@@ -15,8 +15,12 @@ jest.mock("@/lib/data/backup-key", () => ({
   getDefaultBackupPassphrase: () => getDefaultBackupPassphrase(),
 }))
 jest.mock("@/lib/db/settings", () => ({ getSettings: () => getSettings() }))
+jest.mock("@/lib/db/schema", () => ({ getDb: () => ({ name: "headless-account-db" }) }))
 
 import path from "node:path"
+import fs from "node:fs/promises"
+import os from "node:os"
+import { createNodeBackupFilesystem } from "../serve/backup-filesystem"
 
 import { spaceIdFor } from "@cognia/sync-protocol"
 
@@ -59,7 +63,7 @@ beforeEach(() => {
   writeEncryptedLocalBackup
     .mockReset()
     .mockResolvedValue({ sizeBytes: 12, deviceId: "dev", deviceLabel: "srv" })
-  appendBackupHistory.mockClear()
+  appendBackupHistory.mockReset().mockResolvedValue(undefined)
   getDefaultBackupPassphrase.mockReset().mockResolvedValue("pass")
   getSettings.mockReset().mockResolvedValue({})
 })
@@ -114,6 +118,42 @@ describe("headlessSyncSession", () => {
 
 describe("brainBackup", () => {
   const filesystem = {} as never
+
+  it("retries with a unique owned file after publication succeeds but history fails", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "prejoin-backup-"))
+    const filesystem = createNodeBackupFilesystem("persisted-brain-owner")
+    writeEncryptedLocalBackup.mockImplementation(async (fs, target) => {
+      await fs.writeTextFile(target, "committed encrypted backup")
+      return { sizeBytes: 26 }
+    })
+    appendBackupHistory.mockRejectedValueOnce(new Error("transient_history_failure"))
+    const backup = brainBackup({
+      filesystem,
+      fallbackDir: directory,
+      now: () => new Date("2026-11-10T08:09:10.123Z"),
+    })
+    try {
+      await expect(backup()).rejects.toThrow("transient_history_failure")
+      await expect(backup()).resolves.toBeUndefined()
+      await expect(backup()).resolves.toBeUndefined()
+      const names = await fs.readdir(directory)
+      expect(names).toHaveLength(3)
+      for (const name of names) {
+        expect(name).toMatch(
+          /-prejoin-20261110T080910123Z-[a-f0-9-]{36}-owner-[a-f0-9]{64}\.enc\.cbk$/
+        )
+        expect(await fs.readFile(path.join(directory, name), "utf8")).toBe(
+          "committed encrypted backup"
+        )
+      }
+      const successes = appendBackupHistory.mock.calls
+        .map(([row]) => row as { success: boolean; filename?: string })
+        .filter((row) => row.success)
+      expect(successes.map((row) => row.filename).sort()).toEqual(names.sort())
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true })
+    }
+  })
 
   it("writes an encrypted backup into the scheduled folder and records it", async () => {
     getSettings.mockResolvedValue({ backupAutoSchedule: { dirPath: "/backups/" } })

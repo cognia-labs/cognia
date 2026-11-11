@@ -3,6 +3,30 @@
  */
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { toast } from "sonner"
+import { clearAll } from "@/lib/data/clear"
+
+let mockLocale = "en"
+jest.mock("next-intl", () => ({
+  useTranslations: (namespace: string) => {
+    const messages =
+      mockLocale === "en"
+        ? jest.requireActual("@/i18n/messages/en/settings/data.json")
+        : jest.requireActual("@/i18n/messages/zh-CN/settings/data.json")
+    const root = namespace
+      .split(".")
+      .slice(2)
+      .reduce((value, part) => value?.[part], messages)
+    return (key: string, values: Record<string, unknown> = {}) => {
+      const template = key.split(".").reduce((value, part) => value?.[part], root)
+      if (typeof template !== "string") throw new Error(`Missing ${mockLocale} message: ${key}`)
+      return template.replace(/\{(\w+)\}/g, (_match, name: string) => String(values[name]))
+    }
+  },
+}))
+jest.mock("sonner", () => ({
+  toast: { success: jest.fn(), warning: jest.fn(), error: jest.fn() },
+}))
 
 const saveMock = jest.fn(async (..._a: unknown[]) => undefined)
 let storeState: { settings: Record<string, unknown> | null; save: typeof saveMock }
@@ -59,6 +83,11 @@ jest.mock("@/lib/platform/capabilities", () => ({
 import { MaintenanceTab } from "./maintenance-tab"
 
 beforeEach(() => {
+  mockLocale = "en"
+  jest.mocked(clearAll).mockReset()
+  jest.mocked(toast.success).mockClear()
+  jest.mocked(toast.warning).mockClear()
+  jest.mocked(toast.error).mockClear()
   saveMock.mockClear()
   mockTrackEvent.mockClear()
   runWorkspaceMaintenanceMock.mockReset().mockResolvedValue({ events: [] })
@@ -78,6 +107,60 @@ beforeEach(() => {
   localStorage.clear()
   storeState = { settings: { storageRetention: { traceRetentionDays: 30 } }, save: saveMock }
   mockHostRuntime = true
+})
+
+describe("<MaintenanceTab /> reset outcome", () => {
+  it.each([
+    ["en", ["browserPreview"], "browser cookies and preferences"],
+    ["en", ["appData"], "AppData and generated files"],
+    [
+      "en",
+      ["browserPreview", "appData"],
+      "browser cookies and preferences, AppData and generated files",
+    ],
+    ["zh-CN", ["browserPreview", "appData"], "浏览器 Cookie 和偏好设置, AppData 和生成文件"],
+    ["en", [], ""],
+  ] as const)("shows the %s outcome for %j", async (locale, failures, items) => {
+    mockLocale = locale
+    jest.useFakeTimers()
+    jest.mocked(clearAll).mockResolvedValue({ databaseReset: true, cleanupFailures: [...failures] })
+    const timer = jest.spyOn(globalThis, "setTimeout")
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime })
+    try {
+      render(<MaintenanceTab />)
+      await user.click(screen.getByRole("combobox"))
+      await user.click(screen.getByRole("option", { name: "Everything (entire database)" }))
+      await user.click(screen.getByRole("button", { name: locale === "en" ? "Clear…" : "清空…" }))
+      const dialog = screen.getByRole("alertdialog")
+      await user.type(within(dialog).getByRole("textbox"), "DELETE")
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: locale === "en" ? "Permanently delete" : "永久删除",
+        })
+      )
+      await waitFor(() => expect(clearAll).toHaveBeenCalledTimes(1))
+      if (failures.length) {
+        expect(toast.warning).toHaveBeenCalledWith(
+          locale === "en"
+            ? `Database reset; ${items} could not be removed. Reloading…`
+            : `数据库已重置；未能移除：${items}。正在重新载入…`,
+          { duration: 5000 }
+        )
+        expect(toast.success).not.toHaveBeenCalled()
+      } else {
+        expect(toast.success).toHaveBeenCalledWith("All data cleared. Reloading…")
+        expect(toast.warning).not.toHaveBeenCalled()
+      }
+      const reloadTimerIndex = timer.mock.calls.findIndex(
+        ([, ms]) => ms === (failures.length ? 5000 : 250)
+      )
+      expect(reloadTimerIndex).toBeGreaterThanOrEqual(0)
+      clearTimeout(timer.mock.results[reloadTimerIndex].value)
+    } finally {
+      timer.mockRestore()
+      jest.useRealTimers()
+    }
+  })
 })
 
 describe("<MaintenanceTab /> managed workspace block", () => {

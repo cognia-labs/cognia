@@ -31,6 +31,7 @@ import { readFile } from "node:fs/promises"
 import "../db/install-indexeddb"
 
 import { getExecutionBroker } from "@/lib/execution/broker"
+import { getStorageRetentionSnapshot } from "@/lib/storage/retention"
 import { bootstrapHeadlessRuntimes, type HeadlessRuntimeStatus } from "@/lib/headless/bootstrap"
 import {
   installRemoteWorkerRuntime,
@@ -52,7 +53,11 @@ import { fsReader, resolveHome, userConfigPath } from "../config/load"
 import { cliConfigFileSchema, collabCliSchema, type CollabCliConfig } from "../config/schema"
 import { VERSION } from "../version"
 import { ensureHeadlessAccount, HEADLESS_LOCAL_ACCOUNT_ID } from "./account"
-import { createNodeBackupFilesystem } from "./backup-filesystem"
+import {
+  createNodeBackupFilesystem,
+  createUnavailableBackupFilesystem,
+  getServeInstallationId,
+} from "./backup-filesystem"
 import { resolveBrainProfile } from "./brain-profile"
 import { BridgeClient, type BridgeClientOptions, type WebSocketLike } from "./bridge-client"
 import { startHeadlessCollabReader } from "./collab-reader"
@@ -143,6 +148,18 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
   const bridgeUrl = env.COGNIA_BRIDGE_URL ?? deriveBridgeUrl(serverUrl)
   const home = resolveServeHome(env, stringFlag(args, "home"))
   const flushDebounce = numberFlag(args, "flush-debounce")
+  let backupInstallationId: string | undefined
+  let backupFailure: Error | undefined
+  if (!personBrain) {
+    try {
+      backupInstallationId = await getServeInstallationId(home)
+    } catch (cause) {
+      backupFailure = new Error(
+        `Host backups unavailable: cannot read or create ${path.join(home, "installation-id")}: ${cause instanceof Error ? cause.message : String(cause)}. Restore a valid installation identity and restart the Host.`
+      )
+      out.error(`serve: ${backupFailure.message}\n`)
+    }
+  }
 
   // ── 1. Headless marker + IndexedDB shim ────────────────────────────────────
   ;(globalThis as Record<string, unknown>).__COGNIA_HEADLESS__ = true
@@ -261,10 +278,22 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
         .filter((runtime) => runtime.criticality === "required" && runtime.state === "restarting")
         .map((runtime) => runtime.name),
     }),
-    failedRuntimes: () =>
-      (runtimeStatus?.() ?? currentRuntimeStatus)
+    failedRuntimes: () => {
+      const failed = (runtimeStatus?.() ?? currentRuntimeStatus)
         .filter((runtime) => runtime.state === "failed")
-        .map((runtime) => runtime.name),
+        .map((runtime) => runtime.name)
+      if (backupFailure) failed.push("backup-scheduler")
+      if (
+        !personBrain &&
+        getStorageRetentionSnapshot()?.results.some(
+          (result) =>
+            ["failed", "partial", "blocked", "unknown"].includes(result.status) ||
+            (result.failed ?? 0) > 0
+        )
+      )
+        failed.push("storage-retention")
+      return [...new Set(failed)]
+    },
     log: (level, message) => {
       if (level === "error") out.error(`serve: ${message}\n`)
       else out.write(`serve: ${message}\n`)
@@ -280,7 +309,9 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
   // ── 6. Runtimes ────────────────────────────────────────────────────────────
   await import("@/lib/headless/runtimes")
   const resolveMessage = await loadMessageResolver("en")
-  const backupFilesystem = createNodeBackupFilesystem()
+  const backupFilesystem = backupFailure
+    ? createUnavailableBackupFilesystem(backupFailure)
+    : createNodeBackupFilesystem(backupInstallationId)
   // Account sync (ADR-0215 phase 3a): the host's own `logto login` and the
   // key store `cognia-agent account-sync` enrolls into; absent unless
   // COGNIA_ACCOUNT_SYNC is on.

@@ -1,5 +1,13 @@
 /** @jest-environment node */
 
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import {
+  createNodeBackupFilesystem,
+  getServeInstallationId,
+} from "@/cli/src/serve/backup-filesystem"
+
 let mockDatabase = { name: "account-a" }
 jest.mock("@/lib/db/schema", () => ({ getDb: () => mockDatabase }))
 jest.mock("./crypto", () => ({ sha256Hex: async (value: string) => `hash:${value}` }))
@@ -9,6 +17,10 @@ const mockAppendHistory = jest.fn(async (_input?: unknown) => undefined)
 const mockGetLatestSuccessful = jest.fn(async (): Promise<unknown> => undefined)
 const mockBuildPackage = jest.fn()
 const mockBuildStream = jest.fn()
+const mockDeviceMetadata = jest.fn<Promise<{ id: string } | null>, []>(async () => null)
+jest.mock("@/lib/device/device-identity", () => ({
+  getDeviceMetadata: () => mockDeviceMetadata(),
+}))
 jest.mock("./build-stream", () => ({
   buildBackupStream: (...args: unknown[]) => mockBuildStream(...args),
 }))
@@ -39,7 +51,8 @@ jest.mock("@/lib/db/backup-history", () => ({
 jest.mock("@/lib/data/build-package", () => ({
   buildBackupPackage: (options: unknown) => mockBuildPackage(options),
   serializePackage: () => "plain",
-  defaultExportFileName: () => "cognia-backup-2026-07-19.enc.cbk",
+  defaultExportFileName: (...args: unknown[]) =>
+    jest.requireActual("./build-package").defaultExportFileName(...args),
 }))
 jest.mock("@/lib/data/backup-key", () => ({
   getDefaultBackupPassphrase: () => mockGetAutoKey(),
@@ -50,8 +63,9 @@ jest.mock("@/lib/data/retrieval-key-backup", () => ({
 }))
 jest.mock("@/lib/data/scheduler", () => ({
   shouldRunScheduledBackup: (input: unknown) => mockShouldRun(input),
-  pruneScheduledBackups: (candidates: unknown, retainCount: unknown) =>
-    mockPrune(candidates, retainCount),
+  pruneScheduledBackups: (...args: unknown[]) => mockPrune(...args),
+  scheduledBackupCompletedAt: (name: string) =>
+    jest.requireActual("./scheduler").scheduledBackupCompletedAt(name),
 }))
 jest.mock("@/lib/data/destinations/webdav", () => ({
   encryptSnapshotBody: (plaintext: unknown, pkg: unknown, passphrase: unknown) =>
@@ -79,6 +93,8 @@ jest.mock("@/lib/webdav/remote-newer-notify", () => ({
   notifyIfRemoteNewer: (input: unknown) => mockNotifyRemoteNewer(input),
 }))
 
+import { defaultExportFileName } from "./build-package"
+
 import {
   maybeUploadToWebDav,
   runScheduledBackupOnce,
@@ -95,6 +111,13 @@ const messages: ScheduledBackupMessages = {
   newerBody: "newer body",
 }
 
+function intervalFileName(now: Date, installationId?: string): string {
+  return defaultExportFileName(now, "encrypted", installationId).replace(
+    "-owner-",
+    `-interval-${now.toISOString().replace(/[-:.]/g, "")}-owner-`
+  )
+}
+
 const pkg = {
   manifest: {
     exportedAt: "2026-07-19T00:00:00.000Z",
@@ -104,6 +127,7 @@ const pkg = {
 
 beforeEach(() => {
   mockDatabase = { name: "account-a" }
+  mockDeviceMetadata.mockReset().mockResolvedValue(null)
   jest.clearAllMocks()
   mockGetSettings.mockResolvedValue({
     backupAutoSchedule: {
@@ -117,12 +141,181 @@ beforeEach(() => {
   mockBuildPackage.mockResolvedValue(pkg)
   mockGetAutoKey.mockResolvedValue("auto-key")
   mockShouldRun.mockReturnValue(true)
-  mockPrune.mockReturnValue([{ name: "/srv/backups/old.enc.cbk", completedAt: -2 }])
+  mockPrune.mockImplementation((candidates) => candidates.slice(2))
   mockEncrypt.mockResolvedValue("encrypted")
   mockHasSyncPassphrase.mockReturnValue(false)
   mockGetSyncPassphrase.mockReturnValue(null)
   mockLoadPersistedSyncPassphrase.mockResolvedValue(false)
   mockAttachPortableRetrievalKeys.mockClear()
+})
+
+it("prunes earlier processes' backups using the persisted headless installation identity", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "backup-restarts-"))
+  const directory = path.join(home, "backups")
+  mockGetSettings.mockResolvedValue({
+    backupAutoSchedule: { enabled: true, dirPath: directory, retainCount: 1 },
+  })
+  mockPrune.mockImplementation((...args) =>
+    jest.requireActual("./scheduler").pruneScheduledBackups(...args)
+  )
+  mockBuildStream.mockImplementation(async function* () {
+    yield new TextEncoder().encode('{"manifest":{}}\n')
+  })
+  try {
+    for (let restart = 1; restart <= 3; restart++) {
+      // Neither the DB object nor the memory-backed device cache survives restart.
+      mockDatabase = { name: "account-a" }
+      mockDeviceMetadata.mockResolvedValue({ id: `process-${restart}` })
+      const filesystem = createNodeBackupFilesystem(await getServeInstallationId(home))
+      if (restart === 2) {
+        const prejoin = defaultExportFileName(
+          new Date(2026, 10, restart),
+          "encrypted",
+          filesystem.installationId
+        ).replace("-owner-", "-prejoin-00000000-0000-4000-8000-000000000001-owner-")
+        const foreign = defaultExportFileName(
+          new Date(2026, 10, 1),
+          "encrypted",
+          "another-installation"
+        ).replace("-owner-", "-prejoin-00000000-0000-4000-8000-000000000002-owner-")
+        await fs.writeFile(path.join(directory, prejoin), "previous pre-join backup")
+        await fs.writeFile(path.join(directory, foreign), "foreign backup")
+      }
+      await expect(
+        runScheduledBackupOnce({
+          filesystem,
+          messages,
+          now: () => new Date(2026, 10, restart),
+        })
+      ).resolves.toBe(true)
+      const expected = intervalFileName(new Date(2026, 10, restart), filesystem.installationId)
+      const ownerSuffix = expected.match(/-owner-[a-f0-9]{64}\.enc\.cbk$/)![0]
+      const owned = (await fs.readdir(directory)).filter((name) => name.endsWith(ownerSuffix))
+      expect(owned).toEqual([expected])
+      expect((await fs.readdir(directory)).length).toBe(restart === 1 ? 1 : 2)
+    }
+  } finally {
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+it("isolates two default-path Host volumes sharing a backup directory across restarts", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "backup-host-volumes-"))
+  const directory = path.join(root, "shared-backups")
+  const homes = ["host-a", "host-b"].map((volume) => path.join(root, volume, "data", "serve"))
+  mockGetSettings.mockResolvedValue({
+    backupAutoSchedule: { enabled: true, dirPath: directory, retainCount: 1 },
+  })
+  mockPrune.mockImplementation((...args) =>
+    jest.requireActual("./scheduler").pruneScheduledBackups(...args)
+  )
+  mockBuildStream.mockImplementation(async function* () {
+    yield new TextEncoder().encode('{"manifest":{}}\n')
+  })
+  try {
+    const identities = await Promise.all(homes.map(getServeInstallationId))
+    expect(identities[0]).not.toBe(identities[1])
+    const expected = new Map<number, string>()
+    for (const [host, day] of [
+      [0, 1],
+      [1, 2],
+      [0, 3],
+      [1, 4],
+    ] as const) {
+      // Each volume is mounted as /data/serve in its Host; account and DB names match.
+      mockDatabase = { name: "cognia-encrypted-local_acct_a" }
+      const identity = await getServeInstallationId(homes[host]!)
+      expect(identity).toBe(identities[host])
+      const filesystem = createNodeBackupFilesystem(identity)
+      const now = new Date(2026, 10, day)
+      expect(await runScheduledBackupOnce({ filesystem, messages, now: () => now })).toBe(true)
+      expected.set(host, intervalFileName(now, identity))
+      expect((await fs.readdir(directory)).sort()).toEqual([...expected.values()].sort())
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+it("retains the newer same-day pre-join point when UUIDs sort opposite to creation time", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "backup-prejoin-time-"))
+  const identity = "installation-a"
+  const now = new Date("2026-11-10T12:00:00.789Z")
+  const current = intervalFileName(now, identity)
+  const baseName = defaultExportFileName(now, "encrypted", identity)
+  const older = baseName.replace(
+    "-owner-",
+    "-prejoin-20261110T090000123Z-ffffffff-ffff-4fff-bfff-ffffffffffff-owner-"
+  )
+  const newer = baseName.replace(
+    "-owner-",
+    "-prejoin-20261110T100000456Z-00000000-0000-4000-8000-000000000000-owner-"
+  )
+  const legacy = defaultExportFileName(new Date("2026-11-09T00:00:00Z"), "encrypted", identity)
+  mockGetSettings.mockResolvedValue({
+    backupAutoSchedule: { enabled: true, dirPath: directory, retainCount: 2 },
+  })
+  mockPrune.mockImplementation((...args) =>
+    jest.requireActual("./scheduler").pruneScheduledBackups(...args)
+  )
+  mockBuildStream.mockImplementation(async function* () {
+    yield new TextEncoder().encode('{"manifest":{}}\n')
+  })
+  try {
+    for (const file of [older, newer, legacy])
+      await fs.writeFile(path.join(directory, file), "recovery point")
+    const filesystem = createNodeBackupFilesystem(identity)
+    expect(await runScheduledBackupOnce({ filesystem, messages, now: () => now })).toBe(true)
+    expect((await fs.readdir(directory)).sort()).toEqual([current, newer].sort())
+    expect(mockPrune).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        { name: path.join(directory, older), completedAt: Date.parse("2026-11-10T09:00:00.123Z") },
+        { name: path.join(directory, newer), completedAt: Date.parse("2026-11-10T10:00:00.456Z") },
+      ]),
+      2,
+      path.join(directory, current)
+    )
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
+
+it("retains the 01:00 pre-join over the 00:30 interval when the next day's interval runs", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "backup-local-day-"))
+  const filesystem = createNodeBackupFilesystem("installation-a")
+  const interval = new Date(2026, 10, 11, 0, 30)
+  const prejoin = new Date(2026, 10, 11, 1)
+  const nextDay = new Date(2026, 10, 12, 0, 30)
+  const prejoinName = defaultExportFileName(
+    prejoin,
+    "encrypted",
+    filesystem.installationId
+  ).replace(
+    "-owner-",
+    `-prejoin-${prejoin.toISOString().replace(/[-:.]/g, "")}-ffffffff-ffff-4fff-bfff-ffffffffffff-owner-`
+  )
+  mockGetSettings.mockResolvedValue({
+    backupAutoSchedule: { enabled: true, dirPath: directory, retainCount: 2 },
+  })
+  mockPrune.mockImplementation((...args) =>
+    jest.requireActual("./scheduler").pruneScheduledBackups(...args)
+  )
+  mockBuildStream.mockImplementation(async function* () {
+    yield new TextEncoder().encode('{"manifest":{}}\n')
+  })
+  try {
+    expect(await runScheduledBackupOnce({ filesystem, messages, now: () => interval })).toBe(true)
+    expect(await fs.readdir(directory)).toEqual([
+      intervalFileName(interval, filesystem.installationId),
+    ])
+    await fs.writeFile(path.join(directory, prejoinName), "pre-join recovery point")
+    expect(await runScheduledBackupOnce({ filesystem, messages, now: () => nextDay })).toBe(true)
+    expect((await fs.readdir(directory)).sort()).toEqual(
+      [prejoinName, intervalFileName(nextDay, filesystem.installationId)].sort()
+    )
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true })
+  }
 })
 
 it("streams encrypted scheduled backups without constructing a legacy package", async () => {
@@ -224,12 +417,32 @@ afterEach(() => {
   jest.useRealTimers()
 })
 
+it("uses stable, filesystem-safe names for each account and target", () => {
+  const now = new Date(2026, 10, 10, 12)
+  const names = [
+    "cognia-account-acct_alpha-target-target_one-encrypted-v1",
+    "cognia-account-acct_beta-target-target_one-encrypted-v1",
+    "cognia-account-acct_alpha-target-target_two-encrypted-v1",
+  ].map((name) => {
+    mockDatabase = { name }
+    const fileName = defaultExportFileName(now, "encrypted")
+    expect(fileName).toBe(defaultExportFileName(now, "encrypted"))
+    expect(fileName).toMatch(/^cognia-backup-2026-11-10-owner-[a-f0-9]{64}\.enc\.cbk$/)
+    expect(fileName).not.toContain("acct_")
+    expect(fileName).not.toContain("target_")
+    return fileName
+  })
+  expect(new Set(names).size).toBe(3)
+})
+
 it("writes, prunes, records, and stamps one encrypted scheduled backup through the injected host filesystem", async () => {
   const filesystem = {
     writeTextFile: jest.fn(async () => undefined),
     readDirNames: jest.fn(async () => [
-      "cognia-backup-2026-07-19.enc.cbk",
-      "old.enc.cbk",
+      intervalFileName(new Date("2026-07-19T00:00:00Z")),
+      defaultExportFileName(new Date("2026-07-18T00:00:00Z"), "encrypted"),
+      defaultExportFileName(new Date("2026-07-17T00:00:00Z"), "encrypted"),
+      "cognia-backup-2026-07-16.enc.cbk",
       "notes.txt",
     ]),
     remove: jest.fn(async () => undefined),
@@ -244,17 +457,20 @@ it("writes, prunes, records, and stamps one encrypted scheduled backup through t
   ).resolves.toBe(true)
 
   expect(filesystem.writeTextFile).toHaveBeenCalledWith(
-    "/srv/backups/cognia-backup-2026-07-19.enc.cbk",
+    `/srv/backups/${intervalFileName(new Date("2026-07-19T00:00:00Z"))}`,
     "encrypted"
   )
-  expect(filesystem.remove).toHaveBeenCalledWith("/srv/backups/old.enc.cbk")
+  expect(filesystem.remove).toHaveBeenCalledWith(
+    `/srv/backups/${defaultExportFileName(new Date("2026-07-17T00:00:00Z"), "encrypted")}`
+  )
+  expect(filesystem.remove).toHaveBeenCalledTimes(1)
   expect(mockAttachPortableRetrievalKeys).toHaveBeenCalledWith(pkg, "auto-key")
   expect(mockAppendHistory).toHaveBeenCalledWith(
     expect.objectContaining({
       type: "scheduled",
       success: true,
       encryption: "auto-key",
-      filename: "cognia-backup-2026-07-19.enc.cbk",
+      filename: intervalFileName(new Date("2026-07-19T00:00:00Z")),
       deviceId: "device-a",
     })
   )
@@ -275,6 +491,95 @@ it("records a translated failure when the host has no writable destination", asy
   expect(mockAppendHistory).toHaveBeenCalledWith(
     expect.objectContaining({ success: false, errorMessage: "missing destination" })
   )
+})
+
+it("isolates scheduled files and retention for different installations of the same target", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cognia-backup-devices-"))
+  const now = new Date(2026, 10, 10, 12)
+  const old = new Date(2026, 10, 9, 12)
+  const filesystem = createNodeBackupFilesystem()
+  mockGetSettings.mockResolvedValue({
+    backupAutoSchedule: {
+      enabled: true,
+      intervalDays: 1,
+      dirPath: root,
+      retainCount: 1,
+    },
+  })
+  mockPrune.mockImplementation((...args) =>
+    jest.requireActual("./scheduler").pruneScheduledBackups(...args)
+  )
+  mockBuildStream.mockImplementation(async function* () {
+    yield new TextEncoder().encode('{"manifest":{}}')
+  })
+  try {
+    mockDeviceMetadata.mockResolvedValue({ id: "device-one" })
+    expect(await runScheduledBackupOnce({ filesystem, messages, now: () => now })).toBe(true)
+    const first = intervalFileName(now, "device-one")
+    const oldFirst = defaultExportFileName(old, "encrypted", "device-one")
+    await fs.writeFile(path.join(root, oldFirst), "first device older backup")
+    mockDeviceMetadata.mockResolvedValue({ id: "device-two" })
+    const second = intervalFileName(now, "device-two")
+    const oldSecond = defaultExportFileName(old, "encrypted", "device-two")
+    await fs.writeFile(path.join(root, oldSecond), "second device older backup")
+    expect(await runScheduledBackupOnce({ filesystem, messages, now: () => now })).toBe(true)
+    expect(await filesystem.readDirNames(root)).toEqual(
+      expect.arrayContaining([first, oldFirst, second])
+    )
+    await expect(fs.stat(path.join(root, oldSecond))).rejects.toMatchObject({ code: "ENOENT" })
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+it("keeps other owners and legacy backups while pruning only this owner's files on disk", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cognia-backup-owners-"))
+  const now = new Date(2026, 10, 10, 12)
+  const old = new Date(2026, 10, 9, 12)
+  const filesystem = createNodeBackupFilesystem()
+  const legacy = path.join(root, "cognia-backup-2026-11-09.enc.cbk")
+  const ownerA = { name: "cognia-account-acct_alpha-target-target_one-encrypted-v1" }
+  const ownerB = { name: "cognia-account-acct_beta-target-target_two-encrypted-v1" }
+  mockGetSettings.mockResolvedValue({
+    backupAutoSchedule: {
+      enabled: true,
+      intervalDays: 1,
+      dirPath: root,
+      retainCount: 1,
+    },
+  })
+  mockPrune.mockImplementation((...args) =>
+    jest.requireActual("./scheduler").pruneScheduledBackups(...args)
+  )
+  mockBuildStream.mockImplementation(async function* () {
+    yield new TextEncoder().encode(
+      JSON.stringify({ manifest: { device: { id: mockDatabase.name } } })
+    )
+  })
+  try {
+    await fs.writeFile(legacy, "legacy backup")
+    mockDatabase = ownerB
+    const bName = intervalFileName(now)
+    const bOld = defaultExportFileName(old, "encrypted")
+    await fs.writeFile(path.join(root, bOld), "other owner's older backup")
+    expect(await runScheduledBackupOnce({ filesystem, messages, now: () => now })).toBe(true)
+    const bContents = await fs.readFile(path.join(root, bName), "utf8")
+    // Recreate an older file to ensure A's retention cannot remove it.
+    await fs.writeFile(path.join(root, bOld), "other owner's older backup")
+    mockDatabase = ownerA
+    const aName = intervalFileName(now)
+    const aOld = defaultExportFileName(old, "encrypted")
+    await fs.writeFile(path.join(root, aOld), "this owner's older backup")
+    expect(await runScheduledBackupOnce({ filesystem, messages, now: () => now })).toBe(true)
+    expect(aName).not.toBe(bName)
+    expect(await fs.readFile(path.join(root, bName), "utf8")).toBe(bContents)
+    expect(await fs.readFile(path.join(root, bOld), "utf8")).toBe("other owner's older backup")
+    expect(await fs.readFile(legacy, "utf8")).toBe("legacy backup")
+    await expect(fs.stat(path.join(root, aOld))).rejects.toMatchObject({ code: "ENOENT" })
+    expect(await fs.readFile(path.join(root, aName), "utf8")).toContain(ownerA.name)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
 })
 
 it("does nothing while disabled or before the configured interval is due", async () => {
@@ -440,6 +745,7 @@ it("treats directory enumeration as best-effort and records write/key failures",
 })
 
 it("normalizes Windows destinations and sorts multiple retention candidates", async () => {
+  const now = new Date("2026-11-11T00:00:00.123Z")
   mockGetSettings.mockResolvedValueOnce({
     backupAutoSchedule: {
       enabled: true,
@@ -455,9 +761,9 @@ it("normalizes Windows destinations and sorts multiple retention candidates", as
     remove: jest.fn(async () => undefined),
   }
 
-  await runScheduledBackupOnce({ filesystem, messages })
+  await runScheduledBackupOnce({ filesystem, messages, now: () => now })
   expect(filesystem.writeTextFile).toHaveBeenCalledWith(
-    "C:\\backups\\cognia-backup-2026-07-19.enc.cbk",
+    `C:\\backups\\${intervalFileName(now)}`,
     "encrypted"
   )
 })

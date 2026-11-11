@@ -283,6 +283,36 @@ describe("pruneRetainedTables", () => {
 })
 
 describe("startStorageRetentionSweeper", () => {
+  it("shares concurrent startup and releases the timer only after the last consumer", async () => {
+    const timers = jest.spyOn(globalThis, "setInterval")
+    const clear = jest.spyOn(globalThis, "clearInterval")
+    const [releaseFirst, releaseSecond] = await Promise.all([
+      startStorageRetentionSweeper(),
+      startStorageRetentionSweeper(),
+    ])
+    try {
+      const created = timers.mock.calls.flatMap((args, index) =>
+        args[1] === RETENTION_SWEEP_INTERVAL_MS ? [timers.mock.results[index]!.value] : []
+      )
+      expect(created).toHaveLength(1)
+      releaseFirst()
+      releaseFirst()
+      expect(clear).not.toHaveBeenCalledWith(created[0])
+      releaseSecond()
+      expect(clear.mock.calls.filter(([id]) => id === created[0])).toHaveLength(1)
+      // All consumers released their leases, so a real later mount can start again.
+      const releaseNext = await startStorageRetentionSweeper()
+      releaseNext()
+      expect(
+        timers.mock.calls.filter((args) => args[1] === RETENTION_SWEEP_INTERVAL_MS)
+      ).toHaveLength(2)
+    } finally {
+      releaseFirst()
+      releaseSecond()
+      timers.mockRestore()
+      clear.mockRestore()
+    }
+  })
   it("prunes rolling usage on the existing daily callback, preserves the boundary day, and retries atomically", async () => {
     const now = Date.now()
     const cutoff = now - 90 * MS_PER_DAY
@@ -426,17 +456,65 @@ describe("startStorageRetentionSweeper", () => {
     stop()
   })
 
-  it("falls back to the default window when settings can't be read", async () => {
+  it("skips destructive targets and records failure when keep-forever settings cannot be read", async () => {
+    await saveSettings({ storageRetention: { traceRetentionDays: 0 } })
     ;(getSettings as jest.Mock).mockRejectedValueOnce(new Error("settings unavailable"))
     const now = Date.now()
     await getDb().agentTraces.bulkPut([
       span("old", now - 90 * MS_PER_DAY),
       span("keep", now - 1 * MS_PER_DAY),
     ])
-    // No settings → readRetentionDays catches and uses the 30-day default.
+    const expiryPrune = jest.spyOn(RETENTION_TARGETS[0], "prune")
     const stop = await startStorageRetentionSweeper()
-    expect((await getDb().agentTraces.toArray()).map((r) => r.id)).toEqual(["keep"])
     stop()
+    expect((await getDb().agentTraces.toArray()).map((r) => r.id).sort()).toEqual(["keep", "old"])
+    expect(expiryPrune).not.toHaveBeenCalled()
+    expiryPrune.mockRestore()
+    expect(getStorageRetentionSnapshot()?.results).toContainEqual({
+      id: "settings",
+      removed: 0,
+      status: "failed",
+      reason: "settings-unavailable",
+    })
+  })
+
+  it("keeps saved data on a real settings read failure and clears the failure on the next sweep", async () => {
+    const db = getDb()
+    await saveSettings({ storageRetention: { traceRetentionDays: 0 } })
+    await db.agentTraces.put(span("saved-forever", Date.now() - 90 * MS_PER_DAY))
+    const failRead = () => {
+      throw new Error("transient settings read failure")
+    }
+    const timer = jest.spyOn(globalThis, "setInterval")
+    db.settings.hook("reading", failRead)
+    let stop: (() => void) | undefined
+    try {
+      stop = await startStorageRetentionSweeper()
+      expect(await db.agentTraces.get("saved-forever")).toBeDefined()
+      expect(getStorageRetentionSnapshot()?.results).toEqual([
+        { id: "settings", removed: 0, status: "failed", reason: "settings-unavailable" },
+      ])
+      db.settings.hook("reading").unsubscribe(failRead)
+      const tick = timer.mock.calls.find(
+        ([, ms]) => ms === RETENTION_SWEEP_INTERVAL_MS
+      )![0] as () => Promise<void>
+      await tick()
+      expect(getStorageRetentionSnapshot()?.results).toContainEqual({
+        id: "agentTraces",
+        removed: 0,
+        status: "off",
+        reason: "configured-off",
+      })
+      expect(
+        getStorageRetentionSnapshot()?.results.some((result) => result.status === "failed")
+      ).toBe(false)
+      expect((await getSettings()).storageRetention?.traceRetentionDays).toBe(0)
+      expect(await db.agentTraces.get("saved-forever")).toBeDefined()
+    } finally {
+      stop?.()
+      db.settings.hook("reading").unsubscribe(failRead)
+      timer.mockRestore()
+    }
   })
 
   it("schedules a daily interval and the unsubscribe clears it", async () => {

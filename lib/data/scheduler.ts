@@ -54,6 +54,37 @@ export interface BackupCandidate {
   completedAt: number
 }
 
+const EXACT_BACKUP_TIME_SUFFIX = /-\d{8}T\d{9}Z-(?:[a-f0-9-]{36}-)?owner-[a-f0-9]{64}\.enc\.cbk$/
+
+/** Exact interval/pre-join times are UTC; legacy dates are local-day lower bounds. */
+export function scheduledBackupCompletedAt(name: string): number | null {
+  const match =
+    /^cognia-backup-(\d{4}-\d{2}-\d{2})(?:-interval-(\d{8}T\d{9}Z)|-prejoin-(?:(\d{8}T\d{9}Z)-)?[a-f0-9-]{36})?-owner-[a-f0-9]{64}\.enc\.cbk$/.exec(
+      name
+    )
+  if (!match) return null
+  const [, date, intervalTimestamp, prejoinTimestamp] = match
+  const localDay = new Date(`${date}T00:00:00`)
+  const [year, month, day] = date.split("-").map(Number)
+  // Local date construction can normalize impossible dates, too.
+  if (
+    localDay.getFullYear() !== year ||
+    localDay.getMonth() + 1 !== month ||
+    localDay.getDate() !== day
+  )
+    return null
+  const timestamp = intervalTimestamp ?? prejoinTimestamp
+  if (!timestamp) return localDay.getTime()
+  const iso = timestamp.replace(
+    /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z$/,
+    "$1-$2-$3T$4:$5:$6.$7Z"
+  )
+  const completedAt = Date.parse(iso)
+  // Date.parse normalizes impossible dates, which must not authorize deletion.
+  if (!Number.isFinite(completedAt) || new Date(completedAt).toISOString() !== iso) return null
+  return completedAt
+}
+
 /**
  * Pick the candidates to delete so the scheduled-backup directory keeps only
  * the newest `retainCount` entries. Pure: takes the file list, returns the
@@ -61,10 +92,19 @@ export interface BackupCandidate {
  */
 export function pruneScheduledBackups<T extends BackupCandidate>(
   candidates: T[],
-  retainCount: number
+  retainCount: number,
+  keepName?: string
 ): T[] {
   if (retainCount <= 0) return [...candidates]
   if (candidates.length <= retainCount) return []
-  const sorted = [...candidates].sort((a, b) => b.completedAt - a.completedAt)
+  const sorted = [...candidates].sort(
+    (a, b) =>
+      Number(b.name === keepName) - Number(a.name === keepName) ||
+      b.completedAt - a.completedAt ||
+      // An exact local-midnight point is newer than an imprecise same-day file.
+      Number(EXACT_BACKUP_TIME_SUFFIX.test(b.name)) -
+        Number(EXACT_BACKUP_TIME_SUFFIX.test(a.name)) ||
+      (a.name < b.name ? 1 : a.name > b.name ? -1 : 0)
+  )
   return sorted.slice(retainCount)
 }

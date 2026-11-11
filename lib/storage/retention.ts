@@ -61,6 +61,7 @@ export interface RetentionTarget {
 export type RetentionStatus =
   "completed" | "completed-no-work" | "partial" | "blocked" | "off" | "failed" | "unknown"
 export type RetentionReason =
+  | "settings-unavailable"
   | "configured-off"
   | "prune-failed"
   | "file-delete-failed"
@@ -405,22 +406,28 @@ function defaultRetentionWindows(): RetentionWindows {
 }
 
 async function readRetentionWindows(): Promise<RetentionWindows> {
-  try {
-    const settings = await getSettings()
-    const defaults = defaultRetentionWindows()
-    return {
-      traceRetentionDays:
-        settings.storageRetention?.traceRetentionDays ?? defaults.traceRetentionDays,
-      ocrCacheTtlDays: settings.ocrSettings?.cacheTtlDays ?? defaults.ocrCacheTtlDays,
-    }
-  } catch {
-    return defaultRetentionWindows()
+  const settings = await getSettings()
+  const defaults = defaultRetentionWindows()
+  return {
+    traceRetentionDays:
+      settings.storageRetention?.traceRetentionDays ?? defaults.traceRetentionDays,
+    ocrCacheTtlDays: settings.ocrSettings?.cacheTtlDays ?? defaults.ocrCacheTtlDays,
   }
 }
 
 async function sweepOnce(): Promise<void> {
   const db = getDb()
-  const windows = await readRetentionWindows()
+  let windows: RetentionWindows
+  try {
+    windows = await readRetentionWindows()
+  } catch {
+    if (getDb() === db)
+      snapshots.set(db, {
+        completedAt: Date.now(),
+        results: [{ id: "settings", removed: 0, status: "failed", reason: "settings-unavailable" }],
+      })
+    return
+  }
   if (getDb() !== db) return
   const results = await pruneRetainedTables(windows.traceRetentionDays, RETENTION_TARGETS, {
     ocrResults: windows.ocrCacheTtlDays,
@@ -442,13 +449,43 @@ async function sweepOnce(): Promise<void> {
  * `Unsubscribe` that cancels the timer. Never throws — a failed sweep is logged
  * and the timer keeps running for the next window.
  */
-export async function startStorageRetentionSweeper(): Promise<Unsubscribe> {
+async function startSweeperForDatabase(db: ReturnType<typeof getDb>): Promise<Unsubscribe> {
   await recoverEvalQueueOnStartup().catch((err) =>
     console.warn("evaluation queue recovery failed", err)
   )
+  if (getDb() !== db) return () => undefined
   await sweepOnce().catch((err) => console.warn("storage retention sweep failed", err))
+  if (getDb() !== db) return () => undefined
   const id = setInterval(() => {
+    if (getDb() !== db) return
     return sweepOnce().catch(() => console.warn("storage retention sweep failed"))
   }, RETENTION_SWEEP_INTERVAL_MS)
   return () => clearInterval(id)
+}
+
+const sweepers = new WeakMap<
+  ReturnType<typeof getDb>,
+  { users: number; ready: Promise<Unsubscribe> }
+>()
+
+/** Share recovery and the timer per database, with one release per consumer. */
+export async function startStorageRetentionSweeper(): Promise<Unsubscribe> {
+  const db = getDb()
+  let shared = sweepers.get(db)
+  if (!shared) {
+    shared = { users: 0, ready: startSweeperForDatabase(db) }
+    sweepers.set(db, shared)
+  }
+  shared.users++
+  const entry = shared
+  const dispose = await entry.ready
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--entry.users === 0) {
+      dispose()
+      sweepers.delete(db)
+    }
+  }
 }

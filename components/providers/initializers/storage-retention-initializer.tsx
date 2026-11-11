@@ -7,25 +7,21 @@
 // per-table LRU caps elsewhere are the lower bound; this enforces the
 // operator-configured upper-bound time window.
 
-import { useEffect, useRef } from "react"
+import { useEffect } from "react"
 
 import { startStorageRetentionSweeper, type Unsubscribe } from "@/lib/storage/retention"
 
 export function StorageRetentionInitializer() {
-  const hasInitialized = useRef(false)
-  const unsubscribeRef = useRef<Unsubscribe | null>(null)
-
   useEffect(() => {
-    if (hasInitialized.current) return
-    hasInitialized.current = true
-    void startStorageRetentionSweeper().then((u) => {
-      unsubscribeRef.current = u
+    let stopped = false
+    let unsubscribe: Unsubscribe | undefined
+    void startStorageRetentionSweeper().then((dispose) => {
+      if (stopped) dispose()
+      else unsubscribe = dispose
     })
     return () => {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current()
-        unsubscribeRef.current = null
-      }
+      stopped = true
+      unsubscribe?.()
     }
   }, [])
 

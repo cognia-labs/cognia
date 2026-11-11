@@ -1,7 +1,7 @@
 import { tombstoneAgentTurnOperations } from "./shared-run-journal"
 import { measureOperation } from "@/lib/perf/operation-performance"
 import { waitForModelSelection } from "@/lib/chat/model-selection"
-import Dexie from "dexie"
+import Dexie, { type Transaction } from "dexie"
 import type { ChatSession } from "@cognia/agent-config-types"
 import { loggers } from "@cognia/logging"
 import { getDb, withDbReopenRetry } from "./schema"
@@ -1185,8 +1185,31 @@ export async function bulkDeleteSessions(
   ids: readonly string[],
   scope?: SessionPersistenceScope
 ): Promise<void> {
+  const deletion = await prepareBulkDeleteSessions(ids, scope)
+  if (!deletion) return
+  try {
+    // Dexie must see an async callback to track the cascade's native awaits.
+    await deletion.db.transaction("rw", deletion.tables, async (transaction) =>
+      deletion.deleteInsideTransaction(transaction)
+    )
+  } catch (error) {
+    await deletion.finish(false)
+    throw error
+  }
+  await deletion.finish(true)
+}
+
+/**
+ * Prepare external releases and deletion intents before opening a transaction.
+ * The caller includes `tables` in its own transaction, runs the cascade there,
+ * then calls `finish` after commit or rollback to release the preparation lock.
+ */
+export async function prepareBulkDeleteSessions(
+  ids: readonly string[],
+  scope?: SessionPersistenceScope
+) {
   scope?.assertActive()
-  if (ids.length === 0) return
+  if (ids.length === 0) return null
   const db = scope?.db ?? getDb()
   const requestedIds = [...new Set(ids)]
   // Native task state is outside Dexie. Stop/revoke/delete it before dropping
@@ -1239,227 +1262,234 @@ export async function bulkDeleteSessions(
   let scheduledTaskIds: string[] = []
   const orphanCandidates = new Set<string>()
   const sessionAssetOrphans = new Set<string>()
-  try {
-    await db.transaction(
-      "rw",
-      [
-        db.sessions,
-        db.messages,
-        db.sharedRunJournals,
-        db.messageMediaRefs,
-        db.messageMedia,
-        db.sessionState,
-        db.chatDrafts,
-        db.chatInputHistory,
-        db.chatTurnSummaries,
-        db.chatTranscriptIndexState,
-        db.sessionUsage,
-        db.sessionPeerMessages,
-        db.chatGoals,
-        db.chatGoalEvents,
-        db.agentPlans,
-        db.agentPlanEvents,
-        db.loops,
-        db.loopEvents,
-        db.syncTombstones,
-        db.mediaGenerationJobs,
-        db.libraryItems,
-        db.managedDesktopDeletionOutbox,
-        db.executionRuns,
-        db.executionRunEvents,
-        db.executionRunBindings,
-        db.executionRunInterrupts,
-        db.runResultSummaries,
-        db.notificationProjectionWork,
-        ...(scope?.assertSessionsDeletable ? [db.hostStateChannels] : []),
-      ],
-      async () => {
-        scope?.assertActive()
-        const at = Date.now()
-        deletedIds = (await db.sessions.bulkGet(requestedIds)).flatMap((row) =>
-          row ? [row.id] : []
-        )
-        if (deletedIds.length === 0) return
-        await assertSessionsWritable(db, deletedIds, "delete")
-        const attachedDescendants = await listOwnedAttachedDescendantIds(db, deletedIds, {
-          includeSideChats: true,
-        })
-        deletedIds = [...new Set([...deletedIds, ...attachedDescendants])]
-        if (scope?.assertSessionsDeletable) await scope.assertSessionsDeletable(deletedIds)
-        await desktopDeletion.commitInsideTransaction(deletedIds)
-        await deleteManagedDesktopRunProjections(db, deletedIds)
-        const doomedIds = new Set(deletedIds)
-        await tombstoneAgentTurnOperations(doomedIds, db)
-        const doomedRows = await db.sessions.where("id").anyOf(deletedIds).toArray()
-        const doomedById = new Map(doomedRows.map((row) => [row.id, row]))
+  const tables = [
+    db.sessions,
+    db.messages,
+    db.sharedRunJournals,
+    db.messageMediaRefs,
+    db.messageMedia,
+    db.sessionState,
+    db.chatDrafts,
+    db.chatInputHistory,
+    db.chatTurnSummaries,
+    db.chatTranscriptIndexState,
+    db.sessionUsage,
+    db.sessionPeerMessages,
+    db.chatGoals,
+    db.chatGoalEvents,
+    db.agentPlans,
+    db.agentPlanEvents,
+    db.loops,
+    db.loopEvents,
+    db.syncTombstones,
+    db.mediaGenerationJobs,
+    db.libraryItems,
+    db.managedDesktopDeletionOutbox,
+    db.executionRuns,
+    db.executionRunEvents,
+    db.executionRunBindings,
+    db.executionRunInterrupts,
+    db.runResultSummaries,
+    db.notificationProjectionWork,
+    ...(scope?.assertSessionsDeletable ? [db.hostStateChannels] : []),
+  ]
+  return {
+    db,
+    tables,
+    async deleteInsideTransaction(transaction: Transaction): Promise<void> {
+      if (
+        transaction !== Dexie.currentTransaction ||
+        transaction.db !== db ||
+        transaction.mode !== "readwrite" ||
+        tables.some((table) => !transaction.storeNames.includes(table.name))
+      )
+        throw new Error("session_deletion_transaction_scope_mismatch")
+      scope?.assertActive()
+      const at = Date.now()
+      deletedIds = (await db.sessions.bulkGet(requestedIds)).flatMap((row) => (row ? [row.id] : []))
+      if (deletedIds.length === 0) return
+      await assertSessionsWritable(db, deletedIds, "delete")
+      const attachedDescendants = await listOwnedAttachedDescendantIds(db, deletedIds, {
+        includeSideChats: true,
+      })
+      deletedIds = [...new Set([...deletedIds, ...attachedDescendants])]
+      if (scope?.assertSessionsDeletable) await scope.assertSessionsDeletable(deletedIds)
+      await desktopDeletion.commitInsideTransaction(deletedIds)
+      await deleteManagedDesktopRunProjections(db, deletedIds)
+      const doomedIds = new Set(deletedIds)
+      await tombstoneAgentTurnOperations(doomedIds, db)
+      const doomedRows = await db.sessions.where("id").anyOf(deletedIds).toArray()
+      const doomedById = new Map(doomedRows.map((row) => [row.id, row]))
 
-        const goalIds = (await db.chatGoals
-          .where("sessionId")
-          .anyOf(deletedIds)
-          .primaryKeys()) as string[]
-        if (goalIds.length > 0) {
-          await db.chatGoalEvents.where("goalId").anyOf(goalIds).delete()
-          await db.chatGoals.bulkDelete(goalIds)
-        }
-        await deletePlansForSessionsInTransaction(db, deletedIds, at)
-
-        const loopRows = await db.loops.where("sessionId").anyOf(deletedIds).toArray()
-        const loopIds = loopRows.map((row) => row.id)
-        scheduledTaskIds = loopRows.flatMap((row) =>
-          row.scheduledTaskId ? [row.scheduledTaskId] : []
-        )
-        if (loopIds.length > 0) {
-          await db.loopEvents.where("loopId").anyOf(loopIds).delete()
-          await db.loops.bulkDelete(loopIds)
-        }
-
-        const survivingParentOf = (sessionId: string): string | undefined => {
-          let parentId = doomedById.get(sessionId)?.parentSessionId
-          const visited = new Set<string>()
-          while (parentId && doomedIds.has(parentId) && !visited.has(parentId)) {
-            visited.add(parentId)
-            parentId = doomedById.get(parentId)?.parentSessionId
-          }
-          return parentId
-        }
-
-        // Preserve ordinary branches while attached children remain owned by
-        // the deletion set. A surviving branch is connected to the nearest
-        // surviving ancestor, matching the single-delete contract.
-        for (const id of deletedIds) {
-          const childIds = (await db.sessions
-            .where("parentSessionId")
-            .equals(id)
-            .primaryKeys()) as string[]
-          const fallbackParentId = survivingParentOf(id)
-          for (const childId of childIds) {
-            if (!doomedIds.has(childId)) {
-              await db.sessions.update(childId, { parentSessionId: fallbackParentId })
-            }
-          }
-        }
-
-        // A generated video kept in Files keeps what its job recorded; read
-        // before the refs and jobs below go.
-        await preserveGeneratedVideoRecords(db, deletedIds)
-        const allMessageIds: string[] = []
-        const usageIds: string[] = []
-        const mediaRefs = await db.messageMediaRefs.where("sessionId").anyOf(deletedIds).toArray()
-        for (const ref of mediaRefs) {
-          if (ref.sessionAsset) sessionAssetOrphans.add(ref.hash)
-          else orphanCandidates.add(ref.hash)
-        }
-        await db.messageMediaRefs.where("sessionId").anyOf(deletedIds).delete()
-        for (const hash of sessionAssetOrphans) {
-          if (!(await db.messageMediaRefs.where("hash").equals(hash).count()))
-            await db.messageMedia.delete(hash)
-        }
-        await db.sessionState.bulkDelete(deletedIds)
-        await db.chatDrafts.bulkDelete(deletedIds)
-        await db.chatInputHistory.where("sessionId").anyOf(deletedIds).delete()
-        await db.chatTurnSummaries.where("sessionId").anyOf(deletedIds).delete()
-        await db.chatTranscriptIndexState.bulkDelete(deletedIds)
-        for (const id of deletedIds) {
-          const msgIds = (await db.messages.where("sessionId").equals(id).primaryKeys()) as string[]
-          allMessageIds.push(...msgIds)
-          await db.messages.where("sessionId").equals(id).delete()
-          usageIds.push(
-            ...((await db.sessionUsage.where("sessionId").equals(id).primaryKeys()) as string[])
-          )
-          await db.sessionUsage.where("sessionId").equals(id).delete()
-          await db.sessions.delete(id)
-        }
-        await db.sessionPeerMessages
-          .filter(
-            (row) =>
-              (doomedIds.has(row.senderSessionId) || doomedIds.has(row.receiverSessionId)) &&
-              (scope?.allowsCleanupRow?.("sessionPeerMessages", row) ?? true)
-          )
-          .delete()
-        // Video jobs a conversation started (ADR-0205); their video is one of
-        // the session assets released above.
-        await db.mediaGenerationJobs.where("sessionId").anyOf(deletedIds).delete()
-        scope?.assertActive()
-        await recordTombstones("sessions", deletedIds, at)
-        scope?.assertActive()
-        await recordTombstones("messages", allMessageIds, at)
-        scope?.assertActive()
-        await recordTombstones("sessionState", deletedIds, at)
-        // Goals are mirrored on their own (`goals`), so the ones this cascade
-        // dropped need their own tombstones or they outlive their session on
-        // every paired client.
-        scope?.assertActive()
-        await recordTombstones("goals", goalIds, at)
-        // Usage rows are mirrored too (a member's dashboard reads the Host's).
-        scope?.assertActive()
-        await recordTombstones("sessionUsage", usageIds, at)
-        scope?.assertActive()
+      const goalIds = (await db.chatGoals
+        .where("sessionId")
+        .anyOf(deletedIds)
+        .primaryKeys()) as string[]
+      if (goalIds.length > 0) {
+        await db.chatGoalEvents.where("goalId").anyOf(goalIds).delete()
+        await db.chatGoals.bulkDelete(goalIds)
       }
-    )
-  } catch (error) {
-    await desktopDeletion.finish(false).catch(() => undefined)
-    throw error
-  }
-  // A failed external acknowledgment cannot roll a committed conversation back.
-  for (const sessionId of deletedIds)
-    publishChatLifecycleEvent({ type: "session-deleted", sessionId }, Dexie.currentTransaction)
-  await desktopDeletion.finish(true).catch(() => undefined)
-  scope?.assertActive()
-  if (orphanCandidates.size > 0) {
-    try {
-      // Shared media survives the indexed reference re-check; recent uploads
-      // retain the collector's grace period. A failed GC cannot undo a delete.
-      await collectUnreferencedMessageMedia(orphanCandidates)
-    } catch (error) {
-      loggers.store.warn("session media cleanup failed", {
-        sessionIds: deletedIds,
-        error: String(error),
-      })
-    }
-  }
-  scope?.assertActive()
-  clearTemporarySessionAssets(cleanupIds)
-  await cleanupScheduledLoopTasks(scheduledTaskIds, scope)
-  scope?.assertActive()
-  const sandboxReleaseErrors: unknown[] = []
-  for (const id of deletedIds) {
-    try {
-      await releaseSandboxSessionWithRetry(id, scope)
-    } catch (error) {
-      sandboxReleaseErrors.push(error)
-    }
-    scope?.assertActive()
-    invalidatePersistSnapshot(id)
-    markSessionRemoved(id)
-    try {
-      // Cancel composer debounce timers after commit so they cannot restore
-      // the draft row removed above. Do not enqueue a remote draft write.
-      await clearDraft(id, { hostAlreadyCleared: true })
-    } catch (error) {
-      loggers.store.warn("session draft cleanup failed", {
-        sessionId: id,
-        error: String(error),
-      })
-    }
-    // Post-commit, alongside the other derived-view cleanups. Every citation
-    // captured in this conversation now points at nothing, so the claims that
-    // rested on it must stop being injected; the arithmetic that follows runs
-    // on the job worker.
-    scope?.assertActive()
-    await revokeClaimsForDeletedSession(id, ...(scope ? ([scope] as const) : []))
-    scope?.assertActive()
-    await purgeSessionStoreBuckets(id, scope)
-  }
-  if (sandboxReleaseErrors.length > 0) {
-    // The transaction already committed — the sessions ARE deleted. Rejecting
-    // here would report a completed deletion as failed and let an optimistic
-    // caller roll rows back into a list they no longer exist in. A provider
-    // resource that outlived its session is a cleanup problem, not a delete
-    // failure, and the runtime retries the release on the next bind.
-    loggers.store.warn("sandbox runtime release failed after session delete", {
-      sessionIds: deletedIds,
-      errors: sandboxReleaseErrors.map((error) => String(error)),
-    })
+      await deletePlansForSessionsInTransaction(db, deletedIds, at)
+
+      const loopRows = await db.loops.where("sessionId").anyOf(deletedIds).toArray()
+      const loopIds = loopRows.map((row) => row.id)
+      scheduledTaskIds = loopRows.flatMap((row) =>
+        row.scheduledTaskId ? [row.scheduledTaskId] : []
+      )
+      if (loopIds.length > 0) {
+        await db.loopEvents.where("loopId").anyOf(loopIds).delete()
+        await db.loops.bulkDelete(loopIds)
+      }
+
+      const survivingParentOf = (sessionId: string): string | undefined => {
+        let parentId = doomedById.get(sessionId)?.parentSessionId
+        const visited = new Set<string>()
+        while (parentId && doomedIds.has(parentId) && !visited.has(parentId)) {
+          visited.add(parentId)
+          parentId = doomedById.get(parentId)?.parentSessionId
+        }
+        return parentId
+      }
+
+      // Preserve ordinary branches while attached children remain owned by
+      // the deletion set. A surviving branch is connected to the nearest
+      // surviving ancestor, matching the single-delete contract.
+      for (const id of deletedIds) {
+        const childIds = (await db.sessions
+          .where("parentSessionId")
+          .equals(id)
+          .primaryKeys()) as string[]
+        const fallbackParentId = survivingParentOf(id)
+        for (const childId of childIds) {
+          if (!doomedIds.has(childId)) {
+            await db.sessions.update(childId, { parentSessionId: fallbackParentId })
+          }
+        }
+      }
+
+      // A generated video kept in Files keeps what its job recorded; read
+      // before the refs and jobs below go.
+      await preserveGeneratedVideoRecords(db, deletedIds)
+      const allMessageIds: string[] = []
+      const usageIds: string[] = []
+      const mediaRefs = await db.messageMediaRefs.where("sessionId").anyOf(deletedIds).toArray()
+      for (const ref of mediaRefs) {
+        if (ref.sessionAsset) sessionAssetOrphans.add(ref.hash)
+        else orphanCandidates.add(ref.hash)
+      }
+      await db.messageMediaRefs.where("sessionId").anyOf(deletedIds).delete()
+      for (const hash of sessionAssetOrphans) {
+        if (!(await db.messageMediaRefs.where("hash").equals(hash).count()))
+          await db.messageMedia.delete(hash)
+      }
+      await db.sessionState.bulkDelete(deletedIds)
+      await db.chatDrafts.bulkDelete(deletedIds)
+      await db.chatInputHistory.where("sessionId").anyOf(deletedIds).delete()
+      await db.chatTurnSummaries.where("sessionId").anyOf(deletedIds).delete()
+      await db.chatTranscriptIndexState.bulkDelete(deletedIds)
+      for (const id of deletedIds) {
+        const msgIds = (await db.messages.where("sessionId").equals(id).primaryKeys()) as string[]
+        allMessageIds.push(...msgIds)
+        await db.messages.where("sessionId").equals(id).delete()
+        usageIds.push(
+          ...((await db.sessionUsage.where("sessionId").equals(id).primaryKeys()) as string[])
+        )
+        await db.sessionUsage.where("sessionId").equals(id).delete()
+        await db.sessions.delete(id)
+      }
+      await db.sessionPeerMessages
+        .filter(
+          (row) =>
+            (doomedIds.has(row.senderSessionId) || doomedIds.has(row.receiverSessionId)) &&
+            (scope?.allowsCleanupRow?.("sessionPeerMessages", row) ?? true)
+        )
+        .delete()
+      // Video jobs a conversation started (ADR-0205); their video is one of
+      // the session assets released above.
+      await db.mediaGenerationJobs.where("sessionId").anyOf(deletedIds).delete()
+      scope?.assertActive()
+      await recordTombstones("sessions", deletedIds, at)
+      scope?.assertActive()
+      await recordTombstones("messages", allMessageIds, at)
+      scope?.assertActive()
+      await recordTombstones("sessionState", deletedIds, at)
+      // Goals are mirrored on their own (`goals`), so the ones this cascade
+      // dropped need their own tombstones or they outlive their session on
+      // every paired client.
+      scope?.assertActive()
+      await recordTombstones("goals", goalIds, at)
+      // Usage rows are mirrored too (a member's dashboard reads the Host's).
+      scope?.assertActive()
+      await recordTombstones("sessionUsage", usageIds, at)
+      scope?.assertActive()
+    },
+    async finish(committed: boolean): Promise<void> {
+      if (!committed) {
+        await desktopDeletion.finish(false).catch(() => undefined)
+        return
+      }
+      // A failed external acknowledgment cannot roll a committed conversation back.
+      for (const sessionId of deletedIds)
+        publishChatLifecycleEvent({ type: "session-deleted", sessionId }, Dexie.currentTransaction)
+      await desktopDeletion.finish(true).catch(() => undefined)
+      scope?.assertActive()
+      if (orphanCandidates.size > 0) {
+        try {
+          // Shared media survives the indexed reference re-check; recent uploads
+          // retain the collector's grace period. A failed GC cannot undo a delete.
+          await collectUnreferencedMessageMedia(orphanCandidates)
+        } catch (error) {
+          loggers.store.warn("session media cleanup failed", {
+            sessionIds: deletedIds,
+            error: String(error),
+          })
+        }
+      }
+      scope?.assertActive()
+      clearTemporarySessionAssets(cleanupIds)
+      await cleanupScheduledLoopTasks(scheduledTaskIds, scope)
+      scope?.assertActive()
+      const sandboxReleaseErrors: unknown[] = []
+      for (const id of deletedIds) {
+        try {
+          await releaseSandboxSessionWithRetry(id, scope)
+        } catch (error) {
+          sandboxReleaseErrors.push(error)
+        }
+        scope?.assertActive()
+        invalidatePersistSnapshot(id)
+        markSessionRemoved(id)
+        try {
+          // Cancel composer debounce timers after commit so they cannot restore
+          // the draft row removed above. Do not enqueue a remote draft write.
+          await clearDraft(id, { hostAlreadyCleared: true })
+        } catch (error) {
+          loggers.store.warn("session draft cleanup failed", {
+            sessionId: id,
+            error: String(error),
+          })
+        }
+        // Post-commit, alongside the other derived-view cleanups. Every citation
+        // captured in this conversation now points at nothing, so the claims that
+        // rested on it must stop being injected; the arithmetic that follows runs
+        // on the job worker.
+        scope?.assertActive()
+        await revokeClaimsForDeletedSession(id, ...(scope ? ([scope] as const) : []))
+        scope?.assertActive()
+        await purgeSessionStoreBuckets(id, scope)
+      }
+      if (sandboxReleaseErrors.length > 0) {
+        // The transaction already committed — the sessions ARE deleted. Rejecting
+        // here would report a completed deletion as failed and let an optimistic
+        // caller roll rows back into a list they no longer exist in. A provider
+        // resource that outlived its session is a cleanup problem, not a delete
+        // failure, and the runtime retries the release on the next bind.
+        loggers.store.warn("sandbox runtime release failed after session delete", {
+          sessionIds: deletedIds,
+          errors: sandboxReleaseErrors.map((error) => String(error)),
+        })
+      }
+    },
   }
 }
 

@@ -15,11 +15,16 @@ import {
   serializePackage,
 } from "@/lib/data/build-package"
 import { getDefaultBackupPassphrase } from "@/lib/data/backup-key"
-import { pruneScheduledBackups, shouldRunScheduledBackup } from "@/lib/data/scheduler"
+import {
+  pruneScheduledBackups,
+  scheduledBackupCompletedAt,
+  shouldRunScheduledBackup,
+} from "@/lib/data/scheduler"
 import { encryptSnapshotBody, webdavSnapshotName } from "@/lib/data/destinations/webdav"
 import { appendBackupHistory } from "@/lib/db/backup-history"
 import { getSettings, saveSettings } from "@/lib/db/settings"
 import { getDb } from "@/lib/db/schema"
+import { getDeviceMetadata } from "@/lib/device/device-identity"
 import { sha256Hex } from "./crypto"
 import { normalizedBackupPath, withBackupLock } from "./backup-write-lock"
 import {
@@ -35,6 +40,8 @@ import { buildBackupStream } from "./build-stream"
 export const BACKUP_CHECK_INTERVAL_MS = 30 * 60 * 1000
 
 export interface BackupFilesystem {
+  /** Stable Host installation/partition identity when Web Storage is ephemeral. */
+  installationId?: string
   /** Incremental, atomically committed file output on current desktop/headless hosts. */
   writeStream?(
     path: string,
@@ -172,7 +179,15 @@ async function runIntervalBackup(
 
   try {
     if (!passphrase) throw new Error(opts.messages.autoKeyUnavailable)
-    const fileName = defaultExportFileName(opts.now?.() ?? new Date(), "encrypted")
+    const installationId = opts.filesystem.installationId ?? (await getDeviceMetadata())?.id
+    assertActive()
+    const fileTime = opts.now?.() ?? new Date()
+    const fileName = defaultExportFileName(fileTime, "encrypted", installationId).replace(
+      "-owner-",
+      `-interval-${fileTime.toISOString().replace(/[-:.]/g, "")}-owner-`
+    )
+    const ownerSuffix = fileName.match(/-owner-[a-f0-9]{64}\.enc\.cbk$/)?.[0]
+    if (!ownerSuffix) throw new Error("backup_owner_missing")
     const sep = config.dirPath.includes("\\") ? "\\" : "/"
     const directory = config.dirPath.replace(/[/\\]+$/, "")
     const target = `${directory}${sep}${fileName}`
@@ -214,14 +229,18 @@ async function runIntervalBackup(
     try {
       const names = await opts.filesystem.readDirNames(config.dirPath)
       assertActive()
-      const candidates = names
-        .filter((name) => /^cognia-backup-\d{4}-\d{2}-\d{2}\.enc\.cbk$/.test(name))
-        .map((name) => ({ name: `${directory}${sep}${name}`, completedAt: 0 }))
-        .sort((a, b) => (a.name < b.name ? 1 : -1))
-      const toRemove = pruneScheduledBackups(
-        candidates.map((candidate, index) => ({ ...candidate, completedAt: -index })),
-        config.retainCount
-      )
+      const candidates = names.flatMap((name) => {
+        if (!name.endsWith(ownerSuffix)) return []
+        const timestamp = scheduledBackupCompletedAt(name)
+        if (timestamp === null) return []
+        return [
+          {
+            name: `${directory}${sep}${name}`,
+            completedAt: name === fileName ? completedAt : timestamp,
+          },
+        ]
+      })
+      const toRemove = pruneScheduledBackups(candidates, config.retainCount, target)
       for (const candidate of toRemove) {
         try {
           assertActive()

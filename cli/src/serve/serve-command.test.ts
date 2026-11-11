@@ -6,8 +6,6 @@
  * @jest-environment node
  */
 import fs from "node:fs"
-import http from "node:http"
-import type { AddressInfo } from "node:net"
 import os from "node:os"
 import path from "node:path"
 
@@ -20,8 +18,18 @@ import { durabilityRoot, openBackend } from "./persistence/backend"
 import { BRIDGE_PROTOCOL_VERSION } from "./protocol"
 import { projectWorkerPlacement, resolveServeCollabConfig, serveCommand } from "./serve-command"
 import type { HeadlessRuntimeContext } from "@/lib/headless/types"
+import { getStorageRetentionSnapshot } from "@/lib/storage/retention"
+import { brainBackup } from "../account-sync/headless-sync"
+import { runScheduledBackupOnce } from "@/lib/data/backup-scheduler"
+
+jest.mock("@/lib/storage/retention", () => ({
+  getStorageRetentionSnapshot: jest.fn(() => null),
+  startStorageRetentionSweeper: jest.fn(async () => () => undefined),
+}))
 
 const mockBootOrder: string[] = []
+let mockRuntimeContext: HeadlessRuntimeContext | undefined
+let mockBackupFailure = false
 const mockCollabAdapter = {
   resolve: jest.fn().mockResolvedValue(null),
   refresh: jest.fn().mockResolvedValue(null),
@@ -54,6 +62,7 @@ jest.mock("@/lib/headless/bootstrap", () => {
       now: () => number,
       onChange: (statuses: unknown[]) => void
     ) => {
+      mockRuntimeContext = context
       if (context.host === "person-brain") {
         expect(context.collab).toBeUndefined()
         const { personChatCapability } = await import("@/lib/headless/person-chat")
@@ -66,6 +75,13 @@ jest.mock("@/lib/headless/bootstrap", () => {
         })
       } else {
         expect(context.collab).toBe(mockCollabAdapter)
+        if (mockBackupFailure) {
+          expect(() => context.backupFilesystem?.installationId).toThrow("Host backups unavailable")
+        } else {
+          expect(context.backupFilesystem?.installationId).toMatch(
+            /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
+          )
+        }
       }
       mockBootOrder.push("runtimes-started")
       const result = await actual.bootstrapHeadlessRuntimes(context, now, onChange)
@@ -197,8 +213,8 @@ class FakeServerSocket implements WebSocketLike {
 }
 
 /**
- * The control-plane half of the scripted server: a real HTTP listener that
- * answers every `CompanionTransport.call` with a non-retryable 404.
+ * The control-plane half of the scripted server: an injected HTTP response
+ * that answers every `CompanionTransport.call` with a non-retryable 404.
  *
  * Booting the brain activates the whole built-in plugin roster, and each
  * activation awaits host RPCs (`mirrorDeclaredPermissionsToLedger`,
@@ -208,16 +224,24 @@ class FakeServerSocket implements WebSocketLike {
  * terminal on the first attempt, so the boot keeps the same end state (the
  * mirrors are best-effort and still fail) without the backoff.
  */
-async function startControlPlane(): Promise<{ url: string; close: () => Promise<void> }> {
-  const server = http.createServer((_req, res) => {
-    res.writeHead(404, { "content-type": "application/json" })
-    res.end(JSON.stringify({ code: "unknown_command", message: "not served by the test brain" }))
-  })
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
-  const { port } = server.address() as AddressInfo
+async function startControlPlane(
+  backupKey?: string
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const fetchMock = jest
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (url) =>
+      backupKey && String(url).endsWith("/secret_store_get")
+        ? new Response(JSON.stringify({ result: backupKey }), { status: 200 })
+        : new Response(
+            JSON.stringify({ code: "unknown_command", message: "not served by the test brain" }),
+            { status: 404, headers: { "content-type": "application/json" } }
+          )
+    )
   return {
-    url: `http://127.0.0.1:${port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    url: "http://127.0.0.1:7999",
+    close: async () => {
+      fetchMock.mockRestore()
+    },
   }
 }
 
@@ -253,7 +277,10 @@ function env(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 const TEST_ACCOUNT_CONTENT_KEY = "a".repeat(64)
 
 beforeEach(() => {
+  mockRuntimeContext = undefined
+  mockBackupFailure = false
   process.env.COGNIA_ACCOUNT_CONTENT_KEY = TEST_ACCOUNT_CONTENT_KEY
+  jest.mocked(getStorageRetentionSnapshot).mockReturnValue(null)
 })
 
 afterEach(() => {
@@ -261,6 +288,112 @@ afterEach(() => {
 })
 
 describe("serveCommand", () => {
+  it.each(["", "damaged identity", "00000000-0000-4000-8000-000000000001\n"])(
+    "isolates installation identity %j failures to backups and reports runtime health",
+    async (identity) => {
+      __resetCliDbForTesting()
+      mockBackupFailure = !identity.trim().startsWith("00000000-")
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-serve-backup-id-"))
+      const identityPath = path.join(home, "installation-id")
+      fs.writeFileSync(identityPath, identity, { mode: 0o600 })
+      const controlPlane = await startControlPlane("test-host-backup-key")
+      const out = sink()
+      let verified = false
+      let verificationError: unknown
+      try {
+        await expect(
+          serveCommand(parseArgv(["serve", "--home", home]), {
+            out,
+            env: env({
+              COGNIA_SERVER_URL: controlPlane.url,
+              COGNIA_SERVICE_TOKEN: "backup-id-test",
+              COGNIA_COLLAB_URL: "https://collab.test",
+              COGNIA_COLLAB_ORG_ID: "org_acme",
+            }),
+            wsFactory: (url) => new FakeServerSocket(url),
+            shutdown: Promise.resolve(),
+            onStarted: async () => {
+              try {
+                const health = FakeServerSocket.last!.sent.map((frame) => JSON.parse(frame))
+                  .filter((frame) => frame.type === "pong")
+                  .at(-1)
+                expect(health.bootstrapped).toBe(true)
+                expect(health.failedRequiredRuntimes).not.toContain("backup-scheduler")
+                if (mockBackupFailure) {
+                  expect(
+                    health.failedRuntimes.filter((name: string) => name === "backup-scheduler")
+                  ).toEqual(["backup-scheduler"])
+                  expect(out.logs.join("")).toContain("invalid_headless_installation_id")
+                  const { saveSettings } = await import("@/lib/db/settings")
+                  await saveSettings(
+                    {
+                      backupAutoSchedule: {
+                        enabled: true,
+                        dirPath: path.join(home, "backups"),
+                        intervalDays: 1,
+                        retainCount: 2,
+                      },
+                    },
+                    { mirrorToHost: false }
+                  )
+                  const filesystem = mockRuntimeContext!.backupFilesystem!
+                  await expect(
+                    runScheduledBackupOnce({
+                      filesystem,
+                      messages: {
+                        missingDestination: "missing destination",
+                        autoKeyUnavailable: "missing key",
+                        syncPassphraseLocked: "locked",
+                        newerTitle: "newer",
+                        newerBody: "newer backup",
+                      },
+                    })
+                  ).resolves.toBe(false)
+                  const { listBackupHistory } = await import("@/lib/db/backup-history")
+                  expect(await listBackupHistory()).toEqual(
+                    expect.arrayContaining([
+                      expect.objectContaining({
+                        success: false,
+                        errorMessage: expect.stringContaining("Host backups unavailable"),
+                      }),
+                    ])
+                  )
+                  await expect(
+                    brainBackup({
+                      filesystem,
+                      fallbackDir: path.join(home, "backups"),
+                    })()
+                  ).rejects.toThrow("Host backups unavailable")
+                  expect(fs.existsSync(path.join(home, "backups"))).toBe(false)
+                } else {
+                  expect(health.failedRuntimes).not.toContain("backup-scheduler")
+                  expect(out.logs.join("")).not.toContain("Host backups unavailable")
+                  expect(mockRuntimeContext!.backupFilesystem!.installationId).toBe(identity.trim())
+                }
+                expect(fs.readFileSync(identityPath, "utf8")).toBe(identity)
+                verified = true
+              } catch (error) {
+                // Let serve stop all actual runtimes even when an assertion fails.
+                verificationError = error
+              }
+            },
+          })
+        ).resolves.toBe(0)
+        if (verificationError) throw verificationError
+        expect(verified).toBe(true)
+        expect(out.logs.join("")).toContain("account local_acct_a unlocked")
+        expect(out.logs.join("")).toContain("bridge connected")
+      } finally {
+        await controlPlane.close()
+        const { __resetDbForTesting } = await import("@/lib/db/schema")
+        __resetDbForTesting()
+        __resetCliDbForTesting()
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    },
+    30_000
+  )
+
   it("fails fast without a server url or a service token", async () => {
     const out = sink()
     expect(await serveCommand(parseArgv(["serve"]), { out, env: env() })).toBe(2)
@@ -417,6 +550,33 @@ describe("serveCommand", () => {
             .filter((f) => f.type === "pong")
             .at(-1)
           expect(pong?.failedRuntimes).toContain("broken-runtime")
+
+          const retention = jest.mocked(getStorageRetentionSnapshot)
+          for (const status of ["failed", "partial", "blocked", "unknown"] as const) {
+            retention.mockReturnValue({
+              completedAt: Date.now(),
+              results: [{ id: "agentTraces", removed: 0, status }],
+            })
+            server.serverSend({ v: 1, type: "ping" })
+            await new Promise((resolve) => setTimeout(resolve, 10))
+            const health = JSON.parse(
+              server.sent.filter((s) => JSON.parse(s).type === "pong").at(-1)!
+            )
+            expect(
+              health.failedRuntimes.filter((name: string) => name === "storage-retention")
+            ).toEqual(["storage-retention"])
+          }
+          retention.mockReturnValue({
+            completedAt: Date.now(),
+            results: [{ id: "agentTraces", removed: 0, status: "completed-no-work" }],
+          })
+          server.serverSend({ v: 1, type: "ping" })
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          const health = JSON.parse(
+            server.sent.filter((s) => JSON.parse(s).type === "pong").at(-1)!
+          )
+          expect(health.failedRuntimes).not.toContain("storage-retention")
+          retention.mockReturnValue(null)
 
           // And it answers the server's runtime list.
           server.serverSend({

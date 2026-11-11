@@ -443,10 +443,19 @@ function ClearBlock() {
     try {
       if (target === "all") {
         log.warn("clear_all_initiated")
-        await clearAll()
+        const result = await clearAll()
         log.warn("clear_all_completed")
-        toast.success(t("clearAllSuccess"))
-        setTimeout(() => window.location.reload(), 250)
+        if (result.cleanupFailures.length > 0) {
+          const items = result.cleanupFailures
+            .map((failure) =>
+              failure === "browserPreview" ? t("clearAllBrowserPreview") : t("clearAllAppData")
+            )
+            .join(", ")
+          toast.warning(t("clearAllPartial", { items }), { duration: 5000 })
+        } else {
+          toast.success(t("clearAllSuccess"))
+        }
+        setTimeout(() => window.location.reload(), result.cleanupFailures.length ? 5000 : 250)
       } else {
         log.info("clear_table_initiated", { table: target })
         await clearTables([target])

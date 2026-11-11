@@ -4,7 +4,13 @@ import { getDb } from "@/lib/db/schema"
 import { createRecreatedDbTestFixture } from "@/lib/db/test-fixture"
 import { setDraftDebounced, clearDraft } from "@/lib/db/chat-drafts"
 import { loggers } from "@cognia/logging"
-import { putSessionAsset, listSessionAssets, putLibraryAsset } from "@/lib/db/session-assets"
+import {
+  putSessionAsset,
+  getSessionAsset,
+  listSessionAssets,
+  putLibraryAsset,
+  clearTemporarySessionAssets,
+} from "@/lib/db/session-assets"
 import { LIBRARY_OWNER_PREFIX, LIBRARY_REF_SESSION_ID } from "@/lib/db/message-media-refs"
 import { clearBrowserPreviewData } from "@/lib/browser/preview-data"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
@@ -18,7 +24,12 @@ const purgeAppData = purgeDatabaseAppData as jest.Mock
 
 const fixture = createRecreatedDbTestFixture({ seeded: false })
 beforeAll(fixture.initialize)
-beforeEach(fixture.restore)
+beforeEach(async () => {
+  await fixture.restore()
+  clearTemporarySessionAssets()
+  clearPreview.mockReset().mockResolvedValue({ cookiesRemoved: 0 })
+  purgeAppData.mockReset().mockResolvedValue(undefined)
+})
 afterAll(fixture.dispose)
 
 const ownedTables = [
@@ -97,6 +108,228 @@ async function seedSessions() {
 }
 
 describe("clearTables", () => {
+  it("clears memory-only temporary assets without requiring session or reference rows", async () => {
+    const db = getDb()
+    await putSessionAsset({
+      sessionId: "unsaved-session",
+      assetId: "private-source",
+      temporary: true,
+      filename: "notes.txt",
+      mediaType: "text/plain",
+      blob: new Blob(["private upload"]),
+    })
+    expect(await db.sessions.count()).toBe(0)
+    expect(await db.messageMediaRefs.count()).toBe(0)
+    expect(await getSessionAsset("unsaved-session", "private-source")).toBeDefined()
+    await clearTables(["sessions"])
+    expect(await getSessionAsset("unsaved-session", "private-source")).toBeUndefined()
+  })
+
+  it.each([true, false])(
+    "clears orphan conversation rows and timers while preserving Files (sessions empty=%s)",
+    async (empty) => {
+      await seedSessions()
+      const db = getDb()
+      await db.messageMedia.put({
+        hash: "orphan-message-media",
+        mediaType: "image/png",
+        blob: new Blob(["orphan"]),
+        byteSize: 6,
+        createdAt: 1,
+        lastUsedAt: 1,
+      })
+      await db.messageMediaRefs.put({
+        messageId: "a",
+        sessionId: "a",
+        hash: "orphan-message-media",
+      })
+      await putSessionAsset({
+        sessionId: "a",
+        assetId: "orphan-source",
+        filename: "source.txt",
+        mediaType: "text/plain",
+        blob: new Blob(["unkept source"]),
+      })
+      const source = await db.messageMediaRefs
+        .where("messageId")
+        .startsWith("session-asset:")
+        .first()
+      await db.messageMediaRefs.put({
+        messageId: `${LIBRARY_OWNER_PREFIX}pin`,
+        sessionId: LIBRARY_REF_SESSION_ID,
+        hash: "shared",
+      })
+      await putLibraryAsset({
+        assetId: "orphan-test-file",
+        filename: "kept.txt",
+        mediaType: "text/plain",
+        blob: new Blob(["Files-owned source"]),
+      })
+      await db.mediaGenerationJobs.bulkPut([
+        { id: "orphan-job", sessionId: "a" },
+        { id: "files-job" },
+      ] as never)
+      if (empty) await db.sessions.clear()
+      else await db.sessions.delete("a")
+      const setTimer = jest.spyOn(globalThis, "setTimeout")
+      setDraftDebounced("a", "must not return", [], 60_000)
+      const timer = setTimer.mock.results.at(-1)!.value
+      setTimer.mockRestore()
+      const clearTimer = jest.spyOn(globalThis, "clearTimeout")
+      try {
+        await clearTables(["sessions"])
+        for (const table of ownedTables.filter((name) => name !== "messageMediaRefs")) {
+          expect(await db.table(table).count()).toBe(0)
+        }
+        expect(clearTimer).toHaveBeenCalledWith(timer)
+        for (const id of ["a", "b"]) {
+          expect(await db.syncTombstones.get(["messages", id])).toBeDefined()
+          expect(await db.syncTombstones.get(["sessionState", id])).toBeDefined()
+        }
+        expect(await db.syncTombstones.get(["sessions", "a"])).toBeUndefined()
+        expect(await db.mediaGenerationJobs.get("orphan-job")).toBeUndefined()
+        expect(await db.mediaGenerationJobs.get("files-job")).toBeDefined()
+        expect(await db.messageMedia.get(source!.hash)).toBeUndefined()
+        expect(await db.messageMedia.get("orphan-message-media")).toBeUndefined()
+        expect(await db.messageMedia.get("shared")).toBeDefined()
+        const refs = await db.messageMediaRefs.toArray()
+        expect(refs).toHaveLength(2)
+        for (const ref of refs) {
+          expect(ref.messageId.startsWith(LIBRARY_OWNER_PREFIX)).toBe(true)
+          expect(await db.messageMedia.get(ref.hash)).toBeDefined()
+        }
+        expect(await db.libraryItems.get("upload:orphan-test-file")).toBeDefined()
+      } finally {
+        clearTimer.mockRestore()
+        await clearDraft("a", { hostAlreadyCleared: true })
+      }
+    }
+  )
+
+  it.each(["creator", "channel", "message", "delivery", "missing-session", "only-host"] as const)(
+    "leaves Host conversations and their rows to the Host (%s provenance)",
+    async (provenance) => {
+      await seedSessions()
+      const db = getDb()
+      if (provenance === "only-host") await db.sessions.delete("a")
+      if (provenance === "creator" || provenance === "only-host") {
+        await db.sessions.update("b", { programmaticCreator: "host-state" })
+      } else if (provenance === "delivery") {
+        await db.sessions.update("b", { deliverySourceHosts: [{ hostId: "host" }] } as never)
+      } else if (provenance === "message") {
+        await db.messages.update("b", { metadata: { hostState: { optimistic: true } } } as never)
+      } else {
+        await db.hostStateChannels.put({
+          channel: "host-index",
+          hostId: "host",
+          state: { kind: "session-index", sessions: [{ sessionId: "b" }] },
+        } as never)
+        if (provenance === "missing-session") await db.sessions.delete("b")
+      }
+      for (const sessionId of provenance === "only-host" ? ["b"] : ["a", "b"]) {
+        await db.chatGoals.put({ id: `goal-${sessionId}`, sessionId } as never)
+        await db.sessionUsage.put({ messageId: `usage-${sessionId}`, sessionId } as never)
+        await db.mediaGenerationJobs.put({ id: `job-${sessionId}`, sessionId } as never)
+      }
+      const hostRows = new Map<string, unknown[]>()
+      await putSessionAsset({
+        sessionId: "b",
+        assetId: "host-memory-only",
+        temporary: true,
+        filename: "kept.txt",
+        mediaType: "text/plain",
+        blob: new Blob(["Host upload"]),
+      })
+      for (const table of ownedTables.filter((name) => name !== "sessions")) {
+        hostRows.set(
+          table,
+          await db
+            .table(table)
+            .filter((row) => row.sessionId === "b")
+            .toArray()
+        )
+      }
+      await expect(clearTables(["sessions"])).resolves.toBeUndefined()
+      expect(await getSessionAsset("b", "host-memory-only")).toBeDefined()
+      expect(await db.sessions.get("a")).toBeUndefined()
+      if (provenance !== "missing-session") expect(await db.sessions.get("b")).toBeDefined()
+      for (const [table, rows] of hostRows) expect(await db.table(table).toArray()).toEqual(rows)
+      expect(await db.chatGoals.get("goal-a")).toBeUndefined()
+      expect(await db.sessionUsage.get("usage-a")).toBeUndefined()
+      expect(await db.mediaGenerationJobs.get("job-a")).toBeUndefined()
+      expect(await db.chatGoals.get("goal-b")).toBeDefined()
+      expect(await db.sessionUsage.get("usage-b")).toBeDefined()
+      expect(await db.mediaGenerationJobs.get("job-b")).toBeDefined()
+      expect(await db.messageMedia.get("shared")).toBeDefined()
+      for (const table of ["sessions", "messages", "sessionState"] as const) {
+        expect(await db.syncTombstones.get([table, "b"])).toBeUndefined()
+      }
+    }
+  )
+
+  it("rolls back orphan cleanup and tombstones when a combined settings reset fails", async () => {
+    await seedSessions()
+    const db = getDb()
+    await db.sessions.clear()
+    await db.settings.put({ id: "singleton" } as never)
+    await putSessionAsset({
+      sessionId: "unsaved-rollback",
+      assetId: "memory-source",
+      temporary: true,
+      filename: "kept.txt",
+      mediaType: "text/plain",
+      blob: new Blob(["rollback keeps memory"]),
+    })
+    const failure = () => {
+      throw new Error("settings reset failed")
+    }
+    db.settings.hook("deleting", failure)
+    try {
+      await expect(clearTables(["sessions", "settings"])).rejects.toThrow("settings reset failed")
+      for (const table of ownedTables.filter((name) => name !== "sessions")) {
+        expect(await db.table(table).count()).toBe(2)
+      }
+      expect(await db.syncTombstones.count()).toBe(0)
+      expect(await db.messageMedia.get("shared")).toBeDefined()
+      expect(await getSessionAsset("unsaved-rollback", "memory-source")).toBeDefined()
+    } finally {
+      db.settings.hook("deleting").unsubscribe(failure)
+    }
+  })
+
+  it("uses the session cascade for goals, usage, plans, loops and peer messages", async () => {
+    await seedSessions()
+    const db = getDb()
+    await db.chatGoals.put({ id: "goal", sessionId: "a" } as never)
+    await db.chatGoalEvents.put({ id: "goal-event", goalId: "goal" } as never)
+    await db.sessionUsage.put({ messageId: "usage", sessionId: "a", at: 1 } as never)
+    await db.agentPlans.put({ id: "plan", sessionId: "a" } as never)
+    await db.agentPlanEvents.put({ id: "plan-event", planId: "plan" } as never)
+    await db.loops.put({ id: "loop", sessionId: "a" } as never)
+    await db.loopEvents.put({ id: "loop-event", loopId: "loop" } as never)
+    await db.sessionPeerMessages.put({
+      id: "peer",
+      senderSessionId: "a",
+      receiverSessionId: "b",
+    } as never)
+    await db.mediaGenerationJobs.put({ id: "video-job", sessionId: "a" } as never)
+    await clearTables(["sessions"])
+    for (const table of [
+      "chatGoals",
+      "chatGoalEvents",
+      "sessionUsage",
+      "agentPlans",
+      "agentPlanEvents",
+      "loops",
+      "loopEvents",
+      "sessionPeerMessages",
+      "mediaGenerationJobs",
+    ]) {
+      expect(await db.table(table).count()).toBe(0)
+    }
+    expect(await db.syncTombstones.get(["goals", "goal"])).toBeDefined()
+    expect(await db.syncTombstones.get(["sessionUsage", "usage"])).toBeDefined()
+  })
   it("returns immediately when given no names", async () => {
     const transaction = jest.spyOn(getDb(), "transaction")
     try {
@@ -107,41 +340,60 @@ describe("clearTables", () => {
     }
   })
 
-  it("leaves a generated video kept in Files with what its job recorded", async () => {
+  it("keeps the canonical cascade and tombstones in a combined conversation and settings reset", async () => {
     await seedSessions()
     const db = getDb()
-    await db.messageMediaRefs.put({
-      sessionId: "a",
-      messageId: "session-asset:a:video-vjob_v",
-      hash: "original:sha",
-      sessionAsset: { sessionId: "a", assetId: "video-vjob_v", contentHash: "sha" } as never,
-    })
-    await db.mediaGenerationJobs.put({
-      id: "vjob_v",
-      sessionId: "a",
-      status: "succeeded",
-      request: { prompt: "waves" },
-      provider: { providerId: "google", modelId: "veo" },
-      result: { content: { kind: "session-asset", sessionId: "a", assetId: "video-vjob_v" } },
-    } as never)
-    await db.libraryItems.put({
-      key: "session-upload:sha",
-      kind: "session-upload",
-      sourceId: "sha",
-      favoritedAt: 1,
-      snapshot: { title: "waves.mp4" },
-      createdAt: 1,
-      updatedAt: 1,
-    })
-    await clearTables(["sessions"])
-    expect(await db.mediaGenerationJobs.count()).toBe(0)
-    expect((await db.libraryItems.get("session-upload:sha"))?.snapshot?.generated).toEqual({
-      jobId: "vjob_v",
-      prompt: "waves",
-      providerId: "google",
-      modelId: "veo",
-    })
+    await db.settings.put({ id: "singleton" } as never)
+    await db.chatGoals.put({ id: "goal", sessionId: "a" } as never)
+    await db.sessionUsage.put({ messageId: "usage", sessionId: "a", at: 1 } as never)
+    await clearTables(["sessions", "settings"])
+    expect(await db.settings.count()).toBe(0)
+    expect(await db.chatGoals.count()).toBe(0)
+    expect(await db.sessionUsage.count()).toBe(0)
+    for (const table of ownedTables) expect(await db.table(table).count()).toBe(0)
+    expect(await db.syncTombstones.get(["goals", "goal"])).toBeDefined()
+    expect(await db.syncTombstones.get(["sessionUsage", "usage"])).toBeDefined()
   })
+
+  it.each([false, true])(
+    "leaves a generated video kept in Files with what its job recorded (orphan=%s)",
+    async (orphan) => {
+      await seedSessions()
+      const db = getDb()
+      await db.messageMediaRefs.put({
+        sessionId: "a",
+        messageId: "session-asset:a:video-vjob_v",
+        hash: "original:sha",
+        sessionAsset: { sessionId: "a", assetId: "video-vjob_v", contentHash: "sha" } as never,
+      })
+      await db.mediaGenerationJobs.put({
+        id: "vjob_v",
+        sessionId: "a",
+        status: "succeeded",
+        request: { prompt: "waves" },
+        provider: { providerId: "google", modelId: "veo" },
+        result: { content: { kind: "session-asset", sessionId: "a", assetId: "video-vjob_v" } },
+      } as never)
+      await db.libraryItems.put({
+        key: "session-upload:sha",
+        kind: "session-upload",
+        sourceId: "sha",
+        favoritedAt: 1,
+        snapshot: { title: "waves.mp4" },
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      if (orphan) await db.sessions.clear()
+      await clearTables(["sessions"])
+      expect(await db.mediaGenerationJobs.count()).toBe(0)
+      expect((await db.libraryItems.get("session-upload:sha"))?.snapshot?.generated).toEqual({
+        jobId: "vjob_v",
+        prompt: "waves",
+        providerId: "google",
+        modelId: "veo",
+      })
+    }
+  )
 
   it("clears session-owned rows and tombstones them, collecting only candidate media", async () => {
     await seedSessions()
@@ -248,7 +500,7 @@ describe("clearTables", () => {
       await expect(clearTables(["sessions"])).resolves.toBeUndefined()
       expect(await db.sessions.count()).toBe(0)
       expect(await db.chatDrafts.count()).toBe(0)
-      expect(warn).toHaveBeenCalledWith("cleared session draft cleanup failed", {
+      expect(warn).toHaveBeenCalledWith("session draft cleanup failed", {
         sessionId: "a",
         error: "Error: closed",
       })
@@ -268,8 +520,9 @@ describe("clearTables", () => {
     db.messageMedia.hook("deleting", failDelete)
     try {
       await expect(clearTables(["sessions"])).resolves.toBeUndefined()
-      expect(warn).toHaveBeenCalledWith("cleared session media cleanup failed", {
+      expect(warn).toHaveBeenCalledWith("session media cleanup failed", {
         error: "Error: media unavailable",
+        sessionIds: ["a", "b"],
       })
     } finally {
       db.messageMedia.hook("deleting").unsubscribe(failDelete)
@@ -302,7 +555,7 @@ describe("clearAll", () => {
     const db = getDb()
     const remove = jest.spyOn(db, "delete")
     try {
-      await clearAll()
+      await expect(clearAll()).resolves.toEqual({ databaseReset: true, cleanupFailures: [] })
       expect(remove).toHaveBeenCalledTimes(1)
     } finally {
       remove.mockRestore()
@@ -355,11 +608,14 @@ describe("clearAll", () => {
     expect(purgeAppData).toHaveBeenCalledWith(getActiveAccountId(), name)
   })
 
-  it("still reports the data cleared when a video file is held open", async () => {
+  it("reports a verified database reset separately from files held open", async () => {
     purgeAppData.mockReset().mockRejectedValue(new Error("file in use"))
     const warn = jest.spyOn(loggers.store, "warn").mockImplementation(() => undefined)
     try {
-      await expect(clearAll()).resolves.toBeUndefined()
+      await expect(clearAll()).resolves.toEqual({
+        databaseReset: true,
+        cleanupFailures: ["appData"],
+      })
       expect(warn).toHaveBeenCalledWith(
         "clear all: generated video files were not all removed",
         expect.anything()
@@ -374,11 +630,32 @@ describe("clearAll", () => {
     const warn = jest.spyOn(loggers.store, "warn").mockImplementation(() => undefined)
     const remove = jest.spyOn(getDb(), "delete")
     try {
-      await expect(clearAll()).resolves.toBeUndefined()
+      await expect(clearAll()).resolves.toEqual({
+        databaseReset: true,
+        cleanupFailures: ["browserPreview"],
+      })
       expect(remove).toHaveBeenCalledTimes(1)
       expect(warn).toHaveBeenCalled()
     } finally {
       remove.mockRestore()
+      warn.mockRestore()
+    }
+  })
+
+  it("reports each ancillary failure after verifying both databases were deleted", async () => {
+    const mainName = getDb().name
+    clearPreview.mockRejectedValueOnce(new Error("cookies unavailable"))
+    purgeAppData.mockRejectedValueOnce(new Error("files unavailable"))
+    const warn = jest.spyOn(loggers.store, "warn").mockImplementation(() => undefined)
+    try {
+      await expect(clearAll()).resolves.toEqual({
+        databaseReset: true,
+        cleanupFailures: ["browserPreview", "appData"],
+      })
+      expect(await Dexie.exists(mainName)).toBe(false)
+      expect(await Dexie.exists(`${mainName}-router-fusion-v1`)).toBe(false)
+      expect(purgeAppData).toHaveBeenCalledTimes(1)
+    } finally {
       warn.mockRestore()
     }
   })
@@ -406,34 +683,38 @@ it("clears durable and temporary attachment ownership with sessions", async () =
   expect(await getDb().messageMedia.where("hash").startsWith("original:").count()).toBe(0)
 })
 
-it("leaves Files pins and Files-owned uploads, with their bytes, when clearing conversations", async () => {
-  await seedSessions()
-  const db = getDb()
-  await putSessionAsset({
-    sessionId: "a",
-    assetId: "kept",
-    filename: "kept.txt",
-    mediaType: "text/plain",
-    blob: new Blob(["kept source"]),
-  })
-  const kept = await db.messageMediaRefs.where("messageId").startsWith("session-asset:").first()
-  await db.messageMediaRefs.put({
-    messageId: `${LIBRARY_OWNER_PREFIX}session-upload:x`,
-    sessionId: LIBRARY_REF_SESSION_ID,
-    hash: kept!.hash,
-  })
-  await putLibraryAsset({
-    assetId: "own",
-    filename: "own.md",
-    mediaType: "text/markdown",
-    blob: new Blob(["owned by files"]),
-  })
+it.each([false, true])(
+  "leaves Files pins and Files-owned uploads, with their bytes, when clearing conversations (orphan=%s)",
+  async (orphan) => {
+    await seedSessions()
+    const db = getDb()
+    await putSessionAsset({
+      sessionId: "a",
+      assetId: "kept",
+      filename: "kept.txt",
+      mediaType: "text/plain",
+      blob: new Blob(["kept source"]),
+    })
+    const kept = await db.messageMediaRefs.where("messageId").startsWith("session-asset:").first()
+    await db.messageMediaRefs.put({
+      messageId: `${LIBRARY_OWNER_PREFIX}session-upload:x`,
+      sessionId: LIBRARY_REF_SESSION_ID,
+      hash: kept!.hash,
+    })
+    await putLibraryAsset({
+      assetId: "own",
+      filename: "own.md",
+      mediaType: "text/markdown",
+      blob: new Blob(["owned by files"]),
+    })
 
-  await clearTables(["sessions"])
+    if (orphan) await db.sessions.clear()
+    await clearTables(["sessions"])
 
-  const refs = await db.messageMediaRefs.toArray()
-  expect(refs.every((row) => row.sessionId === LIBRARY_REF_SESSION_ID)).toBe(true)
-  expect(refs).toHaveLength(2)
-  expect(await db.messageMedia.where("hash").startsWith("original:").count()).toBe(2)
-  expect(await db.libraryItems.get("upload:own")).toBeDefined()
-})
+    const refs = await db.messageMediaRefs.toArray()
+    expect(refs.every((row) => row.sessionId === LIBRARY_REF_SESSION_ID)).toBe(true)
+    expect(refs).toHaveLength(2)
+    expect(await db.messageMedia.where("hash").startsWith("original:").count()).toBe(2)
+    expect(await db.libraryItems.get("upload:own")).toBeDefined()
+  }
+)

@@ -562,11 +562,23 @@ describe("serializePackage", () => {
 })
 
 describe("defaultExportFileName", () => {
+  it("separates installations sharing an account and target without exposing their device ids", () => {
+    const now = new Date(2026, 10, 10, 12)
+    const first = defaultExportFileName(now, "encrypted", "device-private-one")
+    const second = defaultExportFileName(now, "encrypted", "device-private-two")
+    expect(first).not.toBe(second)
+    expect(first).toBe(defaultExportFileName(now, "encrypted", "device-private-one"))
+    expect(first).not.toContain("device-private-one")
+    expect(second).not.toContain("device-private-two")
+  })
+
   it("uses .cbk for plaintext and .enc.cbk for encrypted", () => {
     const d = new Date("2024-03-04T10:00:00Z")
-    expect(defaultExportFileName(d, "plain")).toMatch(/^cognia-backup-\d{4}-\d{2}-\d{2}\.cbk$/)
+    expect(defaultExportFileName(d, "plain")).toMatch(
+      /^cognia-backup-\d{4}-\d{2}-\d{2}-owner-[a-f0-9]{64}\.cbk$/
+    )
     expect(defaultExportFileName(d, "encrypted")).toMatch(
-      /^cognia-backup-\d{4}-\d{2}-\d{2}\.enc\.cbk$/
+      /^cognia-backup-\d{4}-\d{2}-\d{2}-owner-[a-f0-9]{64}\.enc\.cbk$/
     )
   })
 })

@@ -51420,6 +51420,9 @@
         "title": "Storage cleanup",
         "willBeFreed": "will be freed"
       },
+      "clearAllAppData": "AppData and generated files",
+      "clearAllBrowserPreview": "browser cookies and preferences",
+      "clearAllPartial": "Database reset; {items} could not be removed. Reloading…",
       "clearAllSuccess": "All data cleared. Reloading…",
       "clearButton": "Clear…",
       "clearConfirmAction": "Permanently delete",

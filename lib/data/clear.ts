@@ -7,14 +7,16 @@ import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { clearBrowserPreviewData } from "@/lib/browser/preview-data"
 import { getDb } from "@/lib/db/schema"
 import { clearTemporarySessionAssets } from "@/lib/db/session-assets"
-import { uniqueIndexKeys } from "@/lib/db/unique-keys"
+import { prepareBulkDeleteSessions } from "@/lib/db/sessions"
 import { clearDraft } from "@/lib/db/chat-drafts"
 import { preserveGeneratedVideoRecords } from "@/lib/db/files-library-items"
+import { collectUnreferencedMessageMedia, isLibraryMediaRef } from "@/lib/db/message-media-refs"
 import {
-  collectUnreferencedMessageMedia,
-  isLibraryMediaRef,
-  LIBRARY_OWNER_PREFIX,
-} from "@/lib/db/message-media-refs"
+  CLEANUP_OWNERSHIP_TABLES,
+  readCleanupRowOwnership,
+  type CleanupRowOwnership,
+} from "@/lib/storage/cleanup-ownership"
+import { getRuntimeTargetScopeKey } from "@/lib/runtime/runtime-target-context"
 import { fusionDatabaseName } from "@/lib/router-fusion/gate/database-name"
 import { recordTombstones } from "@/lib/db/tombstones"
 import { purgeDatabaseAppData } from "@/lib/tauri/account-app-data"
@@ -32,115 +34,164 @@ export async function clearTables(names: ClearableTable[]): Promise<void> {
   if (names.length === 0) return
   const db = getDb()
   const wantsSessions = names.includes("sessions")
+  const targetKey = getRuntimeTargetScopeKey()
+  const assertActive = () => {
+    if (getDb() !== db || getRuntimeTargetScopeKey() !== targetKey)
+      throw new Error("clear_owner_changed")
+  }
   const draftSessionIds = new Set<string>()
   const orphanCandidates = new Set<string>()
+  // These are the legacy reset's orphan tables, not a second session cascade.
+  const orphanTables = [
+    db.messages,
+    db.sessionState,
+    db.chatDrafts,
+    db.chatInputHistory,
+    db.chatTurnSummaries,
+    db.chatTranscriptIndexState,
+  ] as const
+  let rowOwnership: CleanupRowOwnership | undefined
+  const refreshOwnership = async () => {
+    const ownership = await readCleanupRowOwnership(db)
+    assertActive()
+    rowOwnership = ownership
+    return ownership
+  }
+  let deletion: Awaited<ReturnType<typeof prepareBulkDeleteSessions>> = null
+  if (wantsSessions) {
+    const ownership = await refreshOwnership()
+    // Mirrored conversations are left to their Host, including persisted
+    // channel bindings and descendants protected by the storage cleanup guard.
+    const ids = await db.sessions.filter((row) => ownership.allows("sessions", row)).primaryKeys()
+    assertActive()
+    deletion = await prepareBulkDeleteSessions(ids, {
+      db,
+      assertActive,
+      allowsCleanupRow: (table, row) => rowOwnership?.allows(table, row) ?? false,
+      async assertSessionsDeletable(sessionIds) {
+        const ownership = await refreshOwnership()
+        if (sessionIds.some((id) => !ownership.allows("sessions", { id })))
+          throw new Error("Storage cleanup session ownership changed")
+      },
+    })
+  }
 
-  await db.transaction(
-    "rw",
-    [
-      db.sessions,
-      db.messages,
-      db.sessionState,
-      db.chatDrafts,
-      db.chatInputHistory,
-      db.messageMediaRefs,
-      db.messageMedia,
-      db.chatTurnSummaries,
-      db.chatTranscriptIndexState,
-      db.syncTombstones,
-      db.mediaGenerationJobs,
-      db.libraryItems,
-      db.characters,
-      db.skills,
-      db.teams,
-      db.promptPresets,
-      db.mcpServers,
-      db.mcpServerSummaries,
-      db.mcpCapabilityCache,
-      db.settings,
-    ],
-    async () => {
-      if (wantsSessions) {
-        const sessionIds = await db.sessions.toCollection().primaryKeys()
-        // A generated video kept in Files keeps what its job recorded; read
-        // before the refs and jobs below go.
-        await preserveGeneratedVideoRecords(
-          db,
-          (await uniqueIndexKeys(db.mediaGenerationJobs.orderBy("sessionId"))) as string[]
-        )
-        const messageIds = await db.messages.toCollection().primaryKeys()
-        const stateIds = await db.sessionState.toCollection().primaryKeys()
-        const draftIds = await db.chatDrafts.toCollection().primaryKeys()
-        for (const id of [...sessionIds, ...draftIds]) draftSessionIds.add(id)
-        for (const hash of await uniqueIndexKeys(db.messageMediaRefs.orderBy("hash"))) {
-          orphanCandidates.add(String(hash))
+  try {
+    await db.transaction(
+      "rw",
+      // The canonical cascade owns its evolving table set. Keep a combined reset
+      // atomic without maintaining a second copy of that set here.
+      [
+        ...(deletion?.tables ?? []),
+        ...(wantsSessions
+          ? [
+              ...orphanTables,
+              db.messageMediaRefs,
+              db.messageMedia,
+              db.mediaGenerationJobs,
+              db.libraryItems,
+              ...CLEANUP_OWNERSHIP_TABLES.map((name) => db.table(name)),
+            ]
+          : []),
+        db.characters,
+        db.skills,
+        db.teams,
+        db.promptPresets,
+        db.mcpServers,
+        db.mcpServerSummaries,
+        db.mcpCapabilityCache,
+        db.settings,
+        db.syncTombstones,
+      ],
+      async (transaction) => {
+        assertActive()
+        await deletion?.deleteInsideTransaction(transaction)
+        if (wantsSessions) {
+          const ownership = await refreshOwnership()
+          const survivingIds = new Set(await db.sessions.toCollection().primaryKeys())
+          const isOrphan = (row: { sessionId?: string }) =>
+            typeof row.sessionId === "string" &&
+            !survivingIds.has(row.sessionId) &&
+            ownership.allows("sessions", { id: row.sessionId })
+          // A reset also removes rows whose local session was already lost.
+          // Host provenance still protects orphan rows through the same guard.
+          const messageIds = await db.messages.filter(isOrphan).primaryKeys()
+          const stateIds = await db.sessionState.filter(isOrphan).primaryKeys()
+          for (const id of await db.chatDrafts.filter(isOrphan).primaryKeys())
+            draftSessionIds.add(id)
+          const videoSessionIds = new Set<string>()
+          await db.mediaGenerationJobs
+            .where("sessionId")
+            .above("")
+            .filter(isOrphan)
+            .each((row) => {
+              videoSessionIds.add(row.sessionId!)
+            })
+          await preserveGeneratedVideoRecords(db, [...videoSessionIds])
+          const refs = db.messageMediaRefs.filter((row) => isOrphan(row) && !isLibraryMediaRef(row))
+          const sourceHashes = new Set<string>()
+          for (const ref of await refs.toArray()) {
+            orphanCandidates.add(ref.hash)
+            if (ref.sessionAsset) sourceHashes.add(ref.hash)
+          }
+          await refs.delete()
+          for (const hash of sourceHashes) {
+            if (!(await db.messageMediaRefs.where("hash").equals(hash).count()))
+              await db.messageMedia.delete(hash)
+          }
+          for (const table of orphanTables) {
+            await table.filter(isOrphan).delete()
+          }
+          await db.mediaGenerationJobs.where("sessionId").above("").filter(isOrphan).delete()
+          const at = Date.now()
+          await recordTombstones("messages", messageIds, at)
+          await recordTombstones("sessionState", stateIds, at)
         }
-        // Files (ADR-0200) owns `library:` rows: its pins and its own uploads
-        // belong to no conversation, so clearing conversations leaves them —
-        // and the bytes they hold — in place.
-        const libraryRefs = await db.messageMediaRefs
-          .where("messageId")
-          .startsWith(LIBRARY_OWNER_PREFIX)
-          .toArray()
-        const libraryHashes = new Set(libraryRefs.map((row) => row.hash))
-        const sourceHashes = (
-          await db.messageMediaRefs
-            .filter((row) => !!row.sessionAsset && !isLibraryMediaRef(row))
-            .toArray()
-        )
-          .map((row) => row.hash)
-          .filter((hash) => !libraryHashes.has(hash))
-        await db.messages.clear()
-        await db.sessionState.clear()
-        await db.chatDrafts.clear()
-        await db.chatInputHistory.clear()
-        await db.messageMediaRefs.clear()
-        if (libraryRefs.length > 0) await db.messageMediaRefs.bulkPut(libraryRefs)
-        await db.messageMedia.bulkDelete(sourceHashes)
-        await db.chatTurnSummaries.clear()
-        await db.chatTranscriptIndexState.clear()
-        await db.sessions.clear()
-        // Session-bound video jobs (ADR-0205) go with their conversations;
-        // plugin results kept in Files have no session and stay.
-        await db.mediaGenerationJobs.where("sessionId").above("").delete()
-        const at = Date.now()
-        await recordTombstones("sessions", sessionIds, at)
-        await recordTombstones("messages", messageIds, at)
-        await recordTombstones("sessionState", stateIds, at)
+        // Paired clients learn about a clear only through tombstones. Built-ins
+        // are re-seeded on the Host and a paired client keeps its own, so only
+        // user-authored rows are tombstoned: a built-in id in `deleted_ids`
+        // would delete the client's seeded copy.
+        const clearedAt = Date.now()
+        if (names.includes("characters")) {
+          const ids = await db.characters.filter((row) => !row.isBuiltIn).primaryKeys()
+          await db.characters.clear()
+          await recordTombstones("characters", ids as string[], clearedAt)
+        }
+        if (names.includes("skills")) {
+          const ids = await db.skills.filter((row) => !row.isBuiltIn).primaryKeys()
+          await db.skills.clear()
+          await recordTombstones("skills", ids as string[], clearedAt)
+        }
+        if (names.includes("teams")) await db.teams.clear()
+        if (names.includes("promptPresets")) await db.promptPresets.clear()
+        if (names.includes("mcpServers")) {
+          // The summaries are what a paired client mirrors (`mcpServers` on the
+          // wire), so they go with the servers rather than outliving them.
+          const ids = await db.mcpServerSummaries.toCollection().primaryKeys()
+          await db.mcpServers.clear()
+          await db.mcpServerSummaries.clear()
+          await db.mcpCapabilityCache.clear()
+          await recordTombstones("mcpServers", ids as string[], clearedAt)
+        }
+        if (names.includes("settings")) await db.settings.clear()
+        assertActive()
       }
-      // Paired clients learn about a clear only through tombstones. Built-ins
-      // are re-seeded on the Host and a paired client keeps its own, so only
-      // user-authored rows are tombstoned: a built-in id in `deleted_ids`
-      // would delete the client's seeded copy.
-      const clearedAt = Date.now()
-      if (names.includes("characters")) {
-        const ids = await db.characters.filter((row) => !row.isBuiltIn).primaryKeys()
-        await db.characters.clear()
-        await recordTombstones("characters", ids as string[], clearedAt)
-      }
-      if (names.includes("skills")) {
-        const ids = await db.skills.filter((row) => !row.isBuiltIn).primaryKeys()
-        await db.skills.clear()
-        await recordTombstones("skills", ids as string[], clearedAt)
-      }
-      if (names.includes("teams")) await db.teams.clear()
-      if (names.includes("promptPresets")) await db.promptPresets.clear()
-      if (names.includes("mcpServers")) {
-        // The summaries are what a paired client mirrors (`mcpServers` on the
-        // wire), so they go with the servers rather than outliving them.
-        const ids = await db.mcpServerSummaries.toCollection().primaryKeys()
-        await db.mcpServers.clear()
-        await db.mcpServerSummaries.clear()
-        await db.mcpCapabilityCache.clear()
-        await recordTombstones("mcpServers", ids as string[], clearedAt)
-      }
-      if (names.includes("settings")) await db.settings.clear()
-    }
-  )
-  if (wantsSessions) clearTemporarySessionAssets()
-  // External cleanup follows the multi-table commit so a failed reset cannot
-  // cancel a live draft or remove media whose references were rolled back.
+    )
+  } catch (error) {
+    await deletion?.finish(false)
+    throw error
+  }
+  await deletion?.finish(true)
+  assertActive()
+  if (wantsSessions)
+    clearTemporarySessionAssets(undefined, {
+      db,
+      allowsSession: (id) => rowOwnership?.allows("sessions", { id }) ?? false,
+    })
+  // External cleanup follows the combined commit so rollback preserves drafts
+  // and media. The canonical cascade already handles the sessions it deleted.
   for (const sessionId of draftSessionIds) {
+    assertActive()
     try {
       await clearDraft(sessionId, { hostAlreadyCleared: true })
     } catch (error) {
@@ -150,6 +201,7 @@ export async function clearTables(names: ClearableTable[]): Promise<void> {
       })
     }
   }
+  assertActive()
   if (orphanCandidates.size > 0) {
     try {
       await collectUnreferencedMessageMedia(orphanCandidates)
@@ -181,7 +233,12 @@ export async function clearTables(names: ClearableTable[]): Promise<void> {
  * go too. Also best-effort: a file held open is removed by the retention sweep
  * once no job row accounts for it.
  */
-export async function clearAll(): Promise<void> {
+export interface ClearAllResult {
+  databaseReset: true
+  cleanupFailures: Array<"browserPreview" | "appData">
+}
+
+export async function clearAll(): Promise<ClearAllResult> {
   const db = getDb()
   const mainName = db.name
   const localAccountId = getActiveAccountId()
@@ -194,9 +251,11 @@ export async function clearAll(): Promise<void> {
       throw new Error(`Clear all data could not verify the deletion of ${name}`)
     }
   }
+  const cleanupFailures: ClearAllResult["cleanupFailures"] = []
   try {
     await clearBrowserPreviewData()
   } catch (error) {
+    cleanupFailures.push("browserPreview")
     loggers.store.warn("clear all: browser preview data was not cleared", {
       error: String(error),
     })
@@ -204,8 +263,10 @@ export async function clearAll(): Promise<void> {
   try {
     await purgeDatabaseAppData(localAccountId, mainName)
   } catch (error) {
+    cleanupFailures.push("appData")
     loggers.store.warn("clear all: generated video files were not all removed", {
       error: String(error),
     })
   }
+  return { databaseReset: true, cleanupFailures }
 }

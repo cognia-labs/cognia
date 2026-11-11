@@ -5,6 +5,8 @@
 // can override for "true full snapshot" use cases.
 
 import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
+import { sha256 } from "@noble/hashes/sha2.js"
+import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import {
   exportAuthoredContent,
   portableSessionReferences,
@@ -505,18 +507,30 @@ export function serializePackage(pkg: BackupPackageV3): string {
 }
 
 /**
- * Stable filename: `cognia-backup-YYYY-MM-DD.cbk` (`.cbk` = cognia backup).
- * Encrypted variants append `.enc.cbk`. Set `mode` to control which.
+ * Stable filename with a hashed account/database owner (`.cbk` = cognia backup).
+ * Encrypted variants append `.enc.cbk`. A stable installation id also isolates
+ * devices that serve the same account and runtime target.
  */
 export function defaultExportFileName(
   now: Date = new Date(),
-  mode: "plain" | "encrypted" = "plain"
+  mode: "plain" | "encrypted" = "plain",
+  deviceId?: string
 ): string {
   const y = now.getFullYear()
   const m = String(now.getMonth() + 1).padStart(2, "0")
   const d = String(now.getDate()).padStart(2, "0")
   const ext = mode === "encrypted" ? "enc.cbk" : "cbk"
-  return `cognia-backup-${y}-${m}-${d}.${ext}`
+  // The physical database name includes the runtime target. Do not include
+  // routing generations: switching away and back must retain the same owner.
+  const owner = Array.from(
+    sha256(
+      new TextEncoder().encode(
+        JSON.stringify([getActiveAccountId(), getDb().name, ...(deviceId ? [deviceId] : [])])
+      )
+    ),
+    (byte) => byte.toString(16).padStart(2, "0")
+  ).join("")
+  return `cognia-backup-${y}-${m}-${d}-owner-${owner}.${ext}`
 }
 
 export const __TESTING__ = { APP_VERSION }

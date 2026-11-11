@@ -137,6 +137,22 @@ it("keeps temporary originals in memory and releases them on teardown", async ()
   expect(await getSessionAsset("s1", "a1")).toBeUndefined()
 })
 
+it("clears temporary owners selectively while preserving protected sources and search", async () => {
+  for (const sessionId of ["s1", "s2", "memory-only"]) {
+    const asset = await putSessionAsset({ ...input("a1", sessionId), temporary: true })
+    await updateSessionAssetExtraction(sessionId, "a1", extraction("a1", asset.contentHash))
+  }
+  clearTemporarySessionAssets(undefined, {
+    db: getDb(),
+    allowsSession: (sessionId) => sessionId !== "s2",
+  })
+  expect(await getSessionAsset("s1", "a1")).toBeUndefined()
+  expect(await getSessionAsset("memory-only", "a1")).toBeUndefined()
+  expect(await getSessionAsset("s2", "a1")).toBeDefined()
+  expect((await searchSessionAssets("s1", "sqlite")).hits).toHaveLength(0)
+  expect((await searchSessionAssets("s2", "sqlite")).hits).not.toHaveLength(0)
+})
+
 it("keeps session sources when messages are cleared or the transcript is replaced", async () => {
   await putSessionAsset(input())
   await clearMessages("s1")

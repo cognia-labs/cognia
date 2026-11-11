@@ -231,6 +231,9 @@
     "willBeFreed": "will be freed"
   },
   "clearAllSuccess": "All data cleared. Reloading…",
+  "clearAllPartial": "Database reset; {items} could not be removed. Reloading…",
+  "clearAllBrowserPreview": "browser cookies and preferences",
+  "clearAllAppData": "AppData and generated files",
   "clearButton": "Clear…",
   "clearConfirmAction": "Permanently delete",
   "clearConfirmBody": "This cannot be undone. To confirm, type DELETE below.",

@@ -231,6 +231,9 @@
     "willBeFreed": "将被释放"
   },
   "clearAllSuccess": "已清空全部数据。正在重新载入…",
+  "clearAllPartial": "数据库已重置；未能移除：{items}。正在重新载入…",
+  "clearAllBrowserPreview": "浏览器 Cookie 和偏好设置",
+  "clearAllAppData": "AppData 和生成文件",
   "clearButton": "清空…",
   "clearConfirmAction": "永久删除",
   "clearConfirmBody": "此操作不可撤销。请在下方输入 DELETE 进行确认。",

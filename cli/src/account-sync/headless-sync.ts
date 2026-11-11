@@ -16,6 +16,7 @@
  */
 
 import path from "node:path"
+import { randomUUID } from "node:crypto"
 
 import { spaceIdFor } from "@cognia/sync-protocol"
 
@@ -112,7 +113,13 @@ export function brainBackup(input: BrainBackupInput): () => Promise<void> {
       /[/\\]+$/,
       ""
     )
-    const fileName = defaultExportFileName(input.now?.() ?? new Date(), "encrypted")
+    const now = input.now?.() ?? new Date()
+    const timestamp = now.toISOString().replace(/[-:.]/g, "")
+    const fileName = defaultExportFileName(
+      now,
+      "encrypted",
+      input.filesystem.installationId
+    ).replace("-owner-", `-prejoin-${timestamp}-${randomUUID()}-owner-`)
     try {
       const passphrase = await getDefaultBackupPassphrase()
       if (!passphrase) throw new Error("the backup key of this host is unavailable")

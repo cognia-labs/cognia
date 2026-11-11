@@ -534,16 +534,26 @@ export async function releaseSessionAsset(sessionId: string, assetId: string): P
 export const deleteSessionAsset = releaseSessionAsset
 
 /** Synchronous teardown for temporary sessions, also called by session deletion. */
-export function clearTemporarySessionAssets(sessionIds?: readonly string[]): void {
-  const rows = temporaryStore()
-  if (!sessionIds) {
+export function clearTemporarySessionAssets(
+  sessionIds?: readonly string[],
+  options: {
+    db?: ReturnType<typeof getDb>
+    allowsSession?: (sessionId: string) => boolean
+  } = {}
+): void {
+  const db = options.db ?? getDb()
+  const rows = temporaryStore(db)
+  const indexes = searchIndexes.get(db)
+  if (!sessionIds && !options.allowsSession) {
     rows.clear()
-    searchIndexes.get(getDb())?.clear()
+    indexes?.clear()
     return
   }
-  const ids = new Set(sessionIds)
-  for (const id of ids) searchIndexes.get(getDb())?.delete(id)
-  for (const [key, row] of rows) if (ids.has(row.sessionId)) rows.delete(key)
+  const ids = sessionIds ? new Set(sessionIds) : undefined
+  const allows = (sessionId: string) =>
+    (!ids || ids.has(sessionId)) && (options.allowsSession?.(sessionId) ?? true)
+  for (const id of indexes?.keys() ?? []) if (allows(id)) indexes?.delete(id)
+  for (const [key, row] of rows) if (allows(row.sessionId)) rows.delete(key)
 }
 
 /** Durable session deletion uses the existing ledger transaction in sessions.ts. */

@@ -45,6 +45,7 @@ import {
   listSessionBranches,
   countBranchesAtMessage,
   bulkDeleteSessions,
+  prepareBulkDeleteSessions,
   clearBranchSeed,
   acknowledgeImportDivergence,
   bindImportedSessionToNativeRuntime,
@@ -1305,6 +1306,96 @@ describe("updateSession + listSessions", () => {
 })
 
 describe("bulkDeleteSessions", () => {
+  it.each([true, false])(
+    "composes preparation, cascade and post-commit effects with another reset (commit=%s)",
+    async (committed) => {
+      const session = await createSession({ title: "Combined reset" })
+      const db = getDb()
+      await db.chatGoals.put({ id: "combined-goal", sessionId: session.id } as never)
+      await db.sessionUsage.put({ messageId: "combined-usage", sessionId: session.id } as never)
+      await db.settings.put({ id: "singleton" } as never)
+      jest.mocked(isTauri).mockReturnValue(true)
+      jest.mocked(releaseSubjectPortLeases).mockImplementationOnce(async () => {
+        expect(Dexie.currentTransaction).toBeNull()
+        expect(await db.settings.get("singleton")).toBeDefined()
+      })
+      const { subscribeChatLifecycleEvents } = await import("@/lib/chat/lifecycle-events")
+      const receive = jest.fn()
+      const stop = subscribeChatLifecycleEvents(receive)
+      const deletion = await prepareBulkDeleteSessions([session.id])
+      expect(releaseSubjectPortLeases).toHaveBeenCalledWith({
+        kind: "desktop-session",
+        key: session.id,
+      })
+      const failure = new Error("other reset failed")
+      try {
+        const reset = db.transaction("rw", [...deletion!.tables, db.settings], async (tx) => {
+          await deletion!.deleteInsideTransaction(tx)
+          expect(await db.chatGoals.count()).toBe(0)
+          expect(await db.sessionUsage.count()).toBe(0)
+          expect(receive).not.toHaveBeenCalled()
+          expect(releaseSandboxSessionMock).not.toHaveBeenCalled()
+          await db.settings.clear()
+          if (!committed) throw failure
+        })
+        if (committed) await reset
+        else await expect(reset).rejects.toBe(failure)
+        expect(receive).not.toHaveBeenCalled()
+        await deletion!.finish(committed)
+        expect(Dexie.currentTransaction).toBeNull()
+        if (committed) {
+          expect(await db.settings.count()).toBe(0)
+          expect(await db.sessions.get(session.id)).toBeUndefined()
+          expect(await db.syncTombstones.get(["goals", "combined-goal"])).toBeDefined()
+          expect(await db.syncTombstones.get(["sessionUsage", "combined-usage"])).toBeDefined()
+          expect(receive).toHaveBeenCalledWith({ type: "session-deleted", sessionId: session.id })
+          expect(releaseSandboxSessionMock).toHaveBeenCalledWith(session.id)
+        } else {
+          expect(await db.settings.count()).toBe(1)
+          expect(await db.sessions.get(session.id)).toBeDefined()
+          expect(await db.chatGoals.count()).toBe(1)
+          expect(await db.sessionUsage.count()).toBe(1)
+          expect(await db.syncTombstones.count()).toBe(0)
+          expect(receive).not.toHaveBeenCalled()
+          expect(releaseSandboxSessionMock).not.toHaveBeenCalled()
+          // Rollback releases the preparation lock so the same deletion can retry.
+          await bulkDeleteSessions([session.id])
+          expect(await db.sessions.get(session.id)).toBeUndefined()
+        }
+      } finally {
+        stop()
+      }
+    }
+  )
+
+  it("rechecks mirror ownership inside a caller transaction before cascading", async () => {
+    const session = await createSession({ title: "Local until preparation completes" })
+    const db = getDb()
+    const assertSessionsDeletable = jest.fn(async (ids: readonly string[]) => {
+      // Ownership readers require this store in the caller's transaction too.
+      await db.hostStateChannels.count()
+      for (const row of await db.sessions.bulkGet([...ids])) {
+        if (row?.programmaticCreator === "host-state") throw new Error("mirrored-session")
+      }
+    })
+    const deletion = await prepareBulkDeleteSessions([session.id], {
+      db,
+      assertActive() {},
+      assertSessionsDeletable,
+    })
+    await db.sessions.update(session.id, { programmaticCreator: "host-state" })
+    try {
+      await expect(
+        db.transaction("rw", deletion!.tables, (tx) => deletion!.deleteInsideTransaction(tx))
+      ).rejects.toThrow("mirrored-session")
+    } finally {
+      await deletion!.finish(false)
+    }
+    expect(assertSessionsDeletable).toHaveBeenCalledTimes(2)
+    expect(await db.sessions.get(session.id)).toBeDefined()
+    expect(await db.syncTombstones.count()).toBe(0)
+  })
+
   it.each(["commit", "rollback"])(
     "keeps encrypted session cascade %s atomic after prior reads",
     async (outcome) => {

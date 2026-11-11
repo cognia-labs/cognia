@@ -51420,6 +51420,9 @@
         "title": "存储清理",
         "willBeFreed": "将被释放"
       },
+      "clearAllAppData": "AppData 和生成文件",
+      "clearAllBrowserPreview": "浏览器 Cookie 和偏好设置",
+      "clearAllPartial": "数据库已重置；未能移除：{items}。正在重新载入…",
       "clearAllSuccess": "已清空全部数据。正在重新载入…",
       "clearButton": "清空…",
       "clearConfirmAction": "永久删除",
