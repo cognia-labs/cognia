@@ -288,13 +288,25 @@ fn maintain_workspaces(
     service: &TaskWorkspaceService,
     request: WorkspaceMaintenanceRequest,
 ) -> Result<WorkspaceMaintenanceResult, String> {
+    maintain_workspaces_with_source_maintenance(service, request, |path| {
+        cognia_git_mirror::run_source_maintenance(path)
+    })
+}
+
+fn maintain_workspaces_with_source_maintenance(
+    service: &TaskWorkspaceService,
+    request: WorkspaceMaintenanceRequest,
+    mut source_maintenance: impl FnMut(&Path) -> bool,
+) -> Result<WorkspaceMaintenanceResult, String> {
     let mut outcome = service.run_workspace_maintenance(request)?;
+    let persisted_event_count = outcome.events.len();
+    let run_event_id = outcome.events[0].event_id.clone();
     let records = service.list_managed_workspaces()?;
     for (index, common_dir) in source_maintenance_common_dirs(&records)
         .into_iter()
         .enumerate()
     {
-        let success = cognia_git_mirror::run_source_maintenance(&common_dir);
+        let success = source_maintenance(&common_dir);
         let detail = format!(
             "source commit-graph maintenance: repository={}, success={success}",
             common_dir.display()
@@ -305,7 +317,7 @@ fn maintain_workspaces(
             log::warn!("{detail}");
         }
         outcome.events.push(WorkspaceMaintenanceEvent {
-            event_id: format!("source-maintenance-{}-{index}", outcome.started_at),
+            event_id: format!("source-maintenance-{run_event_id}-{index}"),
             kind: if success {
                 cognia_task_workspace::WorkspaceMaintenanceEventKind::Reconciled
             } else {
@@ -316,6 +328,7 @@ fn maintain_workspaces(
             detail,
         });
     }
+    service.append_workspace_maintenance_events(&outcome.events[persisted_event_count..])?;
     Ok(outcome)
 }
 
@@ -2622,6 +2635,62 @@ mod tests {
             .path()
             .join(".git/objects/info/commit-graphs/commit-graph-chain")
             .exists());
+    }
+
+    #[test]
+    fn source_maintenance_failures_are_returned_and_persisted() {
+        let _guard = test_guard();
+        let data = TempDir::new().unwrap();
+        let repository = TempDir::new().unwrap();
+        run_git(repository.path(), &["init"]);
+        run_git(repository.path(), &["config", "user.name", "Cognia Test"]);
+        run_git(
+            repository.path(),
+            &["config", "user.email", "cognia@example.com"],
+        );
+        run_git(
+            repository.path(),
+            &["commit", "--allow-empty", "-m", "seed"],
+        );
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        service
+            .begin_run(begin_input(&repository, "failed-maintenance"))
+            .unwrap();
+        let outcome = maintain_workspaces_with_source_maintenance(
+            &service,
+            WorkspaceMaintenanceRequest { now: Some(42) },
+            |_| false,
+        )
+        .unwrap();
+        let failure = outcome
+            .events
+            .iter()
+            .find(|event| event.detail.starts_with("source commit-graph maintenance:"))
+            .unwrap();
+        assert_eq!(
+            failure.kind,
+            cognia_task_workspace::WorkspaceMaintenanceEventKind::Failed
+        );
+        assert!(failure.detail.contains("success=false"));
+        let history = service.list_workspace_maintenance_events(100).unwrap();
+        assert!(history
+            .iter()
+            .any(|event| event.event_id == failure.event_id && event.detail == failure.detail));
+        maintain_workspaces_with_source_maintenance(
+            &service,
+            WorkspaceMaintenanceRequest { now: Some(42) },
+            |_| true,
+        )
+        .unwrap();
+        let history = service.list_workspace_maintenance_events(100).unwrap();
+        let source_events = history
+            .iter()
+            .filter(|event| event.detail.starts_with("source commit-graph maintenance:"))
+            .collect::<Vec<_>>();
+        assert_eq!(source_events.len(), 2);
+        assert!(source_events
+            .iter()
+            .any(|event| event.event_id == failure.event_id));
     }
 
     #[test]

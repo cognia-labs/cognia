@@ -54,6 +54,16 @@ jest.mock("@/lib/telemetry/events/track-event", () => ({
   trackEvent: (...args: unknown[]) => mockTrackEvent(...args),
 }))
 const runWorkspaceMaintenanceMock = jest.fn()
+const maintenanceOutcome = {
+  startedAt: 1,
+  finishedAt: 2,
+  reconcile: { reclaimed: [], orphaned: [], imported: [] },
+  reclaimedWorkspaceIds: [],
+  expiredSnapshotTaskIds: [],
+  removedBlobCount: 0,
+  reclaimedBytes: 0,
+  events: [],
+}
 const listWorkspaceMaintenanceEventsMock = jest.fn()
 const getWorkspaceLifecyclePolicyMock = jest.fn()
 const setWorkspaceLifecyclePolicyMock = jest.fn()
@@ -90,7 +100,7 @@ beforeEach(() => {
   jest.mocked(toast.error).mockClear()
   saveMock.mockClear()
   mockTrackEvent.mockClear()
-  runWorkspaceMaintenanceMock.mockReset().mockResolvedValue({ events: [] })
+  runWorkspaceMaintenanceMock.mockReset().mockResolvedValue(maintenanceOutcome)
   listWorkspaceMaintenanceEventsMock.mockReset().mockResolvedValue({ items: [] })
   getWorkspaceLifecyclePolicyMock.mockReset().mockResolvedValue({
     activeDirectoryCap: 25,
@@ -186,8 +196,71 @@ describe("<MaintenanceTab /> managed workspace block", () => {
     await user.click(within(block).getByRole("button"))
 
     await waitFor(() => expect(runWorkspaceMaintenanceMock).toHaveBeenCalledTimes(1))
+    expect(runWorkspaceUserActionMock).toHaveBeenCalledWith(
+      "task_workspace_maintenance_run",
+      expect.any(Function)
+    )
     expect(listWorkspaceMaintenanceEventsMock).toHaveBeenCalledTimes(2)
     await waitFor(() => expect(block).toHaveAttribute("data-last-event-detail", "registry checked"))
+  })
+
+  it.each(["en", "zh-CN"])(
+    "shows the full %s run response despite newer history",
+    async (locale) => {
+      mockLocale = locale
+      runWorkspaceMaintenanceMock.mockResolvedValue({
+        ...maintenanceOutcome,
+        reclaimedWorkspaceIds: ["old"],
+        removedBlobCount: 1,
+        reclaimedBytes: 12,
+        events: [
+          { eventId: "ok", kind: "directoryReclaimed", detail: "old directory removed" },
+          { eventId: "git", kind: "failed", detail: "source commit-graph failed" },
+          { eventId: "blob", kind: "failed", detail: "blob unlink permission denied" },
+        ],
+      })
+      listWorkspaceMaintenanceEventsMock.mockResolvedValue({
+        items: [{ eventId: "other", kind: "reconciled", detail: "another run finished" }],
+      })
+      render(<MaintenanceTab />)
+      await userEvent.setup().click(
+        screen.getByRole("button", {
+          name: locale === "en" ? "Run workspace maintenance" : "运行工作区维护",
+        })
+      )
+
+      const result = await screen.findByRole("region", {
+        name: locale === "en" ? "This maintenance run" : "本次维护结果",
+      })
+      expect(within(result).getAllByRole("listitem")).toHaveLength(3)
+      expect(result).toHaveTextContent("old directory removed")
+      expect(result).toHaveTextContent("source commit-graph failed")
+      expect(result).toHaveTextContent("blob unlink permission denied")
+      expect(result).toHaveTextContent(
+        locale === "en"
+          ? "Directories reclaimed: 1; snapshots expired: 0; blobs removed: 1; bytes reclaimed: 12."
+          : "已回收 1 个目录、清理 0 个快照、移除 1 个数据块，释放 12 字节。"
+      )
+      expect(within(result).getByRole("alert")).toHaveTextContent(
+        locale === "en" ? "Maintenance completed with failures." : "维护已结束，部分操作失败。"
+      )
+    }
+  )
+
+  it("keeps the run response visible if refreshing history fails", async () => {
+    listWorkspaceMaintenanceEventsMock
+      .mockResolvedValueOnce({ items: [] })
+      .mockRejectedValueOnce(new Error("history unavailable"))
+    runWorkspaceMaintenanceMock.mockResolvedValue({
+      ...maintenanceOutcome,
+      events: [{ eventId: "failure", kind: "failed", detail: "source maintenance refused" }],
+    })
+    render(<MaintenanceTab />)
+    await userEvent.setup().click(screen.getByRole("button", { name: "Run workspace maintenance" }))
+    expect(await screen.findByRole("region", { name: "This maintenance run" })).toHaveTextContent(
+      "source maintenance refused"
+    )
+    expect(await screen.findByText(/history unavailable/)).toBeInTheDocument()
   })
 
   // A standalone browser has no host: reading anyway painted the transport's

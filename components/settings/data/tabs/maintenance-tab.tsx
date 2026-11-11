@@ -57,6 +57,7 @@ import { useWorkspaceActionController } from "@/hooks/use-workspace-action-contr
 import type {
   WorkspaceLifecyclePolicy,
   WorkspaceMaintenanceEvent,
+  WorkspaceMaintenanceResult,
 } from "@/lib/task-workspace/types"
 
 const CLEAR_TARGETS: { value: ClearableTable | "all"; label: string }[] = [
@@ -281,6 +282,7 @@ function WorkspaceMaintenanceBlock() {
   // red on every visit, beside a Run button that could only fail the same way.
   const hostAvailable = hasHostRuntime()
   const [events, setEvents] = useState<WorkspaceMaintenanceEvent[]>([])
+  const [runResult, setRunResult] = useState<WorkspaceMaintenanceResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -308,8 +310,12 @@ function WorkspaceMaintenanceBlock() {
   const run = async () => {
     setBusy(true)
     setError(null)
+    setRunResult(null)
     try {
-      await runWorkspaceMaintenance()
+      const outcome = await runWorkspaceUserAction("task_workspace_maintenance_run", () =>
+        runWorkspaceMaintenance()
+      )
+      setRunResult(outcome)
       await refresh()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -358,6 +364,35 @@ function WorkspaceMaintenanceBlock() {
           {busy ? t("running") : t("runNow")}
         </Button>
       </div>
+      {runResult ? (
+        <section aria-label={t("runResult")} className="space-y-2 text-xs">
+          <p role={runResult.events.some((event) => event.kind === "failed") ? "alert" : "status"}>
+            {t(
+              runResult.events.some((event) => event.kind === "failed")
+                ? "runPartial"
+                : "runComplete"
+            )}
+          </p>
+          <p>
+            {t("runSummary", {
+              directories: runResult.reclaimedWorkspaceIds.length,
+              snapshots: runResult.expiredSnapshotTaskIds.length,
+              blobs: runResult.removedBlobCount,
+              bytes: runResult.reclaimedBytes,
+            })}
+          </p>
+          <ul className="space-y-1">
+            {runResult.events.map((event) => (
+              <li
+                key={event.eventId}
+                className={event.kind === "failed" ? "text-destructive" : undefined}
+              >
+                {t("lastEvent", { kind: t(`kinds.${event.kind}`), detail: event.detail })}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </Card>
   )
 }

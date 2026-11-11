@@ -6,7 +6,7 @@ use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -102,6 +102,18 @@ pub fn capture_with_policy(
     capture_with_budget(root, policy, None)
 }
 
+/// Archive verification needs per-path overlay provenance: a raw overlay
+/// can share its blob ID with a clean file whose checkout uses CRLF filters.
+pub(crate) fn capture_archive_with_policy(
+    root: &Path,
+    policy: &ResourceTrackingPolicy,
+) -> Result<(WorkspaceSnapshot, HashMap<String, Vec<u8>>, HashSet<String>), String> {
+    let mut overlays = HashSet::new();
+    let (snapshot, blobs) =
+        capture_with_budget_recording_overlays(root, policy, None, Some(&mut overlays))?;
+    Ok((snapshot, blobs, overlays))
+}
+
 /// Bound reads before allocation, including a file growing after metadata.
 /// Used by replica transport; the ordinary workspace capture keeps its profile.
 #[derive(Default)]
@@ -161,7 +173,16 @@ fn check_capture_entries(entries: usize, budget: &Option<CaptureBudget>) -> Resu
 pub(crate) fn capture_with_budget(
     root: &Path,
     policy: &ResourceTrackingPolicy,
+    budget: Option<CaptureBudget>,
+) -> Result<(WorkspaceSnapshot, HashMap<String, Vec<u8>>), String> {
+    capture_with_budget_recording_overlays(root, policy, budget, None)
+}
+
+fn capture_with_budget_recording_overlays(
+    root: &Path,
+    policy: &ResourceTrackingPolicy,
     mut budget: Option<CaptureBudget>,
+    overlay_paths: Option<&mut HashSet<String>>,
 ) -> Result<(WorkspaceSnapshot, HashMap<String, Vec<u8>>), String> {
     // Every acquisition pays this walk, and it reads each file whole into
     // memory before hashing it, so the span is the one number that says
@@ -175,7 +196,9 @@ pub(crate) fn capture_with_budget(
     // Falls through to the walk below whenever the root is not a usable Git
     // worktree — no repository, an unborn branch, a broken `git`.
     if !policy.self_contained {
-        if let Some(captured) = capture_git_backed(&canonical_root, policy, &mut budget)? {
+        if let Some(captured) =
+            capture_git_backed(&canonical_root, policy, &mut budget, overlay_paths)?
+        {
             return Ok(captured);
         }
     }
@@ -564,6 +587,7 @@ fn capture_git_backed(
     canonical_root: &Path,
     policy: &ResourceTrackingPolicy,
     budget: &mut Option<CaptureBudget>,
+    mut overlay_paths: Option<&mut HashSet<String>>,
 ) -> Result<Option<GitBackedCapture>, String> {
     let Some(top_level) =
         capture_git_stdout(canonical_root, &["rev-parse", "--show-toplevel"], budget)?
@@ -698,6 +722,9 @@ fn capture_git_backed(
             continue;
         };
         let hash = git_blob_hash(&bytes, format)?;
+        if let Some(paths) = overlay_paths.as_deref_mut() {
+            paths.insert(path.clone());
+        }
         let binary = kind == EntryKind::File && detect_binary(&bytes);
         entries.insert(
             path.clone(),
@@ -1100,6 +1127,78 @@ pub(crate) fn excluded(path: &Path, root: &Path, generated_roots: &[String]) -> 
 fn base_pin_ref(execution_root: &Path) -> String {
     let digest = Sha256::digest(execution_root.to_string_lossy().as_bytes());
     format!("refs/cognia/workspace-base/{}", hex::encode(digest))
+}
+
+fn archive_pin_prefix(workspace_id: &str) -> String {
+    format!(
+        "refs/cognia/workspace-archive/{}/",
+        hex::encode(Sha256::digest(workspace_id.as_bytes()))
+    )
+}
+
+/// An archive's pin outlives the execution pin removed with the worktree.
+/// Unlike acquisition's best-effort pin, failure here must prevent removal.
+pub(crate) fn pin_archive_base(
+    workspace_root: &Path,
+    workspace_id: &str,
+    snapshot: &WorkspaceSnapshot,
+) -> Result<(), String> {
+    let SnapshotBase::GitCommit { commit } = &snapshot.base else {
+        return Ok(());
+    };
+    // Keep earlier bases too: a recapture can fail before replacing its
+    // persisted archive, so moving a single ref would break the old promise.
+    let pin = format!("{}{commit}", archive_pin_prefix(workspace_id));
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .args(["update-ref", &pin, commit])
+        .output()
+        .map_err(|error| format!("pin archive base: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "pin archive base: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn unpin_archive_base(workspace_root: &Path, workspace_id: &str) -> Result<(), String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .args([
+            "for-each-ref",
+            "--format=%(refname)",
+            &archive_pin_prefix(workspace_id),
+        ])
+        .output()
+        .map_err(|error| format!("unpin archive base: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "unpin archive base: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    for pin in String::from_utf8(output.stdout)
+        .map_err(|error| error.to_string())?
+        .lines()
+    {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(workspace_root)
+            .args(["update-ref", "-d", pin])
+            .output()
+            .map_err(|error| format!("unpin archive base: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "unpin archive base: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Keep the commit a Git-backed snapshot references alive.
@@ -1709,6 +1808,52 @@ mod tests {
         assert!(
             git_ref_target(dir.path(), &pin).is_empty(),
             "the pin must be gone once the workspace is torn down"
+        );
+    }
+
+    #[test]
+    fn archive_capture_records_overlay_paths_when_blob_ids_are_shared() {
+        let dir = git_fixture(|root| {
+            fs::write(root.join("overlay.txt"), b"committed\n").unwrap();
+        });
+        let (snapshot, blobs, overlays) =
+            capture_archive_with_policy(dir.path(), &ResourceTrackingPolicy::default()).unwrap();
+        assert_eq!(
+            snapshot.entries["tracked.txt"].hash,
+            snapshot.entries["overlay.txt"].hash
+        );
+        assert_eq!(blobs[&snapshot.entries["overlay.txt"].hash], b"committed\n");
+        assert!(overlays.contains("overlay.txt"));
+        assert!(!overlays.contains("tracked.txt"));
+        assert!(!overlays.contains("also.txt"));
+    }
+
+    #[test]
+    fn archive_pin_outlives_execution_pin_and_is_released_explicitly() {
+        let dir = git_fixture(|_| {});
+        let (snapshot, _) = capture(dir.path()).unwrap();
+        let SnapshotBase::GitCommit { commit } = &snapshot.base else {
+            panic!("expected Git base")
+        };
+        let execution = dir.path().join("execution");
+        pin_snapshot_base(dir.path(), &execution, &snapshot);
+        pin_archive_base(dir.path(), "archive", &snapshot).unwrap();
+        unpin_snapshot_base(dir.path(), &execution);
+        let pin = format!("{}{commit}", archive_pin_prefix("archive"));
+        assert_eq!(&git_ref_target(dir.path(), &pin), commit);
+        unpin_archive_base(dir.path(), "archive").unwrap();
+        assert!(git_ref_target(dir.path(), &pin).is_empty());
+    }
+
+    #[test]
+    fn archive_pin_failure_is_reported_before_any_removal() {
+        let dir = git_fixture(|_| {});
+        let (snapshot, _) = capture(dir.path()).unwrap();
+        let missing_repository = TempDir::new().unwrap();
+        assert!(
+            pin_archive_base(missing_repository.path(), "archive", &snapshot)
+                .unwrap_err()
+                .contains("pin archive base")
         );
     }
 

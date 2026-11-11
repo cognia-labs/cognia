@@ -24,6 +24,23 @@ pub struct WorkspaceStore {
     decoded: Option<(String, Arc<Vec<u8>>)>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct BlobPruneOutcome {
+    pub removed_blob_count: u64,
+    pub reclaimed_bytes: u64,
+    pub failures: Vec<String>,
+}
+
+impl BlobPruneOutcome {
+    fn into_result(self) -> Result<(u64, u64), String> {
+        if self.failures.is_empty() {
+            Ok((self.removed_blob_count, self.reclaimed_bytes))
+        } else {
+            Err(self.failures.join("; "))
+        }
+    }
+}
+
 /// Largest decoded blob a ranged read keeps between slices. A larger one is
 /// decoded again for every slice, streaming, so memory stays bounded.
 pub const DECODED_BLOB_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -1492,16 +1509,52 @@ impl WorkspaceStore {
     }
 
     pub fn prune_unreferenced_blobs(&mut self) -> Result<(u64, u64), String> {
+        let outcome = self.prune_unreferenced_blobs_detailed()?;
+        outcome.into_result()
+    }
+
+    pub(crate) fn prune_unreferenced_blobs_detailed(&mut self) -> Result<BlobPruneOutcome, String> {
         // Releasing task/undo roots also makes their historical versions eligible.
         self.provenance().compact_provenance(crate::provenance::CompactionLimits::default())
             .map_err(|error| format!("compact provenance before blob prune: {error}"))?;
-        self.prune_unreferenced_blobs_after_scan(|| {})
+        self.prune_unreferenced_blobs_with_unlink(|| {}, |path| fs::remove_file(path))
     }
 
+    #[cfg(test)]
     fn prune_unreferenced_blobs_after_scan(&mut self, after_scan: impl FnOnce()) -> Result<(u64, u64), String> {
+        self.prune_unreferenced_blobs_with_unlink(after_scan, |path| fs::remove_file(path))?.into_result()
+    }
+
+    fn prune_unreferenced_blobs_with_unlink(
+        &mut self,
+        after_scan: impl FnOnce(),
+        mut unlink: impl FnMut(&Path) -> std::io::Result<()>,
+    ) -> Result<BlobPruneOutcome, String> {
         // Pin writers and reference scanning must share one write lock through deletion.
         let transaction = self.connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| format!("begin blob prune: {error}"))?;
+        let mut pending_unlinks = Vec::new();
+        // A crash before commit leaves an indexed blob under its tombstone
+        // name; restore it before scanning references. After commit only the
+        // unindexed tombstone remains, and the next pass retries its unlink.
+        for entry in fs::read_dir(&self.blob_dir).map_err(|error| format!("scan blob tombstones: {error}"))? {
+            let entry = entry.map_err(|error| format!("read blob tombstone: {error}"))?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str().and_then(|name| name.strip_prefix(".prune-")) else { continue };
+            let Some((id, hash)) = name.get(..36).zip(name.get(37..)) else { continue };
+            if Uuid::parse_str(id).is_err() || name.as_bytes().get(36) != Some(&b'-') || hash.is_empty() {
+                continue;
+            }
+            let indexed_path = transaction.query_row(
+                "SELECT rel_path FROM task_blobs WHERE hash=?1", [hash], |row| row.get::<_, String>(0),
+            ).optional().map_err(|error| format!("find staged blob: {error}"))?;
+            let path = entry.path();
+            if let Some(source) = indexed_path.map(|path| self.blob_dir.join(path)).filter(|path| !path.exists()) {
+                fs::rename(&path, &source).map_err(|error| format!("restore staged blob {hash}: {error}"))?;
+            } else {
+                pending_unlinks.push(path);
+            }
+        }
         let mut referenced = HashSet::new();
         {
             let mut pins = transaction.prepare("SELECT hash FROM provenance_blob_pins")
@@ -1570,24 +1623,41 @@ impl WorkspaceStore {
             tombstones.push((source, tombstone));
         }
 
-        let mut reclaimed = 0_u64;
-        for (hash, _, stored_size) in &stale {
+        for (hash, _, _) in &stale {
             if let Err(error) = transaction.execute("DELETE FROM task_blobs WHERE hash=?1", [hash])
             {
                 drop(transaction);
                 restore_tombstones(&tombstones);
                 return Err(format!("delete blob {hash}: {error}"));
             }
-            reclaimed = reclaimed.saturating_add(*stored_size);
         }
         if let Err(error) = transaction.commit() {
             restore_tombstones(&tombstones);
             return Err(format!("commit blob prune: {error}"));
         }
-        for (_, tombstone) in tombstones {
-            let _ = fs::remove_file(tombstone);
+        pending_unlinks.extend(tombstones.into_iter().map(|(_, tombstone)| tombstone));
+        let mut outcome = BlobPruneOutcome::default();
+        for tombstone in pending_unlinks {
+            let size = match fs::symlink_metadata(&tombstone) {
+                Ok(metadata) if metadata.is_file() => metadata.len(),
+                Ok(_) => {
+                    outcome.failures.push(format!("blob tombstone is not a file: {}", tombstone.display()));
+                    continue;
+                }
+                Err(error) => {
+                    outcome.failures.push(format!("stat blob tombstone {}: {error}", tombstone.display()));
+                    continue;
+                }
+            };
+            match unlink(&tombstone) {
+                Ok(()) => {
+                    outcome.removed_blob_count += 1;
+                    outcome.reclaimed_bytes = outcome.reclaimed_bytes.saturating_add(size);
+                }
+                Err(error) => outcome.failures.push(format!("unlink blob tombstone {}: {error}", tombstone.display())),
+            }
         }
-        Ok((stale.len() as u64, reclaimed))
+        Ok(outcome)
     }
 
     // -----------------------------------------------------------------
@@ -2670,6 +2740,105 @@ mod tests {
             created_at: 100,
             updated_at: 100,
         }
+    }
+
+    #[test]
+    fn blob_prune_counts_only_successful_unlinks_and_retries_failures() {
+        let dir = TempDir::new().unwrap();
+        let mut store = WorkspaceStore::open(dir.path(), 1 << 20).unwrap();
+        store.put_blob("removed", b"removed bytes", 1).unwrap();
+        store.put_blob("blocked", b"blocked bytes", 1).unwrap();
+        let outcome = store
+            .prune_unreferenced_blobs_with_unlink(
+                || {},
+                |path| {
+                    if path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .ends_with("-blocked")
+                    {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "injected unlink failure",
+                        ))
+                    } else {
+                        fs::remove_file(path)
+                    }
+                },
+            )
+            .unwrap();
+        assert_eq!(outcome.removed_blob_count, 1);
+        assert_eq!(outcome.reclaimed_bytes, b"removed bytes".len() as u64);
+        assert_eq!(outcome.failures.len(), 1);
+        assert!(outcome.failures[0].contains("injected unlink failure"));
+        let tombstones = fs::read_dir(&store.blob_dir)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(tombstones.len(), 1);
+        assert!(tombstones[0]
+            .file_name()
+            .to_string_lossy()
+            .ends_with("-blocked"));
+        drop(store);
+        let mut reopened = WorkspaceStore::open(dir.path(), 1 << 20).unwrap();
+        assert_eq!(
+            reopened.prune_unreferenced_blobs().unwrap(),
+            (1, b"blocked bytes".len() as u64)
+        );
+        assert_eq!(fs::read_dir(&reopened.blob_dir).unwrap().count(), 0);
+        assert_eq!(reopened.prune_unreferenced_blobs().unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn blob_prune_recovers_a_crash_before_commit_without_losing_pinned_bytes() {
+        let dir = TempDir::new().unwrap();
+        let mut store = WorkspaceStore::open(dir.path(), 1 << 20).unwrap();
+        store.put_blob("kept", b"pinned bytes", 1).unwrap();
+        let root = store
+            .provenance()
+            .register_root("principal", "host", "/kept", "working-tree", None)
+            .unwrap();
+        store
+            .provenance()
+            .prepare_mutation(&crate::provenance::MutationIntent {
+                root_id: root.root_id,
+                operation_key: "kept-op".into(),
+                kind: "apply".into(),
+                manifest: serde_json::json!({}),
+                selection: serde_json::json!([]),
+                blob_refs: vec!["kept".into()],
+                created_at: 1,
+            })
+            .unwrap();
+        fs::rename(
+            store.blob_dir.join("kept.blob"),
+            store
+                .blob_dir
+                .join(format!(".prune-{}-kept", Uuid::now_v7())),
+        )
+        .unwrap();
+        drop(store);
+        let mut reopened = WorkspaceStore::open(dir.path(), 1 << 20).unwrap();
+        assert_eq!(reopened.prune_unreferenced_blobs().unwrap(), (0, 0));
+        assert_eq!(reopened.get_blob("kept", 2).unwrap(), b"pinned bytes");
+        assert_eq!(fs::read_dir(&reopened.blob_dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn blob_prune_cleans_unindexed_tombstones_left_by_a_crashed_run() {
+        let dir = TempDir::new().unwrap();
+        let mut store = WorkspaceStore::open(dir.path(), 1 << 20).unwrap();
+        let orphan = store
+            .blob_dir
+            .join(format!(".prune-{}-orphan", Uuid::now_v7()));
+        fs::write(&orphan, b"leftover bytes").unwrap();
+        assert_eq!(
+            store.prune_unreferenced_blobs().unwrap(),
+            (1, b"leftover bytes".len() as u64)
+        );
+        assert!(!orphan.exists());
     }
 
     #[test]

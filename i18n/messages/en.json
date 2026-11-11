@@ -52092,7 +52092,11 @@
         "lastEvent": "{kind}: {detail}",
         "needsHost": "Managed workspaces live on the desktop app or a paired host. This browser has neither, so there is nothing to maintain here.",
         "noEvents": "No maintenance events recorded yet.",
+        "runComplete": "Maintenance completed.",
         "runNow": "Run workspace maintenance",
+        "runPartial": "Maintenance completed with failures.",
+        "runResult": "This maintenance run",
+        "runSummary": "Directories reclaimed: {directories}; snapshots expired: {snapshots}; blobs removed: {blobs}; bytes reclaimed: {bytes}.",
         "running": "Running…",
         "title": "Managed workspace maintenance"
       }

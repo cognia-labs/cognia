@@ -80,6 +80,29 @@ beforeEach(() => {
 })
 
 describe("approval authority", () => {
+  it("attaches a command-bound lease to paired maintenance and preserves partial outcomes", async () => {
+    snapshotMock.mockReturnValue(
+      companionSnapshot({
+        operations: ["task_workspace_maintenance_run", "host_admin_lease_issue"],
+      })
+    )
+    const outcome = { events: [{ kind: "failed", detail: "source maintenance failed" }] }
+    callMock.mockResolvedValueOnce(outcome)
+
+    const result = await runWorkspaceUserAction("task_workspace_maintenance_run", () =>
+      approvalAwareTransport.call("task_workspace_maintenance_run", { request: { now: null } })
+    )
+
+    expect(issueLeaseMock).toHaveBeenCalledWith(["task_workspace_maintenance_run"], 120, {
+      call: callMock,
+    })
+    expect(callMock).toHaveBeenCalledWith("task_workspace_maintenance_run", {
+      request: { now: null },
+      adminLease: "lease-token",
+    })
+    expect(result).toBe(outcome)
+  })
+
   it("leases an explicit remote owner even when the desktop snapshot has no client target", async () => {
     snapshotMock.mockReturnValue(NATIVE_HOST_SNAPSHOT)
     const origin = { kind: "remote" as const, hostId: "host-a" }

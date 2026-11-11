@@ -830,13 +830,26 @@ pub fn plan_directory_reclaim(
     records: &[WorkspaceRecord],
     policy: WorkspaceLifecyclePolicy,
 ) -> Vec<DirectoryReclaimCandidate> {
+    plan_directory_reclaim_with_protections(records, policy, &HashSet::new())
+}
+
+/// The caller supplies only directories still occupying disk (plus active
+/// provisioning reservations). Protected tasks count toward capacity, but
+/// cannot consume a candidate slot.
+pub(crate) fn plan_directory_reclaim_with_protections(
+    records: &[WorkspaceRecord],
+    policy: WorkspaceLifecyclePolicy,
+    protected_workspace_ids: &HashSet<String>,
+) -> Vec<DirectoryReclaimCandidate> {
     let active_count = records
         .iter()
         .filter(|r| {
-            matches!(
-                r.state,
-                WorkspaceState::Active | WorkspaceState::Provisioning
-            )
+            r.environment_kind == WorkspaceEnvironmentKind::Managed
+                && r.owner_type != WorkspaceOwnerType::Imported
+                && r.isolation_kind != IsolationKind::Observed
+                && r.locked_by.as_deref().and_then(parse_integration_lock_reason).is_none()
+                && (matches!(r.state, WorkspaceState::Active | WorkspaceState::Provisioning)
+                    || r.state.is_prunable() || r.state == WorkspaceState::Conflict)
         })
         .count() as u32;
     if active_count <= policy.active_directory_cap {
@@ -850,6 +863,8 @@ pub fn plan_directory_reclaim(
                 && record.state.is_prunable()
                 && !record.pinned
                 && record.owner_type != WorkspaceOwnerType::Imported
+                && record.isolation_kind != IsolationKind::Observed
+                && !protected_workspace_ids.contains(&record.workspace_id)
                 && record
                     .locked_by
                     .as_deref()
@@ -881,6 +896,15 @@ pub fn plan_snapshot_expiration(
     policy: WorkspaceLifecyclePolicy,
     now: i64,
 ) -> Vec<SnapshotExpirationCandidate> {
+    plan_snapshot_expiration_with_protections(records, policy, now, &HashSet::new())
+}
+
+pub(crate) fn plan_snapshot_expiration_with_protections(
+    records: &[WorkspaceRecord],
+    policy: WorkspaceLifecyclePolicy,
+    now: i64,
+    protected_workspace_ids: &HashSet<String>,
+) -> Vec<SnapshotExpirationCandidate> {
     let retention_window_millis = i64::from(policy.snapshot_retention_days) * 24 * 60 * 60 * 1_000;
     let mut candidates: Vec<SnapshotExpirationCandidate> = Vec::new();
     let mut kept_bytes: u64 = 0;
@@ -888,12 +912,18 @@ pub fn plan_snapshot_expiration(
 
     // Pass 1: aged snapshots — ineligible states are filtered here.
     for record in records {
+        if record.environment_kind != WorkspaceEnvironmentKind::Managed
+            || record.owner_type == WorkspaceOwnerType::Imported
+            || record.isolation_kind == IsolationKind::Observed
+        {
+            continue;
+        }
         let Some(ref task_id) = record.snapshot_task_id else {
             continue;
         };
-        if record.environment_kind != WorkspaceEnvironmentKind::Managed
-            || !record.state.is_prunable()
+        if !record.state.is_prunable()
             || record.pinned
+            || protected_workspace_ids.contains(&record.workspace_id)
             || record
                 .locked_by
                 .as_deref()
@@ -931,6 +961,8 @@ pub fn plan_snapshot_expiration(
                         .iter()
                         .any(|candidate| &candidate.snapshot_task_id == task_id)
                     && record.environment_kind == WorkspaceEnvironmentKind::Managed
+                    && record.owner_type != WorkspaceOwnerType::Imported
+                    && record.isolation_kind != IsolationKind::Observed
                     && record.state.is_prunable()
                     && !record.pinned
             })
@@ -1538,8 +1570,8 @@ mod tests {
 
     #[test]
     fn directory_reclaim_prunes_lru_prunable_over_cap() {
-        // 3 active + 4 archived (all prunable). Cap = 5 → 3 active + only
-        // 2 prunable retained → 2 archived to reclaim.
+        // The caller supplies physical directories: archived directories
+        // still occupy capacity until archive has actually removed them.
         let mut records = Vec::new();
         for i in 0..3 {
             let mut r = record(
@@ -1564,7 +1596,7 @@ mod tests {
             ..WorkspaceLifecyclePolicy::default()
         };
         let plan = plan_directory_reclaim(&records, policy);
-        assert!(plan.is_empty(), "3 active ≤ 5 cap — nothing to reclaim");
+        assert_eq!(plan.len(), 2, "7 physical directories exceed the cap by 2");
         // Now push active over the cap.
         for i in 0..4 {
             let mut r = record(
@@ -1575,9 +1607,9 @@ mod tests {
             r.last_used_at = 500 + i as i64;
             records.push(r);
         }
-        // 7 active → 2 over cap; the 2 oldest prunable archived rows are proposed.
+        // 11 physical directories exceed the cap by 6, but only 4 are prunable.
         let plan = plan_directory_reclaim(&records, policy);
-        assert_eq!(plan.len(), 2);
+        assert_eq!(plan.len(), 4);
         assert_eq!(plan[0].workspace_id, "arch-0");
         assert_eq!(plan[1].workspace_id, "arch-1");
         assert!(plan
@@ -1627,6 +1659,102 @@ mod tests {
         // 8 active > 5 cap → 3 overflow, but only 1 eligible archived row.
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].workspace_id, "eligible");
+    }
+
+    #[test]
+    fn directory_reclaim_applies_protections_before_limiting_candidates() {
+        let active = record("active", WorkspaceState::Active, WorkspaceOwnerType::User);
+        let protected = record(
+            "protected",
+            WorkspaceState::Archived,
+            WorkspaceOwnerType::User,
+        );
+        let mut eligible = record(
+            "eligible",
+            WorkspaceState::Archived,
+            WorkspaceOwnerType::User,
+        );
+        eligible.last_used_at = 1;
+        let mut newer = eligible.clone();
+        newer.workspace_id = "newer".into();
+        newer.last_used_at = 2;
+        let policy = WorkspaceLifecyclePolicy {
+            active_directory_cap: 3,
+            ..Default::default()
+        };
+        let plan = plan_directory_reclaim_with_protections(
+            &[active, protected, eligible, newer],
+            policy,
+            &HashSet::from(["protected".into()]),
+        );
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].workspace_id, "eligible");
+    }
+
+    #[test]
+    fn retention_capacity_and_budget_exclude_non_managed_records() {
+        let mut managed = record(
+            "managed",
+            WorkspaceState::Archived,
+            WorkspaceOwnerType::User,
+        );
+        managed.snapshot_task_id = Some("managed-snapshot".into());
+        managed.size_bytes = Some(100);
+        let mut permanent = managed.clone();
+        permanent.environment_kind = WorkspaceEnvironmentKind::Permanent;
+        permanent.size_bytes = Some(10_000);
+        let mut imported = permanent.clone();
+        imported.environment_kind = WorkspaceEnvironmentKind::Managed;
+        imported.owner_type = WorkspaceOwnerType::Imported;
+        let mut observed = managed.clone();
+        observed.workspace_id = "observed".into();
+        observed.snapshot_task_id = Some("observed-snapshot".into());
+        observed.last_used_at = -1;
+        observed.isolation_kind = IsolationKind::Observed;
+        observed.size_bytes = Some(10_000);
+        let records = [managed, permanent, imported, observed];
+        let policy = WorkspaceLifecyclePolicy {
+            active_directory_cap: 1,
+            blob_budget_bytes: 100,
+            ..Default::default()
+        };
+        assert!(plan_directory_reclaim(&records, policy).is_empty());
+        assert!(plan_snapshot_expiration(&records, policy, 1).is_empty());
+        let over_budget = plan_snapshot_expiration(
+            &records,
+            WorkspaceLifecyclePolicy {
+                blob_budget_bytes: 0,
+                ..policy
+            },
+            1,
+        );
+        assert_eq!(over_budget.len(), 1);
+        assert_eq!(over_budget[0].workspace_id, "managed");
+    }
+
+    #[test]
+    fn snapshot_budget_applies_task_protections_before_selecting_lru() {
+        let mut records = Vec::new();
+        for (id, last_used) in [("protected", 0), ("eligible", 1), ("newer", 2)] {
+            let mut row = record(id, WorkspaceState::Archived, WorkspaceOwnerType::User);
+            row.snapshot_task_id = Some(format!("snapshot-{id}"));
+            row.size_bytes = Some(100);
+            row.last_used_at = last_used;
+            records.push(row);
+        }
+        let policy = WorkspaceLifecyclePolicy {
+            blob_budget_bytes: 200,
+            ..Default::default()
+        };
+        let plan = plan_snapshot_expiration_with_protections(
+            &records,
+            policy,
+            10,
+            &HashSet::from(["protected".into()]),
+        );
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].workspace_id, "eligible");
+        assert_eq!(plan[0].reason, SnapshotExpirationReason::OverBudget);
     }
 
     #[test]

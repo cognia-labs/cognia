@@ -43,6 +43,10 @@
     "needsHost": "受管工作区位于桌面应用或已配对的宿主上。此浏览器两者皆无，因此这里无需维护。",
     "noEvents": "尚无维护事件记录。",
     "runNow": "运行工作区维护",
+    "runResult": "本次维护结果",
+    "runSummary": "已回收 {directories} 个目录、清理 {snapshots} 个快照、移除 {blobs} 个数据块，释放 {bytes} 字节。",
+    "runPartial": "维护已结束，部分操作失败。",
+    "runComplete": "维护已完成。",
     "running": "运行中…",
     "title": "受管工作区维护"
   },
