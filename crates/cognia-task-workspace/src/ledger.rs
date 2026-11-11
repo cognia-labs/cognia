@@ -118,9 +118,9 @@ pub fn apply(
     let mut captured_patch = patch.clone();
     fill_applied_patch(&mut captured_patch, &plans, selection, options.revision);
     let capture = prepare_capture(PreflightContext { workspace_root, scratch_root, store, now: options.now }, &captured_patch, &plans, selection, options.revision, "apply");
-    if let Err(error) = commit_plans(workspace_root, &plans) {
-        finish_failed_capture(store, capture.as_deref(), &error);
-        return Err(error);
+    if let Err(failure) = commit_plans(workspace_root, &plans) {
+        finish_failed_capture(store, capture.as_deref(), &failure);
+        return Err(failure.to_string());
     }
     *patch = captured_patch;
     finish_capture(store, capture.as_deref());
@@ -252,9 +252,9 @@ pub fn undo(
     let mut captured_patch = patch.clone();
     captured_patch.state = PatchState::Reverted;
     let capture = prepare_capture(PreflightContext { workspace_root, scratch_root, store, now }, &captured_patch, &plans, &patch.applied_selection, revision, "undo");
-    if let Err(error) = commit_plans(workspace_root, &plans) {
-        finish_failed_capture(store, capture.as_deref(), &error);
-        return Err(error);
+    if let Err(failure) = commit_plans(workspace_root, &plans) {
+        finish_failed_capture(store, capture.as_deref(), &failure);
+        return Err(failure.to_string());
     }
     patch.state = PatchState::Reverted;
     finish_capture(store, capture.as_deref());
@@ -347,9 +347,9 @@ pub fn force_apply(
     let mut captured_patch = patch.clone();
     fill_applied_patch(&mut captured_patch, &plans, selection, options.revision);
     let capture = prepare_capture(PreflightContext { workspace_root, scratch_root, store, now: options.now }, &captured_patch, &plans, selection, options.revision, "force");
-    if let Err(error) = commit_plans(workspace_root, &plans) {
-        finish_failed_capture(store, capture.as_deref(), &error);
-        return Err(error);
+    if let Err(failure) = commit_plans(workspace_root, &plans) {
+        finish_failed_capture(store, capture.as_deref(), &failure);
+        return Err(failure.to_string());
     }
     *patch = captured_patch;
     finish_capture(store, capture.as_deref());
@@ -404,11 +404,14 @@ fn finish_capture(store: &mut WorkspaceStore, key: Option<&str>) {
     }
 }
 
-fn finish_failed_capture(store: &mut WorkspaceStore, key: Option<&str>, error: &str) {
+fn finish_failed_capture(store: &mut WorkspaceStore, key: Option<&str>, failure: &CommitFailure) {
     if let Some(key) = key {
-        crate::provenance::capture::warn_gap(store, key, error);
-        // A reported write failure may have attempted compensation. Never turn
-        // its residual bytes into an adoption on a later recovery pass.
+        crate::provenance::capture::warn_gap(store, key, &failure.to_string());
+        // A reported write failure may have attempted compensation, and one
+        // that could not restore a path leaves residual bytes behind. Never
+        // turn those into an adoption on a later recovery pass: the mutation
+        // is aborted either way, and the unrestored paths travel in the error
+        // and the gap record. The before bytes stay in the blob store.
         let _ = store.provenance().abort_mutation(key, false);
     }
 }
@@ -1230,34 +1233,77 @@ fn read_entry(root: &Path, rel_path: &str) -> Result<Option<EntryPayload>, Strin
     }))
 }
 
-fn commit_plans(root: &Path, plans: &[PlannedWrite]) -> Result<(), String> {
-    let mut completed = Vec::new();
-    for plan in plans {
-        if let Err(error) = write_entry(root, &plan.path, plan.after.as_ref()) {
-            for index in completed.into_iter().rev() {
-                let rollback: &PlannedWrite = &plans[index];
-                let _ = write_entry(root, &rollback.path, rollback.before.as_ref());
-            }
-            return Err(format!(
-                "atomic task patch failed at {}: {error}",
-                plan.path
-            ));
+/// Why a set of planned writes did not all land.
+#[derive(Debug)]
+struct CommitFailure {
+    /// The plan that could not be written, and why.
+    failed: (String, String),
+    /// Earlier plans whose previous content could not be put back, each with
+    /// its error. Empty when the directory is as it was before the commit.
+    unrestored: Vec<(String, String)>,
+}
+
+impl std::fmt::Display for CommitFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (path, error) = &self.failed;
+        write!(formatter, "atomic task patch failed at {path}: {error}")?;
+        if self.unrestored.is_empty() {
+            return Ok(());
         }
-        completed.push(completed.len());
+        write!(
+            formatter,
+            "; the directory is partly changed, could not restore"
+        )?;
+        for (path, error) in &self.unrestored {
+            write!(formatter, " {path} ({error})")?;
+        }
+        Ok(())
+    }
+}
+
+/// Write every plan, or put the directory back as it was.
+///
+/// `write_entry` leaves a path it could not write untouched, so the plan that
+/// failed needs no repair; the ones before it are restored in reverse order. A
+/// restore that fails is not swallowed: its path is reported as unrestored.
+fn commit_plans(root: &Path, plans: &[PlannedWrite]) -> Result<(), CommitFailure> {
+    for (index, plan) in plans.iter().enumerate() {
+        let Err(error) = write_entry(root, &plan.path, plan.after.as_ref()) else {
+            continue;
+        };
+        let mut unrestored = Vec::new();
+        for done in plans[..index].iter().rev() {
+            if let Err(error) = write_entry(root, &done.path, done.before.as_ref()) {
+                unrestored.push((done.path.clone(), error));
+            }
+        }
+        return Err(CommitFailure {
+            failed: (plan.path.clone(), error),
+            unrestored,
+        });
     }
     Ok(())
 }
 
+/// Put `entry` at `rel_path`, or remove what is there when `entry` is `None`.
+///
+/// The new content is staged beside the target and renamed over it, so a
+/// failure at any point leaves the path exactly as it was: the earlier content
+/// is never removed first. A removal has nothing to stage and is one unlink.
 fn write_entry(root: &Path, rel_path: &str, entry: Option<&EntryPayload>) -> Result<(), String> {
     let target = confined_target(root, rel_path)?;
-    if let Ok(metadata) = fs::symlink_metadata(&target) {
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            return Err(format!("refusing to replace directory: {rel_path}"));
-        }
-        fs::remove_file(&target)
-            .map_err(|error| format!("remove {}: {error}", target.display()))?;
+    let existing = fs::symlink_metadata(&target).ok();
+    if existing
+        .as_ref()
+        .is_some_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    {
+        return Err(format!("refusing to replace directory: {rel_path}"));
     }
     let Some(entry) = entry else {
+        if existing.is_some() {
+            fs::remove_file(&target)
+                .map_err(|error| format!("remove {}: {error}", target.display()))?;
+        }
         return Ok(());
     };
     let parent = target
@@ -1273,18 +1319,32 @@ fn write_entry(root: &Path, rel_path: &str, entry: Option<&EntryPayload>) -> Res
     if !canonical_parent.starts_with(&canonical_root) {
         return Err(format!("path escapes workspace: {rel_path}"));
     }
+    let staged = parent.join(format!(".cognia-write-{}", Uuid::now_v7()));
+    let published = stage_entry(&staged, entry).and_then(|()| {
+        failpoint::hit(failpoint::Stage::Publish)?;
+        fs::rename(&staged, &target)
+            .map_err(|error| format!("publish {}: {error}", target.display()))
+    });
+    if published.is_err() {
+        // Best effort: the target is intact either way, and a leftover staged
+        // file is noise, not damage.
+        let _ = fs::remove_file(&staged);
+    }
+    published
+}
+
+/// Create the new entry under its staging name, complete with its mode.
+fn stage_entry(staged: &Path, entry: &EntryPayload) -> Result<(), String> {
+    failpoint::hit(failpoint::Stage::Stage)?;
     match entry.kind {
         ResourceKind::File => {
-            let temp = parent.join(format!(".cognia-write-{}", Uuid::now_v7()));
-            fs::write(&temp, &entry.bytes)
-                .map_err(|error| format!("write temp {}: {error}", temp.display()))?;
-            apply_mode(&temp, entry.mode)?;
-            fs::rename(&temp, &target)
-                .map_err(|error| format!("publish {}: {error}", target.display()))?;
+            fs::write(staged, &entry.bytes)
+                .map_err(|error| format!("write temp {}: {error}", staged.display()))?;
+            failpoint::hit(failpoint::Stage::Mode)?;
+            apply_mode(staged, entry.mode)
         }
-        ResourceKind::Symlink => create_symlink(&target, &entry.bytes)?,
+        ResourceKind::Symlink => create_symlink(staged, &entry.bytes),
     }
-    Ok(())
 }
 
 /// The workspace-relative path a patch entry may touch, or a refusal.
@@ -1379,10 +1439,267 @@ fn create_symlink(path: &Path, bytes: &[u8]) -> Result<(), String> {
     symlink_file(target, path).map_err(|error| format!("symlink {}: {error}", path.display()))
 }
 
+/// Test-only failure injection for the write path. A stage fails the n-th
+/// time (counting from zero) this thread reaches it.
+#[cfg(test)]
+mod failpoint {
+    use std::cell::RefCell;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(super) enum Stage {
+        /// Before the new content is written beside the target.
+        Stage,
+        /// Before the staged file's mode is set.
+        Mode,
+        /// Before the staged entry is renamed onto the target.
+        Publish,
+    }
+
+    thread_local! {
+        static ARMED: RefCell<Vec<(Stage, usize)>> = const { RefCell::new(Vec::new()) };
+        static SEEN: RefCell<Vec<Stage>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Arm failures and forget earlier counts.
+    pub(super) fn arm(failures: &[(Stage, usize)]) {
+        ARMED.with(|armed| *armed.borrow_mut() = failures.to_vec());
+        SEEN.with(|seen| seen.borrow_mut().clear());
+    }
+
+    pub(super) fn hit(stage: Stage) -> Result<(), String> {
+        let nth = SEEN.with(|seen| {
+            let mut seen = seen.borrow_mut();
+            seen.push(stage);
+            seen.iter().filter(|other| **other == stage).count() - 1
+        });
+        if ARMED.with(|armed| armed.borrow().contains(&(stage, nth))) {
+            return Err(format!("injected failure at {stage:?} #{nth}"));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(test))]
+mod failpoint {
+    #[derive(Clone, Copy)]
+    pub(super) enum Stage {
+        Stage,
+        Mode,
+        Publish,
+    }
+
+    #[inline(always)]
+    pub(super) fn hit(_stage: Stage) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn file(bytes: &[u8], mode: u32) -> Option<EntryPayload> {
+        Some(EntryPayload {
+            bytes: bytes.to_vec(),
+            kind: ResourceKind::File,
+            mode: Some(mode),
+        })
+    }
+
+    fn replace(path: &str, before: &[u8], after: &[u8]) -> PlannedWrite {
+        PlannedWrite {
+            path: path.into(),
+            before: file(before, 0o640),
+            after: file(after, 0o600),
+        }
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    fn seed(root: &Path, path: &str, bytes: &[u8]) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(root.join(path), bytes).unwrap();
+        fs::set_permissions(root.join(path), fs::Permissions::from_mode(0o640)).unwrap();
+    }
+
+    fn names(root: &Path) -> Vec<String> {
+        let mut names = fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    const STAGES: [failpoint::Stage; 3] = [
+        failpoint::Stage::Stage,
+        failpoint::Stage::Mode,
+        failpoint::Stage::Publish,
+    ];
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_that_fails_at_any_stage_leaves_the_original_file_as_it_was() {
+        for stage in STAGES {
+            let workspace = TempDir::new().unwrap();
+            seed(workspace.path(), "a.txt", b"original");
+            failpoint::arm(&[(stage, 0)]);
+            let error = commit_plans(workspace.path(), &[replace("a.txt", b"original", b"new")])
+                .unwrap_err();
+            failpoint::arm(&[]);
+            assert!(error.to_string().contains("a.txt"), "{stage:?}: {}", error);
+            assert!(error.unrestored.is_empty(), "{stage:?}");
+            assert_eq!(
+                fs::read(workspace.path().join("a.txt")).unwrap(),
+                b"original",
+                "{stage:?}"
+            );
+            assert_eq!(mode_of(&workspace.path().join("a.txt")), 0o640, "{stage:?}");
+            assert_eq!(
+                names(workspace.path()),
+                ["a.txt"],
+                "{stage:?} left a staged file behind"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failure_on_the_second_file_restores_the_first_and_leaves_the_second() {
+        for stage in STAGES {
+            let workspace = TempDir::new().unwrap();
+            seed(workspace.path(), "a.txt", b"a before");
+            seed(workspace.path(), "b.txt", b"b before");
+            failpoint::arm(&[(stage, 1)]);
+            let error = commit_plans(
+                workspace.path(),
+                &[
+                    replace("a.txt", b"a before", b"a after"),
+                    replace("b.txt", b"b before", b"b after"),
+                ],
+            )
+            .unwrap_err();
+            failpoint::arm(&[]);
+            assert!(error.to_string().contains("b.txt"), "{stage:?}: {}", error);
+            assert!(error.unrestored.is_empty(), "{stage:?}");
+            assert_eq!(
+                fs::read(workspace.path().join("a.txt")).unwrap(),
+                b"a before",
+                "{stage:?}"
+            );
+            assert_eq!(mode_of(&workspace.path().join("a.txt")), 0o640, "{stage:?}");
+            assert_eq!(
+                fs::read(workspace.path().join("b.txt")).unwrap(),
+                b"b before",
+                "{stage:?}"
+            );
+            assert_eq!(names(workspace.path()), ["a.txt", "b.txt"], "{stage:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rollback_that_fails_is_reported_with_the_paths_it_could_not_restore() {
+        let workspace = TempDir::new().unwrap();
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            seed(workspace.path(), name, b"before");
+        }
+        // a and b publish; c fails; restoring b works; restoring a fails.
+        failpoint::arm(&[
+            (failpoint::Stage::Publish, 2),
+            (failpoint::Stage::Publish, 4),
+        ]);
+        let error = commit_plans(
+            workspace.path(),
+            &[
+                replace("a.txt", b"before", b"after"),
+                replace("b.txt", b"before", b"after"),
+                replace("c.txt", b"before", b"after"),
+            ],
+        )
+        .unwrap_err();
+        failpoint::arm(&[]);
+        assert_eq!(error.unrestored.len(), 1);
+        assert_eq!(error.unrestored[0].0, "a.txt");
+        let text = error.to_string();
+        assert!(
+            text.starts_with("atomic task patch failed at c.txt:"),
+            "{text}"
+        );
+        assert!(
+            text.contains("partly changed, could not restore a.txt ("),
+            "{text}"
+        );
+        assert_eq!(fs::read(workspace.path().join("a.txt")).unwrap(), b"after");
+        assert_eq!(fs::read(workspace.path().join("b.txt")).unwrap(), b"before");
+        assert_eq!(fs::read(workspace.path().join("c.txt")).unwrap(), b"before");
+        assert_eq!(names(workspace.path()), ["a.txt", "b.txt", "c.txt"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_that_cannot_be_staged_leaves_the_original_file() {
+        let workspace = TempDir::new().unwrap();
+        seed(workspace.path(), "link", b"original");
+        let error = commit_plans(
+            workspace.path(),
+            &[PlannedWrite {
+                path: "link".into(),
+                before: file(b"original", 0o640),
+                after: Some(EntryPayload {
+                    bytes: vec![0xff, 0xfe],
+                    kind: ResourceKind::Symlink,
+                    mode: None,
+                }),
+            }],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid symlink target"));
+        assert_eq!(
+            fs::read(workspace.path().join("link")).unwrap(),
+            b"original"
+        );
+        assert_eq!(names(workspace.path()), ["link"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_replaces_a_file_with_a_symlink_and_a_symlink_with_a_file() {
+        let workspace = TempDir::new().unwrap();
+        seed(workspace.path(), "entry", b"file");
+        let link = Some(EntryPayload {
+            bytes: b"elsewhere".to_vec(),
+            kind: ResourceKind::Symlink,
+            mode: None,
+        });
+        write_entry(workspace.path(), "entry", link.as_ref()).unwrap();
+        assert_eq!(
+            fs::read_link(workspace.path().join("entry")).unwrap(),
+            Path::new("elsewhere")
+        );
+        write_entry(
+            workspace.path(),
+            "entry",
+            file(b"file again", 0o600).as_ref(),
+        )
+        .unwrap();
+        assert!(!fs::symlink_metadata(workspace.path().join("entry"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read(workspace.path().join("entry")).unwrap(),
+            b"file again"
+        );
+        assert_eq!(mode_of(&workspace.path().join("entry")), 0o600);
+        write_entry(workspace.path(), "entry", None).unwrap();
+        assert_eq!(names(workspace.path()), Vec::<String>::new());
+    }
 
     #[test]
     fn turn_diff_payload_shaped_like_headers_is_counted_as_content() {
@@ -1412,7 +1729,14 @@ mod tests {
         // A failed compensation can leave bytes matching the desired result;
         // those bytes alone do not turn a failed operation into an adoption.
         fs::write(workspace.path().join("result"), b"residual agent output\n").unwrap();
-        finish_failed_capture(&mut store, Some(&key), "injected compensation failure");
+        finish_failed_capture(
+            &mut store,
+            Some(&key),
+            &CommitFailure {
+                failed: ("other".into(), "injected write failure".into()),
+                unrestored: vec![("result".into(), "injected compensation failure".into())],
+            },
+        );
         capture::reconcile(&mut store).unwrap();
         assert_eq!(store.provenance().mutation(&key).unwrap().unwrap().state, MutationCommitState::Aborted);
         assert!(store.provenance().current_version(&root.root_id, "result").unwrap().is_none());
