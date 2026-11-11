@@ -41,12 +41,26 @@
 - **发布 gate**：native 的 `publish_integration` 并集三处 required checks（run 已存、调用方传入、各 changeset 已存），从不读仓库里的策略。`lib/scm/review/review-changeset.ts` 的 `requiredChecksFor` 在评审时并入目标 ref 的策略；`integrate-dialog.tsx` 和 `lib/scm/integration/orchestrator.ts` 不读策略。Squad 和 Best-of-N 自己并入。
 - **检查目录**：通用 SCM runtime 用 `changesetRootForRevision` 返回采集时的 `executionRoot`。`lib/best-of-n/checks.ts` 用 `gitRef: headSha` 取新的托管 checkout。
 
-未核对，实施时先查：
+2026-11-11 补充核对（只读源码，没有运行）：
 
-1. 第二个就地观察 run 被 begin 拒绝后，这一轮对用户表现为什么（无 diff 照常执行，还是整轮失败）。`beginTaskWorkspaceTurn` 对这类错误会抛出，上层怎么处理没有追。
-2. 托管 run 的执行根是否可能嵌在一个被就地观察的物理根里。
-3. `orchestrator.ts` 是否是手动、Squad、Best-of-N、Harness 四类发布的唯一入口。
-4. 报告引用的五处 F02 调用点（`agent-execution-service.ts`、`agent-executor.ts`、`run-and-capture.ts`、Scheduler `executors/index.ts`、`external/manager.ts`）的当前行为，报告只做了源码阅读，没有跑晚到写入实验。
+1. **第二个同目录运行现在整轮被拒。** 就地观察的唯一调用方是聊天控制器 `hooks/chat/use-claude-chat-controller.ts`，begin 抛错后走 `refuseTurn`（`task_workspace_unavailable`），这一轮不执行，也不回退到托管模式或无采集执行。用户看到「工作区不可用」和「重试或绑定文件夹」的提示，附带未翻译的 Rust 原文。远程外部 agent 路径（`remote-run-service.ts`）同样以原始报错失败。托管 run 不受就地观察 run 阻挡，只被停止未确认的 run 阻挡。
+2. **托管执行根默认不会嵌进源仓库。** 它在 `<data_dir>/task-workspaces/executions/<task>/<run>` 下。例外是把 `COGNIA_TASK_WORKSPACE_EXECUTION_ROOT` 显式设到仓库内，代码只校验绝对路径。反方向没有拦截：begin 不拒绝把一个托管执行根当作就地工作区。
+3. **`integrateChangesets` 是发布的唯一 TS 入口。** 手动对话框、Squad merge-all、工作流节点、Best-of-N（含 CLI bridge）都经 `createScmRuntime(...).integrate` 到 `lib/scm/integration/orchestrator.ts`；Harness 只评审不发布；插件没有入口。orchestrator 在 prepare 前原样透传调用方的列表，publish 前只与 Host 已存的列表并集。它的输入里没有仓库根和 blob 读取器；目标 SHA 在 prepare 之后才有（`run.expectedOldSha`）。`reviewChangeset` 不把并集写回 changeset。
+4. **F02 的调用点都不等执行器停止。**
+   - `run-and-capture.ts`：超时立即 reject；abort 后最多等 1 秒（`INTERRUPT_DRAIN_TIMEOUT_MS`）就 reject。它通过 `onExecutorStarted(executorStop)` 把真正的停止 promise 交给调用方，注释写明 reject 不是停止证明。
+   - `agent-execution-service.ts`：成功路径在执行返回后 `lease.settle("ready")`；失败路径直接 `lease.abort()`，不取用 `executorStop`。
+   - `agent-executor.ts`：只透传 signal 和 timeout，不 settle。
+   - Scheduler chat：abort 立即 resolve，随后 `taskLease.settle("failed")`。Scheduler 的外部 agent 路径不传 signal，取消到不了执行器。
+   - `external/manager.ts`：超时触发的取消不 await，立即 reject；abort 只发 `stopAgent`。报告说的「等待 `run.execution`」在 `remote-run-service.ts` 的 `cancelRemoteExternalRun` 里。
+   - settle 的公共面是 `lease.settle`（`lib/task-workspace/run-lease.ts`）到 `settleWorkspaceBundleTurn`，只接受 `ready`、`failed`、`cancelled`，没有可逆性参数。`lib/squads/teammate/dispatch-teammate.ts` 已有一个最多等 2 秒的 `executorStop` 等待，可作参照。
+
+仍未核对：
+
+1. 诊断渲染是否显示 `message` 里的 Rust 原文。
+2. 聊天的工作目录选择器是否过滤掉托管执行根。
+3. 进程内的 bundle-turn begin 是否会走到 `begin_worker_run`（它会武装 Host 的停止栅栏）。
+4. `run.repoCommonDir` 能否作为 `readReviewPolicyAtRef` 的仓库路径。
+5. 以上 F02 结论都来自读代码，晚到写入实验仍没有跑；S1-3 的失败测试就是这个实验。
 
 ## 3. S1 止血
 
@@ -78,11 +92,16 @@
 
 ### S1-3 F02：停止未证实不产生可撤 patch
 
-第 2 节未核对项 4 列出的调用点改为：settle 之前等待执行器的完成信号。取消或超时后在限定时间内仍等不到的，照常 settle 以保留 diff，但 patch 置 `reversible = false`、原因 `stop_unproven`。不设 `executor_stop_unconfirmed`，所以下一轮可以在同一目录开始，新基线取当时的磁盘状态。
+改动落在两处公共面，不逐个调用点打补丁：
 
-worker CLI 和 ADR-0244 的远程 run 路径不变，它们继续用现有的停止确认。
+- `lease.settle` 和 `lease.abort` 增加一个可选的执行器停止 promise。传入时先等它，最多等一个固定上限（参照 `dispatch-teammate.ts` 的 2 秒，具体值实施时定）。等到了照常 settle；等不到则仍然 settle 以保留 diff，并把 `stopUnproven` 传给 Host，由 Host 在产出的 patch 上置 `reversible = false`、原因 `stop_unproven`。settle 的 Host 命令为此加一个字段。
+- `agent-execution-service.ts` 和 Scheduler chat 执行器接住 `onExecutorStarted` 给出的 `executorStop`，在取消和超时路径上传给 lease。Scheduler chat 在 abort 时改用 `cancelled`。
 
-验收：用一个取消后延迟写文件的假执行器，该轮 patch 不可撤且原因正确，下一轮 begin 成功且基线包含晚到的写入。已有的 external 普通取消路径（等待 `run.execution`）回归不变。
+不设 `executor_stop_unconfirmed`，所以下一轮可以在同一目录开始，新基线取当时的磁盘状态。
+
+本项不做：Scheduler 外部 agent 路径不传 signal、`external/manager.ts` 超时不等取消。这两处不 settle 采集，属于 F05，留在待办。worker CLI 和 ADR-0244 的远程 run 路径不变。
+
+验收：用一个取消后延迟写文件的假执行器，在停止 promise 上限内没停的，该轮 patch 不可撤且原因正确，下一轮 begin 成功且基线包含晚到的写入；上限内停下的，patch 可撤且包含全部写入。`cancelRemoteExternalRun` 等待 `run.execution` 的现有行为回归不变。
 
 ### S1-4 F03：含反斜杠的文件名不可撤
 
@@ -104,9 +123,13 @@ worker CLI 和 ADR-0244 的远程 run 路径不变，它们继续用现有的停
 
 ### S1-6 CF01：发布入口并入目标策略
 
-`lib/scm/integration/orchestrator.ts` 在 prepare 和 publish 前用固定的目标 SHA 读评审策略，把 `policy.requiredChecks` 并入传给 native 的 required checks。目标移动后重新读取。native 不改。若未核对项 3 发现有入口绕过 orchestrator，把它改为经过 orchestrator，而不是在第二处重复并集。
+`integrateChangesets` 是唯一入口（第 2 节补充核对 3），并集只加在这里：
 
-验收：目标策略要求一个 changeset 没有存的检查，该检查缺失或失败时，手动发布被拒绝；Squad 和 Best-of-N 的现有行为不变。
+- `IntegrateChangesetsDeps` 增加一个按 ref 读评审策略的依赖，由 `createScmRuntime` 注入，实现复用 `readReviewPolicyAtRef`。仓库路径取被集成 changeset 的 `sourceRoot`，与 `reviewChangeset` 的读法一致。
+- prepare 之后用 `run.expectedOldSha` 读策略，把 `policy.requiredChecks` 并入校验和 publish 用的 required checks。rebuild 之后目标 SHA 变了就重新读。策略解析失败时拒绝发布，与评审侧「无法解析则交给人」的处理一致。
+- native 不改。Squad 和 Best-of-N 自己并入的那部分保留，重复项由现有的去重消掉。
+
+验收：目标策略要求一个 changeset 没有存的检查，该检查缺失或失败时，手动发布被拒绝；目标移动后新增的策略检查同样生效；Squad 和 Best-of-N 的现有行为不变。
 
 ### S1-7 CF02：检查在钉住 SHA 的新 checkout 里跑
 
@@ -116,13 +139,15 @@ worker CLI 和 ADR-0244 的远程 run 路径不变，它们继续用现有的停
 
 ## 4. S2 放行同目录并发，重叠的轮次只读
 
-见 ADR-0255。实施步骤：
+见 ADR-0255。现在第二个同目录运行整轮被拒（第 2 节补充核对 1），所以这一段修的是一个现存的功能阻断，不只是归因。它只依赖 S1-0，可以排在 S1-0 之后、与 S1 其余各项并行。
 
-1. 先完成未核对项 1 和 2，确认现状。
-2. `check_capture_root_admission` 不再因为「已有就地观察 run」拒绝第二个；与停止未确认的 run 相交的拒绝保留。
-3. run 上持久化一个 `overlapped` 标记。begin 时发现相交根上有 `Running|Settling` 的 run，给双方都置上；对某个根执行 Apply、Undo 时，该根上活动的 run 也置上。标记只增不减。
-4. settle 时带标记的 run 产出的 patch 置不可逆，原因 `overlap`。diff 照常可读。
-5. 同一轮内的父子 agent 仍是一个 capture，不算重叠。外部工具的写入检测不到，继续靠 Undo 的三方合并和冲突报告。
+实施步骤：
+
+1. `check_capture_root_admission` 不再因为「已有就地观察 run」拒绝第二个；与停止未确认的 run 相交的拒绝保留。
+2. run 上持久化一个 `overlapped` 标记。begin 时发现相交根上有 `Running|Settling` 的 run，给双方都置上；对某个根执行 Apply、Undo 时，该根上活动的 run 也置上。标记只增不减。托管 run 的执行根与就地工作区相交时同样算重叠。
+3. settle 时带标记的 run 产出的 patch 置不可逆，原因 `overlap`。diff 照常可读。
+4. 同一轮内的父子 agent 仍是一个 capture，不算重叠。外部工具的写入检测不到，继续靠 Undo 的三方合并和冲突报告。
+5. 仍会被拒的情况（与停止未确认的远程 run 相交）补一条专门的诊断文案，en 与 zh-CN 都加，不再落到「绑定文件夹」的提示上。
 
 验收：两个 run 在同一目录时间重叠，两边的 patch 都只读且原因为 `overlap`；不重叠的前后两轮各自可撤；重叠的 run 之一先 settle、另一个后 settle，后者仍只读。
 
@@ -151,7 +176,7 @@ S3-1 和 S3-2 先做，其余依赖它们的修订和 reconcile 入口。每项�
 
 ## 7. 待办，不排期
 
-- **入口覆盖**（原 W05）：F05 external authority 与 Scheduler signal、F06 builtin-provider Plugin/Bot `agent.turn` 与 scheduled Goal 的 capture、CF05 Squad target 漂移。按实际遇到的问题逐项修。
+- **入口覆盖**（原 W05）：F05 external authority 与 Scheduler signal（含 Scheduler 外部 agent 路径不传 signal、`external/manager.ts` 超时不等取消）、F06 builtin-provider Plugin/Bot `agent.turn` 与 scheduled Goal 的 capture、CF05 Squad target 漂移。按实际遇到的问题逐项修。
 - **性能预算**（原 W08）：F13 capture 预算与锁内 I/O、F14 watcher 无界工作、F15 查询重复。S1-5 会让 autocrlf 仓库变慢，出现体感问题时先做 F13。
 - **F16** Codex 实时 diff hint：继续延期。
 - **不做，除非前提变化**：多文件事务日志与 fsync；durable root reservation 与 participant 注册；native 策略 gate、grant 迁移、evidence receipt。重开条件是插件或组织成员能调用 changeset/integration 命令。目前这些命令已经通过 companion RPC 暴露给配对设备（`workspace.write`、High、Interactive），这一点在重开时要先评估。
