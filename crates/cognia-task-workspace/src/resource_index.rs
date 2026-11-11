@@ -333,6 +333,7 @@ mod tests {
             baseline_revision: 0,
             state: RunState::Ready,
             executor_stop_unconfirmed: false,
+            overlapped: false,
             created_at: settled - 1,
             settled_at: Some(settled),
         }

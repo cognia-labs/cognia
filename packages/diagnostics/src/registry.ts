@@ -106,6 +106,16 @@ export const DIAGNOSTIC_CODES: Readonly<Record<DiagnosticCode, DiagnosticCodeSpe
     actions: [{ kind: "retry" }],
     icon: "clock",
   },
+  workspaceStopUnconfirmed: {
+    severity: "error",
+    retryable: true,
+    // Lifted by confirming the earlier run stopped, not by this conversation.
+    persistent: false,
+    // Retry works once that run is confirmed stopped; the log names the run.
+    // Settings has nothing to correct: the folder binding is right.
+    actions: [{ kind: "retry" }, { kind: "view-logs" }],
+    icon: "clock",
+  },
   agentProcessBusy: {
     severity: "error",
     retryable: true,

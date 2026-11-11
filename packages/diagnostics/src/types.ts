@@ -353,6 +353,14 @@ export type DiagnosticCode =
    */
   | "workspaceBusy"
   /**
+   * The host refused a turn because an earlier run on this directory has an
+   * executor that was never confirmed stopped, so it may still be writing
+   * there. Unlike `workspaceBusy`, waiting does not lift it: the run has to be
+   * confirmed stopped on the device that ran it. Runs that merely share a
+   * directory are not refused (ADR-0255).
+   */
+  | "workspaceStopUnconfirmed"
+  /**
    * An external agent's process id is still registered to a live process
    * (another window of this conversation, a turn still running). The adapter
    * already reclaims ids left behind by a dead renderer, so reaching this means

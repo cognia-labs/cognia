@@ -58,6 +58,7 @@ describe("planHaltCauseForCode", () => {
     expect(planHaltCauseForCode("initializationFailed")).toBe("not_started")
     expect(planHaltCauseForCode("agentProcessBusy")).toBe("not_started")
     expect(planHaltCauseForCode("workspaceBusy")).toBe("not_started")
+    expect(planHaltCauseForCode("workspaceStopUnconfirmed")).toBe("not_started")
     expect(planHaltCauseForCode("executionFailed")).toBe("turn_failed")
     expect(planHaltCauseForCode("unknown")).toBe("turn_failed")
   })

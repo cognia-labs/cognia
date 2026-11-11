@@ -183636,6 +183636,13 @@ paths:
                     type:
                       - string
                       - "null"
+                  overlapped:
+                    default: false
+                    description: |-
+                      Another run was running or settling on an intersecting directory at
+                      some point while this one was (ADR-0255). Set once and never cleared;
+                      the patch such a run settles into is not reversible.
+                    type: boolean
                   parentRunId:
                     type:
                       - string
@@ -184620,6 +184627,13 @@ paths:
                     type:
                       - string
                       - "null"
+                  overlapped:
+                    default: false
+                    description: |-
+                      Another run was running or settling on an intersecting directory at
+                      some point while this one was (ADR-0255). Set once and never cleared;
+                      the patch such a run settles into is not reversible.
+                    type: boolean
                   parentRunId:
                     type:
                       - string
@@ -187112,6 +187126,13 @@ paths:
                               type:
                                 - string
                                 - "null"
+                            overlapped:
+                              default: false
+                              description: |-
+                                Another run was running or settling on an intersecting directory at
+                                some point while this one was (ADR-0255). Set once and never cleared;
+                                the patch such a run settles into is not reversible.
+                              type: boolean
                             parentRunId:
                               type:
                                 - string
@@ -187551,6 +187572,13 @@ paths:
                                   type:
                                     - string
                                     - "null"
+                                overlapped:
+                                  default: false
+                                  description: |-
+                                    Another run was running or settling on an intersecting directory at
+                                    some point while this one was (ADR-0255). Set once and never cleared;
+                                    the patch such a run settles into is not reversible.
+                                  type: boolean
                                 parentRunId:
                                   type:
                                     - string
@@ -194576,6 +194604,13 @@ paths:
                           type:
                             - string
                             - "null"
+                        overlapped:
+                          default: false
+                          description: |-
+                            Another run was running or settling on an intersecting directory at
+                            some point while this one was (ADR-0255). Set once and never cleared;
+                            the patch such a run settles into is not reversible.
+                          type: boolean
                         parentRunId:
                           type:
                             - string
@@ -200859,6 +200894,13 @@ paths:
                       type:
                         - string
                         - "null"
+                    overlapped:
+                      default: false
+                      description: |-
+                        Another run was running or settling on an intersecting directory at
+                        some point while this one was (ADR-0255). Set once and never cleared;
+                        the patch such a run settles into is not reversible.
+                      type: boolean
                     parentRunId:
                       type:
                         - string
@@ -209080,6 +209122,13 @@ paths:
                     type:
                       - string
                       - "null"
+                  overlapped:
+                    default: false
+                    description: |-
+                      Another run was running or settling on an intersecting directory at
+                      some point while this one was (ADR-0255). Set once and never cleared;
+                      the patch such a run settles into is not reversible.
+                    type: boolean
                   parentRunId:
                     type:
                       - string

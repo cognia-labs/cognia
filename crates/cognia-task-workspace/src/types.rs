@@ -205,6 +205,11 @@ pub struct TaskRun {
     /// stopped. This run cannot publish a patch, including during recovery.
     #[serde(default)]
     pub executor_stop_unconfirmed: bool,
+    /// Another run was running or settling on an intersecting directory at
+    /// some point while this one was (ADR-0255). Set once and never cleared;
+    /// the patch such a run settles into is not reversible.
+    #[serde(default)]
+    pub overlapped: bool,
     pub created_at: i64,
     pub settled_at: Option<i64>,
 }
@@ -1540,6 +1545,28 @@ mod tests {
                 .all(|key| object.contains_key(key.as_str().unwrap())));
         }
         assert!(reasons.contains(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn task_run_overlap_mark_matches_companion_response_schema() {
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol/companion-response-schemas.json"
+        ))
+        .unwrap();
+        let schema = &catalog["$defs"]["TaskRun"];
+        let property = &schema["properties"]["overlapped"];
+        assert_eq!(property["type"], "boolean");
+        assert_eq!(property["default"], false);
+        let mut run: TaskRun = serde_json::from_value(serde_json::json!({
+            "runId":"run", "taskId":"task", "parentRunId":null,
+            "agentId":"agent", "agentKind":"cli", "executionRoot":"/workspace",
+            "isolationKind":"observed", "isolationRef":null,
+            "baselineRevision":0, "state":"running", "createdAt":1, "settledAt":null
+        }))
+        .unwrap();
+        assert!(!run.overlapped, "a run stored before the mark existed did not overlap");
+        run.overlapped = true;
+        assert_eq!(serde_json::to_value(&run).unwrap()["overlapped"], true);
     }
 
     #[test]

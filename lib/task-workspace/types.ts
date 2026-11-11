@@ -478,6 +478,11 @@ export interface TaskWorkspace {
 export interface TaskRun {
   /** The executor has not been confirmed stopped; no reversible capture is published. */
   executorStopUnconfirmed?: boolean
+  /**
+   * Another run was active on an intersecting directory while this one was
+   * (ADR-0255). The patch it settles into keeps its diff and cannot be undone.
+   */
+  overlapped?: boolean
   runId: string
   taskId: string
   parentRunId: string | null

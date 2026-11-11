@@ -1796,7 +1796,8 @@
     "sidecarExited": "AI 进程意外停止，本轮已中断。点击重试可继续。",
     "title": "发送失败",
     "unflushedEditorBuffers": "本回合开始前有 {count} 个打开的文件未能保存，agent 可能读到过期内容：{files}",
-    "workspaceBusy": "另一个回合仍在占用该会话的工作副本。请等它结束，或在正在运行它的设备上发送。"
+    "workspaceBusy": "另一个回合仍在占用该会话的工作副本。请等它结束，或在正在运行它的设备上发送。",
+    "workspaceStopUnconfirmed": "此文件夹中较早的一次运行从未被确认停止，它的 Agent 可能仍在这里写入。请在运行它的设备上确认其已停止，然后重试。"
   },
   "jump": {
     "back": "返回原处",

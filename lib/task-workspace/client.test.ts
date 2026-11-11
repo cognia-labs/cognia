@@ -2508,6 +2508,26 @@ describe("a settle that does not land", () => {
   })
 })
 
+describe("isExecutorStopUnconfirmedRefusal", () => {
+  const hostSentence =
+    "an executor that is not confirmed stopped is still active on an overlapping root"
+
+  it("recognises the host's refusal", () => {
+    expect(workspaceClient.isExecutorStopUnconfirmedRefusal(new Error(hostSentence))).toBe(true)
+    expect(workspaceClient.isExecutorStopUnconfirmedRefusal(hostSentence)).toBe(true)
+  })
+
+  it("does not claim a busy working copy or any other failure", () => {
+    expect(
+      workspaceClient.isExecutorStopUnconfirmedRefusal(
+        new Error("pipeline workspace is already active: s_abc")
+      )
+    ).toBe(false)
+    expect(workspaceClient.isExecutorStopUnconfirmedRefusal(undefined)).toBe(false)
+    expect(workspaceClient.isWorkspaceBusyRefusal(new Error(hostSentence))).toBe(false)
+  })
+})
+
 describe("isWorkspaceBusyRefusal", () => {
   // Shared with the chat surface so it can say this in the user's own language
   // rather than printing the host's English sentence and its internal key.

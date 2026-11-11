@@ -39,7 +39,7 @@ The existing refusal for a directory that intersects a remote run whose stop is 
 
 ### 2. Overlap makes a turn read-only
 
-Two runs **overlap** when both are running or settling on directories where one equals, contains or is contained by the other. The Host marks both runs when it sees the overlap: at begin, and when an Apply or Undo writes into a directory that has an active run. The mark is stored on the run and is never cleared.
+Two runs **overlap** when both are running or settling on directories where one equals, contains or is contained by the other. The Host marks both runs when it sees the overlap: at begin, when an Apply or Undo writes into a directory that has an active run, and when it admits an executor that runs there without a capture of its own. The mark is stored on the run and is never cleared.
 
 A marked run settles into a patch that is not reversible, with the reason `overlap`. The diff stays readable. Undo and snapshot restore from that patch are refused with the reason shown.
 

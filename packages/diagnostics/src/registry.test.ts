@@ -113,6 +113,16 @@ describe("DIAGNOSTIC_CODES", () => {
    * help a binding that is already correct. These assertions pin the two apart
    * on the axes that produce that advice.
    */
+  it("gives a folder held by an unconfirmed executor its own advice", () => {
+    const unconfirmed = DIAGNOSTIC_CODES.workspaceStopUnconfirmed
+    // Waiting does not lift it, so it is not `workspaceBusy`; the binding is
+    // right, so it does not point at settings like `workspaceUnavailable`.
+    expect(unconfirmed.actions).toEqual([{ kind: "retry" }, { kind: "view-logs" }])
+    expect(unconfirmed.actions).not.toEqual(DIAGNOSTIC_CODES.workspaceBusy.actions)
+    expect(unconfirmed.actions.some((action) => action.kind === "open-settings")).toBe(false)
+    expect(unconfirmed.persistent).toBe(false)
+  })
+
   it("separates a busy working copy from one that cannot be resolved", () => {
     const busy = DIAGNOSTIC_CODES.workspaceBusy
     const unavailable = DIAGNOSTIC_CODES.workspaceUnavailable

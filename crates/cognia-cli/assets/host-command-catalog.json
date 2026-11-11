@@ -85110,6 +85110,11 @@
               "null"
             ]
           },
+          "overlapped": {
+            "default": false,
+            "description": "Another run was running or settling on an intersecting directory at\nsome point while this one was (ADR-0255). Set once and never cleared;\nthe patch such a run settles into is not reversible.",
+            "type": "boolean"
+          },
           "parentRunId": {
             "type": [
               "string",
@@ -85770,6 +85775,11 @@
               "string",
               "null"
             ]
+          },
+          "overlapped": {
+            "default": false,
+            "description": "Another run was running or settling on an intersecting directory at\nsome point while this one was (ADR-0255). Set once and never cleared;\nthe patch such a run settles into is not reversible.",
+            "type": "boolean"
           },
           "parentRunId": {
             "type": [
@@ -87393,6 +87403,11 @@
                         "null"
                       ]
                     },
+                    "overlapped": {
+                      "default": false,
+                      "description": "Another run was running or settling on an intersecting directory at\nsome point while this one was (ADR-0255). Set once and never cleared;\nthe patch such a run settles into is not reversible.",
+                      "type": "boolean"
+                    },
                     "parentRunId": {
                       "type": [
                         "string",
@@ -87790,6 +87805,11 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "overlapped": {
+                          "default": false,
+                          "description": "Another run was running or settling on an intersecting directory at\nsome point while this one was (ADR-0255). Set once and never cleared;\nthe patch such a run settles into is not reversible.",
+                          "type": "boolean"
                         },
                         "parentRunId": {
                           "type": [
@@ -94037,6 +94057,11 @@
                     "null"
                   ]
                 },
+                "overlapped": {
+                  "default": false,
+                  "description": "Another run was running or settling on an intersecting directory at\nsome point while this one was (ADR-0255). Set once and never cleared;\nthe patch such a run settles into is not reversible.",
+                  "type": "boolean"
+                },
                 "parentRunId": {
                   "type": [
                     "string",
@@ -98851,6 +98876,11 @@
                 "string",
                 "null"
               ]
+            },
+            "overlapped": {
+              "default": false,
+              "description": "Another run was running or settling on an intersecting directory at\nsome point while this one was (ADR-0255). Set once and never cleared;\nthe patch such a run settles into is not reversible.",
+              "type": "boolean"
             },
             "parentRunId": {
               "type": [
@@ -103690,6 +103720,11 @@
               "string",
               "null"
             ]
+          },
+          "overlapped": {
+            "default": false,
+            "description": "Another run was running or settling on an intersecting directory at\nsome point while this one was (ADR-0255). Set once and never cleared;\nthe patch such a run settles into is not reversible.",
+            "type": "boolean"
           },
           "parentRunId": {
             "type": [
@@ -112719,5 +112754,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "18b80b98775026d65ae2f10dd04f1ac944e764a49704b0b9f77efd169f796e4b"
+  "catalogHash": "b51b79ca2ad332a2dadceb67f71fe43b23e6c008a7b441287d1fc3dc1af90fd0"
 }

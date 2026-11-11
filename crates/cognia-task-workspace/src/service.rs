@@ -310,6 +310,9 @@ impl crate::BundleApplier for ServiceBundleApplier<'_> {
         )
         .map_err(|error| bundle_operation_conflict(step, error))?;
         if outcome.state == crate::PatchState::Applied {
+            store
+                .mark_overlapping_runs(&target, None)
+                .map_err(|error| bundle_operation_conflict(step, error))?;
             task.revision = revision;
             task.state = TaskWorkspaceState::Applied;
         } else {
@@ -348,6 +351,9 @@ impl crate::BundleApplier for ServiceBundleApplier<'_> {
         let outcome = ledger::undo(&target, &scratch, &mut store, &mut patch, revision, now)
             .map_err(|error| bundle_operation_conflict(step, error))?;
         if outcome.state == crate::PatchState::Reverted {
+            store
+                .mark_overlapping_runs(&target, None)
+                .map_err(|error| bundle_operation_conflict(step, error))?;
             task.revision = revision;
             task.state = TaskWorkspaceState::Ready;
         } else {
@@ -1540,29 +1546,29 @@ impl TaskWorkspaceService {
             .canonicalize()
             .map_err(|error| format!("canonicalize workspace {}: {error}", root.display()))?;
         let _admission = self.lock_run_capture_admission()?;
-        self.check_capture_root_admission(&root, true)
+        self.check_capture_root_admission(&root)?;
+        // The caller is about to write here without a capture of its own.
+        // Runs observing this directory can no longer tell its writes from
+        // theirs, so they are overlapped from now on (ADR-0255).
+        self.store.lock().mark_overlapping_runs(&root, None)?;
+        Ok(())
     }
 
-    fn check_capture_root_admission(
-        &self,
-        root: &Path,
-        observe_in_place: bool,
-    ) -> Result<(), String> {
+    fn check_capture_root_admission(&self, root: &Path) -> Result<(), String> {
         // A quarantined executor can still write anywhere under its root.
         // Refuse intersecting acquisition in either direction, including
         // borrowed/isolated sources, until its explicit stop confirmation.
+        // Runs that merely share a directory are admitted and marked
+        // overlapped instead (ADR-0255).
         let store = self.store.lock();
         for task in store.list_tasks()? {
             if store.list_runs(&task.task_id)?.iter().any(|run| {
-                (run.executor_stop_unconfirmed
-                    || (observe_in_place && run.isolation_kind == IsolationKind::Observed))
+                run.executor_stop_unconfirmed
                     && (Path::new(&run.execution_root).starts_with(root)
                         || root.starts_with(&run.execution_root))
                     && matches!(run.state, RunState::Running | RunState::Settling)
             }) {
-                return Err(
-                    "local workspace observation is already active for an overlapping root".into(),
-                );
+                return Err(UNCONFIRMED_EXECUTOR_OVERLAP.into());
             }
         }
         Ok(())
@@ -1702,7 +1708,17 @@ impl TaskWorkspaceService {
                 });
             }
         }
-        self.check_capture_root_admission(&root, input.observe_in_place)?;
+        self.check_capture_root_admission(&root)?;
+        // A run that observes in place takes its baseline from the live
+        // directory. One already active there may keep writing after that
+        // baseline, so the overlap is noted now, before the capture, even if
+        // that run settles before this one is stored.
+        let overlapped_at_admission = input.observe_in_place
+            && !self
+                .store
+                .lock()
+                .active_runs_intersecting(&root, Some(&input.run_id))?
+                .is_empty();
         let capture_owner = self.try_run_capture_owner(&input.run_id)?
             .ok_or("task run capture still has a live owner")?;
         let now = now_ms();
@@ -2004,6 +2020,23 @@ impl TaskWorkspaceService {
             }
             return Err(error);
         }
+        let overlapped = match store.mark_overlapping_runs(&execution_root, Some(&input.run_id)) {
+            Ok(peers) => overlapped_at_admission || peers > 0,
+            Err(error) => {
+                if owns_execution {
+                    drop(store);
+                    self.rollback_managed_execution(
+                        workspace_id.as_deref(),
+                        &root,
+                        &execution_root,
+                        isolation_kind,
+                        None,
+                        now,
+                    );
+                }
+                return Err(error);
+            }
+        };
         let run = TaskRun {
             run_id: input.run_id,
             task_id: input.task_id,
@@ -2026,6 +2059,7 @@ impl TaskWorkspaceService {
             baseline_revision: task.revision,
             state: RunState::Running,
             executor_stop_unconfirmed: false,
+            overlapped,
             created_at: now,
             settled_at: None,
         };
@@ -4575,6 +4609,10 @@ impl TaskWorkspaceService {
         if run.isolation_kind == IsolationKind::Observed {
             ledger::mark_observed_applied(&mut patch, task.revision, &baseline);
         }
+        if run.overlapped {
+            // Its diff may hold another run's writes; Undo would remove them.
+            patch.mark_irreversible(crate::IrreversibleReason::Overlap);
+        }
         store.put_patch_set(&patch)?;
         let provenance = if run.isolation_kind == IsolationKind::Observed {
             ledger::record_observed_applied(&mut store, &patch, Path::new(&task.workspace_root), now)
@@ -5448,6 +5486,7 @@ impl TaskWorkspaceService {
             },
         )?;
         if outcome.state == crate::PatchState::Applied {
+            store.mark_overlapping_runs(Path::new(&task.workspace_root), None)?;
             task.revision = next_revision;
             task.state = TaskWorkspaceState::Applied;
         } else if outcome.state == crate::PatchState::Conflict {
@@ -5483,6 +5522,7 @@ impl TaskWorkspaceService {
             now,
         )?;
         if outcome.state == crate::PatchState::Reverted {
+            store.mark_overlapping_runs(Path::new(&task.workspace_root), None)?;
             task.revision = next_revision;
             task.state = TaskWorkspaceState::Ready;
         } else if outcome.state == crate::PatchState::Conflict {
@@ -5559,6 +5599,11 @@ impl TaskWorkspaceService {
             }
             crate::ConflictResolution::RetryMerge => unreachable!(),
         };
+        if resolution == crate::ConflictResolution::ApplyTask
+            && outcome.state == crate::PatchState::Applied
+        {
+            store.mark_overlapping_runs(Path::new(&task.workspace_root), None)?;
+        }
         task.revision = next_revision;
         task.state = if outcome.state == crate::PatchState::Applied {
             TaskWorkspaceState::Applied
@@ -6814,6 +6859,10 @@ fn branch_exists(workspace_root: &Path, name: &str) -> bool {
 /// changes approximately never. Short enough that a task still starts from what
 /// the remote said moments ago, long enough that a burst pays for one fetch.
 const REMOTE_FETCH_TTL: Duration = Duration::from_secs(30);
+/// Refusal for a directory that intersects a run whose executor is not
+/// confirmed stopped. `worker_cli` classifies it as a capture refusal.
+pub(crate) const UNCONFIRMED_EXECUTOR_OVERLAP: &str =
+    "an executor that is not confirmed stopped is still active on an overlapping root";
 
 /// Last successful `git fetch origin` per repository, keyed by common directory.
 static LAST_REMOTE_FETCH: std::sync::OnceLock<Mutex<HashMap<String, std::time::Instant>>> =
@@ -12671,7 +12720,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_diff_observed_local_serializes_windows_and_refuses_checkout_baselines() {
+    fn turn_diff_observed_local_shares_a_root_and_refuses_checkout_baselines() {
         let data = TempDir::new().unwrap();
         let workspace = TempDir::new().unwrap();
         fs::write(workspace.path().join("file.txt"), "before\n").unwrap();
@@ -12682,11 +12731,10 @@ mod tests {
         let mut second = input(&workspace, "second-task", "second-run");
         second.session_id = "other-session".into();
         second.observe_in_place = true;
-        service.begin_run(first.clone()).unwrap();
-        assert!(other.begin_run(second.clone()).unwrap_err().contains("observation is already active"));
+        assert!(!service.begin_run(first.clone()).unwrap().overlapped);
+        assert!(other.begin_run(second).unwrap().overlapped);
         assert_eq!(service.begin_run(first).unwrap().run_id, "first-run");
         service.settle_run("first-run").unwrap();
-        other.begin_run(second).unwrap();
         other.settle_run("second-run").unwrap();
         let mut invalid = input(&workspace, "invalid-task", "invalid-run");
         invalid.observe_in_place = true;
@@ -12734,7 +12782,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_diff_review_overlapping_roots_cannot_bypass_live_or_quarantined_capture() {
+    fn turn_diff_review_overlapping_roots_cannot_bypass_quarantine_and_mark_live_capture() {
         for first_nested in [false, true] {
             for quarantined in [false, true] {
                 for next_observed in [false, true] {
@@ -12761,11 +12809,20 @@ mod tests {
                     let mut next = input(&workspace, "next-task", "next-run");
                     next.workspace_root = next_root.to_string_lossy().into_owned();
                     next.observe_in_place = next_observed;
-                    // An isolated copy may be acquired from a live observed
-                    // source, but an uncertain executor fences all acquisitions.
-                    if quarantined || next_observed {
-                        assert!(service.begin_run(next).unwrap_err().contains("observation"));
+                    // An uncertain executor fences every acquisition. A live
+                    // observed run shares its directory with another observed
+                    // run, and both are overlapped; an isolated copy acquired
+                    // from that source writes elsewhere and marks nothing.
+                    let result = service.begin_run(next);
+                    if quarantined {
+                        assert_eq!(result.unwrap_err(), UNCONFIRMED_EXECUTOR_OVERLAP);
+                        continue;
                     }
+                    assert_eq!(result.unwrap().overlapped, next_observed);
+                    assert_eq!(
+                        service.list_runs("first-task").unwrap()[0].overlapped,
+                        next_observed
+                    );
                 }
             }
         }
@@ -12791,7 +12848,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_diff_review_concurrent_nested_admission_opens_only_one_observation() {
+    fn turn_diff_review_concurrent_nested_admission_marks_both_observations_overlapped() {
         let data = TempDir::new().unwrap();
         let workspace = TempDir::new().unwrap();
         fs::create_dir(workspace.path().join("sub")).unwrap();
@@ -12818,11 +12875,125 @@ mod tests {
             .into_iter()
             .map(|thread| thread.join().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-        assert!(results
-            .iter()
-            .filter_map(|result| result.as_ref().err())
-            .all(|error| error.contains("overlapping root")));
+        assert!(results.iter().all(|result| result.is_ok()));
+        for run_id in ["outer-run", "nested-run"] {
+            let (run, _): (TaskRun, WorkspaceSnapshot) =
+                service.store.lock().get_run(run_id).unwrap().unwrap();
+            assert!(run.overlapped, "{run_id} shared a directory with the other run");
+        }
+    }
+
+    fn observed(root: &TempDir, task_id: &str, run_id: &str) -> BeginTaskRun {
+        let mut request = input(root, task_id, run_id);
+        request.session_id = format!("session-{task_id}");
+        request.observe_in_place = true;
+        request
+    }
+
+    #[test]
+    fn overlapping_observed_runs_keep_their_diffs_and_lose_undo() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("a.txt"), "a\n").unwrap();
+        fs::write(workspace.path().join("b.txt"), "b\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        service.begin_run(observed(&workspace, "task-a", "run-a")).unwrap();
+        service.begin_run(observed(&workspace, "task-b", "run-b")).unwrap();
+        fs::write(workspace.path().join("a.txt"), "a by run a\n").unwrap();
+        fs::write(workspace.path().join("b.txt"), "b by run b\n").unwrap();
+        // The first run settles while the second is still running; the second
+        // settles with no other run left. Both overlapped, so both lose Undo.
+        for run_id in ["run-a", "run-b"] {
+            service.settle_run(run_id).unwrap();
+            let patch = service.get_patch_set(run_id).unwrap().unwrap();
+            assert!(!patch.reversible, "{run_id}");
+            assert_eq!(
+                patch.irreversible_reason,
+                Some(crate::IrreversibleReason::Overlap),
+                "{run_id}"
+            );
+            // Each diff holds the other run's write too: the reason Undo is off.
+            for path in ["a.txt", "b.txt"] {
+                assert!(service.read_patch_diff(run_id, path, false).is_ok(), "{run_id} {path}");
+            }
+            assert!(service
+                .undo_patch_set(run_id)
+                .unwrap_err()
+                .contains("another run shared its directory"));
+        }
+        assert_eq!(fs::read_to_string(workspace.path().join("a.txt")).unwrap(), "a by run a\n");
+        assert_eq!(fs::read_to_string(workspace.path().join("b.txt")).unwrap(), "b by run b\n");
+    }
+
+    #[test]
+    fn runs_that_follow_each_other_on_one_root_stay_reversible() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("a.txt"), "a\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        for (run_id, text) in [("run-1", "first\n"), ("run-2", "second\n")] {
+            let run = service.begin_run(observed(&workspace, run_id, run_id)).unwrap();
+            assert!(!run.overlapped);
+            fs::write(workspace.path().join("a.txt"), text).unwrap();
+            service.settle_run(run_id).unwrap();
+            let patch = service.get_patch_set(run_id).unwrap().unwrap();
+            assert!(patch.reversible);
+            assert_eq!(patch.irreversible_reason, None);
+        }
+        service.undo_patch_set("run-2").unwrap();
+        assert_eq!(fs::read_to_string(workspace.path().join("a.txt")).unwrap(), "first\n");
+    }
+
+    #[test]
+    fn a_run_that_starts_beside_one_that_then_settles_is_still_overlapped() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("a.txt"), "a\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        service.begin_run(observed(&workspace, "task-a", "run-a")).unwrap();
+        assert!(service.begin_run(observed(&workspace, "task-b", "run-b")).unwrap().overlapped);
+        service.settle_run("run-a").unwrap();
+        // A third run starts after run-a settled but while run-b still runs.
+        assert!(service.begin_run(observed(&workspace, "task-c", "run-c")).unwrap().overlapped);
+        service.settle_run("run-b").unwrap();
+        service.settle_run("run-c").unwrap();
+        for run_id in ["run-a", "run-b", "run-c"] {
+            assert!(!service.get_patch_set(run_id).unwrap().unwrap().reversible, "{run_id}");
+        }
+    }
+
+    #[test]
+    fn undoing_into_a_root_marks_the_run_active_there() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("a.txt"), "a\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        service.begin_run(observed(&workspace, "task-a", "run-a")).unwrap();
+        fs::write(workspace.path().join("a.txt"), "a by run a\n").unwrap();
+        service.settle_run("run-a").unwrap();
+        let later = service.begin_run(observed(&workspace, "task-b", "run-b")).unwrap();
+        assert!(!later.overlapped);
+        service.undo_patch_set("run-a").unwrap();
+        service.settle_run("run-b").unwrap();
+        let patch = service.get_patch_set("run-b").unwrap().unwrap();
+        assert_eq!(patch.irreversible_reason, Some(crate::IrreversibleReason::Overlap));
+        assert!(service.read_patch_diff("run-b", "a.txt", false).is_ok());
+    }
+
+    #[test]
+    fn an_unconfirmed_executor_still_closes_its_root_to_other_runs() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("a.txt"), "a\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        service
+            .begin_worker_run(observed(&workspace, "task-a", "run-a"), None)
+            .unwrap();
+        service.mark_executor_unconfirmed("run-a").unwrap();
+        assert_eq!(
+            service.begin_run(observed(&workspace, "task-b", "run-b")).unwrap_err(),
+            UNCONFIRMED_EXECUTOR_OVERLAP
+        );
     }
 
     #[test]

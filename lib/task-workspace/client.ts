@@ -295,6 +295,21 @@ export function isWorkspaceBusyRefusal(error: unknown): boolean {
   return WORKSPACE_ALREADY_ACTIVE.test(message)
 }
 
+/** The host's sentence when a directory intersects a run whose executor is not confirmed stopped. */
+const EXECUTOR_STOP_UNCONFIRMED =
+  /executor that is not confirmed stopped is still active on an overlapping root/i
+
+/**
+ * Whether a failure is the host refusing a turn because an earlier run on this
+ * directory has an executor that was never confirmed stopped. Runs that merely
+ * share a directory are admitted (ADR-0255); this is the one refusal left, and
+ * waiting does not lift it, so it is told apart from `isWorkspaceBusyRefusal`.
+ */
+export function isExecutorStopUnconfirmedRefusal(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return EXECUTOR_STOP_UNCONFIRMED.test(message)
+}
+
 export async function beginWorkspaceBundleTurn(
   bundleId: string,
   request: BeginWorkspaceBundleTurn,

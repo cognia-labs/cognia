@@ -234,7 +234,7 @@ fn dispatch_worker_request(
 
 fn is_capture_refusal(message: &str) -> bool {
     [
-        "local workspace observation is already active",
+        crate::service::UNCONFIRMED_EXECUTOR_OVERLAP,
         "runId is already owned by another task run:",
         "pipeline workspace is already active:",
         "task run capture still has a live owner",
@@ -564,10 +564,15 @@ mod tests {
                 &mut output,
             )
             .unwrap();
-            assert_eq!(
-                serde_json::from_slice::<Value>(&output).unwrap()["error"]["code"],
-                "capture_refused"
-            );
+            let answer = serde_json::from_slice::<Value>(&output).unwrap();
+            if quarantined {
+                assert_eq!(answer["error"]["code"], "capture_refused");
+            } else {
+                // An untracked executor may share the directory; the run
+                // observing it is overlapped from then on.
+                assert_eq!(answer["result"], Value::Null);
+                assert!(service.list_runs("cli-task").unwrap()[0].overlapped);
+            }
         }
         assert_eq!(service.list_runs("cli-task").unwrap().len(), 1);
         assert!(service.get_patch_set("cli-run").unwrap().is_none());
@@ -575,7 +580,8 @@ mod tests {
 
     #[test]
     fn capture_refusal_classification_does_not_hide_missing_helper_or_io_errors() {
-        assert!(is_capture_refusal(
+        assert!(is_capture_refusal(crate::service::UNCONFIRMED_EXECUTOR_OVERLAP));
+        assert!(!is_capture_refusal(
             "local workspace observation is already active for an overlapping root"
         ));
         assert!(is_capture_refusal(

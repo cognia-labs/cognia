@@ -1087,6 +1087,47 @@ impl WorkspaceStore {
         .transpose()
     }
 
+    /// Runs that are running or settling on a directory equal to, containing
+    /// or contained by `root`, leaving `except` out.
+    pub fn active_runs_intersecting(
+        &self,
+        root: &Path,
+        except: Option<&str>,
+    ) -> Result<Vec<TaskRun>, String> {
+        let mut found = Vec::new();
+        for task in self.list_tasks()? {
+            found.extend(self.list_runs(&task.task_id)?.into_iter().filter(|run| {
+                let execution_root = Path::new(&run.execution_root);
+                Some(run.run_id.as_str()) != except
+                    && matches!(run.state, RunState::Running | RunState::Settling)
+                    && (execution_root.starts_with(root) || root.starts_with(execution_root))
+            }));
+        }
+        Ok(found)
+    }
+
+    /// Mark every run `active_runs_intersecting` finds as overlapped
+    /// (ADR-0255). Returns how many it found, already marked or not.
+    pub fn mark_overlapping_runs(
+        &self,
+        root: &Path,
+        except: Option<&str>,
+    ) -> Result<usize, String> {
+        let runs = self.active_runs_intersecting(root, except)?;
+        for run in runs.iter().filter(|run| !run.overlapped) {
+            let mut marked = run.clone();
+            marked.overlapped = true;
+            let payload = serde_json::to_string(&marked).map_err(|error| error.to_string())?;
+            self.connection
+                .execute(
+                    "UPDATE task_runs SET payload=?2 WHERE run_id=?1",
+                    params![marked.run_id, payload],
+                )
+                .map_err(|error| format!("mark overlapped run: {error}"))?;
+        }
+        Ok(runs.len())
+    }
+
     pub fn list_runs(&self, task_id: &str) -> Result<Vec<TaskRun>, String> {
         let mut statement = self
             .connection
@@ -2970,6 +3011,7 @@ mod tests {
             baseline_revision: 0,
             state: RunState::Ready,
             executor_stop_unconfirmed: false,
+            overlapped: false,
             created_at: 1,
             settled_at: Some(5),
         };
@@ -3150,6 +3192,7 @@ mod tests {
                     baseline_revision: 0,
                     state: RunState::Running,
                     executor_stop_unconfirmed: false,
+                    overlapped: false,
                     created_at: 1,
                     settled_at: None,
                 },

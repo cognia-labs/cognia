@@ -191,6 +191,7 @@ import {
 import {
   acquireWorkspaceBundle,
   beginObservedTaskWorkspaceTurn,
+  isExecutorStopUnconfirmedRefusal,
   isWorkspaceBusyRefusal,
   runIdForTurn,
   taskIdForMessage,
@@ -4716,14 +4717,26 @@ export function useClaudeChat() {
           })
         } catch (error) {
           markTaskWorkspaceTurnUnowned(sessionId, chatRunId)
+          const beginFailure = error instanceof Error ? error.message : String(error)
           await refuseTurn({
             errorCode: "task_workspace_unavailable",
             finishRun: true,
-            diagnostic: createDiagnostic("workspaceUnavailable", {
-              source: "chat",
-              message: error instanceof Error ? error.message : String(error),
-              meta: { sessionId },
-            }),
+            // Sharing a folder with another run no longer refuses a turn
+            // (ADR-0255). The one refusal left is a run whose agent was never
+            // confirmed stopped, and `workspaceUnavailable` would advise
+            // binding a folder that is already bound correctly.
+            diagnostic: isExecutorStopUnconfirmedRefusal(error)
+              ? createDiagnostic("workspaceStopUnconfirmed", {
+                  source: "chat",
+                  message: tInlineErr("workspaceStopUnconfirmed"),
+                  detail: beginFailure,
+                  meta: { sessionId },
+                })
+              : createDiagnostic("workspaceUnavailable", {
+                  source: "chat",
+                  message: beginFailure,
+                  meta: { sessionId },
+                }),
           })
           return
         }

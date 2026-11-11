@@ -104,6 +104,7 @@ const NOT_STARTED_CODES: ReadonlySet<DiagnosticCode> = new Set<DiagnosticCode>([
   "resourceLimit",
   "agentProcessBusy",
   "workspaceBusy",
+  "workspaceStopUnconfirmed",
   "workspaceUnavailable",
   "externalAgentNotReady",
   "externalAgentNotSelected",
