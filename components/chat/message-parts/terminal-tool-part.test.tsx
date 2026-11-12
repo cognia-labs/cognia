@@ -308,6 +308,22 @@ describe("TerminalToolPart", () => {
     expect(call.command).toBe("ls -la")
   })
 
+  it("never asks runInDockTab to refuse a user click on a shell without integration", () => {
+    const choices: Array<typeof pickerChoice.current> = [
+      { kind: "existing", row: { id: "tab-7" } },
+      { kind: "new" },
+    ]
+    for (const choice of choices) {
+      mockRunInDock.mockClear()
+      pickerChoice.current = choice
+      const { unmount } = render(<TerminalToolPart part={bashPart("input-available")} />)
+      screen.getByTestId("terminal-tab-picker-stub").click()
+      const call = mockRunInDock.mock.calls[0]?.[0] as unknown as { requireCommandEnd?: boolean }
+      expect(call.requireCommandEnd).toBe(false)
+      unmount()
+    }
+  })
+
   it("routes an existing-tab pick to that tab instead of opening a new one", () => {
     pickerChoice.current = { kind: "existing", row: { id: "tab-7" } }
     render(<TerminalToolPart part={bashPart("input-available")} />)

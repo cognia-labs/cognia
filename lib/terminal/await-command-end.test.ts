@@ -1,5 +1,5 @@
 import { awaitCommandEnd, END_CHUNK_GRACE_MS, MAX_CAPTURED_CHARS } from "./await-command-end"
-import type { IntegrationEvent } from "./types"
+import type { IntegrationEvent, SessionInfo } from "./types"
 
 const C = "\u001b]633;C;n\u0007"
 const D = (code = 0) => `\u001b]633;D;n;${code}\u0007`
@@ -8,7 +8,24 @@ function fakeSession() {
   const taps = new Set<(bytes: Uint8Array) => void>()
   const integrations = new Set<(event: IntegrationEvent) => void>()
   const exits = new Set<(code: number | null) => void>()
+  const infos = new Set<(info: SessionInfo) => void>()
+  const info: SessionInfo = {
+    id: "s",
+    projectId: null,
+    extensionId: null,
+    origin: "local",
+    shell: "bash",
+  }
   return {
+    info,
+    onInfo: jest.fn((cb: (info: SessionInfo) => void) => {
+      infos.add(cb)
+      return () => infos.delete(cb)
+    }),
+    snapshot(capabilities: NonNullable<SessionInfo["integrationCapabilities"]>) {
+      info.integrationCapabilities = capabilities
+      for (const cb of [...infos]) cb(info)
+    },
     tapData: jest.fn((cb: (bytes: Uint8Array) => void) => {
       taps.add(cb)
       return () => taps.delete(cb)
@@ -34,7 +51,7 @@ function fakeSession() {
     exit() {
       for (const cb of [...exits]) cb(null)
     },
-    listenerCount: () => taps.size + integrations.size + exits.size,
+    listenerCount: () => taps.size + integrations.size + exits.size + infos.size,
   }
 }
 
@@ -43,8 +60,81 @@ afterEach(() => {
 })
 
 describe("awaitCommandEnd", () => {
+  it.each([
+    { commandStatus: false, degradedReason: null },
+    { commandStatus: false, degradedReason: "shell_integration_unsupported:unknown" },
+    { commandStatus: true, degradedReason: "shell_integration_ready_timeout" },
+  ])("refuses unsupported integration before starting: %j", async (capabilities) => {
+    jest.useFakeTimers()
+    const session = fakeSession()
+    session.snapshot({ osc633: false, cwdTracking: false, ...capabilities })
+    const start = jest.fn()
+    const pending = awaitCommandEnd(session, { timeoutMs: 1000, start })
+    expect(jest.getTimerCount()).toBe(0)
+    // Advancing also makes the pre-fix regression fail without hanging the test.
+    jest.advanceTimersByTime(1000)
+    await expect(pending).resolves.toEqual({
+      kind: "unsupported",
+      reason: capabilities.degradedReason,
+      started: false,
+    })
+    expect(start).not.toHaveBeenCalled()
+    expect(session.tapData).not.toHaveBeenCalled()
+    expect(jest.getTimerCount()).toBe(0)
+  })
+
+  it("refuses an in-flight wait when a snapshot reports readiness timeout", async () => {
+    jest.useFakeTimers()
+    const session = fakeSession()
+    const pending = awaitCommandEnd(session, { timeoutMs: 60_000 })
+    session.snapshot({
+      osc633: false,
+      commandStatus: false,
+      cwdTracking: false,
+      degradedReason: "shell_integration_ready_timeout",
+    })
+    expect(jest.getTimerCount()).toBe(0)
+    jest.advanceTimersByTime(60_000)
+    await expect(pending).resolves.toEqual({
+      kind: "unsupported",
+      reason: "shell_integration_ready_timeout",
+      started: false,
+    })
+    expect(session.listenerCount()).toBe(0)
+    expect(jest.getTimerCount()).toBe(0)
+  })
+
+  it.each([false, true])(
+    "marks degradation after start as already submitted (synchronous=%s)",
+    async (synchronous) => {
+      jest.useFakeTimers()
+      const session = fakeSession()
+      const degrade = () =>
+        session.snapshot({
+          osc633: false,
+          commandStatus: false,
+          cwdTracking: false,
+          degradedReason: "shell_integration_ready_timeout",
+        })
+      const start = jest.fn(() => {
+        if (synchronous) degrade()
+      })
+      const pending = awaitCommandEnd(session, { timeoutMs: 60_000, start })
+      expect(start).toHaveBeenCalledTimes(1)
+      if (!synchronous) degrade()
+      await expect(pending).resolves.toEqual({
+        kind: "unsupported",
+        reason: "shell_integration_ready_timeout",
+        started: true,
+      })
+      expect(session.listenerCount()).toBe(0)
+      expect(jest.getTimerCount()).toBe(0)
+    }
+  )
+
   it("attaches every listener before start runs", async () => {
     const session = fakeSession()
+    session.snapshot({ osc633: true, commandStatus: true, cwdTracking: true, degradedReason: null })
     const order: string[] = []
     const pending = awaitCommandEnd(session, {
       timeoutMs: 1000,
@@ -62,7 +152,7 @@ describe("awaitCommandEnd", () => {
       output: "hi",
       truncated: false,
     })
-    expect(order).toEqual(["start:3"])
+    expect(order).toEqual(["start:4"])
     expect(session.listenerCount()).toBe(0)
   })
 

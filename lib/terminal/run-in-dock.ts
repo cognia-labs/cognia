@@ -14,15 +14,19 @@
  *      the PTY.
  *   4. The result carries the exit code from the integration event and the
  *      text the command printed between its OSC 633 `C` and `D` sequences.
- *      Shells without integration never report `command_end` and time out.
+ *      By default, unavailable integration returns `unsupported` before writing.
+ *      If integration degrades after the write, `sent` means the command may
+ *      still run and completion is unobservable. Callers must not resend it.
  *
- * Timeout default: 60 seconds. Long-running commands can pass a higher
- * limit — but the goal of this API is "send a command and wait for its
- * exit"; if the user expects a daemon, they should not use it.
+ * User-driven calls can set `requireCommandEnd: false`. When integration is
+ * unavailable, the command is written after consent and returns `sent` without
+ * waiting or claiming an exit code/output. Supported sessions still capture and
+ * wait for command end with either option. The wait timeout defaults to 60 seconds;
+ * long-running commands can pass a higher limit.
  */
 
 import { requestAgentTrust } from "./agent-trust"
-import { awaitCommandEnd } from "./await-command-end"
+import { awaitCommandEnd, unsupportedOutcome } from "./await-command-end"
 import { ensureHostCapabilities } from "./host-capabilities"
 import { getLiveSession } from "./session-registry"
 import { resolveDefaultShell } from "./shell-detect"
@@ -43,6 +47,8 @@ export interface RunInDockInput {
   command: string
   /** Max wait time for command_end in ms. Default 60_000. */
   timeoutMs?: number
+  /** Default true. When false, unsupported integration sends without waiting. */
+  requireCommandEnd?: boolean
 }
 
 export type RunInDockOutcome =
@@ -57,6 +63,9 @@ export type RunInDockOutcome =
     }
   | { kind: "denied" }
   | { kind: "timeout"; sessionId: string }
+  | { kind: "unsupported"; sessionId: string; reason: string | null }
+  /** Already submitted and may still run; completion, exit code and output are unavailable. */
+  | { kind: "sent"; sessionId: string; reason: string | null }
   | { kind: "error"; message: string }
 
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -137,12 +146,27 @@ export async function runInDockTab(input: RunInDockInput): Promise<RunInDockOutc
   const session = getLiveSession(sessionId)
   if (!session) return { kind: "error", message: `session ${sessionId} is not live` }
 
+  if (input.requireCommandEnd === false) {
+    const unsupported = unsupportedOutcome(session.info)
+    if (unsupported) {
+      try {
+        await session.write(input.command + "\r")
+      } catch (error) {
+        return { kind: "error", message: error instanceof Error ? error.message : String(error) }
+      }
+      return { kind: "sent", sessionId, reason: unsupported.reason }
+    }
+  }
+
   const ended = await awaitCommandEnd(session, {
     timeoutMs: resolveTimeoutMs(input.timeoutMs),
     // 4. Trailing CR triggers shell submit (and OSC 633 C, then D).
     start: () => void session.write(input.command + "\r"),
   })
   if (ended.kind === "timeout") return { kind: "timeout", sessionId }
+  if (ended.kind === "unsupported") {
+    return { kind: ended.started ? "sent" : "unsupported", sessionId, reason: ended.reason }
+  }
   if (ended.kind === "exited") {
     return { kind: "error", message: `session ${sessionId} exited before the command finished` }
   }

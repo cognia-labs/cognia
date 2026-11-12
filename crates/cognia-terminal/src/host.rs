@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -37,6 +37,7 @@ pub const RECENT_COMMAND_LIMIT: usize = 50;
 const DEFAULT_ATTACHMENT_QUEUE: usize = 256;
 const AUDIT_EVENT_LIMIT: usize = 10_000;
 const AUDIT_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const SHELL_INTEGRATION_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -148,12 +149,42 @@ pub struct IntegrationCapabilities {
 }
 
 impl IntegrationCapabilities {
-    pub fn local_pty(enabled: bool) -> Self {
+    /// `configured` describes the applied setup, never the request toggle.
+    pub fn local_pty(configured: bool) -> Self {
         Self {
-            osc633: enabled,
-            command_status: enabled,
-            cwd_tracking: enabled,
+            osc633: configured,
+            command_status: configured,
+            cwd_tracking: configured,
             degraded_reason: None,
+        }
+    }
+
+    pub(crate) fn from_local_setup(
+        kind: crate::integration::ShellKind,
+        requested: bool,
+        setup: &std::io::Result<crate::integration::IntegrationSetup>,
+    ) -> Self {
+        use crate::integration::ShellKind;
+        if !requested {
+            return Self::local_pty(false);
+        }
+        let reason = if matches!(kind, ShellKind::Unknown | ShellKind::Cmd) {
+            format!("shell_integration_unsupported:{kind:?}").to_ascii_lowercase()
+        } else {
+            match setup {
+                // Encoding-only setup (PowerShell/cmd) is nonempty too; the
+                // nonce env is installed only with the actual OSC 633 hooks.
+                Ok(setup) if setup.env_overrides.contains_key("COGNIA_TERM_NONCE") => {
+                    return Self::local_pty(true);
+                }
+                Ok(_) => "shell_integration_setup_failed:script_missing".into(),
+                Err(error) => format!("shell_integration_setup_failed:{:?}", error.kind())
+                    .to_ascii_lowercase(),
+            }
+        };
+        Self {
+            degraded_reason: Some(reason),
+            ..Self::local_pty(false)
         }
     }
 }
@@ -470,6 +501,7 @@ struct HostedSession {
     created_by_device: Option<String>,
     sandboxed: bool,
     capabilities: IntegrationCapabilities,
+    integration_readiness: Option<IntegrationReadiness>,
     ssh_host_key_status: Option<String>,
     ssh_host_key_fingerprint: Option<String>,
     attachments: HashSet<Uuid>,
@@ -482,6 +514,21 @@ struct HostedSession {
     /// [`TerminalHost::reap_flow_pauses`], the backstop against a client that
     /// paused and then died without detaching.
     flow_paused_by: HashMap<Uuid, Instant>,
+}
+
+struct IntegrationReadiness {
+    /// Set by the nonce-valid event sink even before host registration.
+    first_event: Arc<OnceLock<Instant>>,
+    deadline: Instant,
+}
+
+impl IntegrationReadiness {
+    fn new(first_event: Arc<OnceLock<Instant>>) -> Self {
+        Self {
+            first_event,
+            deadline: Instant::now() + SHELL_INTEGRATION_READY_TIMEOUT,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1010,6 +1057,7 @@ impl TerminalHost {
                 cwd_tracking: hosted.integration_enabled,
                 degraded_reason: hosted.integration_degraded_reason.clone(),
             },
+            None,
             Some(hosted.host_key_status),
             Some(hosted.host_key_fingerprint),
             Arc::clone(&process),
@@ -1059,7 +1107,14 @@ impl TerminalHost {
         let replay = Arc::new(ReplayBuffer::durable(replay_bytes_per_session));
         let weak = Arc::downgrade(&self.inner);
         let callback_session_id = session_id.clone();
+        let first_integration_event = Arc::new(OnceLock::new());
+        let observed_integration_event = Arc::clone(&first_integration_event);
         let sink: EventSink = Arc::new(move |sequence, event| {
+            // The PTY reader only publishes events accepted by Osc633Parser.
+            // Record before looking up the host row: startup can win that race.
+            if matches!(event, TerminalEvent::Integration { .. }) {
+                observed_integration_event.get_or_init(Instant::now);
+            }
             if let Some(inner) = weak.upgrade() {
                 publish_terminal_event(&inner, &callback_session_id, sequence, event);
             }
@@ -1068,7 +1123,6 @@ impl TerminalHost {
         let extension_id = request.extension_id.clone();
         let shell = request.shell.clone();
         let sandboxed = request.sandboxed;
-        let capabilities = IntegrationCapabilities::local_pty(request.enable_shell_integration);
         let spawn = if workspace_resolved {
             super::session::spawn_session_with_resolved_identity
         } else {
@@ -1084,6 +1138,10 @@ impl TerminalHost {
             detached_desk_channel(),
         )
         .map_err(HostError::Process)?;
+        let capabilities = process.integration_capabilities.clone();
+        let readiness = capabilities
+            .command_status
+            .then(|| IntegrationReadiness::new(first_integration_event));
         self.register_process(
             connection,
             session_id,
@@ -1094,6 +1152,7 @@ impl TerminalHost {
             shell,
             sandboxed,
             capabilities,
+            readiness,
             None,
             None,
             Arc::new(process),
@@ -1112,6 +1171,7 @@ impl TerminalHost {
         shell: String,
         sandboxed: bool,
         capabilities: IntegrationCapabilities,
+        integration_readiness: Option<IntegrationReadiness>,
         ssh_host_key_status: Option<String>,
         ssh_host_key_fingerprint: Option<String>,
         process: Arc<dyn HostedTerminalProcess>,
@@ -1139,6 +1199,7 @@ impl TerminalHost {
                 created_by_device: identity.device_id.clone(),
                 sandboxed,
                 capabilities,
+                integration_readiness,
                 ssh_host_key_status,
                 ssh_host_key_fingerprint,
                 attachments,
@@ -1535,6 +1596,47 @@ impl TerminalHost {
         }
     }
 
+    /// Bound configured-but-silent local integration on the existing 1 Hz tick,
+    /// and restore a timed-out session when its first nonce-valid event arrives.
+    pub fn reap_integration_readiness(&self, now: Instant) {
+        let mut changed = Vec::new();
+        let mut state = self.inner.state.lock();
+        for (id, session) in &mut state.sessions {
+            let Some(readiness) = &session.integration_readiness else {
+                continue;
+            };
+            if !session.process.is_alive() {
+                session.integration_readiness = None;
+            } else if readiness.first_event.get().is_some() {
+                if session.capabilities.degraded_reason.as_deref()
+                    == Some("shell_integration_ready_timeout")
+                {
+                    session.capabilities = IntegrationCapabilities::local_pty(true);
+                    changed.push(id.clone());
+                }
+                session.integration_readiness = None;
+            } else if now >= readiness.deadline
+                && session.capabilities.command_status
+                && session.capabilities.degraded_reason.is_none()
+            {
+                session.capabilities = IntegrationCapabilities {
+                    degraded_reason: Some("shell_integration_ready_timeout".into()),
+                    ..IntegrationCapabilities::local_pty(false)
+                };
+                // Keep observing the same first-event slot after timeout: a
+                // slow startup can recover on a later tick without adding
+                // locks or snapshot broadcasts to the PTY reader's event sink.
+                changed.push(id.clone());
+            }
+        }
+        drop(state);
+        for id in changed {
+            // This already broadcasts the complete SessionSnapshot, including
+            // capabilities; no new event kind is needed.
+            broadcast_participants(&self.inner, &id);
+        }
+    }
+
     /// Ask the host to park (or release) a session's producer on this
     /// connection's behalf.
     ///
@@ -1755,6 +1857,7 @@ impl TerminalHost {
             "/bin/test".into(),
             false,
             IntegrationCapabilities::local_pty(true),
+            None,
             None,
             None,
             process,
@@ -2654,6 +2757,319 @@ mod tests {
         host.register_test_process(&client.connection_id, &session_id, process.clone())
             .unwrap();
         (host, client, process, session_id)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_spawn_capabilities_follow_the_applied_setup() {
+        for (shell, requested, script_present, enabled, reason) in [
+            (
+                "/bin/sh",
+                true,
+                false,
+                false,
+                Some("shell_integration_unsupported:unknown"),
+            ),
+            ("/bin/bash", false, true, false, None),
+            (
+                "/bin/bash",
+                true,
+                false,
+                false,
+                Some("shell_integration_setup_failed:script_missing"),
+            ),
+            ("/bin/bash", true, true, true, None),
+        ] {
+            let scripts = tempfile::tempdir().unwrap();
+            if script_present {
+                std::fs::write(
+                    scripts.path().join("shell-integration.bash"),
+                    "printf '\\033]633;A;%s\\007' \"$COGNIA_TERM_NONCE\"\n",
+                )
+                .unwrap();
+            }
+            let host = TerminalHost::new("capability-host", test_config()).unwrap();
+            let client = host.connect(ClientIdentity::local("desktop")).unwrap();
+            let mut request = profile_request();
+            request.shell = shell.into();
+            request.sandboxed = false;
+            request.enable_shell_integration = requested;
+            if shell.ends_with("bash") {
+                request.args = vec!["--noprofile".into()];
+            }
+            let info = host
+                .spawn_local(
+                    &client.connection_id,
+                    "test".into(),
+                    request,
+                    scripts.path(),
+                )
+                .unwrap();
+            assert_eq!(
+                info.integration_capabilities,
+                IntegrationCapabilities {
+                    osc633: enabled,
+                    command_status: enabled,
+                    cwd_tracking: enabled,
+                    degraded_reason: reason.map(str::to_owned),
+                },
+                "{shell}, requested={requested}, script_present={script_present}"
+            );
+            assert!(
+                info.alive,
+                "degraded integration must still allow interactive use"
+            );
+            if !enabled {
+                host.reap_integration_readiness(Instant::now() + SHELL_INTEGRATION_READY_TIMEOUT);
+                assert_eq!(
+                    host.list(&client.connection_id).unwrap()[0].integration_capabilities,
+                    info.integration_capabilities
+                );
+            }
+            host.process(&info.id).unwrap().kill().unwrap();
+        }
+    }
+
+    #[test]
+    fn local_capabilities_do_not_confuse_encoding_with_integration() {
+        use crate::integration::{build_with_profile, ShellKind};
+        let scripts = tempfile::tempdir().unwrap();
+        for (kind, requested, reason) in [
+            (
+                ShellKind::Cmd,
+                true,
+                Some("shell_integration_unsupported:cmd"),
+            ),
+            (ShellKind::Cmd, false, None),
+            (ShellKind::Pwsh, false, None),
+            (
+                ShellKind::Pwsh,
+                true,
+                Some("shell_integration_setup_failed:script_missing"),
+            ),
+        ] {
+            let setup = build_with_profile(kind, scripts.path(), "nonce", requested, true, false);
+            assert!(!setup.as_ref().unwrap().extra_args.is_empty());
+            assert_eq!(
+                IntegrationCapabilities::from_local_setup(kind, requested, &setup),
+                IntegrationCapabilities {
+                    osc633: false,
+                    command_status: false,
+                    cwd_tracking: false,
+                    degraded_reason: reason.map(str::to_owned)
+                }
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_readiness_requires_a_nonce_valid_event_and_broadcasts_timeout() {
+        for valid_nonce in [true, false] {
+            let scripts = tempfile::tempdir().unwrap();
+            let nonce = if valid_nonce {
+                "$COGNIA_TERM_NONCE"
+            } else {
+                "wrong-nonce"
+            };
+            std::fs::write(
+                scripts.path().join("shell-integration.bash"),
+                format!("printf '\\033]633;A;%s\\007booted\\n' \"{nonce}\"\n"),
+            )
+            .unwrap();
+            let host = TerminalHost::new("readiness-host", test_config()).unwrap();
+            let mut client = host.connect(ClientIdentity::local("desktop")).unwrap();
+            let mut request = profile_request();
+            request.shell = "/bin/bash".into();
+            request.args = vec!["--noprofile".into()];
+            request.sandboxed = false;
+            let info = host
+                .spawn_local(
+                    &client.connection_id,
+                    "ready".into(),
+                    request,
+                    scripts.path(),
+                )
+                .unwrap();
+            let process = host.process(&info.id).unwrap();
+            let until = Instant::now() + Duration::from_secs(2);
+            loop {
+                let booted = process.replay().since(0).iter().any(|(_, event)| {
+                    matches!(event, TerminalEvent::Data { bytes } if bytes.windows(6).any(|part| part == b"booted"))
+                });
+                if booted {
+                    break;
+                }
+                assert!(Instant::now() < until, "integration fixture did not run");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            while client.events.try_recv().is_ok() {}
+            host.reap_integration_readiness(Instant::now() + SHELL_INTEGRATION_READY_TIMEOUT);
+            let current = host.list(&client.connection_id).unwrap().remove(0);
+            assert_eq!(current.integration_capabilities.command_status, valid_nonce);
+            if valid_nonce {
+                assert_eq!(current.integration_capabilities.degraded_reason, None);
+            } else {
+                assert_eq!(
+                    current.integration_capabilities.degraded_reason.as_deref(),
+                    Some("shell_integration_ready_timeout")
+                );
+                assert!(current.alive);
+                let mut informed = false;
+                while let Ok(event) = client.events.try_recv() {
+                    if let HostEvent::SessionSnapshot { session } = event {
+                        informed |=
+                            session.integration_capabilities == current.integration_capabilities;
+                    }
+                }
+                assert!(
+                    informed,
+                    "timeout must reach existing clients through a snapshot"
+                );
+                host.reap_integration_readiness(
+                    Instant::now() + SHELL_INTEGRATION_READY_TIMEOUT * 2,
+                );
+                assert_eq!(
+                    host.list(&client.connection_id).unwrap()[0].integration_capabilities,
+                    current.integration_capabilities,
+                    "a session without a nonce-valid event must stay degraded"
+                );
+                host.write(&client.connection_id, &info.id, b"echo still-interactive\r")
+                    .unwrap();
+            }
+            process.kill().unwrap();
+        }
+    }
+
+    #[test]
+    fn readiness_observed_before_registration_is_retained() {
+        let (host, client, _, id) = local_host();
+        let first_event = Arc::new(std::sync::OnceLock::new());
+        first_event.set(Instant::now()).unwrap();
+        host.inner
+            .state
+            .lock()
+            .sessions
+            .get_mut(&id)
+            .unwrap()
+            .integration_readiness = Some(IntegrationReadiness::new(first_event));
+        host.reap_integration_readiness(Instant::now() + SHELL_INTEGRATION_READY_TIMEOUT);
+        assert_eq!(
+            host.list(&client.connection_id).unwrap()[0].integration_capabilities,
+            IntegrationCapabilities::local_pty(true)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn integration_readiness_recovers_after_a_late_nonce_valid_event() {
+        let scripts = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scripts.path().join("shell-integration.bash"),
+            "printf 'waiting-for-release\\n'\nread -r cognia_ready_release\nprintf '\\033]633;A;%s\\007ready-after-release\\n' \"$COGNIA_TERM_NONCE\"\n",
+        )
+        .unwrap();
+        let host = TerminalHost::new("late-readiness-host", test_config()).unwrap();
+        let mut client = host.connect(ClientIdentity::local("desktop")).unwrap();
+        let mut request = profile_request();
+        request.shell = "/bin/bash".into();
+        request.args = vec!["--noprofile".into()];
+        request.sandboxed = false;
+        let info = host
+            .spawn_local(
+                &client.connection_id,
+                "late".into(),
+                request,
+                scripts.path(),
+            )
+            .unwrap();
+        let process = host.process(&info.id).unwrap();
+        let until = Instant::now() + Duration::from_secs(2);
+        while !process.replay().since(0).iter().any(|(_, event)| {
+            matches!(event, TerminalEvent::Data { bytes } if String::from_utf8_lossy(bytes).contains("waiting-for-release"))
+        }) {
+            assert!(Instant::now() < until, "integration fixture did not run");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        while client.events.try_recv().is_ok() {}
+        let after_deadline = Instant::now() + SHELL_INTEGRATION_READY_TIMEOUT;
+        host.reap_integration_readiness(after_deadline);
+        let degraded = host.list(&client.connection_id).unwrap().remove(0);
+        assert_eq!(
+            degraded.integration_capabilities.degraded_reason.as_deref(),
+            Some("shell_integration_ready_timeout")
+        );
+        assert!(std::iter::from_fn(|| client.events.try_recv().ok()).any(|event| {
+            matches!(event, HostEvent::SessionSnapshot { session } if session.integration_capabilities == degraded.integration_capabilities)
+        }));
+
+        // Release the blocked startup script, which emits the real spawn nonce.
+        host.write(&client.connection_id, &info.id, b"\r").unwrap();
+        let until = Instant::now() + Duration::from_secs(2);
+        // The reader publishes data after delivering its parsed integration
+        // events, so this marker also waits for the host sink to record readiness.
+        while !process.replay().since(0).iter().any(|(_, event)| {
+            matches!(event, TerminalEvent::Data { bytes } if String::from_utf8_lossy(bytes).contains("ready-after-release"))
+        }) {
+            assert!(Instant::now() < until, "nonce-valid event did not reach the host");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(process.replay().since(0).iter().any(|(_, event)| {
+            matches!(
+                event,
+                TerminalEvent::Integration {
+                    event: IntegrationEvent::PromptStart
+                }
+            )
+        }));
+        host.reap_integration_readiness(after_deadline + Duration::from_secs(1));
+        assert_eq!(
+            host.list(&client.connection_id).unwrap()[0].integration_capabilities,
+            IntegrationCapabilities::local_pty(true)
+        );
+        assert!(std::iter::from_fn(|| client.events.try_recv().ok()).any(|event| {
+            matches!(event, HostEvent::SessionSnapshot { session } if session.integration_capabilities == IntegrationCapabilities::local_pty(true))
+        }));
+        assert!(process.is_alive());
+        process.kill().unwrap();
+    }
+
+    #[test]
+    fn integration_readiness_never_recovers_other_degraded_reasons() {
+        for reason in [
+            "shell_integration_unsupported:unknown",
+            "shell_integration_setup_failed:script_missing",
+        ] {
+            let (host, client, _, id) = local_host();
+            let first_event = Arc::new(OnceLock::new());
+            let readiness = IntegrationReadiness::new(Arc::clone(&first_event));
+            let after_deadline = readiness.deadline + Duration::from_millis(1);
+            first_event.set(after_deadline).unwrap();
+            {
+                let mut state = host.inner.state.lock();
+                let session = state.sessions.get_mut(&id).unwrap();
+                session.integration_readiness = Some(readiness);
+                session.capabilities = IntegrationCapabilities {
+                    degraded_reason: Some(reason.into()),
+                    ..IntegrationCapabilities::local_pty(false)
+                };
+            }
+            host.reap_integration_readiness(after_deadline);
+            let capabilities = host.list(&client.connection_id).unwrap()[0]
+                .integration_capabilities
+                .clone();
+            assert!(!capabilities.command_status);
+            assert_eq!(capabilities.degraded_reason.as_deref(), Some(reason));
+        }
+    }
+
+    #[test]
+    fn capability_wire_fields_remain_unchanged() {
+        assert_eq!(
+            serde_json::to_value(IntegrationCapabilities::local_pty(false)).unwrap(),
+            serde_json::json!({ "osc633": false, "commandStatus": false,
+                "cwdTracking": false, "degradedReason": null })
+        );
     }
 
     /// The PATH woven into spawned shells comes from the desktop app's managed

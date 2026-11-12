@@ -19,6 +19,7 @@
  */
 
 import type { BaseTerminalSession } from "./base-session"
+import type { SessionInfo } from "./types"
 import { extractMarkedCommandOutput, hasCommandEndMarker } from "./command-output"
 
 /** How much decoded text a single wait keeps; the newest text wins. */
@@ -42,6 +43,21 @@ export type CommandEndOutcome =
     }
   | { kind: "timeout" }
   | { kind: "exited" }
+  | { kind: "unsupported"; reason: string | null; started: boolean }
+
+export function unsupportedOutcome(
+  info: SessionInfo
+): Extract<CommandEndOutcome, { kind: "unsupported" }> | null {
+  const capabilities = info.integrationCapabilities
+  // Older hosts omit capabilities; preserve their existing event-based wait.
+  if (
+    capabilities &&
+    (capabilities.commandStatus === false || capabilities.degradedReason != null)
+  ) {
+    return { kind: "unsupported", reason: capabilities.degradedReason, started: false }
+  }
+  return null
+}
 
 export interface AwaitCommandEndOptions {
   timeoutMs: number
@@ -53,9 +69,11 @@ export interface AwaitCommandEndOptions {
 }
 
 export function awaitCommandEnd(
-  session: Pick<BaseTerminalSession, "tapData" | "onIntegration" | "onExit">,
+  session: Pick<BaseTerminalSession, "info" | "tapData" | "onIntegration" | "onExit" | "onInfo">,
   options: AwaitCommandEndOptions
 ): Promise<CommandEndOutcome> {
+  const unsupported = unsupportedOutcome(session.info)
+  if (unsupported) return Promise.resolve(unsupported)
   return new Promise<CommandEndOutcome>((resolve) => {
     const decoder = new TextDecoder()
     let raw = ""
@@ -63,6 +81,7 @@ export function awaitCommandEnd(
     let ended: { exitCode: number | null } | null = null
     let graceTimer: ReturnType<typeof setTimeout> | undefined
     let settled = false
+    let started = false
 
     const cleanups: Array<() => void> = []
     const finish = (outcome: CommandEndOutcome) => {
@@ -93,6 +112,12 @@ export function awaitCommandEnd(
     const timeoutTimer = setTimeout(() => finish({ kind: "timeout" }), options.timeoutMs)
 
     cleanups.push(
+      session.onInfo((info) => {
+        const unsupported = unsupportedOutcome(info)
+        if (unsupported) finish({ ...unsupported, started })
+      })
+    )
+    cleanups.push(
       session.tapData((bytes) => {
         raw += decoder.decode(bytes, { stream: true })
         if (raw.length > MAX_CAPTURED_CHARS) {
@@ -122,6 +147,10 @@ export function awaitCommandEnd(
       })
     )
 
-    options.start?.()
+    if (options.start) {
+      // A synchronous snapshot from inside start must also be reported as sent.
+      started = true
+      options.start()
+    }
   })
 }

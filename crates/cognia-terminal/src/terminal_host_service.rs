@@ -841,6 +841,7 @@ pub async fn run_terminal_host(endpoint: String) -> Result<(), String> {
             interval.tick().await;
             let now = Instant::now();
             maintenance_host.reap_controller_leases(now);
+            maintenance_host.reap_integration_readiness(now);
             // Backstop for a client that paused output and then stopped running
             // (backgrounded phone, hung JS main thread) — without this its PTY
             // would stay parked forever.

@@ -193,7 +193,8 @@ async function runViaDockConsent(
       command,
       verdict: "ask",
       reason: `${reason} (dock consent path: ${result.reason})`,
-      blocked: true,
+      // Losing completion observability after the write is not a refusal.
+      blocked: result.code !== "command_sent_unobserved",
       source,
       runId: input.runId,
     })

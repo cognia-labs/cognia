@@ -90,6 +90,28 @@ describe("runTerminalDockAction — gate", () => {
 })
 
 describe("runTerminalDockAction — spawn", () => {
+  it("reports a sent command with unobservable completion as a failure", async () => {
+    withGate(true)
+    mockedRunInDock.mockResolvedValueOnce({
+      kind: "sent",
+      sessionId: "tab-new",
+      reason: "shell_integration_ready_timeout",
+    })
+    await expect(
+      runTerminalDockAction({
+        action: "spawn",
+        args: { command: "deploy" },
+        chatSessionId: "c",
+      })
+    ).resolves.toEqual({
+      ok: false,
+      code: "command_sent_unobserved",
+      reason:
+        "Command was sent to session tab-new and may still be running. Completion, exit code, and output cannot be observed by this tool (shell_integration_ready_timeout). Do not send it again.",
+    })
+    expect(mockedRunInDock).toHaveBeenCalledTimes(1)
+  })
+
   it("uses runInDockTab when a command is provided (spawn + run + wait)", async () => {
     withGate(true)
     mockedRunInDock.mockResolvedValue({
@@ -174,6 +196,47 @@ describe("runTerminalDockAction — spawn", () => {
 })
 
 describe("runTerminalDockAction — write", () => {
+  it.each([null, "shell_integration_ready_timeout"])(
+    "fails with a do-not-retry reason when a command was sent but completion is unobservable (%s)",
+    async (reason) => {
+      withGate(true)
+      mockedRunInDock.mockResolvedValueOnce({ kind: "sent", sessionId: "tab", reason })
+      await expect(
+        runTerminalDockAction({
+          action: "write",
+          args: { tabId: "tab", command: "dir", requireCommandEnd: false },
+          chatSessionId: "c",
+        })
+      ).resolves.toEqual({
+        ok: false,
+        code: "command_sent_unobserved",
+        reason: `Command was sent to session tab and may still be running. Completion, exit code, and output cannot be observed by this tool (${reason ?? "shell_integration_disabled"}). Do not send it again.`,
+      })
+      expect(mockedRunInDock).toHaveBeenCalledTimes(1)
+      expect(mockedRunInDock.mock.calls[0][0].requireCommandEnd).toBeUndefined()
+    }
+  )
+
+  it("preserves the typed unsupported outcome from runInDockTab", async () => {
+    withGate(true)
+    mockedRunInDock.mockResolvedValueOnce({
+      kind: "unsupported",
+      sessionId: "tab",
+      reason: "shell_integration_unsupported:cmd",
+    })
+    await expect(
+      runTerminalDockAction({
+        action: "write",
+        args: { tabId: "tab", command: "dir" },
+        chatSessionId: "c",
+      })
+    ).resolves.toEqual({
+      ok: false,
+      code: "shell_integration_unsupported",
+      reason: "command status unavailable (session tab): shell_integration_unsupported:cmd",
+    })
+  })
+
   it("requires tabId and command", async () => {
     withGate(true)
     expect(
@@ -314,6 +377,92 @@ describe("runTerminalDockAction — read_recent", () => {
 })
 
 describe("runTerminalDockAction — wait_for_exit", () => {
+  it("keeps an already-running command wait unsupported when no command was sent by this call", async () => {
+    withGate(true)
+    withSession("tab")
+    mockedTrust.mockResolvedValue(true)
+    let onInfo: ((info: import("./types").SessionInfo) => void) | undefined
+    mockedGetLive.mockReturnValue({
+      info: {
+        integrationCapabilities: {
+          osc633: true,
+          commandStatus: true,
+          cwdTracking: true,
+          degradedReason: null,
+        },
+      },
+      tapData: () => () => undefined,
+      onIntegration: () => () => undefined,
+      onExit: () => () => undefined,
+      onInfo: (listener: typeof onInfo) => {
+        onInfo = listener
+        return () => undefined
+      },
+    } as never)
+    const pending = runTerminalDockAction({
+      action: "wait_for_exit",
+      args: { tabId: "tab" },
+      chatSessionId: "c",
+    })
+    await Promise.resolve()
+    expect(onInfo).toBeDefined()
+    onInfo?.({
+      integrationCapabilities: {
+        osc633: false,
+        commandStatus: false,
+        cwdTracking: false,
+        degradedReason: "shell_integration_ready_timeout",
+      },
+    } as import("./types").SessionInfo)
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      code: "shell_integration_unsupported",
+      reason: "command status unavailable (session tab): shell_integration_ready_timeout",
+    })
+  })
+
+  it.each([null, "shell_integration_ready_timeout"])(
+    "reports unavailable command status immediately (%s)",
+    async (reason) => {
+      withGate(true)
+      withSession("tab")
+      mockedTrust.mockResolvedValue(true)
+      const onIntegration = jest.fn(() => () => undefined)
+      mockedGetLive.mockReturnValue({
+        info: {
+          integrationCapabilities: {
+            osc633: false,
+            commandStatus: reason !== null,
+            cwdTracking: false,
+            degradedReason: reason,
+          },
+        },
+        onIntegration,
+        tapData: () => () => undefined,
+        onExit: () => () => undefined,
+        onInfo: () => () => undefined,
+      } as never)
+      jest.useFakeTimers()
+      try {
+        const pending = runTerminalDockAction({
+          action: "wait_for_exit",
+          args: { tabId: "tab" },
+          chatSessionId: "c",
+        })
+        await Promise.resolve()
+        jest.runAllTimers()
+        await expect(pending).resolves.toEqual({
+          ok: false,
+          code: "shell_integration_unsupported",
+          reason: `command status unavailable (session tab): ${reason ?? "shell_integration_disabled"}`,
+        })
+        expect(onIntegration).not.toHaveBeenCalled()
+      } finally {
+        jest.useRealTimers()
+      }
+    }
+  )
+
   it("requires a tabId", async () => {
     withGate(true)
     const noTab = await runTerminalDockAction({
@@ -339,7 +488,7 @@ describe("runTerminalDockAction — wait_for_exit", () => {
   it("denies when the user refuses consent", async () => {
     withGate(true)
     withSession("tab")
-    mockedGetLive.mockReturnValue({ onIntegration: jest.fn() } as never)
+    mockedGetLive.mockReturnValue({ info: {}, onIntegration: jest.fn() } as never)
     mockedTrust.mockResolvedValue(false)
     const result = await runTerminalDockAction({
       action: "wait_for_exit",
@@ -358,6 +507,8 @@ describe("runTerminalDockAction — wait_for_exit", () => {
     const off = jest.fn()
     const offTap = jest.fn()
     mockedGetLive.mockReturnValue({
+      info: {},
+      onInfo: () => () => undefined,
       onIntegration: (l: (ev: { kind: string; exit_code?: number | null }) => void) => {
         listener = l
         return off
@@ -409,6 +560,8 @@ describe("runTerminalDockAction — wait_for_exit", () => {
       mockedTrust.mockResolvedValue(true)
       const off = jest.fn()
       mockedGetLive.mockReturnValue({
+        info: {},
+        onInfo: () => () => undefined,
         onIntegration: () => off,
         tapData: () => () => undefined,
         onExit: () => () => undefined,

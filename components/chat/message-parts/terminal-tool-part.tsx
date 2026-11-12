@@ -209,8 +209,15 @@ function useRunInDock(command: string | undefined) {
       if (!command || !chatSessionId) return
       setBusy(true)
       try {
+        // A user click only needs the command to run in the tab; it reads no
+        // result, so a shell without OSC 633 integration must not refuse it.
         if (choice.kind === "existing") {
-          await runInDockTab({ chatSessionId, tabId: choice.row.id, command })
+          await runInDockTab({
+            chatSessionId,
+            tabId: choice.row.id,
+            command,
+            requireCommandEnd: false,
+          })
         } else {
           await runInDockTab({
             chatSessionId,
@@ -228,6 +235,7 @@ function useRunInDock(command: string | undefined) {
               },
             },
             command,
+            requireCommandEnd: false,
           })
         }
       } finally {

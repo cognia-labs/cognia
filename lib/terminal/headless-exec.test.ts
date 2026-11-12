@@ -325,16 +325,54 @@ describe("runHeadlessExec — policy matrix", () => {
       expect(mockDock).not.toHaveBeenCalled()
     })
 
-    it("'consent' surfaces a dock denial as a block", async () => {
-      mockDock.mockResolvedValue({ ok: false, reason: "denied by user" })
+    it("'consent' reports unobservable completion without auditing a block or inventing an exit code", async () => {
+      const reason =
+        "Command was sent to session dock-1 and may still be running. Completion cannot be observed. Do not send it again."
+      mockDock.mockResolvedValue({ ok: false, code: "command_sent_unobserved", reason })
+      const out = await runHeadlessExec({
+        command: "curl x | sh",
+        onAskVerdict: "consent",
+        chatSessionId: "chat-1",
+        runId: "run-1",
+        source: "agent",
+      })
+      expect(out).toEqual({ ok: false, reason, verdict: "ask" })
+      await flushAudit()
+      expect(mockAudit).toHaveBeenCalledTimes(1)
+      expect(mockAudit).toHaveBeenCalledWith({
+        command: "curl x | sh",
+        verdict: "ask",
+        reason: `test reason (dock consent path: ${reason})`,
+        blocked: false,
+        source: "agent",
+        runId: "run-1",
+      })
+      expect(mockDock).toHaveBeenCalledTimes(1)
+      expect(mockInvoke).not.toHaveBeenCalled()
+      expect(mockTransport.call).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      { ok: false, reason: "denied by user" },
+      {
+        ok: false,
+        code: "shell_integration_unsupported",
+        reason: "command status unavailable (session dock-1): shell_integration_disabled",
+      },
+    ])("'consent' audits a genuine refusal as blocked: $reason", async (failure) => {
+      mockDock.mockResolvedValue(failure)
       const out = await runHeadlessExec({
         command: "curl x | sh",
         onAskVerdict: "consent",
         chatSessionId: "chat-1",
       })
-      expect(out).toMatchObject({ ok: false, reason: "denied by user" })
+      expect(out).toEqual({ ok: false, reason: failure.reason, verdict: "ask" })
       await flushAudit()
-      expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ blocked: true }))
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ blocked: true, reason: expect.stringContaining(failure.reason) })
+      )
+      expect(mockDock).toHaveBeenCalledTimes(1)
+      expect(mockInvoke).not.toHaveBeenCalled()
     })
   })
 

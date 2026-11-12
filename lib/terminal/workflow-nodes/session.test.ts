@@ -241,6 +241,20 @@ describe("action.terminal.session.run", () => {
     expect(result.decision).toBe("success")
   })
 
+  it("throws a non-retryable error for unobservable completion even with onFailure=branch", async () => {
+    registerRunSession("run-1", "tab-1", "dock")
+    const reason =
+      "Command was sent and may still be running. Completion cannot be observed. Do not send it again."
+    mockDock.mockResolvedValue({ ok: false, code: "command_sent_unobserved", reason })
+    const reg = getExecutor("action.terminal.session.run", 1)!
+    await expect(
+      reg.execute(makeCtx({ sessionId: "tab-1", command: "deploy", onFailure: "branch" }))
+    ).rejects.toMatchObject({ message: `action.terminal.session.run: ${reason}`, retryable: false })
+    expect(mockDock).toHaveBeenCalledTimes(1)
+    expect(mockHeadless).not.toHaveBeenCalled()
+    expect(mockKillFromDock).not.toHaveBeenCalled()
+  })
+
   it("throws on non-zero exit by default, branches with onFailure=branch", async () => {
     registerRunSession("run-1", "hl-1", "headless")
     mockHeadless.mockResolvedValue({

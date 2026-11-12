@@ -170,6 +170,18 @@ describe("action.terminal.script executor", () => {
     )
   })
 
+  it("throws a non-retryable error for unobservable completion even with onFailure=branch", async () => {
+    const reason =
+      "Command was sent and may still be running. Completion cannot be observed. Do not send it again."
+    mockRun.mockResolvedValue({ ok: false, code: "command_sent_unobserved", reason })
+    const reg = getExecutor("action.terminal.script", 1)!
+    await expect(
+      reg.execute(makeCtx({ scriptPath: "deploy.sh", onFailure: "branch" }))
+    ).rejects.toMatchObject({ message: `action.terminal.script: ${reason}`, retryable: false })
+    expect(mockRun).toHaveBeenCalledTimes(1)
+    expect(mockHeadless).not.toHaveBeenCalled()
+  })
+
   it("surfaces headless policy blocks as workflow failures", async () => {
     mockHeadless.mockResolvedValue({ ok: false, reason: "blocked by the classifier" })
     const reg = getExecutor("action.terminal.script", 1)!

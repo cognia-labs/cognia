@@ -147,6 +147,21 @@ describe("action.system.terminal executor", () => {
     )
   })
 
+  it.each([undefined, "tab-1"])(
+    "throws a non-retryable error for unobservable completion even with onFailure=branch (tabId=%s)",
+    async (tabId) => {
+      const reason =
+        "Command was sent and may still be running. Completion cannot be observed. Do not send it again."
+      mockRun.mockResolvedValue({ ok: false, code: "command_sent_unobserved", reason })
+      const reg = getExecutor("action.system.terminal", 1)!
+      await expect(
+        reg.execute(makeCtx({ params: { command: "deploy", tabId, onFailure: "branch" } }))
+      ).rejects.toMatchObject({ message: `action.system.terminal: ${reason}`, retryable: false })
+      expect(mockRun).toHaveBeenCalledTimes(1)
+      expect(mockHeadless).not.toHaveBeenCalled()
+    }
+  )
+
   it("passes a records-shaped result through defensively", async () => {
     mockRun.mockResolvedValue({ ok: true, records: [{ cmd: "ls", exitCode: 0, endedAt: 1 }] })
     const reg = getExecutor("action.system.terminal", 1)!

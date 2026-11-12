@@ -90,6 +90,22 @@ describe("the terminal tool family's surface", () => {
 })
 
 describe("the terminal tool family's run", () => {
+  it.each(["terminal_dock_spawn", "terminal_dock_write"])(
+    "passes the sent, do-not-retry reason unchanged to the model for %s",
+    async (name) => {
+      const failure = {
+        ok: false as const,
+        code: "command_sent_unobserved" as const,
+        reason:
+          "Command was sent to session t1 and may still be running. Completion cannot be observed. Do not send it again.",
+      }
+      jest.mocked(runTerminalDockAction).mockResolvedValue(failure)
+      const result = await toolFamily.run(name, { tabId: "t1", command: "deploy" }, call)
+      expect(result).toEqual(failure)
+      expect(runTerminalDockAction).toHaveBeenCalledTimes(1)
+    }
+  )
+
   it("hands the action, the arguments and the calling conversation to the dock handler", async () => {
     jest.mocked(runTerminalDockAction).mockResolvedValue({ ok: true, records: [] })
     const result = await toolFamily.run("terminal_dock_read_recent", { tabId: "t1" }, call)

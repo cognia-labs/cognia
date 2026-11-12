@@ -53,7 +53,11 @@ export type DockActionResult =
       command?: string
     }
   | { ok: true; records: Array<{ cmd: string; exitCode: number | null; endedAt: number }> }
-  | { ok: false; reason: string }
+  | {
+      ok: false
+      reason: string
+      code?: "shell_integration_unsupported" | "command_sent_unobserved"
+    }
 
 const DEFAULT_SPAWN_ROWS = 24
 const DEFAULT_SPAWN_COLS = 80
@@ -248,6 +252,7 @@ async function runWaitForExit(input: RunTerminalDockActionInput): Promise<DockAc
   // here on — the stream cannot be read backwards.
   const ended = await awaitCommandEnd(session, { timeoutMs: pickTimeoutMs(args) })
   if (ended.kind === "timeout") return { ok: false, reason: "timeout" }
+  if (ended.kind === "unsupported") return unsupportedResult(tabId, ended.reason)
   if (ended.kind === "exited") {
     return { ok: false, reason: `session ${tabId} exited before the command finished` }
   }
@@ -279,7 +284,23 @@ function mapRunInDockOutcome(outcome: Awaited<ReturnType<typeof runInDockTab>>):
       return { ok: false, reason: "user denied terminal access" }
     case "timeout":
       return { ok: false, reason: `timeout (session ${outcome.sessionId})` }
+    case "unsupported":
+      return unsupportedResult(outcome.sessionId, outcome.reason)
+    case "sent":
+      return {
+        ok: false,
+        code: "command_sent_unobserved",
+        reason: `Command was sent to session ${outcome.sessionId} and may still be running. Completion, exit code, and output cannot be observed by this tool (${outcome.reason ?? "shell_integration_disabled"}). Do not send it again.`,
+      }
     case "error":
       return { ok: false, reason: outcome.message }
+  }
+}
+
+function unsupportedResult(sessionId: string, reason: string | null): DockActionResult {
+  return {
+    ok: false,
+    code: "shell_integration_unsupported",
+    reason: `command status unavailable (session ${sessionId}): ${reason ?? "shell_integration_disabled"}`,
   }
 }

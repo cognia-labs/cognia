@@ -9,6 +9,7 @@
  */
 
 import { BaseTerminalSession } from "./base-session"
+import { awaitCommandEnd } from "./await-command-end"
 import type { IntegrationEvent, SessionInfo } from "./types"
 
 class TestableTerminalSession extends BaseTerminalSession {
@@ -355,6 +356,78 @@ describe("BaseTerminalSession flow control", () => {
 })
 
 describe("BaseTerminalSession session snapshots (ADR-0133)", () => {
+  it("allows a fresh command wait after a degraded session receives a restored snapshot", async () => {
+    const session = new TestableTerminalSession({ ...info })
+    const before = session.info
+    const start = jest.fn(() => {
+      session.pushData(new TextEncoder().encode("\u001b]633;C;n\u0007recovered\r\n"))
+      session.pushIntegration({ kind: "command_end", exit_code: 0 })
+      session.pushData(new TextEncoder().encode("\u001b]633;D;n;0\u0007"))
+    })
+    session.pushSnapshot({
+      ...info,
+      integrationCapabilities: {
+        osc633: false,
+        commandStatus: false,
+        cwdTracking: false,
+        degradedReason: "shell_integration_ready_timeout",
+      },
+    })
+    await expect(awaitCommandEnd(session, { timeoutMs: 1000, start })).resolves.toEqual({
+      kind: "unsupported",
+      reason: "shell_integration_ready_timeout",
+      started: false,
+    })
+    expect(start).not.toHaveBeenCalled()
+    session.pushSnapshot({
+      ...info,
+      integrationCapabilities: {
+        osc633: true,
+        commandStatus: true,
+        cwdTracking: true,
+        degradedReason: null,
+      },
+    })
+    expect(session.info).toBe(before)
+    await expect(awaitCommandEnd(session, { timeoutMs: 1000, start })).resolves.toEqual({
+      kind: "ended",
+      exitCode: 0,
+      output: "recovered",
+      truncated: false,
+    })
+    expect(start).toHaveBeenCalledTimes(1)
+  })
+
+  it("passes a degraded capability snapshot to a pending command wait", async () => {
+    const session = new TestableTerminalSession({
+      ...info,
+      integrationCapabilities: {
+        osc633: true,
+        commandStatus: true,
+        cwdTracking: true,
+        degradedReason: null,
+      },
+    })
+    const before = session.info
+    const pending = awaitCommandEnd(session, { timeoutMs: 1000 })
+    session.pushSnapshot({
+      ...info,
+      integrationCapabilities: {
+        osc633: false,
+        commandStatus: false,
+        cwdTracking: false,
+        degradedReason: "shell_integration_ready_timeout",
+      },
+    })
+    await expect(pending).resolves.toEqual({
+      kind: "unsupported",
+      reason: "shell_integration_ready_timeout",
+      started: false,
+    })
+    expect(session.info).toBe(before)
+    expect(session.info.integrationCapabilities?.commandStatus).toBe(false)
+  })
+
   it("refreshes info in place, drops keys the host stopped sending, and notifies onInfo", () => {
     const session = new TestableTerminalSession({ ...info, sshHostKeyStatus: "learned" })
     const before = session.info

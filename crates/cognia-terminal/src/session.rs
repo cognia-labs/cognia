@@ -29,6 +29,7 @@ use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, Master
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::host::IntegrationCapabilities;
 use super::integration::{self, ShellKind};
 use super::osc633::{IntegrationEvent, Osc633Parser};
 use super::replay::ReplayBuffer;
@@ -361,6 +362,7 @@ pub fn detached_desk_channel() -> DeskChannel {
 }
 
 pub struct PtySession {
+    pub(super) integration_capabilities: IntegrationCapabilities,
     pub id: String,
     pub project_id: Option<String>,
     pub extension_id: Option<String>,
@@ -643,6 +645,38 @@ pub fn spawn_session_with_identity(
     )
 }
 
+fn prepare_integration(
+    req: &SpawnRequest,
+    script_dir: &Path,
+    nonce: &str,
+) -> (integration::IntegrationSetup, IntegrationCapabilities) {
+    let kind = ShellKind::from_shell_path(&req.shell);
+    let result = integration::build_with_profile(
+        kind,
+        script_dir,
+        nonce,
+        req.enable_shell_integration,
+        req.force_utf8,
+        req.skip_user_profile,
+    );
+    let capabilities =
+        IntegrationCapabilities::from_local_setup(kind, req.enable_shell_integration, &result);
+    let setup = result.unwrap_or_else(|_| {
+        // Integration is optional for interactive use. Retain independent
+        // encoding setup even when writing a startup shim failed.
+        integration::build_with_profile(
+            kind,
+            script_dir,
+            nonce,
+            false,
+            req.force_utf8,
+            req.skip_user_profile,
+        )
+        .unwrap_or_else(|_| integration::IntegrationSetup::empty())
+    });
+    (setup, capabilities)
+}
+
 pub(crate) fn spawn_session_with_resolved_identity(
     mut req: SpawnRequest,
     script_dir: &Path,
@@ -661,18 +695,9 @@ pub(crate) fn spawn_session_with_resolved_identity(
     req.shell = resolve_shell_binary(&req.shell);
 
     let nonce = Uuid::new_v4().simple().to_string();
-    let shell_kind = ShellKind::from_shell_path(&req.shell);
     // The UTF-8 prelude is applied independently of the integration toggle;
     // `build` gates the OSC 633 hooks on `enable_shell_integration` itself.
-    let setup = integration::build_with_profile(
-        shell_kind,
-        script_dir,
-        &nonce,
-        req.enable_shell_integration,
-        req.force_utf8,
-        req.skip_user_profile,
-    )
-    .map_err(|e| format!("integration setup failed: {e}"))?;
+    let (setup, integration_capabilities) = prepare_integration(&req, script_dir, &nonce);
 
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -791,6 +816,7 @@ pub(crate) fn spawn_session_with_resolved_identity(
         .map_err(|e| format!("waiter thread spawn: {e}"))?;
 
     Ok(PtySession {
+        integration_capabilities,
         id,
         project_id: req.project_id,
         extension_id: req.extension_id,
@@ -1115,6 +1141,27 @@ impl Drop for PtySession {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn integration_setup_error_degrades_instead_of_aborting_spawn() {
+        let scripts = tempfile::tempdir().unwrap();
+        std::fs::write(scripts.path().join("shell-integration.zsh"), "# fixture").unwrap();
+        let nonce = Uuid::new_v4().simple().to_string();
+        let collision = std::env::temp_dir().join(format!("cognia-zdot-{nonce}"));
+        std::fs::write(&collision, "blocks create_dir_all").unwrap();
+        let mut request = sandbox_req(false);
+        request.shell = "zsh".into();
+        request.enable_shell_integration = true;
+        let (setup, capabilities) = prepare_integration(&request, scripts.path(), &nonce);
+        std::fs::remove_file(collision).unwrap();
+        assert!(setup.extra_args.is_empty());
+        assert!(setup.env_overrides.is_empty());
+        assert!(!capabilities.command_status);
+        assert!(capabilities
+            .degraded_reason
+            .unwrap()
+            .starts_with("shell_integration_setup_failed:"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn workspace_env_is_final_at_real_pty_spawn() {

@@ -48,6 +48,7 @@ import { useProjectStore } from "@/stores/project/project-store"
 import { useTerminalStore } from "@/stores/terminal/terminal-store"
 import { __clearLiveSessionsForTesting, registerLiveSession } from "./session-registry"
 import { agentTrustPluginId } from "./agent-trust"
+import type { SessionInfo } from "./types"
 
 function broker() {
   return getPluginConsentBroker()
@@ -70,6 +71,7 @@ async function grantTrust(chatId: string, tabId: string) {
 function makeFakeSession(sid: string) {
   const integrationListeners: Array<(event: unknown) => void> = []
   const taps: Array<(bytes: Uint8Array) => void> = []
+  const infoListeners: Array<(info: SessionInfo) => void> = []
   return {
     id: sid,
     info: {
@@ -78,7 +80,7 @@ function makeFakeSession(sid: string) {
       extensionId: null,
       origin: "local" as const,
       shell: "/bin/bash",
-    },
+    } as SessionInfo,
     write: jest.fn(async () => undefined),
     resize: jest.fn(async () => undefined),
     kill: jest.fn(async () => undefined),
@@ -98,6 +100,16 @@ function makeFakeSession(sid: string) {
       }
     }),
     onExit: jest.fn(() => () => undefined),
+    onInfo: jest.fn((cb: (info: SessionInfo) => void) => {
+      infoListeners.push(cb)
+      return () => {
+        const idx = infoListeners.indexOf(cb)
+        if (idx >= 0) infoListeners.splice(idx, 1)
+      }
+    }),
+    _fireInfo: (info: SessionInfo) => {
+      for (const l of infoListeners.slice()) l(info)
+    },
     _fireIntegration: (event: unknown) => {
       for (const l of integrationListeners.slice()) l(event)
     },
@@ -119,6 +131,147 @@ beforeEach(() => {
 })
 
 describe("runInDockTab", () => {
+  it.each([null, "shell_integration_ready_timeout"])(
+    "sends without waiting when command end is optional and integration is unsupported (%s)",
+    async (reason) => {
+      const fake = makeFakeSession("s-1")
+      fake.info.integrationCapabilities = {
+        osc633: false,
+        commandStatus: reason !== null,
+        cwdTracking: false,
+        degradedReason: reason,
+      }
+      registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
+      useTerminalStore.getState().registerSession(fake.info)
+      await grantTrust("c", "s-1")
+      await expect(
+        runInDockTab({
+          chatSessionId: "c",
+          tabId: "s-1",
+          command: "ls",
+          requireCommandEnd: false,
+          timeoutMs: 10,
+        })
+      ).resolves.toEqual({ kind: "sent", sessionId: "s-1", reason })
+      expect(fake.write).toHaveBeenCalledTimes(1)
+      expect(fake.write).toHaveBeenCalledWith("ls\r")
+      expect(fake.onIntegration).not.toHaveBeenCalled()
+      expect(fake.tapData).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([undefined, true, false])(
+    "reports an already-sent command when integration degrades (requireCommandEnd=%s)",
+    async (requireCommandEnd) => {
+      const fake = makeFakeSession("s-1")
+      fake.info.integrationCapabilities = {
+        osc633: true,
+        commandStatus: true,
+        cwdTracking: true,
+        degradedReason: null,
+      }
+      registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
+      useTerminalStore.getState().registerSession(fake.info)
+      await grantTrust("c", "s-1")
+      const pending = runInDockTab({
+        chatSessionId: "c",
+        tabId: "s-1",
+        command: "ls",
+        requireCommandEnd,
+        timeoutMs: 1000,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      fake.info.integrationCapabilities = {
+        osc633: false,
+        commandStatus: false,
+        cwdTracking: false,
+        degradedReason: "shell_integration_ready_timeout",
+      }
+      fake._fireInfo(fake.info)
+      await expect(pending).resolves.toEqual({
+        kind: "sent",
+        sessionId: "s-1",
+        reason: "shell_integration_ready_timeout",
+      })
+      expect(fake.write).toHaveBeenCalledTimes(1)
+      expect(fake.write).toHaveBeenCalledWith("ls\r")
+    }
+  )
+
+  it("reports sent when a freshly spawned tab degrades after the command was written", async () => {
+    const fake = makeFakeSession("spawned-1")
+    fake.info.integrationCapabilities = {
+      osc633: true,
+      commandStatus: true,
+      cwdTracking: true,
+      degradedReason: null,
+    }
+    ;(spawnFromDock as jest.Mock).mockImplementationOnce(async () => {
+      registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
+      useTerminalStore.getState().registerSession(fake.info)
+      return { kind: "spawned", sessionId: "spawned-1", shell: "/bin/bash" }
+    })
+    await grantTrust("c", "spawned-1")
+    const pending = runInDockTab({
+      chatSessionId: "c",
+      newTab: { req: { shell: "/bin/bash", rows: 24, cols: 80 } },
+      command: "echo once",
+      timeoutMs: 1000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    fake.info.integrationCapabilities = {
+      osc633: false,
+      commandStatus: false,
+      cwdTracking: false,
+      degradedReason: "shell_integration_ready_timeout",
+    }
+    fake._fireInfo(fake.info)
+    await expect(pending).resolves.toEqual({
+      kind: "sent",
+      sessionId: "spawned-1",
+      reason: "shell_integration_ready_timeout",
+    })
+    expect(fake.write).toHaveBeenCalledTimes(1)
+    expect(fake.write).toHaveBeenCalledWith("echo once\r")
+  })
+
+  it("reports a failed optional write instead of claiming the command was sent", async () => {
+    const fake = makeFakeSession("s-1")
+    fake.info.integrationCapabilities = {
+      osc633: false,
+      commandStatus: false,
+      cwdTracking: false,
+      degradedReason: null,
+    }
+    fake.write.mockRejectedValueOnce(new Error("session no longer controlled"))
+    registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
+    useTerminalStore.getState().registerSession(fake.info)
+    await grantTrust("c", "s-1")
+    await expect(
+      runInDockTab({ chatSessionId: "c", tabId: "s-1", command: "ls", requireCommandEnd: false })
+    ).resolves.toEqual({ kind: "error", message: "session no longer controlled" })
+  })
+
+  it.each([null, "shell_integration_setup_failed:script_missing"])(
+    "refuses without writing when integration is unavailable (%s)",
+    async (reason) => {
+      const fake = makeFakeSession("s-1")
+      fake.info.integrationCapabilities = {
+        osc633: false,
+        commandStatus: false,
+        cwdTracking: false,
+        degradedReason: reason,
+      }
+      registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
+      useTerminalStore.getState().registerSession(fake.info)
+      await grantTrust("c", "s-1")
+      await expect(
+        runInDockTab({ chatSessionId: "c", tabId: "s-1", command: "ls", timeoutMs: 10 })
+      ).resolves.toEqual({ kind: "unsupported", sessionId: "s-1", reason })
+      expect(fake.write).not.toHaveBeenCalled()
+    }
+  )
+
   it("returns denied when the user rejects consent", async () => {
     const fake = makeFakeSession("s-1")
     registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
@@ -138,36 +291,46 @@ describe("runInDockTab", () => {
     await expect(pending).resolves.toEqual({ kind: "denied" })
   })
 
-  it("returns the exit code and the printed output on command_end", async () => {
-    const fake = makeFakeSession("s-1")
-    registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
-    useTerminalStore.getState().registerSession(fake.info)
-    // Pre-grant trust so the consent emit short-circuits.
-    await grantTrust("c", "s-1")
-    const pending = runInDockTab({
-      chatSessionId: "c",
-      tabId: "s-1",
-      command: "echo hello",
-      timeoutMs: 1000,
-    })
-    // Allow microtasks to run so the session.write call is queued + listeners attach.
-    await new Promise((r) => setTimeout(r, 0))
-    expect(fake.write).toHaveBeenCalledWith("echo hello\r")
-    // The PTY echoes the line, then the pre-exec marker, the output, and — after
-    // the integration event for it — the chunk carrying the end marker.
-    fake._emit("$ echo hello\r\n\u001b]633;C;nonce\u0007hello\r\n")
-    fake._fireIntegration({ kind: "command_end", exit_code: 0 })
-    fake._emit("\u001b]633;D;nonce;0\u0007$ ")
-    const result = await pending
-    // The command line is NOT the output: it used to be returned in its place.
-    expect(result).toEqual({
-      kind: "ok",
-      sessionId: "s-1",
-      exitCode: 0,
-      output: "hello",
-      outputTruncated: false,
-    })
-  })
+  it.each([undefined, true, false])(
+    "returns the exit code and output with supported integration (requireCommandEnd=%s)",
+    async (requireCommandEnd) => {
+      const fake = makeFakeSession("s-1")
+      fake.info.integrationCapabilities = {
+        osc633: true,
+        commandStatus: true,
+        cwdTracking: true,
+        degradedReason: null,
+      }
+      registerLiveSession(fake as unknown as Parameters<typeof registerLiveSession>[0])
+      useTerminalStore.getState().registerSession(fake.info)
+      // Pre-grant trust so the consent emit short-circuits.
+      await grantTrust("c", "s-1")
+      const pending = runInDockTab({
+        chatSessionId: "c",
+        tabId: "s-1",
+        command: "echo hello",
+        timeoutMs: 1000,
+        requireCommandEnd,
+      })
+      // Allow microtasks to run so the session.write call is queued + listeners attach.
+      await new Promise((r) => setTimeout(r, 0))
+      expect(fake.write).toHaveBeenCalledWith("echo hello\r")
+      // The PTY echoes the line, then the pre-exec marker, the output, and — after
+      // the integration event for it — the chunk carrying the end marker.
+      fake._emit("$ echo hello\r\n\u001b]633;C;nonce\u0007hello\r\n")
+      fake._fireIntegration({ kind: "command_end", exit_code: 0 })
+      fake._emit("\u001b]633;D;nonce;0\u0007$ ")
+      const result = await pending
+      // The command line is NOT the output: it used to be returned in its place.
+      expect(result).toEqual({
+        kind: "ok",
+        sessionId: "s-1",
+        exitCode: 0,
+        output: "hello",
+        outputTruncated: false,
+      })
+    }
+  )
 
   /**
    * Regression: the store snapshot was taken before the spawn, so the freshly
