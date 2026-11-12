@@ -1918,6 +1918,7 @@ dependencies = [
  "dirs 7.0.0",
  "ed25519-dalek 3.0.0",
  "eyre",
+ "fs2",
  "hex",
  "indicatif",
  "is-terminal",

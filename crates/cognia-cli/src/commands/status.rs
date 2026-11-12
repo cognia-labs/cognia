@@ -222,7 +222,7 @@ pub fn run_overview(
                 "  [{:<4}] {}: {}",
                 check["status"].as_str().unwrap_or("?"),
                 check["name"].as_str().unwrap_or("check"),
-                check["detail"].as_str().unwrap_or("")
+                crate::commands::host::doctor_check_detail(check)
             );
         }
         if let Some(error) = &host_error {

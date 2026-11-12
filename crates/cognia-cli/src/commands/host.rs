@@ -1,6 +1,7 @@
 //! Agent-first client for the loopback-only Headless service plane.
 
 mod skills_installer;
+mod storage;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -1902,12 +1903,19 @@ fn run_doctor(
                     "[{:<4}] {}: {}",
                     check["status"].as_str().unwrap_or("?"),
                     check["name"].as_str().unwrap_or("check"),
-                    check["detail"].as_str().unwrap_or("")
+                    doctor_check_detail(&check)
                 );
             }
             Ok(())
         }
     }
+}
+
+pub(crate) fn doctor_check_detail(check: &Value) -> &str {
+    check["detail"]
+        .as_str()
+        .or_else(|| check["detail"]["summary"].as_str())
+        .unwrap_or("")
 }
 
 /// Collect the doctor checks without printing — shared by `host doctor`
@@ -1937,6 +1945,7 @@ pub(crate) fn probe_host_plane(
         json!({"name":"catalog","status":"ok","detail":format!("{} commands, {}", catalog.commands.len(), catalog.catalog_hash)}),
         json!({"name":"server-url","status":"ok","detail":resolved.base_url.origin().ascii_serialization()}),
         json!({"name":"data-dir","status":if resolved.data_dir.is_dir(){"ok"}else{"fail"},"detail":resolved.data_dir.display().to_string()}),
+        storage::check(&resolved.data_dir),
         json!({"name":"ca-cert","status":if resolved.ca_cert.is_file(){"ok"}else{"fail"},"detail":resolved.ca_cert.display().to_string()}),
         credential_source,
     ];
@@ -2597,6 +2606,47 @@ mod tests {
     use tempfile::TempDir;
 
     static TLS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn doctor_details_render_text_and_structured_storage_summaries() {
+        assert_eq!(
+            doctor_check_detail(&json!({"detail":"HTTP 200"})),
+            "HTTP 200"
+        );
+        assert_eq!(
+            doctor_check_detail(&json!({"detail":{"summary":"10 GiB free"}})),
+            "10 GiB free"
+        );
+        assert_eq!(doctor_check_detail(&json!({"detail":null})), "");
+    }
+
+    #[test]
+    fn offline_doctor_includes_local_storage_without_contacting_the_host() {
+        let directory = tempfile::tempdir().unwrap();
+        let blobs = directory.path().join("task-workspaces/blobs");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::write(blobs.join("fixture"), [0; 23]).unwrap();
+        let catalog = load_catalog().unwrap();
+        let config = HostConfig {
+            server_url: "https://127.0.0.1:1".into(),
+            data_dir: Some(directory.path().to_path_buf()),
+            ca_cert: None,
+            server_bin: None,
+        };
+        let (checks, terminal) = probe_host_plane(&catalog, &config, true);
+        assert!(terminal.is_none());
+        let storage = checks
+            .iter()
+            .find(|check| check["name"] == "storage")
+            .unwrap();
+        assert_eq!(storage["detail"]["bytesByOwner"]["task-blobs"], 23);
+        assert_eq!(storage["detail"]["totalBytes"], 23);
+        assert!(storage["detail"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("task-blobs"));
+        assert!(checks.iter().all(|check| check["name"] != "healthz"));
+    }
 
     struct TlsTestServer {
         resolved: ResolvedConfig,

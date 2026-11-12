@@ -35,6 +35,7 @@ ureq = { version = "3", default-features = false, features = ["json", "native-tl
 tungstenite = { version = "0.30", features = ["native-tls"] }
 native-tls = "0.2"
 dirs.workspace = true
+fs2 = "0.4"
 parking_lot.workspace = true
 # ── UX/TUI stack (Phase 1 — see plans/cli-tui-majestic-quokka.md) ─────────
 # `eyre` + `color-eyre` provide the top-level error report with severity
