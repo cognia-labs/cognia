@@ -38,7 +38,7 @@ import type {
 } from "@/types/plugin/plugin-cogset"
 
 import type { InspectedCogpack } from "./package"
-import type { CogpackUnavailableReason, InstalledByResolver, MemberResolution } from "./resolvers"
+import type { CogpackUnavailableReason, MemberResolution, StagedWasmReview } from "./resolvers"
 import type { CogpackTrustResult } from "./trust"
 import {
   cogsetMemberFromCogpack,
@@ -64,7 +64,7 @@ export interface CogpackImportMemberPlan {
   conflicts: PreInstallConflict["reasons"]
   /** Secret fields to fill in: declared by the cogpack and the plugin itself. */
   secretFields: string[]
-  /** A git member: its capabilities can only be reviewed once installed. */
+  /** A git member: its capabilities are reviewed once fetched, before it installs. */
   reviewAfterInstall: boolean
   /** @internal The pinned install, when there is one. */
   install?: MemberResolution["install"]
@@ -298,8 +298,6 @@ export interface CogpackImportResult {
   installed: string[]
   failed: Array<{ pluginId: string; message: string }>
   missing: Array<{ pluginId: string; reason: CogpackMissingReason }>
-  /** Git WASM members whose capabilities the user still has to review. */
-  grantsToReview: NonNullable<InstalledByResolver["grantToReview"]>[]
 }
 
 export class CogpackRefusedError extends Error {
@@ -370,6 +368,8 @@ export async function applyCogpackImport(
   options: {
     deps?: CogpackImportApplyDeps
     onProgress?: (progress: CogpackImportProgress) => void
+    /** Reviews a git member's staged capabilities; without it git members fail. */
+    reviewStagedWasm?: (staged: StagedWasmReview) => Promise<WasmCapabilityGrantDecision | null>
   } = {}
 ): Promise<CogpackImportResult> {
   if (plan.trust.refusedBy) throw new CogpackRefusedError(plan.trust.refusedBy)
@@ -393,17 +393,16 @@ export async function applyCogpackImport(
   options.onProgress?.({ done, total })
   const installed: string[] = []
   const failed: CogpackImportResult["failed"] = []
-  const grantsToReview: CogpackImportResult["grantsToReview"] = []
   for (const member of toInstall) {
     try {
-      const outcome = await member.install!({
+      await member.install!({
         viaCogpack,
         ...(member.manifest?.type === "wasm"
           ? { grantDecision: d.defaultGrant(member.manifest) }
           : {}),
+        ...(options.reviewStagedWasm ? { reviewStagedWasm: options.reviewStagedWasm } : {}),
       })
       installed.push(member.member.id)
-      if (outcome.grantToReview) grantsToReview.push(outcome.grantToReview)
     } catch (error) {
       failed.push({
         pluginId: member.member.id,
@@ -490,5 +489,5 @@ export async function applyCogpackImport(
   })
   if (choices.trustSigner && manifest.signature) await d.trustSigner(manifest.signature)
 
-  return { installId, cogsetId, installed, failed, missing, grantsToReview }
+  return { installId, cogsetId, installed, failed, missing }
 }

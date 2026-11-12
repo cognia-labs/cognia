@@ -24,6 +24,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { PermissionListCard } from "@/components/plugins/dialogs/plugin-pre-install-dialog"
 import { useWasmCapabilityGrant } from "@/hooks/plugins/use-wasm-capability-grant"
 import { packageFormatErrorCode, type PackageFormatErrorCode } from "@/lib/packaging/archive-path"
+import { shortFingerprint } from "@/lib/plugin/security/signature"
 import {
   applyCogpackImport,
   planCogpackImport,
@@ -31,7 +32,6 @@ import {
   type CogpackImportProgress,
   type CogpackImportResult,
 } from "@/lib/plugin/cogpack/import"
-import type { PluginManifest } from "@/types/plugin"
 
 export interface CogpackImportFile {
   name: string
@@ -154,16 +154,22 @@ export function CogpackImportDialog({
       const result = await applyCogpackImport(
         current,
         { install, secrets, trustSigner, mode, useNext },
-        { onProgress: (progress) => setStage({ kind: "installing", plan: current, progress }) }
+        {
+          onProgress: (progress) => setStage({ kind: "installing", plan: current, progress }),
+          // Git WASM members cannot be previewed: review each one once it is
+          // fetched, before it replaces anything. The manager persists the grant.
+          reviewStagedWasm: async (staged) =>
+            (
+              await grant.requestGrant({
+                manifest: staged.manifest,
+                authorFingerprint: staged.authorFingerprint
+                  ? shortFingerprint(staged.authorFingerprint)
+                  : undefined,
+                persist: false,
+              })
+            )?.decision ?? null,
+        }
       )
-      // Git WASM members could not be previewed; review their capabilities now.
-      for (const pending of result.grantsToReview) {
-        if ((pending.manifest as PluginManifest).type !== "wasm") continue
-        await grant.requestGrant({
-          manifest: pending.manifest,
-          authorFingerprint: pending.authorFingerprint,
-        })
-      }
       const name = current.inspected.manifest.name
       if (result.missing.length > 0)
         toast.warning(t("doneWithMissing", { name, count: result.missing.length }))

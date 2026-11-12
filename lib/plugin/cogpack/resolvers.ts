@@ -20,15 +20,21 @@ import type { CogpackMember, CogpackProvenance } from "@/types/plugin/plugin-cog
 export type CogpackUnavailableReason =
   "builtin-missing" | "registry-mismatch" | "preview-failed" | "desktop-only" | "invalid-embedded"
 
+/** What a git member's staged package shows for its capability review. */
+export interface StagedWasmReview {
+  manifest: PluginManifest
+  authorFingerprint?: string
+}
+
 export interface CogpackInstallContext {
   viaCogpack: CogpackProvenance
   /** The WASM capability grant the user approved in the combined review. */
   grantDecision?: WasmCapabilityGrantDecision
-}
-
-export interface InstalledByResolver {
-  /** A git WASM install whose capabilities could not be reviewed beforehand. */
-  grantToReview?: { manifest: PluginManifest; authorFingerprint?: string }
+  /**
+   * Review a git member's capabilities once its package is staged, before it
+   * replaces anything. `null` means the user declined; the old package stays.
+   */
+  reviewStagedWasm?: (staged: StagedWasmReview) => Promise<WasmCapabilityGrantDecision | null>
 }
 
 export interface MemberResolution {
@@ -36,7 +42,7 @@ export interface MemberResolution {
   manifest?: PluginManifest
   unavailable?: { reason: CogpackUnavailableReason; detail?: string }
   /** Install at the pinned revision. Absent when unavailable or nothing to install. */
-  install?: (context: CogpackInstallContext) => Promise<InstalledByResolver>
+  install?: (context: CogpackInstallContext) => Promise<void>
 }
 
 function failed(reason: CogpackUnavailableReason, error?: unknown): MemberResolution {
@@ -111,7 +117,6 @@ export async function resolveCogpackMember(
             version: member.version,
             viaCogpack,
           })
-          return {}
         },
       }
     }
@@ -135,7 +140,6 @@ export async function resolveCogpackMember(
               preview.generatedFiles,
               { viaCogpack }
             )
-            return {}
           },
         }
       } catch (error) {
@@ -158,7 +162,6 @@ export async function resolveCogpackMember(
               viaCogpack,
             })
             if (!result.success) throw new Error(result.error ?? "Registry install failed")
-            return {}
           },
         }
       } catch (error) {
@@ -180,7 +183,6 @@ export async function resolveCogpackMember(
           install: async ({ viaCogpack, grantDecision }) => {
             const { getPluginManager } = await import("@/lib/plugin/core/manager")
             await getPluginManager().installWasmPluginFromUrl(args, grantDecision, { viaCogpack })
-            return {}
           },
         }
       } catch (error) {
@@ -205,7 +207,6 @@ export async function resolveCogpackMember(
           install: async (context) => {
             viaCogpack = context.viaCogpack
             await client.installPlugin(member.id, source.version)
-            return {}
           },
         }
       } catch (error) {
@@ -214,19 +215,29 @@ export async function resolveCogpackMember(
     }
     case "git":
       return {
-        install: async ({ viaCogpack }) => {
-          const { installFromGit } = await import("@/lib/plugin/package/git-installer")
-          const result = await installFromGit({
-            repoUrl: source.url,
-            commit: source.commit,
-            viaCogpack,
-          })
-          return {
-            grantToReview: {
-              manifest: result.manifest,
-              ...(result.authorFingerprint ? { authorFingerprint: result.authorFingerprint } : {}),
-            },
-          }
+        install: async ({ viaCogpack, reviewStagedWasm }) => {
+          // Git cannot be previewed, so the review runs against the staged
+          // package: nothing replaces the installed one until it is approved.
+          if (!reviewStagedWasm) throw new Error("A git member needs a capability review")
+          const { getPluginManager } = await import("@/lib/plugin/core/manager")
+          const installed = await getPluginManager().installWasmPluginFromGit(
+            { repoUrl: source.url, commit: source.commit, viaCogpack },
+            async (staged) => {
+              // The signed member pins id and version, as for embedded files.
+              if (staged.manifest.id !== member.id || staged.manifest.version !== member.version) {
+                throw new Error(
+                  `The repository holds ${staged.manifest.id}@${staged.manifest.version}, not the pinned ${member.id}@${member.version}`
+                )
+              }
+              return reviewStagedWasm({
+                manifest: staged.manifest,
+                ...(staged.authorFingerprint
+                  ? { authorFingerprint: staged.authorFingerprint }
+                  : {}),
+              })
+            }
+          )
+          if (!installed) throw new Error("Capability review cancelled")
         },
       }
   }

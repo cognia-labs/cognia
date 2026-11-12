@@ -10,7 +10,11 @@ const fetchGithubPluginPreview = jest.fn()
 jest.mock("@/lib/plugin/package/github-source", () => ({
   fetchGithubPluginPreview: (ref: unknown) => fetchGithubPluginPreview(ref),
 }))
-const manager = { installPluginFromGithub: jest.fn(), installWasmPluginFromUrl: jest.fn() }
+const manager = {
+  installPluginFromGithub: jest.fn(),
+  installWasmPluginFromUrl: jest.fn(),
+  installWasmPluginFromGit: jest.fn(),
+}
 jest.mock("@/lib/plugin/core/manager", () => ({ getPluginManager: () => manager }))
 const marketplace = { getRegistryUrl: jest.fn(), getPlugin: jest.fn(), installPlugin: jest.fn() }
 jest.mock("@/lib/plugin/package/marketplace", () => ({ getPluginMarketplace: () => marketplace }))
@@ -22,10 +26,6 @@ const openVsx = { getPlugin: jest.fn(), installPlugin: jest.fn() }
 const createOpenVsxInstallClient = jest.fn((_deps: { viaCogpack?: unknown }) => openVsx)
 jest.mock("@/lib/plugin/vscode-shim/openvsx-install-flow", () => ({
   createOpenVsxInstallClient: (deps: { viaCogpack?: unknown }) => createOpenVsxInstallClient(deps),
-}))
-const installFromGit = jest.fn()
-jest.mock("@/lib/plugin/package/git-installer", () => ({
-  installFromGit: (args: unknown) => installFromGit(args),
 }))
 const installEmbeddedPlugin = jest.fn()
 jest.mock("./plugin-tree", () => ({
@@ -226,20 +226,66 @@ describe("resolveCogpackMember", () => {
     expect(openVsx.installPlugin).toHaveBeenCalledWith("x", "3.0.0")
   })
 
-  it("installs git at the commit and hands its capabilities back for review", async () => {
-    installFromGit.mockResolvedValueOnce({ manifest: { id: "x" }, authorFingerprint: "fp" })
-    const resolution = await resolveCogpackMember(
-      member({ kind: "git", url: "https://g/x.git", commit: SHA }),
-      undefined
-    )
-    expect(resolution.manifest).toBeUndefined()
-    await expect(resolution.install!({ viaCogpack })).resolves.toEqual({
-      grantToReview: { manifest: { id: "x" }, authorFingerprint: "fp" },
+  describe("git", () => {
+    const decision = { pluginId: "x", grantedPermissions: [], grantedPreopens: [] }
+    type Review = (staged: {
+      manifest: { id: string; version: string }
+      authorFingerprint?: string
+    }) => Promise<unknown>
+    /** Run the manager's staged install: hand the staged package to the review. */
+    const stageAs = (manifest: { id: string; version: string }, authorFingerprint?: string) =>
+      manager.installWasmPluginFromGit.mockImplementationOnce(
+        async (_args: unknown, review: Review) => {
+          const staged = { manifest, ...(authorFingerprint ? { authorFingerprint } : {}) }
+          return (await review(staged)) ? staged : null
+        }
+      )
+    const resolveGit = () =>
+      resolveCogpackMember(member({ kind: "git", url: "https://g/x.git", commit: SHA }), undefined)
+
+    it("reviews the staged package at the commit before the manager commits it", async () => {
+      stageAs({ id: "x", version: "1.2.0" }, "fp")
+      const reviewStagedWasm = jest.fn(async () => decision)
+      const resolution = await resolveGit()
+      expect(resolution.manifest).toBeUndefined()
+      await expect(resolution.install!({ viaCogpack, reviewStagedWasm })).resolves.toBeUndefined()
+      expect(manager.installWasmPluginFromGit).toHaveBeenCalledWith(
+        { repoUrl: "https://g/x.git", commit: SHA, viaCogpack },
+        expect.any(Function)
+      )
+      expect(reviewStagedWasm).toHaveBeenCalledWith({
+        manifest: { id: "x", version: "1.2.0" },
+        authorFingerprint: "fp",
+      })
     })
-    expect(installFromGit).toHaveBeenCalledWith({
-      repoUrl: "https://g/x.git",
-      commit: SHA,
-      viaCogpack,
+
+    it("fails the member when the user declines, leaving the installed package", async () => {
+      stageAs({ id: "x", version: "1.2.0" })
+      const resolution = await resolveGit()
+      await expect(
+        resolution.install!({ viaCogpack, reviewStagedWasm: async () => null })
+      ).rejects.toThrow("Capability review cancelled")
+    })
+
+    it("refuses a repository that holds another plugin or version than the pin", async () => {
+      const reviewStagedWasm = jest.fn(async () => decision)
+      for (const manifest of [
+        { id: "y", version: "1.2.0" },
+        { id: "x", version: "9.9.9" },
+      ]) {
+        stageAs(manifest)
+        const resolution = await resolveGit()
+        await expect(resolution.install!({ viaCogpack, reviewStagedWasm })).rejects.toThrow(
+          "not the pinned x@1.2.0"
+        )
+      }
+      expect(reviewStagedWasm).not.toHaveBeenCalled()
+    })
+
+    it("never installs without a reviewer", async () => {
+      const resolution = await resolveGit()
+      await expect(resolution.install!({ viaCogpack })).rejects.toThrow("capability review")
+      expect(manager.installWasmPluginFromGit).not.toHaveBeenCalled()
     })
   })
 })

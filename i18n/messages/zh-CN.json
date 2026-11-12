@@ -35340,7 +35340,7 @@
         },
         "resultMissing": "未安装",
         "resultTitle": "{name}已导入",
-        "reviewAfterInstall": "安装后再审核它的权限。",
+        "reviewAfterInstall": "下载后、安装前审核它的权限。",
         "secretPlaceholder": "保存到插件中，而不是 Cogset",
         "secrets": "{name}的机密信息",
         "signer": "签名者：{name} · {fingerprint}",

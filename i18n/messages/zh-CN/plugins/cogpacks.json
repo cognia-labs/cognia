@@ -103,7 +103,7 @@
     "permissions": "{name}请求的权限",
     "missingBinaries": "本机需要：{names}",
     "conflicts": "与已安装插件冲突",
-    "reviewAfterInstall": "安装后再审核它的权限。",
+    "reviewAfterInstall": "下载后、安装前审核它的权限。",
     "secrets": "{name}的机密信息",
     "secretPlaceholder": "保存到插件中，而不是 Cogset",
     "missingDependencies": "需要 Cogpack 中未包含的插件",

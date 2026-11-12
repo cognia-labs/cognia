@@ -109,9 +109,7 @@ function planDeps(overrides: Partial<CogpackImportPlanDeps> = {}): CogpackImport
     },
     shipped: { unavailable: { reason: "builtin-missing" } },
     "wasm-git": {
-      install: (installers["wasm-git"] = jest.fn(async () => ({
-        grantToReview: { manifest: { id: "wasm-git" } as PluginManifest },
-      }))),
+      install: (installers["wasm-git"] = jest.fn(async () => undefined)),
     },
   }
   return {
@@ -255,6 +253,7 @@ describe("applyCogpackImport", () => {
     const plan = await planCogpackImport(await cogpackBytes(), planDeps())
     const a = applyDeps()
     const progress: number[] = []
+    const reviewStagedWasm = jest.fn(async () => null)
     installers.fresh.mockRejectedValueOnce(new Error("disk full"))
     const result = await applyCogpackImport(
       plan,
@@ -265,7 +264,7 @@ describe("applyCogpackImport", () => {
         mode: "new",
         useNext: new Set(),
       },
-      { deps: a.deps, onProgress: (p) => progress.push(p.done) }
+      { deps: a.deps, onProgress: (p) => progress.push(p.done), reviewStagedWasm }
     )
     expect(progress).toEqual([0, 1, 2, 3])
     expect(installers.older).toHaveBeenCalledWith({
@@ -274,6 +273,7 @@ describe("applyCogpackImport", () => {
         version: "2.0.0",
         fingerprint: plan.inspected.fingerprint,
       },
+      reviewStagedWasm,
     })
     // A WASM member is installed with the grant the review showed.
     expect(installers.fresh.mock.calls[0][0].grantDecision).toEqual({
@@ -283,7 +283,9 @@ describe("applyCogpackImport", () => {
     })
     expect(result.installed).toEqual(["older", "wasm-git"])
     expect(result.failed).toEqual([{ pluginId: "fresh", message: "disk full" }])
-    expect(result.grantsToReview).toEqual([{ manifest: { id: "wasm-git" } }])
+    // A git member gets the reviewer, which runs against its staged package.
+    expect(installers["wasm-git"].mock.calls[0][0].reviewStagedWasm).toBe(reviewStagedWasm)
+    expect(installers.older.mock.calls[0][0].reviewStagedWasm).toBe(reviewStagedWasm)
     expect(a.deps.rescan).toHaveBeenCalledTimes(1)
     expect(a.deps.applyConfig).toHaveBeenCalledWith("older", { mode: "slow", token: "s3cret" })
     expect(a.deps.applyConfig).toHaveBeenCalledTimes(1)

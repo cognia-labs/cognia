@@ -103,7 +103,7 @@
     "permissions": "Permissions {name} asks for",
     "missingBinaries": "Needs on this computer: {names}",
     "conflicts": "Conflicts with installed plugins",
-    "reviewAfterInstall": "Its permissions are reviewed once it is installed.",
+    "reviewAfterInstall": "Its permissions are reviewed once it is downloaded, before it is installed.",
     "secrets": "Secrets for {name}",
     "secretPlaceholder": "Saved with the plugin, not in the cogset",
     "missingDependencies": "Needs plugins the cogpack does not include",

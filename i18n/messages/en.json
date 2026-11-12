@@ -35340,7 +35340,7 @@
         },
         "resultMissing": "Not installed",
         "resultTitle": "{name} is imported",
-        "reviewAfterInstall": "Its permissions are reviewed once it is installed.",
+        "reviewAfterInstall": "Its permissions are reviewed once it is downloaded, before it is installed.",
         "secretPlaceholder": "Saved with the plugin, not in the cogset",
         "secrets": "Secrets for {name}",
         "signer": "Signed by {name} · {fingerprint}",

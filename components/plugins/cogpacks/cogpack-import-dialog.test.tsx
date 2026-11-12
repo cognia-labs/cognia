@@ -89,7 +89,6 @@ describe("CogpackImportDialog", () => {
       installed: ["gh"],
       failed: [],
       missing: [{ pluginId: "shipped", reason: "builtin-missing" }],
-      grantsToReview: [{ manifest: { id: "w", type: "wasm" } }],
     })
     const onSwitch = jest.fn()
     render(
@@ -122,10 +121,19 @@ describe("CogpackImportDialog", () => {
     expect(choices.secrets).toEqual({ gh: { token: "s3cret" } })
     expect(choices.trustSigner).toBe(true)
     expect(choices.mode).toBe("new")
-    expect(requestGrant).toHaveBeenCalledWith({
+    // Git members are reviewed against their staged package, before install.
+    const { reviewStagedWasm } = applyCogpackImport.mock.calls[0][2]
+    const decision = { pluginId: "w", grantedPermissions: [], grantedPreopens: [] }
+    requestGrant.mockResolvedValueOnce({ decision } as never)
+    await expect(reviewStagedWasm({ manifest: { id: "w", type: "wasm" } })).resolves.toEqual(
+      decision
+    )
+    expect(requestGrant).toHaveBeenLastCalledWith({
       manifest: { id: "w", type: "wasm" },
       authorFingerprint: undefined,
+      persist: false,
     })
+    await expect(reviewStagedWasm({ manifest: { id: "w", type: "wasm" } })).resolves.toBeNull()
     expect(toast.warning).toHaveBeenCalledWith('doneWithMissing:{"name":"Deep writer","count":1}')
     fireEvent.click(screen.getByTestId("cogpack-import-switch"))
     expect(onSwitch).toHaveBeenCalledWith("c")
@@ -139,7 +147,6 @@ describe("CogpackImportDialog", () => {
       installed: [],
       failed: [],
       missing: [],
-      grantsToReview: [],
     })
     render(
       <CogpackImportDialog
@@ -200,7 +207,6 @@ describe("CogpackImportDialog", () => {
       installed: [],
       failed: [],
       missing: [],
-      grantsToReview: [],
     })
     render(
       <CogpackImportDialog
