@@ -15769,7 +15769,8 @@ mod tests {
                 record.owner_type,
                 record.owner_ref.as_deref(),
                 WorkspaceState::Archived,
-                1,
+                // Archived now: an old timestamp would let the same run expire it.
+                now_ms(),
             )
             .unwrap();
         service
@@ -15943,7 +15944,9 @@ mod tests {
             .contains(failure));
     }
 
-    #[cfg(unix)]
+    // APFS and other Unicode-normalising filesystems refuse non-UTF-8 names,
+    // so only Linux can create the fixture.
+    #[cfg(target_os = "linux")]
     #[test]
     fn archive_rejects_non_utf8_status_paths() {
         use std::os::unix::ffi::OsStringExt;
@@ -16005,7 +16008,8 @@ mod tests {
                             record.owner_type,
                             record.owner_ref.as_deref(),
                             WorkspaceState::Archived,
-                            1,
+                            // Archived now: an old timestamp would let the same run expire it.
+                            now_ms(),
                         )
                         .unwrap();
                     service
