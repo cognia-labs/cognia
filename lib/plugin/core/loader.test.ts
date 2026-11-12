@@ -421,85 +421,99 @@ describe("PluginLoader", () => {
       )
     })
 
-    it("replays Node activation registrations and routes callbacks through the host", async () => {
-      const invokeCallback = jest.fn().mockResolvedValue({ ok: true })
+    it("passes the real context to the resident launcher and retains its live hooks and exports", async () => {
+      const onCommand = jest.fn(async () => true)
+      const createConnector = jest.fn(async () => ({ id: "mail" }))
       launcherModule.launchPluginJs.mockResolvedValueOnce({
-        command: "/opt/node26/bin/node",
-        argv: ["--permission"],
-        process: { killed: false, kill: jest.fn(), isRunning: jest.fn().mockResolvedValue(true) },
-        activation: {
-          calls: [
-            {
-              path: "agent.registerTool",
-              args: [
-                {
-                  name: "node_echo",
-                  execute: { $callback: "call.0.args.0.execute" },
-                },
-              ],
-            },
-          ],
-          hooks: { onCommand: { $callback: "hooks.onCommand" } },
-          exports: { createConnector: { $callback: "exports.createConnector" } },
+        generation: "resident-generation",
+        activation: { hooks: { onCommand }, exports: { createConnector } },
+        process: {
+          killed: false,
+          kill: jest.fn(),
+          isRunning: jest.fn(async () => true),
         },
-        invokeCallback,
         deactivate: jest.fn(),
       })
-      const registerTool = jest.fn()
       const plugin = createMockPlugin("node-plugin")
-      plugin.manifest.engines = { node: ">=26.3.1" }
+      plugin.manifest.engines = { node: ">=26" }
       const definition = await loader.load(plugin)
-
-      const hooks = await definition.activate({ agent: { registerTool } } as never)
-      const tool = registerTool.mock.calls[0][0]
-      await expect(tool.execute({ message: "hello" })).resolves.toEqual({ ok: true })
-      await expect(hooks?.onCommand?.("greet", ["Ada"])).resolves.toEqual({ ok: true })
-      const exports = loader.getModuleExports("node-plugin")
-      await expect(
-        (exports?.createConnector as (config: { id: string }) => Promise<unknown>)({ id: "mail" })
-      ).resolves.toEqual({ ok: true })
-
-      expect(invokeCallback).toHaveBeenNthCalledWith(1, "call.0.args.0.execute", [
-        { message: "hello" },
-      ])
-      expect(invokeCallback).toHaveBeenNthCalledWith(2, "hooks.onCommand", ["greet", ["Ada"]])
-      expect(invokeCallback).toHaveBeenNthCalledWith(3, "exports.createConnector", [{ id: "mail" }])
+      const context = { config: { answer: 42 }, storage: { get: jest.fn() } }
+      const hooks = await definition.activate(context as never)
+      expect(launcherModule.launchPluginJs).toHaveBeenCalledWith(
+        expect.objectContaining({ context })
+      )
+      expect(launcherModule.launchPluginJs.mock.calls[0][0].context).toBe(context)
+      await expect(hooks?.onCommand?.("greet", [])).resolves.toBe(true)
+      expect(loader.getModuleExports("node-plugin")?.createConnector).toBe(createConnector)
     })
 
-    it("restores only the Node recorder's explicit credential marker, preserving untrusted JSON", async () => {
+    it("B09 waits for the launcher's host calls before publishing activation", async () => {
+      let settle!: () => void
+      const pending = new Promise<void>((resolve) => {
+        settle = resolve
+      })
+      const set = jest.fn(() => pending)
+      launcherModule.launchPluginJs.mockImplementationOnce(async (options) => {
+        await options.context.storage.set("key", "value")
+        return {
+          generation: "node-generation",
+          activation: { hooks: {}, exports: {} },
+          process: { killed: false, kill: jest.fn() },
+        }
+      })
+      const plugin = createMockPlugin("node-pending")
+      plugin.manifest.engines = { node: ">=26" }
+      const definition = await loader.load(plugin)
+      let activated = false
+      const activation = Promise.resolve(definition.activate({ storage: { set } } as never)).then(
+        () => {
+          activated = true
+        }
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(set).toHaveBeenCalled()
+      expect(activated).toBe(false)
+      expect(loader.getRuntimeGeneration("node-pending")).toBeUndefined()
+      settle()
+      await activation
+      expect(loader.getRuntimeGeneration("node-pending")).toBe("node-generation")
+    })
+
+    it("rejects failed resident activation without publishing a generation", async () => {
+      launcherModule.launchPluginJs.mockRejectedValueOnce(new Error("host write denied"))
+      const plugin = createMockPlugin("node-failed")
+      plugin.manifest.engines = { node: ">=26" }
+      const definition = await loader.load(plugin)
+      await expect(definition.activate({} as never)).rejects.toThrow("host write denied")
+      expect(loader.getRuntimeGeneration("node-failed")).toBeUndefined()
+    })
+
+    it("restores only the resident bridge's explicit credential marker, preserving untrusted JSON", async () => {
       const { execFileSync } = jest.requireActual("node:child_process")
-      const calls = JSON.parse(
+      const encodedArgs = JSON.parse(
         execFileSync(
           process.execPath,
           [
             "--input-type=module",
             "--eval",
             `
-        import { createRecordingContext } from "./scripts/plugin/node-plugin-host.mjs";
-        const ref = Object.defineProperty({ $secretRef: "token", prefix: "Bearer " }, Symbol.for("cognia.plugin.secretRef"), { value: true });
-        const recorder = createRecordingContext({ pluginId: "node-plugin" });
-        recorder.context.network.post("https://api.example.com", {
-          api_key: { $secretRef: "token" },
-          nested: { api_key: { $cogniaSecretRef: { $secretRef: "token" } } },
-          escaped: { $cogniaPlainObject: [["$cogniaSecretRef", { $secretRef: "token" }]] }
-        }, { headers: { Authorization: ref } });
-        console.log(JSON.stringify(recorder.calls));
-      `,
+          import { createBridgeContext } from "./scripts/plugin/node-plugin-host.mjs";
+          const bridge = createBridgeContext({ snapshot: {}, send() {} });
+          const ref = Object.defineProperty({ $secretRef: "token", prefix: "Bearer " }, Symbol.for("cognia.plugin.secretRef"), { value: true });
+          console.log(JSON.stringify(bridge.encode(["https://api.example.com", {
+            api_key: { $secretRef: "token" },
+            nested: { api_key: { $cogniaSecretRef: { $secretRef: "token" } } },
+            escaped: { $cogniaPlainObject: [["$cogniaSecretRef", { $secretRef: "token" }]] }
+          }, { headers: { Authorization: ref } }])));
+        `,
           ],
           { encoding: "utf8", cwd: process.cwd() }
         )
       )
-      launcherModule.launchPluginJs.mockResolvedValueOnce({
-        activation: { calls, hooks: {}, exports: {} },
-        invokeCallback: jest.fn(),
-        deactivate: jest.fn(),
-        process: { killed: false, kill: jest.fn(), isRunning: jest.fn().mockResolvedValue(true) },
-      })
-      const plugin = createMockPlugin("node-plugin")
-      plugin.manifest.engines = { node: ">=26" }
-      const definition = await loader.load(plugin)
+      const { reviveNodePluginValue } = jest.requireActual("../launcher/launchPluginJs")
       const post = jest.fn()
-      await definition.activate({ network: { post } } as never)
+      post(...reviveNodePluginValue(encodedArgs, jest.fn()))
       const [url, body, options] = post.mock.calls[0]
       expect(
         Object.getOwnPropertyDescriptor(
@@ -510,7 +524,9 @@ describe("PluginLoader", () => {
       expect(body).toEqual({
         api_key: { $secretRef: "token" },
         nested: { api_key: { $cogniaSecretRef: { $secretRef: "token" } } },
-        escaped: { $cogniaPlainObject: [["$cogniaSecretRef", { $secretRef: "token" }]] },
+        escaped: {
+          $cogniaPlainObject: [["$cogniaSecretRef", { $secretRef: "token" }]],
+        },
       })
       expect(Reflect.ownKeys(body.api_key)).toEqual(["$secretRef"])
       const { sanitizePluginNetworkEgress } = await import("../api/plugin-pii-gate")

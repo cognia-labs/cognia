@@ -21,7 +21,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "tauri-host")]
 use tauri::{Manager, State};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use super::{
     NodePluginProcessState, PermissionGrant, PluginError, PluginRecord, PluginRuntimeSnapshot,
@@ -186,10 +186,7 @@ const NODE_PLUGIN_ARGUMENT_LIMIT: usize = 64 * 1024;
 
 fn node_plugin_host_argv(
     mut argv: Vec<String>,
-    action: &str,
     plugin_id: &str,
-    callback_id: &str,
-    args_json: &str,
 ) -> Result<Vec<String>> {
     let entry_index = argv
         .iter()
@@ -201,11 +198,9 @@ fn node_plugin_host_argv(
         "--input-type=module".into(),
         "--eval".into(),
         NODE_PLUGIN_HOST_SOURCE.into(),
-        action.into(),
+        "resident".into(),
         plugin_entry,
         plugin_id.into(),
-        callback_id.into(),
-        args_json.into(),
     ]);
     argv.extend(plugin_args);
     Ok(argv)
@@ -222,44 +217,287 @@ fn parse_node_plugin_frame(line: &str) -> Result<serde_json::Value> {
     let value: serde_json::Value = serde_json::from_str(payload).map_err(|error| {
         PluginError::InvalidManifest(format!("Node plugin host emitted invalid JSON: {error}"))
     })?;
-    if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
-        return Err(PluginError::InvalidManifest(format!(
-            "Node plugin activation failed: {error}"
-        )));
-    }
     Ok(value)
 }
 
-async fn read_node_plugin_activation(
-    child: &std::sync::Arc<tokio::sync::Mutex<tokio::process::Child>>,
-) -> Result<serde_json::Value> {
-    let stdout = child
-        .lock()
-        .await
-        .stdout
-        .take()
-        .ok_or_else(|| PluginError::Internal("Node plugin stdout was not piped".into()))?;
-    let read = async move {
-        let mut lines = BufReader::new(stdout).lines();
-        let mut observed = 0_usize;
-        while let Some(line) = lines.next_line().await.map_err(PluginError::Io)? {
-            observed = observed.saturating_add(line.len());
-            if observed > NODE_PLUGIN_FRAME_LIMIT {
-                return Err(PluginError::InvalidManifest(
-                    "Node plugin activation output exceeded the protocol limit".into(),
-                ));
+struct NodePluginRelay {
+    stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
+    frames: tokio::sync::Mutex<NodePluginFrameQueue>,
+    reader: tokio::task::AbortHandle,
+    state: PluginRuntimeState,
+    plugin_id: String,
+    generation: uuid::Uuid,
+    child: std::sync::Arc<tokio::sync::Mutex<tokio::process::Child>>,
+    runtime: tokio::runtime::Handle,
+    poisoned: std::sync::atomic::AtomicBool,
+    deactivation: parking_lot::Mutex<Option<tokio::task::AbortHandle>>,
+}
+
+struct NodePluginFrameQueue {
+    receiver: tokio::sync::mpsc::Receiver<Result<serde_json::Value>>,
+    deferred: Option<Result<serde_json::Value>>,
+}
+
+impl NodePluginFrameQueue {
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.receiver.len() + usize::from(self.deferred.is_some())
+    }
+}
+
+impl NodePluginRelay {
+    fn poison(&self) {
+        if self
+            .poisoned
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        // A pipe containing a partial JSON line can never be reused safely.
+        self.reader.abort();
+        remove_node_generation(&self.state, &self.plugin_id, self.generation);
+        let child = self.child.clone();
+        self.runtime.spawn(async move {
+            if let Err(error) = kill_node_plugin_child(&child).await {
+                tracing::warn!(%error, "Failed to kill poisoned Node plugin child");
             }
-            if line.starts_with(NODE_PLUGIN_RESULT_PREFIX) {
-                return parse_node_plugin_frame(&line);
+        });
+    }
+
+    fn arm_deactivation(self: &std::sync::Arc<Self>) {
+        let mut deadline = self.deactivation.lock();
+        if deadline.is_some() {
+            return;
+        }
+        let relay = std::sync::Arc::downgrade(self);
+        *deadline = Some(
+            self.runtime
+                .spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if let Some(relay) = relay.upgrade() {
+                        relay.poison();
+                    }
+                })
+                .abort_handle(),
+        );
+    }
+}
+
+impl Drop for NodePluginRelay {
+    fn drop(&mut self) {
+        self.reader.abort();
+        if let Some(deadline) = self.deactivation.get_mut().take() {
+            deadline.abort();
+        }
+    }
+}
+
+struct NodePluginWriteGuard<'a> {
+    relay: &'a NodePluginRelay,
+    complete: bool,
+}
+
+impl Drop for NodePluginWriteGuard<'_> {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.relay.poison();
+        }
+    }
+}
+
+// The process registry owns generations. Pipe state lives here so the public
+// managed-process snapshot remains independent of the transport implementation.
+static NODE_PLUGIN_RELAYS: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<uuid::Uuid, std::sync::Arc<NodePluginRelay>>>,
+> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+
+static NODE_PLUGIN_RETIRING: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<uuid::Uuid, usize>>,
+> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+
+async fn attach_node_plugin_relay(
+    state: &PluginRuntimeState,
+    plugin_id: &str,
+    generation: uuid::Uuid,
+    child: &std::sync::Arc<tokio::sync::Mutex<tokio::process::Child>>,
+) -> Result<(std::sync::Arc<NodePluginRelay>, serde_json::Value)> {
+    let (stdin, stdout) =
+        {
+            let mut child = child.lock().await;
+            (
+                child.stdin.take().ok_or_else(|| {
+                    PluginError::Internal("Node plugin stdin was not piped".into())
+                })?,
+                child.stdout.take().ok_or_else(|| {
+                    PluginError::Internal("Node plugin stdout was not piped".into())
+                })?,
+            )
+        };
+    let (sender, receiver) = tokio::sync::mpsc::channel(32);
+    let reader = tokio::spawn(async move {
+        let mut stdout = BufReader::new(stdout);
+        let mut token: Option<String> = None;
+        let mut stray_bytes = 0_usize;
+        loop {
+            let mut bytes = Vec::new();
+            let read = (&mut stdout)
+                .take((NODE_PLUGIN_FRAME_LIMIT + 1) as u64)
+                .read_until(b'\n', &mut bytes)
+                .await;
+            let frame = match read {
+                Ok(0) => Err(PluginError::InvalidManifest(
+                    "Node plugin exited before replying".into(),
+                )),
+                Ok(_) if bytes.len() > NODE_PLUGIN_FRAME_LIMIT => {
+                    Err(PluginError::InvalidManifest(
+                        "Node plugin output exceeded the protocol limit".into(),
+                    ))
+                }
+                Ok(_) => {
+                    let mut accepted = None;
+                    // The token distinguishes accidental stdout from bridge frames;
+                    // it is not a security boundary against the plugin itself.
+                    for (offset, _) in bytes
+                        .windows(NODE_PLUGIN_RESULT_PREFIX.len())
+                        .enumerate()
+                        .filter(|(_, part)| *part == NODE_PLUGIN_RESULT_PREFIX.as_bytes())
+                    {
+                        let Ok(line) = std::str::from_utf8(&bytes[offset..]) else {
+                            continue;
+                        };
+                        let Ok(mut frame) = parse_node_plugin_frame(line.trim_end()) else {
+                            continue;
+                        };
+                        let received_token = frame.get("token").and_then(serde_json::Value::as_str);
+                        if token.is_none()
+                            && frame.get("type").and_then(serde_json::Value::as_str)
+                                == Some("ready")
+                        {
+                            token = received_token
+                                .filter(|token| token.len() == 64)
+                                .map(str::to_owned);
+                        }
+                        if token.is_some() && received_token == token.as_deref() {
+                            stray_bytes = stray_bytes.saturating_add(offset);
+                            frame.as_object_mut().map(|object| object.remove("token"));
+                            accepted = Some(frame);
+                            break;
+                        }
+                    }
+                    if let Some(frame) = accepted {
+                        if stray_bytes > NODE_PLUGIN_FRAME_LIMIT {
+                            Err(PluginError::InvalidManifest(
+                                "Node plugin stray output exceeded the protocol limit".into(),
+                            ))
+                        } else {
+                            stray_bytes = 0;
+                            Ok(frame)
+                        }
+                    } else {
+                        stray_bytes = stray_bytes.saturating_add(bytes.len());
+                        if stray_bytes <= NODE_PLUGIN_FRAME_LIMIT {
+                            continue;
+                        }
+                        Err(PluginError::InvalidManifest(
+                            "Node plugin stray output exceeded the protocol limit".into(),
+                        ))
+                    }
+                }
+                Err(error) => Err(PluginError::Io(error)),
+            };
+            let failed = frame.is_err();
+            if sender.send(frame).await.is_err() || failed {
+                break;
             }
         }
-        Err(PluginError::InvalidManifest(
-            "Node plugin exited before reporting activation".into(),
-        ))
+    });
+    let relay = std::sync::Arc::new(NodePluginRelay {
+        stdin: tokio::sync::Mutex::new(stdin),
+        frames: tokio::sync::Mutex::new(NodePluginFrameQueue {
+            receiver,
+            deferred: None,
+        }),
+        reader: reader.abort_handle(),
+        state: state.clone(),
+        plugin_id: plugin_id.into(),
+        generation,
+        child: child.clone(),
+        runtime: tokio::runtime::Handle::current(),
+        poisoned: std::sync::atomic::AtomicBool::new(false),
+        deactivation: parking_lot::Mutex::new(None),
+    });
+    let ready = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        relay
+            .frames
+            .lock()
+            .await
+            .receiver
+            .recv()
+            .await
+            .ok_or_else(|| {
+                PluginError::InvalidManifest("Node plugin host exited before ready".into())
+            })?
+    })
+    .await
+    .map_err(|_| PluginError::InvalidManifest("Node plugin host readiness timed out".into()))??;
+    if ready.get("type").and_then(serde_json::Value::as_str) != Some("ready") {
+        return Err(PluginError::InvalidManifest(
+            "Node plugin host did not report ready".into(),
+        ));
+    }
+    Ok((relay, ready))
+}
+
+async fn write_node_plugin_frames(
+    relay: &std::sync::Arc<NodePluginRelay>,
+    frames: &[serde_json::Value],
+) -> Result<()> {
+    if frames.len() > 32 {
+        return Err(PluginError::InvalidArgument(
+            "Too many Node plugin frames".into(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    for frame in frames {
+        serde_json::to_writer(&mut bytes, frame)?;
+        bytes.push(b'\n');
+    }
+    if bytes.len() > NODE_PLUGIN_FRAME_LIMIT {
+        return Err(PluginError::InvalidArgument(
+            "Node plugin frames exceed the protocol limit".into(),
+        ));
+    }
+    if relay.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(PluginError::InvalidManifest(
+            "Node plugin transport is poisoned".into(),
+        ));
+    }
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    if frames.iter().any(|frame| frame["type"] == "deactivate") {
+        relay.arm_deactivation();
+    }
+    let mut guard = NodePluginWriteGuard {
+        relay,
+        complete: false,
     };
-    tokio::time::timeout(std::time::Duration::from_secs(30), read)
-        .await
-        .map_err(|_| PluginError::InvalidManifest("Node plugin activation timed out".into()))?
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut stdin = relay.stdin.lock().await;
+        if relay.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Node plugin transport is poisoned",
+            ));
+        }
+        stdin.write_all(&bytes).await?;
+        stdin.flush().await
+    })
+    .await
+    .map_err(|_| PluginError::InvalidManifest("Node plugin input timed out".into()))?
+    .map_err(PluginError::Io)?;
+    guard.complete = true;
+    Ok(())
 }
 
 fn checked_scope_paths(
@@ -596,7 +834,9 @@ fn assert_current_node_generation(
         .map_err(|_| PluginError::InvalidArgument("invalid Node process generation".into()))?;
     let processes = state.node_plugin_processes.lock();
     if let Some(process) = processes.get(plugin_id) {
-        if generation_matches(process, generation) {
+        if generation_matches(process, generation)
+            && !NODE_PLUGIN_RETIRING.lock().contains_key(&generation)
+        {
             let gate = match process {
                 NodePluginProcessState::Launching { action_gate, .. }
                 | NodePluginProcessState::Running { action_gate, .. } => action_gate.clone(),
@@ -663,7 +903,7 @@ fn remove_node_generation(
     generation: uuid::Uuid,
 ) -> bool {
     let mut processes = state.node_plugin_processes.lock();
-    if processes
+    let removed = if processes
         .get(plugin_id)
         .is_some_and(|process| generation_matches(process, generation))
     {
@@ -671,7 +911,38 @@ fn remove_node_generation(
         true
     } else {
         false
+    };
+    NODE_PLUGIN_RETIRING.lock().remove(&generation);
+    NODE_PLUGIN_RELAYS.lock().remove(&generation);
+    removed
+}
+
+struct NodePluginRetiringGuard(uuid::Uuid);
+
+impl Drop for NodePluginRetiringGuard {
+    fn drop(&mut self) {
+        let mut retiring = NODE_PLUGIN_RETIRING.lock();
+        if let Some(stops) = retiring.get_mut(&self.0) {
+            *stops -= 1;
+            if *stops == 0 {
+                retiring.remove(&self.0);
+            }
+        }
     }
+}
+
+async fn kill_node_plugin_child(
+    child: &std::sync::Arc<tokio::sync::Mutex<tokio::process::Child>>,
+) -> Result<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut child = child.lock().await;
+        if child.try_wait().map_err(PluginError::Io)?.is_none() {
+            child.kill().await.map_err(PluginError::Io)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| PluginError::Internal("Node plugin termination timed out".into()))?
 }
 
 async fn stop_node_plugin_process(
@@ -688,7 +959,7 @@ async fn stop_node_plugin_process(
         }) {
             return Ok(false);
         }
-        match processes.get(plugin_id) {
+        let process = match processes.get(plugin_id) {
             Some(NodePluginProcessState::Launching {
                 generation,
                 action_gate,
@@ -699,18 +970,25 @@ async fn stop_node_plugin_process(
                 action_gate,
             }) => Some((*generation, Some(child.clone()), action_gate.clone())),
             None => None,
+        };
+        if let Some((generation, _, _)) = &process {
+            // Insert while the registry is locked so reaping cannot race it.
+            *NODE_PLUGIN_RETIRING.lock().entry(*generation).or_default() += 1;
         }
+        process
     };
     let had_process = process.is_some();
     if let Some((process_generation, child, action_gate)) = process {
+        let _retiring = NodePluginRetiringGuard(process_generation);
         let _action_guard = action_gate.write().await;
-        if let Some(child) = child {
-            let mut child = child.lock().await;
-            if child.try_wait().map_err(PluginError::Io)?.is_none() {
-                child.kill().await.map_err(PluginError::Io)?;
-            }
-        }
+        let killed = match child {
+            Some(child) => kill_node_plugin_child(&child).await,
+            None => Ok(()),
+        };
+        // Release the reservation even if termination fails, so relaunch can
+        // recover. The child also retains kill_on_drop as a final fallback.
         remove_node_generation(state, plugin_id, process_generation);
+        killed?;
     }
     Ok(had_process)
 }
@@ -726,6 +1004,13 @@ fn spawn_node_reaper(
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            if !processes
+                .lock()
+                .get(&plugin_id)
+                .is_some_and(|process| generation_matches(process, generation))
+            {
+                break;
+            }
             let finished = child
                 .lock()
                 .await
@@ -740,6 +1025,8 @@ fn spawn_node_reaper(
                 {
                     processes.remove(&plugin_id);
                 }
+                NODE_PLUGIN_RELAYS.lock().remove(&generation);
+                NODE_PLUGIN_RETIRING.lock().remove(&generation);
                 break;
             }
         }
@@ -755,7 +1042,7 @@ fn spawn_reserved_node_process(
     root: &Path,
 ) -> Result<std::sync::Arc<tokio::sync::Mutex<tokio::process::Child>>> {
     let mut processes = state.node_plugin_processes.lock();
-    if !processes
+    if NODE_PLUGIN_RETIRING.lock().contains_key(&generation) || !processes
         .get(plugin_id)
         .is_some_and(|process| generation_matches(process, generation))
     {
@@ -777,7 +1064,7 @@ fn spawn_reserved_node_process(
         .env_clear()
         .env("COGNIA_PLUGIN_ID", plugin_id)
         .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
@@ -889,16 +1176,28 @@ pub async fn plugin_launch_js_for_state(
             return Err(error);
         }
     };
-    let argv = node_plugin_host_argv(argv, "activate-wait", &plugin_id, "", "[]")?;
+    let argv = node_plugin_host_argv(argv, &plugin_id)?;
     let child = spawn_reserved_node_process(state, &plugin_id, generation, &command, &argv, &root)?;
-    let activation = match read_node_plugin_activation(&child).await {
-        Ok(activation) => activation,
+    let (relay, activation) = match attach_node_plugin_relay(state, &plugin_id, generation, &child).await {
+        Ok(ready) => ready,
         Err(error) => {
             let _ = child.lock().await.kill().await;
             remove_node_generation(state, &plugin_id, generation);
             return Err(error);
         }
     };
+    {
+        let processes = state.node_plugin_processes.lock();
+        if !processes
+            .get(&plugin_id)
+            .is_some_and(|process| generation_matches(process, generation))
+        {
+            return Err(PluginError::InvalidArgument(
+                "Node plugin launch was cancelled".into(),
+            ));
+        }
+        NODE_PLUGIN_RELAYS.lock().insert(generation, relay);
+    }
     spawn_node_reaper(
         state.node_plugin_processes.clone(),
         plugin_id,
@@ -913,86 +1212,97 @@ pub async fn plugin_launch_js_for_state(
     })
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the Node host protocol boundary keeps every wire field explicit"
-)]
 async fn run_node_plugin_action(
     state: &PluginRuntimeState,
     plugin_id: &str,
-    plugin_path: &str,
-    entry: &str,
-    action: &str,
-    callback_id: &str,
-    args: &serde_json::Value,
-    resource_dir: Option<&Path>,
+    generation: &str,
+    frames: Vec<serde_json::Value>,
+    wait_ms: u64,
 ) -> Result<serde_json::Value> {
-    crate::validate_plugin_id_path_component(plugin_id)?;
-    if callback_id.len() > NODE_PLUGIN_CALLBACK_ID_LIMIT
-        || callback_id.chars().any(char::is_control)
-    {
-        return Err(PluginError::InvalidArgument(
-            "Node plugin callback id is invalid".into(),
-        ));
-    }
-    let args_json = serde_json::to_string(args)?;
-    if args_json.len() > NODE_PLUGIN_ARGUMENT_LIMIT {
-        return Err(PluginError::InvalidArgument(
-            "Node plugin callback arguments exceed the protocol limit".into(),
-        ));
-    }
-    let grants = match state.permissions.read().get(plugin_id).cloned() {
-        Some(grants) => grants,
-        None => crate::permissions::read_ledger(state, plugin_id)?,
-    };
-    let expected_root = state.plugin_dir(plugin_id);
-    let claimed_root = PathBuf::from(plugin_path);
-    let (root, argv) = prepare_node_launch(
-        &expected_root,
-        &claimed_root,
-        &state.plugin_install_dir,
-        &state.plugin_state_dir,
-        entry,
-        grants,
-        Vec::new(),
-    )?;
-    let argv = node_plugin_host_argv(argv, action, plugin_id, callback_id, &args_json)?;
-    let command = resolve_node_runtime(resource_dir)?;
-    let mut process = tokio::process::Command::new(command);
-    process
-        .args(argv)
-        .current_dir(root)
-        .env_clear()
-        .env("COGNIA_PLUGIN_ID", plugin_id)
-        .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let output = tokio::time::timeout(std::time::Duration::from_secs(120), process.output())
-        .await
-        .map_err(|_| PluginError::InvalidManifest("Node plugin callback timed out".into()))??;
-    if output.stdout.len() > NODE_PLUGIN_FRAME_LIMIT
-        || output.stderr.len() > NODE_PLUGIN_FRAME_LIMIT
-    {
-        return Err(PluginError::InvalidManifest(
-            "Node plugin callback output exceeded the protocol limit".into(),
-        ));
-    }
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|_| PluginError::InvalidManifest("Node plugin host stdout is not UTF-8".into()))?;
-    let frame = stdout
-        .lines()
-        .rev()
-        .find(|line| line.starts_with(NODE_PLUGIN_RESULT_PREFIX))
+    let (generation_id, action_gate) =
+        assert_current_node_generation(state, plugin_id, generation)?;
+    let _action_guard = action_gate.read().await;
+    assert_current_node_generation(state, plugin_id, generation)?;
+    let relay = NODE_PLUGIN_RELAYS
+        .lock()
+        .get(&generation_id)
+        .cloned()
         .ok_or_else(|| {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            PluginError::InvalidManifest(format!(
-                "Node plugin host returned no protocol frame: {}",
-                stderr.trim()
-            ))
+            PluginError::InvalidArgument("Node plugin transport is unavailable".into())
         })?;
-    parse_node_plugin_frame(frame)
+    for frame in &frames {
+        let kind = frame.get("type").and_then(serde_json::Value::as_str);
+        if !matches!(kind, Some("activate" | "invoke" | "deactivate" | "reply")) {
+            return Err(PluginError::InvalidArgument(
+                "Invalid Node plugin frame type".into(),
+            ));
+        }
+        if let Some(callback_id) = frame.get("callbackId").and_then(serde_json::Value::as_str) {
+            if callback_id.len() > NODE_PLUGIN_CALLBACK_ID_LIMIT
+                || callback_id.chars().any(char::is_control)
+            {
+                return Err(PluginError::InvalidArgument(
+                    "Node plugin callback id is invalid".into(),
+                ));
+            }
+        }
+        if kind == Some("invoke")
+            && serde_json::to_vec(&frame["args"])?.len() > NODE_PLUGIN_ARGUMENT_LIMIT
+        {
+            return Err(PluginError::InvalidArgument(
+                "Node plugin callback arguments exceed the protocol limit".into(),
+            ));
+        }
+    }
+    write_node_plugin_frames(&relay, &frames).await?;
+    let mut queue = relay.frames.lock().await;
+    let mut output = Vec::new();
+    let mut response_bytes = b"{\"frames\":[]}".len();
+    let wait = std::time::Duration::from_millis(wait_ms.min(1000));
+    let first = match queue.deferred.take() {
+        Some(frame) => Some(frame),
+        None => match tokio::time::timeout(wait, queue.receiver.recv()).await {
+            Ok(frame) => Some(frame.unwrap_or_else(|| {
+                Err(PluginError::InvalidManifest(
+                    "Node plugin transport closed".into(),
+                ))
+            })),
+            Err(_) => None,
+        },
+    };
+    let mut next = first;
+    while let Some(frame) = next {
+        match frame {
+            Ok(frame) => {
+                let bytes = serde_json::to_vec(&frame)?.len() + usize::from(!output.is_empty());
+                if !output.is_empty() && response_bytes + bytes > NODE_PLUGIN_FRAME_LIMIT {
+                    queue.deferred = Some(Ok(frame));
+                    break;
+                }
+                response_bytes += bytes;
+                output.push(frame);
+            }
+            Err(error) if !output.is_empty() => {
+                queue.deferred = Some(Err(error));
+                break;
+            }
+            Err(error) => {
+                relay.poison();
+                return Err(error);
+            }
+        }
+        if output.len() == 32 {
+            break;
+        }
+        next = match queue.receiver.try_recv() {
+            Ok(frame) => Some(frame),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => Some(Err(
+                PluginError::InvalidManifest("Node plugin transport closed".into()),
+            )),
+        };
+    }
+    Ok(serde_json::json!({ "frames": output }))
 }
 
 #[cfg(feature = "tauri-host")]
@@ -1041,23 +1351,21 @@ pub async fn plugin_invoke_js_callback_for_state(
     generation: String,
     resource_dir: Option<PathBuf>,
 ) -> Result<serde_json::Value> {
-    let (_, action_gate) = assert_current_node_generation(state, &plugin_id, &generation)?;
-    let _action_guard = action_gate.read().await;
-    let frame = run_node_plugin_action(
-        state,
-        &plugin_id,
-        &plugin_path,
-        &entry,
-        "callback",
-        &callback_id,
-        &args,
-        resource_dir.as_deref(),
-    )
-    .await?;
-    Ok(frame
-        .get("result")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null))
+    let _ = (plugin_path, entry, resource_dir);
+    if callback_id != "$exchange" {
+        return Err(PluginError::InvalidArgument(
+            "Node plugin callbacks require the resident exchange protocol".into(),
+        ));
+    }
+    let frames: Vec<serde_json::Value> =
+        serde_json::from_value(args.get("frames").cloned().ok_or_else(|| {
+            PluginError::InvalidArgument("Node plugin exchange requires frames".into())
+        })?)?;
+    let wait_ms = args
+        .get("waitMs")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    run_node_plugin_action(state, &plugin_id, &generation, frames, wait_ms).await
 }
 
 #[cfg(feature = "tauri-host")]
@@ -1092,17 +1400,21 @@ pub async fn plugin_deactivate_js_for_state(
     generation: String,
     resource_dir: Option<PathBuf>,
 ) -> Result<()> {
-    let (_, action_gate) = assert_current_node_generation(state, &plugin_id, &generation)?;
+    let _ = (plugin_path, entry, resource_dir);
+    let (generation_id, action_gate) =
+        assert_current_node_generation(state, &plugin_id, &generation)?;
     let _action_guard = action_gate.read().await;
-    run_node_plugin_action(
-        state,
-        &plugin_id,
-        &plugin_path,
-        &entry,
-        "deactivate",
-        "",
-        &serde_json::Value::Array(Vec::new()),
-        resource_dir.as_deref(),
+    assert_current_node_generation(state, &plugin_id, &generation)?;
+    let relay = NODE_PLUGIN_RELAYS
+        .lock()
+        .get(&generation_id)
+        .cloned()
+        .ok_or_else(|| {
+            PluginError::InvalidArgument("Node plugin transport is unavailable".into())
+        })?;
+    write_node_plugin_frames(
+        &relay,
+        &[serde_json::json!({ "type": "deactivate", "id": "deactivate" })],
     )
     .await?;
     Ok(())
@@ -1823,18 +2135,18 @@ mod tests {
             assert_current_node_generation(&state, "demo", &generation.to_string()).unwrap();
         let action = gate.read().await;
 
-        assert!(tokio::time::timeout(
-            std::time::Duration::from_millis(10),
-            stop_node_plugin_process(&state, "demo", Some(generation))
-        )
-        .await
-        .is_err());
+        let stop = stop_node_plugin_process(&state, "demo", Some(generation));
+        tokio::pin!(stop);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut stop)
+                .await
+                .is_err()
+        );
         assert!(state.node_plugin_processes.lock().contains_key("demo"));
+        assert!(assert_current_node_generation(&state, "demo", &generation.to_string()).is_err());
 
         drop(action);
-        assert!(stop_node_plugin_process(&state, "demo", Some(generation))
-            .await
-            .unwrap());
+        assert!(stop.await.unwrap());
     }
 
     #[test]
@@ -1853,6 +2165,540 @@ mod tests {
                 .is_err()
         );
         assert!(assert_current_node_generation(&state, "missing", &current.to_string()).is_err());
+    }
+
+    #[tokio::test]
+    async fn node_callback_waiting_behind_stop_revalidates_generation() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let generation = uuid::Uuid::new_v4();
+        state
+            .node_plugin_processes
+            .lock()
+            .insert("demo".into(), launching(generation));
+        let (_, gate) =
+            assert_current_node_generation(&state, "demo", &generation.to_string()).unwrap();
+        let stopping = gate.write().await;
+        let callback = plugin_invoke_js_callback_for_state(
+            &state,
+            "demo".into(),
+            "/missing".into(),
+            "index.mjs".into(),
+            "$exchange".into(),
+            serde_json::json!({ "frames": [], "waitMs": 0 }),
+            generation.to_string(),
+            None,
+        );
+        tokio::pin!(callback);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut callback)
+                .await
+                .is_err()
+        );
+        remove_node_generation(&state, "demo", generation);
+        drop(stopping);
+        let error = callback.await.unwrap_err().to_string();
+        assert!(error.contains("stale Node process generation"), "{error}");
+    }
+
+    #[cfg(unix)]
+    async fn node_relay_fixture(
+        state: &PluginRuntimeState,
+        tmp: &TempDir,
+        output: &[u8],
+        mode: &str,
+    ) -> (
+        uuid::Uuid,
+        std::sync::Arc<tokio::sync::Mutex<tokio::process::Child>>,
+        std::sync::Arc<NodePluginRelay>,
+    ) {
+        let generation = uuid::Uuid::new_v4();
+        let token = "a".repeat(64);
+        let mut bytes =
+            format!("{NODE_PLUGIN_RESULT_PREFIX}{{\"type\":\"ready\",\"token\":\"{token}\"}}\n")
+                .into_bytes();
+        bytes.extend_from_slice(output);
+        let output_path = tmp.path().join("relay-output");
+        fs::write(&output_path, bytes).unwrap();
+        let script = match mode {
+            "exit" => "/bin/cat \"$1\"",
+            "drain" => "/bin/cat \"$1\"; exec /bin/cat >/dev/null",
+            _ => "/bin/cat \"$1\"; exec /bin/sleep 60",
+        };
+        let child = std::sync::Arc::new(tokio::sync::Mutex::new(
+            tokio::process::Command::new("/bin/sh")
+                .args(["-c", script, "relay-fixture"])
+                .arg(output_path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap(),
+        ));
+        state.node_plugin_processes.lock().insert(
+            "demo".into(),
+            NodePluginProcessState::Running {
+                generation,
+                child: child.clone(),
+                action_gate: std::sync::Arc::new(tokio::sync::RwLock::new(())),
+            },
+        );
+        let (relay, _) = attach_node_plugin_relay(state, "demo", generation, &child)
+            .await
+            .unwrap();
+        NODE_PLUGIN_RELAYS.lock().insert(generation, relay.clone());
+        (generation, child, relay)
+    }
+
+    #[cfg(unix)]
+    fn node_relay_test_frame(id: usize, payload: &str) -> Vec<u8> {
+        format!(
+            "{NODE_PLUGIN_RESULT_PREFIX}{}\n",
+            serde_json::json!({
+                "type": "result", "id": id.to_string(), "value": payload, "token": "a".repeat(64),
+            })
+        )
+        .into_bytes()
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_node_relay_frames(relay: &NodePluginRelay, count: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while relay.frames.lock().await.len() < count {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the fixture must enqueue its frames");
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_node_relay_exit(
+        child: &tokio::sync::Mutex<tokio::process::Child>,
+        seconds: u64,
+    ) {
+        tokio::time::timeout(std::time::Duration::from_secs(seconds), async {
+            while child.lock().await.try_wait().unwrap().is_none() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("native teardown must kill the child");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn node_relay_review_cancelled_partial_write_kills_generation() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let (generation, child, relay) = node_relay_fixture(&state, &tmp, &[], "blocked").await;
+        let frames = [
+            serde_json::json!({ "type": "reply", "id": "nested", "value": "x".repeat(1024 * 1024) }),
+        ];
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(20),
+                write_node_plugin_frames(&relay, &frames)
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            !state.node_plugin_processes.lock().contains_key("demo"),
+            "a cancelled partial frame must retire the stream"
+        );
+        assert!(
+            write_node_plugin_frames(&relay, &[]).await.is_err(),
+            "a poisoned stream must never be reused"
+        );
+        wait_for_node_relay_exit(&child, 1).await;
+        assert!(!NODE_PLUGIN_RELAYS.lock().contains_key(&generation));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn node_relay_review_write_timeout_and_error_retire_generation() {
+        for mode in ["blocked", "exit"] {
+            let tmp = TempDir::new().unwrap();
+            let state = make_state(&tmp);
+            let (_, child, relay) = node_relay_fixture(&state, &tmp, &[], mode).await;
+            if mode == "exit" {
+                child.lock().await.wait().await.unwrap();
+            }
+            let frames = [serde_json::json!({ "type": "reply", "value": "x".repeat(1024 * 1024) })];
+            assert!(write_node_plugin_frames(&relay, &frames).await.is_err());
+            assert!(
+                !state.node_plugin_processes.lock().contains_key("demo"),
+                "{mode} must release the generation"
+            );
+            assert!(write_node_plugin_frames(&relay, &[]).await.is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn node_relay_review_delivers_frames_before_terminal_error() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let (generation, _, relay) = node_relay_fixture(
+            &state,
+            &tmp,
+            &node_relay_test_frame(1, "last result"),
+            "exit",
+        )
+        .await;
+        wait_for_node_relay_frames(&relay, 2).await;
+        let batch = run_node_plugin_action(&state, "demo", &generation.to_string(), vec![], 0)
+            .await
+            .expect("EOF must not discard the final result");
+        assert_eq!(batch["frames"][0]["value"], "last result");
+        let error = run_node_plugin_action(&state, "demo", &generation.to_string(), vec![], 0)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("exited before replying"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn node_relay_review_resets_stray_budget_and_recovers_embedded_prefix() {
+        for embedded in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let state = make_state(&tmp);
+            let mut output = Vec::new();
+            for id in 0..3 {
+                if embedded {
+                    output.extend_from_slice(b"tool output without a newline: ");
+                } else {
+                    output.extend_from_slice(&vec![b'x'; 1100 * 1024]);
+                    output.push(b'\n');
+                }
+                output.extend(node_relay_test_frame(id, "authentic"));
+            }
+            let (generation, _, relay) = node_relay_fixture(&state, &tmp, &output, "exit").await;
+            let mut received = Vec::new();
+            while received.len() < 3 {
+                let batch =
+                    run_node_plugin_action(&state, "demo", &generation.to_string(), vec![], 1000)
+                        .await
+                        .expect("valid frames must survive ordinary tool output");
+                received.extend(batch["frames"].as_array().unwrap().iter().cloned());
+            }
+            assert_eq!(
+                received
+                    .iter()
+                    .map(|frame| frame["id"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["0", "1", "2"]
+            );
+            drop(relay);
+            stop_node_plugin_process(&state, "demo", Some(generation))
+                .await
+                .unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn node_relay_review_caps_exchange_bytes_without_losing_frames() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let output: Vec<_> = (0..3)
+            .flat_map(|id| node_relay_test_frame(id, &"x".repeat(900 * 1024)))
+            .collect();
+        let (generation, _, relay) = node_relay_fixture(&state, &tmp, &output, "drain").await;
+        wait_for_node_relay_frames(&relay, 3).await;
+        let first = run_node_plugin_action(&state, "demo", &generation.to_string(), vec![], 0)
+            .await
+            .unwrap();
+        assert!(
+            serde_json::to_vec(&first).unwrap().len() <= NODE_PLUGIN_FRAME_LIMIT,
+            "RPC response must have a total byte cap"
+        );
+        assert_eq!(first["frames"].as_array().unwrap().len(), 2);
+        let second = run_node_plugin_action(&state, "demo", &generation.to_string(), vec![], 0)
+            .await
+            .unwrap();
+        assert_eq!(second["frames"][0]["id"], "2");
+        stop_node_plugin_process(&state, "demo", Some(generation))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn node_relay_review_cancelled_stop_clears_retiring_marker() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let generation = uuid::Uuid::new_v4();
+        state
+            .node_plugin_processes
+            .lock()
+            .insert("demo".into(), launching(generation));
+        let (_, gate) =
+            assert_current_node_generation(&state, "demo", &generation.to_string()).unwrap();
+        let action = gate.read().await;
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(10),
+                stop_node_plugin_process(&state, "demo", Some(generation))
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            !NODE_PLUGIN_RETIRING.lock().contains_key(&generation),
+            "a dropped stop must not strand the generation"
+        );
+        drop(action);
+        stop_node_plugin_process(&state, "demo", Some(generation))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn node_relay_review_cancelling_one_stop_keeps_another_stop_retired() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let generation = uuid::Uuid::new_v4();
+        state
+            .node_plugin_processes
+            .lock()
+            .insert("demo".into(), launching(generation));
+        let (_, gate) =
+            assert_current_node_generation(&state, "demo", &generation.to_string()).unwrap();
+        let action = gate.read().await;
+        let mut first = Box::pin(stop_node_plugin_process(&state, "demo", Some(generation)));
+        let mut second = Box::pin(stop_node_plugin_process(&state, "demo", Some(generation)));
+        for stop in [&mut first, &mut second] {
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(10), stop)
+                    .await
+                    .is_err()
+            );
+        }
+        drop(first);
+        assert!(assert_current_node_generation(&state, "demo", &generation.to_string()).is_err());
+        drop(second);
+        assert!(assert_current_node_generation(&state, "demo", &generation.to_string()).is_ok());
+        drop(action);
+        stop_node_plugin_process(&state, "demo", Some(generation))
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn node_relay_review_cleanup_clears_retiring_after_reaper_removed_entry() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let generation = uuid::Uuid::new_v4();
+        NODE_PLUGIN_RETIRING.lock().insert(generation, 1);
+        remove_node_generation(&state, "demo", generation);
+        assert!(!NODE_PLUGIN_RETIRING.lock().contains_key(&generation));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn node_relay_review_failed_termination_releases_the_generation() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let (generation, child, _) = node_relay_fixture(&state, &tmp, &[], "blocked").await;
+        let killing = child.lock().await;
+        let error = stop_node_plugin_process(&state, "demo", Some(generation))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("termination timed out"));
+        assert!(!state.node_plugin_processes.lock().contains_key("demo"));
+        assert!(!NODE_PLUGIN_RETIRING.lock().contains_key(&generation));
+        assert!(!NODE_PLUGIN_RELAYS.lock().contains_key(&generation));
+        state
+            .node_plugin_processes
+            .lock()
+            .insert("demo".into(), launching(uuid::Uuid::new_v4()));
+        drop(killing);
+        child.lock().await.kill().await.unwrap();
+        stop_node_plugin_process(&state, "demo", None)
+            .await
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn node_relay_review_native_deactivate_kills_without_owner_stop() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let (generation, child, _) = node_relay_fixture(&state, &tmp, &[], "drain").await;
+        plugin_deactivate_js_for_state(
+            &state,
+            "demo".into(),
+            "unused".into(),
+            "unused".into(),
+            generation.to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+        wait_for_node_relay_exit(&child, 6).await;
+        assert!(!state.node_plugin_processes.lock().contains_key("demo"));
+    }
+
+    #[tokio::test]
+    async fn node_callback_entering_during_stop_fails_before_waiting_for_the_gate() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let generation = uuid::Uuid::new_v4();
+        #[cfg(unix)]
+        let mut command = tokio::process::Command::new("/bin/sleep");
+        #[cfg(unix)]
+        command.arg("60");
+        #[cfg(windows)]
+        let mut command = tokio::process::Command::new("cmd");
+        #[cfg(windows)]
+        command.args(["/C", "ping -n 60 127.0.0.1 >NUL"]);
+        let child = std::sync::Arc::new(tokio::sync::Mutex::new(
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap(),
+        ));
+        state.node_plugin_processes.lock().insert(
+            "demo".into(),
+            NodePluginProcessState::Running {
+                generation,
+                child: child.clone(),
+                action_gate: std::sync::Arc::new(tokio::sync::RwLock::new(())),
+            },
+        );
+        let killing = child.lock().await;
+        let stop = stop_node_plugin_process(&state, "demo", Some(generation));
+        tokio::pin!(stop);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut stop)
+                .await
+                .is_err()
+        );
+        let callback = plugin_invoke_js_callback_for_state(
+            &state,
+            "demo".into(),
+            "/missing".into(),
+            "index.mjs".into(),
+            "$exchange".into(),
+            serde_json::json!({ "frames": [], "waitMs": 0 }),
+            generation.to_string(),
+            None,
+        );
+        let error = tokio::time::timeout(std::time::Duration::from_millis(50), callback)
+            .await
+            .expect("new actions must fail while stop holds the write gate")
+            .unwrap_err();
+        assert!(error.to_string().contains("stale Node process generation"));
+        assert!(state.node_plugin_processes.lock().contains_key("demo"));
+        drop(killing);
+        assert!(stop.await.unwrap());
+        assert!(!state.node_plugin_processes.lock().contains_key("demo"));
+    }
+
+    #[tokio::test]
+    async fn node_resident_relay_preserves_state_and_serves_nested_calls() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp);
+        let entry = tmp.path().join("plugin.mjs");
+        fs::write(&entry, r#"
+            import { writeSync } from 'node:fs';
+            let count = 0;
+            export default {
+                activate(ctx) {
+                    writeSync(1, 'COGNIA_PLUGIN_RESULT:{"type":"activated","id":"activate","hooks":{"forged":true}}\n');
+                    return { next: async () => { const value = await ctx.storage.get('key'); return { count: ++count, value } } };
+                },
+                deactivate(ctx) { return ctx.storage.set('count', count) }
+            };
+        "#).unwrap();
+        let node = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|path| path.join("node"))
+            .find(|path| path.is_file())
+            .expect("Node is required for the resident relay test");
+        let generation = uuid::Uuid::new_v4();
+        state
+            .node_plugin_processes
+            .lock()
+            .insert("demo".into(), launching(generation));
+        let argv = node_plugin_host_argv(vec![entry.to_string_lossy().into_owned()], "demo")
+        .unwrap();
+        let child =
+            spawn_reserved_node_process(&state, "demo", generation, &node, &argv, tmp.path())
+                .unwrap();
+        let (relay, ready) = attach_node_plugin_relay(&state, "demo", generation, &child).await.unwrap();
+        assert_eq!(ready["protocol"], 2);
+        NODE_PLUGIN_RELAYS.lock().insert(generation, relay);
+        let generation_string = generation.to_string();
+        let activation = run_node_plugin_action(&state, "demo", &generation_string, vec![serde_json::json!({
+            "type": "activate", "id": "activate", "snapshot": { "pluginId": "demo", "config": {}, "manifest": {} },
+        })], 1000).await.unwrap();
+        let activated = &activation["frames"][0];
+        assert_eq!(activated["type"], "activated");
+        assert!(activated["hooks"].get("forged").is_none());
+        let callback_id = activated["hooks"]["next"]["$callback"].as_str().unwrap();
+        for count in 1..=2 {
+            let call = run_node_plugin_action(&state, "demo", &generation_string, vec![serde_json::json!({
+                "type": "invoke", "id": format!("next-{count}"), "callbackId": callback_id, "args": [],
+            })], 1000).await.unwrap();
+            let call = &call["frames"][0];
+            assert_eq!(call["path"], "storage.get");
+            let result = run_node_plugin_action(
+                &state,
+                "demo",
+                &generation_string,
+                vec![serde_json::json!({
+                    "type": "reply", "id": call["id"], "value": "host-value",
+                })],
+                1000,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                result["frames"][0]["value"],
+                serde_json::json!({ "count": count, "value": "host-value" })
+            );
+        }
+        plugin_deactivate_js_for_state(
+            &state,
+            "demo".into(),
+            "unused".into(),
+            "unused".into(),
+            generation_string.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        let call = run_node_plugin_action(&state, "demo", &generation_string, vec![], 1000)
+            .await
+            .unwrap();
+        assert_eq!(call["frames"][0]["path"], "storage.set");
+        assert_eq!(call["frames"][0]["args"], serde_json::json!(["count", 2]));
+        let result = run_node_plugin_action(
+            &state,
+            "demo",
+            &generation_string,
+            vec![serde_json::json!({
+                "type": "reply", "id": call["frames"][0]["id"], "value": { "$undefined": true },
+            })],
+            1000,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["frames"][0]["id"], "deactivate");
+        stop_node_plugin_process(&state, "demo", Some(generation))
+            .await
+            .unwrap();
+        assert!(!NODE_PLUGIN_RELAYS.lock().contains_key(&generation));
+        assert!(
+            run_node_plugin_action(&state, "demo", &generation_string, vec![], 0)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

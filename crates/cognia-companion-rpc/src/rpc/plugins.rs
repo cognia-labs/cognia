@@ -1445,6 +1445,8 @@ pub(super) async fn dispatch(
             .and_then(to_json)
         }
         "plugin_invoke_js_callback" => {
+            // $exchange carries bounded resident-process frames, including replies
+            // to nested context calls. The runtime fences every exchange by generation.
             let services = host
                 .headless()
                 .ok_or_else(|| RpcError::headless_host_required(name))?;

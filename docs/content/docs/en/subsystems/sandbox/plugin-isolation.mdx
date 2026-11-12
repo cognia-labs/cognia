@@ -1,6 +1,6 @@
 ---
 title: "Plugin isolation"
-description: "How third-party plugin code is confined: the renderer-side PluginSandbox (permission-mapped globals + Function/AsyncFunction execution), the T2 Node 24 --permission re-exec helper, and the T3 Wasmtime/WASI runtime bounded by the grant ledger."
+description: "How third-party plugin code is confined: the renderer-side PluginSandbox (permission-mapped globals + Function/AsyncFunction execution), the T2 Node 26.3.1+ --permission re-exec helper, and the T3 Wasmtime/WASI runtime bounded by the grant ledger."
 ---
 
 # Plugin isolation
@@ -12,7 +12,7 @@ description: "How third-party plugin code is confined: the renderer-side PluginS
   renderer-side isolation: it maps each `PluginPermission` to a concrete allowed global, wraps
   `console` / `setTimeout` / `fetch` / `localStorage`, and runs plugin code through a `Function` /
   `AsyncFunction` with explicit args and a timeout. **T2** (`launchPluginJs.ts`) translates a
-  manifest's permissions into Node 24 `--permission` flags for re-execing Node-target plugins.
+  manifest's permissions into Node 26.3.1+ `--permission` flags for re-execing Node-target plugins.
   **T3** is the native Rust/Wasmtime host. T2 is reached through `PluginLoader`/`PluginManager` for
   Node-target frontend plugins; T3 reconciles manifest preopens before native load and binds the
   returned runtime generation into every tool and workflow node.
@@ -90,29 +90,63 @@ delegates to the web sandbox service — which is a stub today (see [microVM & W
   routes through the `sandbox_*` tools.
 </Callout>
 
-## T2 — Node `--permission` re-exec
+## T2 — Resident Node `--permission` host
 
-`lib/plugin/launcher/launchPluginJs.ts` translates a permission scope into Node 24 `--allow-*` flags
+`lib/plugin/launcher/launchPluginJs.ts` translates a permission scope into Node 26.3.1+ `--allow-*` flags
 for re-execing a plugin's JS entry. Empty lists OMIT the flag (fail-safe deny), never `*`.
 
-```ts title="lib/plugin/launcher/launchPluginJs.ts:91-112"
-export function nodePermissionArgs(scope: NodePermissionScope): string[] {
-  const args: string[] = ["--permission"]
-  // Network and subprocess scopes fail closed via host-broker errors; Node 24
-  // has no scoped host flag and child-process permission is all-or-nothing.
-  if (scope.readPaths.length > 0) args.push(`--allow-fs-read=${scope.readPaths.join(",")}`)
-  if (scope.writePaths.length > 0) args.push(`--allow-fs-write=${scope.writePaths.join(",")}`)
-  return args
-}
+```ts title="lib/plugin/launcher/launchPluginJs.ts"
+nodePermissionArgs({
+  permissions: ["filesystem:read"],
+  readPaths: ["/plugins/example"],
+  writePaths: [],
+  netHosts: [],
+  allowedSubprocesses: [],
+})
+// ["--permission", "--allow-fs-read=/plugins/example"]
 ```
 
-`buildLaunchArgv(entryPath, scope, extraArgs)` returns the full argv passed to
-`child_process.spawn("node", argv)`. `deriveScopeFromManifest` is conservative: a declared
-permission category with no concrete paths yields an empty list, so the filesystem flag is omitted
-entirely. `PluginLoader.loadFrontendModule()` detects Node-target frontend plugins (`engines.node`
-or `runtimeCompatibility.tauri.entrypoint === "node"`), derives the scope from `permissions` +
-`fileScope`, calls `launchPluginJs()` on activate, and kills the child on deactivate/unload through
-the normal `PluginManager` lifecycle.
+`buildLaunchArgv(entryPath, scope, extraArgs)` describes the permission flags; Rust resolves the
+verified bundled runtime and owns the process. `deriveScopeFromManifest` omits filesystem grants
+without concrete paths. `PluginLoader` selects this path only for frontend manifests declaring
+`engines.node` or `runtimeCompatibility.tauri.entrypoint === "node"`. Ordinary frontend imports
+continue running in their existing realm.
+
+Each generation uses one resident child for activation, callbacks and deactivation. The child retains
+its definition, hooks and closure state. Piped stdin/stdout carry newline-delimited JSON; console
+output goes to stderr. A per-process token distinguishes accidental stdout from prefixed bridge
+frames. It is not a security boundary against plugin code, which can already issue any context call
+its permissions allow. Stray text before a valid frame is discarded, and the 2 MiB stray-output
+budget resets after each valid frame. Frames are limited to 2 MiB, callback arguments to 64 KiB,
+and exchanges to 32 frames and 2 MiB total with a maximum one-second poll.
+
+The existing `plugin_invoke_js_callback` command accepts `callbackId: "$exchange"` with
+`args: { frames, waitMs }` and returns `{ frames }`, over both Tauri and companion RPC. Every
+exchange carries the generation and revalidates it after acquiring the action gate. Stop retires
+the generation before killing the child and clears retirement on every stop exit, including errors
+or cancellation. Termination errors release the reservation so relaunch can recover. A cancelled,
+failed or timed-out pipe write poisons the transport and kills that generation; a partial frame is
+never followed by another write. Final frames are delivered before a terminal read error is reported
+on the next exchange. `plugin_deactivate_js` starts the resident definition's deactivation; exchanges
+continue serving nested context calls until it finishes. A native five-second deadline kills the
+child even if the renderer or Headless owner never sends stop.
+
+Context methods send requests to the real renderer/Headless `PluginContext`, await its method and
+return a promise of the real result. Plugin callbacks remain in the child and cross as references;
+functions returned by callbacks receive new references without re-running activation or a factory.
+`pluginId`, `pluginPath`, manifest, actual config and capabilities are launch snapshots. Configuration
+reads, permission checks and i18n translation/formatting run locally from configuration, grant and
+locale/message snapshots. Methods returning disposers/handles provide an immediate child handle;
+calling it or its methods targets the real host handle by registration-call id. The host disposes
+remaining handles on deactivation, stop, transport failure or activation rollback. Secret-reference
+brands and escaped plain objects are preserved in both directions; unsafe paths and cycles are refused.
+
+Activation resolves only after the child has resolved `activate()` and all its host calls have
+settled. A rejected host call fails activation and kills the child through rollback. Activation has
+a 30-second budget, callback/host requests a 120-second budget, and deactivation/handle disposal a
+five-second budget before forced termination. An asynchronous hung request does not serialize other
+callbacks behind it. Cancellation of a Host operation does not currently propagate an AbortSignal
+into the child.
 
 <Callout type="info">
   Node's permission model confines the entry process. Shell-like work and network egress that needs
@@ -146,7 +180,7 @@ flowchart TB
     PS["permission → globals<br/>Function/AsyncFunction + timeout"]
   end
   subgraph T2["Node target (T2)"]
-    L["nodePermissionArgs → --allow-* flags"] --> SP["spawn('node', argv)"]
+    L["nodePermissionArgs → --allow-* flags"] --> SP["Rust-owned resident Node"]
   end
   subgraph T3["WASM target (T3)"]
     GR["reconcile preopens"] --> LW["plugin_wasm_load"]

@@ -1,6 +1,6 @@
 ---
 title: "插件隔离"
-description: "第三方插件代码如何被约束：渲染端的 PluginSandbox（权限映射的全局对象 + Function/AsyncFunction 执行）、T2 级 Node 24 --permission 重新执行（re-exec）助手，以及由授权账本（grant ledger）限定的 T3 级 Wasmtime/WASI 运行时。"
+description: "第三方插件代码如何被约束：渲染端的 PluginSandbox（权限映射的全局对象 + Function/AsyncFunction 执行）、T2 级 Node 26.3.1+ --permission 重新执行（re-exec）助手，以及由授权账本（grant ledger）限定的 T3 级 Wasmtime/WASI 运行时。"
 ---
 
 # 插件隔离
@@ -11,7 +11,7 @@ description: "第三方插件代码如何被约束：渲染端的 PluginSandbox�
   三个层级共同约束插件代码。`lib/plugin/core/sandbox.ts:PluginSandbox` 是已发布的渲染端隔离：它把每个
   `PluginPermission` 映射到具体的允许访问的全局对象，包装 `console` / `setTimeout` / `fetch` /
   `localStorage`，并通过带显式参数和超时的 `Function` / `AsyncFunction` 运行插件代码。**T2**
-  （`launchPluginJs.ts`）把 manifest 的权限翻译为 Node 24 的 `--permission` 标志，用于重新执行
+  （`launchPluginJs.ts`）把 manifest 的权限翻译为 Node 26.3.1+ 的 `--permission` 标志，用于重新执行
   Node 目标插件。**T3** 是原生 Rust/Wasmtime 宿主。T2 已经通过 `PluginLoader` / `PluginManager`
   触达 Node-target frontend 插件；T3 会在原生 load 前对账 manifest preopens，并把宿主返回的
   runtime generation 绑定到每个工具与 workflow node。
@@ -83,22 +83,30 @@ execute<T>(code: string, context: Record<string, unknown> = {}): T {
   的会话中也会被拒绝，调用会经由 `sandbox_*` 工具路由。
 </Callout>
 
-## T2 —— Node `--permission` 重新执行（re-exec）
+## T2 —— 常驻 Node `--permission` 宿主
 
-`lib/plugin/launcher/launchPluginJs.ts` 把一个权限范围（scope）翻译为 Node 24 的 `--allow-*` 标志，用于重新执行插件的 JS 入口。空列表会 OMIT 该标志（fail-safe 拒绝），绝不使用 `*`。
+`lib/plugin/launcher/launchPluginJs.ts` 把一个权限范围（scope）翻译为 Node 26.3.1+ 的 `--allow-*` 标志，用于重新执行插件的 JS 入口。空列表会 OMIT 该标志（fail-safe 拒绝），绝不使用 `*`。
 
-```ts title="lib/plugin/launcher/launchPluginJs.ts:91-112"
-export function nodePermissionArgs(scope: NodePermissionScope): string[] {
-  const args: string[] = ["--permission"]
-  // Network and subprocess scopes fail closed via host-broker errors; Node 24
-  // has no scoped host flag and child-process permission is all-or-nothing.
-  if (scope.readPaths.length > 0) args.push(`--allow-fs-read=${scope.readPaths.join(",")}`)
-  if (scope.writePaths.length > 0) args.push(`--allow-fs-write=${scope.writePaths.join(",")}`)
-  return args
-}
+```ts title="lib/plugin/launcher/launchPluginJs.ts"
+nodePermissionArgs({
+  permissions: ["filesystem:read"],
+  readPaths: ["/plugins/example"],
+  writePaths: [],
+  netHosts: [],
+  allowedSubprocesses: [],
+})
+// ["--permission", "--allow-fs-read=/plugins/example"]
 ```
 
-`buildLaunchArgv(entryPath, scope, extraArgs)` 返回传给 `child_process.spawn("node", argv)` 的完整 argv。`deriveScopeFromManifest` 很保守：一个声明了但没有具体路径的权限类别会产生空列表，因此文件系统 flag 会被完全省略。`PluginLoader.loadFrontendModule()` 会识别 Node-target frontend 插件（`engines.node` 或 `runtimeCompatibility.tauri.entrypoint === "node"`），从 `permissions` + `fileScope` 推导 scope，在 activate 时调用 `launchPluginJs()`，并在 deactivate/unload 时通过正常 `PluginManager` 生命周期杀掉子进程。
+`buildLaunchArgv(entryPath, scope, extraArgs)` 描述权限参数；Rust 解析经过验证的 bundled runtime 并持有子进程。`deriveScopeFromManifest` 会省略没有具体路径的文件系统授权。只有声明 `engines.node` 或 `runtimeCompatibility.tauri.entrypoint === "node"` 的 frontend manifest 才进入这条路径；普通 frontend import 仍在原有 realm 中运行。
+
+每个 generation 只使用一个常驻子进程执行 activate、所有 callback 与 deactivate，保留 definition、hooks 和闭包状态。stdin/stdout 使用带换行分隔的 JSON，console 重定向到 stderr。每个进程的 token 用于区分意外 stdout 与带前缀的 bridge frame；它不是防御插件代码的安全边界，插件本来就可以发出其权限允许的 context 调用。有效 frame 前的杂散文本会被丢弃，2 MiB 杂散输出预算在每个有效 frame 后重置。单个 frame 限制为 2 MiB，callback 参数限制为 64 KiB，每次 exchange 最多 32 个 frame、总计 2 MiB，long-poll 最长一秒。
+
+现有 `plugin_invoke_js_callback` 命令接受 `callbackId: "$exchange"` 和 `args: { frames, waitMs }`，返回 `{ frames }`；Tauri 与 companion RPC 使用相同协议。每次 exchange 都携带 generation，并在取得 action gate 后再次验证。stop 先把 generation 标记为 retiring 并拒绝新动作，在成功、错误或取消退出时清理本次 retiring 标记；kill 失败时释放记录，使重新启动能够恢复。pipe 写入被取消、失败或超时时，transport 会被标记为 poisoned 并终止该 generation，不会在半个 frame 后继续写入。最后一批有效 frame 先交付，终止读取错误在下一次 exchange 返回。`plugin_deactivate_js` 启动常驻 definition 的 deactivate；exchange 会继续服务其中的嵌套 context 调用，直到完成。原生五秒期限到达后会终止子进程，即使 renderer 或 Headless owner 没有发送 stop。
+
+context 方法把请求交给持有真实 `PluginContext` 的 renderer/Headless，等待真实方法完成，向子进程返回真实结果的 promise。插件 callback 留在子进程中，以引用跨进程传递；callback 返回的函数获得新的引用，无需重跑 activate 或 factory。`pluginId`、`pluginPath`、manifest、真实 config 与 capabilities 使用启动快照。配置读取、权限检查、i18n 翻译及格式化使用本地配置、grant、locale/message 快照。返回 disposer/handle 的方法立即提供子进程 handle；调用它或其方法时，通过注册调用 id 转发到真实宿主 handle。deactivate、stop、transport 失败或 activation rollback 都会释放剩余宿主 handle。双向保留 secret-ref brand 与 plain-object 转义，并拒绝不安全路径和循环引用。
+
+只有子进程 `activate()` 完成且其中所有宿主调用都已落定，activation 才算完成。任何宿主调用拒绝都会让 activation 失败并通过 rollback 杀掉子进程。activation 限时 30 秒，callback/host 请求限时 120 秒，deactivate/handle disposal 限时五秒后强制终止。异步挂起的请求不会把其他 callback 串行堵住。Host 操作的取消目前不会把 AbortSignal 传播到子进程。
 
 <Callout type="info">
   Node permission model 只约束入口进程。需要 host allowlist 强制的 shell 类工作与网络访问必须走 brokered
@@ -120,7 +128,7 @@ flowchart TB
     PS["permission → globals<br/>Function/AsyncFunction + timeout"]
   end
   subgraph T2["Node target (T2)"]
-    L["nodePermissionArgs → --allow-* flags"] --> SP["spawn('node', argv)"]
+    L["nodePermissionArgs → --allow-* flags"] --> SP["Rust-owned resident Node"]
   end
   subgraph T3["WASM target (T3)"]
     GR["reconcile preopens"] --> LW["plugin_wasm_load"]

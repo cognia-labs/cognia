@@ -1,155 +1,265 @@
 import { readFile } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
+import { randomBytes } from "node:crypto"
+import { AsyncLocalStorage } from "node:async_hooks"
 
 export const RESULT_PREFIX = "COGNIA_PLUGIN_RESULT:"
-const CALLBACK_CHAIN_PREFIX = "chain:"
+const FRAME_LIMIT = 2 * 1024 * 1024
 const UNSAFE_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"])
+const WIRE_KEYS = [
+  "$callback",
+  "$undefined",
+  "$cogniaSecretRef",
+  "$cogniaPlainObject",
+  "$hostHandle",
+]
 const HOST_PRIVATE_IMPORT_PATTERN =
   /(?:from\s*|import\s*\(|require\s*\(|import\s+(?=["']))\s*["'](@\/(?:lib|types|components|stores)(?:\/[^"']*)?)["']/g
 
-function writeResult(value) {
-  process.stdout.write(`${RESULT_PREFIX}${JSON.stringify(value)}\n`)
-}
-
-function redirectConsole() {
-  for (const level of ["debug", "info", "log", "warn", "error"]) {
-    console[level] = (...args) => process.stderr.write(`[plugin:${level}] ${args.join(" ")}\n`)
-  }
-}
-
-export function createRecordingContext({ pluginId, manifest = {}, config = {} }) {
-  const calls = []
+export function createBridgeContext({ snapshot, send, requestTimeoutMs = 120_000 }) {
   const callbacks = new Map()
-  const seen = new WeakSet()
+  const callbackIds = new WeakMap()
+  const hostHandles = new WeakMap()
+  const pending = new Map()
+  const operations = new AsyncLocalStorage()
+  let sequence = 0
+  let snapshotValue
 
-  const encode = (value, callbackPath, callbackHandleForPath) => {
+  const encode = (value, seen = new WeakSet(), owner) => {
     if (typeof value === "function") {
-      callbacks.set(callbackPath, value)
-      return { $callback: callbackHandleForPath?.(callbackPath) ?? callbackPath }
+      if (hostHandles.has(value)) return { $hostHandle: hostHandles.get(value) }
+      const owners = callbackIds.get(value) ?? new Map()
+      let id = owners.get(owner)
+      if (!id) {
+        id = `cb:${++sequence}`
+        owners.set(owner, id)
+        callbackIds.set(value, owners)
+        callbacks.set(id, (...args) => value.apply(owner, args))
+      }
+      return { $callback: id }
     }
     if (value === undefined) return { $undefined: true }
     if (value === null || typeof value !== "object") return value
-    if (seen.has(value)) throw new Error(`Plugin context call contains a cycle at ${callbackPath}`)
+    if (seen.has(value)) throw new Error("Node plugin value contains a cycle")
     seen.add(value)
-    // The brand is process-local. Only branded SDK values get this wire tag;
-    // ordinary JSON with marker-looking keys is escaped below.
-    const branded =
-      Object.getOwnPropertyDescriptor(value, Symbol.for("cognia.plugin.secretRef"))?.value === true
-    const encoded = Array.isArray(value)
-      ? value.map((item, index) => encode(item, `${callbackPath}.${index}`, callbackHandleForPath))
-      : Object.fromEntries(
-          Object.entries(value).map(([key, item]) => [
-            key,
-            encode(item, `${callbackPath}.${key}`, callbackHandleForPath),
-          ])
-        )
+    const entries = Object.entries(value).map(([key, item]) => [key, encode(item, seen, value)])
     seen.delete(value)
-    if (branded) return { $cogniaSecretRef: encoded }
-    if (Object.hasOwn(value, "$cogniaSecretRef") || Object.hasOwn(value, "$cogniaPlainObject")) {
-      return { $cogniaPlainObject: Object.entries(encoded) }
+    if (Array.isArray(value)) return entries.map(([, item]) => item)
+    const encoded = Object.fromEntries(entries)
+    if (
+      Object.getOwnPropertyDescriptor(value, Symbol.for("cognia.plugin.secretRef"))?.value === true
+    ) {
+      return { $cogniaSecretRef: encoded }
     }
-    return encoded
+    return WIRE_KEYS.some((key) => Object.hasOwn(value, key))
+      ? { $cogniaPlainObject: entries }
+      : encoded
   }
 
-  const proxyFor = (segments) => {
-    const callable = () => undefined
-    return new Proxy(callable, {
-      get(_target, property) {
-        if (property === "then") return undefined
-        if (segments.length === 0 && property === "pluginId") return pluginId
-        if (segments.length === 0 && property === "manifest") return manifest
-        if (segments.length === 0 && property === "config") return config
-        if (typeof property !== "string") return undefined
-        return proxyFor([...segments, property])
+  const safe = (segments) => {
+    if (
+      segments.some(
+        (segment) => typeof segment !== "string" || !segment || UNSAFE_PATH_SEGMENTS.has(segment)
+      )
+    ) {
+      throw new Error("Unsafe Node plugin context path")
+    }
+    return segments
+  }
+  const handle = (id, path = [], promise, properties = {}) => {
+    const proxy = new Proxy(() => {}, {
+      get(_target, key) {
+        if (key === "then") return promise?.then.bind(promise)
+        if (typeof key !== "string") return undefined
+        if (Object.hasOwn(properties, key)) return properties[key]
+        return handle(id, safe([...path, key]))
       },
-      apply(_target, _thisArg, args) {
-        const path = segments.join(".")
-        const callIndex = calls.length
-        calls.push({
-          path,
-          args: encode(args, `call.${callIndex}.args`),
-        })
-        return undefined
+      apply(_target, _owner, args) {
+        return call({ handle: id, path: path.join(".") }, args)
+      },
+    })
+    hostHandles.set(proxy, { id, path })
+    return proxy
+  }
+  const revive = (value) => {
+    if (Array.isArray(value)) return value.map(revive)
+    if (!value || typeof value !== "object") return value
+    if (Object.keys(value).length === 1) {
+      if (value.$undefined === true) return undefined
+      if (value.$cogniaPlainObject)
+        return Object.fromEntries(
+          value.$cogniaPlainObject.map(([key, item]) => [key, revive(item)])
+        )
+      if (value.$cogniaSecretRef)
+        return Object.defineProperty(
+          revivePlain(value.$cogniaSecretRef),
+          Symbol.for("cognia.plugin.secretRef"),
+          { value: true }
+        )
+      if (value.$hostHandle)
+        return handle(
+          value.$hostHandle.id,
+          safe(value.$hostHandle.path ?? []),
+          undefined,
+          revive(value.$hostHandle.properties ?? {})
+        )
+    }
+    return revivePlain(value)
+  }
+  const revivePlain = (value) =>
+    Object.fromEntries(Object.entries(value).map(([key, item]) => [key, revive(item)]))
+  const call = (target, args) => {
+    const operation = operations.getStore()
+    if (operation?.expired) throw new Error("Node plugin request has expired")
+    const id = `call:${++sequence}`
+    const encodedArgs = encode(args)
+    const promise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id)
+        reject(new Error("Node plugin host call timed out"))
+      }, requestTimeoutMs)
+      pending.set(id, { resolve, reject, timer })
+      send({
+        type: "call",
+        id,
+        requestId: operation?.id,
+        ...target,
+        args: encodedArgs,
+      })
+    })
+    // Even fire-and-forget calls are part of the enclosing lifecycle request.
+    promise.catch(() => {})
+    operation?.calls.push(promise)
+    return handle(id, [], promise)
+  }
+  snapshotValue = revive(snapshot)
+  const local = snapshotValue.local ?? {}
+  const localI18n = local.i18n
+  const localMethods = {
+    "configuration.get": (key) => snapshotValue.config?.[key],
+    "configuration.getOrDefault": (key, fallback) =>
+      snapshotValue.config?.[key] === undefined ? fallback : snapshotValue.config[key],
+    "configuration.getAll": () => ({ ...snapshotValue.config }),
+    "permissions.getGrantedPermissions": () => local.permissions ?? [],
+    "permissions.hasPermission": (permission) => (local.permissions ?? []).includes(permission),
+    "permissions.hasAllPermissions": (permissions) =>
+      permissions.every((permission) => (local.permissions ?? []).includes(permission)),
+    "permissions.hasAnyPermission": (permissions) =>
+      permissions.some((permission) => (local.permissions ?? []).includes(permission)),
+  }
+  if (localI18n) {
+    const message = (key, fallback = true) => {
+      const fullKey = key.startsWith(`plugin.${snapshotValue.pluginId}.`)
+        ? key
+        : `plugin.${snapshotValue.pluginId}.${key}`
+      return (
+        localI18n.messages?.[localI18n.locale]?.[fullKey] ??
+        (fallback ? localI18n.messages?.en?.[fullKey] : undefined)
+      )
+    }
+    Object.assign(localMethods, {
+      "i18n.getCurrentLocale": () => localI18n.locale,
+      "i18n.getLocale": () => localI18n.locale,
+      "i18n.getAvailableLocales": () => localI18n.locales,
+      "i18n.getLocaleName": (locale) => localI18n.localeNames?.[locale] ?? locale,
+      "i18n.t": (key, params) => {
+        const value = message(key) ?? key
+        return params && value !== key
+          ? value.replace(/\{(\w+)\}/g, (match, name) =>
+              params[name] !== undefined ? String(params[name]) : match
+            )
+          : value
+      },
+      "i18n.hasTranslation": (key) => message(key, false) !== undefined,
+      "i18n.hasKey": (key) => message(key, false) !== undefined,
+      "i18n.formatDate": (date, options) =>
+        new Intl.DateTimeFormat(localI18n.locale, options).format(date),
+      "i18n.formatNumber": (number, options) =>
+        new Intl.NumberFormat(localI18n.locale, options).format(number),
+      "i18n.formatRelativeTime": (date) => {
+        const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000)
+        const [unit, value] =
+          seconds >= 86400
+            ? ["day", Math.floor(seconds / 86400)]
+            : seconds >= 3600
+              ? ["hour", Math.floor(seconds / 3600)]
+              : seconds >= 60
+                ? ["minute", Math.floor(seconds / 60)]
+                : ["second", seconds]
+        return new Intl.RelativeTimeFormat(localI18n.locale, {
+          numeric: "auto",
+        }).format(-value, unit)
       },
     })
   }
-
-  return { context: proxyFor([]), calls, callbacks, encode }
-}
-
-function encodeCallbackChain(plan) {
-  return `${CALLBACK_CHAIN_PREFIX}${Buffer.from(JSON.stringify(plan)).toString("base64url")}`
-}
-
-export function parseCallbackChain(callbackId) {
-  if (!callbackId.startsWith(CALLBACK_CHAIN_PREFIX)) return null
-  const encoded = callbackId.slice(CALLBACK_CHAIN_PREFIX.length)
-  if (!encoded || encoded.length > 96 * 1024) {
-    throw new Error("Invalid Node plugin callback chain")
-  }
-  const plan = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"))
-  if (
-    !plan ||
-    typeof plan !== "object" ||
-    typeof plan.root !== "string" ||
-    !Array.isArray(plan.rootArgs) ||
-    !Array.isArray(plan.steps) ||
-    !Array.isArray(plan.path) ||
-    plan.steps.length > 16
-  ) {
-    throw new Error("Invalid Node plugin callback chain")
-  }
-  for (const segment of [
-    ...plan.path,
-    ...plan.steps.flatMap((step) => (Array.isArray(step?.path) ? step.path : [null])),
-  ]) {
-    if (typeof segment !== "string" || UNSAFE_PATH_SEGMENTS.has(segment)) {
-      throw new Error("Unsafe Node plugin callback chain path")
-    }
-  }
-  if (plan.steps.some((step) => !step || !Array.isArray(step.args))) {
-    throw new Error("Invalid Node plugin callback chain step")
-  }
-  return plan
-}
-
-function callbackAtPath(value, path) {
-  let owner
-  let current = value
-  for (const segment of path) {
-    owner = current
-    current = current?.[segment]
-  }
-  if (typeof current !== "function") {
-    throw new Error(`Node plugin callback result is not callable at ${path.join(".")}`)
-  }
-  return { callback: current, owner }
-}
-
-async function invokeCallbackChain(recorder, plan, args) {
-  const root = recorder.callbacks.get(plan.root)
-  if (!root) throw new Error(`Node plugin callback not found: ${plan.root}`)
-  let value = await root(...plan.rootArgs)
-  for (const step of plan.steps) {
-    const { callback, owner } = callbackAtPath(value, step.path)
-    value = await callback.apply(owner, step.args)
-  }
-  const { callback, owner } = callbackAtPath(value, plan.path)
+  const proxyFor = (segments) =>
+    new Proxy(() => {}, {
+      get(_target, property) {
+        if (property === "then" || typeof property !== "string") return undefined
+        const path = safe([...segments, property])
+        let value = snapshotValue
+        for (const segment of path) value = value?.[segment]
+        if (value !== undefined) return value
+        return proxyFor(path)
+      },
+      apply(_target, _owner, args) {
+        const path = safe(segments).join(".")
+        if (Object.hasOwn(localMethods, path)) return localMethods[path](...args)
+        if (path === "i18n.registerTranslations" && localI18n) {
+          const [locale, translations] = args
+          const messages = (localI18n.messages[locale] ??= {})
+          for (const [key, value] of Object.entries(translations))
+            messages[
+              key.startsWith(`plugin.${snapshotValue.pluginId}.`)
+                ? key
+                : `plugin.${snapshotValue.pluginId}.${key}`
+            ] = value
+        }
+        return call({ path }, args)
+      },
+    })
   return {
-    result: await callback.apply(owner, args),
-    history: {
-      root: plan.root,
-      rootArgs: plan.rootArgs,
-      steps: [...plan.steps, { path: plan.path, args }],
+    context: proxyFor([]),
+    encode,
+    revive,
+    callbacks,
+    reply(frame) {
+      const request = pending.get(frame.id)
+      if (!request) return
+      pending.delete(frame.id)
+      clearTimeout(request.timer)
+      if (Object.hasOwn(frame, "error")) request.reject(new Error(String(frame.error)))
+      else request.resolve(revive(frame.value))
+    },
+    async run(id, action, timeoutMs, failOnHostError = false) {
+      const operation = { id, calls: [], expired: false }
+      let timer
+      try {
+        return await Promise.race([
+          operations.run(operation, async () => {
+            const result = await action()
+            let settled = 0
+            while (settled < operation.calls.length) {
+              const batch = operation.calls.slice(settled)
+              settled += batch.length
+              const results = await Promise.allSettled(batch)
+              const failure = results.find((result) => result.status === "rejected")
+              if (failOnHostError && failure) throw failure.reason
+            }
+            return result
+          }),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              operation.expired = true
+              reject(new Error("Node plugin request timed out"))
+            }, timeoutMs)
+          }),
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
     },
   }
-}
-
-function encodeCallbackResult(recorder, result, history) {
-  return recorder.encode(result, "result", (callbackPath) => {
-    const path = callbackPath === "result" ? [] : callbackPath.slice("result.".length).split(".")
-    return encodeCallbackChain({ ...history, path })
-  })
 }
 
 export function resolvePluginDefinition(moduleExports) {
@@ -177,71 +287,108 @@ async function loadDefinition(entry) {
   return { definition: resolvePluginDefinition(moduleExports), moduleExports }
 }
 
-async function activate(entry, pluginId) {
-  const { definition, moduleExports } = await loadDefinition(entry)
-  const recorder = createRecordingContext({
-    pluginId,
-    manifest: definition.manifest ?? {},
-    config: {},
-  })
-  const hooks = (await definition.activate(recorder.context)) ?? {}
-  const encodedHooks = recorder.encode(hooks, "hooks")
-  const publicExports = Object.fromEntries(
-    Object.entries(moduleExports).filter(([name]) => name !== "default")
-  )
-  const encodedExports = recorder.encode(publicExports, "exports")
-  return { definition, recorder, encodedHooks, encodedExports }
-}
-
 async function main() {
-  redirectConsole()
-  const [action, entry, pluginId, callbackId = "", argsJson = "[]"] = process.argv.slice(1)
-  if (!entry || !pluginId) throw new Error("Node plugin host requires entry and plugin id")
-
-  if (action === "deactivate") {
-    const { definition } = await loadDefinition(entry)
-    if (typeof definition.deactivate === "function") {
-      const { context } = createRecordingContext({
-        pluginId,
-        manifest: definition.manifest ?? {},
-        config: {},
-      })
-      await definition.deactivate(context)
-    }
-    writeResult({ ok: true })
-    return
+  // Capture the writer before plugin import. The nonce distinguishes accidental
+  // stdout from frames; it is not a security boundary against plugin code,
+  // which can already make the context calls its permissions allow.
+  const write = process.stdout.write.bind(process.stdout)
+  process.stdout.write = process.stderr.write.bind(process.stderr)
+  for (const level of ["debug", "info", "log", "warn", "error"]) {
+    console[level] = (...args) => process.stderr.write(`[plugin:${level}] ${args.join(" ")}\n`)
   }
-
-  const { recorder, encodedHooks, encodedExports } = await activate(entry, pluginId)
-  if (action === "callback") {
-    const args = JSON.parse(argsJson)
-    if (!Array.isArray(args)) throw new Error("Node plugin callback arguments must be an array")
-    const chain = parseCallbackChain(callbackId)
-    if (chain) {
-      const { result, history } = await invokeCallbackChain(recorder, chain, args)
-      writeResult({ result: encodeCallbackResult(recorder, result, history) })
+  const token = randomBytes(32).toString("hex")
+  const send = (frame) => {
+    const line = `${RESULT_PREFIX}${JSON.stringify({ ...frame, token })}\n`
+    if (Buffer.byteLength(line) > FRAME_LIMIT)
+      throw new Error("Node plugin frame exceeded the protocol limit")
+    write(line)
+  }
+  const [, entry, pluginId] = process.argv.slice(1)
+  if (!entry || !pluginId) throw new Error("Node plugin host requires entry and plugin id")
+  let bridge
+  let definition
+  let activated = false
+  let activating = false
+  let deactivating = false
+  const dispatch = async (frame) => {
+    if (frame.type === "reply") {
+      bridge?.reply(frame)
       return
     }
-    const callback = recorder.callbacks.get(callbackId)
-    if (!callback) throw new Error(`Node plugin callback not found: ${callbackId}`)
-    const result = await callback(...args)
-    writeResult({
-      result: encodeCallbackResult(recorder, result, {
-        root: callbackId,
-        rootArgs: args,
-        steps: [],
-      }),
-    })
-    return
+    const id = frame.id
+    try {
+      if (frame.type === "activate") {
+        if (bridge) throw new Error("Node plugin already activated")
+        bridge = createBridgeContext({ snapshot: frame.snapshot, send })
+        const loaded = await loadDefinition(entry)
+        definition = loaded.definition
+        activating = true
+        const hooks = await bridge.run(id, () => definition.activate(bridge.context), 30_000, true)
+        activated = true
+        activating = false
+        const publicExports = Object.fromEntries(
+          Object.entries(loaded.moduleExports).filter(([name]) => name !== "default")
+        )
+        send({
+          type: "activated",
+          id,
+          hooks: bridge.encode(hooks ?? {}),
+          exports: bridge.encode(publicExports),
+        })
+      } else if (frame.type === "invoke") {
+        if (!bridge || (!activated && !activating && !deactivating))
+          throw new Error("Node plugin is not active")
+        const callback = bridge.callbacks.get(frame.callbackId)
+        if (!callback) throw new Error(`Node plugin callback not found: ${frame.callbackId}`)
+        const args = bridge.revive(frame.args)
+        if (!Array.isArray(args)) throw new Error("Node plugin callback arguments must be an array")
+        const result = await bridge.run(id, () => callback(...args), 120_000)
+        send({ type: "result", id, value: bridge.encode(result) })
+      } else if (frame.type === "deactivate") {
+        if (!bridge || deactivating) throw new Error("Node plugin is not active")
+        deactivating = true
+        await bridge.run(id, () => definition?.deactivate?.(bridge.context), 5_000)
+        activated = false
+        deactivating = false
+        send({ type: "result", id, value: { $undefined: true } })
+        // The owner kills the process after receiving the result and disposing handles.
+      } else throw new Error("Unknown Node plugin frame")
+    } catch (error) {
+      if (frame.type === "activate") activating = false
+      send({
+        type: "error",
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
-  if (action !== "activate-wait") throw new Error(`Unknown Node plugin host action: ${action}`)
-  writeResult({ calls: recorder.calls, hooks: encodedHooks, exports: encodedExports })
-  setInterval(() => {}, 60_000)
+  let buffer = ""
+  process.stdin.setEncoding("utf8")
+  process.stdin.on("data", (chunk) => {
+    buffer += chunk
+    if (Buffer.byteLength(buffer) > FRAME_LIMIT) {
+      process.exitCode = 1
+      process.stdin.destroy()
+      return
+    }
+    let newline
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newline)
+      buffer = buffer.slice(newline + 1)
+      try {
+        void dispatch(JSON.parse(line))
+      } catch {
+        send({ type: "error", error: "Invalid Node plugin frame" })
+      }
+    }
+  })
+  process.stdin.on("end", () => process.exit())
+  send({ type: "ready", protocol: 2 })
 }
 
-if (["activate-wait", "callback", "deactivate"].includes(process.argv[1])) {
+if (process.argv[1] === "resident") {
   main().catch((error) => {
-    writeResult({ error: error instanceof Error ? error.message : String(error) })
+    process.stderr.write(`${error}\n`)
     process.exitCode = 1
   })
 }

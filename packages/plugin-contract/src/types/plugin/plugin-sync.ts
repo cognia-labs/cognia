@@ -56,11 +56,13 @@ export interface PluginSyncRegistrationOptions {
  * Subscription renewal is scheduler-based and dormant: no public renewal API,
  * no active UI, and tests pin its inert state. Polling remains supported.
  *
- * Node-target plugins: only activation-time register is replayed. Revived
- * callbacks return through invokeCallback; message-only errors become generic
- * failures with bounded backoff and never advance the cursor. Cancellation
- * stops the Host run/discards late results, but is not sent into the child.
- * run/request/status/reset are unavailable there after activation. In-realm
+ * Node-target plugins use one resident child per generation. register and
+ * run/request/status/reset bridge to the real Host during activation, callbacks
+ * and deactivation; returned handles forward to generation-owned Host handles.
+ * Drivers retain activation-local state and can await nested context calls.
+ * Message-only child errors remain generic failures with bounded backoff and
+ * never advance the cursor. Cancellation stops the Host run/discards late
+ * results, but does not send an AbortSignal into the child. In-realm
  * frontend/hybrid plugins support tagged errors and two-way cancellation.
  */
 export interface PluginSyncAPI {

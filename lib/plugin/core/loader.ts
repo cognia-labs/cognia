@@ -24,7 +24,6 @@ import {
   deriveScopeFromManifest,
   launchPluginJs,
   type LaunchPluginJsResult,
-  type NodePluginActivationSnapshot,
   type PluginJsHostInvoker,
 } from "../launcher/launchPluginJs"
 import { resolvePluginPath, normalizePluginRelativePath } from "./plugin-path"
@@ -117,75 +116,6 @@ function deriveNodePermissionScope(manifest: PluginManifest) {
     netHosts: hasNetwork ? (manifest.networkAccess?.allowedDomains ?? []) : [],
     subprocesses: canSpawn ? (manifest.shellCommands ?? []) : [],
   })
-}
-
-const UNSAFE_CONTEXT_SEGMENTS = new Set(["__proto__", "prototype", "constructor"])
-
-function reviveNodePluginValue(value: unknown, launch: LaunchPluginJsResult): unknown {
-  if (Array.isArray(value)) return value.map((item) => reviveNodePluginValue(item, launch))
-  if (!value || typeof value !== "object") return value
-  const record = value as Record<string, unknown>
-  if (Object.keys(record).length === 1 && Array.isArray(record.$cogniaPlainObject)) {
-    return Object.fromEntries(
-      record.$cogniaPlainObject.map(([key, item]: [string, unknown]) => [
-        key,
-        reviveNodePluginValue(item, launch),
-      ])
-    )
-  }
-  if (
-    Object.keys(record).length === 1 &&
-    record.$cogniaSecretRef &&
-    typeof record.$cogniaSecretRef === "object" &&
-    !Array.isArray(record.$cogniaSecretRef)
-  ) {
-    const ref = Object.fromEntries(
-      Object.entries(record.$cogniaSecretRef).map(([key, item]) => [
-        key,
-        reviveNodePluginValue(item, launch),
-      ])
-    )
-    return Object.defineProperty(ref, Symbol.for("cognia.plugin.secretRef"), { value: true })
-  }
-  if (typeof record.$callback === "string") {
-    return async (...args: unknown[]) =>
-      reviveNodePluginValue(await launch.invokeCallback(record.$callback as string, args), launch)
-  }
-  if (record.$undefined === true) return undefined
-  return Object.fromEntries(
-    Object.entries(record).map(([key, item]) => [key, reviveNodePluginValue(item, launch)])
-  )
-}
-
-function replayNodePluginActivation(
-  context: object,
-  activation: NodePluginActivationSnapshot,
-  launch: LaunchPluginJsResult
-): void {
-  for (const call of activation.calls) {
-    const segments = call.path.split(".")
-    if (
-      segments.length === 0 ||
-      segments.some((segment) => !segment || UNSAFE_CONTEXT_SEGMENTS.has(segment))
-    ) {
-      throw new Error(`Node plugin requested an unsafe context path: ${call.path}`)
-    }
-    const methodName = segments.pop() as string
-    let owner: unknown = context
-    for (const segment of segments) {
-      if (!owner || typeof owner !== "object") break
-      owner = (owner as Record<string, unknown>)[segment]
-    }
-    const method =
-      owner && (typeof owner === "object" || typeof owner === "function")
-        ? (owner as Record<string, unknown>)[methodName]
-        : undefined
-    if (typeof method !== "function") {
-      throw new Error(`Node plugin requested unavailable context method: ${call.path}`)
-    }
-    const args = reviveNodePluginValue(call.args, launch) as unknown[]
-    method.apply(owner, args)
-  }
 }
 
 // =============================================================================
@@ -419,19 +349,18 @@ export class PluginLoader {
       manifest,
       activate: async (context) => {
         if (launch && (await launch.process.isRunning())) return activeHooks as never
+        if (launch) await launch.process.kill()
         launch = await launchPluginJs({
           pluginId: manifest.id,
           entryPath: validatedEntryPath,
           cwd: pluginPath,
           scope,
           hostInvoker: this.nodeHostInvoker,
+          context,
+          manifest,
         })
-        replayNodePluginActivation(context, launch.activation, launch)
-        activeHooks = reviveNodePluginValue(launch.activation.hooks, launch)
-        const namedExports = reviveNodePluginValue(launch.activation.exports, launch) as Record<
-          string,
-          unknown
-        >
+        activeHooks = launch.activation.hooks
+        const namedExports = launch.activation.exports
         this.loadedModules.set(manifest.id, {
           definition,
           exports: { default: definition, ...namedExports },
@@ -441,12 +370,13 @@ export class PluginLoader {
       },
       deactivate: async () => {
         if (!launch) return
-        await launch.deactivate()
-        if (!launch.process.killed) {
-          await launch.process.kill()
+        try {
+          await launch.deactivate()
+        } finally {
+          if (!launch.process.killed) await launch.process.kill()
+          launch = null
+          activeHooks = undefined
         }
-        launch = null
-        activeHooks = undefined
       },
     }
     this.loadedModules.set(manifest.id, {

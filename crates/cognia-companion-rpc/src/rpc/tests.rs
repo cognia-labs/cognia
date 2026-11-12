@@ -1836,6 +1836,49 @@ async fn headless_plugin_js_status_dispatches_to_the_native_runtime() {
     assert_eq!(result, Value::Bool(false));
 }
 
+#[tokio::test]
+async fn headless_node_plugin_exchange_rejects_stale_generations() {
+    let state = test_state();
+    let host = headless_host();
+    let current = uuid::Uuid::new_v4();
+    host.plugin_runtime.node_plugin_processes.lock().insert(
+        "live-node-plugin".into(),
+        cognia_plugin_runtime::NodePluginProcessState::Launching {
+            generation: current,
+            action_gate: std::sync::Arc::new(tokio::sync::RwLock::new(())),
+        },
+    );
+    for command in ["plugin_invoke_js_callback", "plugin_deactivate_js"] {
+        let mut args = json!({
+            "pluginId": "live-node-plugin", "pluginPath": "/plugins/live-node-plugin", "entry": "index.mjs",
+            "generation": uuid::Uuid::new_v4().to_string(),
+        });
+        if command == "plugin_invoke_js_callback" {
+            args["callbackId"] = json!("$exchange");
+            args["args"] = json!({ "frames": [{ "type": "reply", "id": "nested", "value": 42 }], "waitMs": 0 });
+        }
+        let error = dispatch(
+            command,
+            args,
+            &state,
+            &host,
+            "brain-local",
+            Some(ACCOUNT_ID),
+            Some("service"),
+        )
+        .await
+        .expect_err("a stale resident process must never accept frames");
+        assert!(
+            error.1 .0.message.contains("stale Node process generation"),
+            "{error:?}"
+        );
+        assert!(matches!(
+            host.plugin_runtime.node_plugin_processes.lock().get("live-node-plugin"),
+            Some(cognia_plugin_runtime::NodePluginProcessState::Launching { generation, .. }) if *generation == current
+        ));
+    }
+}
+
 // ── Connector attachment-cache upkeep arms (ADR-0059 T-A5) ───────────────
 
 /// `lib/connectors/housekeeping-scheduler.ts` drives these every cycle. With
