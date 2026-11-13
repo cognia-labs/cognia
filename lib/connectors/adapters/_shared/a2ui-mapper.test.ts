@@ -49,6 +49,17 @@ const SAMPLE_SURFACE: A2UISegmentContent = {
   rootId: "root",
 }
 
+it("preserves the strict marked-person hint including an empty deny-all scope", () => {
+  const persons = [{ kind: "local-person" }]
+  expect(
+    bindingHintFields({ bindingActorScope: { mode: "marked-person", persons } }).actorScope
+  ).toEqual({ mode: "marked-person", persons })
+  expect(bindingHintFields({ bindingActorScope: { mode: "marked-person" } }).actorScope).toEqual({
+    mode: "marked-person",
+    persons: [],
+  })
+})
+
 describe("callback hint trust boundary", () => {
   async function map(surfaceId: string, surface: A2UISegmentContent) {
     await buildLarkA2UICard({

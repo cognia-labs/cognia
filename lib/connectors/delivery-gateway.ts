@@ -46,6 +46,8 @@ import {
   personalDeliveryNotice,
   sendPersonalDeliveryNotice,
 } from "./personal-delivery"
+import { attachPersonalDisclosure } from "./personal-disclosure"
+import { hasPersonalDisclosureCapability } from "@/lib/execution/personal-disclosure"
 
 export type OutboundJobInfo = OutboundJobRow
 export type { OutboundAuthorization } from "@/lib/policy/action-review/plan-delivery"
@@ -618,8 +620,10 @@ export class ConnectorDeliveryGateway {
     input: ImmediateDeliveryInput,
     send: (narrowedRequest?: OutboundRequest) => Promise<OutboundResult>
   ): Promise<OutboundResult> {
-    input = structuredClone(input)
-    input.personalContext = withPersonalSinkAttempt(input.personalContext)
+    input = {
+      ...structuredClone(input),
+      personalContext: withPersonalSinkAttempt(input.personalContext),
+    }
     const personalContext = input.personalContext
     const adapter = input.request ? await this.dependencies.getAdapter(input.adapterId) : undefined
     const personal = await this.dependencies.checkPersonal(
@@ -643,6 +647,14 @@ export class ConnectorDeliveryGateway {
             personal.person
           ).catch(() => undefined)
         : undefined
+    if (narrowed && input.request && input.conversationKey && personal.outcome === "narrow")
+      narrowed = await attachPersonalDisclosure(
+        personalContext,
+        { adapterId: input.adapterId, conversationKey: input.conversationKey },
+        input.request,
+        narrowed,
+        personal.persons
+      )
     if (personal.outcome !== "allow" && !narrowed) {
       if (personal.outcome === "narrow")
         await this.dependencies.checkPersonal(
@@ -788,7 +800,10 @@ export class ConnectorDeliveryGateway {
   ): Promise<EnqueueGovernedResult[]> {
     options?.signal?.throwIfAborted()
     if (inputs.length === 0) return []
-    inputs = structuredClone(inputs)
+    inputs = inputs.map((input) => ({
+      ...structuredClone(input),
+      personalContext: withPersonalSinkAttempt(input.personalContext),
+    }))
     const planningInputs: GovernedEnqueueInput[] = []
     const prepared: GovernedEnqueueInput[] = []
     for (const original of inputs) {
@@ -806,7 +821,7 @@ export class ConnectorDeliveryGateway {
         prepared.push({ ...original, personalContext })
         continue
       }
-      const narrowed =
+      let narrowed =
         decision.outcome === "narrow"
           ? await narrowPersonalDelivery(
               adapter,
@@ -815,6 +830,14 @@ export class ConnectorDeliveryGateway {
               decision.person
             ).catch(() => undefined)
           : undefined
+      if (narrowed && decision.outcome === "narrow")
+        narrowed = await attachPersonalDisclosure(
+          personalContext,
+          { adapterId: original.adapterId, conversationKey: original.conversationKey },
+          original.request,
+          narrowed,
+          decision.persons
+        )
       const notice = await personalDeliveryNotice(Boolean(narrowed))
       // A Host fixed notice carries no run content and does not inherit its taint.
       const noticeInput: GovernedEnqueueInput = {
@@ -897,7 +920,7 @@ export class ConnectorDeliveryGateway {
         })
       )
         throw new Error("A connector delivery batch must retain one Host execution context")
-      const persistenceOptions: OutboundEnqueueOptions | undefined = options?.executionContext
+      let persistenceOptions: OutboundEnqueueOptions | undefined = options?.executionContext
         ? options
         : inherited?.executionRunId || inherited?.sessionId
           ? {
@@ -908,6 +931,16 @@ export class ConnectorDeliveryGateway {
               },
             }
           : options
+      const disclosureInputs = sends
+        .map((index) => inputs[index].personalContext)
+        .filter(hasPersonalDisclosureCapability)
+      if (disclosureInputs.length) {
+        if (sends.length !== 1) throw new Error("A disclosure enqueues exactly one delivery")
+        persistenceOptions = {
+          ...persistenceOptions,
+          personalDisclosureContext: disclosureInputs[0],
+        }
+      }
       const persisted = await Promise.all(
         sends.map((index) => {
           const decision = decisions[index] as Extract<DeliveryDecision, { action: "send" }>

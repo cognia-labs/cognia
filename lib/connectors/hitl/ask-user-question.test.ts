@@ -10,6 +10,11 @@ import {
   settleAskUserCard,
 } from "./ask-user-question"
 import { settleApprovalCard } from "./approval-card-state"
+import * as personalSinkHost from "@/lib/execution/personal-sink"
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readHostPersonContext: jest.fn(async () => ({ connectedOwners: [] })),
+}))
 import {
   awaitAskUser,
   getPendingAskUser,
@@ -207,6 +212,42 @@ describe("askUserTerminalSurface", () => {
 
 describe("applyAskUserCallback", () => {
   const surfaceId = "au_0123456789abcdef"
+
+  it("applies strict marked-person scope to binding-less input without an operator exception", async () => {
+    jest.mocked(personalSinkHost.readHostPersonContext).mockResolvedValue({ connectedOwners: [] })
+    const pending = awaitAskUser("sess-1", "use-1", {
+      meta: meta({
+        actorScope: {
+          mode: "marked-person",
+          persons: [
+            { kind: "platform", platform: "lark", adapterId: "adp-1", remoteUserId: "ou_user1" },
+          ],
+        },
+      }),
+    })
+    try {
+      const refused = await applyAskUserCallback({
+        event: event({
+          actionType: "input",
+          value: "operator answer",
+          user: { ...event().user, remoteUserId: "operator" },
+        }),
+        surfaceId,
+        operatorIds: ["operator"],
+        deps: deps(),
+      })
+      expect(refused.resolved).toBe(false)
+      const accepted = await applyAskUserCallback({
+        event: event({ actionType: "input", value: "person answer" }),
+        surfaceId,
+        deps: deps(),
+      })
+      expect(accepted.resolved).toBe(true)
+      await expect(pending).resolves.toMatchObject({ reason: "answered" })
+    } finally {
+      __resetAskUserRegistryForTesting()
+    }
+  })
 
   function meta(partial: Partial<PendingAskUserMeta> = {}): PendingAskUserMeta {
     return {

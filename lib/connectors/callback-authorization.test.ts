@@ -25,6 +25,70 @@ import {
 
 const T0 = 1_753_000_000_000
 
+it.each(["off", "audit", "enforce"])(
+  "strict marked-person disclosure ignores operators and mode %s",
+  async (mode) => {
+    const person = {
+      kind: "platform" as const,
+      platform: "lark",
+      adapterId: "lk-1",
+      remoteUserId: "ou_person",
+    }
+    for (const remoteUserId of ["ou_operator", "ou_alice", "ou_member", "ou_person"]) {
+      const result = await authorize({
+        adapterRow: adapterRow({
+          larkStrictCallbackAuthorization: mode,
+          runOperatorUserIds: ["ou_operator"],
+        }),
+        binding: binding({
+          kind: "personal_disclosure",
+          actorScope: { mode: "marked-person", persons: [person] },
+        }),
+        event: callbackEvent({
+          user: { id: remoteUserId, platform: "lark", adapterId: "lk-1", remoteUserId },
+        }),
+        kindClass: "personal_disclosure",
+      })
+      expect(result.allowed).toBe(remoteUserId === "ou_person")
+    }
+  }
+)
+
+it("admits the verified connected owner for a local-person mark and requires every marked person", async () => {
+  await getDb().adapterInstances.put(adapterRow({ connectedUser: { openId: "ou_alice" } }))
+  const scope = { mode: "marked-person" as const, persons: [{ kind: "local-person" as const }] }
+  expect(
+    (await authorize({ binding: binding({ kind: "personal_disclosure", actorScope: scope }) }))
+      .allowed
+  ).toBe(true)
+  expect(
+    (
+      await authorize({
+        binding: binding({
+          kind: "personal_disclosure",
+          actorScope: {
+            ...scope,
+            persons: [
+              ...scope.persons,
+              { kind: "platform", platform: "lark", adapterId: "lk-1", remoteUserId: "ou_other" },
+            ],
+          },
+        }),
+      })
+    ).allowed
+  ).toBe(false)
+  expect(
+    (
+      await authorize({
+        binding: binding({
+          kind: "personal_disclosure",
+          actorScope: { mode: "marked-person", persons: [] },
+        }),
+      })
+    ).allowed
+  ).toBe(false)
+})
+
 it("requires a host message, adapter and enabled binding for run controls", async () => {
   const callback = {
     adapterId: "a",

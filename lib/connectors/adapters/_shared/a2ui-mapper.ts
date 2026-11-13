@@ -297,7 +297,7 @@ export function bindingHintFields(raw: Record<string, unknown> | undefined): {
       ? raw.bindingAccountId
       : undefined
   const scopeRaw = raw.bindingActorScope
-  const actorScope: CallbackActorScope | undefined =
+  let actorScope: CallbackActorScope | undefined =
     scopeRaw &&
     typeof scopeRaw === "object" &&
     !Array.isArray(scopeRaw) &&
@@ -305,7 +305,7 @@ export function bindingHintFields(raw: Record<string, unknown> | undefined): {
       String((scopeRaw as { mode?: unknown }).mode)
     )
       ? {
-          mode: (scopeRaw as { mode: CallbackActorScope["mode"] }).mode,
+          mode: (scopeRaw as { mode: "initiator" | "operators" | "conversation" | "anyone" }).mode,
           ...(Array.isArray((scopeRaw as { allowedUserIds?: unknown }).allowedUserIds)
             ? {
                 allowedUserIds: (scopeRaw as { allowedUserIds: unknown[] }).allowedUserIds.filter(
@@ -315,6 +315,24 @@ export function bindingHintFields(raw: Record<string, unknown> | undefined): {
             : {}),
         }
       : undefined
+  if (
+    scopeRaw &&
+    typeof scopeRaw === "object" &&
+    (scopeRaw as { mode?: unknown }).mode === "marked-person"
+  ) {
+    const persons = (scopeRaw as { persons?: unknown }).persons
+    actorScope = {
+      mode: "marked-person",
+      persons: Array.isArray(persons)
+        ? persons.filter(
+            (person) =>
+              person &&
+              typeof person === "object" &&
+              ["local-person", "platform"].includes(person.kind)
+          )
+        : [],
+    }
+  }
   const allowedActions = Array.isArray(raw.bindingAllowedActions)
     ? (raw.bindingAllowedActions.filter(
         (v): v is string => typeof v === "string" && v.length > 0

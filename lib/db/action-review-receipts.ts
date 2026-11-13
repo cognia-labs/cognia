@@ -130,6 +130,8 @@ function deriveAuthKeys(receipt: ActionReviewReceipt): string[] {
  * without re-deriving.
  */
 export interface ActionReviewReceiptRow extends ActionReviewReceipt {
+  /** Host-local replay payload. Never part of the portable receipt or a sync projection. Unindexed. */
+  personalDisclosurePending?: import("@/lib/execution/personal-disclosure").PendingPersonalDisclosure
   decidedAt: number
   outcome: ActionReviewOutcome
   authority: ActionReviewAuthority

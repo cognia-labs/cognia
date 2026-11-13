@@ -630,6 +630,8 @@ export interface OutboundJobWorkflowSource {
  * `[conversationKey+orderSeq]` order (stable FIFO per conversation lane).
  */
 export interface OutboundJobRow {
+  /** Host receipt owning this exact disclosure delivery. Not authority by itself. */
+  personalDisclosureReceiptId?: string
   /** Host-written fixed notice, released only after its narrowed delivery succeeds. Unindexed. */
   /** Host-captured live producer sources, never accepted from model metadata. */
   personalSourceContext?: import("../../types/execution/personal-sink").PersonalSinkContext

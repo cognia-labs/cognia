@@ -246,7 +246,7 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
    - 个人标记，及其在子 agent、工具结果和历史中的传递；
    - 历史隐藏；
    - 受众收窄和出口检查；
-   - 严格的披露范围。
+   - [x] 严格的披露范围（阶段 2D，2026-11-13）。
      目前只有 owner 拥有个人访问，所以这一步先于任何其他人获得访问而落地。
 3. 覆盖每条启动路径的运行树权限、共享账本，以及外部引擎的代理与配置隔离。
 4. 开放代表使用者通道：按主体保存的凭据库、授权链接及其投递方式、回调身份校验（先做 Lark）。它取代仅限 owner 的检查。只有在上述旧历史标记和引擎记录失效完成之后，这一步才能发布。
@@ -273,6 +273,10 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 - 有限预算下无法计量的引擎。
 
 ## 实现状态
+
+阶段 2D（2026-11-13）：收窄后的私密卡片通过 connector 既有固定通知语言目录及 A2UI／原生卡片路径，提供“分享到群组”和“保持私密”。新增 `marked-person` 操作人范围，使用经过验证的回调身份匹配每个被标记的人，包括 Host 主人经过验证的连接身份；发起人或运营者权限均不构成例外，callback 开关关闭及 ADR-0239 shadow mode 也不能放宽。既有回执的 Host 本地未索引字段保存原始请求、SHA-256 哈希、确切 adapter／conversation 目标、相关个人、持久化消息身份和 24 小时有效期。授权记录在 `personal.disclosure`，授权消耗与唯一 outbound job 在同一事务提交。runner 再次校验哈希、目标和相关个人，不允许改写或改道已披露的请求，仅在成功投递后发布不含私密内容的“已由本人分享”通知。私密投影使用独立幂等键，避免抑制原始请求的精确重放。
+
+投递后的规范消息获得仅由 Host 写入的披露元数据。如果原消息还包含未披露的工具部分，则为实际投递内容单独持久化精确投影并记录披露，原消息仍受保护。同一 connector conversation 的同一 session 内后续轮次可以读取该消息，visibility digest 随披露变化。其他 session、派生 artifact、插件、公共分享链接及共享协作投影继续隐藏；通用 metadata／导入合并保留既有 Host 披露并丢弃传入授权。固定 text／markdown 的 `connector_send`、`connectors_send_message` 可以提供同一私密卡片并由 Host 重放，而原工具调用仍被拒绝。不透明／无哈希载荷、可变媒体、文档／integration／HTTP 写入及任意工具执行均不获得重放权限。声明接收方的类型化接缝在阶段 5 前拒绝 bound-person 通道。run taint 和阶段 2C-2 不透明出口围栏保持不变。本地验证及真实 provider／native 验收边界记录于 `docs/evidence/2026-11-13-adr-0243-phase2d.md`。
 
 阶段 2C-2（2026-11-12，第 7 轮修复）：不透明工具在 dispatch 前检查所属 run 的规范 taint，审批与 shadow mode 均不能放宽。Native／AI SDK 围栏、admission 等待、CLI broker 策略、sandbox 逐命令断网与外部引擎限制继续生效。text-only completion interceptor 传递生产者的 Host run；匿名完成仅由显式标记或可证明的 consuming run 限制。S2 已覆盖 terminal／Git／shell、原生 guest、integration／connector selector、automation、workflow URL／project setup、backup HTTP、share 回调重试和 scheduler webhook fan-out。有限操作在 finally 释放；真实后台进程按 Host 进程身份、退出事件及有界 liveness 检查保留，run 结束不能单独证明进程结束。远程／OTLP 日志在批次、重放及回调拒绝后保留精确来源；文件、PDF、视频自动预览使用持久化保留的 Host 消息来源。固定内容 connector 投递保留独立 sink 授权。严格 guard 包含 38 个 AST 入口合约、3 个 MCP caller-context 合约、7 个 capability 策略与 48 个删除门禁变异检查。原 104 项均已审阅并解决；当前 767 项快照为 257 个 tool-gated、498 个 host-system、12 个 gated-here，没有 unresolved 类别。局部验证、基线限制与完整 S1 caller/run 表见 evidence ledger；这些检查不代表真实 provider 或操作系统防火墙验收。 Fix5 将 clean capture 绑定到真实 Host entry。插件实例保留接触过的全部 producer，回调结束后继续校验出口，直到实例卸载／重载；旧 API closure 保留旧实例限制。同树 delegation 和固定内容 sink 明确排除 opaque in-flight 登记。匹配的 fenced PreToolUse 远程 guard 拒绝工具；command guard 使用既有 network-off launcher，否则拒绝。其他生命周期 hook 只记录 warning，不 block。未知 session ancestry 必须 fence／等待，sandbox consumer 在终态／释放时清理，MCP run context 由结构门禁固定，未验证 non-read Host 工具对 marked run 拒绝。F3／F10 工具表与 pinning 结果见 evidence ledger。
 

@@ -13,6 +13,7 @@ import {
   withholdForReaders,
   type PersonalHistoryMessage,
   type PersonalVisibilityContext,
+  type PersonalHistoryDisclosure,
 } from "@cognia/plugin-contract/types/execution/personal-visibility"
 import { getDb } from "@/lib/db/schema"
 import { resolveRunActingIdentity } from "./acting-authority"
@@ -23,6 +24,8 @@ import {
 } from "./personal-marks"
 import type { RerankerOptions } from "@/lib/twin/runtime/reranker"
 import type { ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
+import { personalDisclosureMessageHash } from "./personal-disclosure"
+import { stableJson } from "@/lib/account-sync/data/stable-json"
 
 export {
   personalReaders,
@@ -186,9 +189,45 @@ async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
     [sessionId, consumerSession],
   ])
   const canonical: T[] = []
+  const disclosures: PersonalHistoryDisclosure[] = []
+  // A shared fact applies only to a turn in the original connector session.
+  // Owner/plugin/derived projections do not receive this Host authority.
+  const conversationKey = consumerSession?.platformBinding?.conversationKey
   const explicitById = new Map<string, PersonalMarkV1[]>()
   for (const message of messages) {
     const metadata = message.metadata as Record<string, unknown> | undefined
+    if (!ownerReaders && options.executionRunId && sessionId && conversationKey && !contextMarks) {
+      const stored = await db.messages.get(message.id)
+      const entries = stored?.metadata?.personalDisclosures
+      if (
+        stored?.sessionId === sessionId &&
+        Array.isArray(entries) &&
+        (await personalDisclosureMessageHash(stored)) ===
+          (await personalDisclosureMessageHash(message))
+      ) {
+        for (const entry of entries as (PersonalHistoryDisclosure & { messageHash: string })[]) {
+          const receipt = await db.actionReviewReceipts.get(entry.receiptId)
+          const pending = receipt?.personalDisclosurePending,
+            grant = receipt?.personal?.disclosure
+          const job = grant?.jobId ? await db.outboundQueue.get(grant.jobId) : undefined
+          if (
+            pending &&
+            grant &&
+            job?.status === "sent" &&
+            entry.sessionId === sessionId &&
+            entry.messageId === message.id &&
+            entry.target.conversationKey === conversationKey &&
+            entry.messageHash === (await personalDisclosureMessageHash(stored)) &&
+            pending.messageId === message.id &&
+            pending.sessionId === sessionId &&
+            stableJson(entry.target) === stableJson(grant.target) &&
+            stableJson(entry.persons) === stableJson(pending.persons) &&
+            entry.contentHash === grant.contentHash
+          )
+            disclosures.push(entry)
+        }
+      }
+    }
     const sourceSessionId =
       typeof (message as T & { sessionId?: unknown }).sessionId === "string"
         ? (message as T & { sessionId: string }).sessionId
@@ -235,6 +274,9 @@ async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
     personalReaders(await resolveRunActingIdentity(sessionId, options.executionRunId))
   assertCurrent()
   const visibility: PersonalVisibilityContext = {
+    sessionId,
+    conversationKey,
+    disclosures,
     samePerson: (left, right) => samePersonForHost(left, right, host),
     personKey: (person) =>
       samePersonForHost(person, { kind: "local-person" }, host)

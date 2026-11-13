@@ -17,6 +17,11 @@ import { __resetBusForTesting, getBus, type CallbackHandler } from "./bus"
 import type { ConnectorCallbackEvent } from "@/types/connectors/interaction"
 import type { PlatformIdentity } from "@/types/connectors/event"
 import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
+import { handlePersonalDisclosureCallback } from "./personal-disclosure"
+jest.mock("./personal-disclosure", () => ({
+  ...jest.requireActual("./personal-disclosure"),
+  handlePersonalDisclosureCallback: jest.fn(async () => true),
+}))
 import { createExecutionRun } from "@/lib/db/execution-runs"
 import { registerRunControlHandler } from "@/lib/execution/run-control"
 import { parseLarkInteractiveCallback } from "./adapters/lark/parse"
@@ -141,6 +146,49 @@ beforeEach(async () => {
 }, 30_000)
 
 describe("ConnectorBus.dispatchConnectorCallback", () => {
+  it("routes personal disclosure to the Host handler before generic dispatch or eager binding consumption", async () => {
+    await seedUnguardedAdapter()
+    await recordCallbackBinding({
+      adapterId: "adp_tg",
+      actionId: "personal-share",
+      surfaceId: "private-card",
+      conversationKey: "telegram:adp_tg:c1",
+      kind: "personal_disclosure",
+      actorScope: {
+        mode: "marked-person",
+        persons: [
+          {
+            kind: "platform",
+            platform: "telegram",
+            adapterId: "adp_tg",
+            remoteUserId: sender.remoteUserId,
+          },
+        ],
+      },
+      allowedActions: ["share"],
+      payload: { receiptId: "receipt", decision: "share" },
+    })
+    const bus = getBus()
+    const generic = jest.fn()
+    bus.callbackHandler = generic
+    await bus.dispatchConnectorCallback(
+      makeEvent({
+        triggerId: "personal-press",
+        bindingActionId: "personal-share",
+        value: "share",
+        surfaceId: "private-card",
+        originatingMessageId: undefined,
+      })
+    )
+    expect(handlePersonalDisclosureCallback).toHaveBeenCalledWith(
+      expect.objectContaining({ user: sender }),
+      expect.objectContaining({ kind: "personal_disclosure" })
+    )
+    expect(generic).not.toHaveBeenCalled()
+    expect(
+      (await getDb().connectorCallbackBindings.get("adp_tg:personal-share"))!.consumedAt
+    ).toBeUndefined()
+  })
   it("rechecks the same Lark action after its host receipt lands and keeps forged retries denied", async () => {
     await getDb().adapterInstances.put({
       id: "lark",

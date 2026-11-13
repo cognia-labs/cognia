@@ -265,6 +265,8 @@ export type ConnectorCallbackBindingKind =
   // decision back, and a press after a transient failure tries again. See
   // `lib/connectors/hitl/room-handoff-card.ts`.
   | "room_handoff"
+  /** Exact-content personal disclosure; always strict and consume-once. */
+  | "personal_disclosure"
 
 /** Routing admission reported before a callback starts long-running work. */
 export type ConnectorCallbackDecision =
@@ -371,8 +373,14 @@ export interface ConnectorCallbackBindingRow {
  *                        guarantees the click came from that chat).
  *   - `"anyone"`       — no actor restriction (help/welcome surfaces).
  */
-export interface CallbackActorScope {
-  mode: "initiator" | "operators" | "conversation" | "anyone"
-  /** Platform remoteUserIds (Lark open_id). Used by initiator/operators. */
-  allowedUserIds?: string[]
-}
+export type CallbackActorScope =
+  | {
+      mode: "initiator" | "operators" | "conversation" | "anyone"
+      /** Platform remoteUserIds (Lark open_id). Used by initiator/operators. */
+      allowedUserIds?: string[]
+    }
+  | {
+      mode: "marked-person"
+      /** Every marked person must match the verified transport actor. */
+      persons: import("../execution/acting-identity").PrincipalRefV1[]
+    }

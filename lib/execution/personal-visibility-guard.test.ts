@@ -199,8 +199,10 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/dev/expose-test-globals.tsx": "stored-message-read:1",
   "lib/execution/personal-marks.ts": "stored-message-read:1",
   "lib/execution/personal-sink.ts": "stored-message-read:1",
+  "lib/execution/personal-disclosure.ts": "stored-message-read:2",
+  "lib/connectors/personal-disclosure.ts": "stored-message-read:1",
   "lib/execution/personal-visibility.ts":
-    "prepareOwnerDerivedHistory:1;prepareOwnerHistory:2;preparePairedOwnerHistory:1;preparePersonalHistory:1;resume:forkedFromSdkSessionId:1;resume:sdkSessionId:1;stored-message-read:1;withholdForReaders:2",
+    "prepareOwnerDerivedHistory:1;prepareOwnerHistory:2;preparePairedOwnerHistory:1;preparePersonalHistory:1;resume:forkedFromSdkSessionId:1;resume:sdkSessionId:1;stored-message-read:2;withholdForReaders:2",
   "lib/execution/promote-to-pane.ts": "listMessages:1",
   "lib/execution/run-retrospective.ts": "complete:1",
   "lib/execution/steer.ts": "steerSession:1",

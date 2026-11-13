@@ -55,7 +55,7 @@ export type PersonalSinkContext = {
     }
 )
 
-/** Phase 2D may add a content-and-target-bound disclosure. This grants nothing. */
+/** Serialized values never establish a Host disclosure capability. */
 export type PersonalDisclosureSeam = { phase: "unavailable" }
 
 export type PersonalSinkDecision =
@@ -70,6 +70,16 @@ export interface PersonalSinkReceipt {
   /** Absent for opaque/unhashable payloads: disclosure can never unlock them. */
   contentHash?: string
   originalTarget: unknown
+  disclosure?: {
+    grantedBy: PrincipalRefV1
+    grantedAt: number
+    target: { adapterId: string; conversationKey: string }
+    contentHash: string
+    expiresAt: number
+    /** Atomic consumption is bound to exactly one queued job, including its retries. */
+    consumedAt?: number
+    jobId?: string
+  }
 }
 
 /** Group membership alone never proves an exclusively personal audience. */

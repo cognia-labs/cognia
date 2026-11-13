@@ -41,6 +41,10 @@ import { append as appendConnectorAudit } from "./connector-audit"
 import { resolveScopeProjectId } from "./project-scope"
 import { publishSyncInvalidate } from "@/lib/sync/host-invalidate"
 import { jobExecutionTables, settleJobExecutionInsideTransaction } from "./execution-runs"
+import {
+  consumePersonalDisclosureForEnqueue,
+  hasPersonalDisclosureCapability,
+} from "@/lib/execution/personal-disclosure"
 
 /**
  * Companion fan-out (ADR-0131 inbox relay). Every status write below stamps
@@ -211,6 +215,8 @@ export interface EnqueueInput {
 
 /** In-memory Host proof, kept outside the serializable delivery request. */
 export interface OutboundEnqueueOptions {
+  /** Host-only in-memory capability; serialized or plugin-supplied objects grant nothing. */
+  personalDisclosureContext?: import("@/lib/execution/personal-sink").PersonalSinkContext
   signal?: AbortSignal
   executionContext?: import("@/lib/execution/acting-authority").JobExecutionContext
 }
@@ -254,6 +260,11 @@ export async function enqueueOutboundMany(
     options.signal?.throwIfAborted()
 
     const tables: Table[] = [db.outboundQueue]
+    if (
+      options.personalDisclosureContext &&
+      hasPersonalDisclosureCapability(options.personalDisclosureContext)
+    )
+      tables.push(db.actionReviewReceipts, db.messages, db.sessions, db.adapterInstances)
     if (inputs.some((input) => input.localMessage)) tables.push(db.messages)
     if (inputs.some((input) => input.receipt)) tables.push(db.actionReviewReceipts)
     // Bind before the queue row becomes visible to any runner or wake.
@@ -349,6 +360,11 @@ export async function enqueueOutboundMany(
                 delivery: true,
               })
             }
+            await consumePersonalDisclosureForEnqueue(
+              db,
+              options.personalDisclosureContext,
+              created
+            )
             return created
           })
         })

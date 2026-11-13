@@ -15,6 +15,10 @@
  */
 
 export interface ScheduledNoticeI18n {
+  personalShare: string
+  personalKeepPrivate: string
+  personalSharedBy: (name: string) => string
+  personalKeptPrivate: string
   personalDelivery: (narrowed: boolean) => string
   /**
    * Prefix for a delivery that fired from a missed slot — the operator needs to
@@ -25,6 +29,10 @@ export interface ScheduledNoticeI18n {
 }
 
 const EN: ScheduledNoticeI18n = {
+  personalShare: "Share to the group",
+  personalKeepPrivate: "Keep private",
+  personalSharedBy: (name) => `Shared by ${name || "the person"}.`,
+  personalKeptPrivate: "Kept private.",
   personalDelivery: (narrowed) =>
     narrowed
       ? "This answer contains a person's private information and was sent to them privately."
@@ -33,6 +41,10 @@ const EN: ScheduledNoticeI18n = {
 }
 
 const ZH: ScheduledNoticeI18n = {
+  personalShare: "分享到群组",
+  personalKeepPrivate: "保持私密",
+  personalSharedBy: (name) => `已由${name || "本人"}分享。`,
+  personalKeptPrivate: "已保持私密。",
   personalDelivery: (narrowed) =>
     narrowed
       ? "此回答包含个人私密信息，已私下发送给本人。"

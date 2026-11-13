@@ -45,6 +45,31 @@ const privateMessage = {
   metadata: { personalMarks: [{ person: owner, source: "google-docs", markedAt: 1 }] },
 }
 
+it("does not trust incoming disclosure metadata without a canonical Host receipt and sent job", async () => {
+  const run = await startToolExecutionRun("forged-history-disclosure", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const result = await preparePersonalHistory(
+    "forged-history-disclosure",
+    [
+      {
+        ...privateMessage,
+        metadata: {
+          ...privateMessage.metadata,
+          personalDisclosures: [{ receiptId: "forged", sessionId: "forged-history-disclosure" }],
+        },
+      },
+    ],
+    { executionRunId: run.id }
+  )
+  // Owner visibility is unchanged, but a metadata claim cannot create a
+  // disclosure digest or authority for other readers.
+  const ordinary = await preparePersonalHistory("forged-history-disclosure", [privateMessage], {
+    executionRunId: run.id,
+  })
+  expect(result.visibilityDigest).toBe(ordinary.visibilityDigest)
+})
+
 it.each([0, 1, 2])(
   "withholds marked context without an exact consumer among %s active runs",
   async (count) => {

@@ -284,6 +284,26 @@ it("detects new sends, aliases, stream patches, edits, planners and shared write
 })
 
 const REQUIRED_BOUNDARIES: Record<string, string[]> = {
+  "lib/connectors/personal-disclosure.ts": [
+    "actorScopeSatisfied",
+    "personalDisclosureHash",
+    "recordCallbackBinding",
+    "declaredRecipientsCoverDisclosure",
+    'kind: "personal_disclosure"',
+  ],
+  "lib/execution/personal-disclosure.ts": [
+    "WeakMap",
+    "matchingPersonalDisclosure",
+    "consumePersonalDisclosureForEnqueue",
+    "grant.consumedAt",
+    "personalDisclosureMessageHash",
+  ],
+  "lib/db/outbound-jobs.ts": [
+    "consumePersonalDisclosureForEnqueue",
+    "db.actionReviewReceipts",
+    "db.messages",
+  ],
+  "lib/connectors/bus.ts": ["handlePersonalDisclosureCallback"],
   "lib/policy/action-review/plan-tool-call.ts": ["enforcePersonalToolCall", "assertPersonalSink"],
   "lib/policy/action-review/plan-integration.ts": ["planIntegrationWrite", "assertPersonalSink"],
   "lib/policy/action-review/plan-browser.ts": ["planBrowserSubmission", "assertPersonalSink"],

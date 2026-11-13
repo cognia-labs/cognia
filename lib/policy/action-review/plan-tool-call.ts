@@ -377,6 +377,27 @@ async function enforcePersonalToolCall(
   try {
     const check = options.personalSink ?? assertPersonalSink
     const context = { sessionId: request.sessionId, executionRunId: options.executionRunId }
+    if (!options.personalSink) {
+      const { offerPersonalToolDisclosure } = await import("@/lib/connectors/personal-disclosure")
+      const source = personalSinkHost.personalSinkContextForRun(
+        context,
+        "fixed connector tool disclosure"
+      )
+      if (
+        await offerPersonalToolDisclosure(
+          source,
+          request.toolName,
+          request.input,
+          request.requestId
+        )
+      ) {
+        const taint = await personalSinkHost.readRunPersonalTaint(source)
+        throw new personalSinkHost.PersonalSinkWithheldError(
+          taint.marks.map(({ person }) => person),
+          "awaiting-personal-disclosure"
+        )
+      }
+    }
     if (targets.length === 0) {
       await check(
         personalSinkHost.personalSinkContextForRun(

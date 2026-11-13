@@ -27,6 +27,43 @@ const message = {
   metadata: { personalMarks: [mark], title: "private-title" },
 }
 
+it("limits disclosure to the exact message in the original conversation session and changes even an owner's digest", () => {
+  const disclosure = {
+    receiptId: "receipt",
+    messageId: "secret",
+    sessionId: "session",
+    target: { adapterId: "a", conversationKey: "lark:a:group" },
+    persons: [owner],
+    contentHash: "hash",
+    grantedBy: owner,
+    grantedAt: 2,
+  }
+  const context = {
+    sessionId: "session",
+    conversationKey: "lark:a:group",
+    disclosures: [disclosure],
+  }
+  expect(withholdForReaders([message], [other], {}, context).withheldMessageIds).toEqual([])
+  expect(
+    withholdForReaders([message], [other], {}, { ...context, sessionId: "another" })
+      .withheldMessageIds
+  ).toEqual(["secret"])
+  expect(
+    withholdForReaders([message], [other], {}, { ...context, conversationKey: "lark:a:elsewhere" })
+      .withheldMessageIds
+  ).toEqual(["secret"])
+  expect(withholdForReaders([message], [], {}, context).withheldMessageIds).toEqual(["secret"])
+  expect(withholdForReaders([message], [owner], {}, context).visibilityDigest).not.toBe(
+    withholdForReaders([message], [owner]).visibilityDigest
+  )
+  expect(
+    withholdForReaders(
+      [{ ...message, metadata: { ...message.metadata, personalDisclosures: [disclosure] } }],
+      [other]
+    ).withheldMessageIds
+  ).toEqual(["secret"])
+})
+
 it("uses every requester, but never service, event, unverified or orphan-child authority", () => {
   expect(personalReaders(identity({ requesters: [owner, other] }))).toEqual([owner, other])
   expect(

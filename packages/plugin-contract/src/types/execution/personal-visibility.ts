@@ -14,15 +14,26 @@ export interface PersonalHistoryMessage {
   createdAt?: number
 }
 
-/** Phase 2D seam: there is deliberately no grant-bearing variant in phase 2B. */
-export type PersonalHistoryDisclosure = { phase: "unavailable" }
+/** Supplied from canonical Host grants, never accepted from incoming metadata. */
+export interface PersonalHistoryDisclosure {
+  receiptId: string
+  messageId: string
+  sessionId: string
+  target: { adapterId: string; conversationKey: string }
+  persons: PrincipalRefV1[]
+  contentHash: string
+  grantedBy: PrincipalRefV1
+  grantedAt: number
+}
 
 export interface PersonalVisibilityContext {
   boundPerson?: PrincipalRefV1
   source?: string
   samePerson?: (left: PrincipalRefV1, right: PrincipalRefV1) => boolean
   personKey?: (person: PrincipalRefV1) => string
-  disclosure?: PersonalHistoryDisclosure
+  disclosures?: readonly PersonalHistoryDisclosure[]
+  sessionId?: string
+  conversationKey?: string
 }
 
 /** A resolved identity must come from the Host's live root, never from message metadata. */
@@ -68,19 +79,46 @@ export function personalReaderKey(person: PrincipalRefV1): string {
   return JSON.stringify(person)
 }
 
-function disclosureCoversReader(_disclosure: PersonalHistoryDisclosure | undefined): boolean {
-  return false
+export function disclosureCoversReader(
+  disclosure: PersonalHistoryDisclosure,
+  messageId: string,
+  person: PrincipalRefV1,
+  reader: PrincipalRefV1,
+  context: PersonalVisibilityContext
+): boolean {
+  const equal = context.samePerson ?? samePerson
+  return (
+    (reader.kind === "platform" || reader.kind === "local-person") &&
+    !!context.sessionId &&
+    !!context.conversationKey &&
+    disclosure.sessionId === context.sessionId &&
+    disclosure.target.conversationKey === context.conversationKey &&
+    disclosure.messageId === messageId &&
+    disclosure.persons.some((marked) => equal(marked, person))
+  )
 }
 
 /** A digest of sets, independent of ordering, message prose and credential labels. */
 export function personalVisibilityDigest(
   readers: readonly PrincipalRefV1[],
   withheldMessageIds: readonly string[],
-  context: Pick<PersonalVisibilityContext, "personKey"> = {}
+  context: Pick<PersonalVisibilityContext, "personKey" | "disclosures"> = {}
 ): string {
   return `personal-v1:${contentDigest({
     readers: [...new Set(readers.map(context.personKey ?? personalReaderKey))].sort(),
     withheldMessageIds: [...new Set(withheldMessageIds)].sort(),
+    disclosures: (context.disclosures ?? [])
+      .map((entry) =>
+        JSON.stringify([
+          entry.receiptId,
+          entry.messageId,
+          entry.sessionId,
+          entry.target,
+          entry.contentHash,
+          entry.grantedAt,
+        ])
+      )
+      .sort(),
   })}`
 }
 
@@ -100,7 +138,11 @@ export function withholdForReaders<T extends PersonalHistoryMessage>(
       (readers.length > 0 &&
         readers.every((reader) =>
           marks.every(
-            (mark) => equal(reader, mark.person) || disclosureCoversReader(context.disclosure)
+            (mark) =>
+              equal(reader, mark.person) ||
+              context.disclosures?.some((disclosure) =>
+                disclosureCoversReader(disclosure, message.id, mark.person, reader, context)
+              )
           )
         ))
     )

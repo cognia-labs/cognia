@@ -241,6 +241,20 @@ it("preserves marks when newer metadata replaces other fields", () => {
   ).toEqual({ personalMarks, personalMarkVersion: 1, reactions: ["new"] })
 })
 
+it("preserves only existing Host disclosures across metadata replacement and strips imported grants", () => {
+  const personalDisclosures = [{ receiptId: "host-receipt" }]
+  expect(
+    preservePersonalMarkMetadata(
+      { note: "new", personalDisclosures: [{ receiptId: "forged" }] },
+      { personalDisclosures },
+      { rowExists: true }
+    )
+  ).toEqual({ note: "new", personalDisclosures })
+  expect(
+    preservePersonalMarkMetadata({ personalDisclosures }, undefined, { rowExists: false })
+  ).toBeUndefined()
+})
+
 it.each([undefined, {}, { note: "legacy" }])(
   "does not accept a version on an existing legacy row (%j)",
   (previous) => {

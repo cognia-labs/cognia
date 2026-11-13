@@ -83,6 +83,11 @@ export function preservePersonalMarkMetadata(
     incoming?.personalMarks as PersonalMarkV1[] | undefined
   )
   const metadata = { ...incoming }
+  // Only the Host grant path writes disclosures. Imports/copies cannot forge
+  // one and ordinary streaming/metadata merges cannot erase an existing one.
+  delete metadata.personalDisclosures
+  if (state.rowExists && previous?.personalDisclosures)
+    metadata.personalDisclosures = previous.personalDisclosures
   if (state.rowExists) {
     delete metadata.personalMarkVersion
     if (previous && Object.prototype.hasOwnProperty.call(previous, "personalMarkVersion"))

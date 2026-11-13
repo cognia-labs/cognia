@@ -466,14 +466,18 @@ export async function refreshAskUserCard(
  * ask_user actorScope). The bound path already passed the bus's unified
  * authorization guard; this covers the binding-less correlations.
  */
-function askUserActorAllowed(
+async function askUserActorAllowed(
   entry: PendingAskUser,
   event: ConnectorCallbackEvent,
   operatorIds: string[]
-): boolean {
+): Promise<boolean> {
   const scope = entry.meta.actorScope
   const actorId = event.user.remoteUserId || event.user.id
   switch (scope.mode) {
+    case "marked-person": {
+      const { actorScopeSatisfied } = await import("../callback-authorization")
+      return actorScopeSatisfied(scope, event, [], true)
+    }
     case "anyone":
       return true
     case "conversation":
@@ -591,7 +595,7 @@ export async function applyAskUserCallback(
     } else {
       return { handled: false, resolved: false }
     }
-    if (!askUserActorAllowed(entry, event, operatorIds)) {
+    if (!(await askUserActorAllowed(entry, event, operatorIds))) {
       await audit({
         adapterId: event.adapterId,
         kind: "callback.forbidden",

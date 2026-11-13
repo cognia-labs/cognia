@@ -1,4 +1,9 @@
 import * as personalSinkHost from "@/lib/execution/personal-sink"
+import {
+  personalDisclosureContextForJob,
+  commitPersonalDisclosureHistory,
+} from "@/lib/execution/personal-disclosure"
+import { attachPersonalDisclosure, finishPersonalDisclosureDelivery } from "./personal-disclosure"
 import { validateOutboundFeatures } from "./outbound-features"
 
 /**
@@ -622,6 +627,8 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     /** This runner already holds the `sending` claim on `job`. */
     claimed = false
   ): Promise<boolean> {
+    // A personal grant names the original adapter and conversation exactly.
+    if (job.personalDisclosureReceiptId) return false
     const candidates =
       (mechanism === "failover" ? fromRow.failoverAdapterIds : fromRow.balanceAdapterIds) ?? []
     if (candidates.length === 0) return false
@@ -831,7 +838,11 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     let decision: DeliveryDecision
     try {
       const input: DeliveryPlanInput = {
-        personalContext: { executionRunId: `execution:job:outbound:${job.id}` },
+        personalContext: personalDisclosureContextForJob(
+          { executionRunId: `execution:job:outbound:${job.id}` },
+          job,
+          getDb()
+        ),
         payload: request,
         canNarrowPersonal: !request.editTargetMessageId,
         adapterId: job.adapterId,
@@ -1223,7 +1234,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     // `transform` rewrites the segments AFTER passing the fail-closed PII gate
     // (a leaking rewrite is rejected, the original kept). Plugin errors never
     // break delivery.
-    if (job.attempts === 0) {
+    if (job.attempts === 0 && !job.personalDisclosureReceiptId) {
       try {
         let platform = ""
         try {
@@ -1533,10 +1544,14 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     const jobContext = deliveryRun
       ? { sessionId: deliveryRun.sessionId, executionRunId: deliveryRun.id }
       : personalSinkHost.unverifiedPersonalSinkContext("outbound execution unavailable")
-    const personalContext = withPersonalSinkAttempt(
-      job.personalSourceContext
-        ? personalSinkHost.mergePersonalSinkContexts(job.personalSourceContext, jobContext)
-        : jobContext
+    const personalContext = personalDisclosureContextForJob(
+      withPersonalSinkAttempt(
+        job.personalSourceContext
+          ? personalSinkHost.mergePersonalSinkContexts(job.personalSourceContext, jobContext)
+          : jobContext
+      ),
+      job,
+      getDb()
     )
     const personalDecision = await checkConnectorPersonalSink(
       personalContext,
@@ -1555,6 +1570,14 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
             personalDecision.person
           ).catch(() => undefined)
         : undefined
+    if (narrowed && personalDecision.outcome === "narrow")
+      narrowed = await attachPersonalDisclosure(
+        personalContext,
+        { adapterId, conversationKey },
+        originalRequest,
+        narrowed,
+        personalDecision.persons
+      )
     const sendPersonalNotice = async (sentPrivately: boolean) => {
       const destination = job.personalDeliveryNotice ?? {
         conversationKey,
@@ -1770,6 +1793,8 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     if (result.ok) {
       const platformMsgId = result.platformMessageId ?? idempotencyKey
       await markSent(job.id, platformMsgId)
+      await commitPersonalDisclosureHistory(job)
+      await finishPersonalDisclosureDelivery(job).catch(() => undefined)
       if (narrowed || job.personalDeliveryNotice)
         await sendPersonalNotice(true).catch((error) =>
           console.warn("[outbound-runner] personal notice delivery failed", error)

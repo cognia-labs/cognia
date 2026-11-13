@@ -88,6 +88,25 @@ beforeAll(dbFixture.initialize)
 beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
 
+it("retains the exact personal disclosure grant in the existing unindexed receipt", async () => {
+  const receipt = makeReceipt()
+  receipt.personal = {
+    persons: [{ kind: "local-person" }],
+    outcome: "withheld",
+    contentHash: "exact",
+    originalTarget: { adapterId: "a", conversationKey: "lark:a:group" },
+    disclosure: {
+      grantedBy: { kind: "platform", platform: "lark", adapterId: "a", remoteUserId: "person" },
+      grantedAt: 1,
+      contentHash: "exact",
+      target: { adapterId: "a", conversationKey: "lark:a:group" },
+      expiresAt: 1000,
+    },
+  }
+  await recordActionReviewReceipt(receipt)
+  expect((await getActionReviewReceipt(receipt.id))!.personal).toEqual(receipt.personal)
+})
+
 it("rolls receipt writes and cap trimming back with the caller's transaction", async () => {
   const db = getDb()
   await recordActionReviewReceipt(makeReceipt({ id: "old", decidedAt: 1 }))

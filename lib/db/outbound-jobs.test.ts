@@ -62,6 +62,19 @@ function makeRequest(idempotencyKey: string = crypto.randomUUID()): OutboundRequ
   }
 }
 
+it("does not persist a forged disclosure reference from a serializable enqueue input", async () => {
+  const input: EnqueueInput & { personalDisclosureReceiptId: string } = {
+    adapterId: "adp_1",
+    conversationKey: "telegram:adp_1:chat",
+    request: makeRequest(),
+    source: "manual",
+    personalDisclosureReceiptId: "forged",
+  }
+  const row = await enqueueOutbound(input)
+  expect(row.personalDisclosureReceiptId).toBeUndefined()
+  expect((await getDb().outboundQueue.get(row.id))!.personalDisclosureReceiptId).toBeUndefined()
+})
+
 // Test wrapper: defaults `source` to "ai-run" for the FIFO / queue-lifecycle
 // tests that don't care about provenance. Tests that exercise the v41
 // source/sourceWorkflow plumbing (see the "v41 — provenance" block below)

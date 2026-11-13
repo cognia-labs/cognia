@@ -3509,7 +3509,9 @@ describe("round 5: personal outbound producer identity", () => {
       const bus = getBus()
       for (const adapter of adapters.values()) bus.registerAdapter(adapter)
       const runner = createRunner(adapters)
-      const replacementKey = `${mode}-tail:${mode === "failover" ? "fo" : "lb"}:${siblingId}`
+      // A narrowed private projection has its own key; the original key is
+      // reserved for the exact group request if its person later discloses it.
+      const replacementKey = `${mode}-tail:${mode === "failover" ? "fo" : "lb"}:${siblingId}${mode === "balanced" ? ":personal-private" : ""}`
       let jobs: OutboundJobRow[]
       try {
         jobs = await waitForJobs((rows) =>

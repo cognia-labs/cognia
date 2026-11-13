@@ -37,6 +37,7 @@ import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-ga
 import { getDb } from "@/lib/db/schema"
 import { getLarkStrictCallbackAuthorizationMode } from "./feature-flags"
 import { hashOpenId, resolveConnectorPrincipal } from "./principal/resolve"
+import { samePersonForHost } from "@/lib/execution/personal-visibility"
 
 export type CallbackDenyReason =
   | "principal_unbound"
@@ -93,6 +94,7 @@ const CONSUME_ONCE_KINDS = new Set<ConnectorCallbackBindingKind>([
   // from answering the plan that replaced it.
   "plan_approve",
   "skill_invoke",
+  "personal_disclosure",
 ])
 
 /**
@@ -289,13 +291,25 @@ function legacyActorScope(binding: ConnectorCallbackBindingRow): CallbackActorSc
   return { mode: "conversation" }
 }
 
-function actorScopeSatisfied(
+export async function actorScopeSatisfied(
   scope: CallbackActorScope,
-  actorId: string,
+  event: ConnectorCallbackEvent,
   operatorIds: string[],
   conversationMatched: boolean
-): boolean {
+): Promise<boolean> {
+  const actorId = actorIdOf(event)
   switch (scope.mode) {
+    case "marked-person": {
+      if (!event.user.remoteUserId || !scope.persons.length) return false
+      const host = await personalSinkHost.readHostPersonContext()
+      const actor = {
+        kind: "platform" as const,
+        platform: event.platform,
+        adapterId: event.adapterId,
+        remoteUserId: event.user.remoteUserId,
+      }
+      return scope.persons.every((person) => samePersonForHost(actor, person, host))
+    }
     case "anyone":
       return true
     case "conversation":
@@ -311,7 +325,11 @@ function actorScopeSatisfied(
 export async function authorizeConnectorCallback(
   input: AuthorizeCallbackInput
 ): Promise<AuthorizeCallbackDecision> {
-  const mode = getLarkStrictCallbackAuthorizationMode(input.adapterRow)
+  const mode =
+    input.binding?.kind === "personal_disclosure" ||
+    input.binding?.actorScope?.mode === "marked-person"
+      ? "enforce"
+      : getLarkStrictCallbackAuthorizationMode(input.adapterRow)
   if (mode === "off") return { allowed: true, mode }
 
   const now = input.now ?? Date.now()
@@ -393,7 +411,7 @@ export async function authorizeConnectorCallback(
   if (binding) {
     const scope = binding.actorScope ?? legacyActorScope(binding)
     const operatorIds = operatorIdsOf(input.adapterRow)
-    if (!actorScopeSatisfied(scope, actorId, operatorIds, conversationMatched)) {
+    if (!(await actorScopeSatisfied(scope, event, operatorIds, conversationMatched))) {
       return deny("actor_forbidden")
     }
   }

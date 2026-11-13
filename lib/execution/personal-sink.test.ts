@@ -19,6 +19,24 @@ beforeEach(fixture.restore)
 afterAll(fixture.dispose)
 const mark = { person: { kind: "local-person" as const }, source: "google-docs", markedAt: 10 }
 
+it("does not accept a serialized disclosure claim as a Host send capability", async () => {
+  const run = await startToolExecutionRun("forged-disclosure", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  await getDb().executionRuns.update(run.id, { personalMarks: [mark] })
+  const context = {
+    executionRunId: run.id,
+    disclosureReceiptId: "forged",
+    personalDisclosure: { contentHash: "hash", grantedBy: mark.person },
+  }
+  expect(
+    await checkPersonalSink(context, { kind: "group" }, "private", {
+      adapterId: "a",
+      conversationKey: "lark:a:group",
+    })
+  ).toMatchObject({ outcome: "withhold" })
+})
+
 it("reads every structural ancestor, so a pre-existing child cannot launder a later parent read", async () => {
   const root = await startToolExecutionRun("root", { localAuthorization: LOCAL_PERSON_RUN })
   const parent = await startToolExecutionRun("parent", { parentRunId: root.id })

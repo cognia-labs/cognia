@@ -15,6 +15,11 @@ import type { ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
 import { stableJson } from "@/lib/account-sync/data/stable-json"
 import { sha256Blob, sha256Bytes, sha256String } from "@/lib/utils/hash"
 import type { HostPersonContext } from "./personal-visibility"
+import {
+  copyPersonalDisclosureCapability,
+  hasPersonalDisclosureCapability,
+  matchingPersonalDisclosure,
+} from "./personal-disclosure"
 
 export type { SinkAudienceV1 } from "@cognia/plugin-contract/types/execution/personal-sink"
 
@@ -50,7 +55,10 @@ export function mergePersonalSinkContexts(
 }
 
 export function withPersonalSinkAttempt(context: PersonalSinkContext): PersonalSinkContext {
-  return { ...context, receiptAttemptId: crypto.randomUUID() }
+  return copyPersonalDisclosureCapability(context, {
+    ...context,
+    receiptAttemptId: crypto.randomUUID(),
+  })
 }
 
 /** Only Host-held state may supply this binding; absence stays an explicit denial. */
@@ -320,7 +328,7 @@ export async function recordPersonalSinkReceipt(
   outcome: PersonalSinkReceipt["outcome"] | "withhold",
   payload: unknown,
   originalTarget: unknown
-): Promise<void> {
+): Promise<string> {
   const { getDb } = await import("@/lib/db/schema")
   const db = getDb()
   const [{ outboundReceipt }, { recordActionReviewReceipt, ACTION_REVIEW_RETENTION_DAYS }] =
@@ -336,7 +344,7 @@ export async function recordPersonalSinkReceipt(
   if (await db.actionReviewReceipts.get(receiptId)) {
     if (outcome === "narrow" && !contentHash)
       throw new PersonalSinkWithheldError([...persons], "payload-not-disclosable")
-    return
+    return receiptId
   }
   const now = Date.now()
   const receipt = outboundReceipt({
@@ -371,6 +379,7 @@ export async function recordPersonalSinkReceipt(
   if (getDb() !== db) throw new Error("Personal sink database changed")
   if (outcome === "narrow" && !contentHash)
     throw new PersonalSinkWithheldError([...persons], "payload-not-disclosable")
+  return receiptId
 }
 
 export type HostPersonalSinkDecision =
@@ -378,7 +387,7 @@ export type HostPersonalSinkDecision =
   | { outcome: "narrow"; person: PrincipalRefV1; persons: PrincipalRefV1[] }
   | { outcome: "withhold"; persons: PrincipalRefV1[]; reason: string }
 
-/** No mode, operator, grant, or approval input can override this decision. */
+/** Only the Host's recorded exact-send disclosure can override a personal withhold. */
 export async function checkPersonalSink(
   context: PersonalSinkContext,
   audience: SinkAudienceV1,
@@ -387,6 +396,16 @@ export async function checkPersonalSink(
   options: { canNarrow?: boolean; taint?: RunPersonalTaint } = {}
 ): Promise<HostPersonalSinkDecision> {
   const taint = options.taint ?? (await readRunPersonalTaint(context))
+  if (hasPersonalDisclosureCapability(context)) {
+    if (
+      taint.verified &&
+      (await matchingPersonalDisclosure(context, payload, originalTarget, taint.marks))
+    )
+      return { outcome: "allow" }
+    const persons = taint.marks.map(({ person }) => person)
+    await recordPersonalSinkReceipt(context, persons, "withhold", payload, originalTarget)
+    return { outcome: "withhold", persons, reason: "disclosure-mismatch" }
+  }
   let decision: HostPersonalSinkDecision
   if (!taint.verified && audience.kind === "host-local") {
     const host = await readHostPersonContext()

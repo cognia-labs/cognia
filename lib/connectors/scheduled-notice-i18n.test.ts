@@ -4,6 +4,13 @@
 import { formatScheduledSlot, resolveScheduledNoticeI18n } from "./scheduled-notice-i18n"
 
 describe("resolveScheduledNoticeI18n", () => {
+  it("localizes the fixed disclosure actions and content-free terminal notice", () => {
+    expect(resolveScheduledNoticeI18n("en").personalShare).toBe("Share to the group")
+    expect(resolveScheduledNoticeI18n("en").personalKeepPrivate).toBe("Keep private")
+    expect(resolveScheduledNoticeI18n("en").personalSharedBy("Alice")).toBe("Shared by Alice.")
+    expect(resolveScheduledNoticeI18n("zh-CN").personalShare).toBe("分享到群组")
+    expect(resolveScheduledNoticeI18n("zh-CN").personalKeptPrivate).toBe("已保持私密。")
+  })
   it("uses localized fixed privacy notices without accepting protected content", () => {
     expect(resolveScheduledNoticeI18n("en").personalDelivery(true)).toContain("privately")
     expect(resolveScheduledNoticeI18n("en").personalDelivery(false)).toContain("withheld")

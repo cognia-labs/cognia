@@ -190,3 +190,17 @@ Diagnostics retain Host provenance in a private event-detail WeakMap. Emitted er
 - Local suites establish Host behavior; live provider/native/collab-server acceptance was not run. Opaque egress remains 2C-2 and person disclosure remains 2D.
 
 IM command replies in `lib/connectors/commands/dispatch.ts` (`/status`, `/character`, `/team`, `/workflow` confirmations, ambiguity and not-deployed replies) carry Host configuration labels (character, team, workflow, rule names; likewise the Squad name in the room hand-off card outcome in `lib/connectors/bus.ts`) and use `explicitHostPersonalSinkContext("background-service")`; `/status` keeps the active session aggregate for the session part. Residual: a configuration name written by a marked run is not traced in this phase.
+
+## Phase 2D disclosure callers (2026-11-13)
+
+| Caller                                       | Host authority and retained boundary                                                                                                                                                        |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lib/connectors/delivery-gateway.ts`         | Narrowed delivery attaches the exact original request to its receipt and adds strict private A2UI actions.                                                                                  |
+| `lib/connectors/outbound-runner.ts`          | Late narrowing offers the same card. Disclosed jobs recheck their exact grant, cannot reroute or transform, and publish history and the shared label only after success.                    |
+| `lib/connectors/personal-disclosure.ts`      | Verified marked-person callback, receipt/hash/target/expiry checks, consume-once choices, fixed connector-message tool replay and content-free card closure. No event-payload authority.    |
+| `lib/execution/personal-disclosure.ts`       | Host WeakMap capability; recorded grant and exact queue-job checks; consumption occurs inside outbound persistence. No plugin-exported constructor.                                         |
+| `lib/db/outbound-jobs.ts`                    | One transaction consumes the grant with exactly one job. Failure rolls both back.                                                                                                           |
+| `lib/policy/action-review/plan-tool-call.ts` | Literal connector message withholds can offer a card; original tool stays denied. Arbitrary writes, mutable media and opaque requests stay withheld.                                        |
+| `lib/execution/personal-visibility.ts`       | Canonical message plus Host receipt plus sent job prove same-session conversation disclosure; foreign sessions, derived artifacts, plugins and public/shared projections do not inherit it. |
+
+The bound-person declared-recipient seam refuses until phase 5. Opaque egress remains fenced even after a grant; no shell, MCP, fetch, browser or plugin network exception is introduced. A tool-bearing original message stays withheld; only its exact delivered projection is disclosed. The phase 2D ledger records actual checks and provider/native residuals.

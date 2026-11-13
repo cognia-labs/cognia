@@ -3538,6 +3538,17 @@ export class ConnectorBus {
       }
     }
 
+    if (resolvedBinding?.kind === "personal_disclosure") {
+      try {
+        const { handlePersonalDisclosureCallback } = await import("./personal-disclosure")
+        await handlePersonalDisclosureCallback(event, resolvedBinding)
+        decide({ status: "accepted", kind: "personal_disclosure" })
+        return true
+      } catch {
+        decide({ status: "denied", reason: "personal_disclosure_refused" })
+        return false
+      }
+    }
     if (authDecision.allowed && authDecision.consume) {
       await authDecision.consume({ deliveryTarget: event.deliveryTarget })
     }
