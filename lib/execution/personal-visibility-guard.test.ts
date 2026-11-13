@@ -866,11 +866,13 @@ it("binds every native paired data arm to a fail-closed Host reader and preserve
     join(ROOT, "crates/cognia-companion-rpc/src/rpc/data_sync.rs"),
     "utf8"
   )
-  expect(dispatch).toContain("PairedReader::for_device(tenant_id, device_id)")
   expect(dispatch.match(/for_paired_reader\(paired_reader\)/g)).toHaveLength(8)
   expect(dispatch).toContain("PairedReaderTransport::bind(transport, paired_reader)")
   expect(dispatch).toContain('name == "host_state_submit"')
   const plane = readFileSync(join(ROOT, "crates/cognia-companion/src/data_plane.rs"), "utf8")
+  // Only the exact service scope reads as the Host owner; every other caller needs device proof.
+  expect(dispatch).toContain("PairedReader::for_caller(tenant_id, device_id, scope)")
+  expect(plane).toContain("if crate::jwt::is_service_scope(scope)")
   expect(plane).toContain("store.is_owner_device(tenant, device)")
   expect(plane).toContain('map.insert("pairedReader".into()')
   expect(plane).toContain("personal_visibility_unavailable")
