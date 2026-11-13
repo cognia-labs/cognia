@@ -212,7 +212,7 @@ it("pins each Host producer and every canonical persistence form to marking", ()
     "lib/db/outbound-jobs.ts": ["personalMarkVersion: 1"],
     "lib/db/plugin-bridge.ts": [
       "const current = await dexie.messages.get(messageId)",
-      "preservePersonalMarkMetadata(meta, current.metadata, { rowExists: true })",
+      "patch.metadata = await personalMessageMetadata(messageId, meta, current.metadata",
     ],
     "lib/companion/desktop-write-source.ts": ["personalMarkVersion: 1"],
   }
