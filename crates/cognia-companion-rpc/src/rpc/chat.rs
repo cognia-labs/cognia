@@ -899,8 +899,11 @@ async fn send_arm(
         .bind(&session_id, None)
         .map_err(crate::person_model::person_partition_refusal)?;
     let device_id = caller.device_id;
-    let reader =
-        cognia_companion::data_plane::PairedReader::for_device(caller.tenant_id, caller.device_id);
+    let reader = cognia_companion::data_plane::PairedReader::for_caller(
+        caller.tenant_id,
+        caller.device_id,
+        caller.scope,
+    );
     let mut options = options;
     let context = cognia_companion::remote_execution::global().register(
         &opaque_host_id(state),

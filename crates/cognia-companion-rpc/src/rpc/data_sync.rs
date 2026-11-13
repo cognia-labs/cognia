@@ -290,7 +290,7 @@ pub(super) async fn dispatch(
     let _ = (state, host, device_id, tenant_id, scope);
     // Production HTTP and canonical dispatch bind a tenant; unproven None is Member.
     let paired_reader =
-        cognia_companion::data_plane::PairedReader::for_device(tenant_id, device_id);
+        cognia_companion::data_plane::PairedReader::for_caller(tenant_id, device_id, scope);
     let result = match name {
         // ── Sync down (M4.7) ──────────────────────────────────────────────────
 
@@ -1775,11 +1775,19 @@ mod p5_tests {
     async fn p5d_dispatch_binds_partition_manifest_and_attach_without_changing_legacy() {
         use cognia_companion::ws_bridge::{self, test_support};
         let _slot = test_support::lock_slot().await;
+        // ADR-0253 D05: caller grants come from a readable security store, and a
+        // device the store does not hold has none (`[]`). Without a store the
+        // field is left out, so the Host-derived empty set needs a real store.
+        let _security = cognia_companion::security_store::test_guard();
+        cognia_companion::security_store::install_security_store(Some(
+            cognia_companion::security_store::SecurityStore::in_memory().unwrap(),
+        ));
         test_support::clear_socket_for_testing();
         struct Cleanup;
         impl Drop for Cleanup {
             fn drop(&mut self) {
                 test_support::clear_socket_for_testing();
+                cognia_companion::security_store::install_security_store(None);
             }
         }
         let _cleanup = Cleanup;

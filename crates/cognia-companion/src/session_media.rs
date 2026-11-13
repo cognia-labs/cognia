@@ -72,7 +72,11 @@ pub async fn session_media_handler(
             false,
         );
     }
-    let reader = PairedReader::for_device(Some(&principal.tenant_id), &principal.device_id);
+    let reader = PairedReader::for_caller(
+        Some(&principal.tenant_id),
+        &principal.device_id,
+        Some(principal.scope.as_str()),
+    );
     // Binary HTTP has no person-fleet partition router. Never fall through
     // from a member identity to the operator brain.
     if reader == PairedReader::Member

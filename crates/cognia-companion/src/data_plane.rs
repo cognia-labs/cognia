@@ -96,6 +96,17 @@ pub enum PairedReader {
 }
 
 impl PairedReader {
+    /// The loopback service principal (the Host's own brain and CLI) already
+    /// bypasses device capability checks ([`crate::jwt::is_service_scope`]), so
+    /// it reads as the Host owner. A person child's `person-brain` scope never
+    /// matches it. Every other caller needs positive owner-device proof.
+    pub fn for_caller(tenant: Option<&str>, device: &str, scope: Option<&str>) -> Self {
+        if crate::jwt::is_service_scope(scope) {
+            return Self::Owner;
+        }
+        Self::for_device(tenant, device)
+    }
+
     pub fn for_device(tenant: Option<&str>, device: &str) -> Self {
         let owner = tenant
             .zip(crate::security_store::security_store())
@@ -858,6 +869,24 @@ mod tests {
             PairedReader::for_device(None, "owner"),
             PairedReader::Member
         );
+    }
+
+    #[test]
+    fn only_the_exact_service_scope_reads_as_owner_without_device_proof() {
+        // No store is consulted for the loopback service principal.
+        assert_eq!(
+            PairedReader::for_caller(None, "brain-local", Some("service")),
+            PairedReader::Owner
+        );
+        // A person child, a device and a missing scope still need owner proof;
+        // with no tenant there is none, so they stay members.
+        for scope in [Some("person-brain"), Some("device"), Some("Service"), None] {
+            assert_eq!(
+                PairedReader::for_caller(None, "owner", scope),
+                PairedReader::Member,
+                "{scope:?}"
+            );
+        }
     }
 
     #[test]

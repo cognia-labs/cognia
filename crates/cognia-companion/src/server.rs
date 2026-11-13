@@ -1427,6 +1427,10 @@ mod tests {
     async fn challenge_fails_closed_without_security_store_after_spawn() {
         let _lifecycle_guard = SERVER_LIFECYCLE_TEST_LOCK.lock().await;
         let _topology_guard = crate::ws_bridge::test_support::lock_slot().await;
+        // The 503 depends on no store being installed. Hold the store test lock
+        // so a parallel test cannot install one while this request runs.
+        let _security = crate::security_store::test_guard();
+        crate::security_store::install_security_store(None);
         let state = test_state();
         let (_tmp, tls_mat) = test_tls();
         let handle = spawn_server(0, true, tls_mat, state).await.expect("spawn");
