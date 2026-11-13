@@ -1,3 +1,4 @@
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 /**
  * Plugin Agent SDK — programmatic subagent / team dispatch (Package C).
@@ -370,7 +371,14 @@ export async function dispatchSubagent(
     },
     {
       surface: "plugin",
-      identity: { runId, ...(options._sessionId ? { sessionId: options._sessionId } : {}) },
+      ...(options._runId
+        ? {
+            identity: {
+              runId: `execution:job:${runId}`,
+              ...(options._sessionId ? { sessionId: options._sessionId } : {}),
+            },
+          }
+        : {}),
     }
   )
 
@@ -559,49 +567,61 @@ async function runExternalSubagent(
         normalizeAgentModelRoleOverrides(def.modelRoles) ?? undefined
       )
     : undefined
-  const result = await manager.execute(agentId, prompt, {
-    // A preset names an executable, not another saved agent's model/account.
-    // A pinned config IS the saved agent, so without an explicit override its
-    // own gateway binding (or native mode) applies.
-    ...(cogniaModel !== undefined ? { cogniaModel } : pinned ? {} : { cogniaModel: null }),
-    ...(modelRoles ? { modelRoles } : {}),
-    ...(def.prompt ? { systemPrompt: def.prompt } : {}),
-    // Honor the subagent's declared model on the external CLI too (the sidecar
-    // path already threads `def.model`). Best-effort per the manager.
-    ...(def.model ? { model: def.model } : {}),
-    ...(merged.permissionMode ? { permissionMode: merged.permissionMode } : {}),
-    ...(merged.allowedTools ? { allowedTools: merged.allowedTools } : {}),
-    ...(mcpServers.length > 0 ? { context: { custom: { mcpServers } } } : {}),
-    ...(options.cwd ? { workingDirectory: options.cwd } : {}),
-    ...(options.abortSignal ? { signal: options.abortSignal } : {}),
-    ...(onEvent ? { onEvent } : {}),
-    ...(options._canUseTool
-      ? {
-          onPermissionRequest: async (
-            request: import("@/types/agent/external-agent").AcpPermissionRequest
-          ) => {
-            const decision = await options._canUseTool!(
-              request.toolInfo.name,
-              request.rawInput ?? {},
-              { signal: options.abortSignal }
-            )
-            const granted = decision.behavior === "allow"
-            const selected = request.options?.find((option) =>
-              granted
-                ? option.kind === "allow_once" || option.kind === "allow_always"
-                : option.kind === "reject_once" || option.kind === "reject_always"
-            )
-            return {
-              requestId: request.requestId ?? request.id,
-              granted,
-              ...(selected ? { optionId: selected.optionId } : {}),
-              ...(decision.behavior === "deny" ? { reason: decision.message } : {}),
-              scope: "once" as const,
+  const result = await manager.execute(
+    agentId,
+    prompt,
+    bindPersonalEgressOptions(
+      {
+        // A preset names an executable, not another saved agent's model/account.
+        // A pinned config IS the saved agent, so without an explicit override its
+        // own gateway binding (or native mode) applies.
+        ...(cogniaModel !== undefined ? { cogniaModel } : pinned ? {} : { cogniaModel: null }),
+        ...(modelRoles ? { modelRoles } : {}),
+        ...(def.prompt ? { systemPrompt: def.prompt } : {}),
+        // Honor the subagent's declared model on the external CLI too (the sidecar
+        // path already threads `def.model`). Best-effort per the manager.
+        ...(def.model ? { model: def.model } : {}),
+        ...(merged.permissionMode ? { permissionMode: merged.permissionMode } : {}),
+        ...(merged.allowedTools ? { allowedTools: merged.allowedTools } : {}),
+        ...(mcpServers.length > 0 ? { context: { custom: { mcpServers } } } : {}),
+        ...(options.cwd ? { workingDirectory: options.cwd } : {}),
+        ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+        ...(onEvent ? { onEvent } : {}),
+        ...(options._canUseTool
+          ? {
+              onPermissionRequest: async (
+                request: import("@/types/agent/external-agent").AcpPermissionRequest
+              ) => {
+                const decision = await options._canUseTool!(
+                  request.toolInfo.name,
+                  request.rawInput ?? {},
+                  { signal: options.abortSignal }
+                )
+                const granted = decision.behavior === "allow"
+                const selected = request.options?.find((option) =>
+                  granted
+                    ? option.kind === "allow_once" || option.kind === "allow_always"
+                    : option.kind === "reject_once" || option.kind === "reject_always"
+                )
+                return {
+                  requestId: request.requestId ?? request.id,
+                  granted,
+                  ...(selected ? { optionId: selected.optionId } : {}),
+                  ...(decision.behavior === "deny" ? { reason: decision.message } : {}),
+                  scope: "once" as const,
+                }
+              },
             }
-          },
-        }
-      : {}),
-  })
+          : {}),
+      },
+      options._runId
+        ? {
+            executionRunId: `execution:job:${options._runId}`,
+            ...(options._sessionId ? { sessionId: options._sessionId } : {}),
+          }
+        : {}
+    )
+  )
 
   if (!result.success) {
     throw new Error(
@@ -691,7 +711,7 @@ export async function dispatchSubagentAsChildRun(
   }
   const settled = await launched.outcome
   if (thrown) throw thrown.error
-  if (result) return result
+  if (result) return bindPersonalEgressOptions(result, { executionRunId: launched.executionRunId })
   throw new Error(settled.error ?? "dispatchSubagent: the run ended without a result")
 }
 
@@ -740,5 +760,8 @@ export async function runTeam(
     throw new Error(`Squad run refused: ${launched.detail ?? launched.reason}`)
   }
   const outcome = await launched.outcome
-  return { teamId, status: outcome.status }
+  return bindPersonalEgressOptions(
+    { teamId, status: outcome.status },
+    { executionRunId: launched.executionRunId }
+  )
 }

@@ -189,7 +189,7 @@ export async function runAgentTurn(ctx: StepExecutionContext): Promise<StepExecu
           {
             surface: "workflow-agent-turn",
             ...(params.requireTools !== undefined ? { requireTools: params.requireTools } : {}),
-            identity: { sessionId: ctx.runId, runId: ctx.runId },
+            identity: { sessionId: ctx.runId, runId: `execution:workflow:${ctx.runId}` },
           }
         )
       } catch (err) {

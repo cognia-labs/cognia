@@ -5,6 +5,19 @@ import { handlerPolicyClass } from "../kernel/types.ts"
 const DEFAULT_TIMEOUT_SECS = 5
 const HARD_TIMEOUT_CAP_SECS = 30
 
+export function hookCommandLaunch(
+  command: string,
+  launcher?: readonly string[]
+): { command: string; args: string[]; shell: boolean } {
+  return launcher?.length
+    ? {
+        command: launcher[0]!,
+        args: [...launcher.slice(1), "/bin/sh", "-c", command],
+        shell: false,
+      }
+    : { command, args: [], shell: true }
+}
+
 // --- Handler execution ------------------------------------------------------
 
 /**
@@ -19,7 +32,8 @@ export function runCommandHandler(
   configuredTimeout: number | undefined,
   payloadJson: string,
   signal?: AbortSignal,
-  cwd?: string
+  cwd?: string,
+  sandboxLauncher?: readonly string[]
 ): Promise<HookOutcome> {
   const timeoutSecs = Math.min(
     typeof configuredTimeout === "number" && configuredTimeout > 0
@@ -37,8 +51,9 @@ export function runCommandHandler(
       // path — without Node's per-arg quoting mangling nested quotes.
       // `cwd` is the SESSION working directory, not the sidecar's — hooks that
       // run `git diff` / relative-path checks must see the chat's workspace.
-      child = spawn(command, {
-        shell: true,
+      const launch = hookCommandLaunch(command, sandboxLauncher)
+      child = spawn(launch.command, launch.args, {
+        shell: launch.shell,
         windowsHide: true,
         ...(typeof cwd === "string" && cwd ? { cwd } : {}),
       })
@@ -166,6 +181,7 @@ export function runCommandDetached(
       ...(typeof cwd === "string" && cwd ? { cwd } : {}),
     })
   } catch (e) {
+    deps.finishDetachedPersonalEgress?.()
     return { warning: `async hook failed to spawn: ${errorMessage(e)}` }
   }
 
@@ -183,8 +199,12 @@ export function runCommandDetached(
       error,
     })
   }
-  child.on("error", (e) => report(`async hook crashed: ${errorMessage(e)}`))
+  child.on("error", (e) => {
+    deps.finishDetachedPersonalEgress?.()
+    report(`async hook crashed: ${errorMessage(e)}`)
+  })
   child.on("close", (code) => {
+    deps.finishDetachedPersonalEgress?.()
     if (code !== 0 && code !== null) report(`async hook exited with code ${code}`)
   })
   // stdin stays piped (the payload contract still holds) but a child that

@@ -387,6 +387,7 @@ async function sendWebhookNotification(
   // Deliver to the task's own webhook URL (per-task), signed + with the user's
   // custom default headers.
   const result = await deliverWebhook({
+    credentialContext: personalContext,
     endpoint: {
       id: "task-webhook",
       name: "task",
@@ -400,7 +401,7 @@ async function sendWebhookNotification(
   })
 
   // Also fan the same event out to any standalone egress endpoints.
-  void publishOutboundEvent(event)
+  void publishOutboundEvent(event, personalContext)
 
   void appendWebhookAudit({
     direction: "outbound",

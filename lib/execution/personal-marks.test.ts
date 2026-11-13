@@ -371,3 +371,55 @@ it("does not accept a version from a new output and retains a stored Host versio
     )
   ).toEqual({ personalMarkVersion: 1 })
 })
+
+it("retains committed marks while withholding a failed engine fence", async () => {
+  const { bindPersonalEgressSession } = await import("./personal-egress")
+  const run = await startToolExecutionRun("fence-failure", { localAuthorization: LOCAL_PERSON_RUN })
+  const release = bindPersonalEgressSession({ executionRunId: run.id }, async () => {
+    throw new Error("ACK unavailable")
+  })
+  try {
+    await expect(addPersonalMarksToRun({ executionRunId: run.id }, [mark])).rejects.toThrow(
+      "ACK unavailable"
+    )
+    expect((await getDb().executionRuns.get(run.id))?.personalMarks).toEqual([mark])
+  } finally {
+    release()
+  }
+})
+
+it("H3: an account change during fence ACK withholds the old admission", async () => {
+  const { bindPersonalEgressSession } = await import("./personal-egress")
+  const schema = await import("@/lib/db/schema")
+  const run = await startToolExecutionRun("account-fence", { localAuthorization: LOCAL_PERSON_RUN })
+  const release = bindPersonalEgressSession({ executionRunId: run.id }, async () => {
+    schema.activateAccountDatabase("h3-account-ack")
+  })
+  try {
+    await expect(addPersonalMarksToRun({ executionRunId: run.id }, [mark])).rejects.toThrow(
+      /database changed/
+    )
+  } finally {
+    release()
+    schema.clearAccountDatabaseSelection()
+  }
+})
+
+it("S2 retains exact message producers without borrowing another active run", async () => {
+  const { bindPersonalMessageEgressSource, personalMessageEgressSource } =
+    await import("./personal-marks")
+  const { assertPersonalEgress } = await import("./personal-egress")
+  const run = await startToolExecutionRun("preview-producer", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  bindPersonalMessageEgressSource("preview-message", { executionRunId: run.id })
+  await expect(
+    assertPersonalEgress(await personalMessageEgressSource("preview-message"))
+  ).resolves.toBeUndefined()
+  await addPersonalMarksToRun({ executionRunId: run.id }, [
+    { person: { kind: "local-person" }, source: "test", markedAt: 1 },
+  ])
+  await expect(
+    assertPersonalEgress(await personalMessageEgressSource("preview-message"))
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+})

@@ -1,11 +1,16 @@
+"use client"
+
+import {
+  type PersonalEgressContext,
+  personalEgressOptionsSource,
+  bindPersonalEgressOptions,
+} from "@/lib/execution/personal-egress"
 /**
  * useExternalAgent Hook
  *
  * React hook for managing external agent connections and interactions.
  * Provides a simple interface for connecting to, managing, and executing on external agents.
  */
-
-"use client"
 
 import { useState, useCallback, useEffect, useRef } from "react"
 import { loggers } from "@cognia/logging"
@@ -367,7 +372,10 @@ export interface UseExternalAgentActions {
   /** Get session config options */
   getConfigOptions: () => AcpConfigOption[]
   /** Get agent tools as Cognia AgentTools */
-  getAgentTools: (agentId?: string) => Record<string, AgentTool>
+  getAgentTools: (
+    agentId?: string,
+    personalSource?: PersonalEgressContext
+  ) => Record<string, AgentTool>
   /** Check agent health */
   checkHealth: (agentId: string) => Promise<boolean>
   /** Refresh the agent list */
@@ -1874,6 +1882,7 @@ export function useExternalAgent(scope?: {
       setProgress(0)
       setStreamingResponse("")
       abortControllerRef.current = new AbortController()
+      const personalSource = personalEgressOptionsSource(options)
 
       try {
         const manager = await getManager()
@@ -1917,9 +1926,14 @@ export function useExternalAgent(scope?: {
 
         // Dispatch external agent execution start hook
         const sessionId = resolvedSessionId || ""
-        getPluginEventHooks().dispatchExternalAgentExecutionStart(activeAgentId, sessionId, prompt)
+        getPluginEventHooks().dispatchExternalAgentExecutionStart(
+          activeAgentId,
+          sessionId,
+          prompt,
+          personalSource
+        )
 
-        const result = await manager.execute(activeAgentId, prompt, {
+        const executionOptions = {
           ...options,
           sessionId: resolvedSessionId,
           onProgress: (p: number, message?: string) => {
@@ -1929,7 +1943,14 @@ export function useExternalAgent(scope?: {
           onPermissionRequest,
           onElicitationRequest,
           signal: abortControllerRef.current.signal,
-        })
+        }
+        const result = await manager.execute(
+          activeAgentId,
+          prompt,
+          personalSource
+            ? bindPersonalEgressOptions(executionOptions, personalSource)
+            : executionOptions
+        )
 
         setLastResult(result)
         const nextSessionId = result.sessionId || resolvedSessionId || null
@@ -1946,7 +1967,8 @@ export function useExternalAgent(scope?: {
           activeAgentId,
           nextSessionId || sessionId,
           result.success,
-          result.finalResponse
+          result.finalResponse,
+          personalSource
         )
 
         return result
@@ -1955,8 +1977,8 @@ export function useExternalAgent(scope?: {
         setError(message)
         storeRecordFailure(describeExternalAgentFailure(activeAgentId, "execute", err))
 
-        // Dispatch external agent error hook
-        getPluginEventHooks().dispatchExternalAgentError(activeAgentId, message)
+        // Dispatch external agent error hook with the same producing run.
+        getPluginEventHooks().dispatchExternalAgentError(activeAgentId, message, personalSource)
 
         throw err
       } finally {
@@ -2009,11 +2031,17 @@ export function useExternalAgent(scope?: {
           options?.sessionId || activeSession?.id || executingSessionIdRef.current || undefined
         executingSessionIdRef.current = resolvedSessionId ?? null
 
-        for await (const event of manager.executeStreaming(activeAgentId, prompt, {
+        const streamingOptions = {
           ...options,
           sessionId: resolvedSessionId,
           signal: abortControllerRef.current.signal,
-        })) {
+        }
+        const source = personalEgressOptionsSource(options)
+        for await (const event of manager.executeStreaming(
+          activeAgentId,
+          prompt,
+          source ? bindPersonalEgressOptions(streamingOptions, source) : streamingOptions
+        )) {
           if ("sessionId" in event && typeof event.sessionId === "string") {
             executingSessionIdRef.current = event.sessionId ?? null
           }
@@ -2368,13 +2396,13 @@ export function useExternalAgent(scope?: {
 
   // Get agent tools
   const getAgentTools = useCallback(
-    (agentId?: string): Record<string, AgentTool> => {
+    (agentId?: string, personalSource?: PersonalEgressContext): Record<string, AgentTool> => {
       const targetAgentId = agentId || activeAgentId
       if (!targetAgentId || !managerRef.current) {
         return {}
       }
 
-      return managerRef.current.getAgentTools(targetAgentId)
+      return managerRef.current.getAgentTools(targetAgentId, undefined, personalSource)
     },
     [activeAgentId]
   )

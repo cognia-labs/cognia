@@ -834,3 +834,31 @@ test("portable permission and subagent changes cannot reuse an older session pol
     null
   )
 })
+
+test("fenced and unfenced turns never reuse one live engine session", () => {
+  assert.equal(
+    restartReason({ sendOptions: { personalEgressFenced: false } }, { personalEgressFenced: true }),
+    "personal egress fence changed"
+  )
+  assert.equal(
+    restartReason({ sendOptions: { personalEgressFenced: true } }, {}),
+    "personal egress fence changed"
+  )
+})
+
+test("R2: forwarded hook content carries the Host owner's attempt", () => {
+  const owner = {
+    multiTurn: true,
+    sendOptions: { execution: { identity: { runId: "run", attemptId: "attempt" } } },
+  } as HostSession
+  const frames: Record<string, unknown>[] = []
+  const emit = makeWrappedEmit(
+    (frame) => frames.push(frame),
+    new Map([["s1", owner]]),
+    "s1",
+    () => owner,
+    { id: "turn" }
+  )
+  emit({ type: "event", sessionId: "s1", event: { type: "assistant" } })
+  assert.equal(frames[0]!.attemptId, "attempt")
+})

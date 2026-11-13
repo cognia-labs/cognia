@@ -323,3 +323,12 @@ it("re-admits personal git credentials after agent work and refuses a revoked pu
   expect(deps.executeAgent).toHaveBeenCalledTimes(1)
   expect(deps.commitAndPush).not.toHaveBeenCalled()
 })
+
+it("passes the integration job Host run to the completion owner", async () => {
+  const deps = dependencies()
+  await runGithubIssueLoop(input, context, deps)
+  expect(deps.executeAgent).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.objectContaining({ executionIdentity: { runId: "execution:job:integration:job-1" } })
+  )
+})

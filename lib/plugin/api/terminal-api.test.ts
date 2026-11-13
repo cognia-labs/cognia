@@ -26,8 +26,18 @@ jest.mock("@/lib/terminal/spawn-orchestrator", () => ({
   killFromDock: (...a: unknown[]) => killFromDock(...a),
 }))
 
-const liveSessions = new Map<string, { write: jest.Mock; onData: jest.Mock }>()
+const liveSessions = new Map<
+  string,
+  {
+    write: jest.Mock
+    onData: jest.Mock
+    onExit?: jest.Mock
+    isExited?: boolean
+    processExitConfirmed?: boolean
+  }
+>()
 jest.mock("@/lib/terminal/session-registry", () => ({
+  ...jest.requireActual("@/lib/terminal/session-registry"),
   getLiveSession: (id: string) => liveSessions.get(id),
 }))
 
@@ -283,4 +293,90 @@ describe("createTerminalAPI", () => {
       expect(api.classifyCommand("git status").verdict).toBe("allow")
     })
   })
+})
+
+it.each([false, true])("S2 terminal callbacks gate spawn and stdin (marked=%s)", async (marked) => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  resetPermissionGuard()
+  getPermissionGuard({ confirmDangerousByDefault: false }).registerPlugin(PLUGIN, [
+    "terminal:spawn",
+    "terminal:write",
+  ])
+  spawnFromDock.mockClear()
+  spawnFromDock.mockResolvedValue({ kind: "spawned", sessionId: "s2-terminal", shell: "bash" })
+  addStoreRow("s2-terminal", PLUGIN)
+  const write = jest.fn(async () => undefined)
+  liveSessions.set("s2-terminal", { write, onData: jest.fn() })
+  const api = createTerminalAPI(PLUGIN)
+  await withPluginExecutionContext(
+    PLUGIN,
+    marked ? { personalEgressBlocked: true } : {},
+    async () => {
+      if (marked) {
+        await expect(api.spawn()).rejects.toMatchObject({ code: "personal-egress-denied" })
+        await expect(api.write("s2-terminal", "curl private")).rejects.toMatchObject({
+          code: "personal-egress-denied",
+        })
+        expect(spawnFromDock).not.toHaveBeenCalled()
+        expect(write).not.toHaveBeenCalled()
+      } else {
+        await api.spawn()
+        await api.write("s2-terminal", "echo clear")
+        expect(spawnFromDock).toHaveBeenCalledTimes(1)
+        expect(write).toHaveBeenCalledTimes(1)
+      }
+    }
+  )
+})
+
+it("F5 a real terminal lease survives owner completion and releases on process exit", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+  await fixture.initialize()
+  const { startToolExecutionRun, finishToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  let exit!: () => void
+  const terminal = {
+    write: jest.fn(),
+    onData: jest.fn(),
+    isExited: false,
+    processExitConfirmed: false,
+    onExit: jest.fn((callback) => {
+      exit = callback
+      return () => undefined
+    }),
+  }
+  try {
+    const a = await startToolExecutionRun("f5-terminal-parent", {
+      localAuthorization:
+        LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+    })
+    const b = await startToolExecutionRun("f5-terminal-child", { parentRunId: a.id })
+    getPermissionGuard({ confirmDangerousByDefault: false }).registerPlugin("f5-terminal-plugin", [
+      "terminal:spawn",
+    ])
+    addStoreRow("f5-terminal", "f5-terminal-plugin")
+    liveSessions.set("f5-terminal", terminal)
+    spawnFromDock.mockResolvedValue({ kind: "spawned", sessionId: "f5-terminal", shell: "bash" })
+    const api = createTerminalAPI("f5-terminal-plugin")
+    await withPluginExecutionContext("f5-terminal-plugin", { executionRunId: a.id }, () =>
+      api.spawn()
+    )
+    await finishToolExecutionRun(a.id)
+    const mark = { person: { kind: "local-person" as const }, source: "F5", markedAt: 1 }
+    await expect(addPersonalMarksToRun({ executionRunId: b.id }, [mark])).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
+    terminal.isExited = true
+    terminal.processExitConfirmed = true
+    exit()
+    await expect(addPersonalMarksToRun({ executionRunId: b.id }, [mark])).resolves.toBeUndefined()
+  } finally {
+    terminal.isExited = true
+    terminal.processExitConfirmed = true
+    exit?.()
+    liveSessions.delete("f5-terminal")
+    await fixture.dispose()
+  }
 })

@@ -1,3 +1,4 @@
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
 /**
  * Step executor — runs one node, with retries, timeout, and idempotency.
  * The orchestrator owns the queue + edge logic; this module owns "given a
@@ -125,6 +126,39 @@ export function resolveStepRetryPolicy(
     baseMs: Math.max(0, nodeRetry.retryIntervalMs),
     ...(typeof nodeRetry.maxIntervalMs === "number" ? { maxMs: nodeRetry.maxIntervalMs } : {}),
   }
+}
+
+const OPAQUE_WORKFLOW_NODES = new Set([
+  "io.http",
+  "action.site.deploy",
+  "action.site.rollback",
+  "ocr.extract",
+  "knowledge.source",
+  "knowledge.embed",
+  "knowledge.index",
+  "knowledge.retrieve",
+  "action.twin.ingest",
+  "action.image.info",
+  "action.image.transform",
+  "action.image.adjust",
+  "action.image.convert",
+  "action.media.generateVideo",
+  "action.terminal.script",
+  "action.system.terminal",
+  "action.terminal.session.open",
+  "action.terminal.session.run",
+])
+
+export async function executeWorkflowEgress<T>(
+  ctx: StepExecutionContext,
+  processUnproven: boolean,
+  execute: (ctx: StepExecutionContext) => Promise<T>
+): Promise<T> {
+  return runPersonalEgressOperation(
+    { executionRunId: `execution:workflow:${ctx.runId}` },
+    () => execute(ctx),
+    processUnproven
+  )
 }
 
 export async function runStep(input: RunStepInput): Promise<StepExecution> {
@@ -290,7 +324,15 @@ export async function runStep(input: RunStepInput): Promise<StepExecution> {
         signal,
         async (attemptSignal) => {
           try {
-            return await reg.execute({ ...ctx, signal: attemptSignal })
+            const attemptContext = { ...ctx, signal: attemptSignal }
+            return OPAQUE_WORKFLOW_NODES.has(node.type)
+              ? await executeWorkflowEgress(
+                  attemptContext,
+                  node.type.startsWith("action.terminal.") ||
+                    node.type === "action.system.terminal",
+                  reg.execute
+                )
+              : await reg.execute(attemptContext)
           } finally {
             executionSettled = true
           }

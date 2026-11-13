@@ -1,3 +1,7 @@
+import {
+  bindPersonalOperationOrigin,
+  personalOperationScope,
+} from "@/lib/execution/personal-operation"
 import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Renderer-side IPC handler for `plugin_tool_exec` events from the SDK
@@ -382,18 +386,29 @@ async function runModuleToolCall(
   request: PluginToolExecRequest
 ): Promise<unknown> {
   const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
-  return runContributedTool(tool, request.args, {
-    sessionId: request.sessionId,
-    toolUseId: request.toolUseId,
-    ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
-    executionRunId:
-      toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
-    ...(request.abortSignal ? { signal: request.abortSignal } : {}),
-    ...(request.sandboxRuntimeRef !== undefined
-      ? { sandboxRuntimeRef: request.sandboxRuntimeRef }
-      : {}),
-    outboundAuthorization: toolCallAuthorization(request),
-  })
+  return runContributedTool(
+    tool,
+    request.args,
+    bindPersonalOperationOrigin(
+      {
+        sessionId: request.sessionId,
+        toolUseId: request.toolUseId,
+        ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
+        executionRunId:
+          toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
+        ...(request.abortSignal ? { signal: request.abortSignal } : {}),
+        ...(request.sandboxRuntimeRef !== undefined
+          ? { sandboxRuntimeRef: request.sandboxRuntimeRef }
+          : {}),
+        outboundAuthorization: toolCallAuthorization(request),
+      },
+      {
+        sessionId: request.sessionId,
+        toolUseId: request.toolUseId,
+        scope: personalOperationScope(request.remoteExecutionContext),
+      }
+    )
+  )
 }
 
 async function runPluginToolExec(
@@ -407,12 +422,37 @@ async function runPluginToolExec(
   }
   try {
     request.abortSignal?.throwIfAborted()
+    const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+    const { assertPersonalToolEgress } = await import("@/lib/execution/personal-egress")
+    const declared = findContributedTool(request.name)
+    const preferredOwner = toolOwnerBeforePlugin(request.name)
+    const hostLocalReads = new Set([
+      "list_sessions",
+      "attachment_list",
+      "attachment_search",
+      "attachment_read",
+      "Skill",
+      "load_skill",
+      "load_skill_resource",
+    ])
+    const moduleOwns = declared && preferredOwner === contributedToolPluginId(declared.module)
+    await assertPersonalToolEgress(
+      request.name,
+      {
+        sessionId: request.sessionId,
+        executionRunId:
+          toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
+      },
+      moduleOwns
+        ? declared.declaration.effect === "read"
+        : Boolean(preferredOwner && hostLocalReads.has(request.name)),
+      preferredOwner ? { kind: "host" } : { kind: "unknown" }
+    )
     // ── Module-contributed tools (ADR-0250 §14 amendment) ──────────────────
     // Routed by declared name ahead of every built-in and the plugin
     // registry, so a plugin cannot shadow one; a `precedence: "fallback"`
     // tool waits until the registry has had its turn (below).
     const contributed = findContributedTool(request.name)
-    const preferredOwner = toolOwnerBeforePlugin(request.name)
     if (contributed && preferredOwner === contributedToolPluginId(contributed.module)) {
       const result = await runModuleToolCall(contributed, request)
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
@@ -430,7 +470,20 @@ async function runPluginToolExec(
         request.abortSignal && webDeps.signal
           ? AbortSignal.any([request.abortSignal, webDeps.signal])
           : (request.abortSignal ?? webDeps.signal)
-      const result = await runWebBuiltinTool(request.name, request.args, { ...webDeps, signal })
+      const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+      const result = await runPersonalEgressOperation(
+        {
+          sessionId: request.sessionId,
+          executionRunId: toolCallExecutionRunId(
+            request.sessionId,
+            request.turnId,
+            request.attemptId
+          ),
+        },
+        () => runWebBuiltinTool(request.name, request.args, { ...webDeps, signal }),
+        false,
+        request.name === "web_search" || request.name.endsWith("__web_search")
+      )
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     // ── Independent-session discovery and messaging ──────────────────────
@@ -535,15 +588,28 @@ async function runPluginToolExec(
         )
         try {
           const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
-          const { result } = await invokePluginTool(resolved.pluginId, request.name, request.args, {
-            signal: request.abortSignal,
-            executionRunId:
-              toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
-            sessionId: request.sessionId,
-            sandboxRuntimeRef: request.sandboxRuntimeRef,
-            reason: `chat:plugin_tool_exec:${request.name}`,
-            project: invocationProject.api,
-          })
+          const { result } = await invokePluginTool(
+            resolved.pluginId,
+            request.name,
+            request.args,
+            bindPersonalOperationOrigin(
+              {
+                signal: request.abortSignal,
+                executionRunId:
+                  toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ??
+                  "",
+                sessionId: request.sessionId,
+                sandboxRuntimeRef: request.sandboxRuntimeRef,
+                reason: `chat:plugin_tool_exec:${request.name}`,
+                project: invocationProject.api,
+              },
+              {
+                sessionId: request.sessionId,
+                toolUseId: request.toolUseId,
+                scope: personalOperationScope(request.remoteExecutionContext),
+              }
+            )
+          )
           return {
             ...baseResponse,
             result: assertSafePluginToolResult(result),

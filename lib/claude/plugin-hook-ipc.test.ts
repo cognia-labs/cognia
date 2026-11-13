@@ -276,3 +276,21 @@ it("never treats an uncorrelated Host hook as an owner-outside-dispatch callback
   )
   expect(pluginExecutionContext("bound-owner")).toBeUndefined()
 })
+
+it("R2: hook content uses the Host frame attempt, not payload identity", async () => {
+  const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+  const { pluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  bindToolCallRun("s1", "hook-turn", "private-hook-run", "hook-attempt")
+  resolveMock.mockReturnValue(() => {
+    expect(pluginExecutionContext("p1")).toMatchObject({
+      sessionId: "s1",
+      executionRunId: "private-hook-run",
+    })
+    return {}
+  })
+  await handlePluginHookExec({
+    ...req({ payload: { executionRunId: "forged-clear" } }),
+    turnId: "hook-turn",
+    attemptId: "hook-attempt",
+  } as Parameters<typeof handlePluginHookExec>[0])
+})

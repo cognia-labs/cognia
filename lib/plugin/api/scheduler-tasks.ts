@@ -1,3 +1,5 @@
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin-facing view of the USER's scheduled tasks.
  *
@@ -404,13 +406,16 @@ export async function runUserScheduledTaskNow(
   taskId: string,
   options: PluginSchedulerRunOptions = {}
 ): Promise<TaskExecution | null> {
+  const source = pluginExecutionContext(pluginId) ?? {}
   resolveActor(options.actor)
   const task = await getUserScheduledTask(taskId)
   if (!task) return null
   await assertMutationAllowed(pluginId, task.type, options)
-  return (await store()).runTaskNow(taskId, {
-    triggerSource: options.triggerSource ?? "run-now",
-  })
+  return runPersonalEgressOperation(source, async () =>
+    (await store()).runTaskNow(taskId, {
+      triggerSource: options.triggerSource ?? "run-now",
+    })
+  )
 }
 
 /**

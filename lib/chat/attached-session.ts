@@ -1,3 +1,7 @@
+import {
+  mergePersonalMarks,
+  type PersonalMarkV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
 import type { UIMessage } from "ai"
 import type {
   AttachedChildSession,
@@ -114,6 +118,7 @@ export async function createAttachedSession(
       : preparePersonalHistory(parentSessionId, messages, { session: parent })
 
   let inheritedContent: string | undefined
+  let inheritedMarks: PersonalMarkV1[] = []
   if (input.context.mode === "last-n") {
     const { messages } = await visibleParentHistory(
       (await deps.listMessages(parentSessionId)).map((message) => ({
@@ -121,22 +126,31 @@ export async function createAttachedSession(
         sessionId: parentSessionId,
       }))
     )
-    inheritedContent = renderBranchSeed(messages.slice(-input.context.turns)).content || undefined
+    const kept = messages.slice(-input.context.turns)
+    inheritedMarks = mergePersonalMarks(
+      ...kept.map(
+        (message) =>
+          (message.metadata as { personalMarks?: PersonalMarkV1[] } | undefined)?.personalMarks
+      )
+    )
+    inheritedContent = renderBranchSeed(kept).content || undefined
     if (inheritedContent && !deps.gateInheritedContent(inheritedContent)) {
       throw new Error("The attached-session context was blocked by the PII redaction gate")
     }
   } else if (input.context.mode === "full") {
-    inheritedContent =
-      renderBranchSeed(
-        (
-          await visibleParentHistory(
-            (await deps.listMessages(parentSessionId)).map((message) => ({
-              ...message,
-              sessionId: parentSessionId,
-            }))
-          )
-        ).messages
-      ).content || undefined
+    const { messages } = await visibleParentHistory(
+      (await deps.listMessages(parentSessionId)).map((message) => ({
+        ...message,
+        sessionId: parentSessionId,
+      }))
+    )
+    inheritedMarks = mergePersonalMarks(
+      ...messages.map(
+        (message) =>
+          (message.metadata as { personalMarks?: PersonalMarkV1[] } | undefined)?.personalMarks
+      )
+    )
+    inheritedContent = renderBranchSeed(messages).content || undefined
     if (inheritedContent && !deps.gateInheritedContent(inheritedContent)) {
       throw new Error("The attached-session context was blocked by the PII redaction gate")
     }
@@ -175,7 +189,11 @@ export async function createAttachedSession(
   // edits or truncation of the persisted transcript. Gating our local mirror
   // cannot certify that opaque history, so inherit only the gated rendering.
   if (inheritedContent) {
-    patch.branchSeed = { kind: "transcript", content: inheritedContent }
+    patch.branchSeed = {
+      kind: "transcript",
+      content: inheritedContent,
+      ...(inheritedMarks.length ? { personalMarks: inheritedMarks } : {}),
+    }
   }
   try {
     await deps.updateSession(child.id, patch)

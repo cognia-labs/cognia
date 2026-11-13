@@ -146,3 +146,35 @@ it("rejects save suggestions that try to expose a filesystem path", async () => 
   ).rejects.toThrow("without a path")
   expect(save).not.toHaveBeenCalled()
 })
+
+it("Q1 marked message attachment bytes are withheld while picker handles stay unchanged", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+  await fixture.initialize()
+  try {
+    const { getDb } = await import("@/lib/db/schema")
+    const { bindPluginAttachmentMessage } = await import("./files-api")
+    const file = {
+      name: "private.txt",
+      mimeType: "text/plain",
+      size: 1,
+      bytes: new Uint8Array([7]),
+    }
+    const handle = authorizePluginAttachment("office", file)
+    expect(await createFilesAPI("office").readAttachment(handle)).toMatchObject(file)
+    await getDb().messages.put({
+      id: "q1-attachment",
+      sessionId: "q1",
+      role: "user",
+      parts: [],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "Q1", markedAt: 1 }],
+      },
+    } as never)
+    bindPluginAttachmentMessage(handle, "q1-attachment")
+    const hidden = await createFilesAPI("office").readAttachment(handle)
+    expect(hidden.bytes).toHaveLength(0)
+    expect(hidden.name).not.toContain("private")
+  } finally {
+    await fixture.dispose()
+  }
+})

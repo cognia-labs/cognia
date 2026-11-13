@@ -1317,6 +1317,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // This is a Host dispatch reference, never an identity supplied by messages.
   const historySessionId = ctx.session?.id
   const historyRunId = ctx.personalCredentialContext?.executionRunId ?? ctx.executionIdentity?.runId
+  const { personalEgressFenced } = await import("@/lib/execution/personal-egress")
   let personalContextReadersDigest: string | undefined
   const historyText = async (
     id: string,
@@ -3942,9 +3943,27 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const sandboxBinding = hostContainer
     ? { ...ladderBinding, shellTier: "container" as const }
     : ladderBinding
+  const personalNetworkOff = await personalEgressFenced({
+    sessionId: historySessionId,
+    executionRunId: historyRunId ?? "",
+  })
+  opts.personalEgressFenced = personalNetworkOff
+  const { declaredModuleTools } = await import("@/lib/modules/tool-declarations")
+  opts.personalEgressReadTools = declaredModuleTools()
+    .filter(
+      (tool) =>
+        tool.declaration.effect === "read" &&
+        !/(browser|fetch|clone|shell|process|terminal|code|python)/i.test(tool.name)
+    )
+    .map((tool) => `mcp__cognia-plugin-tools__${tool.name}`)
+  opts.personalEgressReadTools.push(
+    ...listBuiltinTools()
+      .filter((tool) => tool.name === "read")
+      .map((tool) => namespaced(tool.name))
+  )
   const resolvedSandboxPolicy =
     clampSandboxPolicy(
-      asideSandboxCeiling,
+      personalNetworkOff ? { ...asideSandboxCeiling, network: "off" } : asideSandboxCeiling,
       character?.sandboxPolicy ?? appSettings?.sandboxPolicy
     ) ?? null
   const computerUseNeedsConfine =
@@ -3952,6 +3971,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   if (session?.id && (sandboxEnabled || computerUseAllowedForChat)) {
     const bindInput = {
       sessionId: session.id,
+      executionRunId: historyRunId,
       // A character-scoped managed desktop delegation (ADR-0233 A5) names the
       // character, so the Host can match calls from any of its sessions.
       characterId: character?.id,
@@ -3979,6 +3999,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
     try {
       opts.sandboxRuntimeRef = await sandboxSessionRuntime.bindSession(bindInput)
+      if (sandboxSessionRuntime.enforcesNetworkOff(opts.sandboxRuntimeRef))
+        opts.personalEgressReadTools.push("mcp__cognia-plugin-tools__sandbox_bash")
     } catch (err) {
       // An unusable placement must not take the whole send down with it. The
       // binding can be refused by state the user changed elsewhere — a deleted
@@ -4782,13 +4804,16 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // first one's output instead of both racing to overwrite the same input, and
   // `sessionId` is invariant across it.
   if (session?.id) {
-    const patched = await getPluginEventHooks().dispatchBuildOptions({
-      sessionId: session.id,
-      model: opts.model ?? "",
-      systemPrompt: opts.systemPrompt,
-      appendSystemPrompt: opts.appendSystemPrompt,
-      allowedTools: opts.allowedTools,
-    })
+    const patched = await getPluginEventHooks().dispatchBuildOptions(
+      {
+        sessionId: session.id,
+        model: opts.model ?? "",
+        systemPrompt: opts.systemPrompt,
+        appendSystemPrompt: opts.appendSystemPrompt,
+        allowedTools: opts.allowedTools,
+      },
+      { sessionId: session.id, executionRunId: historyRunId }
+    )
     if (patched.model) opts.model = patched.model
     if (patched.systemPrompt !== undefined) opts.systemPrompt = patched.systemPrompt
     if (patched.appendSystemPrompt !== undefined)

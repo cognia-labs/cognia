@@ -158,7 +158,7 @@ import {
 } from "./claude-chat-turn-tasks"
 import type { SendFn } from "./claude-chat-turn-tasks"
 import { closeOpenToolParts, hasOpenToolParts } from "@/lib/chat/phantom-run"
-import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
+import { toolCallExecutionRunId, toolCallEgressRunId } from "@/lib/execution/acting-authority"
 import { contextSourcesOf } from "@/lib/claude/context-sources"
 
 async function settleChatTranscript(
@@ -917,7 +917,16 @@ export async function handleEvent(
       // the request falls through to the user with its original input.
       const perCall = evt.requiresPerCallApproval === true
       {
-        const pre = await dispatchPluginPreToolUse(evt.toolName, evt.input, evt.sessionId)
+        const pre = await dispatchPluginPreToolUse(
+          evt.toolName,
+          evt.input,
+          evt.sessionId,
+          evt.nativeTool,
+          {
+            sessionId: evt.sessionId,
+            executionRunId: toolCallEgressRunId(evt.sessionId, frame.turnId, frame.attemptId),
+          }
+        )
         if (pre.action === "deny") {
           try {
             await approveTool(
@@ -1140,7 +1149,11 @@ export async function handleEvent(
           call?.input ?? {},
           evt.result,
           evt.sessionId,
-          { isError: evt.isError, ...(frame.turnId ? { turnId: frame.turnId } : {}) }
+          { isError: evt.isError, ...(frame.turnId ? { turnId: frame.turnId } : {}) },
+          {
+            sessionId: evt.sessionId,
+            executionRunId: toolCallEgressRunId(evt.sessionId, frame.turnId, frame.attemptId),
+          }
         )
         updatedToolOutput = post.modifiedResult
       } catch {

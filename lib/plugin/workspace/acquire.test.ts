@@ -507,3 +507,14 @@ describe("headless host cache provisioning", () => {
     expect(mkdir).not.toHaveBeenCalled()
   })
 })
+
+it("S2 rechecks plugin provenance at the final Git fetch callback", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  await withPluginExecutionContext("s2-acquire", { personalEgressBlocked: true }, async () => {
+    await expect(
+      defaultAcquireDeps("s2-acquire", () => []).fetchAll!("/work")
+    ).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
+  })
+})

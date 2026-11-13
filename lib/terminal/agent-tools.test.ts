@@ -100,9 +100,28 @@ describe("the terminal tool family's run", () => {
           "Command was sent to session t1 and may still be running. Completion cannot be observed. Do not send it again.",
       }
       jest.mocked(runTerminalDockAction).mockResolvedValue(failure)
-      const result = await toolFamily.run(name, { tabId: "t1", command: "deploy" }, call)
-      expect(result).toEqual(failure)
-      expect(runTerminalDockAction).toHaveBeenCalledTimes(1)
+      // Spawn and write pass the personal-egress fence, which needs a real,
+      // clean run; an unknown run id fails closed.
+      const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+      const fixture = createDbTestFixture()
+      await fixture.initialize()
+      try {
+        const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+          await import("@/lib/execution/acting-authority")
+        const run = await startToolExecutionRun(call.sessionId, {
+          localAuthorization:
+            LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+        })
+        const result = await toolFamily.run(
+          name,
+          { tabId: "t1", command: "deploy" },
+          { ...call, executionRunId: run.id }
+        )
+        expect(result).toEqual(failure)
+        expect(runTerminalDockAction).toHaveBeenCalledTimes(1)
+      } finally {
+        await fixture.dispose()
+      }
     }
   )
 
@@ -113,6 +132,7 @@ describe("the terminal tool family's run", () => {
       action: "read_recent",
       args: { tabId: "t1" },
       chatSessionId: "sess-1",
+      credentialContext: call,
     })
     expect(result).toEqual({ ok: true, records: [] })
   })
@@ -125,3 +145,83 @@ describe("the terminal tool family's run", () => {
     expect(runTerminalDockAction).not.toHaveBeenCalled()
   })
 })
+
+it.each(["terminal_dock_spawn", "terminal_dock_write"])(
+  "S2 fences opaque dock %s before the PTY callback",
+  async (name) => {
+    await expect(
+      toolFamily.run(name, {}, Object.assign({ ...call }, { personalEgressBlocked: true }))
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    expect(runTerminalDockAction).not.toHaveBeenCalled()
+  }
+)
+
+it.each([
+  {
+    name: "terminal_dock_spawn",
+    result: { ok: false, reason: "timeout", sessionId: "f5-dock-timeout" },
+  },
+  {
+    name: "terminal_dock_spawn",
+    result: { ok: true, exitCode: 0, sessionId: "f5-dock-completed" },
+  },
+  {
+    name: "terminal_dock_write",
+    result: { ok: false, reason: "timeout", sessionId: "f5-dock-write" },
+  },
+])(
+  "F5 $name retains live PTY after result $result.sessionId until exit",
+  async ({ name, result }) => {
+    const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+    const fixture = createDbTestFixture()
+    await fixture.initialize()
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+    const { readRunPersonalTaint } = await import("@/lib/execution/personal-sink")
+    const { registerLiveSession, unregisterLiveSession } = await import("./session-registry")
+    const parent = await startToolExecutionRun("f5-dock-parent", {
+      localAuthorization:
+        LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+    })
+    const owner = await startToolExecutionRun(call.sessionId, { parentRunId: parent.id })
+    const sibling = await startToolExecutionRun("f5-dock-sibling", { parentRunId: parent.id })
+    let exited = false
+    const listeners = new Set<() => void>()
+    registerLiveSession({
+      id: result.sessionId,
+      get isExited() {
+        return exited
+      },
+      get processExitConfirmed() {
+        return exited
+      },
+      onExit: (listener: () => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    } as never)
+    jest.mocked(runTerminalDockAction).mockResolvedValue(result as never)
+    const mark = { person: { kind: "local-person" as const }, source: "F5", markedAt: 1 }
+    try {
+      await toolFamily.run(name, {}, { ...call, executionRunId: owner.id })
+      expect(await readRunPersonalTaint({ executionRunId: sibling.id })).toMatchObject({
+        verified: true,
+        marks: [],
+      })
+      await expect(
+        addPersonalMarksToRun({ executionRunId: sibling.id }, [mark])
+      ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      exited = true
+      for (const listener of listeners) listener()
+      await expect(
+        addPersonalMarksToRun({ executionRunId: sibling.id }, [mark])
+      ).resolves.toBeUndefined()
+    } finally {
+      exited = true
+      for (const listener of listeners) listener()
+      unregisterLiveSession(result.sessionId)
+      await fixture.dispose()
+    }
+  }
+)

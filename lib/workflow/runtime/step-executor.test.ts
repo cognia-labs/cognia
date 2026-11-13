@@ -3,7 +3,12 @@
  */
 import "fake-indexeddb/auto"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
-import { resolveStepRetryPolicy, runStep, type RunStepInput } from "./step-executor"
+import {
+  resolveStepRetryPolicy,
+  runStep,
+  executeWorkflowEgress,
+  type RunStepInput,
+} from "./step-executor"
 import "@/lib/workflow/nodes/data/flow"
 import { getExecutor, registerNodeExecutor } from "@/lib/workflow/nodes/registry"
 import { IdempotencyCache } from "./idempotency"
@@ -77,6 +82,18 @@ async function buildInput(opts: {
   securityContext?: RunStepInput["securityContext"]
 }): Promise<RunStepInput> {
   const runId = "run_1"
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const source = await startToolExecutionRun("workflow-step-fixture", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const id = `execution:workflow:${runId}`
+  await getDb().executionRuns.put({
+    ...source,
+    id,
+    actingIdentity: { ...source.actingIdentity!, rootRunId: id },
+  })
   return {
     workflow: makeWorkflow(opts.pinData),
     node,
@@ -285,8 +302,20 @@ describe("circuit breaker integration", () => {
       },
     }
 
-    const run = async (runId: string) =>
-      runStep({
+    const run = async (runId: string) => {
+      const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+        await import("@/lib/execution/acting-authority")
+      const source = await startToolExecutionRun(`circuit:${runId}`, {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      const id = `execution:workflow:${runId}`
+      await getDb().executionRuns.put({
+        ...source,
+        id,
+        actingIdentity: { ...source.actingIdentity!, rootRunId: id },
+      })
+      return runStep({
         workflow: { ...makeWorkflow(), nodes: [cbNode] },
         node: cbNode,
         trigger,
@@ -298,6 +327,7 @@ describe("circuit breaker integration", () => {
         secretResolver: NoopSecretResolver,
         logger: createRunLogger(runId),
       })
+    }
 
     await expect(run("cb_1")).rejects.toThrow("boom")
     await expect(run("cb_2")).rejects.toThrow("boom")
@@ -741,4 +771,29 @@ describe("version-specific node params", () => {
     await expect(runStep(input)).rejects.toThrow(/Invalid params.*conditions/i)
     expect(execute).not.toHaveBeenCalled()
   })
+})
+
+it("S2 workflow URL attempt gate uses the canonical live run and preserves clear dispatch", async () => {
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const run = await startToolExecutionRun("s2-workflow-source", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const id = "execution:workflow:s2-workflow"
+  await getDb().executionRuns.put({
+    ...run,
+    id,
+    actingIdentity: { ...run.actingIdentity!, rootRunId: id },
+  })
+  const ctx = { runId: "s2-workflow" } as StepExecutionContext
+  const execute = jest.fn(async () => ({ output: "sent" }))
+  await expect(executeWorkflowEgress(ctx, false, execute)).resolves.toEqual({ output: "sent" })
+  await getDb().executionRuns.update(id, {
+    personalMarks: [{ person: { kind: "local-person" }, source: "s2", markedAt: 1 }],
+  })
+  await expect(executeWorkflowEgress(ctx, false, execute)).rejects.toMatchObject({
+    code: "personal-egress-denied",
+  })
+  expect(execute).toHaveBeenCalledTimes(1)
 })

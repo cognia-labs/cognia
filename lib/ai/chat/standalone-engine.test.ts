@@ -1087,7 +1087,16 @@ describe("runStandaloneTurn with the real AI SDK stream (webview runtime)", () =
         pointId: "agent.turn.decide",
         semantic: "guard",
         source: "interceptors",
-        handler: (() => ({ decision: "deny", reason: "Turn denied by policy" })) as never,
+        handler: (() => {
+          const { pluginExecutionContext } = jest.requireActual(
+            "@/lib/plugin/core/invocation-identity"
+          )
+          expect(pluginExecutionContext("guard")).toMatchObject({
+            sessionId: "s1",
+            executionRunId: "standalone-private-run",
+          })
+          return { decision: "deny", reason: "Turn denied by policy" }
+        }) as never,
       })
     )
     const doStream = jest.fn(async () => {
@@ -1095,7 +1104,11 @@ describe("runStandaloneTurn with the real AI SDK stream (webview runtime)", () =
     })
     mockModel.mockReturnValueOnce(new MockLanguageModelV4({ doStream }) as never)
     const consoleError = jest.spyOn(console, "error").mockImplementation(() => {})
-    const { events, promise } = run({ messages: history, streamTextImpl: actualAi.streamText })
+    const { events, promise } = run({
+      messages: history,
+      executionRunId: "standalone-private-run",
+      streamTextImpl: actualAi.streamText,
+    })
     await promise
     expect(doStream).not.toHaveBeenCalled()
     expect(events.at(-1)).toMatchObject({
@@ -1114,6 +1127,13 @@ describe("runStandaloneTurn with the real AI SDK stream (webview runtime)", () =
         source: "interceptors",
         failurePolicy: "fail-closed",
         handler: (() => {
+          const { pluginExecutionContext } = jest.requireActual(
+            "@/lib/plugin/core/invocation-identity"
+          )
+          expect(pluginExecutionContext("projector")).toMatchObject({
+            sessionId: "s1",
+            executionRunId: "stream-private-run",
+          })
           throw new Error("projection refused")
         }) as never,
       })
@@ -1121,7 +1141,11 @@ describe("runStandaloneTurn with the real AI SDK stream (webview runtime)", () =
     const model = abortableStreamModel()
     const dispatch = jest.spyOn(model, "doStream")
     mockModel.mockReturnValueOnce(model as never)
-    const { events, promise } = run({ messages: history, streamTextImpl: actualAi.streamText })
+    const { events, promise } = run({
+      messages: history,
+      executionRunId: "stream-private-run",
+      streamTextImpl: actualAi.streamText,
+    })
     await promise
     expect(dispatch.mock.calls[0][0].abortSignal?.aborted).toBe(true)
     expect(events.at(-1)).toMatchObject({

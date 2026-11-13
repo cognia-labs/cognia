@@ -129,6 +129,8 @@ describe("runPluginAgent", () => {
     })
     expect(res.text).toBe("ok")
     expect(typeof res.agentId).toBe("string")
+    const { personalEgressOptionsSource } = await import("@/lib/execution/personal-egress")
+    expect(personalEgressOptionsSource(res)?.executionRunId).toBe(`execution:job:${res.agentId}`)
     const cfg = mockExecute.mock.calls[0][1]!
     expect(cfg).toMatchObject({
       systemPrompt: "S",

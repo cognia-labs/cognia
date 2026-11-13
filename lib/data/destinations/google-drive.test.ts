@@ -328,3 +328,14 @@ it.each(["list", "download"])("drops a stale %s result", async (operation) => {
       : downloadGoogleDriveSnapshot("snapshot", { http, config: { ...config, folderId: "folder" } })
   ).rejects.toBe(stale)
 })
+
+it("S2 rechecks the exact producer after acquiring a Drive lease", async () => {
+  const api = makeDrive()
+  const result = await uploadSnapshotToGoogleDrive("ciphertext", meta, {
+    config,
+    http: api.http,
+    credentialContext: { personalEgressBlocked: true },
+  })
+  expect(result.ok).toBe(false)
+  expect(api.calls).toHaveLength(0)
+})

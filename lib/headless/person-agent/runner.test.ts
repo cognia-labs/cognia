@@ -1,3 +1,6 @@
+import "fake-indexeddb/auto"
+import { personalEgressOptionsSource } from "@/lib/execution/personal-egress"
+import { hostStateRunId } from "@/lib/work-submission/host-adapter"
 import type { ExternalAgentEvent } from "@/types/agent/external-agent"
 import type { TranscriptLiveFrame } from "@/lib/chat/transcript/live-frames"
 import { ExecutionBroker } from "@/lib/execution/broker"
@@ -987,4 +990,168 @@ describe("person agent runner execution-broker lease", () => {
     expect(h.settled).toEqual([expect.objectContaining({ actionId: "a1", outcome: "cancelled" })])
     expect(h.broker.countRunning()).toBe(0)
   })
+})
+
+it("R10 runner binds its action Host run and preserves clean replay", async () => {
+  const h = harness()
+  h.turns.push(replyTurn())
+  await h.runner.startTurn(request())
+  await drain()
+  const options = h.manager.executeStreaming.mock.calls[0]?.[2]
+  expect(personalEgressOptionsSource(options)).toEqual({
+    sessionId: "s1",
+    executionRunId: hostStateRunId("a1"),
+  })
+  expect(options?.context?.custom?.conversationHistory).toBe("User: earlier\n\nAssistant: reply")
+  expect(h.settled).toEqual([{ actionId: "a1", outcome: "completed", errorCode: undefined }])
+  await h.runner.closeAll()
+})
+
+it("R10 real runner settles clean replay, refuses marked ACP, and fences Codex before tool reuse", async () => {
+  const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+  const { getDb } = await import("@/lib/db/schema")
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
+  const { ExternalAgentManager } = await import("@/lib/ai/agent/external/manager")
+  const { BaseProtocolAdapter, protocolAdapterRegistry } =
+    await import("@/lib/ai/agent/external/protocol-adapter")
+  type Config = import("@/types/agent/external-agent").ExternalAgentConfig
+  type Message = import("@/types/agent/external-agent").ExternalAgentMessage
+  type Options = import("@/types/agent/external-agent").ExternalAgentExecutionOptions
+  type Session = import("@/types/agent/external-agent").ExternalAgentSession
+  type CreateOptions = import("@/lib/ai/agent/external/protocol-adapter").SessionCreateOptions
+  class RecordingAdapter extends BaseProtocolAdapter {
+    readonly protocol = "test"
+    lastMessage?: Message
+    lastOptions?: Options
+    lastSessionOptions?: CreateOptions
+    async connect(config: Config) {
+      this._config = config
+      this._connectionStatus = "connected"
+    }
+    async disconnect() {
+      this._connectionStatus = "disconnected"
+      this._sessions.clear()
+    }
+    async createSession(options?: CreateOptions): Promise<Session> {
+      this.lastSessionOptions = options
+      const session: Session = {
+        id: this.generateSessionId(),
+        agentId: this._config!.id,
+        status: "active",
+        createdAt: new Date(),
+        lastActivityAt: new Date(),
+        messages: [],
+        permissionMode: "default",
+        metadata: options?.metadata,
+      }
+      this._sessions.set(session.id, session)
+      return session
+    }
+    async closeSession(id: string) {
+      this._sessions.delete(id)
+    }
+    async *prompt(id: string, message: Message, options?: Options) {
+      this.lastMessage = message
+      this.lastOptions = options
+      yield event({ type: "message_delta", sessionId: id, delta: { type: "text", text: "reply" } })
+      yield event({ type: "done", sessionId: id, success: true, stopReason: "end_turn" })
+    }
+    async respondToPermission() {}
+    async cancel() {}
+  }
+  const fixture = createDbTestFixture({ seeded: false })
+  await fixture.initialize()
+  try {
+    for (const [index, protocol, marked] of [
+      [0, "acp", false],
+      [1, "acp", true],
+      [2, "codex-app-server", true],
+    ] as const) {
+      ExternalAgentManager.resetInstance()
+      const manager = ExternalAgentManager.getInstance({ healthCheckInterval: 0 })
+      const adapter = new RecordingAdapter()
+      protocolAdapterRegistry.register(protocol, () => adapter)
+      const h = harness()
+      h.deps.manager = manager
+      h.deps.launchFor = () => ({
+        config: {
+          id: "r10",
+          name: "R10",
+          protocol,
+          transport: "http",
+          process: { command: "test", args: [] },
+          enabled: true,
+          timeout: 100,
+          retryConfig: {
+            maxRetries: 0,
+            retryDelay: 0,
+            exponentialBackoff: false,
+            maxRetryDelay: 0,
+            retryOnErrors: [],
+          },
+        } as Config,
+        family: "test",
+      })
+      const sessionId = `r10-person-${index}`,
+        actionId = `r10-action-${index}`
+      const run = await startToolExecutionRun(sessionId, {
+        runId: hostStateRunId(actionId),
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      const message = {
+        id: `r10-message-${index}`,
+        sessionId,
+        role: "user",
+        parts: [{ type: "text", text: "replayed history" }],
+        metadata: {
+          personalMarkVersion: 1,
+          ...(marked
+            ? { personalMarks: [{ person: { kind: "local-person" }, source: "R10", markedAt: 1 }] }
+            : {}),
+        },
+      }
+      await getDb().messages.put(message as never)
+      let replay = ""
+      h.deps.history = async () => {
+        const prepared = await preparePersonalHistory(sessionId, [message as never], {
+          executionRunId: run.id,
+        })
+        replay = JSON.stringify(prepared.messages)
+        return {
+          text: replay,
+          visibilityDigest: prepared.visibilityDigest,
+          hasWithheld: !!prepared.withheldMessageIds.length,
+        }
+      }
+      try {
+        await h.runner.startTurn(request({ session: { id: sessionId }, actionId, prompt: "next" }))
+        for (let attempt = 0; !h.settled.length && attempt < 200; attempt++)
+          await new Promise((resolve) => setTimeout(resolve, 1))
+        expect(h.settled).toEqual([
+          {
+            actionId,
+            outcome: marked && protocol === "acp" ? "failed" : "completed",
+            errorCode: marked && protocol === "acp" ? "personal-egress-denied" : undefined,
+          },
+        ])
+        if (marked && protocol === "acp") expect(adapter.lastMessage).toBeUndefined()
+        else {
+          expect(adapter.lastMessage?.content).toEqual([{ type: "text", text: "next" }])
+          expect(adapter.lastOptions?.context?.custom?.conversationHistory).toBe(replay)
+          expect(replay).toContain("replayed history")
+          expect(adapter.lastSessionOptions?.metadata).toMatchObject({
+            personalEgressFenced: marked,
+          })
+        }
+      } finally {
+        await h.runner.closeAll()
+        await manager.dispose()
+      }
+    }
+  } finally {
+    await fixture.dispose()
+  }
 })

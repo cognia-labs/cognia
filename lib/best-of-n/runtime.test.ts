@@ -1,3 +1,4 @@
+import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 import type { BestOfNGroup } from "@/types/best-of-n"
 import type { BestOfNInput } from "./core"
 import type { SendOptions } from "@cognia/agent-config-types"
@@ -490,6 +491,7 @@ it("runs an external candidate in its own workspace root and keeps its cost unkn
   expect(external).toHaveBeenCalledWith(
     expect.objectContaining({
       configId: "codex-1",
+      personalContext: { executionRunId: childJobExecutionRunId(codex.candidateId) },
       model: "gpt-5",
       prompt: "Fix this",
       workingDirectory: "/physical",

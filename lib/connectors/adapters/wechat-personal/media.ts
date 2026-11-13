@@ -1,3 +1,8 @@
+import {
+  runPersonalEgressOperation,
+  PersonalEgressDeniedError,
+  type PersonalEgressContext,
+} from "@/lib/execution/personal-egress"
 /**
  * iLink media decryption — AES-128-ECB + PKCS7.
  *
@@ -280,6 +285,7 @@ export class IlinkMediaError extends Error {
 
 /** Upload bytes without publishing a message. The returned item is ready for sendmessage. */
 export async function uploadIlinkMedia(input: {
+  credentialContext?: PersonalEgressContext
   adapterId: string
   baseUrl: string
   token: string
@@ -326,11 +332,13 @@ export async function uploadIlinkMedia(input: {
       throw new IlinkMediaError(
         "iLink media requires an HTTP URL, local file URI, or inline base64 bytes"
       )
-    plain = await fetchAndDecryptIlinkMediaViaTauri({
-      adapterId: input.adapterId,
-      url: segment.url,
-      fetchAttachment: tauri.fetchAttachment,
-    })
+    plain = await runPersonalEgressOperation(input.credentialContext ?? {}, () =>
+      fetchAndDecryptIlinkMediaViaTauri({
+        adapterId: input.adapterId,
+        url: segment.url,
+        fetchAttachment: tauri.fetchAttachment,
+      })
+    )
   }
   if (plain.length === 0 || plain.length > ILINK_MEDIA_MAX_BYTES)
     throw new IlinkMediaError("iLink media must contain 1 byte to 20 MiB")
@@ -396,6 +404,7 @@ export async function uploadIlinkMedia(input: {
       if (!downloadParam) throw new IlinkMediaError("CDN upload omitted x-encrypted-param", true)
       break
     } catch (error) {
+      if (error instanceof PersonalEgressDeniedError) throw error
       if ((error instanceof IlinkMediaError && !error.retryable) || attempt === 2) throw error
     }
   }

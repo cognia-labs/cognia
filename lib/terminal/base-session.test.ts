@@ -54,8 +54,8 @@ class TestableTerminalSession extends BaseTerminalSession {
     this.dispatchIntegration(event)
   }
 
-  pushExit(code: number | null): void {
-    this.handleExit(code)
+  pushExit(code: number | null, confirmed = true): void {
+    this.handleExit(code, confirmed)
   }
 
   pushReplayGap(): void {
@@ -480,4 +480,13 @@ describe("BaseTerminalSession session snapshots (ADR-0133)", () => {
   it("reports an empty roster for hosts that predate participants", () => {
     expect(makeSession().participants).toEqual([])
   })
+})
+
+it("F5 transport closure does not confirm process exit, but a later Host exit does", () => {
+  const session = new TestableTerminalSession(info)
+  session.pushExit(null, false)
+  expect(session.isExited).toBe(true)
+  expect(session.processExitConfirmed).toBe(false)
+  session.pushExit(null)
+  expect(session.processExitConfirmed).toBe(true)
 })

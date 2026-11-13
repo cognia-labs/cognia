@@ -562,3 +562,19 @@ it("keeps the Host invocation on fanout cards before asynchronous origin lookup"
     })
   )
 })
+
+it("S2 workflow author callback refuses a marked producer before starting a new run", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  const api = createWorkflowAuthorAPI("s2-workflow")
+  jest.mocked(runWorkflow).mockClear()
+  await expect(
+    withPluginExecutionContext("s2-workflow", { personalEgressBlocked: true }, () =>
+      api.runWorkflow({} as never)
+    )
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(runWorkflow).not.toHaveBeenCalled()
+  jest.mocked(runWorkflow).mockResolvedValue({ status: "succeeded" } as never)
+  await expect(
+    withPluginExecutionContext("s2-workflow", {}, () => api.runWorkflow({} as never))
+  ).resolves.toMatchObject({ status: "succeeded" })
+})

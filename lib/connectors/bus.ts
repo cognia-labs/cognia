@@ -1,3 +1,4 @@
+import type { AdapterSendOptions } from "@/types/connectors/adapter"
 import * as personalSinkHost from "@/lib/execution/personal-sink"
 import { connectorRequester, recordAbsorbedRequester } from "@/lib/execution/acting-authority"
 import { publishTopic } from "@/lib/runtime/topics"
@@ -2810,7 +2811,11 @@ export class ConnectorBus {
     if (failed?.status === "rejected") throw failed.reason
   }
 
-  async sendOutbound(adapterId: string, req: OutboundRequest): Promise<OutboundResult> {
+  async sendOutbound(
+    adapterId: string,
+    req: OutboundRequest,
+    options?: AdapterSendOptions
+  ): Promise<OutboundResult> {
     const a = this.adapters.get(adapterId)
     if (!a) {
       const result: OutboundResult = {
@@ -2843,7 +2848,7 @@ export class ConnectorBus {
       }
     }
     try {
-      const result = await a.send(req)
+      const result = await (options ? a.send(req, options) : a.send(req))
       void trackEvent("connector.message.sent", {
         adapterId,
         platform: a.meta.type,

@@ -374,3 +374,88 @@ describe("Extension API", () => {
     })
   })
 })
+
+it("R11 extension conditions refuse synchronously while their composite proof is cold", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const condition = jest.fn(() => true)
+  try {
+    createExtensionAPI("r11-extension").registerExtension("chat.header", () => null, { condition })
+    const callback = bindPluginCallbacks("r11-extension", condition, () => ({
+      executionRunId: "r11-cold",
+    }))
+    expect(callback()).toBe(false)
+    expect(condition).not.toHaveBeenCalled()
+  } finally {
+    restore()
+  }
+})
+
+it("R11 registered class renderer stays empty while cold and mounts after proof", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const { renderToStaticMarkup } = await import("react-dom/server")
+  let cold = true
+  const restore = configurePersonalDispatchFence(() => (cold ? undefined : false))
+  const constructed = jest.fn()
+  const rendered = jest.fn()
+  class Guest extends React.Component<ExtensionProps> {
+    constructor(props: ExtensionProps) {
+      super(props)
+      constructed()
+    }
+    render() {
+      rendered()
+      return React.createElement("span", null, "R11 class content")
+    }
+  }
+  const api = createExtensionAPI("r11-class")
+  const component = bindPluginCallbacks("r11-class", Guest, () => ({ executionRunId: "r11-cold" }))
+  const off = api.registerExtension("chat.header", component)
+  try {
+    const registered = api
+      .getExtensions("chat.header")
+      .find((row) => row.pluginId === "r11-class")!.component
+    expect(renderToStaticMarkup(React.createElement(registered, {} as ExtensionProps))).toBe("")
+    expect(constructed).not.toHaveBeenCalled()
+    expect(rendered).not.toHaveBeenCalled()
+    cold = false
+    expect(renderToStaticMarkup(React.createElement(registered, {} as ExtensionProps))).toContain(
+      "R11 class content"
+    )
+    expect(constructed).toHaveBeenCalledTimes(1)
+    expect(rendered).toHaveBeenCalledTimes(1)
+  } finally {
+    off()
+    restore()
+  }
+})
+
+it("R11 function renderer preserves arrays containing class elements", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const { renderToStaticMarkup } = await import("react-dom/server")
+  const restore = configurePersonalDispatchFence(() => false)
+  class Child extends React.Component {
+    render() {
+      return React.createElement("b", null, "array child")
+    }
+  }
+  const component = bindPluginCallbacks("r11-array", () => [
+    React.createElement(Child, { key: "child" }),
+  ])
+  const api = createExtensionAPI("r11-array")
+  const off = api.registerExtension("chat.header", component)
+  try {
+    const registered = api
+      .getExtensions("chat.header")
+      .find((row) => row.pluginId === "r11-array")!.component
+    expect(renderToStaticMarkup(React.createElement(registered, {} as ExtensionProps))).toContain(
+      "array child"
+    )
+  } finally {
+    off()
+    restore()
+  }
+})

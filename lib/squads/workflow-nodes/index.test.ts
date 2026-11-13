@@ -690,3 +690,24 @@ describe("reviewTeamTask", () => {
     )
   })
 })
+
+it("runs reconciliation judging under the Squad Host run", async () => {
+  const executeAgent = jest.fn(async () => ({ text: "winner" }))
+  jest.doMock("@/lib/ai/agent/agent-executor", () => ({ executeAgent }))
+  const reconcile = jest.fn(
+    async (options: { judge: (candidates: unknown[]) => Promise<string> }) => {
+      expect(await options.judge([{ key: "winner", output: "answer" }])).toBe("winner")
+      return { winner: "winner" }
+    }
+  )
+  getTeamRunContext.mockReturnValue({
+    runId: "run-1",
+    personalExecutionRunId: "execution:team:owner",
+    team: { config: {} },
+    workspaceController: { reconcile },
+  })
+  await reconcileTeamRun(ctx({ mode: "select", selectStrategy: "judge" }))
+  expect(executeAgent).toHaveBeenCalledWith(expect.any(String), {
+    executionIdentity: { runId: "execution:team:owner" },
+  })
+})

@@ -165,6 +165,7 @@ async function resolveExecution(
     ...(options?.policy ? { policy: options.policy } : {}),
     identity: {
       ...(config.sessionId ? { sessionId: config.sessionId } : {}),
+      ...config.executionIdentity,
       ...options?.identity,
     },
     legacy: {
@@ -233,6 +234,19 @@ export async function executeAgentTurn(
     import("@/lib/ai/agent/agent-executor"),
   ])
 
+  const { personalEgressOptionsSource, bindPersonalEgressOptions } =
+    await import("@/lib/execution/personal-egress")
+  const completionProducer = personalEgressOptionsSource(config)
+
+  if (options?.identity?.runId)
+    config = {
+      ...config,
+      executionIdentity: {
+        runId: options.identity.runId,
+        ...(options.identity.sessionId ? { sessionId: options.identity.sessionId } : {}),
+        ...(options.identity.attemptId ? { attemptId: options.identity.attemptId } : {}),
+      },
+    }
   const surface = options?.surface ?? "agent-executor"
   const resolution = await resolveExecution(config, environment, options, getAgentExecutionFlags())
   const { spec } = resolution
@@ -264,6 +278,7 @@ export async function executeAgentTurn(
   const executeResolved = async (
     effectiveConfig: ExecuteAgentConfig
   ): Promise<AgentExecutionServiceResult> => {
+    if (completionProducer) bindPersonalEgressOptions(effectiveConfig, completionProducer)
     if (spec.chatParticipant) {
       const { runVscodeChatAgentTurn } = await import("@/lib/plugin/vscode-shim/chat-turn")
       return stamp(await runVscodeChatAgentTurn(prompt, effectiveConfig, spec.chatParticipant))

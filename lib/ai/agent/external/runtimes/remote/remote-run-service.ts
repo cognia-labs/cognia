@@ -1,3 +1,7 @@
+import {
+  bindPersonalEgressOptions,
+  type PersonalEgressContext,
+} from "@/lib/execution/personal-egress"
 /**
  * Run a host-owned external agent for a client that cannot run one itself.
  *
@@ -276,7 +280,25 @@ interface ActiveRun {
 const runs = new Map<string, ActiveRun>()
 const decisions = new Map<string, PendingDecision>()
 
+/** A remote correlation id is not an execution row. Mint the Host-owned run. */
+export async function beginRemotePersonalRun(
+  sessionId: string
+): Promise<{ context: PersonalEgressContext; finish(): Promise<void> }> {
+  const { startToolExecutionRun, finishToolExecutionRun, resolveExecutingRun } =
+    await import("@/lib/execution/acting-authority")
+  const parent = await resolveExecutingRun(sessionId)
+  const run = await startToolExecutionRun(sessionId, {
+    parentRunId: parent?.id,
+    title: "Remote external turn",
+  })
+  return {
+    context: { personalSources: [{ executionRunId: run.id }, { sessionId, sessionDerived: true }] },
+    finish: () => finishToolExecutionRun(run.id),
+  }
+}
+
 export interface RemoteRunDeps {
+  beginPersonalRun: typeof beginRemotePersonalRun
   admit: typeof admitExternalAgentRun
   release: typeof releaseExternalAgentRun
   publish: (topic: string, payload: unknown) => Promise<void>
@@ -419,6 +441,7 @@ export interface ExternalRunManager extends Partial<
 }
 
 const defaultDeps: RemoteRunDeps = {
+  beginPersonalRun: beginRemotePersonalRun,
   admit: admitExternalAgentRun,
   release: releaseExternalAgentRun,
   publish: publishHostEvent,
@@ -976,7 +999,9 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
   // instead of costing that frame.
   const staged = request.attachments ?? []
   run.execution = (async () => {
+    let personalRun: Awaited<ReturnType<typeof beginRemotePersonalRun>> | undefined
     try {
+      personalRun = await deps.beginPersonalRun(request.chatSessionId)
       if (request.externalSessionId && !isGatewayTaskSessionId(request.externalSessionId))
         assertSessionOwner(
           agentId,
@@ -1015,52 +1040,59 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
       controller.signal.throwIfAborted()
       const images =
         staged.length > 0 ? await deliverableRunImages(run, manager, request, staged) : []
-      const result = await manager.execute(agentId, request.prompt, {
-        sessionId: request.externalSessionId,
-        ...((run.workspace?.workingDirectory ?? placed.workingDirectory)
-          ? { workingDirectory: run.workspace?.workingDirectory ?? placed.workingDirectory }
-          : {}),
-        ...(images.length > 0 ? { attachments: images } : {}),
-        // Omitted rather than passed as undefined so the manager's own
-        // `if (options?.model)` gate reads the same on both lanes: an absent
-        // model means "inherit the agent's own selection", and writing an
-        // empty one would switch a session onto nothing.
-        ...(request.model ? { model: request.model } : {}),
-        ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
-        ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
-        ...(request.allowedTools !== undefined ? { allowedTools: request.allowedTools } : {}),
-        // `!== undefined`, not truthiness: `null` is the explicit "native"
-        // instruction and must reach the manager, while an absent key leaves
-        // the Host configuration's own binding in force.
-        ...(request.cogniaModel !== undefined ? { cogniaModel: request.cogniaModel } : {}),
-        // The device that asked. A gateway task started for it is bound to it,
-        // so a different device cannot resume or rebind the same task.
-        context: {
-          custom: {
-            chatSessionId: request.chatSessionId,
-            deliveryOriginRunRef: request.runId,
-            ...(request.callerDeviceId ? { callerDeviceId: request.callerDeviceId } : {}),
+      const result = await manager.execute(
+        agentId,
+        request.prompt,
+        bindPersonalEgressOptions(
+          {
+            sessionId: request.externalSessionId,
+            ...((run.workspace?.workingDirectory ?? placed.workingDirectory)
+              ? { workingDirectory: run.workspace?.workingDirectory ?? placed.workingDirectory }
+              : {}),
+            ...(images.length > 0 ? { attachments: images } : {}),
+            // Omitted rather than passed as undefined so the manager's own
+            // `if (options?.model)` gate reads the same on both lanes: an absent
+            // model means "inherit the agent's own selection", and writing an
+            // empty one would switch a session onto nothing.
+            ...(request.model ? { model: request.model } : {}),
+            ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+            ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
+            ...(request.allowedTools !== undefined ? { allowedTools: request.allowedTools } : {}),
+            // `!== undefined`, not truthiness: `null` is the explicit "native"
+            // instruction and must reach the manager, while an absent key leaves
+            // the Host configuration's own binding in force.
+            ...(request.cogniaModel !== undefined ? { cogniaModel: request.cogniaModel } : {}),
+            // The device that asked. A gateway task started for it is bound to it,
+            // so a different device cannot resume or rebind the same task.
+            context: {
+              custom: {
+                chatSessionId: request.chatSessionId,
+                deliveryOriginRunRef: request.runId,
+                ...(request.callerDeviceId ? { callerDeviceId: request.callerDeviceId } : {}),
+              },
+            },
+            signal: controller.signal,
+            onEvent: (event) => {
+              if (run.settled) return
+              if (event.sessionId) {
+                run.externalSessionId = event.sessionId
+                bindSessionOwner(manager, agentId, event.sessionId, {
+                  chatSessionId: request.chatSessionId,
+                  deviceId: request.callerDeviceId,
+                  revision: request.stamp.revision,
+                })
+              }
+              if (event.type === "permission_request" || event.type === "elicitation_request") {
+                registerDecision(run, event)
+              }
+              // A dropped frame is a hole the client can see (its `seq` gap) and
+              // recover from; a crashed host is neither.
+              void emit(run, event).catch(() => undefined)
+            },
           },
-        },
-        signal: controller.signal,
-        onEvent: (event) => {
-          if (run.settled) return
-          if (event.sessionId) {
-            run.externalSessionId = event.sessionId
-            bindSessionOwner(manager, agentId, event.sessionId, {
-              chatSessionId: request.chatSessionId,
-              deviceId: request.callerDeviceId,
-              revision: request.stamp.revision,
-            })
-          }
-          if (event.type === "permission_request" || event.type === "elicitation_request") {
-            registerDecision(run, event)
-          }
-          // A dropped frame is a hole the client can see (its `seq` gap) and
-          // recover from; a crashed host is neither.
-          void emit(run, event).catch(() => undefined)
-        },
-      })
+          personalRun.context
+        )
+      )
       const completedSessionId = (result as { sessionId?: string } | null)?.sessionId
       if (completedSessionId) {
         run.externalSessionId = completedSessionId
@@ -1100,6 +1132,7 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
       if (staged.length > 0) {
         await deps.consumeAttachments(staged.map((attachment) => attachment.ref)).catch(() => {})
       }
+      await personalRun?.finish()
     }
   })().catch(() => {
     // `settle` itself can reject through the terminal publish. It has already

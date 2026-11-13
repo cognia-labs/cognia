@@ -289,3 +289,24 @@ describe("runDrivenTurns", () => {
     expect(actions.at(-1)).toMatchObject({ type: "ACTIVITY_END", status: "error" })
   })
 })
+
+it("S2 passes the exact captured result to the completion decision", async () => {
+  const result = reply("finished", 1, 1)
+  const advance = jest.fn(async () => ({
+    kind: "stop" as const,
+    status: "done" as const,
+    summary: "done",
+  }))
+  await runDrivenTurns({
+    send: async () => result,
+    firstPrompt: "first",
+    advance,
+    dispatch: () => {},
+    signal: new AbortController().signal,
+    label: "s2",
+    kind: "loop",
+    max: 1,
+    delay: async () => {},
+  })
+  expect(advance).toHaveBeenCalledWith(expect.objectContaining({ capturedResult: result }))
+})

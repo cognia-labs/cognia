@@ -1080,6 +1080,7 @@ describe("executeChatTask", () => {
     )
 
     expect(executeProjectEnvironmentMock).toHaveBeenCalledWith({
+      credentialContext: { executionRunId: "exec-1" },
       environment,
       executionRoot: "/bundle/primary",
       scope: "local",

@@ -210,7 +210,7 @@ export class TerminalSession extends BaseTerminalSession {
       case "exit": {
         // The session is gone; there is no lease left to renew.
         this.stopFlowRenewal()
-        this.handleExit(event.code ?? null)
+        this.handleExit(event.code ?? null, event.code !== undefined && event.code !== null)
         break
       }
       case "replay_gap": {

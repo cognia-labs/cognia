@@ -224,7 +224,9 @@ export async function executeBackupTask(
       const syncPass = getSyncPassphrase()
       const readyLegs: BackupDestination[] = []
       for (const leg of remoteLegs) {
-        const readiness = await readBackupDestinationReadiness(leg, _signal)
+        const readiness = await readBackupDestinationReadiness(leg, _signal, undefined, {
+          executionRunId: execution.id,
+        })
         assertActive()
         if (readiness.state === "ready") readyLegs.push(leg)
         else {
@@ -259,7 +261,9 @@ export async function executeBackupTask(
           let anyRemoteSucceeded = false
           for (const leg of readyLegs) {
             assertActive()
-            const result = await dispatchBackupDestination(leg, body, meta, assertActive, _signal)
+            const result = await dispatchBackupDestination(leg, body, meta, assertActive, _signal, {
+              executionRunId: execution.id,
+            })
             if (getDb() !== db)
               return { success: false, error: "backup_owner_changed_or_cancelled" }
             finishedLegs.add(leg)

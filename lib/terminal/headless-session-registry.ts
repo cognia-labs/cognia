@@ -1,5 +1,13 @@
 "use client"
 
+import {
+  retainHeadlessPersonalEgress,
+  retainTerminalPersonalEgress,
+  confirmHeadlessPersonalEgressExit,
+  __clearTerminalPersonalEgressForTesting,
+} from "./personal-egress"
+import type { PersonalEgressContext } from "@/lib/execution/personal-egress"
+
 /**
  * Run-scoped bookkeeping for terminal sessions opened by workflow nodes
  * (`action.terminal.session.open`). Whatever a run opens — headless
@@ -65,11 +73,16 @@ function forgetOpen(open: RunSessionOpen): void {
 export function finishRunSessionOpen(
   open: RunSessionOpen,
   sessionId: string,
-  mode: RunSessionMode
+  mode: RunSessionMode,
+  context?: PersonalEgressContext
 ): boolean {
   forgetOpen(open)
-  if (open.released) return false
+  if (context) {
+    if (mode === "headless") retainHeadlessPersonalEgress(context, sessionId)
+    else retainTerminalPersonalEgress(context, sessionId)
+  }
   registerRunSession(open.runId, sessionId, mode)
+  if (open.released) return false
   return true
 }
 
@@ -79,7 +92,16 @@ export function abandonRunSessionOpen(open: RunSessionOpen): void {
 }
 
 /** Record a session opened by `runId`. */
-export function registerRunSession(runId: string, sessionId: string, mode: RunSessionMode): void {
+export function registerRunSession(
+  runId: string,
+  sessionId: string,
+  mode: RunSessionMode,
+  context?: PersonalEgressContext
+): void {
+  if (context) {
+    if (mode === "headless") retainHeadlessPersonalEgress(context, sessionId)
+    else retainTerminalPersonalEgress(context, sessionId)
+  }
   const list = byRun.get(runId) ?? []
   if (!list.some((e) => e.sessionId === sessionId)) {
     list.push({ sessionId, mode })
@@ -106,8 +128,7 @@ export function deregisterRunSession(runId: string, sessionId: string): void {
 
 /**
  * Close every session the run still holds. Best-effort: each close is
- * isolated so one failure can't leak the rest, and the ledger entry is
- * dropped regardless. Safe to call for runs that never opened a session
+ * isolated so one failure can't leak the rest, and failed closes remain in the ledger until exit proof. Safe to call for runs that never opened a session
  * and safe to call twice.
  */
 export async function closeRunSessions(runId: string): Promise<void> {
@@ -117,11 +138,11 @@ export async function closeRunSessions(runId: string): Promise<void> {
     pendingOpens.delete(runId)
   }
   const list = byRun.get(runId)
-  byRun.delete(runId)
   if (!list || list.length === 0) return
   for (const entry of list) {
     try {
       await closeRunSession(entry.sessionId, entry.mode)
+      deregisterRunSession(runId, entry.sessionId)
     } catch {
       // Best-effort cleanup — a dead backend or an already-closed session
       // must never mask the run's own result.
@@ -133,7 +154,9 @@ export async function closeRunSessions(runId: string): Promise<void> {
 export async function closeRunSession(sessionId: string, mode: RunSessionMode): Promise<void> {
   if (mode === "headless") {
     const { invoke } = await import("@tauri-apps/api/core")
-    await invoke("terminal_headless_kill", { sessionId })
+    const proof = await invoke<{ status: string }>("terminal_headless_kill", { sessionId })
+    if (proof?.status === "exited") confirmHeadlessPersonalEgressExit(sessionId)
+    for (const runId of byRun.keys()) deregisterRunSession(runId, sessionId)
     return
   }
   const [{ killFromDock }, { useTerminalStore }] = await Promise.all([
@@ -141,10 +164,15 @@ export async function closeRunSession(sessionId: string, mode: RunSessionMode): 
     import("@/stores/terminal/terminal-store"),
   ])
   await killFromDock(sessionId, useTerminalStore.getState())
+  for (const runId of byRun.keys()) deregisterRunSession(runId, sessionId)
 }
 
 /** Test-only: reset the ledger between cases. */
 export function __clearRunSessionsForTesting(): void {
+  __clearTerminalPersonalEgressForTesting()
+  for (const entries of byRun.values())
+    for (const entry of entries)
+      if (entry.mode === "headless") confirmHeadlessPersonalEgressExit(entry.sessionId)
   byRun.clear()
   pendingOpens.clear()
 }

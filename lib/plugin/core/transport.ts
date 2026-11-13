@@ -1,3 +1,5 @@
+import { pluginEgressContext } from "./invocation-identity"
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
 import { getPluginApiMethodContract } from "@/lib/plugin/contracts/interface-catalog"
 import { getPluginApiWireOpContract } from "@cognia/plugin-sdk/contracts"
 import { loggers } from "@/lib/plugin/core/logger"
@@ -229,6 +231,32 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function invokePluginApi<T = unknown>(
+  pluginId: string,
+  api: string,
+  payload: unknown,
+  options: InvokePluginApiOptions = {}
+): Promise<T> {
+  const source = pluginEgressContext(pluginId)
+  return ["shell:execute", "shell:open", "shell:showInFolder"].includes(api)
+    ? invokePluginShellApi<T>(source, pluginId, api, payload, options)
+    : invokeBoundPluginApi<T>(pluginId, api, payload, options)
+}
+
+async function invokePluginShellApi<T>(
+  source: import("@/lib/execution/personal-egress").PersonalEgressContext,
+  pluginId: string,
+  api: string,
+  payload: unknown,
+  options: InvokePluginApiOptions
+): Promise<T> {
+  return runPersonalEgressOperation(
+    source,
+    () => invokeBoundPluginApi<T>(pluginId, api, payload, options),
+    true
+  )
+}
+
+async function invokeBoundPluginApi<T = unknown>(
   pluginId: string,
   api: string,
   payload: unknown,

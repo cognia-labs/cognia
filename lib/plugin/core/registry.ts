@@ -1,3 +1,4 @@
+import { markPluginSynchronousCallback } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Registry - Central registry for plugin contributions.
  *
@@ -233,6 +234,7 @@ export class PluginRegistry {
   // ===========================================================================
 
   registerCommand(pluginId: string, command: PluginCommand): void {
+    if (typeof command.enabled === "function") markPluginSynchronousCallback(command.enabled, false)
     this.commands.register(command.id, command, { pluginId })
   }
 

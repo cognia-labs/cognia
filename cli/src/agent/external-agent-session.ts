@@ -397,6 +397,7 @@ export interface ExternalAgentSessionParams {
    * exercise the "backend cannot host Cognia tools" path).
    */
   startToolHost?: (params: {
+    executionRunId?: () => string | undefined
     session: ResolvedCliSessionContext
     attempt: number
     gate?: PermissionResponder
@@ -922,6 +923,8 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
     })
     try {
       broker = await startToolHost({
+        executionRunId: () =>
+          toolCallExecutionRunId(sessionId, activeToolScope?.turnId, activeToolScope?.attemptId),
         session,
         attempt: brokerAttempt,
         gate: async (request) => {
@@ -1965,6 +1968,16 @@ export function createExternalAgentSession(params: ExternalAgentSessionParams): 
           publishMcp(session, cogniaServers)
           assertExternalAgentContentSafety(flattened.text, executionOptions)
           activeContentSafety = executionOptions.contentSafety
+          const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+          bindPersonalEgressOptions(executionOptions, {
+            sessionId,
+            executionRunId:
+              toolCallExecutionRunId(
+                sessionId,
+                activeToolScope?.turnId,
+                activeToolScope?.attemptId
+              ) ?? "",
+          })
           const execution = manager.execute(agentId, flattened.text, executionOptions)
           // Fold rejection into the value so the losing race branch can never
           // surface as an unhandled rejection.

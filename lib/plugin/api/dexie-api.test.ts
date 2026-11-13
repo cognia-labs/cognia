@@ -33,6 +33,24 @@ describe("createDexieAPI", () => {
     expect(api.rawDb().name).toBe(db.name)
   })
 
+  it("P1 rawDb cannot recover core tables or internal database handles", async () => {
+    db = makePluginDb("github-delivery", "repos")
+    db.version(2).stores({ messages: "id" })
+    const raw = createDexieAPI(db, "github-delivery").rawDb()
+    expect((raw as unknown as { messages?: unknown }).messages).toBeUndefined()
+    expect(raw.tables.map((table) => table.name)).toEqual(["github-delivery:repos"])
+    expect((raw as unknown as { backendDB?: unknown }).backendDB).toBeUndefined()
+    expect(Object.getOwnPropertyDescriptor(raw, "messages")).toBeUndefined()
+    expect(raw.table("repos").db).toBe(raw)
+    await raw.transaction("r", "repos", async (transaction) => {
+      expect(transaction.db).toBe(raw)
+      expect((transaction.db as unknown as { messages?: unknown }).messages).toBeUndefined()
+    })
+    expect(() => raw.transaction("r", db.table("messages"), async () => undefined)).toThrow(
+      /namespace/
+    )
+  })
+
   it("rawDb().table() auto-namespaces a bare name", () => {
     db = makePluginDb("github-delivery", "repos")
     const api = createDexieAPI(db, "github-delivery")

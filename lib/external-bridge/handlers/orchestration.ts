@@ -101,9 +101,10 @@ async function runCharacterAsChildRun(
       kind: "agent",
       label: characterId,
       engine: {
-        run: async (signal) => {
+        run: async (signal, executionIdentity) => {
           try {
             result = await executeAgent(prompt, {
+              executionIdentity,
               characterId,
               toolsEnabled,
               ...(cwd ? { cwd } : {}),

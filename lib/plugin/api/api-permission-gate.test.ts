@@ -117,3 +117,21 @@ describe("hasApiOrGuardPermission", () => {
     expect(hasApiOrGuardPermission(pluginId, "theme:write")).toBe(false)
   })
 })
+
+it("S2 API namespace guards outbound callbacks with the current Host source", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  initializePluginPermissions("s2-api", ["vector:read"])
+  const dispatch = jest.fn(async () => "ok")
+  const api = createApiGuardedAPI(
+    "s2-api",
+    { dispatch },
+    { dispatch: "vector:read" },
+    { egressMethods: ["dispatch"] }
+  )
+  await expect(
+    withPluginExecutionContext("s2-api", { personalEgressBlocked: true }, () => api.dispatch())
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(dispatch).not.toHaveBeenCalled()
+  await expect(withPluginExecutionContext("s2-api", {}, () => api.dispatch())).resolves.toBe("ok")
+  revokePluginPermissions("s2-api")
+})

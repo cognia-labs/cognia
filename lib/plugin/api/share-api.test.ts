@@ -12,7 +12,8 @@ jest.mock("@/lib/execution/personal-sink", () => ({
   assertPersonalSink: jest.fn(async () => {}),
 }))
 jest.mock("@/lib/plugin/core/invocation-identity", () => ({
-  pluginExecutionContext: jest.fn(() => ({ executionRunId: "host-invocation" })),
+  ...jest.requireActual("@/lib/plugin/core/invocation-identity"),
+  pluginExecutionContext: jest.fn(() => ({})),
 }))
 
 const createShareLink = jest.fn(async (..._a: unknown[]) => ({
@@ -87,13 +88,13 @@ describe("createShareAPI", () => {
       expect(created.code).toBe("c1")
       expect(createShareLink).toHaveBeenCalled()
       expect(assertPersonalSink).toHaveBeenCalledWith(
-        { executionRunId: "host-invocation" },
+        { unverifiedReason: "plugin invocation unavailable" },
         { kind: "unknown", label: "public share" },
         undefined,
         { kind: "public-share", pluginId: PLUGIN }
       )
       await api.revoke("c1")
-      expect(revokeShareLink).toHaveBeenCalledWith("c1")
+      expect(revokeShareLink).toHaveBeenCalledWith("c1", undefined, expect.any(Object))
       await api.delete("c1")
       expect(deleteSharedLink).toHaveBeenCalledWith("c1")
     })
@@ -108,4 +109,28 @@ describe("createShareAPI", () => {
       expect(createShareLink).not.toHaveBeenCalled()
     })
   })
+})
+
+it("S2 share callbacks deny marked revoke/stats and preserve clear requests", async () => {
+  const { withPluginExecutionContext, beginPluginEgressInstance } =
+    await import("@/lib/plugin/core/invocation-identity")
+  beginPluginEgressInstance(PLUGIN)
+  resetPermissionGuard()
+  getPermissionGuard({ confirmDangerousByDefault: false }).registerPlugin(PLUGIN, [
+    "share:read",
+    "share:create",
+  ])
+  jest.mocked(pluginExecutionContext).mockReturnValue({})
+  const api = createShareAPI(PLUGIN)
+  await expect(api.getStats("c1")).resolves.toMatchObject({ viewCount: 3 })
+  const before = getShareStats.mock.calls.length
+  await withPluginExecutionContext(PLUGIN, { personalEgressBlocked: true }, async () => {
+    await expect(api.getStats("encoded-private")).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
+    await expect(api.revoke("encoded-private")).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
+  })
+  expect(getShareStats).toHaveBeenCalledTimes(before)
 })

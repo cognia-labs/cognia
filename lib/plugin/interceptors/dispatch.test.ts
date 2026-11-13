@@ -100,3 +100,32 @@ it("keeps a timed-out callback bound until actual settlement and backgrounds run
   expect(pluginExecutionContext("provider")).toBeUndefined()
   dispatchObserve("operation.completed", {}, { operationId: "runless" })
 })
+
+it("P3 actual interceptor delivery retains marked exposure but not an earlier clean producer", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+  await fixture.initialize()
+  try {
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const { getDb } = await import("@/lib/db/schema")
+    const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+    const { beginPluginEgressInstance, pluginEgressContextResolver } =
+      await import("../core/invocation-identity")
+    const run = await startToolExecutionRun("interceptor-source")
+    beginPluginEgressInstance("provider")
+    registration("tool.call.prepare", "transform", (value: unknown) => value)
+    const context = { operationId: "p3", credentialContext: { executionRunId: run.id } }
+    await dispatchTransform("tool.call.prepare", {}, context)
+    await getDb().executionRuns.update(run.id, {
+      personalMarks: [{ person: { kind: "local-person" }, source: "P3", markedAt: 1 }],
+    })
+    await expect(
+      assertPersonalEgress(pluginEgressContextResolver("provider")())
+    ).resolves.toBeUndefined()
+    await dispatchTransform("tool.call.prepare", {}, context)
+    await expect(
+      assertPersonalEgress(pluginEgressContextResolver("provider")())
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  } finally {
+    await fixture.dispose()
+  }
+})

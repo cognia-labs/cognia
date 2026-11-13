@@ -481,3 +481,19 @@ describe("PII gate (W2.4)", () => {
     ).resolves.toEqual(["4"])
   })
 })
+
+it("S2 vector callback blocks marked remote-capable operations and allows clear", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  initializePluginPermissions("s2-vector", ["vector:read"])
+  const api = createVectorAPI("s2-vector")
+  const before = jest.mocked(createVectorStore).mock.calls.length
+  await expect(
+    withPluginExecutionContext("s2-vector", { personalEgressBlocked: true }, () =>
+      api.listCollections()
+    )
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(jest.mocked(createVectorStore).mock.calls).toHaveLength(before)
+  await expect(
+    withPluginExecutionContext("s2-vector", {}, () => api.listCollections())
+  ).resolves.toEqual(expect.any(Array))
+})

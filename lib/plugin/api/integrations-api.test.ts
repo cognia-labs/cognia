@@ -556,7 +556,18 @@ describe("ctx.integrations", () => {
       ],
       handlers: {},
     })
-    const api = createIntegrationsAPI("github-delivery", () => true)
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+    const run = await startToolExecutionRun("github-write-test", {
+      localAuthorization:
+        LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+    })
+    const api = bindPluginCallbacks(
+      "github-delivery",
+      createIntegrationsAPI("github-delivery", () => true),
+      () => ({ executionRunId: run.id })
+    )
     const account = await api.createAccount({
       integrationId: "github",
       providerId: "oauth",
@@ -625,7 +636,18 @@ describe("ctx.integrations", () => {
       .mockResolvedValue({ account, repository: "cognia/cognia-next" } as Awaited<
         ReturnType<typeof botBinding.resolveBotIntegrationBinding>
       >)
-    const bot = createIntegrationsAPI("bot", () => true)
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+    const run = await startToolExecutionRun("resource-test", {
+      localAuthorization:
+        LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+    })
+    const bot = bindPluginCallbacks(
+      "bot",
+      createIntegrationsAPI("bot", () => true),
+      () => ({ executionRunId: run.id })
+    )
     const ref = { runId: "run", slotId: "github" }
     const resourceRequest = jest.fn().mockResolvedValue({ status: 200, headers: {}, data: {} })
     setIntegrationAuthenticatedRequestExecutorForTesting(resourceRequest)
@@ -889,4 +911,30 @@ it("delegates account, publication and recovery operations with the calling plug
   } finally {
     jest.restoreAllMocks()
   }
+})
+
+it("S2 integration callbacks gate before Bot binding resolution, including GET", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  const api = createIntegrationsAPI("s2-integration", () => true)
+  const binding = jest.mocked(botBinding.resolveBotIntegrationBinding)
+  const count = binding.mock.calls.length
+  await expect(
+    withPluginExecutionContext("s2-integration", { personalEgressBlocked: true }, () =>
+      api.authenticatedRequest({ slotId: "slot" } as never, "/repos/o/r/issues?content=private")
+    )
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(binding.mock.calls).toHaveLength(count)
+  const request = jest
+    .spyOn(actionRunner, "authenticatedIntegrationRequest")
+    .mockResolvedValue({ status: 200, headers: {}, data: {} })
+  const account = jest
+    .spyOn(await import("@/lib/db/integrations"), "getIntegrationAccount")
+    .mockResolvedValue({ id: "a" } as never)
+  await expect(
+    withPluginExecutionContext("s2-integration", {}, () =>
+      api.authenticatedRequest("a", "https://example.test")
+    )
+  ).resolves.toMatchObject({ status: 200 })
+  request.mockRestore()
+  account.mockRestore()
 })

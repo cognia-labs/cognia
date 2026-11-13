@@ -69,6 +69,9 @@ import type { Verdict } from "./resolver.ts"
 
 /** The `SendOptions` fields the ladder and its adapters read. */
 export interface PermissionSendOptions {
+  personalEgressFenced?: boolean
+  personalEgressReadTools?: string[]
+  personalEgressState?: { fenced: boolean }
   permissionMode?: unknown
   permissionRuleset?: unknown
   suppressApprovalForTools?: unknown

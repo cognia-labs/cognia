@@ -241,3 +241,131 @@ test("plugin definitions keep a full runtime schema for root JSON Schema constra
   assert.equal(schema.safeParse({ safe_name: 42 }).success, false)
   assert.equal(schema.safeParse({ other: "ok" }).success, false)
 })
+
+test("H3: native plugin relay excludes only its own tracked round trip", async () => {
+  const { fencePersonalEgress, quiescePersonalEgress, beginPersonalEgressOperation } =
+    await import("../../policy/personal-egress.ts")
+  const policy = {}
+  const pending: PendingPluginToolCalls = new Map()
+  let relayId = ""
+  const defs = buildPluginToolDefinitions({
+    tools: [{ name: "marking_tool", pluginId: "p", jsonSchema: { type: "object" } }],
+    sessionId: "s",
+    pendingPluginToolCalls: pending,
+    personalEgressPolicy: policy,
+    emit(frame) {
+      relayId = String(frame.toolUseId)
+    },
+  })!
+  const call = defs[0]!.handler({})
+  assert.ok(relayId)
+  const finishSibling = beginPersonalEgressOperation(policy, false, "sibling")
+  fencePersonalEgress(policy)
+  let released = false
+  const admission = quiescePersonalEgress(policy, [relayId]).then(() => {
+    released = true
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(released, false)
+  finishSibling()
+  await admission
+  assert.equal(released, true)
+  answer(pending, relayId, { result: "private result" })
+  await call
+})
+
+test("H3: a fenced approved network-off sandbox relay remains executable", async () => {
+  const pending: PendingPluginToolCalls = new Map()
+  const defs = buildPluginToolDefinitions({
+    tools: [{ name: "sandbox_bash", jsonSchema: { type: "object" } }],
+    sessionId: "s",
+    pendingPluginToolCalls: pending,
+    personalEgressPolicy: {
+      personalEgressFenced: true,
+      personalEgressReadTools: ["mcp__cognia-plugin-tools__sandbox_bash"],
+    },
+    emit(frame) {
+      answer(pending, String(frame.toolUseId), { result: "network off" })
+    },
+  })!
+  assert.deepEqual(await defs[0]!.handler({}), { content: [{ type: "text", text: "network off" }] })
+})
+
+test("F3: child recall can quiesce while parent dispatch_agent waits", async () => {
+  const { fencePersonalEgress, quiescePersonalEgress } =
+    await import("../../policy/personal-egress.ts")
+  const policy = {}
+  const pending: PendingPluginToolCalls = new Map()
+  let relayId = ""
+  const defs = buildPluginToolDefinitions({
+    tools: [{ name: "dispatch_agent", pluginId: "cognia-dispatch-agent", timeoutMs: 0 }],
+    sessionId: "parent",
+    pendingPluginToolCalls: pending,
+    personalEgressPolicy: policy,
+    emit(frame) {
+      relayId = String(frame.toolUseId)
+    },
+  })!
+  const call = defs[0]!.handler({})
+  fencePersonalEgress(policy)
+  try {
+    await quiescePersonalEgress(policy)
+    assert.equal(pending.has(relayId), true)
+  } finally {
+    answer(pending, relayId, { result: "child recalled private memory" })
+    await call
+  }
+})
+
+test("F3: sibling shell still delays child recall while delegation waits", async () => {
+  const { beginPersonalEgressOperation, fencePersonalEgress, quiescePersonalEgress } =
+    await import("../../policy/personal-egress.ts")
+  const policy = {}
+  const pending: PendingPluginToolCalls = new Map()
+  let relayId = ""
+  const defs = buildPluginToolDefinitions({
+    tools: [{ name: "dispatch_agent", pluginId: "cognia-dispatch-agent", timeoutMs: 0 }],
+    sessionId: "parent",
+    pendingPluginToolCalls: pending,
+    personalEgressPolicy: policy,
+    emit(frame) {
+      relayId = String(frame.toolUseId)
+    },
+  })!
+  const call = defs[0]!.handler({})
+  const finishShell = beginPersonalEgressOperation(policy, false, "sibling-shell")
+  fencePersonalEgress(policy)
+  let admitted = false
+  const recall = quiescePersonalEgress(policy).then(() => {
+    admitted = true
+  })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(admitted, false)
+    finishShell()
+    await recall
+    assert.equal(admitted, true)
+  } finally {
+    finishShell()
+    answer(pending, relayId, { result: "done" })
+    await call
+  }
+})
+
+test("F3 exemptions require exact Host ownership, including prototype-like plugin ids", async () => {
+  const { pluginToolIsOpaqueEgress } = await import("./proxy.ts")
+  for (const [pluginId, names] of Object.entries({
+    "cognia-dispatch-agent": ["dispatch_agent", "Task"],
+    "cognia-squads-builtin": ["team_delegate", "team_post_to_chat"],
+    "cognia-ask-user": ["ask_user"],
+    "cognia-builtin-skills": ["im_broadcast"],
+  }))
+    for (const name of names) {
+      assert.equal(pluginToolIsOpaqueEgress({ pluginId, name }), false)
+      assert.equal(pluginToolIsOpaqueEgress({ pluginId: "third-party", name }), true)
+    }
+  for (const pluginId of ["constructor", "__proto__", "toString"])
+    assert.equal(pluginToolIsOpaqueEgress({ pluginId, name: "dispatch_agent" }), true)
+  for (const name of ["im_send_voice", "im_create_chat", "im_dispatch_task", "shell_execute"])
+    assert.equal(pluginToolIsOpaqueEgress({ pluginId: "cognia-builtin-skills", name }), true)
+})

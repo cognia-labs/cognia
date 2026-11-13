@@ -1,3 +1,4 @@
+import { personalEgressOptionsSource } from "@/lib/execution/personal-egress"
 /**
  * Streaming `/goal` runner for the TUI.
  *
@@ -144,9 +145,11 @@ export async function runGoalStreaming(objective: string, deps: GoalRunDeps): Pr
   const advance = async ({
     text: lastResponse,
     tokensDelta,
+    capturedResult,
   }: {
     text: string
     tokensDelta: number
+    capturedResult?: import("@/lib/claude/run-and-capture").RunAndCaptureResult
   }): Promise<DrivenAdvance> => {
     const current = await readGoal(goal.id)
     if (!current) return { kind: "stop", status: "error", summary: "Goal removed mid-run." }
@@ -159,6 +162,7 @@ export async function runGoalStreaming(objective: string, deps: GoalRunDeps): Pr
       capturedGenerationId: goal.generationId,
       firer: deps.firer,
       hookContext: {
+        credentialContext: personalEgressOptionsSource(capturedResult),
         agentId: "goal-judge",
         agentKind: "goal-judge",
         sessionId: deps.sessionId,

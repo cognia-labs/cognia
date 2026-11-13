@@ -40,6 +40,7 @@ import { spawnerMessage } from "./spawner-message-arg"
 export interface RunInDockInput {
   /** Identifier of the chat session driving this — scopes the trust grant. */
   chatSessionId: string
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   /** Existing tab to run in. Mutually exclusive with `newTab`. */
   tabId?: string
   /** When true, spawn a new tab first, then run. */
@@ -121,6 +122,10 @@ export async function runInDockTab(input: RunInDockInput): Promise<RunInDockOutc
     sessionId = outcome.sessionId
   }
   if (!sessionId) return { kind: "error", message: "no session id resolved" }
+  if (input.credentialContext) {
+    const { retainTerminalPersonalEgress } = await import("./personal-egress")
+    retainTerminalPersonalEgress(input.credentialContext, sessionId)
+  }
 
   // Read the store AFTER the spawn. Zustand replaces `sessions` on every
   // registration, so a `getState()` taken before the await is a snapshot that

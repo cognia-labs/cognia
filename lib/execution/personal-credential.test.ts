@@ -185,3 +185,9 @@ it("also records a direct Host action when its session resolves to a run", async
     "google-docs"
   )
 })
+
+it("a content-only network fence never grants credential authority", async () => {
+  await expect(
+    admitPersonalCredential({ personalEgressBlocked: true }, { source: "mcp-oauth" })
+  ).resolves.toMatchObject({ ok: false })
+})

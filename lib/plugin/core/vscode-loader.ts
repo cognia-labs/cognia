@@ -555,9 +555,19 @@ export async function invokeVscodeRpc<T = unknown>(
   runtimeGeneration?: string,
   signal?: AbortSignal
 ): Promise<T> {
-  if (method === "extension:call") {
-    return withPluginExecutionContext(pluginId, pluginDispatchContext(pluginId), () =>
-      invokeBoundVscodeRpc<T>(pluginId, method, payload, runtimeGeneration, signal)
+  if (!isVscodeHostAvailable()) throw new Error("VS Code extension host unavailable (browser mode)")
+  if (method !== "extension:cancel") {
+    const source = pluginExecutionContext(pluginId) ?? pluginDispatchContext(pluginId)
+    const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+    return runPersonalEgressOperation(
+      source,
+      (operation) => {
+        const generation = runtimeGeneration ?? requireVscodeGeneration(pluginId)
+        return withPluginExecutionContext(pluginId, operation, () =>
+          invokeBoundVscodeRpc<T>(pluginId, method, payload, generation, signal)
+        )
+      },
+      true
     )
   }
   return invokeBoundVscodeRpc<T>(pluginId, method, payload, runtimeGeneration, signal)
@@ -654,4 +664,8 @@ function hasThemeOnlyContributions(manifest: PluginManifest): boolean {
     (manifest.vscodeLanguages ?? []).length > 0
   )
 }
-import { pluginDispatchContext, withPluginExecutionContext } from "./invocation-identity"
+import {
+  pluginDispatchContext,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "./invocation-identity"

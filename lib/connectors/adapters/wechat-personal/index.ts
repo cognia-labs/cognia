@@ -1,3 +1,5 @@
+import { personalEgressOptionsSource } from "@/lib/execution/personal-egress"
+import type { AdapterSendOptions } from "@/types/connectors/adapter"
 /**
  * Personal WeChat (iLink) adapter factory.
  *
@@ -545,7 +547,15 @@ export function createWechatPersonalAdapter(opts: WechatPersonalAdapterOptions):
     }
   }
 
-  async function send(req: OutboundRequest): Promise<OutboundResult> {
+  async function send(req: OutboundRequest, options?: AdapterSendOptions): Promise<OutboundResult> {
+    const producer =
+      personalEgressOptionsSource(options) ??
+      (options?.executionIdentity
+        ? {
+            sessionId: options.executionIdentity.sessionId,
+            executionRunId: options.executionIdentity.runId,
+          }
+        : {})
     const ref = req.conversationRef as WechatPersonalConversationRef
     const conversationKey = ref.userId
       ? buildConversationKey("wechat-personal", opts.id, ref.userId)
@@ -605,6 +615,7 @@ export function createWechatPersonalAdapter(opts: WechatPersonalAdapterOptions):
             userId: ref.userId,
             segment: part.segment,
             tauri: ctx!.tauri,
+            credentialContext: producer,
           })
           bodies.push(
             buildSendMediaBody(ref.userId, contextToken, uploaded.itemType, uploaded.mediaItem)

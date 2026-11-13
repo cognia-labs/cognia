@@ -11,9 +11,14 @@
  * seeded raw from the manifest and never receives the default API grants.
  */
 
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import type { PluginAPIPermission } from "@/types/plugin/plugin"
 import type { PluginPermission } from "@/types/plugin"
-import { getPermissionGuard, PermissionError } from "@/lib/plugin/security/permission-guard"
+import {
+  getPermissionGuard,
+  PermissionError,
+  invokeEgressMethod,
+} from "@/lib/plugin/security/permission-guard"
 import { pluginHasApiPermission } from "./permission-api"
 
 export interface ApiGuardOptions<T> {
@@ -25,6 +30,7 @@ export interface ApiGuardOptions<T> {
    * updating the map can't drift into being unprotected.
    */
   unguarded?: ReadonlyArray<keyof T>
+  egressMethods?: ReadonlyArray<keyof T>
 }
 
 export function hasApiOrGuardPermission(
@@ -84,7 +90,15 @@ export function createApiGuardedAPI<T extends object>(
             required as unknown as PluginPermission
           )
         }
-        return (value as (...a: unknown[]) => unknown).apply(target, args)
+        return options.egressMethods?.includes(prop as keyof T)
+          ? invokeEgressMethod(
+              pluginExecutionContext(pluginId) ?? {},
+              value as (...a: unknown[]) => unknown,
+              target,
+              args,
+              pluginId
+            )
+          : (value as (...a: unknown[]) => unknown).apply(target, args)
       }
     },
   })

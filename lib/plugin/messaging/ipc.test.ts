@@ -1071,3 +1071,37 @@ describe("declarative library RPC", () => {
     expect(ipc.getLibraryCallHistory()).toEqual([])
   })
 })
+
+it("S2 IPC debug logs retain the caller's Host source", async () => {
+  const { loggers } = await import("../core/logger")
+  const { captureLogEgressSource } = await import("@cognia/logging/context")
+  const seen: unknown[] = []
+  const spy = jest.spyOn(loggers.manager, "debug").mockImplementation(() => {
+    seen.push(captureLogEgressSource())
+  })
+  try {
+    const ipc = new PluginIPC({ enableLogging: true })
+    await withPluginExecutionContext("s2-ipc", { personalEgressBlocked: true }, async () =>
+      ipc.send("s2-ipc", "target", "private", { private: "value" })
+    )
+    expect(seen).toContainEqual({ version: 1, runIds: [], blocked: true })
+  } finally {
+    spy.mockRestore()
+  }
+})
+
+it("R11 IPC subscriber tags its synchronous filter contract", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const guard = jest.fn(() => true)
+  try {
+    const ipc = new PluginIPC()
+    ipc.subscribe("r11", "topic", () => undefined, guard)
+    expect(bindPluginCallbacks("r11", guard, () => ({ executionRunId: "r11-cold" }))()).toBe(false)
+    expect(guard).not.toHaveBeenCalled()
+    ipc.clear()
+  } finally {
+    restore()
+  }
+})

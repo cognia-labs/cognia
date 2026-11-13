@@ -692,6 +692,23 @@ describe("ArtifactWorkspaceDock", () => {
     expect(layout.browserRequestUrl).toBeNull()
   })
 
+  it("F8 dock probe claims without creating a page or revealing the dock", () => {
+    useDockTabsStore.setState({ bySession: {} })
+    render(
+      <ArtifactWorkspaceDock>
+        <div />
+      </ArtifactWorkspaceDock>
+    )
+    act(() => useArtifactDockLayoutStore.getState().setDockCollapsed(true))
+    let accepted = false
+    act(() => {
+      accepted = requestBrowserUrl("https://example.com/private", { probe: true })
+    })
+    expect(accepted).toBe(true)
+    expect(selectPageTabs(useDockTabsStore.getState(), SESSION)).toHaveLength(0)
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
+  })
+
   it("lines a background conversation's agent page up there, leaving this dock alone", () => {
     useDockTabsStore.setState({ bySession: {} })
     render(

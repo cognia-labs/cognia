@@ -15,7 +15,9 @@
 import type { UIMessage } from "ai"
 import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"
 import { createPluginBudget, type PluginBudget } from "./budget"
-import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import { preparePluginHistory } from "@/lib/execution/personal-visibility"
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
+import { personalOperationSources } from "@/lib/execution/personal-operation"
 import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import type {
   PluginAgentSession,
@@ -68,10 +70,9 @@ function buildSession(
     const existing = await messagesDb.listMessages(id)
     // Prior turns for the text-channel fallback (ignored on the sidecar, where
     // native resume carries the conversation).
-    const projection = await preparePersonalHistory(
-      host?.sessionId,
-      existing.map((message) => ({ ...message, sessionId: id })),
-      { executionRunId: host?.executionRunId ?? "" }
+    const projection = await preparePluginHistory(
+      id,
+      existing.map((message) => ({ ...message, sessionId: id }))
     )
     const priorMessages = projection.messages
       .map((message) => ({
@@ -80,10 +81,15 @@ function buildSession(
       }))
       .filter((m): m is { role: "user" | "assistant"; content: string } => m.role !== "system")
 
+    const bindCompletion = <T extends object>(config: T): T =>
+      host && (host.executionRunId || host.personalEgressBlocked || personalOperationSources(host))
+        ? bindPersonalEgressOptions(config, host)
+        : config
     const result = await executeAgentTurnFromRenderer(
       prompt,
-      {
+      bindCompletion({
         sessionId: id,
+        ...(host?.executionRunId ? { executionIdentity: { runId: host.executionRunId } } : {}),
         toolsEnabled: options.toolsEnabled ?? true,
         ...(base.characterId ? { characterId: base.characterId } : {}),
         ...(base.cwd ? { cwd: base.cwd } : {}),
@@ -93,7 +99,7 @@ function buildSession(
         ...(options.outputFormat ? { outputFormat: options.outputFormat } : {}),
         ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
         ...(priorMessages.length > 0 ? { priorMessages } : {}),
-      },
+      }),
       { surface: "plugin" }
     )
 
@@ -133,15 +139,11 @@ function buildSession(
   }
 
   const history = async (): Promise<PluginSessionMessage[]> => {
-    const host = pluginId ? pluginExecutionContext(pluginId) : undefined
     const messagesDb = await import("@/lib/db/messages")
     const rows = await messagesDb.listMessages(id)
-    const projection = await preparePersonalHistory(
-      host?.sessionId,
-      rows.map((message) => ({ ...message, sessionId: id })),
-      {
-        executionRunId: host?.executionRunId ?? "",
-      }
+    const projection = await preparePluginHistory(
+      id,
+      rows.map((message) => ({ ...message, sessionId: id }))
     )
     return projection.messages.map(toSessionMessage)
   }

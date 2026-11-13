@@ -1,3 +1,4 @@
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 /**
  * Task executor registry for the app scheduler.
  *
@@ -948,6 +949,7 @@ async function runChatPrompt(
       () =>
         executeProjectEnvironment({
           environment: resolved.environment,
+          credentialContext: { executionRunId: execution.id },
           executionRoot,
           scope: executionContext.location,
           surface: "scheduled",
@@ -1437,12 +1439,18 @@ async function executeExternalAgentTask(
         getExternalAgentManager()
       )
     }
-    const result = await executeOnExternalAgent(payload.prompt, {
-      agentId: payload.agentId,
-      permissionMode: payload.permissionMode,
-      workingDirectory: workspaceLease?.primaryAlias,
-      timeout,
-    })
+    const result = await executeOnExternalAgent(
+      payload.prompt,
+      bindPersonalEgressOptions(
+        {
+          agentId: payload.agentId,
+          permissionMode: payload.permissionMode,
+          workingDirectory: workspaceLease?.primaryAlias,
+          timeout,
+        },
+        { executionRunId: execution.id }
+      )
+    )
 
     if (!result) {
       await workspaceLease?.settle("failed")

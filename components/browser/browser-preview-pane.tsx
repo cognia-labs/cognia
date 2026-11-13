@@ -176,7 +176,7 @@ export function BrowserPreviewPane({
    * a host that can be hidden while still mounted needs to supply it — see the
    * `onBrowserUrlRequest` handler below.
    */
-  onRequestReveal?: () => boolean
+  onRequestReveal?: (probe?: boolean) => boolean
   /**
    * Show one chat dock page tab. The dock routes links itself (a link becomes
    * a tab), so a docked pane never claims URL requests.
@@ -724,7 +724,8 @@ export function BrowserPreviewPane({
       // whatever it has open. Anything else must be a navigable address.
       const normalized = url ? normalizePreviewUrl(url) : null
       if (url && !normalized) return false
-      if (!regionVisibleRef.current && revealRef.current?.() !== true) return false
+      if (!regionVisibleRef.current && revealRef.current?.(request.probe) !== true) return false
+      if (request.probe) return true
       // ADR-0201: a requested engine is honored when it can be served now;
       // an unservable one leaves the pane on the engine it already resolved.
       const wanted = request.backend

@@ -68,6 +68,19 @@ function setup() {
 afterEach(() => __setContainerExecForTesting(undefined))
 
 describe("createContainerExecAdapter", () => {
+  it("attests only an already bound network-off placement", async () => {
+    const { adapter, resolvePlacement } = setup()
+    expect(adapter.enforcesNetworkOff!("ref-1")).toBe(false)
+    await adapter.preflight!("ref-1", "/workspaces/p", "s1")
+    expect(adapter.enforcesNetworkOff!("ref-1")).toBe(true)
+    resolvePlacement.mockResolvedValueOnce({
+      ...(placement as object),
+      spec: { egress: { tier: "allowlist" } },
+    } as never)
+    await adapter.preflight!("ref-2", "/workspaces/p", "s2")
+    expect(adapter.enforcesNetworkOff!("ref-2")).toBe(false)
+  })
+
   it("claims the session's placement at preflight and runs each command there", async () => {
     const { adapter, call, resolvePlacement } = setup()
     await adapter.preflight!("ref-1", "/workspaces/p", "s1")

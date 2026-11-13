@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import "fake-indexeddb/auto"
 /**
  * Tests for wasm-loader.ts
  *
@@ -76,12 +77,19 @@ it("binds direct WASM callbacks through transport settlement", async () => {
     return "null"
   })
   await callWasmExport("bound-wasm", "read", {}, "generation")
-  const context = { executionRunId: "wasm-service-attempt" }
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const run = await startToolExecutionRun("wasm-service-attempt", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const context = { executionRunId: run.id }
   await withPluginExecutionContext("bound-wasm", context, () =>
     callWasmExport("bound-wasm", "read", {}, "generation")
   )
-  expect(seen).toEqual([HOST_BACKGROUND, context])
+  expect(seen).toEqual([expect.objectContaining(HOST_BACKGROUND), expect.objectContaining(context)])
   expect(pluginExecutionContext("bound-wasm")).toBeUndefined()
+  await unloadWasmPlugin("bound-wasm", "generation")
 })
 
 describe("updateWasmPluginConfig", () => {
@@ -391,4 +399,62 @@ describe("unloadWasmPlugin", () => {
     invokeMock.mockRejectedValueOnce(new Error("boom"))
     await expect(unloadWasmPlugin("demo.wasm", "wasm-gen-1")).rejects.toThrow("boom")
   })
+})
+
+it("S2 WASM guest callback checks live source before native dispatch", async () => {
+  const { withPluginExecutionContext } = await import("./invocation-identity")
+  setTauri(true)
+  invokeMock.mockResolvedValue("{}")
+  const manifest = {
+    ...baseManifest,
+    tools: [
+      { name: "s2", description: "s2", parametersSchema: { type: "object", properties: {} } },
+    ],
+  }
+  const tool = buildWasmToolDefinitions(manifest, "wasm-gen-1")[0]
+  const before = invokeMock.mock.calls.length
+  await expect(
+    withPluginExecutionContext(baseManifest.id, { personalEgressBlocked: true }, () =>
+      tool.execute({}, {} as PluginToolContext)
+    )
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(invokeMock.mock.calls).toHaveLength(before)
+  await withPluginExecutionContext(baseManifest.id, {}, () =>
+    tool.execute({}, {} as PluginToolContext)
+  )
+  expect(invokeMock.mock.calls).toHaveLength(before + 1)
+})
+
+it("F7 WASM dispatch keeps the canonical F2 egress fence without an unload lease", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+  await fixture.initialize()
+  setTauri(true)
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const owner = await startToolExecutionRun("f7-wasm-owner", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const child = await startToolExecutionRun("f7-wasm-child", { parentRunId: owner.id })
+  invokeMock.mockResolvedValue("null")
+  try {
+    await withPluginExecutionContext("f7-wasm", { executionRunId: owner.id }, () =>
+      callWasmExport("f7-wasm", "read", {}, "generation")
+    )
+    await expect(
+      addPersonalMarksToRun({ executionRunId: child.id }, [
+        { person: { kind: "local-person" }, source: "F7", markedAt: 1 },
+      ])
+    ).resolves.toBeUndefined()
+    const calls = invokeMock.mock.calls.length
+    await expect(
+      withPluginExecutionContext("f7-wasm", { executionRunId: owner.id }, () =>
+        callWasmExport("f7-wasm", "read", { private: true }, "generation")
+      )
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    expect(invokeMock.mock.calls).toHaveLength(calls)
+  } finally {
+    await fixture.dispose()
+  }
 })

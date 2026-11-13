@@ -12,7 +12,15 @@ import { requestBrowserDownloadAttach } from "@/lib/browser/downloads-client"
 import { isBrowserSurfaceVisible, requestBrowserUrl } from "@/lib/browser/open-url-request"
 import { saveBrowserAnnotation } from "@/lib/db/browser-annotations"
 import { browserToolsAsker, gateBrowserEngine } from "@/lib/browser/submission-gate"
-import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import {
+  personalEgressCachedFenced,
+  hasPersonalEgressSnapshot,
+  personalEgressFenced,
+} from "@/lib/execution/personal-egress"
+import {
+  pluginExecutionContext,
+  pluginEgressContextResolver,
+} from "@/lib/plugin/core/invocation-identity"
 import type { PluginSource } from "@/types/plugin"
 import type {
   PluginBrowserAPI,
@@ -145,6 +153,7 @@ export interface CreateBrowserAPIOptions {
 export function createBrowserAPI(options: CreateBrowserAPIOptions = {}): PluginBrowserAPI {
   const pluginId =
     options.pluginId ?? (options.firstParty ? FIRST_PARTY_BROWSER_PLUGIN_ID : "unknown-plugin")
+  const egressContext = pluginEgressContextResolver(pluginId)
   const expose = (
     engine: BrowserEngine,
     chatSessionId: string | undefined,
@@ -180,12 +189,34 @@ export function createBrowserAPI(options: CreateBrowserAPIOptions = {}): PluginB
         localOptions?.chatSessionId,
         localOptions?.botRunId
       ),
-    openPane: (url, paneOptions = {}) =>
-      requestBrowserUrl(url, {
-        ...(paneOptions.backend ? { backend: paneOptions.backend } : {}),
-        ...(paneOptions.chatSessionId ? { chatSessionId: paneOptions.chatSessionId } : {}),
-        source: "agent",
-      }),
+    openPane: (url, paneOptions = {}) => {
+      const invocation = egressContext()
+      const open = () =>
+        requestBrowserUrl(url, {
+          ...(paneOptions.backend ? { backend: paneOptions.backend } : {}),
+          ...(paneOptions.chatSessionId ? { chatSessionId: paneOptions.chatSessionId } : {}),
+          source: "agent",
+        })
+      if (
+        url &&
+        (invocation.personalEgressBlocked ||
+          personalEgressCachedFenced(invocation) ||
+          invocation.executionRunId ||
+          !hasPersonalEgressSnapshot(invocation))
+      ) {
+        if (!hasPersonalEgressSnapshot(invocation)) {
+          const accepted = requestBrowserUrl(url, { ...paneOptions, source: "agent", probe: true })
+          void personalEgressFenced(invocation)
+            .then((fenced) => {
+              if (accepted && !fenced && !personalEgressCachedFenced(invocation)) open()
+            })
+            .catch(() => undefined)
+          return accepted
+        }
+        if (personalEgressCachedFenced(invocation)) return false
+      }
+      return open()
+    },
     attachDownload: requestBrowserDownloadAttach,
     isSurfaceVisible: isBrowserSurfaceVisible,
   }

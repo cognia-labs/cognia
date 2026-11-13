@@ -1,3 +1,5 @@
+import { invokeEgressMethod } from "@/lib/plugin/security/permission-guard"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Workspace Backend API.
  *
@@ -111,32 +113,46 @@ export function createWorkspaceAPI(
     },
 
     acquire(spec) {
-      if (spec.kind === "bot-run") {
+      if (spec.kind === "bot-run")
         requirePermissions("filesystem:write", "git:write", "integrations:read")
-        return acquireBotWorkspace(pluginId, spec, defaultAcquireDeps(pluginId, openWorkspaceRoots))
-      }
-      return acquireWorkspace(spec, {
-        ...defaultAcquireDeps(pluginId, openWorkspaceRoots),
-        allowedCloneHosts,
-        authorizeRemote: async (remote) => {
-          if (!declaredPermissions.has("git:write"))
-            throw new Error("workspace clone requires the manifest to declare git:write")
-          requirePermissions("git:write")
-          const credentials = DEFAULT_WORKSPACE_CLONE_HOSTS.includes(remote.host)
-            ? "This may use your saved Git credentials for this host."
-            : "Your saved Git credentials will not be used for this host."
-          const allowed = await getPluginConsentBroker().request({
-            pluginId,
-            permission: "git:write",
-            scope: `workspace-clone:${remote.host}`,
-            reason: `Clone or refresh ${remote.url}. ${credentials}`,
+      return invokeEgressMethod(
+        pluginExecutionContext(pluginId) ?? {},
+        async () => {
+          if (spec.kind === "bot-run") {
+            requirePermissions("filesystem:write", "git:write", "integrations:read")
+            return acquireBotWorkspace(
+              pluginId,
+              spec,
+              defaultAcquireDeps(pluginId, openWorkspaceRoots)
+            )
+          }
+          return acquireWorkspace(spec, {
+            ...defaultAcquireDeps(pluginId, openWorkspaceRoots),
+            allowedCloneHosts,
+            authorizeRemote: async (remote) => {
+              if (!declaredPermissions.has("git:write"))
+                throw new Error("workspace clone requires the manifest to declare git:write")
+              requirePermissions("git:write")
+              const credentials = DEFAULT_WORKSPACE_CLONE_HOSTS.includes(remote.host)
+                ? "This may use your saved Git credentials for this host."
+                : "Your saved Git credentials will not be used for this host."
+              const allowed = await getPluginConsentBroker().request({
+                pluginId,
+                permission: "git:write",
+                scope: `workspace-clone:${remote.host}`,
+                reason: `Clone or refresh ${remote.url}. ${credentials}`,
+              })
+              if (!allowed) throw new Error("Workspace clone consent denied")
+              // The consent overlay can stay open while a grant is revoked,
+              // forbidden, or the active profile is locked.
+              requirePermissions("git:write")
+            },
           })
-          if (!allowed) throw new Error("Workspace clone consent denied")
-          // The consent overlay can stay open while a grant is revoked,
-          // forbidden, or the active profile is locked.
-          requirePermissions("git:write")
         },
-      })
+        {},
+        [],
+        pluginId
+      ) as ReturnType<PluginWorkspaceAPI["acquire"]>
     },
     snapshot: (handle) => {
       requirePermissions("filesystem:read", "git:read")

@@ -440,7 +440,7 @@ sdk remote=false f.mcp
   entries {input:<input>,suggestions:[{type:"addRules"}],suppressAlwaysAllowRule:undefined}
   outcome {behavior:"allow",updatedInput:<input>}
 sdk remote=false n.Write
-  frames {type:"permission_request",sessionId:"s1",requestId:"<id>",toolUseID:"tu-1",toolName:"Write",input:<input>,title:"Title",displayName:"Display",description:"Desc",blockedPath:undefined,decisionReason:"reason",suggestions:[{type:"addRules"}],defaultToNo:false,suppressAlwaysAllowRule:undefined}
+  frames {type:"permission_request",sessionId:"s1",requestId:"<id>",toolUseID:"tu-1",toolName:"Write",input:<input>,nativeTool:{engine:"claude-agent-sdk",name:"Write"},title:"Title",displayName:"Display",description:"Desc",blockedPath:undefined,decisionReason:"reason",suggestions:[{type:"addRules"}],defaultToNo:false,suppressAlwaysAllowRule:undefined}
   entries {input:<input>,suggestions:[{type:"addRules"}],suppressAlwaysAllowRule:undefined}
   outcome {behavior:"allow",updatedInput:<input>}
 sdk remote=true b.write

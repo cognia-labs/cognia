@@ -1,3 +1,5 @@
+import { withLogEgressSource } from "@cognia/logging/context"
+import { personalLogEgressSource } from "@/lib/execution/personal-egress"
 /**
  * Plugin Message Bus
  *
@@ -543,7 +545,12 @@ export class MessageBus {
 
   private log(action: string, data: unknown): void {
     if (this.config.enableLogging) {
-      loggers.manager.debug(`[MessageBus] ${action}:`, data)
+      withLogEgressSource(
+        personalLogEgressSource(
+          data && typeof data === "object" ? this.executions.get(data as BusEvent) : undefined
+        ),
+        () => loggers.manager.debug(`[MessageBus] ${action}:`, data)
+      )
     }
   }
 

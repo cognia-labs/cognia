@@ -119,7 +119,7 @@ test("nested options and interaction callbacks reach the SDK after the final den
   assert.equal(options.fallbackModel, "fallback")
   assert.deepEqual(options.tools, [])
   assert.deepEqual(options.mcpServers, {})
-  assert.equal(options.hooks, undefined)
+  assert.equal(options.hooks?.PreToolUse?.length, 1)
   assert.equal(typeof options.onElicitation, "function")
   assert.ok(options.systemPrompt)
   assert.equal(
@@ -213,13 +213,14 @@ test("native PostToolUse starts LSP with host ports before the first tool reques
       setNestedToolAuthorizer() {},
       mergedMcpServers: {},
       pluginToolNameAliases: new Map(),
+      personalEgressRelayTools: new Set(),
       modelAllowedTools: [],
       disallowed: new Set(),
       lspEnabled: lsp.lspEnabled,
       lspResolver: lsp.lspResolver,
     },
   })
-  const hook = options.hooks?.PostToolUse?.[0]?.hooks[0]
+  const hook = options.hooks?.PostToolUse?.[1]?.hooks[0]
   assert.ok(hook)
   assert.equal(starts.length, 0)
   const result = await hook(
@@ -324,4 +325,167 @@ test("options bind nested authorization to the session canUseTool with approval 
     authorize(toolName, { path: "." }, { signal: controller.signal }),
     /interrupted/
   )
+})
+
+test("mandatory PreToolUse denies preallowed Bash and WebFetch after a Host fence", async () => {
+  const { options, session } = captureClaudeRuntime(
+    {
+      toolSurface: "full",
+      permissionMode: "bypassPermissions",
+      allowedTools: ["Bash", "WebFetch"],
+    },
+    () => ({ async *[Symbol.asyncIterator]() {}, interrupt() {}, close() {} })
+  )
+  const hook = options.hooks?.PreToolUse?.at(-1)?.hooks[0]
+  assert.ok(hook)
+  const { fencePersonalEgress } = await import("../../policy/personal-egress.ts")
+  assert.ok(session.sendOptions)
+  fencePersonalEgress(session.sendOptions)
+  for (const name of ["Bash", "WebFetch"]) {
+    const result = await hook(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "test-session",
+        transcript_path: "",
+        cwd: ".",
+        tool_name: name,
+        tool_input: {},
+        tool_use_id: "tool",
+      },
+      "tool",
+      { signal: new AbortController().signal }
+    )
+    assert.ok("hookSpecificOutput" in result)
+    assert.equal(
+      (result as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
+        ?.permissionDecision,
+      "deny"
+    )
+  }
+  for (const name of ["Read", "Glob", "WebSearch"]) {
+    const result = await hook(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "test-session",
+        transcript_path: "",
+        cwd: ".",
+        tool_name: name,
+        tool_input: {},
+        tool_use_id: "native",
+      },
+      "native",
+      { signal: new AbortController().signal }
+    )
+    assert.deepEqual(result, {}, `G1: real native ${name} remains allowed`)
+  }
+  session.closeInput()
+})
+
+test("H3: real native bridge self-admission uses relay identity and waits for siblings", async () => {
+  let finishQuery!: () => void
+  const running = new Promise<void>((resolve) => {
+    finishQuery = resolve
+  })
+  const captured = captureClaudeRuntime(
+    {
+      toolSurface: "full",
+      permissionMode: "bypassPermissions",
+      pluginTools: [{ name: "private_recall", pluginId: "p", jsonSchema: { type: "object" } }],
+    },
+    () => ({
+      async *[Symbol.asyncIterator]() {
+        await running
+      },
+      interrupt() {},
+      close() {
+        finishQuery()
+      },
+    })
+  )
+  const { options, session, events } = captured
+  const pre = options.hooks!.PreToolUse!.at(-1)!.hooks[0]!
+  await pre(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "test-session",
+      transcript_path: "",
+      cwd: ".",
+      tool_name: "mcp__cognia-plugin-tools__private_recall",
+      tool_input: {},
+      tool_use_id: "sdk-native-id",
+    },
+    "sdk-native-id",
+    { signal: new AbortController().signal }
+  )
+  const server = options.mcpServers!["cognia-plugin-tools"]!
+  assert.ok("instance" in server)
+  const registered = (
+    server.instance as unknown as {
+      _registeredTools: Record<string, { handler(input: unknown): Promise<unknown> }>
+    }
+  )._registeredTools
+  const call = registered.private_recall!.handler({})
+  const event = events.find((frame) => frame.type === "plugin_tool_exec")!
+  assert.ok(event)
+  assert.notEqual(event.toolUseId, "sdk-native-id")
+  const { beginPersonalEgressOperation, fencePersonalEgress, quiescePersonalEgress } =
+    await import("../../policy/personal-egress.ts")
+  const finishSibling = beginPersonalEgressOperation(session.sendOptions!, false, "sibling-shell")
+  fencePersonalEgress(session.sendOptions!)
+  let admitted = false
+  const admission = quiescePersonalEgress(session.sendOptions!, [String(event.toolUseId)]).then(
+    () => {
+      admitted = true
+    }
+  )
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(admitted, false)
+  finishSibling()
+  await admission
+  assert.equal(admitted, true, "outer SDK identity must not deadlock its own Host relay")
+  session.pendingPluginToolCalls.get(String(event.toolUseId))!.resolve({ result: "private result" })
+  await call
+  session.closeInput()
+  finishQuery()
+})
+
+test("R6: aborted and approval-denied native calls release their in-flight leases", async () => {
+  for (const denied of [false, true]) {
+    const { options, session } = captureClaudeRuntime({ toolSurface: "full" }, () => ({
+      async *[Symbol.asyncIterator]() {},
+      interrupt() {},
+      close() {},
+    }))
+    const controller = new AbortController()
+    const hook = options.hooks!.PreToolUse![0]!.hooks[0]!
+    await hook(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "test-session",
+        transcript_path: "",
+        cwd: ".",
+        tool_name: "Bash",
+        tool_input: {},
+        tool_use_id: "native-cleanup",
+      },
+      "native-cleanup",
+      { signal: controller.signal }
+    )
+    if (denied) {
+      const approval = options.canUseTool!("Bash", { command: "pwd" }, {
+        signal: controller.signal,
+        toolUseID: "native-cleanup",
+      } as never)
+      for (let i = 0; i < 10 && !session.pendingApprovals.size; i++) await Promise.resolve()
+      const entry = [...session.pendingApprovals.values()][0]
+      assert.ok(entry)
+      entry.resolve({ behavior: "deny", message: "person denied" })
+      await approval
+    } else controller.abort()
+    const { fencePersonalEgress, quiescePersonalEgress } =
+      await import("../../policy/personal-egress.ts")
+    fencePersonalEgress(session.sendOptions!)
+    await quiescePersonalEgress(session.sendOptions!)
+    session.closeInput()
+  }
 })

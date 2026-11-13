@@ -826,3 +826,29 @@ it("describes, grants and revokes Host sync permission", () => {
   guard.revoke("sync-plugin", "sync:run")
   expect(guard.check("sync-plugin", "sync:run")).toBe(false)
 })
+
+it("S2 capability proxy refuses marked callbacks and keeps clear dispatch and local methods", async () => {
+  const { withPluginContentDispatch } = await import("@/lib/plugin/core/invocation-identity")
+  const id = "s2-capability"
+  const guard = getPermissionGuard({ confirmDangerousByDefault: false })
+  guard.registerPlugin(id, ["network:fetch"])
+  const outbound = jest.fn(async () => "sent")
+  const local = jest.fn(() => "local")
+  const api = createGuardedAPI(
+    id,
+    { outbound, local },
+    { outbound: "network:fetch", local: "network:fetch" },
+    { egressMethods: ["outbound"] }
+  )
+  expect(await withPluginContentDispatch(id, {}, () => api.outbound())).toBe("sent")
+  outbound.mockClear()
+  await expect(
+    withPluginContentDispatch(id, { personalEgressBlocked: true }, () => api.outbound())
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(outbound).not.toHaveBeenCalled()
+  await expect(withPluginContentDispatch(id, {}, () => api.outbound())).rejects.toMatchObject({
+    code: "personal-egress-denied",
+  })
+  expect(api.local()).toBe("local")
+  guard.unregisterPlugin(id)
+})

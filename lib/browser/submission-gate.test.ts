@@ -1,5 +1,10 @@
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
 jest.mock("@/lib/execution/personal-sink", () => ({
   ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
   assertPersonalSink: jest.fn(async () => {}),
 }))
 
@@ -208,6 +213,21 @@ describe("browserToolsAsker", () => {
 })
 
 describe("gateBrowserEngine", () => {
+  it("denies marked navigation even while outbound authorization is in shadow mode", async () => {
+    const engine = { ...guardedEngine(), navigate: jest.fn(async () => ({ ok: true })) }
+    const gated = gateBrowserEngine(
+      asEngine(engine),
+      { kind: "workflow", workflowId: "private-workflow", runId: "marked" },
+      {},
+      deps(SHADOW, "proceed").gateDeps
+    )
+    mockEgressTaint.mockResolvedValueOnce({ verified: true, marks: [{}] })
+    await expect(gated.navigate("https://example.com/private")).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
+    expect(engine.navigate).not.toHaveBeenCalled()
+  })
+
   it("never hands out the guard's own methods, and passes the rest through", async () => {
     const engine = guardedEngine()
     const gated = gateBrowserEngine(asEngine(engine), chat, {}, deps(SHADOW, "proceed").gateDeps)

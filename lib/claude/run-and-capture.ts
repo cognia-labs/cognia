@@ -1,3 +1,7 @@
+import {
+  bindPersonalEgressOptions,
+  personalEgressOptionsSource,
+} from "@/lib/execution/personal-egress"
 /**
  * Run a Claude turn and capture the assistant's final reply text.
  *
@@ -24,7 +28,11 @@
 
 import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
 import { redactText } from "@cognia/redact"
-import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
+import {
+  bindToolCallRun,
+  toolCallExecutionRunId,
+  toolCallEgressRunId,
+} from "@/lib/execution/acting-authority"
 import {
   sendPrompt,
   interruptSession,
@@ -767,19 +775,22 @@ async function runCaptureWithFusionAction(
   }
   cap?.onPartial?.(outcome.text)
   cap?.onEvent?.({ type: "text-delta", delta: outcome.text })
-  return {
-    text: outcome.text,
-    // A fusion run has no SDK assistant message; its run id is the stable
-    // idempotency key a caller would otherwise take from one.
-    messageId: outcome.runId,
-    a2uiSurfaces: {},
-    a2uiSurfaceOrder: [],
-    usage: {
-      inputTokens: outcome.usage.promptTokens,
-      outputTokens: outcome.usage.completionTokens,
+  return bindPersonalEgressOptions(
+    {
+      text: outcome.text,
+      // A fusion run has no SDK assistant message; its run id is the stable
+      // idempotency key a caller would otherwise take from one.
+      messageId: outcome.runId,
+      a2uiSurfaces: {},
+      a2uiSurfaceOrder: [],
+      usage: {
+        inputTokens: outcome.usage.promptTokens,
+        outputTokens: outcome.usage.completionTokens,
+      },
+      resultSubtype: outcome.qualityStatus === "degraded" ? "degraded" : "success",
     },
-    resultSubtype: outcome.qualityStatus === "degraded" ? "degraded" : "success",
-  }
+    { executionRunId: outcome.runId, sessionId }
+  )
 }
 
 /**
@@ -902,7 +913,10 @@ async function runCaptureWithMiddleware(
   // Apply any text transformation the chain produced onto the captured result.
   return response.text === holder.value.text
     ? holder.value
-    : { ...holder.value, text: response.text, textTransformed: true }
+    : bindPersonalEgressOptions(
+        { ...holder.value, text: response.text, textTransformed: true },
+        personalEgressOptionsSource(holder.value) ?? {}
+      )
 }
 
 /**
@@ -926,6 +940,17 @@ async function captureAssistantReplyCore(
   // session-scoped event, so `onEvent` below can drop events left over from a
   // previous turn of the same session — see the filter for why that matters.
   const turnId = options?.turnId ?? crypto.randomUUID()
+  const knownRunId =
+    cap?.outboundPolicy?.executionRunId ||
+    options?.execution?.identity?.runId ||
+    toolCallExecutionRunId(sessionId, turnId, options?.execution?.identity?.attemptId) ||
+    undefined
+  if (knownRunId)
+    bindToolCallRun(sessionId, turnId, knownRunId, options?.execution?.identity?.attemptId)
+  const toolEgressRunId = () =>
+    knownRunId
+      ? toolCallEgressRunId(sessionId, turnId, options?.execution?.identity?.attemptId)
+      : undefined
 
   return new Promise<RunAndCaptureResult>((resolve, reject) => {
     let unlisten: (() => void) | null = null
@@ -1198,7 +1223,16 @@ async function captureAssistantReplyCore(
           try {
             // The capture is the sole command responder, including the global
             // plugin firewall previously run by the competing UI subscriber.
-            const pre = await dispatchPreToolUse(req.toolName, req.input, sessionId)
+            const pre = await dispatchPreToolUse(
+              req.toolName,
+              req.input,
+              sessionId,
+              req.nativeTool,
+              {
+                sessionId,
+                executionRunId: toolEgressRunId(),
+              }
+            )
             if (settled || abortRequested || signal?.aborted) return
             // ADR-0201: an approve-every-call tool is the approver's decision on
             // the input the MODEL sent. A plugin may deny it, but a plugin
@@ -1298,7 +1332,11 @@ async function captureAssistantReplyCore(
               call?.input ?? {},
               req.result,
               sessionId,
-              { isError: req.isError, turnId }
+              { isError: req.isError, turnId },
+              {
+                sessionId,
+                executionRunId: toolEgressRunId(),
+              }
             )
             updatedToolOutput = post.modifiedResult
           } catch {
@@ -1384,7 +1422,15 @@ async function captureAssistantReplyCore(
 
     const finishOk = (result: RunAndCaptureResult) => {
       cleanup()
-      resolve(result)
+      resolve(
+        bindPersonalEgressOptions(result, {
+          sessionId,
+          executionRunId:
+            cap?.outboundPolicy?.executionRunId ??
+            toolCallExecutionRunId(sessionId, turnId, options?.execution?.identity?.attemptId) ??
+            undefined,
+        })
+      )
     }
 
     const finishErr = (err: RunAndCaptureError) => {
@@ -2220,6 +2266,42 @@ async function captureHostExternalReply(
   options?: SendOptions,
   cap?: RunAndCaptureOptions
 ): Promise<RunAndCaptureResult> {
+  const { resolveExecutingRun, startToolExecutionRun, finishToolExecutionRun } =
+    await import("@/lib/execution/acting-authority")
+  let executionRunId =
+    cap?.outboundPolicy?.executionRunId ||
+    options?.execution?.identity?.runId ||
+    toolCallExecutionRunId(sessionId, options?.turnId, options?.execution?.identity?.attemptId) ||
+    (await resolveExecutingRun(sessionId))?.id
+  const owned = !executionRunId
+  if (!executionRunId)
+    executionRunId = (await startToolExecutionRun(sessionId, { title: "Host external capture" })).id
+  try {
+    if (owned) {
+      const { readSessionPersonalTaint } = await import("@/lib/execution/personal-sink")
+      const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+      const taint = await readSessionPersonalTaint(sessionId)
+      if (taint.marks.length) await addPersonalMarksToRun({ executionRunId }, taint.marks)
+    }
+    return await captureBoundHostExternalReply(sessionId, prompt, options, cap, {
+      sessionId,
+      executionRunId,
+    })
+  } finally {
+    if (owned) await finishToolExecutionRun(executionRunId)
+  }
+}
+
+async function captureBoundHostExternalReply(
+  sessionId: string,
+  prompt: SendContent,
+  options: SendOptions | undefined,
+  cap: RunAndCaptureOptions | undefined,
+  personalContext: { sessionId: string; executionRunId: string }
+): Promise<RunAndCaptureResult> {
+  const { assertPersonalEgress, bindPersonalEgressSession } =
+    await import("@/lib/execution/personal-egress")
+  await assertPersonalEgress(personalContext)
   const { externalAgentIdFromProviderId } =
     await import("@/lib/ai/agent/external/session/session-models")
   const { getRemoteHostConfig } =
@@ -2465,16 +2547,22 @@ async function captureHostExternalReply(
         return
       }
       settled = true
-      resolve({
-        text,
-        messageId: runId,
-        sdkSessionId,
-        usage,
-        a2uiSurfaces: Object.fromEntries(surfaceAcc.surfaces),
-        a2uiSurfaceOrder: surfaceAcc.order,
-      })
+      resolve(
+        bindPersonalEgressOptions(
+          {
+            text,
+            messageId: runId,
+            sdkSessionId,
+            usage,
+            a2uiSurfaces: Object.fromEntries(surfaceAcc.surfaces),
+            a2uiSurfaceOrder: surfaceAcc.order,
+          },
+          personalContext
+        )
+      )
     },
   })
+  const releasePersonalEgress = bindPersonalEgressSession(personalContext)
   cap?.signal?.addEventListener("abort", abort, { once: true })
   try {
     if (cap?.signal?.aborted) abort()
@@ -2530,6 +2618,7 @@ async function captureHostExternalReply(
   } finally {
     clearTimeout(timer)
     clearTimeout(idle)
+    releasePersonalEgress()
     cap?.signal?.removeEventListener("abort", abort)
     stop()
     releaseSkillLoadContext(sessionId)

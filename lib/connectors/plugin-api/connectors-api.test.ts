@@ -16,12 +16,16 @@
  * management delegation.
  */
 
+import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createConnectorsAPI } from "./connectors-api"
 import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security"
 import { PermissionError } from "@/lib/plugin/security/permission-guard"
 import { routePythonHostRequest } from "@/lib/plugin/python/host-request-router"
 import type { PluginContext } from "@/types/plugin/plugin"
-import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import {
+  withPluginExecutionContext,
+  beginPluginEgressInstance,
+} from "@/lib/plugin/core/invocation-identity"
 
 const mockPersonalSink = jest.fn(async (..._args: unknown[]) => ({ outcome: "allow" as string }))
 jest.mock("@/lib/execution/personal-sink", () => ({
@@ -64,6 +68,7 @@ const getAdapterA2UICapability = jest.fn((id: string) =>
 const getAdapterSkillCapabilities = jest.fn((id: string) =>
   id === "sl" ? [{ family: "lark.calendar", mutations: ["read", "write"] }] : null
 )
+const findStoredPlatformMessage = jest.fn()
 const fetchHistoryAll = jest.fn(async (..._a: unknown[]) => [{ messageId: "h1" }])
 const inboundObservers = new Set<(e: unknown) => void>()
 const callbackObservers = new Set<(e: unknown, k: string | null) => void>()
@@ -131,6 +136,7 @@ jest.mock("@/lib/connectors/bus", () => ({
     getAdapterSkillCapabilities: (...a: unknown[]) =>
       getAdapterSkillCapabilities(...(a as [string])),
     fetchHistoryAll: (...a: unknown[]) => fetchHistoryAll(...a),
+    findStoredPlatformMessage: (...args: unknown[]) => findStoredPlatformMessage(...args),
     subscribeInbound: (...a: unknown[]) => subscribeInbound(...(a as [(e: unknown) => void])),
     subscribeCallback: (...a: unknown[]) =>
       subscribeCallback(...(a as [(e: unknown, k: string | null) => void])),
@@ -309,15 +315,19 @@ jest.mock("@/lib/db/outbound-jobs", () => ({
 }))
 
 jest.mock("@/lib/db/schema", () => ({
-  getDb: () => ({
-    outboundQueue: { get: (...a: unknown[]) => outboundQueueGet(...(a as [string])) },
-  }),
+  ...jest.requireActual("@/lib/db/schema"),
+  getDb: () => {
+    const db = jest.requireActual("@/lib/db/schema").getDb()
+    db.outboundQueue.get = (...args: [string]) => outboundQueueGet(...args)
+    return db
+  },
 }))
 
 const hasNoLeakingPiiDeep = jest.fn(
   (value: unknown) => !JSON.stringify(value).includes("leak@pii.example")
 )
 jest.mock("@cognia/redact", () => ({
+  ...jest.requireActual("@cognia/redact"),
   hasNoLeakingPiiDeep: (...a: unknown[]) => hasNoLeakingPiiDeep(...(a as [unknown])),
 }))
 
@@ -352,12 +362,17 @@ jest.mock("@/lib/connectors/delivered-messages", () => ({
   landedChatsOf: async () => [],
 }))
 
+const q1Fixture = createDbTestFixture({ seeded: false })
+beforeAll(q1Fixture.initialize)
+afterAll(q1Fixture.dispose)
+
 const PLUGIN = "conn-plugin"
 
 describe("createConnectorsAPI", () => {
   let guard: ReturnType<typeof getPermissionGuard>
 
   beforeEach(() => {
+    beginPluginEgressInstance(PLUGIN)
     jest.clearAllMocks()
     mockPersonalSink.mockReset().mockResolvedValue({ outcome: "allow" })
     inboundObservers.clear()
@@ -468,7 +483,7 @@ describe("createConnectorsAPI", () => {
           capability: "links.create",
           mutation: "destructive",
         })
-        expect(() => api.queryManagement("links", request as never)).toThrow(/mutation/)
+        await expect(api.queryManagement("links", request as never)).rejects.toThrow(/mutation/)
         expect(() => api.manage("links", request as never)).toThrow(PermissionError)
         expect(execute).not.toHaveBeenCalled()
         guard.registerPlugin(PLUGIN, ["connectors:read", "connectors:manage"])
@@ -499,9 +514,9 @@ describe("createConnectorsAPI", () => {
         expect(
           await api.queryManagement("resources", { operation: "menus.get", input: {} })
         ).toMatchObject({ status: "ok" })
-        expect(() =>
+        await expect(
           api.queryManagement("resources", { operation: "menus.set", input: { items: [] } })
-        ).toThrow(/mutation/)
+        ).rejects.toThrow(/mutation/)
         expect(() =>
           api.manage("resources", { operation: "menus.set", input: { items: [] } })
         ).toThrow(PermissionError)
@@ -679,6 +694,44 @@ describe("createConnectorsAPI", () => {
       const res = await api.fetchHistory("tg", "telegram:tg:42", { max: 5 })
       expect(res).toEqual([{ messageId: "h1" }])
       expect(fetchHistoryAll).toHaveBeenCalledWith("tg", "telegram:tg:42", { max: 5 })
+    })
+
+    it("Q1 IM history projects canonical marked rows with distinct platform ids", async () => {
+      const { getDb } = await import("@/lib/db/schema")
+      const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+        await import("@/lib/execution/acting-authority")
+      const { bindPersonalMessageRun } = await import("@/lib/execution/personal-marks")
+      await getDb().sessions.put({ ...SESSION, id: "q1-im" } as never)
+      const run = await startToolExecutionRun("q1-im", {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      await getDb().executionRuns.update(run.id, {
+        personalMarks: [{ person: { kind: "local-person" }, source: "Q1", markedAt: 1 }],
+      })
+      const stored = {
+        id: "host-message",
+        sessionId: "q1-im",
+        role: "assistant",
+        parts: [{ type: "text", text: "private" }],
+        metadata: { personalMarkVersion: 1 },
+      }
+      await getDb().messages.put(stored as never)
+      bindPersonalMessageRun(stored.id, run.id)
+      findStoredPlatformMessage.mockResolvedValueOnce(stored)
+      fetchHistoryAll.mockResolvedValueOnce([
+        {
+          messageId: "platform-message",
+          plainText: "private",
+          raw: { secret: "private" },
+          segments: [],
+          sender: {},
+          channel: {},
+        } as { messageId: string },
+      ])
+      const result = await createConnectorsAPI(PLUGIN).fetchHistory("tg", "unbound")
+      expect(JSON.stringify(result)).not.toContain("private")
+      expect(result[0].plainText).toContain("Withheld")
     })
 
     it("onInbound subscribes a passive observer and disposes", () => {
@@ -1750,5 +1803,18 @@ describe("createConnectorsAPI", () => {
         /does not implement createChat/
       )
     })
+  })
+})
+
+it("S2 refuses remote read selectors from a marked plugin callback", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  resetPermissionGuard()
+  getPermissionGuard({ confirmDangerousByDefault: false }).registerPlugin(PLUGIN, [
+    "connectors:read",
+  ])
+  await withPluginExecutionContext(PLUGIN, { personalEgressBlocked: true }, async () => {
+    await expect(
+      createConnectorsAPI(PLUGIN).fetchHistory("tg", "telegram:tg:secret")
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
   })
 })

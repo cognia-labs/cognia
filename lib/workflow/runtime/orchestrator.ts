@@ -1,3 +1,4 @@
+import { syncWorkflowExecutionRun } from "@/lib/execution/workflow-bridge"
 /**
  * Workflow orchestrator. Top-level entry point for executing a workflow.
  *
@@ -311,6 +312,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     if (TERMINAL_RUN_STATUSES.has(blockedAdmission.status)) await ackRunCompleted(runId)
     return { runId, status: blockedAdmission.status, error: blockedAdmission.error }
   }
+  // Canonical authority must exist before a node can perform opaque egress.
+  await syncWorkflowExecutionRun(runRow, [], [])
   // Register before any asynchronous startup work. A cancellation between the
   // admission commit and registration is caught by the durable re-read below.
   const ac = new AbortController()

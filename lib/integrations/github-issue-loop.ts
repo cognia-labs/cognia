@@ -207,6 +207,7 @@ export async function runGithubIssueLoop(
       ].join("\n\n")
       try {
         await deps.executeAgent(prompt, {
+          executionIdentity: { runId: `execution:job:integration:${context.jobId}` },
           cwd: workspace.path,
           toolsEnabled: true,
           abortSignal: context.signal,

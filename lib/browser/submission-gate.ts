@@ -34,7 +34,11 @@ import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 import type { BrowserEngine } from "@/lib/browser/agent-engine"
 import { assertPersonalSink, isPersonalSinkWithheldError } from "@/lib/execution/personal-sink"
-import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import {
+  pluginExecutionContext,
+  pluginEgressContextResolver,
+  pluginEgressInstanceKey,
+} from "@/lib/plugin/core/invocation-identity"
 import {
   isSubmissionGuardedEngine,
   type BrowserActionResult,
@@ -311,11 +315,15 @@ class PageDrainer {
 
 /** The planning and asking one gated engine does. */
 class GateCore {
+  private readonly pluginEgress?: ReturnType<typeof pluginEgressContextResolver>
   constructor(
     private readonly asker: BrowserSubmissionAsker,
     private readonly options: SubmissionGateOptions,
     private readonly deps: SubmissionGateDeps
-  ) {}
+  ) {
+    this.pluginEgress =
+      asker.kind === "plugin" ? pluginEgressContextResolver(asker.pluginId) : undefined
+  }
 
   async mode(): Promise<"shadow" | "enforce"> {
     const settings = await (this.deps.settings ?? readAppSettings)()
@@ -324,6 +332,12 @@ class GateCore {
 
   /** The asker the policy sees: a chat with a captured turn running plans as that turn. */
   private resolvedAsker(): BrowserSubmissionAsker {
+    if (this.asker.kind === "plugin") {
+      const live = pluginExecutionContext(this.asker.pluginId)
+      return live && live.executionRunId === this.asker.executionRunId
+        ? this.asker
+        : { ...this.asker, executionRunId: "" }
+    }
     if (this.asker.kind !== "chat") return this.asker
     const turn = (this.deps.capturedTurnOf ?? defaultCapturedTurnOf)(this.asker.sessionId)
     if (!turn) return this.asker
@@ -336,6 +350,20 @@ class GateCore {
       ...(policy.origin ? { origin: policy.origin } : {}),
       ...(policy.policyGrants ? { policyGrants: policy.policyGrants } : {}),
     }
+  }
+
+  personalContext() {
+    if (this.pluginEgress) return this.pluginEgress()
+    const asker = this.resolvedAsker()
+    return personalSinkHost.personalSinkContextForRun(
+      asker.kind === "workflow"
+        ? { executionRunId: `execution:workflow:${asker.runId}` }
+        : {
+            sessionId: asker.kind === "chat" || asker.kind === "turn" ? asker.sessionId : undefined,
+            executionRunId: asker.executionRunId,
+          },
+      "opaque browser action has no Host execution"
+    )
   }
 
   async assertOpaqueAction(operation: string, target?: string): Promise<void> {
@@ -452,7 +480,14 @@ function gatedEngine(engine: BrowserEngine, core: GateCore): BrowserEngine {
       }
     }
     await core.assertOpaqueAction(method, personalTarget)
-    const call = () => (engine[method] as (...a: unknown[]) => Promise<unknown>).apply(engine, args)
+    const call = async () => {
+      const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+      await assertPersonalEgress(core.personalContext())
+      const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+      return runPersonalEgressOperation(core.personalContext(), () =>
+        (engine[method] as (...a: unknown[]) => Promise<unknown>).apply(engine, args)
+      )
+    }
     const enforce = (await core.mode()) === "enforce"
     const possible = possibleSubmissionOperation(method, args)
 
@@ -547,7 +582,7 @@ export function gateBrowserEngine(
 ): BrowserEngine {
   const byAsker = gated.get(engine) ?? new Map<string, BrowserEngine>()
   gated.set(engine, byAsker)
-  const key = `${askerKey(asker)}:execution:${asker.executionRunId ?? "active"}`
+  const key = `${askerKey(asker)}:execution:${asker.executionRunId ?? "active"}:instance:${asker.kind === "plugin" ? pluginEgressInstanceKey(asker.pluginId) : "host"}`
   const existing = byAsker.get(key)
   if (existing) return existing
   const wrapped = gatedEngine(engine, new GateCore(asker, options, deps))

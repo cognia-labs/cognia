@@ -37,6 +37,8 @@ export interface BrowserOpenUrlRequest {
    * after `dispatchEvent` returns — event dispatch is synchronous, so this is a
    * reliable "did anyone take it?" answer without timers or a return channel.
    */
+  /** Side-effect-free capability probe; listeners must not reveal or navigate. */
+  probe?: boolean
   claimed: boolean
 }
 
@@ -65,12 +67,14 @@ export function requestBrowserUrl(
   url: string,
   options: {
     backend?: BrowserBackend
+    probe?: boolean
     source?: "user" | "agent"
     chatSessionId?: string
   } = {}
 ): boolean {
   if (typeof window === "undefined") return false
   const extra = {
+    ...(options.probe ? { probe: true } : {}),
     ...(options.backend ? { backend: options.backend } : {}),
     ...(options.source ? { source: options.source } : {}),
     ...(options.chatSessionId ? { chatSessionId: options.chatSessionId } : {}),

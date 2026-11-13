@@ -1,3 +1,11 @@
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 import type {
   ModuleToolFamily,
   ModuleToolsEntry,

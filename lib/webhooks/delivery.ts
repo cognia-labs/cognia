@@ -1,3 +1,8 @@
+import {
+  runPersonalEgressOperation,
+  PersonalEgressDeniedError,
+  type PersonalEgressContext,
+} from "@/lib/execution/personal-egress"
 /**
  * Signed webhook delivery with exponential backoff + jitter.
  *
@@ -26,6 +31,7 @@ import { loggers } from "@cognia/logging"
 const log = loggers.scheduler
 
 export interface DeliverInput {
+  credentialContext?: PersonalEgressContext
   endpoint: WebhookEndpoint
   event: OutboundWebhookEvent
   /** Resolved Standard Webhooks signing secret. Omitted → unsigned delivery. */
@@ -68,7 +74,7 @@ export async function deliverWebhook(
   opts: { sleep?: (ms: number) => Promise<void> } = {}
 ): Promise<DeliverResult> {
   const sleep = opts.sleep ?? realSleep
-  const { endpoint, event, signingSecret } = input
+  const { endpoint, event, signingSecret, credentialContext } = input
   const limits = input.limits ? normalizeWebhookDelivery(input.limits) : DEFAULT_WEBHOOK_DELIVERY
   const { maxRetries, baseDelayMs, timeoutMs } = limits
   const body = JSON.stringify(event) // serialize ONCE
@@ -86,12 +92,14 @@ export async function deliverWebhook(
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
-      const res = await proxyFetch(endpoint.url, {
-        method: "POST",
-        headers: baseHeaders,
-        body,
-        signal: controller.signal,
-      })
+      const res = await runPersonalEgressOperation(credentialContext ?? {}, () =>
+        proxyFetch(endpoint.url, {
+          method: "POST",
+          headers: baseHeaders,
+          body,
+          signal: controller.signal,
+        })
+      )
       clearTimeout(timer)
       if (res.ok) return { ok: true, httpStatus: res.status }
       if (attempt === maxRetries) {
@@ -99,7 +107,7 @@ export async function deliverWebhook(
       }
     } catch (error) {
       clearTimeout(timer)
-      if (attempt === maxRetries) {
+      if (error instanceof PersonalEgressDeniedError || attempt === maxRetries) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
     }

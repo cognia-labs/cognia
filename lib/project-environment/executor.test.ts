@@ -875,3 +875,16 @@ describe("mise install (ADR-0147, 2026-11-08 amendment)", () => {
     expect(second).not.toBe(first)
   })
 })
+
+it("S2 never bypasses a producer egress denial before native setup", async () => {
+  const result = await executeProjectEnvironment({
+    environment,
+    executionRoot: "/s2-denied",
+    scope: "local",
+    surface: "interactive",
+    bypassOnFailure: true,
+    credentialContext: { personalEgressBlocked: true },
+  })
+  expect(result).toMatchObject({ success: false, bypassed: false })
+  expect(callMock).not.toHaveBeenCalled()
+})

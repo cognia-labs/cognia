@@ -2356,3 +2356,31 @@ it("continues a run when its crash-resume mirror fails and logs only once per ru
     warn.mockRestore()
   }
 })
+
+it("S2 persists canonical authority before the first executor can run", async () => {
+  let observed: unknown
+  registerNodeExecutor({
+    kind: "flow.set",
+    typeVersion: 1,
+    execute: async (ctx) => {
+      observed = await getDb().executionRuns.get(`execution:workflow:${ctx.runId}`)
+      return { output: { ok: true } }
+    },
+  })
+  const workflow = buildWorkflow([
+    {
+      id: "s2-authority",
+      type: "flow.set",
+      typeVersion: 1,
+      position: { x: 0, y: 0 },
+      data: { label: "authority", params: { variable: "s2", value: "ok" } },
+    },
+  ])
+  const result = await runWorkflow({ workflow, trigger })
+  expect(result.status).toBe("succeeded")
+  expect(observed).toMatchObject({
+    id: `execution:workflow:${result.runId}`,
+    status: "running",
+    actingIdentity: { rootRunId: `execution:workflow:${result.runId}` },
+  })
+})

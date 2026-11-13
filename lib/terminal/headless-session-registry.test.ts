@@ -9,9 +9,12 @@ import {
   registerRunSession,
 } from "./headless-session-registry"
 
-const mockInvoke = jest.fn(async (..._args: unknown[]) => undefined)
+const mockInvoke = jest.fn<Promise<unknown>, unknown[]>(async () => ({ status: "exited" }))
 jest.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args),
+  invoke: (...args: unknown[]) =>
+    (args[1] as { observeOnly?: boolean } | undefined)?.observeOnly
+      ? Promise.resolve({ status: "unknown" })
+      : mockInvoke(...args),
 }))
 
 const mockKillFromDock = jest.fn(async (..._args: unknown[]) => undefined)
@@ -25,7 +28,7 @@ jest.mock("@/stores/terminal/terminal-store", () => ({
 
 beforeEach(() => {
   __clearRunSessionsForTesting()
-  mockInvoke.mockReset().mockResolvedValue(undefined)
+  mockInvoke.mockReset().mockResolvedValue({ status: "exited" })
   mockKillFromDock.mockReset().mockResolvedValue(undefined)
 })
 
@@ -88,7 +91,7 @@ describe("headless session registry", () => {
     const open = beginRunSessionOpen("run-x")
     await closeRunSessions("run-x")
     expect(finishRunSessionOpen(open, "late-1", "headless")).toBe(false)
-    expect(listRunSessions("run-x")).toEqual([])
+    expect(listRunSessions("run-x")).toEqual([{ sessionId: "late-1", mode: "headless" }])
   })
 
   it("registers an open that finished before any release", async () => {
@@ -117,4 +120,54 @@ describe("headless session registry", () => {
     await closeRunSessions("run-a")
     expect(open.released).toBe(false)
   })
+})
+
+it("F5 persistent headless lease survives a failed close until Host child-wait proves exit", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { readRunPersonalTaint } = await import("@/lib/execution/personal-sink")
+  const { closeRunSession } = await import("./headless-session-registry")
+  const owner = await startToolExecutionRun("headless-lease-owner", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const child = await startToolExecutionRun("headless-lease-child", { parentRunId: owner.id })
+  const mark = { person: { kind: "local-person" as const }, source: "F5", markedAt: 1 }
+  mockInvoke.mockResolvedValue({ status: "stillRunning" })
+  registerRunSession("workflow", "f5-headless", "headless", { executionRunId: owner.id })
+  try {
+    expect(await readRunPersonalTaint({ executionRunId: child.id })).toMatchObject({
+      verified: true,
+      marks: [],
+    })
+    await expect(addPersonalMarksToRun({ executionRunId: child.id }, [mark])).rejects.toMatchObject(
+      { code: "personal-egress-denied" }
+    )
+    mockInvoke.mockRejectedValueOnce(new Error("Host unavailable"))
+    await expect(closeRunSession("f5-headless", "headless")).rejects.toThrow("Host unavailable")
+    await expect(addPersonalMarksToRun({ executionRunId: child.id }, [mark])).rejects.toMatchObject(
+      { code: "personal-egress-denied" }
+    )
+    for (const proof of [undefined, { status: "unknown" }, { status: "stillRunning" }]) {
+      mockInvoke.mockResolvedValueOnce(proof)
+      await expect(closeRunSession("f5-headless", "headless")).resolves.toBeUndefined()
+      await expect(
+        addPersonalMarksToRun({ executionRunId: child.id }, [mark])
+      ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    }
+    await closeRunSessions("workflow")
+    expect(listRunSessions("workflow")).toEqual([])
+    mockInvoke.mockResolvedValue({ status: "exited" })
+    await expect(
+      addPersonalMarksToRun({ executionRunId: child.id }, [mark])
+    ).resolves.toBeUndefined()
+    expect(listRunSessions("workflow")).toEqual([])
+  } finally {
+    mockInvoke.mockResolvedValue({ status: "exited" })
+    await closeRunSession("f5-headless", "headless")
+    await fixture.dispose()
+  }
 })

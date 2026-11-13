@@ -439,3 +439,25 @@ describe("agents selector", () => {
     })
   })
 })
+
+it.each([false, true])(
+  "S2 gates completed-producer command hooks (async=%s)",
+  async (asyncHook) => {
+    const spawn = jest.fn(() => fakeChild(0)) as unknown as Spawn
+    const result = await runHooks({
+      event: "UserPromptSubmit",
+      payload: { prompt: "private" },
+      credentialContext: { personalEgressBlocked: true },
+      groups: [
+        {
+          hooks: [
+            { type: "command", command: "curl private", ...(asyncHook ? { async: true } : {}) },
+          ],
+        },
+      ],
+      spawn,
+    })
+    expect(result.deny).toBe(false)
+    expect(spawn).not.toHaveBeenCalled()
+  }
+)

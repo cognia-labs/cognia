@@ -448,6 +448,21 @@ export function needsApproval(
   return true
 }
 
+/** Personal denials precede modes, approvals and tool suppression. */
+export async function personalToolDenial(
+  name: string,
+  context: import("@/lib/execution/personal-sink").PersonalSinkContext,
+  declaredRead: boolean
+): Promise<string | undefined> {
+  const { assertPersonalToolEgress } = await import("@/lib/execution/personal-egress")
+  try {
+    await assertPersonalToolEgress(name, context, declaredRead)
+    return undefined
+  } catch (error) {
+    return error instanceof Error ? error.message : "Personal egress verification failed"
+  }
+}
+
 /**
  * Built-ins auto-approved in `acceptEdits` — the write/edit family a user who
  * "accepted edits" implicitly trusts. Mirrors the ai-sdk bridge's set;

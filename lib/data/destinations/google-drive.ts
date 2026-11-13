@@ -1,3 +1,4 @@
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
 /**
  * Google Drive backup destination — uploads encrypted snapshots into a folder
  * under My Drive with the `drive.file` scope (spec 2026-08-16, D).
@@ -323,7 +324,9 @@ async function driveContext(deps: GoogleDriveDestinationDeps) {
     deps.assertActive?.()
     await lease.assertCurrent()
     try {
-      return await (deps.http ?? backupHttpRequest)(request)
+      return await runPersonalEgressOperation(deps.credentialContext ?? {}, () =>
+        (deps.http ?? backupHttpRequest)(request)
+      )
     } finally {
       deps.assertActive?.()
       await lease.assertCurrent()

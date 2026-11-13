@@ -18,7 +18,10 @@ jest.mock("@/lib/terminal/headless-exec", () => ({
 
 const mockInvoke = jest.fn()
 jest.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args),
+  invoke: (...args: unknown[]) =>
+    (args[1] as { observeOnly?: boolean } | undefined)?.observeOnly
+      ? Promise.resolve({ status: "unknown" })
+      : mockInvoke(...args),
 }))
 
 jest.mock("@/lib/tauri", () => ({ isTauri: () => true }))
@@ -103,7 +106,7 @@ describe("action.terminal.session.open", () => {
         ? new Promise((resolve) => {
             resolveSpawn = resolve
           })
-        : Promise.resolve(undefined)
+        : Promise.resolve({ status: "exited" })
     )
     const controller = new AbortController()
     const reg = getExecutor("action.terminal.session.open", 1)!
@@ -132,10 +135,19 @@ describe("action.terminal.session.open", () => {
     const pending = reg.execute(makeCtx({}, "run-d"))
     await new Promise((r) => setTimeout(r, 0))
     await closeRunSessions("run-d")
+    const { registerLiveSession, unregisterLiveSession } =
+      await import("@/lib/terminal/session-registry")
+    registerLiveSession({
+      id: "late-tab",
+      processExitConfirmed: true,
+      info: { id: "late-tab", alive: false },
+      onExit: () => () => undefined,
+    } as unknown as import("@/lib/terminal/base-session").BaseTerminalSession)
     resolveSpawn({ ok: true, sessionId: "late-tab" })
     await expect(pending).rejects.toMatchObject({ name: "AbortError" })
     expect(mockKillFromDock).toHaveBeenCalledWith("late-tab", {})
     expect(listRunSessions("run-d")).toEqual([])
+    unregisterLiveSession("late-tab")
   })
 
   it("does not spawn at all for a run that is already cancelled", async () => {
@@ -153,7 +165,11 @@ describe("action.terminal.session.open", () => {
     const reg = getExecutor("action.terminal.session.open", 1)!
     const result = await reg.execute(makeCtx({ cwd: "/repo" }))
     expect(mockDock).toHaveBeenCalledWith(
-      expect.objectContaining({ chatSessionId: "run-1", action: "spawn" })
+      expect.objectContaining({
+        chatSessionId: "run-1",
+        credentialContext: { executionRunId: `execution:workflow:${"run-1"}` },
+        action: "spawn",
+      })
     )
     expect(result.output).toMatchObject({ sessionId: "tab-1", mode: "dock" })
     expect(listRunSessions("run-1")).toEqual([{ sessionId: "tab-1", mode: "dock" }])
@@ -304,7 +320,7 @@ describe("action.terminal.session.run", () => {
 describe("action.terminal.session.close", () => {
   it("closes a headless session and deregisters it", async () => {
     registerRunSession("run-1", "hl-1", "headless")
-    mockInvoke.mockResolvedValue(undefined)
+    mockInvoke.mockResolvedValue({ status: "exited" })
     const reg = getExecutor("action.terminal.session.close", 1)!
     const result = await reg.execute(makeCtx({ sessionId: "hl-1" }))
     expect(mockInvoke).toHaveBeenCalledWith("terminal_headless_kill", { sessionId: "hl-1" })
@@ -331,4 +347,96 @@ describe("action.terminal.session.close", () => {
     const reg = getExecutor("action.terminal.session.close", 1)!
     await expect(reg.execute(makeCtx({}))).rejects.toThrow(/sessionId/)
   })
+})
+
+it("F7 cancelled late spawn and explicit close retain the lease until child-wait proof", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { closeRunSession } = await import("@/lib/terminal/headless-session-registry")
+  const owner = await startToolExecutionRun("f7-workflow", {
+    runId: "execution:workflow:f7-workflow",
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const sibling = await startToolExecutionRun("f7-workflow-sibling", { parentRunId: owner.id })
+  const mark = { person: { kind: "local-person" as const }, source: "F7", markedAt: 1 }
+  let resolveSpawn!: (value: unknown) => void
+  mockInvoke.mockImplementation((command: string) =>
+    command === "terminal_headless_spawn"
+      ? new Promise((resolve) => {
+          resolveSpawn = resolve
+        })
+      : Promise.resolve({ status: "unknown" })
+  )
+  const controller = new AbortController()
+  try {
+    const pending = getExecutor("action.terminal.session.open", 1)!.execute(
+      makeCtx({ unattended: true }, "f7-workflow", controller.signal)
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    controller.abort()
+    await closeRunSessions("f7-workflow")
+    resolveSpawn({ sessionId: "f7-late-pty", shell: "bash" })
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    await expect(
+      addPersonalMarksToRun({ executionRunId: sibling.id }, [mark])
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    registerRunSession("f7-workflow", "f7-late-pty", "headless")
+    await expect(
+      getExecutor("action.terminal.session.close", 1)!.execute(
+        makeCtx({ sessionId: "f7-late-pty" }, "f7-workflow")
+      )
+    ).resolves.toMatchObject({ decision: "success" })
+    expect(listRunSessions("f7-workflow")).toEqual([])
+    mockInvoke.mockResolvedValue({ status: "exited" })
+    await getExecutor("action.terminal.session.close", 1)!.execute(
+      makeCtx({ sessionId: "f7-late-pty" }, "f7-workflow")
+    )
+    expect(listRunSessions("f7-workflow")).toEqual([])
+    await expect(
+      addPersonalMarksToRun({ executionRunId: sibling.id }, [mark])
+    ).resolves.toBeUndefined()
+  } finally {
+    mockInvoke.mockResolvedValue({ status: "exited" })
+    await closeRunSession("f7-late-pty", "headless")
+    await fixture.dispose()
+  }
+})
+
+it("R11 clean workflow close succeeds on StillRunning while its lease stays held", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+  const { retainHeadlessPersonalEgress } = await import("@/lib/terminal/personal-egress")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { closeRunSession } = await import("@/lib/terminal/headless-session-registry")
+  const owner = await startToolExecutionRun("r11-close", { runId: "execution:workflow:r11-close" })
+  const sibling = await startToolExecutionRun("r11-close-child", { parentRunId: owner.id })
+  const mark = { person: { kind: "local-person" as const }, source: "R11", markedAt: 1 }
+  mockInvoke.mockResolvedValue({ status: "stillRunning" })
+  retainHeadlessPersonalEgress({ executionRunId: owner.id }, "r11-live")
+  registerRunSession("r11-close", "r11-live", "headless")
+  try {
+    await expect(
+      getExecutor("action.terminal.session.close", 1)!.execute(
+        makeCtx({ sessionId: "r11-live" }, "r11-close")
+      )
+    ).resolves.toMatchObject({ decision: "success" })
+    expect(listRunSessions("r11-close")).toEqual([])
+    await expect(
+      addPersonalMarksToRun({ executionRunId: sibling.id }, [mark])
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    mockInvoke.mockResolvedValue({ status: "exited" })
+    await closeRunSession("r11-live", "headless")
+    await expect(
+      addPersonalMarksToRun({ executionRunId: sibling.id }, [mark])
+    ).resolves.toBeUndefined()
+  } finally {
+    mockInvoke.mockResolvedValue({ status: "exited" })
+    await closeRunSession("r11-live", "headless")
+    await fixture.dispose()
+  }
 })

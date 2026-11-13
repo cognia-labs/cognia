@@ -311,3 +311,15 @@ it("keeps stored backup PATs out of unproven verification/upload and admits the 
     uploadSnapshotToGithub("ciphertext", meta, { config, http: api.http, credentialContext })
   ).resolves.toMatchObject({ ok: true })
 })
+
+it("S2 rechecks the exact producer before backup HTTP", async () => {
+  const api = makeGithub()
+  const result = await uploadSnapshotToGithub("ciphertext", meta, {
+    config,
+    token: "token",
+    http: api.http,
+    credentialContext: { personalEgressBlocked: true },
+  })
+  expect(result.ok).toBe(false)
+  expect(api.calls).toHaveLength(0)
+})

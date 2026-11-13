@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 
+import "fake-indexeddb/auto"
 import { runHeadlessExec } from "./headless-exec"
 
 // --- mocks ------------------------------------------------------------------
@@ -64,7 +65,10 @@ jest.mock("@/lib/platform/detect", () => {
   const { __mockHostState } = jest.requireMock("@/lib/tauri") as {
     __mockHostState: { headless: boolean; tauri: boolean }
   }
-  return { isHeadlessHost: () => __mockHostState.headless }
+  return {
+    isHeadlessHost: () => __mockHostState.headless,
+    isTauri: () => __mockHostState.tauri && !__mockHostState.headless,
+  }
 })
 
 jest.mock("@tauri-apps/api/core", () => ({
@@ -118,9 +122,11 @@ beforeEach(() => {
   __mockTerminalSettings.unattendedAskPolicy = undefined
   __mockTerminalSettings.sandboxed = false
   __mockClassifyState.verdict = "allow"
-  mockInvoke
-    .mockReset()
-    .mockResolvedValue({ output: "ok", exitCode: 0, timedOut: false, durationMs: 12 })
+  mockInvoke.mockReset().mockImplementation(async (command: string) => {
+    if (command === "terminal_headless_spawn") return { sessionId: "one-shot", shell: "bash" }
+    if (command === "terminal_headless_kill") return { status: "exited" }
+    return { output: "ok", exitCode: 0, timedOut: false, durationMs: 12 }
+  })
   mockTransport.call
     .mockReset()
     .mockResolvedValue({ stdout: "server out", stderr: "", exitCode: 0, timedOut: false })
@@ -377,11 +383,10 @@ describe("runHeadlessExec — policy matrix", () => {
   })
 
   it("maps a timed-out run to ok+timedOut with a null exit", async () => {
-    mockInvoke.mockResolvedValue({
-      output: "partial",
-      exitCode: null,
-      timedOut: true,
-      durationMs: 5000,
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === "terminal_headless_spawn") return { sessionId: "timeout-pty" }
+      if (command === "terminal_headless_kill") return { status: "exited" }
+      return { output: "partial", exitCode: null, timedOut: true, durationMs: 5000 }
     })
     const out = await runHeadlessExec({ command: "sleep 100" })
     expect(out).toMatchObject({ ok: true, timedOut: true, exitCode: null, output: "partial" })
@@ -463,3 +468,184 @@ describe("unattended execution on an attached host", () => {
     expect(mockTransport.call).not.toHaveBeenCalled()
   })
 })
+
+it("S2 refuses a marked Host producer before either headless transport", async () => {
+  await expect(
+    runHeadlessExec({ command: "echo private", credentialContext: { personalEgressBlocked: true } })
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(mockInvoke).not.toHaveBeenCalled()
+  expect(mockTransport.call).not.toHaveBeenCalled()
+})
+
+it("F5 headless consent keeps a timed-out dock PTY leased until its exit", async () => {
+  const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+  const { indexedDB, IDBKeyRange } = await import("fake-indexeddb")
+  const { default: Dexie } = await import("dexie")
+  Dexie.dependencies.indexedDB = indexedDB
+  Dexie.dependencies.IDBKeyRange = IDBKeyRange
+  const fixture = createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { readRunPersonalTaint } = await import("@/lib/execution/personal-sink")
+  const { registerLiveSession, unregisterLiveSession } = await import("./session-registry")
+  const parent = await startToolExecutionRun("f5-consent-parent", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const owner = await startToolExecutionRun("f5-consent-owner", { parentRunId: parent.id })
+  const sibling = await startToolExecutionRun("f5-consent-sibling", { parentRunId: parent.id })
+  let exited = false
+  const listeners = new Set<() => void>()
+  registerLiveSession({
+    id: "f5-consent-pty",
+    get processExitConfirmed() {
+      return exited
+    },
+    onExit: (listener: () => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  } as never)
+  __mockTerminalSettings.allowUnattendedExecution = true
+  __mockClassifyState.verdict = "ask"
+  mockDock.mockResolvedValueOnce({ ok: false, reason: "timeout", sessionId: "f5-consent-pty" })
+  const mark = { person: { kind: "local-person" as const }, source: "F5", markedAt: 1 }
+  try {
+    await expect(
+      runHeadlessExec({
+        command: "interactive-command",
+        onAskVerdict: "consent",
+        chatSessionId: "f5-chat",
+        credentialContext: { executionRunId: owner.id },
+      })
+    ).resolves.toMatchObject({ ok: false, reason: "timeout" })
+    expect(await readRunPersonalTaint({ executionRunId: sibling.id })).toMatchObject({
+      verified: true,
+      marks: [],
+    })
+    await expect(
+      addPersonalMarksToRun({ executionRunId: sibling.id }, [mark])
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    exited = true
+    for (const listener of listeners) listener()
+    await expect(
+      addPersonalMarksToRun({ executionRunId: sibling.id }, [mark])
+    ).resolves.toBeUndefined()
+  } finally {
+    exited = true
+    for (const listener of listeners) listener()
+    unregisterLiveSession("f5-consent-pty")
+    await fixture.dispose()
+  }
+})
+
+it.each([false, true])(
+  "P6 one-shot completion releases its real run lease (failure=%s)",
+  async (failure) => {
+    const { indexedDB, IDBKeyRange } = await import("fake-indexeddb")
+    const { default: Dexie } = await import("dexie")
+    Dexie.dependencies.indexedDB = indexedDB
+    Dexie.dependencies.IDBKeyRange = IDBKeyRange
+    const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+    await fixture.initialize()
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+    const owner = await startToolExecutionRun("p6-owner", {
+      localAuthorization:
+        LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+    })
+    const child = await startToolExecutionRun("p6-child", { parentRunId: owner.id })
+    let finish!: () => void
+    mockInvoke.mockImplementation(async (_command: string) => {
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      if (failure) throw new Error("command failed")
+      return { output: "hello", exitCode: 0, timedOut: false, durationMs: 5 }
+    })
+    const running = runHeadlessExec({
+      command: "echo hello",
+      credentialContext: { executionRunId: owner.id },
+    })
+    try {
+      while (!finish) await new Promise((resolve) => setTimeout(resolve, 0))
+      const marking = addPersonalMarksToRun({ executionRunId: child.id }, [
+        { person: { kind: "local-person" }, source: "P6", markedAt: 1 },
+      ])
+      finish()
+      expect(await running).toMatchObject(
+        failure
+          ? { ok: false, reason: "command failed" }
+          : { ok: true, output: "hello", exitCode: 0, durationMs: 5 }
+      )
+      await expect(marking).resolves.toBeUndefined()
+      expect(mockInvoke.mock.calls.map(([command]) => command)).toEqual(["terminal_headless_exec"])
+    } finally {
+      finish?.()
+      await running
+      await fixture.dispose()
+    }
+  }
+)
+
+it.each([false, true])(
+  "Q5 timeout or abnormal one-shot holds its lease until native exit proof; Q7 removed identity can still release (error=%s)",
+  async (error) => {
+    const { indexedDB, IDBKeyRange } = await import("fake-indexeddb")
+    const { default: Dexie } = await import("dexie")
+    Dexie.dependencies.indexedDB = indexedDB
+    Dexie.dependencies.IDBKeyRange = IDBKeyRange
+    const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+    await fixture.initialize()
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+    const { __clearTerminalPersonalEgressForTesting } = await import("./personal-egress")
+    const owner = await startToolExecutionRun("q5-owner", {
+      localAuthorization:
+        LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+    })
+    const child = await startToolExecutionRun("q5-child", { parentRunId: owner.id })
+    let exited = false
+    mockInvoke.mockImplementation(async (command: string) =>
+      command === "terminal_headless_kill"
+        ? { status: exited ? "exited" : "stillRunning" }
+        : {
+            output: "partial",
+            exitCode: null,
+            timedOut: !error,
+            durationMs: 5,
+            pendingSessionId: "q5-survivor",
+            ...(error ? { error: "event stream closed" } : {}),
+          }
+    )
+    try {
+      await runHeadlessExec({
+        command: "echo hello",
+        credentialContext: { executionRunId: owner.id },
+      })
+      const marks = [{ person: { kind: "local-person" as const }, source: "Q5", markedAt: 1 }]
+      await expect(
+        addPersonalMarksToRun({ executionRunId: child.id }, marks)
+      ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      exited = true
+      await expect(
+        addPersonalMarksToRun({ executionRunId: child.id }, marks)
+      ).resolves.toBeUndefined()
+      // The observe-only exit-proof reconcile never signals the child.
+      expect(
+        mockInvoke.mock.calls.filter(
+          ([command, args]) =>
+            command === "terminal_headless_kill" &&
+            !(args as { observeOnly?: boolean } | undefined)?.observeOnly
+        )
+      ).toHaveLength(2)
+    } finally {
+      __clearTerminalPersonalEgressForTesting()
+      await fixture.dispose()
+    }
+  }
+)

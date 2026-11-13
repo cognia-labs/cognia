@@ -1,4 +1,9 @@
 import {
+  runPersonalEgressOperation,
+  PersonalEgressDeniedError,
+} from "@/lib/execution/personal-egress"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import {
   assertBootstrapEnvironment,
   prepareBootstrapExecution,
   BootstrapAgentValidationError,
@@ -64,6 +69,8 @@ interface NativeEnvironmentResult {
 
 export interface ExecuteProjectEnvironmentInput {
   environment: ProjectEnvironment
+  /** Host-held producer; never read from script arguments. */
+  credentialContext?: PersonalCredentialContext
   executionRoot: string
   scope: "local" | "managedWorktree"
   surface: "interactive" | "scheduled"
@@ -379,16 +386,18 @@ async function runScript(
     if (options.mise?.step) {
       // Its own call, ahead of the script, under the setup's policy and with
       // mise held to safe mode. No secrets: installing tools needs none.
-      const installed = await transport.call<NativeEnvironmentResult>(
-        "project_environment_execute",
-        {
-          script: MISE_STEP_SCRIPT,
-          cwd: input.executionRoot,
-          variables: { ...input.environment.variables, ...MISE_STEP_VARIABLES },
-          keyringReferences: [],
-          policy,
-          timeoutSecs: input.timeoutSecs,
-        }
+      const installed = await runPersonalEgressOperation(
+        input.credentialContext ?? {},
+        () =>
+          transport.call<NativeEnvironmentResult>("project_environment_execute", {
+            script: MISE_STEP_SCRIPT,
+            cwd: input.executionRoot,
+            variables: { ...input.environment.variables, ...MISE_STEP_VARIABLES },
+            keyringReferences: [],
+            policy,
+            timeoutSecs: input.timeoutSecs,
+          }),
+        true
       )
       if (installed.timed_out) throw new Error("mise install timed out")
       if (installed.exit_code !== 0) {
@@ -400,17 +409,22 @@ async function runScript(
     }
     const result =
       bootstrap || hasScript(script)
-        ? await transport.call<NativeEnvironmentResult>("project_environment_execute", {
-            script: bootstrap?.script ?? script,
-            cwd: input.executionRoot,
-            variables: bootstrap?.variables ?? input.environment.variables,
-            keyringReferences: input.environment.keyringReferences,
-            policy,
-            // The CLI must retain its configured budget plus time to reap tool groups.
-            timeoutSecs: bootstrap
-              ? Math.max(input.timeoutSecs ?? 0, bootstrap.timeoutSecs)
-              : input.timeoutSecs,
-          })
+        ? await runPersonalEgressOperation(
+            input.credentialContext ?? {},
+            () =>
+              transport.call<NativeEnvironmentResult>("project_environment_execute", {
+                script: bootstrap?.script ?? script,
+                cwd: input.executionRoot,
+                variables: bootstrap?.variables ?? input.environment.variables,
+                keyringReferences: input.environment.keyringReferences,
+                policy,
+                // The CLI must retain its configured budget plus time to reap tool groups.
+                timeoutSecs: bootstrap
+                  ? Math.max(input.timeoutSecs ?? 0, bootstrap.timeoutSecs)
+                  : input.timeoutSecs,
+              }),
+            true
+          )
         : // A setup that is only the mise step has nothing more to run.
           { stdout: "", stderr: "", exit_code: 0, timed_out: false }
     const success = !result.timed_out && result.exit_code === 0
@@ -451,7 +465,10 @@ async function runScript(
   } catch (cause) {
     const error = cause instanceof Error ? cause.message : String(cause)
     const bypassed =
-      !portLeaseFailed && input.surface === "interactive" && input.bypassOnFailure === true
+      !(cause instanceof PersonalEgressDeniedError) &&
+      !portLeaseFailed &&
+      input.surface === "interactive" &&
+      input.bypassOnFailure === true
     if (options.recordInitialization) {
       const completedAt = Date.now()
       await updateProjectEnvironmentInitialization(

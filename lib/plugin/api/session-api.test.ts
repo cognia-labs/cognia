@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/personal-marks", () => {
+  const actual = jest.requireActual("@/lib/execution/personal-marks")
+  return { ...actual, bindPersonalMessageEgressSource: jest.fn() }
+})
 /**
  * Tests for Session Plugin API
  */
@@ -767,4 +771,21 @@ describe("Session API", () => {
     const session = await legacyApi.createSession({ title: "Doomed" })
     await expect(legacyApi.deleteSession(session.id)).resolves.not.toThrow()
   })
+})
+
+it("S2 binds session updates to the exact Host producer before persistence", async () => {
+  const marks = await import("@/lib/execution/personal-marks")
+  const bind = jest.mocked(marks.bindPersonalMessageEgressSource)
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  getPermissionGuard({ confirmDangerousByDefault: false }).registerPlugin("s2-session", [
+    "session:write",
+  ])
+  await withPluginExecutionContext("s2-session", { personalEgressBlocked: true }, async () => {
+    await createSessionAPI("s2-session").updateMessage("s", "s2-message", { parts: [] })
+    expect(bind).toHaveBeenCalledWith(
+      "s2-message",
+      expect.objectContaining({ personalEgressBlocked: true })
+    )
+  })
+  bind.mockClear()
 })

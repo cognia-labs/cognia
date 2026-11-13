@@ -1,3 +1,11 @@
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 /**
  * Co-located unit test for `runAndCaptureAssistantReply`. Mocks the Tauri
  * IPC layer so we can drive synthetic event sequences and assert the
@@ -2698,10 +2706,17 @@ describe("runAndCaptureAssistantReply", () => {
     fire(assistantEvent("done"))
     fire(sessionEnded())
     await promise
-    expect(postToolUseMock).toHaveBeenCalledWith("Bash", { command: "ls" }, "ENOENT", SESSION, {
-      isError: true,
-      turnId: "turn-7",
-    })
+    expect(postToolUseMock).toHaveBeenCalledWith(
+      "Bash",
+      { command: "ls" },
+      "ENOENT",
+      SESSION,
+      {
+        isError: true,
+        turnId: "turn-7",
+      },
+      { sessionId: SESSION, executionRunId: undefined }
+    )
   })
 
   it("correlates input from the originating tool_use into the review responder", async () => {
@@ -4070,6 +4085,10 @@ jest.mock("@/lib/ai/agent/external/runtimes/remote/remote-run-client", () => ({
 }))
 
 describe("host-owned external agent capture", () => {
+  const hostRunFixture = createDbTestFixture({ seeded: false })
+  beforeAll(hostRunFixture.initialize)
+  beforeEach(hostRunFixture.restore)
+  afterAll(hostRunFixture.dispose)
   beforeEach(() => {
     externalHandlers = undefined
     getRemoteConfigMock.mockResolvedValue({
@@ -4081,6 +4100,45 @@ describe("host-owned external agent capture", () => {
     getRemoteConfigMock.mockClear()
     stopExternalMock.mockClear()
     cancelExternalTurnMock.mockClear()
+  })
+
+  it("P2 external capture uses the exact Host execution identity before dispatch", async () => {
+    const fixture = createDbTestFixture({ seeded: false })
+    await fixture.initialize()
+    const actual = jest.requireActual<typeof import("@/lib/execution/personal-sink")>(
+      "@/lib/execution/personal-sink"
+    )
+    mockEgressTaint.mockImplementation(actual.readRunPersonalTaint as never)
+    try {
+      const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+        await import("@/lib/execution/acting-authority")
+      const run = await startToolExecutionRun(SESSION, {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      await (await import("@/lib/db/schema")).getDb().executionRuns.update(run.id, {
+        personalMarks: [{ person: { kind: "local-person" }, source: "P2", markedAt: 1 }],
+      })
+      await expect(
+        runAndCaptureAssistantReply(
+          SESSION,
+          "private",
+          {
+            provider: "cognia:external-agent:pi-1",
+            execution: { identity: { runId: run.id } },
+          } as never,
+          {
+            execution: { skip: true },
+            outboundPolicy: { executionRunId: "" },
+            timeoutMs: 100,
+          } as never
+        )
+      ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      expect(startExternalTurnMock).not.toHaveBeenCalled()
+    } finally {
+      mockEgressTaint.mockImplementation(async () => ({ verified: true, marks: [] }))
+      await fixture.dispose()
+    }
   })
 
   it("refuses a revised source before external admission", async () => {
@@ -4654,4 +4712,64 @@ describe("Router + Fusion action", () => {
     ).rejects.toMatchObject({ code: "ROUTE_NO_SOLUTION" })
     expect(sendPromptMock).not.toHaveBeenCalled()
   })
+})
+
+describe("F1 clean plugin/bot capture provenance", () => {
+  const fixture = createDbTestFixture({ seeded: false })
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+  it.each([false, true])(
+    "F1 plugin permission path uses the real canonical run (marked=%s)",
+    async (marked) => {
+      const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+        await import("@/lib/execution/acting-authority")
+      const { getDb } = await import("@/lib/db/schema")
+      const actual = jest.requireActual<typeof import("@/lib/execution/personal-sink")>(
+        "@/lib/execution/personal-sink"
+      )
+      mockEgressTaint.mockImplementation(actual.readRunPersonalTaint as never)
+      const run = await startToolExecutionRun(SESSION, {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      if (marked)
+        await getDb().executionRuns.update(run.id, {
+          personalMarks: [{ person: { kind: "local-person" }, source: "F1", markedAt: 1 }],
+        })
+      const dispatch =
+        jest.requireActual<typeof import("./adapter-hooks")>("./adapter-hooks").dispatchPreToolUse
+      preToolUseMock.mockImplementation(dispatch as never)
+      const approver = jest.fn(async () => ({ decision: "allow" as const }))
+      try {
+        const promise = runAndCaptureAssistantReply(
+          SESSION,
+          "plugin turn",
+          { turnId: "f1-" + run.id },
+          {
+            timeoutMs: 5000,
+            outboundPolicy: { unattended: true, executionRunId: run.id },
+            onPermissionRequest: approver,
+          }
+        )
+        await flushUntilSubscribed()
+        fire({
+          type: "permission_request",
+          sessionId: SESSION,
+          requestId: "f1-permission",
+          toolName: "Bash",
+          input: { command: "pwd" },
+        } as never)
+        for (let n = 0; n < 200 && !approveToolMock.mock.calls.length; n++)
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(approveToolMock.mock.calls[0]?.[2]).toBe(marked ? "deny" : "allow")
+        expect(approver).toHaveBeenCalledTimes(marked ? 0 : 1)
+        fire(assistantEvent("done"))
+        fire(sessionEnded())
+        await promise
+      } finally {
+        mockEgressTaint.mockImplementation(async () => ({ verified: true, marks: [] }))
+      }
+    }
+  )
 })

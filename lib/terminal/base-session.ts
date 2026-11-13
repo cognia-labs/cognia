@@ -64,6 +64,7 @@ export abstract class BaseTerminalSession {
   protected readonly replayGapListeners = new Set<ReplayGapListener>()
   protected readonly infoListeners = new Set<InfoListener>()
   protected exited = false
+  private confirmedProcessExit = false
   protected exitCode: number | null = null
   protected controlState: TerminalControlState = {
     role: "controller",
@@ -103,6 +104,11 @@ export abstract class BaseTerminalSession {
   }
 
   /** True once an `exit` event has been observed. */
+  /** Transport loss alone cannot prove that the Host process stopped. */
+  get processExitConfirmed(): boolean {
+    return this.confirmedProcessExit
+  }
+
   get isExited(): boolean {
     return this.exited
   }
@@ -364,7 +370,8 @@ export abstract class BaseTerminalSession {
    * close (clean exit, transport drop, kill) through this so listeners
    * fire exactly once.
    */
-  protected handleExit(code: number | null): void {
+  protected handleExit(code: number | null, processExitConfirmed = true): void {
+    this.confirmedProcessExit ||= processExitConfirmed
     if (this.exited) return
     this.exited = true
     this.exitCode = code

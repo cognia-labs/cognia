@@ -1,3 +1,4 @@
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
 /**
  * GitHub backup destination — commits encrypted snapshots to a PRIVATE
  * repository through the contents API (spec 2026-08-16, D).
@@ -244,7 +245,9 @@ export async function uploadSnapshotToGithub(
   assertActive()
   const http: BackupHttpFn = async (request) => {
     assertActive()
-    const response = await (deps.http ?? backupHttpRequest)(request)
+    const response = await runPersonalEgressOperation(deps.credentialContext ?? {}, () =>
+      (deps.http ?? backupHttpRequest)(request)
+    )
     assertActive()
     return response
   }

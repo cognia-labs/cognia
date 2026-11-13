@@ -1,4 +1,5 @@
 "use client"
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 import * as personalSinkHost from "@/lib/execution/personal-sink"
 
 import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
@@ -564,6 +565,16 @@ export interface ExternalTurnOmissions {
   attachments: number[]
   /** Such blocks outside the attachments, which no manifest names. */
   unnamed: number
+}
+
+/** The local external lane receives the exact Host run outside serializable model options. */
+export function executePersonalExternalTurn<T extends object, R>(
+  execute: (prompt: string, options: T) => Promise<R>,
+  prompt: string,
+  options: T,
+  source: { sessionId: string; executionRunId: string }
+): Promise<R> {
+  return execute(prompt, bindPersonalEgressOptions(options, source))
 }
 
 /** Only a host person gesture can mint a local run; automation never inherits the gesture. */
@@ -5004,6 +5015,7 @@ export function useClaudeChat() {
         })
         const setup = await executeProjectEnvironment({
           environment: resolvedEnvironment.environment,
+          credentialContext: { sessionId, executionRunId },
           executionRoot: environmentRoot,
           scope: executionContext.location,
           surface: "interactive",
@@ -6212,51 +6224,56 @@ export function useClaudeChat() {
                     : {}),
                   onEvent: handleExternalEvent,
                 })
-              : await executeOnExternalAgent(externalExecutionPrompt, {
-                  contentSafety: sendOptions.contentSafety,
-                  agentId: extAgentId,
-                  ...asideExternalPermission,
-                  ...(gatewayController ? { signal: gatewayController.signal } : {}),
-                  ...(!resetExternalSession && modelSelection.gatewayLink
-                    ? { sessionId: modelSelection.gatewayLink }
-                    : {}),
-                  // Cognia model A → B on the same task: the agent resumes its
-                  // own history on the new model (manager checks account,
-                  // device and runtime are unchanged).
-                  ...(!resetExternalSession && modelSelection.rebind ? { rebind: true } : {}),
-                  ...(!resetExternalSession && matchingHostedNativeSessionId
-                    ? { sessionId: matchingHostedNativeSessionId }
-                    : {}),
-                  // Tells the manager not to fall back on the conversation's
-                  // previous session either: this turn starts a new task.
-                  ...(resetExternalSession ? { resetExternalSession: true } : {}),
-                  // Resume the agent's own native session, but only for an
-                  // import whose binding has been verified. The id comes from
-                  // the session row, which is where it has always lived. The
-                  // composition carries the verification decision, nothing more.
-                  ...(!resetExternalSession &&
-                  verifiedNativeResume &&
-                  session?.importRuntimeBinding?.nativeSessionId
-                    ? { sessionId: session.importRuntimeBinding.nativeSessionId }
-                    : {}),
-                  workingDirectory: sendOptions.cwd,
-                  systemPrompt: externalSystemPrompt || undefined,
-                  allowedTools: sendOptions.allowedTools,
-                  ...(deliveredImages.length > 0 ? { attachments: deliveredImages } : {}),
-                  ...externalModelAxes,
-                  context: {
-                    custom: {
-                      additionalDirectories: sendOptions.additionalDirectories ?? [],
-                      chatSessionId: sessionId,
-                      mcpServers: externalMcpServers,
-                      ...(sandboxToolHostLeaseIds ? { sandboxToolHostLeaseIds } : {}),
-                      ...(externalContinuationContext
-                        ? { conversationHistory: externalContinuationContext }
-                        : {}),
+              : await executePersonalExternalTurn(
+                  executeOnExternalAgent,
+                  externalExecutionPrompt,
+                  {
+                    contentSafety: sendOptions.contentSafety,
+                    agentId: extAgentId,
+                    ...asideExternalPermission,
+                    ...(gatewayController ? { signal: gatewayController.signal } : {}),
+                    ...(!resetExternalSession && modelSelection.gatewayLink
+                      ? { sessionId: modelSelection.gatewayLink }
+                      : {}),
+                    // Cognia model A → B on the same task: the agent resumes its
+                    // own history on the new model (manager checks account,
+                    // device and runtime are unchanged).
+                    ...(!resetExternalSession && modelSelection.rebind ? { rebind: true } : {}),
+                    ...(!resetExternalSession && matchingHostedNativeSessionId
+                      ? { sessionId: matchingHostedNativeSessionId }
+                      : {}),
+                    // Tells the manager not to fall back on the conversation's
+                    // previous session either: this turn starts a new task.
+                    ...(resetExternalSession ? { resetExternalSession: true } : {}),
+                    // Resume the agent's own native session, but only for an
+                    // import whose binding has been verified. The id comes from
+                    // the session row, which is where it has always lived. The
+                    // composition carries the verification decision, nothing more.
+                    ...(!resetExternalSession &&
+                    verifiedNativeResume &&
+                    session?.importRuntimeBinding?.nativeSessionId
+                      ? { sessionId: session.importRuntimeBinding.nativeSessionId }
+                      : {}),
+                    workingDirectory: sendOptions.cwd,
+                    systemPrompt: externalSystemPrompt || undefined,
+                    allowedTools: sendOptions.allowedTools,
+                    ...(deliveredImages.length > 0 ? { attachments: deliveredImages } : {}),
+                    ...externalModelAxes,
+                    context: {
+                      custom: {
+                        additionalDirectories: sendOptions.additionalDirectories ?? [],
+                        chatSessionId: sessionId,
+                        mcpServers: externalMcpServers,
+                        ...(sandboxToolHostLeaseIds ? { sandboxToolHostLeaseIds } : {}),
+                        ...(externalContinuationContext
+                          ? { conversationHistory: externalContinuationContext }
+                          : {}),
+                      },
                     },
+                    onEvent: handleExternalEvent,
                   },
-                  onEvent: handleExternalEvent,
-                })
+                  { sessionId, executionRunId }
+                )
 
           sealCoalescer()
           persistExternalSession(result?.sessionId)

@@ -350,19 +350,40 @@ export function createVectorAPI(pluginId: string): PluginVectorAPI {
 
   // Store mutations need vector:write, queries vector:read; `embed`/`embedBatch`
   // spend the user's embedding quota and require ai:embed.
-  return createApiGuardedAPI(pluginId, api, {
-    createCollection: "vector:write",
-    deleteCollection: "vector:write",
-    listCollections: "vector:read",
-    getCollectionInfo: "vector:read",
-    addDocuments: "vector:write",
-    updateDocuments: "vector:write",
-    deleteDocuments: "vector:write",
-    search: "vector:read",
-    searchByEmbedding: "vector:read",
-    embed: "ai:embed",
-    embedBatch: "ai:embed",
-    getDocumentCount: "vector:read",
-    clearCollection: "vector:write",
-  })
+  return createApiGuardedAPI(
+    pluginId,
+    api,
+    {
+      createCollection: "vector:write",
+      deleteCollection: "vector:write",
+      listCollections: "vector:read",
+      getCollectionInfo: "vector:read",
+      addDocuments: "vector:write",
+      updateDocuments: "vector:write",
+      deleteDocuments: "vector:write",
+      search: "vector:read",
+      searchByEmbedding: "vector:read",
+      embed: "ai:embed",
+      embedBatch: "ai:embed",
+      getDocumentCount: "vector:read",
+      clearCollection: "vector:write",
+    },
+    {
+      egressMethods: [
+        "createCollection",
+        "deleteCollection",
+        "listCollections",
+        "getCollectionInfo",
+        "addDocuments",
+        "updateDocuments",
+        "deleteDocuments",
+        "search",
+        "searchByEmbedding",
+        "embed",
+        "embedBatch",
+        "getDocumentCount",
+        "clearCollection",
+      ],
+    }
+  )
 }

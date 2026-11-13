@@ -94,6 +94,15 @@ export type RunPersonalTaint =
   | { verified: true; marks: PersonalMarkV1[] }
   | { verified: false; marks: PersonalMarkV1[]; reason: string }
 
+// Cache consumers retain exactly the ancestry the canonical read verified.
+// This is Host metadata, not another taint derivation or serialized authority.
+const taintDependencies = new WeakMap<RunPersonalTaint, ReadonlySet<string>>()
+export function personalTaintDependencies(
+  taint: RunPersonalTaint
+): ReadonlySet<string> | undefined {
+  return taintDependencies.get(taint)
+}
+
 /** Read each live Host source, retaining known marks even if another source fails. */
 export async function readRunPersonalTaint(
   context: PersonalSinkContext
@@ -109,9 +118,15 @@ export async function readRunPersonalTaint(
       seen.delete(source)
       const marks = mergePersonalMarks(...results.map((result) => result.marks))
       const failed = results.find((result) => !result.verified)
-      return failed && !failed.verified
-        ? { verified: false, marks, reason: failed.reason }
-        : { verified: true, marks }
+      const combined: RunPersonalTaint =
+        failed && !failed.verified
+          ? { verified: false, marks, reason: failed.reason }
+          : { verified: true, marks }
+      taintDependencies.set(
+        combined,
+        new Set(results.flatMap((result) => [...(personalTaintDependencies(result) ?? [])]))
+      )
+      return combined
     }
     if (source.sessionDerived && source.sessionId) return readSessionPersonalTaint(source.sessionId)
     return readExecutionRunPersonalTaint(source)
@@ -205,7 +220,9 @@ async function readExecutionRunPersonalTaint(
       const reachedIdentityRoot = current.id === rootId || (!rootId && !current.parentRunId)
       if (reachedIdentityRoot && !current.parentRunId) {
         if (getDb() !== db) throw new Error("Personal sink database changed")
-        return { verified: true, marks: mergePersonalMarks(marks) }
+        const result: RunPersonalTaint = { verified: true, marks: mergePersonalMarks(marks) }
+        taintDependencies.set(result, visited)
+        return result
       }
       const nextId: string | undefined = current.parentRunId ?? rootId
       if (!nextId) break

@@ -1,3 +1,4 @@
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 /**
  * `launchChildRun`: the one way to start a child run (ADR-0252 §3).
  *
@@ -70,7 +71,10 @@ export interface ChildRunBackgroundRegistration {
  * applies no grant: the caller resolved the run's configuration itself.
  */
 export interface ChildRunCallerEngine {
-  run(signal: AbortSignal): Promise<ChildRunOutcome>
+  run(
+    signal: AbortSignal,
+    executionIdentity: { runId: string; sessionId?: string }
+  ): Promise<ChildRunOutcome>
 }
 
 export type ChildRunTarget =
@@ -253,6 +257,7 @@ function errorText(error: unknown): string {
  * answers through this engine too.
  */
 export function startAgentEngine(input: {
+  executionIdentity?: { runId: string; sessionId?: string }
   prompt: string
   systemPrompt?: string
   characterId?: string
@@ -266,6 +271,7 @@ export function startAgentEngine(input: {
       const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
       if (controller.signal.aborted) return { status: "cancelled", error: "Cancelled." }
       const result = await executeAgent(input.prompt, {
+        ...(input.executionIdentity ? { executionIdentity: input.executionIdentity } : {}),
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
         ...(input.characterId ? { characterId: input.characterId } : {}),
         ...(input.toolsEnabled !== undefined ? { toolsEnabled: input.toolsEnabled } : {}),
@@ -291,7 +297,8 @@ export function startAgentEngine(input: {
  * that signal is what makes the manager cancel the agent's session.
  */
 function startExternalEngine(
-  target: Extract<ChildRunTarget, { kind: "external" }>
+  target: Extract<ChildRunTarget, { kind: "external" }>,
+  personalContext: { sessionId?: string; executionRunId: string }
 ): StartedChildEngine {
   const controller = new AbortController()
   let timedOut = false
@@ -310,11 +317,18 @@ function startExternalEngine(
       // environment (ADR-0224 A8); a refusal fails the child.
       await placeDispatchedAgent(target.agentId, target.workingDirectory, getExternalAgentManager())
       if (stopped()) return { status: "cancelled", error: "Cancelled." }
-      const result = await getExternalAgentManager().execute(target.agentId, target.prompt, {
-        ...(target.systemPrompt ? { systemPrompt: target.systemPrompt } : {}),
-        ...(target.workingDirectory ? { workingDirectory: target.workingDirectory } : {}),
-        signal: controller.signal,
-      })
+      const result = await getExternalAgentManager().execute(
+        target.agentId,
+        target.prompt,
+        bindPersonalEgressOptions(
+          {
+            ...(target.systemPrompt ? { systemPrompt: target.systemPrompt } : {}),
+            ...(target.workingDirectory ? { workingDirectory: target.workingDirectory } : {}),
+            signal: controller.signal,
+          },
+          personalContext
+        )
+      )
       if (stopped()) return { status: "cancelled", error: "Cancelled." }
       if (!result.success) {
         return {
@@ -341,8 +355,16 @@ async function startJobEngine(
 ): Promise<StartedChildEngine | { refused: LaunchChildRunRefusal; detail?: string }> {
   switch (target.kind) {
     case "agent":
-      if ("engine" in target) return startCallerEngine(target.engine)
+      if ("engine" in target)
+        return startCallerEngine(target.engine, {
+          runId: personalContext.executionRunId,
+          ...(personalContext.sessionId ? { sessionId: personalContext.sessionId } : {}),
+        })
       return startAgentEngine({
+        executionIdentity: {
+          runId: personalContext.executionRunId,
+          ...(personalContext.sessionId ? { sessionId: personalContext.sessionId } : {}),
+        },
         prompt: target.prompt,
         ...(target.systemPrompt ? { systemPrompt: target.systemPrompt } : {}),
         ...(target.characterId ? { characterId: target.characterId } : {}),
@@ -351,7 +373,7 @@ async function startJobEngine(
         grants,
       })
     case "external":
-      return startExternalEngine(target)
+      return startExternalEngine(target, personalContext)
     case "twin": {
       const port = await loadPort("twin-answer")
       if (!port) return { refused: "engine_unavailable", detail: "twin-answer" }
@@ -367,11 +389,14 @@ async function startJobEngine(
 }
 
 /** A caller's engine: its run gets the stop signal; a throw is a failed outcome. */
-function startCallerEngine(engine: ChildRunCallerEngine): StartedChildEngine {
+function startCallerEngine(
+  engine: ChildRunCallerEngine,
+  executionIdentity: { runId: string; sessionId?: string }
+): StartedChildEngine {
   const controller = new AbortController()
   const outcome = (async (): Promise<ChildRunOutcome> => {
     try {
-      return await engine.run(controller.signal)
+      return await engine.run(controller.signal, executionIdentity)
     } catch (error) {
       return controller.signal.aborted
         ? { status: "cancelled", error: errorText(error) }

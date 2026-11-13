@@ -1,3 +1,8 @@
+import {
+  pluginExecutionContext,
+  pluginDispatchContext,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
 /**
  * Renderer-side JSON-RPC dispatcher for the VS Code extension host.
  *
@@ -195,6 +200,17 @@ export async function handleInboundFrame(
   raw: string,
   generation?: string
 ): Promise<void> {
+  const source = pluginExecutionContext(pluginId) ?? pluginDispatchContext(pluginId)
+  return withPluginExecutionContext(pluginId, source, () =>
+    handleBoundInboundFrame(pluginId, raw, generation)
+  )
+}
+
+async function handleBoundInboundFrame(
+  pluginId: string,
+  raw: string,
+  generation?: string
+): Promise<void> {
   let frame: InboundFrame
   try {
     frame = JSON.parse(raw) as InboundFrame
@@ -265,9 +281,9 @@ async function emitResult(
     })
     return
   }
-  const frame = JSON.stringify({ jsonrpc: "2.0", id, result })
+  const frame = { jsonrpc: "2.0", id, result }
   try {
-    await sendResponseImpl(pluginId, generation, frame)
+    await sendGuestResponse(pluginId, generation, frame)
   } catch (err) {
     dispatcherLogger.warn("sendResponse failed", {
       pluginId,
@@ -291,14 +307,50 @@ async function emitError(
     })
     return
   }
-  const frame = JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } })
+  const frame = { jsonrpc: "2.0", id, error: { code, message } }
   try {
-    await sendResponseImpl(pluginId, generation, frame)
+    await sendGuestResponse(pluginId, generation, frame)
   } catch (err) {
     dispatcherLogger.warn("sendResponse (error frame) failed", {
       pluginId,
       id,
       error: err instanceof Error ? err.message : String(err),
     })
+  }
+}
+
+/** Track the complete response send; a Host read can mark its awaiting guest. */
+async function sendGuestResponse(
+  pluginId: string,
+  generation: string | undefined,
+  frame: Record<string, unknown>
+): Promise<void> {
+  const send = sendResponseImpl
+  if (!send) return
+  const source = pluginExecutionContext(pluginId) ?? pluginDispatchContext(pluginId)
+  const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+  const { PERSONAL_EGRESS_DENIAL } =
+    await import("@cognia/plugin-contract/types/execution/personal-egress")
+  try {
+    await runPersonalEgressOperation(source, async () =>
+      send(pluginId, generation, JSON.stringify(frame))
+    )
+  } catch (error) {
+    if (!(
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "personal-egress-denied"
+    ))
+      throw error
+    await send(
+      pluginId,
+      generation,
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: frame.id,
+        error: { code: -32000, message: PERSONAL_EGRESS_DENIAL },
+      })
+    )
   }
 }

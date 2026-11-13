@@ -128,3 +128,13 @@ describe("deliverWebhook", () => {
     expect(fetchMock).toHaveBeenCalledTimes(11)
   })
 })
+
+it("S2 consumes a marked producer denial without sending or retrying", async () => {
+  const sleep = jest.fn(async () => undefined)
+  const result = await deliverWebhook(
+    { endpoint: endpoint(), event: event(), credentialContext: { personalEgressBlocked: true } },
+    { sleep }
+  )
+  expect(result.ok).toBe(false)
+  expect(sleep).not.toHaveBeenCalled()
+})

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { captureClaudeRuntime } from "../../../test-support/claude-runtime.ts"
-import { dispatchAnthropic } from "./index.ts"
+import { startAnthropicPump } from "./pump.ts"
+import { createToolSessionContext } from "../../tools/session.ts"
 import {
   createTerminalReplTools,
   __setNodePtyForTesting,
@@ -64,40 +65,43 @@ test(
     })
     assert.equal(spawned.isError, undefined)
     let closed = false
-    dispatchAnthropic(
-      {
-        sessionId: "background-sdk",
-        firstPrompt: "work",
-        sendOptions: { toolSurface: "none" },
-        emit: (event) => {
-          events.push(event)
+    // Tool resources are owned by an executor, not by the conversation id.
+    const toolSession = createToolSessionContext({
+      sessionId: "conversation-sdk",
+      executorId: "background-sdk",
+      sendOptions: {},
+    })
+    startAnthropicPump({
+      sessionId: "conversation-sdk",
+      sendOptions: {},
+      emit: (event: Record<string, unknown>) => {
+        events.push(event)
+      },
+      log() {},
+      toolSession,
+      pluginToolNameAliases: new Map(),
+      mcpAutoReconnect: { onEvent() {} },
+      mcpStderrSink: { end() {} },
+      state: { outstandingPrompts: 1 },
+      waitForProcessExit: async () => {},
+      session: { closeInput() {}, drainPending() {} },
+      q: {
+        async *[Symbol.asyncIterator]() {
+          yield {
+            type: "system",
+            subtype: "background_tasks_changed",
+            tasks: [{ task_id: "bash" }, { task_id: "Task" }],
+          }
+          yield { type: "result", subtype: "success" }
+          await tasks
+          yield { type: "system", subtype: "background_tasks_changed", tasks: [] }
         },
-        log() {},
-        hostRpc: {
-          async call(method) {
-            throw new Error(`Unused background channel must not query ${method}`)
-          },
+        interrupt() {},
+        close() {
+          closed = true
         },
       },
-      {
-        query: () => ({
-          async *[Symbol.asyncIterator]() {
-            yield {
-              type: "system",
-              subtype: "background_tasks_changed",
-              tasks: [{ task_id: "bash" }, { task_id: "Task" }],
-            }
-            yield { type: "result", subtype: "success" }
-            await tasks
-            yield { type: "system", subtype: "background_tasks_changed", tasks: [] }
-          },
-          interrupt() {},
-          close() {
-            closed = true
-          },
-        }),
-      }
-    )
+    } as unknown as Parameters<typeof startAnthropicPump>[0])
     await flush()
     assert.equal(
       events.some((event) => event.type === "session_ended"),
@@ -190,4 +194,75 @@ test("iterator errors settle the session once and retain the error message", asy
   )
   assert.equal(session._ended, true)
   session.closeInput()
+})
+
+test("G3: a live native background task refuses personal admission", async () => {
+  let finish!: () => void
+  const done = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  const { session } = captureClaudeRuntime({}, () => ({
+    async *[Symbol.asyncIterator]() {
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "Task" }] }
+      await done
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [] }
+    },
+    interrupt() {},
+    close() {},
+  }))
+  try {
+    await flush()
+    await assert.rejects(
+      (session as typeof session & { fencePersonalEgress(): Promise<void> }).fencePersonalEgress(),
+      /isolation unconfirmed/
+    )
+  } finally {
+    finish()
+    session.closeInput()
+    await flush()
+  }
+})
+
+test("H3: native fence refuses an unconfirmed descendant proof after direct PIDs end", async (t) => {
+  const toolSession = createToolSessionContext({ sessionId: "proof", sendOptions: {} })
+  t.mock.method(toolSession, "disposeProcesses", async () => {})
+  t.mock.method(toolSession, "hasRunningProcesses", async () => false)
+  t.mock.method(toolSession, "hasLiveProcesses", async () => true)
+  let finish!: () => void
+  const running = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  const session = {
+    closeInput() {},
+    drainPending() {},
+    fencePersonalEgress: undefined as undefined | (() => Promise<void>),
+  }
+  startAnthropicPump({
+    sessionId: "proof",
+    sendOptions: {},
+    emit() {},
+    log() {},
+    toolSession,
+    pluginToolNameAliases: new Map(),
+    mcpAutoReconnect: { onEvent() {} },
+    mcpStderrSink: { end() {} },
+    state: { outstandingPrompts: 1 },
+    waitForProcessExit: async () => {},
+    session,
+    q: {
+      async *[Symbol.asyncIterator]() {
+        await running
+      },
+      interrupt() {},
+      close() {
+        finish()
+      },
+    },
+  } as unknown as Parameters<typeof startAnthropicPump>[0])
+  try {
+    await assert.rejects(session.fencePersonalEgress!(), /isolation unconfirmed/)
+  } finally {
+    finish()
+    await flush()
+  }
 })

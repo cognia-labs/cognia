@@ -143,6 +143,35 @@ jest.mock("@/stores", () => ({
 
 describe("Artifact API", () => {
   const testPluginId = "test-plugin"
+  it("R11 cold artifact mount returns a usable empty handle synchronously", async () => {
+    const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+    const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+    let cold = true
+    const restore = configurePersonalDispatchFence(() => (cold ? undefined : false))
+    const mount = jest.fn((_artifact: unknown, _container: unknown) => ({ dispose: jest.fn() }))
+    const off = createArtifactAPI(testPluginId).registerRenderer("r11", { name: "R11", mount })
+    try {
+      const handle = bindPluginCallbacks("r11", mount, () => ({ executionRunId: "r11-cold" }))(
+        {} as never,
+        {} as never
+      )
+      expect(handle).not.toBeInstanceOf(Promise)
+      expect(handle.dispose()).toBeUndefined()
+      expect(mount).not.toHaveBeenCalled()
+      cold = false
+      const mounted = bindPluginCallbacks("r11", mount, () => ({ executionRunId: "r11-warm" }))(
+        {} as never,
+        {} as never
+      )
+      expect(mount).toHaveBeenCalledTimes(1)
+      cold = true
+      expect(mounted.dispose()).toBeUndefined()
+      expect(mount.mock.results[0].value.dispose).not.toHaveBeenCalled()
+    } finally {
+      off()
+      restore()
+    }
+  })
 
   it("keeps synchronous, stable component getters for lazy artifact surfaces", () => {
     for (const [name, renderer] of Object.entries(getBuiltinRenderers())) {

@@ -1,3 +1,7 @@
+import {
+  markPluginSynchronousCallback,
+  markPluginSynchronousRenderer,
+} from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Extension Points API Implementation
  *
@@ -148,11 +152,13 @@ export function createExtensionAPI(
         id: extensionId,
         pluginId,
         point: normalizedPoint,
-        component,
+        component: markPluginSynchronousRenderer(pluginId, component),
         options: {
           priority: extensionOptions.priority || 0,
           labelKey: extensionOptions.labelKey,
-          condition: extensionOptions.condition,
+          condition:
+            extensionOptions.condition &&
+            markPluginSynchronousCallback(extensionOptions.condition, false),
           when: extensionOptions.when,
           // An inverted pair is a typo, not an intent. Left as-is, CSS resolves
           // it by letting `min-width` win — handing the plugin the *larger* of

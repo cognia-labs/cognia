@@ -1,3 +1,5 @@
+import { preparePluginHistory } from "@/lib/execution/personal-visibility"
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 import {
   executeConnectorManagement,
   listConnectorManagementOperations,
@@ -261,8 +263,48 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
       return row ? toInstanceInfo(row) : null
     },
     getRuntimeState: (adapterId) => getAdapterRuntimeStateSnapshot(adapterId),
-    fetchHistory: (adapterId, conversationKey, opts) =>
-      getBus().fetchHistoryAll(adapterId, conversationKey, opts),
+    fetchHistory: async (adapterId, conversationKey, opts) => {
+      const events = await getBus().fetchHistoryAll(adapterId, conversationKey, opts)
+      const override = await readForResolution(conversationKey).catch(() => undefined)
+      const session = await findSessionByConversationKey(conversationKey)
+      const sessionId = override?.sessionId ?? session?.id
+      if (!events.length) return events
+      const bus = getBus()
+      const hidden = await Promise.all(
+        events.map(async (event) => {
+          const stored =
+            typeof bus.findStoredPlatformMessage === "function"
+              ? await bus.findStoredPlatformMessage(event, event.messageId)
+              : undefined
+          if (!stored && !sessionId) return false
+          return (
+            (
+              await preparePluginHistory(stored?.sessionId ?? sessionId, [
+                stored ?? { ...event, id: event.messageId },
+              ])
+            ).withheldMessageIds.length > 0
+          )
+        })
+      )
+      return events.map((event, index) => {
+        if (!hidden[index]) return event
+        return {
+          platform: event.platform,
+          adapterId: event.adapterId,
+          selfId: event.selfId,
+          messageId: event.messageId,
+          conversationRef: event.conversationRef,
+          conversationKey: event.conversationKey,
+          timestamp: event.timestamp,
+          sender: { ...event.sender, displayName: undefined, avatarUrl: undefined },
+          channel: { ...event.channel, name: undefined },
+          mentions: { users: [], selfMentioned: false },
+          segments: [{ type: "text" as const, text: "[Withheld: personal content]" }],
+          plainText: "[Withheld: personal content]",
+          raw: undefined,
+        }
+      })
+    },
     onInbound: (handler) => getBus().subscribeInbound(handler),
     onCallback: (handler) => getBus().subscribeCallback(handler),
     listRunningAdapters: () => listRunningAdapters().map((e) => toInfo(e.adapter)),
@@ -620,6 +662,22 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
       // Pure, ungated helper (mints a client-side idempotency key). The `a2ui`
       // builder is a non-function property and passes through unchanged.
       unguarded: ["newIdempotencyKey"],
+      egressMethods: [
+        "queryManagement",
+        "manage",
+        "fetchHistory",
+        "resolveContacts",
+        "getReadReceipt",
+        "deleteMessage",
+        "deleteEphemeralCard",
+        "addReaction",
+        "removeReaction",
+        "unpinMessage",
+        "setTyping",
+        "createInstance",
+        "updateInstance",
+        "setInstanceEnabled",
+      ],
     }
   )
 }
@@ -667,6 +725,9 @@ async function legacyDirectSend(
   adapterId: string,
   request: OutboundRequest
 ): Promise<OutboundResult> {
+  const captured = pluginExecutionContext(pluginId)
+  const source = captured ?? {}
+  const sendOptions = captured ? bindPersonalEgressOptions({}, captured) : undefined
   request = namespaceExplicitPluginStream(pluginId, structuredClone(request))
   console.warn(
     `[connectors-api] plugin ${pluginId} used deprecated direct send; migrate to ctx.connectors.enqueueSend`
@@ -685,10 +746,7 @@ async function legacyDirectSend(
     return await getConnectorDeliveryGateway().sendNow(
       {
         adapterId,
-        personalContext: personalSinkContextForRun(
-          pluginExecutionContext(pluginId) ?? {},
-          "plugin invocation unavailable"
-        ),
+        personalContext: personalSinkContextForRun(source, "plugin invocation unavailable"),
         request: addressed,
         ...(conversationKey ? { conversationKey } : {}),
         segments: addressed.segments,
@@ -703,7 +761,10 @@ async function legacyDirectSend(
           migrationTarget: "ctx.connectors.enqueueSend",
         },
       },
-      (narrowedRequest) => getBus().sendOutbound(adapterId, narrowedRequest ?? addressed)
+      (narrowedRequest) =>
+        sendOptions
+          ? getBus().sendOutbound(adapterId, narrowedRequest ?? addressed, sendOptions)
+          : getBus().sendOutbound(adapterId, narrowedRequest ?? addressed)
     )
   } catch (error) {
     if (error instanceof ConnectorDeliveryPiiError) return refusedResult(error)

@@ -759,21 +759,14 @@ it.each([true, false])(
         { executionRunId: parent.id }
       )
       expect(handlerContext?.executionRunId).toMatch(/^execution:job:integration:/)
-      expect(reply.result).toMatchObject({ status: localPerson ? "succeeded" : "failed" })
+      expect(reply.result).toMatchObject({ status: "failed" })
       const jobRun = await getDb().executionRuns.get(handlerContext!.executionRunId!)
       expect(jobRun).toMatchObject({
         parentRunId: parent.id,
         actingIdentity: { rootRunId: parent.id },
-        status: localPerson ? "completed" : "failed",
+        status: "failed",
       })
-      if (localPerson) {
-        expect(proxyFetch).toHaveBeenCalledTimes(1)
-        expect(
-          new Headers(jest.mocked(proxyFetch).mock.calls[0][1]?.headers).get("authorization")
-        ).toBe("Bearer host-credential")
-      } else {
-        expect(proxyFetch).not.toHaveBeenCalled()
-      }
+      expect(proxyFetch).not.toHaveBeenCalled()
       expect(pluginExecutionContext(consumer)).toBeUndefined()
     } finally {
       __setInvokePluginToolDepsForTesting(null)

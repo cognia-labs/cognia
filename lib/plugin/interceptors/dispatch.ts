@@ -6,7 +6,7 @@ export * from "@cognia/plugin-contract/lib/plugin/interceptors/dispatch"
 
 import * as portable from "@cognia/plugin-contract/lib/plugin/interceptors/dispatch"
 import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
-import { HOST_BACKGROUND, withPluginExecutionContext } from "../core/invocation-identity"
+import { HOST_BACKGROUND, withPluginContentDispatch } from "../core/invocation-identity"
 
 export interface InterceptorDispatchContext extends portable.InterceptorDispatchContext {
   /** Host operation identity, never a plugin payload field. */
@@ -20,7 +20,7 @@ function bound(context: InterceptorDispatchContext): portable.InterceptorDispatc
   return {
     ...context,
     invokeHandler: (registration, invoke) =>
-      withPluginExecutionContext(registration.pluginId, execution, async () => invoke()),
+      withPluginContentDispatch(registration.pluginId, execution, async () => invoke()),
   }
 }
 export function dispatchObserve<T>(

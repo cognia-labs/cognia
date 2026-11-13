@@ -538,3 +538,38 @@ test("nested mode shortcuts never bypass always-ask permission classes", async (
     if (frames.length) assert.equal(frames[0]!.requiresPerCallApproval, true)
   }
 })
+
+test("a mid-run fence denies preapproved opaque tools before permissions", async () => {
+  const options: PermissionSendOptions = {
+    permissionMode: "bypassPermissions",
+    alwaysAllowTools: ["Bash", "WebFetch", "WebSearch"],
+  }
+  const gate = mkGate(options)
+  options.personalEgressFenced = true
+  for (const name of ["Bash", "WebFetch", "mcp__third__read"])
+    assert.equal((await gate(name, {}, {})).behavior, "deny")
+  assert.equal((await gate("WebSearch", {}, {})).behavior, "allow")
+})
+
+test("H1: only the installed native registry mints Host approval ownership", async () => {
+  for (const name of ["Read", "mcp__third__Read", "mcp__cognia-plugin-tools__Read"]) {
+    const frames: Record<string, unknown>[] = []
+    const pending = new Map<string, PendingApproval>()
+    const gate = mkGate(
+      { permissionMode: "default" },
+      {
+        pendingApprovals: pending,
+        emit: (frame) => {
+          frames.push(frame)
+          queueMicrotask(() => pending.get(String(frame.requestId))?.resolve({ behavior: "allow" }))
+        },
+      }
+    )
+    await gate(name, {}, { sdkPreflight: true })
+    assert.equal(frames.length, 1)
+    assert.deepEqual(
+      frames[0]!.nativeTool,
+      name === "Read" ? { engine: "claude-agent-sdk", name: "Read" } : undefined
+    )
+  }
+})

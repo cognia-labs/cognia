@@ -662,7 +662,13 @@ export async function reconcileTeamRun(ctx: StepExecutionContext): Promise<StepE
               `Pick the best candidate key only.\n\n${prompt}`,
               "team-reconcile-judge"
             )
-            const text = (await executeAgent(visiblePrompt, {})).text
+            const text = (
+              await executeAgent(visiblePrompt, {
+                executionIdentity: {
+                  runId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
+                },
+              })
+            ).text
             return candidates.find((candidate) => text?.includes(candidate.key))?.key ?? null
           },
         }

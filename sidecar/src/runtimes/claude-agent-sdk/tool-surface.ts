@@ -1,3 +1,4 @@
+import { bindPersonalEgressHostTools } from "../../policy/personal-egress.ts"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { BUILTIN_TOOL_NAMES, LEGACY_TOOL_NAME_ALIASES } from "@anthropic-ai/claude-agent-sdk"
 import type { SendOptions } from "../../shared/wire/inbound.ts"
@@ -218,10 +219,12 @@ export function buildToolSurface({
   // (`ocr.extract` → `ocr_extract`), as `modelName → originalName`. Filled by
   // the server builder, consumed wherever the SDK's vocabulary meets ours:
   // the allow/deny lists below, `canUseTool`, and every streamed message.
+  const personalEgressRelayTools = new Set<string>()
   const pluginToolNameAliases = new Map<string, string>()
   if (Array.isArray(sendOptions.pluginTools) && sendOptions.pluginTools.length > 0) {
-    const pluginToolsServer = buildPluginToolsServer(
-      anthropicPluginToolBridgeOptions({
+    const pluginToolsServer = buildPluginToolsServer({
+      personalEgressPolicy: sendOptions,
+      ...anthropicPluginToolBridgeOptions({
         tools: sendOptions.pluginTools,
         contentSafety: sendOptions.contentSafety,
         emit,
@@ -235,8 +238,8 @@ export function buildToolSurface({
         attemptId: sendOptions.execution?.identity?.attemptId,
         toolNameAliases: pluginToolNameAliases,
         permissionPromptToolName: sendOptions.claudeAgentSdk?.permissionPromptToolName,
-      })
-    )
+      }),
+    })
     if (pluginToolNameAliases.size > 0) {
       log(
         "info",
@@ -248,6 +251,17 @@ export function buildToolSurface({
       )
     }
     if (pluginToolsServer) {
+      if (!Object.prototype.hasOwnProperty.call(withA2UI, PLUGIN_TOOLS_SERVER_NAME)) {
+        for (const tool of sendOptions.pluginTools) {
+          const name = modelPluginToolNameList(pluginToolNameAliases, PLUGIN_TOOLS_SERVER_NAME, [
+            `mcp__${PLUGIN_TOOLS_SERVER_NAME}__${tool.name}`,
+          ])?.[0]
+          if (name)
+            personalEgressRelayTools.add(
+              name.startsWith("mcp__") ? name : `mcp__${PLUGIN_TOOLS_SERVER_NAME}__${name}`
+            )
+        }
+      }
       mergedMcpServers = Object.prototype.hasOwnProperty.call(withA2UI, PLUGIN_TOOLS_SERVER_NAME)
         ? (() => {
             log(
@@ -259,6 +273,30 @@ export function buildToolSurface({
         : { ...withA2UI, [PLUGIN_TOOLS_SERVER_NAME]: pluginToolsServer }
     }
   }
+
+  // Permission callbacks see both SDK aliases and restored Host names.
+  const readNames = sendOptions.personalEgressReadTools ?? []
+  sendOptions.personalEgressReadTools = [
+    ...new Set([
+      ...readNames,
+      ...(modelPluginToolNameList(pluginToolNameAliases, PLUGIN_TOOLS_SERVER_NAME, readNames) ??
+        []),
+    ]),
+  ]
+  const registeredHostTools = new Set(personalEgressRelayTools)
+  if (!Object.prototype.hasOwnProperty.call(withA2UI, PLUGIN_TOOLS_SERVER_NAME)) {
+    for (const [model, original] of pluginToolNameAliases)
+      if (registeredHostTools.has(`mcp__${PLUGIN_TOOLS_SERVER_NAME}__${model}`))
+        registeredHostTools.add(`mcp__${PLUGIN_TOOLS_SERVER_NAME}__${original}`)
+  }
+  if (
+    builtinServer &&
+    !Object.prototype.hasOwnProperty.call(baseUserServers, BUILTIN_SERVER_NAME)
+  ) {
+    for (const name of sendOptions.personalEgressReadTools ?? [])
+      if (name.startsWith(`mcp__${BUILTIN_SERVER_NAME}__`)) registeredHostTools.add(name)
+  }
+  bindPersonalEgressHostTools(sendOptions, registeredHostTools)
 
   // The lists the SDK compares tool names against must speak its vocabulary.
   const modelAllowedTools = modelPluginToolNameList(
@@ -305,6 +343,7 @@ export function buildToolSurface({
       }))
     ) as Options["mcpServers"],
     pluginToolNameAliases,
+    personalEgressRelayTools,
     modelAllowedTools,
     disallowed,
     lspEnabled,

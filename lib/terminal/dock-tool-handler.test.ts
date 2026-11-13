@@ -108,6 +108,7 @@ describe("runTerminalDockAction — spawn", () => {
       code: "command_sent_unobserved",
       reason:
         "Command was sent to session tab-new and may still be running. Completion, exit code, and output cannot be observed by this tool (shell_integration_ready_timeout). Do not send it again.",
+      sessionId: "tab-new",
     })
     expect(mockedRunInDock).toHaveBeenCalledTimes(1)
   })
@@ -211,6 +212,7 @@ describe("runTerminalDockAction — write", () => {
         ok: false,
         code: "command_sent_unobserved",
         reason: `Command was sent to session tab and may still be running. Completion, exit code, and output cannot be observed by this tool (${reason ?? "shell_integration_disabled"}). Do not send it again.`,
+        sessionId: "tab",
       })
       expect(mockedRunInDock).toHaveBeenCalledTimes(1)
       expect(mockedRunInDock.mock.calls[0][0].requireCommandEnd).toBeUndefined()
@@ -286,7 +288,7 @@ describe("runTerminalDockAction — write", () => {
       args: { tabId: "t1", command: "sleep 999" },
       chatSessionId: "c",
     })
-    expect(r2).toEqual({ ok: false, reason: "timeout (session t1)" })
+    expect(r2).toEqual({ ok: false, reason: "timeout (session t1)", sessionId: "t1" })
 
     mockedRunInDock.mockResolvedValueOnce({ kind: "error", message: "broke" })
     const r3 = await runTerminalDockAction({

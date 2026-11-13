@@ -1,3 +1,4 @@
+import type { PersonalEgressContext } from "@/lib/execution/personal-egress"
 /**
  * Outbound egress registry.
  *
@@ -18,7 +19,10 @@ export interface PublishResult {
   result: DeliverResult
 }
 
-export async function publishOutboundEvent(event: OutboundWebhookEvent): Promise<PublishResult[]> {
+export async function publishOutboundEvent(
+  event: OutboundWebhookEvent,
+  credentialContext?: PersonalEgressContext
+): Promise<PublishResult[]> {
   const outbound = useWebhookStore.getState().config
   // Fan out only to enabled endpoints whose subscription filter matches this
   // event type (empty filter = all events, GitHub/Svix-style).
@@ -35,6 +39,7 @@ export async function publishOutboundEvent(event: OutboundWebhookEvent): Promise
   const out: PublishResult[] = []
   for (const endpoint of endpoints) {
     const result = await deliverWebhook({
+      credentialContext,
       endpoint: {
         ...endpoint,
         headers: mergeWebhookHeaders(outbound.defaultHeaders, endpoint.headers),

@@ -244,6 +244,7 @@ describe("runPluginAgentTurn", () => {
     const [, , , opts] = runAndCaptureAssistantReply.mock.calls[0] as unknown[]
     expect((opts as { outboundPolicy?: unknown }).outboundPolicy).toEqual({
       unattended: true,
+      executionRunId: "entry-run",
       origin: { rootSessionId: "bot:inst-1" },
       policyGrants: lists,
     })
@@ -251,7 +252,10 @@ describe("runPluginAgentTurn", () => {
     runAndCaptureAssistantReply.mockClear()
     await runTurn(base, { grantSource: { kind: "bot", id: "inst-1" }, outboundPolicyGrants: [] })
     const [, , , bare] = runAndCaptureAssistantReply.mock.calls[0] as unknown[]
-    expect((bare as { outboundPolicy?: unknown }).outboundPolicy).toEqual({ unattended: true })
+    expect((bare as { outboundPolicy?: unknown }).outboundPolicy).toEqual({
+      unattended: true,
+      executionRunId: "entry-run",
+    })
   })
 
   it("closes a parked run as failed when the turn throws", async () => {
@@ -714,4 +718,16 @@ it("binds every captured plugin assistant/tool message to its Host execution bef
   } finally {
     binding.mockClear()
   }
+})
+
+it("F1 plugin agent turn supplies its exact entry run to capture permission policy", async () => {
+  const result = await runTurn(base)
+  expect(
+    (await import("@/lib/execution/personal-egress")).personalEgressOptionsSource(result)
+  ).toEqual({ executionRunId: "entry-run" })
+  const capture = runAndCaptureAssistantReply.mock.calls.at(-1) as unknown[]
+  expect(capture[3]).toMatchObject({
+    outboundPolicy: { unattended: true, executionRunId: "entry-run" },
+    onPermissionRequest: expect.any(Function),
+  })
 })

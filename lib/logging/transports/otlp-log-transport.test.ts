@@ -341,3 +341,41 @@ describe("withdrawn consent", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 })
+
+it("rechecks original Host sources on OTLP retry and retains the background log", async () => {
+  const { configureLogEgressPolicy } = await import("@cognia/logging/context")
+  let blocked = false
+  const restore = configureLogEgressPolicy(async (entries, send) => {
+    const admitted = entries.filter((entry) => !blocked || !entry.hostEgressSource)
+    return admitted.length ? send(admitted) : undefined
+  })
+  const fetchImpl = jest.fn(
+    async (..._args: Parameters<typeof fetch>) => new Response("", { status: blocked ? 200 : 503 })
+  )
+  const transport = new OtlpLogTransport({
+    endpoint: "https://collector.example/v1/logs",
+    flushInterval: 0,
+    maxRetries: 1,
+    fetchImpl,
+    sleepImpl: async () => {
+      blocked = true
+    },
+  })
+  try {
+    transport.log(
+      entry({
+        id: "private",
+        message: "producer",
+        hostEgressSource: { version: 1, runIds: ["run"] },
+      })
+    )
+    transport.log(entry({ id: "host", message: "background" }))
+    await transport.flush()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(String(fetchImpl.mock.calls[1][1]?.body)).not.toContain("producer")
+    expect(String(fetchImpl.mock.calls[1][1]?.body)).toContain("background")
+  } finally {
+    await transport.close()
+    restore()
+  }
+})

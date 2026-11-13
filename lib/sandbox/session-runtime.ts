@@ -1,3 +1,7 @@
+import Dexie from "dexie"
+import { cachedPersonalDispatchFence } from "@/lib/execution/personal-operation"
+import { getDb } from "@/lib/db/schema"
+import { isTerminalRunStatus } from "@cognia/plugin-contract/types/execution/run"
 import type { SandboxAttestationV1, SandboxResourcePolicy } from "@cognia/agent-config-types"
 import {
   HOST_FALLBACK_RUNTIME_REF,
@@ -51,6 +55,7 @@ export {
 export type { MicrovmExecAdapter } from "./microvm-bridge"
 
 export interface BindSandboxSessionInput {
+  executionRunId?: string
   sessionId: string
   /** Character identity frozen with this binding, for managed Host delegation checks. */
   characterId?: string
@@ -189,6 +194,78 @@ const HOST_FALLBACK_RECORD: RuntimeRecord = Object.freeze({
  */
 export class SandboxSessionRuntime {
   private readonly activeBySession = new Map<string, SandboxRuntimeRef>()
+  private readonly consumingRuns = new Map<string, Set<string>>()
+  private readonly personalNetworkOff = new Map<string, Set<string>>()
+  private networkBindingKey(record: BindSandboxSessionInput): string {
+    return JSON.stringify([record.binding, record.workspaceRoot])
+  }
+  private rememberNetworkOff(record: BindSandboxSessionInput): void {
+    const bindings = this.personalNetworkOff.get(record.sessionId) ?? new Set<string>()
+    bindings.add(this.networkBindingKey(record))
+    this.personalNetworkOff.set(record.sessionId, bindings)
+  }
+  private provenanceUpdate: Promise<void> = Promise.resolve()
+  private observedDatabase?: object
+  private observeRunLifetimes(): void {
+    try {
+      const db = getDb()
+      if (this.observedDatabase === db) return
+      if (this.observedDatabase) this.consumingRuns.clear()
+      this.observedDatabase = db
+      const refresh = (remove?: string) => {
+        const consumers = [...this.consumingRuns].map(
+          ([sessionId, runs]) => [sessionId, [...runs]] as const
+        )
+        const complete = () => {
+          this.provenanceUpdate = this.provenanceUpdate.then(async () => {
+            if (this.observedDatabase !== db) return
+            const { personalContentExposed } = await import("@/lib/execution/personal-egress")
+            for (const [sessionId, runs] of consumers) {
+              if (
+                await personalContentExposed({
+                  personalSources: runs.map((executionRunId) => ({ executionRunId })),
+                })
+              )
+                for (const record of this.records.values())
+                  if (record.sessionId === sessionId) this.rememberNetworkOff(record)
+              if (remove) this.consumingRuns.get(sessionId)?.delete(remove)
+            }
+          })
+        }
+        const tx = Dexie.currentTransaction
+        if (tx) tx.on("complete", complete)
+        else complete()
+      }
+      db.executionRuns.hook("updating", (changes, id) => {
+        if (
+          Object.keys(changes).some((key) =>
+            /^(personalMarks|parentRunId|actingIdentity)(\.|$)/.test(key)
+          )
+        )
+          refresh()
+        if (
+          "status" in changes &&
+          isTerminalRunStatus(changes.status as Parameters<typeof isTerminalRunStatus>[0])
+        )
+          refresh(String(id))
+      })
+      db.executionRuns.hook("deleting", (id) => refresh(String(id)))
+    } catch {
+      /* Unknown database keeps consumers conservatively active. */
+    }
+  }
+  private async retainConsumer(sessionId: string, runId: string): Promise<void> {
+    this.observeRunLifetimes()
+    const runs = this.consumingRuns.get(sessionId) ?? new Set<string>()
+    runs.add(runId)
+    this.consumingRuns.set(sessionId, runs)
+    try {
+      const row = await getDb().executionRuns.get(runId)
+      if (row && isTerminalRunStatus(row.status)) runs.delete(runId)
+    } catch {
+      /* Unverified consumers remain active. */
+    }
+  }
   private readonly records = new Map<SandboxRuntimeRef, RuntimeRecord>()
   private readonly cleanupByRef = new Map<SandboxRuntimeRef, RuntimeRecord>()
   private readonly cleanupInFlight = new Map<SandboxRuntimeRef, Promise<void>>()
@@ -203,6 +280,7 @@ export class SandboxSessionRuntime {
   }
 
   async bindSession(input: BindSandboxSessionInput): Promise<SandboxRuntimeRef> {
+    this.observeRunLifetimes()
     // Own the requested policy before yielding to a provider or a release.
     input = {
       ...input,
@@ -213,6 +291,7 @@ export class SandboxSessionRuntime {
     const releasing = this.releases.get(input.sessionId)
     if (releasing) await releasing
     if (this.closedSessions.has(input.sessionId)) await this.releaseSession(input.sessionId)
+    if (input.executionRunId) await this.retainConsumer(input.sessionId, input.executionRunId)
     const key = fingerprint(input)
     const pending = this.pendingBinds.get(input.sessionId)
     if (pending?.fingerprint === key && !pending.cancelled) return pending.promise
@@ -404,6 +483,7 @@ export class SandboxSessionRuntime {
     if (!record || record.workspaceRoot === workspaceRoot) return ref
     const input: BindSandboxSessionInput = {
       sessionId: record.sessionId,
+      executionRunId: record.executionRunId,
       characterId: record.characterId,
       binding: record.binding,
       policy: record.policy,
@@ -535,12 +615,55 @@ export class SandboxSessionRuntime {
     }
   }
 
+  enforcesNetworkOff(ref: SandboxRuntimeRef): boolean {
+    const record = this.records.get(ref)
+    return (
+      record?.binding.shellTier === "container" &&
+      record.tierAdapter?.enforcesNetworkOff?.(ref) === true
+    )
+  }
+
   async executeSandbox(
     ref: SandboxRuntimeRef,
     payload: MicrovmExecPayload,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; executionRunId?: string }
   ): Promise<MicrovmResult> {
     const record = this.requireRecord(ref)
+    const { personalEgressFenced, personalContentExposed, PersonalEgressDeniedError } =
+      await import("@/lib/execution/personal-egress")
+    this.observeRunLifetimes()
+    await this.provenanceUpdate
+    if (options?.executionRunId) await this.retainConsumer(record.sessionId, options.executionRunId)
+    const runs = this.consumingRuns.get(record.sessionId) ?? new Set<string>()
+    const producers = new Set([
+      ...runs,
+      ...(options?.executionRunId ? [options.executionRunId] : []),
+    ])
+    const source: import("@/lib/execution/personal-egress").PersonalEgressContext = producers.size
+      ? { personalSources: [...producers].map((executionRunId) => ({ executionRunId })) }
+      : {}
+    const sticky =
+      this.personalNetworkOff.get(record.sessionId)?.has(this.networkBindingKey(record)) === true
+    const fenced = sticky || (await personalEgressFenced(source))
+    const exposed =
+      !sticky &&
+      fenced &&
+      (cachedPersonalDispatchFence(source) === true || (await personalContentExposed(source)))
+    if (exposed) this.rememberNetworkOff(record)
+    if (fenced && !sticky && !exposed) {
+      // Unknown provenance refuses this call without changing a clean binding.
+      if (options?.executionRunId)
+        this.consumingRuns.get(record.sessionId)?.delete(options.executionRunId)
+      throw new PersonalEgressDeniedError()
+    }
+    if (fenced) {
+      if (
+        record.binding.shellTier !== "container" ||
+        record.tierAdapter?.enforcesNetworkOff?.(ref) !== true
+      )
+        throw new PersonalEgressDeniedError()
+      payload = { ...payload, request: { ...payload.request, network: "off", networkHosts: [] } }
+    }
     if (!record.sandboxEnabled) {
       throw new SandboxRuntimeError(
         "surface-disabled",
@@ -582,188 +705,203 @@ export class SandboxSessionRuntime {
         record.workspaceRoot ? [record.workspaceRoot] : []
       ),
     }
-    switch (record.binding.shellTier) {
-      case "os": {
-        // On the desktop the Rust `sandbox_exec` command records the audit
-        // entry and emits `automation:event`, which the renderer mirrors into
-        // Dexie. A host running the tier through its own executor never reaches
-        // that code, so it has to record here or the call leaves no trace on
-        // that host while the desktop records every one. The predicate is read
-        // ONCE and reused for the decision, so a withdrawal racing the call
-        // cannot make the row disagree with the route that ran.
-        const hostExecuted = getOsSandboxExec() !== null
-        if (!hostExecuted) return this.deps.executeOsSandbox(payload)
-        const started = Date.now()
-        try {
-          const result = await this.deps.executeOsSandbox(payload)
-          this.recordTierAudit(payload, {
-            tier: "os",
-            provider: "cognia-sandbox-exec",
-            result,
-            durationMs: Math.max(result.duration * 1000, Date.now() - started),
-          })
-          return result
-        } catch (error) {
-          this.recordTierAudit(payload, {
-            tier: "os",
-            provider: "cognia-sandbox-exec",
-            error,
-            durationMs: Date.now() - started,
-          })
-          throw error
-        }
-      }
-      case "microvm": {
-        const adapter = record.tierAdapter
-        if (!adapter) {
-          throw new SandboxRuntimeError(
-            "microvm-unavailable",
-            "The bound E2B execution adapter is no longer available; the operation was not run locally."
-          )
-        }
-        // Stamp the session ceiling so the adapter can tell an operator cap it
-        // cannot honour from a per-call request that simply needs less than
-        // the instance offers.
-        const started = Date.now()
-        try {
-          const result = await adapter.execute(ref, {
-            ...payload,
-            ...(record.policy
-              ? {
-                  ceiling: {
-                    ...(record.policy.network ? { network: record.policy.network } : {}),
-                    ...(record.policy.maxCpuSeconds
-                      ? { maxCpuSeconds: record.policy.maxCpuSeconds }
-                      : {}),
-                    ...(record.policy.maxMemoryMb
-                      ? { maxMemoryMb: record.policy.maxMemoryMb }
-                      : {}),
-                  },
-                }
-              : {}),
-          })
-          this.recordMicrovmAudit(payload, {
-            result,
-            durationMs: Math.max(result.duration, Date.now() - started),
-          })
-          return result
-        } catch (error) {
-          this.recordMicrovmAudit(payload, {
-            error,
-            durationMs: Date.now() - started,
-          })
-          throw error
-        }
-      }
-      case "container": {
-        const adapter = record.tierAdapter
-        if (!adapter) {
-          throw new SandboxRuntimeError(
-            "placement-unavailable",
-            "The bound container placement is no longer available; the operation was not run locally."
-          )
-        }
-        // No ceiling stamp: the environment's own size class and egress tier
-        // bound the container, and the per-call request is clamped above.
-        const started = Date.now()
-        try {
-          const result = await adapter.execute(ref, payload)
-          this.recordTierAudit(payload, {
-            tier: "container",
-            provider: CONTAINER_AUDIT_PROVIDER,
-            result,
-            durationMs: Math.max(result.duration, Date.now() - started),
-          })
-          return result
-        } catch (error) {
-          this.recordTierAudit(payload, {
-            tier: "container",
-            provider: CONTAINER_AUDIT_PROVIDER,
-            error,
-            durationMs: Date.now() - started,
-          })
-          throw error
-        }
-      }
-      case "cua-desktop": {
-        // Runs the command inside the bound machine via the provider adapter.
-        // `preflightMutableTarget` has already established that the connection
-        // advertises `workspaceExec`, and the adapter attests the per-call
-        // policy against the container's frozen confinement before running
-        // anything. A refusal at either point stays a refusal: there is no
-        // fallback to this host.
-        const row = record.lume?.row ?? (await this.requireConnection(record.binding.connectionId))
-        const started = Date.now()
-        try {
-          const exec = await runSandboxConnectionOperation(row, "workspaceExec", {
-            signal: options?.signal,
-            ...(row.config.provider === "e2b"
-              ? { managedAgent: { sessionKey: record.sessionId, characterId: record.characterId } }
-              : {}),
-            ...(record.lume
-              ? {
-                  lumeBinding: record.lume.binding,
-                  lumeClient: this.deps.getLumeClient?.() ?? lumeClient,
-                }
-              : {}),
-            exec: {
-              argv: payload.command.argv,
-              cwd: record.lume
-                ? lumeLogicalPath(record.lume.root, payload.command.cwd)
-                : payload.command.cwd,
-              env: payload.command.env,
-              stdin: payload.command.stdin ?? undefined,
-              timeoutMs: payload.command.timeout > 0 ? payload.command.timeout * 1000 : undefined,
-              policy: record.lume
-                ? {
-                    ...payload.request,
-                    readable: payload.request.readable.map((path) =>
-                      lumeLogicalPath(record.lume!.root, path)
-                    ),
-                    writable: payload.request.writable.map((path) =>
-                      lumeLogicalPath(record.lume!.root, path)
-                    ),
-                    targetFiles: payload.request.targetFiles.map((path) =>
-                      lumeLogicalPath(record.lume!.root, path)
-                    ),
-                  }
-                : payload.request,
-            },
-          })
-          if (!exec.exec) {
-            throw new SandboxRuntimeError(
-              "surface-disabled",
-              "The bound machine accepted the command but returned no result."
-            )
+    const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+    return runPersonalEgressOperation(
+      source,
+      async () => {
+        switch (record.binding.shellTier) {
+          case "os": {
+            // On the desktop the Rust `sandbox_exec` command records the audit
+            // entry and emits `automation:event`, which the renderer mirrors into
+            // Dexie. A host running the tier through its own executor never reaches
+            // that code, so it has to record here or the call leaves no trace on
+            // that host while the desktop records every one. The predicate is read
+            // ONCE and reused for the decision, so a withdrawal racing the call
+            // cannot make the row disagree with the route that ran.
+            const hostExecuted = getOsSandboxExec() !== null
+            if (!hostExecuted) return this.deps.executeOsSandbox(payload)
+            const started = Date.now()
+            try {
+              const result = await this.deps.executeOsSandbox(payload)
+              this.recordTierAudit(payload, {
+                tier: "os",
+                provider: "cognia-sandbox-exec",
+                result,
+                durationMs: Math.max(result.duration * 1000, Date.now() - started),
+              })
+              return result
+            } catch (error) {
+              this.recordTierAudit(payload, {
+                tier: "os",
+                provider: "cognia-sandbox-exec",
+                error,
+                durationMs: Date.now() - started,
+              })
+              throw error
+            }
           }
-          if (record.lume && exec.exec.vmStopped) this.retireRecord(ref)
-          const result: MicrovmResult = {
-            exit_code: exec.exec.exitCode,
-            stdout: exec.exec.stdout,
-            stderr: exec.exec.stderr,
-            duration: exec.exec.durationMs,
-            timed_out: exec.exec.timedOut,
-            ...(exec.exec.stdoutTruncated ? { stdout_truncated: true } : {}),
-            ...(exec.exec.stderrTruncated ? { stderr_truncated: true } : {}),
+          case "microvm": {
+            const adapter = record.tierAdapter
+            if (!adapter) {
+              throw new SandboxRuntimeError(
+                "microvm-unavailable",
+                "The bound E2B execution adapter is no longer available; the operation was not run locally."
+              )
+            }
+            // Stamp the session ceiling so the adapter can tell an operator cap it
+            // cannot honour from a per-call request that simply needs less than
+            // the instance offers.
+            const started = Date.now()
+            try {
+              const result = await adapter.execute(ref, {
+                ...payload,
+                ...(record.policy
+                  ? {
+                      ceiling: {
+                        ...(record.policy.network ? { network: record.policy.network } : {}),
+                        ...(record.policy.maxCpuSeconds
+                          ? { maxCpuSeconds: record.policy.maxCpuSeconds }
+                          : {}),
+                        ...(record.policy.maxMemoryMb
+                          ? { maxMemoryMb: record.policy.maxMemoryMb }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              })
+              this.recordMicrovmAudit(payload, {
+                result,
+                durationMs: Math.max(result.duration, Date.now() - started),
+              })
+              return result
+            } catch (error) {
+              this.recordMicrovmAudit(payload, {
+                error,
+                durationMs: Date.now() - started,
+              })
+              throw error
+            }
           }
-          this.recordTierAudit(payload, {
-            tier: "cua-desktop",
-            provider: row.provider,
-            result,
-            durationMs: Math.max(result.duration, Date.now() - started),
-          })
-          return result
-        } catch (error) {
-          this.recordTierAudit(payload, {
-            tier: "cua-desktop",
-            provider: row.provider,
-            error,
-            durationMs: Date.now() - started,
-          })
-          throw error
+          case "container": {
+            const adapter = record.tierAdapter
+            if (!adapter) {
+              throw new SandboxRuntimeError(
+                "placement-unavailable",
+                "The bound container placement is no longer available; the operation was not run locally."
+              )
+            }
+            // No ceiling stamp: the environment's own size class and egress tier
+            // bound the container, and the per-call request is clamped above.
+            const started = Date.now()
+            try {
+              const result = await adapter.execute(ref, payload)
+              this.recordTierAudit(payload, {
+                tier: "container",
+                provider: CONTAINER_AUDIT_PROVIDER,
+                result,
+                durationMs: Math.max(result.duration, Date.now() - started),
+              })
+              return result
+            } catch (error) {
+              this.recordTierAudit(payload, {
+                tier: "container",
+                provider: CONTAINER_AUDIT_PROVIDER,
+                error,
+                durationMs: Date.now() - started,
+              })
+              throw error
+            }
+          }
+          case "cua-desktop": {
+            // Runs the command inside the bound machine via the provider adapter.
+            // `preflightMutableTarget` has already established that the connection
+            // advertises `workspaceExec`, and the adapter attests the per-call
+            // policy against the container's frozen confinement before running
+            // anything. A refusal at either point stays a refusal: there is no
+            // fallback to this host.
+            const row =
+              record.lume?.row ?? (await this.requireConnection(record.binding.connectionId))
+            const started = Date.now()
+            try {
+              const exec = await runSandboxConnectionOperation(row, "workspaceExec", {
+                signal: options?.signal,
+                ...(row.config.provider === "e2b"
+                  ? {
+                      managedAgent: {
+                        sessionKey: record.sessionId,
+                        characterId: record.characterId,
+                      },
+                    }
+                  : {}),
+                ...(record.lume
+                  ? {
+                      lumeBinding: record.lume.binding,
+                      lumeClient: this.deps.getLumeClient?.() ?? lumeClient,
+                    }
+                  : {}),
+                exec: {
+                  argv: payload.command.argv,
+                  cwd: record.lume
+                    ? lumeLogicalPath(record.lume.root, payload.command.cwd)
+                    : payload.command.cwd,
+                  env: payload.command.env,
+                  stdin: payload.command.stdin ?? undefined,
+                  timeoutMs:
+                    payload.command.timeout > 0 ? payload.command.timeout * 1000 : undefined,
+                  policy: record.lume
+                    ? {
+                        ...payload.request,
+                        readable: payload.request.readable.map((path) =>
+                          lumeLogicalPath(record.lume!.root, path)
+                        ),
+                        writable: payload.request.writable.map((path) =>
+                          lumeLogicalPath(record.lume!.root, path)
+                        ),
+                        targetFiles: payload.request.targetFiles.map((path) =>
+                          lumeLogicalPath(record.lume!.root, path)
+                        ),
+                      }
+                    : payload.request,
+                },
+              })
+              if (!exec.exec) {
+                throw new SandboxRuntimeError(
+                  "surface-disabled",
+                  "The bound machine accepted the command but returned no result."
+                )
+              }
+              if (record.lume && exec.exec.vmStopped) this.retireRecord(ref)
+              const result: MicrovmResult = {
+                exit_code: exec.exec.exitCode,
+                stdout: exec.exec.stdout,
+                stderr: exec.exec.stderr,
+                duration: exec.exec.durationMs,
+                timed_out: exec.exec.timedOut,
+                ...(exec.exec.stdoutTruncated ? { stdout_truncated: true } : {}),
+                ...(exec.exec.stderrTruncated ? { stderr_truncated: true } : {}),
+              }
+              this.recordTierAudit(payload, {
+                tier: "cua-desktop",
+                provider: row.provider,
+                result,
+                durationMs: Math.max(result.duration, Date.now() - started),
+              })
+              return result
+            } catch (error) {
+              this.recordTierAudit(payload, {
+                tier: "cua-desktop",
+                provider: row.provider,
+                error,
+                durationMs: Date.now() - started,
+              })
+              throw error
+            }
+          }
         }
-      }
-    }
+      },
+      !fenced && payload.tool === "sandbox_bash",
+      fenced
+    )
   }
 
   async fileOperation(
@@ -919,6 +1057,7 @@ export class SandboxSessionRuntime {
   }
 
   releaseSession(sessionId: string): Promise<void> {
+    this.consumingRuns.delete(sessionId)
     for (const record of this.records.values()) {
       if (record.sessionId === sessionId) this.stopLumeHeartbeat(record.ref)
     }
@@ -976,6 +1115,7 @@ export class SandboxSessionRuntime {
     }
     // Nothing left to clean up — drop the tombstone so the set cannot grow
     // once per session id for the lifetime of the process.
+    this.personalNetworkOff.delete(sessionId)
     this.closedSessions.delete(sessionId)
   }
 
@@ -1132,6 +1272,8 @@ export class SandboxSessionRuntime {
   __resetForTesting(): void {
     for (const ref of this.lumeHeartbeats.keys()) this.stopLumeHeartbeat(ref)
     for (const sessionId of this.bindingAttempts.keys()) this.cancelPendingBindings(sessionId)
+    this.consumingRuns.clear()
+    this.personalNetworkOff.clear()
     this.bindingAttempts.clear()
     this.releases.clear()
     this.pendingBinds.clear()

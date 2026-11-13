@@ -489,3 +489,50 @@ describe("runInTerminalDock", () => {
     expect(useTerminalStore.getState().panelOpen).toBe(true)
   })
 })
+
+it("F5 runInDock binds the live session before command timeout and retains it until Host exit", async () => {
+  const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+  const fixture = createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { readRunPersonalTaint } = await import("@/lib/execution/personal-sink")
+  const parent = await startToolExecutionRun("f5-run-dock", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const child = await startToolExecutionRun("f5-run-dock-child", { parentRunId: parent.id })
+  const fake = makeFakeSession("f5-run-dock-session")
+  let exited = false
+  Object.defineProperty(fake, "processExitConfirmed", { get: () => exited })
+  registerLiveSession(fake as never)
+  useTerminalStore.getState().registerSession(fake.info)
+  await grantTrust("f5-chat", fake.id)
+  const mark = { person: { kind: "local-person" as const }, source: "F5", markedAt: 1 }
+  try {
+    await expect(
+      runInDockTab({
+        chatSessionId: "f5-chat",
+        tabId: fake.id,
+        command: "sleep 100",
+        timeoutMs: 1,
+        credentialContext: { executionRunId: parent.id },
+      })
+    ).resolves.toEqual({ kind: "timeout", sessionId: fake.id })
+    expect(await readRunPersonalTaint({ executionRunId: child.id })).toMatchObject({
+      verified: true,
+      marks: [],
+    })
+    await expect(addPersonalMarksToRun({ executionRunId: child.id }, [mark])).rejects.toMatchObject(
+      { code: "personal-egress-denied" }
+    )
+    exited = true
+    await expect(
+      addPersonalMarksToRun({ executionRunId: child.id }, [mark])
+    ).resolves.toBeUndefined()
+  } finally {
+    exited = true
+    await fixture.dispose()
+  }
+})

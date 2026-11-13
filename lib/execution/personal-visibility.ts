@@ -16,7 +16,11 @@ import {
 } from "@cognia/plugin-contract/types/execution/personal-visibility"
 import { getDb } from "@/lib/db/schema"
 import { resolveRunActingIdentity } from "./acting-authority"
-import { addPersonalMarksToRun, personalMarkContextForSession } from "./personal-marks"
+import {
+  addPersonalMarksToRun,
+  personalMarkContextForSession,
+  personalMessageAttributedMarks,
+} from "./personal-marks"
 import type { RerankerOptions } from "@/lib/twin/runtime/reranker"
 import type { ExecutionRun } from "@cognia/plugin-contract/types/execution/run"
 
@@ -117,6 +121,14 @@ export function prepareOwnerHistory<T extends PersonalHistoryMessage>(
   return prepareHistoryForReaders(undefined, messages, options, [{ kind: "local-person" }])
 }
 
+/** Plugins are code, never a personal reader, including in an owner's invocation. */
+export function preparePluginHistory<T extends PersonalHistoryMessage>(
+  sessionId: string | undefined,
+  messages: readonly T[]
+): ReturnType<typeof preparePersonalHistory<T>> {
+  return prepareHistoryForReaders(sessionId, messages, {}, [])
+}
+
 /**
  * Interim paired read as the Host owner. Phase 2B-2 must pass a Rust caller flag
  * from crates/cognia-companion-rpc/src/rpc/data_sync.rs (sync_pull, session_list,
@@ -191,11 +203,12 @@ async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
     const sourceSession = sessions.get(sourceSessionId)
     if (!contexts.has(sourceSessionId))
       contexts.set(sourceSessionId, await personalMarkContextForSession(db, sourceSession))
-    const marks = effectivePersonalMarks(
-      message,
-      sourceSession ?? {},
-      contexts.get(sourceSessionId)!
+    const attributed = await personalMessageAttributedMarks(message.id)
+    const marks = mergePersonalMarks(
+      effectivePersonalMarks(message, sourceSession ?? {}, contexts.get(sourceSessionId)!),
+      attributed
     )
+    if (attributed.length) explicitById.set(message.id, attributed)
     // A copy returned by an earlier preparation carries the legacy read-time
     // attribution materialized in metadata.personalMarks. It is still legacy,
     // so it never taints a consuming run (phase 2C-1 D1).
@@ -209,7 +222,7 @@ async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
       stored?.length &&
       JSON.stringify(mergePersonalMarks(stored)) !== JSON.stringify(mergePersonalMarks(inferred))
     )
-      explicitById.set(message.id, mergePersonalMarks(stored))
+      explicitById.set(message.id, mergePersonalMarks(stored, attributed))
     canonical.push(
       marks.length ? { ...message, metadata: { ...metadata, personalMarks: marks } } : message
     )

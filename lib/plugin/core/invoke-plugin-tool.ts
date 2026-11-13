@@ -1,4 +1,5 @@
-import { withPluginExecutionContext } from "./invocation-identity"
+import { copyPersonalOperation } from "@/lib/execution/personal-operation"
+import { withPluginExecutionContext, withPluginContentDispatch } from "./invocation-identity"
 /**
  * Unified plugin-tool invocation seam.
  *
@@ -122,6 +123,7 @@ export interface InvokePluginToolDeps {
     getPlugin: (pluginId: string) =>
       | {
           status: string
+          source?: import("@/types/plugin").PluginSource
           config?: Record<string, unknown>
           manifest: { permissions?: PluginPermission[]; resilience?: PluginResilienceConfig }
         }
@@ -340,6 +342,26 @@ async function invokeBoundPluginTool(
     }
   )
   const effectiveArgs = prepared.args
+  const { assertPersonalToolEgress, runPersonalEgressOperation } =
+    await import("@/lib/execution/personal-egress")
+  // These bundled tools terminate at the Host's per-command sandbox boundary.
+  // A marketplace plugin reusing the id/name receives no such exemption.
+  const { sandboxSessionRuntime } = await import("@/lib/sandbox/session-runtime")
+  const actualSandboxRef = options.sessionId
+    ? deps.resolveSandboxRuntimeRef(options.sessionId)
+    : options.sandboxRuntimeRef
+  const networkOffPort =
+    plugin.source === "builtin" &&
+    pluginId === "cognia-sandboxed-tools" &&
+    ["sandbox_bash", "sandbox_edit", "sandbox_write", "sandbox_text_editor"].includes(toolName) &&
+    (toolName !== "sandbox_bash" ||
+      Boolean(actualSandboxRef && sandboxSessionRuntime.enforcesNetworkOff(actualSandboxRef)))
+  if (!networkOffPort)
+    await assertPersonalToolEgress(toolName, options, false, {
+      kind: "plugin",
+      pluginId,
+      toolId: toolName,
+    })
 
   // ── Permission consent gate ────────────────────────────────────────────
   // Tools don't declare per-tool permissions; gating operates on the
@@ -384,7 +406,7 @@ async function invokeBoundPluginTool(
     )
   }
 
-  const context: PluginToolContext = {
+  const context: PluginToolContext = copyPersonalOperation(options, {
     invocationId: operationId,
     executionRunId: options.executionRunId,
     sessionId: options.sessionId,
@@ -393,7 +415,7 @@ async function invokeBoundPluginTool(
     config: plugin.config ?? {},
     signal: options.signal,
     ...(options.project ? { project: options.project } : {}),
-  }
+  })
 
   // ── Resilience: timeout + retry + per-plugin circuit breaker ───────────
   // The permission gate above runs exactly once, OUTSIDE the retry loop, so
@@ -420,10 +442,25 @@ async function invokeBoundPluginTool(
         effectiveArgs,
         (finalArgs) =>
           runResilient(
-            (attemptSignal) =>
-              withPluginExecutionContext(pluginId, context, () =>
-                tool.execute(finalArgs, { ...context, signal: attemptSignal })
-              ),
+            async (attemptSignal) => {
+              if (!networkOffPort)
+                await assertPersonalToolEgress(toolName, options, false, {
+                  kind: "plugin",
+                  pluginId,
+                  toolId: toolName,
+                })
+              return runPersonalEgressOperation(
+                options,
+                (operation) => {
+                  const bound = copyPersonalOperation(operation, { ...context })
+                  return withPluginContentDispatch(pluginId, bound, () =>
+                    tool.execute(finalArgs, { ...bound, signal: attemptSignal })
+                  )
+                },
+                false,
+                networkOffPort
+              )
+            },
             {
               timeoutMs: cfg.timeoutMs,
               maxRetries: cfg.maxRetries,

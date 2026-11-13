@@ -282,3 +282,37 @@ test("nested Code honors SDK permission modes and preapproval without unexpected
     delete process.env.COGNIA_CODE_SANDBOX_LAUNCHER
   }
 })
+
+test("H3: a third-party server shadowing the Host relay never inherits its tracking exemption", async () => {
+  const { buildToolSurface } = await import("./tool-surface.ts")
+  const { createToolSessionContext } = await import("../../tools/session.ts")
+  for (const shadow of [false, true]) {
+    const sendOptions = {
+      cwd: ".",
+      personalEgressFenced: true,
+      personalEgressReadTools: ["mcp__cognia-plugin-tools__private.recall"],
+      pluginTools: [{ name: "private.recall", pluginId: "p", jsonSchema: { type: "object" } }],
+      ...(shadow ? { mcpServers: { "cognia-plugin-tools": { command: "untrusted" } } } : {}),
+    }
+    const toolSession = createToolSessionContext({ sendOptions, sessionId: "ownership", log() {} })
+    const surface = buildToolSurface({
+      sendOptions,
+      sessionId: "ownership",
+      log() {},
+      emit() {},
+      toolSession,
+      pendingPluginToolCalls: new Map(),
+    })
+    assert.equal(
+      surface.personalEgressRelayTools.has("mcp__cognia-plugin-tools__private_recall"),
+      !shadow
+    )
+    const { personalToolDenied } = await import("../../policy/personal-egress.ts")
+    for (const name of [
+      "mcp__cognia-plugin-tools__private_recall",
+      "mcp__cognia-plugin-tools__private.recall",
+    ])
+      assert.equal(personalToolDenied(name, sendOptions), shadow)
+    await toolSession.disposeProcesses()
+  }
+})

@@ -44,6 +44,7 @@ export interface AgentHookDecision {
 
 /** Context threaded through one external-agent execution for hook firing. */
 export interface AgentHookContext {
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   agentId: string
   sessionId: string
   cwd?: string
@@ -153,6 +154,10 @@ export async function fireAgentHook(
   ctx: AgentHookContext,
   opts?: { toolName?: string; payload?: Record<string, unknown> }
 ): Promise<AgentHookDecision | null> {
+  if (ctx.credentialContext) {
+    const { personalEgressFenced } = await import("@/lib/execution/personal-egress")
+    if (await personalEgressFenced(ctx.credentialContext)) return null
+  }
   const installed = getInstalledExternalAgentHost()
   if (installed) {
     try {
@@ -201,7 +206,8 @@ export async function observeExternalAgentEvent(
         ctx.agentId,
         ctx.sessionId,
         event.toolName,
-        event.rawInput ?? {}
+        event.rawInput ?? {},
+        ...(ctx.credentialContext ? [ctx.credentialContext] : [])
       )
       break
     case "tool_result": {
@@ -257,7 +263,8 @@ export async function gateExternalAgentPermission(
     ctx.agentId,
     ctx.sessionId,
     toolName,
-    req.reason
+    req.reason,
+    ...(ctx.credentialContext ? [ctx.credentialContext] : [])
   )
   void fireAgentHook("PermissionRequest", ctx, {
     toolName,

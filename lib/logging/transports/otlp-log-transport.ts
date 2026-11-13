@@ -1,3 +1,4 @@
+import { runLogEgress } from "@cognia/logging/context"
 import {
   structuredLogEntriesToOtlpLogs,
   type OtlpLogResourceMetadata,
@@ -215,7 +216,7 @@ export class OtlpLogTransport implements Transport {
       this.lastError = `OTLP log payload exceeds ${this.options.maxRequestBytes} byte limit`
       return
     }
-    await this.exportPayload(batch.length, body, batchEpoch)
+    await this.exportPayload(batch, body, batchEpoch)
   }
 
   private async splitBatch(batch: StructuredLogEntry[], batchEpoch: number): Promise<void> {
@@ -224,7 +225,12 @@ export class OtlpLogTransport implements Transport {
     await this.exportBatch(batch.slice(midpoint), batchEpoch)
   }
 
-  private async exportPayload(entryCount: number, body: string, batchEpoch: number): Promise<void> {
+  private async exportPayload(
+    batch: StructuredLogEntry[],
+    body: string,
+    batchEpoch: number
+  ): Promise<void> {
+    const entryCount = batch.length
     let lastError: Error | undefined
     for (let attempt = 0; attempt <= this.options.maxRetries; attempt += 1) {
       // Re-checked per attempt: the whole point is that a discard during a
@@ -236,12 +242,20 @@ export class OtlpLogTransport implements Transport {
           ? setTimeout(() => controller.abort(), this.options.requestTimeoutMs)
           : undefined
       try {
-        const response = await this.fetchImpl(this.options.endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body,
-          signal: controller?.signal,
+        const response = await runLogEgress(batch, async (admitted) => {
+          const nextBody =
+            admitted.length === batch.length
+              ? body
+              : JSON.stringify(structuredLogEntriesToOtlpLogs(admitted, this.options.resource))
+          if (!hasNoLeakingPiiInOtlp(JSON.parse(nextBody))) return undefined
+          return this.fetchImpl(this.options.endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: nextBody,
+            signal: controller?.signal,
+          })
         })
+        if (!response) return
         if (response.ok) {
           this.lastSuccessAt = new Date().toISOString()
           this.lastError = undefined

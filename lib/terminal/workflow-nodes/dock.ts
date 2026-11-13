@@ -81,6 +81,7 @@ registerNodeExecutor({
         timeoutMs: timeoutSec ? timeoutSec * 1000 : undefined,
         onAskVerdict: params.onAskVerdict,
         chatSessionId: ctx.runId,
+        credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
         runId: ctx.runId,
         source: "workflow",
       })
@@ -128,6 +129,7 @@ registerNodeExecutor({
       // agent-trust grant to that so each run gets its own consent
       // prompt (or reuses an existing session grant for the tab).
       chatSessionId: ctx.runId,
+      credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
       action: params.tabId ? "write" : "spawn",
       args: {
         command: composed,
@@ -199,6 +201,7 @@ registerNodeExecutor({
     const { runTerminalDockAction } = await import("@/lib/terminal/dock-tool-handler")
     const result = await runTerminalDockAction({
       chatSessionId: ctx.runId,
+      credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
       action: "read_recent",
       args: { tabId, lineLimit: params.lineLimit },
     })
@@ -237,6 +240,7 @@ registerNodeExecutor({
     const { runTerminalDockAction } = await import("@/lib/terminal/dock-tool-handler")
     const result = await runTerminalDockAction({
       chatSessionId: ctx.runId,
+      credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
       action: "wait_for_exit",
       args: { tabId, timeoutSec: clampTimeout(params.timeoutSec) },
     })

@@ -1,3 +1,4 @@
+import { markPluginSynchronousCallback } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Artifact API Implementation
  *
@@ -240,7 +241,10 @@ export function createArtifactAPI(pluginId: string): PluginArtifactAPI {
         id: rendererId,
         kind,
         name: renderer.name,
-        mount: renderer.mount,
+        mount: markPluginSynchronousCallback(renderer.mount, { dispose() {} }, [
+          "update",
+          "dispose",
+        ]),
       })
       logger.info(`Registered artifact renderer: ${type}`)
 

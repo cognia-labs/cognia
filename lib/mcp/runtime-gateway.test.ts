@@ -1,4 +1,13 @@
 /** @jest-environment node */
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
+
 import type { McpServer } from "@cognia/agent-config-types"
 
 const mockAppendMcpAuditLog = jest.fn(
@@ -10,25 +19,26 @@ jest.mock("@/lib/db/mcp-audit-log", () => ({
 }))
 
 const mockCapabilityCache = new Map<string, unknown>()
-jest.mock("@/lib/db/schema", () => ({
-  getDb: () => ({
-    mcpCapabilityCache: {
-      get: (id: string) => Promise.resolve(mockCapabilityCache.get(id)),
-      put: (row: { id: string }) => {
-        mockCapabilityCache.set(row.id, row)
-        return Promise.resolve(row.id)
-      },
-      where: () => ({
-        equals: () => ({
-          delete: () => {
-            mockCapabilityCache.clear()
-            return Promise.resolve()
-          },
-        }),
-      }),
+const mockGatewayDb = {
+  name: "mcp-gateway-fixture",
+  executionRuns: { hook: jest.fn() },
+  mcpCapabilityCache: {
+    get: (id: string) => Promise.resolve(mockCapabilityCache.get(id)),
+    put: (row: { id: string }) => {
+      mockCapabilityCache.set(row.id, row)
+      return Promise.resolve(row.id)
     },
-  }),
-}))
+    where: () => ({
+      equals: () => ({
+        delete: () => {
+          mockCapabilityCache.clear()
+          return Promise.resolve()
+        },
+      }),
+    }),
+  },
+}
+jest.mock("@/lib/db/schema", () => ({ getDb: () => mockGatewayDb }))
 
 import { McpRuntimeGateway } from "./runtime-gateway"
 
@@ -499,4 +509,23 @@ describe("MCP Runtime Gateway", () => {
       ).rejects.toThrow(/trust is blocked/)
     })
   })
+})
+
+it("withholds third-party MCP before opening a connection when tainted", async () => {
+  const fixture = fixtureOpen()
+  const gateway = new McpRuntimeGateway({ open: fixture.open })
+  mockEgressTaint.mockResolvedValueOnce({
+    verified: true,
+    marks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+  })
+  await expect(
+    gateway.invoke({
+      scopeId: "private",
+      server: server(),
+      toolName: "read",
+      surface: "workflow",
+      credentialContext: { executionRunId: "host-run" },
+    })
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(fixture.open).not.toHaveBeenCalled()
 })

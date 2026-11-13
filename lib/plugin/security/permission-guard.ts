@@ -1,3 +1,8 @@
+import { personalOperationSources } from "@/lib/execution/personal-operation"
+import {
+  pluginEgressContextResolver,
+  withPluginExecutionContext,
+} from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Permission Guard
  *
@@ -1054,6 +1059,23 @@ export function __resetPermissionGuardForTesting(): void {
 // API Wrapper Factory
 // =============================================================================
 
+/** Only opted-in asynchronous capability methods enter this Host egress boundary. */
+export async function invokeEgressMethod(
+  source: import("@/lib/execution/personal-credential").PersonalCredentialContext,
+  method: (...args: unknown[]) => unknown,
+  receiver: object,
+  args: unknown[],
+  pluginId: string
+): Promise<unknown> {
+  const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+  return runPersonalEgressOperation(source, (operation) => {
+    const dispatch = async () => Reflect.apply(method, receiver, args)
+    return source.executionRunId || source.sessionId || personalOperationSources(source)
+      ? withPluginExecutionContext(pluginId, operation, dispatch)
+      : dispatch()
+  })
+}
+
 export function createGuardedAPI<T extends object>(
   pluginId: string,
   api: T,
@@ -1061,6 +1083,8 @@ export function createGuardedAPI<T extends object>(
   options: {
     /** Host-sanitized action context for consent and permission audit entries. */
     context?: string
+    /** Async methods that can send arbitrary run content outside the Host. */
+    egressMethods?: ReadonlyArray<keyof T>
     /**
      * Method names that must NOT route through the async per-call consent
      * overlay even when their permission sits at the "confirm" tier. Use for
@@ -1097,6 +1121,8 @@ export function createGuardedAPI<T extends object>(
   const guard = getPermissionGuard()
   const consentExempt = new Set<keyof T>(options.consentExempt ?? [])
   const unguarded = new Set<keyof T>(options.unguarded ?? [])
+  const egressMethods = new Set<keyof T>(options.egressMethods ?? [])
+  const egressContext = pluginEgressContextResolver(pluginId)
 
   return new Proxy(api, {
     get(target, prop: string | symbol) {
@@ -1122,6 +1148,17 @@ export function createGuardedAPI<T extends object>(
       }
 
       return (...args: unknown[]) => {
+        const source = egressMethods.has(prop as keyof T) ? egressContext() : undefined
+        const call = () =>
+          source
+            ? invokeEgressMethod(
+                source,
+                value as (...args: unknown[]) => unknown,
+                target,
+                args,
+                pluginId
+              )
+            : (value as (...args: unknown[]) => unknown).apply(target, args)
         const permissions = Array.isArray(requiredPermissions)
           ? requiredPermissions
           : [requiredPermissions]
@@ -1139,7 +1176,7 @@ export function createGuardedAPI<T extends object>(
           for (const permission of permissions) {
             guard.require(pluginId, permission, context)
           }
-          return (value as (...args: unknown[]) => unknown).apply(target, args)
+          return call()
         }
 
         // Consent path — at least one permission needs the per-call overlay.
@@ -1174,7 +1211,7 @@ export function createGuardedAPI<T extends object>(
             }
           }
           for (const permission of permissions) guard.require(pluginId, permission, context)
-          return (value as (...args: unknown[]) => unknown).apply(target, args)
+          return call()
         })()
       }
     },

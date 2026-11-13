@@ -197,7 +197,11 @@ describe("dispatchPlanStepNode — agent_turn", () => {
     expect(res.output).toMatchObject({ text: "did it" })
     expect(executeAgentMock).toHaveBeenCalledWith(
       "go",
-      expect.objectContaining({ toolsEnabled: true, characterId: "char_1" })
+      expect.objectContaining({
+        toolsEnabled: true,
+        characterId: "char_1",
+        executionIdentity: { runId: "execution:plan:p1" },
+      })
     )
     expect(calls.map((c) => c.status)).toEqual(["in_progress", "completed"])
     expect(calls[1].patch).toMatchObject({ result: "did it" })

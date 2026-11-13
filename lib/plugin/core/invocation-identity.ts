@@ -1,4 +1,13 @@
+import {
+  copyPersonalOperation,
+  retainPersonalFailure,
+  bindPersonalOperationSources,
+  mostSpecificPersonalOperation,
+  personalOperationSources,
+  cachedPersonalDispatchFence,
+} from "@/lib/execution/personal-operation"
 import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+import { createElement, isValidElement, type ComponentType } from "react"
 
 /** A Host operation without personal provenance is never an outside-dispatch read. */
 export const HOST_BACKGROUND: Readonly<PersonalCredentialContext> = Object.freeze({
@@ -9,13 +18,56 @@ export const HOST_BACKGROUND: Readonly<PersonalCredentialContext> = Object.freez
 // no async-local storage, so retain every Host-bound invocation until its actual
 // callback settles. Only a verified Host parent -> job chain may overlap;
 // unrelated runs fail closed. Public plugin fields cannot establish a chain.
+interface PluginExposure {
+  id: number
+  sources: Set<PersonalCredentialContext>
+}
+let exposureSequence = 0
+const pluginExposures = new Map<string, PluginExposure>()
+/** A newly published context starts a new runtime instance. Old API closures retain their old exposure. */
+export function beginPluginEgressInstance(pluginId: string): void {
+  pluginExposures.set(pluginId, { id: ++exposureSequence, sources: new Set() })
+}
+function pluginExposure(pluginId: string): PluginExposure {
+  let instance = pluginExposures.get(pluginId)
+  if (!instance) {
+    instance = { id: ++exposureSequence, sources: new Set() }
+    pluginExposures.set(pluginId, instance)
+  }
+  return instance
+}
+/** Credential authority stays invocation-local; egress retains every producer exposed to this instance. */
+export function pluginEgressInstanceKey(pluginId: string): number {
+  return pluginExposure(pluginId).id
+}
+export function pluginEgressContextResolver(pluginId: string): () => PersonalCredentialContext {
+  const instance = pluginExposure(pluginId)
+  return () => {
+    const active = pluginExecutionContext(pluginId)
+    const sources = [...instance.sources.values(), ...(active ? [active] : [])]
+    if (
+      sources.length &&
+      sources.every(
+        (source) =>
+          !personalOperationSources(source) && contextKey(source) === contextKey(sources[0]!)
+      )
+    )
+      return active ?? sources[0]!
+    return sources.length ? bindPersonalOperationSources({}, sources) : {}
+  }
+}
+export function pluginEgressContext(pluginId: string): PersonalCredentialContext {
+  return pluginEgressContextResolver(pluginId)()
+}
+
 const invocations = new Map<string, Set<PersonalCredentialContext>>()
 // Only the synchronous entry into a Host dispatch may lend its identity to a
 // registered callback. An unrelated background callback must not borrow a
 // local-person invocation merely because that invocation is still awaiting.
 const dispatching = new Map<string, PersonalCredentialContext>()
 export function pluginDispatchContext(pluginId: string): PersonalCredentialContext {
-  return { ...(dispatching.get(pluginId) ?? HOST_BACKGROUND) }
+  const context = dispatching.get(pluginId) ?? HOST_BACKGROUND
+  return copyPersonalOperation(context, { ...context })
 }
 const callbackReceivers = new WeakMap<object, object>()
 const delegatedAncestors = new WeakMap<PersonalCredentialContext, ReadonlySet<string>>()
@@ -30,6 +82,7 @@ const contextKey = (context: PersonalCredentialContext) =>
     context.sessionId,
     context.executionRunId,
     localProofKey(context.localAuthorization),
+    context.personalEgressBlocked === true,
   ])
 
 /** Later Host state may narrow a captured read, never replace its authority. */
@@ -39,7 +92,13 @@ export function restrictPluginCredentialContext(
 ): PersonalCredentialContext | undefined {
   if (current && (!captured || contextKey(current) !== contextKey(captured)))
     return { executionRunId: "" }
-  return captured && { ...captured, ...(current?.externalEngine ? { externalEngine: true } : {}) }
+  return (
+    captured &&
+    copyPersonalOperation(captured, {
+      ...captured,
+      ...(current?.externalEngine ? { externalEngine: true } : {}),
+    })
+  )
 }
 
 export function pluginExecutionContext(pluginId: string): PersonalCredentialContext | undefined {
@@ -53,9 +112,33 @@ export function pluginExecutionContext(pluginId: string): PersonalCredentialCont
         delegatedAncestors.get(candidate)?.has(contextKey(item))
     )
   )
-  return leaf
-    ? { ...leaf, ...(contexts.some((item) => item.externalEngine) ? { externalEngine: true } : {}) }
-    : { executionRunId: "" }
+  if (!leaf)
+    return bindPersonalOperationSources(
+      {
+        executionRunId: "",
+        ...(contexts.some((item) => item.personalEgressBlocked)
+          ? { personalEgressBlocked: true as const }
+          : {}),
+      },
+      contexts
+    )
+  const result = {
+    ...leaf,
+    ...(contexts.some((item) => item.personalEgressBlocked)
+      ? { personalEgressBlocked: true as const }
+      : {}),
+    ...(contexts.some((item) => item.externalEngine) ? { externalEngine: true } : {}),
+  }
+  const specific = mostSpecificPersonalOperation(contexts)
+  return specific
+    ? copyPersonalOperation(specific, result)
+    : bindPersonalOperationSources(
+        {
+          executionRunId: "",
+          ...(result.personalEgressBlocked ? { personalEgressBlocked: true as const } : {}),
+        },
+        contexts
+      )
 }
 
 /** Host dispatch only; never called with plugin/model arguments. */
@@ -67,18 +150,43 @@ export function withPluginExecutionContext<T>(
   return bindPluginExecutionContext(pluginId, context, task)
 }
 
+/** Load canonical policy only at dispatch, after the Host DB runtime is ready. */
+async function explicitContentExposure(context: PersonalCredentialContext): Promise<boolean> {
+  const { personalContentExposed } = await import("@/lib/execution/personal-egress")
+  return personalContentExposed(context)
+}
+
+/** Snapshot before content handoff. Later marks cannot retroactively taint a delivery. */
+export function withPluginContentDispatch<T>(
+  pluginId: string,
+  context: PersonalCredentialContext,
+  task: () => T | Promise<T>
+): Promise<T> {
+  const instance = pluginExposure(pluginId)
+  const dispatch = (fenced: boolean): Promise<T> => {
+    if (fenced) instance.sources.add({ personalEgressBlocked: true })
+    try {
+      return Promise.resolve(withPluginExecutionContext(pluginId, context, task)) as Promise<T>
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+  const cached = cachedPersonalDispatchFence(context)
+  return cached === undefined ? explicitContentExposure(context).then(dispatch) : dispatch(cached)
+}
+
 function bindPluginExecutionContext<T>(
   pluginId: string,
   context: PersonalCredentialContext,
   task: () => T,
   ancestors?: ReadonlySet<string>
 ): T {
-  const binding = {
+  const binding = copyPersonalOperation(context, {
     ...context,
     ...(context.executionRunId === undefined && context.localAuthorization === undefined
       ? HOST_BACKGROUND
       : {}),
-  }
+  })
   const active = invocations.get(pluginId) ?? new Set<PersonalCredentialContext>()
   const same = [...active].find((item) => contextKey(item) === contextKey(binding))
   const inherited = ancestors ?? (same && delegatedAncestors.get(same))
@@ -104,13 +212,13 @@ function bindPluginExecutionContext<T>(
         (value) => finish(value, release),
         (error) => {
           release()
-          throw error
+          throw retainPersonalFailure(error, binding)
         }
       ) as T
     return finish(result, release)
   } catch (error) {
     release()
-    throw error
+    throw retainPersonalFailure(error, binding)
   }
 }
 
@@ -163,10 +271,50 @@ function finish<T>(value: T, release: () => void): T {
   return iterator as T
 }
 
+const synchronousCallbacks = new WeakMap<
+  object,
+  { neutral: unknown; methods?: readonly string[] }
+>()
+const callbackExecutions = new WeakMap<object, () => PersonalCredentialContext>()
+/** Host registrars provide the declared synchronous refusal value. */
+export function markPluginSynchronousCallback<T extends object>(
+  callback: T,
+  neutral: unknown,
+  methods?: readonly string[]
+): T {
+  let target: object | undefined = callback
+  const visited = new Set<object>()
+  while (target && !visited.has(target)) {
+    visited.add(target)
+    synchronousCallbacks.set(target, { neutral, methods })
+    target = callbackReceivers.get(target)
+  }
+  return callback
+}
+
+/** React must construct the real class only after the Host render gate passes. */
+export function markPluginSynchronousRenderer<T extends object>(pluginId: string, component: T): T {
+  let original: object = component
+  while (callbackReceivers.has(original)) original = callbackReceivers.get(original)!
+  if (typeof original !== "function" || !original.prototype?.isReactComponent)
+    return callbackReceivers.has(component)
+      ? markPluginSynchronousCallback(component, null)
+      : bindPluginCallbacks(
+          pluginId,
+          markPluginSynchronousCallback(component, null),
+          callbackExecutions.get(component)
+        )
+  const render = markPluginSynchronousCallback(
+    (props: object) => createElement(original as ComponentType<object>, props),
+    null
+  )
+  return bindPluginCallbacks(pluginId, render, callbackExecutions.get(component)) as T
+}
+
 /**
  * Fence callbacks contributed to Host registries, including factory results.
- * Plain data stays cloneable; class receivers and synchronous contracts stay
- * intact. Render components are the plugin's own panel UI, not Host operations.
+ * Plain data stays cloneable; class receivers and ordinary synchronous contracts
+ * stay intact. Cold composite content handoffs await every producer before guest code. Render components are the plugin's own panel UI, not Host operations.
  * Specific dispatchers establish exact operation identity outside this fence;
  * a registry with no such provenance receives HOST_BACKGROUND.
  */
@@ -200,17 +348,56 @@ export function bindPluginCallbacks<T>(
       },
       apply(_target, receiver, args) {
         const context = execution()
-        const result = withPluginExecutionContext(pluginId, context, () =>
-          Reflect.apply(value, (receiver && callbackReceivers.get(receiver)) || receiver, args)
-        )
-        const wrapResult = (output: unknown) => {
-          // Generator bodies execute on next(), after stream() has returned.
-          const iterator = isIterator(output)
-          return bindPluginCallbacks(pluginId, output, iterator ? () => context : execution)
+        const snapshot = cachedPersonalDispatchFence(context)
+        const instance = pluginExposure(pluginId)
+        const synchronous = synchronousCallbacks.get(bound) ?? synchronousCallbacks.get(value)
+        if (snapshot === undefined && synchronous) {
+          // A synchronous contract cannot await the fence. Return the
+          // registrar's declared refusal value now and warm the cache, so the
+          // next call delivers on a known snapshot.
+          void import("@/lib/execution/personal-egress")
+            .then(async ({ personalEgressFenced }) => {
+              await personalEgressFenced(context)
+            })
+            .catch(() => {
+              /* Unverified content stays cold and is not delivered. */
+            })
+          return synchronous.neutral
         }
-        return result && typeof (result as PromiseLike<unknown>).then === "function"
-          ? Promise.resolve(result).then(wrapResult)
-          : wrapResult(result)
+        const composite = personalOperationSources(context) || "personalSources" in context
+        const deliver = () => {
+          if (snapshot === true) instance.sources.add({ personalEgressBlocked: true })
+          const result = withPluginExecutionContext(pluginId, context, () =>
+            Reflect.apply(value, (receiver && callbackReceivers.get(receiver)) || receiver, args)
+          )
+          const wrapResult = (output: unknown) => {
+            if (isValidElement(output) || synchronous?.neutral === null) return output
+            if (output && typeof output === "object")
+              for (const key of synchronous?.methods ?? []) {
+                const method = Reflect.get(output, key)
+                if (typeof method === "function") markPluginSynchronousCallback(method, undefined)
+              }
+            // Generator bodies execute on next(), after stream() has returned.
+            const iterator = isIterator(output)
+            return bindPluginCallbacks(pluginId, output, iterator ? () => context : execution)
+          }
+          return result && typeof (result as PromiseLike<unknown>).then === "function"
+            ? Promise.resolve(result).then(wrapResult)
+            : wrapResult(result)
+        }
+        if (snapshot === undefined) {
+          const proof = explicitContentExposure(context).then((exposed) => {
+            if (exposed) instance.sources.add({ personalEgressBlocked: true })
+          })
+          // Composite callbacks are content handoffs: resolve every opaque
+          // producer before invoking guest code. Plain synchronous callbacks
+          // retain their established return contract.
+          if (composite) return proof.then(deliver)
+          void proof.catch(() => {
+            /* Missing proof is not exposure. */
+          })
+        }
+        return deliver()
       },
       construct(_target, args, newTarget): object {
         return bindPluginCallbacks(
@@ -223,6 +410,7 @@ export function bindPluginCallbacks<T>(
       },
     })
     callbackReceivers.set(bound, object)
+    callbackExecutions.set(bound, execution)
     seen.set(object, bound)
     return bound as T
   }
@@ -242,9 +430,13 @@ export function bindPluginCallbacks<T>(
     const bound = new Proxy(object, {
       get(target, key) {
         const member = Reflect.get(target, key, target)
-        return typeof member === "function"
-          ? bindPluginCallbacks(pluginId, member.bind(target), execution, seen)
-          : bindPluginCallbacks(pluginId, member, execution, seen)
+        if (typeof member !== "function")
+          return bindPluginCallbacks(pluginId, member, execution, seen)
+        const receiverBound = member.bind(target)
+        callbackReceivers.set(receiverBound, member)
+        const policy = synchronousCallbacks.get(member)
+        if (policy) synchronousCallbacks.set(receiverBound, policy)
+        return bindPluginCallbacks(pluginId, receiverBound, execution, seen)
       },
     })
     seen.set(object, bound)
@@ -259,6 +451,12 @@ export function bindPluginCallbacks<T>(
   let changed = false
   for (const key of Reflect.ownKeys(object)) {
     const descriptor = Object.getOwnPropertyDescriptor(object, key)!
+    if (
+      "value" in descriptor &&
+      typeof descriptor.value === "function" &&
+      ["render", "component", "Component"].includes(String(key))
+    )
+      callbackExecutions.set(descriptor.value, execution)
     if ("value" in descriptor && !["render", "component", "Component"].includes(String(key))) {
       const original = descriptor.value
       descriptor.value = bindPluginCallbacks(pluginId, original, execution, seen)
@@ -299,7 +497,7 @@ export function bindPluginContextCallbacks<T extends object>(pluginId: string, a
           typeof member === "function" ||
           (member &&
             typeof member === "object" &&
-            Object.getPrototypeOf(member) === Object.prototype &&
+            [Object.prototype, null].includes(Object.getPrototypeOf(member)) &&
             hasMethods(member, visited))
         )
       })
@@ -348,7 +546,7 @@ export function bindPluginContextCallbacks<T extends object>(pluginId: string, a
         }
         return member &&
           typeof member === "object" &&
-          Object.getPrototypeOf(member) === Object.prototype
+          [Object.prototype, null].includes(Object.getPrototypeOf(member))
           ? wrap(member)
           : member
       },
@@ -399,7 +597,7 @@ export async function withPluginJobExecutionContext<T>(
   ) {
     return bindPluginExecutionContext(
       pluginId,
-      context,
+      copyPersonalOperation(parent, context),
       task,
       new Set([...(delegatedAncestors.get(parentBinding) ?? []), contextKey(parent)])
     )

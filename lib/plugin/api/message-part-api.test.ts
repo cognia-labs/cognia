@@ -91,3 +91,20 @@ describe("purgeMessagePartRenderersForPlugin", () => {
     expect(getMessagePartRenderer("b-1")).toBeDefined()
   })
 })
+
+it("R11 registration supplies the synchronous cold refusal policy", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const guest = jest.fn(() => null)
+  try {
+    createMessagePartAPI("r11-render").registerPartRenderer("r11-part", guest)
+    const callback = bindPluginCallbacks("r11-policy", guest, () => ({
+      executionRunId: "r11-cold",
+    }))
+    expect(callback()).toBe(null)
+    expect(guest).not.toHaveBeenCalled()
+  } finally {
+    restore()
+  }
+})

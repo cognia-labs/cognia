@@ -925,3 +925,21 @@ it("inherits a marked parent's provenance without transferring taint to a later 
   expect(child.personalMarks).not.toBe(personalMarks)
   expect(recordedRunMetadata("local", { runId: "later-root" }).personalMarks).toBeUndefined()
 })
+
+it("H4: the run boundary primes the synchronous egress snapshot", async () => {
+  const { personalEgressCachedFenced } = await import("./personal-egress")
+  const run = await startToolExecutionRun("cache-boundary", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  expect(personalEgressCachedFenced({ executionRunId: run.id })).toBe(false)
+})
+
+it("R2: correlated unknown content never becomes a background egress context", async () => {
+  const { toolCallEgressRunId } = await import("./acting-authority")
+  bindToolCallRun("egress-correlation", "turn", "producer", "attempt")
+  expect(toolCallEgressRunId("egress-correlation", "turn", "attempt")).toBe("producer")
+  expect(toolCallEgressRunId("egress-correlation", "turn", "wrong-attempt")).toBe(
+    "unresolved-tool-producer"
+  )
+  expect(toolCallEgressRunId("background")).toBeUndefined()
+})

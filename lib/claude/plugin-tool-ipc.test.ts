@@ -1,3 +1,11 @@
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 /**
  * Tests for plugin-tool-ipc.ts
  * Renderer-side IPC handler for `plugin_tool_exec` events from the sidecar.
@@ -1151,6 +1159,10 @@ describe("handlePluginToolExec — terminal dock tools", () => {
       action: "write",
       args: { tabId: "tab-1", command: "ls" },
       chatSessionId: "sess-X",
+      credentialContext: expect.objectContaining({
+        executionRunId: expect.any(String),
+        sessionId: "sess-X",
+      }),
     })
     expect(response.result).toEqual({
       ok: true,
@@ -2185,4 +2197,83 @@ describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
       "crate host unavailable"
     )
   })
+})
+
+it("denies Host web_fetch from a marked run before fetching", async () => {
+  mockEgressTaint.mockResolvedValueOnce({
+    verified: true,
+    marks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+  })
+  const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+  bindToolCallRun("private", "fetch-turn", "marked", "fetch-attempt")
+  const result = await handlePluginToolExec({
+    turnId: "fetch-turn",
+    attemptId: "fetch-attempt",
+    type: "plugin_tool_exec",
+    sessionId: "private",
+    toolUseId: "fetch",
+    name: "web_fetch",
+    args: { url: "https://example.com" },
+  })
+  expect(result.error).toContain("private content")
+})
+
+describe("F10 verified tool declaration pin", () => {
+  it.each(["scheduler_create_task", "send_session_message"])(
+    "F10 marked %s is denied and clean dispatch is unchanged",
+    async (name) => {
+      const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+      await fixture.initialize()
+      const actual = jest.requireActual<typeof import("@/lib/execution/personal-sink")>(
+        "@/lib/execution/personal-sink"
+      )
+      mockEgressTaint.mockImplementation(actual.readRunPersonalTaint as never)
+      const { startToolExecutionRun, bindToolCallRun, LOCAL_PERSON_RUN } =
+        await import("@/lib/execution/acting-authority")
+      const { getDb } = await import("@/lib/db/schema")
+      const execute = jest.fn(async () => "unchanged clean result")
+      const send = jest.fn(async () => ({ id: "f10-peer-receipt" }))
+      __setSessionPeerToolDepsForTesting(async () => ({
+        gate: () => true,
+        listReachable: async () => [],
+        send,
+      }))
+      __setPluginToolResolverForTesting({
+        getTool: () => ({ pluginId: "fixture-f10", execute }),
+      } as unknown as PluginToolResolver)
+      try {
+        for (const marked of [false, true]) {
+          const run = await startToolExecutionRun("f10-session-" + name, {
+            localAuthorization:
+              LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+          })
+          if (marked)
+            await getDb().executionRuns.update(run.id, {
+              personalMarks: [{ person: { kind: "local-person" }, source: "F10", markedAt: 1 }],
+            })
+          bindToolCallRun("f10-session-" + name, run.id, run.id)
+          const response = await handlePluginToolExec({
+            type: "plugin_tool_exec",
+            sessionId: "f10-session-" + name,
+            turnId: run.id,
+            toolUseId: run.id,
+            name,
+            args:
+              name === "send_session_message"
+                ? { target_session_id: "target", message: "hello" }
+                : {},
+          })
+          if (marked) expect(response.error).toContain("private content")
+          else expect(response.error).toBeUndefined()
+        }
+        expect(execute).toHaveBeenCalledTimes(name === "scheduler_create_task" ? 1 : 0)
+        expect(send).toHaveBeenCalledTimes(name === "send_session_message" ? 1 : 0)
+      } finally {
+        __setSessionPeerToolDepsForTesting(null)
+        __setPluginToolResolverForTesting(null)
+        mockEgressTaint.mockImplementation(async () => ({ verified: true, marks: [] }))
+        await fixture.dispose()
+      }
+    }
+  )
 })

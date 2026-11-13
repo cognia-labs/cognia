@@ -1372,3 +1372,31 @@ it("does not silently omit rejected media or publish its caption", async () => {
     await adapter.stop()
   }
 })
+
+it("S2 denies arbitrary media fetch for the exact marked Host delivery", async () => {
+  const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+  const { adapter } = await startSubscribed(makeEmit())
+  const originalFetch = global.fetch
+  const fetch = jest.fn()
+  global.fetch = fetch
+  try {
+    const result = await adapter.send(
+      {
+        conversationRef: {
+          platform: "wecom",
+          adapterId: "wc1",
+          chatId: "user",
+          chatType: "single",
+        },
+        segments: [{ type: "image", url: "https://outside.test/private" }],
+        metadata: { idempotencyKey: "s2-marked" },
+      },
+      bindPersonalEgressOptions({}, { personalEgressBlocked: true })
+    )
+    expect(result.ok).toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+  } finally {
+    global.fetch = originalFetch
+    await adapter.stop()
+  }
+})

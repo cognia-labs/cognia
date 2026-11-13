@@ -1,3 +1,12 @@
+import { markPluginSynchronousCallback } from "./invocation-identity"
+import { withLogEgressSource } from "@cognia/logging/context"
+import { withPluginPersonalReads } from "./personal-read-projection"
+import { PERSONAL_EGRESS_DENIAL } from "@cognia/plugin-contract/types/execution/personal-egress"
+import {
+  personalLogEgressSource,
+  installPersonalLogEgressPolicy,
+  runPersonalEgressOperation,
+} from "@/lib/execution/personal-egress"
 /**
  * Plugin Context - Runtime context provided to plugins
  */
@@ -7,7 +16,9 @@ import {
   bindPluginCallbacks,
   bindPluginContextCallbacks,
   HOST_BACKGROUND,
-  withPluginExecutionContext,
+  withPluginContentDispatch,
+  beginPluginEgressInstance,
+  pluginEgressContextResolver,
 } from "./invocation-identity"
 import { toast } from "sonner"
 import { createPluginSystemLogger, loggers } from "./logger"
@@ -270,6 +281,7 @@ export function createPluginContext(
   options?: { enableDebug?: boolean; generation?: number }
 ): PluginBaseContext {
   const pluginId = plugin.manifest.id
+  beginPluginEgressInstance(pluginId)
 
   const baseContext: PluginBaseContext = {
     pluginId,
@@ -528,17 +540,20 @@ export function createFullPluginContext(
     configurable: true,
     get: () => usePluginStore.getState().plugins[pluginId]?.config ?? plugin.config,
   })
-  const governedContext = withGovernedPluginContext(fullContext, {
-    pluginId,
-    platform: resolvePluginApiPlatform(),
-    // Classify by manifest type rather than defaulting to "frontend": a python
-    // plugin's calls were being audited as a runtime it does not run in, which
-    // meant the catalog's per-runtime gate could never fire for it. Enforcement
-    // is still per-namespace `shadow`, so this changes what is recorded, not
-    // what is allowed.
-    runtime: pluginApiRuntimeForType(plugin.manifest.type),
-    hasPermission: (permission) => permissionsAPI.hasPermission(permission),
-  })
+  const governedContext = withGovernedPluginContext(
+    withPluginPersonalReads(fullContext, () => pluginExecutionContext(pluginId) ?? {}),
+    {
+      pluginId,
+      platform: resolvePluginApiPlatform(),
+      // Classify by manifest type rather than defaulting to "frontend": a python
+      // plugin's calls were being audited as a runtime it does not run in, which
+      // meant the catalog's per-runtime gate could never fire for it. Enforcement
+      // is still per-namespace `shadow`, so this changes what is recorded, not
+      // what is allowed.
+      runtime: pluginApiRuntimeForType(plugin.manifest.type),
+      hasPermission: (permission) => permissionsAPI.hasPermission(permission),
+    }
+  )
   scope.track(() => revokePluginFileHandles(pluginId), "ctx.files.handles")
   const scopedContext = bindPluginContextCallbacks(
     pluginId,
@@ -570,6 +585,7 @@ export function isFullPluginContext(
 // =============================================================================
 
 function createLogger(pluginId: string): PluginLogger {
+  const egressContext = pluginEgressContextResolver(pluginId)
   // Tagged at the source, so `/logs`'s `plugin` facet sees every line a plugin
   // writes rather than only the ones a debug session happened to be recording.
   //
@@ -581,11 +597,27 @@ function createLogger(pluginId: string): PluginLogger {
   // with `enableDebug`, which is developer mode AND non-builtin, so in a
   // default install it covered nothing at all. `withContext` merges into every
   // entry's data and the two keys are hoisted to the entry itself.
-  return createPluginSystemLogger(pluginId).withContext({
+  installPersonalLogEgressPolicy()
+  const logger = createPluginSystemLogger(pluginId).withContext({
     runtime: "plugin",
     origin: "plugin",
     pluginId,
   })
+  const wrap = (target: object): PluginLogger =>
+    new Proxy(target, {
+      get(object, property, receiver) {
+        const method: unknown = Reflect.get(object, property, receiver)
+        if (typeof method !== "function") return method
+        return (...args: unknown[]) => {
+          if (property === "child" || property === "withContext")
+            return wrap(Reflect.apply(method, object, args))
+          return withLogEgressSource(personalLogEgressSource(egressContext()), () =>
+            Reflect.apply(method, object, args)
+          )
+        }
+      },
+    }) as PluginLogger
+  return wrap(logger)
 }
 
 // =============================================================================
@@ -678,7 +710,7 @@ function createEventEmitter(pluginId: string): PluginEventEmitter {
           try {
             handler(...args)
           } catch (error) {
-            loggers.hooks.error(`Error in plugin event handler for ${event}:`, error)
+            createLogger(pluginId).error(`Error in plugin event handler for ${event}:`, error)
           }
         })
       }
@@ -813,8 +845,10 @@ function createUIAPI(pluginId: string): PluginUIAPI {
     showDialog: (options: PluginDialog): Promise<unknown> =>
       openDataDialog<unknown>({ kind: "dialog", options }, undefined),
 
-    showInputDialog: (options: PluginInputDialog): Promise<string | null> =>
-      openDataDialog<string | null>({ kind: "input", options }, null),
+    showInputDialog: (options: PluginInputDialog): Promise<string | null> => {
+      if (options.validate) markPluginSynchronousCallback(options.validate, PERSONAL_EGRESS_DENIAL)
+      return openDataDialog<string | null>({ kind: "input", options }, null)
+    },
 
     showConfirmDialog: (options: PluginConfirmDialog): Promise<boolean> =>
       openDataDialog<boolean>({ kind: "confirm", options }, false),
@@ -1000,6 +1034,11 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
       // runs. Only the names on the allowlist reach here; every other host tool
       // stays private to the agent loop.
       if (isAuthorCallableHostTool(name)) {
+        const invocation = pluginExecutionContext(pluginId)
+        if (invocation) {
+          const { assertPersonalToolEgress } = await import("@/lib/execution/personal-egress")
+          await assertPersonalToolEgress(name, invocation)
+        }
         // Running host-side reuses the host's SSRF guard and rate limiter, but
         // NOT the plugin's own egress clamp — `runWebBuiltinTool` has never
         // heard of a manifest. `web_fetch` is the one promoted tool whose
@@ -1095,7 +1134,7 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
           // Through the one stop: the agent's run and every run under it.
           const cancelled = tracked && (await cancelChildRun(agentId))
           if (!cancelled) {
-            loggers.agent.warn(`No active background agent to cancel: ${agentId}`)
+            createLogger(pluginId).warn(`No active background agent to cancel: ${agentId}`)
           }
         })
         .catch((error) =>
@@ -1280,7 +1319,7 @@ function createSettingsAPI(pluginId: string): PluginSettingsAPI {
       try {
         localStorage.setItem(settingsKey, JSON.stringify(data))
       } catch (error) {
-        loggers.manager.error(`Plugin ${pluginId} failed to persist setting ${key}:`, error)
+        createLogger(pluginId).error(`Plugin ${pluginId} failed to persist setting ${key}:`, error)
         return
       }
 
@@ -1291,7 +1330,7 @@ function createSettingsAPI(pluginId: string): PluginSettingsAPI {
           try {
             listener(value)
           } catch (error) {
-            loggers.manager.error(
+            createLogger(pluginId).error(
               `Plugin ${pluginId} settings onChange handler for ${key} threw:`,
               error
             )
@@ -1521,6 +1560,7 @@ function createNetworkAPI(
 ): PluginNetworkAPI {
   const rateLimiter = getPluginRateLimiter()
   const secrets = createSecretsAPI(pluginId)
+  const egressContext = pluginEgressContextResolver(pluginId)
   const prepareEgress = async (
     url: string,
     method: NetworkHttpMethod,
@@ -1588,7 +1628,8 @@ function createNetworkAPI(
         }
       },
     })
-    return resolveNetworkCredentials(egress, (key) => guardedSecrets.get(key))
+    const resolved = await resolveNetworkCredentials(egress, (key) => guardedSecrets.get(key))
+    return { ...resolved, personalContext: egressContext() }
   }
   const auditEgress = (
     url: string,
@@ -1655,33 +1696,35 @@ function createNetworkAPI(
     delete requestOptions.dataClassification
     delete requestOptions.piiPolicy
     delete requestOptions.query
-    return egress.dispatch(async () => {
-      if (!isPluginGatewayAvailable()) {
-        const headers = { ...(requestOptions.headers ?? {}) }
-        const body =
-          requestOptions.body === undefined || typeof requestOptions.body === "string"
-            ? requestOptions.body
-            : JSON.stringify(requestOptions.body)
-        if (body !== undefined && typeof requestOptions.body !== "string") {
-          const hasContentType = Object.keys(headers).some(
-            (header) => header.toLowerCase() === "content-type"
-          )
-          if (!hasContentType) headers["content-type"] = "application/json"
+    return runPersonalEgressOperation(egress.personalContext, () =>
+      egress.dispatch(async () => {
+        if (!isPluginGatewayAvailable()) {
+          const headers = { ...(requestOptions.headers ?? {}) }
+          const body =
+            requestOptions.body === undefined || typeof requestOptions.body === "string"
+              ? requestOptions.body
+              : JSON.stringify(requestOptions.body)
+          if (body !== undefined && typeof requestOptions.body !== "string") {
+            const hasContentType = Object.keys(headers).some(
+              (header) => header.toLowerCase() === "content-type"
+            )
+            if (!hasContentType) headers["content-type"] = "application/json"
+          }
+          const response = await fetch(egress.url, {
+            method,
+            headers,
+            body,
+            signal: requestOptions.signal,
+          })
+          return parseBrowserResponse<T>(response, options?.responseType)
         }
-        const response = await fetch(egress.url, {
-          method,
-          headers,
-          body,
-          signal: requestOptions.signal,
-        })
-        return parseBrowserResponse<T>(response, options?.responseType)
-      }
 
-      return invokePluginApi<NetworkResponse<T>>(pluginId, "network:fetch", {
-        url: egress.url,
-        options: requestOptions,
+        return invokePluginApi<NetworkResponse<T>>(pluginId, "network:fetch", {
+          url: egress.url,
+          options: requestOptions,
+        })
       })
-    })
+    )
   }
 
   return {
@@ -1709,42 +1752,44 @@ function createNetworkAPI(
     ): Promise<DownloadResult> => {
       rateLimiter.check(pluginId, "network:download")
       const egress = await prepareEgress(url, "GET", options)
-      return egress.dispatch(async () => {
-        if (!isPluginGatewayAvailable()) {
-          const response = await fetch(egress.url, { headers: egress.headers })
-          if (!response.ok) {
-            throw new PluginGatewayError({
-              code: "NOT_SUPPORTED",
-              message: `Failed to download ${egress.url}: ${response.status} ${response.statusText}`,
-              requestId: `browser-network-download-${pluginId}`,
-              api: "network:download",
-              pluginId,
-            })
+      return runPersonalEgressOperation(egress.personalContext, () =>
+        egress.dispatch(async () => {
+          if (!isPluginGatewayAvailable()) {
+            const response = await fetch(egress.url, { headers: egress.headers })
+            if (!response.ok) {
+              throw new PluginGatewayError({
+                code: "NOT_SUPPORTED",
+                message: `Failed to download ${egress.url}: ${response.status} ${response.statusText}`,
+                requestId: `browser-network-download-${pluginId}`,
+                api: "network:download",
+                pluginId,
+              })
+            }
+
+            const blob = await response.blob()
+            const objectUrl = URL.createObjectURL(blob)
+            const anchor = document.createElement("a")
+            anchor.href = objectUrl
+            anchor.download = destPath.split("/").pop() || "download.bin"
+            anchor.click()
+            URL.revokeObjectURL(objectUrl)
+
+            return {
+              path: destPath,
+              size: blob.size,
+              contentType: blob.type || undefined,
+            }
           }
 
-          const blob = await response.blob()
-          const objectUrl = URL.createObjectURL(blob)
-          const anchor = document.createElement("a")
-          anchor.href = objectUrl
-          anchor.download = destPath.split("/").pop() || "download.bin"
-          anchor.click()
-          URL.revokeObjectURL(objectUrl)
-
-          return {
-            path: destPath,
-            size: blob.size,
-            contentType: blob.type || undefined,
-          }
-        }
-
-        // The host streams the body into the plugin's data sandbox; `onProgress`
-        // can't cross the IPC boundary, so only the static request shape is sent.
-        return invokePluginApi<DownloadResult>(pluginId, "network:download", {
-          url: egress.url,
-          destPath,
-          headers: egress.headers,
+          // The host streams the body into the plugin's data sandbox; `onProgress`
+          // can't cross the IPC boundary, so only the static request shape is sent.
+          return invokePluginApi<DownloadResult>(pluginId, "network:download", {
+            url: egress.url,
+            destPath,
+            headers: egress.headers,
+          })
         })
-      })
+      )
     },
 
     upload: async (
@@ -1755,17 +1800,19 @@ function createNetworkAPI(
       rateLimiter.check(pluginId, "network:upload")
       const fileContentPolicy = options?.fileContentPolicy ?? "block"
       const egress = await prepareEgress(url, "POST", options, fileContentPolicy)
-      return egress.dispatch(() =>
-        invokePluginApi<NetworkResponse<unknown>>(pluginId, "network:upload", {
-          url: egress.url,
-          filePath,
-          headers: egress.headers,
-          // When set, the host sends multipart/form-data with this field name;
-          // otherwise the file bytes are the raw request body.
-          fieldName: options?.fieldName,
-          fileContentPolicy,
-          dataClassification: options?.dataClassification,
-        })
+      return runPersonalEgressOperation(egress.personalContext, () =>
+        egress.dispatch(() =>
+          invokePluginApi<NetworkResponse<unknown>>(pluginId, "network:upload", {
+            url: egress.url,
+            filePath,
+            headers: egress.headers,
+            // When set, the host sends multipart/form-data with this field name;
+            // otherwise the file bytes are the raw request body.
+            fieldName: options?.fieldName,
+            fileContentPolicy,
+            dataClassification: options?.dataClassification,
+          })
+        )
       )
     },
   }
@@ -2051,11 +2098,14 @@ function createClipboardAPI(_pluginId: string): PluginClipboardAPI {
 // =============================================================================
 
 function createShellAPI(pluginId: string): PluginShellAPI {
+  const egressContext = pluginEgressContextResolver(pluginId)
   const rateLimiter = getPluginRateLimiter()
   return {
     execute: (command: string, options?: ShellOptions) => {
       rateLimiter.check(pluginId, "shell:execute")
-      return invokePluginApi<ShellResult>(pluginId, "shell:execute", { command, options })
+      return runPersonalEgressOperation(egressContext(), () =>
+        invokePluginApi<ShellResult>(pluginId, "shell:execute", { command, options })
+      )
     },
 
     spawn: (_command: string, _args?: string[], _options?: SpawnOptions): ChildProcess => {
@@ -2074,8 +2124,14 @@ function createShellAPI(pluginId: string): PluginShellAPI {
       })
     },
 
-    open: (path: string) => invokePluginApi<void>(pluginId, "shell:open", { path }),
-    showInFolder: (path: string) => invokePluginApi<void>(pluginId, "shell:showInFolder", { path }),
+    open: (path: string) =>
+      runPersonalEgressOperation(egressContext(), () =>
+        invokePluginApi<void>(pluginId, "shell:open", { path })
+      ),
+    showInFolder: (path: string) =>
+      runPersonalEgressOperation(egressContext(), () =>
+        invokePluginApi<void>(pluginId, "shell:showInFolder", { path })
+      ),
   }
 }
 
@@ -2143,6 +2199,7 @@ function createShortcutsAPI(pluginId: string): PluginShortcutsAPI {
 
   const api: PluginShortcutsAPI = {
     register: (shortcut: string, callback: () => void, options?: ShortcutOptions) => {
+      markPluginSynchronousCallback(callback, undefined)
       registeredShortcuts.add(shortcut)
 
       // Route onto the live shortcut rail (Rust ShortcutRegistry on
@@ -2204,6 +2261,8 @@ function createContextMenuAPI(pluginId: string): PluginContextMenuAPI {
   const api: PluginContextMenuAPI = {
     register: (item: ContextMenuItem) => {
       const id = `${pluginId}:${item.id}`
+      markPluginSynchronousCallback(item.onClick, undefined)
+      if (typeof item.disabled === "function") markPluginSynchronousCallback(item.disabled, true)
       handlers.set(id, item.onClick)
 
       // Renderer registry — the consumer half. UI surfaces (chat message
@@ -3487,7 +3546,7 @@ export function createWorkflowAPI(pluginId: string): PluginWorkflowAPI {
         kind: prefixed as never,
         typeVersion: def.typeVersion,
         execute: (ctx) =>
-          withPluginExecutionContext(
+          withPluginContentDispatch(
             pluginId,
             {
               executionRunId: `execution:workflow:${ctx.runId}`,
@@ -3569,6 +3628,7 @@ export function createWorkflowAPI(pluginId: string): PluginWorkflowAPI {
       // `lib/workflow/runtime/trigger-bridge.dispatchTrigger`. Fire-and-
       // forget — failures land in the audit panel through
       // `recordSilentFailure`, not in the plugin's call stack.
+      const logSource = personalLogEgressSource(pluginExecutionContext(pluginId))
       void dispatchPluginTrigger({
         pluginId,
         workflowId,
@@ -3577,19 +3637,23 @@ export function createWorkflowAPI(pluginId: string): PluginWorkflowAPI {
         triggerId,
       }).then((result) => {
         if (!result.ok) {
-          loggers.manager.debug("plugin emitTriggerEvent rejected", {
-            pluginId,
-            workflowId,
-            kind,
-            prefixedKind: result.prefixedKind,
-            reason: result.rejectedReason,
-          })
+          withLogEgressSource(logSource, () =>
+            loggers.manager.debug("plugin emitTriggerEvent rejected", {
+              pluginId,
+              workflowId,
+              kind,
+              prefixedKind: result.prefixedKind,
+              reason: result.rejectedReason,
+            })
+          )
         } else {
-          loggers.manager.debug("plugin emitTriggerEvent dispatched", {
-            pluginId,
-            workflowId,
-            prefixedKind: result.prefixedKind,
-          })
+          withLogEgressSource(logSource, () =>
+            loggers.manager.debug("plugin emitTriggerEvent dispatched", {
+              pluginId,
+              workflowId,
+              prefixedKind: result.prefixedKind,
+            })
+          )
         }
       })
     },

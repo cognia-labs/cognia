@@ -1,3 +1,4 @@
+import type { StructuredLogEntry } from "./types/log-entry"
 /**
  * Logger Context
  * Manages session ID, trace ID, and context propagation
@@ -207,4 +208,75 @@ export function traced<TArgs extends unknown[], TResult>(
   return async (...args: TArgs) => {
     return logContext.withTraceAsync(() => fn(...args)) as Promise<TResult>
   }
+}
+
+/** Host-stamped producer references survive durable retry; public log data is never authority. */
+export interface HostLogEgressSource {
+  version: 1
+  runIds: string[]
+  blocked?: true
+}
+let currentEgressSource: HostLogEgressSource | undefined
+export function withLogEgressSource<T>(source: HostLogEgressSource | undefined, task: () => T): T {
+  const previous = currentEgressSource
+  currentEgressSource = source
+  try {
+    return task()
+  } finally {
+    currentEgressSource = previous
+  }
+}
+export function captureLogEgressSource(): HostLogEgressSource | undefined {
+  return currentEgressSource
+}
+type LogEgressPolicy = (
+  entries: StructuredLogEntry[],
+  send: (entries: StructuredLogEntry[]) => Promise<unknown>
+) => Promise<unknown>
+let logEgressPolicy: LogEgressPolicy | undefined
+export function configureLogEgressPolicy(policy: LogEgressPolicy): () => void {
+  const previous = logEgressPolicy
+  logEgressPolicy = policy
+  return () => {
+    logEgressPolicy = previous
+  }
+}
+export function runLogEgress<T>(
+  entries: StructuredLogEntry[],
+  send: (entries: StructuredLogEntry[]) => Promise<T>
+): Promise<T | undefined> {
+  if (logEgressPolicy) return logEgressPolicy(entries, send) as Promise<T | undefined>
+  // A pure package host without the policy port cannot authorize stamped replay.
+  const background = entries.filter((entry) => entry.hostEgressSource === undefined)
+  return background.length ? send(background) : Promise.resolve(undefined)
+}
+export function stripLogEgressSources(entries: StructuredLogEntry[]): StructuredLogEntry[] {
+  return entries.map((entry) => {
+    const copy = { ...entry }
+    delete copy.hostEgressSource
+    return copy
+  })
+}
+
+/** Host failure provenance survives rejected callbacks without ambient async state. */
+let failureSource: ((error: unknown) => HostLogEgressSource | undefined) | undefined
+export function configureLogFailureSource(
+  resolve: (error: unknown) => HostLogEgressSource | undefined
+): void {
+  failureSource = resolve
+}
+export function captureLogFailureSource(error: unknown): HostLogEgressSource | undefined {
+  return failureSource?.(error)
+}
+export function mergeLogEgressSources(
+  ...sources: (HostLogEgressSource | undefined)[]
+): HostLogEgressSource | undefined {
+  const present = sources.filter((source): source is HostLogEgressSource => source !== undefined)
+  return present.length
+    ? {
+        version: 1,
+        runIds: [...new Set(present.flatMap((source) => source.runIds))],
+        ...(present.some((source) => source.blocked) ? { blocked: true } : {}),
+      }
+    : undefined
 }

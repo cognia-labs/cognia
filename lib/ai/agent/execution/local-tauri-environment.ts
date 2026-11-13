@@ -1,3 +1,4 @@
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import type { AgentTeamEvidenceKind } from "@/types/agent/agent-team-runtime"
 import type { ProjectEnvironment, ProjectEnvironmentVersion } from "@/types/project-environment"
 import type { WorkspaceBundleTurnLease } from "@/lib/task-workspace/run-lease"
@@ -46,7 +47,8 @@ export interface AgentExecutionEnvironment {
   preflight(profile: ProjectEnvironmentVersion): { ok: boolean; missing: string[] }
   prepare(
     profile: ProjectEnvironmentVersion,
-    repositoryPath: string
+    repositoryPath: string,
+    credentialContext?: PersonalCredentialContext
   ): Promise<PreparedAgentEnvironment>
   openChild(input: OpenAgentChildInput): Promise<AgentChildEnvironmentSession>
   suspend(childRunId: string): Promise<void>
@@ -97,7 +99,8 @@ export interface LocalTauriEnvironmentOptions {
   now?: () => number
   executeSetup?: (
     profile: ProjectEnvironmentVersion,
-    repositoryPath: string
+    repositoryPath: string,
+    credentialContext?: PersonalCredentialContext
   ) => Promise<{ success: boolean; error?: string }>
   openWorkspace?: (input: OpenAgentChildInput) => Promise<OpenWorkspaceResult>
   acquireWorkspaceBundle?: AcquireBundle
@@ -161,10 +164,15 @@ export function createLocalTauriExecutionEnvironment(
 
   const executeSetup =
     options.executeSetup ??
-    (async (profile: ProjectEnvironmentVersion, repositoryPath: string) => {
+    (async (
+      profile: ProjectEnvironmentVersion,
+      repositoryPath: string,
+      credentialContext?: PersonalCredentialContext
+    ) => {
       const { executeProjectEnvironment } = await import("@/lib/project-environment/executor")
       return executeProjectEnvironment({
         environment: asMutableEnvironment(profile),
+        credentialContext,
         executionRoot: repositoryPath,
         scope: "managedWorktree",
         surface: "scheduled",
@@ -228,7 +236,7 @@ export function createLocalTauriExecutionEnvironment(
     capabilities,
     preflight,
 
-    async prepare(profile, repositoryPath) {
+    async prepare(profile, repositoryPath, credentialContext) {
       const requested = profile.policy
       if (
         (options.sandboxSupported === undefined || options.networkPolicySupported === undefined) &&
@@ -249,7 +257,9 @@ export function createLocalTauriExecutionEnvironment(
       if (!check.ok) {
         throw new Error(`Execution environment cannot enforce: ${check.missing.join(", ")}`)
       }
-      const result = await executeSetup(profile, repositoryPath)
+      const result = await (credentialContext
+        ? executeSetup(profile, repositoryPath, credentialContext)
+        : executeSetup(profile, repositoryPath))
       if (!result.success) throw new Error(result.error ?? "Project environment setup failed")
       const snapshot = structuredClone(profile)
       return { profile: Object.freeze(snapshot), executionRoot: repositoryPath, preparedAt: now() }

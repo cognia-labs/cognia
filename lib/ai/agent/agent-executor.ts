@@ -104,6 +104,10 @@ export interface AgentTool {
 }
 
 export interface ExecuteAgentConfig {
+  /** Host-held producer identity; never copy this from plugin/tool payloads. */
+  executionIdentity?: { runId: string; sessionId?: string; attemptId?: string }
+  /** Explicit personal marks on completion content without a durable run. */
+  personalMarks?: readonly import("@cognia/plugin-contract/types/execution/acting-identity").PersonalMarkV1[]
   /** Trusted workflow execution identity, never inferred from prompt text. */
   knowledgeAccess?: import("@cognia/plugin-contract/lib/knowledge-base/runtime/progressive-reading").KnowledgeReadingAccess
   systemPrompt?: string
@@ -386,13 +390,14 @@ function permissionResponderFor(
   canUseTool: PluginToolPermissionFn | undefined,
   signal: AbortSignal | undefined
 ) {
+  // No responder means the existing UI/policy owns the request. The capture's
+  // mandatory pre-tool gate can deny egress, but cannot invent consent.
   if (!canUseTool) return undefined
   return async (req: { toolName: string; input: Record<string, unknown> }) => {
     const decision = await canUseTool(req.toolName, req.input, { signal })
-    if (decision.behavior === "deny") {
-      return { decision: "deny" as const, message: decision.message }
-    }
-    return { decision: "allow" as const, updatedInput: decision.updatedInput }
+    return decision.behavior === "deny"
+      ? { decision: "deny" as const, message: decision.message }
+      : { decision: "allow" as const, updatedInput: decision.updatedInput }
   }
 }
 
@@ -762,9 +767,7 @@ async function runToolEnabledStandalone(
             label: `Subagent ${session.id.slice(0, 8)}`,
             ...(session.projectId ? { projectId: session.projectId } : {}),
           },
-          ...(permissionResponderFor(config.canUseTool, config.abortSignal)
-            ? { onPermissionRequest: permissionResponderFor(config.canUseTool, config.abortSignal) }
-            : {}),
+          onPermissionRequest: permissionResponderFor(config.canUseTool, config.abortSignal),
           ...(onToolResultReview ? { onToolResultReview } : {}),
         })
         controller?.complete()
@@ -926,7 +929,40 @@ export async function runCompletionRail(
   prompt: string,
   config: ExecuteAgentConfig = {}
 ): Promise<ExecuteAgentResult> {
-  // This completion rail has no admitted Host run. Stored-history builders
+  const explicitPersonalContent = Boolean(
+    config.personalMarks?.length ||
+    config.priorMessages?.some(
+      (message) =>
+        Array.isArray(message.metadata?.personalMarks) && message.metadata.personalMarks.length > 0
+    )
+  )
+  let credentialContext: import("@/lib/execution/personal-credential").PersonalCredentialContext = {
+    ...(config.executionIdentity?.runId
+      ? config.executionIdentity.sessionId
+        ? { sessionId: config.executionIdentity.sessionId }
+        : {}
+      : config.sessionId
+        ? { sessionId: config.sessionId }
+        : {}),
+    ...(config.executionIdentity?.runId ? { executionRunId: config.executionIdentity.runId } : {}),
+    ...(explicitPersonalContent ? { personalEgressBlocked: true as const } : {}),
+  }
+  if (!config.executionIdentity?.runId && config.sessionId) {
+    try {
+      const { resolveExecutingRun } = await import("@/lib/execution/acting-authority")
+      const consuming = await resolveExecutingRun(config.sessionId)
+      if (consuming) credentialContext = { ...credentialContext, executionRunId: consuming.id }
+    } catch {
+      /* No proven consuming run remains compatible unless content is marked. */
+    }
+  }
+  const { personalEgressOptionsSource } = await import("@/lib/execution/personal-egress")
+  const producer = personalEgressOptionsSource(config)
+  if (producer) {
+    const { bindPersonalOperationSources } = await import("@/lib/execution/personal-operation")
+    bindPersonalOperationSources(credentialContext, [producer])
+  }
+  // Stored-history builders
   // materialize legacy marks before flattening; keep those marks effective at
   // this final boundary, including routing/ledger prompts and later retries.
   if (config.priorMessages?.length) {
@@ -1133,7 +1169,7 @@ export async function runCompletionRail(
     const attemptSignal = config.abortSignal
       ? AbortSignal.any([config.abortSignal, attemptController.signal])
       : attemptController.signal
-    const semanticContext = { operationId, sessionId, signal: attemptSignal }
+    const semanticContext = { operationId, sessionId, signal: attemptSignal, credentialContext }
     let lease: import("@/lib/ai/ledgered-model-call").LedgeredGenerationLease | null = null
     let streamed = false
     try {

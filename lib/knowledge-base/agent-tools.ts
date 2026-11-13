@@ -1,3 +1,7 @@
+import {
+  runPersonalEgressOperation,
+  PersonalEgressDeniedError,
+} from "@/lib/execution/personal-egress"
 /**
  * The knowledge-base module's tool family (ADR-0250 §14 amendment):
  * progressive reads over the agent's bound knowledge bases.
@@ -119,11 +123,21 @@ async function read(
   }
 }
 
+async function rankKnowledgeDocuments(
+  source: import("@/lib/execution/personal-egress").PersonalEgressContext,
+  reader: KnowledgeReader,
+  name: KnowledgeToolName,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  return runPersonalEgressOperation(source, () => read(reader, name, args))
+}
+
 /** One call: arguments checked against the schema, then read through the conversation's reader. */
 export async function runKnowledgeTool(
   name: string,
   args: Record<string, unknown>,
-  call: Pick<ToolCallContext, "signal" | "sessionState">
+  call: Pick<ToolCallContext, "signal" | "sessionState"> &
+    Partial<Pick<ToolCallContext, "executionRunId" | "sessionId">>
 ): Promise<unknown> {
   const tool = TOOLS.find((candidate) => candidate.name === name)
   if (!tool || Object.keys(args).some((key) => !(key in tool.jsonSchema.properties)))
@@ -134,10 +148,16 @@ export async function runKnowledgeTool(
   if (!reader) return { ok: false, code: "knowledge_scope_unavailable" }
   try {
     call.signal?.throwIfAborted()
-    const result = await read(reader, tool.name, args)
+    const result =
+      tool.name === "knowledge_list_documents" &&
+      typeof args.query === "string" &&
+      args.query.trim()
+        ? await rankKnowledgeDocuments(call, reader, tool.name, args)
+        : await read(reader, tool.name, args)
     call.signal?.throwIfAborted()
     return { ok: true, ...(result as object) }
   } catch (error) {
+    if (error instanceof PersonalEgressDeniedError) throw error
     if (error instanceof KnowledgeReadingError) return { ok: false, code: error.code }
     if (call.signal?.aborted) return { ok: false, code: "aborted" }
     return { ok: false, code: "read_failed" }

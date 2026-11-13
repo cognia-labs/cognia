@@ -9,6 +9,7 @@ export type Emit = (frame: Frame) => void
 export type Outcome = { ok: true; result: unknown } | { ok: false; error: string }
 /** The host consumes capabilities, while each rail owns its complete session. */
 export interface HostSession {
+  fencePersonalEgress?(excludedToolUseIds?: readonly string[]): Promise<void>
   reloadExtensions?(options?: AgentExtensionReloadOptions): Promise<AgentExtensionReloadResult>
   sdkSessionId?: string
   multiTurn?: boolean

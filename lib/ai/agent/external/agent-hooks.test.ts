@@ -1,3 +1,7 @@
+import { personalEgressFenced } from "@/lib/execution/personal-egress"
+jest.mock("@/lib/execution/personal-egress", () => ({
+  personalEgressFenced: jest.fn(async () => false),
+}))
 import { invoke as invokeRaw } from "@tauri-apps/api/core"
 import { isTauri as isTauriRaw } from "@/lib/tauri"
 import type { ExternalAgentPermissionRequestEvent } from "@/types/agent/external-agent"
@@ -467,4 +471,29 @@ describe("installed external-agent host (ADR-0217)", () => {
       }
     )
   })
+})
+
+it("R2: a marked external producer skips opaque settings hooks without blocking Stop", async () => {
+  jest.mocked(personalEgressFenced).mockResolvedValueOnce(true)
+  await expect(
+    fireAgentHook("Stop", { ...ctx, credentialContext: { executionRunId: "private-external" } })
+  ).resolves.toBeNull()
+  expect(personalEgressFenced).toHaveBeenCalledWith({ executionRunId: "private-external" })
+  expect(invoke).not.toHaveBeenCalled()
+})
+
+it("R2: external tool content forwards the producer context through the installed hook contract", async () => {
+  const execution = { executionRunId: "external-tool-source" }
+  await observeExternalAgentEvent({ ...ctx, credentialContext: execution }, {
+    type: "tool_use_start",
+    toolName: "Read",
+    rawInput: { path: "private.txt" },
+  } as never)
+  expect(dispatchExternalAgentToolCall).toHaveBeenCalledWith(
+    "a1",
+    "s1",
+    "Read",
+    { path: "private.txt" },
+    execution
+  )
 })

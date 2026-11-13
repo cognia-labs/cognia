@@ -1,6 +1,7 @@
 jest.mock("@/lib/execution/personal-sink", () => ({
   ...jest.requireActual("@/lib/execution/personal-sink"),
   assertPersonalSink: jest.fn(async () => {}),
+  readRunPersonalTaint: jest.fn(async () => ({ verified: true, marks: [] })),
 }))
 jest.mock("@/lib/browser/agent-engine", () => ({
   routeEngine: jest.fn(() => ({ engine: {} })),
@@ -72,7 +73,11 @@ describe("createBrowserAPI", () => {
       { executionRunId: "host-execution" },
       () => api.routeEngine("https://example.com", { botRunId: "plugin-claim" }).engine
     )
-    await routed.navigate("https://example.com")
+    await withPluginExecutionContext(
+      "provenance-plugin",
+      { executionRunId: "host-execution" },
+      () => routed.navigate("https://example.com")
+    )
     expect(assertPersonalSink).toHaveBeenCalledWith(
       { sessionId: undefined, executionRunId: "host-execution" },
       { kind: "unknown", label: "opaque browser action" },
@@ -245,3 +250,102 @@ describe("plugin engine facade (ADR-0201)", () => {
     ).not.toBe(gateBrowserEngine(engine, { kind: "plugin", pluginId: "acme", botRunId: "run-1" }))
   })
 })
+
+it("H4: a primed run opens its pane synchronously with no hot-path read", async () => {
+  const { personalEgressFenced } = await import("@/lib/execution/personal-egress")
+  const host = await import("@/lib/execution/personal-sink")
+  await personalEgressFenced({ executionRunId: "clear-pane" })
+  jest.mocked(host.readRunPersonalTaint).mockClear()
+  const value = withPluginExecutionContext("pane-plugin", { executionRunId: "clear-pane" }, () =>
+    createBrowserAPI({ pluginId: "pane-plugin" }).openPane("https://example.com/private")
+  )
+  expect(value).toBe(true)
+  expect(host.readRunPersonalTaint).not.toHaveBeenCalled()
+})
+
+it("H4: marked and cache-missing run pane egress fails synchronously", async () => {
+  const { personalEgressFenced } = await import("@/lib/execution/personal-egress")
+  const host = await import("@/lib/execution/personal-sink")
+  jest
+    .mocked(host.readRunPersonalTaint)
+    .mockImplementation(
+      async (context) =>
+        ({ verified: true, marks: context.executionRunId === "marked-pane" ? [{}] : [] }) as never
+    )
+  await personalEgressFenced({ executionRunId: "marked-pane" })
+  const before = jest.mocked(requestBrowserUrl).mock.calls.length
+  for (const executionRunId of ["marked-pane"]) {
+    expect(
+      withPluginExecutionContext("pane-plugin", { executionRunId }, () =>
+        createBrowserAPI({ pluginId: "pane-plugin" }).openPane("https://example.com/private")
+      )
+    ).toBe(false)
+  }
+  expect(jest.mocked(requestBrowserUrl).mock.calls.length).toBe(before)
+})
+
+it("R7: an untainted cache miss opens after one read and primes subsequent synchronous calls", async () => {
+  const host = await import("@/lib/execution/personal-sink")
+  jest.mocked(host.readRunPersonalTaint).mockClear()
+  const open = () =>
+    withPluginExecutionContext("reload-pane", { executionRunId: "reload-run" }, () =>
+      createBrowserAPI({ pluginId: "reload-pane" }).openPane("https://example.com")
+    )
+  const accepted: boolean = open()
+  expect(accepted).toBe(true)
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(host.readRunPersonalTaint).toHaveBeenCalledTimes(1)
+  expect(open()).toBe(true)
+  expect(host.readRunPersonalTaint).toHaveBeenCalledTimes(1)
+})
+
+it.each([false, true])(
+  "F8 openPane stays boolean and defers navigation behind a real taint read (marked=%s)",
+  async (marked) => {
+    const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+    await fixture.initialize()
+    const sink = await import("@/lib/execution/personal-sink")
+    const actual = jest.requireActual<typeof import("@/lib/execution/personal-sink")>(
+      "@/lib/execution/personal-sink"
+    )
+    jest.mocked(sink.readRunPersonalTaint).mockImplementation(actual.readRunPersonalTaint)
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { invalidatePersonalEgressCache } = await import("@/lib/execution/personal-egress")
+    const { getDb } = await import("@/lib/db/schema")
+    try {
+      const run = await startToolExecutionRun("f8-pane", {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      if (marked)
+        await getDb().executionRuns.update(run.id, {
+          personalMarks: [{ person: { kind: "local-person" }, source: "F8", markedAt: 1 }],
+        })
+      invalidatePersonalEgressCache(run.id)
+      jest.mocked(sink.readRunPersonalTaint).mockClear()
+      jest.mocked(requestBrowserUrl).mockClear()
+      const accepted: boolean = withPluginExecutionContext(
+        "f8-" + run.id,
+        { executionRunId: run.id },
+        () => createBrowserAPI({ pluginId: "f8-" + run.id }).openPane("https://example.com")
+      )
+      expect(accepted).toBe(true)
+      expect(requestBrowserUrl).toHaveBeenCalledTimes(1)
+      expect(requestBrowserUrl).toHaveBeenLastCalledWith(
+        "https://example.com",
+        expect.objectContaining({ probe: true })
+      )
+      for (let n = 0; n < 30; n++) await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(
+        jest.mocked(requestBrowserUrl).mock.calls.filter(([, options]) => !options?.probe)
+      ).toHaveLength(marked ? 0 : 1)
+      expect(sink.readRunPersonalTaint).toHaveBeenCalledTimes(1)
+    } finally {
+      jest
+        .mocked(sink.readRunPersonalTaint)
+        .mockImplementation(async () => ({ verified: true, marks: [] }))
+      await fixture.dispose()
+    }
+  }
+)

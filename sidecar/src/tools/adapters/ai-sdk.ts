@@ -55,6 +55,13 @@ import type { VerificationBudget } from "../../shared/verification-budget.ts"
 /** An AI SDK tool as this adapter builds it. */
 type AiSdkTool = Tool
 
+// Runtime classification uses the adapter's actual registered object, never a
+// model-facing name or self-declared tool metadata.
+const toolPolicyNames = new WeakMap<object, string>()
+export function aiSdkToolPolicyName(definition: object): string | undefined {
+  return toolPolicyNames.get(definition)
+}
+
 /** The PostToolUse review: the updated output, or undefined/null to pass it through. */
 export type ToolOutputReview = (
   namespaced: string,
@@ -299,7 +306,7 @@ function pluginToolToAiSdkTool(
           )
         : parsed
       const validated = validatedToolInput(manifest.name, validator, effective)
-      const toolUseId = randomUUID()
+      const toolUseId = options?.toolCallId || randomUUID()
       // Preserve the manifest's lifecycle contract on the AI SDK rail just as
       // buildPluginToolsServer does on the Anthropic rail. In particular,
       // dispatch_agent/ask_user declare `timeoutMs: 0`: the child run or human
@@ -551,6 +558,7 @@ export function buildAiSdkTools({
         alwaysLoad: def.alwaysLoad === true,
       }
     )
+    toolPolicyNames.set(tools[def.name]!, `mcp__${SERVER_NAME}__${def.name}`)
   }
 
   if (Array.isArray(sendOptions.pluginTools) && pendingPluginToolCalls) {
@@ -573,6 +581,10 @@ export function buildAiSdkTools({
           attemptId: sendOptions.execution?.identity?.attemptId,
         }),
         { serverName: PLUGIN_TOOLS_SERVER_NAME }
+      )
+      toolPolicyNames.set(
+        tools[manifest.name]!,
+        `mcp__${PLUGIN_TOOLS_SERVER_NAME}__${manifest.name}`
       )
     }
   }

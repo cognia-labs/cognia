@@ -17,6 +17,13 @@
 
 import { invoke } from "@tauri-apps/api/core"
 import { loggers } from "@cognia/logging"
+import {
+  withLogEgressSource,
+  captureLogFailureSource,
+  mergeLogEgressSources,
+} from "@cognia/logging/context"
+import { personalLogEgressSource } from "@/lib/execution/personal-egress"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import type { PluginCapability, PluginTrayAPI, PluginTrayItemInput } from "@/types/plugin/plugin"
 import { registerTrayItem, unregisterTrayItem } from "@/lib/tray/registry"
 import { recordSilentFailure } from "../contracts/diagnostics-store"
@@ -32,6 +39,16 @@ export function createTrayAPI({ pluginId, capabilities }: CreateTrayAPIArgs): Pl
   const handlers = new Map<string, () => void>()
 
   function registerOne(item: PluginTrayItemInput): () => void {
+    const source = personalLogEgressSource(pluginExecutionContext(pluginId))
+    const warn = (message: string, error: unknown) =>
+      withLogEgressSource(
+        mergeLogEgressSources(
+          source,
+          captureLogFailureSource(error),
+          personalLogEgressSource(pluginExecutionContext(pluginId))
+        ),
+        () => loggers.tray.warn(message, { pluginId, itemId: fullId, error: String(error) })
+      )
     const fullId = `${pluginId}:${item.id}`
     handlers.set(fullId, item.onClick)
 
@@ -46,11 +63,7 @@ export function createTrayAPI({ pluginId, capabilities }: CreateTrayAPIArgs): Pl
         accelerator: item.accelerator,
       },
     }).catch((error) => {
-      loggers.tray.warn("plugin_tray_item_register failed", {
-        pluginId,
-        itemId: fullId,
-        error: String(error),
-      })
+      warn("plugin_tray_item_register failed", error)
       recordSilentFailure(
         pluginId,
         {
@@ -80,11 +93,7 @@ export function createTrayAPI({ pluginId, capabilities }: CreateTrayAPIArgs): Pl
       try {
         item.onClick()
       } catch (err) {
-        loggers.tray.warn("plugin tray onClick threw", {
-          pluginId,
-          itemId: fullId,
-          error: String(err),
-        })
+        warn("plugin tray onClick threw", err)
       }
     }
     window.addEventListener(`plugin-tray-item:${fullId}`, listener)
@@ -94,11 +103,7 @@ export function createTrayAPI({ pluginId, capabilities }: CreateTrayAPIArgs): Pl
       window.removeEventListener(`plugin-tray-item:${fullId}`, listener)
       unregisterTrayItem(fullId)
       invoke("plugin_tray_item_unregister", { pluginId, itemId: fullId }).catch((error) => {
-        loggers.tray.warn("plugin_tray_item_unregister failed", {
-          pluginId,
-          itemId: fullId,
-          error: String(error),
-        })
+        warn("plugin_tray_item_unregister failed", error)
         recordSilentFailure(
           pluginId,
           {

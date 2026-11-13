@@ -1,3 +1,11 @@
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 import * as piSubagents from "./config/pi-subagents"
 jest.mock("./config/pi-subagents", () => {
   const actual = jest.requireActual("./config/pi-subagents")
@@ -6097,4 +6105,187 @@ describe("native agent package registration", () => {
       expect(adapter?.isConnected()).toBe(false)
     }
   )
+})
+
+it("refuses a marked external turn before engine dispatch", async () => {
+  const manager = freshManager()
+  mockEgressTaint.mockResolvedValueOnce({
+    verified: true,
+    marks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+  })
+  const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+  await expect(
+    manager.execute(
+      "not-connected",
+      "private",
+      bindPersonalEgressOptions(
+        { context: { custom: { chatSessionId: "host-session" } } },
+        { executionRunId: "marked" }
+      )
+    )
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+})
+
+it("G4: marked Codex uses a fenced native identity and never reuses it unfenced", async () => {
+  const manager = freshManager()
+  protocolAdapterRegistry.register("codex-app-server", () => currentMock as never)
+  await manager.addAgent(buildBaseConfig({ protocol: "codex-app-server" }))
+  const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+  mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
+  try {
+    const opts = bindPersonalEgressOptions(
+      { context: { custom: { chatSessionId: "fenced-codex" } } },
+      { executionRunId: "marked-codex" }
+    )
+    const marked = await manager.execute("agent-1", "private", opts)
+    expect(currentMock.lastSessionOptions?.metadata).toMatchObject({ personalEgressFenced: true })
+    mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+    const clear = await manager.execute("agent-1", "clear", {
+      ...opts,
+      sessionId: marked.sessionId,
+    })
+    expect(clear.sessionId).not.toBe(marked.sessionId)
+    expect(currentMock.lastSessionOptions?.metadata).toMatchObject({ personalEgressFenced: false })
+  } finally {
+    mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+  }
+})
+
+it("Q3 person-agent replay binds its real Host run: clean unchanged, marked refused or Codex network off", async () => {
+  const { indexedDB, IDBKeyRange } = await import("fake-indexeddb")
+  const { default: Dexie } = await import("dexie")
+  Dexie.dependencies.indexedDB = indexedDB
+  Dexie.dependencies.IDBKeyRange = IDBKeyRange
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+  await fixture.initialize()
+  const actual = jest.requireActual<typeof import("@/lib/execution/personal-sink")>(
+    "@/lib/execution/personal-sink"
+  )
+  mockEgressTaint.mockImplementation(actual.readRunPersonalTaint as never)
+  const { getDb } = await import("@/lib/db/schema")
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
+  const { createPersonAgentRunner } = await import("@/lib/headless/person-agent/runner")
+  const { createPersonProcessPlane } = await import("@/lib/headless/person-agent/process-plane")
+  const { ExecutionBroker } = await import("@/lib/execution/broker")
+  const { hostStateRunId } = await import("@/lib/work-submission/host-adapter")
+  try {
+    for (const [index, protocol, marked] of [
+      [0, "acp", false],
+      [1, "acp", true],
+      [2, "codex-app-server", true],
+    ] as const) {
+      ExternalAgentManager.resetInstance()
+      currentMock = new MockAdapter()
+      const manager = freshManager()
+      protocolAdapterRegistry.register(protocol, () => currentMock as never)
+      const sessionId = `q3-person-${index}`
+      const actionId = `q3-action-${index}`
+      const run = await startToolExecutionRun(sessionId, {
+        runId: hostStateRunId(actionId),
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      const message = {
+        id: `q3-message-${index}`,
+        sessionId,
+        role: "user",
+        parts: [{ type: "text", text: "replayed history" }],
+        metadata: {
+          personalMarkVersion: 1,
+          ...(marked
+            ? { personalMarks: [{ person: { kind: "local-person" }, source: "Q3", markedAt: 1 }] }
+            : {}),
+        },
+      }
+      await getDb().messages.put(message as never)
+      const settled = jest.fn(async () => undefined)
+      const runner = createPersonAgentRunner({
+        manager,
+        broker: new ExecutionBroker(),
+        plane: createPersonProcessPlane({
+          call: async () => null,
+          subscribe: () => () => undefined,
+          whenSubscribed: async () => undefined,
+        } as never),
+        prepareLease: async () => ({ ticketId: "q3", secret: "test", expiresAtMs: 1 }),
+        ticketTokens: async () => ({
+          inputTokens: 0,
+          outputTokens: 0,
+          requests: 0,
+          openRequests: 0,
+        }),
+        launchFor: () => ({
+          config: buildBaseConfig({ protocol, process: { command: "test", args: [] } }),
+          family: "test",
+        }),
+        history: async () => {
+          const visible = await preparePersonalHistory(sessionId, [message as never], {
+            executionRunId: run.id,
+          })
+          return {
+            text: JSON.stringify(visible.messages),
+            visibilityDigest: visible.visibilityDigest,
+            hasWithheld: !!visible.withheldMessageIds.length,
+          }
+        },
+        writeMessage: async () => undefined,
+        removeMessage: async () => undefined,
+        settle: settled,
+        project: async () => undefined,
+        recordUsage: async () => undefined,
+        publishLive: async () => undefined,
+        transcriptRevision: async () => 1,
+        applyEvent: (parts) => [...parts],
+        pickAllowOption: () => undefined,
+        newId: () => `q3-${index}`,
+        now: () => 0,
+        setTimer: () => 0,
+        clearTimer: () => undefined,
+        log: () => undefined,
+      })
+      try {
+        await runner.startTurn({
+          session: { id: sessionId },
+          runtimeId: "test",
+          provider: "test",
+          model: "test",
+          prompt: "next",
+          actionId,
+          messageId: `current-${index}`,
+        })
+        for (let attempt = 0; !settled.mock.calls.length && attempt < 100; attempt++)
+          await new Promise((resolve) => setTimeout(resolve, 1))
+        expect(settled).toHaveBeenCalled()
+        const tools = manager.getAgentTools(`person-agent-q3-${index}`, undefined, {
+          executionRunId: run.id,
+        })
+        const tool = Object.values(tools)[0]
+        expect(tool).toBeDefined()
+        if (marked && protocol === "acp")
+          await expect(tool.execute({ value: "run-bound input" })).rejects.toMatchObject({
+            code: "personal-egress-denied",
+          })
+        else await expect(tool.execute({ value: "run-bound input" })).resolves.toBe("ok")
+        if (!marked) {
+          const retainedTool = Object.values(manager.getAgentTools(`person-agent-q3-${index}`))[0]
+          await expect(retainedTool.execute({ value: "clean retained input" })).resolves.toBe("ok")
+        }
+        if (marked && protocol === "acp") expect(currentMock.lastMessage).toBeUndefined()
+        else {
+          expect(currentMock.lastMessage).toBeDefined()
+          if (marked)
+            expect(currentMock.lastSessionOptions?.metadata).toMatchObject({
+              personalEgressFenced: true,
+            })
+        }
+      } finally {
+        await runner.closeAll()
+      }
+    }
+  } finally {
+    mockEgressTaint.mockImplementation(async () => ({ verified: true, marks: [] }))
+    await fixture.dispose()
+  }
 })

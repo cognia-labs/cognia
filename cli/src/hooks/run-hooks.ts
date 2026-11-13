@@ -1,3 +1,8 @@
+import {
+  runPersonalEgressOperation,
+  PersonalEgressDeniedError,
+} from "@/lib/execution/personal-egress"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 /**
  * Runs the `command` handlers of the hook groups matched for an event, with the
  * JSON event payload piped on stdin. Mirrors the desktop Rust runner's blocking
@@ -203,6 +208,7 @@ function spawnAsyncCommand(command: string, payloadJson: string, spawn: Spawn): 
  * `webhook` and unknown handlers are inert.
  */
 export async function runHooks(opts: {
+  credentialContext?: PersonalCredentialContext
   event: HookEvent
   toolName?: string
   payload: Record<string, unknown>
@@ -238,13 +244,23 @@ export async function runHooks(opts: {
   for (const group of matched) {
     for (const handler of group.hooks) {
       if (!isCommandHandler(handler)) continue // webhook / unknown ⇒ inert
-      if (handler.async === true) {
-        spawnAsyncCommand(handler.command, payloadJson, opts.spawn)
-        continue
-      }
-      const outcome = await runCommand(handler, payloadJson, opts.spawn, defaultTimeoutMs)
-      if (blocking && outcome.blocked) {
-        return { deny: true, reason: outcome.reason }
+      try {
+        const outcome = await runPersonalEgressOperation(
+          opts.credentialContext ?? {},
+          async () => {
+            if (handler.async === true) {
+              spawnAsyncCommand(handler.command, payloadJson, opts.spawn)
+              return { blocked: false }
+            }
+            return runCommand(handler, payloadJson, opts.spawn, defaultTimeoutMs)
+          },
+          true
+        )
+        if (blocking && outcome.blocked)
+          return { deny: true, reason: "reason" in outcome ? outcome.reason : undefined }
+      } catch (error) {
+        // A fence disables opaque hooks without denying their lifecycle event.
+        if (!(error instanceof PersonalEgressDeniedError)) throw error
       }
     }
   }

@@ -6,6 +6,7 @@ jest.mock("@/lib/db/messages", () => ({
 
 import { useAgentRuntimeStore } from "@/stores/agent/agent-runtime-store"
 import {
+  executePersonalExternalTurn,
   createExternalIdleEventConsumer,
   asideProviderHistoryMode,
   asideContextForRegenerate,
@@ -636,4 +637,21 @@ it("uses the Host user-message constructor for staged personal attachment marks"
   expect(message.metadata?.personalMarks).toEqual([
     { person: { kind: "local-person" }, source: "google-docs", markedAt: 12 },
   ])
+})
+
+it("R10 external chat dispatch binds the exact Host run without changing prompt or options", async () => {
+  const { personalEgressOptionsSource } = await import("@/lib/execution/personal-egress")
+  const options = {
+    agentId: "external",
+    context: { custom: { conversationHistory: "clean history" } },
+  }
+  const execute = jest.fn(async (_prompt: string, _options: typeof options) => "done")
+  const source = { sessionId: "chat", executionRunId: "host-chat-run" }
+  await expect(executePersonalExternalTurn(execute, "next", options, source)).resolves.toBe("done")
+  expect(execute).toHaveBeenCalledWith("next", options)
+  expect(personalEgressOptionsSource(execute.mock.calls[0]?.[1])).toBe(source)
+  expect(options).toEqual({
+    agentId: "external",
+    context: { custom: { conversationHistory: "clean history" } },
+  })
 })

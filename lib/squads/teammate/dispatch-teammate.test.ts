@@ -11,7 +11,6 @@ import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibili
 import { dispatchTeammate, ExternalRuntimeUnavailableError } from "./dispatch-teammate"
 import { closeSession } from "@/lib/claude/ipc"
 jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
   closeSession: jest.fn(async () => undefined),
 }))
 jest.mock("@/lib/execution/acting-authority", () => ({
@@ -604,6 +603,9 @@ describe("dispatchTeammate — text-only fallback", () => {
       const result = await dispatchTeammate(ctx, { taskId: "t1", prompt: "new task" })
       expect(result.text).toBe("[Withheld: personal content of Host owner]")
       expect(executeAgentMock.mock.calls[0][0]).toBe("new task")
+      expect(executeAgentMock.mock.calls[0][1].executionIdentity).toEqual({
+        runId: `execution:team:${ctx.runId}`,
+      })
       expect(prepare).toHaveBeenLastCalledWith(
         undefined,
         expect.any(Array),

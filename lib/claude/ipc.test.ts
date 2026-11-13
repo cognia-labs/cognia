@@ -1,4 +1,13 @@
 /** @jest-environment jsdom */
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
+
 import type { ModuleToolEntry } from "@/lib/modules/manifest-types"
 import { transport } from "@/lib/tauri"
 import { waitFor } from "@testing-library/react"
@@ -132,7 +141,11 @@ import {
   ensureDirConfined,
 } from "./ipc"
 
-import { __resetRoutingForTests, setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import {
+  __resetRoutingForTests,
+  setActiveRemoteTransport,
+  getActiveRemoteTransport,
+} from "@/lib/tauri/transport-routing"
 
 const TAURI_KEY = "__TAURI_INTERNALS__"
 
@@ -206,6 +219,97 @@ describe("connector approval review settlement", () => {
     expect(toolCallExecutionRunId("session-approval", "bound-provider", "a2")).toBe(
       "host-current-attempt"
     )
+  })
+
+  it("waits for the concrete Host fence ACK before the mark barrier settles", async () => {
+    const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+    const { fencePersonalEgressSessions } = await import("@/lib/execution/personal-egress")
+    type Event = import("@cognia/agent-config-types").ClaudeEvent
+    const listeners = new Set<(event: Event) => void>()
+    jest.spyOn(transport, "subscribe").mockImplementation((_channel, handler) => {
+      listeners.add(handler as (event: Event) => void)
+      return () => {
+        listeners.delete(handler as (event: Event) => void)
+      }
+    })
+    bindToolCallRun("fence-session", "fence-turn", "fence-run", "fence-attempt")
+    callSpy.mockResolvedValue(undefined)
+    await sendPrompt(
+      "fence-session",
+      "before private read",
+      {
+        turnId: "fence-turn",
+        execution: { identity: { runId: "wire-other", attemptId: "fence-attempt" } },
+      } as Parameters<typeof sendPrompt>[2],
+      { transcriptRuntime: "host-owned" }
+    )
+    mockEgressTaint.mockImplementation(async (...args: unknown[]) => ({
+      verified: true,
+      marks: (args[0] as { executionRunId?: string })?.executionRunId === "fence-run" ? [{}] : [],
+    }))
+    let settled = false
+    const pending = fencePersonalEgressSessions({ executionRunId: "fence-run" }).then(() => {
+      settled = true
+    })
+    try {
+      await waitFor(() =>
+        expect(callSpy).toHaveBeenCalledWith(
+          "claude_session_control",
+          expect.objectContaining({
+            sessionId: "fence-session",
+            params: { personalEgressFence: true },
+          })
+        )
+      )
+      expect(settled).toBe(false)
+      const control = callSpy.mock.calls.find(
+        ([command, args]) =>
+          command === "claude_session_control" &&
+          (args as { sessionId?: string })?.sessionId === "fence-session"
+      )![1] as { requestId: string }
+      for (const listener of listeners)
+        listener({
+          type: "control_response",
+          sessionId: "fence-session",
+          requestId: control.requestId,
+          method: "updateSettings",
+          ok: true,
+          result: { personalEgressFenced: true },
+        } as Event)
+      await pending
+      expect(settled).toBe(true)
+    } finally {
+      mockEgressTaint.mockImplementation(async () => ({ verified: true, marks: [] }))
+    }
+  })
+
+  it("starts marked Host runs fenced even when the wire claims a clear identity", async () => {
+    const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+    bindToolCallRun("session-approval", "marked-host-turn", "run-approval", "marked-attempt")
+    mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
+    callSpy.mockResolvedValue(undefined)
+    try {
+      await sendPrompt(
+        "session-approval",
+        "private",
+        {
+          turnId: "marked-host-turn",
+          execution: { identity: { runId: "wire-clear", attemptId: "marked-attempt" } },
+        } as Parameters<typeof sendPrompt>[2],
+        { transcriptRuntime: "host-owned" }
+      )
+      expect(callSpy).toHaveBeenCalledWith(
+        "agent_send",
+        expect.objectContaining({
+          options: expect.objectContaining({ personalEgressFenced: true }),
+        })
+      )
+      expect(mockEgressTaint).toHaveBeenCalledWith(
+        expect.objectContaining({ executionRunId: "run-approval" })
+      )
+    } finally {
+      mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+    }
   })
 
   it("routes local model-step approval through the existing response funnel without native IPC", async () => {
@@ -1954,7 +2058,7 @@ describe("remote transcript authority", () => {
     await sendPrompt("remote", "prompt", { transcriptInvalidationId: "host-generation" })
     expect(mockPrepareTranscriptRuntimeSend).not.toHaveBeenCalled()
     expect(mockWithTranscriptRuntimeLock).not.toHaveBeenCalled()
-    expect(callSpy).toHaveBeenCalledWith(
+    expect(getActiveRemoteTransport()!.call).toHaveBeenCalledWith(
       "agent_send",
       expect.objectContaining({ options: { transcriptInvalidationId: "host-generation" } })
     )
@@ -1975,7 +2079,7 @@ describe("remote transcript authority", () => {
       },
     }
     await sendPrompt("utility-owned", "Reply with OK.", options)
-    expect(callSpy).toHaveBeenCalledWith("agent_send", {
+    expect(getActiveRemoteTransport()!.call).toHaveBeenCalledWith("agent_send", {
       sessionId: "utility-owned",
       prompt: "Reply with OK.",
       options,
@@ -1985,7 +2089,7 @@ describe("remote transcript authority", () => {
 
   it("names the user message on a paired send so the host keeps the same row", async () => {
     await sendPrompt("remote", "prompt", {}, { messageId: "user-1" })
-    expect(callSpy).toHaveBeenCalledWith(
+    expect(getActiveRemoteTransport()!.call).toHaveBeenCalledWith(
       "agent_send",
       expect.objectContaining({ sessionId: "remote", messageId: "user-1" })
     )

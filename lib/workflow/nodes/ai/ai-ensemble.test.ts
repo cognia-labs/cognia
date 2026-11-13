@@ -291,8 +291,13 @@ describe("defaultAiEnsembleDeps", () => {
 
   it("runAgent without a schema returns the completion text", async () => {
     mockExecuteAgent.mockResolvedValue({ text: "plain answer" })
-    const deps = await defaultAiEnsembleDeps(makeCtx({}))
+    const ctx = makeCtx({})
+    const deps = await defaultAiEnsembleDeps(ctx)
     expect(await deps.runAgent({ prompt: "go" })).toEqual({ text: "plain answer" })
+    expect(mockExecuteAgent).toHaveBeenCalledWith(
+      "go",
+      expect.objectContaining({ executionIdentity: { runId: `execution:workflow:${ctx.runId}` } })
+    )
   })
 
   it("runAgent with a schema returns the validated object", async () => {

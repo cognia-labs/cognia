@@ -1,3 +1,4 @@
+import { toolCallEgressRunId } from "@/lib/execution/acting-authority"
 import type { PermissionRequestEvent, SendOptions, ToolHostEvent } from "@cognia/agent-config-types"
 import { callSidecarToolHost, createSidecarFeatureCallClient } from "@/lib/claude/feature-call"
 import { handlePluginToolExec } from "@/lib/claude/plugin-tool-ipc"
@@ -312,7 +313,14 @@ export function createRendererToolHost(
       let result: unknown
       if (event.type === "tool_host_pre_tool") {
         try {
-          result = await deps.before(event.toolName, event.input, ownerSessionId)
+          result = await deps.before(event.toolName, event.input, ownerSessionId, undefined, {
+            sessionId: ownerSessionId,
+            executionRunId: toolCallEgressRunId(
+              ownerSessionId,
+              turn.options.sendOptions.turnId,
+              turn.options.sendOptions.execution?.identity?.attemptId
+            ),
+          })
         } catch {
           result = { action: "deny", reason: "Cognia tool preflight failed" }
         }
@@ -322,7 +330,16 @@ export function createRendererToolHost(
             event.toolName,
             event.input ?? {},
             event.result,
-            ownerSessionId
+            ownerSessionId,
+            undefined,
+            {
+              sessionId: ownerSessionId,
+              executionRunId: toolCallEgressRunId(
+                ownerSessionId,
+                turn.options.sendOptions.turnId,
+                turn.options.sendOptions.execution?.identity?.attemptId
+              ),
+            }
           )
           result = { updatedResult: review.modifiedResult }
         } catch {

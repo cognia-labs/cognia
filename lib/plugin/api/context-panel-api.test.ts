@@ -399,3 +399,28 @@ describe("plugin context panel API", () => {
     disposeHost()
   })
 })
+
+it("R11 context panel badge cold callback returns synchronously without delivery", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const badge = jest.fn(() => 1)
+  const off = createContextPanelAPI("r11-panel", () => true).register({
+    id: "p",
+    activity: "inspect",
+    label: "P",
+    labelKey: "p",
+    resourceKinds: ["session"],
+    renderer: () => null,
+    getBadge: badge,
+  })
+  try {
+    expect(
+      bindPluginCallbacks("r11-panel", badge, () => ({ executionRunId: "r11-cold" }))()
+    ).toBeUndefined()
+    expect(badge).not.toHaveBeenCalled()
+  } finally {
+    off()
+    restore()
+  }
+})

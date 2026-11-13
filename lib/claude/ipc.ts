@@ -1,3 +1,7 @@
+import {
+  personalOperationToolIds,
+  personalOperationScope,
+} from "@/lib/execution/personal-operation"
 // Thin wrapper around the Claude sidecar IPC. Components should use this
 // module rather than touching @tauri-apps/api directly — every boundary
 // goes through `transport` from `@/lib/tauri`.
@@ -6,8 +10,14 @@ import type { Page, PageRequest } from "@/lib/tauri/companion-paging"
 import type { UnlistenFn } from "@tauri-apps/api/event"
 import type { UIMessage } from "@/types"
 import { transport } from "@/lib/tauri"
+import { localTransport } from "@/lib/tauri/transport-instance"
+import type { Transport } from "@/lib/tauri/transport-types"
 import { detectHostProfile } from "@/lib/platform/capabilities"
-import { getActiveRemoteTransport, isRemoteHostActive } from "@/lib/tauri/transport-routing"
+import {
+  getActiveRemoteTransport,
+  isRemoteHostActive,
+  RoutingTransport,
+} from "@/lib/tauri/transport-routing"
 import { reportGovernanceProjectionFailure } from "@/lib/db/governance-ledger"
 import type {
   AgentId,
@@ -66,6 +76,12 @@ const SIDECAR_EVENT = "claude://message"
 /** Canonical agent-event channel (ADR-0090 Phase 3). */
 const AGENT_EVENT = "agent://message"
 const remoteApprovalContexts = new Map<string, RemoteExecutionContext>()
+const personalEgressSessions = new Set<{
+  sessionId: string
+  turnId?: string
+  transportIdentity: object
+  release: () => void
+}>()
 // The transport route is part of ownership: an identically named session on
 // another host must survive this renderer's Stop or late session-ended event.
 const pluginToolSessionContexts = new WeakMap<object, Map<string, RemoteExecutionContext>>()
@@ -430,6 +446,58 @@ async function assertPersonalVisibilityDigest(
   }
 }
 
+/** An ACK and its lifecycle belong to one concrete Host, never the routing facade. */
+async function fencePersonalSession(
+  target: Transport,
+  sessionId: string,
+  excludedToolUseIds: readonly string[] = []
+): Promise<void> {
+  const requestId = crypto.randomUUID()
+  let resolve!: () => void
+  let reject!: (error: Error) => void
+  const ack = new Promise<void>((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  const unlisten = await target.subscribe<ClaudeEvent>(SIDECAR_EVENT, (event) => {
+    if (
+      !isControlResponseEvent(event) ||
+      event.requestId !== requestId ||
+      event.sessionId !== sessionId
+    )
+      return
+    if (
+      event.ok &&
+      (event.result as { personalEgressFenced?: boolean })?.personalEgressFenced === true
+    )
+      resolve()
+    else reject(new Error("Personal egress fence was not acknowledged; private content withheld"))
+  })
+  const timer = setTimeout(
+    () => reject(new Error("Personal egress fence timed out; private content withheld")),
+    CONTROL_TIMEOUT_MS
+  )
+  try {
+    await Promise.all([
+      ack,
+      target.call("claude_session_control", {
+        sessionId,
+        requestId,
+        method: "updateSettings",
+        params: {
+          personalEgressFence: true,
+          ...(excludedToolUseIds.length
+            ? { personalEgressExcludeToolUseIds: excludedToolUseIds }
+            : {}),
+        },
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+    unlisten()
+  }
+}
+
 async function sendPromptToTransport(
   sessionId: string,
   prompt: SendContent,
@@ -482,6 +550,67 @@ async function sendPromptToTransport(
     assertSafeModelInput(prompt)
     if (options.initialConversation) assertSafeModelHistory(options.initialConversation)
   }
+  const dispatchTransport =
+    getActiveRemoteTransport() ??
+    (transport instanceof RoutingTransport ? localTransport : transport)
+  const { personalEgressFenced, bindPersonalEgressSession } =
+    await import("@/lib/execution/personal-egress")
+  const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+  const context = {
+    sessionId,
+    executionRunId:
+      toolCallExecutionRunId(sessionId, options?.turnId, options?.execution?.identity?.attemptId) ??
+      "",
+  }
+  const fenced = await personalEgressFenced(context)
+  if (fenced) options = { ...options, personalEgressFenced: true }
+  if (!fenced && context.executionRunId && options?.personalEgressFenced !== true) {
+    // Own a lifecycle subscription even for callers without a chat capture.
+    // The control/ACK listener itself stays lazy until a fence is requested.
+    const transportIdentity = dispatchTransport
+    let unlistenPersonal: UnlistenFn = () => {}
+    for (const previous of personalEgressSessions)
+      if (previous.sessionId === sessionId && previous.transportIdentity === transportIdentity) {
+        previous.release()
+        personalEgressSessions.delete(previous)
+      }
+    const binding = {
+      sessionId,
+      turnId: options?.turnId,
+      transportIdentity,
+      release: bindPersonalEgressSession(context, async (admission) => {
+        await fencePersonalSession(
+          transportIdentity,
+          sessionId,
+          personalOperationToolIds(
+            admission,
+            sessionId,
+            personalOperationScope(pluginToolSessionContexts.get(transportIdentity)?.get(sessionId))
+          )
+        )
+        binding.release()
+        personalEgressSessions.delete(binding)
+      }),
+    }
+    const releaseRun = binding.release
+    binding.release = () => {
+      releaseRun()
+      unlistenPersonal()
+    }
+    personalEgressSessions.add(binding)
+    unlistenPersonal = await transportIdentity.subscribe<ClaudeEvent>(SIDECAR_EVENT, (event) => {
+      if (
+        event.type !== "session_ended" ||
+        event.sessionId !== sessionId ||
+        event.turnId !== binding.turnId
+      )
+        return
+      binding.release()
+      personalEgressSessions.delete(binding)
+    })
+    // The listener setup yielded; context may have become personal meanwhile.
+    if (await personalEgressFenced(context)) options = { ...options, personalEgressFenced: true }
+  }
   // Paired Hosts expose current SendOptions through the canonical command.
   // The legacy claude_send contract predates tool surfaces and model budgets.
   // Local legacy sends retain their existing alias and transcript admission.
@@ -502,7 +631,7 @@ async function sendPromptToTransport(
   // lazily restart the Rust sidecar after its capture has declared it stopped.
   delivery?.signal?.throwIfAborted()
   delivery?.onDispatch?.()
-  await transport.call(command, {
+  await dispatchTransport.call(command, {
     sessionId,
     prompt,
     options: wireOptions,

@@ -141,6 +141,9 @@ async function admitPluginExternalRun(
   return { agentId, permissionMode }
 }
 
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
+
 export async function runPluginExternalAgent(
   pluginId: string,
   presetOrAgentId: string,
@@ -188,6 +191,7 @@ async function dispatchPluginExternalAgent(
   options: PluginExternalAgentOptions,
   registerCleanup: (release: () => Promise<void>) => void
 ): Promise<PluginExternalAgentResult> {
+  const personalSource = pluginExecutionContext(pluginId) ?? { executionRunId: "" }
   if (!pluginHasApiPermission(pluginId, "agent:dispatch-external"))
     throw new Error(
       'agent.runExternalAgent requires the "agent:dispatch-external" permission — declare it in the plugin manifest.'
@@ -201,6 +205,19 @@ async function dispatchPluginExternalAgent(
     import("@/lib/ai/agent/external/config/presets"),
   ])
   const manager = getExternalAgentManager()
+  const executeBound: typeof manager.execute = (agentId, prompt, executionOptions, onStopped) =>
+    onStopped
+      ? manager.execute(
+          agentId,
+          prompt,
+          bindPersonalEgressOptions(executionOptions ?? {}, personalSource),
+          onStopped
+        )
+      : manager.execute(
+          agentId,
+          prompt,
+          bindPersonalEgressOptions(executionOptions ?? {}, personalSource)
+        )
   if (!options.runId) {
     if (options.workspace) throw new Error("A workspace requires a Bot run")
     const { agentId, permissionMode } = await admitPluginExternalRun(
@@ -212,7 +229,7 @@ async function dispatchPluginExternalAgent(
     // (ADR-0224 A8); a refusal stops it before it starts.
     const { placeDispatchedAgent } = await import("@/lib/sandbox/host-agent-placement")
     await placeDispatchedAgent(agentId, options.workingDirectory, manager)
-    const result = await manager.execute(agentId, prompt, { ...options, permissionMode })
+    const result = await executeBound(agentId, prompt, { ...options, permissionMode })
     return {
       ...result,
       agentId,
@@ -588,7 +605,7 @@ async function dispatchPluginExternalAgent(
   // Explicit fields prevent a plugin from replacing its owned cwd, trace, model route, or permission policy.
   let result: ExternalAgentResult
   try {
-    result = await manager.execute(agentId, prompt, {
+    result = await executeBound(agentId, prompt, {
       ...(sessionId ? { sessionId } : {}),
       model,
       // The installation's route, never the plugin's: null keeps the agent on

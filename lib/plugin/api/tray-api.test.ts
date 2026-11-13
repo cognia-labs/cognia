@@ -131,3 +131,34 @@ describe("createTrayAPI", () => {
     )
   })
 })
+
+it("S2 async tray failures retain registration provenance after callback release", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  const { captureLogEgressSource } = await import("@cognia/logging/context")
+  const { loggers } = await import("@cognia/logging")
+  const seen: unknown[] = []
+  const spy = jest.spyOn(loggers.tray, "warn").mockImplementation(() => {
+    seen.push(captureLogEgressSource())
+  })
+  let reject: (error: Error) => void = () => {}
+  invoke.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, fail) => {
+        reject = fail
+      })
+  )
+  try {
+    await withPluginExecutionContext("s2-tray", { personalEgressBlocked: true }, async () => {
+      createTrayAPI({ pluginId: "s2-tray", capabilities: ["tray"] }).register({
+        id: "private",
+        label: "Private",
+        onClick: () => {},
+      })
+    })
+    reject(new Error("native failure"))
+    await Promise.resolve()
+    expect(seen).toEqual([{ version: 1, runIds: [], blocked: true }])
+  } finally {
+    spy.mockRestore()
+  }
+})

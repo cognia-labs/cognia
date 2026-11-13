@@ -1,3 +1,4 @@
+import { installPersonalLogEgressPolicy } from "@/lib/execution/personal-egress"
 import {
   addTransport,
   emitLoggerDiagnostic,
@@ -1303,6 +1304,7 @@ function dispatchSpanToTransports(span: AgentTraceSpan): void {
 }
 
 export function bootstrapLogger(config?: Partial<UnifiedLoggerConfig>): LoggingBootstrapState {
+  installPersonalLogEgressPolicy()
   const persistedConfig = readConfigSettings()
   const transportSettings = readTransportSettings()
   const retentionSettings = readRetentionSettings()

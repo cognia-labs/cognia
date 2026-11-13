@@ -117,3 +117,82 @@ describe("view-bridge", () => {
     expect(getViewSnapshot()).toHaveLength(0)
   })
 })
+
+it("R11 tree change subscription returns a synchronous cold disposer", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const subscribe = jest.fn((_listener: unknown) => () => undefined)
+  try {
+    const result = await registerViewsForPlugin(
+      manifest([
+        { id: "cold", containerId: "explorer", type: "tree", entry: "v.js", export: "tree" },
+      ]),
+      "/root",
+      {
+        importer: async () => ({ tree: { getChildren: () => [], onDidChangeTreeData: subscribe } }),
+      }
+    )
+    expect(result.errors).toEqual([])
+    const off = bindPluginCallbacks("p", subscribe, () => ({ executionRunId: "r11-cold" }))(
+      () => undefined
+    )
+    expect(off).not.toBeInstanceOf(Promise)
+    expect(off()).toBeUndefined()
+    expect(subscribe).not.toHaveBeenCalled()
+  } finally {
+    restore()
+  }
+})
+
+it("R11 actual registered raw Component export and class subscription stay synchronous while cold", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { bindPersonalOperationSources, configurePersonalDispatchFence } =
+    await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const guest = jest.fn(() => null),
+    subscribed = jest.fn()
+  const source = bindPersonalOperationSources({}, [
+    { executionRunId: "r11-a" },
+    { executionRunId: "r11-b" },
+  ])
+  class Provider {
+    getChildren() {
+      return []
+    }
+    onDidChangeTreeData() {
+      subscribed()
+      return () => undefined
+    }
+  }
+  try {
+    const imported = bindPluginCallbacks(
+      "p",
+      { Component: guest, tree: new Provider() },
+      () => source
+    )
+    const result = await registerViewsForPlugin(
+      manifest([
+        { id: "r", containerId: "explorer", type: "react", entry: "v.js", export: "Component" },
+        { id: "t", containerId: "explorer", type: "tree", entry: "v.js", export: "tree" },
+      ]),
+      "/root",
+      { importer: async () => imported }
+    )
+    expect(result.errors).toEqual([])
+    const views = getViewSnapshot()
+    const react = views.find((view) => view.viewId === "r")!
+    if (react.kind !== "react") throw new Error("Missing React registration")
+    expect((react.component as () => unknown)()).toBeNull()
+    expect(guest).not.toHaveBeenCalled()
+    const tree = views.find((view) => view.viewId === "t")!
+    if (tree.kind !== "tree") throw new Error("Missing tree registration")
+    const off = tree.provider.onDidChangeTreeData!(() => undefined)
+    expect(off).not.toBeInstanceOf(Promise)
+    expect(off()).toBeUndefined()
+    expect(subscribed).not.toHaveBeenCalled()
+  } finally {
+    unregisterViewsForPlugin("p")
+    restore()
+  }
+})

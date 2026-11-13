@@ -235,7 +235,7 @@ function callSiteInventory(text: string, file: string): string[] {
         const index = (counts.get(key) ?? 0) + 1
         counts.set(key, index)
         sites.push(
-          `${key} | ${index}${file === "lib/plugin/core/context.ts" && name === "prepareEgress" ? " | 2C-2" : ""}`
+          `${key} | ${index}${file === "lib/plugin/core/context.ts" && name === "prepareEgress" ? " | 2C-2-enforced" : ""}`
         )
       }
     }
@@ -251,7 +251,9 @@ it("requires classification of every sink call site including app and opaque plu
     .sort()
   expect(actual).toEqual(reviewedSites)
   expect(
-    actual.some((site) => site.includes("lib/plugin/core/context.ts") && site.endsWith("2C-2"))
+    actual.some(
+      (site) => site.includes("lib/plugin/core/context.ts") && site.endsWith("2C-2-enforced")
+    )
   ).toBe(true)
 })
 

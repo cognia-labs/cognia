@@ -338,6 +338,7 @@ export function createBestOfNExecution(): BestOfNExecution {
               try {
                 ;({ text } = await runExternalCandidate({
                   configId: externalConfigId,
+                  personalContext: { executionRunId: candidateRunId },
                   prompt: request.prompt,
                   model: externalModel,
                   workingDirectory: workspace.physicalRoot,

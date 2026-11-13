@@ -663,3 +663,50 @@ describe("createVscodeTerminalDependencies", () => {
     expect(changes).toHaveBeenCalled()
   })
 })
+
+it("S2 VSCode terminal callbacks deny marked spawn and allow clear", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  installVscodeTerminalHandlers()
+  const h = setup()
+  await expect(
+    withPluginExecutionContext("acme.ext", { personalEgressBlocked: true }, () =>
+      h.call("terminal:create", { terminalId: "s2", kind: "process", name: "test" })
+    )
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(h.deps.spawn).not.toHaveBeenCalled()
+  await withPluginExecutionContext("acme.ext", {}, () =>
+    h.call("terminal:create", { terminalId: "s2", kind: "process", name: "test" })
+  )
+  expect(h.deps.spawn).toHaveBeenCalledTimes(1)
+})
+
+it("F5 VSCode process terminal remains leased after command return until Host exit", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  const owner = await startToolExecutionRun("vscode-pty-owner", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const child = await startToolExecutionRun("vscode-pty-child", { parentRunId: owner.id })
+  const h = setup()
+  const mark = { person: { kind: "local-person" as const }, source: "F5", markedAt: 1 }
+  try {
+    await withPluginExecutionContext("acme.ext", { executionRunId: owner.id }, () =>
+      h.call("terminal:create", { terminalId: "f5-process", kind: "process" })
+    )
+    await expect(addPersonalMarksToRun({ executionRunId: child.id }, [mark])).rejects.toMatchObject(
+      { code: "personal-egress-denied" }
+    )
+    for (const shell of h.live.values()) await shell.kill()
+    await expect(
+      addPersonalMarksToRun({ executionRunId: child.id }, [mark])
+    ).resolves.toBeUndefined()
+  } finally {
+    for (const shell of h.live.values()) await shell.kill()
+    await fixture.dispose()
+  }
+})

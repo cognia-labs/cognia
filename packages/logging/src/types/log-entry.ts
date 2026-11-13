@@ -8,6 +8,8 @@ import type { AppLogLevel, LogLevel, LogOrigin, LogRuntime } from "./log-level"
  * Structured log entry with full context
  */
 export interface StructuredLogEntry {
+  /** Host-only provenance, retained locally for live/durable export checks. */
+  hostEgressSource?: import("../context").HostLogEgressSource
   /** Unique log entry ID */
   id: string
   /** ISO timestamp */

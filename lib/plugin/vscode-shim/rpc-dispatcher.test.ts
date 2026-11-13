@@ -319,3 +319,49 @@ it("contains asynchronous native unsubscribe races", async () => {
   resetRegistry()
   expect(attached).toBe(1)
 })
+
+it.each([false, true])(
+  "F7 VSCode replies withhold newly admitted result and error content (%s)",
+  async (throws) => {
+    const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+    await fixture.initialize()
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+    const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+    const owner = await startToolExecutionRun("f7-vscode-reply", {
+      localAuthorization:
+        LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+    })
+    const sent: string[] = []
+    configureRpcDispatcher({
+      sendResponse: async (_id, _generation, frame) => {
+        sent.push(frame)
+      },
+      listen: async () => () => {},
+    })
+    registerMethod("private:read", async () => {
+      await addPersonalMarksToRun({ executionRunId: owner.id }, [
+        { person: { kind: "local-person" }, source: "F7", markedAt: 1 },
+      ])
+      if (throws) throw new Error("private-error")
+      return "private-response"
+    })
+    try {
+      await withPluginExecutionContext("f7-vscode", { executionRunId: owner.id }, () =>
+        handleInboundFrame("f7-vscode", JSON.stringify({ id: 1, method: "private:read" }), "g")
+      )
+      expect(sent).toHaveLength(1)
+      expect(JSON.parse(sent[0])).toMatchObject({
+        id: 1,
+        error: { message: expect.stringContaining("private content") },
+      })
+      expect(sent[0]).not.toContain("private-response")
+      expect(sent[0]).not.toContain("private-error")
+    } finally {
+      resetRegistry()
+      configureRpcDispatcher(null)
+      await fixture.dispose()
+    }
+  }
+)

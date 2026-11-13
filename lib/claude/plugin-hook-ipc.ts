@@ -1,3 +1,4 @@
+import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
 /**
  * Renderer-side handler for `plugin_hook_exec` — the settings.json ⇄ plugin
  * lifecycle-hook bridge.
@@ -30,7 +31,7 @@ import type { PluginHooksAll } from "@/types/plugin/plugin-hooks"
 import { createLogger } from "@cognia/logging"
 import { transformModelStreamPart } from "@/lib/plugin/interceptors/consumers"
 import { dispatchGuard } from "@/lib/plugin/interceptors/dispatch"
-import { HOST_BACKGROUND, withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import { HOST_BACKGROUND, withPluginContentDispatch } from "@/lib/plugin/core/invocation-identity"
 import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 
 const log = createLogger("claude.plugin-hook-ipc")
@@ -97,6 +98,18 @@ export async function handlePluginHookExec(
   req: PluginHookExecRequest,
   deps: HandlePluginHookDeps = {}
 ): Promise<PluginHookExecOutcome> {
+  if (!deps.credentialContext) {
+    const frame = req as PluginHookExecRequest & { turnId?: string; attemptId?: string }
+    deps = {
+      ...deps,
+      credentialContext: {
+        sessionId: req.sessionId,
+        executionRunId:
+          toolCallExecutionRunId(req.sessionId, frame.turnId, frame.attemptId) ||
+          `unresolved-hook:${req.sessionId}`,
+      },
+    }
+  }
   const resolveHandler = deps.resolveHandler ?? getPluginHookHandler
   const hasPermission = deps.hasPermission ?? defaultHasPermission
   const label = `${req.pluginId}:${req.hookId}`
@@ -169,7 +182,7 @@ export async function handlePluginHookExec(
   }
 
   try {
-    const result = await withPluginExecutionContext(
+    const result = await withPluginContentDispatch(
       req.pluginId,
       deps.credentialContext ?? HOST_BACKGROUND,
       () => handler(req.payload as never)
@@ -204,7 +217,7 @@ async function runBroadcast(
     const handler = resolveHandler(pluginId, req.hookId)
     if (!handler) continue
     try {
-      const value = await withPluginExecutionContext(
+      const value = await withPluginContentDispatch(
         pluginId,
         credentialContext ?? HOST_BACKGROUND,
         () => handler(req.payload as never)

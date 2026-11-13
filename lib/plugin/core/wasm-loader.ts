@@ -14,7 +14,11 @@ import { loggers } from "@cognia/logging"
 import type { PluginDefinition, PluginManifest, PluginTool } from "@/types/plugin"
 import type { PluginNodeDef } from "@/types/plugin/plugin-workflow"
 import { persistRuntimeStubWarning, RUNTIME_STUB_WARNINGS } from "./runtime-stub-warning"
-import { pluginDispatchContext, withPluginExecutionContext } from "./invocation-identity"
+import {
+  pluginDispatchContext,
+  pluginExecutionContext,
+  withPluginExecutionContext,
+} from "./invocation-identity"
 
 const wasmLoaderLogger = loggers.plugin.child("wasm-loader")
 
@@ -69,9 +73,19 @@ async function invokeWasmHost<T>(command: string, args?: Record<string, unknown>
     const { transport } = await import("@/lib/tauri/transport-instance")
     return transport.call<T>(command, args)
   }
-  return typeof args?.pluginId === "string" && command === "plugin_wasm_call"
-    ? withPluginExecutionContext(args.pluginId, pluginDispatchContext(args.pluginId), dispatch)
-    : dispatch()
+  if (typeof args?.pluginId === "string" && command === "plugin_wasm_call") {
+    const pluginId = args.pluginId
+    const source = pluginExecutionContext(pluginId) ?? pluginDispatchContext(pluginId)
+    const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+    return runPersonalEgressOperation(
+      source,
+      (operation) => {
+        return withPluginExecutionContext(pluginId, operation, dispatch)
+      },
+      true
+    )
+  }
+  return dispatch()
 }
 
 /**
@@ -307,7 +321,7 @@ export async function unloadWasmPlugin(pluginId: string, generation?: string): P
   const boundGeneration = generation ?? requireWasmGeneration(pluginId)
   try {
     await invokeWasmHost("plugin_wasm_unload", { pluginId, generation: boundGeneration })
-    wasmGenerations.delete(pluginId)
+    if (wasmGenerations.get(pluginId) === boundGeneration) wasmGenerations.delete(pluginId)
   } catch (error) {
     wasmLoaderLogger.warn("WASM unload failed", {
       pluginId,

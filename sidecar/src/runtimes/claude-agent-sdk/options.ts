@@ -1,5 +1,14 @@
+import { BUILTIN_TOOL_NAMES } from "@anthropic-ai/claude-agent-sdk"
+import {
+  personalToolDenied,
+  personalEgressState,
+  beginPersonalEgressOperation,
+  releasePersonalEgressOperations,
+  opaquePersonalTool,
+} from "../../policy/personal-egress.ts"
 import type { HookMap } from "../../hooks/kernel/types.ts"
-import type { Options } from "@anthropic-ai/claude-agent-sdk"
+import type { Options, HookCallback } from "@anthropic-ai/claude-agent-sdk"
+import { PERSONAL_EGRESS_DENIAL } from "@cognia/agent-contracts/personal-egress"
 import { enforceAnthropicToolSurface, normalizeClaudeToolNames } from "./tool-surface.ts"
 import type { OptionsContext } from "./runtime-types.ts"
 
@@ -47,9 +56,11 @@ export function buildAnthropicOptions({
   interruptForLedger,
   surface,
 }: OptionsContext) {
+  personalEgressState(sendOptions)
   const {
     mergedMcpServers,
     pluginToolNameAliases,
+    personalEgressRelayTools,
     modelAllowedTools,
     disallowed,
     lspEnabled,
@@ -105,6 +116,7 @@ export function buildAnthropicOptions({
   }
 
   const executeNativeHook = createNativeHookExecutor({
+    personalEgressFenced: () => personalEgressState(sendOptions).fenced,
     cwd: sendOptions.cwd,
     // Native model hooks are separate invocations. They must not inherit the
     // root query's retry policy without its total deadline and cancellation.
@@ -239,8 +251,17 @@ export function buildAnthropicOptions({
     hooks: mergeHookMaps(
       lspEnabled && lspResolver
         ? buildLspHooks({
-            getDiagnostics: (file) =>
-              lspResolver.getDiagnostics(file, { processContext: { hostRpc, sessionId } }),
+            getDiagnostics: async (file) => {
+              if (personalEgressState(sendOptions).fenced) throw new Error(PERSONAL_EGRESS_DENIAL)
+              const finish = beginPersonalEgressOperation(sendOptions, true)
+              try {
+                return await lspResolver.getDiagnostics(file, {
+                  processContext: { hostRpc, sessionId },
+                })
+              } finally {
+                finish()
+              }
+            },
           })
         : undefined,
       buildAgentHooks(sendOptions.hooks, {
@@ -262,6 +283,9 @@ export function buildAnthropicOptions({
         // keys as the `mcpServers` wire map.
         mcpDeclaredBy: sendOptions.mcpDeclaredBy,
         executeNativeHandler: executeNativeHook,
+        personalEgressFenced: () => personalEgressState(sendOptions).fenced,
+        beginPersonalEgress: (unproven, toolUseId) =>
+          beginPersonalEgressOperation(sendOptions, unproven, toolUseId),
         pendingPluginHookCalls,
         newId: () => randomUUID(),
       }),
@@ -361,6 +385,96 @@ export function buildAnthropicOptions({
     )
   }
   options = enforceAnthropicToolSurface(options, sendOptions)
+  // Mandatory hook remains outside overlays and covers SDK-preallowed tools.
+  const inFlight = new Map<string, () => void>()
+  const personalHook: HookCallback = async (input, toolUseId, hookContext) => {
+    const name = "tool_name" in input ? input.tool_name : ""
+    if (personalToolDenied(name, sendOptions, BUILTIN_TOOL_NAMES))
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: PERSONAL_EGRESS_DENIAL,
+        },
+      }
+    if (
+      !personalEgressState(sendOptions).fenced &&
+      !personalEgressRelayTools.has(name) &&
+      opaquePersonalTool(name, sendOptions, BUILTIN_TOOL_NAMES)
+    ) {
+      const id = toolUseId ?? ("tool_use_id" in input ? String(input.tool_use_id) : randomUUID())
+      const release = beginPersonalEgressOperation(
+        sendOptions,
+        /(?:Bash|shell|process|terminal|sandbox_bash)/i.test(name),
+        id
+      )
+      const abort = () => {
+        release()
+        inFlight.delete(id)
+      }
+      hookContext.signal.addEventListener("abort", abort, { once: true })
+      inFlight.set(id, () => {
+        hookContext.signal.removeEventListener("abort", abort)
+        release()
+      })
+      if (hookContext.signal.aborted) abort()
+    }
+    return {}
+  }
+  const finishPersonalTool: HookCallback = async (input, toolUseId) => {
+    const id = toolUseId ?? ("tool_use_id" in input ? String(input.tool_use_id) : "")
+    inFlight.get(id)?.()
+    inFlight.delete(id)
+    return {}
+  }
+  options.hooks = {
+    ...options.hooks,
+    PreToolUse: [
+      { hooks: [personalHook] },
+      ...(options.hooks?.PreToolUse ?? []).map((entry) => ({
+        ...entry,
+        hooks: entry.hooks.map((hook) => async (...args: Parameters<HookCallback>) => {
+          const result = await hook(...args)
+          if (
+            ("hookSpecificOutput" in result &&
+              result.hookSpecificOutput &&
+              "permissionDecision" in result.hookSpecificOutput &&
+              result.hookSpecificOutput.permissionDecision === "deny") ||
+            ("continue" in result && result.continue === false)
+          ) {
+            const id = args[1] ?? ("tool_use_id" in args[0] ? String(args[0].tool_use_id) : "")
+            inFlight.get(id)?.()
+            inFlight.delete(id)
+          }
+          return result
+        }),
+      })),
+    ],
+    PostToolUse: [{ hooks: [finishPersonalTool] }, ...(options.hooks?.PostToolUse ?? [])],
+    PostToolUseFailure: [
+      { hooks: [finishPersonalTool] },
+      ...(options.hooks?.PostToolUseFailure ?? []),
+    ],
+  }
+
+  const authorize = options.canUseTool
+  if (authorize)
+    options.canUseTool = async (name, input, context) => {
+      try {
+        const answer = await authorize(name, input, context)
+        if (answer?.behavior === "deny") {
+          inFlight.get(context.toolUseID)?.()
+          inFlight.delete(context.toolUseID)
+          releasePersonalEgressOperations(sendOptions, context.toolUseID)
+        }
+        return answer
+      } catch (error) {
+        inFlight.get(context.toolUseID)?.()
+        inFlight.delete(context.toolUseID)
+        throw error
+      }
+    }
+
   options = applyEmbeddedClaudeExecutable(options)
 
   // Strip undefined/null so the SDK uses its defaults instead of choking on

@@ -33,6 +33,7 @@ import { spawnerMessage } from "./spawner-message-arg"
 export interface RunTerminalDockActionInput {
   /** One of "spawn" | "write" | "read_recent" | "wait_for_exit". */
   action: TerminalDockAction
+  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   /** Tool arguments as serialised by the model. Validated per action. */
   args: Record<string, unknown>
   /** Chat session id passed through `plugin_tool_exec` — scopes the consent grant. */
@@ -57,6 +58,7 @@ export type DockActionResult =
       ok: false
       reason: string
       code?: "shell_integration_unsupported" | "command_sent_unobserved"
+      sessionId?: string
     }
 
 const DEFAULT_SPAWN_ROWS = 24
@@ -136,6 +138,7 @@ async function runSpawn(input: RunTerminalDockActionInput): Promise<DockActionRe
     // Spawn + run + wait — all handled by the existing helper.
     const outcome = await runInDockTab({
       chatSessionId,
+      credentialContext: input.credentialContext,
       newTab: {
         req: {
           rows: DEFAULT_SPAWN_ROWS,
@@ -169,6 +172,10 @@ async function runSpawn(input: RunTerminalDockActionInput): Promise<DockActionRe
     ...spawnerMessage(chatSessionId),
   })
   if (result.kind === "spawned") {
+    if (input.credentialContext) {
+      const { retainTerminalPersonalEgress } = await import("./personal-egress")
+      retainTerminalPersonalEgress(input.credentialContext, result.sessionId)
+    }
     return { ok: true, sessionId: result.sessionId }
   }
   if (result.kind === "denied") {
@@ -186,6 +193,7 @@ async function runWrite(input: RunTerminalDockActionInput): Promise<DockActionRe
 
   const outcome = await runInDockTab({
     chatSessionId,
+    credentialContext: input.credentialContext,
     tabId,
     command,
     timeoutMs: pickTimeoutMs(args),
@@ -283,7 +291,11 @@ function mapRunInDockOutcome(outcome: Awaited<ReturnType<typeof runInDockTab>>):
     case "denied":
       return { ok: false, reason: "user denied terminal access" }
     case "timeout":
-      return { ok: false, reason: `timeout (session ${outcome.sessionId})` }
+      return {
+        ok: false,
+        reason: `timeout (session ${outcome.sessionId})`,
+        sessionId: outcome.sessionId,
+      }
     case "unsupported":
       return unsupportedResult(outcome.sessionId, outcome.reason)
     case "sent":
@@ -291,6 +303,7 @@ function mapRunInDockOutcome(outcome: Awaited<ReturnType<typeof runInDockTab>>):
         ok: false,
         code: "command_sent_unobserved",
         reason: `Command was sent to session ${outcome.sessionId} and may still be running. Completion, exit code, and output cannot be observed by this tool (${outcome.reason ?? "shell_integration_disabled"}). Do not send it again.`,
+        sessionId: outcome.sessionId,
       }
     case "error":
       return { ok: false, reason: outcome.message }

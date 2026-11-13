@@ -417,3 +417,14 @@ describe("TerminalSession flow control", () => {
     })
   })
 })
+
+it("R11 failed wait UI exit closes the tab without confirming personal egress exit", async () => {
+  mockInvoke.mockResolvedValueOnce({ session: baseInfo })
+  const session = await TerminalSession.spawn({ shell: "/bin/bash", rows: 24, cols: 80 })
+  const listener = jest.fn()
+  session.onExit(listener)
+  fire({ kind: "exit", code: null })
+  expect(listener).toHaveBeenCalledWith(null)
+  expect(session.isExited).toBe(true)
+  expect(session.processExitConfirmed).toBe(false)
+})

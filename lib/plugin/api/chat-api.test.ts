@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/personal-marks", () => {
+  const actual = jest.requireActual("@/lib/execution/personal-marks")
+  return { ...actual, bindPersonalMessageEgressSource: jest.fn() }
+})
 // The composer lives behind a window-event seam that `chat-api` reaches by
 // dynamic import; stubbing the module keeps this suite in the fast node project
 // instead of dragging the whole composer (and a DOM) in behind it.
@@ -236,4 +240,23 @@ describe("chat write surface", () => {
     useChatStore.setState({ activeSessionId: null })
     expect(() => createChatAPI("wiki").stageIntent("hi")).toThrow(/no session/i)
   })
+})
+
+it("S2 binds appended message effects to the Host invocation", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  const marks = await import("@/lib/execution/personal-marks")
+  const bind = jest.mocked(marks.bindPersonalMessageEgressSource)
+  const state = useChatStore.getState()
+  useChatStore.setState({
+    activeSessionId: "s2-chat",
+    sessions: { ...state.sessions, "s2-chat": { messages: [] } as never },
+  })
+  await withPluginExecutionContext("s2-chat-plugin", { personalEgressBlocked: true }, async () => {
+    const id = createChatAPI("s2-chat-plugin").appendMessagePart({
+      type: "file",
+      url: "https://outside.test/private",
+    })
+    expect(bind).toHaveBeenCalledWith(id, expect.objectContaining({ personalEgressBlocked: true }))
+  })
+  bind.mockClear()
 })

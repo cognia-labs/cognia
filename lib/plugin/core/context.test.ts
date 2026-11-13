@@ -1,4 +1,12 @@
 /** @jest-environment jsdom */
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 /**
  * Plugin Context Tests
  */
@@ -35,6 +43,7 @@ import {
   HOST_BACKGROUND,
   pluginExecutionContext,
   withPluginExecutionContext,
+  withPluginContentDispatch,
 } from "./invocation-identity"
 import { invokePluginTool } from "@/lib/plugin/core/invoke-plugin-tool"
 import {
@@ -717,34 +726,53 @@ describe("createPluginContext", () => {
     })
 
     it("surfaces plugin node default params and binds execution to its exact workflow run", async () => {
-      const context = createPluginContext(createMockPlugin(), mockManager)
-      const seen: unknown[] = []
-      const dispose = context.workflow.registerNode({
-        kind: "action.format",
-        typeVersion: 1,
-        category: "plugin",
-        label: "Format",
-        description: "Format text",
-        iconName: "Wand",
-        paramsSchema: { type: "object" },
-        defaultParams: { mode: "markdown", retries: 2 },
-        execute: async () => {
-          await Promise.resolve()
-          seen.push(pluginExecutionContext("test-plugin"))
-          return { output: {} }
-        },
+      const fake = await import("fake-indexeddb")
+      const { default: Dexie } = await import("dexie")
+      Dexie.dependencies.indexedDB = fake.indexedDB
+      Dexie.dependencies.IDBKeyRange = fake.IDBKeyRange
+      Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: fake.indexedDB })
+      Object.defineProperty(globalThis, "IDBKeyRange", {
+        configurable: true,
+        value: fake.IDBKeyRange,
       })
+      ;(await import("@/lib/db/schema")).__resetDbForTesting()
+      const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+      await fixture.initialize()
+      await (
+        await import("@/lib/execution/acting-authority")
+      ).startToolExecutionRun("workflow-session", { runId: "execution:workflow:service-workflow" })
+      try {
+        const context = createPluginContext(createMockPlugin(), mockManager)
+        const seen: unknown[] = []
+        const dispose = context.workflow.registerNode({
+          kind: "action.format",
+          typeVersion: 1,
+          category: "plugin",
+          label: "Format",
+          description: "Format text",
+          iconName: "Wand",
+          paramsSchema: { type: "object" },
+          defaultParams: { mode: "markdown", retries: 2 },
+          execute: async () => {
+            await Promise.resolve()
+            seen.push(pluginExecutionContext("test-plugin"))
+            return { output: {} }
+          },
+        })
 
-      const entry = nodeCatalogEntry("test-plugin.action.format" as never)
-      expect(entry.defaultParams).toEqual({ mode: "markdown", retries: 2 })
-      expect(entry.typeVersion).toBe(1)
-      await getExecutor("test-plugin.action.format" as never, 1)!.execute({
-        runId: "service-workflow",
-      } as never)
-      expect(seen).toEqual([{ executionRunId: "execution:workflow:service-workflow" }])
-      expect(pluginExecutionContext("test-plugin")).toBeUndefined()
+        const entry = nodeCatalogEntry("test-plugin.action.format" as never)
+        expect(entry.defaultParams).toEqual({ mode: "markdown", retries: 2 })
+        expect(entry.typeVersion).toBe(1)
+        await getExecutor("test-plugin.action.format" as never, 1)!.execute({
+          runId: "service-workflow",
+        } as never)
+        expect(seen).toEqual([{ executionRunId: "execution:workflow:service-workflow" }])
+        expect(pluginExecutionContext("test-plugin")).toBeUndefined()
 
-      dispose()
+        dispose()
+      } finally {
+        await fixture.dispose()
+      }
     })
 
     it("surfaces plugin trigger default params on the hot-merged catalog entry", () => {
@@ -2277,6 +2305,38 @@ describe("createPluginContext", () => {
   })
 
   describe("context menu api", () => {
+    it("R11 context menu disabled predicate synchronously denies a cold source", async () => {
+      const { bindPluginCallbacks } = await import("./invocation-identity")
+      const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+      const restore = configurePersonalDispatchFence(() => undefined)
+      const disabled = jest.fn(() => false)
+      const plugin = createMockPlugin()
+      const context = createPluginContext(plugin, mockManager)
+      const off = context.contextMenu.register({
+        id: "r11",
+        label: "R11",
+        onClick: () => undefined,
+        disabled,
+      } as never)
+      try {
+        const { getContextMenuSnapshot } = await import("@/lib/plugin/context-menu/registry")
+        await Promise.resolve()
+        const predicate = getContextMenuSnapshot().find(
+          (row) => row.id === `${plugin.manifest.id}:r11`
+        )!.item.disabled
+        if (typeof predicate !== "function")
+          throw new Error("Missing registered disabled predicate")
+        expect(
+          bindPluginCallbacks(plugin.manifest.id, predicate, () => ({
+            executionRunId: "r11-cold",
+          }))({} as never)
+        ).toBe(true)
+        expect(disabled).not.toHaveBeenCalled()
+      } finally {
+        off()
+        restore()
+      }
+    })
     it("should have register methods", () => {
       const plugin = createMockPlugin()
       const context = createPluginContext(plugin, mockManager)
@@ -3936,6 +3996,33 @@ describe("agent imperative API", () => {
       }
     )
 
+    it("H4: plugin network reads canonical taint exactly once per call", async () => {
+      const plugin = createMockPlugin()
+      const ctx = createPluginContext(plugin, mockManager)
+      mockEgressTaint.mockClear()
+      await withPluginExecutionContext(
+        plugin.manifest.id,
+        { executionRunId: "clear-network" },
+        () => ctx.network.fetch("https://example.com")
+      )
+      expect(mockEgressTaint).toHaveBeenCalledTimes(1)
+    })
+
+    it("denies plugin network in a personally marked Host invocation", async () => {
+      mockEgressTaint.mockResolvedValueOnce({ verified: true, marks: [{}] })
+      try {
+        const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+        await expect(
+          withPluginExecutionContext("test-plugin", { executionRunId: "host-run" }, () =>
+            ctx.network.get("https://api.example.com/private")
+          )
+        ).rejects.toMatchObject({ code: "personal-egress-denied" })
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally {
+        mockEgressTaint.mockReset().mockResolvedValue({ verified: true, marks: [] })
+      }
+    })
+
     it("resolves upload headers into plain strings at the native transport", async () => {
       mockIsTauri.mockReturnValue(true)
       const invokeMock = invoke as jest.Mock
@@ -4754,4 +4841,136 @@ it("fences callbacks registered through the published base context", () => {
   ctx.events.emit("binding", {})
   expect(seen).toEqual([HOST_BACKGROUND])
   expect(pluginExecutionContext(plugin.manifest.id)).toBeUndefined()
+})
+
+it("captures a plugin logger's actual Host source at each synchronous log call", async () => {
+  const { withPluginContentDispatch } = await import("./invocation-identity")
+  const { captureLogEgressSource } = await import("@cognia/logging/context")
+  const seen: unknown[] = []
+  const spy = jest.spyOn(console, "info").mockImplementation(() => {
+    seen.push(captureLogEgressSource())
+  })
+  try {
+    const plugin = createMockPlugin()
+    const context = createPluginContext(plugin, mockManager)
+    await withPluginContentDispatch(plugin.manifest.id, { personalEgressBlocked: true }, async () =>
+      context.logger.info("private")
+    )
+    context.logger.info("background")
+    expect(seen).toEqual([
+      { version: 1, runIds: [], blocked: true },
+      { version: 1, runIds: [], blocked: true },
+    ])
+  } finally {
+    spy.mockRestore()
+  }
+})
+
+it("S2 contextual event errors keep the emitting Host source", async () => {
+  const { captureLogEgressSource } = await import("@cognia/logging/context")
+  const { withPluginExecutionContext } = await import("./invocation-identity")
+  const seen: unknown[] = []
+  const spy = jest.spyOn(console, "error").mockImplementation(() => {
+    seen.push(captureLogEgressSource())
+  })
+  try {
+    const plugin = createMockPlugin()
+    const context = createPluginContext(plugin, mockManager)
+    await withPluginExecutionContext(
+      plugin.manifest.id,
+      { personalEgressBlocked: true },
+      async () => {
+        context.events.on("private-event", () => {
+          throw new Error("private")
+        })
+        context.events.emit("private-event")
+      }
+    )
+    expect(seen).toEqual([{ version: 1, runIds: [], blocked: true }])
+  } finally {
+    spy.mockRestore()
+  }
+})
+
+describe("F2 retained plugin instance exposure", () => {
+  it("F2 deferred network, shell and sandbox retain real taint after hook release", async () => {
+    const Dexie = (await import("dexie")).default
+    const fake = await import("fake-indexeddb")
+    Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: fake.indexedDB })
+    Object.defineProperty(globalThis, "IDBKeyRange", {
+      configurable: true,
+      value: fake.IDBKeyRange,
+    })
+    Dexie.dependencies.indexedDB = fake.indexedDB
+    Dexie.dependencies.IDBKeyRange = fake.IDBKeyRange
+    ;(await import("@/lib/db/schema")).__resetDbForTesting()
+    const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+    await fixture.initialize()
+    const actual = jest.requireActual<typeof import("@/lib/execution/personal-sink")>(
+      "@/lib/execution/personal-sink"
+    )
+    mockEgressTaint.mockImplementation(actual.readRunPersonalTaint as never)
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { getDb } = await import("@/lib/db/schema")
+    mockIsTauri.mockReturnValue(false)
+    const originalFetch = global.fetch
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({}),
+      text: async () => "{}",
+    })) as unknown as typeof fetch
+    const id = "f2-deferred"
+    const manifest = {
+      ...mockManifest,
+      id,
+      permissions: [
+        "network:fetch",
+        "shell:execute",
+        "native:process",
+      ] as PluginManifest["permissions"],
+    }
+    getPermissionGuard().registerPlugin(id, manifest.permissions!)
+    const ctx = createFullPluginContext(createMockPlugin({ manifest }), mockManager)
+    try {
+      const run = await startToolExecutionRun("f2-session", {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      await getDb().executionRuns.update(run.id, {
+        personalMarks: [{ person: { kind: "local-person" }, source: "F2", markedAt: 1 }],
+      })
+      await withPluginContentDispatch(
+        id,
+        { executionRunId: run.id },
+        async () => "marked hook payload"
+      )
+      expect(pluginExecutionContext(id)).toBeUndefined()
+      for (const send of [
+        () => ctx.network.post("https://example.com", { body: "stash" }),
+        () => ctx.shell.execute("echo stash"),
+        () => ctx.sandbox.execute("ref", {} as never),
+      ]) {
+        await expect(
+          new Promise((resolve) => setTimeout(resolve, 0)).then<unknown>(() => send())
+        ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      }
+      const clean = await startToolExecutionRun("f2-other", {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      await withPluginExecutionContext(id, { executionRunId: clean.id }, async () => {
+        await expect(
+          ctx.network.post("https://example.com", { body: "stash" })
+        ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      })
+    } finally {
+      global.fetch = originalFetch
+      mockEgressTaint.mockImplementation(async () => ({ verified: true, marks: [] }))
+      await fixture.dispose()
+    }
+  })
 })

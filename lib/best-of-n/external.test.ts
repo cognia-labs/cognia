@@ -1,7 +1,8 @@
+import { personalEgressOptionsSource } from "@/lib/execution/personal-egress"
 import { runExternalCandidate, type ExternalCandidateDeps } from "./external"
 
 function deps(registered: boolean) {
-  const execute = jest.fn(async () => ({ success: true, finalResponse: "done" }))
+  const execute = jest.fn(async (..._args: unknown[]) => ({ success: true, finalResponse: "done" }))
   const manager = { getAgent: jest.fn(() => (registered ? {} : undefined)), execute }
   const forward = jest.fn()
   const value = {
@@ -79,4 +80,13 @@ it("reports the agent's token usage, also for a run that failed", async () => {
   // A run that reported nothing books nothing.
   await runExternalCandidate({ ...input, onUsage }, f.deps)
   expect(onUsage).toHaveBeenCalledTimes(2)
+})
+
+it("R10 binds the candidate Host source to manager execution options", async () => {
+  const f = deps(true)
+  const personalContext = { executionRunId: "candidate-host-run" }
+  await runExternalCandidate({ ...input, personalContext }, f.deps)
+  expect(personalEgressOptionsSource(f.execute.mock.calls[0]?.[2] as object | undefined)).toBe(
+    personalContext
+  )
 })

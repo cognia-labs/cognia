@@ -1,3 +1,7 @@
+import {
+  markPluginSynchronousRenderer,
+  markPluginSynchronousCallback,
+} from "@/lib/plugin/core/invocation-identity"
 /**
  * View bridge (B2).
  *
@@ -102,6 +106,8 @@ async function resolveView(
       typeof exported === "function"
         ? (exported as () => TreeDataProvider)()
         : (exported as TreeDataProvider)
+    if (provider?.onDidChangeTreeData)
+      markPluginSynchronousCallback(provider.onDidChangeTreeData, () => undefined)
     if (!provider || typeof provider.getChildren !== "function") {
       throw new Error(`tree view "${def.id}" export "${def.export}" is not a TreeDataProvider`)
     }
@@ -114,7 +120,10 @@ async function resolveView(
   return {
     kind: "react",
     ...base,
-    component: exported as React.ComponentType<PluginViewProps>,
+    component: markPluginSynchronousRenderer(
+      pluginId,
+      exported as React.ComponentType<PluginViewProps>
+    ),
   }
 }
 

@@ -95,6 +95,10 @@ export function createContainerExecAdapter(deps: ContainerExecDeps): MicrovmExec
   }
 
   return {
+    enforcesNetworkOff(ref) {
+      const binding = bindings.get(ref)
+      return !!binding && egressOff(binding.placement)
+    },
     async preflight(ref, workspaceRoot, ownerGroup) {
       if (!workspaceRoot) {
         throw new SandboxRuntimeError(

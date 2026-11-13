@@ -1,5 +1,8 @@
 "use client"
 
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
+import { personalMessageEgressSource } from "@/lib/execution/personal-marks"
+
 // Inline preview for non-image `file` message parts. Markdown files use the
 // shared rendered/source surfaces, HTML files render live in the same
 // sanitized sandbox iframe the static artifact preview uses, other text files
@@ -45,6 +48,8 @@ import {
 } from "@/lib/file-viewer/registry"
 
 export interface FilePartPreviewProps {
+  /** Host message identity for automatic remote previews. */
+  messageId?: string
   url: string
   mediaType?: string
   filename?: string
@@ -206,14 +211,19 @@ function DownloadLink({ url, displayName }: { url: string; displayName: string }
 }
 
 /** Fetch the text body of a (data:/blob:/http) URL. Null while loading; false on error. */
-function useFileText(url: string, enabled: boolean): string | null | false {
+function useFileText(url: string, enabled: boolean, messageId?: string): string | null | false {
   // Key the result by the URL it belongs to so a URL change reads as loading
   // (null) during render — no synchronous state reset inside the effect.
   const [result, setResult] = useState<{ url: string; value: string | false } | null>(null)
   useEffect(() => {
     if (!enabled) return
     let cancelled = false
-    fetch(url)
+    ;(async () => {
+      if (/^(?:data|blob):/i.test(url)) return fetch(url)
+      return runPersonalEgressOperation(await personalMessageEgressSource(messageId), () =>
+        fetch(url)
+      )
+    })()
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
       .then((body) => {
         if (!cancelled) setResult({ url, value: body })
@@ -224,11 +234,40 @@ function useFileText(url: string, enabled: boolean): string | null | false {
     return () => {
       cancelled = true
     }
-  }, [url, enabled])
+  }, [url, enabled, messageId])
   return result && result.url === url ? result.value : null
 }
 
+function useMediaPreviewUrl(url: string, enabled: boolean, messageId?: string): string | null {
+  const local = /^(?:data|blob):/i.test(url)
+  const [result, setResult] = useState<{ url: string; objectUrl: string } | null>(null)
+  useEffect(() => {
+    if (!enabled || local || !messageId) return
+    let cancelled = false
+    let objectUrl: string | undefined
+    void (async () => {
+      const blob = await runPersonalEgressOperation(
+        await personalMessageEgressSource(messageId),
+        async () => {
+          const response = await fetch(url)
+          if (!response.ok) throw new Error(String(response.status))
+          return response.blob()
+        }
+      )
+      if (cancelled) return
+      objectUrl = URL.createObjectURL(blob)
+      setResult({ url, objectUrl })
+    })().catch(() => undefined)
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [url, enabled, messageId, local])
+  return local || !messageId ? url : result?.url === url ? result.objectUrl : null
+}
+
 export const FilePartPreview = memo(function FilePartPreview({
+  messageId,
   url,
   mediaType,
   filename,
@@ -241,11 +280,12 @@ export const FilePartPreview = memo(function FilePartPreview({
   const displayName = filename ?? url
   const pdf = isPdf(mediaType, filename)
   const video = !pdf && isVideo(mediaType, filename)
+  const mediaUrl = useMediaPreviewUrl(url, pdf || video, messageId)
   const viewer = registeredAttachmentViewer(mediaType, filename)
   const textLike = !pdf && !video && (viewer !== null || isTextLike(mediaType, filename))
   const markdown = textLike && isMarkdown(mediaType, filename)
   const html = textLike && isHtml(mediaType, filename)
-  const text = useFileText(url, textLike)
+  const text = useFileText(url, textLike, messageId)
   const documentView = presentation === "document"
   const codeProps = { presentation, toolbarContainer, filename }
   const viewerRequest = useMemo(
@@ -260,11 +300,14 @@ export const FilePartPreview = memo(function FilePartPreview({
     [url, viewer?.id, filename, displayName, mediaType, text]
   )
 
+  if ((pdf || video) && !mediaUrl)
+    return <p className="text-xs text-muted-foreground">{t("previewUnavailable")}</p>
+
   if (pdf) {
     return (
       <div className="my-1 overflow-hidden rounded border" data-testid="file-preview-pdf">
         <object
-          data={url}
+          data={mediaUrl ?? undefined}
           type="application/pdf"
           className="h-64 w-full sm:h-80 md:h-96"
           aria-label={displayName}
@@ -281,7 +324,7 @@ export const FilePartPreview = memo(function FilePartPreview({
   if (video) {
     return (
       <div className="my-1" data-testid="file-preview-video">
-        <VideoBlock src={url} title={displayName} />
+        <VideoBlock src={mediaUrl ?? ""} title={displayName} />
       </div>
     )
   }
@@ -417,6 +460,7 @@ export function filePreviewKind(
  * preview is the download card alone.
  */
 export const FilePartCard = memo(function FilePartCard({
+  messageId,
   url,
   mediaType,
   filename,
@@ -482,6 +526,7 @@ export const FilePartCard = memo(function FilePartCard({
       {open ? (
         <div id={bodyId} className="border-t p-2 [&>*]:my-0" data-testid="file-part-card-body">
           <FilePartPreview
+            messageId={messageId}
             url={url}
             mediaType={mediaType}
             filename={filename}

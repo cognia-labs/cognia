@@ -611,3 +611,42 @@ describe("sentryTransform / logglyTransform", () => {
     expect(out[0].data).toEqual({ x: 1 })
   })
 })
+
+it("consumes blocked durable log replay and sends the clear survivor without Host provenance", async () => {
+  const { configureLogEgressPolicy } = await import("../context")
+  const restore = configureLogEgressPolicy(async (entries, send) => {
+    const admitted = entries.filter((entry) => !entry.hostEgressSource?.blocked)
+    return admitted.length ? send(admitted) : undefined
+  })
+  const store = new FakeQueueStore()
+  store.batches = [
+    {
+      id: 1,
+      createdAt: "now",
+      bytes: 1,
+      entries: JSON.parse(
+        JSON.stringify([
+          makeEntry({
+            id: "private",
+            hostEgressSource: { version: 1, runIds: ["run"], blocked: true },
+          }),
+          makeEntry({ id: "host" }),
+        ])
+      ),
+    },
+  ]
+  const fetchImpl = jest.fn(async (..._args: Parameters<typeof fetch>) => okResponse())
+  const transport = makeTransport({ fetchImpl: fetchImpl as unknown as typeof fetch }, store)
+  try {
+    await transport.flush()
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    const body = String(fetchImpl.mock.calls[0]?.[1]?.body)
+    expect(body).toContain('"host"')
+    expect(body).not.toContain('"private"')
+    expect(body).not.toContain("hostEgressSource")
+    expect(store.batches).toEqual([])
+  } finally {
+    await transport.close()
+    restore()
+  }
+})

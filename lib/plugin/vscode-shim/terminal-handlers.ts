@@ -1,3 +1,5 @@
+import { assertPersonalEgress, runPersonalEgressOperation } from "@/lib/execution/personal-egress"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Renderer side of VS Code extensions' terminals: each one is a tab in the
  * terminal dock.
@@ -147,6 +149,7 @@ export function createVscodeTerminalDependencies(input: {
       (await import("@/lib/plugin/core/vscode-loader")).callVscodeProvider(...args),
     permissions: (pluginId) => listPluginPermissions(pluginId),
     async spawn(request) {
+      await assertPersonalEgress(pluginExecutionContext(request.pluginId) ?? {})
       const outcome = await spawnFromDock({
         req: {
           shell: request.shell,
@@ -574,20 +577,31 @@ async function createProcessTerminal(
           )
         )
       : undefined
+  const source = pluginExecutionContext(pluginId) ?? {}
   const projectId = d.activeProjectId()
   const previous = d.activeSessionId()
-  const { sessionId, title, processId } = await d.spawn({
-    pluginId,
-    ...(typeof value.profileLaunchId === "string"
-      ? { profileLaunchId: value.profileLaunchId }
-      : {}),
-    name,
-    shell: typeof value.shellPath === "string" ? value.shellPath : "",
-    args: Array.isArray(value.shellArgs) ? value.shellArgs.map(String) : undefined,
-    cwd: typeof value.cwd === "string" && value.cwd ? value.cwd : d.defaultCwd(),
-    env,
-    projectId: projectId ?? undefined,
-  })
+  await assertPersonalEgress(pluginExecutionContext(pluginId) ?? {})
+  const { sessionId, title, processId } = await runPersonalEgressOperation(
+    pluginExecutionContext(pluginId) ?? {},
+    async () => {
+      const spawned = await d.spawn({
+        pluginId,
+        ...(typeof value.profileLaunchId === "string"
+          ? { profileLaunchId: value.profileLaunchId }
+          : {}),
+        name,
+        shell: typeof value.shellPath === "string" ? value.shellPath : "",
+        args: Array.isArray(value.shellArgs) ? value.shellArgs.map(String) : undefined,
+        cwd: typeof value.cwd === "string" && value.cwd ? value.cwd : d.defaultCwd(),
+        env,
+        projectId: projectId ?? undefined,
+      })
+      const { retainTerminalPersonalEgress } = await import("@/lib/terminal/personal-egress")
+      retainTerminalPersonalEgress(source, spawned.sessionId, d.session(spawned.sessionId))
+      return spawned
+    },
+    true
+  )
   if (typeof value.profileLaunchId === "string") {
     try {
       assertProfileLaunch(pluginId, value.profileLaunchId)
@@ -714,6 +728,7 @@ export function installVscodeTerminalHandlers(): Array<() => void> {
       await requirePermission(context.pluginId, "terminal:write")
       const session = requireDeps().session(entry.sessionId)
       if (!session) throw new Error(`Terminal ${entry.terminalId} has ended`)
+      await assertPersonalEgress(pluginExecutionContext(context.pluginId) ?? {})
       entry.sending = true
       const writing = session.write(value.data)
       entry.sending = false

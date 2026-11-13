@@ -1,3 +1,4 @@
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 jest.mock("@/lib/sandbox/microvm-bridge", () => ({
   getMicrovmExec: jest.fn(),
   setMicrovmExec: jest.fn(),
@@ -90,4 +91,31 @@ describe("createSandboxAPI", () => {
       "file"
     )
   })
+})
+
+it("R8: public sandbox options cannot replace the Host caller run", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+  await fixture.initialize()
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  try {
+    await startToolExecutionRun("bound-sandbox-session", {
+      runId: "private-host",
+      localAuthorization:
+        LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+    })
+    getPermissionGuard().registerPlugin("bound-sandbox", ["native:process"])
+    await withPluginExecutionContext("bound-sandbox", { executionRunId: "private-host" }, () =>
+      createSandboxAPI("bound-sandbox").execute("ref", {} as never, {
+        executionRunId: "forged-clear",
+      })
+    )
+    expect(sandboxSessionRuntime.executeSandbox).toHaveBeenLastCalledWith(
+      "ref",
+      {},
+      { executionRunId: "private-host" }
+    )
+  } finally {
+    await fixture.dispose()
+  }
 })

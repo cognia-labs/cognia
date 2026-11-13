@@ -16,6 +16,13 @@
 // `toolUseId` key.
 
 import { randomUUID } from "node:crypto"
+import {
+  beginPersonalEgressOperation,
+  opaquePersonalTool,
+  personalToolDenied,
+  personalEgressState,
+  type PersonalEgressPolicy,
+} from "../../policy/personal-egress.ts"
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js"
@@ -49,6 +56,23 @@ export interface PluginToolManifestEntry {
    * (see `buildPerCallApprovalSet` in ../../policy/permission/ladder.ts).
    */
   requiresApproval?: unknown
+}
+
+const NON_OPAQUE_HOST_TOOLS: Readonly<Record<string, readonly string[]>> = {
+  "cognia-dispatch-agent": ["dispatch_agent", "Task"],
+  "cognia-squads-builtin": ["team_delegate", "team_post_to_chat"],
+  "cognia-ask-user": ["ask_user"],
+  "cognia-builtin-skills": ["im_broadcast"],
+}
+/** Exact Host owner/name pairs: delegation waits and governed content sinks are not opaque egress. */
+export function pluginToolIsOpaqueEgress(
+  tool: Pick<PluginToolManifestEntry, "name" | "pluginId">
+): boolean {
+  const owner = tool.pluginId ?? ""
+  return (
+    !Object.hasOwn(NON_OPAQUE_HOST_TOOLS, owner) ||
+    !NON_OPAQUE_HOST_TOOLS[owner]?.includes(tool.name)
+  )
 }
 
 /** What the renderer answers a `plugin_tool_exec` with. */
@@ -111,6 +135,9 @@ export function awaitPluginToolResponse(
 }
 
 export interface PluginToolsServerOptions {
+  /** Host-installed session state, never taken from tool args. */
+  personalEgressPolicy?: PersonalEgressPolicy
+
   contentSafety?: { injectionProtection: boolean }
   /**
    * Plugin tool manifest forwarded from the renderer. The `execute` function
@@ -173,6 +200,7 @@ export function buildPluginToolDefinitions({
   attemptId,
   toolNameAliases,
   permissionPromptToolName,
+  personalEgressPolicy,
 }: PluginToolsServerOptions): ToolDefinition[] | null {
   if (!Array.isArray(tools) || tools.length === 0) return null
   if (!hasNoLeakingPiiDeep(tools)) throw new Error("Plugin tool metadata blocked by the PII gate")
@@ -197,47 +225,71 @@ export function buildPluginToolDefinitions({
       zodShape,
       async (args): Promise<CallToolResult> => {
         const toolUseId = randomUUID()
-        // Honor a per-tool timeout override from the manifest (`t.timeoutMs`);
-        // `0` means "no timeout" for human-blocking / long-running tools.
-        const pending = awaitPluginToolResponse(
-          pendingPluginToolCalls,
-          toolUseId,
-          t.name,
-          typeof t.timeoutMs === "number" ? t.timeoutMs : undefined
-        )
-        emit({
-          type: "plugin_tool_exec",
-          sessionId,
-          toolUseId,
-          name: t.name,
-          args,
-          ...(turnId ? { turnId } : {}),
-          ...(attemptId ? { attemptId } : {}),
-          ...(sandboxRuntimeRef ? { sandboxRuntimeRef } : {}),
-          ...(remoteExecutionContext ? { remoteExecutionContext } : {}),
-        })
-        const response = await pending
-        if (response && response.error) {
-          const error = toolError(response.error, "plugin tool")
-          assertSafeExternalContent(error, contentSafety?.injectionProtection)
-          return error
-        }
-        const result = response?.result ?? null
+        // The relay owns this operation's identity; the SDK's outer MCP call
+        // uses a different id. Track the actual Host round trip exactly once.
         if (
-          permissionPromptToolName ===
-            `mcp__${SERVER_NAME}__${modelNameOf.get(t.name) ?? t.name}` &&
-          permissionDecisionHasUnprovenRewrite(result, args.input)
-        )
-          return toolError(
-            "Permission delegate cannot rewrite tool input after policy validation",
-            "plugin tool"
+          personalEgressPolicy &&
+          personalToolDenied(
+            `mcp__${SERVER_NAME}__${modelNameOf.get(t.name) ?? t.name}`,
+            personalEgressPolicy
           )
-        if (!hasNoLeakingPiiDeep(result))
-          return toolError("Plugin tool result blocked by the PII gate", "plugin tool")
-        // A plugin that already speaks MCP (image / audio / resource blocks)
-        // passes through untouched; everything else keeps the JSON-text shape.
-        assertSafeExternalContent(result, contentSafety?.injectionProtection)
-        return isCallToolResult(result) ? result : toolText(result)
+        )
+          throw new Error("Personal egress is fenced")
+        const finish =
+          personalEgressPolicy &&
+          !personalEgressState(personalEgressPolicy).fenced &&
+          pluginToolIsOpaqueEgress(t) &&
+          opaquePersonalTool(
+            `mcp__${SERVER_NAME}__${modelNameOf.get(t.name) ?? t.name}`,
+            personalEgressPolicy
+          )
+            ? beginPersonalEgressOperation(personalEgressPolicy, false, toolUseId)
+            : undefined
+        try {
+          // Honor a per-tool timeout override from the manifest (`t.timeoutMs`);
+          // `0` means "no timeout" for human-blocking / long-running tools.
+          const pending = awaitPluginToolResponse(
+            pendingPluginToolCalls,
+            toolUseId,
+            t.name,
+            typeof t.timeoutMs === "number" ? t.timeoutMs : undefined
+          )
+          emit({
+            type: "plugin_tool_exec",
+            sessionId,
+            toolUseId,
+            name: t.name,
+            args,
+            ...(turnId ? { turnId } : {}),
+            ...(attemptId ? { attemptId } : {}),
+            ...(sandboxRuntimeRef ? { sandboxRuntimeRef } : {}),
+            ...(remoteExecutionContext ? { remoteExecutionContext } : {}),
+          })
+          const response = await pending
+          if (response && response.error) {
+            const error = toolError(response.error, "plugin tool")
+            assertSafeExternalContent(error, contentSafety?.injectionProtection)
+            return error
+          }
+          const result = response?.result ?? null
+          if (
+            permissionPromptToolName ===
+              `mcp__${SERVER_NAME}__${modelNameOf.get(t.name) ?? t.name}` &&
+            permissionDecisionHasUnprovenRewrite(result, args.input)
+          )
+            return toolError(
+              "Permission delegate cannot rewrite tool input after policy validation",
+              "plugin tool"
+            )
+          if (!hasNoLeakingPiiDeep(result))
+            return toolError("Plugin tool result blocked by the PII gate", "plugin tool")
+          // A plugin that already speaks MCP (image / audio / resource blocks)
+          // passes through untouched; everything else keeps the JSON-text shape.
+          assertSafeExternalContent(result, contentSafety?.injectionProtection)
+          return isCallToolResult(result) ? result : toolText(result)
+        } finally {
+          finish?.()
+        }
       },
       { alwaysLoad: alwaysLoad === true || perToolAlways.has(t.name) }
     )

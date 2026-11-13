@@ -1479,6 +1479,45 @@ describe("applySdkEvent — unknown event", () => {
 })
 
 describe("makeUserMessage", () => {
+  it("Q1 binds attachment grants to the exact generated user message", async () => {
+    const { indexedDB, IDBKeyRange } = await import("fake-indexeddb")
+    const { default: Dexie } = await import("dexie")
+    Dexie.dependencies.indexedDB = indexedDB
+    Dexie.dependencies.IDBKeyRange = IDBKeyRange
+    const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+    await fixture.initialize()
+    try {
+      const files = await import("@/lib/plugin/api/files-api")
+      const { initializePluginPermissions } = await import("@/lib/plugin/api/permission-api")
+      const { getDb } = await import("@/lib/db/schema")
+      initializePluginPermissions("q1-office", ["filesystem:read"])
+      const handle = files.authorizePluginAttachment("q1-office", {
+        name: "private.txt",
+        mimeType: "text/plain",
+        bytes: new Uint8Array([7]),
+        size: 1,
+      })
+      const message = makeUserMessage("hello", "q1-wiring", [
+        {
+          filename: "file.txt",
+          mediaType: "text/plain",
+          kind: "document",
+          pluginHandles: { office: handle },
+        } as never,
+      ])
+      await getDb().messages.put({
+        ...message,
+        sessionId: "q1",
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "Q1", markedAt: 1 }],
+        },
+      } as never)
+      expect((await files.createFilesAPI("q1-office").readAttachment(handle)).bytes).toHaveLength(0)
+      files.revokePluginFileHandles("q1-office")
+    } finally {
+      await fixture.dispose()
+    }
+  })
   it("produces a single text part for a string content", () => {
     const msg = makeUserMessage("hello", "id-1")
     expect(msg.id).toBe("id-1")

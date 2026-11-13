@@ -32,6 +32,7 @@ const smartReveal = jest.fn(() => true)
 const closePanelTab = jest.fn()
 const setDockCollapsed = jest.fn()
 const openBrowser = jest.fn()
+let mockBrowserReveal: ((probe?: boolean) => boolean) | undefined
 let jumpToMessage: ((id: string, a?: unknown, b?: unknown) => boolean) | null = null
 const toastError = jest.fn()
 
@@ -217,7 +218,7 @@ jest.mock("@/components/browser/browser-preview-pane", () => ({
     sessionId?: string
     requestedUrl?: string
     requestId?: number
-    onRequestReveal?: () => boolean
+    onRequestReveal?: (probe?: boolean) => boolean
     initialUrl?: string
     dockPage?: {
       owner: string
@@ -226,29 +227,32 @@ jest.mock("@/components/browser/browser-preview-pane", () => ({
       onEngineChange: (engine: string) => void
       onNavigated?: (url: string) => void
     }
-  }) => (
-    <div
-      data-testid="browser"
-      data-session={sessionId ?? "none"}
-      data-requested={requestedUrl ?? ""}
-      data-request-id={String(requestId ?? "")}
-      data-initial={initialUrl ?? ""}
-      data-owner={dockPage?.owner ?? ""}
-      data-tab={dockPage?.tabId ?? ""}
-      onClick={() => onRequestReveal?.()}
-    >
-      {dockPage ? (
-        <>
-          <button type="button" onClick={() => dockPage.onEngineChange("embedded")}>
-            lightweight
-          </button>
-          <button type="button" onClick={() => dockPage.onNavigated?.("https://moved.test/")}>
-            navigated
-          </button>
-        </>
-      ) : null}
-    </div>
-  ),
+  }) => {
+    mockBrowserReveal = onRequestReveal
+    return (
+      <div
+        data-testid="browser"
+        data-session={sessionId ?? "none"}
+        data-requested={requestedUrl ?? ""}
+        data-request-id={String(requestId ?? "")}
+        data-initial={initialUrl ?? ""}
+        data-owner={dockPage?.owner ?? ""}
+        data-tab={dockPage?.tabId ?? ""}
+        onClick={() => onRequestReveal?.()}
+      >
+        {dockPage ? (
+          <>
+            <button type="button" onClick={() => dockPage.onEngineChange("embedded")}>
+              lightweight
+            </button>
+            <button type="button" onClick={() => dockPage.onNavigated?.("https://moved.test/")}>
+              navigated
+            </button>
+          </>
+        ) : null}
+      </div>
+    )
+  },
 }))
 
 jest.mock("@/components/context-workbench/panels/run-context-panel", () => ({
@@ -626,6 +630,13 @@ describe("opening a link beside the conversation", () => {
     }
     return render(<Harness />)
   }
+
+  it("F8 browser reveal probe leaves dock and workbench unchanged", () => {
+    mountBrowserPanel()
+    expect(mockBrowserReveal?.(true)).toBe(true)
+    expect(smartReveal).not.toHaveBeenCalled()
+    expect(setDockCollapsed).not.toHaveBeenCalled()
+  })
 
   it("uncollapses the dock when a hidden pane asks to be revealed", () => {
     mountBrowserPanel()

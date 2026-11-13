@@ -62,6 +62,9 @@ export function makeWrappedEmit(
     emitFn({
       ...msg,
       ...(turnId ? { turnId } : {}),
+      ...((msg.attemptId ?? getOwner?.()?.sendOptions?.execution?.identity?.attemptId)
+        ? { attemptId: msg.attemptId ?? getOwner?.()?.sendOptions?.execution?.identity?.attemptId }
+        : {}),
       ...(transcriptInvalidationId ? { transcriptInvalidationId } : {}),
     })
     if (msg && msg.type === "session_ended" && msg.sessionId === sessionId) {
@@ -145,6 +148,11 @@ export function envelopeEmitterParams({
  * @returns {string | null}
  */
 export function restartReason(existing: HostSession, options?: SendOptions) {
+  if (
+    (options?.personalEgressFenced === true) !==
+    (existing.sendOptions?.personalEgressFenced === true)
+  )
+    return "personal egress fence changed"
   if (Array.isArray(options?.initialConversation)) return "transcript restored"
   if (
     options?.personalVisibilityHasWithheld === true &&

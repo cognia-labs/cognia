@@ -391,6 +391,7 @@ pub struct PtySession {
     /// Cleared by the waiter thread when the child is reaped. See
     /// [`TerminalSessionInfo::alive`] for why the session outlives its child.
     pub(super) alive: Arc<AtomicBool>,
+    pub(super) wait_failed: Arc<AtomicBool>,
     /// Wave 2 — timestamped + monotonic-seq replay buffer. Every event
     /// the reader / waiter threads emit lands here before fan-out so
     /// reconnecting WS clients can resume with `?resumeFrom=<seq>`. See
@@ -560,7 +561,11 @@ fn resolve_sandbox_launch_prefix(req: &SpawnRequest) -> Result<Option<Vec<String
         writable: vec![cwd],
         readable: sandbox_home_readable(),
         denied_readable: Vec::new(),
-        network: if req.sandbox_network.unwrap_or(true) { cognia_exec_sandbox::types::NetworkPolicy::On } else { cognia_exec_sandbox::types::NetworkPolicy::Off },
+        network: if req.sandbox_network.unwrap_or(true) {
+            cognia_exec_sandbox::types::NetworkPolicy::On
+        } else {
+            cognia_exec_sandbox::types::NetworkPolicy::Off
+        },
         ..Default::default()
     };
     #[cfg(target_os = "linux")]
@@ -810,9 +815,19 @@ pub(crate) fn spawn_session_with_resolved_identity(
     let waiter_replay = replay.clone();
     let waiter_id = id.clone();
     let waiter_alive = alive.clone();
+    let wait_failed = Arc::new(AtomicBool::new(false));
+    let waiter_failed = wait_failed.clone();
     thread::Builder::new()
         .name(format!("pty-waiter-{waiter_id}"))
-        .spawn(move || pty_waiter_loop(child, waiter_sink, waiter_replay, waiter_alive))
+        .spawn(move || {
+            pty_waiter_loop(
+                child,
+                waiter_sink,
+                waiter_replay,
+                waiter_alive,
+                waiter_failed,
+            )
+        })
         .map_err(|e| format!("waiter thread spawn: {e}"))?;
 
     Ok(PtySession {
@@ -828,6 +843,7 @@ pub(crate) fn spawn_session_with_resolved_identity(
         pid,
         tempdir: setup.tempdir,
         alive,
+        wait_failed,
         replay,
         channel_slot,
         flow,
@@ -994,10 +1010,17 @@ fn pty_waiter_loop(
     sink: EventSink,
     replay: Arc<ReplayBuffer>,
     alive: Arc<AtomicBool>,
+    wait_failed: Arc<AtomicBool>,
 ) {
     let code = match child.wait() {
         Ok(status) => Some(status.exit_code()),
-        Err(_) => None,
+        Err(error) => {
+            // Stop signalling a PID whose lifetime can no longer be verified.
+            // This is not an exit proof: publish the failure before liveness.
+            wait_failed.store(true, Ordering::SeqCst);
+            log::warn!("terminal child wait failed: {error}");
+            None
+        }
     };
     // Publish liveness *before* the event so anything woken by the event
     // (managed-process registry, kill path) never observes a reaped child as
@@ -1069,6 +1092,25 @@ impl PtySession {
         killer.kill()
     }
 
+    /// Bounded wait for successful child.wait(), never just a kill acknowledgment.
+    pub fn wait_for_exit(&self, timeout: std::time::Duration) -> bool {
+        let started = std::time::Instant::now();
+        while self.is_alive() {
+            if self.wait_failed() {
+                return false;
+            }
+            if started.elapsed() >= timeout {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        !self.wait_failed()
+    }
+
+    pub fn wait_failed(&self) -> bool {
+        self.wait_failed.load(Ordering::SeqCst)
+    }
+
     /// Whether the PTY child is still running. See [`TerminalSessionInfo::alive`].
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
@@ -1130,8 +1172,10 @@ impl Drop for PtySession {
         self.flow.close();
         // Best-effort kill. If the child already exited, this is a no-op
         // (or a benign error swallowed below).
-        if let Ok(mut killer) = self.killer.lock() {
-            let _ = killer.kill();
+        if self.is_alive() {
+            if let Ok(mut killer) = self.killer.lock() {
+                let _ = killer.kill();
+            }
         }
         if let Some(td) = &self.tempdir {
             let _ = std::fs::remove_dir_all(td);
@@ -1637,6 +1681,76 @@ mod tests {
         assert!(saw_exit, "expected an Exit event, got: {events:?}");
     }
 
+    #[derive(Debug)]
+    struct FailedWaitChild;
+    impl ChildKiller for FailedWaitChild {
+        fn kill(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(Self)
+        }
+    }
+    impl Child for FailedWaitChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            Err(std::io::Error::other("wait failed"))
+        }
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            Err(std::io::Error::other("wait failed"))
+        }
+        fn process_id(&self) -> Option<u32> {
+            None
+        }
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+            None
+        }
+    }
+
+    #[test]
+    fn personal_egress_failed_child_wait_never_emits_exit_proof() {
+        let alive = Arc::new(AtomicBool::new(true));
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let captured = events.clone();
+        let sink: EventSink = Arc::new(move |_, event| {
+            captured.lock().unwrap().push(event);
+        });
+        let failed = Arc::new(AtomicBool::new(false));
+        pty_waiter_loop(
+            Box::new(FailedWaitChild),
+            sink,
+            Arc::new(ReplayBuffer::new()),
+            alive.clone(),
+            failed.clone(),
+        );
+        assert!(failed.load(Ordering::SeqCst));
+        assert!(!alive.load(Ordering::SeqCst));
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], TerminalEvent::Exit { code: None }));
+    }
+
+    #[test]
+    fn personal_egress_waits_for_the_real_child_exit() {
+        let shell = detect_default_shell().expect("default shell");
+        let (channel, _) = capture_channel();
+        let mut request = sandbox_req(false);
+        request.shell = shell;
+        request.enable_shell_integration = false;
+        request.skip_user_profile = true;
+        let session = spawn_session(
+            request,
+            &empty_script_dir(),
+            &PathInjection::default(),
+            channel,
+        )
+        .expect("real PTY spawn");
+        assert!(!session.wait_for_exit(std::time::Duration::from_millis(20)));
+        session.kill().expect("signal child");
+        assert!(session.wait_for_exit(std::time::Duration::from_secs(2)));
+        assert!(!session.info().alive);
+    }
+
     #[test]
     fn natural_exit_clears_alive_and_makes_kill_a_no_op() {
         // Regression: the session stays in the store after its shell exits, so
@@ -1699,6 +1813,7 @@ mod tests {
         assert!(!session.info().alive, "info() must report the reaped child");
         // Kill on a reaped session must not signal the (possibly reused) PID.
         assert!(session.kill().is_ok());
+        assert!(session.wait_for_exit(std::time::Duration::from_secs(1)));
     }
 
     /// A `Write` that blocks forever on first write — models a child that

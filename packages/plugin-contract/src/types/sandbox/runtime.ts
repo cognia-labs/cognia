@@ -134,6 +134,8 @@ export class MicrovmAdapterError extends Error {
 }
 
 export interface MicrovmExecAdapter {
+  /** Host attestation checked before each private command, not a result receipt. */
+  enforcesNetworkOff?(ownerRef: string): boolean
   preflight?(ownerRef: string, workspaceRoot?: string, ownerGroup?: string): Promise<void> | void
   /**
    * Whether `preflight(ownerRef, workspaceRoot, requirements.ownerGroup)` would

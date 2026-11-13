@@ -407,3 +407,13 @@ describe("facade", () => {
     )
   })
 })
+
+it("S2 refuses task-start callbacks for a marked plugin producer", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  await withPluginExecutionContext(PLUGIN, { personalEgressBlocked: true }, async () => {
+    await expect(createUserSchedulerAPI(PLUGIN).runTaskNow("t1")).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
+    expect(state.runTaskNow).not.toHaveBeenCalled()
+  })
+})

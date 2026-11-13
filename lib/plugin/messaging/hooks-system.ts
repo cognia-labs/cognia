@@ -1,3 +1,5 @@
+import { withPluginContentDispatch } from "@/lib/plugin/core/invocation-identity"
+import { copyPersonalOperation } from "@/lib/execution/personal-operation"
 import {
   bindPluginCallbacks,
   withPluginCommandExecution,
@@ -564,14 +566,16 @@ export class PluginLifecycleHooks {
     message: PluginMessage,
     execution?: PersonalCredentialContext
   ): Promise<PluginMessage> {
-    const binding = execution && { ...execution }
+    const binding = execution && copyPersonalOperation(execution, { ...execution })
     let currentMessage = message
 
     for (const pluginId of this.hookExecutionOrder) {
       const registered = this.registered(pluginId, binding)
       if (registered?.hooks.onMessageSend) {
         try {
-          currentMessage = await registered.hooks.onMessageSend(currentMessage)
+          currentMessage = await withPluginContentDispatch(pluginId, binding ?? {}, () =>
+            registered.hooks.onMessageSend!(currentMessage)
+          )
         } catch (error) {
           loggers.hooks.error(`Error in plugin ${pluginId} onMessageSend:`, error)
         }
@@ -585,14 +589,16 @@ export class PluginLifecycleHooks {
     message: PluginMessage,
     execution?: PersonalCredentialContext
   ): Promise<PluginMessage> {
-    const binding = execution && { ...execution }
+    const binding = execution && copyPersonalOperation(execution, { ...execution })
     let currentMessage = message
 
     for (const pluginId of this.hookExecutionOrder) {
       const registered = this.registered(pluginId, binding)
       if (registered?.hooks.onMessageReceive) {
         try {
-          currentMessage = await registered.hooks.onMessageReceive(currentMessage)
+          currentMessage = await withPluginContentDispatch(pluginId, binding ?? {}, () =>
+            registered.hooks.onMessageReceive!(currentMessage)
+          )
         } catch (error) {
           loggers.hooks.error(`Error in plugin ${pluginId} onMessageReceive:`, error)
         }
@@ -1066,7 +1072,7 @@ export class PluginEventHooks {
     timeoutMs: number = PluginEventHooks.HOOK_TIMEOUT_MS,
     execution?: PersonalCredentialContext
   ): Promise<HookSandboxExecutionResult<T>[]> {
-    const binding = execution && { ...execution }
+    const binding = execution && copyPersonalOperation(execution, { ...execution })
     const store = usePluginStore.getState()
     const pluginIds = this.getPluginsByPriority(hookName)
     const results: HookSandboxExecutionResult<T>[] = []
@@ -1082,6 +1088,30 @@ export class PluginEventHooks {
         continue
       }
 
+      // Native-network guests must never receive marked run content. A registered
+      // PreToolUse handler matches this dispatch; unavailable guards deny the call.
+      if (["python", "hybrid", "vscode-extension"].includes(plugin.manifest?.type)) {
+        const { personalEgressFenced } = await import("@/lib/execution/personal-egress")
+        const { PERSONAL_EGRESS_DENIAL } =
+          await import("@cognia/plugin-contract/types/execution/personal-egress")
+        const { pluginDispatchContext } = await import("@/lib/plugin/core/invocation-identity")
+        if (await personalEgressFenced(binding ?? pluginDispatchContext(pluginId))) {
+          loggers.hooks.warn("Native plugin hook withheld by personal egress fence", {
+            pluginId,
+            hookName,
+          })
+          if (hookName === "onPreToolUse")
+            results.push({
+              success: true,
+              result: { action: "deny", denyReason: PERSONAL_EGRESS_DENIAL } as T,
+              pluginId,
+              executionTime: 0,
+              duration: 0,
+              skipped: false,
+            })
+          continue
+        }
+      }
       const startTime = performance.now()
       // The timeout timer must be cleared on the fast path (W3.7): per-chunk
       // dispatchers (dispatchStreamChunk) call executeHook thousands of times
@@ -1089,7 +1119,7 @@ export class PluginEventHooks {
       // and rejects into the void later.
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined
       try {
-        const hookPromise = Promise.resolve(
+        const hookPromise = withPluginContentDispatch(pluginId, binding ?? {}, () =>
           executor(
             bindPluginCallbacks(
               pluginId,
@@ -1118,6 +1148,30 @@ export class PluginEventHooks {
           skipped: false,
         })
       } catch (error) {
+        // The native gate may observe a mark committed after the hook precheck,
+        // or a Python-backed contribution on a frontend manifest. Never turn
+        // that refusal into an allowed guarded tool.
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "personal-egress-denied"
+        ) {
+          loggers.hooks.warn("Plugin hook withheld by personal egress fence", {
+            pluginId,
+            hookName,
+          })
+          if (hookName === "onPreToolUse")
+            results.push({
+              success: true,
+              result: { action: "deny", denyReason: String(error) } as T,
+              pluginId,
+              executionTime: performance.now() - startTime,
+              duration: performance.now() - startTime,
+              skipped: false,
+            })
+          continue
+        }
         loggers.hooks.error(`Error in ${hookName} for plugin ${pluginId}:`, error)
         results.push({
           success: false,
@@ -1414,13 +1468,15 @@ export class PluginEventHooks {
    * use `onBuildOptions` for option tweaks, the runner for control flow.
    */
   async dispatchBuildOptions(
-    options: import("@/types/plugin/plugin-hooks").BuildOptionsHookInput
+    options: import("@/types/plugin/plugin-hooks").BuildOptionsHookInput,
+    execution?: PersonalCredentialContext
   ): Promise<import("@/types/plugin/plugin-hooks").BuildOptionsHookInput> {
     const { value } = await dispatchTransform<
       import("@/types/plugin/plugin-hooks").BuildOptionsHookInput
     >("agent.context.prepare", options, {
       operationId: `build-options:${options.sessionId}`,
       sessionId: options.sessionId,
+      credentialContext: execution,
       // A rewrite that redirects a turn to a different conversation is an
       // authorization change wearing a transform's clothes.
       invariantFields: ["sessionId"],
@@ -1428,18 +1484,40 @@ export class PluginEventHooks {
     return value
   }
 
-  dispatchStreamStart(sessionId: string) {
-    this.executeHook("onStreamStart", (hooks) => hooks.onStreamStart?.(sessionId))
-  }
-
-  dispatchStreamChunk(sessionId: string, chunk: string, fullContent: string) {
-    this.executeHook("onStreamChunk", (hooks) =>
-      hooks.onStreamChunk?.(sessionId, chunk, fullContent)
+  dispatchStreamStart(sessionId: string, execution?: PersonalCredentialContext) {
+    this.executeHook(
+      "onStreamStart",
+      (hooks) => hooks.onStreamStart?.(sessionId),
+      undefined,
+      execution
     )
   }
 
-  dispatchStreamEnd(sessionId: string, finalContent: string) {
-    this.executeHook("onStreamEnd", (hooks) => hooks.onStreamEnd?.(sessionId, finalContent))
+  dispatchStreamChunk(
+    sessionId: string,
+    chunk: string,
+    fullContent: string,
+    execution?: PersonalCredentialContext
+  ) {
+    this.executeHook(
+      "onStreamChunk",
+      (hooks) => hooks.onStreamChunk?.(sessionId, chunk, fullContent),
+      undefined,
+      execution
+    )
+  }
+
+  dispatchStreamEnd(
+    sessionId: string,
+    finalContent: string,
+    execution?: PersonalCredentialContext
+  ) {
+    this.executeHook(
+      "onStreamEnd",
+      (hooks) => hooks.onStreamEnd?.(sessionId, finalContent),
+      undefined,
+      execution
+    )
   }
 
   dispatchChatError(sessionId: string, error: Error, execution?: PersonalCredentialContext) {
@@ -1498,14 +1576,20 @@ export class PluginEventHooks {
   async dispatchPreToolUse(
     toolName: string,
     toolArgs: unknown,
-    sessionId: string
+    sessionId: string,
+    execution?: PersonalCredentialContext
   ): Promise<import("@/types/plugin/plugin-hooks").PreToolUseResult> {
-    const results = await this.executeHook("onPreToolUse", async (hooks) => {
-      if (hooks.onPreToolUse) {
-        return hooks.onPreToolUse(toolName, toolArgs, sessionId)
-      }
-      return { action: "allow" as const }
-    })
+    const results = await this.executeHook(
+      "onPreToolUse",
+      async (hooks) => {
+        if (hooks.onPreToolUse) {
+          return hooks.onPreToolUse(toolName, toolArgs, sessionId)
+        }
+        return { action: "allow" as const }
+      },
+      undefined,
+      execution
+    )
 
     // Check for deny or modify actions (first one wins)
     for (const result of results) {
@@ -1524,7 +1608,8 @@ export class PluginEventHooks {
     toolArgs: unknown,
     toolResult: unknown,
     sessionId: string,
-    call: { isError?: boolean; turnId?: string } = {}
+    call: { isError?: boolean; turnId?: string } = {},
+    execution?: PersonalCredentialContext
   ): Promise<import("@/types/plugin/plugin-hooks").PostToolUseResult> {
     const { value } = await dispatchTransform<ToolResultProjectValue>(
       "tool.result.project",
@@ -1540,6 +1625,7 @@ export class PluginEventHooks {
       {
         operationId: `tool-result:${sessionId}:${toolName}`,
         sessionId,
+        credentialContext: execution,
         invariantFields: ["toolName", "sessionId"],
       }
     )
@@ -1903,17 +1989,26 @@ export class PluginEventHooks {
     )
   }
 
-  dispatchExternalAgentExecutionStart(agentId: string, sessionId: string, prompt: string) {
-    this.executeHook("onExternalAgentExecutionStart", (hooks) =>
-      (
-        hooks as PluginHooksAll & {
-          onExternalAgentExecutionStart?: (
-            agentId: string,
-            sessionId: string,
-            prompt: string
-          ) => void
-        }
-      ).onExternalAgentExecutionStart?.(agentId, sessionId, prompt)
+  dispatchExternalAgentExecutionStart(
+    agentId: string,
+    sessionId: string,
+    prompt: string,
+    execution?: PersonalCredentialContext
+  ) {
+    this.executeHook(
+      "onExternalAgentExecutionStart",
+      (hooks) =>
+        (
+          hooks as PluginHooksAll & {
+            onExternalAgentExecutionStart?: (
+              agentId: string,
+              sessionId: string,
+              prompt: string
+            ) => void
+          }
+        ).onExternalAgentExecutionStart?.(agentId, sessionId, prompt),
+      undefined,
+      execution
     )
   }
 
@@ -1921,19 +2016,24 @@ export class PluginEventHooks {
     agentId: string,
     sessionId: string,
     success: boolean,
-    response?: string
+    response?: string,
+    execution?: PersonalCredentialContext
   ) {
-    this.executeHook("onExternalAgentExecutionComplete", (hooks) =>
-      (
-        hooks as PluginHooksAll & {
-          onExternalAgentExecutionComplete?: (
-            agentId: string,
-            sessionId: string,
-            success: boolean,
-            response?: string
-          ) => void
-        }
-      ).onExternalAgentExecutionComplete?.(agentId, sessionId, success, response)
+    this.executeHook(
+      "onExternalAgentExecutionComplete",
+      (hooks) =>
+        (
+          hooks as PluginHooksAll & {
+            onExternalAgentExecutionComplete?: (
+              agentId: string,
+              sessionId: string,
+              success: boolean,
+              response?: string
+            ) => void
+          }
+        ).onExternalAgentExecutionComplete?.(agentId, sessionId, success, response),
+      undefined,
+      execution
     )
   }
 
@@ -1941,19 +2041,24 @@ export class PluginEventHooks {
     agentId: string,
     sessionId: string,
     toolName: string,
-    reason?: string
+    reason?: string,
+    execution?: PersonalCredentialContext
   ) {
-    this.executeHook("onExternalAgentPermissionRequest", (hooks) =>
-      (
-        hooks as PluginHooksAll & {
-          onExternalAgentPermissionRequest?: (
-            agentId: string,
-            sessionId: string,
-            toolName: string,
-            reason?: string
-          ) => void
-        }
-      ).onExternalAgentPermissionRequest?.(agentId, sessionId, toolName, reason)
+    this.executeHook(
+      "onExternalAgentPermissionRequest",
+      (hooks) =>
+        (
+          hooks as PluginHooksAll & {
+            onExternalAgentPermissionRequest?: (
+              agentId: string,
+              sessionId: string,
+              toolName: string,
+              reason?: string
+            ) => void
+          }
+        ).onExternalAgentPermissionRequest?.(agentId, sessionId, toolName, reason),
+      undefined,
+      execution
     )
   }
 
@@ -1961,29 +2066,42 @@ export class PluginEventHooks {
     agentId: string,
     sessionId: string,
     toolName: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    execution?: PersonalCredentialContext
   ) {
-    this.executeHook("onExternalAgentToolCall", (hooks) =>
-      (
-        hooks as PluginHooksAll & {
-          onExternalAgentToolCall?: (
-            agentId: string,
-            sessionId: string,
-            toolName: string,
-            args: Record<string, unknown>
-          ) => void
-        }
-      ).onExternalAgentToolCall?.(agentId, sessionId, toolName, args)
+    this.executeHook(
+      "onExternalAgentToolCall",
+      (hooks) =>
+        (
+          hooks as PluginHooksAll & {
+            onExternalAgentToolCall?: (
+              agentId: string,
+              sessionId: string,
+              toolName: string,
+              args: Record<string, unknown>
+            ) => void
+          }
+        ).onExternalAgentToolCall?.(agentId, sessionId, toolName, args),
+      undefined,
+      execution
     )
   }
 
-  dispatchExternalAgentError(agentId: string, error: string) {
-    this.executeHook("onExternalAgentError", (hooks) =>
-      (
-        hooks as PluginHooksAll & {
-          onExternalAgentError?: (agentId: string, error: string) => void
-        }
-      ).onExternalAgentError?.(agentId, error)
+  dispatchExternalAgentError(
+    agentId: string,
+    error: string,
+    execution?: PersonalCredentialContext
+  ) {
+    this.executeHook(
+      "onExternalAgentError",
+      (hooks) =>
+        (
+          hooks as PluginHooksAll & {
+            onExternalAgentError?: (agentId: string, error: string) => void
+          }
+        ).onExternalAgentError?.(agentId, error),
+      undefined,
+      execution
     )
   }
 

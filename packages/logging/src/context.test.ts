@@ -172,3 +172,14 @@ describe("span context", () => {
     expect(logContext.spanId).toBeUndefined()
   })
 })
+
+it("keeps Host log source scoped synchronously and fails closed without a replay policy", async () => {
+  const { withLogEgressSource, captureLogEgressSource, runLogEgress } = await import("./context")
+  const stamp = { version: 1 as const, runIds: ["host-run"] }
+  withLogEgressSource(stamp, () => expect(captureLogEgressSource()).toBe(stamp))
+  expect(captureLogEgressSource()).toBeUndefined()
+  const send = jest.fn(async () => "sent")
+  await expect(runLogEgress([{ hostEgressSource: stamp } as never], send)).resolves.toBeUndefined()
+  expect(send).not.toHaveBeenCalled()
+  await expect(runLogEgress([{} as never], send)).resolves.toBe("sent")
+})

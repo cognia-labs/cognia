@@ -381,3 +381,29 @@ it.each(["attached", "branch"])(
     })
   }
 )
+
+it("H4: exposes only the ancestry verified by the canonical read to cache invalidation", async () => {
+  const root = await startToolExecutionRun("dependency-root", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const child = await startToolExecutionRun("dependency-child", { parentRunId: root.id })
+  const taint = await readRunPersonalTaint({ executionRunId: child.id })
+  expect(personalSinkHost.personalTaintDependencies(taint)).toEqual(new Set([child.id, root.id]))
+  expect(
+    personalSinkHost.personalTaintDependencies(JSON.parse(JSON.stringify(taint)))
+  ).toBeUndefined()
+})
+
+it("F8 composite producer snapshots invalidate on a real ancestor mark", async () => {
+  const { personalEgressFenced, personalEgressCachedFenced } = await import("./personal-egress")
+  const { bindPersonalOperationSources } = await import("./personal-operation")
+  const parent = await startToolExecutionRun("f8-composite-parent", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const child = await startToolExecutionRun("f8-composite-child", { parentRunId: parent.id })
+  const source = bindPersonalOperationSources({}, [{ executionRunId: child.id }])
+  expect(await personalEgressFenced(source)).toBe(false)
+  expect(personalEgressCachedFenced(source)).toBe(false)
+  await getDb().executionRuns.update(parent.id, { personalMarks: [mark] })
+  expect(personalEgressCachedFenced(source)).toBe(true)
+})

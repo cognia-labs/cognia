@@ -293,3 +293,12 @@ describe("workspace clone authorization", () => {
     expect(dependencies.fetchAll).not.toHaveBeenCalled()
   })
 })
+
+it("S2 gates workspace acquisition before consent or backend callbacks", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  await withPluginExecutionContext("s2-workspace", { personalEgressBlocked: true }, async () => {
+    await expect(
+      createWorkspaceAPI("s2-workspace").acquire({ kind: "current-project" })
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  })
+})

@@ -1,3 +1,4 @@
+import { markPluginSynchronousCallback } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin hook registry — the single home for "which plugin contributes which
  * hook, and is it live right now?".
@@ -34,6 +35,102 @@ import {
 } from "@/lib/plugin/interceptors"
 import { createOverlayRegistry } from "./createOverlayRegistry"
 
+// Contract-defined synchronous notification hooks return no value on a cold cache.
+const synchronousNotifications: readonly (keyof PluginHooksAll)[] = [
+  "onConfigChange",
+  "onA2UISurfaceCreate",
+  "onA2UISurfaceDestroy",
+  "onA2UIDataChange",
+  "onAgentStart",
+  "onAgentStep",
+  "onAgentComplete",
+  "onAgentError",
+  "onMessageDelete",
+  "onMessageEdit",
+  "onSessionCreate",
+  "onSessionSwitch",
+  "onSessionDelete",
+  "onSessionRename",
+  "onSessionClear",
+  "onChatRegenerate",
+  "onModelSwitch",
+  "onChatModeSwitch",
+  "onSystemPromptChange",
+  "onAgentPlanCreate",
+  "onAgentPlanStepComplete",
+  "onScheduledTaskStart",
+  "onScheduledTaskComplete",
+  "onScheduledTaskError",
+  "onTeamStart",
+  "onTeamPlanReady",
+  "onTeammateClaim",
+  "onTeammateRelease",
+  "onTeamBudgetWarn",
+  "onTeamComplete",
+  "onConsensusOpened",
+  "onConsensusVoted",
+  "onConsensusResolved",
+  "onSharedMemoryWrite",
+  "onSharedMemoryDelete",
+  "onTeamDelegationStart",
+  "onTeamDelegationComplete",
+  "onProjectSwitch",
+  "onSessionLinked",
+  "onSessionUnlinked",
+  "onCanvasUpdate",
+  "onCanvasDelete",
+  "onCanvasSwitch",
+  "onCanvasContentChange",
+  "onCanvasVersionSave",
+  "onCanvasVersionRestore",
+  "onCanvasSelection",
+  "onArtifactUpdate",
+  "onArtifactDelete",
+  "onArtifactOpen",
+  "onArtifactClose",
+  "onArtifactExecute",
+  "onArtifactExport",
+  "onExportComplete",
+  "onProjectExportComplete",
+  "onThemeModeChange",
+  "onColorPresetChange",
+  "onCustomThemeActivate",
+  "onStreamStart",
+  "onStreamChunk",
+  "onStreamEnd",
+  "onChatError",
+  "onTokenUsage",
+  "onDocumentsIndexed",
+  "onVectorSearch",
+  "onRAGContextRetrieved",
+  "onWorkflowStart",
+  "onWorkflowStepComplete",
+  "onWorkflowComplete",
+  "onWorkflowError",
+  "onWorkflowNodeStart",
+  "onWorkflowNodeComplete",
+  "onWorkflowNodeError",
+  "onWorkflowTriggerFired",
+  "onSidebarToggle",
+  "onPanelOpen",
+  "onPanelClose",
+  "onTerminalLifecycle",
+  "onExternalAgentConnect",
+  "onExternalAgentDisconnect",
+  "onExternalAgentExecutionStart",
+  "onExternalAgentExecutionComplete",
+  "onExternalAgentPermissionRequest",
+  "onExternalAgentToolCall",
+  "onExternalAgentError",
+  "onCodeExecutionStart",
+  "onCodeExecutionComplete",
+  "onCodeExecutionError",
+  "onMCPServerConnect",
+  "onMCPServerDisconnect",
+  "onMCPToolCall",
+  "onMCPToolResult",
+]
+
 /** One plugin's hook contribution. */
 export interface RegisteredPluginHooks {
   hooks: PluginHooksAll
@@ -64,6 +161,13 @@ export function registerPluginHookContribution(
   hooks: PluginHooksAll,
   priority = 0
 ): void {
+  for (const key of synchronousNotifications) {
+    const callback = hooks[key]
+    if (callback) markPluginSynchronousCallback(callback, undefined)
+  }
+  if (hooks.onMessageRender) markPluginSynchronousCallback(hooks.onMessageRender, null)
+  if (hooks.onShortcut) markPluginSynchronousCallback(hooks.onShortcut, false)
+  if (hooks.onContextMenuShow) markPluginSynchronousCallback(hooks.onContextMenuShow, undefined)
   registry.register(pluginId, { hooks, priority }, { pluginId })
   // Drop the previous generation's normalized records first — a plugin that
   // removes a hook between reloads must stop being dispatched for it. Scoped to

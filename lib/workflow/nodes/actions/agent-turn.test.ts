@@ -105,6 +105,7 @@ describe("runAgentTurn", () => {
     expect(mockRunCompletionRail).toHaveBeenCalledWith(
       "read library",
       expect.objectContaining({
+        executionIdentity: { runId: "execution:workflow:run1", sessionId: "run1" },
         knowledgeAccess: {
           entrypoint: "http",
           triggeredBy: { initiator: { authenticated: true, principalId: "verified-subject" } },

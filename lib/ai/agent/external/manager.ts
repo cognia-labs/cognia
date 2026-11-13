@@ -1,3 +1,10 @@
+import { bindPersonalOperationSources } from "@/lib/execution/personal-operation"
+import {
+  personalEgressOptionsSource,
+  bindPersonalEgressOptions,
+  assertPersonalEgress,
+  type PersonalEgressContext,
+} from "@/lib/execution/personal-egress"
 /**
  * External Agent Manager
  *
@@ -448,7 +455,10 @@ export class ExternalAgentManager {
   private instances: Map<string, ExternalAgentInstance> = new Map()
   private sessionContentPolicies = new WeakMap<
     ProtocolAdapter,
-    Map<string, { enabled: boolean; chatSessionId?: string }>
+    Map<
+      string,
+      { enabled: boolean; chatSessionId?: string; personalSource?: PersonalEgressContext }
+    >
   >()
   private adapters: Map<string, ProtocolAdapter> = new Map()
   private nesSessions = new Map<string, Set<string>>()
@@ -1348,6 +1358,7 @@ export class ExternalAgentManager {
     const target = this.sessionOperationTarget(agentId, sessionId)
     if (!target.adapter.executeSessionShell)
       throw new Error("Agent does not support native shell execution")
+    await this.enforceSessionContentPolicy(target.adapter, target.sessionId, command)
     const sessionCwd = target.adapter.getSession(target.sessionId)?.metadata?.cwd
     let deniedReason = "Native shell execution was blocked by policy"
     const blocked = await gateExternalAgentPermission(
@@ -1385,6 +1396,7 @@ export class ExternalAgentManager {
         })
     )
     if (blocked) throw new Error(deniedReason)
+    await this.enforceSessionContentPolicy(target.adapter, target.sessionId, command)
     const ownerKey = JSON.stringify([target.agentId, target.sessionId])
     this.sessionShellApprovals.add(ownerKey)
     try {
@@ -1422,6 +1434,7 @@ export class ExternalAgentManager {
       if (!active || !current || this.adapters.get(agentId) !== adapter) return
       this.instances.get(agentId)?.sessions.set(sessionId, current)
       const hookContext = {
+        credentialContext: this.sessionContentPolicies.get(adapter)?.get(sessionId)?.personalSource,
         agentId,
         sessionId,
         agentKind: "external" as const,
@@ -1525,6 +1538,8 @@ export class ExternalAgentManager {
       this.sessionContentPolicies.set(adapter, policies)
     }
     policies.set(sessionId, {
+      personalSource:
+        personalEgressOptionsSource(options) ?? policies.get(sessionId)?.personalSource,
       enabled: options?.contentSafety?.injectionProtection === true,
       ...(typeof options?.context?.custom?.chatSessionId === "string"
         ? { chatSessionId: options.context.custom.chatSessionId }
@@ -1538,6 +1553,7 @@ export class ExternalAgentManager {
     input: unknown
   ): Promise<void> {
     const policy = this.sessionContentPolicies.get(adapter)?.get(sessionId)
+    await assertPersonalEgress(policy?.personalSource ?? {})
     const current = policy?.chatSessionId
       ? await (
           await import("@/lib/chat/conversation-channel")
@@ -3461,6 +3477,7 @@ export class ExternalAgentManager {
       // Per-agent Codex defaults (sandbox mode / reasoning effort / summary)
       // ride to the adapter through metadata — same channel as selectedModel.
       codexOptions: instance.config.codexOptions,
+      personalEgressFenced: options?.personalEgressFenced === true,
       // Per-execution thinking level. Rides the same metadata channel as
       // `selectedModel`, and because the Codex client only applies
       // `codexOptions.defaultReasoningEffort` when this is undefined, setting it
@@ -3551,7 +3568,7 @@ export class ExternalAgentManager {
       (typeof options?.context?.custom?.sessionId === "string"
         ? options.context.custom.sessionId
         : undefined)
-    const preferredSessionId =
+    let preferredSessionId =
       reset || requestedSessionId?.startsWith("cognia-gateway:") ? undefined : requestedSessionId
     const chatSessionId =
       typeof options?.context?.custom?.chatSessionId === "string"
@@ -3573,6 +3590,13 @@ export class ExternalAgentManager {
               .filter((candidate) => candidate.metadata?.cogniaSessionId === chatSessionId)
           )
         : undefined
+    if (
+      session &&
+      Boolean(session.metadata?.personalEgressFenced) !== Boolean(options?.personalEgressFenced)
+    ) {
+      session = undefined
+      preferredSessionId = undefined
+    }
     const prepare = protocolAdapterRegistry.runtimePolicy(
       instance.config.protocol
     ).prepareCachedSession
@@ -4189,39 +4213,101 @@ export class ExternalAgentManager {
   /**
    * Execute a prompt on an external agent (streaming)
    */
+  private executionPersonalSource(
+    agentId: string,
+    options?: ExternalAgentExecutionOptions
+  ): PersonalEgressContext {
+    const adapter = this.adapters.get(agentId)
+    const chatSessionId = options?.context?.custom?.chatSessionId
+    const sessionId =
+      options?.sessionId ??
+      (options?.resetExternalSession !== true && typeof chatSessionId === "string"
+        ? this.resolveConversationSessionId(agentId, chatSessionId)
+        : undefined)
+    const retained =
+      adapter && sessionId
+        ? this.sessionContentPolicies.get(adapter)?.get(sessionId)?.personalSource
+        : undefined
+    const supplied = personalEgressOptionsSource(options)
+    return retained && supplied
+      ? bindPersonalOperationSources({}, [retained, supplied])
+      : (supplied ?? retained ?? {})
+  }
+
   async *executeStreaming(
     agentId: string,
     prompt: string,
     options?: PermissionBoundExternalExecutionOptions
   ): AsyncIterable<ExternalAgentEvent> {
     assertExternalAgentContentSafety(prompt, options)
-    const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
-    if (gateway) {
-      try {
-        // The inner manager path retains tool approvals, PII gating, hooks,
-        // timeout handling and the protocol's normal tool-call loop.
-        for await (const event of this.executeStreaming(gateway.agentId, prompt, {
-          ...gateway.options,
-          onEvent: undefined,
-        })) {
-          const mapped = gateway.mapEvent(event)
-          options?.onEvent?.(mapped)
-          yield mapped
-        }
-      } finally {
-        await gateway.release()
-      }
-      return
-    }
-    const releaseToolHosts = await this.bindSandboxToolHostLeases(agentId, options)
-    let releaseScope = () => {}
+    const {
+      personalEgressFenced,
+      PersonalEgressDeniedError,
+      bindPersonalEgressSession,
+      bindPersonalEgressOptions,
+    } = await import("@/lib/execution/personal-egress")
+    // Canonical run producers bind options at their Host dispatch boundary.
+    // Resumes retain the sources already consumed by that native session;
+    // new content callers add their exact Host run at the dispatch boundary.
+    const personalContext = this.executionPersonalSource(agentId, options)
+    let releasePersonal = () => {}
     try {
-      const scoped = await this.acquireProcessWriteScope(agentId, options)
-      releaseScope = scoped.release
-      yield* this.executePreparedStreaming(agentId, prompt, scoped.options)
+      const fenced = await personalEgressFenced(personalContext)
+      if (fenced && this.instances.get(agentId)?.config.protocol !== "codex-app-server")
+        throw new PersonalEgressDeniedError()
+      // Only an already network-off Codex session can acknowledge an
+      // additional mark; an unfenced external session still refuses admission.
+      releasePersonal = bindPersonalEgressSession(
+        personalContext,
+        fenced && this.instances.get(agentId)?.config.protocol === "codex-app-server"
+          ? async () => {}
+          : undefined
+      )
+      options = bindPersonalEgressOptions(
+        { ...options, personalEgressFenced: fenced },
+        personalContext
+      )
+      const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
+      if (gateway) {
+        try {
+          // The inner manager path retains tool approvals, PII gating, hooks,
+          // timeout handling and the protocol's normal tool-call loop.
+          for await (const event of this.executeStreaming(
+            gateway.agentId,
+            prompt,
+            bindPersonalEgressOptions(
+              {
+                ...gateway.options,
+                onEvent: undefined,
+              },
+              personalContext
+            )
+          )) {
+            const mapped = gateway.mapEvent(event)
+            options?.onEvent?.(mapped)
+            yield mapped
+          }
+        } finally {
+          await gateway.release()
+        }
+        return
+      }
+      const releaseToolHosts = await this.bindSandboxToolHostLeases(agentId, options)
+      let releaseScope = () => {}
+      try {
+        const scoped = await this.acquireProcessWriteScope(agentId, options)
+        releaseScope = scoped.release
+        yield* this.executePreparedStreaming(
+          agentId,
+          prompt,
+          bindPersonalEgressOptions(scoped.options ?? {}, personalContext)
+        )
+      } finally {
+        releaseScope()
+        releaseToolHosts()
+      }
     } finally {
-      releaseScope()
-      releaseToolHosts()
+      releasePersonal()
     }
   }
 
@@ -4243,6 +4329,14 @@ export class ExternalAgentManager {
       else await this.connect(agentId)
     }
 
+    const retainedSource = options?.sessionId
+      ? this.sessionContentPolicies.get(adapter)?.get(options.sessionId)?.personalSource
+      : undefined
+    const suppliedSource = personalEgressOptionsSource(options)
+    const personalSource =
+      retainedSource && suppliedSource
+        ? bindPersonalOperationSources({}, [retainedSource, suppliedSource])
+        : (suppliedSource ?? retainedSource)
     options = enforceExternalPermissionCeiling(
       options,
       instance.config.protocol,
@@ -4250,6 +4344,7 @@ export class ExternalAgentManager {
       instance.config.defaultPermissionMode,
       this.getAgentCapabilityProfile(agentId)
     )
+    if (personalSource && options) bindPersonalEgressOptions(options, personalSource)
 
     this.updateInstanceState(agentId, instance, { status: "executing" })
     instance.stats.totalExecutions++
@@ -4307,6 +4402,7 @@ export class ExternalAgentManager {
     }
 
     const hookCtx: AgentHookContext = {
+      credentialContext: personalSource,
       agentId,
       agentKind: "external",
       agentRef: agentId,
@@ -4611,33 +4707,68 @@ export class ExternalAgentManager {
     onExecutorStopped?: () => void
   ): Promise<ExternalAgentResult> {
     assertExternalAgentContentSafety(prompt, options)
-    const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
-    if (gateway) {
+    const {
+      personalEgressFenced,
+      PersonalEgressDeniedError,
+      bindPersonalEgressSession,
+      bindPersonalEgressOptions,
+    } = await import("@/lib/execution/personal-egress")
+    // Canonical run producers bind options at their Host dispatch boundary.
+    // Resumes retain the sources already consumed by that native session;
+    // new content callers add their exact Host run at the dispatch boundary.
+    const personalContext = this.executionPersonalSource(agentId, options)
+    let releasePersonal = () => {}
+    try {
+      const fenced = await personalEgressFenced(personalContext)
+      if (fenced && this.instances.get(agentId)?.config.protocol !== "codex-app-server")
+        throw new PersonalEgressDeniedError()
+      // Only an already network-off Codex session can acknowledge an
+      // additional mark; an unfenced external session still refuses admission.
+      releasePersonal = bindPersonalEgressSession(
+        personalContext,
+        fenced && this.instances.get(agentId)?.config.protocol === "codex-app-server"
+          ? async () => {}
+          : undefined
+      )
+      options = bindPersonalEgressOptions(
+        { ...options, personalEgressFenced: fenced },
+        personalContext
+      )
+      const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
+      if (gateway) {
+        try {
+          const result = await this.execute(
+            gateway.agentId,
+            prompt,
+            bindPersonalEgressOptions(gateway.options ?? {}, personalContext),
+            onExecutorStopped
+          )
+          if (result.success) gateway.recordResult(result.finalResponse)
+          return {
+            ...result,
+            sessionId: gatewaySessionId(gateway.taskId, result.sessionId, gateway.binding),
+          }
+        } finally {
+          await gateway.release()
+        }
+      }
+      const releaseToolHosts = await this.bindSandboxToolHostLeases(agentId, options)
+      let releaseScope = () => {}
       try {
-        const result = await this.execute(
-          gateway.agentId,
+        const scoped = await this.acquireProcessWriteScope(agentId, options)
+        releaseScope = scoped.release
+        return await this.executePrepared(
+          agentId,
           prompt,
-          gateway.options,
+          bindPersonalEgressOptions(scoped.options ?? {}, personalContext),
           onExecutorStopped
         )
-        if (result.success) gateway.recordResult(result.finalResponse)
-        return {
-          ...result,
-          sessionId: gatewaySessionId(gateway.taskId, result.sessionId, gateway.binding),
-        }
       } finally {
-        await gateway.release()
+        releaseScope()
+        releaseToolHosts()
       }
-    }
-    const releaseToolHosts = await this.bindSandboxToolHostLeases(agentId, options)
-    let releaseScope = () => {}
-    try {
-      const scoped = await this.acquireProcessWriteScope(agentId, options)
-      releaseScope = scoped.release
-      return await this.executePrepared(agentId, prompt, scoped.options, onExecutorStopped)
     } finally {
-      releaseScope()
-      releaseToolHosts()
+      releasePersonal()
     }
   }
 
@@ -4660,6 +4791,14 @@ export class ExternalAgentManager {
       else await this.connect(agentId)
     }
 
+    const retainedSource = options?.sessionId
+      ? this.sessionContentPolicies.get(adapter)?.get(options.sessionId)?.personalSource
+      : undefined
+    const suppliedSource = personalEgressOptionsSource(options)
+    const personalSource =
+      retainedSource && suppliedSource
+        ? bindPersonalOperationSources({}, [retainedSource, suppliedSource])
+        : (suppliedSource ?? retainedSource)
     options = enforceExternalPermissionCeiling(
       options,
       instance.config.protocol,
@@ -4667,6 +4806,7 @@ export class ExternalAgentManager {
       instance.config.defaultPermissionMode,
       this.getAgentCapabilityProfile(agentId)
     )
+    if (personalSource && options) bindPersonalEgressOptions(options, personalSource)
 
     this.updateInstanceState(agentId, instance, { status: "executing" })
     instance.stats.totalExecutions++
@@ -4728,6 +4868,7 @@ export class ExternalAgentManager {
       ? 0
       : retryConfig.maxRetries
     const hookCtx: AgentHookContext = {
+      credentialContext: personalSource,
       agentId,
       agentKind: "external",
       agentRef: agentId,
@@ -5103,7 +5244,8 @@ export class ExternalAgentManager {
       toolId: string,
       name: string,
       input: Record<string, unknown>
-    ) => Promise<string>
+    ) => Promise<string>,
+    personalSource?: PersonalEgressContext
   ): Record<string, AgentTool> {
     const instance = this.instances.get(agentId)
     if (!instance?.tools) {
@@ -5116,7 +5258,7 @@ export class ExternalAgentManager {
       input: Record<string, unknown>
     ): Promise<string> => {
       // Execute tool via external agent
-      const result = await this.executeToolOnAgent(agentId, toolId, name, input)
+      const result = await this.executeToolOnAgent(agentId, toolId, name, input, personalSource)
       return typeof result === "string" ? result : JSON.stringify(result)
     }
 
@@ -5130,14 +5272,35 @@ export class ExternalAgentManager {
     agentId: string,
     _toolId: string,
     toolName: string,
-    input: Record<string, unknown>
+    input: Record<string, unknown>,
+    personalSource: PersonalEgressContext | undefined
   ): Promise<string | Record<string, unknown>> {
     // Create a prompt that asks the agent to execute the tool
     const prompt = `Execute the tool "${toolName}" with the following input:\n${JSON.stringify(input, null, 2)}`
+    // A tool facade retrieved outside a turn still inherits every session this
+    // live external agent has already consumed; callers can add an exact run.
+    const adapter = this.adapters.get(agentId)
+    const retained = adapter
+      ? [...(this.sessionContentPolicies.get(adapter)?.values() ?? [])].flatMap((policy) =>
+          policy.personalSource ? [policy.personalSource] : []
+        )
+      : []
+    if (retained.length)
+      personalSource = bindPersonalOperationSources({}, [
+        ...(personalSource ? [personalSource] : []),
+        ...retained,
+      ])
 
-    const result = await this.execute(agentId, prompt, {
-      maxSteps: 1,
-    })
+    const result = await this.execute(
+      agentId,
+      prompt,
+      bindPersonalEgressOptions(
+        {
+          maxSteps: 1,
+        },
+        personalSource ?? {}
+      )
+    )
 
     return result.finalResponse || result.output || ""
   }
@@ -5145,12 +5308,12 @@ export class ExternalAgentManager {
   /**
    * Get all tools from all connected agents
    */
-  getAllAgentTools(): Record<string, AgentTool> {
+  getAllAgentTools(personalSource?: PersonalEgressContext): Record<string, AgentTool> {
     const allTools: Record<string, AgentTool> = {}
 
     for (const [agentId, instance] of this.instances) {
       if (instance.connectionStatus === "connected" && instance.tools) {
-        const agentTools = this.getAgentTools(agentId)
+        const agentTools = this.getAgentTools(agentId, undefined, personalSource)
         // Prefix with agent ID to avoid conflicts
         for (const [name, tool] of Object.entries(agentTools)) {
           allTools[`${agentId}:${name}`] = tool

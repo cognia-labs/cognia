@@ -1,3 +1,9 @@
+import {
+  assertPersonalEgress,
+  runPersonalEgressOperation,
+  PersonalEgressDeniedError,
+} from "@/lib/execution/personal-egress"
+import { copyPersonalOperation } from "@/lib/execution/personal-operation"
 import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   createPluginCredentialAccess,
@@ -669,6 +675,7 @@ async function defaultAuthenticatedRequest<T>(
       connection.revision
     )
   if (init.signal?.aborted) throw new Error("Action cancelled or timed out")
+  await assertPersonalEgress(init.credentialContext ?? {})
   const response = await proxyFetch(url, {
     method: init.method,
     headers,
@@ -738,10 +745,12 @@ async function authenticatedRequest<T>(
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
   if (!READ_METHODS.has((init?.method ?? "GET").toUpperCase())) {
     await assertPersonalSink(
-      personalSinkHost.personalSinkContextForRun(
-        init?.credentialContext ?? { executionRunId: "" },
-        "lib/integrations/action-runner.ts"
-      ),
+      init?.credentialContext === undefined
+        ? explicitHostPersonalSinkContext("background-service")
+        : personalSinkHost.personalSinkContextForRun(
+            init.credentialContext,
+            "lib/integrations/action-runner.ts"
+          ),
       { kind: "unknown", label: "integration HTTP write" },
       { method: init?.method ?? "GET", headers: init?.headers, body: init?.body },
       input
@@ -758,12 +767,23 @@ async function authenticatedRequest<T>(
       "Integration authenticated request blocked by the PII gate; redact identifiers and retry."
     )
   }
-  if (requestOverride) {
-    await init?.beforeSend?.()
-    if (init?.signal?.aborted) throw new Error("Action cancelled or timed out")
-    return requestOverride<T>(pluginId, connectorAccountId, input, init)
-  }
-  return defaultAuthenticatedRequest<T>(pluginId, connectorAccountId, input, init)
+  const source = init?.credentialContext ?? {}
+  return runPersonalEgressOperation(source, async (operation) => {
+    const boundInit = {
+      ...init,
+      credentialContext:
+        init?.credentialContext === undefined
+          ? undefined
+          : copyPersonalOperation(operation, { ...source }),
+    }
+    if (requestOverride) {
+      await init?.beforeSend?.()
+      if (init?.signal?.aborted) throw new Error("Action cancelled or timed out")
+      await assertPersonalEgress(boundInit.credentialContext ?? {})
+      return requestOverride<T>(pluginId, connectorAccountId, input, boundInit)
+    }
+    return defaultAuthenticatedRequest<T>(pluginId, connectorAccountId, input, boundInit)
+  })
 }
 
 /**
@@ -809,10 +829,9 @@ export async function authenticatedIntegrationRequest<T>(
   // custom headers can disclose run-derived content. Check before borrowing
   // credentials or entering the transport, regardless of authorization mode.
   await assertPersonalSink(
-    personalSinkHost.personalSinkContextForRun(
-      captured ?? { executionRunId: "" },
-      "lib/integrations/action-runner.ts"
-    ),
+    captured === undefined
+      ? explicitHostPersonalSinkContext("background-service")
+      : personalSinkHost.personalSinkContextForRun(captured, "lib/integrations/action-runner.ts"),
     { kind: "unknown", label: "raw integration HTTP request" },
     {
       url: input,
@@ -1263,7 +1282,7 @@ export async function runIntegrationActionJob(
   if (!(await isIntegrationRuntimeOwner())) return candidate
   // An explicit Host UI execution can bind legacy jobs, never actor/source data.
   // Existing execution rows are immutable and cannot be reauthorized this way.
-  if (credentialContext && !isIntegrationActionJobTerminal(candidate.status))
+  if (!isIntegrationActionJobTerminal(candidate.status))
     await startJobExecutionRun(`integration:${jobId}`, credentialContext)
   const running = runningPerAccount.get(candidate.accountId) ?? 0
   if (running >= MAX_ACCOUNT_CONCURRENCY) return candidate
@@ -1468,7 +1487,7 @@ export async function runIntegrationActionJob(
         if (controller.signal.aborted) throw new Error("Action cancelled or timed out")
         return authenticatedRequest(job.pluginId, job.accountId, input, {
           ...init,
-          credentialContext: jobCredentialContext(job.id),
+          credentialContext: pluginExecutionContext(job.pluginId) ?? jobCredentialContext(job.id),
           verifiedBotAccount,
           signal: controller.signal,
           beforeSend: () => assertActiveClaim(!READ_METHODS.has(method)),
@@ -1495,6 +1514,7 @@ export async function runIntegrationActionJob(
       )
     }
     // Keep persisted/approved input immutable. This value comes only from the host publication.
+    await assertPersonalEgress(jobCredentialContext(job.id))
     const output = await withPluginJobExecutionContext(job.pluginId, job.id, () =>
       handler(
         approvedHeadSha ? { ...job.input, expectedHeadSha: approvedHeadSha } : job.input,
@@ -1535,6 +1555,7 @@ export async function runIntegrationActionJob(
     }
     const message = error instanceof Error ? error.message : String(error)
     const retryable =
+      !(error instanceof PersonalEgressDeniedError) &&
       !(error instanceof OutboundPolicyError) &&
       !(error instanceof ConsumerGrantRequired) &&
       !(error instanceof PersonalCredentialRefusedError) &&

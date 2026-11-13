@@ -29,12 +29,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 #[cfg(feature = "tauri-host")]
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 use uuid::Uuid;
 
@@ -54,6 +54,59 @@ const MAX_RAW_BYTES: usize = 4 * 1024 * 1024;
 const HEADLESS_COLS: u16 = 200;
 const HEADLESS_ROWS: u16 = 24;
 
+// Only the real child-wait Exit event records proof. Registry removal is
+// independent: performance-panel kill must remain immediate and non-waiting.
+const EXIT_PROOF_CAP: usize = 4096;
+#[derive(Default)]
+struct ExitProofStore {
+    records: HashMap<String, Instant>,
+}
+impl ExitProofStore {
+    fn proof(&mut self, id: &str, record: bool) -> HeadlessExitProof {
+        if record {
+            if !self.records.contains_key(id) && self.records.len() >= EXIT_PROOF_CAP {
+                let oldest = self
+                    .records
+                    .iter()
+                    .min_by_key(|(_, at)| **at)
+                    .map(|(key, _)| key.clone());
+                if let Some(oldest) = oldest {
+                    self.records.remove(&oldest);
+                }
+            }
+            self.records.insert(id.to_owned(), Instant::now());
+        }
+        if self.records.contains_key(id) {
+            HeadlessExitProof::Exited
+        } else {
+            HeadlessExitProof::Unknown
+        }
+    }
+}
+static EXIT_PROOFS: OnceLock<StdMutex<ExitProofStore>> = OnceLock::new();
+fn exit_proof(id: &str, record: bool) -> HeadlessExitProof {
+    EXIT_PROOFS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .proof(id, record)
+}
+#[cfg(feature = "tauri-host")]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HeadlessExitNotification {
+    session_id: String,
+}
+#[cfg(feature = "tauri-host")]
+fn proof_notifier<R: Runtime>(app: AppHandle<R>) -> Arc<dyn Fn(String) + Send + Sync> {
+    Arc::new(move |session_id| {
+        let _ = app.emit(
+            "terminal:headless-exit-proof",
+            HeadlessExitNotification { session_id },
+        );
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeadlessExecResult {
@@ -61,6 +114,10 @@ pub struct HeadlessExecResult {
     pub exit_code: Option<i32>,
     pub timed_out: bool,
     pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +125,16 @@ pub struct HeadlessExecResult {
 pub struct HeadlessSpawnResult {
     pub session_id: String,
     pub shell: String,
+}
+
+/// Only Exited is a successful child-wait proof. Unknown identities and
+/// bounded waits must never release a Host process lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum HeadlessExitProof {
+    Exited,
+    StillRunning,
+    Unknown,
 }
 
 /// What the sink reports back to a pending `run`.
@@ -111,6 +178,7 @@ struct CaptureState {
 pub struct HeadlessSession {
     pub id: String,
     pub shell: String,
+    managed: AtomicBool,
     session: PtySession,
     capture: Arc<StdMutex<CaptureState>>,
     /// Receiver half of the run-completion channel. A `run` holds this
@@ -125,10 +193,79 @@ pub struct HeadlessSession {
     exited: Arc<AtomicBool>,
 }
 
+struct LingeringHeadlessSession {
+    id: String,
+    shell: String,
+    pid: Option<u32>,
+    alive: Arc<AtomicBool>,
+    wait_failed: Arc<AtomicBool>,
+    killer: StdMutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
+}
+impl LingeringHeadlessSession {
+    fn capture(session: &HeadlessSession) -> Self {
+        let killer = session
+            .session
+            .killer
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone_killer();
+        Self {
+            id: session.id.clone(),
+            shell: session.shell.clone(),
+            pid: session.session.pid,
+            alive: session.session.alive.clone(),
+            wait_failed: session.session.wait_failed.clone(),
+            killer: StdMutex::new(killer),
+        }
+    }
+    fn alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst) && !self.wait_failed.load(Ordering::SeqCst)
+    }
+    fn observed_proof(&self) -> HeadlessExitProof {
+        let alive = self.alive.load(Ordering::SeqCst);
+        if self.wait_failed.load(Ordering::SeqCst) {
+            HeadlessExitProof::Unknown
+        } else if alive {
+            HeadlessExitProof::StillRunning
+        } else {
+            HeadlessExitProof::Exited
+        }
+    }
+    fn kill(&self) -> std::io::Result<()> {
+        if !self.alive() {
+            return Ok(());
+        }
+        self.killer
+            .lock()
+            .map_err(|_| std::io::Error::other("killer mutex poisoned"))?
+            .kill()
+    }
+    fn wait_for_proof(&self) -> HeadlessExitProof {
+        let started = Instant::now();
+        loop {
+            let proof = self.observed_proof();
+            if proof != HeadlessExitProof::StillRunning
+                || started.elapsed() >= Duration::from_secs(2)
+            {
+                return proof;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    fn kill_with_proof(&self) -> std::io::Result<HeadlessExitProof> {
+        if self.wait_failed.load(Ordering::SeqCst) {
+            return Ok(HeadlessExitProof::Unknown);
+        }
+        self.kill()?;
+        Ok(self.wait_for_proof())
+    }
+}
+
 /// Registry of live headless sessions — managed Tauri state, independent of
 /// the dock's host-owned sessions.
 #[derive(Default)]
 pub struct HeadlessTerminalState {
+    lingering: StdMutex<HashMap<String, Arc<LingeringHeadlessSession>>>,
     sessions: StdMutex<HashMap<String, Arc<HeadlessSession>>>,
 }
 
@@ -159,31 +296,84 @@ impl HeadlessTerminalState {
             .remove(id)
     }
 
+    fn get_lingering(&self, id: &str) -> Option<Arc<LingeringHeadlessSession>> {
+        self.lingering
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(id)
+            .cloned()
+    }
+    fn remove_lingering(&self, id: &str) {
+        self.lingering
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(id);
+    }
     /// Snapshot for the unified managed-process registry. Headless sessions
     /// are their own PTY registry, so without this they were invisible to the
     /// performance panel and survived app exit.
     pub fn managed_snapshot(&self) -> Vec<HeadlessManagedInfo> {
-        self.sessions
+        let mut rows: Vec<_> = self
+            .sessions
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .values()
+            .filter(|s| s.managed.load(Ordering::SeqCst))
             .map(|s| HeadlessManagedInfo {
                 id: s.id.clone(),
                 shell: s.shell.clone(),
                 pid: s.session.info().pid,
                 alive: s.session.is_alive(),
             })
-            .collect()
+            .collect();
+        let mut lingering = self.lingering.lock().unwrap_or_else(|p| p.into_inner());
+        lingering.retain(|_, process| process.alive());
+        rows.extend(lingering.values().map(|s| HeadlessManagedInfo {
+            id: s.id.clone(),
+            shell: s.shell.clone(),
+            pid: s.pid,
+            alive: true,
+        }));
+        rows
     }
 
-    /// Kill one session and drop it from the registry.
+    /// Retain unconfirmed children for retry; failed waits report Unknown and forget the native handle.
+    pub fn kill_with_proof(&self, id: &str) -> Result<HeadlessExitProof, String> {
+        let proof = if let Some(session) = self.get(id) {
+            session.kill_with_proof()
+        } else if let Some(session) = self.get_lingering(id) {
+            session.kill_with_proof()
+        } else {
+            return Ok(exit_proof(id, false));
+        }
+        .map_err(|error| format!("headless kill: {error}"))?;
+        if matches!(
+            proof,
+            HeadlessExitProof::Exited | HeadlessExitProof::Unknown
+        ) {
+            self.remove(id);
+            self.remove_lingering(id);
+        }
+        Ok(proof)
+    }
+
     pub fn kill(&self, id: &str) -> bool {
         match self.remove(id) {
             Some(session) => {
                 session.kill();
                 true
             }
-            None => false,
+            None => {
+                if let Some(process) = self.get_lingering(id) {
+                    let _ = process.kill();
+                    if !process.alive() {
+                        self.remove_lingering(id);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -198,6 +388,19 @@ impl HeadlessTerminalState {
             .collect();
         for session in sessions {
             session.kill();
+        }
+        let lingering: Vec<_> = self
+            .lingering
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        for process in lingering {
+            let _ = process.kill();
+            if !process.alive() {
+                self.remove_lingering(&process.id);
+            }
         }
     }
 }
@@ -365,6 +568,7 @@ pub fn spawn_headless(
     script_dir: &std::path::Path,
     path: &super::session::PathInjection,
     sandboxed: bool,
+    exit_notify: Option<Arc<dyn Fn(String) + Send + Sync>>,
 ) -> Result<HeadlessSession, String> {
     let shell = shell
         .filter(|s| !s.trim().is_empty())
@@ -407,11 +611,24 @@ pub fn spawn_headless(
     let (tx, rx) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = tokio::sync::watch::channel(false);
     let sink = build_capture_sink(capture.clone(), exited.clone(), tx, ready_tx);
+    let id = Uuid::new_v4().to_string();
+    let proof_id = id.clone();
+    let proof_sink: EventSink = Arc::new(move |seq, event| {
+        if matches!(&event, TerminalEvent::Exit { code: Some(_) }) {
+            exit_proof(&proof_id, true);
+            if let Some(notify) = &exit_notify {
+                notify(proof_id.clone());
+            }
+        }
+        sink(seq, event);
+    });
 
-    let session = spawn_session_with_sink(req, script_dir, path, sink, detached_desk_channel())?;
+    let session =
+        spawn_session_with_sink(req, script_dir, path, proof_sink, detached_desk_channel())?;
     Ok(HeadlessSession {
-        id: Uuid::new_v4().to_string(),
+        id,
         shell: session.shell.clone(),
+        managed: AtomicBool::new(true),
         session,
         capture,
         signals: TokioMutex::new(rx),
@@ -534,6 +751,8 @@ impl HeadlessSession {
                         exit_code,
                         timed_out: false,
                         duration_ms: started.elapsed().as_millis() as u64,
+                        pending_session_id: None,
+                        error: None,
                     });
                 }
                 Ok(Some(RunSignal::SessionExited { code })) => {
@@ -543,6 +762,8 @@ impl HeadlessSession {
                         exit_code: code.map(|c| c as i32),
                         timed_out: false,
                         duration_ms: started.elapsed().as_millis() as u64,
+                        pending_session_id: None,
+                        error: None,
                     });
                 }
                 Ok(None) => return Err("headless session event stream closed".into()),
@@ -557,6 +778,8 @@ impl HeadlessSession {
             exit_code: None,
             timed_out: true,
             duration_ms: started.elapsed().as_millis() as u64,
+            pending_session_id: None,
+            error: None,
         }
     }
 
@@ -575,12 +798,76 @@ impl HeadlessSession {
     pub fn kill(&self) {
         let _ = self.session.kill();
     }
+
+    pub fn kill_with_proof(&self) -> std::io::Result<HeadlessExitProof> {
+        if self.session.wait_failed() {
+            return Ok(HeadlessExitProof::Unknown);
+        }
+        self.session.kill()?;
+        Ok(if self.session.wait_for_exit(Duration::from_secs(2)) {
+            HeadlessExitProof::Exited
+        } else if self.session.wait_failed() {
+            HeadlessExitProof::Unknown
+        } else {
+            HeadlessExitProof::StillRunning
+        })
+    }
 }
 
 impl Drop for HeadlessSession {
     fn drop(&mut self) {
         // Belt-and-braces: a headless PTY must never outlive its handle.
-        let _ = self.session.kill();
+        if self.session.is_alive() {
+            let _ = self.session.kill();
+        }
+    }
+}
+
+/// One-shot cleanup must not release a process lease on timeout or error.
+async fn settle_one_shot(
+    state: &HeadlessTerminalState,
+    session: Arc<HeadlessSession>,
+    result: Result<HeadlessExecResult, String>,
+) -> Result<HeadlessExecResult, String> {
+    let id = session.id.clone();
+    let normal = matches!(&result, Ok(output) if !output.timed_out && output.error.is_none());
+    let proof = if normal {
+        let lingering = Arc::new(LingeringHeadlessSession::capture(&session));
+        {
+            let mut records = state.lingering.lock().unwrap_or_else(|p| p.into_inner());
+            records.retain(|_, record| record.alive());
+            records.insert(id.clone(), lingering.clone());
+        }
+        drop(state.remove(&id));
+        drop(session);
+        tokio::task::spawn_blocking(move || Ok::<_, std::io::Error>(lingering.wait_for_proof()))
+            .await
+    } else {
+        session.managed.store(true, Ordering::SeqCst);
+        tokio::task::spawn_blocking(move || session.kill_with_proof()).await
+    };
+    let exited = matches!(&proof, Ok(Ok(HeadlessExitProof::Exited)));
+    if matches!(
+        &proof,
+        Ok(Ok(HeadlessExitProof::Exited | HeadlessExitProof::Unknown))
+    ) {
+        state.remove(&id);
+        state.remove_lingering(&id);
+    }
+    let pending = if exited { None } else { Some(id) };
+    match result {
+        Ok(mut output) => {
+            output.pending_session_id = pending;
+            Ok(output)
+        }
+        Err(error) => Ok(HeadlessExecResult {
+            output: String::new(),
+            exit_code: None,
+            timed_out: false,
+            duration_ms: 0,
+            pending_session_id: pending,
+            error: Some(error),
+        }),
     }
 }
 
@@ -600,6 +887,7 @@ fn resolve_dirs<R: Runtime>(app: &AppHandle<R>) -> (PathBuf, super::session::Pat
 #[tauri::command]
 pub async fn terminal_headless_exec<R: Runtime>(
     app: AppHandle<R>,
+    state: tauri::State<'_, HeadlessTerminalState>,
     command: String,
     cwd: Option<String>,
     shell: Option<String>,
@@ -608,6 +896,7 @@ pub async fn terminal_headless_exec<R: Runtime>(
     sandboxed: Option<bool>,
 ) -> Result<HeadlessExecResult, String> {
     let (script_dir, path) = resolve_dirs(&app);
+    let notify = proof_notifier(app.clone());
     let session = tokio::task::spawn_blocking(move || {
         spawn_headless(
             shell,
@@ -616,13 +905,17 @@ pub async fn terminal_headless_exec<R: Runtime>(
             &script_dir,
             &path,
             sandboxed.unwrap_or(false),
+            Some(notify),
         )
     })
     .await
     .map_err(|error| format!("terminal headless spawn task failed: {error}"))??;
+    let session = session;
+    session.managed.store(false, Ordering::SeqCst);
+    let session = Arc::new(session);
+    state.insert(session.clone());
     let result = session.run(&command, timeout_ms).await;
-    session.kill();
-    result
+    settle_one_shot(&state, session, result).await
 }
 
 /// Spawn a persistent headless session for multi-step runs.
@@ -644,6 +937,7 @@ pub fn terminal_headless_spawn<R: Runtime>(
         &script_dir,
         &path,
         sandboxed.unwrap_or(false),
+        Some(proof_notifier(app.clone())),
     )?;
     let result = HeadlessSpawnResult {
         session_id: session.id.clone(),
@@ -671,18 +965,296 @@ pub async fn terminal_headless_run(
 /// Kill + forget a persistent headless session. Idempotent.
 #[cfg(feature = "tauri-host")]
 #[tauri::command]
-pub fn terminal_headless_kill(
+pub async fn terminal_headless_kill(
     state: tauri::State<'_, HeadlessTerminalState>,
     session_id: String,
-) -> Result<(), String> {
-    if let Some(session) = state.remove(&session_id) {
-        session.kill();
+    observe_only: Option<bool>,
+) -> Result<HeadlessExitProof, String> {
+    let proof = if let Some(session) = state.get(&session_id) {
+        if observe_only.unwrap_or(false) {
+            return Ok(if session.session.wait_failed() {
+                HeadlessExitProof::Unknown
+            } else if session.session.is_alive() {
+                HeadlessExitProof::StillRunning
+            } else {
+                exit_proof(&session_id, false)
+            });
+        }
+        tokio::task::spawn_blocking(move || session.kill_with_proof()).await
+    } else if let Some(process) = state.get_lingering(&session_id) {
+        if observe_only.unwrap_or(false) {
+            return Ok(process.observed_proof());
+        }
+        tokio::task::spawn_blocking(move || process.kill_with_proof()).await
+    } else {
+        return Ok(exit_proof(&session_id, false));
     }
-    Ok(())
+    .map_err(|error| format!("headless kill task failed: {error}"))?
+    .map_err(|error| format!("headless kill: {error}"))?;
+    if matches!(
+        proof,
+        HeadlessExitProof::Exited | HeadlessExitProof::Unknown
+    ) {
+        state.remove(&session_id);
+        state.remove_lingering(&session_id);
+    }
+    Ok(proof)
 }
 
 #[cfg(test)]
 mod tests {
+    #[derive(Debug)]
+    struct TestKiller {
+        fail: bool,
+    }
+    impl portable_pty::ChildKiller for TestKiller {
+        fn kill(&mut self) -> std::io::Result<()> {
+            if self.fail {
+                Err(std::io::Error::other("kill refused"))
+            } else {
+                Ok(())
+            }
+        }
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            Box::new(Self { fail: self.fail })
+        }
+    }
+
+    #[test]
+    fn r3_exit_proofs_have_no_time_expiry_and_evict_by_count() {
+        let mut store = ExitProofStore::default();
+        store.records.insert(
+            "old".into(),
+            Instant::now()
+                .checked_sub(Duration::from_secs(3600))
+                .unwrap(),
+        );
+        assert_eq!(store.proof("old", false), HeadlessExitProof::Exited);
+        for index in 0..EXIT_PROOF_CAP - 1 {
+            store.proof(&format!("fresh-{index}"), true);
+        }
+        store.proof("newest", true);
+        assert_eq!(store.records.len(), EXIT_PROOF_CAP);
+        assert_eq!(store.proof("old", false), HeadlessExitProof::Unknown);
+        assert_eq!(store.proof("newest", false), HeadlessExitProof::Exited);
+    }
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn r2_normal_hup_ignoring_command_drops_pty_and_exposes_any_survivor() {
+        let state = HeadlessTerminalState::new();
+        let raw = spawn_test_session();
+        raw.managed.store(false, Ordering::SeqCst);
+        let session = Arc::new(raw);
+        let id = session.id.clone();
+        let pid = session.session.pid;
+        let alive = session.session.alive.clone();
+        state.insert(session.clone());
+        let result = session
+            .run("trap '' HUP; echo r2-normal", Some(60_000))
+            .await;
+        let settled = settle_one_shot(&state, session, result).await;
+        let retained = state.get(&id).is_some();
+        let was_alive = alive.load(Ordering::SeqCst);
+        let visible = state
+            .managed_snapshot()
+            .iter()
+            .any(|row| row.id == id && row.alive);
+        if was_alive {
+            if let Some(pid) = pid {
+                let _ = std::process::Command::new("/bin/kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .status();
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while alive.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        state.kill_all();
+        let output = settled.unwrap();
+        assert!(!output.timed_out);
+        assert!(output.error.is_none());
+        assert_eq!(output.exit_code, Some(0));
+        assert!(output.output.contains("r2-normal"));
+        assert!(!retained);
+        if was_alive {
+            assert!(visible);
+        }
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    #[cfg(unix)]
+    async fn q5_timeout_survivor_retains_identity_until_real_exit() {
+        let state = HeadlessTerminalState::new();
+        let session = spawn_test_session();
+        session.managed.store(false, Ordering::SeqCst);
+        let session = Arc::new(session);
+        session
+            .run("trap '' HUP; echo q5-ready", Some(60_000))
+            .await
+            .unwrap();
+        let id = session.id.clone();
+        let pid = session.session.info().pid.unwrap();
+        state.insert(session.clone());
+        let timed = session
+            .run("while :; do read -r line; done", Some(50))
+            .await;
+        let output = settle_one_shot(&state, session.clone(), timed)
+            .await
+            .unwrap();
+        let pending = output.pending_session_id.clone();
+        let proof = state.kill_with_proof(&id).unwrap();
+        // Always terminate the survivor before any assertion can panic.
+        let _ = std::process::Command::new("/bin/kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+        let reaped = session.session.wait_for_exit(Duration::from_secs(2));
+        assert!(output.timed_out);
+        assert_eq!(pending.as_deref(), Some(id.as_str()));
+        assert_eq!(proof, HeadlessExitProof::StillRunning);
+        assert!(reaped);
+        assert_eq!(
+            state.kill_with_proof(&id).unwrap(),
+            HeadlessExitProof::Exited
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn q5_abnormal_return_keeps_unconfirmed_identity_and_error() {
+        let state = HeadlessTerminalState::new();
+        let session = Arc::new(spawn_test_session());
+        let id = session.id.clone();
+        let original = std::mem::replace(
+            &mut *session.session.killer.lock().unwrap(),
+            Box::new(TestKiller { fail: true }),
+        );
+        state.insert(session.clone());
+        let output = settle_one_shot(&state, session.clone(), Err("event stream closed".into()))
+            .await
+            .unwrap();
+        let retained = state.get(&id).is_some();
+        *session.session.killer.lock().unwrap() = original;
+        let cleanup = state.kill_with_proof(&id);
+        assert!(retained);
+        assert_eq!(output.pending_session_id.as_deref(), Some(id.as_str()));
+        assert_eq!(output.error.as_deref(), Some("event stream closed"));
+        assert_eq!(cleanup.unwrap(), HeadlessExitProof::Exited);
+    }
+
+    #[test]
+    fn q7_removed_sessions_retain_only_real_child_wait_proof() {
+        for all in [false, true] {
+            let state = HeadlessTerminalState::new();
+            let session = Arc::new(spawn_test_session());
+            let id = session.id.clone();
+            state.insert(session.clone());
+            if all {
+                state.kill_all();
+            } else {
+                assert!(state.kill(&id));
+            }
+            assert!(state.get(&id).is_none());
+            assert!(session.session.wait_for_exit(Duration::from_secs(2)));
+            // alive=false precedes the real Exit sink; wait for that publication.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while exit_proof(&id, false) != HeadlessExitProof::Exited && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            assert_eq!(
+                state.kill_with_proof(&id).unwrap(),
+                HeadlessExitProof::Exited
+            );
+            assert_eq!(
+                state.kill_with_proof(&id).unwrap(),
+                HeadlessExitProof::Exited
+            );
+        }
+    }
+
+    #[test]
+    fn q8_one_shot_is_not_a_managed_process() {
+        let state = HeadlessTerminalState::new();
+        let one_shot = spawn_test_session();
+        one_shot.managed.store(false, Ordering::SeqCst);
+        let hidden_id = one_shot.id.clone();
+        state.insert(Arc::new(one_shot));
+        let persistent = Arc::new(spawn_test_session());
+        let visible_id = persistent.id.clone();
+        state.insert(persistent);
+        let snapshot = state.managed_snapshot();
+        state.kill_all();
+        assert!(!snapshot.iter().any(|row| row.id == hidden_id));
+        assert!(snapshot.iter().any(|row| row.id == visible_id));
+    }
+
+    #[test]
+    fn personal_egress_headless_exit_proof_retains_failed_and_unconfirmed_children() {
+        let state = HeadlessTerminalState::new();
+        assert_eq!(
+            state.kill_with_proof("missing").unwrap(),
+            HeadlessExitProof::Unknown
+        );
+        let session = Arc::new(spawn_test_session());
+        let id = session.id.clone();
+        let original = std::mem::replace(
+            &mut *session.session.killer.lock().unwrap(),
+            Box::new(TestKiller { fail: true }),
+        );
+        state.insert(session.clone());
+        assert!(state
+            .kill_with_proof(&id)
+            .unwrap_err()
+            .contains("kill refused"));
+        assert!(state.get(&id).is_some());
+        *session.session.killer.lock().unwrap() = Box::new(TestKiller { fail: false });
+        assert_eq!(
+            state.kill_with_proof(&id).unwrap(),
+            HeadlessExitProof::StillRunning
+        );
+        assert!(state.get(&id).is_some());
+        *session.session.killer.lock().unwrap() = original;
+        assert_eq!(
+            state.kill_with_proof(&id).unwrap(),
+            HeadlessExitProof::Exited
+        );
+        assert!(!session.session.is_alive());
+        assert!(state.get(&id).is_none());
+        assert_eq!(
+            serde_json::to_value(HeadlessExitProof::Exited).unwrap(),
+            serde_json::json!({ "status": "exited" })
+        );
+    }
+
+    #[test]
+    fn p5_failed_wait_is_unknown_and_removes_native_identity() {
+        let state = HeadlessTerminalState::new();
+        let session = Arc::new(spawn_test_session());
+        let id = session.id.clone();
+        session.session.wait_failed.store(true, Ordering::SeqCst);
+        state.insert(session.clone());
+        assert_eq!(
+            state.kill_with_proof(&id).unwrap(),
+            HeadlessExitProof::Unknown
+        );
+        assert!(state.get(&id).is_none());
+        session.kill();
+    }
+
+    #[test]
+    fn p5_legacy_kill_removes_even_when_signalling_fails() {
+        let state = HeadlessTerminalState::new();
+        let session = Arc::new(spawn_test_session());
+        let id = session.id.clone();
+        let original = std::mem::replace(
+            &mut *session.session.killer.lock().unwrap(),
+            Box::new(TestKiller { fail: true }),
+        );
+        state.insert(session.clone());
+        assert!(state.kill(&id));
+        assert!(state.get(&id).is_none());
+        *session.session.killer.lock().unwrap() = original;
+        session.kill();
+    }
+
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn workspace_env_reaches_the_headless_pty() {
@@ -695,13 +1267,14 @@ mod tests {
                 &script_dir(),
                 &super::super::session::PathInjection::default(),
                 false,
+                None,
             )
             .unwrap();
             let result = session.run(
                 r#"printf '%s:%s:%s\n' "${COGNIA_PORT-unset}" "${COGNIA_PORT_COUNT-unset}" "$PORT""#,
                 Some(60_000),
             ).await.unwrap();
-            session.kill();
+            let _ = session.kill();
             assert!(
                 !result.timed_out,
                 "workspace env command timed out: {result:?}"
@@ -721,6 +1294,7 @@ mod tests {
             &script_dir(),
             &super::super::session::PathInjection::default(),
             false,
+            None,
         );
         assert!(result
             .err()
@@ -765,6 +1339,7 @@ mod tests {
             &script_dir(),
             &super::super::session::PathInjection::default(),
             false,
+            None,
         )
         .expect("headless spawn")
     }
@@ -776,7 +1351,7 @@ mod tests {
             .run("echo cognia-headless-ok", Some(60_000))
             .await
             .expect("run ok");
-        session.kill();
+        let _ = session.kill();
         assert!(!result.timed_out, "should not time out: {result:?}");
         assert!(
             result.output.contains("cognia-headless-ok"),
@@ -828,7 +1403,7 @@ mod tests {
         let session = spawn_test_session();
         let cmd = if cfg!(windows) { "exit 3" } else { "(exit 3)" };
         let result = session.run(cmd, Some(60_000)).await.expect("run ok");
-        session.kill();
+        let _ = session.kill();
         // `exit 3` in pwsh ends the shell itself on some hosts; accept
         // either the captured code or a session-exit with code 3.
         assert_eq!(result.exit_code, Some(3), "result: {result:?}");
@@ -849,7 +1424,7 @@ mod tests {
         };
         session.run(setvar, Some(60_000)).await.expect("set");
         let result = session.run(readvar, Some(60_000)).await.expect("read");
-        session.kill();
+        let _ = session.kill();
         assert!(
             result.output.contains("persisted"),
             "output: {:?}",
@@ -866,7 +1441,7 @@ mod tests {
             "sleep 30"
         };
         let result = session.run(sleeper, Some(1_500)).await.expect("run ok");
-        session.kill();
+        let _ = session.kill();
         assert!(result.timed_out, "expected timeout: {result:?}");
         assert!(result.exit_code.is_none());
     }
@@ -875,7 +1450,7 @@ mod tests {
     async fn rejects_an_empty_command_and_runs_after_kill_fail() {
         let session = spawn_test_session();
         assert!(session.run("   ", Some(5_000)).await.is_err());
-        session.kill();
+        let _ = session.kill();
     }
 
     #[test]
@@ -886,7 +1461,7 @@ mod tests {
         state.insert(session);
         assert!(state.get(&id).is_some());
         let removed = state.remove(&id).expect("removed");
-        removed.kill();
+        let _ = removed.kill();
         assert!(state.get(&id).is_none());
         assert!(state.remove(&id).is_none());
     }

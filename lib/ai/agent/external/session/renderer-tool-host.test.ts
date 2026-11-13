@@ -168,7 +168,15 @@ describe("renderer Cognia tool host", () => {
 
   it("reviews model-visible tool outputs through the shared PostToolUse hook", async () => {
     const { host, emit, call, review } = setup()
-    await host.start({ sendOptions })
+    const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+    bindToolCallRun("chat-1", "external-turn", "external-run", "external-attempt")
+    await host.start({
+      sendOptions: {
+        ...sendOptions,
+        turnId: "external-turn",
+        execution: { identity: { runId: "wire-not-authority", attemptId: "external-attempt" } },
+      } as SendOptions,
+    })
     emit({
       type: "tool_result_review",
       sessionId: "chat-1",
@@ -180,7 +188,14 @@ describe("renderer Cognia tool host", () => {
       isError: false,
     })
     await flush()
-    expect(review).toHaveBeenCalledWith("read", { path: "note.txt" }, "original", "chat-1")
+    expect(review).toHaveBeenCalledWith(
+      "read",
+      { path: "note.txt" },
+      "original",
+      "chat-1",
+      undefined,
+      { sessionId: "chat-1", executionRunId: "external-run" }
+    )
     expect(call).toHaveBeenLastCalledWith(
       "tool-host-reply",
       expect.objectContaining({

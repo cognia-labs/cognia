@@ -469,6 +469,7 @@ function useSideBrowserReveal({ pageTabs }: { pageTabs: boolean }): void {
             ? (chatSessionOfOwner(agentPageOwner(request.chatSessionId)) ?? active)
             : (request.chatSessionId ?? active)
         if (!target) return false
+        if (request.probe) return true
         if (!pageTabs) {
           useDockTabsStore.getState().queueBrowserRequest(target, {
             url,

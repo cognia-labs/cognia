@@ -1,6 +1,9 @@
-import type { Options } from "@anthropic-ai/claude-agent-sdk"
+import { PERSONAL_EGRESS_DENIAL } from "@cognia/agent-contracts/personal-egress"
+import { BUILTIN_TOOL_NAMES, type Options } from "@anthropic-ai/claude-agent-sdk"
+import { personalToolDenied } from "../policy/personal-egress.ts"
 import {
   errorMessage,
+  fencedHookOutcome,
   type HookHandler,
   type HookOutcome,
   type NativeHookContext,
@@ -46,6 +49,7 @@ export interface NativeHookOptions {
   budget?: ReturnType<typeof createHookBudgetGovernor>
   redact?: (value: string) => string
   piiGate?: (value: unknown) => boolean
+  personalEgressFenced?: () => boolean
 }
 type Redact = (value: string) => string
 type PiiGate = (value: unknown) => boolean
@@ -185,12 +189,15 @@ export function createNativeHookExecutor({
   budget = createHookBudgetGovernor(maxBudgetUsd),
   redact = (value) => redactText(value).redacted,
   piiGate = hasNoLeakingPiiDeep,
+  personalEgressFenced = () => false,
 }: NativeHookOptions = {}) {
   return async function executeNativeHook(
     handler: HookHandler,
     payloadJson: string,
     context: NativeHookContext = {}
   ): Promise<HookOutcome> {
+    if (personalEgressFenced() && handler.type === "mcp_tool")
+      return fencedHookOutcome(context.eventName, handler.type)
     if ((context.depth ?? 0) >= 1) {
       return { warning: "hook recursion depth exceeded (maximum 1)" }
     }
@@ -225,7 +232,29 @@ export function createNativeHookExecutor({
           maxBudgetUsd: budget.remaining(),
           settingSources: [],
           sandbox: { allowNestedUserNamespaces: false },
-          hooks: nestedPiiHooks(redact, piiGate) as Options["hooks"],
+          hooks: {
+            ...nestedPiiHooks(redact, piiGate),
+            PreToolUse: [
+              {
+                hooks: [
+                  async (input) =>
+                    personalToolDenied(
+                      "tool_name" in input ? input.tool_name : "",
+                      { personalEgressFenced: personalEgressFenced() },
+                      BUILTIN_TOOL_NAMES
+                    )
+                      ? {
+                          hookSpecificOutput: {
+                            hookEventName: "PreToolUse",
+                            permissionDecision: "deny",
+                            permissionDecisionReason: PERSONAL_EGRESS_DENIAL,
+                          },
+                        }
+                      : {},
+                ],
+              },
+            ],
+          } as Options["hooks"],
         },
       })
     } catch (error) {

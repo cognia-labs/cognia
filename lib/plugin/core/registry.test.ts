@@ -374,3 +374,20 @@ describe("PluginRegistry", () => {
     })
   })
 })
+
+it("R11 registration supplies the synchronous cold refusal policy", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const guest = jest.fn(() => null)
+  try {
+    new PluginRegistry().registerCommand("r11-command", { id: "r11", enabled: guest } as never)
+    const callback = bindPluginCallbacks("r11-policy", guest, () => ({
+      executionRunId: "r11-cold",
+    }))
+    expect(callback()).toBe(false)
+    expect(guest).not.toHaveBeenCalled()
+  } finally {
+    restore()
+  }
+})

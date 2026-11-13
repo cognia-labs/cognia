@@ -2604,7 +2604,15 @@ function renderPart(
 
     // Non-image file: the same file card the composer showed, with an inline
     // preview for text/code/pdf/video under it, or a download card otherwise.
-    return <FilePartCard key={key} url={url} mediaType={mediaType} filename={filename} />
+    return (
+      <FilePartCard
+        key={key}
+        messageId={messageId}
+        url={url}
+        mediaType={mediaType}
+        filename={filename}
+      />
+    )
   }
 
   // Plugin-contributed part types — checked before the generic tool fallback

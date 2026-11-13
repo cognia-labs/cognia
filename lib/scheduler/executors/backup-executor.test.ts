@@ -234,7 +234,8 @@ describe("executeBackupTask", () => {
       expect.any(String),
       expect.objectContaining({ filename: expect.stringMatching(/^cognia-backup-.*\.enc\.cbk$/) }),
       expect.any(Function),
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      { executionRunId: "exec-1" }
     )
     // webdav-only never touches the disk.
     expect(writeTextFileMock).not.toHaveBeenCalled()

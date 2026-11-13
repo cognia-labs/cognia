@@ -1,3 +1,4 @@
+import { BUILTIN_TOOL_NAMES } from "@anthropic-ai/claude-agent-sdk"
 // The Claude Agent SDK rail's `canUseTool` callback.
 //
 // The SDK enforces plan, dontAsk and bypassPermissions over its own native
@@ -8,6 +9,8 @@
 // renderer may answer with a rewritten input.
 
 import { randomUUID } from "node:crypto"
+import { personalToolDenied, personalEgressState } from "../personal-egress.ts"
+import { PERSONAL_EGRESS_DENIAL } from "@cognia/agent-contracts/personal-egress"
 
 import { buildPluginAccessMap } from "../confinement/classify.ts"
 import type { DoomLoopGuard } from "../doom-loop.ts"
@@ -177,6 +180,7 @@ export function anthropicToolDenial(
   input: unknown,
   signal?: AbortSignal | null
 ): string | undefined {
+  if (personalToolDenied(toolName, sendOptions, BUILTIN_TOOL_NAMES)) return PERSONAL_EGRESS_DENIAL
   const reason = firstHardDenial(CLAUDE_AGENT_SDK_RAIL, HARD_CHECKS, {
     toolName,
     input,
@@ -249,6 +253,7 @@ export function createAnthropicCanUseTool({
   input: Record<string, unknown>,
   ctx: CanUseToolContext
 ) => Promise<ApprovalAnswer> {
+  personalEgressState(sendOptions)
   // Verbose canUseTool tracing (shares the host's COGNIA_SIDECAR_VERBOSE gate).
   // Surfaces as frontend `log` events so a tool-call hang can be diagnosed
   // without stderr access.
@@ -256,6 +261,8 @@ export function createAnthropicCanUseTool({
     process.env.COGNIA_SIDECAR_VERBOSE === "1" || process.env.COGNIA_SIDECAR_VERBOSE === "true"
 
   return (modelToolName, input, ctx) => {
+    if (personalToolDenied(modelToolName, sendOptions, BUILTIN_TOOL_NAMES))
+      return Promise.resolve({ behavior: "deny", message: PERSONAL_EGRESS_DENIAL })
     // The profile hook already asked a person about this very call and was
     // answered; the SDK consulting us afterwards must not ask again.
     if (ctx?.toolUseID && profileApprovals?.delete(ctx.toolUseID)) {
@@ -343,6 +350,10 @@ export function createAnthropicCanUseTool({
       toolUseID: ctx.toolUseID,
       toolName,
       input,
+      ...((BUILTIN_TOOL_NAMES as readonly string[]).includes(modelToolName) &&
+      modelToolName === toolName
+        ? { nativeTool: { engine: "claude-agent-sdk", name: modelToolName } }
+        : {}),
       title: ctx.title,
       displayName: ctx.displayName,
       description: ctx.description,

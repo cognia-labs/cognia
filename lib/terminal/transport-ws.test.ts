@@ -376,6 +376,7 @@ describe("RemoteTerminalSession canonical LAN transport", () => {
     })
     latestSocket().fireFrame(TerminalFrameKind.Exit, { code: 7 }, BigInt(6))
     await flush()
+    expect(session.processExitConfirmed).toBe(true)
     expect(output).toEqual([[72, 105]])
     expect(integrations).toEqual([{ kind: "prompt_start" }])
     expect(gaps).toEqual([{ requestedAfter: 1, firstAvailable: 3, lastAvailable: 5 }])
@@ -476,6 +477,7 @@ describe("RemoteTerminalSession canonical LAN transport", () => {
     latestSocket().fireFrame(TerminalFrameKind.Ack, { ok: true }, request.sequence)
     await kill
     expect(session.isExited).toBe(true)
+    expect(session.processExitConfirmed).toBe(false)
     // Killing an exited session is a no-op.
     await session.kill()
     warn.mockRestore()

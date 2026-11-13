@@ -1,3 +1,5 @@
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Terminal API (`ctx.terminal`) — imperative access to the
  * integrated terminal dock for plugins (build runners, dev-server
@@ -80,11 +82,22 @@ export function createTerminalAPI(pluginId: string): PluginTerminalAPI {
 
   /** Spawn `req` (always tagged to this plugin) and normalise the outcome. */
   async function doSpawn(req: SpawnRequest, label: string): Promise<{ id: string; shell: string }> {
-    const outcome = await spawnFromDock({
-      // Tag ownership so the dock + this API scope the session to us.
-      req: { ...req, extensionId: pluginId },
-      store: useTerminalStore.getState(),
-    })
+    const source = pluginExecutionContext(pluginId) ?? {}
+    const outcome = await runPersonalEgressOperation(
+      source,
+      async () => {
+        const spawned = await spawnFromDock({
+          req: { ...req, extensionId: pluginId },
+          store: useTerminalStore.getState(),
+        })
+        if (spawned.kind === "spawned") {
+          const { retainTerminalPersonalEgress } = await import("@/lib/terminal/personal-egress")
+          retainTerminalPersonalEgress(source, spawned.sessionId)
+        }
+        return spawned
+      },
+      true
+    )
     if (outcome.kind === "spawned") {
       return { id: outcome.sessionId, shell: outcome.shell }
     }
@@ -222,6 +235,7 @@ export function createTerminalAPI(pluginId: string): PluginTerminalAPI {
       // return non-Promises and (for the owned-session ones) throw ownership
       // errors synchronously. They share `terminal:spawn` with the actual
       // spawn action but must not route through the async consent overlay.
+      egressMethods: ["spawn", "runScript", "write"],
       consentExempt: ["detectScriptType", "list", "readRecent", "onData", "classifyCommand"],
     }
   )

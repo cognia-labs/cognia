@@ -73,6 +73,8 @@ function makeEventCallback(
       pendingPluginHookCalls: deps?.pendingPluginHookCalls,
       newId: deps?.newId,
       executeNativeHandler: deps?.executeNativeHandler,
+      personalEgressFenced: deps?.personalEgressFenced,
+      beginPersonalEgress: deps?.beginPersonalEgress,
       onAudit:
         typeof deps?.emitAudit === "function"
           ? (audit) => deps.emitAudit!(buildHookAuditPayload(deps?.sessionId, audit))

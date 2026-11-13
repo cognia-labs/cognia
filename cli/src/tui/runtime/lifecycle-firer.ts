@@ -53,7 +53,7 @@ export function createCliLifecycleFirer(deps: CliLifecycleFirerDeps): LifecycleH
   const claudeHome = path.join(deps.osHome ?? os.homedir(), ".claude")
   const config: HooksConfig = loadHooks({ home: deps.home, claudeHome, readFile })
 
-  return async (event, _ctx, opts) => {
+  return async (event, ctx, opts) => {
     if (!KNOWN_EVENTS.has(event)) return null
     const groups = config[event as HookEvent] ?? []
     if (groups.length === 0) return null
@@ -63,6 +63,7 @@ export function createCliLifecycleFirer(deps: CliLifecycleFirerDeps): LifecycleH
       payload: opts?.payload ?? {},
       groups,
       spawn,
+      credentialContext: ctx.credentialContext,
     })
     return {
       block: res.deny ? (res.reason ?? "blocked by hook") : null,

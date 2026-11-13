@@ -1027,6 +1027,7 @@ jest.mock("@/lib/execution/chat-lease", () => ({
 // Direct-chat journal persistence is covered by lib/execution/direct-chat-run.test.ts.
 // Keep this hook suite focused on routing and UI state without requiring IndexedDB.
 jest.mock("@/lib/execution/direct-chat-run", () => ({
+  activeDirectChatExecutionRunId: jest.fn(() => undefined),
   finishDirectChatExecutionRun: jest.fn().mockResolvedValue(undefined),
   projectDirectChatCaptureEvent: jest.fn().mockResolvedValue(undefined),
   projectDirectChatSdkMessage: jest.fn().mockResolvedValue(undefined),
@@ -3103,6 +3104,7 @@ describe("useClaudeChat — actions", () => {
     })
 
     expect(executeProjectEnvironmentMock).toHaveBeenCalledWith({
+      credentialContext: { sessionId: "sess-1", executionRunId: expect.any(String) },
       environment,
       executionRoot: "/managed/sess-1",
       scope: "managedWorktree",
@@ -3340,6 +3342,27 @@ describe("useClaudeChat — actions", () => {
     expect(captured).not.toBeNull()
     expect(captured!.signal.aborted).toBe(true)
     expect(interruptSessionMock).not.toHaveBeenCalled()
+  })
+
+  it("R11 controller external entry binds its admitted Host run", async () => {
+    const { personalEgressOptionsSource } = await import("@/lib/execution/personal-egress")
+    useAgentRuntimeStore.setState({ runtimeRef: { kind: "external", agentId: "ext-1" } })
+    executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "done" })
+    const admitted = jest.requireMock("@/lib/execution/direct-chat-run")
+      .startDirectChatExecutionRun as jest.Mock
+    admitted.mockClear()
+    const { result } = renderHook(() => useClaudeChat())
+    await flush()
+    await act(async () => {
+      await result.current.send("R11 external request")
+    })
+    expect(executeOnExternalAgentMock).toHaveBeenCalledTimes(1)
+    const runId = admitted.mock.calls.at(-1)?.[0].runId
+    expect(runId).toEqual(expect.any(String))
+    expect(personalEgressOptionsSource(executeOnExternalAgentMock.mock.calls[0][1])).toEqual({
+      sessionId: "sess-1",
+      executionRunId: runId,
+    })
   })
 
   it("persists external usage in the same chat session as the assistant turn", async () => {

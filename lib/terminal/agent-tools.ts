@@ -1,3 +1,4 @@
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
 /**
  * The terminal module's tool family (ADR-0250 §14 amendment): the four
  * `terminal_dock_*` tools through which the agent drives the user's visible
@@ -89,6 +90,38 @@ export const toolFamily: ModuleToolFamily = {
     const action = dockAction(name)
     if (!action) return { ok: false, reason: `unknown terminal dock tool: ${name}` }
     const { runTerminalDockAction } = await import("./dock-tool-handler")
-    return runTerminalDockAction({ action, args, chatSessionId: call.sessionId })
+    return action === "spawn" || action === "write"
+      ? runDockToolEgress(call, () =>
+          runTerminalDockAction({
+            action,
+            args,
+            chatSessionId: call.sessionId,
+            credentialContext: call,
+          })
+        )
+      : runTerminalDockAction({
+          action,
+          args,
+          chatSessionId: call.sessionId,
+          credentialContext: call,
+        })
   },
+}
+
+async function runDockToolEgress<T extends import("./dock-tool-handler").DockActionResult>(
+  call: import("@/lib/modules/manifest-types").ToolCallContext,
+  dispatch: () => Promise<T>
+): Promise<T> {
+  return runPersonalEgressOperation(
+    call,
+    async () => {
+      const result = await dispatch()
+      if ("sessionId" in result && result.sessionId) {
+        const { retainTerminalPersonalEgress } = await import("./personal-egress")
+        retainTerminalPersonalEgress(call, result.sessionId)
+      }
+      return result
+    },
+    true
+  )
 }

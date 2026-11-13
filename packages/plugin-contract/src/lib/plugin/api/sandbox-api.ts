@@ -14,7 +14,7 @@ export interface PluginSandboxAPI {
   fileOperation?(
     ref: SandboxRuntimeRef,
     request: SandboxFileRequest,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; executionRunId?: string }
   ): Promise<SandboxFileResult | undefined>
   readonly hostFallbackRuntimeRef: SandboxRuntimeRef
   registerMicrovmAdapter(adapter: MicrovmExecAdapter): () => void
@@ -23,7 +23,7 @@ export interface PluginSandboxAPI {
   execute(
     ref: SandboxRuntimeRef,
     payload: MicrovmExecPayload,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; executionRunId?: string }
   ): Promise<MicrovmResult>
   clampRequest<T extends MicrovmExecPayload["request"]>(ref: SandboxRuntimeRef, request: T): T
   assertWritablePath(ref: SandboxRuntimeRef, path: string, label?: string): void

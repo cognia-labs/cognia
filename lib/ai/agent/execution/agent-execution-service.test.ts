@@ -726,3 +726,20 @@ it.each([
     expect(resolveVscodeChatParticipant).not.toHaveBeenCalled()
   }
 )
+
+it("threads a caller-held Host run through intentional and degraded completions", async () => {
+  for (const toolsEnabled of [false, true]) {
+    await executeAgentTurn(
+      "owned",
+      { toolsEnabled },
+      { isTauri: false, isHeadlessHost: false },
+      { identity: { runId: "host-owner", sessionId: "host-session" } }
+    )
+    expect(completionRail).toHaveBeenLastCalledWith(
+      "owned",
+      expect.objectContaining({
+        executionIdentity: { runId: "host-owner", sessionId: "host-session" },
+      })
+    )
+  }
+})

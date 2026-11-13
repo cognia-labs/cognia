@@ -96,7 +96,13 @@ describe("createPluginAgentSession", () => {
     )
     const owner = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
     await withPluginExecutionContext("plugin-owner", { executionRunId: owner.id }, async () => {
-      expect((await session.history())[0].content).toBe("secret prior answer")
+      expect((await session.history())[0].content).toContain("Withheld")
+      expect((await session.history())[0].content).not.toContain("secret prior answer")
+      await session.send("continue", { toolsEnabled: false })
+      expect(mockExecute).toHaveBeenLastCalledWith(
+        "continue",
+        expect.objectContaining({ executionIdentity: { runId: owner.id } })
+      )
       await recordAbsorbedRequester(owner.id, {
         kind: "platform",
         platform: "slack",
@@ -300,4 +306,20 @@ it("persists participant response metadata and carries it into the next send", a
     }),
     { surface: "plugin" }
   )
+})
+
+it("preserves Host-only no-run producer fences through the completion authority", async () => {
+  const { personalEgressOptionsSource, assertPersonalEgress } =
+    await import("@/lib/execution/personal-egress")
+  const session = await createPluginAgentSession({}, "source-owner")
+  await withPluginExecutionContext("source-owner", { personalEgressBlocked: true }, () =>
+    session.send("continue", { toolsEnabled: false })
+  )
+  const config = mockExecute.mock.calls.at(-1)![1]
+  const source = personalEgressOptionsSource(config)
+  expect(source).toMatchObject({ personalEgressBlocked: true })
+  await expect(assertPersonalEgress(source!)).rejects.toMatchObject({
+    code: "personal-egress-denied",
+  })
+  expect(JSON.stringify(config)).not.toContain("personalEgressBlocked")
 })

@@ -1,3 +1,4 @@
+import { copyPersonalOperation } from "@/lib/execution/personal-operation"
 /**
  * In-process tools that feature modules contribute (ADR-0250 §14 amendment).
  *
@@ -314,13 +315,19 @@ export async function runContributedTool(
   args: Record<string, unknown>,
   call: ToolCallContext
 ): Promise<unknown> {
+  const { assertPersonalToolEgress } = await import("@/lib/execution/personal-egress")
   const family = await loadFamily(tool.entry)
+  await assertPersonalToolEgress(tool.name, call, tool.declaration.effect === "read")
   const owner = tool.entry.module
-  return family.run(tool.name, args, {
-    ...call,
-    sessionState: (contributionId) =>
-      readContextSessionState(call.sessionId, `${owner}.${contributionId}`),
-  })
+  return family.run(
+    tool.name,
+    args,
+    copyPersonalOperation(call, {
+      ...call,
+      sessionState: (contributionId) =>
+        readContextSessionState(call.sessionId, `${owner}.${contributionId}`),
+    })
+  )
 }
 
 /** Test helper: forget every loaded family. */

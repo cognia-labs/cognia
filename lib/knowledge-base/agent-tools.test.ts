@@ -144,3 +144,27 @@ describe("run", () => {
     ).toEqual({ ok: false, code: "aborted" })
   })
 })
+
+it("S2 ranking refuses unavailable Host execution before provider-capable reader dispatch; local reads remain available", async () => {
+  const state = stateWith(true)
+  await expect(
+    runKnowledgeTool(
+      "knowledge_list_documents",
+      { query: "private" },
+      { ...callWithForS2(state), executionRunId: "missing-s2-run" }
+    )
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  await expect(
+    runKnowledgeTool(
+      "knowledge_list_documents",
+      {},
+      { ...callWithForS2(state), executionRunId: "missing-s2-run" }
+    )
+  ).resolves.toMatchObject({ ok: true })
+  await expect(
+    runKnowledgeTool("knowledge_list_documents", { query: "clear" }, callWithForS2(state))
+  ).resolves.toMatchObject({ ok: true })
+})
+function callWithForS2(state: unknown) {
+  return { sessionState: (id: string) => (id === "reader" ? state : undefined) }
+}

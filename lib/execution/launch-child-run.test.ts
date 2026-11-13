@@ -170,7 +170,11 @@ describe("launchChildRun: agent", () => {
     })
     expect(executeAgentMock).toHaveBeenCalledWith(
       "do the thing",
-      expect.objectContaining({ systemPrompt: "be brief", abortSignal: expect.any(AbortSignal) })
+      expect.objectContaining({
+        systemPrompt: "be brief",
+        abortSignal: expect.any(AbortSignal),
+        executionIdentity: { runId: "execution:job:child-1", sessionId: "session-parent" },
+      })
     )
     const row = await getExecutionRun(launched.executionRunId)
     expect(row?.status).toBe("completed")
@@ -503,6 +507,16 @@ describe("launchChildRun: external", () => {
       "fix it",
       expect.objectContaining({ systemPrompt: "sys", workingDirectory: "/repo" })
     )
+    const { personalEgressOptionsSource, assertPersonalEgress } = await import("./personal-egress")
+    const source = personalEgressOptionsSource(externalExecuteMock.mock.calls[0][2])
+    expect(source).toMatchObject({ executionRunId: launched.executionRunId })
+    const db = (await import("@/lib/db/schema")).getDb()
+    await db.executionRuns.update(launched.executionRunId, {
+      personalMarks: [{ person: { kind: "local-person" }, source: "P2", markedAt: 1 }],
+    })
+    await expect(assertPersonalEgress(source!)).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
     expect((await getExecutionRun(launched.executionRunId))?.status).toBe("completed")
   })
 

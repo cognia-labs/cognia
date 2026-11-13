@@ -10,7 +10,7 @@ import assert from "node:assert/strict"
 import childProcess from "node:child_process"
 import { syncBuiltinESMExports } from "node:module"
 import { after, mock } from "node:test"
-import { buildAiSdkTools, __testing__ } from "./ai-sdk.ts"
+import { buildAiSdkTools, aiSdkToolPolicyName, __testing__ } from "./ai-sdk.ts"
 import { createAiSdkToolSearchController } from "./ai-sdk-tool-search.ts"
 import { createSessionTaskStore } from "../state/tasks.ts"
 import type { ReadTracker } from "../state/read-tracker.ts"
@@ -168,14 +168,24 @@ test("buildAiSdkTools wires plugin tools that round-trip through the renderer", 
     pendingPluginToolCalls,
   })
   assert.ok(tools.my_plugin_tool, "plugin tool registered")
+  assert.equal(
+    aiSdkToolPolicyName(tools.my_plugin_tool!),
+    "mcp__cognia-plugin-tools__my_plugin_tool"
+  )
+  assert.equal(aiSdkToolPolicyName({ ...tools.my_plugin_tool }), undefined)
 
   // Kick off execute; it should emit a plugin_tool_exec and await a response.
-  const execPromise = tools.my_plugin_tool!.execute({ q: "hi" })
+  const execPromise = tools.my_plugin_tool!.execute({ q: "hi" }, { toolCallId: "engine-call-id" })
   // Let the microtask register the pending call.
   await Promise.resolve()
   const event = emitted.find((m) => m.type === "plugin_tool_exec")
   assert.ok(event, "plugin_tool_exec emitted")
   assert.equal(event.name, "my_plugin_tool")
+  assert.equal(
+    event.toolUseId,
+    "engine-call-id",
+    "H3: Host admission and runtime tracking share the engine call id"
+  )
   assert.deepEqual(event.args, { q: "hi" })
   assert.equal(event.sandboxRuntimeRef, "sandbox-runtime:ai-sdk")
   assert.equal(event.turnId, "turn-1")

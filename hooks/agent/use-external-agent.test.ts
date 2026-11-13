@@ -1667,11 +1667,23 @@ describe("useExternalAgent core actions", () => {
     await flush()
     let runResult: unknown
     await act(async () => {
-      runResult = await result.current.execute("hello")
+      const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+      runResult = await result.current.execute(
+        "hello",
+        bindPersonalEgressOptions({}, { executionRunId: "external-hook-source" })
+      )
+    })
+    const { personalEgressOptionsSource } = await import("@/lib/execution/personal-egress")
+    expect(personalEgressOptionsSource(fakeManager.execute.mock.calls.at(-1)![2])).toEqual({
+      executionRunId: "external-hook-source",
     })
     expect(runResult).toMatchObject({ finalResponse: "yo" })
-    expect(dispatchExecutionStart).toHaveBeenCalled()
-    expect(dispatchExecutionComplete).toHaveBeenCalled()
+    expect(dispatchExecutionStart).toHaveBeenCalledWith("a1", expect.any(String), "hello", {
+      executionRunId: "external-hook-source",
+    })
+    expect(dispatchExecutionComplete).toHaveBeenCalledWith("a1", "sess-1", true, "yo", {
+      executionRunId: "external-hook-source",
+    })
   })
 
   it("execute normalizes timeout error messages", async () => {
@@ -1718,7 +1730,16 @@ describe("useExternalAgent core actions", () => {
     const { result } = renderHook(() => useExternalAgent())
     await flush()
     await act(async () => {
-      await expect(result.current.execute("hi")).rejects.toThrow("adapter refused the prompt")
+      const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+      await expect(
+        result.current.execute(
+          "hi",
+          bindPersonalEgressOptions({}, { executionRunId: "failed-private-run" })
+        )
+      ).rejects.toThrow("adapter refused the prompt")
+      expect(dispatchExternalAgentError).toHaveBeenCalledWith("a1", "adapter refused the prompt", {
+        executionRunId: "failed-private-run",
+      })
     })
     await flush()
     expect(storeRecordAgentFailure).toHaveBeenCalledWith(
@@ -1754,26 +1775,22 @@ describe("useExternalAgent core actions", () => {
   it("setSessionMode/Model require active session", async () => {
     const { result } = renderHook(() => useExternalAgent())
     await flush()
-    await expect(
-      act(async () => {
-        await result.current.setSessionMode("default" as never)
-      })
-    ).rejects.toThrow("No active session")
-    await expect(
-      act(async () => {
-        await result.current.setSessionModel("opus")
-      })
-    ).rejects.toThrow("No active session")
+    await act(async () => {
+      await expect(result.current.setSessionMode("default" as never)).rejects.toThrow(
+        "No active session"
+      )
+      await expect(result.current.setSessionModel("opus")).rejects.toThrow("No active session")
+    })
   })
 
   it("authenticate requires active agent", async () => {
     const { result } = renderHook(() => useExternalAgent())
     await flush()
-    await expect(
-      act(async () => {
-        await result.current.authenticate("oauth", { token: "t" })
-      })
-    ).rejects.toThrow("No active agent selected")
+    await act(async () => {
+      await expect(result.current.authenticate("oauth", { token: "t" })).rejects.toThrow(
+        "No active agent selected"
+      )
+    })
   })
 })
 
@@ -1782,3 +1799,38 @@ describe("useExternalAgent core actions", () => {
 // coverage of those surfaces hits a React 19 race where `result.current` is
 // transiently null after the hook's lifecycle effect fires. The behavior is
 // covered by `useExternalAgentSessionPanel` integration tests.
+
+it("R10 production getter passes the invoking Host run to a fresh tool facade", async () => {
+  const { indexedDB, IDBKeyRange } = await import("fake-indexeddb")
+  const { default: Dexie } = await import("dexie")
+  Dexie.dependencies.indexedDB = indexedDB
+  Dexie.dependencies.IDBKeyRange = IDBKeyRange
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+  await fixture.initialize()
+  try {
+    const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { getDb } = await import("@/lib/db/schema")
+    const { personalEgressFenced, invalidatePersonalEgressCache } =
+      await import("@/lib/execution/personal-egress")
+    const run = await startToolExecutionRun("r10-getter", {
+      localAuthorization:
+        LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+    })
+    const source = { executionRunId: run.id }
+    seedAgent("fresh-agent")
+    const { result } = renderHook(() => useExternalAgent())
+    await flush()
+    result.current.getAgentTools("fresh-agent", source)
+    expect(fakeManager.getAgentTools).toHaveBeenCalledWith("fresh-agent", undefined, source)
+    const captured = fakeManager.getAgentTools.mock.calls.at(-1)?.[2]
+    await expect(personalEgressFenced(captured)).resolves.toBe(false)
+    await getDb().executionRuns.update(run.id, {
+      personalMarks: [{ person: { kind: "local-person" }, source: "R10", markedAt: 1 }],
+    })
+    invalidatePersonalEgressCache(run.id)
+    await expect(personalEgressFenced(captured)).resolves.toBe(true)
+  } finally {
+    await fixture.dispose()
+  }
+})

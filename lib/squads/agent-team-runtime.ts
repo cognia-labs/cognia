@@ -504,7 +504,9 @@ export async function runTeamLifecycle(
               repositoryId,
             })
             try {
-              await setupAdapter.prepare(input.profile.profile, lease.primaryAlias)
+              await setupAdapter.prepare(input.profile.profile, lease.primaryAlias, {
+                executionRunId: `execution:team:${input.runId}`,
+              })
             } catch (error) {
               try {
                 await lease.abort()
@@ -1433,7 +1435,8 @@ export function abortTeam(teamId: string, reason?: unknown, runId?: string): boo
   return true
 }
 
-/** Test-only — drop in-flight entries without aborting. */
+/** Test-only — abort in-flight waiters before dropping their ownership. */
 export function __resetInflightForTesting(): void {
+  for (const { controller } of inflightControllers.values()) controller.abort()
   inflightControllers.clear()
 }

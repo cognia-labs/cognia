@@ -50,6 +50,7 @@ import {
   confinementRoots,
   namespacedHostTool,
   needsApproval,
+  personalToolDenial,
   READ_ONLY_BUILTIN_TOOLS,
   visibleBuiltinTools,
   visibleHostTools,
@@ -73,6 +74,8 @@ export interface ToolHostResultEvent {
 }
 
 export interface ToolHostBrokerParams {
+  /** Host lease; evaluated per call and never populated from MCP arguments. */
+  executionRunId?: () => string | undefined
   session: ResolvedCliSessionContext
   /**
    * Monotonic connect-attempt id. A bridge minted for attempt N is refused once
@@ -284,6 +287,19 @@ export async function startToolHostBroker(params: ToolHostBrokerParams): Promise
     // `checkConfinement` always explains a denial, so the reason is never absent.
     if (!confined.allowed) return { allow: false, reason: String(confined.reason) }
     const full = namespacedFor(server, p.name)
+    const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+    const personalDenial = await personalToolDenial(
+      full,
+      {
+        sessionId: session.sessionId,
+        executionRunId:
+          params.executionRunId?.() ??
+          toolCallExecutionRunId(session.sessionId, session.sendOptions.turnId) ??
+          "",
+      },
+      readOnly
+    )
+    if (personalDenial) return { allow: false, reason: personalDenial }
     if (isExplicitlyDenied(session.sendOptions, full, p.args))
       return { allow: false, reason: "denied by permission ruleset" }
     const explicit = explicitToolMode(session.sendOptions, full, p.args)
@@ -330,6 +346,18 @@ export async function startToolHostBroker(params: ToolHostBrokerParams): Promise
     if (decision.decision === "deny") {
       return { allow: false, reason: decision.message ?? `"${p.name}" was denied` }
     }
+    const afterApproval = await personalToolDenial(
+      full,
+      {
+        sessionId: session.sessionId,
+        executionRunId:
+          params.executionRunId?.() ??
+          toolCallExecutionRunId(session.sessionId, session.sendOptions.turnId) ??
+          "",
+      },
+      readOnly
+    )
+    if (afterApproval) return { allow: false, reason: afterApproval }
     return { allow: true, ...(updatedArgs !== undefined ? { updatedArgs } : {}) }
   }
 

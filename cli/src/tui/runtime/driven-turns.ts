@@ -23,6 +23,8 @@ import { formatTokens } from "../format/usage"
 import type { ActivityKind, TuiAction } from "../state/types"
 
 export interface DrivenAdvanceInput {
+  /** Host capture object retains opaque producer authority after completion. */
+  capturedResult?: RunAndCaptureResult
   /** The just-completed turn's assistant text. */
   text: string
   /** input + output tokens for the turn (0 when unknown). */
@@ -129,7 +131,7 @@ export async function runDrivenTurns(deps: DrivenTurnsDeps): Promise<void> {
 
       const tokensDelta = (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0)
       totalTokens += tokensDelta
-      const decision = await advance({ text: result.text, tokensDelta })
+      const decision = await advance({ text: result.text, tokensDelta, capturedResult: result })
       if (signal.aborted) {
         endAborted()
         return

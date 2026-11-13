@@ -1,8 +1,15 @@
+import { toolCallEgressRunId } from "@/lib/execution/acting-authority"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import { onClaudeMessage } from "@/lib/claude/ipc"
 import type { ClaudeEvent } from "@cognia/agent-config-types"
 import { getPluginEventHooks } from "./hooks-system"
 
-type StreamState = { messageId?: string; content: string }
+type StreamState = {
+  messageId?: string
+  content: string
+  execution: PersonalCredentialContext
+  owner: string
+}
 
 /** One transport observer covers both interactive chat and autonomous captures. */
 export function installStreamHookSource(): () => void {
@@ -19,17 +26,22 @@ export function installStreamHookSource(): () => void {
       if (completedMessages.size > 128)
         completedMessages.delete(completedMessages.keys().next().value!)
     }
-    getPluginEventHooks().dispatchStreamEnd(sessionId, state.content)
+    getPluginEventHooks().dispatchStreamEnd(sessionId, state.content, state.execution)
   }
-  const begin = (sessionId: string, messageId?: string): StreamState => {
+  const begin = (
+    sessionId: string,
+    messageId: string | undefined,
+    execution: PersonalCredentialContext,
+    owner: string
+  ): StreamState => {
     const previous = streams.get(sessionId)
-    if (previous && previous.messageId === messageId) return previous
+    if (previous && previous.messageId === messageId && previous.owner === owner) return previous
     end(sessionId)
     // Bound unfinished streams when a transport dies without a terminal event.
     if (streams.size >= 128) end(streams.keys().next().value!)
-    const state: StreamState = { messageId, content: "" }
+    const state: StreamState = { messageId, content: "", execution, owner }
     streams.set(sessionId, state)
-    getPluginEventHooks().dispatchStreamStart(sessionId)
+    getPluginEventHooks().dispatchStreamStart(sessionId, execution)
     return state
   }
   const observe = (frame: ClaudeEvent) => {
@@ -40,8 +52,17 @@ export function installStreamHookSource(): () => void {
     }
     if (!("sessionId" in frame) || typeof frame.sessionId !== "string") return
     const { sessionId } = frame
+    const identity = frame as ClaudeEvent & { turnId?: string; attemptId?: string }
+    const execution = {
+      sessionId,
+      executionRunId: toolCallEgressRunId(sessionId, identity.turnId, identity.attemptId),
+    }
+    const owner = JSON.stringify([identity.turnId, identity.attemptId])
+    const endOwned = () => {
+      if (!identity.turnId || streams.get(sessionId)?.owner === owner) end(sessionId)
+    }
     if (frame.type === "session_ended") {
-      end(sessionId)
+      endOwned()
       return
     }
     if (frame.type !== "event") return
@@ -51,37 +72,44 @@ export function installStreamHookSource(): () => void {
       message?: { id?: string; content?: Array<{ type?: string; text?: string }> }
     }
     if (event.type === "result") {
-      end(sessionId)
+      endOwned()
       return
     }
     if (event.type === "stream_event") {
       const stream = event.event
-      if (stream?.type === "message_start") begin(sessionId, stream.message?.id)
+      if (stream?.type === "message_start") begin(sessionId, stream.message?.id, execution, owner)
       else if (
         stream?.type === "content_block_delta" &&
         stream.delta?.type === "text_delta" &&
         stream.delta.text
       ) {
-        const state = streams.get(sessionId) ?? begin(sessionId)
+        const previous = streams.get(sessionId)
+        const state =
+          previous?.owner === owner ? previous : begin(sessionId, undefined, execution, owner)
         state.content += stream.delta.text
-        getPluginEventHooks().dispatchStreamChunk(sessionId, stream.delta.text, state.content)
-      } else if (stream?.type === "message_stop") end(sessionId)
+        getPluginEventHooks().dispatchStreamChunk(
+          sessionId,
+          stream.delta.text,
+          state.content,
+          state.execution
+        )
+      } else if (stream?.type === "message_stop") endOwned()
     } else if (event.type === "assistant") {
       if (event.message?.id && completedMessages.get(sessionId) === event.message.id) return
       const existing = streams.get(sessionId)
       // Some providers stream text before supplying the assistant message id.
       // The snapshot identifies that same stream; only two known differing ids
       // establish a new message boundary.
-      if (existing && !existing.messageId) existing.messageId = event.message?.id
+      if (existing?.owner === owner && !existing.messageId) existing.messageId = event.message?.id
       const text = (event.message?.content ?? [])
         .filter((block) => block.type === "text")
         .map((block) => block.text ?? "")
         .join("")
-      const state = begin(sessionId, event.message?.id)
+      const state = begin(sessionId, event.message?.id, execution, owner)
       if (text.startsWith(state.content) && text.length > state.content.length) {
         const delta = text.slice(state.content.length)
         state.content = text
-        getPluginEventHooks().dispatchStreamChunk(sessionId, delta, text)
+        getPluginEventHooks().dispatchStreamChunk(sessionId, delta, text, state.execution)
       }
     }
   }

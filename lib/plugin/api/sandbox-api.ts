@@ -1,3 +1,8 @@
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
+import {
+  pluginExecutionContext,
+  pluginEgressContextResolver,
+} from "@/lib/plugin/core/invocation-identity"
 import { getMicrovmExec, setMicrovmExec } from "@/lib/sandbox/microvm-bridge"
 import { HOST_FALLBACK_RUNTIME_REF, sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
 import { createGuardedAPI } from "@/lib/plugin/security/permission-guard"
@@ -18,6 +23,7 @@ export type { PluginSandboxAPI } from "@cognia/plugin-contract/lib/plugin/api/sa
  * inline, `clampRequest` returns the clamped request).
  */
 export function createSandboxAPI(pluginId: string): PluginSandboxAPI {
+  const egressContext = pluginEgressContextResolver(pluginId)
   const api: PluginSandboxAPI = {
     hostFallbackRuntimeRef: HOST_FALLBACK_RUNTIME_REF,
     registerMicrovmAdapter: (adapter) => {
@@ -29,10 +35,15 @@ export function createSandboxAPI(pluginId: string): PluginSandboxAPI {
     activeRefForSession: (sessionId) => sandboxSessionRuntime.activeRefForSession(sessionId),
     decorateComputerUseContext: (ref, base) =>
       sandboxSessionRuntime.decorateComputerUseContext(ref, base),
-    execute: (ref, payload, options) =>
-      options
-        ? sandboxSessionRuntime.executeSandbox(ref, payload, options)
-        : sandboxSessionRuntime.executeSandbox(ref, payload),
+    execute: (ref, payload, options) => {
+      const caller = pluginExecutionContext(pluginId)
+      const trustedOptions = { ...options, executionRunId: caller?.executionRunId }
+      return runPersonalEgressOperation(egressContext(), () =>
+        options || caller
+          ? sandboxSessionRuntime.executeSandbox(ref, payload, trustedOptions)
+          : sandboxSessionRuntime.executeSandbox(ref, payload)
+      )
+    },
     fileOperation: (ref, request, options) =>
       sandboxSessionRuntime.fileOperation(ref, request, options),
     clampRequest: (ref, request) => sandboxSessionRuntime.clampRequest(ref, request),

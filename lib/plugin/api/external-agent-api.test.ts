@@ -1210,3 +1210,10 @@ describe("execution route and cost ceiling", () => {
     expect(mockManager.execute).not.toHaveBeenCalled()
   })
 })
+
+it("public external context cannot manufacture a Host provenance binding", async () => {
+  const { personalEgressOptionsSource } = await import("@/lib/execution/personal-egress")
+  expect(
+    personalEgressOptionsSource({ context: { custom: { chatSessionId: "clean" } } })
+  ).toBeUndefined()
+})

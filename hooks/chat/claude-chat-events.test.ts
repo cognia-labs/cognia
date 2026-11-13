@@ -2139,3 +2139,40 @@ it.each([false, true])(
     }
   }
 )
+
+it("R1: an unclaimed native permission request still reaches the approval UI", async () => {
+  const hooks = await import("@/lib/claude/adapter-hooks")
+  const pre = jest.spyOn(hooks, "dispatchPreToolUse").mockResolvedValueOnce({ action: "allow" })
+  const store = useChatStore.getState()
+  store.clear()
+  store.setActiveSession("approval-original")
+  useChatStore.setState({ openSessionIds: ["approval-original"] })
+  const push = jest.spyOn(useChatStore.getState(), "pushApproval")
+  try {
+    await handleEvent(
+      {
+        type: "permission_request",
+        sessionId: "approval-original",
+        requestId: "original-request",
+        toolName: "Read",
+        input: { file_path: "local.txt" },
+        requiresPerCallApproval: true,
+      } as never,
+      { current: "approval-original" },
+      { current: [] },
+      { current: new Map() },
+      { current: new Map() },
+      { current: null },
+      {
+        messagesMirrorRef: { current: new Map() },
+        registry: {},
+        getExecutionHandle: () => undefined,
+      } as never
+    )
+    expect(push).toHaveBeenCalledWith(expect.objectContaining({ requestId: "original-request" }))
+  } finally {
+    pre.mockRestore()
+    push.mockRestore()
+    useChatStore.getState().clear()
+  }
+})

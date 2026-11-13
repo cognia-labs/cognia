@@ -86,6 +86,16 @@ export function toolCallExecutionRunId(
   return toolCallRuns.get(toolCallKey(sessionId, turnId, attemptId)) ?? ""
 }
 
+/** A correlated lookup failure is distinct from a content-free background call. */
+export function toolCallEgressRunId(
+  sessionId: string,
+  turnId?: string,
+  attemptId?: string
+): string | undefined {
+  const runId = toolCallExecutionRunId(sessionId, turnId, attemptId)
+  return runId === "" ? "unresolved-tool-producer" : runId
+}
+
 /** Minimal entry record for host skill/member paths without a chat journal. */
 export async function startToolExecutionRun(
   sessionId: string | undefined,
@@ -234,6 +244,8 @@ export async function startToolExecutionRun(
     }
   )
   if (!job && sessionId) activeToolRuns.set(sessionId, id)
+  const { personalEgressFenced } = await import("./personal-egress")
+  await personalEgressFenced({ executionRunId: run.id })
   return run
 }
 

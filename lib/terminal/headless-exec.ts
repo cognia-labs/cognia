@@ -1,5 +1,8 @@
 "use client"
 
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
+
 /**
  * Policy entry point for *unattended* terminal execution — the shared
  * seam workflow terminal nodes (and, later, agent tools) call to run a
@@ -31,6 +34,7 @@ import { selectTerminalTransportChain } from "./pick-transport"
 export type UnattendedAskPolicy = "fail" | "consent" | "run"
 
 export interface HeadlessExecInput {
+  credentialContext?: PersonalCredentialContext
   command: string
   cwd?: string
   shell?: string
@@ -62,6 +66,8 @@ export type HeadlessExecOutcome =
   | { ok: false; reason: string; verdict?: "allow" | "ask" | "deny" }
 
 interface RustHeadlessResult {
+  pendingSessionId?: string
+  error?: string
   output: string
   exitCode: number | null
   timedOut: boolean
@@ -151,12 +157,20 @@ export async function runHeadlessExec(input: HeadlessExecInput): Promise<Headles
       }
     }
     if (policy === "consent") {
-      return runViaDockConsent(input, command, classified.reason, source)
+      return runPersonalEgressOperation(
+        input.credentialContext ?? {},
+        () => runViaDockConsent(input, command, classified.reason, source),
+        true
+      )
     }
     // policy === "run" — explicit opt-in, fall through to headless exec.
   }
 
-  return execHeadless(input, command, classified.verdict as "allow" | "ask", source)
+  return runPersonalEgressOperation(
+    input.credentialContext ?? {},
+    () => execHeadless(input, command, classified.verdict as "allow" | "ask", source),
+    true
+  )
 }
 
 /**
@@ -180,6 +194,7 @@ async function runViaDockConsent(
   const { runTerminalDockAction } = await import("./dock-tool-handler")
   const result = await runTerminalDockAction({
     chatSessionId: input.chatSessionId,
+    credentialContext: input.credentialContext,
     action: "spawn",
     args: {
       command,
@@ -188,6 +203,10 @@ async function runViaDockConsent(
       timeoutSec: input.timeoutMs ? Math.ceil(input.timeoutMs / 1000) : undefined,
     },
   })
+  if ("sessionId" in result && result.sessionId) {
+    const { retainTerminalPersonalEgress } = await import("./personal-egress")
+    retainTerminalPersonalEgress(input.credentialContext ?? {}, result.sessionId)
+  }
   if (!result.ok) {
     audit({
       command,
@@ -250,30 +269,33 @@ async function execHeadless(
   let result: RustHeadlessResult
   try {
     if (input.sessionId) {
-      result = (await invoke("terminal_headless_run", {
+      const { retainHeadlessPersonalEgress } = await import("./personal-egress")
+      retainHeadlessPersonalEgress(input.credentialContext ?? {}, input.sessionId)
+      result = await invoke<RustHeadlessResult>("terminal_headless_run", {
         sessionId: input.sessionId,
         command,
         timeoutMs: input.timeoutMs,
-      })) as RustHeadlessResult
+      })
     } else {
-      // ADR-0028 Phase 3.3 — a fresh one-shot headless shell honors the
-      // global sandbox toggle (persistent `terminal_headless_run` reuses the
-      // policy the session was spawned with, so it isn't re-passed here).
-      const { useSettingsStore } = await import("@/stores/settings")
-      const sandboxed = useSettingsStore.getState().settings?.terminal?.sandboxed ?? false
-      result = (await invoke("terminal_headless_exec", {
+      result = await invoke<RustHeadlessResult>("terminal_headless_exec", {
         command,
         cwd: input.cwd,
         shell: input.shell,
         env: input.env,
         timeoutMs: input.timeoutMs,
-        sandboxed,
-      })) as RustHeadlessResult
+        sandboxed: readTerminalSettings()?.sandboxed ?? false,
+      })
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return { ok: false, reason: message, verdict }
   }
+
+  if (result.pendingSessionId) {
+    const { retainHeadlessPersonalEgress } = await import("./personal-egress")
+    retainHeadlessPersonalEgress(input.credentialContext ?? {}, result.pendingSessionId)
+  }
+  if (result.error) return { ok: false, reason: result.error, verdict }
 
   audit({
     command,

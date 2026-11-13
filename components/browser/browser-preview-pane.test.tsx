@@ -1412,6 +1412,19 @@ describe("⌘-click link claim", () => {
     return claimed
   }
 
+  it("F8 visible and hidden probes never navigate", () => {
+    mockRegionVisible = false
+    const reveal = jest.fn(() => true)
+    renderPane(<BrowserPreviewPane onRequestReveal={reveal} />)
+    let accepted = false
+    act(() => {
+      accepted = requestBrowserUrl("https://example.com/private", { probe: true })
+    })
+    expect(accepted).toBe(true)
+    expect(reveal).toHaveBeenCalledWith(true)
+    expect(urlBar()).toHaveValue("")
+  })
+
   it("claims and navigates when the pane is on screen", () => {
     renderPane(<BrowserPreviewPane />)
     expect(claim("example.com/docs")).toBe(true)

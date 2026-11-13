@@ -7,6 +7,8 @@
 // surfaces as a `tool-error` the model can recover from.
 
 import { randomUUID } from "node:crypto"
+import { personalToolDenied, personalEgressState } from "../personal-egress.ts"
+import { PERSONAL_EGRESS_DENIAL } from "@cognia/agent-contracts/personal-egress"
 
 import { buildPluginAccessMap } from "../confinement/classify.ts"
 import type { DoomLoopGuard } from "../doom-loop.ts"
@@ -200,7 +202,9 @@ export function createToolPermissionGate({
     sendOptions?.alwaysExplicitGithubTools
   )
 
+  if (sendOptions) personalEgressState(sendOptions)
   return async function gate(toolName, input, signal, validateInput) {
+    if (personalToolDenied(toolName, sendOptions ?? {})) throw new Error(PERSONAL_EGRESS_DENIAL)
     const call = (effectiveInput = input) => ({
       toolName,
       input: effectiveInput,
@@ -286,6 +290,7 @@ export function createToolPermissionGate({
       throw new Error((decision.message as string | undefined) ?? `denied: ${toolName}`)
     }
     const updated = decision && decision.updatedInput !== undefined ? decision.updatedInput : input
+    if (personalToolDenied(toolName, sendOptions ?? {})) throw new Error(PERSONAL_EGRESS_DENIAL)
     const effective = validateInput ? validateInput(updated) : updated
     // Approval cannot grant authority over a rewritten target. Do not climb
     // the approval/doom steps again: only this rail's mandatory denials are

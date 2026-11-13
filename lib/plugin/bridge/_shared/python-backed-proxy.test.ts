@@ -1,3 +1,5 @@
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { startToolExecutionRun, LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   PYTHON_CONTRIBUTION_DISPATCH,
   PYTHON_CONTRIBUTION_RELEASE,
@@ -23,7 +25,10 @@ import {
   bindPythonRuntimeGeneration,
 } from "@/lib/plugin/python/runtime-generation"
 
-jest.mock("@/lib/platform/detect", () => ({ isHeadlessHost: jest.fn(() => false) }))
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  isHeadlessHost: jest.fn(() => false),
+}))
 jest.mock("@tauri-apps/api/core", () => ({ invoke: jest.fn(async () => "via-invoke") }))
 jest.mock("@/lib/tauri/transport-instance", () => ({
   transport: { call: jest.fn(async () => "via-transport") },
@@ -49,6 +54,11 @@ function createEventHarness() {
   }
 }
 
+const fixture = createDbTestFixture()
+beforeAll(fixture.initialize)
+beforeEach(fixture.restore)
+afterAll(fixture.dispose)
+
 interface OcrLike {
   extract(image: string): Promise<unknown>
 }
@@ -67,9 +77,12 @@ describe("createPythonBackedProxy", () => {
       },
     })
     await proxy.extract("background.png")
-    const context = { executionRunId: "python-service-attempt" }
+    const run = await startToolExecutionRun("python-service-attempt", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    const context = { executionRunId: run.id }
     await withPluginExecutionContext("bound-python", context, () => proxy.extract("run.png"))
-    expect(seen).toEqual([HOST_BACKGROUND, context])
+    expect(seen).toMatchObject([HOST_BACKGROUND, context])
     expect(pluginExecutionContext("bound-python")).toBeUndefined()
   })
 
@@ -125,6 +138,10 @@ describe("createPythonBackedProxy", () => {
   it("retains the exact run after a stream closes until Python actually settles", async () => {
     const harness = createEventHarness()
     let resolveCall!: (value: unknown) => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
     const proxy = createPythonBackedProxy<{
       complete(): AsyncGenerator<unknown, unknown, void>
     }>({
@@ -135,13 +152,18 @@ describe("createPythonBackedProxy", () => {
       call: () =>
         new Promise((resolve) => {
           resolveCall = resolve
+          entered()
         }),
       subscribe: harness.subscribe,
       newStreamId: () => "late-stream",
     })
-    const context = { executionRunId: "late-python-attempt" }
+    const run = await startToolExecutionRun("late-python-attempt", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    const context = { executionRunId: run.id }
     const iterator = withPluginExecutionContext("late-python", context, () => proxy.complete())
     const first = iterator.next()
+    await started
     harness.emit({
       pluginId: "late-python",
       kind: "chunk",
@@ -150,7 +172,7 @@ describe("createPythonBackedProxy", () => {
     await expect(first).resolves.toEqual({ value: "first", done: false })
     await iterator.return(undefined)
     expect(harness.listenerCount()).toBe(0)
-    expect(pluginExecutionContext("late-python")).toEqual(context)
+    expect(pluginExecutionContext("late-python")).toMatchObject(context)
     resolveCall("done")
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(pluginExecutionContext("late-python")).toBeUndefined()
@@ -618,4 +640,71 @@ describe("subscribePythonContributionPush", () => {
     })
     expect(pushes).toHaveLength(1)
   })
+})
+
+it("F7 Python contribution methods streams and interceptors never receive marked content", async () => {
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { dispatchTransform, registerInterceptor, __resetInterceptorRegistryForTesting } =
+    await import("@/lib/plugin/interceptors")
+  const owner = await startToolExecutionRun("f7-contribution-owner", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const child = await startToolExecutionRun("f7-contribution-child", { parentRunId: owner.id })
+  const id = "f7-python-contribution"
+  const call = jest.fn(async () => ({}))
+  const proxy = createPythonBackedProxy<{
+    transform(value: object): Promise<object>
+    stream(value: object): AsyncGenerator<unknown, unknown, void>
+  }>({
+    pluginId: id,
+    contributionId: "transform",
+    methods: ["transform", "stream"],
+    streamingMethods: ["stream"],
+    call,
+    subscribe: () => () => {},
+  })
+  registerInterceptor({
+    registrationId: id,
+    pointId: "tool.call.prepare",
+    semantic: "transform",
+    pluginId: id,
+    pluginInstanceId: id + "#1",
+    generation: 1,
+    realmId: "global",
+    trustTier: "community",
+    order: {},
+    timeoutMs: 1000,
+    source: "interceptors",
+    runtime: "python",
+    handler: proxy.transform as never,
+  })
+  const execution = { executionRunId: owner.id }
+  try {
+    await withPluginExecutionContext(id, execution, () => proxy.transform({ clean: true }))
+    await withPluginExecutionContext(id, execution, () => proxy.stream({ clean: true }).next())
+    await dispatchTransform(
+      "tool.call.prepare",
+      { clean: true },
+      { operationId: "clean", credentialContext: execution }
+    )
+    expect(call).toHaveBeenCalledTimes(3)
+    await addPersonalMarksToRun({ executionRunId: child.id }, [
+      { person: { kind: "local-person" }, source: "F7", markedAt: 1 },
+    ])
+    await expect(
+      withPluginExecutionContext(id, execution, () => proxy.transform({ private: true }))
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    await expect(
+      withPluginExecutionContext(id, execution, () => proxy.stream({ private: true }).next())
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    const transformed = await dispatchTransform(
+      "tool.call.prepare",
+      { private: true },
+      { operationId: "marked", credentialContext: execution }
+    )
+    expect(transformed.report.failed).toHaveLength(1)
+    expect(call).toHaveBeenCalledTimes(3)
+  } finally {
+    __resetInterceptorRegistryForTesting()
+  }
 })

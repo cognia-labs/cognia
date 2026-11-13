@@ -1,3 +1,7 @@
+import {
+  markPluginSynchronousRenderer,
+  markPluginSynchronousCallback,
+} from "@/lib/plugin/core/invocation-identity"
 import type { ComponentType } from "react"
 import { contextPanelRegistry } from "@/lib/context-workbench/panel-registry"
 import { resolveContextPanelIcon } from "@/lib/context-workbench/panel-icons"
@@ -137,6 +141,8 @@ export async function registerContextPanelsForPlugin(
           ContextPanelDefinition["getBadge"] | undefined
       }
       const permissions = requiredPermissions(manifest, index)
+      if (getBadge) markPluginSynchronousCallback(getBadge, undefined)
+      if (onRestore) markPluginSynchronousCallback(onRestore, undefined)
       contextPanelRegistry.register({
         id: `${manifest.id}:${def.id}`,
         activity: def.activity,
@@ -158,7 +164,7 @@ export async function registerContextPanelsForPlugin(
         requiresChatScope: def.kind === "chat" ? true : def.requiresChatScope,
         preferredMode: def.preferredMode,
         retention: def.retention ?? "stateful",
-        renderer: exported,
+        renderer: markPluginSynchronousRenderer(manifest.id, exported),
         onFirstActivate,
         onRestore,
         pluginId: manifest.id,

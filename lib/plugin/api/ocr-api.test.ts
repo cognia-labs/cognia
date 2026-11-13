@@ -191,3 +191,35 @@ describe("createOcrAPI", () => {
     })
   })
 })
+
+it("S2 OCR callback blocks a marked source before loading or extracting and allows clear", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  resetPermissionGuard()
+  getPermissionGuard({ confirmDangerousByDefault: false }).registerPlugin("s2-ocr", [
+    "media:image:read",
+    "database:write",
+  ])
+  const extract = jest.fn(async () => ({ combinedText: "ok" }))
+  mockOcrPort = { extract }
+  const api = createOcrAPI("s2-ocr", {
+    extract,
+    extractFile: extract,
+    extractScreen: extract,
+    runSlashCommand: extract,
+    listAvailableProviders: () => ["test"],
+  } as never)
+  await expect(
+    withPluginExecutionContext("s2-ocr", {}, () =>
+      api.extract({ kind: "image", data: "bytes" } as unknown as OcrInput)
+    )
+  ).resolves.toEqual({ combinedText: "ok" })
+  extract.mockClear()
+  await expect(
+    withPluginExecutionContext("s2-ocr", { personalEgressBlocked: true }, () =>
+      api.extract({ kind: "image", data: "bytes" } as unknown as OcrInput)
+    )
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(extract).not.toHaveBeenCalled()
+
+  mockOcrPort = null
+})

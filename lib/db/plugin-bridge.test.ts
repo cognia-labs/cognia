@@ -1,3 +1,4 @@
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
 import { messageRepository } from "./plugin-bridge"
@@ -11,7 +12,10 @@ jest.mock("@/lib/chat/transcript/revision-events", () => ({
   ...jest.requireActual("@/lib/chat/transcript/revision-events"),
   invalidateTranscriptRuntime: jest.fn(async () => {}),
 }))
-jest.mock("@/lib/platform/detect", () => ({ isTauri: () => false }))
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  isTauri: () => false,
+}))
 
 const fixture = createDbTestFixture()
 beforeAll(fixture.initialize)
@@ -212,4 +216,25 @@ it("keeps marks added while a plugin edit awaits transcript invalidation", async
     personalMarkVersion: 1,
     personalMarks,
   })
+})
+
+it("S2 persists Host producer taint on plugin updates and retains it on later clear writes", async () => {
+  const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun, bindPersonalMessageEgressSource } =
+    await import("@/lib/execution/personal-marks")
+  const run = await startToolExecutionRun("s1", { localAuthorization: LOCAL_PERSON_RUN })
+  await addPersonalMarksToRun({ executionRunId: run.id }, [
+    { person: { kind: "local-person" }, source: "test", markedAt: 1 },
+  ])
+  bindPersonalMessageEgressSource("m1", { executionRunId: run.id })
+  await messageRepository.update("m1", {
+    parts: [{ type: "file", url: "https://outside.test/private", mediaType: "text/plain" }],
+  })
+  const stored = await getDb().messages.get("m1")
+  expect(stored?.metadata?.personalMarks).toHaveLength(1)
+  bindPersonalMessageEgressSource("m1", {})
+  await messageRepository.update("m1", { content: "edited" })
+  expect((await getDb().messages.get("m1"))?.metadata?.personalMarks).toEqual(
+    stored?.metadata?.personalMarks
+  )
 })

@@ -69,6 +69,7 @@ function enabledCategories(options: SendOptions): string[] {
 export function contextVersionProjection(input: ContextVersionInput): Record<string, unknown> {
   const o = input.sendOptions
   return {
+    personalEgressFenced: o.personalEgressFenced === true,
     systemPrompt: o.systemPrompt ?? "",
     model: o.model ?? "",
     provider: o.provider ?? "",

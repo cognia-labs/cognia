@@ -1,6 +1,14 @@
 /**
  * @jest-environment node
  */
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 
 import {
   hasPostToolUseListeners,
@@ -309,4 +317,62 @@ describe("adapter-hooks", () => {
     expect(await dispatchOnAssistantMessage(message)).toBe(message)
     expect(lifecycleSpy).not.toHaveBeenCalled()
   })
+})
+
+it("denies opaque tools before plugin hooks for a marked run", async () => {
+  mockEgressTaint.mockResolvedValueOnce({
+    verified: true,
+    marks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+  })
+  expect(
+    await dispatchPreToolUse("Bash", { command: "curl example.com" }, "host-session", undefined, {
+      executionRunId: "host-run",
+    })
+  ).toMatchObject({ action: "deny", reason: expect.stringContaining("private content") })
+})
+
+it("H1: Host approval accepts only engine-proven native Read", async () => {
+  mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
+  const proof = { engine: "claude-agent-sdk" as const, name: "Read" }
+  try {
+    expect(
+      await dispatchPreToolUse("Read", {}, "marked", proof, { executionRunId: "marked-run" })
+    ).toEqual({ action: "allow" })
+    expect(
+      await dispatchPreToolUse("Read", {}, "marked", undefined, { executionRunId: "marked-run" })
+    ).toMatchObject({ action: "deny" })
+    expect(
+      await dispatchPreToolUse("mcp__third__Read", {}, "marked", proof, {
+        executionRunId: "marked-run",
+      })
+    ).toMatchObject({
+      action: "deny",
+    })
+    expect(
+      await dispatchPreToolUse("mcp__cognia-plugin-tools__Read", {}, "marked", proof, {
+        executionRunId: "marked-run",
+      })
+    ).toMatchObject({ action: "deny" })
+    expect(
+      await dispatchPreToolUse("Glob", {}, "marked", proof, { executionRunId: "marked-run" })
+    ).toMatchObject({ action: "deny" })
+  } finally {
+    mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+  }
+})
+
+it("R5: exact clear run does not aggregate an older marked session run, and reads once", async () => {
+  mockEgressTaint.mockClear()
+  mockEgressTaint.mockImplementation(async (context) => ({
+    verified: true,
+    marks: (context as { executionRunId?: string }).executionRunId === "old-marked" ? [{}] : [],
+  }))
+  expect(
+    await dispatchPreToolUse("Bash", {}, "same-session", undefined, {
+      sessionId: "same-session",
+      executionRunId: "current-clear",
+    })
+  ).toEqual({ action: "allow" })
+  expect(mockEgressTaint).toHaveBeenCalledTimes(1)
+  expect(mockEgressTaint.mock.calls[0][0]).toMatchObject({ executionRunId: "current-clear" })
 })

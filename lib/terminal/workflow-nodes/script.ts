@@ -110,6 +110,7 @@ registerNodeExecutor({
         timeoutMs: timeoutSec ? timeoutSec * 1000 : undefined,
         onAskVerdict: params.onAskVerdict,
         chatSessionId: ctx.runId,
+        credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
         runId: ctx.runId,
         source: "workflow",
       })
@@ -124,6 +125,7 @@ registerNodeExecutor({
       const { runTerminalDockAction } = await import("@/lib/terminal/dock-tool-handler")
       const result = await runTerminalDockAction({
         chatSessionId: ctx.runId,
+        credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
         action: "spawn",
         args: {
           command: composed,

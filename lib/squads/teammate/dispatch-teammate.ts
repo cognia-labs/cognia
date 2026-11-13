@@ -1,3 +1,4 @@
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 /**
  * `dispatchTeammate` — the reusable teammate-dispatch primitive (ADR-0022
  * addendum). This is the ultracode `agent()` equivalent: claim a teammate from
@@ -758,49 +759,52 @@ async function runExternalBacked(
     const result = await manager.execute(
       agentId,
       visible.prompt,
-      {
-        // The preset is only the executable. An absent teammate binding selects
-        // native mode; a retained gateway session carries its frozen binding. A
-        // teammate pinned to one exact config runs THAT saved agent, so its own
-        // gateway binding (or native mode) applies unless the teammate overrides.
-        ...(teammate.config?.cogniaModel !== undefined
-          ? { cogniaModel: teammate.config.cogniaModel }
-          : sessionId || resolveTeammatePinnedConfigId(teammate)
-            ? {}
-            : { cogniaModel: null }),
-        ...(sessionId ? { sessionId } : {}),
-        systemPrompt: visible.systemPrompt,
-        // The sidecar and text channels both honour the resolved model; the
-        // external channel used to drop it on the floor, so an external teammate
-        // silently ran on whatever its CLI's own config selected.
-        ...(model ? { model } : {}),
-        ...(merged.permissionMode ? { permissionMode: merged.permissionMode } : {}),
-        ...(merged.allowedTools ? { allowedTools: merged.allowedTools } : {}),
-        ...((cwdOverride ?? teamCtx.team.config?.workingDir)
-          ? { workingDirectory: cwdOverride ?? teamCtx.team.config?.workingDir }
-          : {}),
-        // The team's other repositories ride as extra roots for an agent that
-        // takes them; any other works in the primary repository only.
-        ...(mcpServers.length > 0 || processOrigin || extraRoots.length > 0
-          ? {
-              context: {
-                custom: {
-                  ...(mcpServers.length > 0 ? { mcpServers } : {}),
-                  ...(processOrigin ? { processOrigin } : {}),
-                  ...(extraRoots.length > 0 ? { additionalDirectories: [...extraRoots] } : {}),
+      bindPersonalEgressOptions(
+        {
+          // The preset is only the executable. An absent teammate binding selects
+          // native mode; a retained gateway session carries its frozen binding. A
+          // teammate pinned to one exact config runs THAT saved agent, so its own
+          // gateway binding (or native mode) applies unless the teammate overrides.
+          ...(teammate.config?.cogniaModel !== undefined
+            ? { cogniaModel: teammate.config.cogniaModel }
+            : sessionId || resolveTeammatePinnedConfigId(teammate)
+              ? {}
+              : { cogniaModel: null }),
+          ...(sessionId ? { sessionId } : {}),
+          systemPrompt: visible.systemPrompt,
+          // The sidecar and text channels both honour the resolved model; the
+          // external channel used to drop it on the floor, so an external teammate
+          // silently ran on whatever its CLI's own config selected.
+          ...(model ? { model } : {}),
+          ...(merged.permissionMode ? { permissionMode: merged.permissionMode } : {}),
+          ...(merged.allowedTools ? { allowedTools: merged.allowedTools } : {}),
+          ...((cwdOverride ?? teamCtx.team.config?.workingDir)
+            ? { workingDirectory: cwdOverride ?? teamCtx.team.config?.workingDir }
+            : {}),
+          // The team's other repositories ride as extra roots for an agent that
+          // takes them; any other works in the primary repository only.
+          ...(mcpServers.length > 0 || processOrigin || extraRoots.length > 0
+            ? {
+                context: {
+                  custom: {
+                    ...(mcpServers.length > 0 ? { mcpServers } : {}),
+                    ...(processOrigin ? { processOrigin } : {}),
+                    ...(extraRoots.length > 0 ? { additionalDirectories: [...extraRoots] } : {}),
+                  },
                 },
-              },
-            }
-          : {}),
-        // Live progress: translate the external protocol stream into the same
-        // CaptureStreamEvent frames the sidecar channel emits, so an external
-        // teammate streams tool-calls/text into the activity panel too.
-        onEvent: (event) => {
-          observeSession(event.sessionId)
-          capture?.(event)
+              }
+            : {}),
+          // Live progress: translate the external protocol stream into the same
+          // CaptureStreamEvent frames the sidecar channel emits, so an external
+          // teammate streams tool-calls/text into the activity panel too.
+          onEvent: (event) => {
+            observeSession(event.sessionId)
+            capture?.(event)
+          },
+          signal,
         },
-        signal,
-      },
+        { executionRunId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}` }
+      ),
       ...(onExecutorStopped ? ([onExecutorStopped] as const) : [])
     )
     observeSession(result.sessionId)
@@ -842,6 +846,9 @@ async function runTextOnly(
   signal.throwIfAborted()
   const visible = await visibleTeamTurn(teamCtx, prompt, systemPrompt, "teammate-text")
   const result = await executeAgent(visible.prompt, {
+    executionIdentity: {
+      runId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
+    },
     systemPrompt: visible.systemPrompt,
     ...(modelHint ? { model: modelHint } : {}),
     ...(typeof maxSteps === "number" && maxSteps > 0 ? { maxSteps } : {}),
@@ -1847,7 +1854,9 @@ export async function dispatchTeammate(
         }
         let prepared = environment.preparedByRepository.get(durableRepositoryId)
         if (!prepared) {
-          prepared = await environment.adapter.prepare(environment.profile, taskWorkspaceRoot)
+          prepared = await environment.adapter.prepare(environment.profile, taskWorkspaceRoot, {
+            executionRunId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
+          })
           environment.preparedByRepository.set(durableRepositoryId, prepared)
         }
         durableEnvironmentSession = await environment.adapter.openChild({

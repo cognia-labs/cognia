@@ -64,6 +64,7 @@ export interface RuntimeGatewayOptions {
 }
 
 export interface RuntimeInvokeInput {
+  credentialContext?: import("@/lib/execution/personal-egress").PersonalEgressContext
   scopeId: string
   server: McpServer
   toolName: string
@@ -188,6 +189,8 @@ export class McpRuntimeGateway {
     const startedAt = this.now()
     this.bumpMetric("toolCalls")
     try {
+      const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+      await assertPersonalEgress(input.credentialContext ?? {})
       const timeoutMs = Math.min(input.deadlineMs ?? this.toolTimeoutMs, this.toolTimeoutMs)
       const result = await this.withAuthRefreshRetry(
         input,
@@ -197,7 +200,8 @@ export class McpRuntimeGateway {
             { name: activeInput.toolName, arguments: activeInput.args ?? {} },
             timeoutMs,
             activeInput.signal,
-            "MCP tool call timed out"
+            "MCP tool call timed out",
+            activeInput.credentialContext
           ),
         true
       )
@@ -440,8 +444,14 @@ export class McpRuntimeGateway {
     toolCall = false
   ): Promise<T> {
     await this.authorize(input, toolCall)
+    const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+    // Run callers supply Host provenance; UI/discovery callers may be background.
+    const source = input.credentialContext ?? {}
+    await assertPersonalEgress(source)
     try {
-      return await operation(await this.getLease(input), input)
+      const lease = await this.getLease(input)
+      await assertPersonalEgress(source)
+      return await operation(lease, input)
     } catch (error) {
       if (!input.refreshAuth || !isExplicitUnauthorized(error)) throw error
       await this.reconnect(input.scopeId, input.server.id)
@@ -455,7 +465,9 @@ export class McpRuntimeGateway {
       }
       this.bumpMetric("retries")
       await this.authorize(retryInput, toolCall)
-      return operation(await this.getLease(retryInput), retryInput)
+      const lease = await this.getLease(retryInput)
+      await assertPersonalEgress(source)
+      return operation(lease, retryInput)
     }
   }
 
@@ -679,8 +691,11 @@ async function callToolWithTimeout(
   params: { name: string; arguments?: Record<string, unknown> },
   timeoutMs: number,
   signal: AbortSignal | undefined,
-  message: string
+  message: string,
+  personalContext: RuntimeInvokeInput["credentialContext"]
 ) {
+  const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+  await assertPersonalEgress(personalContext ?? {})
   if (signal?.aborted) throw new Error("MCP operation aborted")
   const controller = new AbortController()
   let timedOut = false
@@ -690,10 +705,13 @@ async function callToolWithTimeout(
     timedOut = true
     controller.abort()
   }, timeoutMs)
-  const operation = client.callTool(params, undefined, {
-    signal: controller.signal,
-    timeout: timeoutMs,
-  })
+  const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+  const operation = runPersonalEgressOperation(personalContext ?? {}, () =>
+    client.callTool(params, undefined, {
+      signal: controller.signal,
+      timeout: timeoutMs,
+    })
+  )
   try {
     return await withTimeout(operation, timeoutMs, signal, message)
   } catch (error) {

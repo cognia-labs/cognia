@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/execution/personal-sink", () => ({
   ...jest.requireActual("@/lib/execution/personal-sink"),
   assertPersonalSink: jest.fn(async () => {}),
@@ -64,6 +65,10 @@ jest.mock("@cognia/logging", () => ({
   },
 }))
 
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+const egressFixture = createDbTestFixture()
+beforeAll(egressFixture.initialize)
+afterAll(egressFixture.dispose)
 import { notify } from "@/lib/tauri/notification"
 import { notify as centerNotify } from "@/lib/notifications/runtime"
 import { notifyConversationOverIM } from "@/lib/notifications/conversation-notify"
@@ -582,7 +587,9 @@ describe("notification-integration", () => {
         },
       } as unknown as ScheduledTask
 
-      await notifyTaskEvent(webhookTask, mockExecution, "complete")
+      const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+      const run = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
+      await notifyTaskEvent(webhookTask, { ...mockExecution, id: run.id }, "complete")
 
       expect(fetch).toHaveBeenCalledWith(
         "https://example.com/webhook",

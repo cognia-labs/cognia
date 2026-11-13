@@ -16,7 +16,12 @@ import type {
 import { DEFAULT_UNIFIED_CONFIG, LEVEL_PRIORITY } from "./types"
 
 import { clearLevelRuleCache, resolveMinLevel } from "./level-rules"
-import { logContext } from "./context"
+import {
+  logContext,
+  captureLogEgressSource,
+  captureLogFailureSource,
+  mergeLogEgressSources,
+} from "./context"
 import { logSampler } from "./sampling"
 import { createConsoleTransport } from "./transports/console-transport"
 import { redactStructuredLogEntry } from "./redaction"
@@ -548,6 +553,8 @@ class CoreLogger implements Logger {
     // normalize -> redact -> dispatch
     const normalized = normalizeEntry(entry)
     const redacted = redactStructuredLogEntry(normalized, config.redaction)
+    const producer = mergeLogEgressSources(captureLogEgressSource(), captureLogFailureSource(error))
+    if (producer) redacted.hostEgressSource = producer
     dispatchEntry(redacted)
   }
 

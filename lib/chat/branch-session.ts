@@ -335,6 +335,12 @@ export async function branchSessionAtMessage(params: BranchSessionParams): Promi
       }
     })
   )
+  const seedMarks = mergePersonalMarks(
+    ...portable.map(
+      (message) =>
+        (message.metadata as { personalMarks?: PersonalMarkV1[] } | undefined)?.personalMarks
+    )
+  )
   const historicalStates = sourceRows.map((row) =>
     row?.sessionId === sourceId ? row.workingSetSnapshot : undefined
   )
@@ -374,7 +380,11 @@ export async function branchSessionAtMessage(params: BranchSessionParams): Promi
         },
       } as UIMessage,
     ]
-    child.branchSeed = { kind: "summary", content: summary }
+    child.branchSeed = {
+      kind: "summary",
+      content: summary,
+      ...(seedMarks.length ? { personalMarks: seedMarks } : {}),
+    }
   } else {
     // direct
     seededMessages = cloneMessages(portable)
@@ -407,7 +417,12 @@ export async function branchSessionAtMessage(params: BranchSessionParams): Promi
       // Mid-conversation (or no SDK session yet): re-establish the truncated
       // context explicitly on the first send.
       const { content } = renderBranchSeed(portable)
-      if (content) child.branchSeed = { kind: "transcript", content }
+      if (content)
+        child.branchSeed = {
+          kind: "transcript",
+          content,
+          ...(seedMarks.length ? { personalMarks: seedMarks } : {}),
+        }
     }
   }
 

@@ -119,6 +119,7 @@ export function createOcrAPI(
       runSlashCommand: ["native:filesystem", "media:image:read", "database:write"],
     },
     {
+      egressMethods: ["extract", "extractFile", "extractScreen", "runSlashCommand"],
       unguarded: ["registerProvider", "listRegistered", "listAvailableProviders", "isReady"],
     }
   )

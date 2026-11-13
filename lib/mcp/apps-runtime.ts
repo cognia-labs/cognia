@@ -191,6 +191,7 @@ export async function readMcpDownloadResource(
     scopeId,
     server: resolved.server,
     uri: resourceUri,
+    credentialContext,
     surface: "chat",
     interactive: true,
     refreshAuth: resolved.refreshAuth,

@@ -104,3 +104,68 @@ test("an unknown command type is a warning, not a crash", () => {
   route({ type: "nope" })
   assert.deepEqual(logged, [["warn", "unknown command type: nope"]])
 })
+
+test("acknowledges a sticky egress fence before returning to the Host", () => {
+  const { sessions, route, emitted } = routerHarness({
+    control: () => {
+      throw new Error("must not reach SDK")
+    },
+  })
+  const sendOptions = { personalEgressFenced: false }
+  sessions.set("private", { sendOptions })
+  route({
+    type: "control",
+    sessionId: "private",
+    requestId: "fence-1",
+    method: "updateSettings",
+    params: { personalEgressFence: true },
+  })
+  assert.equal(sendOptions.personalEgressFenced, true)
+  assert.deepEqual(emitted, [
+    {
+      type: "control_response",
+      sessionId: "private",
+      requestId: "fence-1",
+      method: "updateSettings",
+      ok: true,
+      result: { personalEgressFenced: true },
+    },
+  ])
+})
+
+test("G3: Host fence ACK follows quiescence and failed proof returns refusal", async () => {
+  const { sessions, route, emitted } = routerHarness({})
+  let finish!: () => void
+  const quiesced = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  sessions.set("s", { sendOptions: {}, fencePersonalEgress: () => quiesced })
+  route({
+    type: "control",
+    sessionId: "s",
+    requestId: "r",
+    method: "updateSettings",
+    params: { personalEgressFence: true },
+  })
+  assert.equal(emitted.length, 0)
+  finish()
+  await quiesced
+  await Promise.resolve()
+  assert.equal((emitted[0] as { ok?: boolean })?.ok, true)
+  sessions.set("bad", {
+    sendOptions: {},
+    fencePersonalEgress: async () => {
+      throw new Error("process alive")
+    },
+  })
+  route({
+    type: "control",
+    sessionId: "bad",
+    requestId: "bad",
+    method: "updateSettings",
+    params: { personalEgressFence: true },
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal((emitted[1] as { ok?: boolean })?.ok, false)
+})

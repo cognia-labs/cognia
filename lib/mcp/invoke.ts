@@ -127,6 +127,7 @@ export async function invokeMcpTool(
       : defaultMcpRuntimeGateway)
   try {
     const gatewayInput: RuntimeInvokeInput = {
+      credentialContext: input.credentialContext,
       scopeId,
       server: runtimeCredential.server,
       toolName,

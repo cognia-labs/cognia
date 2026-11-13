@@ -1,3 +1,4 @@
+import { markPluginSynchronousRenderer } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Message Part Renderer API.
  *
@@ -47,7 +48,11 @@ export function createMessagePartAPI(pluginId: string): PluginMessagePartAPI {
         )
         return () => {}
       }
-      const unregister = registerMessagePartRenderer(pluginId, type, component)
+      const unregister = registerMessagePartRenderer(
+        pluginId,
+        type,
+        markPluginSynchronousRenderer(pluginId, component)
+      )
       logger.info(`[messagePart] registered renderer for "${type}"`)
       return () => {
         unregister()

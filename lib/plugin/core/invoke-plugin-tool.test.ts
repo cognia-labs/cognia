@@ -1,3 +1,11 @@
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 import { pluginExecutionContext } from "./invocation-identity"
 /**
  * Tests for the unified plugin-tool invocation seam.
@@ -180,6 +188,23 @@ describe("resolvePluginToolByName", () => {
 })
 
 describe("invokePluginTool", () => {
+  it.each(["Read", "WebSearch", "Glob"])(
+    "G1: marked plugin %s never inherits native ownership",
+    async (name) => {
+      const tool = makeTool({ name })
+      __setInvokePluginToolDepsForTesting(makeDeps({ tools: [tool] }))
+      mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
+      try {
+        await expect(
+          invokePluginTool("plug-a", name, {}, { executionRunId: "marked-run" })
+        ).rejects.toMatchObject({ code: "personal-egress-denied" })
+        expect(tool.execute).not.toHaveBeenCalled()
+      } finally {
+        mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+      }
+    }
+  )
+
   afterEach(() => {
     __setInvokePluginToolDepsForTesting(null)
     __resetRegistryForTesting()

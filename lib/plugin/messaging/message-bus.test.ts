@@ -539,3 +539,21 @@ describe("MessageBus hardening (W3.6/W3.7)", () => {
     expect(count).toBeGreaterThanOrEqual(16)
   })
 })
+
+it("S2 debug event logs retain the sender's Host source", async () => {
+  const { loggers } = await import("../core/logger")
+  const { captureLogEgressSource } = await import("@cognia/logging/context")
+  const seen: unknown[] = []
+  const spy = jest.spyOn(loggers.manager, "debug").mockImplementation(() => {
+    seen.push(captureLogEgressSource())
+  })
+  try {
+    const bus = new MessageBus({ enableLogging: true })
+    await withPluginExecutionContext("s2-bus", { personalEgressBlocked: true }, async () =>
+      bus.emitFromPlugin("s2-bus", "private", { private: "value" })
+    )
+    expect(seen).toContainEqual({ version: 1, runIds: [], blocked: true })
+  } finally {
+    spy.mockRestore()
+  }
+})

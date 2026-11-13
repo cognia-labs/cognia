@@ -1,3 +1,4 @@
+import { bindPluginAttachmentMessage } from "@/lib/plugin/api/files-api"
 // Translates SDKMessage events from the Claude Agent SDK (via the sidecar)
 // into UIMessage parts in the shape AI SDK Elements expect.
 
@@ -1438,6 +1439,9 @@ export function makeUserMessage(
   manifest?: readonly AttachmentManifestEntry[]
 ): UIMessage {
   const messageId = id ?? `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  for (const entry of manifest ?? [])
+    for (const handle of Object.values(entry.pluginHandles ?? {}))
+      bindPluginAttachmentMessage(handle, messageId)
 
   if (typeof content === "string") {
     return {

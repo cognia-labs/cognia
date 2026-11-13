@@ -1,3 +1,7 @@
+import {
+  runPersonalEgressOperation,
+  type PersonalEgressContext,
+} from "@/lib/execution/personal-egress"
 // Owner-side share service: create / revoke / inspect public links.
 //
 // Every request goes through `proxyFetch`: the worker URL is whatever the user
@@ -235,12 +239,19 @@ async function hashShareFiles(
 }
 
 /** Withdraw a share whose files did not all arrive. True when it is gone. */
-async function withdrawShare(baseUrl: string, code: string, ownerToken: string): Promise<boolean> {
+async function withdrawShare(
+  baseUrl: string,
+  code: string,
+  ownerToken: string,
+  credentialContext?: PersonalEgressContext
+): Promise<boolean> {
   try {
-    const res = await proxyFetch(`${baseUrl}/v1/share/${encodeURIComponent(code)}`, {
-      method: "DELETE",
-      headers: { "X-Owner-Token": ownerToken, "Content-Type": "application/json" },
-    })
+    const res = await runPersonalEgressOperation(credentialContext ?? {}, () =>
+      proxyFetch(`${baseUrl}/v1/share/${encodeURIComponent(code)}`, {
+        method: "DELETE",
+        headers: { "X-Owner-Token": ownerToken, "Content-Type": "application/json" },
+      })
+    )
     return res.ok || res.status === 404
   } catch {
     return false
@@ -250,8 +261,11 @@ async function withdrawShare(baseUrl: string, code: string, ownerToken: string):
 /** Create a share link and mirror it locally. */
 export async function createShareLink(
   input: CreateShareInput,
-  endpoint?: ShareEndpoint
+  endpoint?: ShareEndpoint,
+  credentialContext?: PersonalEgressContext
 ): Promise<CreatedShare> {
+  const fetchForProducer: typeof proxyFetch = (url, init) =>
+    runPersonalEgressOperation(credentialContext ?? {}, () => proxyFetch(url, init))
   await assertPersonalShareSnapshot(input.payload)
   const ep = endpoint ?? (await resolveShareEndpoint())
   const headers = authHeaders(ep)
@@ -276,7 +290,7 @@ export async function createShareLink(
   assertShareRequestSize(serializedBody)
 
   await assertPersonalShareSnapshot(input.payload)
-  const res = await proxyFetch(`${ep.baseUrl}/v1/share`, {
+  const res = await fetchForProducer(`${ep.baseUrl}/v1/share`, {
     method: "POST",
     headers,
     body: serializedBody,
@@ -318,7 +332,7 @@ export async function createShareLink(
           material: material.bytes,
           entry,
           source: await files[index].open(),
-          fetchImpl: proxyFetch,
+          fetchImpl: fetchForProducer,
           signal: input.signal,
           onProgress: (done) =>
             input.onProgress?.({
@@ -333,7 +347,9 @@ export async function createShareLink(
         before += entry.size
       }
     } catch (error) {
-      const revoked = ownerToken ? await withdrawShare(ep.baseUrl, code, ownerToken) : false
+      const revoked = ownerToken
+        ? await withdrawShare(ep.baseUrl, code, ownerToken, credentialContext)
+        : false
       if (!revoked) await recordSharedLink(row)
       throw new ShareFilesUploadError(revoked, error)
     }
@@ -355,12 +371,18 @@ export async function createShareLink(
 }
 
 /** Revoke a share on the worker and flag the local mirror. */
-export async function revokeShareLink(code: string, endpoint?: ShareEndpoint): Promise<void> {
+export async function revokeShareLink(
+  code: string,
+  endpoint?: ShareEndpoint,
+  credentialContext?: PersonalEgressContext
+): Promise<void> {
   const { baseUrl, headers } = await resolveShareOwnerRequest(code, endpoint)
-  const res = await proxyFetch(`${baseUrl}/v1/share/${encodeURIComponent(code)}`, {
-    method: "DELETE",
-    headers,
-  })
+  const res = await runPersonalEgressOperation(credentialContext ?? {}, () =>
+    proxyFetch(`${baseUrl}/v1/share/${encodeURIComponent(code)}`, {
+      method: "DELETE",
+      headers,
+    })
+  )
   // 404 means it's already gone (expired/burned) — treat as success.
   if (!res.ok && res.status !== 404) {
     throw new ShareRequestError(res.status, await readError(res))
@@ -372,13 +394,16 @@ export async function revokeShareLink(code: string, endpoint?: ShareEndpoint): P
 /** Owner-only live stats (view count / expiry / revoked). Null if not found. */
 export async function getShareStats(
   code: string,
-  endpoint?: ShareEndpoint
+  endpoint?: ShareEndpoint,
+  credentialContext?: PersonalEgressContext
 ): Promise<ShareStats | null> {
   const { baseUrl, headers } = await resolveShareOwnerRequest(code, endpoint)
-  const res = await proxyFetch(`${baseUrl}/v1/share/${encodeURIComponent(code)}/stats`, {
-    method: "GET",
-    headers,
-  })
+  const res = await runPersonalEgressOperation(credentialContext ?? {}, () =>
+    proxyFetch(`${baseUrl}/v1/share/${encodeURIComponent(code)}/stats`, {
+      method: "GET",
+      headers,
+    })
+  )
   if (res.status === 404) return null
   if (!res.ok) throw new ShareRequestError(res.status, await readError(res))
   return (await res.json()) as ShareStats

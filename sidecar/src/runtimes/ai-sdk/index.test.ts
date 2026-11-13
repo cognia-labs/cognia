@@ -64,6 +64,11 @@ test(
         events.some((event) => event.type === "session_disposed"),
         false
       )
+      await assert.rejects(
+        session.fencePersonalEgress(),
+        /isolation unconfirmed|live foreground process groups/,
+        "H3: ended direct PIDs do not prove descendant isolation"
+      )
     } finally {
       session.closeInput()
       await session.closed
@@ -87,6 +92,7 @@ test("turn end and interrupt leave background jobs live; close proves disposal o
   })
   let live = true
   let kills = 0
+  let processOwner = ""
   const session = startSession({
     provider: "openai",
     sessionId: "background-child",
@@ -106,8 +112,10 @@ test("turn end and interrupt leave background jobs live; close proves disposal o
         if (method === "workspace.portEnv") return {}
         if (method === "jobs.spawn") {
           assert.deepEqual(params.owner, { kind: "app" })
+          processOwner = String((params.origin as { sessionId?: unknown }).sessionId)
+          assert.notEqual(processOwner, "background-child")
           assert.deepEqual(params.origin, {
-            sessionId: "background-child",
+            sessionId: processOwner,
             childRunId: "child",
             dispatchEpoch: 1,
           })
@@ -122,7 +130,7 @@ test("turn end and interrupt leave background jobs live; close proves disposal o
         }
         if (method === "jobs.list")
           return {
-            originSessionId: "background-child",
+            originSessionId: processOwner,
             jobs: live ? [{ id: "background-job", status: "running", startedAtMs: 1 }] : [],
           }
         throw new Error(`Unexpected RPC ${method}`)
@@ -148,14 +156,21 @@ test("turn end and interrupt leave background jobs live; close proves disposal o
     events.some((event) => event.type === "session_disposed"),
     false
   )
-  session.closeInput()
+  let fenced = false
+  const fence = session.fencePersonalEgress!().then(() => {
+    fenced = true
+  })
   await new Promise<void>((resolve) => setImmediate(resolve))
   assert.equal(kills, 1)
+  assert.equal(fenced, false, "G3: private admission waits for actual job reaping")
   assert.equal(
     events.some((event) => event.type === "session_disposed"),
     false
   )
   disposed()
+  await fence
+  assert.equal(fenced, true)
+  session.closeInput()
   await session.closed
   assert.equal(live, false)
   assert.equal(events.filter((event) => event.type === "session_disposed").length, 1)
@@ -199,7 +214,7 @@ test("a detached job survives ordinary disposal and prevents durable proof until
             // Model the Host's owner/origin distinction. App-owned work disappears
             // from owner-only queries even though its process is still running.
             return {
-              originSessionId: "detached-live",
+              originSessionId: String((params.owner as { sessionId?: unknown })?.sessionId),
               jobs: params.includeOrigin && job ? [job] : [],
             }
           }
@@ -227,8 +242,9 @@ test("a detached job survives ordinary disposal and prevents durable proof until
     session.closeInput()
     await session.closed
     assert.equal(job?.status, "running")
+    assert.notEqual((job?.origin as { sessionId?: string })?.sessionId, "detached-live")
     assert.deepEqual(job?.origin, {
-      sessionId: "detached-live",
+      sessionId: String((job?.origin as { sessionId?: unknown })?.sessionId),
       ...(durable ? { childRunId: "child", dispatchEpoch: 1 } : {}),
     })
     assert.equal(
@@ -5404,4 +5420,103 @@ test("dispatchAiSdk honors an explicit zero retry budget before any output", asy
   assert.equal(calls, 1, "an explicitly metered request must never be retried")
   const ended = events.find((e) => e.type === "session_ended")
   assert.match(ended!.error, /no events for 30ms/)
+})
+
+test("H1: a marked AI SDK turn retains the actual registered Host search port", async () => {
+  const { events, emit } = captureEmit()
+  let searched = false
+  const session: ReturnType<typeof startSession> = startSession({
+    provider: "openai",
+    sessionId: "marked-search",
+    firstPrompt: "search",
+    sendOptions: {
+      model: "gpt-x",
+      permissionMode: "bypassPermissions",
+      personalEgressFenced: true,
+      providerCredentials: { apiKey: "k", protocol: "openai" },
+      pluginTools: [
+        { name: "web_search", pluginId: "cognia-web-builtin", jsonSchema: { type: "object" } },
+      ],
+    },
+    emit(frame) {
+      emit(frame)
+      if (frame.type === "plugin_tool_exec")
+        queueMicrotask(() =>
+          session.pendingPluginToolCalls
+            .get(String(frame.toolUseId))!
+            .resolve({ result: "search result" })
+        )
+    },
+    log() {},
+    streamText(args) {
+      return {
+        fullStream: (async function* () {
+          assert.equal(
+            await streamArgs(args).tools.web_search!.execute({}, { toolCallId: "search-call" }),
+            "search result"
+          )
+          searched = true
+          yield { type: "finish", finishReason: "stop" }
+        })(),
+        usage: Promise.resolve({ promptTokens: 1, completionTokens: 1 }),
+      }
+    },
+  })
+  await waitForEvent(events, (frame) => frame.type === "session_ended")
+  assert.equal(searched, true)
+  session.closeInput()
+})
+
+test("F3 AI SDK child recall does not wait on its parent delegation wrapper", async () => {
+  const { events, emit } = captureEmit()
+  let completed = false
+  let relayId = ""
+  const session = startSession({
+    provider: "openai",
+    sessionId: "f3-ai",
+    firstPrompt: "delegate",
+    sendOptions: {
+      model: "gpt-test",
+      permissionMode: "bypassPermissions",
+      providerCredentials: { apiKey: "k", protocol: "openai" },
+      pluginTools: [
+        {
+          name: "dispatch_agent",
+          pluginId: "cognia-dispatch-agent",
+          timeoutMs: 0,
+          jsonSchema: { type: "object" },
+        },
+      ],
+    },
+    emit(frame) {
+      emit(frame)
+      if (frame.type === "plugin_tool_exec") relayId = String(frame.toolUseId)
+    },
+    log() {},
+    streamText(raw) {
+      return {
+        fullStream: (async function* () {
+          const child = streamArgs(raw).tools.dispatch_agent!.execute(
+            {},
+            { toolCallId: "delegation", messages: [] }
+          )
+          await waitForEvent(events, (event) => event.type === "plugin_tool_exec")
+          await session.fencePersonalEgress()
+          session.pendingPluginToolCalls.get(relayId)!.resolve({ result: "private child memory" })
+          await child
+          completed = true
+          yield { type: "finish", finishReason: "stop" }
+        })(),
+        usage: Promise.resolve({ promptTokens: 1, completionTokens: 1 }),
+      }
+    },
+  })
+  try {
+    await waitForEvent(events, (event) => event.type === "session_ended")
+    assert.equal(completed, true)
+  } finally {
+    session.pendingPluginToolCalls.get(relayId)?.resolve({ result: "cleanup" })
+    session.closeInput()
+    await session.closed
+  }
 })

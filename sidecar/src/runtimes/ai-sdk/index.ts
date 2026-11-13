@@ -1,4 +1,12 @@
+import { pluginToolIsOpaqueEgress } from "../../tools/plugin/proxy.ts"
 import { drainPendingRoundTrips } from "../common/round-trips.ts"
+import {
+  personalEgressState,
+  quiescePersonalEgress,
+  beginPersonalEgressOperation,
+  opaquePersonalTool,
+  personalToolDenied,
+} from "../../policy/personal-egress.ts"
 import {
   createSemanticConsumers,
   SemanticInterceptionError,
@@ -230,6 +238,7 @@ export function dispatchAiSdk({
   buildMcpTools: buildMcpToolsOverride,
   streamIdleTimeoutMs,
 }: DispatchAiSdkOptions) {
+  personalEgressState(sendOptions)
   // Code-level protocol adapters round-trip through the renderer; the host
   // resolves `protocol_adapter_*` against this Map (per-session, like
   // pendingPluginToolCalls).
@@ -980,7 +989,8 @@ export function dispatchAiSdk({
           // even when stale/global MCP or ToolSearch settings survive upstream.
           toolsCache = {}
         } else {
-          const { buildAiSdkTools } = await import("../../tools/adapters/ai-sdk.ts")
+          const { buildAiSdkTools, aiSdkToolPolicyName } =
+            await import("../../tools/adapters/ai-sdk.ts")
           const { createDoomLoopGuard } = await import("../../policy/doom-loop.ts")
           // Own the tool gate's guard here so it can be reset per turn (F1).
           const toolDoomGuard = createDoomLoopGuard()
@@ -1058,6 +1068,40 @@ export function dispatchAiSdk({
                 "warn",
                 `external MCP setup failed, continuing without it: ${errorToMessage(err)}`
               )
+            }
+          }
+
+          for (const [name, definition] of Object.entries(toolsCache ?? {})) {
+            const execute = definition.execute
+            const policyName = aiSdkToolPolicyName(definition) ?? name
+            const pluginEntry =
+              aiSdkToolPolicyName(definition) &&
+              (sendOptions.pluginTools ?? []).find(
+                (entry) => policyName === "mcp__cognia-plugin-tools__" + entry.name
+              )
+            if (
+              !execute ||
+              (pluginEntry && !pluginToolIsOpaqueEgress(pluginEntry)) ||
+              !opaquePersonalTool(policyName, sendOptions)
+            )
+              continue
+            definition.execute = (input, context) => {
+              if (personalEgressState(sendOptions).fenced) {
+                if (personalToolDenied(policyName, sendOptions))
+                  throw new Error("Personal egress is fenced")
+                return execute(input, context)
+              }
+              const finish = beginPersonalEgressOperation(
+                sendOptions,
+                /(?:sandbox_bash)/i.test(name),
+                context?.toolCallId
+              )
+              try {
+                return Promise.resolve(execute(input, context)).finally(finish)
+              } catch (error) {
+                finish()
+                throw error
+              }
             }
           }
 
@@ -1866,6 +1910,12 @@ export function dispatchAiSdk({
 
   return {
     sdkSessionId,
+    fencePersonalEgress: async (excludedToolUseIds: readonly string[] = []) => {
+      await quiescePersonalEgress(sendOptions, excludedToolUseIds)
+      await toolSession.disposeProcesses()
+      if (await toolSession.hasLiveProcesses())
+        throw new Error("Personal process isolation unconfirmed; private content withheld")
+    },
     closed,
     // Marks this dispatcher as a long-lived, multi-turn session: the host keeps
     // the session entry across per-turn `session_ended` events so the in-process

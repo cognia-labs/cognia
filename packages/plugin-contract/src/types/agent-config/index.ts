@@ -595,6 +595,9 @@ export type SendOptions = {
   transcriptInvalidationId?: string
   /** Host-derived identity of the readers and withheld canonical message ids. */
   personalVisibilityDigest?: string
+  /** Sticky Host egress fence; no approval or disclosure can relax it. */
+  personalEgressFenced?: boolean
+  personalEgressReadTools?: string[]
   /** Host proof that the current canonical projection contains withheld message ids. */
   personalVisibilityHasWithheld?: boolean
   /** Reader-only provenance of history-derived prompt additions; grants no identity. */
@@ -1317,6 +1320,8 @@ export interface PermissionRequestEvent {
   toolUseID: string
   toolName: string
   input: Record<string, unknown>
+  /** Minted by the native SDK gate from its installed registry, never tool input. */
+  nativeTool?: { engine: "claude-agent-sdk"; name: string }
   title?: string
   displayName?: string
   description?: string
@@ -2844,7 +2849,11 @@ export interface ChatSession {
    * direct branch); a `summary` seed carries the LLM summary (summary branch).
    * Undefined once consumed, and on tail branches that use SDK fork instead.
    */
-  branchSeed?: { kind: "transcript" | "summary"; content: string }
+  branchSeed?: {
+    kind: "transcript" | "summary"
+    content: string
+    personalMarks?: import("../execution/acting-identity").PersonalMarkV1[]
+  }
   /**
    * Durable handoff state for a task dispatched into a resource-workbench
    * sidechat. The first prompt remains here until that sidechat successfully

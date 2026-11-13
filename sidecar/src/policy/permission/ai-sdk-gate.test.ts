@@ -978,3 +978,15 @@ test("rewritten inputs re-run mandatory ruleset, sandbox scope and interruption 
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("a mid-run fence overrides AI SDK bypass and remembered grants", async () => {
+  const sendOptions = { permissionMode: "bypassPermissions", personalEgressFenced: false }
+  const gate = createToolPermissionGate({ sendOptions })
+  sendOptions.personalEgressFenced = true
+  for (const name of ["Bash", "WebFetch", "mcp__third__read"])
+    await assert.rejects(gate(name, {}), /private content/)
+  // The actual adapter supplies the qualified Host port; a bare lookalike
+  // cannot establish ownership.
+  await gate("mcp__cognia-plugin-tools__web_search", {})
+  await assert.rejects(gate("web_search", {}), /private content/)
+})

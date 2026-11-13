@@ -422,7 +422,7 @@ const definition = definePlugin({
         }
         // Resolve now so an unservable choice fails here, not on the next call.
         const route = engineFor(callCtx, url)
-        const paneShown = browserApi().openPane(url ?? "", {
+        const paneShown = await browserApi().openPane(url ?? "", {
           ...(paneBackend(choice) ? { backend: paneBackend(choice) } : {}),
           ...(sessionId ? { chatSessionId: sessionId } : {}),
         })
@@ -471,7 +471,7 @@ const definition = definePlugin({
         const page = await route.engine.getPage().catch(() => null)
         const pageUrl = page?.url || lastUrlFor(callCtx) || ""
         backendChoices.set(sessionId, "embedded")
-        const paneShown = browserApi().openPane(pageUrl, {
+        const paneShown = await browserApi().openPane(pageUrl, {
           backend: "embedded",
           chatSessionId: sessionId,
         })

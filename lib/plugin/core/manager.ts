@@ -1146,10 +1146,14 @@ export class PluginManager {
         "plugin_python_module_getattr",
       ].includes(command)
     ) {
-      return withPluginExecutionContext(
-        args.pluginId,
-        pluginDispatchContext(args.pluginId),
-        dispatch
+      const source = pluginExecutionContext(args.pluginId) ?? pluginDispatchContext(args.pluginId)
+      const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+      return runPersonalEgressOperation(
+        source,
+        (operation) => {
+          return withPluginExecutionContext(args.pluginId as string, operation, dispatch)
+        },
+        true
       )
     }
     return dispatch()
@@ -2513,32 +2517,54 @@ export class PluginManager {
 
   /** Route one host request and write its answer back to the plugin. */
   private async handlePythonHostRequest(frame: PythonHostRequestFrame): Promise<void> {
-    const outcome = await routePythonHostRequest(frame, {
-      getContext: (pluginId) => this.contexts.get(pluginId) ?? null,
+    const source = pluginExecutionContext(frame.pluginId) ?? pluginDispatchContext(frame.pluginId)
+    return withPluginExecutionContext(frame.pluginId, source, async () => {
+      const { personalEgressFenced, runPersonalEgressOperation } =
+        await import("@/lib/execution/personal-egress")
+      const { PERSONAL_EGRESS_DENIAL } =
+        await import("@cognia/plugin-contract/types/execution/personal-egress")
+      const outcome = (await personalEgressFenced(source))
+        ? { ok: false as const, error: PERSONAL_EGRESS_DENIAL }
+        : await routePythonHostRequest(frame, {
+            getContext: (pluginId) => this.contexts.get(pluginId) ?? null,
+          })
+      try {
+        const send = (fenced: boolean) =>
+          this.invokeNativeHost("plugin_python_host_response", {
+            pluginId: frame.pluginId,
+            generation: frame.generation,
+            requestId: frame.requestId,
+            ok: !fenced && outcome.ok,
+            result: !fenced && outcome.ok ? outcome.result : null,
+            error: fenced ? PERSONAL_EGRESS_DENIAL : outcome.ok ? null : outcome.error,
+          })
+        try {
+          await runPersonalEgressOperation(source, async () => send(false))
+        } catch (error) {
+          if (!(
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            error.code === "personal-egress-denied"
+          ))
+            throw error
+          await send(true)
+        }
+      } catch (error) {
+        // The host is gone or the generation went stale — the plugin's own
+        // timeout is the backstop. Record it rather than swallowing: a burst of
+        // these means the response path itself is broken.
+        recordSilentFailure(
+          "python-runtime",
+          {
+            site: "manager.handlePythonHostRequest",
+            message: `Failed to answer host request ${frame.requestId} for ${frame.pluginId}`,
+            expected: false,
+          },
+          error
+        )
+      }
     })
-    try {
-      await this.invokeNativeHost("plugin_python_host_response", {
-        pluginId: frame.pluginId,
-        generation: frame.generation,
-        requestId: frame.requestId,
-        ok: outcome.ok,
-        result: outcome.ok ? outcome.result : null,
-        error: outcome.ok ? null : outcome.error,
-      })
-    } catch (error) {
-      // The host is gone or the generation went stale — the plugin's own
-      // timeout is the backstop. Record it rather than swallowing: a burst of
-      // these means the response path itself is broken.
-      recordSilentFailure(
-        "python-runtime",
-        {
-          site: "manager.handlePythonHostRequest",
-          message: `Failed to answer host request ${frame.requestId} for ${frame.pluginId}`,
-          expected: false,
-        },
-        error
-      )
-    }
   }
 
   private applyCompatibilityPolicy(

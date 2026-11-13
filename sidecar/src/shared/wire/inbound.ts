@@ -23,6 +23,9 @@ import type {
 
 /** Host-visible fields; rail-owned options remain additive on the wire. */
 export interface SendOptions {
+  personalEgressFenced?: boolean
+  personalEgressReadTools?: string[]
+  personalEgressState?: { fenced: boolean }
   contentSafety?: { injectionProtection: boolean }
   semanticInterceptors?: Array<"model.stream.transform" | "agent.turn.decide">
   approvalTtlMs?: number

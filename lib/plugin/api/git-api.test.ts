@@ -253,3 +253,33 @@ describe("createGitAPI", () => {
     })
   })
 })
+
+it.each([false, true])(
+  "S2 Git callback network operations retain the run fence (marked=%s)",
+  async (marked) => {
+    const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+    resetPermissionGuard()
+    getPermissionGuard({ confirmDangerousByDefault: false }).registerPlugin(PLUGIN, ["git:write"])
+    mockRootDir = "/repo"
+    jest.mocked(git.gitFetch).mockClear()
+    jest.mocked(git.gitPush).mockClear()
+    const api = createGitAPI(PLUGIN)
+    await withPluginExecutionContext(
+      PLUGIN,
+      marked ? { personalEgressBlocked: true } : {},
+      async () => {
+        if (marked) {
+          await expect(api.fetch()).rejects.toMatchObject({ code: "personal-egress-denied" })
+          await expect(api.push()).rejects.toMatchObject({ code: "personal-egress-denied" })
+          expect(git.gitFetch).not.toHaveBeenCalled()
+          expect(git.gitPush).not.toHaveBeenCalled()
+        } else {
+          await api.fetch()
+          await api.push()
+          expect(git.gitFetch).toHaveBeenCalledTimes(1)
+          expect(git.gitPush).toHaveBeenCalledTimes(1)
+        }
+      }
+    )
+  }
+)

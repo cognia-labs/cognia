@@ -1,3 +1,5 @@
+import { runPersonalEgressOperation } from "@/lib/execution/personal-egress"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Turns a repository reference into a checkout a plugin can read.
  *
@@ -406,15 +408,20 @@ export function defaultAcquireDeps(
       }
       return transport.call<boolean>("plugin_workspace_repo_remove", { pluginId, segments })
     },
-    clone: gitCloneGuarded,
+    clone: (...args) => runWorkspaceGit(pluginId, () => gitCloneGuarded(...args)),
     headOf: defaultHeadOf,
     // `cacheIsReusable` asks "was this cache dir cloned from the URL we are
     // about to clone from" — that is the fetch side of the remote, not the push
     // side (a fork's push URL routinely differs from where it fetches).
     remotesOf: async (root) =>
       (await gitRemotes(root)).map(({ name, fetchUrl }) => ({ name, url: fetchUrl })),
-    fetchAll: (root) => gitFetch(root),
-    fetchRef: (root, ref, options) => gitFetch(root, "origin", false, ref, options),
+    fetchAll: (root) => runWorkspaceGit(pluginId, () => gitFetch(root)),
+    fetchRef: (root, ref, options) =>
+      runWorkspaceGit(pluginId, () => gitFetch(root, "origin", false, ref, options)),
     checkoutRef: (root, ref) => gitCheckoutBranch(root, ref),
   }
+}
+
+async function runWorkspaceGit<T>(pluginId: string, dispatch: () => Promise<T>): Promise<T> {
+  return runPersonalEgressOperation(pluginExecutionContext(pluginId) ?? {}, () => dispatch(), true)
 }

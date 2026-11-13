@@ -331,3 +331,21 @@ describe("outbound media encryption and CDN handshake", () => {
     expect(mockProxyFetch).not.toHaveBeenCalled()
   })
 })
+
+it("S2 denies arbitrary media download for a marked delivery producer", async () => {
+  const fetchAttachment = jest.fn()
+  const httpRequest = jest.fn()
+  await expect(
+    uploadIlinkMedia({
+      adapterId: "wx1",
+      baseUrl: "https://api.test",
+      token: "secret",
+      userId: "u",
+      segment: { type: "image", url: "https://outside.test/private" },
+      tauri: { fetchAttachment, httpRequest } as unknown as AdapterContext["tauri"],
+      credentialContext: { personalEgressBlocked: true },
+    })
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(fetchAttachment).not.toHaveBeenCalled()
+  expect(httpRequest).not.toHaveBeenCalled()
+})

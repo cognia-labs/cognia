@@ -79,3 +79,35 @@ describe("installed external-agent host", () => {
     uninstallSecond()
   })
 })
+
+it("R2: an installed Host preserves the optional producer context on plugin hooks", () => {
+  const cli = host("producer-context")
+  const tool = jest.fn()
+  const permission = jest.fn()
+  cli.hooks.pluginHooks = {
+    dispatchExternalAgentToolCall: tool,
+    dispatchExternalAgentPermissionRequest: permission,
+  }
+  const uninstall = installExternalAgentHost(cli)
+  const execution = { executionRunId: "private-producer" }
+  try {
+    getInstalledExternalAgentHost()!.hooks.pluginHooks!.dispatchExternalAgentToolCall(
+      "a",
+      "s",
+      "Read",
+      {},
+      execution
+    )
+    getInstalledExternalAgentHost()!.hooks.pluginHooks!.dispatchExternalAgentPermissionRequest(
+      "a",
+      "s",
+      "Read",
+      "private reason",
+      execution
+    )
+    expect(tool).toHaveBeenCalledWith("a", "s", "Read", {}, execution)
+    expect(permission).toHaveBeenCalledWith("a", "s", "Read", "private reason", execution)
+  } finally {
+    uninstall()
+  }
+})

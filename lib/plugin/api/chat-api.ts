@@ -1,3 +1,5 @@
+import { bindPersonalMessageEgressSource } from "@/lib/execution/personal-marks"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Chat API — middleware registration, plus the composer write surface.
  *
@@ -126,6 +128,7 @@ export function createChatAPI(
         return null
       }
       const id = `plugin-${pluginId}-${nanoid(8)}`
+      bindPersonalMessageEgressSource(id, pluginExecutionContext(pluginId))
       // Addressed write. The previous call was `state.appendMessage(msg)`, which
       // ignores `sessionId` entirely and always writes to whichever session has
       // focus — so a plugin appending to a background session landed its message

@@ -1,3 +1,22 @@
+const mockResolveConsumingRun = jest.fn(
+  async (_sessionId: string) => undefined as { id: string } | undefined
+)
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  resolveExecutingRun: (sessionId: string) => mockResolveConsumingRun(sessionId),
+}))
+jest.mock("@/lib/plugin/core/module-plugin-api", () => ({
+  ...jest.requireActual("@/lib/plugin/core/module-plugin-api"),
+  buildModulePluginNamespace: () => ({}),
+}))
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 /**
  * Tests for the plugin agent executor.
  *
@@ -95,6 +114,7 @@ const acquireWorkspaceBundleMock = jest.fn(
 const settleWorkspaceBundleMock = jest.fn(async () => [])
 const abortWorkspaceBundleMock = jest.fn(async () => [])
 jest.mock("@/lib/task-workspace/client", () => ({
+  ...jest.requireActual("@/lib/task-workspace/client"),
   acquireWorkspaceBundle: (input: { roots: Array<{ sourceRoot: string }> }) =>
     acquireWorkspaceBundleMock(input),
 }))
@@ -136,6 +156,7 @@ jest.mock("@/lib/claude/provider-attempt-options", () => ({
   resolveProviderAttemptOptions: (...args: unknown[]) => mockResolveProviderAttemptOptions(...args),
 }))
 jest.mock("@cognia/redact", () => ({
+  ...jest.requireActual("@cognia/redact"),
   hasNoLeakingPiiDeep: (value: unknown) => mockHasNoLeakingPiiDeep(value),
   // Read by the Prompt Center when it validates a published override.
   hasNoLeakingPii: () => true,
@@ -284,6 +305,90 @@ describe("executeAgent", () => {
       expect(result.text).toBe("safe display")
       expect(result.object).toEqual({ raw: true })
     })
+
+    it.each([
+      { marked: false, run: true, session: false, explicit: false },
+      { marked: true, run: true, session: false, explicit: false },
+      { marked: true, run: false, session: true, explicit: false },
+      { marked: true, run: false, session: false, explicit: true },
+      { marked: false, run: false, session: true, explicit: false },
+    ])(
+      "S1: completion interceptor ctx.network follows proven content ownership %j",
+      async ({ marked, run, session, explicit }) => {
+        primeTextChannel(["completion content"])
+        const { createPluginContext } = await import("@/lib/plugin/core/context")
+        const { getPermissionGuard } = await import("@/lib/plugin/security/permission-guard")
+        const pluginId = "completion-network"
+        getPermissionGuard().registerPlugin(pluginId, ["network:fetch"])
+        const ctx = createPluginContext(
+          {
+            manifest: {
+              id: pluginId,
+              type: "frontend",
+              permissions: ["network:fetch"],
+              networkAccess: { allowedDomains: ["*"], reasoning: "Completion boundary regression" },
+            },
+            source: "builtin",
+            path: "/test",
+            config: {},
+          } as never,
+          { createPluginServicesAPI: () => ({}) } as never
+        )
+        const originalFetch = globalThis.fetch
+        const send = jest.fn(async () => new Response("ok", { status: 200 }))
+        globalThis.fetch = send as typeof fetch
+        mockEgressTaint.mockImplementation(async (...args: unknown[]) => ({
+          verified: true,
+          marks:
+            marked && (args[0] as { executionRunId?: string }).executionRunId === "completion-owner"
+              ? [{}]
+              : [],
+        }))
+        const { getPluginConsentBroker } = await import("@/lib/plugin/security/consent-broker")
+        const consent = jest.spyOn(getPluginConsentBroker(), "request").mockResolvedValue(true)
+        let denial: unknown
+        registerInterceptor(
+          createInterceptorRegistration({
+            pluginId,
+            pointId: "model.stream.transform",
+            semantic: "transform",
+            source: "interceptors",
+            handler: (async (part: unknown) => {
+              try {
+                await ctx.network.fetch("https://example.com/collect")
+              } catch (error) {
+                denial = error
+              }
+              return part
+            }) as never,
+          })
+        )
+        try {
+          mockResolveConsumingRun.mockResolvedValue(
+            session && marked ? { id: "completion-owner" } : undefined
+          )
+          await runCompletionRail("hi", {
+            ...(run
+              ? { sessionId: "consumer-session", executionIdentity: { runId: "completion-owner" } }
+              : {}),
+            ...(session ? { sessionId: "completion-session" } : {}),
+            ...(explicit ? { personalMarks: [{}] as never } : {}),
+          })
+          if (run)
+            expect(mockEgressTaint).not.toHaveBeenCalledWith(
+              expect.objectContaining({ sessionId: "consumer-session" })
+            )
+          expect(send).toHaveBeenCalledTimes(marked ? 0 : 1)
+          if (marked) expect(denial).toMatchObject({ code: "personal-egress-denied" })
+          else expect(denial).toBeUndefined()
+        } finally {
+          consent.mockRestore()
+          globalThis.fetch = originalFetch
+          mockResolveConsumingRun.mockResolvedValue(undefined)
+          mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+        }
+      }
+    )
 
     it("uses the existing per-call responder for completion approvals and denies missing responders", async () => {
       primeTextChannel(["approved"])
@@ -1465,10 +1570,10 @@ describe("executeAgent", () => {
       expect(decision).toEqual({ decision: "allow", updatedInput: undefined })
     })
 
-    it("does not attach a permission responder when no canUseTool is given", async () => {
+    it("R1: without a plugin gate the original approval UI retains the request", async () => {
       await executeAgent("x", { toolsEnabled: true })
-      const capArg = mockRunAndCapture.mock.calls[0][3] as { onPermissionRequest?: unknown }
-      expect(capArg.onPermissionRequest).toBeUndefined()
+      const cap = mockRunAndCapture.mock.calls[0][3] as { onPermissionRequest?: unknown }
+      expect(cap.onPermissionRequest).toBeUndefined()
     })
 
     it("wires onPostToolUse as a tool-result review responder + enables review on sendOptions", async () => {

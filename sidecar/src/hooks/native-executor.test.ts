@@ -42,7 +42,11 @@ test("native hook executor installs only its PII boundary and constrains prompt 
   assert.deepEqual(outcome, { output: '{"additionalContext":"approved"}' })
   assert.deepEqual(calls[0]!.options.settingSources, [])
   assert.equal(calls[0]!.options.sandbox?.allowNestedUserNamespaces, false)
-  assert.deepEqual(Object.keys(calls[0]!.options.hooks!), ["PostToolUse", "PostToolUseFailure"])
+  assert.deepEqual(Object.keys(calls[0]!.options.hooks!), [
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PreToolUse",
+  ])
   assert.deepEqual(calls[0]!.options.allowedTools, [])
   assert.equal(calls[0]!.options.maxTurns, 1)
   assert.match(calls[0]!.prompt, /hook-origin depth="1"/)
@@ -215,4 +219,62 @@ test("native hook executor blocks exhausted budget and refuses recursion", async
   assert.deepEqual(await fresh({ type: "prompt", prompt: "x" }, "{}", { depth: 1 }), {
     warning: "hook recursion depth exceeded (maximum 1)",
   })
+})
+
+test("R4: nested hooks keep local reads and fence network-capable calls live", async () => {
+  const calls: NativeHookQueryInput[] = []
+  let fenced = true
+  const execute = createNativeHookExecutor({
+    personalEgressFenced: () => fenced,
+    queryFn: fakeQuery([{ type: "result", subtype: "success", result: "{}" }], calls),
+    allowedTools: ["Bash"],
+  })
+  assert.match(
+    (await execute({ type: "mcp_tool", server: "fs", tool: "read" }, "{}")).warning ?? "",
+    /skipped/
+  )
+  assert.equal(calls.length, 0)
+  fenced = false
+  await execute({ type: "agent", prompt: "work" }, "{}")
+  fenced = true
+  const hook = calls[0]!.options.hooks!.PreToolUse![0]!.hooks[0]!
+  const result = await hook(
+    { hook_event_name: "PreToolUse", tool_name: "Bash" } as never,
+    undefined,
+    { signal: new AbortController().signal }
+  )
+  assert.equal(
+    (result as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
+      ?.permissionDecision,
+    "deny"
+  )
+  const localRead = await hook(
+    { hook_event_name: "PreToolUse", tool_name: "Read" } as never,
+    undefined,
+    { signal: new AbortController().signal }
+  )
+  assert.equal(
+    (localRead as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
+      ?.permissionDecision,
+    undefined
+  )
+})
+
+test("F4: fenced MCP guard denies PreToolUse and only warns for Stop", async () => {
+  const calls: NativeHookQueryInput[] = []
+  const execute = createNativeHookExecutor({
+    personalEgressFenced: () => true,
+    queryFn: fakeQuery([], calls),
+  })
+  assert.match(
+    (await execute({ type: "mcp_tool", server: "s", tool: "t" }, "{}", { eventName: "PreToolUse" }))
+      .block ?? "",
+    /guard could not be consulted/
+  )
+  const stop = await execute({ type: "mcp_tool", server: "s", tool: "t" }, "{}", {
+    eventName: "Stop",
+  })
+  assert.match(stop.warning ?? "", /skipped/)
+  assert.equal(stop.block, undefined)
+  assert.equal(calls.length, 0)
 })

@@ -902,3 +902,15 @@ describe("IndexedDB write batching", () => {
     })
   })
 })
+
+it("installs the Host log replay policy before transport bootstrap", async () => {
+  const mod = await import("./bootstrap")
+  mod.bootstrapLogger({ enableConsole: false })
+  const { runLogEgress } = await import("@cognia/logging/context")
+  const send = jest.fn(async () => "sent")
+  await expect(
+    runLogEgress([{ hostEgressSource: { version: 1, runIds: [], blocked: true } }] as never, send)
+  ).resolves.toBeUndefined()
+  expect(send).not.toHaveBeenCalled()
+  await expect(runLogEgress([{} as never], send)).resolves.toBe("sent")
+})

@@ -7030,6 +7030,92 @@ describe("PluginManager", () => {
       expect(pluginExecutionContext("bound-ide")).toBeUndefined()
     })
 
+    it.each([false, true])(
+      "F7 Python Host replies withhold content admitted during the guest request (%s)",
+      async (throws) => {
+        const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+          await import("@/lib/execution/acting-authority")
+        const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+        const owner = await startToolExecutionRun("f7-python-reply", {
+          localAuthorization:
+            LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+        })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+        const internals = manager as unknown as {
+          contexts: Map<string, unknown>
+          handlePythonHostRequest(frame: object): Promise<void>
+        }
+        internals.contexts.set("f7-reply", {
+          custom: {
+            read: async () => {
+              await addPersonalMarksToRun({ executionRunId: owner.id }, [
+                { person: { kind: "local-person" }, source: "F7", markedAt: 1 },
+              ])
+              if (throws) throw new Error("private-error")
+              return "private-response"
+            },
+          },
+        })
+        mockInvoke.mockResolvedValue(null)
+        await withPluginExecutionContext("f7-reply", { executionRunId: owner.id }, () =>
+          internals.handlePythonHostRequest({
+            pluginId: "f7-reply",
+            generation: "g",
+            requestId: 1,
+            method: "custom.read",
+            params: [],
+          })
+        )
+        expect(mockInvoke).toHaveBeenCalledWith(
+          "plugin_python_host_response",
+          expect.objectContaining({
+            ok: false,
+            result: null,
+            error: expect.stringContaining("private content"),
+          })
+        )
+        expect(JSON.stringify(mockInvoke.mock.calls)).not.toContain("private-response")
+        expect(JSON.stringify(mockInvoke.mock.calls)).not.toContain("private-error")
+      }
+    )
+
+    it("F7 Python receives clean content but never marked tree content", async () => {
+      const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+        await import("@/lib/execution/acting-authority")
+      const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+      const { readRunPersonalTaint } = await import("@/lib/execution/personal-sink")
+      const id = "f7-python-guest"
+      const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
+      ;(
+        manager as unknown as { pythonRuntimeGenerations: Map<string, string> }
+      ).pythonRuntimeGenerations.set(id, "generation")
+      mockInvoke.mockResolvedValue(null)
+      const owner = await startToolExecutionRun("f7-python-owner", {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      const child = await startToolExecutionRun("f7-python-child", { parentRunId: owner.id })
+      await withPluginExecutionContext(id, { executionRunId: owner.id }, () =>
+        manager.callPythonFunction(id, "read", [])
+      )
+      await expect(
+        addPersonalMarksToRun({ executionRunId: child.id }, [
+          { person: { kind: "local-person" }, source: "F7", markedAt: 1 },
+        ])
+      ).resolves.toBeUndefined()
+      expect(await readRunPersonalTaint({ executionRunId: owner.id })).toMatchObject({
+        verified: true,
+        marks: [expect.anything()],
+      })
+      const calls = mockInvoke.mock.calls.length
+      await expect(
+        withPluginExecutionContext(id, { executionRunId: owner.id }, () =>
+          manager.callPythonFunction(id, "read", ["private"])
+        )
+      ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      expect(mockInvoke.mock.calls).toHaveLength(calls)
+    })
+
     it("binds direct Python Host callbacks until the transport settles", async () => {
       const seen: unknown[] = []
       const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: true })
@@ -7041,12 +7127,27 @@ describe("PluginManager", () => {
         seen.push(pluginExecutionContext("bound-python"))
       })
       await manager.callPythonFunction("bound-python", "read", [])
-      const context = { executionRunId: "python-service-attempt" }
+      const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+        await import("@/lib/execution/acting-authority")
+      const run = await startToolExecutionRun("python-service-attempt", {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      const context = { executionRunId: run.id }
       await withPluginExecutionContext("bound-python", context, () =>
         manager.callPythonHook("bound-python", "onRead", "read", {})
       )
-      expect(seen).toEqual([{ executionRunId: "" }, context])
+      await expect(
+        withPluginExecutionContext("bound-python", { personalEgressBlocked: true }, () =>
+          manager.callPythonFunction("bound-python", "read", [])
+        )
+      ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      expect(seen).toEqual([
+        expect.objectContaining({ executionRunId: "" }),
+        expect.objectContaining(context),
+      ])
       expect(pluginExecutionContext("bound-python")).toBeUndefined()
+      await manager.unloadPythonPlugin("bound-python")
     })
 
     it("installPythonDeps and pushPythonConfig delegate to the backend commands", async () => {

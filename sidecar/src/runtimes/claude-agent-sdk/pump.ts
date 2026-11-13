@@ -1,3 +1,7 @@
+import {
+  quiescePersonalEgress,
+  releasePersonalEgressOperations,
+} from "../../policy/personal-egress.ts"
 import type { PumpContext } from "./runtime-types.ts"
 import { randomUUID } from "node:crypto"
 
@@ -37,8 +41,17 @@ export function startAnthropicPump({
   // draining, or a throw).
   let turnEnded = false
   let liveSdkTasks = new Set<string>()
+  Object.assign(session, {
+    fencePersonalEgress: async (excludedToolUseIds: readonly string[] = []) => {
+      await quiescePersonalEgress(sendOptions, excludedToolUseIds)
+      await toolSession.disposeProcesses()
+      if ((await toolSession.hasLiveProcesses()) || liveSdkTasks.size > 0)
+        throw new Error("Personal process isolation unconfirmed; private content withheld")
+    },
+  })
   const endTurn = (event: Record<string, unknown>) => {
     if (turnEnded) return
+    releasePersonalEgressOperations(sendOptions)
     turnEnded = true
     emit(event)
   }

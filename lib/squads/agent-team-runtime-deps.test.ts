@@ -725,3 +725,30 @@ it("keeps the notifying team's exact Host run instead of an unresolved session",
     personalContext: { executionRunId: "execution:team:team-notice-run" },
   })
 })
+
+it("passes the unique live Squad Host run to lead completions", async () => {
+  const { registerTeamRunContext, unregisterTeamRunContext } = await import("./team-run-context")
+  const team = makeTeam()
+  const lead = makeLead()
+  seedStore(team, [lead])
+  const executeAgent = jest.fn(async () => ({
+    text: "plan",
+    channel: "text" as const,
+    toolsAvailable: false,
+  }))
+  registerTeamRunContext({
+    runId: "live-lead",
+    teamId: team.id,
+    personalExecutionRunId: "execution:team:owner",
+  } as never)
+  try {
+    const { runLeadPlanning } = buildAgentTeamRuntimeDeps({ executeAgent, readSettings })
+    await runLeadPlanning!({ team, lead, signal: new AbortController().signal })
+    expect(executeAgent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ executionIdentity: { runId: "execution:team:owner" } })
+    )
+  } finally {
+    unregisterTeamRunContext("live-lead")
+  }
+})

@@ -308,15 +308,22 @@ describe("vscode-loader — Tauri mode", () => {
   })
 
   it("retains a background binding for the complete extension callback RPC", async () => {
-    const { pluginExecutionContext } = await import("./invocation-identity")
+    const { pluginExecutionContext, withPluginExecutionContext } =
+      await import("./invocation-identity")
     const invoke = jest.fn(async () => {
       await Promise.resolve()
-      expect(pluginExecutionContext("cognia.test-ext")).toEqual({ executionRunId: "" })
+      expect(pluginExecutionContext("cognia.test-ext")).toMatchObject({ executionRunId: "" })
       return "null"
     })
     jest.doMock("@tauri-apps/api/core", () => ({ invoke }))
     const { invokeVscodeRpc } = await import("./vscode-loader")
     await invokeVscodeRpc("cognia.test-ext", "extension:call", {}, "test-generation")
+    await expect(
+      withPluginExecutionContext("cognia.test-ext", { personalEgressBlocked: true }, () =>
+        invokeVscodeRpc("cognia.test-ext", "extension:call", {}, "test-generation")
+      )
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    expect(invoke).toHaveBeenCalledTimes(1)
     expect(pluginExecutionContext("cognia.test-ext")).toBeUndefined()
   })
 
@@ -708,4 +715,44 @@ describe("vscode-loader — invokeVscodeRpc without Tauri", () => {
     const { unloadVscodeExtension } = await import("./vscode-loader")
     await expect(unloadVscodeExtension("x")).resolves.toBeUndefined()
   })
+})
+
+it("F7 VSCode receives clean content but never marked tree content", async () => {
+  jest.resetModules()
+  installTauriWindow()
+  delete (globalThis as Record<string, unknown>).__COGNIA_HEADLESS__
+  const native = jest.fn(async () => "null")
+  jest.doMock("@tauri-apps/api/core", () => ({ invoke: native }))
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { withPluginExecutionContext } = await import("./invocation-identity")
+  const { invokeVscodeRpc } = await import("./vscode-loader")
+  const owner = await startToolExecutionRun("f7-vscode-owner", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
+  const child = await startToolExecutionRun("f7-vscode-child", { parentRunId: owner.id })
+  try {
+    await withPluginExecutionContext("f7-vscode", { executionRunId: owner.id }, () =>
+      invokeVscodeRpc("f7-vscode", "extension:call", {}, "generation")
+    )
+    await expect(
+      addPersonalMarksToRun({ executionRunId: child.id }, [
+        { person: { kind: "local-person" }, source: "F7", markedAt: 1 },
+      ])
+    ).resolves.toBeUndefined()
+    const calls = native.mock.calls.length
+    await expect(
+      withPluginExecutionContext("f7-vscode", { executionRunId: owner.id }, () =>
+        invokeVscodeRpc("f7-vscode", "extension:call", { private: true }, "generation")
+      )
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    expect(native.mock.calls).toHaveLength(calls)
+  } finally {
+    removeTauriWindow()
+    await fixture.dispose()
+  }
 })

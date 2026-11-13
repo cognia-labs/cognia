@@ -177,17 +177,22 @@ export interface ArtifactSurfacePanelsInput {
 function useSideBrowserRequest(scopeKey: string): {
   requestedUrl: string | undefined
   requestId: number
-  revealBrowserPanel: () => boolean
+  revealBrowserPanel: (probe?: boolean) => boolean
 } {
   const requestedUrl = useArtifactDockLayoutStore((state) => state.browserRequestUrl)
   // Carried alongside the address so a link clicked twice reaches the pane
   // twice. The store bumps it per request; the URL on its own does not change.
   const requestId = useArtifactDockLayoutStore((state) => state.browserRequestId)
-  const revealBrowserPanel = useCallback(() => {
-    if (!useContextWorkbenchStore.getState().smartReveal(scopeKey, "browser", "wide")) return false
-    useArtifactDockLayoutStore.getState().setDockCollapsed(false)
-    return true
-  }, [scopeKey])
+  const revealBrowserPanel = useCallback(
+    (probe = false) => {
+      if (probe) return !useContextWorkbenchStore.getState().layouts[scopeKey]?.userPinned
+      if (!useContextWorkbenchStore.getState().smartReveal(scopeKey, "browser", "wide"))
+        return false
+      useArtifactDockLayoutStore.getState().setDockCollapsed(false)
+      return true
+    },
+    [scopeKey]
+  )
   return { requestedUrl: requestedUrl ?? undefined, requestId, revealBrowserPanel }
 }
 
@@ -201,7 +206,7 @@ interface DockPanelInputs {
   onWidthHint: (mode: ContextPanelMode, panelId?: string) => void
   requestedUrl: string | undefined
   requestId: number
-  revealBrowserPanel: () => boolean
+  revealBrowserPanel: (probe?: boolean) => boolean
 }
 
 interface ArtifactPanelInputs extends DockPanelInputs {

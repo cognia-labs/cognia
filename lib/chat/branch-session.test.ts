@@ -91,6 +91,12 @@ it("retains legacy personal attribution on direct and summary branches after the
       summaryText: "private derived summary",
     })
     const copied = await listMessages(child.id)
+    if (child.branchSeed)
+      expect(child.branchSeed.personalMarks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ person: expect.objectContaining({ kind: "platform" }) }),
+        ])
+      )
     expect(copied[0].metadata).toMatchObject({
       personalMarks: [
         expect.objectContaining({

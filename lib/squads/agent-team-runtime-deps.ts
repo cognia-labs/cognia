@@ -45,7 +45,7 @@ import {
   TEAMMATE_TASK_PROMPT,
   teamPromptContext,
 } from "./team-prompts"
-import { visibleTeamDerivedTextForTeam } from "./team-run-context"
+import { getTeamRunContextForTeam, visibleTeamDerivedTextForTeam } from "./team-run-context"
 
 export interface TeamPromptResolveOptions {
   /**
@@ -216,7 +216,18 @@ export function buildAgentTeamRuntimeDeps(
       const fields = visible.startsWith("[Withheld:")
         ? { prompt: visible, systemPrompt: undefined }
         : (JSON.parse(visible) as { prompt: string; systemPrompt: string })
+      const teamContext = getTeamRunContextForTeam(team.id)
+      const { getInflightTeamRunId } = await import("./agent-team-runtime")
+      const inflight = teamContext ? undefined : getInflightTeamRunId(team.id)
+      const runId =
+        teamContext?.personalExecutionRunId ??
+        (teamContext
+          ? agentTeamExecutionRunId(teamContext.runId)
+          : inflight
+            ? agentTeamExecutionRunId(inflight)
+            : undefined)
       const result = await executeAgent(fields.prompt, {
+        ...(runId ? { executionIdentity: { runId } } : {}),
         ...execution,
         systemPrompt: fields.systemPrompt,
         abortSignal: signal,

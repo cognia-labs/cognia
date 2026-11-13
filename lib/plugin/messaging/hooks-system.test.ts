@@ -2199,3 +2199,122 @@ describe("chat dispatchers route through the interceptor chain (ADR-0189)", () =
     })
   })
 })
+
+it("R2: pre/post/stream recipients inherit the Host run instead of background authority", async () => {
+  getPermissionGuard().registerPlugin("content-hook", ["agent:external:read"])
+  const seen: unknown[] = []
+  const observe = async () => {
+    await Promise.resolve()
+    seen.push(pluginExecutionContext("content-hook"))
+    return { action: "allow" as const }
+  }
+  seedPlugins({
+    plugins: {
+      "content-hook": {
+        status: "enabled",
+        hooks: {
+          onPreToolUse: observe,
+          onPostToolUse: observe,
+          onStreamChunk: observe,
+          onStreamEnd: observe,
+          onExternalAgentError: observe,
+        },
+      },
+    },
+  })
+  const eventHooks = new PluginEventHooks()
+  const execution = { sessionId: "content", executionRunId: "private-run" }
+  await eventHooks.dispatchPreToolUse("Read", {}, "content", execution)
+  await eventHooks.dispatchPostToolUse("Read", {}, "private", "content", {}, execution)
+  eventHooks.dispatchStreamChunk("content", "private", "private", execution)
+  eventHooks.dispatchStreamEnd("content", "private", execution)
+  eventHooks.dispatchExternalAgentError("external", "private error", execution)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  expect(seen).toHaveLength(5)
+  expect(seen).toEqual([execution, execution, execution, execution, execution])
+  seedPlugins({ plugins: {} })
+})
+
+it.each(["python", "hybrid", "vscode-extension"])(
+  "F7 %s hooks withhold marked content and fail a matching guard closed",
+  async (type) => {
+    const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+    await fixture.initialize()
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+    const { loggers } = await import("../core/logger")
+    const warn = jest.spyOn(loggers.hooks, "warn")
+    const callback = jest.fn(() => ({ action: "allow" as const }))
+    const eventHooks = new PluginEventHooks()
+    seedPlugins({
+      plugins: {
+        native: {
+          status: "enabled",
+          manifest: { type },
+          hooks: { onPreToolUse: callback, onStreamChunk: callback },
+        },
+      },
+    } as never)
+    const owner = await startToolExecutionRun("f7-hook-owner", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    const child = await startToolExecutionRun("f7-hook-child", { parentRunId: owner.id })
+    const { bindPersonalOperationSources } = await import("@/lib/execution/personal-operation")
+    const execution =
+      type === "hybrid"
+        ? bindPersonalOperationSources({}, [{ executionRunId: owner.id }])
+        : { executionRunId: owner.id }
+    try {
+      expect(await eventHooks.dispatchPreToolUse("Read", {}, "s", execution)).toMatchObject({
+        action: "allow",
+      })
+      expect(callback).toHaveBeenCalledTimes(1)
+      await addPersonalMarksToRun({ executionRunId: child.id }, [
+        { person: { kind: "local-person" }, source: "F7", markedAt: 1 },
+      ])
+      expect(
+        await eventHooks.dispatchPreToolUse("Read", { private: true }, "s", execution)
+      ).toMatchObject({ action: "deny" })
+      eventHooks.dispatchStreamChunk("s", "private", "private", execution)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(warn).toHaveBeenCalled()
+      seedPlugins({ plugins: {} })
+      expect(await eventHooks.dispatchPreToolUse("Read", {}, "s", execution)).toMatchObject({
+        action: "allow",
+      })
+    } finally {
+      warn.mockRestore()
+      seedPlugins({ plugins: {} })
+      await fixture.dispose()
+    }
+  }
+)
+
+it("F7 native dispatch refusal after the hook precheck still denies PreToolUse", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+  const owner = await startToolExecutionRun("f7-native-race", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const callback = jest.fn(async () => {
+    await addPersonalMarksToRun({ executionRunId: owner.id }, [
+      { person: { kind: "local-person" }, source: "F7", markedAt: 1 },
+    ])
+    await assertPersonalEgress({ executionRunId: owner.id })
+    return { action: "allow" as const }
+  })
+  seedPlugins({ plugins: { native: { status: "enabled", hooks: { onPreToolUse: callback } } } })
+  try {
+    expect(
+      await new PluginEventHooks().dispatchPreToolUse("Read", {}, "s", { executionRunId: owner.id })
+    ).toMatchObject({ action: "deny" })
+    expect(callback).toHaveBeenCalledTimes(1)
+  } finally {
+    seedPlugins({ plugins: {} })
+    await fixture.dispose()
+  }
+})

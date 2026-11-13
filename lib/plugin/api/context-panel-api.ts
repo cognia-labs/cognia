@@ -1,3 +1,7 @@
+import {
+  markPluginSynchronousCallback,
+  markPluginSynchronousRenderer,
+} from "@/lib/plugin/core/invocation-identity"
 import { contextPanelRegistry } from "@/lib/context-workbench/panel-registry"
 import { resolveContextPanelIcon } from "@/lib/context-workbench/panel-icons"
 import {
@@ -81,6 +85,8 @@ export function createContextPanelAPI(
         throw new Error(`Permission denied: ${denied} is required to register a context panel`)
       }
 
+      if (registration.getBadge) markPluginSynchronousCallback(registration.getBadge, undefined)
+      if (registration.onRestore) markPluginSynchronousCallback(registration.onRestore, undefined)
       return contextPanelRegistry.register({
         id: `${pluginId}:${registration.id}`,
         activity: registration.activity,
@@ -98,7 +104,7 @@ export function createContextPanelAPI(
         hasRequiredPermissions: () => required.every((permission) => hasPermission(permission)),
         preferredMode: registration.preferredMode,
         retention: registration.retention ?? "stateful",
-        renderer: registration.renderer,
+        renderer: markPluginSynchronousRenderer(pluginId, registration.renderer),
         onFirstActivate: registration.onFirstActivate,
         onRestore: registration.onRestore,
         pluginId,

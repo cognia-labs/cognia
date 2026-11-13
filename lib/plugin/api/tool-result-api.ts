@@ -1,3 +1,4 @@
+import { markPluginSynchronousRenderer } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Tool-Result Renderer API.
  *
@@ -33,7 +34,11 @@ export function createToolResultAPI(pluginId: string): PluginToolResultAPI {
         logger.warn(`[toolResult] refusing to register a renderer for an empty tool name`)
         return () => {}
       }
-      const unregister = registerToolResultRenderer(pluginId, key, component)
+      const unregister = registerToolResultRenderer(
+        pluginId,
+        key,
+        markPluginSynchronousRenderer(pluginId, component)
+      )
       logger.info(
         `[toolResult] registered renderer for "${key}" (inert if the host ships a built-in card for it)`
       )

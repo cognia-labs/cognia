@@ -471,3 +471,32 @@ describe("per-module level overrides", () => {
     expect(mem.entries.map((e) => e.message)).toEqual(["before"])
   })
 })
+
+it("stamps Host producer after redaction and ignores a public forged producer field", async () => {
+  const core = await import("./core")
+  const { withLogEgressSource } = await import("./context")
+  const memory = makeMemoryTransport()
+  core.initLogger({ enableConsole: false, minLevel: "trace" }, [memory])
+  const logger = core.createLogger("producer")
+  const stamp = { version: 1 as const, runIds: ["host-origin"] }
+  withLogEgressSource(stamp, () =>
+    logger.info("safe", { hostEgressSource: { runIds: ["forged"] } })
+  )
+  expect(memory.entries[0].hostEgressSource).toEqual(stamp)
+  logger.info("background", { hostEgressSource: { runIds: ["forged"] } })
+  expect(memory.entries[1].hostEgressSource).toBeUndefined()
+})
+
+it("S2 keeps rejected callback provenance when an unrelated logger reports the error", async () => {
+  const core = await import("./core")
+  const { configureLogFailureSource } = await import("./context")
+  const failure = new Error("private callback error")
+  configureLogFailureSource((error) =>
+    error === failure ? { version: 1, runIds: ["producer"] } : undefined
+  )
+  const memory = makeMemoryTransport()
+  core.initLogger({ enableConsole: false, minLevel: "trace" }, [memory])
+  core.createLogger("plugin:hooks").error("handler failed", failure)
+  expect(memory.entries[0].hostEgressSource).toEqual({ version: 1, runIds: ["producer"] })
+  configureLogFailureSource(() => undefined)
+})

@@ -1,3 +1,7 @@
+import {
+  bindPersonalEgressOptions,
+  type PersonalEgressContext,
+} from "@/lib/execution/personal-egress"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
 import type {
   ExternalAgentEvent,
@@ -25,6 +29,7 @@ export interface ExternalCandidateDeps {
 }
 
 export interface ExternalCandidateInput {
+  personalContext?: PersonalEgressContext
   /** The exact external configuration recorded in the ledger. */
   configId: string
   prompt: string
@@ -85,12 +90,19 @@ export async function runExternalCandidate(
   await deps.place(input.configId, input.workingDirectory, manager)
   const onEvent = await deps.pipe(input.onCapture)
   input.signal.throwIfAborted()
-  const result = await manager.execute(input.configId, input.prompt, {
-    workingDirectory: input.workingDirectory,
-    ...(input.model ? { model: input.model } : {}),
-    onEvent,
-    signal: input.signal,
-  })
+  const result = await manager.execute(
+    input.configId,
+    input.prompt,
+    bindPersonalEgressOptions(
+      {
+        workingDirectory: input.workingDirectory,
+        ...(input.model ? { model: input.model } : {}),
+        onEvent,
+        signal: input.signal,
+      },
+      input.personalContext ?? {}
+    )
+  )
   if (result.tokenUsage) input.onUsage?.(result.tokenUsage)
   if (!result.success)
     throw new Error(result.error || `External agent ${input.configId} returned a failure`)

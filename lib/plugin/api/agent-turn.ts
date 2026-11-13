@@ -1,4 +1,5 @@
 import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 /**
  * A synchronous, tool-enabled agent turn, run headlessly on a plugin's behalf.
  *
@@ -424,7 +425,9 @@ export async function runPluginAgentTurn(
           )
             throw transcriptCancellation("runPluginAgentTurn: operation transcript changed")
           await settleCompletedOperation(completed)
-          return structuredClone(completed.result)
+          return bindPersonalEgressOptions(structuredClone(completed.result), {
+            executionRunId: completed.executionRunId,
+          })
         }
         pendingOperation = completed
         const user = await getDb().messages.get(completed.userMessageId!)
@@ -644,6 +647,7 @@ export async function runPluginAgentTurn(
           pauseTimeoutWhileAwaitingPermission: true,
           outboundPolicy: {
             unattended: true,
+            executionRunId: entry.id,
             ...(options.outboundOrigin ? { origin: options.outboundOrigin } : {}),
             ...(options.outboundPolicyGrants?.length
               ? { policyGrants: options.outboundPolicyGrants }
@@ -946,13 +950,16 @@ export async function runPluginAgentTurn(
         )
       await permissions.finish("completed")
 
-      return {
-        sessionId,
-        text: result.text,
-        ...(result.messageId ? { messageId: result.messageId } : {}),
-        status: permissions.needsApproval() ? "needs_approval" : "completed",
-        ...(permissions.needsApproval() ? { needsApproval: [...permissions.denials] } : {}),
-      }
+      return bindPersonalEgressOptions<PluginAgentTurnResult>(
+        {
+          sessionId,
+          text: result.text,
+          ...(result.messageId ? { messageId: result.messageId } : {}),
+          status: permissions.needsApproval() ? "needs_approval" : "completed",
+          ...(permissions.needsApproval() ? { needsApproval: [...permissions.denials] } : {}),
+        },
+        { executionRunId: entry?.id }
+      )
     })
   }
   const operationId = options.operationId ?? options.usage?.operationId

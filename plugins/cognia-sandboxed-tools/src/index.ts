@@ -503,9 +503,10 @@ async function dispatchSandbox(
   callCtx: PluginToolContext
 ): Promise<SandboxResultShape> {
   throwIfAborted(callCtx)
-  return callCtx.signal
-    ? sandbox.execute(requireRuntimeRef(sandbox, callCtx), payload, { signal: callCtx.signal })
-    : sandbox.execute(requireRuntimeRef(sandbox, callCtx), payload)
+  return sandbox.execute(requireRuntimeRef(sandbox, callCtx), payload, {
+    signal: callCtx.signal,
+    executionRunId: callCtx.executionRunId,
+  })
 }
 
 async function execBash(

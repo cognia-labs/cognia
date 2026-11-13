@@ -1,3 +1,11 @@
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 jest.mock("@/lib/tauri/transport-instance", () => ({ localTransport: { call: jest.fn() } }))
 import { localTransport } from "@/lib/tauri/transport-instance"
 import type { SandboxResourcePolicy } from "@cognia/agent-config-types"
@@ -2038,6 +2046,28 @@ describe("OS-tier audit", () => {
       }
     }
 
+    it("requires pre-execution network-off attestation for a marked container command", async () => {
+      const deps = createDeps()
+      const adapter = { ...containerAdapter(), enforcesNetworkOff: jest.fn(() => false) }
+      jest.mocked(deps.getContainerAdapter!).mockReturnValue(adapter)
+      const runtime = new SandboxSessionRuntime(deps)
+      const ref = await runtime.bindSession({ ...input, executionRunId: "marked-container" })
+      mockEgressTaint.mockResolvedValueOnce({ verified: true, marks: [{}] })
+      await expect(runtime.executeSandbox(ref, payload)).rejects.toMatchObject({
+        code: "personal-egress-denied",
+      })
+      expect(adapter.execute).not.toHaveBeenCalled()
+      adapter.enforcesNetworkOff.mockReturnValue(true)
+      mockEgressTaint.mockResolvedValueOnce({ verified: true, marks: [{}] })
+      await runtime.executeSandbox(ref, payload)
+      expect(adapter.execute).toHaveBeenCalledWith(
+        ref,
+        expect.objectContaining({
+          request: expect.objectContaining({ network: "off", networkHosts: [] }),
+        })
+      )
+    })
+
     it("refuses to bind on a host with no sandbox pool instead of running here", async () => {
       const deps = createDeps()
       const runtime = new SandboxSessionRuntime(deps)
@@ -2138,4 +2168,176 @@ describe("OS-tier audit", () => {
       expect(await rebindSendOptionsWorkspace(same)).toBe(same)
     })
   })
+})
+
+it("denies unsandboxed shell after a mid-run mark", async () => {
+  const deps = createDeps()
+  const runtime = new SandboxSessionRuntime(deps)
+  const ref = await runtime.bindSession({
+    sessionId: "private",
+    executionRunId: "host-run",
+    binding: { shellTier: "os", computerTarget: "local" },
+    policy: null,
+    confine: null,
+    sandboxEnabled: true,
+    computerUseEnabled: false,
+  })
+  mockEgressTaint.mockResolvedValueOnce({
+    verified: true,
+    marks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+  })
+  await expect(runtime.executeSandbox(ref, payload)).rejects.toMatchObject({
+    code: "personal-egress-denied",
+  })
+  expect(deps.executeOsSandbox).not.toHaveBeenCalled()
+})
+
+it("R8: caller run overrides a clear bind-time run and protects the fallback", async () => {
+  const deps = createDeps()
+  const runtime = new SandboxSessionRuntime(deps)
+  const ref = await runtime.bindSession({
+    sessionId: "clear-binding",
+    executionRunId: "clear-run",
+    binding: { shellTier: "os", computerTarget: "local" },
+    policy: null,
+    confine: null,
+    sandboxEnabled: true,
+    computerUseEnabled: false,
+  })
+  mockEgressTaint.mockImplementation(async (context) => ({
+    verified: true,
+    marks: JSON.stringify(context).includes("private-caller") ? [{}] : [],
+  }))
+  for (const target of [ref, HOST_FALLBACK_RUNTIME_REF])
+    await expect(
+      runtime.executeSandbox(target, payload, { executionRunId: "private-caller" })
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  await expect(runtime.executeSandbox(ref, payload)).rejects.toMatchObject({
+    code: "personal-egress-denied",
+  })
+  expect(deps.executeOsSandbox).not.toHaveBeenCalled()
+})
+
+it("Q2 clean consecutive turns reuse the real binding fingerprint without releasing", async () => {
+  const deps = createDeps()
+  const runtime = new SandboxSessionRuntime(deps)
+  const binding = {
+    sessionId: "q2-clean",
+    binding: { shellTier: "os" as const, computerTarget: "local" as const },
+    policy: null,
+    confine: null,
+    sandboxEnabled: true,
+    computerUseEnabled: false,
+  }
+  const first = await runtime.bindSession({ ...binding, executionRunId: "q2-a" })
+  const second = await runtime.bindSession({ ...binding, executionRunId: "q2-b" })
+  expect(second).toBe(first)
+  expect(deps.makeRef).toHaveBeenCalledTimes(1)
+  runtime.__resetForTesting()
+})
+
+describe("F7 sandbox active consuming runs", () => {
+  it("P7 a tainted shared record stays denied for clean callers after run completion", async () => {
+    const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+    await fixture.initialize()
+    const actual = jest.requireActual<typeof import("@/lib/execution/personal-sink")>(
+      "@/lib/execution/personal-sink"
+    )
+    mockEgressTaint.mockImplementation(actual.readRunPersonalTaint as never)
+    const { startToolExecutionRun, finishToolExecutionRun, LOCAL_PERSON_RUN } =
+      await import("@/lib/execution/acting-authority")
+    const { getDb } = await import("@/lib/db/schema")
+    const deps = createDeps()
+    let generation = 0
+    deps.makeRef.mockImplementation(() => "f7-ref:" + ++generation)
+    const runtime = new SandboxSessionRuntime(deps)
+    try {
+      const a = await startToolExecutionRun("f7-session", {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      const binding = {
+        sessionId: "f7-session",
+        executionRunId: a.id,
+        binding: { shellTier: "os" as const, computerTarget: "local" as const },
+        policy: null,
+        confine: null,
+        sandboxEnabled: true,
+        computerUseEnabled: false,
+      }
+      const ref = await runtime.bindSession(binding)
+      await getDb().executionRuns.update(a.id, {
+        personalMarks: [{ person: { kind: "local-person" }, source: "F7", markedAt: 1 }],
+      })
+      await expect(
+        runtime.executeSandbox(ref, payload, { executionRunId: "" })
+      ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      await finishToolExecutionRun(a.id)
+      const b = await startToolExecutionRun("f7-session", {
+        localAuthorization:
+          LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+      })
+      const next = await runtime.bindSession({ ...binding, executionRunId: b.id })
+      expect(next).toBe(ref)
+      await expect(
+        runtime.executeSandbox(next, payload, { executionRunId: b.id })
+      ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      const rebuilt = await runtime.bindSession({
+        ...binding,
+        executionRunId: b.id,
+        policy: { networkAccess: true } as never,
+      })
+      await expect(
+        runtime.executeSandbox(rebuilt, payload, { executionRunId: b.id })
+      ).rejects.toMatchObject({ code: "personal-egress-denied" })
+      const fresh = await runtime.bindSession({
+        ...binding,
+        sessionId: "p7-fresh",
+        executionRunId: b.id,
+      })
+      await expect(
+        runtime.executeSandbox(fresh, payload, { executionRunId: b.id })
+      ).resolves.toBeDefined()
+      await runtime.releaseSession("f7-session")
+      expect(
+        (runtime as unknown as { consumingRuns: Map<string, Set<string>> }).consumingRuns.has(
+          "f7-session"
+        )
+      ).toBe(false)
+    } finally {
+      runtime.__resetForTesting()
+      mockEgressTaint.mockImplementation(async () => ({ verified: true, marks: [] }))
+      await fixture.dispose()
+    }
+  })
+})
+
+it("R11 unknown refusal does not stick to a clean sandbox binding", async () => {
+  const deps = createDeps()
+  const runtime = new SandboxSessionRuntime(deps)
+  const binding = {
+    sessionId: "r11-clean-binding",
+    binding: { shellTier: "os" as const, computerTarget: "local" as const },
+    policy: null,
+    confine: null,
+    sandboxEnabled: true,
+    computerUseEnabled: false,
+  }
+  const ref = await runtime.bindSession(binding)
+  mockEgressTaint.mockImplementation(async (context) => ({
+    verified: !JSON.stringify(context).includes("r11-missing"),
+    marks: [],
+  }))
+  try {
+    await expect(
+      runtime.executeSandbox(ref, payload, { executionRunId: "r11-missing" })
+    ).rejects.toMatchObject({ code: "personal-egress-denied" })
+    await expect(
+      runtime.executeSandbox(ref, payload, { executionRunId: "r11-clean" })
+    ).resolves.toBeDefined()
+    expect(deps.executeOsSandbox).toHaveBeenCalledTimes(1)
+  } finally {
+    runtime.__resetForTesting()
+    mockEgressTaint.mockImplementation(async () => ({ verified: true, marks: [] }))
+  }
 })

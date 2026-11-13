@@ -594,14 +594,19 @@ describe("Integration action runner", () => {
       const dispatched = deferred<AbortSignal | null | undefined>()
       const response = deferred<Response>()
       let handlerSignal: AbortSignal | undefined
-      const account = await setup(async (_input, context) => {
-        handlerSignal = context.signal
-        return context.authenticatedRequest("https://api.example.test/issues", { method })
-      })
+      const account = await setup(
+        async (_input, context) => {
+          handlerSignal = context.signal
+          return context.authenticatedRequest("https://api.example.test/issues", { method })
+        },
+        undefined,
+        "required",
+        "github-app"
+      )
       const dispose = registerAuthenticationProvider({
-        id: "example-oauth",
+        id: "github-app",
         label: "Example",
-        pluginId: "example-delivery",
+        pluginId: null,
         getSessions: async () => [
           {
             id: "opaque",
@@ -1042,7 +1047,21 @@ describe("Integration action runner", () => {
         }
         if (status === "queued") jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(false)
         const original = await executeIntegrationAction("example-delivery", input, caller)
-        expect(original.status).toBe(status)
+        if (status === "succeeded") {
+          // A historical 2C-1 completion remains protected on replay, even though
+          // 2C-2 now refuses this first opaque HTTP send after credential admission.
+          expect(original).toMatchObject({
+            status: "failed",
+            error: expect.stringContaining("private content"),
+          })
+          expect(global.fetch).not.toHaveBeenCalled()
+          await getDb().integrationActionJobs.update(original.id, {
+            status: "succeeded",
+            output: { privateResult: "owner-only" },
+            error: undefined,
+          })
+          original.status = "succeeded"
+        } else expect(original.status).toBe(status)
         jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(true)
         // A local-person run with a different root is also not this job's caller.
         const outsider = await startToolExecutionRun("desktop", {
@@ -1079,7 +1098,10 @@ describe("Integration action runner", () => {
             ...caller,
             executionRunId: child.id,
           })
-        ).resolves.toMatchObject({ id: original.id, status: "succeeded" })
+        ).resolves.toMatchObject({
+          id: original.id,
+          status: status === "succeeded" ? "succeeded" : "failed",
+        })
         expect(resolveCredential).toHaveBeenCalledTimes(1)
       } finally {
         global.fetch = previousFetch
@@ -2574,7 +2596,10 @@ describe("Integration action runner", () => {
           { integrationId: "example", accountId: account.id, actionId: "issue.read", input: {} },
           { kind: "tool-call", sessionId: "desktop", executionRunId: localRun.id }
         )
-        expect(local.status).toBe("succeeded")
+        expect(local).toMatchObject({
+          status: "failed",
+          error: expect.stringContaining("private content"),
+        })
         expect(resolveCredential).toHaveBeenCalledTimes(1)
         const contextOnly = await executeIntegrationAction(
           "example-delivery",
@@ -2587,7 +2612,10 @@ describe("Integration action runner", () => {
           undefined,
           { sessionId: "desktop", executionRunId: localRun.id }
         )
-        expect(contextOnly.status).toBe("succeeded")
+        expect(contextOnly).toMatchObject({
+          status: "failed",
+          error: expect.stringContaining("private content"),
+        })
         const conflicting = await executeIntegrationAction(
           "example-delivery",
           {
@@ -2600,7 +2628,7 @@ describe("Integration action runner", () => {
           { localAuthorization: LOCAL_PERSON_RUN }
         )
         expect(conflicting.status).toBe("failed")
-        expect(resolveCredential).toHaveBeenCalledTimes(2)
+        expect(resolveCredential).toHaveBeenCalledTimes(1)
         jest
           .mocked(botBinding.assertBotIntegrationAction)
           .mockResolvedValue({ account, installation: { id: "bot" } } as never)
@@ -2613,7 +2641,7 @@ describe("Integration action runner", () => {
         })
         expect(bound.status).toBe("succeeded")
         expect(botBinding.assertBotIntegrationAction).toHaveBeenCalled()
-        expect(resolveCredential).toHaveBeenCalledTimes(3)
+        expect(resolveCredential).toHaveBeenCalledTimes(2)
       } finally {
         global.fetch = originalFetch
         dispose()
@@ -2673,7 +2701,7 @@ describe("Integration action runner", () => {
         if (mode === "approval") {
           await updateIntegrationActionJob(job.id, { status: "awaiting_approval" })
           jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(true)
-        } else expect(job.status).toBe("retry_wait")
+        } else expect(job.status).toBe("failed")
         await finishToolExecutionRun(origin.id)
         if (mode === "retry")
           await updateIntegrationActionJob(job.id, { nextAttemptAt: new Date(0).toISOString() })
@@ -2681,13 +2709,17 @@ describe("Integration action runner", () => {
           mode === "approval"
             ? await approveIntegrationActionJob(job.id, { actor: "person" })
             : await runIntegrationActionJob(job.id)
-        expect(result).toMatchObject({ status: "succeeded", error: undefined })
+        expect(result).toMatchObject({
+          status: "failed",
+          error: expect.stringContaining("private content"),
+        })
         const execution = await getDb().executionRuns.get(`execution:job:integration:${job.id}`)
         expect(execution).toMatchObject({
-          status: "completed",
+          status: "failed",
           actingIdentity: { rootRunId: origin.id },
         })
-        expect(credential).toHaveBeenCalledTimes(mode === "approval" ? 1 : 2)
+        expect(credential).toHaveBeenCalledTimes(1)
+        expect(fetch).not.toHaveBeenCalled()
       } finally {
         global.fetch = originalFetch
         dispose()

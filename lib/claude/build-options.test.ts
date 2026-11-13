@@ -1,3 +1,11 @@
+const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockEgressTaint(...args),
+}))
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 // This option-composition suite models a verified owner turn. Actual Host
 // identity/provenance resolution is exercised by the colocated visibility suite.
@@ -7120,7 +7128,10 @@ describe("desktop-independent DI seams (standalone CLI)", () => {
           character: makeChar({ id: "c1" }),
           session: makeSession({ id: "s1", characterId: "c1" }),
         })
-        expect(spy).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "s1" }))
+        expect(spy).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "s1" }), {
+          sessionId: "s1",
+          executionRunId: undefined,
+        })
         expect(opts.model).toBe("patched-model")
         expect(opts.appendSystemPrompt).toContain("PATCHED")
       } finally {
@@ -10114,4 +10125,21 @@ describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
       )
     }
   })
+})
+
+it("starts personally marked turns fenced and excludes opaque builtin read claims", async () => {
+  mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
+  try {
+    const opts = await resolveSendOptions({
+      character: makeChar(),
+      personalCredentialContext: { sessionId: "private", executionRunId: "marked" },
+    })
+    expect(opts.personalEgressFenced).toBe(true)
+    expect(opts.personalEgressReadTools).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/(?:git_|lsp_|start_process|WebFetch)/)])
+    )
+    expect(opts.personalEgressReadTools).not.toContain("mcp__cognia-plugin-tools__sandbox_bash")
+  } finally {
+    mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+  }
 })

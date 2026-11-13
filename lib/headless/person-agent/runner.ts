@@ -1,3 +1,5 @@
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
+import { hostStateRunId } from "@/lib/work-submission/host-adapter"
 /**
  * One sandboxed agent process per member conversation (P6e, plan §9b.5).
  *
@@ -839,12 +841,19 @@ export function createPersonAgentRunner(deps: PersonAgentRunnerDeps): PersonAgen
       agent.visibilityDigest = history.visibilityDigest
       agent.fresh = false
       stream = deps.manager
-        .executeStreaming(agent.agentId, prompt.text, {
-          ...(agent.nativeSessionId ? { sessionId: agent.nativeSessionId } : {}),
-          workingDirectory: PERSON_AGENT_WORKSPACE,
-          ...(prompt.attachments.length > 0 ? { attachments: prompt.attachments } : {}),
-          ...(replay ? { context: { custom: { conversationHistory: replay } } } : {}),
-        })
+        .executeStreaming(
+          agent.agentId,
+          prompt.text,
+          bindPersonalEgressOptions(
+            {
+              ...(agent.nativeSessionId ? { sessionId: agent.nativeSessionId } : {}),
+              workingDirectory: PERSON_AGENT_WORKSPACE,
+              ...(prompt.attachments.length > 0 ? { attachments: prompt.attachments } : {}),
+              ...(replay ? { context: { custom: { conversationHistory: replay } } } : {}),
+            },
+            { sessionId: request.session.id, executionRunId: hostStateRunId(request.actionId) }
+          )
+        )
         [Symbol.asyncIterator]()
     } catch (error) {
       agent.turn = undefined

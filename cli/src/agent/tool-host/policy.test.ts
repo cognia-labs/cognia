@@ -1,6 +1,15 @@
 /**
  * @jest-environment node
  */
+const mockPersonalTaint = jest.fn(async (..._args: unknown[]) => ({
+  verified: true,
+  marks: [] as unknown[],
+}))
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readRunPersonalTaint: (...args: unknown[]) => mockPersonalTaint(...args),
+}))
+
 import path from "node:path"
 
 import type { SendOptions } from "@cognia/agent-config-types"
@@ -263,4 +272,18 @@ describe("explicitToolMode (ADR-0239)", () => {
     expect(explicitToolMode(unmoded, tool)).toBe("enforce")
     expect(needsApproval(unmoded, tool)).toBe(true)
   })
+})
+
+it("refuses tainted CLI shell independently of bypass and suppression", async () => {
+  const { personalToolDenial } = await import("./policy")
+  mockPersonalTaint.mockResolvedValueOnce({
+    verified: true,
+    marks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+  })
+  expect(
+    await personalToolDenial("mcp__cognia-tools__bash", { executionRunId: "lease-run" }, false)
+  ).toContain("private content")
+  expect(
+    await personalToolDenial("web_search", { executionRunId: "lease-run" }, false)
+  ).toBeUndefined()
 })

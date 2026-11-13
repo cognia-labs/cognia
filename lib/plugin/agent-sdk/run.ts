@@ -1,3 +1,4 @@
+import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 /**
  * Plugin Agent SDK runtime — `runPluginAgent` (one-shot) and
  * `runPluginAgentStreamed` (async-iterable). Both adapt the typed
@@ -236,7 +237,11 @@ function executeWithRobustness(
   prompt: string,
   opts: PluginAgentRunOptions,
   signal: AbortSignal,
-  meta: { agentId: string; pluginId?: string },
+  meta: {
+    agentId: string
+    pluginId?: string
+    executionIdentity?: ExecuteAgentConfig["executionIdentity"]
+  },
   onEvent: ExecuteAgentConfig["onEvent"] | undefined,
   enableFallback: boolean
 ): Promise<ExecuteAgentResult> {
@@ -251,6 +256,7 @@ function executeWithRobustness(
   }
   const runOnce = (model?: string): Promise<ExecuteAgentResult> => {
     const cfg = toExecuteConfig(model ? { ...opts, model } : opts, signal, onEvent, meta.pluginId)
+    if (meta.executionIdentity) cfg.executionIdentity = meta.executionIdentity
     const traceModel = model ?? opts.model
     return withRunTrace(
       Boolean(opts.trace),
@@ -279,7 +285,10 @@ async function runAsChildRun<T>(
   agentId: string,
   meta: RunPluginAgentMeta,
   signal: AbortSignal,
-  body: (runSignal: AbortSignal) => Promise<T>,
+  body: (
+    runSignal: AbortSignal,
+    executionIdentity: NonNullable<ExecuteAgentConfig["executionIdentity"]>
+  ) => Promise<T>,
   /** Told the child's run id once its engine has started. */
   onLaunched?: (executionRunId: string) => void
 ): Promise<T> {
@@ -301,9 +310,9 @@ async function runAsChildRun<T>(
       kind: "agent",
       label,
       engine: {
-        run: async (runSignal) => {
+        run: async (runSignal, executionIdentity) => {
           try {
-            value = { result: await body(runSignal) }
+            value = { result: await body(runSignal, executionIdentity) }
           } catch (error) {
             thrown = { error }
             throw error
@@ -323,7 +332,12 @@ async function runAsChildRun<T>(
   onLaunched?.(launched.executionRunId)
   const settled = await launched.outcome
   if (thrown) throw thrown.error
-  if (value) return value.result
+  if (value) {
+    const output = value.result
+    if (output && (typeof output === "object" || typeof output === "function"))
+      bindPersonalEgressOptions(output, { executionRunId: launched.executionRunId })
+    return output
+  }
   throw new Error(settled.error ?? "Plugin agent run ended without a result")
 }
 
@@ -346,22 +360,27 @@ export async function runPluginAgent(
     : managedSignal
 
   try {
-    const withId = await runAsChildRun(agentId, meta, signal, async (runSignal) => {
-      await runInputGuardrails(prompt, options.guardrails, runSignal)
-      const opts = await withContextContributions(prompt, options, meta.pluginId)
-      const result = await executeWithRobustness(
-        prompt,
-        opts,
-        runSignal,
-        { agentId, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
-        undefined,
-        true
-      )
-      const withId = { ...result, agentId }
-      await runOutputGuardrails(prompt, result.text, options.guardrails, runSignal)
-      fireStopHook(options, withId, runSignal)
-      return withId
-    })
+    const withId = await runAsChildRun(
+      agentId,
+      meta,
+      signal,
+      async (runSignal, executionIdentity) => {
+        await runInputGuardrails(prompt, options.guardrails, runSignal)
+        const opts = await withContextContributions(prompt, options, meta.pluginId)
+        const result = await executeWithRobustness(
+          prompt,
+          opts,
+          runSignal,
+          { agentId, executionIdentity, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
+          undefined,
+          true
+        )
+        const withId = { ...result, agentId }
+        await runOutputGuardrails(prompt, result.text, options.guardrails, runSignal)
+        fireStopHook(options, withId, runSignal)
+        return withId
+      }
+    )
     // Settle with the real outcome so the journal row carries text/usage.
     manager.finishAgent(agentId, {
       text: withId.text,
@@ -413,20 +432,22 @@ export function runPluginAgentStreamed(
       .catch(() => manager.cancelAgent(agentId))
   })
 
+  const personalSource: { executionRunId?: string } = {}
+  bindPersonalEgressOptions(controller.run, personalSource)
   void (async () => {
     try {
       const withId = await runAsChildRun(
         agentId,
         meta,
         signal,
-        async (runSignal) => {
+        async (runSignal, executionIdentity) => {
           await runInputGuardrails(prompt, options.guardrails, runSignal)
           const opts = await withContextContributions(prompt, options, meta.pluginId)
           const result = await executeWithRobustness(
             prompt,
             opts,
             runSignal,
-            { agentId, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
+            { agentId, executionIdentity, ...(meta.pluginId ? { pluginId: meta.pluginId } : {}) },
             (event) => {
               // The plugin agent stream surfaces only text/tool events — capture-only
               // events (thinking-delta, usage, compact) have no PluginAgentStreamEvent
@@ -448,6 +469,7 @@ export function runPluginAgentStreamed(
         },
         (executionRunId) => {
           launchedRunId = executionRunId
+          personalSource.executionRunId = executionRunId
         }
       )
       manager.finishAgent(agentId, {

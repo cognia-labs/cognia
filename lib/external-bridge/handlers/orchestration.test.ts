@@ -29,11 +29,13 @@ jest.mock("@/lib/plugin/agent-sdk/dispatch", () => ({
 const launchInputs: Array<Record<string, unknown>> = []
 jest.mock("@/lib/execution/launch-child-run", () => ({
   launchChildRun: async (input: {
-    target: { engine: { run: (signal: AbortSignal) => Promise<unknown> } }
+    target: {
+      engine: { run: (signal: AbortSignal, identity: { runId: string }) => Promise<unknown> }
+    }
   }) => {
     launchInputs.push(input as never)
     const outcome = input.target.engine
-      .run(new AbortController().signal)
+      .run(new AbortController().signal, { runId: "execution:job:c" })
       .catch((error: unknown) => ({ status: "failed", error: String(error) }))
     return { started: true, childId: "c", executionRunId: "execution:job:c", outcome }
   },

@@ -142,3 +142,9 @@ test("MCP nested connection and credential changes invalidate the session withou
   expect(hashContextVersion(original)).not.toBe(hashContextVersion(changedAuth))
   expect(JSON.stringify(contextVersionProjection(original))).not.toContain("secret-one")
 })
+
+it("separates fenced and unfenced native session identities", () => {
+  expect(
+    hashContextVersion(input({ sendOptions: { ...BASE_OPTIONS, personalEgressFenced: true } }))
+  ).not.toBe(hashContextVersion(input()))
+})

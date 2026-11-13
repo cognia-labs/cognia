@@ -1,3 +1,6 @@
+import { markPluginSynchronousCallback } from "@/lib/plugin/core/invocation-identity"
+import { withLogEgressSource } from "@cognia/logging/context"
+import { personalLogEgressSource } from "@/lib/execution/personal-egress"
 /**
  * Plugin IPC (Inter-Plugin Communication)
  *
@@ -442,8 +445,8 @@ export class PluginIPC {
     const subscription: IPCSubscription = {
       channel,
       pluginId,
-      handler,
-      filter,
+      handler: markPluginSynchronousCallback(handler, undefined),
+      filter: filter && markPluginSynchronousCallback(filter, false),
     }
 
     this.subscriptions.get(channel)!.add(subscription)
@@ -1051,7 +1054,15 @@ export class PluginIPC {
 
   private log(action: string, data: unknown): void {
     if (this.config.enableLogging) {
-      loggers.manager.debug(`[IPC] ${action}:`, data)
+      const sourceId =
+        data && typeof data === "object"
+          ? ((data as { senderId?: string; callerId?: string }).senderId ??
+            (data as { callerId?: string }).callerId)
+          : undefined
+      withLogEgressSource(
+        personalLogEgressSource(sourceId ? pluginExecutionContext(sourceId) : undefined),
+        () => loggers.manager.debug(`[IPC] ${action}:`, data)
+      )
     }
   }
 

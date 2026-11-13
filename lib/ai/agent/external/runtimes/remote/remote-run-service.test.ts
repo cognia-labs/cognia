@@ -14,13 +14,21 @@ import {
   cancelRemoteExternalRun,
   remoteDecisionId,
   resolveRemoteDecision,
-  startRemoteExternalRun,
+  startRemoteExternalRun as startRemoteExternalRunImpl,
   __resetRemoteRunStateForTests,
   __setRemoteRunDepsForTests,
   type ExternalRunManager,
   type RemoteRunFrame,
 } from "./remote-run-service"
 import { resolveExternalAgentModels } from "../../session/session-models"
+
+// Accepted means queued. Let the admitted Host-run preparation and placement
+// settle their microtasks before tests drive the mock agent's event channel.
+async function startRemoteExternalRun(...args: Parameters<typeof startRemoteExternalRunImpl>) {
+  const result = await startRemoteExternalRunImpl(...args)
+  for (let tick = 0; tick < 20; tick++) await Promise.resolve()
+  return result
+}
 
 const mockResolveAttachmentRef = jest.fn()
 const mockConsumeAttachmentRefs = jest.fn(async (_refs: readonly string[]) => {})
@@ -127,6 +135,7 @@ function setup(
   restore?.()
   __resetRemoteRunStateForTests()
   restore = __setRemoteRunDepsForTests({
+    beginPersonalRun: async () => ({ context: {}, finish: async () => undefined }),
     admit: async (runId, stamp) =>
       over.admitRefusal
         ? ({ ok: false, refusal: over.admitRefusal } as never)
@@ -1650,4 +1659,35 @@ describe("owned remote session operations", () => {
     await flush()
     expect(h.frames.filter((frame) => frame.runId === "display")).toHaveLength(0)
   })
+})
+
+it("Q3 remote correlation mints a real Host run and retains source-session marks", async () => {
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+  await fixture.initialize()
+  try {
+    const { getDb } = await import("@/lib/db/schema")
+    const { beginRemotePersonalRun } = await import("./remote-run-service")
+    const { personalEgressFenced } = await import("@/lib/execution/personal-egress")
+    await getDb().sessions.put({
+      id: "q3-remote",
+      title: "remote",
+      createdAt: 1,
+      updatedAt: 1,
+    } as never)
+    const turn = await beginRemotePersonalRun("q3-remote")
+    expect(await personalEgressFenced(turn.context)).toBe(false)
+    await getDb().messages.put({
+      id: "q3-secret",
+      sessionId: "q3-remote",
+      role: "user",
+      parts: [],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "Q3", markedAt: 1 }],
+      },
+    } as never)
+    expect(await personalEgressFenced(turn.context)).toBe(true)
+    await turn.finish()
+  } finally {
+    await fixture.dispose()
+  }
 })

@@ -63,7 +63,10 @@ registerNodeExecutor({
     // rather than leaving a PTY no run owns.
     const open = beginRunSessionOpen(ctx.runId)
     const adopt = async (sessionId: string, mode: RunSessionMode): Promise<void> => {
-      if (!ctx.signal.aborted && finishRunSessionOpen(open, sessionId, mode)) return
+      const adopted = finishRunSessionOpen(open, sessionId, mode, {
+        executionRunId: `execution:workflow:${ctx.runId}`,
+      })
+      if (!ctx.signal.aborted && adopted) return
       abandonRunSessionOpen(open)
       try {
         await closeRunSession(sessionId, mode)
@@ -108,6 +111,7 @@ registerNodeExecutor({
       const { runTerminalDockAction } = await import("@/lib/terminal/dock-tool-handler")
       const result = await runTerminalDockAction({
         chatSessionId: ctx.runId,
+        credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
         action: "spawn",
         args: {
           cwd: params.cwd,
@@ -174,6 +178,7 @@ registerNodeExecutor({
         timeoutMs: timeoutSec ? timeoutSec * 1000 : undefined,
         onAskVerdict: params.onAskVerdict,
         chatSessionId: ctx.runId,
+        credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
         runId: ctx.runId,
         source: "workflow",
       })
@@ -188,6 +193,7 @@ registerNodeExecutor({
       const { runTerminalDockAction } = await import("@/lib/terminal/dock-tool-handler")
       const result = await runTerminalDockAction({
         chatSessionId: ctx.runId,
+        credentialContext: { executionRunId: `execution:workflow:${ctx.runId}` },
         action: "write",
         args: { tabId: sessionId, command: composed, timeoutSec },
       })
@@ -246,16 +252,8 @@ registerNodeExecutor({
       return { output: { sessionId, closed: false }, decision: "success" }
     }
 
-    if (entry.mode === "headless") {
-      const { invoke } = await import("@tauri-apps/api/core")
-      await invoke("terminal_headless_kill", { sessionId })
-    } else {
-      const [{ killFromDock }, { useTerminalStore }] = await Promise.all([
-        import("@/lib/terminal/spawn-orchestrator"),
-        import("@/stores/terminal/terminal-store"),
-      ])
-      await killFromDock(sessionId, useTerminalStore.getState())
-    }
+    const { closeRunSession } = await import("@/lib/terminal/headless-session-registry")
+    await closeRunSession(sessionId, entry.mode)
     deregisterRunSession(ctx.runId, sessionId)
     return { output: { sessionId, closed: true }, decision: "success" }
   },

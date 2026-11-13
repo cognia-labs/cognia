@@ -346,6 +346,7 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
                 sessionId,
                 operationId,
                 signal,
+                credentialContext: { sessionId, executionRunId: params.executionRunId },
               },
               (verdict) =>
                 requestLocalToolApproval({
@@ -377,6 +378,7 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
             sessionId,
             operationId,
             signal,
+            credentialContext: { sessionId, executionRunId: params.executionRunId },
           })
           for (const env of mapper.handle(projected)) {
             await emit({ type: "event", sessionId, event: env })

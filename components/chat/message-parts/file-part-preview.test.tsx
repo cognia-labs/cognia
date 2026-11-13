@@ -364,3 +364,47 @@ describe("FilePartCard", () => {
     expect(screen.queryByTestId("file-part-card")).toBeNull()
   })
 })
+
+it.each([
+  "https://outside.test/private",
+  " https://outside.test/private",
+  "//outside.test/private",
+])("S2 denies a marked Host message remote preview %s", async (url) => {
+  const { bindPersonalMessageEgressSource } = await import("@/lib/execution/personal-marks")
+  const messageId = `s2-preview-${url}`
+  bindPersonalMessageEgressSource(messageId, { personalEgressBlocked: true })
+  render(
+    <FilePartPreview
+      messageId={messageId}
+      url={url}
+      filename="private.txt"
+      mediaType="text/plain"
+    />
+  )
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  expect(fetchMock).not.toHaveBeenCalled()
+})
+
+it.each(["application/pdf", "video/mp4"])(
+  "S2 never mounts remote marked media %s",
+  async (mediaType) => {
+    const { bindPersonalMessageEgressSource } = await import("@/lib/execution/personal-marks")
+    const messageId = `s2-media-${mediaType}`
+    bindPersonalMessageEgressSource(messageId, { personalEgressBlocked: true })
+    const { container } = render(
+      <FilePartPreview
+        messageId={messageId}
+        url="https://outside.test/private"
+        mediaType={mediaType}
+        filename="private"
+      />
+    )
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(container.querySelector("object,video")).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  }
+)

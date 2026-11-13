@@ -284,7 +284,6 @@ describe("dispatchSubagent", () => {
     const res = await dispatchSubagent(subagent, "go")
     expect(mockRendererTurn.mock.calls[0][2]).toEqual({
       surface: "plugin",
-      identity: { runId: expect.any(String) },
     })
     expect(res).toMatchObject({
       text: "authoritative",
@@ -464,6 +463,35 @@ describe("dispatchSubagent — external backing (A2)", () => {
     prompt: "You write code.",
     externalPresetId: "claude-code",
   }
+
+  it("P2 external subagent options retain the canonical job row", async () => {
+    const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture({ seeded: false })
+    await fixture.initialize()
+    try {
+      const authority = jest.requireActual<typeof import("@/lib/execution/acting-authority")>(
+        "@/lib/execution/acting-authority"
+      )
+      const run = await authority.startJobExecutionRun("p2-subagent")
+      externalCreatePreset.mockReturnValue({
+        id: "p2-external",
+        metadata: { preset: "claude-code" },
+      })
+      externalExecute.mockResolvedValue({ success: true, finalResponse: "done" })
+      await dispatchSubagent(externalDef, "go", { _runId: "p2-subagent" })
+      const { personalEgressOptionsSource, assertPersonalEgress } =
+        await import("@/lib/execution/personal-egress")
+      const source = personalEgressOptionsSource(externalExecute.mock.calls[0][2])
+      expect(source).toMatchObject({ executionRunId: run.id })
+      await (await import("@/lib/db/schema")).getDb().executionRuns.update(run.id, {
+        personalMarks: [{ person: { kind: "local-person" }, source: "P2", markedAt: 1 }],
+      })
+      await expect(assertPersonalEgress(source!)).rejects.toMatchObject({
+        code: "personal-egress-denied",
+      })
+    } finally {
+      await fixture.dispose()
+    }
+  })
 
   it("spawns + executes the external agent and maps the result", async () => {
     externalCreatePreset.mockReturnValue({ id: "ext-1", metadata: { preset: "claude-code" } })
@@ -876,7 +904,7 @@ function runCallerEngine() {
   mockLaunchChildRun.mockImplementation(async (input: LaunchChildRunInput) => {
     if (!("engine" in input.target)) throw new Error("expected a caller engine")
     const outcome = input.target.engine
-      .run(new AbortController().signal)
+      .run(new AbortController().signal, { runId: "x" })
       .catch((error: unknown) => ({ status: "failed", error: String(error) }))
     return { started: true, childId: input.childId, executionRunId: "x", outcome }
   })
@@ -979,6 +1007,9 @@ describe("runTeam", () => {
       target: { kind: "squad", squadId: "t1", brief: "", origin: "plugin", ultracode: true },
     })
     expect(res).toEqual({ teamId: "t1", status: "completed" })
+    expect(
+      (await import("@/lib/execution/personal-egress")).personalEgressOptionsSource(res)
+    ).toEqual({ executionRunId: "execution:team:run_team_1" })
   })
 
   it("keeps the caller's origin for the gate policy", async () => {
@@ -1094,7 +1125,7 @@ it("threads a host-owned persistent child session and exact execution identity",
     expect.objectContaining({ sessionId: "child-owned" }),
     {
       surface: "plugin",
-      identity: { runId: "run-owned", sessionId: "child-owned" },
+      identity: { runId: "execution:job:run-owned", sessionId: "child-owned" },
     }
   )
 })

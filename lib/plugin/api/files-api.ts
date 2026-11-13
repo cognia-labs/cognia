@@ -5,7 +5,10 @@ import type { PluginFileHandle, PluginFilesAPI } from "@/types/plugin"
 import { createApiGuardedAPI } from "./api-permission-gate"
 
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024
-const attachmentHandles = new Map<string, { pluginId: string; file: PluginFileHandle }>()
+const attachmentHandles = new Map<
+  string,
+  { pluginId: string; file: PluginFileHandle; messageIds?: Set<string> }
+>()
 const MIME_BY_EXTENSION: Record<string, string> = {
   csv: "text/csv",
   gif: "image/gif",
@@ -77,6 +80,12 @@ export function authorizePluginAttachment(
   return handle
 }
 
+/** Host-only association from the committed user-message attachment manifest. */
+export function bindPluginAttachmentMessage(handle: string, messageId: string): void {
+  const entry = attachmentHandles.get(handle)
+  if (entry) (entry.messageIds ??= new Set()).add(messageId)
+}
+
 export function revokePluginFileHandles(pluginId: string): void {
   for (const [handle, entry] of attachmentHandles) {
     if (entry.pluginId === pluginId) attachmentHandles.delete(handle)
@@ -140,6 +149,24 @@ export function createFilesAPI(pluginId: string): PluginFilesAPI {
       const entry = attachmentHandles.get(handle)
       if (!entry || entry.pluginId !== pluginId) {
         throw new Error("attachment handle is not authorized for this plugin")
+      }
+      if (entry.messageIds?.size) {
+        const { getDb } = await import("@/lib/db/schema")
+        const { preparePluginHistory } = await import("@/lib/execution/personal-visibility")
+        for (const id of entry.messageIds) {
+          const message = await getDb().messages.get(id)
+          if (
+            message &&
+            (await preparePluginHistory(message.sessionId, [message])).withheldMessageIds.length
+          )
+            return {
+              id: handle,
+              name: "[Withheld: personal content]",
+              mimeType: "text/plain",
+              size: 0,
+              bytes: new Uint8Array(),
+            }
+        }
       }
       return entry.file
     },

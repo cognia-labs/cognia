@@ -1,3 +1,4 @@
+import { invokeEgressMethod } from "@/lib/plugin/security/permission-guard"
 import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import {
   AuthConnectionApiError,
@@ -72,7 +73,7 @@ export function createIntegrationsAPI(
   pluginId: string,
   hasPermission: (permission: string) => boolean
 ): PluginIntegrationsAPI {
-  return {
+  const api: PluginIntegrationsAPI = {
     listDefinitions() {
       requirePermission(hasPermission, "integrations:read", "ctx.integrations.listDefinitions")
       return listRegisteredIntegrations(pluginId)
@@ -193,6 +194,7 @@ export function createIntegrationsAPI(
       return listIntegrationSubscriptions(pluginId, connectorAccountId)
     },
     async listResources(query) {
+      const credentialContext = pluginExecutionContext(pluginId)
       requirePermission(hasPermission, "integrations:read", "ctx.integrations.listResources")
       if (typeof query.accountId !== "string") {
         const binding = await resolveBotIntegrationBinding(pluginId, query.accountId)
@@ -201,7 +203,7 @@ export function createIntegrationsAPI(
         const page = await listIntegrationResources(
           binding.account.pluginId,
           { ...query, accountId: binding.account.id },
-          undefined,
+          credentialContext,
           {
             pluginId: binding.account.pluginId,
             accountId: binding.account.id,
@@ -222,13 +224,14 @@ export function createIntegrationsAPI(
       )
     },
     async checkAccountHealth(connectorAccountId) {
+      const credentialContext = pluginExecutionContext(pluginId)
       requirePermission(hasPermission, "integrations:read", "ctx.integrations.checkAccountHealth")
       if (typeof connectorAccountId !== "string") {
         const binding = await resolveBotIntegrationBinding(pluginId, connectorAccountId)
         return checkIntegrationAccountHealth(
           binding.account.pluginId,
           binding.account.id,
-          undefined,
+          credentialContext,
           {
             pluginId: binding.account.pluginId,
             accountId: binding.account.id,
@@ -363,7 +366,7 @@ export function createIntegrationsAPI(
           binding.account.id,
           target,
           init,
-          undefined,
+          credentialContext,
           {
             pluginId: binding.account.pluginId,
             accountId: binding.account.id,
@@ -435,4 +438,24 @@ export function createIntegrationsAPI(
       return rollbackIntegrationMigration(pluginId, migrationId)
     },
   }
+  const outbound = new Set([
+    "authenticatedRequest",
+    "listResources",
+    "checkAccountHealth",
+    "executeAction",
+  ])
+  return new Proxy(api, {
+    get(target, prop, receiver) {
+      const method: unknown = Reflect.get(target, prop, receiver)
+      if (typeof method !== "function" || !outbound.has(String(prop))) return method
+      return (...args: unknown[]) =>
+        invokeEgressMethod(
+          pluginExecutionContext(pluginId) ?? {},
+          method as (...args: unknown[]) => unknown,
+          target,
+          args,
+          pluginId
+        )
+    },
+  })
 }

@@ -274,6 +274,20 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 
 ## 实现状态
 
+阶段 2C-2（2026-11-12，第 7 轮修复）：不透明工具在 dispatch 前检查所属 run 的规范 taint，审批与 shadow mode 均不能放宽。Native／AI SDK 围栏、admission 等待、CLI broker 策略、sandbox 逐命令断网与外部引擎限制继续生效。text-only completion interceptor 传递生产者的 Host run；匿名完成仅由显式标记或可证明的 consuming run 限制。S2 已覆盖 terminal／Git／shell、原生 guest、integration／connector selector、automation、workflow URL／project setup、backup HTTP、share 回调重试和 scheduler webhook fan-out。有限操作在 finally 释放；真实后台进程按 Host 进程身份、退出事件及有界 liveness 检查保留，run 结束不能单独证明进程结束。远程／OTLP 日志在批次、重放及回调拒绝后保留精确来源；文件、PDF、视频自动预览使用持久化保留的 Host 消息来源。固定内容 connector 投递保留独立 sink 授权。严格 guard 包含 38 个 AST 入口合约、3 个 MCP caller-context 合约、7 个 capability 策略与 48 个删除门禁变异检查。原 104 项均已审阅并解决；当前 767 项快照为 257 个 tool-gated、498 个 host-system、12 个 gated-here，没有 unresolved 类别。局部验证、基线限制与完整 S1 caller/run 表见 evidence ledger；这些检查不代表真实 provider 或操作系统防火墙验收。 Fix5 将 clean capture 绑定到真实 Host entry。插件实例保留接触过的全部 producer，回调结束后继续校验出口，直到实例卸载／重载；旧 API closure 保留旧实例限制。同树 delegation 和固定内容 sink 明确排除 opaque in-flight 登记。匹配的 fenced PreToolUse 远程 guard 拒绝工具；command guard 使用既有 network-off launcher，否则拒绝。其他生命周期 hook 只记录 warning，不 block。未知 session ancestry 必须 fence／等待，sandbox consumer 在终态／释放时清理，MCP run context 由结构门禁固定，未验证 non-read Host 工具对 marked run 拒绝。F3／F10 工具表与 pinning 结果见 evidence ledger。
+
+Fix7 以内容排除替代 native guest 生命周期 lease：拥有独立 OS 网络能力的 Python、hybrid Python contribution 和 VSCode guest 不得接收带标记 run tree 的内容。工具、contribution、interceptor、stream 及 Host 回复均使用规范 Host 来源校验。匹配的 native PreToolUse guard 无法接收 payload 时拒绝工具，其他 hook 记录 warning 后跳过且不 block。Host 读取使等待中的 guest 所属 run 被标记时，只回复固定拒绝文本，错误回复同样受限。WASM 保留插件实例级 F2 Host API 围栏；较早未标记内容的交付不需要 guest lease。
+
+残余边界：原生 `TodoWrite` 仍被豁免。较早未标记 turn 启动的脱离进程仍可能读取 transcript 或磁盘；本阶段未隔离这些进程，run 之外的进程隔离归阶段 3。
+
+标记操作先持久化 taint，再等待受影响会话的 fence ACK 和已跟踪的在途 opaque 操作结束，期间不释放个人结果/上下文。Native/AI SDK 清理进程后检查存活 jobs，包括 detached origin。已注册且仍存活的 native background task 会拒绝个人内容 admission。Terminal lease 仅证明 shell 已退出；可能继续存活的 detached descendants（包括 nohup/disown 进程）属于 phase 3 进程隔离残余风险。MCP discovery/listing 不携带 run 内容，继续允许。这些本地 barrier 不等同于 OS 防火墙或真实 provider 验收。
+
+外部引擎类别：内置 Claude、AI SDK 支持 live fence。Codex marked-start 强制网络关闭，禁用附加及发现的 native MCP server，将 fence 纳入 native session 身份，拒绝跨身份 resume，并在 resume/fork 保留网络上限。Codex 无 per-call native fence，因此拒绝 mid-run marking。其他外部协议保守拒绝 marked-start 和 mid-run admission。无 run id 的未标记 external 调用保持原行为。
+
+run-bound 插件 openPane 保留同步 boolean：run boundary 的一次 canonical read 预热 Host 缓存；mark／祖先 revision 只使受影响的后代快照失效，无关 run 保留快照。cache miss 使用无副作用 probe 保留同步 boolean；仅一次 canonical read 通过后才能创建／导航 pane，回调前 cache 失效仍拒绝。插件 ctx.network 在 credential resolution 后、实际 dispatch 时只读取一次 canonical taint。直接 primitive 清单扫描 tool-capable workspaces 的生产源码超集，新增未分类调用点会失败；静态 alias 分析不能证明任意运行时代码的行为。web_search query、provider 流量和 DNS 仍是 residual。各 lane、实际验证及未完成验收见 `docs/evidence/2026-11-11-adr-0243-phase2c2.md`。
+
+fix round 2 将安装的 SDK registry 所证明的 native 身份传递至 Host approval；同名插件／MCP 不获得例外。marked Codex 的 plan/dontAsk 保持未标记时的文件 sandbox 和 approval policy，只收紧网络。Host operation lineage 仅排除提交 mark 的调用栈及实际 stream，其他 sibling operation／stream 仍阻止释放。Native 插件 relay 按实际 Host round-trip 身份跟踪；用户覆盖同名 MCP namespace 时仍按第三方处理。有限操作与进程退出清理 Host process 状态；run 删除／终态不能替代真实进程退出，account 切换清理旧 scope。ACK 期间 account DB 变化也拒绝 admission。Terminal exit proof 仅覆盖 shell；退出后仍存活的 detached descendants 属于 phase 3 进程隔离残余风险，本阶段不证明完整后代隔离；本地回归不代表 provider／OS 验收。
+
 Phase 2C-1（2026-11-10）：可移植的 personal-sink 判定与 Host 边界检查，在 connector 能证明私有目的地时，将仅属于一个人的回答收窄至本人；否则隐藏。run 的 taint 合并本身及沿结构父链到固定 identity root 的全部祖先标记；confirmation 创建的新 identity root 仍保留实时结构来源祖先，审批不会截断后续来源标记。声称存在但无法解析的 job parent 在创建新 job 前即被拒绝，不能洗成无标记的新根；execution 无法解析、祖先读取失败或出现环时隐藏。history 与 derived-context preparation 在释放上下文前，将实际仍可见来源的显式标记提交到消费 run；提交失败则隐藏该上下文。仅供 Host 本人 UI 使用的 owner helper 不污染 run。**D1 legacy 残余：**`effectivePersonalMarks` 对缺少版本标记的 connector 旧行所推断的读取时归属，仍过滤历史，但其推断本身不会污染消费 run；显式来源 message／artifact／run 标记会污染。公开快照继续包含这些 legacy 推断，并隐藏相应旧行。
 
 第一轮复核修正：gateway 与 notification 入口必须显式传递 Host provenance。缺少精确消费 run 时隐藏 marked context，不再从同 session 的其他 active run 推断。已证明的本人受众可以接收 opaque payload；未知受众仍 withheld 且无 `contentHash`，因此 disclosure 不能解锁。confirmation 的读取标记会沿结构链跨 identity segment 提交。共享标题和编辑后的摘要草稿在来源消息删除后仍保留来源 run taint。流式回复合并过期 frame 并在 final 重读；native presentation 在每次 driver 写入前重查。收窄会清除原会话 placement/edit 指针；回执区分被隐藏的原内容与实际收窄内容，并在同一次 attempt 内去重。模型侧拒绝文案不含平台 ID。调用点清单包含 `app/**`，plugin `prepareEgress` 明确列为 2C-2。缺少可信 run binding 的旧 producer 继续 withheld，不将 session 或 wire run ID 提升为权限。
@@ -474,3 +488,32 @@ Phase 2-0 关闭子会话绑定和模型伪造绑定漏洞：子会话技能继�
 Phase 2C-1 第二轮复核（2026-11-10）：会话标题、状态/错误、目标输出、自动提案和共享摘要使用该会话所有显式消息/run 标记及其结构祖先的并集，不使用旧数据的推断归属，也不选择环境中的活跃 run。已验证通知来源合并后保留实时并集；未知来源仍为未知。排队投递持久化原始来源供重试检查。Host 存储、配置、传输生命周期通知显式归为后台服务；Issue/site 通知采用该分类的前提是带标记的内置技能、插件及工作流写入均在持久化前被拒绝。Phase 2A-0 个人凭据仅属于 Host owner，因此未知来源可显示在 owner 本地 feed/toast/OS，已知外部人物标记仍被投影。Phase 4/5 开放其他人的个人访问时必须重新审视此前提；配对成员设备属于 2B-2，不等同本地 owner。Fumadocs 内容集合之外的`docs/evidence/2026-11-10-adr-0243-phase2c1-caller-inventory.md`记录已恢复来源与真实剩余缺口。 IM 命令回复（`/status`、`/character`、`/team`、`/workflow`）中的角色、团队、工作流和规则名称属于 Host 配置标签，按 Host 后台内容分类；残余风险是带标记的运行自己写进配置的名称，本阶段不追踪。
 
 Issue 创建确认使用独立 Host proposal source 记录，在点击时核对原草稿、项目、会话并重读来源标记；组件/model payload 不能提供该证明，旧提案缺失证明时拒绝。重路由保留 session/composite 来源；派生会话沿 canonical parent 读取显式标记。
+
+
+Fix7 terminal lease 仅在成功 child wait 或既有 PTY 确认退出事件后释放。私有 headless kill 传播错误、有界等待，并返回 exited／stillRunning／unknown；仅 exited 释放 Host lease。wait 失败不产生退出证明。one-shot、consent、workflow 取消时晚到的 spawn 及显式 close 均使用这一生命周期。私有 headless 自然退出由下一次有界 close 确认，在此之前保守保留 lease。当前沙箱无法写入指定共享 target 目录，Rust 验证因此 blocked；JavaScript 局部测试不能代替原生编译或实际进程退出验收。当前结果及残余边界见 phase2C2 evidence ledger。
+
+
+### Phase 2C-2 fix9：明确标记、持久 binding 与退出证明
+
+插件没有个人 reader。Transcript 读取和订阅使用 engine 相同的 phase 2B effective visibility，包含 Host message-to-run 归属及消息写入后新增的 run 标记。Session id、标题和时间戳保持原值；明确带标记的 transcript seed 执行投影。IM history 解析 canonical stored message，attachment grant 保留所属 message。插件驱动的 run/tool 结果仅在对应 Host run 确知带标记时 withheld；缺少 provenance 本身不会触发 withholding。Artifact、canvas、editor/terminal data、日志及 events/bus payload 保持不变：派生 artifact 投影属于 2C-2 之外的残余风险，任意文件系统数据也未建立文件级来源。
+
+清洁 sandbox 多轮交互复用原 binding fingerprint，不纳入每轮 run id。Binding 一旦被 tainted run 使用，在 record 重建和 consumer pruning 后仍保持 network-off（无法证明该能力的 tier 则拒绝），直至 session/workspace binding 被销毁。单一 run 的插件 callback cache miss 不会记录 exposure；异步内容交付等待 canonical read，同步 callback 保持返回形状，仅在明确证明标记后记录到捕获的 activation。Cold composite callback 尚需展开 canonical producer 才能完整执行此规则。Fresh external-tool facade 也仍需绑定调用方 Host 来源或证明上游 gate；这些 fix9 未完成项记录于 evidence ledger。
+
+External chat capture、person-agent replay、best-of-N、scheduler 和 remote Host turn 绑定真实 Host run。恢复 external session 保留已消费来源，未绑定新 run 的 fleet continuation 不得清除此来源。Remote transport correlation id 不等同 execution row。
+
+One-shot timeout 和异常返回通过 blocking thread 执行 kill proof，在有限 operation 结束前把未确认 session 身份转交 TS process lease。只有成功 child wait 证明退出。Wait 失败停止后续信号发送，但仍报告 Unknown。有界原生退出记录（TTL 十分钟，上限 1024 条）在旧 registry 立即移除后保留。One-shot session 不出现在 managed-process snapshot；旧 kill/kill-all 保持不等待语义，src-tauri 未修改。
+
+Terminal proof 仅覆盖 shell，detached descendants 仍属 phase 3 隔离工作。本地测试不代表 provider/firewall 验收。此版本的 Rust 测试和 tauri-host 编译由外部 verifier 执行，evidence ledger 区分外部结果与本地检查。
+
+
+### Phase 2C-2 fix10：补齐组合来源与外部运行绑定
+
+插件冷缓存组合回调会展开所有不透明或显式 producer，在交付内容前等待读取 canonical marks。缺失来源不会记录曝光。曝光缓存与“来源未知时拒绝外发”分开，缺失 run 的拒绝不能变成插件永久曝光。若读取另一来源期间已有 producer 新增 marks，正向证据读取器会按当前依赖重新读取。普通同步回调保持原有返回形态；冷缓存组合交付在证据就绪前返回 Promise。
+
+生产 external-tool getter 接收并传递调用方的 Host personalSource；原生 external session id 不能建立 run 权限。manager 在执行工具前合并该来源与会话保留来源。getter 测试使用真实 canonical run；person-agent runner 测试使用真实 manager 与 canonical history：clean replay 不变，marked ACP 在交付前拒绝，marked Codex 携带 network-off metadata。message、metadata 与 settle outcome 均在后续工具复用前断言。chat 和两个 best-of-N 交付点均补齐来源绑定 co-test 与可逆 without-fix 证明。
+
+fix10 brief 提供了 fix9 后独立验证的336个 cognia-terminal 测试和 tauri-host check 通过结果。fix10 未修改 Rust 或 sidecar；该结果取代此前 native 验证阻塞，以及 fix9 的 Q3/Q4 后续项。evidence ledger 保留本地验证的准确结果，并区分 adapter policy 测试与真实 provider/OS 验收。派生产物、任意文件系统来源、脱离 shell 的后代进程和 provider/firewall 验收仍遵循前述阶段边界。
+
+Phase 2C-2 fix11：ctx.agent 的所有可调用 runner 返回值都经过个人读取投影，并绑定真实 Host 子运行。正常 one-shot 先释放 PTY，再等待真实子进程退出；存活 shell 仅保留轻量进程记录，以 managed 状态显示在性能面板。未确认退出的 close 保留租约，但不会使干净 workflow 失败。退出证明只按4096条数量上限淘汰，不按时间过期；原生证明事件及时释放租约。wait 失败仍发送 UI Exit(null)，但不产生退出证明。sandbox/history 的未知读取只拒绝本次调用，不写入 sticky 或缓存；已删除的 branch parent 使历史处于未验证状态。冷缓存同步 guard/render/notification 分别返回 false/null/undefined（disabled 返回 true），跳过 guest 并异步预热；异步回调继续等待证明。
+
+命名残余 **cold-single-run-handoff-window**：普通单运行回调可能先交付内容，再由 setTimeout(0) 记录 exposure，需由 phase3 进程/插件隔离关闭该时序窗口。命名残余 **restart-provenance-loss**：内存中的 sticky network-off 与 external-source 状态不跨重启保留，需由 phase3 持久化运行/绑定来源和恢复机制在恢复派发前重建。Phase2C-2 不声称已关闭这两项；本轮 Rust 测试及 tauri-host 编译由外部验证者执行。

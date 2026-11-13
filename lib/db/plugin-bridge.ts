@@ -1,4 +1,4 @@
-import { preservePersonalMarkMetadata } from "@cognia/plugin-contract/types/execution/acting-identity"
+import { personalMessageMetadata } from "@/lib/execution/personal-marks"
 /**
  * Plugin-facing Dexie bridge.
  *
@@ -165,7 +165,7 @@ export const messageRepository = {
       const existing = await db.messages.get(row.id)
       const incoming = { ...row.metadata }
       delete incoming.personalMarkVersion
-      row.metadata = preservePersonalMarkMetadata(incoming, existing?.metadata, {
+      row.metadata = await personalMessageMetadata(row.id, incoming, existing?.metadata, {
         rowExists: !!existing,
       })
       if (!existing && session?.platformBinding)
@@ -203,7 +203,9 @@ export const messageRepository = {
         if (updates.attachments !== undefined) meta.attachments = updates.attachments
         if (updates.tokens !== undefined) meta.tokens = updates.tokens
         if (updates.branchId !== undefined) meta.branchId = updates.branchId
-        patch.metadata = preservePersonalMarkMetadata(meta, current.metadata, { rowExists: true })
+        patch.metadata = await personalMessageMetadata(messageId, meta, current.metadata, {
+          rowExists: true,
+        })
         await dexie.messages.update(messageId, patch)
       })
 

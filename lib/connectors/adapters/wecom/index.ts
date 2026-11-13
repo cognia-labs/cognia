@@ -1,3 +1,8 @@
+import {
+  personalEgressOptionsSource,
+  runPersonalEgressOperation,
+} from "@/lib/execution/personal-egress"
+import type { AdapterSendOptions } from "@/types/connectors/adapter"
 /**
  * WeCom 智能机器人 (AI bot) adapter factory.
  *
@@ -703,7 +708,10 @@ export function createWeComAdapter(opts: WeComAdapterOptions): PlatformAdapter {
   }
 
   // ── outbound: media upload ────────────────────────────────────────────────
-  async function uploadMedia(seg: WeComMediaSegment): Promise<string> {
+  async function uploadMedia(
+    seg: WeComMediaSegment,
+    producer: import("@/lib/execution/personal-egress").PersonalEgressContext
+  ): Promise<string> {
     let bytes: Uint8Array
     if (seg.url.startsWith("data:")) {
       const encoded = /^data:[^,]*;base64,([A-Za-z0-9+/]*={0,2})$/.exec(seg.url)?.[1]
@@ -716,7 +724,7 @@ export function createWeComAdapter(opts: WeComAdapterOptions): PlatformAdapter {
         throw new WeComAckError("Invalid inline media base64", false)
       }
     } else {
-      const resp = await proxyFetch(seg.url)
+      const resp = await runPersonalEgressOperation(producer, () => proxyFetch(seg.url))
       if (!resp.ok)
         throw new WeComAckError(
           `Media download HTTP ${resp.status}`,
@@ -774,7 +782,15 @@ export function createWeComAdapter(opts: WeComAdapterOptions): PlatformAdapter {
     }
   }
 
-  async function send(req: OutboundRequest): Promise<OutboundResult> {
+  async function send(req: OutboundRequest, options?: AdapterSendOptions): Promise<OutboundResult> {
+    const producer =
+      personalEgressOptionsSource(options) ??
+      (options?.executionIdentity
+        ? {
+            sessionId: options.executionIdentity.sessionId,
+            executionRunId: options.executionIdentity.runId,
+          }
+        : {})
     const ref = req.conversationRef as WeComConversationRef
     const serialized = serializeSegments(req.segments)
     const [firstMarkdown = "", ...overflowMarkdown] = serialized.markdownChunks
@@ -814,7 +830,7 @@ export function createWeComAdapter(opts: WeComAdapterOptions): PlatformAdapter {
     const mediaIds: Array<{ type: WeComMediaSegment["type"]; mediaId: string }> = []
     try {
       for (const m of serialized.media) {
-        const id = await uploadMedia(m)
+        const id = await uploadMedia(m, producer)
         mediaIds.push({ type: m.type, mediaId: id })
       }
     } catch (error) {

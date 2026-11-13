@@ -1,3 +1,4 @@
+import { runLogEgress, stripLogEgressSources } from "../context"
 /**
  * Remote Transport
  * Ships logs to remote endpoints with batching, durable retry queue, and health telemetry.
@@ -298,26 +299,23 @@ export class RemoteTransport implements Transport {
     }
 
     try {
-      const serializedBody = this.serializeSafely(entries)
-      if (serializedBody === null) {
-        // Treat the batch as consumed so an unsafe persisted replay is deleted
-        // rather than retried forever.
-        return true
-      }
-
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), this.options.timeout)
-
-      const response = await this.fetchImpl(this.options.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: serializedBody,
-        signal: controller.signal,
+      const response = await runLogEgress(entries, async (admitted) => {
+        const serializedBody = this.serializeSafely(stripLogEgressSources(admitted))
+        if (serializedBody === null) return undefined
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), this.options.timeout)
+        try {
+          return await this.fetchImpl(this.options.endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: serializedBody,
+            signal: controller.signal,
+          })
+        } finally {
+          clearTimeout(timeoutId)
+        }
       })
-
-      clearTimeout(timeoutId)
+      if (!response) return true
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)

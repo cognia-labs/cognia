@@ -1,3 +1,4 @@
+import { hookCommandLaunch } from "./command.ts"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { writeFileSync } from "node:fs"
@@ -98,4 +99,17 @@ test("runCommandHandler: a hook that exits without reading stdin does not crash 
   const payload = JSON.stringify({ pad: "x".repeat(1024 * 1024) })
   const out = await runCommandHandler(nodeCmd("process.exit(0)"), undefined, payload)
   assert.deepEqual(out, {})
+})
+
+test("F4: network-off hook commands reuse the Host launcher", () => {
+  assert.deepEqual(hookCommandLaunch("printf guard", ["/host/sandbox", "--network=off", "--"]), {
+    command: "/host/sandbox",
+    args: ["--network=off", "--", "/bin/sh", "-c", "printf guard"],
+    shell: false,
+  })
+  assert.deepEqual(hookCommandLaunch("printf guard"), {
+    command: "printf guard",
+    args: [],
+    shell: true,
+  })
 })

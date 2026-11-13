@@ -197,3 +197,37 @@ describe("interceptor normalization (ADR-0189)", () => {
     expect(resolveInterceptorChain("model.request.invoke").ordered).toHaveLength(1)
   })
 })
+
+it("R11 registration supplies the synchronous cold refusal policy", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const guest = jest.fn(() => null)
+  try {
+    registerPluginHookContribution("r11-render", { onMessageRender: guest } as never)
+    const callback = bindPluginCallbacks("r11-policy", guest, () => ({
+      executionRunId: "r11-cold",
+    }))
+    expect(callback()).toBe(null)
+    expect(guest).not.toHaveBeenCalled()
+  } finally {
+    restore()
+  }
+})
+
+it("R11 synchronous stream notification returns void and skips cold delivery", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const guest = jest.fn(() => undefined)
+  try {
+    registerPluginHookContribution("r11-sync-stream", { onStreamChunk: guest })
+    const callback = bindPluginCallbacks("r11-sync-stream", guest, () => ({
+      executionRunId: "r11-cold",
+    }))
+    expect(callback()).toBeUndefined()
+    expect(guest).not.toHaveBeenCalled()
+  } finally {
+    restore()
+  }
+})

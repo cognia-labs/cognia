@@ -529,3 +529,18 @@ it("explicit owner UI reads retain legacy owner content but still withhold a kno
   expect(joined.withheldMessageIds).toEqual(["legacy-seed"])
   expect(joined.messages[0].text).not.toContain("owner's old seed")
 })
+
+it("P1 plugin history cannot inherit a local person's reader authority", async () => {
+  const { preparePluginHistory } = await import("./personal-visibility")
+  const run = await startToolExecutionRun("plugin-history", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const result = await preparePluginHistory("plugin-history", [
+    privateMessage,
+    { id: "public", text: "public" },
+  ])
+  expect(result.readers).toEqual([])
+  expect(result.withheldMessageIds).toEqual([privateMessage.id])
+  expect(result.messages[1]).toEqual({ id: "public", text: "public" })
+  expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+})

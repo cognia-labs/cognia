@@ -74,7 +74,7 @@ it("loads and registers declarative panels through the namespaced registry", asy
       id: "review-plugin:outline",
       label: "Outline",
       pluginId: "review-plugin",
-      renderer: Renderer,
+      renderer: expect.any(Function),
     }),
   ])
 })
@@ -386,4 +386,25 @@ it("still gates a declarative panel on the resource permission", async () => {
   expect(result.registered).toBe(0)
   expect(result.errors).toHaveLength(2)
   expect(result.errors[0]?.message).toMatch(/canvas:read/)
+})
+
+it("R11 declared panel badge preserves synchronous cold refusal", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const badge = jest.fn(() => 2)
+  try {
+    const result = await registerContextPanelsForPlugin(
+      { ...manifest, contextPanels: [{ ...manifest.contextPanels[0], getBadgeExport: "badge" }] },
+      "/plugins/review",
+      { importer: async () => ({ OutlinePanel: () => null, badge }), hasPermission: () => true }
+    )
+    expect(result.errors).toEqual([])
+    expect(
+      bindPluginCallbacks(manifest.id, badge, () => ({ executionRunId: "r11-cold" }))()
+    ).toBeUndefined()
+    expect(badge).not.toHaveBeenCalled()
+  } finally {
+    restore()
+  }
 })

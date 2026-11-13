@@ -169,15 +169,23 @@ function bindTransport(
   return {
     // Retain the native callback even if a stream consumer stops before the
     // Python transport settles. Never borrow an unrelated awaiting invocation.
-    call: (id, functionName, args) =>
-      withPluginExecutionContext(pluginId, pluginDispatchContext(pluginId), () =>
-        transport(id, functionName, args)
-      ),
+    call: (id, functionName, args) => {
+      const source = pluginDispatchContext(pluginId)
+      return withPluginExecutionContext(pluginId, source, () =>
+        import("@/lib/execution/personal-egress").then(({ runPersonalEgressOperation }) =>
+          runPersonalEgressOperation(source, (operation) =>
+            withPluginExecutionContext(pluginId, operation, () => transport(id, functionName, args))
+          )
+        )
+      )
+    },
     generation,
   }
 }
 
 function wrapFailure(options: PythonBackedProxyOptions, method: string, error: unknown): Error {
+  if (error instanceof Error && "code" in error && error.code === "personal-egress-denied")
+    return error
   const message = error instanceof Error ? error.message : String(error)
   const wrapped = new Error(`python-backed ${describe(options, method)} failed: ${message}`)
   if (error instanceof Error && error.stack) wrapped.stack = error.stack

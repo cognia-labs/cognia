@@ -620,6 +620,7 @@ describe("Host-owned attached session staging", () => {
       test.deps
     )
     expect(child.branchSeed?.content).toContain("OWNER LEGACY IM HISTORY")
+    expect(child.branchSeed?.personalMarks?.length).toBeGreaterThan(0)
     expect(child.attachedChild?.parentSessionId).toBe(parent.id)
   })
 

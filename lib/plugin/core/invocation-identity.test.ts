@@ -93,38 +93,45 @@ it("keeps direct Host-local proof distinct from background and preserves sync ca
 })
 
 it("fences contributed methods, returned class instances and async iterators through settlement", async () => {
-  let release!: () => void
-  const waiting = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  class Adapter {
-    #value = 7
-    read() {
-      return this.#value
+  const fixture = createDbTestFixture({ seeded: false })
+  await fixture.initialize()
+  const run = await startToolExecutionRun("factory-service")
+  try {
+    let release!: () => void
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    class Adapter {
+      #value = 7
+      read() {
+        return this.#value
+      }
+      async *stream() {
+        await waiting
+        expect(pluginExecutionContext("p")?.executionRunId).toBe(run.id)
+        yield this.#value
+      }
     }
-    async *stream() {
-      await waiting
-      expect(pluginExecutionContext("p")?.executionRunId).toBe("service")
-      yield this.#value
-    }
+    const factory = bindPluginCallbacks("p", () => new Adapter())
+    let adapter!: Adapter
+    let iterator!: AsyncGenerator<number>
+    withPluginExecutionContext("p", { executionRunId: run.id }, () => {
+      adapter = factory()
+      iterator = adapter.stream()
+    })
+    expect(adapter.read()).toBe(7)
+    const next = iterator.next()
+    expect(pluginExecutionContext("p")?.executionRunId).toBe(run.id)
+    release()
+    await expect(next).resolves.toEqual({ value: 7, done: false })
+    // The Host may await transport backpressure before asking for another chunk.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(pluginExecutionContext("p")?.executionRunId).toBe(run.id)
+    await iterator.return(undefined as never)
+    expect(pluginExecutionContext("p")).toBeUndefined()
+  } finally {
+    await fixture.dispose()
   }
-  const factory = bindPluginCallbacks("p", () => new Adapter())
-  let adapter!: Adapter
-  let iterator!: AsyncGenerator<number>
-  withPluginExecutionContext("p", { executionRunId: "service" }, () => {
-    adapter = factory()
-    iterator = adapter.stream()
-  })
-  expect(adapter.read()).toBe(7)
-  const next = iterator.next()
-  expect(pluginExecutionContext("p")?.executionRunId).toBe("service")
-  release()
-  await expect(next).resolves.toEqual({ value: 7, done: false })
-  // The Host may await transport backpressure before asking for another chunk.
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  expect(pluginExecutionContext("p")?.executionRunId).toBe("service")
-  await iterator.return(undefined as never)
-  expect(pluginExecutionContext("p")).toBeUndefined()
 })
 
 it("wraps callback arguments at the published context, preserves off identity and cloneable data", async () => {
@@ -309,5 +316,265 @@ describe("Host integration job delegation", () => {
         })
       )
     )
+  })
+})
+
+it("H3: Host context copies retain the unique admitting operation", async () => {
+  const { forkPersonalOperation, isPersonalAdmissionOperation } =
+    await import("@/lib/execution/personal-operation")
+  const root = forkPersonalOperation({ executionRunId: "lineage" })
+  const child = forkPersonalOperation(root)
+  await withPluginExecutionContext("operation-copy", root, async () => {
+    await withPluginExecutionContext("operation-copy", child, async () => {
+      await Promise.resolve()
+      const current = pluginExecutionContext("operation-copy")!
+      expect(isPersonalAdmissionOperation(child, current)).toBe(true)
+      expect(isPersonalAdmissionOperation(forkPersonalOperation(root), current)).toBe(false)
+    })
+  })
+})
+
+it("retains all producer dependencies when concurrent sibling operations deny credential authority", async () => {
+  const { forkPersonalOperation, personalOperationSources } =
+    await import("@/lib/execution/personal-operation")
+  const parent = forkPersonalOperation({
+    executionRunId: "same-run",
+    personalEgressBlocked: true as const,
+  })
+  const left = forkPersonalOperation(parent),
+    right = forkPersonalOperation(parent)
+  await withPluginExecutionContext("sibling-marked", left, async () => {
+    await withPluginExecutionContext("sibling-marked", right, async () => {
+      const context = pluginExecutionContext("sibling-marked")!
+      expect(context).toMatchObject({ executionRunId: "", personalEgressBlocked: true })
+      expect(personalOperationSources(context)).toHaveLength(2)
+    })
+  })
+})
+
+describe("F2 instance exposure lifetime", () => {
+  const fixture = createDbTestFixture({ seeded: false })
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+  it("Q4 cold clean dispatch never records exposure and cold marked dispatch awaits proof", async () => {
+    const { beginPluginEgressInstance, pluginEgressContextResolver } =
+      await import("./invocation-identity")
+    const { assertPersonalEgress, invalidatePersonalEgressCache } =
+      await import("@/lib/execution/personal-egress")
+    for (const marked of [false, true]) {
+      const run = await startToolExecutionRun(`q4-${marked}`, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      if (marked)
+        await getDb().executionRuns.update(run.id, {
+          personalMarks: [{ person: { kind: "local-person" }, source: "Q4", markedAt: 1 }],
+        })
+      invalidatePersonalEgressCache(run.id)
+      const id = `q4-${marked}`
+      beginPluginEgressInstance(id)
+      const callback = bindPluginCallbacks(
+        id,
+        () => "delivered",
+        () => ({ executionRunId: run.id })
+      )
+      expect(callback()).toBe("delivered")
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      const check = assertPersonalEgress(pluginEgressContextResolver(id)())
+      if (marked) await expect(check).rejects.toMatchObject({ code: "personal-egress-denied" })
+      else await expect(check).resolves.toBeUndefined()
+    }
+  })
+  it("R10 cold composites read every producer before delivery and retain only explicit exposure", async () => {
+    const { beginPluginEgressInstance, pluginEgressContextResolver } =
+      await import("./invocation-identity")
+    const { bindPersonalOperationSources } = await import("@/lib/execution/personal-operation")
+    const { assertPersonalEgress, invalidatePersonalEgressCache } =
+      await import("@/lib/execution/personal-egress")
+    for (const marked of [false, true]) {
+      const a = await startToolExecutionRun(`r10-a-${marked}`, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      const b = await startToolExecutionRun(`r10-b-${marked}`, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      if (marked)
+        await getDb().executionRuns.update(b.id, {
+          personalMarks: [{ person: { kind: "local-person" }, source: "R10", markedAt: 1 }],
+        })
+      invalidatePersonalEgressCache(a.id)
+      invalidatePersonalEgressCache(b.id)
+      const source = bindPersonalOperationSources({}, [
+        { executionRunId: a.id },
+        bindPersonalOperationSources({}, [
+          { personalSources: [{ executionRunId: b.id }, { executionRunId: "missing-r10" }] },
+        ]),
+      ])
+      const id = `r10-composite-${marked}`
+      beginPluginEgressInstance(id)
+      const delivered = jest.fn(() => "delivered")
+      const callback = bindPluginCallbacks(id, delivered, () => source)
+      const delivery = callback()
+      expect(delivered).not.toHaveBeenCalled()
+      await expect(Promise.resolve(delivery)).resolves.toBe("delivered")
+      expect(delivered).toHaveBeenCalledTimes(1)
+      const check = assertPersonalEgress(pluginEgressContextResolver(id)())
+      if (marked) await expect(check).rejects.toMatchObject({ code: "personal-egress-denied" })
+      else await expect(check).resolves.toBeUndefined()
+    }
+  })
+  it.each([false, true])(
+    "R11 sync cold composite guard warms without delivering marked=%s",
+    async (marked) => {
+      const {
+        markPluginSynchronousCallback,
+        beginPluginEgressInstance,
+        pluginEgressContextResolver,
+      } = await import("./invocation-identity")
+      const { bindPersonalOperationSources, cachedPersonalDispatchFence } =
+        await import("@/lib/execution/personal-operation")
+      const { invalidatePersonalEgressCache, assertPersonalEgress } =
+        await import("@/lib/execution/personal-egress")
+      const a = await startToolExecutionRun(`r11-sync-a-${marked}`, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      const b = await startToolExecutionRun(`r11-sync-b-${marked}`, {
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      if (marked)
+        await getDb().executionRuns.update(b.id, {
+          personalMarks: [{ person: { kind: "local-person" }, source: "R11", markedAt: 1 }],
+        })
+      invalidatePersonalEgressCache(a.id)
+      invalidatePersonalEgressCache(b.id)
+      const source = bindPersonalOperationSources({}, [
+        { executionRunId: a.id },
+        { executionRunId: b.id },
+      ])
+      const id = `r11-sync-${marked}`
+      beginPluginEgressInstance(id)
+      const guest = jest.fn(() => true)
+      const callback = bindPluginCallbacks(id, guest, () => source)
+      markPluginSynchronousCallback(callback, false)
+      expect(callback()).toBe(false)
+      expect(guest).not.toHaveBeenCalled()
+      await expect(assertPersonalEgress(pluginEgressContextResolver(id)())).resolves.toBeUndefined()
+      for (let n = 0; cachedPersonalDispatchFence(source) === undefined && n < 100; n++)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      expect(cachedPersonalDispatchFence(source)).toBe(marked)
+      expect(callback()).toBe(true)
+      expect(guest).toHaveBeenCalledTimes(1)
+      const check = assertPersonalEgress(pluginEgressContextResolver(id)())
+      if (marked) await expect(check).rejects.toMatchObject({ code: "personal-egress-denied" })
+      else await expect(check).resolves.toBeUndefined()
+    }
+  )
+  it("R11 IPC synchronous filter rejects cold composite before guest delivery", async () => {
+    const { PluginIPC } = await import("@/lib/plugin/messaging/ipc")
+    const { bindPersonalOperationSources, cachedPersonalDispatchFence } =
+      await import("@/lib/execution/personal-operation")
+    const { invalidatePersonalEgressCache } = await import("@/lib/execution/personal-egress")
+    const a = await startToolExecutionRun("r11-ipc-a", { localAuthorization: LOCAL_PERSON_RUN })
+    const b = await startToolExecutionRun("r11-ipc-b", { localAuthorization: LOCAL_PERSON_RUN })
+    invalidatePersonalEgressCache(a.id)
+    invalidatePersonalEgressCache(b.id)
+    const source = bindPersonalOperationSources({}, [
+      { executionRunId: a.id },
+      { executionRunId: b.id },
+    ])
+    const ipc = new PluginIPC()
+    const guard = jest.fn(() => true),
+      received = jest.fn()
+    const bound = bindPluginCallbacks("r11-receiver", guard, () => source)
+    ipc.subscribe("r11-receiver", "r11-channel", received, bound)
+    await withPluginExecutionContext("r11-sender", source, () =>
+      ipc.send("r11-sender", "r11-receiver", "r11-channel", "content")
+    )
+    expect(guard).not.toHaveBeenCalled()
+    expect(received).not.toHaveBeenCalled()
+    for (let n = 0; cachedPersonalDispatchFence(source) === undefined && n < 100; n++)
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    await withPluginExecutionContext("r11-sender", source, () =>
+      ipc.send("r11-sender", "r11-receiver", "r11-channel", "content")
+    )
+    expect(guard).toHaveBeenCalledTimes(1)
+    expect(received).toHaveBeenCalledWith("content", "r11-sender")
+    ipc.clear()
+  })
+  it("P3 copied composite delivery preserves a verified clean snapshot", async () => {
+    const { beginPluginEgressInstance, pluginEgressContextResolver, withPluginContentDispatch } =
+      await import("./invocation-identity")
+    const { bindPersonalOperationSources } = await import("@/lib/execution/personal-operation")
+    const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+    const a = await startToolExecutionRun("p3-composite-a")
+    const b = await startToolExecutionRun("p3-composite-b")
+    const source = bindPersonalOperationSources({}, [
+      { executionRunId: a.id },
+      { executionRunId: b.id },
+    ])
+    beginPluginEgressInstance("p3-composite")
+    const callback = bindPluginCallbacks("p3-composite", () => undefined)
+    await withPluginContentDispatch("p3-composite", source, callback)
+    await expect(
+      assertPersonalEgress(pluginEgressContextResolver("p3-composite")())
+    ).resolves.toBeUndefined()
+  })
+  it("P3 a clean delivery is not retroactively exposed when its run later taints", async () => {
+    const { beginPluginEgressInstance, pluginEgressContextResolver, withPluginContentDispatch } =
+      await import("./invocation-identity")
+    const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+    const a = await startToolExecutionRun("p3-a", { localAuthorization: LOCAL_PERSON_RUN })
+    const b = await startToolExecutionRun("p3-b", { localAuthorization: LOCAL_PERSON_RUN })
+    beginPluginEgressInstance("p3")
+    const source = pluginEgressContextResolver("p3")
+    await withPluginContentDispatch("p3", { executionRunId: a.id }, () => undefined)
+    await getDb().executionRuns.update(a.id, {
+      personalMarks: [{ person: { kind: "local-person" }, source: "P3", markedAt: 1 }],
+    })
+    await withPluginContentDispatch("p3", { executionRunId: b.id }, () => undefined)
+    await expect(assertPersonalEgress(source())).resolves.toBeUndefined()
+    await withPluginContentDispatch("p3", { executionRunId: a.id }, () => undefined)
+    await expect(assertPersonalEgress(source())).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
+  })
+
+  it("F2 opaque exposure unions survive release and a later clean source; reload isolates old APIs", async () => {
+    const { beginPluginEgressInstance, pluginEgressContextResolver } =
+      await import("./invocation-identity")
+    const { bindPersonalOperationSources } = await import("@/lib/execution/personal-operation")
+    const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+    const marked = await startToolExecutionRun("f2-opaque-marked", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    const clean = await startToolExecutionRun("f2-opaque-clean", {
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    await getDb().executionRuns.update(marked.id, {
+      personalMarks: [{ person: { kind: "local-person" }, source: "F2", markedAt: 1 }],
+    })
+    beginPluginEgressInstance("f2-instance")
+    const oldSource = pluginEgressContextResolver("f2-instance")
+    const { withPluginContentDispatch } = await import("./invocation-identity")
+    await withPluginContentDispatch(
+      "f2-instance",
+      bindPersonalOperationSources({}, [{ executionRunId: marked.id }]),
+      async () => undefined
+    )
+    await withPluginExecutionContext(
+      "f2-instance",
+      bindPersonalOperationSources({}, [{ executionRunId: clean.id }]),
+      async () => undefined
+    )
+    await expect(assertPersonalEgress(oldSource())).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
+    beginPluginEgressInstance("f2-instance")
+    await expect(
+      assertPersonalEgress(pluginEgressContextResolver("f2-instance")())
+    ).resolves.toBeUndefined()
+    await expect(assertPersonalEgress(oldSource())).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
   })
 })

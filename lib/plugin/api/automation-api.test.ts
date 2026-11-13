@@ -593,3 +593,18 @@ describe("picture-in-picture live view", () => {
     expect(getComputerUsePipSnapshot("chat-3").frame).toBeNull()
   })
 })
+
+it("S2 refuses marked automation callbacks before the desktop action", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  resetPermissionGuard()
+  getPermissionGuard({ confirmDangerousByDefault: false }).registerPlugin(PLUGIN, [
+    "automation:type",
+  ])
+  desktop.type.mockClear()
+  await withPluginExecutionContext(PLUGIN, { personalEgressBlocked: true }, async () => {
+    await expect(createAutomationAPI(PLUGIN).type("private")).rejects.toMatchObject({
+      code: "personal-egress-denied",
+    })
+    expect(desktop.type).not.toHaveBeenCalled()
+  })
+})

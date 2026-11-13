@@ -1,6 +1,7 @@
 import type { HostSession, Emit, Log } from "./sessions/types.ts"
 import type { HostCommand } from "../shared/wire/inbound.ts"
 import { errorMessage } from "../shared/errors.ts"
+import { fencePersonalEgress, personalEgressState } from "../policy/personal-egress.ts"
 import { routeClose } from "./sessions/lifecycle.ts"
 import { commandSupported, capabilityError } from "../runtimes/registry.ts"
 
@@ -57,6 +58,56 @@ export function routeCommand(
     handlers: Record<string, ((message: HostCommand) => unknown) | undefined>
   }
 ) {
+  // A reserved Host control carried by the existing allowlisted transport.
+  // Apply synchronously before acknowledgement; never forwarded to the SDK.
+  if (
+    msg.type === "control" &&
+    msg.method === "updateSettings" &&
+    (msg.params as Record<string, unknown> | undefined)?.personalEgressFence === true
+  ) {
+    const session = msg.sessionId ? sessionsMap.get(msg.sessionId) : undefined
+    if (session?.sendOptions) {
+      fencePersonalEgress(session.sendOptions)
+      const acknowledge = () => {
+        emitFn({
+          type: "control_response",
+          sessionId: msg.sessionId,
+          requestId: msg.requestId,
+          method: msg.method,
+          ok: true,
+          result: { personalEgressFenced: true },
+        })
+      }
+      if (session.fencePersonalEgress) {
+        const raw = (msg.params as Record<string, unknown>).personalEgressExcludeToolUseIds
+        const excluded = Array.isArray(raw)
+          ? raw.filter((id): id is string => typeof id === "string")
+          : []
+        void session.fencePersonalEgress(excluded).then(acknowledge, (error) =>
+          emitFn({
+            type: "control_response",
+            sessionId: msg.sessionId,
+            requestId: msg.requestId,
+            method: msg.method,
+            ok: false,
+            error:
+              error instanceof Error ? error.message : "personal_egress_quiescence_unconfirmed",
+          })
+        )
+      } else acknowledge()
+    } else {
+      emitFn({
+        type: "control_response",
+        sessionId: msg.sessionId,
+        requestId: msg.requestId,
+        method: msg.method,
+        ok: false,
+        error: "no_active_session",
+      })
+    }
+    return
+  }
+  if (msg.type === "send" && msg.options) personalEgressState(msg.options)
   const handler = handlers[msg?.type]
   if (!handler) {
     logFn("warn", `unknown command type: ${msg?.type}`)

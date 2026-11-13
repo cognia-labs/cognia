@@ -109,6 +109,7 @@ async function runStepWork(
           { runIds: [executionRunId], executionRunId, sessionId: runCtx.plan.sessionId }
         )
         return executeAgent(history.messages[0].content, {
+          executionIdentity: { runId: executionRunId },
           toolsEnabled: true,
           ...(runCtx.characterId ? { characterId: runCtx.characterId } : {}),
           ...(cwd ? { cwd } : {}),

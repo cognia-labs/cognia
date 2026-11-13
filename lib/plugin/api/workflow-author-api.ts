@@ -1,3 +1,4 @@
+import { invokeEgressMethod } from "@/lib/plugin/security/permission-guard"
 import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { personalSinkContextForRun } from "@/lib/execution/personal-sink"
 /**
@@ -235,8 +236,22 @@ export function createWorkflowAuthorAPI(pluginId?: string): PluginWorkflowAuthor
     getNodeCatalogEntry: (kind) =>
       authoringCatalogEntry(nodeCatalogEntry(kind as WorkflowNodeKind)),
     refreshTemplateWarnings: refreshAllWorkflowTemplateWarnings,
-    runWorkflow,
-    executeRunWorkflowTyped,
+    runWorkflow: (...args) =>
+      invokeEgressMethod(
+        (pluginId ? pluginExecutionContext(pluginId) : undefined) ?? {},
+        runWorkflow as (...args: unknown[]) => unknown,
+        {},
+        args,
+        pluginId ?? "host-workflow"
+      ) as ReturnType<typeof runWorkflow>,
+    executeRunWorkflowTyped: (...args) =>
+      invokeEgressMethod(
+        (pluginId ? pluginExecutionContext(pluginId) : undefined) ?? {},
+        executeRunWorkflowTyped as (...args: unknown[]) => unknown,
+        {},
+        args,
+        pluginId ?? "host-workflow"
+      ) as ReturnType<typeof executeRunWorkflowTyped>,
     getRunnerToolDefinition: () => ({
       name: WORKFLOW_RUNNER_TOOL_NAME,
       definition: WORKFLOW_RUNNER_TOOL_DEFINITION,

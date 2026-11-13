@@ -62,48 +62,115 @@ export function createDexieAPI(db: Dexie, pluginId: string): PluginDexieAPI {
     return toNamespacedTableName(pluginId, name)
   }
 
-  return {
-    table<T, K = unknown>(name: string): Dexie.Table<T, K> {
-      // W6.6: route through the same resolver rawDb() uses so an
-      // already-namespaced `<pluginId>:foo` passes through instead of being
-      // double-prefixed to `<pluginId>:<pluginId>:foo` (which always threw),
-      // and cross-plugin prefixes are rejected identically on both paths.
-      return db.table<T, K>(resolveTableName(name))
-    },
-
-    rawDb(): Dexie {
-      // A Proxy over the real Dexie instance that re-routes `table` and
-      // `transaction` through `resolveTableName`, so the raw escape hatch can
-      // no longer reach tables outside this plugin's namespace. All other
-      // members are forwarded (methods bound to the real instance so Dexie's
-      // internal `this` stays correct).
-      const handler: ProxyHandler<Dexie> = {
-        get(target, prop, receiver) {
-          if (prop === "table") {
-            return <T, K = unknown>(name: string): Dexie.Table<T, K> =>
-              target.table<T, K>(resolveTableName(name))
-          }
-          if (prop === "transaction") {
-            return (...args: unknown[]): unknown => {
-              // Dexie: transaction(mode, ...tables, scope). The first arg is
-              // the mode, the last is the scope function; everything between
-              // is a table spec (string | Dexie.Table | array of those).
-              const resolved = args.map((arg, index) => {
-                if (index === 0 || typeof arg === "function") return arg
-                if (typeof arg === "string") return resolveTableName(arg)
-                if (Array.isArray(arg)) {
-                  return arg.map((t) => (typeof t === "string" ? resolveTableName(t) : t))
-                }
-                return arg
-              })
-              return (target.transaction as (...a: unknown[]) => unknown)(...resolved)
-            }
-          }
-          const value = Reflect.get(target, prop, receiver)
-          return typeof value === "function" ? value.bind(target) : value
-        },
+  const handles = new WeakMap<object, object>()
+  const originals = new WeakMap<object, object>()
+  const protect = (value: unknown): unknown => {
+    if (!value || typeof value !== "object") return value
+    if (value === db) return view
+    if (typeof (value as PromiseLike<unknown>).then === "function")
+      return Promise.resolve(value).then(protect)
+    if (Array.isArray(value)) return value.map(protect)
+    if (
+      value instanceof Date ||
+      value instanceof Blob ||
+      ArrayBuffer.isView(value) ||
+      value instanceof ArrayBuffer
+    )
+      return value
+    const prototype = Object.getPrototypeOf(value)
+    // Stored plugin rows stay ordinary structured-cloneable data. Only live
+    // Dexie handles need a facade (including WhereClause, which has no .db).
+    if (prototype === Object.prototype || prototype === null) return value
+    const existing = handles.get(value)
+    if (existing) return existing
+    const read = (key: PropertyKey): unknown => {
+      if (key === "db") return view
+      if (
+        key === "constructor" ||
+        key === "core" ||
+        (typeof key === "string" && key.startsWith("_"))
+      )
+        return undefined
+      const member: unknown = Reflect.get(value, key)
+      if (typeof member !== "function") return protect(member)
+      return (...args: unknown[]) =>
+        protect(
+          Reflect.apply(
+            member,
+            value,
+            args.map((arg) =>
+              typeof arg === "function"
+                ? (...items: unknown[]) => Reflect.apply(arg, undefined, items.map(protect))
+                : arg && typeof arg === "object"
+                  ? (originals.get(arg) ?? arg)
+                  : arg
+            )
+          )
+        )
+    }
+    const safe = new Proxy(
+      {},
+      {
+        get: (_target, key) => read(key),
+        ownKeys: () =>
+          Reflect.ownKeys(value).filter((key) => !(typeof key === "string" && key.startsWith("_"))),
+        getOwnPropertyDescriptor: (_target, key) =>
+          Reflect.has(value, key)
+            ? { configurable: true, enumerable: true, get: () => read(key) }
+            : undefined,
+        getPrototypeOf: () => null,
       }
-      return new Proxy(db, handler)
-    },
+    )
+    handles.set(value, safe)
+    originals.set(safe, value)
+    return safe
   }
+  const table = <T, K = unknown>(name: string): Dexie.Table<T, K> =>
+    protect(db.table<T, K>(resolveTableName(name))) as Dexie.Table<T, K>
+  const transaction = (...args: unknown[]): unknown => {
+    const spec = (value: unknown): unknown => {
+      if (typeof value === "string") return resolveTableName(value)
+      if (Array.isArray(value)) return value.map(spec)
+      const original =
+        value && typeof value === "object" ? (originals.get(value) ?? value) : undefined
+      if (
+        original &&
+        "name" in original &&
+        typeof original.name === "string" &&
+        original.name === resolveTableName(original.name)
+      )
+        return original
+      throw new Error("Transaction table is not in its namespace")
+    }
+    const resolved = args.map((arg, index) =>
+      index === 0
+        ? arg
+        : typeof arg === "function"
+          ? (...items: unknown[]) => Reflect.apply(arg, undefined, items.map(protect))
+          : spec(arg)
+    )
+    return protect(Reflect.apply(db.transaction, db, resolved))
+  }
+  // A fresh facade target contains no Host database properties or descriptors.
+  const read = (key: PropertyKey): unknown => {
+    if (key === "name") return db.name
+    if (key === "table") return table
+    if (key === "transaction") return transaction
+    if (key === "tables")
+      return db.tables.filter((entry) => entry.name.startsWith(`${pluginId}:`)).map(protect)
+    return undefined
+  }
+  const view = new Proxy(
+    {},
+    {
+      get: (_target, key) => read(key),
+      ownKeys: () => ["name", "table", "transaction", "tables"],
+      getOwnPropertyDescriptor: (_target, key) =>
+        ["name", "table", "transaction", "tables"].includes(String(key))
+          ? { configurable: true, enumerable: true, get: () => read(key) }
+          : undefined,
+      getPrototypeOf: () => null,
+    }
+  ) as Dexie
+  return { table, rawDb: () => view }
 }

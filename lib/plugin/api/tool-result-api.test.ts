@@ -41,7 +41,7 @@ describe("createToolResultAPI", () => {
     const api = createToolResultAPI("plugin-a")
     api.registerToolResultRenderer("  mcp__cognia-plugin-tools__my_tool  ", Stub)
 
-    expect(getToolResultRenderer("my_tool")?.component).toBe(Stub)
+    expect(getToolResultRenderer("my_tool")?.component).toEqual(expect.any(Function))
     expect(listToolResultRenderers()[0].toolName).toBe("my_tool")
   })
 
@@ -87,4 +87,21 @@ describe("purgeToolResultRenderersForPlugin", () => {
     expect(getToolResultRenderer("two")).toBeUndefined()
     expect(getToolResultRenderer("three")?.pluginId).toBe("plugin-b")
   })
+})
+
+it("R11 registration supplies the synchronous cold refusal policy", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const guest = jest.fn(() => null)
+  try {
+    createToolResultAPI("r11-render").registerToolResultRenderer("r11-tool", guest)
+    const callback = bindPluginCallbacks("r11-policy", guest, () => ({
+      executionRunId: "r11-cold",
+    }))
+    expect(callback()).toBe(null)
+    expect(guest).not.toHaveBeenCalled()
+  } finally {
+    restore()
+  }
 })

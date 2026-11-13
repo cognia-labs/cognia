@@ -78,13 +78,15 @@ export interface InstalledExternalAgentPluginHooks {
     agentId: string,
     sessionId: string,
     toolName: string,
-    input: Record<string, unknown>
+    input: Record<string, unknown>,
+    execution?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   ): void
   dispatchExternalAgentPermissionRequest(
     agentId: string,
     sessionId: string,
     toolName: string,
-    reason?: string
+    reason?: string,
+    execution?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   ): void
 }
 

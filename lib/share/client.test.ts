@@ -484,3 +484,20 @@ describe("createShareLink with files (ADR-0222)", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+it("S2 rechecks after a plugin file source admits private content", async () => {
+  const producer: { personalEgressBlocked?: true } = {}
+  const file: CreateShareFile = {
+    path: "private.txt",
+    name: "private.txt",
+    mime: "text/plain",
+    open: async () => {
+      producer.personalEgressBlocked = true
+      return bytesShareSource(new TextEncoder().encode("private"))
+    },
+  }
+  await expect(
+    createShareLink({ payload: PAYLOAD, files: [file] }, ENDPOINT, producer)
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(fetchMock).not.toHaveBeenCalled()
+})

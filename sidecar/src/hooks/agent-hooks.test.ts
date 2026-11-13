@@ -335,3 +335,71 @@ test("buildAgentHooks: tool_provenance reaches the hook script as a real stdin f
   const stopOut = await stopMap!.Stop![0]!.hooks[0]!({ hook_event_name: "Stop" }, undefined, {})
   assert.match(JSON.stringify(stopOut), /absent/)
 })
+
+test("F4: fenced matching HTTP guard denies Read but unmatched Glob is allowed", async () => {
+  const warnings: string[] = []
+  const hooks = buildAgentHooks(
+    {
+      PreToolUse: [
+        { matcher: "Read", hooks: [{ type: "http", url: "https://example.invalid/guard" }] },
+      ],
+    },
+    {
+      sessionId: "f4",
+      personalEgressFenced: () => true,
+      log: (_level, message) => warnings.push(message),
+    }
+  )!
+  const read = await hooks.PreToolUse![0]!.hooks[0]!({
+    tool_name: "Read",
+    tool_input: { file_path: "/home/user/.ssh/id_ed25519" },
+  })
+  assert.equal(read.hookSpecificOutput?.permissionDecision, "deny")
+  assert.match(
+    read.hookSpecificOutput?.permissionDecisionReason ?? "",
+    /guard could not be consulted/
+  )
+  assert.deepEqual(
+    await hooks.PreToolUse![0]!.hooks[0]!({ tool_name: "Glob", tool_input: { pattern: "*" } }),
+    {}
+  )
+  assert.equal(warnings.length, 1)
+})
+
+for (const eventName of ["Stop", "UserPromptSubmit"])
+  for (const policyClass of ["managed", "user"])
+    test(
+      "P8a fenced " + policyClass + " " + eventName + " follows its failure policy",
+      async () => {
+        const { fencePersonalEgress, personalEgressState } =
+          await import("../policy/personal-egress.ts")
+        const policy = {}
+        fencePersonalEgress(policy)
+        const warnings: string[] = [],
+          audits: unknown[] = []
+        const hooks = buildAgentHooks(
+          {
+            [eventName]: [
+              { hooks: [{ type: "webhook", url: "https://example.invalid", policyClass }] },
+            ],
+          },
+          {
+            sessionId: "p8-hook",
+            personalEgressFenced: () => personalEgressState(policy).fenced,
+            log: (_level, message) => warnings.push(message),
+            emitAudit: (frame) => audits.push(frame),
+          }
+        )!
+        const output = await hooks[eventName]![0]!.hooks[0]!({ hook_event_name: eventName })
+        if (policyClass === "managed") {
+          assert.equal(output.decision, "block")
+          assert.match(output.reason ?? "", /Managed hook failed closed/)
+          assert.match(JSON.stringify(audits), /blocked/)
+        } else {
+          assert.deepEqual(output, {})
+          assert.match(JSON.stringify(audits), /warning/)
+        }
+        assert.equal(warnings.length, 1)
+        assert.match(warnings[0]!, /skipped/)
+      }
+    )

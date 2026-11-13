@@ -25,6 +25,7 @@ export interface HookOutput extends Record<string, unknown> {
   continue?: unknown
 }
 export interface HookOutcome extends HookOutput {
+  personalEgressSkipped?: boolean
   warnings?: string[]
   block?: string
   warning?: string
@@ -88,6 +89,7 @@ export interface PluginHookFrame {
 }
 export type PendingPluginHooks = Map<string, { resolve(value: unknown): void }>
 export interface NativeHookContext {
+  eventName?: string
   signal?: AbortSignal
   depth?: number
 }
@@ -110,6 +112,9 @@ export interface HookDeps {
   pendingPluginHookCalls?: PendingPluginHooks
   newId?: () => string
   executeNativeHandler?: NativeHookExecutor
+  personalEgressFenced?: () => boolean
+  beginPersonalEgress?: (processUnproven: boolean, toolUseId?: string) => () => void
+  finishDetachedPersonalEgress?: () => void
   emitRaw?: (frame: PluginHookFrame) => void
   emit?: (frame: PluginHookFrame | HookEnvelope) => void
   emitAudit?: (frame: HookEnvelope) => void
@@ -142,4 +147,19 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 export function errorMessage(value: unknown): unknown {
   return asRecord(value)?.message ?? value
+}
+
+/** A missing policy consultation can deny a tool, never block another lifecycle event. */
+export function fencedHookOutcome(
+  eventName: string | undefined,
+  handlerType: string | undefined
+): HookOutcome {
+  const warning = `Hook ${handlerType ?? "unknown"} skipped: personal egress is fenced`
+  return {
+    warning,
+    personalEgressSkipped: true,
+    ...(eventName === "PreToolUse"
+      ? { block: `${warning}; the guard could not be consulted` }
+      : {}),
+  }
 }

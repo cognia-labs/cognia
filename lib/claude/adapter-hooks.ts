@@ -91,14 +91,36 @@ export interface PreToolUseResultLike {
 export async function dispatchPreToolUse(
   toolName: string,
   toolArgs: unknown,
-  sessionId: string
+  sessionId: string,
+  nativeTool?: { engine: "claude-agent-sdk"; name: string },
+  execution?: PersonalCredentialContext
 ): Promise<PreToolUseResultLike> {
+  const { assertPersonalToolEgress } = await import("@/lib/execution/personal-egress")
+  const { findDeclaredModuleTool } = await import("@/lib/modules/tool-declarations")
+  try {
+    await assertPersonalToolEgress(
+      toolName,
+      execution ?? { sessionId },
+      findDeclaredModuleTool(toolName)?.declaration.effect === "read",
+      nativeTool?.engine === "claude-agent-sdk" &&
+        nativeTool.name === toolName &&
+        !toolName.startsWith("mcp__")
+        ? { kind: "native", registeredTools: [nativeTool.name] }
+        : undefined
+    )
+  } catch (error) {
+    return {
+      action: "deny",
+      reason: error instanceof Error ? error.message : "Personal egress verification failed",
+    }
+  }
   if (!hasEventListeners("onPreToolUse")) return { action: "allow" }
   try {
     const result = (await getPluginEventHooks().dispatchPreToolUse(
       toolName,
       toolArgs,
-      sessionId
+      sessionId,
+      ...(execution ? [execution] : [])
     )) as PreToolUseResultLike & { denyReason?: string }
     // The plugin contract (`PreToolUseResult`) names the reason `denyReason`;
     // the call sites read `reason`. Without this the plugin's explanation never
@@ -132,7 +154,8 @@ export async function dispatchPostToolUse(
   toolResult: unknown,
   sessionId: string,
   /** What the call site knows about the call: its outcome and its turn. */
-  call?: { isError?: boolean; turnId?: string }
+  call?: { isError?: boolean; turnId?: string },
+  execution?: PersonalCredentialContext
 ): Promise<PostToolUseResultLike> {
   if (!hasInterceptors("tool.result.project")) return {}
   return (await getPluginEventHooks().dispatchPostToolUse(
@@ -140,7 +163,8 @@ export async function dispatchPostToolUse(
     toolArgs,
     toolResult,
     sessionId,
-    ...(call ? [call] : [])
+    call,
+    ...(execution ? [execution] : [])
   )) as PostToolUseResultLike
 }
 
@@ -181,30 +205,42 @@ export async function dispatchOnMessageSend(
 }
 
 /** Fired when an SDK stream begins. */
-export function dispatchStreamStart(sessionId: string): void {
+export function dispatchStreamStart(
+  sessionId: string,
+  execution?: PersonalCredentialContext
+): void {
   if (!hasEventListeners("onStreamStart")) return
   try {
-    getPluginEventHooks().dispatchStreamStart(sessionId)
+    getPluginEventHooks().dispatchStreamStart(sessionId, execution)
   } catch {
     // hooks must not break the stream
   }
 }
 
 /** Fired for every chunk in an SDK stream. */
-export function dispatchStreamChunk(sessionId: string, chunk: string, fullContent: string): void {
+export function dispatchStreamChunk(
+  sessionId: string,
+  chunk: string,
+  fullContent: string,
+  execution?: PersonalCredentialContext
+): void {
   if (!hasEventListeners("onStreamChunk")) return
   try {
-    getPluginEventHooks().dispatchStreamChunk(sessionId, chunk, fullContent)
+    getPluginEventHooks().dispatchStreamChunk(sessionId, chunk, fullContent, execution)
   } catch {
     // ignore
   }
 }
 
 /** Fired when an SDK stream completes. */
-export function dispatchStreamEnd(sessionId: string, finalContent: string): void {
+export function dispatchStreamEnd(
+  sessionId: string,
+  finalContent: string,
+  execution?: PersonalCredentialContext
+): void {
   if (!hasEventListeners("onStreamEnd")) return
   try {
-    getPluginEventHooks().dispatchStreamEnd(sessionId, finalContent)
+    getPluginEventHooks().dispatchStreamEnd(sessionId, finalContent, execution)
   } catch {
     // ignore
   }

@@ -545,3 +545,26 @@ describe("gateway failure diagnostics", () => {
     )
   })
 })
+
+it("S2 shell callback rejects marked invocations before IPC and keeps clear dispatch", async () => {
+  const { withPluginExecutionContext } = await import("./invocation-identity")
+  mockTransportCall.mockResolvedValue({ success: true, data: "ok" })
+  mockDirectInvoke.mockResolvedValue({ success: true, data: "ok" })
+  mockTransportCall.mockClear()
+  mockDirectInvoke.mockClear()
+  await withPluginExecutionContext("s2-shell", {}, () =>
+    invokePluginApi("s2-shell", "shell:execute", { command: "echo ok" })
+  )
+  expect(mockTransportCall.mock.calls.length + mockDirectInvoke.mock.calls.length).toBeGreaterThan(
+    0
+  )
+  mockTransportCall.mockClear()
+  mockDirectInvoke.mockClear()
+  await expect(
+    withPluginExecutionContext("s2-shell", { personalEgressBlocked: true }, () =>
+      invokePluginApi("s2-shell", "shell:execute", { command: "curl example.test" })
+    )
+  ).rejects.toMatchObject({ code: "personal-egress-denied" })
+  expect(mockTransportCall).not.toHaveBeenCalled()
+  expect(mockDirectInvoke).not.toHaveBeenCalled()
+})

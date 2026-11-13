@@ -1,3 +1,5 @@
+import { bindPersonalMessageEgressSource } from "@/lib/execution/personal-marks"
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 /**
  * Plugin Session API Implementation
  *
@@ -221,6 +223,7 @@ export function createSessionAPI(pluginId: string): PluginSessionAPI {
       }
 
       try {
+        bindPersonalMessageEgressSource(newMessage.id, pluginExecutionContext(pluginId))
         await messageRepository.create(sessionId, newMessage)
         logger.info(`Added message to session: ${sessionId}`)
         return newMessage
@@ -232,6 +235,7 @@ export function createSessionAPI(pluginId: string): PluginSessionAPI {
 
     updateMessage: async (sessionId: string, messageId: string, updates: Partial<UIMessage>) => {
       try {
+        bindPersonalMessageEgressSource(messageId, pluginExecutionContext(pluginId))
         await messageRepository.update(messageId, updates)
         logger.info(`Updated message: ${messageId}`)
       } catch (error) {

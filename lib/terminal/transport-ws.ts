@@ -497,7 +497,7 @@ export class RemoteTerminalSession extends BaseTerminalSession {
     } finally {
       this.disposeConnectionListeners()
       await this.closeOwnedConnection()
-      this.handleExit(null)
+      this.handleExit(null, false)
     }
   }
 
@@ -641,7 +641,7 @@ export class RemoteTerminalSession extends BaseTerminalSession {
     }
     if (Date.now() - this.reconnectStartedAt >= RECONNECT_BUDGET_MS) {
       this.emitTransportState("gone")
-      this.handleExit(null)
+      this.handleExit(null, false)
       return
     }
     const delay = BACKOFF_MS[Math.min(this.backoffIndex, BACKOFF_MS.length - 1)]!

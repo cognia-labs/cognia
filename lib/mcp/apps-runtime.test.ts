@@ -209,3 +209,11 @@ it("forwards explicit Host view admission while loading an MCP App resource", as
   })
   expect(readResource).toHaveBeenCalledWith(server, "ui://view", "history", credentialContext)
 })
+
+it("F9 MCP App downloads retain their Host credential context", async () => {
+  mockRegistryRow.mockResolvedValue(server)
+  mockGatewayRead.mockResolvedValue({ contents: [{ uri: "file://a", text: "a" }] })
+  const credentialContext = { executionRunId: "execution:app-download" }
+  await readMcpDownloadResource(server, "file://a", "chat-1", credentialContext)
+  expect(mockGatewayRead).toHaveBeenLastCalledWith(expect.objectContaining({ credentialContext }))
+})

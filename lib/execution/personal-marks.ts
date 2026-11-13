@@ -1,3 +1,4 @@
+import { bindPersonalOperationSources, personalOperationSources } from "./personal-operation"
 /** Host-owned run taint and message provenance, separate from credential authority. */
 import Dexie from "dexie"
 import type { UIMessage } from "ai"
@@ -29,7 +30,7 @@ export async function markPersonalCredential(
   })
   if (!run || getDb() !== db) throw new Error("Personal mark execution unavailable")
   const mark: PersonalMarkV1 = { person, source, markedAt: Date.now() }
-  await persistRunPersonalMarks(db, run, identity, [mark])
+  await persistRunPersonalMarks(db, run, identity, [mark], context)
 }
 
 /** Host recall must commit its source taint before releasing context or tool output. */
@@ -42,14 +43,15 @@ export async function addPersonalMarksToRun(
   const run = await resolveExecutingRun(context.sessionId, context.executionRunId)
   const identity = await resolveRunActingIdentity(context.sessionId, context.executionRunId)
   if (!run || !identity || getDb() !== db) throw new Error("Personal mark execution unavailable")
-  await persistRunPersonalMarks(db, run, identity, marks)
+  await persistRunPersonalMarks(db, run, identity, marks, context)
 }
 
 async function persistRunPersonalMarks(
   db: ReturnType<typeof getDb>,
   run: ExecutionRun,
   identity: ActingIdentityV1,
-  incoming: readonly PersonalMarkV1[]
+  incoming: readonly PersonalMarkV1[],
+  admission: { sessionId?: string; executionRunId?: string }
 ): Promise<void> {
   const { appendRunEventInsideTransaction, semanticRunEvent } =
     await import("@/lib/db/execution-runs")
@@ -106,6 +108,12 @@ async function persistRunPersonalMarks(
       if (!reachedRoot || getDb() !== db) throw new Error("Personal mark identity root unavailable")
     }
   )
+  const { fencePersonalEgressSessions, invalidatePersonalEgressCache } =
+    await import("./personal-egress")
+  if (getDb() !== db) throw new Error("Personal mark database changed")
+  invalidatePersonalEgressCache(run.id)
+  await fencePersonalEgressSessions(admission, run.id)
+  if (getDb() !== db) throw new Error("Personal mark database changed")
 }
 
 // Only Host writers bind generated message ids. Model/plugin metadata is never
@@ -120,7 +128,70 @@ export function bindPersonalMessageRun(
   const db = getDb()
   let bindings = messageRuns.get(db)
   if (!bindings) messageRuns.set(db, (bindings = new Map()))
-  bindings.set(messageId, [...new Set(runIds)])
+  bindings.set(messageId, [...new Set([...(bindings.get(messageId) ?? []), ...runIds])])
+}
+
+/** Retain the exact Host producer for effects caused by message rendering. */
+const messageEgressBlocked = new WeakMap<ReturnType<typeof getDb>, Set<string>>()
+const messageEgressSources = new WeakMap<
+  ReturnType<typeof getDb>,
+  Map<string, PersonalCredentialContext>
+>()
+export function bindPersonalMessageEgressSource(
+  messageId: string,
+  source: PersonalCredentialContext | undefined
+): void {
+  if (!source) return
+  const db = getDb()
+  let bindings = messageEgressSources.get(db)
+  if (!bindings) messageEgressSources.set(db, (bindings = new Map()))
+  const previous = bindings.get(messageId)
+  bindings.set(messageId, previous ? bindPersonalOperationSources({}, [previous, source]) : source)
+  const pending: object[] = [source],
+    seen = new Set<object>(),
+    ids: string[] = []
+  let blocked = false
+  while (pending.length) {
+    const item = pending.pop()!
+    if (seen.has(item)) continue
+    if (seen.size >= 128) {
+      blocked = true
+      break
+    }
+    seen.add(item)
+    if ("executionRunId" in item && typeof item.executionRunId === "string" && item.executionRunId)
+      ids.push(item.executionRunId)
+    if ("personalEgressBlocked" in item && item.personalEgressBlocked) blocked = true
+    pending.push(...(personalOperationSources(item) ?? []))
+  }
+  if (ids.length) bindPersonalMessageRun(messageId, ids)
+  if (blocked) {
+    let set = messageEgressBlocked.get(db)
+    if (!set) messageEgressBlocked.set(db, (set = new Set()))
+    set.add(messageId)
+  }
+}
+export async function personalMessageEgressSource(
+  messageId: string | undefined
+): Promise<import("./personal-egress").PersonalEgressContext> {
+  if (!messageId) return {}
+  const db = getDb()
+  const source = messageEgressSources.get(db)?.get(messageId)
+  const message = await db.messages.get(messageId)
+  if (getDb() !== db) return { personalEgressBlocked: true }
+  const metadata = message?.metadata as
+    { personalMarks?: readonly unknown[]; hostPersonalEgressBlocked?: boolean } | undefined
+  if (
+    metadata?.personalMarks?.length ||
+    metadata?.hostPersonalEgressBlocked ||
+    messageEgressBlocked.get(db)?.has(messageId)
+  )
+    return { personalEgressBlocked: true }
+  if (source) return source
+  const runIds = messageRuns.get(db)?.get(messageId)
+  if (runIds?.length)
+    return { personalSources: runIds.map((executionRunId) => ({ executionRunId })) }
+  return message ? {} : { personalEgressBlocked: true }
 }
 
 /** Only messages produced/changed by this exact Host event belong to its run. */
@@ -138,6 +209,18 @@ export function bindPersonalMessageChanges(
     )
       bindPersonalMessageRun(message.id, runId)
   }
+}
+
+/** Read only Host-attributed producer marks; missing attribution is not taint. */
+export async function personalMessageAttributedMarks(messageId: string): Promise<PersonalMarkV1[]> {
+  const db = getDb()
+  const marks: PersonalMarkV1[] = []
+  for (const runId of messageRuns.get(db)?.get(messageId) ?? []) {
+    const { readRunPersonalTaint } = await import("./personal-sink")
+    marks.push(...(await readRunPersonalTaint({ executionRunId: runId })).marks)
+  }
+  if (getDb() !== db) throw new Error("Personal message database changed")
+  return mergePersonalMarks(marks)
 }
 
 /** Dexie replaces Promise within transactions, so instanceof is not reliable. */
@@ -163,6 +246,9 @@ export function personalMessageMetadata(
       runIds ? hostMarks : (incoming?.personalMarks as PersonalMarkV1[] | undefined)
     )
     const metadata = { ...incoming }
+    if (previous?.hostPersonalEgressBlocked || messageEgressBlocked.get(db)?.has(messageId))
+      metadata.hostPersonalEgressBlocked = true
+    else delete metadata.hostPersonalEgressBlocked
     if (runIds) delete metadata.personalMarks
     if (marks.length) metadata.personalMarks = marks
     // This path consumes producer output. Only the Host bound-session rule

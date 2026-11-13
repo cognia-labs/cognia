@@ -143,6 +143,7 @@ export async function ghCliToken(
   try {
     const { runHeadlessExec } = await import("@/lib/terminal/headless-exec")
     const out = await runHeadlessExec({
+      credentialContext,
       command,
       onAskVerdict: "run",
       source: "agent",

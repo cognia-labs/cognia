@@ -126,3 +126,18 @@ describe("isBrowserSurfaceVisible", () => {
     spy.mockRestore()
   })
 })
+
+it("F8 capability probes preserve synchronous claims without requesting navigation", () => {
+  const navigate = jest.fn()
+  const off = onBrowserUrlReveal((_url, request) => {
+    if (!request.probe) navigate()
+    return true
+  })
+  try {
+    expect(requestBrowserUrl("https://example.com", { probe: true })).toBe(true)
+    expect(navigate).not.toHaveBeenCalled()
+  } finally {
+    off()
+  }
+  expect(requestBrowserUrl("https://example.com", { probe: true })).toBe(false)
+})
