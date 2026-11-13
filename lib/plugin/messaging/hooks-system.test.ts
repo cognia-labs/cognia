@@ -2222,8 +2222,18 @@ it("R2: pre/post/stream recipients inherit the Host run instead of background au
       },
     },
   })
+  // Content hooks first prove the run's exposure; an unknown run fails closed,
+  // so the recipients need a real, clean Host run.
+  const fixture = (await import("@/lib/db/test-fixture")).createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun, LOCAL_PERSON_RUN } =
+    await import("@/lib/execution/acting-authority")
+  const run = await startToolExecutionRun("content", {
+    localAuthorization:
+      LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+  })
   const eventHooks = new PluginEventHooks()
-  const execution = { sessionId: "content", executionRunId: "private-run" }
+  const execution = { sessionId: "content", executionRunId: run.id }
   await eventHooks.dispatchPreToolUse("Read", {}, "content", execution)
   await eventHooks.dispatchPostToolUse("Read", {}, "private", "content", {}, execution)
   eventHooks.dispatchStreamChunk("content", "private", "private", execution)
@@ -2233,6 +2243,7 @@ it("R2: pre/post/stream recipients inherit the Host run instead of background au
   expect(seen).toHaveLength(5)
   expect(seen).toEqual([execution, execution, execution, execution, execution])
   seedPlugins({ plugins: {} })
+  await fixture.dispose()
 })
 
 it.each(["python", "hybrid", "vscode-extension"])(

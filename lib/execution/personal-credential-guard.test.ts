@@ -10,7 +10,7 @@ const ROOT = join(__dirname, "..", "..")
 // the plugin's own timers/activation/panel UI, never a Host callback. These
 // reviewed seams keep a refusing HOST_BACKGROUND binding for runless work.
 const HOST_DISPATCH_BINDINGS: Record<string, string[]> = {
-  "lib/claude/plugin-hook-ipc.ts": ["withPluginExecutionContext", "HOST_BACKGROUND"],
+  "lib/claude/plugin-hook-ipc.ts": ["withPluginContentDispatch", "HOST_BACKGROUND"],
   "lib/plugin/core/invocation-identity.ts": [
     "HOST_BACKGROUND",
     "localAuthorization",
@@ -149,7 +149,8 @@ const HOST_DISPATCH_BINDINGS: Record<string, string[]> = {
   "lib/bot/control-writes/lifecycle-hooks.ts": ["withPluginExecutionContext", "HOST_BACKGROUND"],
   "lib/plugin/core/vscode-loader.ts": [
     "withPluginExecutionContext",
-    'method === "extension:call"',
+    // Every RPC but cancel carries the invocation's identity.
+    'method !== "extension:cancel"',
     "pluginDispatchContext",
   ],
   "lib/plugin/core/wasm-loader.ts": [
