@@ -2,9 +2,12 @@
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import ts from "typescript"
+import { createRequire } from "node:module"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+// Resolve the root workspace compiler: docs/ installs a native TypeScript
+// without the JS API, and Node would find it first from docs/evidence.
+const ts = createRequire(path.join(root, "package.json"))("typescript")
 // A forwarding entry is audited separately from the authority it forwards to.
 export const entries = [
   [

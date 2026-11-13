@@ -5,9 +5,13 @@ import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
 import { fileURLToPath } from "node:url"
-import ts from "typescript"
+import { createRequire } from "node:module"
+import { execFileSync } from "node:child_process"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+// Resolve the root workspace compiler: docs/ installs a native TypeScript
+// without the JS API, and Node would find it first from docs/evidence.
+const ts = createRequire(path.join(root, "package.json"))("typescript")
 const manifest = path.join(root, "lib/execution/personal-egress-network-sites.json")
 const roots = [
   "app",
@@ -204,6 +208,29 @@ export function scan(file, text) {
   return entries.map(({ base: _base, ...entry }) => entry)
 }
 
+// Only code the repository owns: tracked files plus untracked, unignored ones.
+// Build output and local virtualenvs are gitignored. Without git, walk everything.
+const repoFiles = (() => {
+  try {
+    const out = execFileSync(
+      "git",
+      ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        maxBuffer: 256 * 1024 * 1024,
+      }
+    )
+    return new Set(
+      out
+        .split("\0")
+        .filter(Boolean)
+        .map((file) => path.join(root, file))
+    )
+  } catch {
+    return undefined
+  }
+})()
 function files(directory) {
   if (!fs.existsSync(directory)) return []
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -215,6 +242,7 @@ function files(directory) {
       return []
     const full = path.join(directory, entry.name)
     if (entry.isDirectory()) return files(full)
+    if (repoFiles && !repoFiles.has(full)) return []
     return /\.(?:[cm]?ts|tsx|[cm]?js|jsx)$/.test(entry.name) &&
       !/\.(?:test|spec|stories|d)\./.test(entry.name)
       ? [full]
