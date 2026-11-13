@@ -244,7 +244,7 @@ describe("readDexieDelta", () => {
       }))
     )
 
-    const delta = await readDexieDelta("sessions", 0)
+    const delta = await readDexieDelta("sessions", 0, undefined, undefined, undefined, "owner")
     const timestamps = delta.rows.map((row) => (row as { updatedAt: number }).updatedAt)
     const firstSlice = timestamps.slice(0, 200)
     expect({
@@ -300,7 +300,7 @@ describe("readDexieDelta", () => {
       },
     } as never)
 
-    const delta = await readDexieDelta("sessions", 0)
+    const delta = await readDexieDelta("sessions", 0, undefined, undefined, undefined, "owner")
     const row = delta.rows[0] as Record<string, unknown>
     expect(row.executionContext).toEqual(
       expect.objectContaining({
@@ -323,7 +323,7 @@ describe("readDexieDelta", () => {
       createdAt: 1,
       updatedAt: 10,
     })
-    const delta = await readDexieDelta("sessions", 0)
+    const delta = await readDexieDelta("sessions", 0, undefined, undefined, undefined, "owner")
     expect(delta.rows).toContainEqual(
       expect.objectContaining({
         id: "resource-workbench:canvas:doc",
@@ -1996,7 +1996,7 @@ it("preserves effective legacy personal marks on paired sync copies", async () =
     parts: [{ type: "text", text: "legacy secret answer" }],
     createdAt: 10,
   })
-  const delta = await readDexieDelta("messages", 0)
+  const delta = await readDexieDelta("messages", 0, undefined, undefined, undefined, "owner")
   expect(JSON.stringify(delta)).toContain('"remoteUserId":"owner"')
   expect(JSON.stringify(delta)).toContain("legacy secret answer")
   expect(JSON.stringify(delta)).not.toContain("[Withheld:")
@@ -2023,13 +2023,44 @@ it("keeps owner marked bodies and derived session fields in legacy and cursor sy
     },
   })
   for (const cursor of [undefined, ""]) {
-    const page = await readDexieDelta("messages", 0, undefined, undefined, cursor)
+    const page = await readDexieDelta("messages", 0, undefined, undefined, cursor, "owner")
     expect(JSON.stringify(page)).toContain("secret sync body")
     expect(JSON.stringify(page)).not.toContain("[Withheld:")
   }
-  const sessions = await readDexieDelta("sessions", 0)
+  const sessions = await readDexieDelta("sessions", 0, undefined, undefined, undefined, "owner")
   expect(JSON.stringify(sessions)).toMatch(/secret sync title/)
   expect(JSON.stringify(sessions)).toContain("secret preview")
   expect(JSON.stringify(sessions)).toContain("secret branch seed")
   expect((await getDb().sessions.get("private-sync"))?.title).toBe("secret sync title")
+})
+
+it("withholds private bodies, titles and seeds for members in cold and incremental sync", async () => {
+  await getDb().sessions.put({
+    id: "member-sync",
+    title: "secret member title",
+    lastMessagePreview: "secret member preview",
+    branchSeed: { kind: "summary", content: "secret member seed" },
+    createdAt: 1,
+    updatedAt: 10,
+  })
+  await getDb().messages.put({
+    id: "member-sync-message",
+    sessionId: "member-sync",
+    role: "assistant",
+    createdAt: 10,
+    parts: [{ type: "text", text: "secret member body" }],
+    metadata: {
+      personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
+    },
+  })
+  for (const reader of ["member", undefined, "forged"]) {
+    for (const since of [0, 1])
+      for (const cursor of [undefined, ""]) {
+        const result = await readDexieDelta("messages", since, undefined, undefined, cursor, reader)
+        expect(JSON.stringify(result)).not.toContain("secret member body")
+        expect(JSON.stringify(result)).toContain("[Withheld:")
+      }
+    const result = await readDexieDelta("sessions", 0, undefined, undefined, undefined, reader)
+    expect(JSON.stringify(result)).not.toMatch(/secret member (title|preview|seed)/)
+  }
 })

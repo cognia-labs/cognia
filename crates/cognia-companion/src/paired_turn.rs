@@ -28,10 +28,9 @@ pub const ABANDON: &str = "paired_turn_abandon";
 /// The service scope is the brain itself: its HostState dispatcher already
 /// admitted the turn (`lib/work-submission/host-adapter.ts`), and a second
 /// submission would split one turn's reply across two rows. A caller with no
-/// account scope has no Host account to file work under; such a device cannot
-/// use HostState either, so its turns stay as unrecorded as they always were.
+/// account scope cannot establish owner authority and is refused at Host binding.
 ///
-/// The turn's options are never part of the request: they may carry a key.
+/// Options travel transiently to prepare canonical history, never into a durable bundle.
 pub fn admission_args(
     scope: Option<&str>,
     tenant_id: Option<&str>,
@@ -39,14 +38,19 @@ pub fn admission_args(
     prompt: &Value,
     message_id: Option<&str>,
     request_id: &str,
+    reader: crate::data_plane::PairedReader,
+    options: Value,
 ) -> Option<Value> {
-    if crate::jwt::is_service_scope(scope) || tenant_id.is_none() {
+    if crate::jwt::is_service_scope(scope) {
         return None;
     }
+    let _ = tenant_id; // Missing tenant is refused by Host authority binding.
     let mut args = serde_json::json!({
         "sessionId": session_id,
         "runId": format!("paired:{request_id}"),
         "prompt": prompt,
+        "pairedReader": reader.as_str(),
+        "options": options,
     });
     if let Some(message_id) = message_id.filter(|id| !id.is_empty()) {
         args["messageId"] = Value::String(message_id.to_string());
@@ -98,6 +102,8 @@ mod tests {
             &serde_json::json!("hello"),
             Some("user-message-1"),
             "request-1",
+            crate::data_plane::PairedReader::Owner,
+            serde_json::json!({}),
         )
         .expect("a device-originated turn needs admission");
         assert_eq!(
@@ -106,10 +112,28 @@ mod tests {
                 "sessionId": "session-1",
                 "runId": "paired:request-1",
                 "prompt": "hello",
+                "pairedReader": "owner",
+                "options": {},
                 "messageId": "user-message-1",
             })
         );
-        assert!(args.get("options").is_none());
+        assert_eq!(args["pairedReader"], "owner");
+    }
+
+    #[test]
+    fn a_client_role_in_options_never_overrides_the_host_member_role() {
+        let args = admission_args(
+            Some("device"),
+            Some("tenant"),
+            "s",
+            &serde_json::json!("hello"),
+            None,
+            "r",
+            crate::data_plane::PairedReader::Member,
+            serde_json::json!({"pairedReader": "owner"}),
+        )
+        .unwrap();
+        assert_eq!(args["pairedReader"], "member");
     }
 
     #[test]
@@ -122,6 +146,8 @@ mod tests {
                 &serde_json::json!([{ "type": "text", "text": "hi" }]),
                 message_id,
                 "request-2",
+                crate::data_plane::PairedReader::Member,
+                serde_json::json!({}),
             )
             .unwrap();
             assert!(args.get("messageId").is_none());
@@ -129,12 +155,30 @@ mod tests {
     }
 
     #[test]
-    fn the_brains_own_sends_and_unscoped_callers_are_not_admitted() {
+    fn service_skips_admission_but_missing_tenant_still_requires_host_binding() {
         let prompt = serde_json::json!("hi");
-        assert!(
-            admission_args(Some("service"), Some("tenant-a"), "s", &prompt, None, "r").is_none()
-        );
-        assert!(admission_args(None, None, "s", &prompt, None, "r").is_none());
+        assert!(admission_args(
+            Some("service"),
+            Some("tenant-a"),
+            "s",
+            &prompt,
+            None,
+            "r",
+            crate::data_plane::PairedReader::Member,
+            serde_json::json!({})
+        )
+        .is_none());
+        assert!(admission_args(
+            None,
+            None,
+            "s",
+            &prompt,
+            None,
+            "r",
+            crate::data_plane::PairedReader::Member,
+            serde_json::json!({})
+        )
+        .is_some());
     }
 
     #[test]

@@ -17,7 +17,10 @@ registerHeadlessRuntime({
   criticality: "required",
   hosts: ["brain", "person-brain"],
   start: async (ctx) => {
-    const unsubMessages = await installDesktopMessageSource({ bridge: ctx.bridge })
+    const unsubMessages = await installDesktopMessageSource({
+      bridge: ctx.bridge,
+      partition: ctx.host === "person-brain",
+    })
     const unsubWrites = await installDesktopWriteSource({
       bridge: ctx.bridge,
       ...(ctx.host === "person-brain" ? { partition: true } : {}),

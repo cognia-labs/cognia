@@ -766,10 +766,12 @@ struct SendCaller<'a> {
 async fn admit_paired_turn(
     state: &SharedState,
     caller: SendCaller<'_>,
+    reader: cognia_companion::data_plane::PairedReader,
     session_id: &str,
     prompt: &Value,
     message_id: Option<&str>,
     request_id: &str,
+    options: &mut Option<claude_commands::SendOptions>,
 ) -> Result<Option<String>, (StatusCode, Json<RpcError>)> {
     let Some(args) = cognia_companion::paired_turn::admission_args(
         caller.scope,
@@ -778,6 +780,9 @@ async fn admit_paired_turn(
         prompt,
         message_id,
         request_id,
+        reader,
+        serde_json::to_value(options.as_ref())
+            .map_err(|error| RpcError::internal(error.to_string()))?,
     ) else {
         return Ok(None);
     };
@@ -797,7 +802,17 @@ async fn admit_paired_turn(
         .map_err(|error| {
             map_desktop_write_bridge_error(cognia_companion::paired_turn::ADMIT, error)
         })?;
-    cognia_companion::paired_turn::interpret_admission(result)
+    let prepared = result.get("options").cloned();
+    let admission = cognia_companion::paired_turn::interpret_admission(result)?;
+    if admission.is_some() {
+        *options = Some(
+            serde_json::from_value(prepared.ok_or_else(|| {
+                RpcError::internal("paired admission omitted Host options".into())
+            })?)
+            .map_err(|error| RpcError::internal(error.to_string()))?,
+        );
+    }
+    Ok(admission)
 }
 
 /// The turn was admitted but never reached the runtime: seal it as failed so
@@ -884,6 +899,8 @@ async fn send_arm(
         .bind(&session_id, None)
         .map_err(crate::person_model::person_partition_refusal)?;
     let device_id = caller.device_id;
+    let reader =
+        cognia_companion::data_plane::PairedReader::for_device(caller.tenant_id, caller.device_id);
     let mut options = options;
     let context = cognia_companion::remote_execution::global().register(
         &opaque_host_id(state),
@@ -918,16 +935,20 @@ async fn send_arm(
             .map_err(RpcError::internal)?;
             send_options.cwd = Some(run.execution_root);
         }
-        fill_host_provider_key(send_options, caller);
+        if reader == cognia_companion::data_plane::PairedReader::Owner {
+            fill_host_provider_key(send_options, caller);
+        }
     }
     // Last before the handoff, so no refusal above can strand an admission.
     let admission = admit_paired_turn(
         state,
         caller,
+        reader,
         &session_id,
         &prompt,
         message_id.as_deref(),
         &request_id,
+        &mut options,
     )
     .await?;
     let sent = claude_commands::claude_send_with_host_and_id(
@@ -1154,7 +1175,7 @@ mod tests {
         let err = authorize_approval(None, "phone-b", Some("service"), &session, "req-1")
             .expect_err("remote-scoped request must refuse the grant path");
         assert_eq!(err.0, StatusCode::FORBIDDEN);
-        assert_eq!(err.1.0.code, "REMOTE_SCOPE_DENIED");
+        assert_eq!(err.1 .0.code, "REMOTE_SCOPE_DENIED");
 
         // The origin device, with its context, is still the one that answers.
         assert!(authorize_approval(Some(&context), "phone-a", None, &session, "req-1").is_ok());

@@ -25,7 +25,10 @@ registerHeadlessRuntime({
     // paired to a headless Host only learned about a change when something
     // else happened to trigger a pull.
     const uninstallInvalidation = installHostTableInvalidation()
-    const uninstallSource = await installDesktopSyncSource({ bridge: ctx.bridge })
+    const uninstallSource = await installDesktopSyncSource({
+      bridge: ctx.bridge,
+      partition: ctx.host === "person-brain",
+    })
     return () => {
       uninstallInvalidation()
       uninstallProjection()

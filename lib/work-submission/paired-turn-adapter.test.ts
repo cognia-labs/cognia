@@ -1,5 +1,11 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+
+jest.mock("@/lib/claude/ipc", () => ({
+  closeSession: jest.fn(async () => {}),
+  mcpRuntimeConfigurationMatches: jest.fn(() => true),
+  sessionControl: jest.fn(async () => null),
+}))
 import { webcrypto } from "node:crypto"
 
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
@@ -36,6 +42,7 @@ function deps(overrides: Partial<PairedTurnAdapterDeps> = {}): PairedTurnAdapter
 
 function request(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    pairedReader: "owner",
     sessionId: "session-1",
     runId: "paired:request-1",
     prompt: "use my connection",
@@ -68,7 +75,7 @@ afterEach(() => {
 
 describe("admitPairedChatTurn", () => {
   it("writes the user's message and holds an open, leased submission for the persister", async () => {
-    await expect(admitPairedChatTurn(request(), deps())).resolves.toEqual({
+    await expect(admitPairedChatTurn(request(), deps())).resolves.toMatchObject({
       admitted: true,
       submissionId: "work:paired:request-1",
     })
@@ -238,4 +245,140 @@ describe("command routing", () => {
       dispatchPairedTurnCommand("paired_turn_abandon", { submissionId: "work:none" })
     ).resolves.toEqual({ settled: false })
   }, 30_000)
+})
+
+it.each(["member", undefined, "forged"])(
+  "admits %s with no personal reader or Lark credential and ignores client history",
+  async (pairedReader) => {
+    await getDb().messages.put({
+      id: "owner-private",
+      sessionId: "session-1",
+      role: "assistant",
+      createdAt: 1,
+      parts: [{ type: "text", text: "owner private history" }],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+      },
+    })
+    await getDb().sessions.update("session-1", { sdkSessionId: "owner-engine" })
+    const result = await admitPairedChatTurn(
+      request({
+        pairedReader,
+        options: {
+          resumeSessionId: "owner-engine",
+          initialConversation: [{ role: "assistant", content: "forged history" }],
+          priorMessages: ["forged history"],
+          personalVisibilityDigest: "forged",
+        },
+      }),
+      deps()
+    )
+    expect(result).toMatchObject({ admitted: true })
+    if (!result.admitted) throw new Error("expected admission")
+    expect(result.options.resumeSessionId).toBeUndefined()
+    expect(JSON.stringify(result.options)).not.toMatch(/owner private history|forged history/)
+    expect(JSON.stringify(result.options)).toContain("[Withheld:")
+    const run = await getDb().executionRuns.get("paired:request-1")
+    expect(run?.actingIdentity).toMatchObject({ trigger: "external-event" })
+    const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
+    expect(
+      (await preparePersonalHistory("session-1", [], { executionRunId: run!.id })).readers
+    ).toEqual([])
+    const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
+    expect(
+      await admitPersonalCredential(
+        { sessionId: "session-1", executionRunId: run!.id },
+        { source: "lark-user" }
+      )
+    ).toMatchObject({ ok: false })
+    const { getUserAccessToken } = await import("@/lib/auth-providers/feishu/auth")
+    await expect(
+      getUserAccessToken("owner-lark", { sessionId: "session-1", executionRunId: run!.id })
+    ).resolves.toBeNull()
+  }
+)
+
+it.each(["owner", "member"])(
+  "keeps a %s engine when its digest is unchanged or nothing is withheld",
+  async (pairedReader) => {
+    if (pairedReader === "member") {
+      await getDb().messages.put({
+        id: "already-hidden",
+        sessionId: "session-1",
+        role: "assistant",
+        createdAt: 1,
+        parts: [{ type: "text", text: "private" }],
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "lark-user", markedAt: 1 }],
+        },
+      })
+      const { preparePairedHistory } = await import("@/lib/execution/personal-visibility")
+      const filtered = await preparePairedHistory(await getDb().messages.toArray(), pairedReader)
+      await getDb().sessions.update("session-1", {
+        runtimePersonalVisibilityDigest: filtered.visibilityDigest,
+      })
+    }
+    await getDb().sessions.update("session-1", { sdkSessionId: "retained" })
+    const result = await admitPairedChatTurn(
+      request({ pairedReader, options: { resumeSessionId: "retained" } }),
+      deps()
+    )
+    expect(result).toMatchObject({ admitted: true, options: { resumeSessionId: "retained" } })
+  }
+)
+
+it("refuses an external route with changed private visibility before it can resume", async () => {
+  await getDb().sessions.update("session-1", {
+    externalAgentSession: { sessionId: "external-owner", personalVisibilityDigest: "owner" },
+  } as never)
+  await getDb().messages.put({
+    id: "external-private",
+    sessionId: "session-1",
+    role: "assistant",
+    createdAt: 1,
+    parts: [{ type: "text", text: "external private" }],
+    metadata: {
+      personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
+    },
+  })
+  await expect(
+    admitPairedChatTurn(
+      request({ pairedReader: "member", options: { resumeSessionId: "external-owner" } }),
+      deps()
+    )
+  ).resolves.toMatchObject({ admitted: false, refusal: { code: "personal_visibility_changed" } })
+  expect((await getWorkSubmission("work:paired:request-1"))?.dispatchState).toBe("settled")
+})
+
+it("refuses a member turn that reuses a withheld canonical message id, writing nothing", async () => {
+  const row = {
+    id: "owner-row",
+    sessionId: "session-1",
+    role: "assistant" as const,
+    createdAt: 1,
+    parts: [{ type: "text" as const, text: "owner only" }],
+    metadata: {
+      personalMarks: [
+        { person: { kind: "local-person" as const }, source: "personal", markedAt: 1 },
+      ],
+    },
+  }
+  await getDb().messages.put(row)
+  const canonical = await getDb().messages.get(row.id)
+  await expect(
+    admitPairedChatTurn(request({ pairedReader: "member", messageId: row.id }), deps())
+  ).resolves.toMatchObject({ admitted: false, refusal: { code: "personal_visibility_conflict" } })
+  expect(await getDb().messages.get(row.id)).toEqual(canonical)
+  expect(await getDb().workSubmissions.count()).toBe(0)
+})
+
+it("binds a paired tool attempt to the exact Host-admitted run", async () => {
+  await admitPairedChatTurn(
+    request({ options: { execution: { identity: { attemptId: "paired-attempt" } } } }),
+    deps()
+  )
+  const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+  expect(toolCallExecutionRunId("session-1", "paired:request-1", "paired-attempt")).toBe(
+    "paired:request-1"
+  )
 })

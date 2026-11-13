@@ -132,17 +132,14 @@ export function preparePluginHistory<T extends PersonalHistoryMessage>(
   return prepareHistoryForReaders(sessionId, messages, {}, [])
 }
 
-/**
- * Interim paired read as the Host owner. Phase 2B-2 must pass a Rust caller flag
- * from crates/cognia-companion-rpc/src/rpc/data_sync.rs (sync_pull, session_list,
- * message_get_by_session, session_timeline, session_turn_messages), using
- * SecurityStore::is_owner_device(tenant, device); member devices then get no
- * personal reader. Keep this one named entry for every paired history read.
- */
-export function preparePairedOwnerHistory<T extends PersonalHistoryMessage>(
-  messages: readonly T[]
+/** Host-set paired audience. Unknown or absent roles never grant a personal reader. */
+export function preparePairedHistory<T extends PersonalHistoryMessage>(
+  messages: readonly T[],
+  reader?: unknown
 ): ReturnType<typeof preparePersonalHistory<T>> {
-  return prepareOwnerHistory(messages)
+  return reader === "owner"
+    ? prepareOwnerHistory(messages)
+    : preparePluginHistory(undefined, messages)
 }
 
 async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
@@ -475,13 +472,16 @@ async function prepareDerivedHistory<T extends PersonalHistoryMessage>(
   )
 }
 
-/** Paired session fields share the explicit interim owner read policy. */
-export async function projectPersonalSessionHistory(session: ChatSession): Promise<ChatSession> {
+/** Paired derived fields use the same Host-set audience as transcript rows. */
+export async function projectPersonalSessionHistory(
+  session: ChatSession,
+  reader?: unknown
+): Promise<ChatSession> {
   const db = getDb()
   const attributed = await prepareOwnerDerivedHistory([{ id: session.id, text: session.title }], {
     sessionId: session.id,
   })
-  const result = await preparePairedOwnerHistory(attributed.messages)
+  const result = await preparePairedHistory(attributed.messages, reader)
   if (getDb() !== db) throw new Error("Personal history database changed")
   if (result.withheldMessageIds.length === 0) return session
   return {

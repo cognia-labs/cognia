@@ -5,10 +5,15 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderValue, StatusCode},
     response::Response,
+    Extension,
 };
 use serde::Deserialize;
 
-use super::{data_plane::DataPlane, SharedState};
+use super::{
+    data_plane::{DataPlane, PairedReader},
+    middleware::DeviceContext,
+    SharedState,
+};
 
 use super::desktop_messages_bridge::MAX_MEDIA_BYTES;
 
@@ -45,6 +50,7 @@ pub async fn session_media_handler(
     Path((session_id, hash)): Path<(String, String)>,
     Query(query): Query<MediaQuery>,
     State(state): State<SharedState>,
+    Extension(principal): Extension<DeviceContext>,
 ) -> Response {
     if !valid_request(&session_id, &hash, &query.variant) {
         return media_error(
@@ -66,6 +72,20 @@ pub async fn session_media_handler(
             false,
         );
     }
+    let reader = PairedReader::for_device(Some(&principal.tenant_id), &principal.device_id);
+    // Binary HTTP has no person-fleet partition router. Never fall through
+    // from a member identity to the operator brain.
+    if reader == PairedReader::Member
+        && crate::deployment::deployment_mode() == crate::deployment::DeploymentMode::MultiTenant
+        && crate::person_partition::current().is_none()
+    {
+        return media_error(
+            StatusCode::FORBIDDEN,
+            "personal_visibility_unavailable",
+            "person-partition media routing is unavailable",
+            false,
+        );
+    }
     let Some(data_plane) = DataPlane::pick(&state) else {
         return media_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -73,6 +93,17 @@ pub async fn session_media_handler(
             "the session media service is unavailable",
             true,
         );
+    };
+    let data_plane = match data_plane.for_paired_reader(reader) {
+        Ok(plane) => plane,
+        Err(_) => {
+            return media_error(
+                StatusCode::CONFLICT,
+                "personal_visibility_unavailable",
+                "the degraded store cannot filter personal media",
+                false,
+            )
+        }
     };
     let media = match data_plane
         .session_media(session_id, hash, query.variant)
@@ -135,6 +166,17 @@ pub async fn session_media_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_personal_visibility_is_a_typed_conflict() {
+        let response = media_error(
+            StatusCode::CONFLICT,
+            "personal_visibility_unavailable",
+            "filter unavailable",
+            false,
+        );
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
 
     #[test]
     fn validates_hash_variant_and_session_bounds() {

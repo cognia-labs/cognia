@@ -288,6 +288,9 @@ pub(super) async fn dispatch(
     scope: Option<&str>,
 ) -> Result<Value, (StatusCode, Json<RpcError>)> {
     let _ = (state, host, device_id, tenant_id, scope);
+    // Production HTTP and canonical dispatch bind a tenant; unproven None is Member.
+    let paired_reader =
+        cognia_companion::data_plane::PairedReader::for_device(tenant_id, device_id);
     let result = match name {
         // ── Sync down (M4.7) ──────────────────────────────────────────────────
 
@@ -445,6 +448,7 @@ pub(super) async fn dispatch(
             // degraded-store path.
             let transport = cognia_companion::ws_bridge::resolve_bridge_transport(state)
                 .map_err(RpcError::service_unavailable)?;
+            let transport = cognia_companion::data_plane::PairedReaderTransport::bind(transport, paired_reader);
             // The principal's `tenant_id` is a *tenant*; the responder on the
             // far side (`desktop-sync-source`) checks it against its unlocked
             // local account id and refuses a mismatch. Translating here is the
@@ -482,7 +486,8 @@ pub(super) async fn dispatch(
             let session_id: String = required(&args, "session_id")?;
             let message_id: String = required(&args, "message_id")?;
             let updates: Value = required(&args, "updates")?;
-            let dp = pick_data_plane(state)?;
+            let dp = pick_data_plane(state)?
+                .for_paired_reader(paired_reader).map_err(RpcError::transcript)?;
             let result = dp
                 .update_message(session_id.clone(), message_id, updates)
                 .await
@@ -494,7 +499,8 @@ pub(super) async fn dispatch(
         "message_delete" => {
             let session_id: String = required(&args, "session_id")?;
             let message_id: String = required(&args, "message_id")?;
-            let dp = pick_data_plane(state)?;
+            let dp = pick_data_plane(state)?
+                .for_paired_reader(paired_reader).map_err(RpcError::transcript)?;
             let result = dp
                 .delete_message(session_id.clone(), message_id)
                 .await
@@ -512,11 +518,12 @@ pub(super) async fn dispatch(
             let updated_before: Option<i64> = optional(&args, "updatedBefore")?;
             let offset = page.offset().map_err(paging_error)?;
             let limit = page.page_size_or(cognia_companion::paging::DEFAULT_PAGE_SIZE);
-            let dp = pick_data_plane(state)?;
+            let dp = pick_data_plane(state)?
+                .for_paired_reader(paired_reader).map_err(RpcError::transcript)?;
             let legacy = dp
                 .list_sessions(limit, wire_offset(offset)?, updated_before)
                 .await
-                .map_err(RpcError::internal)?;
+                .map_err(RpcError::transcript)?;
             let (page, extras) = cognia_companion::paging::Page::from_legacy_offset_page(
                 legacy,
                 "rows",
@@ -531,7 +538,8 @@ pub(super) async fn dispatch(
             let page = page_request(&args)?;
             let offset = page.offset().map_err(paging_error)?;
             let limit = page.page_size_or(cognia_companion::paging::DEFAULT_PAGE_SIZE);
-            let dp = pick_data_plane(state)?;
+            let dp = pick_data_plane(state)?
+                .for_paired_reader(paired_reader).map_err(RpcError::transcript)?;
             let legacy = dp
                 .get_messages_by_session(session_id, Some(limit), Some(wire_offset(offset)?))
                 .await
@@ -546,7 +554,8 @@ pub(super) async fn dispatch(
         }
 
         "transcript_capabilities" => {
-            let dp = pick_data_plane(state)?;
+            let dp = pick_data_plane(state)?
+                .for_paired_reader(paired_reader).map_err(RpcError::transcript)?;
             dp.transcript_capabilities()
                 .await
                 .map_err(RpcError::internal)
@@ -557,7 +566,8 @@ pub(super) async fn dispatch(
             let direction: Option<String> = optional(&args, "direction")?;
             let cursor: Option<String> = optional(&args, "cursor")?;
             let limit: Option<u32> = optional(&args, "limit")?;
-            let dp = pick_data_plane(state)?;
+            let dp = pick_data_plane(state)?
+                .for_paired_reader(paired_reader).map_err(RpcError::transcript)?;
             dp.session_timeline(session_id, direction, cursor, limit)
                 .await
                 .map_err(RpcError::transcript)
@@ -570,7 +580,8 @@ pub(super) async fn dispatch(
             let detail_revision: u64 = required(&args, "detail_revision")?;
             let page = page_request(&args)?;
             let cursor = page.cursor().map_err(paging_error)?;
-            let dp = pick_data_plane(state)?;
+            let dp = pick_data_plane(state)?
+                .for_paired_reader(paired_reader).map_err(RpcError::transcript)?;
             let legacy = dp
                 .session_turn_messages(
                     session_id,
@@ -596,7 +607,8 @@ pub(super) async fn dispatch(
             let session_id: String = required(&args, "session_id")?;
             let content: String = required(&args, "content")?;
             let role: Option<String> = optional(&args, "role")?;
-            let dp = pick_data_plane(state)?;
+            let dp = pick_data_plane(state)?
+                .for_paired_reader(paired_reader).map_err(RpcError::transcript)?;
             let result = dp
                 .send_message(session_id.clone(), content, role)
                 .await
@@ -1149,6 +1161,7 @@ pub(super) async fn dispatch(
             // ADR-0060: some TS dispatch arms must know the authenticated
             // caller device. Injected server-side (overwriting any
             // client-sent value) so a device can never spoof another's id.
+            let args = if name == "host_state_submit" { paired_reader.stamp(args) } else { args };
             let args = inject_caller_device_id(name, args, device_id);
             let args = inject_caller_event_streams(name, args, device_id);
             let args = inject_caller_device_grants(name, args, state, device_id, tenant_id);
@@ -1182,7 +1195,10 @@ pub(super) async fn dispatch(
                     cognia_companion::desktop_writes_bridge::DEFAULT_TIMEOUT,
                 )
                 .await
-                .map_err(|error| map_desktop_write_bridge_error(name, error))?;
+                .map_err(|error| {
+                    if error.starts_with("personal_visibility_") { RpcError::transcript(error) }
+                    else { map_desktop_write_bridge_error(name, error) }
+                })?;
             // A submission or a stop just changed this browser's list: hint its
             // device socket (ADR-0228 §5) so a second panel or the badge sees
             // it without waiting for a poll. Best-effort by design.
@@ -1752,7 +1768,7 @@ mod tests {
 mod p5_tests {
     use super::*;
     use cognia_companion::{
-        person_partition::{PersonPartition, scope},
+        person_partition::{scope, PersonPartition},
         sync_registry::SyncTableDescriptor,
     };
     #[tokio::test]

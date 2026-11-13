@@ -898,6 +898,9 @@ describe("dispatchCommand: connector_approve_draft", () => {
 
   it("enqueues the draft preview before transitioning it to approved", async () => {
     const db = getDb()
+    // A current draft retains its real, unmarked producer; legacy unbound drafts refuse.
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const producer = await startToolExecutionRun("s1")
     const outboundPreview = {
       conversationRef: { platform: "telegram" as const, adapterId: "adapter-1", chatId: 5 },
       segments: [{ type: "text" as const, text: "send this" }],
@@ -905,6 +908,7 @@ describe("dispatchCommand: connector_approve_draft", () => {
     }
     await db.connectorDrafts.add({
       id: "d-preview",
+      personalExecutionRunId: producer.id,
       conversationKey: "telegram:adapter-1:5",
       sessionId: "s1",
       segments: outboundPreview.segments,
@@ -3730,3 +3734,35 @@ it("p6g a partition manifest carries the member's agents, and leaves them out wh
   expect(operator).not.toHaveProperty("personAgents")
   expect(personAgentPolicyRead).not.toHaveBeenCalled()
 })
+
+it.each(["transcript.edit", "transcript.truncate", "session.delete"])(
+  "refuses member %s on withheld rows before any HostState batch action",
+  async (kind) => {
+    await getDb().messages.put({
+      id: "hoststate-private",
+      sessionId: "hoststate-private-session",
+      role: "assistant",
+      createdAt: 1,
+      parts: [{ type: "text", text: "private canonical" }],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
+      },
+    })
+    mockHostStateService.submit.mockClear()
+    await expect(
+      dispatchCommand("host_state_submit", {
+        pairedReader: "member",
+        actions: [
+          {
+            sessionId: "hoststate-private-session",
+            action: { kind, messageId: "hoststate-private", text: "replace" },
+          },
+        ],
+      })
+    ).rejects.toThrow("personal_visibility_conflict")
+    expect(mockHostStateService.submit).not.toHaveBeenCalled()
+    expect((await getDb().messages.get("hoststate-private"))?.parts).toEqual([
+      { type: "text", text: "private canonical" },
+    ])
+  }
+)

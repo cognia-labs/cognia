@@ -12,7 +12,7 @@ import {
   preparePersonalDerivedHistory,
   prepareOwnerHistory,
   prepareOwnerDerivedHistory,
-  preparePairedOwnerHistory,
+  preparePairedHistory,
   projectPersonalSessionHistory,
   samePersonForHost,
   withPersonalRerankerVisibility,
@@ -428,7 +428,7 @@ it("does not declassify retained titles or summaries after their marked source r
   )
   expect(result.withheldMessageIds).toEqual(["retained-summary"])
   expect(result.messages[0].text).not.toContain("private retained summary")
-  const projected = await projectPersonalSessionHistory(session)
+  const projected = await projectPersonalSessionHistory(session, "owner")
   expect(projected).toEqual(session)
   expect((await getDb().sessions.get(session.id))?.title).toBe(session.title)
 })
@@ -501,7 +501,7 @@ it("never grants the owner an old derived artifact whose foreign-person provenan
   ).toEqual(["old-run-summary"])
 })
 
-it("keeps owner titles, previews, seeds and history through the explicit interim paired owner read", async () => {
+it("keeps owner titles, previews, seeds and history through the explicit paired owner read", async () => {
   const session = {
     id: "paired",
     title: "private report title",
@@ -517,9 +517,11 @@ it("keeps owner titles, previews, seeds and history through the explicit interim
     role: "assistant",
     sessionId: session.id,
   } as never)
-  const projected = await projectPersonalSessionHistory(session)
+  const projected = await projectPersonalSessionHistory(session, "owner")
   expect(projected).toEqual(session)
-  expect((await preparePairedOwnerHistory([privateMessage])).messages[0]).toEqual(privateMessage)
+  expect((await preparePairedHistory([privateMessage], "owner")).messages[0]).toEqual(
+    privateMessage
+  )
   expect(await getDb().sessions.get(session.id)).toEqual(session)
   expect((await getDb().messages.get(privateMessage.id))?.parts).toEqual(privateMessage.parts)
 })
@@ -569,3 +571,14 @@ it("P1 plugin history cannot inherit a local person's reader authority", async (
   expect(result.messages[1]).toEqual({ id: "public", text: "public" })
   expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
 })
+
+it.each(["member", undefined, "forged-owner"])(
+  "paired %s has no personal reader",
+  async (reader) => {
+    const result = await preparePairedHistory([privateMessage], reader)
+    expect(result.readers).toEqual([])
+    expect(result.withheldMessageIds).toEqual(["private"])
+    expect(JSON.stringify(result.messages)).not.toContain("private answer")
+    expect((await preparePairedHistory([privateMessage], "owner")).withheldMessageIds).toEqual([])
+  }
+)

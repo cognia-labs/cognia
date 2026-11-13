@@ -5,6 +5,8 @@
  *
  * @jest-environment node
  */
+import "fake-indexeddb/auto"
+
 import { bootstrapHeadlessRuntimes } from "../bootstrap"
 import { __resetHeadlessRuntimesForTesting } from "../registry"
 import type { HeadlessRuntimeContext, RuntimeBridge } from "../types"
@@ -103,4 +105,58 @@ describe("desktop-sync-source headless smoke", () => {
       restore()
     }
   })
+})
+
+it("preserves marked data in the trusted person partition despite a member device role", async () => {
+  jest.resetModules()
+  jest.doMock("@/stores/account/account-store", () => ({
+    useAccountStore: { getState: () => ({ unlockedAccountId: "local_acct_a" }) },
+  }))
+  const registry = await import("../registry")
+  registry.__resetHeadlessRuntimesForTesting()
+  await import("./desktop-sync-source")
+  const { bootstrapHeadlessRuntimes: bootstrap } = await import("../bootstrap")
+  const { getDb, __enableDbRuntimeForTesting } = await import("@/lib/db/schema")
+  const releaseDbRuntime = __enableDbRuntimeForTesting()
+  await getDb().sessions.put({
+    id: "partition-sync",
+    title: "Own partition",
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  await getDb().messages.put({
+    id: "partition-sync-private",
+    sessionId: "partition-sync",
+    role: "assistant",
+    createdAt: 1,
+    parts: [{ type: "text", text: "own partition sync content" }],
+    metadata: {
+      personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
+    },
+  })
+  const { bridge, listeners, invocations } = makeBridge()
+  const result = await bootstrap({ ...makeCtx(bridge), host: "person-brain" })
+  listeners.get("companion://sync-pull-request")!({
+    payload: {
+      request_id: "partition-sync",
+      table: "messages",
+      since: 0,
+      account_id: "local_acct_a",
+      pairedReader: "member",
+    },
+  })
+  for (
+    let tick = 0;
+    tick < 100 && !invocations.some((item) => item.args.requestId === "partition-sync");
+    tick++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(
+    JSON.stringify(invocations.find((item) => item.args.requestId === "partition-sync")?.args.delta)
+  ).toContain("own partition sync content")
+  await result.stop()
+  await getDb().messages.delete("partition-sync-private")
+  await getDb().sessions.delete("partition-sync")
+  releaseDbRuntime()
+  jest.dontMock("@/stores/account/account-store")
 })

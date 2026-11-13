@@ -2064,6 +2064,19 @@ describe("remote transcript authority", () => {
     )
   })
 
+  it("ignores mirror-supplied personal digests and history on paired sends", async () => {
+    await sendPrompt("remote", "prompt", {
+      resumeSessionId: "host-decides",
+      personalVisibilityDigest: "forged",
+      personalContextReadersDigest: "forged",
+      initialConversation: [{ role: "assistant", content: "private mirror history" }],
+    })
+    expect(getActiveRemoteTransport()!.call).toHaveBeenCalledWith(
+      "agent_send",
+      expect.objectContaining({ options: { resumeSessionId: "host-decides" } })
+    )
+  })
+
   it("uses the canonical Host send for a tool-free utility without an execution spec", async () => {
     const options = {
       provider: "openai",

@@ -10,6 +10,13 @@ const ROOT = join(__dirname, "..", "..")
 // the plugin's own timers/activation/panel UI, never a Host callback. These
 // reviewed seams keep a refusing HOST_BACKGROUND binding for runless work.
 const HOST_DISPATCH_BINDINGS: Record<string, string[]> = {
+  "lib/work-submission/paired-turn-adapter.ts": [
+    'payload.pairedReader === "owner"',
+    "localAuthorization: authorityModule.LOCAL_PERSON_RUN",
+    "executionRunId: runId",
+    "bindToolCallRun",
+    "prepareTranscriptRuntimeSend",
+  ],
   "lib/claude/plugin-hook-ipc.ts": ["withPluginContentDispatch", "HOST_BACKGROUND"],
   "lib/plugin/core/invocation-identity.ts": [
     "HOST_BACKGROUND",

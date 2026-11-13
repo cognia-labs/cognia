@@ -847,6 +847,30 @@ async fn handle_binary_resource(
     let Some(data_plane) = crate::data_plane::DataPlane::pick(state) else {
         return send_binary_resource_error(peer, request.id, "service_unavailable").await;
     };
+    let principal = match rtc_device_principal(device_id) {
+        Ok(principal) => principal,
+        Err(_) => return send_binary_resource_error(peer, request.id, "forbidden").await,
+    };
+    let reader = crate::data_plane::PairedReader::for_device(
+        principal
+            .as_ref()
+            .map(|principal| principal.tenant_id.as_str()),
+        device_id,
+    );
+    if reader == crate::data_plane::PairedReader::Member
+        && crate::deployment::deployment_mode() == crate::deployment::DeploymentMode::MultiTenant
+        && crate::person_partition::current().is_none()
+    {
+        return send_binary_resource_error(peer, request.id, "personal_visibility_unavailable")
+            .await;
+    }
+    let data_plane = match data_plane.for_paired_reader(reader) {
+        Ok(plane) => plane,
+        Err(_) => {
+            return send_binary_resource_error(peer, request.id, "personal_visibility_unavailable")
+                .await
+        }
+    };
     let media = match data_plane
         .session_media(
             request.resource.session_id,

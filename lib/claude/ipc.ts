@@ -351,7 +351,21 @@ export async function sendPrompt(
     if (mirror?.runtimeTranscriptGeneration || mirror?.runtimeTranscriptInvalidated) {
       throw new TranscriptRuntimeRecoveryError("transcript_authoritative_host_required")
     }
-    return sendPromptToTransport(sessionId, prompt, options, delivery, { pairedHost: true })
+    // The Host re-derives audience and canonical history at admission. A mirror
+    // cannot attest a digest or supply the history used to rebuild its engine.
+    const pairedOptions = { ...options }
+    for (const key of [
+      "personalVisibilityDigest",
+      "personalContextReadersDigest",
+      "personalVisibilityHasWithheld",
+      "initialConversation",
+      "priorMessages",
+      "history",
+      "runtimeHistory",
+    ]) {
+      delete (pairedOptions as Record<string, unknown>)[key]
+    }
+    return sendPromptToTransport(sessionId, prompt, pairedOptions, delivery, { pairedHost: true })
   }
   if (delivery?.transcriptRuntime === "prepared" || delivery?.transcriptRuntime === "host-owned") {
     if (delivery.transcriptRuntime === "prepared") {

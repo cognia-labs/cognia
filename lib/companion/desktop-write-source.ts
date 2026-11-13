@@ -1030,11 +1030,49 @@ async function hostStateSnapshot(
   return service.snapshot(stripHostStateInternal(payload) as unknown as HostStateSnapshotRequest)
 }
 
+/** Check the entire batch before the service can commit any action. */
+export async function assertPairedHostStateMutations(
+  payload: Record<string, unknown>
+): Promise<void> {
+  if (!Array.isArray(payload.actions)) return // The closed protocol validator rejects malformed input.
+  const { assertPairedMessageMutation, PairedMessageConflictError } =
+    await import("./desktop-message-source")
+  for (const envelope of payload.actions) {
+    const action = envelope?.action
+    const sessionId = envelope?.sessionId
+    if (!action || typeof sessionId !== "string") continue
+    if (
+      payload.pairedReader !== "owner" &&
+      ["message.enqueue", "turn.regenerate", "turn.steer", "turn.followup"].includes(action.kind)
+    ) {
+      // These legacy HostState dispatchers mint local authority. Members send
+      // through agent_send, whose Host admission binds the exact readerless run.
+      throw new PairedMessageConflictError()
+    }
+    if (action.kind === "transcript.edit") {
+      const message = await getDb().messages.get(action.messageId)
+      if (message?.sessionId === sessionId)
+        await assertPairedMessageMutation(message, payload.pairedReader, [
+          { type: "text", text: action.text },
+        ])
+    } else if (["transcript.truncate", "session.delete"].includes(action.kind)) {
+      const rows = await getDb().messages.where("sessionId").equals(sessionId).sortBy("createdAt")
+      const keep =
+        action.kind === "transcript.truncate" && action.afterMessageId
+          ? rows.findIndex((row) => row.id === action.afterMessageId)
+          : -1
+      for (const row of rows.slice(keep + 1))
+        await assertPairedMessageMutation(row, payload.pairedReader)
+    }
+  }
+}
+
 async function hostStateSubmit(
   payload: Record<string, unknown>,
   bridge?: TauriBridge,
   authorization: HostStateAuthorizationStrategy = "device-grants"
 ): Promise<unknown> {
+  if (authorization !== "person-partition") await assertPairedHostStateMutations(payload)
   const service = await resolveHostStateService(payload, bridge, authorization)
   return service.submit(
     stripHostStateInternal(payload) as unknown as HostStateSubmitRequest,
@@ -1090,6 +1128,7 @@ function stripHostStateInternal(payload: Record<string, unknown>): Record<string
     callerDeviceId: _deviceId,
     callerDeviceGrants: _grants,
     callerPartition: _partition,
+    pairedReader: _pairedReader,
     // The approval token, not part of the protocol body. `host_state_submit`
     // is `approval: "interactive"`, so a paired client has to send one and the
     // RPC layer forwards it untouched; left in, it fails the closed-shape

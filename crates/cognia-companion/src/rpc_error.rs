@@ -172,6 +172,12 @@ impl RpcError {
     /// session".
     pub fn transcript(detail: String) -> (StatusCode, Json<Self>) {
         match detail.as_str() {
+            "personal_visibility_conflict"
+            | "personal_visibility_changed"
+            | "personal_visibility_unavailable" => (
+                StatusCode::CONFLICT,
+                Json(Self::new(detail.clone(), detail)),
+            ),
             "INVALID_PARAMS" | "SESSION_NOT_FOUND" | "TRANSCRIPT_STALE" | "TURN_NOT_FOUND"
             | "TURN_NOT_COMPLETED" | "MEDIA_NOT_FOUND" => (
                 StatusCode::BAD_REQUEST,
@@ -272,10 +278,29 @@ impl RpcError {
 mod tests {
     use super::*;
     #[test]
+    fn personal_visibility_refusals_keep_their_typed_conflict_code() {
+        for code in [
+            "personal_visibility_conflict",
+            "personal_visibility_changed",
+            "personal_visibility_unavailable",
+        ] {
+            let (status, Json(error)) = RpcError::transcript(code.into());
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(error.code, code);
+        }
+    }
+
+    #[test]
     fn p6d_quota_details_are_additive_to_the_legacy_envelope() {
-        let mut error = RpcError::new("person_workspace_quota_exceeded", "person_workspace_quota_exceeded");
+        let mut error = RpcError::new(
+            "person_workspace_quota_exceeded",
+            "person_workspace_quota_exceeded",
+        );
         error.details = Some(serde_json::json!({"usedBytes":100,"maxBytes":100}));
-        assert_eq!(serde_json::to_value(error).unwrap()["details"], serde_json::json!({"usedBytes":100,"maxBytes":100}));
+        assert_eq!(
+            serde_json::to_value(error).unwrap()["details"],
+            serde_json::json!({"usedBytes":100,"maxBytes":100})
+        );
         the_envelope_serializes_code_message_and_retryable();
     }
 

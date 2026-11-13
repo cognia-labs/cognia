@@ -1,7 +1,7 @@
 "use client"
 
 import {
-  preparePairedOwnerHistory,
+  preparePairedHistory,
   projectPersonalSessionHistory,
 } from "@/lib/execution/personal-visibility"
 
@@ -67,6 +67,7 @@ import type { GoalEvent } from "@/types/goal"
 /** Page size for paged tables (messages). One round-trip pulls at most this many rows. */
 const MESSAGES_PAGE_SIZE = 500
 interface SyncPullRequestEvent {
+  pairedReader?: unknown
   request_id: string
   table: SyncableTable | string
   since: number
@@ -85,6 +86,8 @@ interface TauriBridge {
 }
 
 export interface InstallOptions extends SharedInstallOptions {
+  /** Trusted isolated person-brain profile, independent of paired device roles. */
+  partition?: boolean
   /** Inject a Tauri bridge for tests; defaults to the dynamic real one. */
   bridge?: TauriBridge
 }
@@ -106,7 +109,10 @@ export const installDesktopSyncSource = createSharedInstall<InstallOptions>(asyn
   }
 
   const unlisten = await bridge.listen<SyncPullRequestEvent>(REQUEST_EVENT, (event) => {
-    void respondToSyncRequest(event.payload, bridge)
+    void respondToSyncRequest(
+      opts.partition ? { ...event.payload, pairedReader: "owner" } : event.payload,
+      bridge
+    )
   })
 
   return () => {
@@ -126,7 +132,8 @@ async function respondToSyncRequest(
       since,
       request.content_protocol_version,
       undefined,
-      request.cursor
+      request.cursor,
+      request.pairedReader
     )
     await bridge.invoke(RESPONSE_COMMAND, { requestId: request_id, delta, error: null })
   } catch (err: unknown) {
@@ -158,7 +165,8 @@ export async function readDexieDelta(
   contentProtocolVersion?: number,
   /** Dependencies a module's reader takes by name (`SyncServeContext.deps`); tests inject them. */
   serveDeps: Readonly<Record<string, unknown>> = {},
-  cursor?: string
+  cursor?: string,
+  pairedReader?: unknown
 ): Promise<SyncDelta<unknown>> {
   if (table === "memories" && contentProtocolVersion !== 1) {
     throw new Error("upgrade_required: retrieval content protocol v1 is required")
@@ -167,7 +175,7 @@ export async function readDexieDelta(
     if (!PAGED_SYNC_TABLES.includes(table as SyncableTable)) {
       throw new Error("unsupported sync cursor table")
     }
-    return readCursorDelta(table as SyncableTable, since, cursor)
+    return readCursorDelta(table as SyncableTable, since, cursor, pairedReader)
   }
   // A table a module owns the sync of may read its rows through the module's
   // own projection (ADR-0250 §14 `syncHandlers`).
@@ -182,9 +190,9 @@ export async function readDexieDelta(
     case "skills":
       return readSkillsDelta(since)
     case "sessions":
-      return readSessionsDelta(since)
+      return readSessionsDelta(since, pairedReader)
     case "messages":
-      return readMessagesDelta(since)
+      return readMessagesDelta(since, pairedReader)
     case "workflows":
       return readWorkflowsDelta(since)
     case "workflowRuns":
@@ -306,7 +314,10 @@ async function readSkillsDelta(since: number): Promise<SyncDelta<Skill>> {
   return finalizeDelta("skills", rows, since)
 }
 
-async function readSessionsDelta(since: number): Promise<SyncDelta<ChatSession>> {
+async function readSessionsDelta(
+  since: number,
+  pairedReader?: unknown
+): Promise<SyncDelta<ChatSession>> {
   // The client applies this complete delta in slices. Send recent sessions
   // first so a cold sidebar fills with recent history before older rows.
   // finalizeDelta still advances the cursor to the maximum across all rows.
@@ -318,12 +329,15 @@ async function readSessionsDelta(since: number): Promise<SyncDelta<ChatSession>>
   )
   return finalizeDelta(
     "sessions",
-    await Promise.all(rows.map(projectPersonalSessionHistory)),
+    await Promise.all(rows.map((session) => projectPersonalSessionHistory(session, pairedReader))),
     since
   )
 }
 
-async function readMessagesDelta(since: number): Promise<SyncDelta<StoredMessage>> {
+async function readMessagesDelta(
+  since: number,
+  pairedReader?: unknown
+): Promise<SyncDelta<StoredMessage>> {
   const index = getDb().messages.orderBy("[createdAt+id]")
 
   if (since === 0) {
@@ -336,7 +350,7 @@ async function readMessagesDelta(since: number): Promise<SyncDelta<StoredMessage
     newest.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
     return finalizeDelta(
       "messages",
-      (await preparePairedOwnerHistory(newest)).messages,
+      (await preparePairedHistory(newest, pairedReader)).messages,
       since,
       false,
       (row) => row.createdAt
@@ -367,7 +381,7 @@ async function readMessagesDelta(since: number): Promise<SyncDelta<StoredMessage
   }
   return finalizeDelta(
     "messages",
-    (await preparePairedOwnerHistory(page)).messages,
+    (await preparePairedHistory(page, pairedReader)).messages,
     since,
     hasMore,
     (row) => row.createdAt
@@ -411,7 +425,8 @@ function decodeSyncCursor(table: string, since: number, value: string): PagedSyn
 async function readCursorDelta(
   table: SyncableTable,
   since: number,
-  token: string
+  token: string,
+  pairedReader?: unknown
 ): Promise<SyncDelta<unknown>> {
   const cursor = decodeSyncCursor(table, since, token)
   const db = getDb()
@@ -522,7 +537,7 @@ async function readCursorDelta(
     rows = page.slice(0, RUN_PAGE_SIZE).map(projectRunForSync)
   }
   if (table === "messages")
-    rows = (await preparePairedOwnerHistory(rows as unknown as StoredMessage[])).messages
+    rows = (await preparePairedHistory(rows as unknown as StoredMessage[], pairedReader)).messages
   const deleted = await readTombstonesSince(table, cursor.deletedAt)
   const last = rows.at(-1)
   const next: PagedSyncCursor = {

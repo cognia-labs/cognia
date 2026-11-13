@@ -1,7 +1,7 @@
 "use client"
 
 import {
-  preparePairedOwnerHistory,
+  preparePairedHistory,
   projectPersonalSessionHistory,
 } from "@/lib/execution/personal-visibility"
 
@@ -93,6 +93,7 @@ const RESPONSE_COMMAND = "companion_message_response"
 const MAX_SESSION_LIST_PAGE_SIZE = 200
 
 interface UpdateRequestEvent {
+  pairedReader?: unknown
   requestId: string
   kind: "update"
   sessionId: string
@@ -101,6 +102,7 @@ interface UpdateRequestEvent {
 }
 
 interface DeleteRequestEvent {
+  pairedReader?: unknown
   requestId: string
   kind: "delete"
   sessionId: string
@@ -108,6 +110,7 @@ interface DeleteRequestEvent {
 }
 
 interface SessionListRequestEvent {
+  pairedReader?: unknown
   requestId: string
   kind: "session_list"
   limit: number
@@ -116,6 +119,7 @@ interface SessionListRequestEvent {
 }
 
 interface GetMessagesRequestEvent {
+  pairedReader?: unknown
   requestId: string
   kind: "message_get_by_session"
   sessionId: string
@@ -137,16 +141,19 @@ interface TranscriptCapabilitiesRequestEvent {
 }
 
 interface SessionTimelineRequestEvent extends SessionTimelineRequest {
+  pairedReader?: unknown
   requestId: string
   kind: "session_timeline"
 }
 
 interface SessionTurnMessagesRequestEvent extends SessionTurnMessagesRequest {
+  pairedReader?: unknown
   requestId: string
   kind: "session_turn_messages"
 }
 
 interface SessionMediaRequestEvent {
+  pairedReader?: unknown
   requestId: string
   kind: "session_media"
   sessionId: string
@@ -164,6 +171,8 @@ interface SessionMediaRequestEvent {
  */
 
 export interface InstallOptions extends SharedInstallOptions {
+  /** Trusted isolated person-brain profile; never read from a request payload. */
+  partition?: boolean
   /** Inject a Tauri bridge for tests; defaults to the dynamic real one. */
   bridge?: RuntimeBridge
 }
@@ -202,19 +211,22 @@ export const installDesktopMessageSource = createSharedInstall<InstallOptions>(a
     }
   }
 
+  const audience = <T extends { pairedReader?: unknown }>(request: T): T =>
+    opts.partition ? { ...request, pairedReader: "owner" } : request
+
   const offUpdate = await bridge.listen<UpdateRequestEvent>(UPDATE_EVENT, (event) => {
-    void respondUpdate(event.payload, bridge)
+    void respondUpdate(audience(event.payload), bridge)
   })
   const offDelete = await bridge.listen<DeleteRequestEvent>(DELETE_EVENT, (event) => {
-    void respondDelete(event.payload, bridge)
+    void respondDelete(audience(event.payload), bridge)
   })
   const offList = await bridge.listen<SessionListRequestEvent>(LIST_EVENT, (event) => {
-    void respondList(event.payload, bridge)
+    void respondList(audience(event.payload), bridge)
   })
   const offGetBySession = await bridge.listen<GetMessagesRequestEvent>(
     GET_BY_SESSION_EVENT,
     (event) => {
-      void respondGetMessages(event.payload, bridge)
+      void respondGetMessages(audience(event.payload), bridge)
     }
   )
   const offSend = await bridge.listen<SendMessageRequestEvent>(SEND_EVENT, (event) => {
@@ -226,15 +238,15 @@ export const installDesktopMessageSource = createSharedInstall<InstallOptions>(a
   )
   const offSessionTimeline = await bridge.listen<SessionTimelineRequestEvent>(
     SESSION_TIMELINE_EVENT,
-    (event) => void respondSessionTimeline(event.payload, bridge)
+    (event) => void respondSessionTimeline(audience(event.payload), bridge)
   )
   const offSessionTurnMessages = await bridge.listen<SessionTurnMessagesRequestEvent>(
     SESSION_TURN_MESSAGES_EVENT,
-    (event) => void respondSessionTurnMessages(event.payload, bridge)
+    (event) => void respondSessionTurnMessages(audience(event.payload), bridge)
   )
   const offSessionMedia = await bridge.listen<SessionMediaRequestEvent>(
     SESSION_MEDIA_EVENT,
-    (event) => void respondSessionMedia(event.payload, bridge)
+    (event) => void respondSessionMedia(audience(event.payload), bridge)
   )
   // ADR-0222: a live file share reading `/uploads` or `/artifacts` asks for
   // one slice at a time and is answered on this same media channel.
@@ -406,6 +418,11 @@ async function respondSessionMedia(
     }
     try {
       await assertSharedSessionRead(session)
+      const rows = await getDb().messages.where("sessionId").equals(request.sessionId).toArray()
+      if ((await preparePairedHistory(rows, request.pairedReader)).withheldMessageIds.length) {
+        await fail("MEDIA_NOT_FOUND")
+        return
+      }
     } catch {
       await fail("MEDIA_NOT_FOUND")
       return
@@ -446,6 +463,36 @@ async function respondSessionMedia(
   })
 }
 
+/** A projection is never canonical write input, even when the owner submits it. */
+export async function assertPairedMessageMutation(
+  message: StoredMessage,
+  reader?: unknown,
+  parts?: unknown
+): Promise<void> {
+  const projection = await preparePairedHistory([message], "member")
+  if (!projection.withheldMessageIds.length) return
+  const placeholder = projection.messages[0].parts
+  const projectedParts = Array.isArray(placeholder) ? placeholder : []
+  const incoming = JSON.stringify(parts)
+  if (
+    reader !== "owner" ||
+    (incoming &&
+      projectedParts.some((part) => {
+        const text = (part as { text?: unknown }).text
+        return typeof text === "string" && incoming.includes(JSON.stringify(text).slice(1, -1))
+      }))
+  ) {
+    throw new PairedMessageConflictError()
+  }
+}
+
+export class PairedMessageConflictError extends Error {
+  readonly code = "personal_visibility_conflict"
+  constructor() {
+    super("personal_visibility_conflict")
+  }
+}
+
 async function respondUpdate(req: UpdateRequestEvent, bridge: RuntimeBridge): Promise<void> {
   try {
     const [session, message] = await Promise.all([
@@ -455,6 +502,11 @@ async function respondUpdate(req: UpdateRequestEvent, bridge: RuntimeBridge): Pr
     if (!session || !message || message.sessionId !== req.sessionId)
       throw new Error("SESSION_NOT_FOUND")
     assertLocalMutationAllowed(session, "message.correctOwn")
+    await assertPairedMessageMutation(
+      message,
+      req.pairedReader,
+      req.updates.parts ?? (req.updates as { content?: unknown }).content
+    )
     await messageRepository.update(req.messageId, req.updates as Partial<UIMessage>)
     await bridge.invoke(RESPONSE_COMMAND, {
       requestId: req.requestId,
@@ -479,6 +531,7 @@ async function respondDelete(req: DeleteRequestEvent, bridge: RuntimeBridge): Pr
     if (!session || !message || message.sessionId !== req.sessionId)
       throw new Error("SESSION_NOT_FOUND")
     assertLocalMutationAllowed(session, "message.redactOwn")
+    await assertPairedMessageMutation(message, req.pairedReader)
     await messageRepository.delete(req.messageId)
     await bridge.invoke(RESPONSE_COMMAND, {
       requestId: req.requestId,
@@ -496,7 +549,7 @@ async function respondDelete(req: DeleteRequestEvent, bridge: RuntimeBridge): Pr
 
 async function respondList(req: SessionListRequestEvent, bridge: RuntimeBridge): Promise<void> {
   try {
-    const page = await readSessionPage(req.limit, req.offset, req.before)
+    const page = await readSessionPage(req.limit, req.offset, req.before, req.pairedReader)
     await bridge.invoke(RESPONSE_COMMAND, {
       requestId: req.requestId,
       result: page,
@@ -516,7 +569,7 @@ async function respondGetMessages(
   bridge: RuntimeBridge
 ): Promise<void> {
   try {
-    const page = await readMessagesPage(req.sessionId, req.limit, req.offset)
+    const page = await readMessagesPage(req.sessionId, req.limit, req.offset, req.pairedReader)
     await bridge.invoke(RESPONSE_COMMAND, {
       requestId: req.requestId,
       result: page,
@@ -577,7 +630,8 @@ export interface SessionListPage {
 export async function readSessionPage(
   limit: number,
   offset: number,
-  before?: number
+  before?: number,
+  pairedReader?: unknown
 ): Promise<SessionListPage> {
   if (!Number.isFinite(limit) || limit <= 0) {
     throw new Error("limit must be a positive number")
@@ -612,7 +666,11 @@ export async function readSessionPage(
   }
   const hasMore = candidates.length > pageSize
   const rows = (
-    await Promise.all(accessible.slice(0, pageSize).map(projectPersonalSessionHistory))
+    await Promise.all(
+      accessible
+        .slice(0, pageSize)
+        .map((session) => projectPersonalSessionHistory(session, pairedReader))
+    )
   ).map(projectSessionListItem)
   const nextOffset = hasMore ? offset + rows.length : undefined
 
@@ -657,7 +715,8 @@ export interface MessagesPage {
 export async function readMessagesPage(
   sessionId: string,
   limit?: number,
-  offset?: number
+  offset?: number,
+  pairedReader?: unknown
 ): Promise<MessagesPage> {
   const session = await getDb().sessions.get(sessionId)
   if (!session || !isSessionExposed(session, "external-connector")) {
@@ -676,7 +735,7 @@ export async function readMessagesPage(
   // Compatibility path for clients predating transcript/media V1. Capable
   // clients never call this full-message API; legacy clients cannot resolve a
   // content-addressed ref, so expand only this bounded wire page.
-  const filtered = await preparePairedOwnerHistory(candidates.slice(0, pageSize))
+  const filtered = await preparePairedHistory(candidates.slice(0, pageSize), pairedReader)
   const rows = await Promise.all(
     filtered.messages.map(async (row) => expandLegacyMediaRefs(toWireMessage(row)))
   )
@@ -735,7 +794,7 @@ async function transcriptRevision(sessionId: string): Promise<{
  * at complete turn boundaries, including explicitly keyed multi-message turns.
  */
 export async function readTranscriptTimeline(
-  request: SessionTimelineRequest
+  request: SessionTimelineRequest & { pairedReader?: unknown }
 ): Promise<SessionTimelinePage> {
   const direction = request.direction ?? "backward"
   if (direction !== "backward") throw transcriptError("INVALID_PARAMS")
@@ -812,7 +871,7 @@ export async function readTranscriptTimeline(
     rowsDescending.length = completeRowCount
   }
   const rows = rowsDescending.reverse()
-  const filtered = await preparePairedOwnerHistory(rows)
+  const filtered = await preparePairedHistory(rows, request.pairedReader)
   const projected = projectTranscriptTimeline({
     sessionId: request.sessionId,
     revision: session.revision,
@@ -901,7 +960,7 @@ async function readImplicitTurn(sessionId: string, turnKey: string): Promise<Sto
 
 /** Read one completed turn with both count and serialized-byte page budgets. */
 export async function readTranscriptTurnMessages(
-  request: SessionTurnMessagesRequest
+  request: SessionTurnMessagesRequest & { pairedReader?: unknown }
 ): Promise<SessionTurnMessagesPage> {
   const session = await transcriptRevision(request.sessionId)
   if (session.revision !== request.revision || session.revision !== request.detailRevision) {
@@ -933,7 +992,10 @@ export async function readTranscriptTurnMessages(
   )
   const page: TranscriptMessage[] = []
   let approximateBytes = 2
-  const filtered = await preparePairedOwnerHistory(allRows.slice(position, position + limit + 1))
+  const filtered = await preparePairedHistory(
+    allRows.slice(position, position + limit + 1),
+    request.pairedReader
+  )
   for (const row of filtered.messages) {
     if (page.length >= limit) break
     const message = toTranscriptMessage(row)

@@ -3,6 +3,8 @@
  *
  * @jest-environment node
  */
+import "fake-indexeddb/auto"
+
 import type { RouterFusionHost } from "@/lib/router-fusion/gate/load-engine"
 
 import { bootstrapHeadlessRuntimes } from "../bootstrap"
@@ -128,6 +130,47 @@ describe("desktop-message-source headless smoke", () => {
     expect(invocations.find((item) => item.args.requestId === "p5d-profile")?.args.error).toBe(
       "host_state_partition_mismatch"
     )
+    const { getDb, __enableDbRuntimeForTesting } = await import("@/lib/db/schema")
+    const releaseDbRuntime = __enableDbRuntimeForTesting()
+    await getDb().sessions.put({
+      id: "partition-read",
+      title: "Own partition",
+      kind: "direct",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    await getDb().messages.put({
+      id: "partition-private",
+      sessionId: "partition-read",
+      role: "assistant",
+      createdAt: 1,
+      parts: [{ type: "text", text: "own partition content" }],
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
+      },
+    })
+    listeners.get("companion://message-get-by-session-request")!({
+      payload: {
+        requestId: "partition-read",
+        kind: "message_get_by_session",
+        sessionId: "partition-read",
+        pairedReader: "member",
+      },
+    })
+    for (
+      let tick = 0;
+      tick < 100 && !invocations.some((item) => item.args.requestId === "partition-read");
+      tick++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(
+      JSON.stringify(
+        invocations.find((item) => item.args.requestId === "partition-read")?.args.result
+      )
+    ).toContain("own partition content")
+    await getDb().messages.delete("partition-private")
+    await getDb().sessions.delete("partition-read")
+    releaseDbRuntime()
     await result.stop()
     expect(listeners.size).toBe(0)
   })

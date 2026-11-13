@@ -65,7 +65,7 @@ describe("readSessionPage", () => {
       { id: "s2", title: "mid", kind: "direct", createdAt: 0, updatedAt: 5 } as never,
       { id: "s3", title: "new", kind: "direct", createdAt: 0, updatedAt: 10 } as never,
     ])
-    const page = await readSessionPage(10, 0)
+    const page = await readSessionPage(10, 0, undefined, "owner")
     expect(page.rows.map((r) => r.id)).toEqual(["s3", "s2", "s1"])
     expect(page.total).toBeUndefined()
     expect(page.has_more).toBe(false)
@@ -90,7 +90,7 @@ describe("readSessionPage", () => {
       updatedAt: 2,
     } as never)
 
-    const page = await readSessionPage(10, 0)
+    const page = await readSessionPage(10, 0, undefined, "owner")
 
     expect(page.rows).toEqual([
       {
@@ -128,7 +128,7 @@ describe("readSessionPage", () => {
       } as never,
     ])
 
-    const page = await readSessionPage(10, 0)
+    const page = await readSessionPage(10, 0, undefined, "owner")
     expect(page.rows.map((row) => row.id)).toEqual(["visible"])
     expect(page.has_more).toBe(false)
   })
@@ -144,15 +144,15 @@ describe("readSessionPage", () => {
     })) as never[]
     await db.sessions.bulkPut(rows)
 
-    const page1 = await readSessionPage(2, 0)
+    const page1 = await readSessionPage(2, 0, undefined, "owner")
     expect(page1.rows.map((r) => r.id)).toEqual(["s4", "s3"])
     expect(page1.next_offset).toBe(2)
 
-    const page2 = await readSessionPage(2, 2)
+    const page2 = await readSessionPage(2, 2, undefined, "owner")
     expect(page2.rows.map((r) => r.id)).toEqual(["s2", "s1"])
     expect(page2.next_offset).toBe(4)
 
-    const page3 = await readSessionPage(2, 4)
+    const page3 = await readSessionPage(2, 4, undefined, "owner")
     expect(page3.rows.map((r) => r.id)).toEqual(["s0"])
     expect(page3.next_offset).toBeUndefined()
   })
@@ -169,7 +169,7 @@ describe("readSessionPage", () => {
       })) as never[]
     )
 
-    const page = await readSessionPage(10_000, 0)
+    const page = await readSessionPage(10_000, 0, undefined, "owner")
 
     expect(page.rows).toHaveLength(200)
     expect(page.has_more).toBe(true)
@@ -183,18 +183,18 @@ describe("readSessionPage", () => {
       { id: "mid", title: "m", kind: "direct", createdAt: 0, updatedAt: 5 } as never,
       { id: "new", title: "n", kind: "direct", createdAt: 0, updatedAt: 10 } as never,
     ])
-    const page = await readSessionPage(10, 0, 5)
+    const page = await readSessionPage(10, 0, 5, "owner")
     expect(page.rows.map((r) => r.id)).toEqual(["old"])
     expect(page.has_more).toBe(false)
   })
 
   it("rejects a non-positive limit", async () => {
-    await expect(readSessionPage(0, 0)).rejects.toThrow(/limit/)
-    await expect(readSessionPage(-1, 0)).rejects.toThrow(/limit/)
+    await expect(readSessionPage(0, 0, undefined, "owner")).rejects.toThrow(/limit/)
+    await expect(readSessionPage(-1, 0, undefined, "owner")).rejects.toThrow(/limit/)
   })
 
   it("rejects a negative offset", async () => {
-    await expect(readSessionPage(10, -1)).rejects.toThrow(/offset/)
+    await expect(readSessionPage(10, -1, undefined, "owner")).rejects.toThrow(/offset/)
   })
 })
 
@@ -1209,6 +1209,7 @@ describe("transcript bridge projections", () => {
     const page = await readTranscriptTurnMessages({
       sessionId: "s1",
       turnKey: "turn:user",
+      pairedReader: "owner",
       revision: 4,
       detailRevision: 4,
     })
@@ -1692,7 +1693,7 @@ it("materializes legacy personal provenance in paired message-history pages with
     parts: [],
     createdAt: 10,
   })
-  const page = await readMessagesPage("s1")
+  const page = await readMessagesPage("s1", undefined, undefined, "owner")
   expect(page.rows.find((row) => row.id === "legacy-paired")?.metadata).toMatchObject({
     personalMarks: [
       {
@@ -1727,15 +1728,19 @@ it("keeps owner marked messages and derived titles across paired pages and timel
       personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
     },
   })
-  const page = await readMessagesPage("private-paired")
-  const timeline = await readTranscriptTimeline({ sessionId: "private-paired" })
+  const page = await readMessagesPage("private-paired", undefined, undefined, "owner")
+  const timeline = await readTranscriptTimeline({
+    sessionId: "private-paired",
+    pairedReader: "owner",
+  })
   const detail = await readTranscriptTurnMessages({
     sessionId: "private-paired",
+    pairedReader: "owner",
     turnKey: "turn:private-turn",
     revision: 1,
     detailRevision: 1,
   })
-  const sessions = await readSessionPage(200, 0)
+  const sessions = await readSessionPage(200, 0, undefined, "owner")
   expect(JSON.stringify(sessions)).toContain("secret title")
   expect(JSON.stringify(sessions)).toContain("secret preview")
   for (const result of [page, timeline, detail]) {
@@ -1746,4 +1751,209 @@ it("keeps owner marked messages and derived titles across paired pages and timel
     { type: "text", text: "secret body" },
   ])
   expect((await getDb().sessions.get("private-paired"))?.title).toBe("secret title")
+})
+
+it("withholds member and missing-role reads across every paired transcript projection", async () => {
+  await putExposedSession("private-paired")
+  await getDb().sessions.update("private-paired", {
+    title: "secret title",
+    lastMessagePreview: "secret preview",
+    transcriptRevision: 1,
+  })
+  await getDb().messages.put({
+    id: "private-turn",
+    sessionId: "private-paired",
+    role: "user",
+    createdAt: 1,
+    parts: [{ type: "text", text: "secret body" }],
+    metadata: {
+      personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
+    },
+  })
+  for (const pairedReader of ["member", undefined, "forged"]) {
+    const results = [
+      await readMessagesPage("private-paired", undefined, undefined, pairedReader),
+      await readTranscriptTimeline({ sessionId: "private-paired", pairedReader }),
+      await readTranscriptTurnMessages({
+        sessionId: "private-paired",
+        pairedReader,
+        turnKey: "turn:private-turn",
+        revision: 1,
+        detailRevision: 1,
+      }),
+      await readSessionPage(200, 0, undefined, pairedReader),
+    ]
+    for (const result of results) {
+      expect(JSON.stringify(result)).not.toMatch(/secret body|secret title|secret preview/)
+      expect(JSON.stringify(result)).toContain("[Withheld:")
+    }
+  }
+})
+
+it.each(["member", undefined, "owner"])(
+  "protects private canonical rows from paired %s write-back",
+  async (pairedReader) => {
+    const handlers: Record<string, (e: { payload: unknown }) => void> = {}
+    const invoke = jest.fn(async () => ({}))
+    await installDesktopMessageSource({
+      bridge: {
+        listen: async (event, handler) => {
+          handlers[event] = handler as (e: { payload: unknown }) => void
+          return () => {}
+        },
+        invoke,
+        respondMedia,
+      },
+      forceReinstall: true,
+    })
+    await putExposedSession("write-private")
+    const canonical = {
+      id: "write-private-row",
+      sessionId: "write-private",
+      role: "assistant" as const,
+      createdAt: 1,
+      parts: [{ type: "text" as const, text: "canonical secret" }],
+      metadata: {
+        personalMarks: [
+          { person: { kind: "local-person" as const }, source: "personal", markedAt: 1 },
+        ],
+      },
+    }
+    await getDb().messages.put(canonical)
+    const { preparePairedHistory } = await import("@/lib/execution/personal-visibility")
+    const placeholder = (await preparePairedHistory([canonical], "member")).messages[0].parts
+    for (const updates of [
+      { content: (placeholder[0] as { text: string }).text },
+      { parts: placeholder },
+      {
+        parts: [
+          { type: "text", text: "prefix " + (placeholder[0] as { text: string }).text + " suffix" },
+        ],
+      },
+    ]) {
+      invoke.mockClear()
+      handlers["companion://message-update-request"]({
+        payload: {
+          requestId: "blocked",
+          kind: "update",
+          sessionId: "write-private",
+          messageId: canonical.id,
+          pairedReader,
+          updates,
+        },
+      })
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("companion_message_response", {
+          requestId: "blocked",
+          result: null,
+          error: "personal_visibility_conflict",
+        })
+      )
+      expect((await getDb().messages.get(canonical.id))?.parts).toEqual(canonical.parts)
+    }
+    if (pairedReader !== "owner") {
+      for (const operation of ["update", "delete"]) {
+        invoke.mockClear()
+        handlers["companion://message-" + operation + "-request"]({
+          payload: {
+            requestId: operation,
+            kind: operation,
+            sessionId: "write-private",
+            messageId: canonical.id,
+            pairedReader,
+            updates: { parts: [{ type: "text", text: "overwrite" }] },
+          },
+        })
+        await waitFor(() =>
+          expect(invoke).toHaveBeenCalledWith("companion_message_response", {
+            requestId: operation,
+            result: null,
+            error: "personal_visibility_conflict",
+          })
+        )
+        expect((await getDb().messages.get(canonical.id))?.parts).toEqual(canonical.parts)
+      }
+    } else {
+      invoke.mockClear()
+      handlers["companion://message-update-request"]({
+        payload: {
+          requestId: "owner-edit",
+          kind: "update",
+          sessionId: "write-private",
+          messageId: canonical.id,
+          pairedReader,
+          updates: { parts: [{ type: "text", text: "owner edit" }] },
+        },
+      })
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("companion_message_response", {
+          requestId: "owner-edit",
+          result: null,
+          error: null,
+        })
+      )
+      expect((await getDb().messages.get(canonical.id))?.parts).toEqual([
+        { type: "text", text: "owner edit" },
+      ])
+    }
+  }
+)
+
+it("keeps marked media available to its owner and refuses it for paired members", async () => {
+  const hash = "e".repeat(64)
+  await putExposedSession("media-private")
+  await getDb().messages.put({
+    id: "media-private-row",
+    sessionId: "media-private",
+    role: "assistant",
+    createdAt: 1,
+    parts: [],
+    metadata: {
+      personalMarks: [{ person: { kind: "local-person" }, source: "personal", markedAt: 1 }],
+    },
+  })
+  await getDb().messageMediaRefs.put({
+    messageId: "media-private-row",
+    sessionId: "media-private",
+    hash,
+  })
+  const handlers: Record<string, (e: { payload: unknown }) => void> = {}
+  const answers = jest.fn(async () => {})
+  mockGetMessageMedia.mockResolvedValue({
+    hash,
+    blob: { arrayBuffer: async () => new Uint8Array([17]).buffer },
+    mediaType: "image/png",
+  } as never)
+  const stop = await installDesktopMessageSource({
+    bridge: {
+      listen: async (event, handler) => {
+        handlers[event] = handler as (e: { payload: unknown }) => void
+        return () => {}
+      },
+      invoke: async () => ({}),
+      respondMedia: answers,
+    },
+    forceReinstall: true,
+  })
+  for (const pairedReader of ["member", undefined, "owner"]) {
+    answers.mockClear()
+    handlers["companion://session-media-request"]({
+      payload: {
+        requestId: "media-private",
+        kind: "session_media",
+        sessionId: "media-private",
+        hash,
+        variant: "canonical",
+        pairedReader,
+      },
+    })
+    await waitFor(() => expect(answers).toHaveBeenCalled())
+    if (pairedReader === "owner")
+      expect(answers).toHaveBeenCalledWith(expect.objectContaining({ bytes: new Uint8Array([17]) }))
+    else
+      expect(answers).toHaveBeenCalledWith(
+        expect.objectContaining({ error: "MEDIA_NOT_FOUND", bytes: new Uint8Array() })
+      )
+  }
+  stop?.()
 })

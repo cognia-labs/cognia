@@ -88,6 +88,70 @@ fn bridged<T>(result: Result<T, String>) -> Result<T, String> {
     })
 }
 
+/// Host-derived audience; role labels in client JSON never establish authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PairedReader {
+    Owner,
+    Member,
+}
+
+impl PairedReader {
+    pub fn for_device(tenant: Option<&str>, device: &str) -> Self {
+        let owner = tenant
+            .zip(crate::security_store::security_store())
+            .map(|(tenant, store)| store.is_owner_device(tenant, device));
+        Self::from_owner_result(owner)
+    }
+
+    fn from_owner_result<E>(result: Option<Result<bool, E>>) -> Self {
+        if matches!(result, Some(Ok(true))) {
+            Self::Owner
+        } else {
+            Self::Member
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Member => "member",
+        }
+    }
+
+    pub fn stamp(self, mut payload: Value) -> Value {
+        if let Some(map) = payload.as_object_mut() {
+            map.remove("paired_reader");
+            map.insert("pairedReader".into(), Value::String(self.as_str().into()));
+        }
+        payload
+    }
+}
+
+/// Bind identity at emission, after the legacy bus serializes its request.
+/// This keeps shared bus structs transport-neutral while covering every arm.
+pub struct PairedReaderTransport {
+    inner: Arc<dyn BridgeTransport>,
+    reader: PairedReader,
+}
+
+impl PairedReaderTransport {
+    pub fn bind(inner: Arc<dyn BridgeTransport>, reader: PairedReader) -> Arc<dyn BridgeTransport> {
+        Arc::new(Self { inner, reader })
+    }
+}
+
+impl BridgeTransport for PairedReaderTransport {
+    fn emit(&self, channel: &str, payload: Value) -> Result<(), String> {
+        self.inner.emit(channel, self.reader.stamp(payload))
+    }
+    fn reserve_request(&self) -> Result<crate::bridge_transport::BridgeRequestGuard, String> {
+        self.inner.reserve_request()
+    }
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+}
+
 /// Dispatch target for one RPC invocation.
 pub enum DataPlane {
     /// Round-trip through a bridge to whichever process hosts the brain. On
@@ -101,6 +165,20 @@ pub enum DataPlane {
 }
 
 impl DataPlane {
+    /// SQLite cannot run the canonical TS mark filter. Refuse before reading.
+    pub fn for_paired_reader(self, reader: PairedReader) -> Result<Self, String> {
+        match self {
+            Self::Bridge { bridge, transport } => Ok(Self::Bridge {
+                bridge,
+                transport: PairedReaderTransport::bind(transport, reader),
+            }),
+            Self::Direct(_) if reader == PairedReader::Member => {
+                Err("personal_visibility_unavailable".into())
+            }
+            direct => Ok(direct),
+        }
+    }
+
     /// Resolve the right variant given the current process state. See the
     /// module docs for the ordering rationale (connected brain → WebView →
     /// degraded store).
@@ -111,7 +189,9 @@ impl DataPlane {
                 transport: socket,
             });
         }
-        if super::person_partition::current().is_some() { return None; }
+        if super::person_partition::current().is_some() {
+            return None;
+        }
         if let Some(renderer) = state.renderer.as_ref() {
             return Some(DataPlane::Bridge {
                 bridge: Arc::clone(&state.desktop_messages_bridge),
@@ -760,6 +840,207 @@ mod tests {
     use crate::ws_bridge::test_support::{
         clear_socket_for_testing, install_socket_for_testing, lock_slot,
     };
+
+    #[test]
+    fn paired_reader_requires_positive_owner_proof() {
+        assert_eq!(
+            PairedReader::from_owner_result::<&str>(Some(Ok(true))),
+            PairedReader::Owner
+        );
+        // Member, revoked/suspended owner and unknown devices are false in SecurityStore.
+        for result in [Some(Ok(false)), Some(Err("store error")), None] {
+            assert_eq!(
+                PairedReader::from_owner_result(result),
+                PairedReader::Member
+            );
+        }
+        assert_eq!(
+            PairedReader::for_device(None, "owner"),
+            PairedReader::Member
+        );
+    }
+
+    #[test]
+    fn active_owner_is_the_only_device_role_with_a_personal_reader() {
+        use crate::security_store::{install_security_store, test_guard, SecurityStore};
+        let _guard = test_guard();
+        let store = SecurityStore::in_memory().unwrap();
+        for device in ["owner", "suspended", "revoked"] {
+            let challenge = store.issue_challenge("tenant", 100, 60).unwrap();
+            let invitation = store
+                .create_owner_invitation("tenant", "local-trust-root", 100, 60)
+                .unwrap();
+            store
+                .register_owner_device(
+                    "tenant",
+                    &invitation,
+                    &challenge.id,
+                    &challenge.nonce,
+                    device,
+                    device,
+                    "pem",
+                    &format!("thumb-{device}"),
+                    101,
+                )
+                .unwrap();
+        }
+        let challenge = store.issue_challenge("tenant", 100, 60).unwrap();
+        let enrollment = store
+            .create_worker_enrollment("tenant", "local-trust-root", 100, 60)
+            .unwrap();
+        store
+            .register_worker_device(
+                "tenant",
+                &enrollment,
+                &challenge.id,
+                &challenge.nonce,
+                "member",
+                "Member",
+                "pem",
+                "thumb-member",
+                101,
+            )
+            .unwrap();
+        store
+            .suspend_device("tenant", "local-trust-root", "suspended", true, 110)
+            .unwrap();
+        store
+            .revoke_device("tenant", "local-trust-root", "revoked", true, 110)
+            .unwrap();
+        install_security_store(Some(store));
+        assert_eq!(
+            PairedReader::for_device(Some("tenant"), "owner"),
+            PairedReader::Owner
+        );
+        for device in ["member", "suspended", "revoked", "unknown"] {
+            assert_eq!(
+                PairedReader::for_device(Some("tenant"), device),
+                PairedReader::Member
+            );
+        }
+        assert_eq!(
+            PairedReader::for_device(None, "owner"),
+            PairedReader::Member
+        );
+        assert_eq!(
+            PairedReader::for_device(Some("another"), "owner"),
+            PairedReader::Member
+        );
+        install_security_store(None);
+        assert_eq!(
+            PairedReader::for_device(Some("tenant"), "owner"),
+            PairedReader::Member
+        );
+    }
+
+    #[test]
+    fn every_paired_bridge_payload_overwrites_client_role() {
+        struct Recorder(parking_lot::Mutex<Vec<(String, Value)>>);
+        impl BridgeTransport for Recorder {
+            fn emit(&self, channel: &str, payload: Value) -> Result<(), String> {
+                self.0.lock().push((channel.into(), payload));
+                Ok(())
+            }
+            fn kind(&self) -> &'static str {
+                "recording"
+            }
+        }
+        let recorder = Arc::new(Recorder(parking_lot::Mutex::new(Vec::new())));
+        let transport = PairedReaderTransport::bind(recorder.clone(), PairedReader::Member);
+        for channel in [
+            "sync-pull",
+            "session-list",
+            "message-get-by-session",
+            "session-timeline",
+            "session-turn-messages",
+            "message-update",
+            "message-delete",
+            "session-media",
+        ] {
+            transport
+                .emit(
+                    channel,
+                    json!({"pairedReader": "owner", "paired_reader": "owner"}),
+                )
+                .unwrap();
+        }
+        assert_eq!(transport.kind(), "recording");
+        assert!(transport.reserve_request().is_ok());
+        for (_, payload) in recorder.0.lock().iter() {
+            assert_eq!(payload["pairedReader"], "member");
+            assert!(payload.get("paired_reader").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn paired_data_plane_arms_emit_the_bound_role() {
+        struct Responder {
+            bridge: Arc<DesktopMessagesBridge>,
+            frames: parking_lot::Mutex<Vec<Value>>,
+        }
+        impl BridgeTransport for Responder {
+            fn emit(&self, _channel: &str, payload: Value) -> Result<(), String> {
+                self.frames.lock().push(payload.clone());
+                self.bridge
+                    .resolve(crate::desktop_messages_bridge::MessageBridgeResponse {
+                        request_id: payload["requestId"].as_str().unwrap().into(),
+                        result: Some(json!({})),
+                        error: None,
+                    });
+                Ok(())
+            }
+            fn kind(&self) -> &'static str {
+                "responding"
+            }
+        }
+        for reader in [PairedReader::Owner, PairedReader::Member] {
+            let bridge = DesktopMessagesBridge::new();
+            let responder = Arc::new(Responder {
+                bridge: bridge.clone(),
+                frames: parking_lot::Mutex::new(Vec::new()),
+            });
+            let plane = DataPlane::Bridge {
+                bridge,
+                transport: responder.clone(),
+            }
+            .for_paired_reader(reader)
+            .unwrap();
+            plane.list_sessions(10, 0, None).await.unwrap();
+            plane
+                .get_messages_by_session("s".into(), None, None)
+                .await
+                .unwrap();
+            plane
+                .session_timeline("s".into(), None, None, None)
+                .await
+                .unwrap();
+            plane
+                .session_turn_messages("s".into(), "turn:m".into(), 1, 1, None, None)
+                .await
+                .unwrap();
+            plane
+                .update_message("s".into(), "m".into(), json!({"pairedReader":"owner"}))
+                .await
+                .unwrap();
+            plane.delete_message("s".into(), "m".into()).await.unwrap();
+            let frames = responder.frames.lock();
+            assert_eq!(frames.len(), 6);
+            for frame in frames.iter() {
+                assert_eq!(frame["pairedReader"], reader.as_str());
+            }
+        }
+    }
+
+    #[test]
+    fn direct_member_read_refuses_before_store_access() {
+        let store = SqliteAppStore::in_memory().unwrap();
+        assert!(
+            matches!(DataPlane::Direct(store.clone()).for_paired_reader(PairedReader::Member), Err(code) if code == "personal_visibility_unavailable")
+        );
+        assert!(DataPlane::Direct(store)
+            .for_paired_reader(PairedReader::Owner)
+            .is_ok());
+    }
 
     fn test_state() -> SharedState {
         use crate::{

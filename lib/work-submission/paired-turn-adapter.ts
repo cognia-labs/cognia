@@ -18,7 +18,7 @@
  *
  * ## What is deliberately not stored
  *
- * The turn's `SendOptions` are never frozen into an execution-context bundle
+ * The turn's `SendOptions` travel transiently for Host history preparation and are never frozen into an execution-context bundle
  * (`bindWorkExecutionContext`): they may carry `providerCredentials`, and a
  * credential must not land in the Host's durable store. The cost is honest — a
  * Host that dies mid-turn cannot re-dispatch it, and recovery settles it as
@@ -29,7 +29,7 @@
  */
 
 import type { UIMessage } from "ai"
-import type { SendContent } from "@cognia/agent-config-types"
+import type { ChatSession, SendContent, SendOptions } from "@cognia/agent-config-types"
 
 import { claimWorkSubmission } from "@/lib/db/work-submissions"
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
@@ -56,14 +56,27 @@ export function isPairedTurnCommand(command: string): command is PairedTurnComma
 export const PAIRED_TURN_LEASE_OWNER = "paired-turn"
 
 export type PairedTurnAdmission =
-  | { admitted: true; submissionId: string }
+  | { admitted: true; submissionId: string; options: SendOptions }
   /** No runtime target on this Host: work submissions are off, as for local chat. */
   | { admitted: false; untracked: true }
   /** The Host will not run this turn; the server answers the client with `code`. */
   | { admitted: false; refusal: { code: string; message: string } }
 
 export interface PairedTurnAdapterDeps extends WorkSubmissionServiceDeps {
-  getSession?: (sessionId: string) => Promise<{ id: string; handoffLock?: unknown } | undefined>
+  getSession?: (
+    sessionId: string
+  ) => Promise<
+    | Pick<
+        ChatSession,
+        | "id"
+        | "handoffLock"
+        | "sdkSessionId"
+        | "externalAgentSession"
+        | "externalAgentGatewaySessions"
+        | "activeBranchByGroup"
+      >
+    | undefined
+  >
   getMessage?: (messageId: string) => Promise<{ sessionId: string } | undefined>
   commitUserMessage?: (sessionId: string, message: UIMessage) => Promise<void>
   startHeartbeat?: (submissionId: string) => () => void
@@ -100,7 +113,10 @@ export async function admitPairedChatTurn(
   const messageId = stringField(payload, "messageId") ?? `${runId}:user`
 
   const active = getActiveRuntimeTargetContext()
-  if (!active) return { admitted: false, untracked: true }
+  if (!active)
+    return payload.pairedReader === "owner"
+      ? { admitted: false, untracked: true }
+      : refusal("personal_visibility_changed", "A member turn requires Host admission.")
   // The server binds the caller's account from its own session, overwriting
   // anything the client sent; a mismatch is a pairing for another account.
   if (stringField(payload, "callerAccountId") !== active.accountId) {
@@ -130,6 +146,20 @@ export async function admitPairedChatTurn(
   if (existing && existing.sessionId !== sessionId) {
     return refusal("host_state_message_id_exists", "The message id already exists.")
   }
+  if (existing) {
+    const canonical = await getDb().messages.get(messageId)
+    if (canonical) {
+      const { assertPairedMessageMutation, PairedMessageConflictError } =
+        await import("@/lib/companion/desktop-message-source")
+      try {
+        await assertPairedMessageMutation(canonical, payload.pairedReader, prompt)
+      } catch (error) {
+        if (error instanceof PairedMessageConflictError)
+          return refusal(error.code, "The referenced message is not writable by this reader.")
+        throw error
+      }
+    }
+  }
   const commit =
     deps.commitUserMessage ??
     (async (id: string, message: UIMessage) => {
@@ -145,7 +175,9 @@ export async function admitPairedChatTurn(
     const authorityModule = await import("@/lib/execution/acting-authority")
     await acceptWorkSubmission(
       {
-        localAuthorization: authorityModule.LOCAL_PERSON_RUN,
+        ...(payload.pairedReader === "owner"
+          ? { localAuthorization: authorityModule.LOCAL_PERSON_RUN }
+          : {}),
         intent: {
           contractVersion: 1,
           idempotencyKey: `paired:${sessionId}:${runId}`,
@@ -183,8 +215,97 @@ export async function admitPairedChatTurn(
         onError: (error) => console.error("paired turn lease renewal failed", error),
       }))
   )(submissionId)
-  await markWorkSubmissionStarted(submissionId, now)
-  return { admitted: true, submissionId }
+  try {
+    const options = { ...((payload.options ?? {}) as SendOptions) }
+    // Client history and visibility assertions are never Host authority.
+    for (const key of [
+      "personalVisibilityDigest",
+      "personalContextReadersDigest",
+      "personalVisibilityHasWithheld",
+      "initialConversation",
+      "priorMessages",
+      "history",
+      "runtimeHistory",
+      "pairedReader",
+    ]) {
+      delete (options as Record<string, unknown>)[key]
+    }
+    const externalRoute = [
+      session.externalAgentSession,
+      ...(session.externalAgentGatewaySessions ?? []),
+    ].find(
+      (link) => options.resumeSessionId !== undefined && link?.sessionId === options.resumeSessionId
+    )
+    if (payload.pairedReader !== "owner") {
+      // A client cannot borrow an unrelated opaque engine's retained memory.
+      if (options.resumeSessionId !== session.sdkSessionId && !externalRoute)
+        options.resumeSessionId = undefined
+      options.forkFromSessionId = undefined
+    }
+    options.turnId = runId
+    const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+    bindToolCallRun(sessionId, runId, runId, options.execution?.identity?.attemptId, {
+      builtinRuntime: true,
+    })
+    const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/claude-chat-send-options")
+    const { withTranscriptRuntimeLock } = await import("@/lib/chat/transcript/revision-events")
+    const prepared = await withTranscriptRuntimeLock(sessionId, async () => {
+      if (externalRoute) {
+        const { listMessages } = await import("@/lib/db/messages")
+        const { selectVisibleMessages } = await import("@/stores/chat")
+        const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
+        const history = await preparePersonalHistory(
+          sessionId,
+          selectVisibleMessages(await listMessages(sessionId), session.activeBranchByGroup ?? {}),
+          { executionRunId: runId }
+        )
+        if (
+          history.withheldMessageIds.length &&
+          externalRoute.personalVisibilityDigest !== history.visibilityDigest
+        ) {
+          // agent_send owns the builtin sidecar, not the external manager's
+          // route reconstruction. It cannot safely rebuild this opaque engine.
+          throw new Error("personal_visibility_changed")
+        }
+        const current = await getDb().sessions.get(sessionId)
+        if (!current) throw new Error("session_not_found")
+        const stamp = <T extends { sessionId: string; personalVisibilityDigest?: string }>(
+          link: T
+        ): T =>
+          link.sessionId === externalRoute.sessionId
+            ? { ...link, personalVisibilityDigest: history.visibilityDigest }
+            : link
+        await getDb().sessions.update(sessionId, {
+          ...(current.externalAgentSession
+            ? { externalAgentSession: stamp(current.externalAgentSession) }
+            : {}),
+          ...(current.externalAgentGatewaySessions
+            ? { externalAgentGatewaySessions: current.externalAgentGatewaySessions.map(stamp) }
+            : {}),
+        })
+        return {
+          ...options,
+          personalVisibilityDigest: history.visibilityDigest,
+          personalVisibilityHasWithheld: history.withheldMessageIds.length > 0,
+        }
+      }
+      return prepareTranscriptRuntimeSend(sessionId, options, {
+        executionRunId: runId,
+        currentMessageId: messageId,
+      })
+    })
+    await markWorkSubmissionStarted(submissionId, now)
+    return { admitted: true, submissionId, options: prepared }
+  } catch (error) {
+    await settleWorkSubmission(
+      { submissionId, outcome: "failed", errorCode: "personal_visibility_changed" },
+      deps
+    )
+    return refusal(
+      "personal_visibility_changed",
+      error instanceof Error ? error.message : "Host history preparation failed."
+    )
+  }
 }
 
 /**

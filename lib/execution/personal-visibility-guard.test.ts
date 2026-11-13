@@ -173,8 +173,8 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/collab/shared-reference-scan.ts": "stored-message-read:2",
   "lib/collab/shared-room-catch-up.ts": "complete:1;prepareOwnerHistory:1",
   "lib/collab/shared-run-coordinator.ts": "listMessages:1",
-  "lib/companion/desktop-message-source.ts": "preparePairedOwnerHistory:3;stored-message-read:7",
-  "lib/companion/desktop-write-source.ts": "resume:externalSessionId:3",
+  "lib/companion/desktop-message-source.ts": "preparePairedHistory:5;stored-message-read:8",
+  "lib/companion/desktop-write-source.ts": "resume:externalSessionId:3;stored-message-read:1",
   "lib/connectors/adapters/lark/run-presentation/driver.ts": "complete:1",
   "lib/connectors/automation-control.ts": "complete:1",
   "lib/connectors/bus.ts": "stored-message-read:8",
@@ -202,7 +202,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/execution/personal-disclosure.ts": "stored-message-read:2",
   "lib/connectors/personal-disclosure.ts": "stored-message-read:1",
   "lib/execution/personal-visibility.ts":
-    "prepareOwnerDerivedHistory:1;prepareOwnerHistory:2;preparePairedOwnerHistory:1;preparePersonalHistory:1;resume:forkedFromSdkSessionId:1;resume:sdkSessionId:1;stored-message-read:2;withholdForReaders:2",
+    "prepareOwnerDerivedHistory:1;prepareOwnerHistory:2;preparePairedHistory:1;preparePersonalHistory:1;resume:forkedFromSdkSessionId:1;resume:sdkSessionId:1;stored-message-read:2;withholdForReaders:2",
   "lib/execution/promote-to-pane.ts": "listMessages:1",
   "lib/execution/run-retrospective.ts": "complete:1",
   "lib/execution/steer.ts": "steerSession:1",
@@ -297,7 +297,7 @@ const REVIEWED_SITES: Record<string, string> = {
     "preparePersonalHistory:1;withPersonalRerankerVisibility:1",
   "lib/squads/workflow-nodes/index.ts": "readDependencyResultsForRun:1;visibleTeamDerivedText:1",
   "lib/squads/workflow-nodes/team-ops.ts": "preparePersonalDerivedHistory:1",
-  "lib/sync/desktop-sync-source.ts": "preparePairedOwnerHistory:3;stored-message-read:6",
+  "lib/sync/desktop-sync-source.ts": "preparePairedHistory:3;stored-message-read:6",
   "lib/sync/handlers/messages.ts": "stored-message-read:1",
   "lib/sync/host-state-service.ts": "listMessages:1;prepareOwnerHistory:1;stored-message-read:6",
   "lib/sync/host-state-store.ts": "stored-message-read:4",
@@ -322,7 +322,8 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/web/web-tools-core.ts": "complete:1",
   "lib/wiki/agents/index-page-agent.ts": "complete:1",
   "lib/wiki/agents/module-article-agent.ts": "complete:1",
-  "lib/work-submission/paired-turn-adapter.ts": "stored-message-read:1",
+  "lib/work-submission/paired-turn-adapter.ts":
+    "listMessages:1;preparePersonalHistory:1;resume:forkFromSessionId:1;resume:resumeSessionId:4;resume:sdkSessionId:1;stored-message-read:2",
   "lib/workflow/nodes/actions/memory-recall.ts": "withPersonalMemoryVisibility:1",
   "lib/workflow/nodes/ai/ai-prompt-routed.ts": "complete:3",
   "lib/workflow/nodes/ai/ai-prompt-v2.ts": "complete:1",
@@ -394,7 +395,7 @@ const HISTORY_CALLS = new Set([
   "preparePersonalDerivedHistory",
   "prepareOwnerHistory",
   "prepareOwnerDerivedHistory",
-  "preparePairedOwnerHistory",
+  "preparePairedHistory",
   "withholdForReaders",
   "prepareCliPersonalHistory",
   "prepareCliPersonalMessages",
@@ -541,19 +542,19 @@ it("detects new paths, aliases, table aliases and retained-memory assignments", 
   expect(contextSites("streamText({messages: stored})")).toBe("streamText:1")
 })
 
-it("keeps the explicit interim owner helper as the only paired history entry", () => {
+it("keeps the Host-set paired reader helper as the only paired history entry", () => {
   for (const file of [
     "lib/sync/desktop-sync-source.ts",
     "lib/companion/desktop-message-source.ts",
   ]) {
     const source = readFileSync(join(ROOT, file), "utf8")
-    expect(source).toContain("preparePairedOwnerHistory")
+    expect(source).toContain("preparePairedHistory")
     expect(source).not.toMatch(/\bprepare(?:Personal|Owner)(?:Derived)?History\s*\(/)
     expect(source).toContain("projectPersonalSessionHistory")
   }
   const host = readFileSync(join(ROOT, "lib/execution/personal-visibility.ts"), "utf8")
-  expect(host).toContain("SecurityStore::is_owner_device(tenant, device)")
-  expect(host).toContain("return prepareOwnerHistory(messages)")
+  expect(host).toContain('reader === "owner"')
+  expect(host).toContain("preparePluginHistory(undefined, messages)")
 })
 
 function digestComparisonCount(text: string): number {
@@ -841,9 +842,9 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "preparePersonalHistory",
     "preparePersonalDerivedHistory",
   ],
-  "lib/sync/desktop-sync-source.ts": ["preparePairedOwnerHistory", "projectPersonalSessionHistory"],
+  "lib/sync/desktop-sync-source.ts": ["preparePairedHistory", "projectPersonalSessionHistory"],
   "lib/companion/desktop-message-source.ts": [
-    "preparePairedOwnerHistory",
+    "preparePairedHistory",
     "projectPersonalSessionHistory",
   ],
 }
@@ -857,5 +858,36 @@ it("pins the shared filter and digest comparison at every reviewed model boundar
         anchor,
         present: true,
       })
+  }
+})
+
+it("binds every native paired data arm to a fail-closed Host reader and preserves partition policy", () => {
+  const dispatch = readFileSync(
+    join(ROOT, "crates/cognia-companion-rpc/src/rpc/data_sync.rs"),
+    "utf8"
+  )
+  expect(dispatch).toContain("PairedReader::for_device(tenant_id, device_id)")
+  expect(dispatch.match(/for_paired_reader\(paired_reader\)/g)).toHaveLength(8)
+  expect(dispatch).toContain("PairedReaderTransport::bind(transport, paired_reader)")
+  expect(dispatch).toContain('name == "host_state_submit"')
+  const plane = readFileSync(join(ROOT, "crates/cognia-companion/src/data_plane.rs"), "utf8")
+  expect(plane).toContain("store.is_owner_device(tenant, device)")
+  expect(plane).toContain('map.insert("pairedReader".into()')
+  expect(plane).toContain("personal_visibility_unavailable")
+  for (const file of [
+    "crates/cognia-companion/src/session_media.rs",
+    "crates/cognia-companion/src/signaling/dispatch.rs",
+  ]) {
+    const media = readFileSync(join(ROOT, file), "utf8")
+    expect(media).toContain("for_paired_reader(reader)")
+    expect(media).toContain("personal_visibility_unavailable")
+  }
+  for (const file of [
+    "lib/headless/runtimes/desktop-message-source.ts",
+    "lib/headless/runtimes/desktop-sync-source.ts",
+  ]) {
+    expect(readFileSync(join(ROOT, file), "utf8")).toContain(
+      'partition: ctx.host === "person-brain"'
+    )
   }
 })
