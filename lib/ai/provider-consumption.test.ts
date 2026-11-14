@@ -1495,3 +1495,101 @@ it.each(["first-eligible", "ordered"] as const)(
     expect(result.attemptedProviderIds).toEqual(["missing-legacy"])
   }
 )
+
+describe("keyless endpoints with the actual OpenAI SDK", () => {
+  const resolveOllama = (baseURL?: string) => {
+    const resolution = resolveFeatureProvider(
+      {
+        featureId: "keyless-local",
+        routeProfile: "general-text",
+        selectionMode: "explicit-provider",
+        providerId: "ollama",
+        fallbackMode: "none",
+      },
+      {
+        defaultProvider: "ollama",
+        providers: {
+          ollama: { enabled: true, defaultModel: "llama", ...(baseURL ? { baseURL } : {}) },
+        },
+        customProviders: [],
+      }
+    )
+    if (resolution.kind !== "resolved") throw new Error("ollama did not resolve")
+    return resolution
+  }
+
+  async function capture(resolution: ResolvedProvider) {
+    const actual = jest.requireActual<typeof import("@ai-sdk/openai")>("@ai-sdk/openai")
+    jest.mocked(createOpenAI).mockImplementationOnce(actual.createOpenAI)
+    const stopped = new Error("captured")
+    const transport = jest.fn<
+      ReturnType<typeof globalThis.fetch>,
+      Parameters<typeof globalThis.fetch>
+    >(() => Promise.reject(stopped))
+    const model = createFeatureProviderModel(resolution, { fetch: transport }) as LanguageModelV4
+    await expect(
+      model.doGenerate({
+        prompt: [{ role: "user", content: [{ type: "text", text: "Synthetic" }] }],
+        maxOutputTokens: 8,
+      })
+    ).rejects.toThrow(stopped.message)
+    const [input, init] = transport.mock.calls[0]
+    return { url: String(input), headers: new Headers(init?.headers) }
+  }
+
+  const ORIGINAL_ENV = process.env.OPENAI_API_KEY
+  afterEach(() => {
+    if (ORIGINAL_ENV === undefined) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = ORIGINAL_ENV
+  })
+
+  it("dispatches without OPENAI_API_KEY and sends no Authorization header", async () => {
+    delete process.env.OPENAI_API_KEY
+    const { url, headers } = await capture(resolveOllama())
+    expect(url).toBe("http://localhost:11434/v1/chat/completions")
+    expect(headers.has("authorization")).toBe(false)
+  })
+
+  it("never forwards an ambient OPENAI_API_KEY to a local engine", async () => {
+    process.env.OPENAI_API_KEY = "sk-synthetic-ambient"
+    const { headers } = await capture(resolveOllama())
+    expect(headers.has("authorization")).toBe(false)
+  })
+
+  it("gives an explicit engine root the same /v1 surface as the default", async () => {
+    delete process.env.OPENAI_API_KEY
+    expect(resolveOllama("http://engine:11434").baseURL).toBe("http://engine:11434/v1")
+    expect(resolveOllama("http://engine:11434/").baseURL).toBe("http://engine:11434/v1")
+    // A URL that names a path is the user's choice.
+    expect(resolveOllama("http://proxy:8080/ollama").baseURL).toBe("http://proxy:8080/ollama")
+    const { url } = await capture(resolveOllama("http://engine:11434"))
+    expect(url).toBe("http://engine:11434/v1/chat/completions")
+  })
+})
+
+describe("resolveFeatureProvider — key pools", () => {
+  it("uses the pool's active key when the row has no single key", () => {
+    const resolution = resolveFeatureProvider(
+      {
+        featureId: "pool",
+        routeProfile: "general-text",
+        selectionMode: "explicit-provider",
+        providerId: "openai",
+        fallbackMode: "none",
+      },
+      {
+        defaultProvider: "openai",
+        providers: {
+          openai: {
+            enabled: true,
+            defaultModel: "gpt",
+            apiKeys: ["sk-pool-a", "sk-pool-b"],
+            currentKeyIndex: 1,
+          } as never,
+        },
+        customProviders: [],
+      }
+    )
+    expect((resolution as ResolvedProvider).apiKey).toBe("sk-pool-b")
+  })
+})

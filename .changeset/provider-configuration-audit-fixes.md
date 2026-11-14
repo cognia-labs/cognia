@@ -1,0 +1,5 @@
+---
+"cognia-next": patch
+---
+
+Provider configuration now behaves the same on every path. Exports and backups without API keys leave out every credential, including key pools, OAuth refresh tokens, Bedrock secrets, OpenRouter BYOK keys, CLIProxyAPI management keys and auth headers. Verification fingerprints no longer store a copy of the key. Keyless local engines work without an `OPENAI_API_KEY`, and an ambient `OPENAI_API_KEY` is never sent to them. A local engine root URL gets the same `/v1` path as the default. Custom providers on this machine or the LAN, or behind an auth header, can stay keyless. Connection tests use the gateway, headers, protocol and model you configured. Changing the endpoint marks a verified provider stale. Model lists follow the endpoint they came from. Title and label generation use the same provider settings as chat. The gateway keeps Google and Anthropic authentication intact. Headless external agents can pick Gemini models. A desktop driving a remote Host no longer fills that Host's requests with keys sealed on the desktop.

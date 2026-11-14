@@ -27,7 +27,9 @@ export interface UseConnectionTestResult {
     baseURL: string,
     apiKey: string,
     protocol: ApiProtocol,
-    model?: string
+    model?: string,
+    /** The static headers being edited; the probe must send what the chat sends. */
+    customHeaders?: Record<string, string>
   ) => Promise<ApiTestResult>
   /** Clear the last result — call on any field edit so a stale badge doesn't linger. */
   reset: () => void
@@ -38,10 +40,22 @@ export function useConnectionTest(): UseConnectionTestResult {
   const [result, setResult] = useState<ApiTestResult | null>(null)
 
   const test = useCallback(
-    async (baseURL: string, apiKey: string, protocol: ApiProtocol, model?: string) => {
+    async (
+      baseURL: string,
+      apiKey: string,
+      protocol: ApiProtocol,
+      model?: string,
+      customHeaders?: Record<string, string>
+    ) => {
       setTesting(true)
       setResult(null)
-      const r = await testCustomProviderConnectionByProtocol(baseURL, apiKey, protocol, model)
+      const r = await testCustomProviderConnectionByProtocol(
+        baseURL,
+        apiKey,
+        protocol,
+        model,
+        customHeaders && Object.keys(customHeaders).length > 0 ? customHeaders : undefined
+      )
       setResult(r)
       setTesting(false)
       return r

@@ -86,7 +86,7 @@ import {
   importProfiles as validateProfilesImport,
   PROFILE_STORE_SCHEMA_VERSION,
 } from "@cognia/provider-types"
-import { deepStripSecrets } from "@/lib/settings/profile-transfer"
+import { stripSettingsRowSecrets } from "@/lib/settings/profile-transfer"
 import type {
   RetrievalEncryptedContentRow,
   RetrievalProfileRow,
@@ -358,7 +358,7 @@ export async function applyBackupPackage(
         const incoming = (
           opts.includeApiKey
             ? { ...env.settings, id: "singleton" }
-            : { ...(deepStripSecrets(env.settings) as AppSettings), id: "singleton" }
+            : { ...(stripSettingsRowSecrets(env.settings) as AppSettings), id: "singleton" }
         ) as AppSettings
         if (!existing) {
           await db.settings.put(incoming)

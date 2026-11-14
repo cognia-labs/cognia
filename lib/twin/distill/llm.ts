@@ -19,10 +19,12 @@ import { generateText, streamText, type LanguageModel } from "ai"
 import type { ApiFlavor, ProviderName } from "@cognia/provider-types/provider"
 import { getBuiltInProviderDefaultBaseURL } from "@cognia/provider-types/built-in-provider-catalog"
 import {
+  anthropicSdkBaseURL,
   normalizeProtocol,
   resolveProviderProtocol,
   decideOpenAiEndpointFlavor,
 } from "@cognia/provider-types/provider-protocol"
+import { keylessSdkCredential } from "@cognia/provider-types/keyless-credentials"
 import {
   resolvePerplexityEndpoint,
   withPerplexityAgentFetch,
@@ -179,9 +181,22 @@ export interface LlmClient {
  * `provider: "openai"` and pass `baseURL`.
  */
 export interface LlmConfig {
-  provider: ProviderName | "openai" | "google" | "mistral" | "cohere"
+  /**
+   * The provider identity. A built-in id (`commandcode`, `deepseek`, `ollama`,
+   * …) keeps the per-provider decisions the main chat client makes (protocol
+   * by model family, Responses-vs-Chat, catalog base URL). Older call sites
+   * pass a bare protocol family here, which still works.
+   */
+  provider: ProviderName | "openai" | "google" | "mistral" | "cohere" | (string & {})
+  /**
+   * Wire protocol the resolver chose. Required for custom provider ids, whose
+   * protocol cannot be inferred from the id; omitted, it is derived from
+   * `provider` (and the model, for providers that route by model family).
+   */
+  protocol?: string
   model: string
-  apiKey: string
+  /** Absent for a keyless endpoint (local engine, unauthenticated gateway). */
+  apiKey?: string
   baseURL?: string
   /** Extra provider headers, e.g. Codex ChatGPT-login account/originator headers. */
   headers?: Record<string, string>
@@ -196,27 +211,55 @@ export type AnthropicLlmConfig = LlmConfig
 
 function buildProviderSettings(
   config: LlmConfig,
+  sdk: string,
   // Catalog `defaultBaseURL`s are OpenAI-compat endpoints (e.g. Cohere's
   // `/compatibility/v1`); they must never reach a native @ai-sdk/* client,
   // so only the OpenAI-family branches opt into the catalog fallback.
-  opts?: { catalogBaseURLFallback?: boolean }
+  opts?: {
+    catalogBaseURLFallback?: boolean
+    /** Rewrite the base URL into the form the SDK expects (Anthropic `/v1`). */
+    normalizeBaseURL?: (baseURL: string | undefined) => string | undefined
+    fetch?: typeof globalThis.fetch
+  }
 ): {
   apiKey?: string
   baseURL?: string
   headers?: Record<string, string>
   fetch: typeof globalThis.fetch
 } {
-  const baseURL =
+  const configured =
     config.baseURL ??
     (opts?.catalogBaseURLFallback
       ? getBuiltInProviderDefaultBaseURL(config.provider as string)
       : undefined)
-  return {
+  const baseURL = opts?.normalizeBaseURL ? opts.normalizeBaseURL(configured) : configured
+  // Same keyless rule as the main chat clients: a key-less endpoint gets a
+  // stripped placeholder rather than the SDK's ambient `*_API_KEY` fallback.
+  const credential = keylessSdkCredential({
+    sdk,
     apiKey: config.apiKey,
-    fetch: platformStreamingFetch,
+    baseURL,
+    fetch: opts?.fetch ?? platformStreamingFetch,
+  })
+  return {
+    ...(credential.apiKey !== undefined ? { apiKey: credential.apiKey } : {}),
+    fetch: credential.fetch ?? opts?.fetch ?? platformStreamingFetch,
     ...(baseURL ? { baseURL } : {}),
     ...(config.headers ? { headers: config.headers } : {}),
   }
+}
+
+/** Protocol for a config: explicit, then by provider (and model), then the id itself. */
+function protocolOfConfig(config: LlmConfig): string {
+  const providerId = config.provider as string
+  // CommandCode serves Claude models on the Anthropic wire and the rest on
+  // OpenAI; the model decides, whatever a caller passed as `protocol`.
+  if (providerId === "commandcode") {
+    return normalizeProtocol(resolveProviderProtocol(providerId, config.model) ?? "openai")
+  }
+  return normalizeProtocol(
+    config.protocol ?? resolveProviderProtocol(providerId, config.model) ?? providerId
+  )
 }
 
 function selectOpenAiFamilyModel(
@@ -245,12 +288,19 @@ function selectOpenAiFamilyModel(
 
 async function buildLanguageModel(config: LlmConfig): Promise<LanguageModel> {
   const providerId = config.provider as string
-  const protocol = normalizeProtocol(resolveProviderProtocol(providerId) ?? providerId)
+  const protocol = protocolOfConfig(config)
 
   switch (protocol) {
     case "anthropic": {
       const { createAnthropic } = await import("@ai-sdk/anthropic")
-      const client = createAnthropic(buildProviderSettings(config))
+      // Settings carry a relay ROOT (Claude Code's ANTHROPIC_BASE_URL form);
+      // the SDK wants the versioned base, exactly as the main chat applies.
+      const client = createAnthropic(
+        buildProviderSettings(config, "anthropic", {
+          catalogBaseURLFallback: providerId === "commandcode",
+          normalizeBaseURL: anthropicSdkBaseURL,
+        })
+      )
       return client(config.model)
     }
     case "openai": {
@@ -262,37 +312,42 @@ async function buildLanguageModel(config: LlmConfig): Promise<LanguageModel> {
           apiFlavor: config.apiFlavor,
         })
         const client = createOpenAI({
-          ...buildProviderSettings(config),
+          ...buildProviderSettings(
+            { ...config, baseURL: endpoint.baseURL },
+            "perplexity",
+            endpoint.flavor === "responses"
+              ? { fetch: withPerplexityAgentFetch(platformStreamingFetch) }
+              : undefined
+          ),
           baseURL: endpoint.baseURL,
-          ...(endpoint.flavor === "responses"
-            ? { fetch: withPerplexityAgentFetch(platformStreamingFetch) }
-            : {}),
         })
         return endpoint.flavor === "responses"
           ? client.responses(config.model)
           : client.chat(config.model)
       }
-      const client = createOpenAI(buildProviderSettings(config, { catalogBaseURLFallback: true }))
+      const client = createOpenAI(
+        buildProviderSettings(config, "openai", { catalogBaseURLFallback: true })
+      )
       return selectOpenAiFamilyModel(client, config, providerId)
     }
     case "azure": {
       const { createAzure } = await import("@ai-sdk/azure")
-      const client = createAzure(buildProviderSettings(config))
+      const client = createAzure(buildProviderSettings(config, "azure"))
       return selectOpenAiFamilyModel(client, config, "azure")
     }
     case "google": {
       const { createGoogle } = await import("@ai-sdk/google")
-      const client = createGoogle(buildProviderSettings(config))
+      const client = createGoogle(buildProviderSettings(config, "google"))
       return client(config.model)
     }
     case "mistral": {
       const { createMistral } = await import("@ai-sdk/mistral")
-      const client = createMistral(buildProviderSettings(config))
+      const client = createMistral(buildProviderSettings(config, "mistral"))
       return client(config.model)
     }
     case "cohere": {
       const { createCohere } = await import("@ai-sdk/cohere")
-      const client = createCohere(buildProviderSettings(config))
+      const client = createCohere(buildProviderSettings(config, "cohere"))
       return client(config.model)
     }
     default:

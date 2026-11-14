@@ -157,9 +157,11 @@ describe("models.list", () => {
       provider: resolved("ollama", "openai", { baseURL: "http://localhost:11434" }),
       settings,
     })
+    // The listing authenticates exactly like the resolved provider.
     expect(discovery.discoverLocalProviderModels).toHaveBeenCalledWith(
       "ollama",
-      "http://localhost:11434"
+      "http://localhost:11434",
+      { apiKey: "k", customHeaders: undefined }
     )
 
     featureCall.discoverBedrockModelsViaSidecar.mockResolvedValueOnce([

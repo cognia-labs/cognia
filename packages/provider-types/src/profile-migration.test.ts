@@ -220,3 +220,67 @@ describe("export / import round-trip", () => {
     expect(importProfiles("{}").ok).toBe(false)
   })
 })
+
+describe("deriveProfiles — effective protocol and authentication", () => {
+  const transportOf = (input: DeriveProfilesInput, deploymentId: string) => {
+    const derived = deriveProfiles(input)
+    const deployment = derived.deploymentProfiles.find((entry) => entry.id === deploymentId)
+    return derived.transportProfiles.find((entry) => entry.id === deployment?.transportProfileRef)
+  }
+
+  it("authenticates Google with x-goog-api-key, as the gateway's own default does", () => {
+    const transport = transportOf(
+      { catalog, providerSettings: { google: { providerId: "google", enabled: true } } },
+      "google"
+    )
+    expect(transport?.auth).toEqual({ scheme: "custom-header", name: "x-goog-api-key" })
+  })
+
+  it("honours a built-in row's apiProtocol override over the catalog", () => {
+    const transport = transportOf(
+      {
+        catalog,
+        providerSettings: {
+          openrouter: { providerId: "openrouter", enabled: true, apiProtocol: "anthropic" },
+        },
+      },
+      "openrouter"
+    )
+    expect(transport).toMatchObject({ protocol: "anthropic", auth: { scheme: "x-api-key" } })
+  })
+
+  it("reads a custom row's protocol from apiProtocol, the field settings write", () => {
+    const transport = transportOf(
+      {
+        catalog,
+        customProviders: [
+          { id: "custom-a", apiProtocol: "anthropic", baseURL: "https://relay.example" },
+        ],
+      },
+      "custom-a"
+    )
+    expect(transport).toMatchObject({ protocol: "anthropic", auth: { scheme: "x-api-key" } })
+  })
+
+  it("reads the canonical customName/customModels over stale aliases", () => {
+    const derived = deriveProfiles({
+      catalog,
+      customProviders: [
+        {
+          id: "custom-a",
+          customName: "Renamed",
+          name: "Old name",
+          customModels: ["new-model"],
+          models: ["old-model"],
+          baseURL: "https://relay.example",
+        },
+      ],
+    })
+    expect(derived.providerProfiles.find((entry) => entry.id === "custom-a")?.displayName).toBe(
+      "Renamed"
+    )
+    expect(
+      derived.deploymentProfiles.find((entry) => entry.id === "custom-a")?.models.map((m) => m.id)
+    ).toEqual(["new-model"])
+  })
+})

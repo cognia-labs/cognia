@@ -3171,3 +3171,155 @@ describe("flat field reference stability", () => {
     expect(after.opacity).toBe(0.8)
   })
 })
+
+describe("custom provider writes keep the submitted transport", () => {
+  const draft = {
+    customName: "Gateway",
+    baseURL: "https://gw.example/v1",
+    apiKey: "",
+    apiProtocol: "anthropic" as const,
+    customModels: ["m"],
+  }
+
+  function savedCustomProviders() {
+    const patch = dbSettings.saveSettings.mock.calls.at(-1)?.[0] as Partial<AppSettings>
+    return patch.customProviders ?? []
+  }
+
+  beforeEach(() => {
+    dbSettings.saveSettings.mockImplementation(async (patch) => baseSettings({ ...patch }))
+  })
+
+  it("keeps headers and the Agent SDK opt-in on first creation", async () => {
+    useSettingsStore.setState({ settings: baseSettings({ customProviders: [] }) })
+    await useSettingsStore.getState().addCustomProvider({
+      ...draft,
+      customHeaders: { "x-tenant-id": "acme" },
+      experimentalAgentSdk: true,
+      inferenceDefaults: { temperature: 0.1 },
+    })
+    expect(savedCustomProviders()[0]).toMatchObject({
+      customHeaders: { "x-tenant-id": "acme" },
+      experimentalAgentSdk: true,
+      inferenceDefaults: { temperature: 0.1 },
+    })
+  })
+
+  it("keeps the name/models aliases in step with the edited fields", async () => {
+    useSettingsStore.setState({ settings: baseSettings({ customProviders: [] }) })
+    const id = await useSettingsStore.getState().addCustomProvider(draft)
+    useSettingsStore.setState({
+      settings: baseSettings({ customProviders: savedCustomProviders() }),
+    })
+    await useSettingsStore
+      .getState()
+      .updateCustomProvider(id, { customName: "Renamed", customModels: ["m2"] })
+    expect(savedCustomProviders()[0]).toMatchObject({
+      customName: "Renamed",
+      name: "Renamed",
+      customModels: ["m2"],
+      models: ["m2"],
+    })
+  })
+
+  it("drops a discovered model list when the endpoint changes", async () => {
+    const row = {
+      id: "c",
+      providerId: "c",
+      isCustom: true as const,
+      enabled: true,
+      defaultModel: "m",
+      apiKey: "k",
+      baseURL: "https://old.example/v1",
+      apiProtocol: "openai" as const,
+      customName: "C",
+      name: "C",
+      customModels: ["m"],
+      models: ["m"],
+      discoveredModels: [{ id: "old-engine-model" }],
+      discoveredModelsLastFetched: 1,
+    }
+    useSettingsStore.setState({ settings: baseSettings({ customProviders: [row] }) })
+    await useSettingsStore.getState().updateCustomProvider("c", { baseURL: "https://new/v1" })
+    expect(savedCustomProviders()[0].discoveredModels).toBeUndefined()
+    expect(savedCustomProviders()[0].discoveredModelsLastFetched).toBeUndefined()
+  })
+})
+
+describe("setProviderConfig — discovered model identity", () => {
+  beforeEach(() => {
+    dbSettings.saveSettings.mockImplementation(async (patch) => baseSettings({ ...patch }))
+  })
+
+  const existing = {
+    providerId: "ollama",
+    enabled: true,
+    defaultModel: "llama",
+    baseURL: "http://engine-a:11434",
+    discoveredModels: [{ id: "llama" }],
+    discoveredModelsLastFetched: 5,
+  }
+
+  function savedOllama() {
+    const patch = dbSettings.saveSettings.mock.calls.at(-1)?.[0] as Partial<AppSettings>
+    return patch.providerSettings?.ollama
+  }
+
+  it("drops the list when the endpoint or key changes", async () => {
+    useSettingsStore.setState({
+      settings: baseSettings({ providerSettings: { ollama: existing } }),
+    })
+    await useSettingsStore.getState().setProviderConfig("ollama", { baseURL: "http://engine-b" })
+    expect(savedOllama()?.discoveredModels).toBeUndefined()
+  })
+
+  it("keeps the list across unrelated edits and when the write supplies a new one", async () => {
+    useSettingsStore.setState({
+      settings: baseSettings({ providerSettings: { ollama: existing } }),
+    })
+    await useSettingsStore.getState().setProviderConfig("ollama", { defaultModel: "qwen" })
+    expect(savedOllama()?.discoveredModels).toEqual([{ id: "llama" }])
+
+    await useSettingsStore.getState().setProviderConfig("ollama", {
+      baseURL: "http://engine-b",
+      discoveredModels: [{ id: "qwen" }],
+      discoveredModelsLastFetched: 9,
+    })
+    expect(savedOllama()?.discoveredModels).toEqual([{ id: "qwen" }])
+  })
+})
+
+describe("load — legacy verification fingerprints", () => {
+  it("persists a credential-free rewrite of a v2 fingerprint as a repair", async () => {
+    const row = { providerId: "openai", enabled: true, defaultModel: "gpt", apiKey: "sk-legacy" }
+    const legacy = JSON.stringify({
+      verificationContract: "provider-connectivity-v2",
+      apiKey: "sk-legacy",
+      apiKeys: [],
+      currentKeyIndex: 0,
+      baseURL: "",
+      defaultModel: "gpt",
+      apiProtocol: "",
+      customHeaders: [],
+    })
+    dbSettings.getSettings.mockResolvedValue(
+      baseSettings({
+        providerSettings: {
+          openai: { ...row, verificationStatus: "verified", verificationFingerprint: legacy },
+        },
+      })
+    )
+    dbSettings.saveSettings.mockImplementation(async (patch) => baseSettings({ ...patch }))
+    await useSettingsStore.getState().load()
+    const repair = dbSettings.saveSettings.mock.calls.find(
+      ([patch]) => (patch as Partial<AppSettings>).providerSettings
+    )
+    expect(repair?.[1]).toEqual({ mirrorToHost: false })
+    expect(
+      (repair?.[0] as Partial<AppSettings>).providerSettings?.openai?.verificationFingerprint
+    ).not.toContain("sk-legacy")
+    expect(
+      useSettingsStore.getState().settings?.providerSettings?.openai?.verificationFingerprint
+    ).not.toContain("sk-legacy")
+  })
+})

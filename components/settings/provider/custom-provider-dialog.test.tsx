@@ -395,8 +395,21 @@ describe("CustomProviderDialog", () => {
           "http://localhost:11434/v1",
           "",
           "openai",
-          "gateway-model"
+          "gateway-model",
+          undefined
         )
+      )
+      // A local endpoint may stay keyless, so no "key required" hint.
+      expect(screen.queryByTestId("custom-provider-key-hint")).toBeNull()
+    })
+
+    it("explains that a keyless public endpoint cannot be enabled", async () => {
+      await renderAndFlushMountReset()
+      fireEvent.change(screen.getByTestId("base-url"), {
+        target: { value: "https://gateway.example/v1" },
+      })
+      expect(screen.getByTestId("custom-provider-key-hint")).toHaveTextContent(
+        "customProviderKeyRequiredForPublicEndpoint"
       )
     })
 

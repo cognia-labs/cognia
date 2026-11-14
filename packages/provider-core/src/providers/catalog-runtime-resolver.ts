@@ -101,11 +101,25 @@ function resolveAdapterFamily(
   )
 }
 
-function isPrivateOrLinkLocalHostname(hostname: string): boolean {
+/**
+ * True for loopback, private-LAN, link-local and mDNS host names. Shared by the
+ * remote-catalog endpoint guard and the keyless-endpoint rule in
+ * `completeness.ts`.
+ */
+export function isPrivateOrLinkLocalHostname(hostname: string): boolean {
   const normalized = hostname.toLocaleLowerCase().replace(/^\[|\]$/g, "")
   if (normalized === "localhost" || normalized === "::1" || normalized === "0:0:0:0:0:0:0:1") {
     return true
   }
+  if (
+    normalized.endsWith(".localhost") ||
+    normalized === "local" ||
+    normalized.endsWith(".local")
+  ) {
+    return true
+  }
+  // fc00::/7 unique-local IPv6.
+  if (/^f[cd][0-9a-f]{0,2}:/.test(normalized)) return true
   if (
     normalized.startsWith("10.") ||
     normalized.startsWith("127.") ||

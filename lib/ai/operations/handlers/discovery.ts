@@ -186,7 +186,11 @@ const cliProxyLister: RemoteLister = (provider) => {
 }
 
 function localLister(name: LocalProviderName): RemoteLister {
-  return (provider) => discoverLocalProviderModels(name, provider.baseURL)
+  return (provider) =>
+    discoverLocalProviderModels(name, provider.baseURL, {
+      apiKey: provider.apiKey,
+      customHeaders: provider.headers,
+    })
 }
 
 /** Vendor-specific listers, keyed by provider id. */

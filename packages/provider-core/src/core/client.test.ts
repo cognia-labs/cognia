@@ -1,3 +1,5 @@
+import { KEYLESS_SDK_PLACEHOLDER } from "@cognia/provider-types/keyless-credentials"
+
 // Each provider factory is mocked to return a callable provider. The provider
 // records the model id it was called with and echoes back the factory options,
 // so tests can assert both the factory wiring ({ apiKey, baseURL }) and the
@@ -227,6 +229,23 @@ describe("getProviderModel", () => {
       apiKey: "sk-test",
       baseURL: "https://proxy.example/v1",
     })
+  })
+
+  it("hands a keyless local engine the stripped placeholder, not the ambient env key", () => {
+    const m = getProviderModel({
+      provider: "ollama",
+      model: "llama",
+      baseURL: "http://localhost:11434/v1",
+    }) as ResolvedModel
+    expect(m.factoryOpts).toMatchObject({
+      apiKey: KEYLESS_SDK_PLACEHOLDER,
+      fetch: expect.any(Function),
+    })
+  })
+
+  it("keeps the SDK default when a keyless call targets the vendor itself", () => {
+    const m = getProviderModel({ provider: "anthropic", model: "x" }) as ResolvedModel
+    expect(m.factoryOpts).not.toHaveProperty("apiKey")
   })
 
   it("never mutates process.env when an apiKey is supplied", () => {

@@ -213,6 +213,79 @@ describe("buildRendererLlmClient", () => {
     expect(client).toBeNull()
   })
 
+  it("returns null for a keyless call bound for the vendor's own API", () => {
+    const client = buildRendererLlmClient({
+      session: makeSession(),
+      appSettings: makeSettings({
+        defaultProvider: "openai",
+        providerSettings: { openai: { enabled: true, defaultModel: "gpt" } },
+      }),
+      featureId: "f",
+    })
+    expect(client).toBeNull()
+  })
+
+  // A local engine needs no key; the utility rail used to return null for it
+  // while the main chat served it.
+  it("builds a keyless client for a local engine", () => {
+    const client = buildRendererLlmClient({
+      session: makeSession(),
+      appSettings: makeSettings({
+        defaultProvider: "ollama",
+        providerSettings: { ollama: { enabled: true, defaultModel: "llama" } },
+      }),
+      featureId: "conversation-title",
+    })
+    expect(client).not.toBeNull()
+    expect(mockCreateLlmClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        protocol: "openai",
+        baseURL: "http://localhost:11434/v1",
+      })
+    )
+    expect(mockCreateLlmClient.mock.calls[0][0]).not.toHaveProperty("apiKey")
+  })
+
+  it("keeps the provider identity and static headers the main chat uses", () => {
+    buildRendererLlmClient({
+      session: makeSession(),
+      appSettings: makeSettings({
+        defaultProvider: "commandcode",
+        providerSettings: {
+          commandcode: {
+            enabled: true,
+            apiKey: "sk-cc",
+            defaultModel: "claude-sonnet-5",
+            customHeaders: { "x-tenant-id": "acme" },
+          },
+        },
+      }),
+      featureId: "conversation-title",
+    })
+    expect(mockCreateLlmClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "commandcode",
+        apiKey: "sk-cc",
+        headers: { "x-tenant-id": "acme" },
+      })
+    )
+  })
+
+  it("lets a paired Host fill a key the renderer does not hold", () => {
+    mockPairedHost.mockReturnValue(true)
+    const client = buildRendererLlmClient({
+      session: makeSession(),
+      appSettings: makeSettings({
+        defaultProvider: "deepseek",
+        providerSettings: { deepseek: { enabled: true, defaultModel: "deepseek-chat" } },
+      }),
+      featureId: "conversation-title",
+    })
+    expect(client).not.toBeNull()
+    expect(mockCreateHostLlmClient).toHaveBeenCalled()
+  })
+
   it("returns null when no model can be determined", () => {
     const client = buildRendererLlmClient({
       session: makeSession({ model: undefined }),

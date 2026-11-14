@@ -39570,6 +39570,7 @@
     "custom": "Custom",
     "customBaseURL": "Custom Base URL",
     "customProviderDescription": "Configure a custom API provider with your preferred protocol.",
+    "customProviderKeyRequiredForPublicEndpoint": "A public endpoint needs an API key, or an Authorization header under Transport headers, before it can be enabled. Endpoints on this machine or your local network can stay keyless.",
     "customProviderModelsManaged": "Custom-provider models are managed inside the provider editor.",
     "customProviderMutationFailed": "Could not save the provider change: {error}",
     "customProviders": "Custom Providers",

@@ -283,10 +283,23 @@ export interface HostGatewayCapabilities {
 }
 
 /**
+ * Protocols the Rust gateway executes and a task lease admits
+ * (`crates/cognia-gateway/src/execute.rs:is_executable_protocol`). The desktop
+ * catalog above admits the same set; the Host catalog must not narrow it.
+ */
+const HOST_GATEWAY_EXECUTABLE_PROTOCOLS: ReadonlySet<string> = new Set([
+  "openai",
+  "responses",
+  "anthropic",
+  "google",
+  "gemini",
+])
+
+/**
  * The headless Host's catalog: the same eligibility rule, read from the
  * gateway snapshot `agent_gateway_host_task_prepare` mints against rather than
  * from renderer settings the brain does not have. A provider is offered when
- * the gateway serves it, it speaks OpenAI or Anthropic, and the Host resolved a
+ * the gateway serves it, it speaks a protocol the gateway executes, and the Host resolved a
  * credential for it; each model is one the deployment lists. Capability facts
  * the profile store does not record stay absent (unknown is eligible, and the
  * launch adapter re-checks).
@@ -301,7 +314,7 @@ export function listHostProfileGatewayModelOptions(
   const eligible = (capabilities.providers ?? []).filter(
     (provider) =>
       provider.enabled === true &&
-      (provider.protocol === "openai" || provider.protocol === "anthropic") &&
+      HOST_GATEWAY_EXECUTABLE_PROTOCOLS.has(provider.protocol ?? "") &&
       typeof provider.credentialPool === "number" &&
       provider.credentialPool > 0 &&
       deployments.get(provider.id)?.enabled !== false

@@ -127,12 +127,23 @@ function mergeSources(
   return current.includes(next) ? current : [...current, next]
 }
 
+/**
+ * How long a live model listing counts as fresh. Past it the list is still
+ * shown, but labelled stale so the UI offers a refresh instead of presenting
+ * an old engine's or account's inventory as current.
+ */
+export const REMOTE_MODEL_FRESHNESS_TTL_MS = 24 * 60 * 60 * 1000
+
 function sourceFreshness(
   source: ProviderModelSource,
-  remoteLastFetchedAt?: number
+  remoteLastFetchedAt: number | undefined,
+  now: number
 ): ProviderModelFreshness {
   if (source === "remote-discovered") {
-    return remoteLastFetchedAt ? "fresh" : "stale"
+    if (!remoteLastFetchedAt || remoteLastFetchedAt <= 0) return "stale"
+    // A timestamp from the future (clock skew) is not evidence of freshness.
+    if (remoteLastFetchedAt > now) return "stale"
+    return now - remoteLastFetchedAt <= REMOTE_MODEL_FRESHNESS_TTL_MS ? "fresh" : "stale"
   }
 
   return "static"
@@ -247,7 +258,10 @@ export function buildProviderModelDiscoverySnapshot(input: {
   userCuratedModels?: ProviderModelCandidate[]
   /** Subscription APIs return account-specific limits and entitlements. */
   remoteOverridesCatalog?: boolean
+  /** Clock for the freshness window; injectable for tests. */
+  now?: number
 }): ProviderModelDiscoverySnapshot {
+  const now = input.now ?? Date.now()
   const merged = new Map<
     string,
     ProviderModelCandidate & {
@@ -268,7 +282,7 @@ export function buildProviderModelDiscoverySnapshot(input: {
         merged.set(model.id, {
           ...model,
           source,
-          freshness: sourceFreshness(source, input.remoteLastFetchedAt),
+          freshness: sourceFreshness(source, input.remoteLastFetchedAt, now),
           mergedSources: [source],
           provider: model.provider,
         })
@@ -284,7 +298,7 @@ export function buildProviderModelDiscoverySnapshot(input: {
         // badge. `mergedSources` still records every contributing source.
         source: overwrite ? source : existing.source,
         freshness: overwrite
-          ? sourceFreshness(source, input.remoteLastFetchedAt)
+          ? sourceFreshness(source, input.remoteLastFetchedAt, now)
           : existing.freshness,
         mergedSources: mergeSources(existing.mergedSources, source),
         provider: (overwrite ? model.provider : existing.provider) ?? existing.provider,
@@ -386,9 +400,17 @@ export async function discoverCLIProxyAPIModels(input: {
 
 export async function discoverLocalProviderModels(
   providerId: LocalProviderName,
-  baseURL?: string
+  baseURL?: string,
+  auth?: { apiKey?: string; customHeaders?: Record<string, string> }
 ): Promise<ProviderModelCandidate[]> {
-  const service = createLocalProviderService(providerId, baseURL)
+  // The listing must authenticate exactly like the connection test that
+  // preceded it; an engine behind a key or a header-auth proxy answers 401
+  // to a bare request.
+  const service = createLocalProviderService(providerId, {
+    baseUrl: baseURL,
+    apiKey: auth?.apiKey,
+    customHeaders: auth?.customHeaders,
+  })
   const models = await service.listModels()
   return models.map((model) => ({
     id: model.id,

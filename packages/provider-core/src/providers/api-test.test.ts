@@ -43,6 +43,7 @@ function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
     ok,
     status,
     json: async () => body,
+    text: async () => JSON.stringify(body),
   } as unknown as Response
 }
 
@@ -112,8 +113,8 @@ describe("testCustomProviderConnectionByProtocol", () => {
     expect(result.message).toContain("401")
   })
 
-  it("(anthropic) POSTs /v1/messages with the x-api-key header and treats 400 as ok", async () => {
-    proxyFetchMock.mockResolvedValue(jsonResponse({}, { status: 400 }))
+  it("(anthropic) POSTs /v1/messages with the x-api-key header", async () => {
+    proxyFetchMock.mockResolvedValue(jsonResponse({}, { status: 200 }))
     const result = await testCustomProviderConnectionByProtocol(
       "https://api.anthropic.com",
       "key",
@@ -124,6 +125,43 @@ describe("testCustomProviderConnectionByProtocol", () => {
     expect(call[0]).toBe("https://api.anthropic.com/v1/messages")
     expect(call[1].method).toBe("POST")
     expect(call[1].headers["x-api-key"]).toBe("key")
+  })
+
+  // A 400 means the host authenticated and then rejected the request (unknown
+  // model, exhausted balance); a chat turn would fail the same way, so it must
+  // not become an authoritative "verified".
+  it("(anthropic) reports a 400 as a failure with the provider's message", async () => {
+    proxyFetchMock.mockResolvedValue(
+      jsonResponse(
+        { type: "error", error: { type: "invalid_request_error", message: "model: not found" } },
+        { status: 400 }
+      )
+    )
+    const result = await testCustomProviderConnectionByProtocol(
+      "https://relay.example/anthropic",
+      "key",
+      "anthropic",
+      "missing-model"
+    )
+    expect(result.success).toBe(false)
+    expect(result.message).toBe("API error: 400 — model: not found")
+  })
+
+  it("(anthropic) lets configured headers win and sends no key header when keyless", async () => {
+    proxyFetchMock.mockResolvedValue(jsonResponse({}, { status: 200 }))
+    await testCustomProviderConnectionByProtocol("http://127.0.0.1:8080", "", "anthropic", "m", {
+      "x-api-key": "from-headers",
+      "x-tenant-id": "acme",
+    })
+    const headers = proxyFetchMock.mock.calls[0][1].headers
+    expect(headers["x-api-key"]).toBe("from-headers")
+    expect(headers["x-tenant-id"]).toBe("acme")
+  })
+
+  it("(openai) sends no Authorization header for a keyless endpoint", async () => {
+    proxyFetchMock.mockResolvedValue(jsonResponse({}, { status: 200 }))
+    await testCustomProviderConnectionByProtocol("http://127.0.0.1:8080/v1", "", "openai")
+    expect(proxyFetchMock.mock.calls[0][1].headers.Authorization).toBeUndefined()
   })
 
   // Regression: the probe used to POST to `<base>/messages`, which 404s on every
@@ -182,7 +220,9 @@ describe("testCustomProviderConnectionByProtocol", () => {
     expect(result.message).toBe("API error: 500")
   })
 
-  it("(gemini) appends the key as a query param", async () => {
+  // Same credential header the chat's Google SDK client sends; a key in the
+  // query string would also land in proxy and gateway access logs.
+  it("(gemini) authenticates with the x-goog-api-key header", async () => {
     proxyFetchMock.mockResolvedValue(jsonResponse({}, { status: 200 }))
     const result = await testCustomProviderConnectionByProtocol(
       "https://generativelanguage.googleapis.com/v1",
@@ -191,8 +231,9 @@ describe("testCustomProviderConnectionByProtocol", () => {
     )
     expect(result.success).toBe(true)
     expect(proxyFetchMock.mock.calls[0][0]).toBe(
-      "https://generativelanguage.googleapis.com/v1/models?key=gk"
+      "https://generativelanguage.googleapis.com/v1/models"
     )
+    expect(proxyFetchMock.mock.calls[0][1].headers["x-goog-api-key"]).toBe("gk")
   })
 
   it("(gemini) returns failure on non-2xx", async () => {
@@ -655,6 +696,45 @@ describe("probeProviderConnection / testProviderConnection", () => {
     })
     expect(result.outcome).toBe("limited")
     expect(result.authoritative).toBe(false)
+  })
+
+  // A vendor probe dials the public endpoint with a bare key; a row that
+  // configures its own transport must be probed over that transport.
+  it.each([
+    [
+      "google",
+      "https://gemini-gateway.example/v1beta",
+      "https://gemini-gateway.example/v1beta/models",
+    ],
+    ["deepseek", "https://ds-relay.example/v1", "https://ds-relay.example/v1/models"],
+    ["groq", "https://groq-relay.example/v1", "https://groq-relay.example/v1/models"],
+    ["mistral", "https://mistral-relay.example/v1", "https://mistral-relay.example/v1/models"],
+    ["openai", "https://openai-relay.example/v1", "https://openai-relay.example/v1/models"],
+  ])("probes %s over its configured gateway", async (providerId, baseURL, expected) => {
+    proxyFetchMock.mockResolvedValue(jsonResponse({ data: [] }))
+    await probeProviderConnection({ providerId, apiKey: "k", baseURL })
+    expect(proxyFetchMock.mock.calls[0][0]).toBe(expected)
+  })
+
+  it("sends the configured static headers on a vendor probe", async () => {
+    proxyFetchMock.mockResolvedValue(jsonResponse({ data: [] }))
+    await probeProviderConnection({
+      providerId: "openai",
+      apiKey: "k",
+      customHeaders: { "x-tenant-id": "acme" },
+    })
+    expect(proxyFetchMock.mock.calls[0][1].headers["x-tenant-id"]).toBe("acme")
+  })
+
+  it("honours a protocol override and the row's model", async () => {
+    proxyFetchMock.mockResolvedValue(jsonResponse({}))
+    await testProviderConnection("openai", "k", "https://relay.example", undefined, {
+      protocol: "anthropic",
+      model: "relay-model",
+    })
+    const [url, init] = proxyFetchMock.mock.calls[0]
+    expect(url).toBe("https://relay.example/v1/messages")
+    expect(JSON.parse(init.body).model).toBe("relay-model")
   })
 
   it("testProviderConnection is a thin wrapper around probeProviderConnection", async () => {

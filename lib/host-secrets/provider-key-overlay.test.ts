@@ -68,4 +68,27 @@ describe("host provider key overlay", () => {
     expect(harness.log).toHaveBeenCalledWith("warn", expect.stringContaining("store locked"))
     stop()
   })
+
+  it("withholds this machine's keys from snapshots while its gate says a remote Host runs", async () => {
+    const harness = deps([[["deepseek", "sk-local-sealed"]]])
+    let remoteActive = true
+    const { ready, stop } = installHostProviderKeys({
+      ...harness.value,
+      applies: () => !remoteActive,
+    })
+    await ready
+    const snapshot = () =>
+      createProviderSettingsSnapshot({
+        defaultProvider: "deepseek",
+        providerSettings: { deepseek: { enabled: true, apiKey: "" } },
+        customProviders: undefined,
+      })
+    expect(snapshot().providers.deepseek?.apiKey).toBe("")
+    remoteActive = false
+    expect(snapshot().providers.deepseek?.apiKey).toBe("sk-local-sealed")
+    stop()
+    // Teardown removes the gate with the keys.
+    remoteActive = true
+    expect(hostProviderKey("deepseek")).toBeUndefined()
+  })
 })

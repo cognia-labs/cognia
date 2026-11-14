@@ -382,6 +382,41 @@ describe("buildGatewaySnapshot", () => {
     expect(snap.providers.filter((p) => p.id !== "openai").every((p) => !p.deploymentId)).toBe(true)
   })
 
+  // The projection contributes headers; the credential header follows the
+  // protocol the resolver chose, so a stale/derived scheme can't turn a
+  // Google key into a Bearer token.
+  it("keeps the resolver protocol's auth when a derived transport is joined", () => {
+    const slice: SnapshotSettingsSlice = {
+      providerSettings: {
+        google: { providerId: "google", apiKey: "g-key", enabled: true },
+        openai: { providerId: "openai", apiKey: "sk-o", enabled: true },
+      } as unknown as SnapshotSettingsSlice["providerSettings"],
+    }
+    const snap = buildGatewaySnapshot(slice, 1, {
+      profileVersion: 2,
+      byLegacyId: {
+        google: {
+          deploymentId: "google",
+          models: {},
+          transport: { authScheme: "bearer", staticHeaders: [["x-tenant", "t1"]] },
+        },
+        openai: {
+          deploymentId: "openai",
+          models: {},
+          transport: { authScheme: "custom-header", authHeaderName: "x-goog-api-key" },
+        },
+      },
+    })
+    expect(snap.providers.find((p) => p.id === "google")?.transport).toEqual({
+      authScheme: "custom-header",
+      authHeaderName: "x-goog-api-key",
+      staticHeaders: [["x-tenant", "t1"]],
+    })
+    expect(snap.providers.find((p) => p.id === "openai")?.transport).toEqual({
+      authScheme: "bearer",
+    })
+  })
+
   it("resolves enabled built-in providers with protocol + key + baseURL", () => {
     const slice: SnapshotSettingsSlice = {
       providerSettings: {

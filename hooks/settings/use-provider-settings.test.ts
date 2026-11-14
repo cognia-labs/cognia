@@ -107,6 +107,7 @@ jest.mock("@/lib/ai/providers/host-connection", () => ({
   testHostProviderConnection: (...args: unknown[]) => hostProbe(...args),
 }))
 
+import { buildProviderVerificationFingerprint } from "@cognia/provider-core/providers/completeness"
 import { useProviderSettings } from "./use-provider-settings"
 
 beforeEach(() => {
@@ -265,6 +266,49 @@ describe("useProviderSettings — testProvider", () => {
     expect(testProviderConnection).not.toHaveBeenCalled()
   })
 
+  it("tests with the row's protocol override and default model", async () => {
+    settingsState.settings!.providerSettings.openai = {
+      ...settingsState.settings!.providerSettings.openai,
+      apiProtocol: "anthropic",
+      defaultModel: "relay-model",
+    }
+    testProviderConnection.mockResolvedValue({ success: true, message: "ok" } as ApiTestResult)
+    const { result } = renderHook(() => useProviderSettings())
+    await act(async () => {
+      await result.current.testProvider("openai")
+    })
+    expect(testProviderConnection).toHaveBeenCalledWith(
+      "openai",
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      { protocol: "anthropic", model: "relay-model" }
+    )
+  })
+
+  // A format check (or a CORS-limited browser probe) proves nothing about the
+  // connection, so it must not persist "verified".
+  it("does not persist verified for a limited, non-authoritative pass", async () => {
+    testProviderConnection.mockResolvedValue({
+      success: true,
+      message: "format ok",
+      outcome: "limited",
+      authoritative: false,
+    } as ApiTestResult)
+    const { result } = renderHook(() => useProviderSettings())
+    await act(async () => {
+      await result.current.testProvider("openai")
+    })
+    expect(settingsState.setProviderConfig).not.toHaveBeenCalledWith(
+      "openai",
+      expect.objectContaining({ verificationStatus: "verified" })
+    )
+    expect(settingsState.setProviderConfig).toHaveBeenCalledWith(
+      "openai",
+      expect.objectContaining({ verificationStatus: "unverified", healthStatus: "unknown" })
+    )
+  })
+
   it("stores success result, persists verification status, and clears testing flag", async () => {
     testProviderConnection.mockResolvedValue({
       success: true,
@@ -312,7 +356,11 @@ describe("useProviderSettings — testProvider", () => {
       expect(r?.success).toBe(true)
     })
 
-    expect(discoverLocalProviderModels).toHaveBeenCalledWith("ollama", "http://localhost:11434")
+    // Discovery authenticates exactly like the probe that preceded it.
+    expect(discoverLocalProviderModels).toHaveBeenCalledWith("ollama", "http://localhost:11434", {
+      apiKey: undefined,
+      customHeaders: undefined,
+    })
     expect(settingsState.setProviderConfig).toHaveBeenCalledWith(
       "ollama",
       expect.objectContaining({
@@ -524,7 +572,8 @@ describe("subscription credentials across readiness and connection testing", () 
       "codex",
       "vault-secret",
       "https://relay.test",
-      { "X-Tenant": "team" }
+      { "X-Tenant": "team" },
+      expect.objectContaining({})
     )
     expect(JSON.stringify(settingsState.setProviderConfig.mock.calls)).not.toContain("vault-secret")
     expect(settingsState.setProviderConfig).toHaveBeenCalledWith(
@@ -565,7 +614,8 @@ describe("subscription credentials across readiness and connection testing", () 
       "codex",
       "rotated-secret",
       "https://new.test",
-      undefined
+      undefined,
+      expect.objectContaining({})
     )
     expect(JSON.stringify(settingsState.setProviderConfig.mock.calls)).not.toContain(
       "rotated-secret"
@@ -616,7 +666,8 @@ it("offers readiness and connection tests before a subscription provider has any
     "codex",
     "vault-only",
     "https://account.test",
-    undefined
+    undefined,
+    expect.objectContaining({})
   )
 })
 
@@ -655,7 +706,8 @@ it("projects CommandCode vault readiness and tests without persisting the key", 
     "commandcode",
     "cmd-vault-secret",
     "https://api.commandcode.ai/provider/v1",
-    undefined
+    undefined,
+    expect.objectContaining({})
   )
 })
 
@@ -706,7 +758,13 @@ it("projects custom subscription readiness without leaking the vault credential 
   expect(saved.verificationStatus).toBe("verified")
   expect(saved.apiKey).toBeUndefined()
   expect(JSON.stringify(saved)).not.toContain("vault-custom-secret")
-  expect(JSON.parse(saved.verificationFingerprint).apiKey).toMatch(/^subscription:/)
+  // The fingerprint binds to the vault credential's identity, never the secret.
+  const fingerprint = JSON.parse(saved.verificationFingerprint)
+  expect(fingerprint.verificationContract).toBe("provider-connectivity-v3")
+  expect(fingerprint.credential).toEqual(expect.any(String))
+  expect(saved.verificationFingerprint).not.toBe(
+    buildProviderVerificationFingerprint({ ...saved, apiKey: "vault-custom-secret" })
+  )
 })
 
 it("discards custom subscription test results when its credential changes during the request", async () => {

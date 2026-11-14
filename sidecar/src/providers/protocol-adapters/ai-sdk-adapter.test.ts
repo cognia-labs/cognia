@@ -497,6 +497,47 @@ test("installed SDK preserves explicit conversation headers on the actual HTTP r
   assert.ok(headers.every((value) => value.get("x-cognia-session-id") === "operator-scope"))
 })
 
+test("a keyless local engine neither needs nor receives an ambient OPENAI_API_KEY", async (t) => {
+  const seen: Array<{ url: string; headers: Headers }> = []
+  t.mock.method(globalThis, "fetch", async (input: unknown, init: RequestInit) => {
+    seen.push({ url: String(input), headers: new Headers(init.headers) })
+    return new Response(
+      `data: ${JSON.stringify({
+        id: "test",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "llama",
+        choices: [{ index: 0, delta: { content: "OK" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      })}\n\ndata: [DONE]\n\n`,
+      { headers: { "content-type": "text/event-stream" } }
+    )
+  })
+  const original = process.env.OPENAI_API_KEY
+  try {
+    for (const ambient of [undefined, "sk-synthetic-ambient"]) {
+      if (ambient === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = ambient
+      const result = await makeAiSdkAdapter("openai").start({
+        model: "llama",
+        messages: [{ role: "user", content: "test" }],
+        credentials: { baseURL: "http://localhost:11434/v1" },
+      })
+      for await (const _event of result.fullStream) {
+        /* Consume the installed SDK stream. */
+      }
+    }
+  } finally {
+    if (original === undefined) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = original
+  }
+  assert.equal(seen.length, 2)
+  for (const request of seen) {
+    assert.equal(request.url, "http://localhost:11434/v1/chat/completions")
+    assert.equal(request.headers.get("authorization"), null)
+  }
+})
+
 test("start passes model/messages/params through to streamText verbatim", async () => {
   let captured: StreamArgs | undefined
   const fakeStreamText = (args: Record<string, unknown>) => {

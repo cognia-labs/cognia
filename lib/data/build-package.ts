@@ -36,7 +36,7 @@ import { collectMessageMediaHashes } from "@/lib/db/message-media-refs"
 import { filterExposedSessions } from "@/lib/chat/session-exposure"
 import { listAllCanvasCommentRows } from "@/lib/db/context-comments"
 import { exportStoredProfilesRedacted } from "@/lib/db/provider-profiles"
-import { deepStripSecrets } from "@/lib/settings/profile-transfer"
+import { stripSettingsRowSecrets } from "@/lib/settings/profile-transfer"
 import { createPagedTableReader } from "./paged-table-reader"
 import { redactMcpServerForExport } from "@/lib/mcp/credentials"
 
@@ -217,10 +217,10 @@ export async function buildBackupPackage(
       : Promise.resolve([]),
   ])
 
-  // The setting face contains nested provider credentials. Reuse the settings
-  // transfer scrubber so `includeApiKey: false` covers every nested key.
+  // The setting face contains nested provider credentials. The row scrubber
+  // projects provider rows by schema, then scrubs every other nested key.
   const settings = (
-    opts.includeApiKey ? { ...settingsRow } : deepStripSecrets(settingsRow)
+    opts.includeApiKey ? { ...settingsRow } : stripSettingsRowSecrets(settingsRow)
   ) as typeof settingsRow
 
   const filteredCharacters = includeBuiltIns ? characters : characters.filter((c) => !c.isBuiltIn)

@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dialog"
 import { useSettingsStore } from "@/stores/settings"
 import { useConnectionTest } from "@/hooks/settings/use-connection-test"
+import { customProviderAllowsKeyless } from "@cognia/provider-core/providers/completeness"
 import { ProtocolSelectContent } from "./protocol-select-content"
 import {
   buildCustomProviderModelDiscoverySnapshot,
@@ -234,7 +235,7 @@ export function CustomProviderDialog({
   const handleTestConnection = async () => {
     const modelId = defaultModel || availableModels[0]?.id
     if (!isValidProviderUrl(baseURL) || !modelId) return
-    await runConnectionTest(baseURL.trim(), apiKey.trim(), apiProtocol, modelId)
+    await runConnectionTest(baseURL.trim(), apiKey.trim(), apiProtocol, modelId, customHeaders)
   }
 
   const handleDiscoverModels = async () => {
@@ -290,9 +291,9 @@ export function CustomProviderDialog({
       discoveredModels,
       discoveredModelsLastFetched,
       customHeaders,
-      ...(experimentalAgentSdk && apiProtocol === "anthropic"
-        ? { experimentalAgentSdk: true }
-        : {}),
+      // Always present so an edit that turns the switch off (or leaves the
+      // Anthropic wire) clears a previously stored opt-in.
+      experimentalAgentSdk: experimentalAgentSdk && apiProtocol === "anthropic" ? true : undefined,
       defaultModel: defaultModel || availableModels[0]?.id || "",
       enabled: editingProviderId ? (customProviders[editingProviderId]?.enabled ?? true) : true,
     }
@@ -333,6 +334,13 @@ export function CustomProviderDialog({
   const validBaseURL = isValidProviderUrl(baseURL)
   const canTest = validBaseURL && !!selectedTestModel
   const canSave = !!name.trim() && canTest
+  // The key is optional for an endpoint on this machine / the LAN or one that
+  // authenticates through a header; a public endpoint without either is saved
+  // but cannot be enabled, so say so before the user wonders why.
+  const needsKeyForPublicEndpoint =
+    validBaseURL &&
+    !apiKey.trim() &&
+    !customProviderAllowsKeyless({ baseURL: baseURL.trim(), customHeaders })
 
   return (
     <Dialog
@@ -506,6 +514,11 @@ export function CustomProviderDialog({
                 {testing ? tc("loading") : t("test")}
               </Button>
             </div>
+            {needsKeyForPublicEndpoint && (
+              <p className="text-xs text-muted-foreground" data-testid="custom-provider-key-hint">
+                {t("customProviderKeyRequiredForPublicEndpoint")}
+              </p>
+            )}
             {testResult && <ConnectionStatusCard result={toConnectionCardResult(testResult)} />}
           </div>
 

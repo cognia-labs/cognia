@@ -1607,5 +1607,6 @@
     "discovering": "正在发现…",
     "connected": "已连接 Magpie {version} · {count} 个模型",
     "failed": "无法连接 Magpie"
-  }
+  },
+  "customProviderKeyRequiredForPublicEndpoint": "公网地址需要 API 密钥，或在传输标头中设置 Authorization 标头，才能启用。本机或局域网内的地址可以不填密钥。"
 }

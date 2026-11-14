@@ -97,6 +97,35 @@ function buildAnthropicMessagesURL(trimmedBaseUrl: string): string {
     : `${trimmedBaseUrl}/v1/messages`
 }
 
+/** The provider's own error message from a failed probe, trimmed for display. */
+async function readProbeErrorDetail(response: Response): Promise<string | undefined> {
+  try {
+    const text = (await response.text()).trim()
+    if (!text) return undefined
+    try {
+      const parsed = JSON.parse(text) as {
+        error?: { message?: unknown } | string
+        message?: unknown
+      }
+      const message =
+        typeof parsed.error === "string"
+          ? parsed.error
+          : typeof parsed.error?.message === "string"
+            ? parsed.error.message
+            : typeof parsed.message === "string"
+              ? parsed.message
+              : undefined
+      // A JSON body without a message carries nothing worth showing.
+      return message ? message.slice(0, 300) : undefined
+    } catch {
+      // Not JSON: fall through to the raw body.
+    }
+    return text.slice(0, 300)
+  } catch {
+    return undefined
+  }
+}
+
 export async function testCustomProviderConnectionByProtocol(
   baseUrl: string,
   apiKey: string,
@@ -126,10 +155,12 @@ export async function testCustomProviderConnectionByProtocol(
       response = await proxyFetch(buildAnthropicMessagesURL(normalizedBaseUrl), {
         method: "POST",
         headers: {
-          ...extraHeaders,
-          "x-api-key": apiKey,
+          // Same precedence as the SDK the chat uses: configured static
+          // headers win over the key-derived one; a keyless endpoint gets none.
+          ...(apiKey ? { "x-api-key": apiKey } : {}),
           "anthropic-version": "2023-06-01",
           "Content-Type": "application/json",
+          ...extraHeaders,
         },
         body: JSON.stringify({
           model: model?.trim() || ANTHROPIC_PROBE_FALLBACK_MODEL,
@@ -139,17 +170,28 @@ export async function testCustomProviderConnectionByProtocol(
       })
 
       const latency = Date.now() - start
-      const ok = response.ok || response.status === 400
+      if (response.ok) {
+        return { success: true, message: "Connected successfully.", latency_ms: latency }
+      }
+      // A 400 means the host authenticated the request and then rejected it —
+      // an unknown model, an exhausted balance, a malformed relay contract. A
+      // chat turn would be rejected the same way, so it is not a verification.
+      const detail = await readProbeErrorDetail(response)
       return {
-        success: ok,
-        message: ok ? "Connected successfully." : `API error: ${response.status}`,
+        success: false,
+        message: detail
+          ? `API error: ${response.status} — ${detail}`
+          : `API error: ${response.status}`,
         latency_ms: latency,
       }
     }
 
     if (apiProtocol === "gemini") {
-      response = await proxyFetch(`${normalizedBaseUrl}/models?key=${apiKey}`, {
-        headers: extraHeaders,
+      response = await proxyFetch(`${normalizedBaseUrl}/models`, {
+        headers: {
+          ...(apiKey ? { "x-goog-api-key": apiKey } : {}),
+          ...extraHeaders,
+        },
       })
 
       const latency = Date.now() - start
@@ -165,8 +207,8 @@ export async function testCustomProviderConnectionByProtocol(
 
     response = await proxyFetch(`${normalizedBaseUrl}/models`, {
       headers: {
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         ...extraHeaders,
-        Authorization: `Bearer ${apiKey}`,
       },
     })
 
@@ -535,13 +577,18 @@ export async function testProviderConnection(
   providerId: string,
   apiKey: string,
   baseUrl?: string,
-  customHeaders?: Record<string, string>
+  customHeaders?: Record<string, string>,
+  /** The row's protocol override and default model, so the probe tests the
+   *  transport and model the chat will actually use. */
+  options?: { protocol?: ApiProtocol; model?: string }
 ): Promise<ApiTestResult> {
   const probeResult = await probeProviderConnection({
     providerId,
     apiKey,
     baseURL: baseUrl,
     customHeaders,
+    ...(options?.protocol ? { protocol: options.protocol } : {}),
+    ...(options?.model?.trim() ? { model: options.model.trim() } : {}),
   })
 
   return probeResult
@@ -563,14 +610,80 @@ function toAuthoritativeResult(result: ApiTestResult): ProviderConnectionProbeRe
   }
 }
 
+/**
+ * Providers whose probe below targets a fixed vendor endpoint, with that
+ * endpoint's base URL (OpenAI, Anthropic and Google have no catalog base URL:
+ * their SDKs default to it).
+ */
+const VENDOR_PROBE_BASE_URLS: Readonly<Record<string, string>> = {
+  openai: "https://api.openai.com/v1",
+  anthropic: ANTHROPIC_PUBLIC_BASE_URL,
+  google: "https://generativelanguage.googleapis.com/v1beta",
+  deepseek: "https://api.deepseek.com/v1",
+  groq: "https://api.groq.com/openai/v1",
+  mistral: "https://api.mistral.ai/v1",
+}
+const VENDOR_PROBE_PROVIDERS: ReadonlySet<string> = new Set(Object.keys(VENDOR_PROBE_BASE_URLS))
+
+function vendorProbeBaseURL(providerId: string): string | undefined {
+  return getBuiltInProviderDefaultBaseURL(providerId) || VENDOR_PROBE_BASE_URLS[providerId]
+}
+
+function normalizedEndpoint(url: string | undefined): string {
+  return (url ?? "").trim().replace(/\/+$/, "").toLowerCase()
+}
+
+function hasConfiguredTransport(input: {
+  providerId: string
+  baseURL?: string
+  customHeaders?: Record<string, string>
+  protocol: string
+  catalogProtocol?: string | null
+}): boolean {
+  if (input.customHeaders && Object.keys(input.customHeaders).length > 0) return true
+  if (input.catalogProtocol && input.protocol !== input.catalogProtocol) return true
+  const configured = normalizedEndpoint(input.baseURL)
+  if (!configured) return false
+  return ![
+    getBuiltInProviderDefaultBaseURL(input.providerId),
+    VENDOR_PROBE_BASE_URLS[input.providerId],
+  ].some((endpoint) => endpoint && normalizedEndpoint(endpoint) === configured)
+}
+
 export async function probeProviderConnection(
   input: ProviderConnectionProbeInput
 ): Promise<ProviderConnectionProbeResult> {
   const { providerId, apiKey = "", baseURL, customHeaders } = input
-  const protocol = input.protocol || getBuiltInProviderProtocol(providerId) || "openai"
+  const catalogProtocol = getBuiltInProviderProtocol(providerId)
+  const protocol = input.protocol || catalogProtocol || "openai"
 
   // Use centralized local provider configs
   const localProviderDefaults = LOCAL_PROVIDER_TEST_CONFIGS
+
+  // The vendor-specific probes below dial the vendor's public endpoint with a
+  // bare key. A row that changes the transport — its own base URL (a gateway
+  // or relay), static headers, or a protocol override — must be tested over
+  // that transport, or the result describes a connection the chat never uses.
+  if (
+    VENDOR_PROBE_PROVIDERS.has(providerId) &&
+    hasConfiguredTransport({ providerId, baseURL, customHeaders, protocol, catalogProtocol }) &&
+    // Anthropic's own API refuses browser-origin requests, so the browser
+    // keeps its explicit "limited" answer unless the row names another host.
+    !(providerId === "anthropic" && !isTauri() && !baseURL?.trim())
+  ) {
+    const resolvedBaseURL = baseURL?.trim() || vendorProbeBaseURL(providerId)
+    if (resolvedBaseURL) {
+      return toAuthoritativeResult(
+        await testCustomProviderConnectionByProtocol(
+          resolvedBaseURL,
+          apiKey,
+          protocol,
+          input.model ?? getBuiltInProviderDefaultModel(providerId),
+          customHeaders
+        )
+      )
+    }
+  }
 
   switch (providerId) {
     case "commandcode": {

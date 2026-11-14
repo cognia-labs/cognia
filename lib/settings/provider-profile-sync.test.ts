@@ -111,3 +111,38 @@ describe("saveSettings wiring", () => {
     clearSpy.mockRestore()
   })
 })
+
+describe("syncProviderProfilesFromSettings — per-database memo", () => {
+  // Each account/runtime target selects its own database, and each holds its
+  // own profile store: a memo shared across them skipped populating an empty
+  // database whose settings derived to the same content.
+  it("populates a second, empty database with identical settings", async () => {
+    const emptyTable = { toArray: async () => [] }
+    const databases = ["cognia-account-a", "cognia-account-b"].map((name) => ({
+      name,
+      providerProfiles: emptyTable,
+      deploymentProfiles: emptyTable,
+      transportProfiles: emptyTable,
+    }))
+    let active = databases[0]
+    const putDerivedProfiles = jest.fn(async () => putDerivedProfiles.mock.calls.length)
+
+    await jest.isolateModulesAsync(async () => {
+      jest.doMock("@/lib/db/schema", () => ({ getDb: () => active }))
+      jest.doMock("@/lib/db/provider-profiles", () => ({ putDerivedProfiles }))
+      const sync = await import("./provider-profile-sync")
+      const settings = {
+        providerSettings: { zhipu: { providerId: "zhipu", enabled: true } },
+        customProviders: [],
+      } as never
+
+      expect(await sync.syncProviderProfilesFromSettings(settings)).toBe(1)
+      // Same database, same content: skipped.
+      expect(await sync.syncProviderProfilesFromSettings(settings)).toBeNull()
+
+      active = databases[1]
+      expect(await sync.syncProviderProfilesFromSettings(settings)).toBe(2)
+      expect(putDerivedProfiles).toHaveBeenCalledTimes(2)
+    })
+  })
+})

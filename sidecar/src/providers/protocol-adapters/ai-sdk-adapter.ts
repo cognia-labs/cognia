@@ -18,6 +18,7 @@ import {
   resolveProviderProtocol,
 } from "@cognia/provider-types/provider-protocol"
 import { buildBedrockProviderOptions } from "../bedrock.ts"
+import { keylessSdkCredential } from "@cognia/provider-types/keyless-credentials"
 import {
   resolvePerplexityEndpoint,
   withPerplexityAgentFetch,
@@ -429,6 +430,22 @@ export async function buildModel({
 }
 
 /** Construct the un-wrapped provider model. Split out so the wrap is uniform. */
+/**
+ * `apiKey` (and, for a keyless endpoint, the placeholder-stripping `fetch`)
+ * for one `@ai-sdk/*` factory. See `keylessSdkCredential`.
+ */
+function sdkCredentialOptions(
+  sdk: string,
+  apiKey: string | undefined,
+  baseURL: string | undefined
+): { apiKey?: string; fetch?: typeof globalThis.fetch } {
+  const credential = keylessSdkCredential({ sdk, apiKey, baseURL })
+  return {
+    ...(credential.apiKey !== undefined ? { apiKey: credential.apiKey } : {}),
+    ...(credential.fetch ? { fetch: credential.fetch } : {}),
+  }
+}
+
 async function buildRawModel({
   protocol,
   model,
@@ -472,22 +489,38 @@ async function buildRawModel({
       if (providerId === "perplexity") {
         const endpoint = resolvePerplexityEndpoint({ model, baseURL, apiFlavor })
         const { createOpenAI } = await import("@ai-sdk/openai")
-        const client = createOpenAI({
+        const credential = keylessSdkCredential({
+          sdk: "perplexity",
           apiKey,
           baseURL: endpoint.baseURL,
+          fetch: endpoint.flavor === "responses" ? withPerplexityAgentFetch() : undefined,
+        })
+        const client = createOpenAI({
+          apiKey: credential.apiKey,
+          baseURL: endpoint.baseURL,
           headers,
-          ...(endpoint.flavor === "responses" ? { fetch: withPerplexityAgentFetch() } : {}),
+          ...(credential.fetch ? { fetch: credential.fetch } : {}),
         })
         return endpoint.flavor === "responses" ? client.responses(model) : client.chat(model)
       }
       if (providerId === "deepseek" && apiFlavor !== "responses") {
         const { createDeepSeek } = await import("@ai-sdk/deepseek")
-        return createDeepSeek({ apiKey, baseURL, headers }).chat(model)
+        return createDeepSeek({
+          ...sdkCredentialOptions("deepseek", apiKey, baseURL),
+          baseURL,
+          headers,
+        }).chat(model)
       }
       const { createOpenAI } = await import("@ai-sdk/openai")
       // `headers` carries the Codex ChatGPT-login extras (ChatGPT-Account-Id,
       // OpenAI-Beta, originator, OAI-Product-Sku); undefined for everyone else.
-      const client = createOpenAI({ apiKey, baseURL, headers })
+      // A keyless OpenAI-compatible endpoint (local engine, LAN gateway) must
+      // neither fail on a missing OPENAI_API_KEY nor receive that ambient key.
+      const client = createOpenAI({
+        ...sdkCredentialOptions("openai", apiKey, baseURL),
+        baseURL,
+        headers,
+      })
       // Pick the endpoint family explicitly. As of @ai-sdk/openai v3 the bare
       // `client(model)` returns a Responses-API model that POSTs to `/responses`
       // — an OpenAI-proprietary endpoint. The OpenAI-*compatible* gateways this
@@ -508,28 +541,44 @@ async function buildRawModel({
       // for most rows. Same treatment as the openai/azure branches.
       // Settings carry Claude Code's `ANTHROPIC_BASE_URL` root; the SDK client
       // wants the versioned base (see `anthropicSdkBaseURL`).
-      const client = createAnthropic({ apiKey, baseURL: anthropicSdkBaseURL(baseURL), headers })
+      const client = createAnthropic({
+        ...sdkCredentialOptions("anthropic", apiKey, baseURL),
+        baseURL: anthropicSdkBaseURL(baseURL),
+        headers,
+      })
       return client(model)
     }
     case "google": {
       const { createGoogle } = await import("@ai-sdk/google")
       // `headers` = the provider's static customHeaders (settings UI); undefined
       // for most rows. Same treatment as the openai/azure branches.
-      const client = createGoogle({ apiKey, baseURL, headers })
+      const client = createGoogle({
+        ...sdkCredentialOptions("google", apiKey, baseURL),
+        baseURL,
+        headers,
+      })
       return client(model)
     }
     case "mistral": {
       const { createMistral } = await import("@ai-sdk/mistral")
       // `headers` = the provider's static customHeaders (settings UI); undefined
       // for most rows. Same treatment as the openai/azure branches.
-      const client = createMistral({ apiKey, baseURL, headers })
+      const client = createMistral({
+        ...sdkCredentialOptions("mistral", apiKey, baseURL),
+        baseURL,
+        headers,
+      })
       return client(model)
     }
     case "cohere": {
       const { createCohere } = await import("@ai-sdk/cohere")
       // `headers` = the provider's static customHeaders (settings UI); undefined
       // for most rows. Same treatment as the openai/azure branches.
-      const client = createCohere({ apiKey, baseURL, headers })
+      const client = createCohere({
+        ...sdkCredentialOptions("cohere", apiKey, baseURL),
+        baseURL,
+        headers,
+      })
       return client(model)
     }
     case "azure": {
@@ -537,7 +586,11 @@ async function buildRawModel({
       // Azure Foundry serves the OpenAI surface behind a per-resource endpoint.
       // The resolver carries that full endpoint as `baseURL`; `headers` is
       // forwarded for parity with the openai path (usually undefined).
-      const client = createAzure({ apiKey, baseURL, headers })
+      const client = createAzure({
+        ...sdkCredentialOptions("azure", apiKey, baseURL),
+        baseURL,
+        headers,
+      })
       // Azure exposes BOTH /chat/completions and the newer /responses. Default
       // to chat (conservative for existing deployments); `apiFlavor: "responses"`
       // opts a resource into the Responses API. Same shared decision as openai.

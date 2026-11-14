@@ -27,6 +27,28 @@ import { cn } from "@/lib/utils"
 import { useSettingsStore } from "@/stores"
 import type { CustomProviderSettings } from "@cognia/provider-types/provider"
 import { PROVIDERS } from "@cognia/provider-types"
+import { stripProviderSecrets } from "@cognia/provider-types/provider-secrets"
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function readImportedHeaders(value: unknown): Record<string, string> | undefined {
+  if (!isPlainRecord(value)) return undefined
+  const headers = Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string")
+  )
+  return Object.keys(headers).length > 0 ? headers : undefined
+}
+
+function readImportedApiFlavor(
+  value: unknown,
+  apiProtocol: string
+): CustomProviderSettings["apiFlavor"] {
+  // Only the OpenAI family has a Chat/Responses split (same rule as the dialog).
+  if (apiProtocol !== "openai") return "auto"
+  return value === "chat" || value === "responses" || value === "auto" ? value : "auto"
+}
 
 interface ProviderImportExportProps {
   onClose?: () => void
@@ -309,20 +331,19 @@ export function ProviderImportExport({ onClose, compact = false }: ProviderImpor
         const settings = providerSettings[id]
         const custom = customProviders[id]
 
+        // Without keys, project through the schema-aware stripper: a row
+        // carries credentials well beyond `apiKey` (key pool and its stats,
+        // OAuth refresh token, Bedrock IAM secrets, OpenRouter BYOK, the
+        // CLIProxyAPI management key, auth headers).
         if (settings) {
-          const settingsCopy = { ...settings }
-          if (!includeApiKeys) {
-            delete settingsCopy.apiKey
-            delete settingsCopy.apiKeys
-          }
-          exportData.providerSettings![id] = settingsCopy
+          exportData.providerSettings![id] = includeApiKeys
+            ? { ...settings }
+            : stripProviderSecrets(settings)
         }
         if (custom) {
-          const customCopy = { ...custom }
-          if (!includeApiKeys) {
-            delete (customCopy as Record<string, unknown>).apiKey
-          }
-          exportData.customProviders![id] = customCopy
+          exportData.customProviders![id] = includeApiKeys
+            ? { ...custom }
+            : stripProviderSecrets(custom)
         }
       })
 
@@ -553,46 +574,50 @@ export function ProviderImportExport({ onClose, compact = false }: ProviderImpor
           }
 
           const providerData = provider as Record<string, unknown>
+          const importedKey = typeof providerData.apiKey === "string" ? providerData.apiKey : ""
+          const apiProtocol =
+            (providerData.apiProtocol as "openai" | "anthropic" | "gemini") || "openai"
           const normalized = {
-            customName: String(providerData.customName || id),
+            customName: String(providerData.customName || providerData.name || id),
             baseURL: String(providerData.baseURL || ""),
-            apiKey: String(providerData.apiKey || ""),
             customModels: Array.isArray(providerData.customModels)
               ? providerData.customModels.filter((m): m is string => typeof m === "string")
-              : [],
+              : Array.isArray(providerData.models)
+                ? providerData.models.filter((m): m is string => typeof m === "string")
+                : [],
             defaultModel: String(providerData.defaultModel || ""),
-            apiProtocol:
-              (providerData.apiProtocol as "openai" | "anthropic" | "gemini") || "openai",
+            apiProtocol,
             enabled: providerData.enabled !== false,
+            // Transport and parameter fields travel with the row: the
+            // destination must not keep its own stale values for them.
+            apiFlavor: readImportedApiFlavor(providerData.apiFlavor, apiProtocol),
+            customHeaders: readImportedHeaders(providerData.customHeaders),
+            experimentalAgentSdk:
+              providerData.experimentalAgentSdk === true && apiProtocol === "anthropic"
+                ? true
+                : undefined,
+            inferenceDefaults: isPlainRecord(providerData.inferenceDefaults)
+              ? (providerData.inferenceDefaults as CustomProviderSettings["inferenceDefaults"])
+              : undefined,
+            customModelMetadata: isPlainRecord(providerData.customModelMetadata)
+              ? (providerData.customModelMetadata as CustomProviderSettings["customModelMetadata"])
+              : undefined,
           }
 
-          // For existing providers, use update to avoid accidental duplication.
-          if (hasConflict && importResolution === "merge") {
+          if (hasConflict) {
             const currentProvider = customProviders[id]
+            // A key-less export (the default) must not sign the destination
+            // out: an absent key keeps the local one under either strategy.
+            // "merge" additionally prefers the local key over an imported one.
+            const apiKey =
+              importResolution === "merge"
+                ? currentProvider?.apiKey || importedKey
+                : importedKey || currentProvider?.apiKey || ""
             mutations.push(
               Promise.resolve(
                 updateCustomProvider(id, {
-                  customName: normalized.customName,
-                  baseURL: normalized.baseURL,
-                  apiKey: currentProvider?.apiKey || normalized.apiKey,
-                  customModels: normalized.customModels,
-                  defaultModel: normalized.defaultModel,
-                  apiProtocol: normalized.apiProtocol,
-                  enabled: normalized.enabled,
-                })
-              )
-            )
-          } else if (hasConflict) {
-            mutations.push(
-              Promise.resolve(
-                updateCustomProvider(id, {
-                  customName: normalized.customName,
-                  baseURL: normalized.baseURL,
-                  apiKey: normalized.apiKey,
-                  customModels: normalized.customModels,
-                  defaultModel: normalized.defaultModel,
-                  apiProtocol: normalized.apiProtocol,
-                  enabled: normalized.enabled,
+                  ...normalized,
+                  apiKey,
                 })
               )
             )
@@ -602,13 +627,8 @@ export function ProviderImportExport({ onClose, compact = false }: ProviderImpor
               Promise.resolve(
                 addCustomProvider({
                   id,
-                  customName: normalized.customName,
-                  baseURL: normalized.baseURL,
-                  apiKey: normalized.apiKey,
-                  customModels: normalized.customModels,
-                  defaultModel: normalized.defaultModel,
-                  apiProtocol: normalized.apiProtocol,
-                  enabled: normalized.enabled,
+                  ...normalized,
+                  apiKey: importedKey,
                 })
               )
             )

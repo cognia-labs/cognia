@@ -31,6 +31,7 @@ import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/sessi
 import { isRoutingPlaceholderModel } from "./routing/auto-model-resolution"
 import { sessionWorkspaceId } from "@/lib/workspace/session-workspace"
 import { createHostLlmClient, shouldUseHostLlmClient } from "./host-llm-client"
+import { allowsAmbientSdkCredential } from "@cognia/provider-types/keyless-credentials"
 
 export interface BuildRendererLlmClientArgs {
   session: ChatSession | null | undefined
@@ -120,9 +121,12 @@ export function buildRendererLlmClient({
   )
 
   if (resolution.kind !== "resolved") return null
-  // No renderer key → can't build a client. (The anthropic legacy env path only
-  // works inside the sidecar; these calls run in the renderer.)
-  if (!resolution.apiKey) return null
+  const viaHost = shouldUseHostLlmClient()
+  // No renderer key → can't build a client when the request needs one. (The
+  // anthropic legacy env path only works inside the sidecar; these calls run
+  // in the renderer.) A paired Host fills a key it holds itself, and a
+  // keyless endpoint (local engine, unauthenticated gateway) needs none.
+  if (!viaHost && !rendererCredentialAvailable(resolution)) return null
 
   // A session model that is really a routing request — `"auto"` or an enabled
   // mapping alias — is not a dispatchable model id on this rail: the engine
@@ -148,7 +152,7 @@ export function buildRendererLlmClient({
   // executor for them, so utility features degrade gracefully to null.
   if (!isRendererExecutableProtocol(resolution.protocol)) return null
 
-  const client = shouldUseHostLlmClient()
+  const client = viaHost
     ? createHostLlmClient({ ...resolution, model }, featureId)
     : createLlmClient(llmConfigOf(resolution, model))
   // Every feature on this rail goes through one seam, so D27 ("every LLM
@@ -170,22 +174,47 @@ export function buildRendererLlmClient({
 }
 
 /**
- * The `createLlmClient` config one resolved provider becomes. `protocol`
- * (openai | anthropic | azure | google | mistral | cohere) maps 1:1 to the SDK
- * family; a custom OpenAI-compatible provider resolves to protocol "openai"
- * plus its own baseURL.
+ * The `createLlmClient` config one resolved provider becomes. It carries the
+ * same identity the main chat client receives — the provider id (so per-provider
+ * decisions such as CommandCode's model-family protocol, Responses-vs-Chat and
+ * Anthropic relay roots match), the resolved protocol (required for custom ids)
+ * and the static headers.
  */
 function llmConfigOf(
-  resolution: { protocol: string; apiKey?: string; baseURL?: string; apiFlavor?: unknown },
+  resolution: {
+    providerId: string
+    protocol: string
+    apiKey?: string
+    baseURL?: string
+    apiFlavor?: unknown
+    headers?: Record<string, string>
+  },
   model: string
 ): Parameters<typeof createLlmClient>[0] {
   return {
-    provider: resolution.protocol as Parameters<typeof createLlmClient>[0]["provider"],
+    provider: resolution.providerId as Parameters<typeof createLlmClient>[0]["provider"],
+    protocol: resolution.protocol,
     model,
-    apiKey: resolution.apiKey as string,
+    ...(resolution.apiKey ? { apiKey: resolution.apiKey } : {}),
     baseURL: resolution.baseURL,
     apiFlavor: resolution.apiFlavor as Parameters<typeof createLlmClient>[0]["apiFlavor"],
+    ...(resolution.headers ? { headers: { ...resolution.headers } } : {}),
   }
+}
+
+/**
+ * True when a renderer-side call can authenticate: it has a key, or it targets
+ * an endpoint that is not the SDK vendor's own API host and so is dispatched
+ * keyless (an absent key there is the configuration, not a missing secret).
+ */
+function rendererCredentialAvailable(resolution: {
+  protocol: string
+  apiKey?: string
+  baseURL?: string
+}): boolean {
+  if (resolution.apiKey) return true
+  if (!resolution.baseURL) return false
+  return !allowsAmbientSdkCredential({ sdk: resolution.protocol, baseURL: resolution.baseURL })
 }
 
 /**
@@ -220,7 +249,7 @@ export function resolveDeploymentLlmConfig(
     },
     snapshot
   )
-  if (resolution.kind !== "resolved" || !resolution.apiKey) return null
+  if (resolution.kind !== "resolved" || !rendererCredentialAvailable(resolution)) return null
   if (!isRendererExecutableProtocol(resolution.protocol)) return null
   return llmConfigOf(resolution, modelId)
 }

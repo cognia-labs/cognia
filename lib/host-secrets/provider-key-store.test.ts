@@ -3,9 +3,13 @@ import {
   hostProviderKeyCount,
   overlayHostProviderKeys,
   replaceHostProviderKeys,
+  setHostProviderKeyOverlayGate,
 } from "./provider-key-store"
 
-afterEach(() => replaceHostProviderKeys([]))
+afterEach(() => {
+  replaceHostProviderKeys([])
+  setHostProviderKeyOverlayGate(null)
+})
 
 describe("host provider key store", () => {
   it("fills providers that have no key and leaves a configured key alone", () => {
@@ -45,5 +49,19 @@ describe("host provider key store", () => {
     replaceHostProviderKeys([["c", "k"]])
     expect(hostProviderKey("a")).toBeUndefined()
     expect(hostProviderKey("c")).toBe("k")
+  })
+
+  // A desktop driving a paired remote Host builds that Host's turns; keys
+  // sealed on this desktop must not ride along in their credentials.
+  it("answers nothing while its gate is closed", () => {
+    replaceHostProviderKeys([["deepseek", "sk-host"]])
+    let local = false
+    setHostProviderKeyOverlayGate(() => local)
+    const providers = { deepseek: { apiKey: "" } }
+    expect(overlayHostProviderKeys(providers)).toBe(providers)
+    expect(hostProviderKey("deepseek")).toBeUndefined()
+    local = true
+    expect(overlayHostProviderKeys(providers).deepseek.apiKey).toBe("sk-host")
+    expect(hostProviderKey("deepseek")).toBe("sk-host")
   })
 })

@@ -105,6 +105,74 @@ import {
   computeEnabledProviderIds,
   seedDefaultMappingsIfNeeded,
 } from "@/lib/routing/seed-default-mappings"
+import { repairLegacyProviderFingerprints } from "@/lib/settings/provider-fingerprint-repair"
+
+function discoveryIdentity(row: Partial<UserProviderSettings> | undefined): string {
+  return JSON.stringify({
+    baseURL: row?.baseURL?.trim() ?? "",
+    apiKey: row?.apiKey ?? "",
+    apiKeys: row?.apiKeys ?? [],
+    customHeaders: Object.entries(row?.customHeaders ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+    apiProtocol: row?.apiProtocol ?? "",
+    apiFlavor: row?.apiFlavor ?? "",
+    bedrock: row?.bedrock
+      ? {
+          authMode: row.bedrock.authMode,
+          region: row.bedrock.region ?? "",
+          baseURL: row.bedrock.baseURL ?? "",
+          apiKey: row.bedrock.apiKey ?? "",
+          accessKeyId: row.bedrock.accessKeyId ?? "",
+          profile: row.bedrock.profile ?? "",
+          roleArn: row.bedrock.roleArn ?? "",
+        }
+      : null,
+  })
+}
+
+/**
+ * A discovered model list belongs to the endpoint and account that produced
+ * it. When a write changes either, the old list (and its fetch stamp) would
+ * keep presenting another engine's or account's inventory as current, so it
+ * is dropped unless the same write supplies a fresh one.
+ */
+export function dropStaleDiscoveredModels<T extends Partial<UserProviderSettings>>(
+  previous: Partial<UserProviderSettings> | undefined,
+  next: T,
+  patch: Partial<UserProviderSettings>
+): T {
+  if (!previous) return next
+  if ("discoveredModels" in patch || "discoveredModelsLastFetched" in patch) return next
+  if (next.discoveredModels === undefined && next.discoveredModelsLastFetched === undefined) {
+    return next
+  }
+  if (discoveryIdentity(previous) === discoveryIdentity(next)) return next
+  const cleared = { ...next }
+  delete cleared.discoveredModels
+  delete cleared.discoveredModelsLastFetched
+  return cleared
+}
+
+/**
+ * `name` / `models` are aliases of `customName` / `customModels` that the
+ * profile projection and older readers consume, while the dialog edits the
+ * canonical fields. Keep both in step on every write. A legacy patch that only
+ * names an alias still reaches the canonical field.
+ */
+export function syncCustomProviderAliases(
+  row: CustomProviderSettings,
+  patch?: Partial<CustomProviderSettings>
+): CustomProviderSettings {
+  const next = { ...row }
+  if (patch && patch.customName === undefined && patch.name !== undefined) {
+    next.customName = patch.name
+  }
+  if (patch && patch.customModels === undefined && patch.models !== undefined) {
+    next.customModels = patch.models
+  }
+  if (typeof next.customName === "string") next.name = next.customName
+  if (Array.isArray(next.customModels)) next.models = next.customModels
+  return next
+}
 
 interface SettingsState {
   settings: AppSettings | null
@@ -370,6 +438,14 @@ interface SettingsState {
       >
       discoveredModels?: import("@cognia/provider-types/provider").ProviderModelDiscoveryEntry[]
       discoveredModelsLastFetched?: number
+      /** Static request headers (tenant, version, gateway routing). */
+      customHeaders?: Record<string, string>
+      /** Opt an Anthropic-wire custom provider into the Agent SDK path. */
+      experimentalAgentSdk?: boolean
+      inferenceDefaults?: import("@cognia/provider-types/provider").ProviderInferenceDefaults
+      connectionParams?: import("@cognia/provider-types/provider").ProviderConnectionParams
+      providerSpecificParams?: Record<string, unknown>
+      advancedParams?: Record<string, unknown>
       id?: string
     },
     scope?: CustomProviderMutationScope
@@ -854,6 +930,13 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
         if (s.modelMappings !== repaired.modelMappings) {
           patch.modelMappings = s.modelMappings
         }
+        // Older builds persisted a verification fingerprint that embedded the
+        // raw API key; rewrite it into the credential-free form.
+        const fingerprintRepair = repairLegacyProviderFingerprints(s)
+        if (fingerprintRepair) {
+          s = { ...s, ...fingerprintRepair }
+          Object.assign(patch, fingerprintRepair)
+        }
         if (Object.keys(patch).length > 0) {
           // A repair, not an edit — the user never asked for it, so a paired
           // client must not replay it onto its host (dropping an orphaned
@@ -891,6 +974,20 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
           }
         }
         set({ settings: s, loaded: true, loadFailed: false, loadError: null })
+        // The derived Provider Profile Store is per database and is otherwise
+        // only refreshed by a provider-touching save. Reconcile it once per
+        // load so a database activated for another account/target never runs
+        // with an empty projection of settings it already holds.
+        if (controlsNativeHost) {
+          try {
+            const { syncProviderProfilesFromSettings } =
+              await import("@/lib/settings/provider-profile-sync")
+            await syncProviderProfilesFromSettings(s)
+          } catch (err) {
+            // A re-derivable projection; the next provider save retries it.
+            console.warn("providerProfiles.sync failed", err)
+          }
+        }
         // Push the API key to the Rust process on first load. The user expects
         // their previously-entered key to be active without a manual save.
         if (controlsNativeHost && s.apiKey) {
@@ -1641,7 +1738,11 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
             defaultModel: "",
           } as UserProviderSettings)
         const map = { ...(cur?.providerSettings ?? {}) }
-        map[providerId] = { ...existing, ...patch, providerId }
+        map[providerId] = dropStaleDiscoveredModels(
+          cur?.providerSettings?.[providerId],
+          { ...existing, ...patch, providerId },
+          patch
+        )
         const next = await saveSettings({ providerSettings: map })
         set({ settings: next })
         // If this is the active default provider AND the patch touched
@@ -1706,8 +1807,18 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
         const cur = get().settings
         const list = cur?.customProviders ?? []
         const idx = list.findIndex((p) => p.id === provider.id)
+        const previous = idx >= 0 ? list[idx] : undefined
+        const row = dropStaleDiscoveredModels(
+          previous,
+          syncCustomProviderAliases(provider),
+          // A full-row upsert carries the previous list unchanged unless the
+          // caller replaced it; compare by reference to tell the two apart.
+          previous && provider.discoveredModels !== previous.discoveredModels
+            ? { discoveredModels: provider.discoveredModels }
+            : {}
+        )
         const updated =
-          idx >= 0 ? list.map((p) => (p.id === provider.id ? provider : p)) : [...list, provider]
+          idx >= 0 ? list.map((p) => (p.id === provider.id ? row : p)) : [...list, row]
         const next = scope
           ? await saveSettings({ customProviders: updated }, { scope, mirrorToHost: false })
           : await saveSettings({ customProviders: updated })
@@ -1726,6 +1837,18 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
         apiKey: provider.apiKey,
         baseURL: provider.baseURL,
         ...(provider.apiFlavor ? { apiFlavor: provider.apiFlavor } : {}),
+        // Transport and parameter fields the create dialog submits. The edit
+        // path spreads its patch, so these must survive the first save too.
+        ...(provider.customHeaders && Object.keys(provider.customHeaders).length > 0
+          ? { customHeaders: { ...provider.customHeaders } }
+          : {}),
+        ...(provider.experimentalAgentSdk ? { experimentalAgentSdk: true } : {}),
+        ...(provider.inferenceDefaults ? { inferenceDefaults: provider.inferenceDefaults } : {}),
+        ...(provider.connectionParams ? { connectionParams: provider.connectionParams } : {}),
+        ...(provider.providerSpecificParams
+          ? { providerSpecificParams: provider.providerSpecificParams }
+          : {}),
+        ...(provider.advancedParams ? { advancedParams: provider.advancedParams } : {}),
         // CustomProviderSettings extension
         id,
         isCustom: true,
@@ -1750,7 +1873,14 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
         const idx = list.findIndex((p) => p.id === providerId)
         if (idx < 0) return
         const updated = [...list]
-        updated[idx] = { ...updated[idx], ...patch, id: providerId, isCustom: true }
+        updated[idx] = dropStaleDiscoveredModels(
+          list[idx],
+          syncCustomProviderAliases(
+            { ...updated[idx], ...patch, id: providerId, isCustom: true },
+            patch
+          ),
+          patch
+        )
         const next = await saveSettings({ customProviders: updated })
         set({ settings: next })
       }),

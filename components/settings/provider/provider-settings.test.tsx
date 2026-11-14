@@ -12,6 +12,7 @@
  */
 import React from "react"
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react"
+import { buildProviderVerificationFingerprint } from "@cognia/provider-core/providers/completeness"
 import { ProviderSettings } from "./provider-settings"
 
 const mockRouterReplace = jest.fn()
@@ -729,6 +730,20 @@ beforeEach(() => {
   mockOpenRouterRow = { models: [{ id: "or-1", name: "OR Model" }] }
 })
 
+/**
+ * A row verified against its own configuration: completeness only honours a
+ * "verified" status whose fingerprint matches the row it describes.
+ */
+function verifiedRow<T extends Parameters<typeof buildProviderVerificationFingerprint>[0]>(
+  row: T
+): T & { verificationStatus: "verified"; verificationFingerprint: string } {
+  return {
+    ...row,
+    verificationStatus: "verified",
+    verificationFingerprint: buildProviderVerificationFingerprint(row),
+  }
+}
+
 describe("ProviderSettings external agent runtimes", () => {
   afterEach(() => {
     mockExternalRuntimes.configuredCount = 0
@@ -940,13 +955,12 @@ describe("ProviderSettings (cognia-next slim port)", () => {
         ["deepseek", { name: "DeepSeek", defaultModel: "deepseek-chat" }],
       ],
     })
-    mockHookState.providerSettings.deepseek = {
+    mockHookState.providerSettings.deepseek = verifiedRow({
       providerId: "deepseek",
       enabled: true,
       apiKey: "sk-ds",
       defaultModel: "deepseek-chat",
-      verificationStatus: "verified",
-    }
+    })
     render(<ProviderSettings />)
     expect(mockSetSelectedProviderId).toHaveBeenCalledWith("deepseek")
   })
@@ -1073,13 +1087,12 @@ describe("ProviderSettings (cognia-next slim port)", () => {
     expect(screen.getByTestId("provider-setup-checklist")).toBeInTheDocument()
     unmount()
 
-    mockHookState.providerSettings.openai = {
+    mockHookState.providerSettings.openai = verifiedRow({
       providerId: "openai",
       enabled: true,
       apiKey: "sk-openai",
       defaultModel: "gpt-4o",
-      verificationStatus: "verified",
-    }
+    })
     render(<ProviderSettings />)
     expect(screen.queryByTestId("provider-setup-checklist")).toBeNull()
   })
@@ -1922,14 +1935,13 @@ describe("ProviderSettings (cognia-next slim port)", () => {
       selectedProviderId: "openai",
     })
     // Verified earlier with a matching fingerprint → persisted success.
-    mockHookState.providerSettings.openai = {
+    mockHookState.providerSettings.openai = verifiedRow({
       providerId: "openai",
       enabled: true,
       apiKey: "sk-openai",
       defaultModel: "gpt-4o",
-      verificationStatus: "verified",
       lastVerifiedAt: 1_700_000_000_000,
-    }
+    })
     const { unmount } = render(<ProviderSettings />)
     const shown = JSON.parse(screen.getByTestId("mock-test-result").textContent ?? "{}")
     expect(shown).toMatchObject({ success: true, persisted: true, testedAt: 1_700_000_000_000 })

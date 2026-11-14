@@ -16,6 +16,7 @@
  */
 
 import type { AppSettings } from "@cognia/agent-config-types"
+import { stripProviderCollectionSecrets } from "@cognia/provider-types/provider-secrets"
 import { DEFAULTS } from "@/lib/db/settings"
 
 export const SETTINGS_PROFILE_SCHEMA = "cognia-settings" as const
@@ -35,9 +36,22 @@ export const NON_TRANSFERABLE_KEYS = [
   "installUuid",
 ] as const satisfies readonly (keyof AppSettings)[]
 
+/**
+ * Provider connections are carried by the dedicated Provider export
+ * (`components/settings/provider/provider-import-export.tsx`), which has a
+ * per-row schema, conflict resolution and keeps destination credentials. A
+ * preferences profile neither writes nor accepts them: the importer has no
+ * merge that would keep the destination's keys, so carrying them here only
+ * produced a file whose provider section could never be restored.
+ */
+export const PROVIDER_CONNECTION_KEYS = [
+  "providerSettings",
+  "customProviders",
+] as const satisfies readonly (keyof AppSettings)[]
+
 /** Nested object keys whose name marks them as a secret — scrubbed recursively. */
 const SECRET_KEY_RE =
-  /(token|apikey|secret|password|passphrase|privatekey|credential|authorization|cookie)/i
+  /(token|apikey|secret|password|passphrase|privatekey|credential|authorization|cookie|managementkey)/i
 const SEARCH_LOCAL_FIELDS = new Set(["apiKey", "apiKeys", "cx", "baseUrl", "allowPrivateEndpoint"])
 
 export interface SettingsProfile {
@@ -97,6 +111,20 @@ export function deepStripSecrets(value: unknown): unknown {
   return value
 }
 
+/**
+ * Strip every credential from a whole settings row (full backup without API
+ * keys). Provider rows go through the schema-aware provider projection first —
+ * their credentials (BYOK configs, key-indexed usage stats, auth headers) do
+ * not all carry a secret-looking key name — then the generic recursive scrub.
+ */
+export function stripSettingsRowSecrets<T extends object>(row: T): T {
+  const projected: Record<string, unknown> = { ...(row as Record<string, unknown>) }
+  for (const key of PROVIDER_CONNECTION_KEYS) {
+    if (key in projected) projected[key] = stripProviderCollectionSecrets(projected[key])
+  }
+  return deepStripSecrets(projected) as T
+}
+
 /** Search credentials and self-hosted endpoint authority cannot travel hosts. */
 function portableSearchProviders(value: unknown): unknown {
   if (!isPlainObject(value)) return undefined
@@ -119,7 +147,7 @@ function portableSearchProviders(value: unknown): unknown {
 
 /** Keys excluded from any export: explicit secrets + identity/instance fields. */
 function excludedExportKeys(): Set<string> {
-  return new Set<string>([...SECRET_KEYS, ...NON_TRANSFERABLE_KEYS])
+  return new Set<string>([...SECRET_KEYS, ...NON_TRANSFERABLE_KEYS, ...PROVIDER_CONNECTION_KEYS])
 }
 
 /**

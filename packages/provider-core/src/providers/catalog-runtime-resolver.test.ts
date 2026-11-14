@@ -6,7 +6,10 @@ import type {
 } from "@cognia/provider-types"
 
 import { InMemoryCatalogRepository } from "./catalog-repository"
-import { resolveCatalogRuntimeTarget } from "./catalog-runtime-resolver"
+import {
+  isPrivateOrLinkLocalHostname,
+  resolveCatalogRuntimeTarget,
+} from "./catalog-runtime-resolver"
 
 const providerProfile: ProviderProfile = {
   id: "profile:openai",
@@ -409,4 +412,29 @@ describe("resolveCatalogRuntimeTarget", () => {
       })
     ).toThrow(expect.objectContaining({ code: "adapter_not_allowed" }))
   })
+})
+
+describe("isPrivateOrLinkLocalHostname", () => {
+  it.each([
+    "localhost",
+    "engine.localhost",
+    "printer.local",
+    "127.0.0.1",
+    "10.1.2.3",
+    "172.20.0.4",
+    "192.168.1.9",
+    "169.254.1.1",
+    "[::1]",
+    "fd00::1",
+    "fe80::1",
+  ])("classifies %s as private", (host) => {
+    expect(isPrivateOrLinkLocalHostname(host)).toBe(true)
+  })
+
+  it.each(["api.openai.com", "172.32.0.1", "8.8.8.8", "localhost.example.com"])(
+    "classifies %s as public",
+    (host) => {
+      expect(isPrivateOrLinkLocalHostname(host)).toBe(false)
+    }
+  )
 })

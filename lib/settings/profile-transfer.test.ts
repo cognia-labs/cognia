@@ -4,6 +4,7 @@ import {
   importSettingsProfile,
   buildResetPatch,
   deepStripSecrets,
+  stripSettingsRowSecrets,
   SETTINGS_PROFILE_SCHEMA,
   SETTINGS_PROFILE_VERSION,
 } from "./profile-transfer"
@@ -116,17 +117,21 @@ describe("profile-transfer export", () => {
     })
   })
 
-  it("recursively scrubs nested secrets (provider/custom/webdav)", () => {
+  it("recursively scrubs nested secrets (webdav)", () => {
     const s = exportSettingsProfile(sampleSettings(), NOW).settings as Record<string, never>
-    const provider = (s.providerSettings as Record<string, Record<string, unknown>>).openai
-    expect(provider.apiKey).toBeUndefined()
-    expect(provider.baseURL).toBe("https://api.openai.com") // non-secret kept
-    const custom = (s.customProviders as Record<string, unknown>[])[0]
-    expect(custom.apiKey).toBeUndefined()
-    expect(custom.customName).toBe("X")
     const webdav = s.webdavSync as Record<string, unknown>
     expect(webdav.rememberPassphrase).toBe(true) // boolean flag, not a secret → kept
     expect(webdav.baseUrl).toBe("https://dav")
+  })
+
+  // Provider connections travel through the dedicated Provider export, which
+  // keeps destination keys on import; a preferences profile never could
+  // restore them, so it no longer writes them either.
+  it("leaves provider connections to the Provider export", () => {
+    const s = exportSettingsProfile(sampleSettings(), NOW).settings as Record<string, unknown>
+    expect(s.providerSettings).toBeUndefined()
+    expect(s.customProviders).toBeUndefined()
+    expect(JSON.stringify(s)).not.toContain("sk-openai")
   })
 
   it("serializes to valid JSON", () => {
@@ -264,4 +269,44 @@ describe("profile-transfer reset", () => {
     expect("installUuid" in patch).toBe(false)
     expect(patch.theme).toBe(DEFAULTS.theme)
   })
+})
+
+describe("stripSettingsRowSecrets (full backup without keys)", () => {
+  const SECRET = "sk-synthetic-backup"
+  const row = {
+    ...DEFAULTS,
+    apiKey: SECRET,
+    providerSettings: {
+      openrouter: {
+        providerId: "openrouter",
+        enabled: true,
+        defaultModel: "m",
+        apiKey: SECRET,
+        apiKeyUsageStats: { [SECRET]: { usageCount: 1, lastUsed: 1, errorCount: 0 } },
+        verificationFingerprint: JSON.stringify({ apiKey: SECRET }),
+        customHeaders: { Authorization: `Bearer ${SECRET}`, "x-tenant-id": "acme" },
+        openRouterSettings: {
+          byokKeys: [{ id: "b", provider: "openai", config: JSON.stringify({ k: SECRET }) }],
+        },
+        cliProxyAPISettings: { managementKey: SECRET },
+      },
+    },
+    customProviders: [
+      { id: "x", customName: "X", baseURL: "https://x", apiKey: SECRET, enabled: true },
+    ],
+  } as unknown as AppSettings
+
+  it("removes credentials a key-name scrub cannot see", () => {
+    expect(JSON.stringify(stripSettingsRowSecrets(row))).not.toContain(SECRET)
+  })
+
+  it("keeps the provider connection metadata", () => {
+    const stripped = stripSettingsRowSecrets(row)
+    expect(stripped.providerSettings?.openrouter?.customHeaders).toEqual({ "x-tenant-id": "acme" })
+    expect(stripped.customProviders?.[0]).toMatchObject({ customName: "X", baseURL: "https://x" })
+  })
+})
+
+it("drops a CLIProxyAPI management key in the generic scrub", () => {
+  expect(deepStripSecrets({ managementKey: "m" })).toEqual({})
 })

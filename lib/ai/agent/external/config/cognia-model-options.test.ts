@@ -263,13 +263,24 @@ describe("listHostProfileGatewayModelOptions", () => {
         snapshot: true,
         providers: [
           provider("solo-1", { credentialPool: 0 }),
-          provider("acme-eu", { protocol: "gemini" }),
+          provider("acme-eu", { protocol: "mistral" }),
           provider("acme-us", { enabled: false }),
           provider("off"),
           provider("lonely", { models: [] }),
         ],
       })
     ).toEqual([])
+  })
+
+  it("offers Google/Gemini deployments the Host gateway executes", () => {
+    const options = listHostProfileGatewayModelOptions(docs, {
+      snapshot: true,
+      providers: [
+        provider("acme-eu", { protocol: "gemini" }),
+        provider("acme-us", { protocol: "google" }),
+      ],
+    })
+    expect(options.map((option) => option.providerId)).toEqual(["acme-eu", "acme-us"])
   })
 
   it("answers nothing before the server has projected a snapshot", () => {

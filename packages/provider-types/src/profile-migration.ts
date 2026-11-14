@@ -40,15 +40,23 @@ export interface LegacyProviderSettingsRow {
   customHeaders?: Record<string, string>
   apiKey?: string
   apiKeys?: string[]
+  /** User override of the catalog wire protocol (settings' `apiProtocol`). */
+  apiProtocol?: string
 }
 
 export interface LegacyCustomProviderRow {
   id?: string
+  /** Display name the dialog edits; `name` is its legacy alias. */
+  customName?: string
   name?: string
   enabled?: boolean
+  /** Wire protocol as settings store it. `protocol` is a legacy spelling. */
+  apiProtocol?: string
   protocol?: string
   baseURL?: string
   defaultModel?: string
+  /** Model ids the dialog edits; `models` is their legacy alias. */
+  customModels?: string[]
   models?: Array<{ id?: string; name?: string } | string>
   customHeaders?: Record<string, string>
 }
@@ -76,13 +84,28 @@ export function builtinEndpointSentinel(providerId: string): string {
   return `builtin:${providerId}`
 }
 
-function transportAuthFor(protocol: string): TransportProfile["auth"] {
-  return protocol === "anthropic" ? { scheme: "x-api-key" } : { scheme: "bearer" }
+/**
+ * The credential header each wire protocol authenticates with. It must match
+ * what the provider resolver and the gateway's legacy defaults send: a
+ * transport profile overrides the gateway's auth, so a wrong scheme here
+ * silently changes how requests authenticate.
+ */
+export function transportAuthFor(protocol: string): TransportProfile["auth"] {
+  if (protocol === "anthropic") return { scheme: "x-api-key" }
+  if (protocol === "gemini" || protocol === "google") {
+    return { scheme: "custom-header", name: "x-goog-api-key" }
+  }
+  return { scheme: "bearer" }
 }
 
 function sharedTransportId(protocol: string): string {
-  const auth = transportAuthFor(protocol).scheme
-  return `tp-${protocol}-${auth}`
+  const auth = transportAuthFor(protocol)
+  const scheme = auth.scheme === "custom-header" ? `header-${auth.name}` : auth.scheme
+  return `tp-${protocol}-${scheme}`
+}
+
+function hasText(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0
 }
 
 function sanitizedStaticHeaders(
@@ -200,7 +223,11 @@ export function deriveProfiles(input: DeriveProfilesInput): DerivedProfiles {
 
   for (const [providerId, row] of settingsEntries) {
     const entry = catalogById.get(providerId)
-    const protocol = entry?.protocol ?? "openai"
+    // The user's protocol override wins over the catalog default, exactly as
+    // the provider resolver does.
+    const protocol = hasText(row.apiProtocol)
+      ? row.apiProtocol.trim()
+      : (entry?.protocol ?? "openai")
     const vendorId = entry?.relayOf ?? providerId
     const vendor = ensureVendor(vendorId)
 
@@ -234,10 +261,22 @@ export function deriveProfiles(input: DeriveProfilesInput): DerivedProfiles {
     .sort((a, b) => a.id.localeCompare(b.id))
 
   for (const row of customRows) {
-    const protocol = row.protocol === "anthropic" ? "anthropic" : (row.protocol ?? "openai")
-    const vendor = ensureVendor(row.id, row.name ?? row.id)
+    const protocol = hasText(row.apiProtocol)
+      ? row.apiProtocol.trim()
+      : hasText(row.protocol)
+        ? row.protocol.trim()
+        : "openai"
+    // Canonical fields first: edits update `customName` / `customModels`, and
+    // the aliases can lag behind on rows written by older builds.
+    const displayName = hasText(row.customName) ? row.customName : row.name
+    const vendor = ensureVendor(row.id, displayName ?? row.id)
     const modelIds = new Set<string>()
-    for (const model of row.models ?? []) {
+    const sourceModels: Array<{ id?: string; name?: string } | string> = Array.isArray(
+      row.customModels
+    )
+      ? row.customModels
+      : (row.models ?? [])
+    for (const model of sourceModels) {
       const id = typeof model === "string" ? model : model?.id
       if (id) modelIds.add(id)
     }

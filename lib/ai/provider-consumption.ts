@@ -53,6 +53,7 @@ import type {
   CustomProviderSettings,
 } from "@cognia/provider-types"
 import { validateBedrockConnectionSettings } from "@cognia/provider-types"
+import { keylessSdkCredential } from "@cognia/provider-types/keyless-credentials"
 import { createBedrockSidecarLanguageModel } from "@/lib/claude/feature-call"
 import { protectRawAnalysis } from "@/lib/ai/raw-analysis"
 import { createNativeSiwcFetch } from "@/lib/subscription/siwc/native-fetch"
@@ -112,6 +113,27 @@ export type {
 export type { ResolverProtocol }
 
 /** Convert a rich custom-provider row to the resolver-facing shape. */
+/**
+ * The active key of a row's key pool: the slot rotation last used
+ * (`currentKeyIndex`) when it holds a key, otherwise the first non-blank one.
+ */
+function pooledCredential(row: unknown): string | undefined {
+  if (!row || typeof row !== "object") return undefined
+  const { apiKeys, currentKeyIndex } = row as { apiKeys?: unknown; currentKeyIndex?: unknown }
+  if (!Array.isArray(apiKeys)) return undefined
+  const keys = apiKeys.filter((key): key is string => typeof key === "string")
+  if (
+    typeof currentKeyIndex === "number" &&
+    Number.isInteger(currentKeyIndex) &&
+    currentKeyIndex >= 0 &&
+    currentKeyIndex < keys.length &&
+    keys[currentKeyIndex].trim()
+  ) {
+    return keys[currentKeyIndex].trim()
+  }
+  return keys.find((key) => key.trim())?.trim()
+}
+
 function richToDefinition(rich: RichCustomProviderEntry): CustomProviderDefinition {
   // `apiProtocol` uses the renderer name 'gemini'; the resolver wants 'google'.
   // normalizeProtocol is the single gemini→google bridge (provider-protocol.ts).
@@ -126,7 +148,7 @@ function richToDefinition(rich: RichCustomProviderEntry): CustomProviderDefiniti
     protocol,
     apiFlavor: rich.apiFlavor,
     baseURL: rich.baseURL,
-    apiKey: rich.apiKey,
+    apiKey: pickNonEmpty(rich.apiKey) ?? pooledCredential(rich),
     defaultModel: rich.defaultModel,
     customHeaders: rich.customHeaders,
     ...(rich.subscription ? { subscription: rich.subscription } : {}),
@@ -330,9 +352,12 @@ function resolveOne(
     (custom ? (custom.protocol ?? builtin?.apiProtocol) : builtin?.apiProtocol) ?? defaultProtocol
   ) as ResolvedProvider["protocol"]
 
+  // A provider configured only with a key pool (`apiKeys`) has no single
+  // `apiKey`; the gateway already serves it from the pool, so every other
+  // consumer must see the pool's active key too.
   const apiKey = custom
-    ? pickNonEmpty(custom.apiKey, builtin?.apiKey)
-    : pickNonEmpty(builtin?.apiKey)
+    ? pickNonEmpty(custom.apiKey, builtin?.apiKey, pooledCredential(builtin))
+    : pickNonEmpty(builtin?.apiKey, pooledCredential(builtin))
   let baseURL = custom
     ? pickNonEmpty(custom.baseURL, builtin?.baseURL)
     : pickNonEmpty(builtin?.baseURL)
@@ -375,6 +400,13 @@ function resolveOne(
   // AI SDK's openai client expects — so the turn can actually dispatch.
   if (!baseURL && !custom && providerId in LOCAL_PROVIDER_URLS) {
     baseURL = getOpenAICompatibleURL(LOCAL_PROVIDER_URLS[providerId as LocalProviderName])
+  } else if (baseURL && !custom && providerId in LOCAL_PROVIDER_URLS) {
+    // The local engine panel probes and lists models from the engine ROOT
+    // (it strips `/v1` itself), so the root is what users paste. Give an
+    // explicit root the same OpenAI-compatible `/v1` surface the default
+    // gets; a URL that already names a path (a reverse proxy, `/v1`) is the
+    // user's choice and stays as typed.
+    baseURL = localEngineInferenceURL(baseURL)
   }
 
   // Built-in cloud aggregators (OpenRouter, DeepSeek, Groq, xAI, TogetherAI, …)
@@ -414,6 +446,25 @@ function resolveOne(
     isCustomProvider: Boolean(custom),
     useProxy: false,
   }
+}
+
+/**
+ * An explicit local-engine URL that is only an origin (`http://engine:11434`,
+ * optionally with a trailing slash) becomes its `/v1` surface; any other path
+ * is kept verbatim.
+ */
+export function localEngineInferenceURL(baseURL: string): string {
+  const trimmed = baseURL.trim()
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.pathname === "" || parsed.pathname === "/") {
+      if (parsed.search || parsed.hash) return trimmed
+      return getOpenAICompatibleURL(trimmed)
+    }
+  } catch {
+    // Not a parseable URL: leave it for the request layer to reject.
+  }
+  return trimmed
 }
 
 export function resolveFeatureProvider(
@@ -542,6 +593,17 @@ export function resolveFeatureProvider(
 // AI SDK client / model construction
 // =============================================================================
 
+/** The SDK family whose environment fallback a factory call would read. */
+function keylessSdkFamily(providerId: string, protocol: string, apiFlavor?: string): string {
+  if (providerId === "deepseek" && protocol === "openai" && apiFlavor !== "responses") {
+    return "deepseek"
+  }
+  if (["qwen", "xai", "togetherai", "fireworks", "deepinfra", "perplexity"].includes(providerId)) {
+    return providerId
+  }
+  return protocol
+}
+
 export function createFeatureProviderClient(config: FeatureClientConfig) {
   const {
     providerId,
@@ -582,7 +644,6 @@ export function createFeatureProviderClient(config: FeatureClientConfig) {
     fetch?: typeof globalThis.fetch
     headers?: Record<string, string>
   } = {}
-  if (apiKey) settings.apiKey = apiKey
   if (baseURL) settings.baseURL = baseURL
   // `fetch` + `headers` are standard AI SDK `ProviderSettings` fields accepted
   // by every create*() factory below. Whatever fetch performs the request —
@@ -592,6 +653,18 @@ export function createFeatureProviderClient(config: FeatureClientConfig) {
   const baseFetch = fetchImpl ?? getStreamingFetch()
   if (baseFetch) settings.fetch = withProviderTimeouts(baseFetch)
   if (headers) settings.headers = headers
+  // A keyless endpoint (local engine, LAN gateway, header-authenticated
+  // relay) must neither throw on a missing `*_API_KEY` variable nor be sent
+  // one: outside the vendor's own host the SDK gets a placeholder whose
+  // header is stripped before the request leaves.
+  const credential = keylessSdkCredential({
+    sdk: keylessSdkFamily(providerId, protocol, apiFlavor),
+    apiKey,
+    baseURL,
+    fetch: settings.fetch,
+  })
+  if (credential.apiKey !== undefined) settings.apiKey = credential.apiKey
+  if (credential.fetch) settings.fetch = credential.fetch
 
   if (providerId === "perplexity" && protocol === "openai" && apiFlavor === "responses") {
     settings.fetch = withPerplexityAgentFetch(settings.fetch)

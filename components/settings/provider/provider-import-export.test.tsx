@@ -28,13 +28,16 @@ class MockFileReader {
   }
 }
 
+const mockStoreData: { providerSettings: Record<string, unknown>; customProviders: unknown[] } = {
+  providerSettings: { openai: { apiKey: "test-key", enabled: true } },
+  customProviders: [],
+}
+
 jest.mock("@/stores", () => ({
   useSettingsStore: (selector: (state: Record<string, unknown>) => unknown) => {
     const state = {
-      providerSettings: {
-        openai: { apiKey: "test-key", enabled: true },
-      },
-      customProviders: [],
+      providerSettings: mockStoreData.providerSettings,
+      customProviders: mockStoreData.customProviders,
       setProviderSettings: mockSetProviderSettings,
       addCustomProvider: mockAddCustomProvider,
       updateCustomProvider: mockUpdateCustomProvider,
@@ -402,5 +405,102 @@ describe("ProviderImportExport", () => {
       expect(screen.getByText("importErrors.importFailedRetry")).toBeInTheDocument()
     )
     expect(screen.queryByText("importSuccess")).not.toBeInTheDocument()
+  })
+
+  describe("credential boundary and round-trip fidelity", () => {
+    const SECRET = "sk-synthetic-export"
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    let exported: Blob | undefined
+
+    beforeEach(() => {
+      exported = undefined
+      URL.createObjectURL = jest.fn((blob: Blob) => {
+        exported = blob
+        return "blob:test"
+      }) as typeof URL.createObjectURL
+      URL.revokeObjectURL = jest.fn()
+      mockStoreData.providerSettings = {
+        openrouter: {
+          providerId: "openrouter",
+          apiKey: SECRET,
+          apiKeys: [SECRET],
+          apiKeyUsageStats: { [SECRET]: { usageCount: 1, lastUsed: 1, errorCount: 0 } },
+          oauthRefreshToken: SECRET,
+          verificationFingerprint: JSON.stringify({ apiKey: SECRET }),
+          customHeaders: { Authorization: `Bearer ${SECRET}`, "x-tenant-id": "acme" },
+          openRouterSettings: {
+            provisioningApiKey: SECRET,
+            byokKeys: [
+              { id: "b", provider: "openai", config: SECRET, alwaysUse: false, enabled: true },
+            ],
+          },
+          enabled: true,
+          defaultModel: "m",
+        },
+      }
+    })
+
+    afterEach(() => {
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+      mockStoreData.providerSettings = { openai: { apiKey: "test-key", enabled: true } }
+      mockStoreData.customProviders = []
+    })
+
+    it("exports no credential of any kind when API keys are excluded", async () => {
+      render(<ProviderImportExport />)
+      fireEvent.click(screen.getByText("export"))
+      fireEvent.click(screen.getByText("exportNow"))
+      expect(exported).toBeDefined()
+      const text = await new Promise<string>((resolve, reject) => {
+        const reader = new OriginalFileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(reader.error)
+        reader.readAsText(exported!)
+      })
+      expect(text).not.toContain(SECRET)
+      expect(JSON.parse(text).providerSettings.openrouter).toMatchObject({
+        customHeaders: { "x-tenant-id": "acme" },
+        defaultModel: "m",
+      })
+    })
+
+    it("imports a custom provider's headers, flavor and inference defaults", async () => {
+      mockFileReaderContent = JSON.stringify({
+        version: 1,
+        exportedAt: "2026-11-14T00:00:00.000Z",
+        customProviders: {
+          "custom-gw": {
+            customName: "Gateway",
+            baseURL: "https://gw.example/v1",
+            customModels: ["m"],
+            defaultModel: "m",
+            apiProtocol: "openai",
+            apiFlavor: "responses",
+            customHeaders: { "x-tenant-id": "acme" },
+            inferenceDefaults: { temperature: 0.2 },
+            enabled: true,
+          },
+        },
+      })
+      const { container } = render(<ProviderImportExport />)
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(fileInput, {
+        target: { files: [new File(["ignored"], "providers.json", { type: "application/json" })] },
+      })
+      await waitFor(() => expect(screen.getByText("importNow")).toBeInTheDocument())
+      fireEvent.click(screen.getByText("importNow"))
+      await waitFor(() =>
+        expect(mockAddCustomProvider).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: "custom-gw",
+            apiFlavor: "responses",
+            customHeaders: { "x-tenant-id": "acme" },
+            inferenceDefaults: { temperature: 0.2 },
+          })
+        )
+      )
+    })
   })
 })

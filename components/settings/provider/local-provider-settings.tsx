@@ -17,6 +17,7 @@ import {
   createLocalProviderService,
   getInstallInstructions,
 } from "@cognia/provider-core/providers/local-provider-service"
+import { buildProviderVerificationFingerprint } from "@cognia/provider-core/providers/completeness"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -31,6 +32,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { useSettingsStore } from "@/stores/settings"
 import { useDraftField } from "@/hooks/settings/use-draft-field"
 import { useHostProfile } from "@/hooks/use-host-profile"
+import { getRuntimeTargetScopeKey } from "@/lib/runtime/runtime-target-context"
 import { LocalProviderCard } from "./local-provider-card"
 import { ProviderHostNotice } from "./provider-host-notice"
 import { LocalProviderSetupWizard } from "./local-provider-setup-wizard"
@@ -134,11 +136,33 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
   )
 
   const handleTestConnection = useCallback(async () => {
+    // Bind the result to the configuration and runtime target it was made
+    // against: a probe that resolves after the endpoint, key, headers or
+    // target changed must not write a model list or a "verified" status that
+    // vouches for the new configuration.
+    const testedSettings = useSettingsStore.getState().providerSettings[providerId]
+    const testedConfig = buildProviderVerificationFingerprint(testedSettings)
+    const testedScope = getRuntimeTargetScopeKey()
+    const isCurrent = () =>
+      getRuntimeTargetScopeKey() === testedScope &&
+      buildProviderVerificationFingerprint(
+        useSettingsStore.getState().providerSettings[providerId]
+      ) === testedConfig
+    const recordFailure = async (message: string) => {
+      if (!isCurrent()) return
+      await setProviderConfig(providerId, {
+        verificationStatus: "unverified",
+        lastVerifiedAt: Date.now(),
+        verificationMessage: message,
+        healthStatus: "error",
+      })
+    }
+
     setIsRefreshing(true)
     try {
       const service = createLocalProviderService(providerId, serviceOptions)
       const nextStatus = await service.getStatus()
-      setStatus(nextStatus)
+      if (isCurrent()) setStatus(nextStatus)
 
       if (nextStatus.connected) {
         let models: LocalModelInfo[]
@@ -146,29 +170,30 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
           models = await service.listModels()
         } catch (error) {
           const message = error instanceof Error ? error.message : t("connectionFailed")
-          await setProviderConfig(providerId, {
-            verificationStatus: "unverified",
-            lastVerifiedAt: Date.now(),
-            verificationMessage: message,
-            healthStatus: "error",
-          })
+          await recordFailure(message)
           return {
             success: false,
             message,
             latency: nextStatus.latency_ms,
           }
         }
-        await persistDiscoveredModels(models)
         const message = t("connectedSummary", {
           version: nextStatus.version || t("unknownVersion"),
           count: models.length,
         })
-        await setProviderConfig(providerId, {
-          verificationStatus: "verified",
-          lastVerifiedAt: Date.now(),
-          verificationMessage: message,
-          healthStatus: "healthy",
-        })
+        if (isCurrent()) {
+          await persistDiscoveredModels(models)
+          // Recompute after the model write: picking a default model changes
+          // the row the fingerprint pins.
+          const verifiedRow = useSettingsStore.getState().providerSettings[providerId]
+          await setProviderConfig(providerId, {
+            verificationStatus: "verified",
+            verificationFingerprint: buildProviderVerificationFingerprint(verifiedRow),
+            lastVerifiedAt: Date.now(),
+            verificationMessage: message,
+            healthStatus: "healthy",
+          })
+        }
         return {
           success: true,
           message,
@@ -177,12 +202,7 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
       }
 
       const message = nextStatus.error || t("connectionFailed")
-      await setProviderConfig(providerId, {
-        verificationStatus: "unverified",
-        lastVerifiedAt: Date.now(),
-        verificationMessage: message,
-        healthStatus: "error",
-      })
+      await recordFailure(message)
       return {
         success: false,
         message,
@@ -190,12 +210,7 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : t("connectionFailed")
-      await setProviderConfig(providerId, {
-        verificationStatus: "unverified",
-        lastVerifiedAt: Date.now(),
-        verificationMessage: message,
-        healthStatus: "error",
-      })
+      await recordFailure(message)
       return {
         success: false,
         message,

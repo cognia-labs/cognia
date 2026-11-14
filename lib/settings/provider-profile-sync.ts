@@ -36,15 +36,23 @@ function stableStringify(value: unknown): string {
   })
 }
 
-let lastDerivationHash: string | null = null
+/**
+ * Last written derivation, per database. The active account/runtime target
+ * selects a different database (`activateAccountDatabase`), and each one holds
+ * its own profile store: a memo shared across them would skip populating an
+ * empty database whose settings derive to the same content as the previous
+ * one's.
+ */
+const lastDerivationHashByDb = new Map<string, string>()
 
 /** Test hook — the memo is module-global. */
 export function __resetProviderProfileSync(): void {
-  lastDerivationHash = null
+  lastDerivationHashByDb.clear()
 }
 
-async function currentStoreHash(): Promise<string> {
-  const db = getDb()
+type ProfileDb = ReturnType<typeof getDb>
+
+async function currentStoreHash(db: ProfileDb): Promise<string> {
   const [providers, deployments, transports] = await Promise.all([
     db.providerProfiles.toArray(),
     db.deploymentProfiles.toArray(),
@@ -83,14 +91,21 @@ export async function syncProviderProfilesFromSettings(
   })
   const nextHash = stableStringify(derived)
 
-  if (lastDerivationHash === null) {
-    // First sync this process: compare against what the store already holds
-    // so a reload doesn't burn a version on identical content.
-    lastDerivationHash = await currentStoreHash()
+  const db = getDb()
+  const dbKey = db.name
+  let lastHash = lastDerivationHashByDb.get(dbKey)
+  if (lastHash === undefined) {
+    // First sync against this database: compare with what its store already
+    // holds so a reload doesn't burn a version on identical content.
+    lastHash = await currentStoreHash(db)
+    lastDerivationHashByDb.set(dbKey, lastHash)
   }
-  if (nextHash === lastDerivationHash) return null
+  if (nextHash === lastHash) return null
 
   const version = await putDerivedProfiles(derived)
-  lastDerivationHash = nextHash
+  // Record against the database the profiles were derived for; if the active
+  // database changed during the write, the next sync re-reads its own store.
+  if (getDb().name === dbKey) lastDerivationHashByDb.set(dbKey, nextHash)
+  else lastDerivationHashByDb.delete(dbKey)
   return version
 }

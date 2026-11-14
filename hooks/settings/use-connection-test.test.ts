@@ -42,7 +42,13 @@ describe("useConnectionTest", () => {
       message: "Connected successfully.",
       latency_ms: 42,
     })
-    expect(testMock).toHaveBeenCalledWith("https://api.example.com/v1", "sk-x", "openai", undefined)
+    expect(testMock).toHaveBeenCalledWith(
+      "https://api.example.com/v1",
+      "sk-x",
+      "openai",
+      undefined,
+      undefined
+    )
   })
 
   // Anthropic-wire hosts probe with a real request, so the model must reach the
@@ -62,8 +68,33 @@ describe("useConnectionTest", () => {
       "https://api.kimi.com/coding/",
       "sk-x",
       "anthropic",
-      "kimi-for-coding"
+      "kimi-for-coding",
+      undefined
     )
+  })
+
+  // A gateway that needs a tenant/routing header must be probed with it, or
+  // the dialog reports a failure the saved provider would not have.
+  it("forwards the edited static headers to the transport", async () => {
+    testMock.mockResolvedValue({ success: true, message: "ok" })
+    const { result } = renderHook(() => useConnectionTest())
+    await act(async () => {
+      await result.current.test("https://gw.example/v1", "", "openai", "m", {
+        "x-tenant-id": "acme",
+      })
+    })
+    expect(testMock).toHaveBeenCalledWith("https://gw.example/v1", "", "openai", "m", {
+      "x-tenant-id": "acme",
+    })
+  })
+
+  it("sends no header map when none is configured", async () => {
+    testMock.mockResolvedValue({ success: true, message: "ok" })
+    const { result } = renderHook(() => useConnectionTest())
+    await act(async () => {
+      await result.current.test("https://gw.example/v1", "k", "openai", "m", {})
+    })
+    expect(testMock).toHaveBeenCalledWith("https://gw.example/v1", "k", "openai", "m", undefined)
   })
 
   it("preserves the 'limited' outcome instead of collapsing it to success/error", async () => {

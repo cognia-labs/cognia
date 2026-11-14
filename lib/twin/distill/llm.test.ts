@@ -22,6 +22,7 @@ import { platformStreamingFetch } from "@/lib/network/platform-streaming-fetch"
 jest.mock("@/lib/network/platform-streaming-fetch", () => ({ platformStreamingFetch: jest.fn() }))
 import { createAzure } from "@ai-sdk/azure"
 import { createOpenAI } from "@ai-sdk/openai"
+import { KEYLESS_SDK_PLACEHOLDER } from "@cognia/provider-types/keyless-credentials"
 
 import {
   abortableStreamModel,
@@ -340,6 +341,65 @@ describe("createLlmClient", () => {
         __provider: "openai.chat",
         id: "openrouter/auto",
       })
+    })
+
+    it("dispatches a keyless local engine with the stripped placeholder", async () => {
+      const client = createLlmClient({
+        provider: "ollama" as LlmConfig["provider"],
+        protocol: "openai",
+        model: "llama",
+        baseURL: "http://localhost:11434/v1",
+      })
+      await expect(client.complete("hi")).resolves.toBe("ok:openai.chat")
+      const settings = (createOpenAI as jest.Mock).mock.calls.at(-1)?.[0]
+      expect(settings.apiKey).toBe(KEYLESS_SDK_PLACEHOLDER)
+      // The wrapper strips the placeholder header before the request leaves.
+      expect(settings.fetch).not.toBe(platformStreamingFetch)
+    })
+
+    it("uses the resolver's protocol for a custom provider id", async () => {
+      const client = createLlmClient({
+        provider: "custom-gw" as LlmConfig["provider"],
+        protocol: "openai",
+        model: "m",
+        apiKey: "k",
+        baseURL: "https://gw.example/v1",
+        headers: { "x-tenant-id": "acme" },
+      })
+      await expect(client.complete("hi")).resolves.toBe("ok:openai.chat")
+      expect(createOpenAI).toHaveBeenLastCalledWith(
+        expect.objectContaining({ headers: { "x-tenant-id": "acme" } })
+      )
+    })
+
+    // CommandCode serves Claude models on the Anthropic wire; the utility rail
+    // used to send them to OpenAI /chat/completions, and an Anthropic relay
+    // root missed the `/v1` the SDK expects.
+    it("serves CommandCode Claude models over Anthropic /v1/messages", async () => {
+      jest
+        .mocked(platformStreamingFetch)
+        .mockImplementationOnce(() => Promise.reject(new Error("captured")))
+      const model = (await createTwinLanguageModel({
+        provider: "commandcode" as LlmConfig["provider"],
+        protocol: "openai",
+        model: "claude-sonnet-5",
+        apiKey: "sk-cc",
+        baseURL: "https://relay.example/coding",
+      })) as unknown as {
+        doGenerate: (options: unknown) => Promise<unknown>
+      }
+      await expect(
+        model.doGenerate({
+          prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+          maxOutputTokens: 4,
+        })
+      ).rejects.toThrow("captured")
+      const [input, init] = jest.mocked(platformStreamingFetch).mock.calls.at(-1) as [
+        string,
+        RequestInit,
+      ]
+      expect(String(input)).toBe("https://relay.example/coding/v1/messages")
+      expect(new Headers(init.headers).get("x-api-key")).toBe("sk-cc")
     })
 
     it("fills the catalog base URL for built-in OpenAI-compatible providers", async () => {

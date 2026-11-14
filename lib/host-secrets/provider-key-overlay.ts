@@ -19,7 +19,13 @@
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { isTauri } from "@/lib/tauri"
 
-import { hostProviderKeyCount, replaceHostProviderKeys } from "./provider-key-store"
+import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
+
+import {
+  hostProviderKeyCount,
+  replaceHostProviderKeys,
+  setHostProviderKeyOverlayGate,
+} from "./provider-key-store"
 
 export {
   hostProviderKey,
@@ -40,6 +46,11 @@ export interface HostProviderKeyDeps {
   load: () => Promise<LoadedKeys>
   subscribe: (onChange: () => void) => Promise<() => void> | (() => void)
   log?: (level: "warn" | "error", message: string) => void
+  /**
+   * Whether the overlay may fill keys for the current runtime target. Absent,
+   * it always may (a headless brain only ever runs its own turns).
+   */
+  applies?: () => boolean
 }
 
 /** Where this process's keys come from, or null where there is no host store. */
@@ -69,6 +80,10 @@ export function defaultHostProviderKeyDeps(): HostProviderKeyDeps | null {
         const { listen } = await import("@tauri-apps/api/event")
         return listen(HOST_SECRETS_CHANGED_EVENT, () => onChange())
       },
+      // While this desktop drives a paired remote Host, chat turns run there
+      // and their credentials are sent to it. Keys sealed on this machine are
+      // for this machine's own runtime and must not fill those credentials.
+      applies: () => !isRemoteHostActive(),
     }
   }
   return null
@@ -117,6 +132,7 @@ export function installHostProviderKeys(deps: HostProviderKeyDeps): InstalledHos
     return pending
   }
 
+  setHostProviderKeyOverlayGate(deps.applies ?? null)
   const ready = reload()
   void Promise.resolve(deps.subscribe(() => void reload()))
     .then((stop) => {
@@ -136,6 +152,7 @@ export function installHostProviderKeys(deps: HostProviderKeyDeps): InstalledHos
       stopped = true
       unsubscribe?.()
       replaceHostProviderKeys([])
+      setHostProviderKeyOverlayGate(null)
     },
   }
 }

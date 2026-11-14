@@ -1,5 +1,6 @@
 import {
   buildProviderVerificationFingerprint,
+  customProviderAllowsKeyless,
   evaluateBuiltInProviderCompleteness,
   evaluateCustomProviderCompleteness,
   evaluateRuntimeEligibility,
@@ -7,6 +8,7 @@ import {
   getProviderRequirements,
   hasAnyCredential,
   isValidHttpUrl,
+  upgradeLegacyVerificationFingerprint,
 } from "./completeness"
 
 describe("provider completeness contract", () => {
@@ -35,7 +37,9 @@ describe("provider completeness contract", () => {
   })
 
   it("builds stable fingerprints from trimmed optional settings", () => {
-    expect(JSON.parse(buildProviderVerificationFingerprint()).apiKeys).toEqual([])
+    expect(buildProviderVerificationFingerprint({ apiKey: " sk-direct " })).toBe(
+      buildProviderVerificationFingerprint({ apiKey: "sk-direct" })
+    )
 
     const fingerprint = JSON.parse(
       buildProviderVerificationFingerprint({
@@ -47,12 +51,112 @@ describe("provider completeness contract", () => {
     )
 
     expect(fingerprint).toMatchObject({
-      apiKey: "sk-direct",
-      apiKeys: ["key-a", "key-b"],
       currentKeyIndex: 0,
       baseURL: "https://api.example.com/v1",
       defaultModel: "gpt-4o",
     })
+  })
+
+  // The fingerprint is persisted beside the row and travels with exports and
+  // backups; it must never be a second plaintext copy of a credential.
+  it("never embeds credential material", () => {
+    const serialized = buildProviderVerificationFingerprint({
+      apiKey: "sk-synthetic-direct",
+      apiKeys: ["sk-synthetic-pool"],
+      customHeaders: { Authorization: "Bearer sk-synthetic-header" },
+      bedrock: {
+        authMode: "iam",
+        region: "us-east-1",
+        accessKeyId: "AKIASYNTHETIC",
+        secretAccessKey: "synthetic-secret",
+        sessionToken: "synthetic-session",
+      },
+    })
+    for (const secret of [
+      "sk-synthetic-direct",
+      "sk-synthetic-pool",
+      "sk-synthetic-header",
+      "AKIASYNTHETIC",
+      "synthetic-secret",
+      "synthetic-session",
+    ]) {
+      expect(serialized).not.toContain(secret)
+    }
+  })
+
+  it("changes with every credential and connection identity field", () => {
+    const base = {
+      apiKey: "k",
+      baseURL: "https://api.example.com/v1",
+      defaultModel: "m",
+      apiFlavor: "chat",
+      customHeaders: { "x-tenant-id": "a" },
+      bedrock: {
+        authMode: "iam",
+        region: "us-east-1",
+        accessKeyId: "id",
+        secretAccessKey: "s",
+        profile: "p",
+        roleArn: "r",
+      },
+    }
+    const fingerprint = buildProviderVerificationFingerprint(base)
+    const variants = [
+      { ...base, apiKey: "k2" },
+      { ...base, apiFlavor: "responses" },
+      { ...base, customHeaders: { "x-tenant-id": "b" } },
+      { ...base, bedrock: { ...base.bedrock, region: "eu-west-1" } },
+      { ...base, bedrock: { ...base.bedrock, secretAccessKey: "s2" } },
+      { ...base, bedrock: { ...base.bedrock, accessKeyId: "id2" } },
+      { ...base, bedrock: { ...base.bedrock, profile: "p2" } },
+      { ...base, bedrock: { ...base.bedrock, roleArn: "r2" } },
+    ]
+    for (const variant of variants) {
+      expect(buildProviderVerificationFingerprint(variant)).not.toBe(fingerprint)
+    }
+  })
+
+  it("treats a verified row without a fingerprint as stale", () => {
+    expect(
+      evaluateBuiltInProviderCompleteness("ollama", {
+        providerId: "ollama",
+        enabled: true,
+        defaultModel: "llama",
+        baseURL: "http://localhost:11434",
+        verificationStatus: "verified",
+      }).verificationStatus
+    ).toBe("stale")
+  })
+
+  it("rewrites a v2 fingerprint and recognises when it no longer matches", () => {
+    const row = { apiKey: "sk-old", baseURL: "https://x/v1", defaultModel: "m" }
+    const v2 = JSON.stringify({
+      verificationContract: "provider-connectivity-v2",
+      apiKey: "sk-old",
+      apiKeys: [],
+      currentKeyIndex: 0,
+      baseURL: "https://x/v1",
+      defaultModel: "m",
+      apiProtocol: "",
+      customHeaders: [],
+    })
+    expect(upgradeLegacyVerificationFingerprint({ ...row, verificationFingerprint: v2 })).toBe(
+      buildProviderVerificationFingerprint(row)
+    )
+    const mismatch = upgradeLegacyVerificationFingerprint({
+      ...row,
+      apiKey: "sk-new",
+      verificationFingerprint: v2,
+    })
+    expect(mismatch).not.toContain("sk-old")
+    expect(mismatch).not.toBe(buildProviderVerificationFingerprint({ ...row, apiKey: "sk-new" }))
+    expect(
+      upgradeLegacyVerificationFingerprint({
+        ...row,
+        verificationFingerprint: buildProviderVerificationFingerprint(row),
+      })
+    ).toBeUndefined()
+    expect(upgradeLegacyVerificationFingerprint(row)).toBeUndefined()
   })
 
   it("infers requirements for catalog, local, and unknown providers", () => {
@@ -304,4 +408,55 @@ it("invalidates verification on protocol/header changes but ignores header inser
   expect(
     buildProviderVerificationFingerprint({ ...cfg, customHeaders: { "X-A": "other" } })
   ).not.toBe(fingerprint)
+})
+
+describe("keyless custom providers", () => {
+  const row = (baseURL: string, extra: Record<string, unknown> = {}) => ({
+    id: "custom-x",
+    providerId: "custom-x",
+    enabled: true,
+    baseURL,
+    defaultModel: "m",
+    ...extra,
+  })
+
+  it.each([
+    "http://localhost:8080/v1",
+    "http://127.0.0.1:8080/v1",
+    "http://192.168.1.20:11434",
+    "http://10.0.0.5/v1",
+    "http://engine.local:8000/v1",
+  ])("allows a keyless private endpoint %s", (baseURL) => {
+    const result = evaluateCustomProviderCompleteness(row(baseURL))
+    expect(result.eligibility.enable.allowed).toBe(true)
+    expect(result.eligibility.testConnection.allowed).toBe(true)
+    expect(result.eligibility.runtime.allowed).toBe(true)
+  })
+
+  it("allows a header-authenticated public relay", () => {
+    expect(
+      evaluateCustomProviderCompleteness(
+        row("https://relay.example/v1", { customHeaders: { Authorization: "Bearer x" } })
+      ).eligibility.runtime.allowed
+    ).toBe(true)
+  })
+
+  it("accepts a key pool as the credential", () => {
+    expect(
+      evaluateCustomProviderCompleteness(row("https://relay.example/v1", { apiKeys: ["k"] }))
+        .eligibility.runtime.allowed
+    ).toBe(true)
+  })
+
+  it("still requires a credential for a public endpoint", () => {
+    const result = evaluateCustomProviderCompleteness(row("https://relay.example/v1"))
+    expect(result.eligibility.runtime).toMatchObject({ allowed: false, code: "missing_credential" })
+    expect(customProviderAllowsKeyless({ baseURL: "https://relay.example/v1" })).toBe(false)
+    expect(
+      customProviderAllowsKeyless({
+        baseURL: "https://relay.example/v1",
+        customHeaders: { "x-tenant-id": "acme" },
+      })
+    ).toBe(false)
+  })
 })

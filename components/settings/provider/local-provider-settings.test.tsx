@@ -4,6 +4,7 @@
 
 import React from "react"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { buildProviderVerificationFingerprint } from "@cognia/provider-core/providers/completeness"
 import { LocalProviderSettings } from "./local-provider-settings"
 
 jest.mock("next-intl", () => ({
@@ -46,7 +47,10 @@ const mockState = {
 }
 
 jest.mock("@/stores/settings", () => ({
-  useSettingsStore: (selector: (state: typeof mockState) => unknown) => selector(mockState),
+  useSettingsStore: Object.assign(
+    (selector: (state: typeof mockState) => unknown) => selector(mockState),
+    { getState: () => mockState }
+  ),
 }))
 
 let mockHostProfile = "desktop"
@@ -241,11 +245,42 @@ describe("LocalProviderSettings", () => {
         "ollama",
         expect.objectContaining({
           verificationStatus: "verified",
+          // Pins the verification to the tested row, so a later endpoint or
+          // key change turns it stale.
+          verificationFingerprint: buildProviderVerificationFingerprint(
+            mockState.providerSettings.ollama
+          ),
           healthStatus: "healthy",
           verificationMessage: "Connected v0.6.0 (2 models)",
         })
       )
     })
+  })
+
+  it("writes nothing when the endpoint changed while the probe was in flight", async () => {
+    let releaseStatus!: (value: unknown) => void
+    render(<LocalProviderSettings providerId="ollama" />)
+    await waitFor(() => expect(getStatus).toHaveBeenCalled())
+    getStatus.mockClear()
+    getStatus.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseStatus = resolve
+        })
+    )
+    const original = mockState.providerSettings.ollama
+    try {
+      act(() => {
+        fireEvent.click(screen.getByTestId("test-connection"))
+      })
+      mockState.providerSettings.ollama = { ...original, baseURL: "http://127.0.0.1:22444" }
+      await act(async () => {
+        releaseStatus({ connected: true, version: "0.6.0", models_count: 2, latency_ms: 1 })
+      })
+      expect(mockState.setProviderConfig).not.toHaveBeenCalled()
+    } finally {
+      mockState.providerSettings.ollama = original
+    }
   })
 
   it("marks the provider unverified when model discovery fails after the server responds", async () => {

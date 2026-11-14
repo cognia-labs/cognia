@@ -39570,6 +39570,7 @@
     "custom": "自定义",
     "customBaseURL": "自定义基础 URL",
     "customProviderDescription": "配置使用您首选协议的自定义 API 服务商。",
+    "customProviderKeyRequiredForPublicEndpoint": "公网地址需要 API 密钥，或在传输标头中设置 Authorization 标头，才能启用。本机或局域网内的地址可以不填密钥。",
     "customProviderModelsManaged": "自定义服务商的模型在服务商编辑器中管理。",
     "customProviderMutationFailed": "无法保存服务商更改：{error}",
     "customProviders": "自定义服务商",

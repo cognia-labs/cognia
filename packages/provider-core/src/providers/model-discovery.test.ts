@@ -8,6 +8,8 @@ import {
   buildCustomProviderModelDiscoverySnapshot,
   modelConfigToProviderModelCandidate,
   discoverOpenAICompatibleModels,
+  discoverLocalProviderModels,
+  REMOTE_MODEL_FRESHNESS_TTL_MS,
 } from "./model-discovery"
 import { proxyFetch } from "./runtime-adapters"
 
@@ -421,5 +423,45 @@ describe("buildBuiltInProviderModelDiscoverySnapshot", () => {
     })
     expect(byId(snap, "m1")!.contextLength).toBe(200000)
     expect(byId(snap, "m2")).toBeDefined()
+  })
+})
+
+describe("remote listing freshness", () => {
+  const NOW = 10 * 24 * 60 * 60 * 1000
+  const freshnessAt = (remoteLastFetchedAt: number | undefined) =>
+    buildProviderModelDiscoverySnapshot({
+      providerId: "p",
+      remoteModels: [{ id: "m" }],
+      remoteLastFetchedAt,
+      now: NOW,
+    }).models[0].freshness
+
+  it("is fresh only inside the freshness window", () => {
+    expect(freshnessAt(NOW - 1000)).toBe("fresh")
+    expect(freshnessAt(NOW - REMOTE_MODEL_FRESHNESS_TTL_MS - 1)).toBe("stale")
+  })
+
+  it("never treats a bogus or future timestamp as fresh", () => {
+    expect(freshnessAt(1)).toBe("stale")
+    expect(freshnessAt(undefined)).toBe("stale")
+    expect(freshnessAt(NOW + 60_000)).toBe("stale")
+  })
+})
+
+describe("discoverLocalProviderModels", () => {
+  it("authenticates the listing with the configured key and headers", async () => {
+    jest
+      .mocked(proxyFetch)
+      .mockResolvedValue(
+        new Response(JSON.stringify({ models: [{ name: "llama" }] }), { status: 200 })
+      )
+    await discoverLocalProviderModels("ollama", "http://engine:11434", {
+      apiKey: "local-key",
+      customHeaders: { "x-tenant-id": "acme" },
+    }).catch(() => undefined)
+    const call = jest.mocked(proxyFetch).mock.calls.at(-1)
+    const headers = new Headers((call?.[1] as RequestInit | undefined)?.headers)
+    expect(headers.get("authorization")).toBe("Bearer local-key")
+    expect(headers.get("x-tenant-id")).toBe("acme")
   })
 })

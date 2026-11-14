@@ -19,6 +19,7 @@ import {
 } from "@cognia/provider-types/built-in-provider-catalog"
 import type { BedrockConnectionSettings, ProviderName } from "@cognia/provider-types"
 import { getBuiltInProviderDefaultBaseURL } from "@cognia/provider-types/built-in-provider-catalog"
+import { keylessSdkCredential } from "@cognia/provider-types/keyless-credentials"
 // Single source of truth for the OpenAI Responses-vs-Chat decision and the
 // provider→protocol map (shared with the sidecar; the file lives under
 // `sidecar/` because the sidecar ships standalone and can't import TS).
@@ -57,6 +58,23 @@ export interface ProviderModelOptions {
 }
 
 /**
+ * `apiKey` / `fetch` for one factory call: a keyless endpoint gets a stripped
+ * placeholder instead of the SDK's ambient `*_API_KEY` fallback.
+ */
+function credentialOptions(
+  sdk: string,
+  apiKey: string | undefined,
+  baseURL: string | undefined,
+  fetch?: typeof globalThis.fetch
+): { apiKey?: string; fetch?: typeof globalThis.fetch } {
+  const credential = keylessSdkCredential({ sdk, apiKey, baseURL, fetch })
+  return {
+    ...(credential.apiKey !== undefined ? { apiKey: credential.apiKey } : {}),
+    ...(credential.fetch ? { fetch: credential.fetch } : {}),
+  }
+}
+
+/**
  * Resolve a Vercel AI SDK `LanguageModel` for a given provider + model.
  *
  * Honours `opts.provider` across the first-party `@ai-sdk/*` families plus the
@@ -84,10 +102,14 @@ export function getProviderModel(opts: ProviderModelOptions): LanguageModel {
       apiFlavor: opts.apiFlavor,
     })
     const client = createOpenAI({
-      apiKey,
+      ...credentialOptions(
+        "perplexity",
+        apiKey,
+        endpoint.baseURL,
+        endpoint.flavor === "responses" ? withPerplexityAgentFetch() : undefined
+      ),
       baseURL: endpoint.baseURL,
       headers: opts.headers,
-      ...(endpoint.flavor === "responses" ? { fetch: withPerplexityAgentFetch() } : {}),
     })
     return (
       endpoint.flavor === "responses" ? client.responses(opts.model) : client.chat(opts.model)
@@ -95,9 +117,10 @@ export function getProviderModel(opts: ProviderModelOptions): LanguageModel {
   }
 
   if (provider === "commandcode" && resolveProviderProtocol(provider, opts.model) === "anthropic") {
+    const commandCodeBaseURL = baseURL ?? getBuiltInProviderDefaultBaseURL(provider)
     return createAnthropic({
-      apiKey,
-      baseURL: baseURL ?? getBuiltInProviderDefaultBaseURL(provider),
+      ...credentialOptions("anthropic", apiKey, commandCodeBaseURL),
+      baseURL: commandCodeBaseURL,
       headers: opts.headers,
     })(opts.model) as LanguageModel
   }
@@ -111,19 +134,39 @@ export function getProviderModel(opts: ProviderModelOptions): LanguageModel {
       // model even supports `effort`.
       const model =
         opts.model || getBuiltInProviderDefaultModel("anthropic") || ANTHROPIC_FALLBACK_MODEL_ID
-      return createAnthropic({ apiKey, baseURL })(model) as LanguageModel
+      return createAnthropic({
+        ...credentialOptions("anthropic", apiKey, baseURL),
+        baseURL,
+        headers: opts.headers,
+      })(model) as LanguageModel
     }
     case "google":
     case "gemini":
-      return createGoogle({ apiKey, baseURL })(opts.model) as LanguageModel
+      return createGoogle({
+        ...credentialOptions("google", apiKey, baseURL),
+        baseURL,
+        headers: opts.headers,
+      })(opts.model) as LanguageModel
     case "mistral":
-      return createMistral({ apiKey, baseURL })(opts.model) as LanguageModel
+      return createMistral({
+        ...credentialOptions("mistral", apiKey, baseURL),
+        baseURL,
+        headers: opts.headers,
+      })(opts.model) as LanguageModel
     case "cohere":
-      return createCohere({ apiKey, baseURL })(opts.model) as LanguageModel
+      return createCohere({
+        ...credentialOptions("cohere", apiKey, baseURL),
+        baseURL,
+        headers: opts.headers,
+      })(opts.model) as LanguageModel
     case "azure": {
       // Azure serves the OpenAI surface; honor apiFlavor (auto → chat for Azure,
       // "responses" opts into the Responses API) via the shared decision.
-      const client = createAzure({ apiKey, baseURL, headers: opts.headers })
+      const client = createAzure({
+        ...credentialOptions("azure", apiKey, baseURL),
+        baseURL,
+        headers: opts.headers,
+      })
       const flavor = decideOpenAiEndpointFlavor({
         apiFlavor: opts.apiFlavor,
         baseURL,
@@ -165,7 +208,11 @@ export function getProviderModel(opts: ProviderModelOptions): LanguageModel {
         // an explicit `apiFlavor` and otherwise the host/id heuristic — exactly
         // as the sidecar's ai-sdk dispatch path does.
         const compatBaseURL = baseURL ?? getBuiltInProviderDefaultBaseURL(provider)
-        const client = createOpenAI({ apiKey, baseURL: compatBaseURL, headers: opts.headers })
+        const client = createOpenAI({
+          ...credentialOptions("openai", apiKey, compatBaseURL),
+          baseURL: compatBaseURL,
+          headers: opts.headers,
+        })
         const flavor = decideOpenAiEndpointFlavor({
           apiFlavor: opts.apiFlavor,
           baseURL: compatBaseURL,

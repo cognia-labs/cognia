@@ -14,7 +14,7 @@ import { getDb } from "@/lib/db/schema"
 import { getSettings } from "@/lib/db/settings"
 import { getDeviceMetadata } from "@/lib/device/device-identity"
 import { redactMcpServerForExport } from "@/lib/mcp/credentials"
-import { deepStripSecrets } from "@/lib/settings/profile-transfer"
+import { stripSettingsRowSecrets } from "@/lib/settings/profile-transfer"
 import { isTauri } from "@/lib/tauri"
 import { artifactsSnapshot } from "./snapshots/artifacts"
 import { readAllSnapshots } from "./snapshots/helpers"
@@ -105,7 +105,9 @@ export async function* buildBackupSections(
 
   if (includeSettings) {
     const settingsRow = await getSettings()
-    const settings = options.includeApiKey ? { ...settingsRow } : deepStripSecrets(settingsRow)
+    const settings = options.includeApiKey
+      ? { ...settingsRow }
+      : stripSettingsRowSecrets(settingsRow)
     yield { section: "settings", rows: [settings] }
   }
 

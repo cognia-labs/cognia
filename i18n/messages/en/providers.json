@@ -1607,5 +1607,6 @@
     "discovering": "Discovering…",
     "connected": "Connected to Magpie {version} · {count} models",
     "failed": "Could not connect to Magpie"
-  }
+  },
+  "customProviderKeyRequiredForPublicEndpoint": "A public endpoint needs an API key, or an Authorization header under Transport headers, before it can be enabled. Endpoints on this machine or your local network can stay keyless."
 }

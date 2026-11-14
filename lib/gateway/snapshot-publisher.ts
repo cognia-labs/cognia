@@ -67,6 +67,15 @@ function protocolAuth(
   return { authScheme: protocol === "anthropic" ? "x-api-key" : "bearer" }
 }
 
+/** Replace a transport's credential header with the protocol's own. */
+function withProtocolAuth(
+  transport: GatewayTransportSnapshot,
+  protocol: string
+): GatewayTransportSnapshot {
+  const { authScheme: _scheme, authHeaderName: _name, ...rest } = transport
+  return { ...rest, ...protocolAuth(protocol) }
+}
+
 /**
  * Pull model ids off a custom-provider entry. The lean resolver type
  * (`RichCustomProviderEntry`) doesn't expose them, but the rich
@@ -432,7 +441,16 @@ export function buildGatewaySnapshot(
       ...provider,
       deploymentId: derived.deploymentId,
       ...(derived.enabled === false ? { enabled: false, credentialFallbackAllowed: false } : {}),
-      ...(derived.transport ? { transport: derived.transport } : {}),
+      ...(derived.transport
+        ? {
+            // The profile store contributes sanitized static headers and
+            // forwarded semantics, but the credential header is a property of
+            // the wire protocol the resolver chose for this provider. Letting
+            // the projection's auth win would send a Google key as Bearer, or
+            // an Anthropic-wire key as Bearer after a protocol override.
+            transport: withProtocolAuth(derived.transport, provider.protocol),
+          }
+        : {}),
     }
   })
   const aliases = buildAliases(slice, profileMeta)

@@ -46,6 +46,10 @@ import {
 } from "@/lib/subscription/core/provider-registry"
 import type { SubscriptionProviderDefinition } from "@/types/subscription/provider-definition"
 
+function isVerifyingResult(result: ApiTestResult): boolean {
+  return result.success && result.authoritative !== false && result.outcome !== "limited"
+}
+
 function subscriptionOnlyConfig<T extends UserProviderSettings>(
   cfg: T,
   definition?: SubscriptionProviderDefinition
@@ -490,11 +494,20 @@ export function useProviderSettings(): UseProviderSettingsResult {
                   id,
                   getActiveCredential(effectiveCfg),
                   effectiveCfg.baseURL,
-                  effectiveCfg.customHeaders
+                  effectiveCfg.customHeaders,
+                  { protocol: effectiveCfg.apiProtocol, model: effectiveCfg.defaultModel }
                 )
           const providerName = id as ProviderName
           if (result.success && isLocalProviderName(providerName)) {
-            const discoveredModels = await discoverLocalProviderModels(providerName, cfg.baseURL)
+            // Same credentials and headers the probe just authenticated with.
+            const discoveredModels = await discoverLocalProviderModels(
+              providerName,
+              effectiveCfg.baseURL,
+              {
+                apiKey: getActiveCredential(effectiveCfg) || undefined,
+                customHeaders: effectiveCfg.customHeaders,
+              }
+            )
             await setProviderConfig(id, {
               discoveredModels,
               discoveredModelsLastFetched: Date.now(),
@@ -507,7 +520,10 @@ export function useProviderSettings(): UseProviderSettingsResult {
         // "stale" when the key or base URL changes afterwards. Without it the
         // stale branch was unreachable and a rotated key kept showing
         // "verified" forever.
-        const verificationPatch: Partial<UserProviderSettings> = result.success
+        // Only an authoritative pass verifies: a "limited" result (format
+        // check only, CORS-blocked browser) must not vouch for the row.
+        const verified = isVerifyingResult(result)
+        const verificationPatch: Partial<UserProviderSettings> = verified
           ? {
               verificationStatus: "verified",
               verificationFingerprint: buildProviderVerificationFingerprint(verificationCfg),
@@ -519,7 +535,8 @@ export function useProviderSettings(): UseProviderSettingsResult {
               verificationStatus: "unverified",
               lastVerifiedAt: Date.now(),
               verificationMessage: result.message,
-              healthStatus: "error",
+              // A limited pass reached nothing wrong; it just proved nothing.
+              healthStatus: result.success ? "unknown" : "error",
             }
         if (!isCurrent()) return null
         await setProviderConfig(id, verificationPatch)
@@ -595,7 +612,8 @@ export function useProviderSettings(): UseProviderSettingsResult {
               effectiveCfg.customHeaders
             )
         const outcome = result.success ? "success" : "error"
-        const verificationPatch: Partial<CustomProviderSettings> = result.success
+        const verified = isVerifyingResult(result)
+        const verificationPatch: Partial<CustomProviderSettings> = verified
           ? {
               verificationStatus: "verified",
               verificationFingerprint: buildProviderVerificationFingerprint(verificationCfg),
@@ -607,7 +625,8 @@ export function useProviderSettings(): UseProviderSettingsResult {
               verificationStatus: "unverified",
               lastVerifiedAt: Date.now(),
               verificationMessage: result.message,
-              healthStatus: "error",
+              // A limited pass reached nothing wrong; it just proved nothing.
+              healthStatus: result.success ? "unknown" : "error",
             }
         if (!isCurrent()) return null
         await updateCustomProvider(id, verificationPatch)
