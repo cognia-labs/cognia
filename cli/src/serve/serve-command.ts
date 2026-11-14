@@ -224,7 +224,9 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
   // ── 5. Data plane: the bridge WS ───────────────────────────────────────────
   const bridgeRef: { current: BridgeClient | null } = { current: null }
   const workerPool = new WorkerRpcPool({
-    sendFrame: (connectionId, frame) => {
+    sendFrame: (connectionId, _frame, finalize) => {
+      const frame = finalize()
+      if (frame === undefined) return
       if (!bridgeRef.current) throw new Error("brain bridge is not connected")
       bridgeRef.current.sendWorkerFrame(connectionId, frame)
     },

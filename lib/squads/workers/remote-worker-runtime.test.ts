@@ -84,6 +84,21 @@ describe("remote AgentTeam worker selection", () => {
     requiredSandboxCapabilities: ["filesystem"],
   }
 
+  it("uses the original placement requirements when a descriptor changes before sending", () => {
+    const selected = selectRemoteWorker([worker("device:a")], { mode: "auto" }, requirements)
+    selected.manifest.credentialProfileRefs = []
+    expect(evaluateRemoteWorkerPlacement(selected, requirements)).toEqual({
+      ready: false,
+      reason: "credential_missing",
+    })
+    selected.manifest.credentialProfileRefs = ["credential:anthropic"]
+    selected.manifest.executionProfile!.capabilities = []
+    expect(evaluateRemoteWorkerPlacement(selected, requirements)).toEqual({
+      ready: false,
+      reason: "capability_mismatch",
+    })
+  })
+
   it("selects the lowest load and breaks ties by stable authenticated hostRef", () => {
     const selected = selectRemoteWorker(
       [worker("device:b"), worker("device:a"), worker("device:c", { activeTurns: 1 })],

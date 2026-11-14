@@ -1,4 +1,5 @@
 import type {
+  AgentEventEnvelope,
   AgentWorkerManifestV1,
   CogniaClient,
   CogniaClientOptions,
@@ -7,7 +8,9 @@ import type {
 import type { ResolvedAgentExecutionSpec } from "@cognia/agent-config-types/agent-execution"
 
 import { selectRemoteWorker } from "./remote-worker-runtime"
-import { WorkerRpcPool } from "./worker-rpc-pool"
+import { WorkerRpcPool, WorkerDetachedError } from "./worker-rpc-pool"
+import { createCogniaClient } from "@cognia/agent"
+import { RPC_METHODS, RPC_PROTOCOL_VERSION } from "@cognia/agent/protocol"
 
 const manifest: AgentWorkerManifestV1 = {
   manifestVersion: 1,
@@ -94,10 +97,8 @@ describe("WorkerRpcPool", () => {
     expect(pool.listWorkers()).toEqual([])
   })
 
-  it("converts host send failures into stream errors", async () => {
-    // The peer tears the connection down from the stream's `error` event. If the
-    // throw escaped the write instead, only the one call that happened to be
-    // writing would reject and every other in-flight request would hang.
+  it("turns a synchronous host send failure into detach without throwing from the frame sink", async () => {
+    // Host delivery errors must not enter RpcPeer's synchronous write/error race.
     let host: Extract<NonNullable<CogniaClientOptions["host"]>, { kind: "streams" }> | undefined
     const createClient = jest.fn((options: CogniaClientOptions) => {
       if (options.host?.kind === "streams") host = options.host
@@ -115,8 +116,9 @@ describe("WorkerRpcPool", () => {
     const errors: Error[] = []
     streams.writable.on("error", (error: Error) => errors.push(error))
 
-    expect(streams.writable.write("frame\n")).toBe(false)
-    expect(errors).toEqual([expect.objectContaining({ message: "bridge failed" })])
+    expect(streams.writable.write("frame\n")).toBe(true)
+    expect(errors).toEqual([])
+    expect(pool.listWorkers()).toEqual([])
   })
 
   it("replaces an older connection for the same authenticated host", () => {
@@ -396,7 +398,7 @@ describe("WorkerRpcPool", () => {
         onEvent,
         onControl: async (control) => {
           await control.steer("safe steering", "steer-1")
-          await control.pause("pause-1")
+          void control.pause("pause-1")
           await control.terminate("terminate-1")
         },
       })
@@ -406,8 +408,8 @@ describe("WorkerRpcPool", () => {
     expect(open).toHaveBeenCalledWith("session-recovery")
     expect(steer).toHaveBeenCalledWith("safe steering", { commandId: "steer-1" })
     expect(abort).toHaveBeenCalledWith({ commandId: "terminate-1" })
-    expect(waitForIdle).toHaveBeenCalledTimes(2)
-    expect(close).toHaveBeenCalled()
+    expect(waitForIdle).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledTimes(1)
     expect(events).toHaveBeenCalledWith(
       expect.objectContaining({ afterEventId: "event-before", signal: expect.any(AbortSignal) })
     )
@@ -417,7 +419,7 @@ describe("WorkerRpcPool", () => {
       expect.objectContaining({
         commandId: "lease-recovery",
         maxSteps: 2,
-        signal: controller.signal,
+        signal: expect.any(AbortSignal),
       })
     )
   })
@@ -491,10 +493,12 @@ describe("WorkerRpcPool", () => {
       prompt: "safe prompt",
       onSession: jest.fn(),
       onEvent: jest.fn(),
-      onControl: (control) => control.pause("pause-1"),
+      onControl: (control) => {
+        void control.pause("pause-1")
+      },
     })
 
-    expect(waitForIdle).toHaveBeenCalledWith({ timeoutMs: 30_000 })
+    expect(waitForIdle).not.toHaveBeenCalled()
     expect(abort).not.toHaveBeenCalled()
     expect(snapshot).not.toHaveBeenCalled()
     expect(open).not.toHaveBeenCalled()
@@ -575,5 +579,745 @@ describe("WorkerRpcPool", () => {
       onControl: jest.fn(),
     })
     expect(outcome.recoveryRequired).toBeUndefined()
+  })
+})
+
+describe("WorkerRpcPool stop evidence", () => {
+  function harness(
+    capabilities: string[] = ["worker-self-fence-v1", "turn-interrupt-v1", "event-replay-v2"]
+  ) {
+    let now = 1_000
+    let finish!: (outcome: { status: string; result: object }) => void
+    const session = {
+      id: "fresh-session",
+      events: jest.fn(async function* (): AsyncGenerator<AgentEventEnvelope> {}),
+      run: jest.fn(
+        (_prompt: string, _options: import("@cognia/agent").RunOptions) =>
+          new Promise<{ status: string; result: object }>((resolve) => {
+            finish = resolve
+          })
+      ),
+      renew: jest.fn(async () => ({ renewed: true })),
+      abort: jest.fn(async () => ({
+        stopped: true,
+        turnStatus: "aborted",
+        sessionStatus: "idle",
+        targetTurnCommandId: "turn-1",
+        dispatchEpoch: 7,
+        followUpsDropped: 0,
+      })),
+      state: jest.fn(async () => ({ status: "idle" })),
+      // The persisted head a strict stop drains through; none by default.
+      entries: jest.fn(async () => ({ entries: [], headEventId: undefined as string | undefined })),
+      close: jest.fn(async () => undefined),
+      steer: jest.fn(),
+      waitForIdle: jest.fn(),
+    }
+    let streams!: Extract<NonNullable<CogniaClientOptions["host"]>, { kind: "streams" }>
+    const sendFrame = jest.fn()
+    const supports = jest.fn((capability: string) => capabilities.includes(capability))
+    const create = jest.fn(async () => session)
+    const open = jest.fn(async () => session)
+    const pool = new WorkerRpcPool({
+      sendFrame,
+      now: () => now,
+      strictStopDrainTimeoutMs: 50,
+      createClient: (async (options: CogniaClientOptions) => {
+        streams = options.host as typeof streams
+        return { sessions: { create, open }, runtime: { supports }, close: jest.fn() }
+      }) as never,
+    })
+    pool.attach({
+      connectionId: "connection",
+      hostRef: "device:test",
+      manifest: {
+        ...manifest,
+        executionProfile: {
+          ...manifest.executionProfile!,
+          runtimeAdapter: "ai-sdk",
+          capabilities: ["streaming"],
+        },
+        credentialProfileRefs: ["credential:test"],
+        workspaceBindingRefs: ["repository:project:repo"],
+        hardCapabilities: capabilities as never,
+        fenceGraceMs: 30_000,
+      },
+    })
+    let control!: import("./remote-worker-runtime").RemoteWorkerTurnControl
+    const input = {
+      hostRef: "device:test",
+      commandId: "turn-1",
+      dispatchEpoch: 7,
+      handoff: safeHandoff,
+      prompt: "safe prompt",
+      fence: {
+        childRunId: "child-run",
+        dispatchEpoch: 7,
+        lastRenewalSentAt: 500,
+        leaseTtlMs: 60_000,
+      },
+      onSession: jest.fn(),
+      onEvent: jest.fn<Promise<void>, [AgentEventEnvelope]>(async () => undefined),
+      onControl: (next: typeof control) => {
+        control = next
+      },
+    }
+    return {
+      pool,
+      session,
+      create,
+      open,
+      input,
+      sendFrame,
+      supports,
+      streams: () => streams,
+      control: () => control,
+      setNow: (value: number) => {
+        now = value
+      },
+      finish: (status = "completed") => finish({ status, result: {} }),
+      ready: () => new Promise<void>((resolve) => setImmediate(resolve)),
+    }
+  }
+
+  it("computes the remaining run TTL when the client reads the fence to write its frame", async () => {
+    const h = harness()
+    const running = h.pool.run(h.input)
+    await h.ready()
+    h.setNow(2_000)
+    const options = h.session.run.mock.calls[0]![1]
+    expect(options.fence).toEqual({ childRunId: "child-run", dispatchEpoch: 7, leaseTtlMs: 58_500 })
+    h.finish()
+    await running
+  })
+
+  it("pushes the remaining renewal TTL and rejects a refused renewal", async () => {
+    const h = harness()
+    const running = h.pool.run(h.input)
+    await h.ready()
+    h.setNow(22_000)
+    await h.control().renew!({ ...h.input.fence, lastRenewalSentAt: 20_000 })
+    expect(h.session.renew).toHaveBeenCalledWith(
+      {
+        childRunId: "child-run",
+        dispatchEpoch: 7,
+        leaseTtlMs: 58_000,
+      },
+      { signal: expect.any(AbortSignal) }
+    )
+    h.session.renew.mockResolvedValueOnce({ renewed: false })
+    const failedRun = expect(running).rejects.toThrow("renewal")
+    await expect(h.control().renew!(h.input.fence)).rejects.toThrow("renewal")
+    await failedRun
+  })
+
+  it("fails an in-flight run with its detach reason even if the fake client never settles", async () => {
+    const h = harness()
+    const running = h.pool.run(h.input)
+    const observed = expect(running).rejects.toMatchObject({
+      name: "WorkerDetachedError",
+      connectionId: "connection",
+      reason: "authority_revoked",
+    })
+    await h.ready()
+    h.pool.detach("connection", "authority_revoked")
+    await observed
+    expect(new WorkerDetachedError("connection", "socket_closed")).toBeInstanceOf(Error)
+  })
+
+  it.each([
+    [true, "turn-1", 7, true],
+    [false, "turn-1", 7, false],
+    [true, "other-turn", 7, false],
+    [true, "turn-1", 6, false],
+  ])(
+    "accepts terminate evidence only for the stopped target and epoch (%s, %s, %s)",
+    async (stopped, target, epoch, confirmed) => {
+      const h = harness()
+      const running = h.pool.run(h.input)
+      await h.ready()
+      h.session.abort.mockResolvedValueOnce({
+        stopped,
+        turnStatus: "aborted",
+        sessionStatus: "idle",
+        targetTurnCommandId: target,
+        dispatchEpoch: epoch,
+        followUpsDropped: 0,
+      })
+      const proof = await h.control().terminate("terminate-1")
+      expect(proof).toEqual(confirmed ? { kind: "ack", epoch: 7, at: 1_000 } : undefined)
+      expect(h.session.abort).toHaveBeenCalledWith(
+        expect.objectContaining({ targetTurnCommandId: "turn-1", dispatchEpoch: 7 })
+      )
+      expect(h.session.close).toHaveBeenCalledTimes(confirmed ? 1 : 0)
+      h.finish("aborted")
+      await running
+    }
+  )
+
+  it("obtains a completed-turn disposal receipt", async () => {
+    const h = harness()
+    h.session.abort.mockResolvedValueOnce({
+      stopped: true,
+      turnStatus: "completed",
+      sessionStatus: "idle",
+      targetTurnCommandId: "turn-1",
+      dispatchEpoch: 7,
+      followUpsDropped: 0,
+    })
+    const running = h.pool.run(h.input)
+    await h.ready()
+    h.finish()
+    await expect(running).resolves.toMatchObject({
+      disposalProof: { kind: "ack", epoch: 7, at: 1_000 },
+    })
+  })
+
+  it("uses plain abort and no fence or disposal proof on an old Worker", async () => {
+    const h = harness([])
+    const running = h.pool.run({ ...h.input, fence: undefined })
+    await h.ready()
+    await expect(h.control().terminate("terminate-old")).resolves.toBeUndefined()
+    expect(h.session.abort).toHaveBeenCalledWith({ commandId: "terminate-old" })
+    expect(h.session.close).not.toHaveBeenCalled()
+    expect(h.session.run.mock.calls[0]![1].fence).toBeUndefined()
+    h.finish()
+    await expect(running).resolves.not.toHaveProperty("disposalProof")
+  })
+
+  it("creates a fresh recovery session for a fenced Worker without replaying the old cursor", async () => {
+    const h = harness()
+    const running = h.pool.run({
+      ...h.input,
+      recoverySessionId: "fenced-session",
+      lastRemoteEventId: "old-cursor",
+    })
+    await h.ready()
+    expect(h.open).not.toHaveBeenCalled()
+    expect(h.create).toHaveBeenCalledWith({ commandId: "turn-1", handoff: safeHandoff })
+    h.finish()
+    await running
+  })
+
+  it.each(["capability", "credential"])(
+    "rechecks a %s lost after placement and before client initialization",
+    async (lost) => {
+      const h = harness()
+      const requirements = {
+        spec: { ...executionSpec, runtimeAdapter: "ai-sdk" as const },
+        workspaceBindingRef: "repository:project:repo",
+        requiredSandboxCapabilities: [],
+      }
+      selectRemoteWorker(h.pool.listWorkers(), { mode: "auto" }, requirements)
+      const current = h.pool.listWorkers()[0]!.manifest
+      if (lost === "capability") current.executionProfile!.capabilities.splice(0)
+      else current.credentialProfileRefs.splice(0)
+      await expect(h.pool.run({ ...h.input, placementRequirements: requirements })).rejects.toThrow(
+        lost === "capability" ? "capability_mismatch" : "credential_missing"
+      )
+      expect(h.create).not.toHaveBeenCalled()
+    }
+  )
+
+  it("rechecks compatibility and remaining TTL at the stream write after an async cursor read", async () => {
+    const h = harness()
+    const requirements = {
+      spec: { ...executionSpec, runtimeAdapter: "ai-sdk" as const },
+      workspaceBindingRef: "repository:project:repo",
+      requiredSandboxCapabilities: [],
+    }
+    const running = h.pool.run({ ...h.input, placementRequirements: requirements })
+    await h.ready()
+    h.setNow(3_000)
+    const frame = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "turn/run",
+      params: {
+        sessionId: "fresh-session",
+        commandId: "turn-1",
+        fence: { childRunId: "child-run", dispatchEpoch: 7, leaseTtlMs: 60_000 },
+      },
+    })
+    h.streams().writable.write(frame + "\n")
+    expect(JSON.parse(h.sendFrame.mock.calls[0]![1]).params.fence.leaseTtlMs).toBe(57_500)
+    const observed = expect(running).rejects.toThrow("credential_missing")
+    const errors: Error[] = []
+    h.streams().writable.on("error", (error: Error) => errors.push(error))
+    h.pool.listWorkers()[0]!.manifest.credentialProfileRefs.splice(0)
+    h.streams().writable.write(frame + "\n")
+    expect(errors).toEqual([])
+    expect(h.sendFrame).toHaveBeenCalledTimes(1)
+    await observed
+  })
+
+  it.each([true, false])(
+    "strict pause reports its actual stop receipt (stopped=%s)",
+    async (stopped) => {
+      const h = harness()
+      const running = h.pool.run(h.input)
+      await h.ready()
+      h.session.abort.mockResolvedValueOnce({
+        stopped,
+        turnStatus: "aborted",
+        sessionStatus: "idle",
+        targetTurnCommandId: "turn-1",
+        dispatchEpoch: 7,
+        followUpsDropped: 0,
+      })
+      await expect(h.control().pause("pause-1")).resolves.toEqual(
+        stopped ? { kind: "ack", epoch: 7, at: 1_000 } : false
+      )
+      h.finish("aborted")
+      await running
+    }
+  )
+
+  it.each(["detach", "abort", "failure"])(
+    "old Worker pause ends unconfirmed on %s",
+    async (failure) => {
+      const h = harness([])
+      const controller = new AbortController()
+      const running = h.pool.run({ ...h.input, fence: undefined, signal: controller.signal })
+      const observed = running.catch(() => undefined)
+      await h.ready()
+      const pausing = h.control().pause("pause-after-turn")
+      if (failure === "detach") h.pool.detach("connection", "socket_closed")
+      else if (failure === "abort") controller.abort(new Error("lease lost"))
+      else h.finish("failed")
+      await expect(pausing).resolves.toBe(false)
+      await observed
+      expect(h.session.abort).not.toHaveBeenCalled()
+      expect(h.session.waitForIdle).not.toHaveBeenCalled()
+    }
+  )
+
+  it("lets pause_after_turn wait beyond thirty seconds and confirm a clean completion", async () => {
+    const h = harness([])
+    const running = h.pool.run({ ...h.input, fence: undefined })
+    await h.ready()
+    const pausing = h.control().pause("pause-after-turn")
+    h.setNow(40_000)
+    expect(h.session.waitForIdle).not.toHaveBeenCalled()
+    h.finish()
+    await expect(pausing).resolves.toBe(true)
+    await running
+  })
+
+  it("preserves a completed turn while a pending renewal is refused before its disposal receipt arrives", async () => {
+    const h = harness()
+    let complete!: () => void
+    const completed = new Promise<void>((resolve) => {
+      complete = resolve
+    })
+    let failRenewal!: (error: Error) => void
+    h.session.renew.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failRenewal = reject
+        })
+    )
+    let receipt!: (value: {
+      stopped: boolean
+      turnStatus: string
+      sessionStatus: string
+      targetTurnCommandId: string
+      dispatchEpoch: number
+      followUpsDropped: number
+    }) => void
+    h.session.abort.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          receipt = resolve
+        })
+    )
+    const running = h.pool.run({ ...h.input, onTurnCompleted: complete })
+    await h.ready()
+    const renewing = h.control().renew!(h.input.fence).catch((error: unknown) => error)
+    h.finish()
+    await completed
+    await h.ready()
+    failRenewal(new Error("session stopped after completion"))
+    await expect(renewing).resolves.toBeInstanceOf(Error)
+    expect(h.session.run.mock.calls[0]![1].signal?.aborted).toBe(false)
+    receipt({
+      stopped: true,
+      turnStatus: "completed",
+      sessionStatus: "idle",
+      targetTurnCommandId: "turn-1",
+      dispatchEpoch: 7,
+      followUpsDropped: 0,
+    })
+    await expect(running).resolves.toMatchObject({ disposalProof: { kind: "ack", epoch: 7 } })
+  })
+
+  it("refuses dispatch when the RPC handshake does not confirm the manifest's fence capability", async () => {
+    const h = harness()
+    h.supports.mockReturnValue(false)
+    await expect(h.pool.run(h.input)).rejects.toThrow("RPC does not declare worker-self-fence-v1")
+    expect(h.session.run).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [false, "completed", "turn-1", 7],
+    [true, "aborted", "turn-1", 7],
+    [true, "completed", "other-turn", 7],
+    [true, "completed", "turn-1", 6],
+  ])(
+    "does not certify completion from an unconfirmed or mismatched receipt (%s, %s, %s, %s)",
+    async (stopped, turnStatus, targetTurnCommandId, dispatchEpoch) => {
+      const h = harness()
+      const running = h.pool.run(h.input)
+      await h.ready()
+      h.session.abort.mockResolvedValueOnce({
+        stopped,
+        turnStatus,
+        targetTurnCommandId,
+        dispatchEpoch,
+        sessionStatus: "idle",
+        followUpsDropped: 0,
+      })
+      h.finish()
+      await expect(running).resolves.not.toHaveProperty("disposalProof")
+      expect(h.session.close).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("settles a pending strict pause as unconfirmed on detach", async () => {
+    const h = harness()
+    const running = h.pool.run(h.input)
+    const observed = running.catch(() => undefined)
+    await h.ready()
+    h.session.abort.mockImplementationOnce(() => new Promise(() => undefined))
+    const pausing = h.control().pause("pause-lost")
+    h.pool.detach("connection", "socket_closed")
+    await expect(pausing).resolves.toBe(false)
+    await observed
+  })
+
+  it("drains accepted remote events before confirming a strict pause for checkpointing", async () => {
+    const h = harness()
+    let finishProjection!: () => void
+    const projected = new Promise<void>((resolve) => {
+      finishProjection = resolve
+    })
+    h.session.events.mockImplementation(async function* () {
+      yield { eventId: "event-final", sequence: 1, event: { kind: "text-delta", delta: "final" } }
+    })
+    h.input.onEvent.mockImplementationOnce(() => projected)
+    h.session.entries.mockResolvedValue({ entries: [], headEventId: "event-final" })
+    const running = h.pool.run(h.input)
+    await h.ready()
+    let confirmed = false
+    const pausing = h
+      .control()
+      .pause("pause-drain")
+      .then((proof) => {
+        confirmed = !!proof
+        return proof
+      })
+    await h.ready()
+    expect(confirmed).toBe(false)
+    finishProjection()
+    await expect(pausing).resolves.toMatchObject({ kind: "ack", epoch: 7 })
+    h.finish("aborted")
+    await running
+  })
+
+  it("keeps a verified stop receipt as proof when the cancelled turn's event tail cannot drain", async () => {
+    for (const action of ["pause", "terminate"] as const) {
+      const h = harness()
+      h.session.events.mockImplementation(async function* () {
+        yield { eventId: "event-final", sequence: 1, event: { kind: "text-delta", delta: "final" } }
+      })
+      // The projection never finishes; the turn's lifetime is then cancelled.
+      h.input.onEvent.mockImplementationOnce(() => new Promise<void>(() => undefined))
+      h.session.entries.mockResolvedValue({ entries: [], headEventId: "event-final" })
+      const controller = new AbortController()
+      const running = h.pool.run({ ...h.input, signal: controller.signal }).catch(() => undefined)
+      await h.ready()
+      const stopping =
+        action === "pause"
+          ? h.control().pause(`${action}-cancelled`)
+          : h.control().terminate(`${action}-cancelled`)
+      controller.abort(new Error("renewal refused"))
+      const answer = await stopping
+      if (action === "pause") {
+        // Proven stop, but no checkpoint over an unprojected tail.
+        expect(answer).toEqual({
+          proof: { kind: "ack", epoch: 7, at: expect.any(Number) },
+          checkpointSafe: false,
+        })
+      } else {
+        expect(answer).toMatchObject({ kind: "ack", epoch: 7 })
+      }
+      h.finish("aborted")
+      await running
+    }
+  })
+
+  it("refuses a checkpoint when the Worker's persisted head was never projected", async () => {
+    for (const ending of ["stream-ended", "never-arrives"] as const) {
+      const h = harness()
+      // The subscription delivers an earlier event; the head stays unseen.
+      h.session.events.mockImplementation(async function* (options?: { signal?: AbortSignal }) {
+        yield { eventId: "event-early", sequence: 1, event: { kind: "text-delta", delta: "a" } }
+        // Like the real subscription, an idle stream ends only when cancelled.
+        if (ending === "never-arrives")
+          await new Promise<void>((resolve) =>
+            options?.signal?.addEventListener("abort", () => resolve(), { once: true })
+          )
+      })
+      h.session.entries.mockResolvedValue({ entries: [], headEventId: "event-unseen" })
+      const running = h.pool.run(h.input)
+      await h.ready()
+      await expect(h.control().pause(`pause-${ending}`)).resolves.toEqual({
+        proof: { kind: "ack", epoch: 7, at: expect.any(Number) },
+        checkpointSafe: false,
+      })
+      h.finish("aborted")
+      await running.catch(() => undefined)
+    }
+  })
+
+  it("delivers a verified stop when a projection hangs while the dispatch stays alive", async () => {
+    for (const action of ["pause", "terminate"] as const) {
+      const h = harness()
+      h.session.events.mockImplementation(async function* () {
+        yield { eventId: "event-final", sequence: 1, event: { kind: "text-delta", delta: "final" } }
+      })
+      // The projection never returns and nothing cancels the dispatch.
+      h.input.onEvent.mockImplementationOnce(() => new Promise<void>(() => undefined))
+      h.session.entries.mockResolvedValue({ entries: [], headEventId: "event-final" })
+      const running = h.pool.run(h.input).catch(() => undefined)
+      await h.ready()
+      const answer =
+        action === "pause"
+          ? await h.control().pause(`${action}-hung`)
+          : await h.control().terminate(`${action}-hung`)
+      const proof = { kind: "ack", epoch: 7, at: expect.any(Number) }
+      expect(answer).toEqual(action === "pause" ? { proof, checkpointSafe: false } : proof)
+      h.finish("aborted")
+      void running
+    }
+  })
+
+  it("treats a stopped turn as drained once its persisted head was already projected", async () => {
+    const h = harness()
+    h.session.events.mockImplementation(async function* () {
+      yield { eventId: "event-final", sequence: 1, event: { kind: "text-delta", delta: "final" } }
+    })
+    h.session.entries.mockResolvedValue({ entries: [], headEventId: "event-final" })
+    const running = h.pool.run(h.input)
+    await h.ready()
+    await h.ready()
+    await expect(h.control().pause("pause-projected")).resolves.toEqual({
+      kind: "ack",
+      epoch: 7,
+      at: expect.any(Number),
+    })
+    expect(h.session.entries).toHaveBeenCalledWith({ limit: 1 })
+    h.finish("aborted")
+    await running
+  })
+
+  it("refuses a checkpoint from a Worker that cannot report its persisted head", async () => {
+    const h = harness(["worker-self-fence-v1", "turn-interrupt-v1"])
+    const running = h.pool.run(h.input)
+    await h.ready()
+    await expect(h.control().pause("pause-no-head")).resolves.toEqual({
+      proof: { kind: "ack", epoch: 7, at: expect.any(Number) },
+      checkpointSafe: false,
+    })
+    expect(h.session.entries).not.toHaveBeenCalled()
+    h.finish("aborted")
+    await running
+  })
+
+  it("hands a verified completion receipt to the dispatcher before a later cleanup can fail the run", async () => {
+    const h = harness()
+    h.session.events.mockImplementation(async function* () {
+      yield { eventId: "event-final", sequence: 1, event: { kind: "text-delta", delta: "final" } }
+    })
+    h.input.onEvent.mockImplementationOnce(() => new Promise<void>(() => undefined))
+    h.session.abort.mockResolvedValueOnce({
+      stopped: true,
+      turnStatus: "completed",
+      sessionStatus: "idle",
+      targetTurnCommandId: "turn-1",
+      dispatchEpoch: 7,
+      followUpsDropped: 0,
+    })
+    const onDisposalProof = jest.fn()
+    const controller = new AbortController()
+    const running = h.pool.run({ ...h.input, onDisposalProof, signal: controller.signal })
+    await h.ready()
+    h.finish("completed")
+    await h.ready()
+    // The task times out while the projection of the final event still hangs.
+    controller.abort(new Error("task timed out"))
+    await expect(running).rejects.toThrow()
+    expect(onDisposalProof).toHaveBeenCalledTimes(1)
+    expect(onDisposalProof).toHaveBeenCalledWith({ kind: "ack", epoch: 7, at: expect.any(Number) })
+  })
+
+  it("fails the dispatch when the event projection or its PII gate rejects", async () => {
+    const h = harness()
+    h.session.events.mockImplementation(async function* () {
+      yield {
+        eventId: "event-rejected",
+        sequence: 1,
+        event: { kind: "text-delta", delta: "content" },
+      }
+    })
+    h.input.onEvent.mockRejectedValueOnce(new Error("Remote event failed the PII gate"))
+    await expect(h.pool.run(h.input)).rejects.toThrow("PII gate")
+    expect(h.session.run.mock.calls[0]![1].signal?.aborted).toBe(true)
+  })
+})
+
+// Exercise the actual SDK/RpcPeer; only the remote service is scripted.
+function realRpcWorker(
+  options: { capable?: boolean; beforeReply?(method: string, count: number): void } = {}
+) {
+  const requests: Array<{ id?: number; method: string; params: Record<string, unknown> }> = []
+  let sequence = 0
+  let entries = 0
+  const openSessions = new Set<string>()
+  const pool = new WorkerRpcPool({
+    createClient: (options) => createCogniaClient({ ...options, requestTimeoutMs: 10 }),
+    sendFrame(connectionId, original, finalize?: () => string | undefined) {
+      const frame = finalize ? finalize() : original
+      if (frame === undefined) return
+      const request = JSON.parse(frame) as (typeof requests)[number]
+      requests.push(request)
+      if (request.id === undefined) return
+      const sessionId = String(request.params?.sessionId ?? "")
+      let result: unknown = { commandId: request.params?.commandId ?? "command" }
+      if (request.method === "initialize")
+        result = {
+          protocolVersion: RPC_PROTOCOL_VERSION,
+          host: { name: "scripted-worker", version: "1" },
+          runtimeVersion: "1",
+          instanceId: "real-rpc-worker",
+          methods: RPC_METHODS,
+          capabilities: [
+            "worker-dispatch-v1",
+            "event-replay",
+            ...(options.capable ? ["worker-self-fence-v1"] : []),
+          ],
+          limits: { maxOpenSessions: 32, maxActiveTurns: 1 },
+        }
+      if (request.method === "session/create") {
+        const id = `real-session-${++sequence}`
+        openSessions.add(id)
+        result = { sessionId: id, spec: {} }
+      }
+      if (request.method === "session/entries") {
+        entries += 1
+        result = { entries: [] }
+      }
+      if (request.method === "session/state") result = { sessionId, status: "idle" }
+      if (request.method === "turn/run") result = { status: "completed", result: { text: "done" } }
+      if (request.method === "session/close") openSessions.delete(sessionId)
+      options.beforeReply?.(request.method, entries)
+      queueMicrotask(() =>
+        pool.receive(connectionId, JSON.stringify({ jsonrpc: "2.0", id: request.id, result }))
+      )
+    },
+  })
+  const workerManifest = {
+    ...manifest,
+    hardCapabilities: options.capable ? ["worker-self-fence-v1"] : [],
+    fenceGraceMs: 30_000,
+    credentialProfileRefs: ["credential:test"],
+    workspaceBindingRefs: ["repository:project:repo"],
+    executionProfile: {
+      ...manifest.executionProfile!,
+      runtimeAdapter: "ai-sdk" as const,
+      capabilities: ["streaming"],
+    },
+  }
+  pool.attach({ connectionId: "real-connection", hostRef: "device:real", manifest: workerManifest })
+  const input = {
+    hostRef: "device:real",
+    commandId: "real-turn",
+    prompt: "safe prompt",
+    handoff: safeHandoff,
+    onSession: jest.fn(),
+    onEvent: jest.fn(),
+    onControl: jest.fn(),
+  }
+  return { pool, requests, input, openSessions }
+}
+
+describe("WorkerRpcPool transport regressions", () => {
+  it("fails a refused frame promptly through a real RpcPeer without an unhandled rejection", async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (error: unknown) => unhandled.push(error)
+    process.on("unhandledRejection", onUnhandled)
+    const h = realRpcWorker({
+      capable: true,
+      beforeReply(method, count) {
+        if (method === "session/entries" && count === 2)
+          h.pool.listWorkers()[0]!.manifest.credentialProfileRefs.splice(0)
+      },
+    })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const outcome = h.pool
+        .run({
+          ...h.input,
+          dispatchEpoch: 1,
+          fence: {
+            childRunId: "child-run",
+            dispatchEpoch: 1,
+            lastRenewalSentAt: Date.now(),
+            leaseTtlMs: 60_000,
+          },
+          placementRequirements: {
+            spec: { ...executionSpec, runtimeAdapter: "ai-sdk" },
+            workspaceBindingRef: "repository:project:repo",
+            requiredSandboxCapabilities: [],
+          },
+        })
+        .then(
+          () => ({ error: undefined }),
+          (error: unknown) => ({ error })
+        )
+      const result = await Promise.race([
+        outcome,
+        new Promise<{ error: unknown }>((resolve) => {
+          timer = setTimeout(() => resolve({ error: new Error("refused frame hung") }), 100)
+        }),
+      ])
+      expect(result.error).toMatchObject({
+        message: "Worker placement changed: credential_missing",
+      })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(unhandled).toEqual([])
+      expect(h.requests.some((request) => request.method === "turn/run")).toBe(false)
+    } finally {
+      if (timer) clearTimeout(timer)
+      h.pool.close()
+      process.off("unhandledRejection", onUnhandled)
+    }
+  })
+
+  it("cleans up more than 32 sequential completed sessions on one old-Worker connection without inventing proof", async () => {
+    const h = realRpcWorker()
+    try {
+      for (let i = 0; i < 40; i++) {
+        await expect(h.pool.run({ ...h.input, commandId: `turn-${i}` })).resolves.toEqual({
+          status: "completed",
+          result: { text: "done" },
+        })
+        expect(h.openSessions.size).toBe(0)
+      }
+      expect(h.requests.filter((request) => request.method === "session/close")).toHaveLength(40)
+      expect(h.requests.filter((request) => request.method === "initialize")).toHaveLength(1)
+    } finally {
+      h.pool.close()
+    }
   })
 })

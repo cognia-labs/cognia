@@ -6,6 +6,7 @@ import type { AgentTeam } from "@/types/agent/agent-team"
 import type { AgentTeamExecutionConstraints } from "@/types/agent/agent-team-runtime"
 import { beginDurableDispatch } from "../durable/durable-dispatch"
 import { createDurableTeamCoordinator } from "../durable/durable-runtime"
+import { WorkerRpcPool } from "../workers/worker-rpc-pool"
 import {
   externalSessionControl,
   remoteTurnControl,
@@ -88,7 +89,7 @@ describe("remoteTurnControl", () => {
   it("derives command ids from the lease and answers pause with the checkpoint", async () => {
     const remote = {
       steer: jest.fn(async () => undefined),
-      pause: jest.fn(async () => undefined),
+      pause: jest.fn(async () => true),
       terminate: jest.fn(async () => undefined),
     }
     const dispatch = dispatchHandle(false)
@@ -99,6 +100,24 @@ describe("remoteTurnControl", () => {
     expect(remote.steer).toHaveBeenCalledWith("go", "msg-9")
     expect(remote.pause).toHaveBeenCalledWith("lease-1:pause")
     expect(remote.terminate).toHaveBeenCalledWith("lease-1:terminate")
+  })
+
+  it("records a proven stop whose event tail is unsafe without checkpointing it", async () => {
+    const proof = { kind: "ack" as const, epoch: 3, at: 10 }
+    const recordRemoteDisposal = jest.fn(async () => undefined)
+    const checkpointPause = jest.fn(async () => true)
+    const control = remoteTurnControl(
+      {
+        steer: jest.fn(),
+        pause: jest.fn(async () => ({ proof, checkpointSafe: false as const })),
+        terminate: jest.fn(),
+      },
+      "lease-2",
+      { checkpointPause, recordRemoteDisposal }
+    )
+    await expect(control.pause?.()).resolves.toBe(false)
+    expect(recordRemoteDisposal).toHaveBeenCalledWith(proof)
+    expect(checkpointPause).not.toHaveBeenCalled()
   })
 })
 
@@ -244,5 +263,164 @@ describe("a mixed built-in and external team on one durable run", () => {
       builtin.dispose()
       external.dispose()
     }
+  })
+})
+
+describe("remote pause through the durable coordinator", () => {
+  let disableDbRuntime: (() => void) | undefined
+  beforeEach(async () => {
+    disableDbRuntime = __enableDbRuntimeForTesting()
+    await getDb().delete()
+    __resetDbForTesting()
+  })
+  afterEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+    disableDbRuntime?.()
+  })
+  it.each([
+    [true, "confirmed", "paused"],
+    [true, "unconfirmed", "needs_input"],
+    [false, "completed", "paused"],
+    [false, "failed", "needs_input"],
+    [false, "detach", "needs_input"],
+  ] as const)(
+    "never leaves pausing on a capable=%s Worker with %s",
+    async (capable, result, status) => {
+      const team = {
+        id: "remote-team",
+        name: "Remote",
+        task: "Ship",
+        leadId: "lead",
+        config: {
+          runtimeVersion: "durable-v2",
+          writeMode: "single-writer",
+          repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+        },
+      } as unknown as AgentTeam
+      const store = createMemoryTeamRunStore<AgentTeamExecutionConstraints>()
+      const coordinator = createDurableTeamCoordinator({ store, now: () => 1_000 })
+      await coordinator.prepareRun(team, "pause-run")
+      const dispatch = await beginDurableDispatch({
+        coordinator,
+        team,
+        runId: "pause-run",
+        teammateId: "mate",
+        taskId: "task",
+        access: "read",
+        repositoryId: "primary",
+        now: () => 1_000,
+      })
+      await dispatch.claimRemoteLease({
+        childRunId: dispatch.childRunId,
+        leaseId: "turn-pause",
+        hostRef: "device:a",
+        now: 1_000,
+      })
+      let finish!: (outcome: object) => void
+      let started!: () => void
+      const ready = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      const session = {
+        id: "remote-session",
+        events: async function* () {},
+        run: () =>
+          new Promise((resolve) => {
+            finish = resolve
+            started()
+          }),
+        abort: jest.fn(async () => ({
+          stopped: result === "confirmed",
+          turnStatus: "aborted",
+          sessionStatus: "idle",
+          targetTurnCommandId: "turn-pause",
+          dispatchEpoch: dispatch.dispatchEpoch,
+        })),
+        state: async () => ({ status: "idle" }),
+        // No events were persisted, so a stopped turn is drained.
+        entries: async () => ({ entries: [], headEventId: undefined }),
+        close: jest.fn(),
+      }
+      const pool = new WorkerRpcPool({
+        sendFrame: jest.fn(),
+        createClient: (async () => ({
+          runtime: { supports: () => capable },
+          sessions: { create: async () => session },
+          close: jest.fn(),
+        })) as never,
+      })
+      pool.attach({
+        connectionId: "pause-connection",
+        hostRef: "device:a",
+        manifest: {
+          manifestVersion: 1,
+          runtime: "test",
+          models: [],
+          hardCapabilities: capable ? ["turn-interrupt-v1"] : [],
+          maxActiveTurns: 1,
+          credentialProfileRefs: [],
+          workspaceBindingRefs: [],
+          taskWorkspace: { enabled: true },
+          sandbox: { capabilities: [] },
+          platform: { os: "test", arch: "test" },
+        },
+      })
+      const running = pool
+        .run({
+          hostRef: "device:a",
+          commandId: "turn-pause",
+          dispatchEpoch: dispatch.dispatchEpoch,
+          handoff: {
+            envelopeVersion: 1,
+            identity: {
+              parentRunId: "pause-run",
+              childRunId: dispatch.childRunId,
+              depth: 1,
+              parentChain: ["pause-run"],
+            },
+            task: { prompt: "task" },
+            execution: { mode: "orchestrated" },
+            createdAt: "2026-11-14T00:00:00.000Z",
+          },
+          prompt: "task",
+          onSession: jest.fn(),
+          onEvent: jest.fn(),
+          onControl: async (control) => {
+            await dispatch.attachControl(remoteTurnControl(control, "turn-pause", dispatch))
+          },
+        })
+        .catch(() => undefined)
+      await ready
+      const pausing = coordinator.pauseChild(dispatch.childRunId)
+      if (!capable) {
+        // The pause follows the turn's own lifetime, including loss of control.
+        if (result === "detach") pool.detach("pause-connection", "socket_closed")
+        else finish({ status: result, result: {} })
+      }
+      await pausing
+      const child = await store.getChild(dispatch.childRunId)
+      expect(child?.status).toBe(status)
+      expect(child?.waitingReason).toBe(status === "needs_input" ? "pause_unconfirmed" : undefined)
+      if (capable && result === "confirmed")
+        expect(child?.stop?.proof).toMatchObject({ kind: "ack", epoch: dispatch.dispatchEpoch })
+      if (capable) finish({ status: "aborted", result: {} })
+      await running
+      pool.close()
+      dispatch.dispose()
+    }
+  )
+
+  it.each(["false", "throw"])("does not checkpoint an unconfirmed pause (%s)", async (result) => {
+    const checkpointPause = jest.fn(async () => true)
+    const pause = jest.fn(async () => {
+      if (result === "throw") throw new Error("detached")
+      return false
+    })
+    const control = remoteTurnControl({ steer: jest.fn(), pause, terminate: jest.fn() }, "lease", {
+      checkpointPause,
+    })
+    await expect(control.pause?.()).resolves.toBe(false)
+    expect(checkpointPause).not.toHaveBeenCalled()
   })
 })

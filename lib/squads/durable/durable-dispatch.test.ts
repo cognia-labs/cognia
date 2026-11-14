@@ -6,6 +6,8 @@ import type { ProjectEnvironmentVersion } from "@/types/project-environment"
 import { createLocalTauriExecutionEnvironment } from "@/lib/ai/agent/execution/local-tauri-environment"
 import { createDurableTeamCoordinator } from "./durable-runtime"
 import { beginDurableDispatch } from "./durable-dispatch"
+import { WorkerRpcPool } from "../workers/worker-rpc-pool"
+import { childStopProof } from "@cognia/agent-orchestration/replay"
 import { createDecisionLedger } from "@cognia/agent-orchestration/decision-ledger"
 import * as runtimeDb from "@/lib/db/agent-team-runtime"
 import { createMemoryTeamRunStore } from "@cognia/agent-orchestration/memory-store"
@@ -311,6 +313,51 @@ describe("durable dispatch bridge", () => {
       stop: { state: "confirmed", epoch, proof: { kind: "ack", epoch, at: 3 } },
     })
     await expect(dispatch.complete({ text: "late result" })).rejects.toThrow("no longer active")
+  })
+
+  it("records a verified remote ACK through a concurrent same-attempt write, once", async () => {
+    const { coordinator, dispatch } = await openDispatch("remote-ack-cas", "read", false)
+    await dispatch.run(
+      async () => {
+        await dispatch.claimRemoteLease({
+          childRunId: dispatch.childRunId,
+          leaseId: "remote-lease",
+          hostRef: "host-a",
+          now: Date.now(),
+        })
+      },
+      undefined,
+      { deferExecutionStart: true }
+    )
+    const epoch = dispatch.dispatchEpoch
+    // A renewal by this attempt lands between the receipt's read and its CAS.
+    const conditional = coordinator.store.updateChildIfCurrent.bind(coordinator.store)
+    let raced = false
+    const spy = jest
+      .spyOn(coordinator.store, "updateChildIfCurrent")
+      .mockImplementation(async (id, expected, patch) => {
+        if (!raced && (patch as { stop?: unknown }).stop) {
+          raced = true
+          await coordinator.store.updateChild(id, { updatedAt: Date.now() + 1 })
+        }
+        return conditional(id, expected, patch)
+      })
+    try {
+      await expect(
+        dispatch.recordRemoteDisposal({ kind: "ack", epoch, at: 5 })
+      ).resolves.toBeUndefined()
+      expect(raced).toBe(true)
+      // Recording the same epoch's receipt again is a no-op, not a failure.
+      await expect(
+        dispatch.recordRemoteDisposal({ kind: "ack", epoch, at: 6 })
+      ).resolves.toBeUndefined()
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await coordinator.store.getChild(dispatch.childRunId)).toMatchObject({
+      settledEpoch: epoch,
+      stop: { state: "confirmed", epoch, proof: { kind: "ack", epoch, at: 5 } },
+    })
   })
 
   it("keeps an external timeout unconfirmed until the Host registry proves it stopped", async () => {
@@ -1939,4 +1986,189 @@ describe("durable dispatch bridge", () => {
       .last()
     expect(checkpoint).toMatchObject({ replay: "safe", sideEffects: [] })
   })
+
+  it.each([true, false])(
+    "detach records an unconfirmed stop, then recovery waits for fence proof (capable=%s)",
+    async (capable) => {
+      let now = 1_000
+      const store = createMemoryTeamRunStore<AgentTeamExecutionConstraints>()
+      const coordinator = createDurableTeamCoordinator({ store, now: () => now })
+      const runId = `detach-proof-${capable}`
+      await coordinator.prepareRun(team, runId)
+      const input = {
+        coordinator,
+        team,
+        runId,
+        teammateId: "mate",
+        taskId: "task",
+        access: "read" as const,
+        repositoryId: "primary",
+        now: () => now,
+      }
+      const dispatch = await beginDurableDispatch(input)
+      const child = await dispatch.claimRemoteLease({
+        childRunId: dispatch.childRunId,
+        leaseId: "lease-detach",
+        hostRef: "device:a",
+        now,
+        fenceCapable: capable,
+        fenceGraceMs: 30_000,
+      })
+      expect(child).toBeDefined()
+      const pool = new WorkerRpcPool({
+        sendFrame: jest.fn(),
+        now: () => now,
+        createClient: (async () => ({
+          runtime: { supports: () => capable },
+          sessions: {
+            create: async () => ({
+              id: "session-detach",
+              events: async function* () {},
+              run: () => new Promise(() => undefined),
+            }),
+          },
+          close: jest.fn(),
+        })) as never,
+      })
+      const manifest = {
+        manifestVersion: 1,
+        runtime: "cognia-agent",
+        models: [],
+        hardCapabilities: capable ? ["worker-self-fence-v1"] : [],
+        fenceGraceMs: 30_000,
+        maxActiveTurns: 1,
+        credentialProfileRefs: [],
+        workspaceBindingRefs: [],
+        taskWorkspace: { enabled: true },
+        sandbox: { capabilities: [] },
+        platform: { os: "linux", arch: "x64" },
+        executionProfile: {
+          profileVersion: 1,
+          backendId: "cognia-agent",
+          runtimeAdapter: "ai-sdk",
+          modelBindings: { primary: "inherit" },
+          deploymentRefs: [],
+          capabilities: [],
+        },
+      }
+      expect(pool.attach({ connectionId: "old", hostRef: "device:a", manifest })).toBe(true)
+      let started!: () => void
+      const ready = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      const states: string[] = []
+      const update = store.updateChildIfCurrent.bind(store)
+      const observer = jest
+        .spyOn(store, "updateChildIfCurrent")
+        .mockImplementation(async (...args) => {
+          if (args[2].stop) states.push(args[2].stop.state)
+          return update(...args)
+        })
+      const execution = pool
+        .run({
+          hostRef: "device:a",
+          commandId: "lease-detach",
+          dispatchEpoch: dispatch.dispatchEpoch,
+          handoff: {
+            envelopeVersion: 1,
+            identity: {
+              parentRunId: runId,
+              childRunId: dispatch.childRunId,
+              depth: 1,
+              parentChain: [runId],
+            },
+            task: { prompt: "safe task" },
+            execution: { mode: "orchestrated" },
+            createdAt: "2026-11-14T00:00:00.000Z",
+          },
+          prompt: "safe task",
+          onSession: jest.fn(),
+          onEvent: jest.fn(),
+          onControl: () => {
+            started()
+          },
+        })
+        .catch(async (error) => {
+          await dispatch.recordRemoteControlLoss(error)
+          await dispatch.fail(error)
+        })
+      await ready
+      pool.detach("old", "socket_closed")
+      await execution
+      expect(states.slice(0, 2)).toEqual(["requested", "unconfirmed"])
+      observer.mockRestore()
+      const detached = await store.getChild(dispatch.childRunId)
+      expect(detached).toMatchObject({
+        status: "needs_input",
+        stop: { state: "unconfirmed", epoch: dispatch.dispatchEpoch },
+      })
+      expect(childStopProof(detached!, now)).toBeUndefined()
+      // Reconnection supplies no receipt. Even the same host must wait.
+      pool.attach({ connectionId: "early-reconnect", hostRef: "device:a", manifest })
+      now = 60_000
+      await store.updateRun(runId, { status: "running" })
+      await expect(beginDurableDispatch({ ...input, teammateId: "another-mate" })).rejects.toThrow(
+        "stop_unconfirmed"
+      )
+      now = child!.lastRenewalSentAt! + child!.leaseTtlMs! + child!.fenceGraceMs!
+      await store.updateRun(runId, { status: "running" })
+      if (capable) {
+        expect(childStopProof((await store.getChild(dispatch.childRunId))!, now)).toMatchObject({
+          kind: "fence-expiry",
+          epoch: dispatch.dispatchEpoch,
+        })
+        const recovered = await beginDurableDispatch({ ...input, teammateId: "another-mate" })
+        expect(recovered.childRunId).not.toBe(dispatch.childRunId)
+        recovered.dispose()
+      } else {
+        expect(childStopProof((await store.getChild(dispatch.childRunId))!, now)).toBeUndefined()
+        await expect(
+          beginDurableDispatch({ ...input, teammateId: "another-mate" })
+        ).rejects.toThrow("stop_unconfirmed")
+      }
+      pool.close()
+      dispatch.dispose()
+    }
+  )
+
+  it.each([true, false])(
+    "lets the pause owner settle after the remote turn's failure (confirmed=%s)",
+    async (confirmed) => {
+      const { coordinator, dispatch } = await openDispatch(
+        `remote-pause-race-${confirmed}`,
+        "read",
+        false
+      )
+      await dispatch.claimRemoteLease({
+        childRunId: dispatch.childRunId,
+        leaseId: "pause-race",
+        hostRef: "device:a",
+        now: Date.now(),
+      })
+      let finishPause!: (safe: boolean) => void
+      let startPause!: () => void
+      const started = new Promise<void>((resolve) => {
+        startPause = resolve
+      })
+      await dispatch.attachControl({
+        steer: jest.fn(),
+        pause: () => {
+          startPause()
+          return new Promise<boolean>((resolve) => {
+            finishPause = resolve
+          })
+        },
+      })
+      const pausing = coordinator.pauseChild(dispatch.childRunId)
+      await started
+      await dispatch.fail(new Error("remote turn interrupted during pause"))
+      expect((await coordinator.store.getChild(dispatch.childRunId))?.status).toBe("pausing")
+      finishPause(confirmed)
+      await pausing
+      const child = await coordinator.store.getChild(dispatch.childRunId)
+      expect(child?.status).toBe(confirmed ? "paused" : "needs_input")
+      expect(child?.waitingReason).toBe(confirmed ? undefined : "pause_unconfirmed")
+      dispatch.dispose()
+    }
+  )
 })

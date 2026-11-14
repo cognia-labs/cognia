@@ -288,6 +288,13 @@ jest.mock("../workers/remote-worker-runtime", () => {
   }
 })
 
+const renewDispatchLeaseMock = jest.fn(async (..._args: unknown[]) => true)
+const sourceRunStatusMock = jest.fn(() => "running")
+const safeReplayMock = jest.fn(async (..._args: unknown[]) => true)
+jest.mock("@cognia/agent-orchestration/coordinator", () => ({
+  ...jest.requireActual("@cognia/agent-orchestration/coordinator"),
+  isStoredChildReplaySafe: (...args: unknown[]) => safeReplayMock(...args),
+}))
 const claimDispatchLeaseMock = jest.fn<Promise<unknown>, unknown[]>(async () => undefined)
 const getAgentTeamChildRunMock = jest.fn(async (..._args: unknown[]) => undefined as unknown)
 const updateChildRunMock = jest.fn(async (..._args: unknown[]) => true)
@@ -322,13 +329,14 @@ jest.mock("@/lib/db/agent-team-runtime", () => ({
     teamId: "team1",
     projectId: "project1",
     objective: "Ship",
-    status: "running",
+    status: sourceRunStatusMock(),
     priority: 0,
     decisionVersion: 0,
     createdAt: 1,
     updatedAt: 1,
   }),
-  renewAgentTeamDispatchLease: async () => true,
+  getLatestAgentTeamCheckpoint: async () => ({ id: "checkpoint", replay: "safe" }),
+  renewAgentTeamDispatchLease: (...args: unknown[]) => renewDispatchLeaseMock(...args),
   settleAgentTeamDispatchLease: (...args: Parameters<typeof settleDispatchLeaseMock>) =>
     settleDispatchLeaseMock(...args),
   updateAgentTeamChildRun: (...args: Parameters<typeof updateChildRunMock>) =>
@@ -518,10 +526,13 @@ beforeEach(() => {
   remoteRunMock.mockReset()
   remoteWorkersMock.mockReset().mockReturnValue([])
   claimDispatchLeaseMock.mockReset()
+  renewDispatchLeaseMock.mockReset().mockResolvedValue(true)
+  sourceRunStatusMock.mockReset().mockReturnValue("running")
+  safeReplayMock.mockReset().mockResolvedValue(true)
   getAgentTeamChildRunMock.mockReset().mockResolvedValue(undefined)
-  updateChildRunMock.mockClear()
+  updateChildRunMock.mockReset().mockResolvedValue(true)
   settleDispatchLeaseMock.mockClear()
-  advanceRemoteEventMock.mockClear()
+  advanceRemoteEventMock.mockReset().mockResolvedValue(true)
   projectRemoteEventMock.mockClear()
   projectChildLifecycleMock.mockClear()
   projectFleetMock.mockClear()
@@ -1058,6 +1069,361 @@ describe("dispatchTeammate — durable execution environment", () => {
 })
 
 describe("dispatchTeammate — remote durable worker", () => {
+  function setupRemote(capable = true) {
+    process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH = "true"
+    const dispatch = {
+      childRunId: "child-wp3",
+      dispatchEpoch: 1,
+      bindDispatchEpoch: jest.fn(),
+      claimRemoteLease: (...args: unknown[]) => claimDispatchLeaseMock(...args),
+      capture: jest.fn(),
+      prepareTurnContext: jest.fn(async () => "checkpoint context"),
+      attachControl: jest.fn(async (..._args: unknown[]) => undefined),
+      checkpointPause: jest.fn(async () => true),
+      recordRemoteDisposal: jest.fn(async () => undefined),
+      recordRemoteControlLoss: jest.fn(async (..._args: unknown[]) => undefined),
+      run: (operation: (signal: AbortSignal) => Promise<unknown>) => operation(admission.signal),
+      complete: jest.fn(async () => undefined),
+      fail: jest.fn(async () => undefined),
+      dispose: jest.fn(),
+    }
+    const admission = new AbortController()
+    beginDurableDispatchMock.mockResolvedValue(dispatch)
+    remoteWorkersMock.mockReturnValue([
+      {
+        connectionId: "connection-wp3",
+        hostRef: "device:wp3",
+        online: true,
+        activeTurns: 0,
+        lastSeenAt: 1,
+        manifest: {
+          manifestVersion: 1,
+          runtime: "cognia-agent",
+          models: ["default"],
+          hardCapabilities: [
+            ...new Set(Object.values(RUNTIME_CAPABILITIES).flat()),
+            "worker-policy-v1",
+            ...(capable ? ["worker-self-fence-v1", "turn-interrupt-v1"] : []),
+          ],
+          fenceGraceMs: 30_000,
+          maxActiveTurns: 1,
+          credentialProfileRefs: [],
+          workspaceBindingRefs: ["repository:project1:primary"],
+          taskWorkspace: { enabled: true },
+          sandbox: { capabilities: ["filesystem"] },
+          platform: { os: "linux", arch: "x64" },
+          executionProfile: {
+            profileVersion: 1,
+            backendId: "cognia-agent",
+            runtimeAdapter: "claude-agent-sdk",
+            modelBindings: { primary: "default" },
+            deploymentRefs: ["anthropic"],
+            capabilities: [...RUNTIME_CAPABILITIES["claude-agent-sdk"]],
+          },
+        },
+      },
+    ])
+    claimDispatchLeaseMock.mockImplementation(async (input: unknown) => ({
+      id: "child-wp3",
+      dispatchEpoch: 2,
+      dispatchLeaseId: (input as { leaseId: string }).leaseId,
+      fenceCapable: capable,
+      lastRenewalSentAt: Date.now(),
+      leaseTtlMs: 60_000,
+      remoteSessionId: "old-session",
+      lastRemoteEventId: "old-event",
+    }))
+    const { ctx } = makeCtx(
+      makeTeammate({
+        config: {
+          execution: {
+            mode: "pinned",
+            deploymentRef: "anthropic",
+            executionTarget: { mode: "auto" },
+          },
+        },
+      }),
+      {
+        repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+        defaultPermissionMode: "plan",
+      }
+    )
+    ;(ctx.team as AgentTeam).projectId = "project1"
+    const control = {
+      steer: jest.fn(),
+      pause: jest.fn(async () => false),
+      terminate: jest.fn(),
+      renew: jest.fn(async (..._args: unknown[]): Promise<void> => undefined),
+    }
+    let accept!: (outcome: object) => void
+    let reject!: (error: unknown) => void
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    remoteRunMock.mockImplementation(async (input: RemoteWorkerRunInput) => {
+      await input.onSession("new-session")
+      await input.onControl(control)
+      return new Promise((resolve, fail) => {
+        accept = resolve
+        reject = fail
+        input.signal?.addEventListener("abort", () => fail(input.signal?.reason), { once: true })
+        started()
+      })
+    })
+    return {
+      ctx,
+      dispatch,
+      control,
+      ready,
+      admission,
+      finish: (outcome: object = { status: "completed", result: { text: "answer" } }) =>
+        accept(outcome),
+      reject: (error: unknown) => reject(error),
+      run: () => dispatchTeammate(ctx, { taskId: "task-wp3", prompt: "task prompt" }),
+    }
+  }
+
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH
+    jest.useRealTimers()
+  })
+
+  it("sends fences on dispatch and immediately after each successful DB renewal", async () => {
+    jest.useFakeTimers()
+    const h = setupRemote()
+    const running = h.run()
+    await h.ready
+    const input = remoteRunMock.mock.calls[0]![0] as RemoteWorkerRunInput
+    expect(input.fence).toMatchObject({
+      childRunId: "child-wp3",
+      dispatchEpoch: 2,
+      leaseTtlMs: 60_000,
+    })
+    let renewDb!: (value: boolean) => void
+    renewDispatchLeaseMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          renewDb = resolve
+        })
+    )
+    await jest.advanceTimersByTimeAsync(20_000)
+    const recordedAt = renewDispatchLeaseMock.mock.calls[0]![2]
+    expect(h.control.renew).not.toHaveBeenCalled()
+    await jest.advanceTimersByTimeAsync(2_000)
+    renewDb(true)
+    await jest.advanceTimersByTimeAsync(0)
+    expect(h.control.renew).toHaveBeenCalledWith({
+      childRunId: "child-wp3",
+      dispatchEpoch: 2,
+      lastRenewalSentAt: recordedAt,
+      leaseTtlMs: 60_000,
+    })
+    await jest.advanceTimersByTimeAsync(18_000)
+    expect(h.control.renew).toHaveBeenCalledTimes(2)
+    h.finish()
+    await running
+  })
+
+  it.each(["db", "worker"])(
+    "keeps confirmed completion when a delayed %s renewal fails afterwards",
+    async (stage) => {
+      jest.useFakeTimers()
+      const h = setupRemote()
+      let failRenewal!: () => void
+      if (stage === "db")
+        renewDispatchLeaseMock.mockImplementationOnce(
+          () =>
+            new Promise<boolean>((resolve) => {
+              failRenewal = () => resolve(false)
+            })
+        )
+      else
+        h.control.renew.mockImplementationOnce(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              failRenewal = () => reject(new Error("renewal refused after close"))
+            })
+        )
+      const running = h.run()
+      const observed = running.then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error })
+      )
+      await h.ready
+      await jest.advanceTimersByTimeAsync(20_000)
+      h.finish({
+        status: "completed",
+        disposalProof: { kind: "ack", epoch: 2, at: Date.now() },
+        result: { text: "proven answer" },
+      })
+      await jest.advanceTimersByTimeAsync(0)
+      failRenewal()
+      const result = await observed
+      expect(result.error).toBeUndefined()
+      expect(result.value).toMatchObject({ text: "proven answer" })
+      expect(h.dispatch.fail).not.toHaveBeenCalled()
+      expect(h.dispatch.recordRemoteDisposal).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "ack", epoch: 2 })
+      )
+    }
+  )
+
+  it("stops renewing at turn completion while the disposal receipt is still pending", async () => {
+    jest.useFakeTimers()
+    const h = setupRemote()
+    let renewDb!: (ok: boolean) => void
+    renewDispatchLeaseMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          renewDb = resolve
+        })
+    )
+    const running = h.run()
+    await h.ready
+    await jest.advanceTimersByTimeAsync(20_000)
+    const input = remoteRunMock.mock.calls[0]![0] as RemoteWorkerRunInput
+    input.onTurnCompleted?.()
+    renewDb(false)
+    await jest.advanceTimersByTimeAsync(20_000)
+    expect(input.signal?.aborted).toBe(false)
+    expect(renewDispatchLeaseMock).toHaveBeenCalledTimes(1)
+    h.finish({
+      status: "completed",
+      disposalProof: { kind: "ack", epoch: 2, at: Date.now() },
+      result: { text: "confirmed" },
+    })
+    await expect(running).resolves.toMatchObject({ text: "confirmed" })
+    expect(h.dispatch.fail).not.toHaveBeenCalled()
+    expect(h.control.renew).not.toHaveBeenCalled()
+  })
+
+  it.each(["db", "worker"])(
+    "still fails if the delayed %s renewal is lost before completion",
+    async (stage) => {
+      jest.useFakeTimers()
+      const h = setupRemote()
+      let failRenewal!: () => void
+      if (stage === "db")
+        renewDispatchLeaseMock.mockImplementationOnce(
+          () =>
+            new Promise<boolean>((resolve) => {
+              failRenewal = () => resolve(false)
+            })
+        )
+      else
+        h.control.renew.mockImplementationOnce(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              failRenewal = () => reject(new Error("renewal lost before completion"))
+            })
+        )
+      const running = h.run()
+      const observed = expect(running).rejects.toThrow()
+      await h.ready
+      await jest.advanceTimersByTimeAsync(20_000)
+      failRenewal()
+      await observed
+      h.finish({
+        status: "completed",
+        disposalProof: { kind: "ack", epoch: 2, at: Date.now() },
+        result: { text: "too late" },
+      })
+      expect(h.dispatch.fail).toHaveBeenCalledTimes(1)
+      expect(h.dispatch.recordRemoteDisposal).not.toHaveBeenCalled()
+    }
+  )
+
+  it("keeps old Workers free of fences and renewal RPCs", async () => {
+    jest.useFakeTimers()
+    const h = setupRemote(false)
+    const running = h.run()
+    await h.ready
+    expect(remoteRunMock.mock.calls[0]![0].fence).toBeUndefined()
+    await jest.advanceTimersByTimeAsync(40_000)
+    expect(renewDispatchLeaseMock).toHaveBeenCalledTimes(2)
+    expect(h.control.renew).not.toHaveBeenCalled()
+    h.finish()
+    await running
+    expect(projectFleetMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "waiting-input" })
+    )
+  })
+
+  it.each(["db_lost", "db_failure", "worker_refusal", "detach"])(
+    "aborts on %s and clears the working fleet projection",
+    async (failure) => {
+      jest.useFakeTimers()
+      const h = setupRemote()
+      if (failure === "db_lost") renewDispatchLeaseMock.mockResolvedValueOnce(false)
+      if (failure === "db_failure")
+        renewDispatchLeaseMock.mockRejectedValueOnce(new Error("database failed"))
+      if (failure === "worker_refusal")
+        h.control.renew.mockRejectedValueOnce(new Error("renewal refused"))
+      const running = h.run()
+      const observed = expect(running).rejects.toThrow()
+      await h.ready
+      if (failure === "detach") {
+        const { WorkerDetachedError } = await import("../workers/worker-rpc-pool")
+        h.reject(new WorkerDetachedError("connection-wp3", "authority_revoked"))
+      } else await jest.advanceTimersByTimeAsync(20_000)
+      await observed
+      expect(h.dispatch.recordRemoteControlLoss).toHaveBeenCalledTimes(1)
+      expect(projectFleetMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: "waiting-input" })
+      )
+      if (failure.startsWith("db_")) expect(h.control.renew).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([true, false])(
+    "preserves the recovery checkpoint gate with a fresh capable session (capable=%s)",
+    async (capable) => {
+      const h = setupRemote(capable)
+      sourceRunStatusMock.mockReturnValue("recovering")
+      const running = h.run()
+      await h.ready
+      expect(safeReplayMock).toHaveBeenCalled()
+      expect(remoteRunMock.mock.calls[0]![0].recoverySessionId).toBe(
+        capable ? undefined : "old-session"
+      )
+      expect(remoteRunMock.mock.calls[0]![0].lastRemoteEventId).toBe(
+        capable ? undefined : "old-event"
+      )
+      expect(remoteRunMock.mock.calls[0]![0].prompt).toContain("checkpoint context")
+      h.finish()
+      await running
+    }
+  )
+
+  it("refuses a fresh recovery dispatch when the checkpoint gate fails", async () => {
+    const h = setupRemote()
+    sourceRunStatusMock.mockReturnValue("recovering")
+    safeReplayMock.mockResolvedValue(false)
+    await expect(h.run()).rejects.toThrow("safe checkpoint")
+    expect(remoteRunMock).not.toHaveBeenCalled()
+  })
+
+  it("does not turn coordinator admission cancellation into an abort of pause_after_turn", async () => {
+    const h = setupRemote(false)
+    const running = h.run()
+    const observed = expect(running).rejects.toThrow("control requested")
+    await h.ready
+    h.admission.abort(new DOMException("Child pause", "AbortError"))
+    expect(remoteRunMock.mock.calls[0]![0].signal.aborted).toBe(false)
+    h.control.pause.mockResolvedValueOnce(true)
+    const durableControl = h.dispatch.attachControl.mock.calls[0]![0] as {
+      pause(): Promise<boolean>
+    }
+    await expect(durableControl.pause()).resolves.toBe(true)
+    h.finish()
+    await observed
+    expect(h.dispatch.checkpointPause).toHaveBeenCalledTimes(1)
+    expect(projectFleetMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "waiting-input" })
+    )
+  })
+
   beforeEach(() => {
     delete process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH
   })
@@ -1216,6 +1582,85 @@ describe("dispatchTeammate — remote durable worker", () => {
       delete process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH
     }
   })
+
+  it("resets the durable event cursor before projecting a fresh recovery session", async () => {
+    const h = setupRemote()
+    sourceRunStatusMock.mockReturnValue("recovering")
+    let persistedCursor: string | undefined = "old-event"
+    updateChildRunMock.mockImplementation(async (_id, patch) => {
+      const update = patch as { lastRemoteEventId?: string }
+      if (Object.hasOwn(update, "lastRemoteEventId")) persistedCursor = update.lastRemoteEventId
+      return true
+    })
+    advanceRemoteEventMock.mockImplementation(async (_id, previous, eventId) => {
+      if (previous !== persistedCursor) return false
+      persistedCursor = eventId as string
+      return true
+    })
+    const running = h.run()
+    await h.ready
+    const input = remoteRunMock.mock.calls[0]![0] as RemoteWorkerRunInput
+    await input.onEvent({
+      eventId: "fresh-event",
+      sequence: 1,
+      event: { kind: "text-delta", delta: "new" },
+    })
+    h.finish()
+    await running
+    expect(persistedCursor).toBe("fresh-event")
+    expect(projectRemoteEventMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps a late event from restoring a disconnected fleet row to working", async () => {
+    const h = setupRemote()
+    const running = h.run()
+    const observed = expect(running).rejects.toThrow("socket_closed")
+    await h.ready
+    const input = remoteRunMock.mock.calls[0]![0] as RemoteWorkerRunInput
+    let projectLate!: (accepted: boolean) => void
+    advanceRemoteEventMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          projectLate = resolve
+        })
+    )
+    const lateEvent = input.onEvent({
+      eventId: "late-event",
+      sequence: 1,
+      event: { kind: "text-delta", delta: "late" },
+    })
+    const { WorkerDetachedError } = await import("../workers/worker-rpc-pool")
+    h.reject(new WorkerDetachedError("connection-wp3", "socket_closed"))
+    await observed
+    projectLate(true)
+    await lateEvent
+    expect(projectFleetMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "waiting-input" })
+    )
+  })
+
+  it.each([true, false])(
+    "projects a terminal control receipt honestly (confirmed=%s)",
+    async (confirmed) => {
+      const h = setupRemote()
+      h.control.terminate.mockResolvedValue(
+        confirmed ? { kind: "ack", epoch: 2, at: 3 } : undefined
+      )
+      const running = h.run()
+      const observed = expect(running).rejects.toThrow("control requested")
+      await h.ready
+      const control = h.dispatch.attachControl.mock.calls[0]![0] as {
+        terminate(): Promise<unknown>
+      }
+      await control.terminate()
+      expect(h.dispatch.recordRemoteDisposal).toHaveBeenCalledTimes(confirmed ? 1 : 0)
+      h.finish({ status: "aborted", result: {} })
+      await observed
+      expect(projectFleetMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: confirmed ? "ended" : "waiting-input" })
+      )
+    }
+  )
 
   it("claims a child lease, dispatches by stable repository ref, and captures events once", async () => {
     process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH = "true"

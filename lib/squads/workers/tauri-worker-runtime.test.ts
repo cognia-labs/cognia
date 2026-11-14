@@ -1,8 +1,11 @@
 import {
   getRemoteWorkerRuntime,
   __resetRemoteWorkerRuntimeForTesting,
+  type RemoteWorkerRunInput,
+  type RemoteWorkerTurnControl,
 } from "./remote-worker-runtime"
 import { attachTauriWorkerRuntime, type WorkerBrainEnvelope } from "./tauri-worker-runtime"
+import { RPC_METHODS, RPC_PROTOCOL_VERSION } from "@cognia/agent/protocol"
 
 jest.mock("@tauri-apps/api/core", () => ({
   invoke: jest.fn(),
@@ -103,6 +106,7 @@ describe("attachTauriWorkerRuntime", () => {
     })
     expect(handle.pool.listWorkers()).toHaveLength(1)
 
+    const detach = jest.spyOn(handle.pool, "detach")
     harness.channel.deliver({
       seq: 3,
       type: "worker_detach",
@@ -111,6 +115,8 @@ describe("attachTauriWorkerRuntime", () => {
       reason: "socket_closed",
     })
     expect(handle.pool.listWorkers()).toEqual([])
+    expect(detach).toHaveBeenCalledWith("connection-1", "socket_closed")
+    detach.mockRestore()
   })
 
   it("acks cumulatively on a timer instead of once per frame", async () => {
@@ -245,6 +251,172 @@ describe("attachTauriWorkerRuntime", () => {
     await jest.advanceTimersByTimeAsync(0)
     expect(order.slice(1)).toEqual(['{"id":1}', '{"id":2}', '{"id":3}'])
     await handle.dispose()
+  })
+
+  it.each([
+    ["turn/run", "remaining"],
+    ["dispatch/renew", "remaining"],
+    ["turn/run", "expired"],
+    ["dispatch/renew", "expired"],
+    ["turn/run", "incompatible"],
+    ["dispatch/renew", "incompatible"],
+  ])("finalizes %s at desktop dequeue time (%s)", async (operation, scenario) => {
+    jest.setSystemTime(1_000)
+    type Request = { id?: number | string; method: string; params: Record<string, unknown> }
+    const sent: Request[] = []
+    let eventSeq = 1
+    let entries = 0
+    let blocked = false
+    let release!: () => void
+    const queueBlocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let runRequest: Request | undefined
+    const reply = (request: Request, result: unknown) => {
+      queueMicrotask(() =>
+        harness.channel.deliver({
+          seq: ++eventSeq,
+          type: "worker_frame",
+          connectionId: "queued",
+          frame: JSON.stringify({ jsonrpc: "2.0", id: request.id, result }),
+        })
+      )
+    }
+    const invoke = jest.fn(async (command: string, args?: Record<string, unknown>) => {
+      if (command !== "companion_worker_send_frame") return
+      const request = JSON.parse(String(args?.frame)) as Request
+      if (request.id === "queue-block") {
+        blocked = true
+        await queueBlocked
+        return
+      }
+      if (request.id === undefined) return
+      sent.push(request)
+      let result: unknown = { commandId: request.params?.commandId ?? "command" }
+      if (request.method === "initialize")
+        result = {
+          protocolVersion: RPC_PROTOCOL_VERSION,
+          host: { name: "queued-worker", version: "1" },
+          runtimeVersion: "1",
+          instanceId: "queued",
+          methods: RPC_METHODS,
+          capabilities: ["worker-dispatch-v1", "event-replay", "worker-self-fence-v1"],
+          limits: {},
+        }
+      if (request.method === "session/create") result = { sessionId: "queued-session", spec: {} }
+      if (request.method === "session/entries") {
+        result = { entries: [] }
+        entries += 1
+      }
+      if (request.method === "session/state")
+        result = { sessionId: "queued-session", status: "idle" }
+      if (request.method === "turn/run") {
+        runRequest = request
+        return
+      }
+      if (request.method === "dispatch/renew")
+        result = { commandId: request.params.commandId, renewed: true }
+      reply(request, result)
+      // Reply to the cursor read, but hold its IPC completion. The SDK can
+      // enqueue turn/run while the transport still waits on this invocation.
+      if (operation === "turn/run" && request.method === "session/entries" && entries === 2) {
+        blocked = true
+        await queueBlocked
+      }
+    })
+    const harness = setup(invoke as never)
+    const handle = await harness.attach()
+    harness.channel.deliver({
+      seq: eventSeq,
+      type: "worker_attach",
+      connectionId: "queued",
+      hostRef: "device:queued",
+      manifest: {
+        ...manifest,
+        hardCapabilities: ["worker-self-fence-v1"],
+        fenceGraceMs: 30_000,
+        executionProfile: { ...manifest.executionProfile, runtimeAdapter: "ai-sdk" },
+      },
+    })
+    let control!: RemoteWorkerTurnControl
+    const lease = {
+      childRunId: "queued-child",
+      dispatchEpoch: 1,
+      lastRenewalSentAt: 1_000,
+      leaseTtlMs: 5_000,
+    }
+    const input: RemoteWorkerRunInput = {
+      hostRef: "device:queued",
+      commandId: "queued-turn",
+      dispatchEpoch: 1,
+      fence: lease,
+      handoff: {
+        envelopeVersion: 1,
+        identity: {
+          parentRunId: "parent",
+          childRunId: "queued-child",
+          depth: 1,
+          parentChain: ["parent"],
+        },
+        task: { prompt: "task" },
+        execution: { mode: "orchestrated" },
+        createdAt: "2026-11-14T00:00:00.000Z",
+      },
+      prompt: "task",
+      onSession: jest.fn(),
+      onEvent: jest.fn(),
+      onControl: (next) => {
+        control = next
+      },
+    }
+    const running = handle.pool.run(input).then(
+      (outcome) => ({ outcome, error: undefined }),
+      (error: unknown) => ({ outcome: undefined, error })
+    )
+    const flush = async () => {
+      for (let i = 0; i < 8; i++) await jest.advanceTimersByTimeAsync(0)
+    }
+    let renewing: Promise<unknown> | undefined
+    try {
+      await flush()
+      if (operation === "dispatch/renew") {
+        const sink = (
+          handle.pool as unknown as {
+            workers: Map<string, { writable: { write(frame: string): boolean } }>
+          }
+        ).workers.get("queued")!.writable
+        sink.write('{"id":"queue-block"}\n')
+        await flush()
+        renewing = control.renew!(lease).catch((error: unknown) => error)
+        await flush()
+      }
+      expect(blocked).toBe(true)
+      expect(sent.filter((request) => request.method === operation)).toHaveLength(0)
+      await jest.advanceTimersByTimeAsync(scenario === "expired" ? 6_000 : 2_000)
+      if (scenario === "incompatible")
+        handle.pool.listWorkers()[0]!.manifest.hardCapabilities.splice(0)
+      release()
+      await flush()
+      if (scenario === "remaining") {
+        const request = sent.find((request) => request.method === operation)!
+        const ttl =
+          operation === "turn/run"
+            ? (request.params.fence as { leaseTtlMs: number }).leaseTtlMs
+            : request.params.leaseTtlMs
+        expect(ttl).toBe(3_000)
+        await renewing
+        reply(runRequest!, { status: "completed", result: { text: "done" } })
+        await flush()
+        expect((await running).error).toBeUndefined()
+      } else {
+        expect(sent.filter((request) => request.method === operation)).toHaveLength(0)
+        expect((await running).error).toBeInstanceOf(Error)
+        await renewing
+      }
+    } finally {
+      release()
+      await handle.dispose()
+    }
   })
 
   it("detaches the connection when a frame never reaches the worker", async () => {

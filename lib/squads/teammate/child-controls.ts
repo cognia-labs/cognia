@@ -14,6 +14,7 @@ export interface ChildControlDispatch {
   releaseSession(sessionId: string): Promise<void>
   /** Checkpoint the paused child; `false` when it is not safe to replay. */
   checkpointPause(): Promise<boolean>
+  recordRemoteDisposal?(proof: import("@cognia/agent-orchestration").StopProof): Promise<void>
 }
 
 /** The external-agent manager surface a control drives. */
@@ -75,7 +76,9 @@ export function sidecarSessionControl(
 /** The control a remote worker hands back for its running turn. */
 export interface RemoteTurnControls {
   steer(message: string, commandId: string): Promise<void>
-  pause(commandId: string): Promise<void>
+  pause(
+    commandId: string
+  ): Promise<import("../workers/remote-worker-runtime").RemoteWorkerPauseResult>
   terminate(commandId: string): Promise<void | import("@cognia/agent-orchestration").StopProof>
 }
 
@@ -87,13 +90,24 @@ export interface RemoteTurnControls {
 export function remoteTurnControl(
   control: RemoteTurnControls,
   leaseId: string,
-  dispatch: Pick<ChildControlDispatch, "checkpointPause">
+  dispatch: Pick<ChildControlDispatch, "checkpointPause" | "recordRemoteDisposal">
 ): DurableChildControl {
   return {
     steer: (message, sourceMessageId) => control.steer(message, sourceMessageId),
     pause: async () => {
-      await control.pause(`${leaseId}:pause`)
-      return dispatch.checkpointPause()
+      try {
+        const stopped = await control.pause(`${leaseId}:pause`)
+        if (!stopped) return false
+        if (typeof stopped === "object" && "proof" in stopped) {
+          // The stop is proven; the turn's event tail is not, so no checkpoint.
+          await dispatch.recordRemoteDisposal?.(stopped.proof)
+          return false
+        }
+        if (typeof stopped === "object") await dispatch.recordRemoteDisposal?.(stopped)
+        return await dispatch.checkpointPause()
+      } catch {
+        return false
+      }
     },
     terminate: () => control.terminate(`${leaseId}:terminate`),
   }

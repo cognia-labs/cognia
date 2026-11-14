@@ -16,6 +16,8 @@ import type { WebSocketLike } from "./bridge-client"
 import { HEADLESS_CATALOG_HASH, HEADLESS_CONTRACT_VERSION } from "./headless-contract-identity"
 import { durabilityRoot, openBackend } from "./persistence/backend"
 import { BRIDGE_PROTOCOL_VERSION } from "./protocol"
+import { WorkerRpcPool, type WorkerRpcPoolOptions } from "@/lib/squads/workers/worker-rpc-pool"
+import { getRemoteWorkerRuntime } from "@/lib/squads/workers/remote-worker-runtime"
 import { projectWorkerPlacement, resolveServeCollabConfig, serveCommand } from "./serve-command"
 import type { HeadlessRuntimeContext } from "@/lib/headless/types"
 import { getStorageRetentionSnapshot } from "@/lib/storage/retention"
@@ -496,6 +498,7 @@ describe("serveCommand", () => {
   }, 30_000)
 
   it("boots, answers a sync-pull from Dexie, and flushes on shutdown", async () => {
+    const detach = jest.spyOn(WorkerRpcPool.prototype, "detach")
     mockBootOrder.length = 0
     __resetCliDbForTesting()
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-serve-e2e-"))
@@ -517,6 +520,35 @@ describe("serveCommand", () => {
       // The server asks for it over the bridge.
       const server = FakeServerSocket.last!
       expect(server.url).toBe(`ws${controlPlane.url.slice(4)}/internal/bridge?token=svc-token-e2e`)
+      const workerPool = getRemoteWorkerRuntime() as WorkerRpcPool
+      const { sendFrame } = (workerPool as unknown as { options: WorkerRpcPoolOptions }).options
+      const frameCount = () =>
+        server.sent
+          .map((frame) => JSON.parse(frame))
+          .filter((frame) => frame.type === "worker_frame").length
+      const before = frameCount()
+      const refused = jest.fn(() => undefined)
+      sendFrame("dropped", "stale frame", refused)
+      expect(refused).toHaveBeenCalledTimes(1)
+      expect(frameCount()).toBe(before)
+      const finalized = '{"jsonrpc":"2.0","id":1}'
+      const finalize = jest.fn(() => finalized)
+      sendFrame("finalized", "stale frame", finalize)
+      expect(finalize).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(server.sent.at(-1)!)).toMatchObject({
+        type: "worker_frame",
+        connectionId: "finalized",
+        frame: finalized,
+      })
+
+      server.serverSend({
+        v: 1,
+        type: "worker_detach",
+        connectionId: "detached-worker",
+        hostRef: "device:a",
+        reason: "authority_revoked",
+      })
+      expect(detach).toHaveBeenCalledWith("detached-worker", "authority_revoked")
       server.serverSend({
         v: 1,
         type: "event",
@@ -624,6 +656,7 @@ describe("serveCommand", () => {
         onStarted,
       })
     } finally {
+      detach.mockRestore()
       await controlPlane.close()
     }
 

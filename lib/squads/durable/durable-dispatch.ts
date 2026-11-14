@@ -888,14 +888,57 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
     ): Promise<void> {
       // A current-epoch receipt remains evidence when an operator stop or a
       // transport failure wins the result race. Result projection stays gated.
-      const child = await ownedChild()
-      if (!hasRemoteDispatch(child) || proof.kind !== "ack" || proof.epoch !== dispatchEpoch)
+      if (proof.kind !== "ack" || proof.epoch !== dispatchEpoch)
         throw new Error("stop_unconfirmed: remote disposal acknowledgement does not match")
-      await updateOwnedChild({
-        settledEpoch: dispatchEpoch,
-        stop: { state: "confirmed", epoch: dispatchEpoch, requestedAt: proof.at, proof },
-        updatedAt: now(),
-      })
+      // A concurrent write by this same attempt (a renewal already in flight)
+      // can move `updatedAt` between the read and the CAS. Only a change of
+      // ownership may refuse a verified receipt, so re-read and retry; an ack
+      // already recorded for this epoch is this one.
+      for (let tries = 0; tries < 8; tries++) {
+        const child = await ownedChild()
+        if (!hasRemoteDispatch(child))
+          throw new Error("stop_unconfirmed: remote disposal acknowledgement does not match")
+        if (
+          child.stop?.state === "confirmed" &&
+          child.stop.epoch === dispatchEpoch &&
+          child.stop.proof?.kind === "ack" &&
+          child.stop.proof.epoch === dispatchEpoch
+        )
+          return
+        if (
+          await store.updateChildIfCurrent(childRunId, child, {
+            settledEpoch: dispatchEpoch,
+            stop: { state: "confirmed", epoch: dispatchEpoch, requestedAt: proof.at, proof },
+            updatedAt: now(),
+          })
+        )
+          return
+      }
+      throw new Error("Dispatch no longer owns this child projection")
+    },
+    async recordRemoteControlLoss(error: unknown): Promise<void> {
+      // Loss of authority starts the stop path, but never supplies its proof.
+      // Keep pause/terminate's state transition with the coordinator.
+      for (const state of ["requested", "unconfirmed"] as const) {
+        for (;;) {
+          const child = await ownedChild()
+          if (
+            !hasRemoteDispatch(child) ||
+            (child.stop?.state === "confirmed" && child.stop.proof?.epoch === dispatchEpoch)
+          )
+            return
+          if (state === "requested" && child.stop?.state === "unconfirmed") break
+          const at = now()
+          if (
+            await store.updateChildIfCurrent(childRunId, child, {
+              stop: { state, epoch: dispatchEpoch, requestedAt: child.stop?.requestedAt ?? at },
+              error: redactText(error instanceof Error ? error.message : String(error)).redacted,
+              updatedAt: at,
+            })
+          )
+            break
+        }
+      }
     },
     async bindLocalSidecarSession(sessionId: string): Promise<void> {
       const { getLiveSidecarSessionIds } = await import("@/lib/claude/ipc")
@@ -1170,7 +1213,8 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
           )
           return
         }
-        if (["completed", "cancelled", "terminated", "paused"].includes(current.status)) return
+        if (["completed", "cancelled", "terminated", "paused", "pausing"].includes(current.status))
+          return
         if (
           current.status === "queued" &&
           current.startedAt !== undefined &&

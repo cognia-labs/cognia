@@ -80,6 +80,7 @@ import {
   RemoteWorkerWaitingError,
   selectRemoteWorker,
   type RemoteWorkerDescriptor,
+  type RemoteWorkerTurnControl,
 } from "../workers/remote-worker-runtime"
 import { requestWorkerWake, shouldAttemptWake } from "../workers/wake-worker"
 import { runMemberFusionTurn } from "./member-fusion-turn"
@@ -1397,6 +1398,9 @@ export async function dispatchTeammate(
     const executeTurn = async (
       admissionSignal?: AbortSignal
     ): Promise<{ text: string; usage?: TokenUsage }> => {
+      // Once admitted, remote pause/terminate is governed by its control
+      // receipt. The coordinator aborts admission before invoking that control.
+      const dispatchLifetimeSignal = combinedSignal
       if (admissionSignal) combinedSignal = AbortSignal.any([combinedSignal, admissionSignal])
       combinedSignal.throwIfAborted()
       const durableTurnContext = await activeDispatch?.prepareTurnContext()
@@ -1492,6 +1496,7 @@ export async function dispatchTeammate(
           updateAgentTeamChildRun,
         } = await import("@/lib/db/agent-team-runtime")
         const leaseId = `dispatch:${activeDispatch.childRunId}:${globalThis.crypto.randomUUID()}`
+        const leaseClaimedAt = Date.now()
         const declaredFenceGraceMs: unknown = Reflect.get(target.manifest, "fenceGraceMs")
         const claimed = await activeDispatch.claimRemoteLease({
           childRunId: activeDispatch.childRunId,
@@ -1508,7 +1513,7 @@ export async function dispatchTeammate(
               ? declaredFenceGraceMs
               : 30_000,
           executionFingerprint: remoteExecutionSpec.executionFingerprint,
-          now: Date.now(),
+          now: leaseClaimedAt,
         })
         if (!claimed) throw new RemoteWorkerWaitingError("no_compatible_capacity", target.hostRef)
         const dispatchEpoch = claimed.dispatchEpoch ?? 0
@@ -1534,9 +1539,9 @@ export async function dispatchTeammate(
         }
         const sourceRun = await getAgentTeamRun(teamCtx.runId)
         if (!sourceRun) throw new Error(`Unknown durable AgentTeam run: ${teamCtx.runId}`)
-        const recoverySessionId =
+        const retainedRecoverySessionId =
           sourceRun.status === "recovering" ? claimed.remoteSessionId : undefined
-        if (recoverySessionId) {
+        if (retainedRecoverySessionId) {
           const { getLatestAgentTeamCheckpoint } = await import("@/lib/db/agent-team-runtime")
           const checkpoint = await getLatestAgentTeamCheckpoint(activeDispatch.childRunId)
           const [{ isStoredChildReplaySafe }, { getDurableTeamCoordinator }] = await Promise.all([
@@ -1553,6 +1558,7 @@ export async function dispatchTeammate(
             throw new Error("Remote session recovery requires a safe checkpoint")
           }
         }
+        const recoverySessionId = claimed.fenceCapable ? undefined : retainedRecoverySessionId
         const { agentTeamExecutionRunId } = await import("@/lib/execution/agent-team-bridge")
         const { semanticRunEvent } = await import("@/lib/db/execution-runs")
         const projectAgentTeamChildLifecycle = async (
@@ -1675,13 +1681,15 @@ export async function dispatchTeammate(
           state: "started",
           sourceEventId: `agent-team:${teamCtx.runId}:${leaseId}:started`,
         })
-        let lastRemoteEventId = claimed.lastRemoteEventId
+        let lastRemoteEventId = recoverySessionId ? claimed.lastRemoteEventId : undefined
         let projectedRemoteSessionId = claimed.remoteSessionId
+        let remoteActive = true
+        let fleetProjection = Promise.resolve()
         const { projectManagedFleetSession } =
           await import("@/lib/fleet/managed-session-projection")
         const projectFleet = async (status: import("@/lib/fleet/types").FleetStatus) => {
           if (!projectedRemoteSessionId) return
-          await projectManagedFleetSession({
+          const projection = {
             sessionId: projectedRemoteSessionId,
             hostRef: target.hostRef,
             status,
@@ -1691,47 +1699,153 @@ export async function dispatchTeammate(
             executionRunId: agentTeamExecutionRunId(teamCtx.runId),
             projectName: teamCtx.team.name,
             startedAt: claimed.startedAt,
-          }).catch(() => undefined)
+          }
+          fleetProjection = fleetProjection.then(async () => {
+            if (status === "working" && (!remoteActive || controlRequested)) return
+            await projectManagedFleetSession(projection).catch(() => undefined)
+          })
+          await fleetProjection
         }
         const leaseController = new AbortController()
-        const renew = setInterval(() => {
-          void renewAgentTeamDispatchLease(
-            activeDispatch.childRunId,
-            leaseId,
-            Date.now(),
-            undefined,
-            dispatchEpoch
-          )
-            .then((ok) => {
-              if (!ok) leaseController.abort(new Error("Remote dispatch lease was lost"))
+        let renew: ReturnType<typeof setInterval> | undefined
+        let renewal: Promise<void> | undefined
+        let controlOperation: Promise<unknown> | undefined
+        let controlRequested = false
+        let controlSettled = false
+        let disposalConfirmed = false
+        const recordCompletionProof = async (
+          proof: import("@cognia/agent-orchestration").StopProof
+        ) => {
+          if (disposalConfirmed || proof.kind !== "ack" || proof.epoch !== dispatchEpoch) return
+          await activeDispatch.recordRemoteDisposal(proof)
+          disposalConfirmed = true
+        }
+        let remoteTurnCompleted = false
+        const leaseTtlMs = claimed.leaseTtlMs ?? 60_000
+        const startRenewing = (control: RemoteWorkerTurnControl) => {
+          renew = setInterval(() => {
+            if (renewal || leaseController.signal.aborted || controlSettled || remoteTurnCompleted)
+              return
+            const sentAt = Date.now()
+            renewal = (async () => {
+              try {
+                const ok = await renewAgentTeamDispatchLease(
+                  activeDispatch.childRunId,
+                  leaseId,
+                  sentAt,
+                  leaseTtlMs,
+                  dispatchEpoch
+                )
+                if (!ok) throw new Error("Remote dispatch lease was lost")
+                if (remoteTurnCompleted) return
+                if (claimed.fenceCapable) {
+                  if (!control.renew) throw new Error("Remote worker lease renewal unavailable")
+                  await control.renew({
+                    childRunId: activeDispatch.childRunId,
+                    dispatchEpoch,
+                    lastRenewalSentAt: sentAt,
+                    leaseTtlMs,
+                  })
+                }
+              } catch (error) {
+                // Preserve the order in which loss and turn completion were
+                // observed. A late refusal after cleanup cannot erase a result.
+                if (!remoteTurnCompleted) leaseController.abort(error)
+              }
+            })().finally(() => {
+              renewal = undefined
             })
-            .catch((error) => leaseController.abort(error))
-        }, 20_000)
+          }, 20_000)
+        }
         try {
+          combinedSignal.throwIfAborted()
           const outcome = await remoteRuntime.run({
             hostRef: target.hostRef,
             handoff,
             commandId: leaseId,
+            dispatchEpoch,
+            placementRequirements,
+            ...(claimed.fenceCapable
+              ? {
+                  fence: {
+                    childRunId: activeDispatch.childRunId,
+                    dispatchEpoch,
+                    lastRenewalSentAt: claimed.lastRenewalSentAt ?? leaseClaimedAt,
+                    leaseTtlMs,
+                  },
+                }
+              : {}),
             ...(recoverySessionId ? { recoverySessionId } : {}),
             ...(lastRemoteEventId ? { lastRemoteEventId } : {}),
             prompt: remotePrompt,
             ...(maxSteps ? { maxSteps } : {}),
-            signal: AbortSignal.any([combinedSignal, leaseController.signal]),
+            signal: AbortSignal.any([dispatchLifetimeSignal, leaseController.signal]),
+            onTurnCompleted: () => {
+              remoteTurnCompleted = true
+              if (renew) clearInterval(renew)
+            },
+            onDisposalProof: recordCompletionProof,
             onSession: async (remoteSessionId) => {
+              combinedSignal.throwIfAborted()
               projectedRemoteSessionId = remoteSessionId
               await projectCurrent(async () => {
                 await updateAgentTeamChildRun(activeDispatch.childRunId, {
                   remoteSessionId,
                   sessionId: remoteSessionId,
+                  // A fresh session has its own event sequence. Keep the DB
+                  // CAS cursor aligned with the new stream, under this epoch.
+                  ...(!recoverySessionId ? { lastRemoteEventId: undefined } : {}),
                   updatedAt: Date.now(),
                 })
               })
               await projectFleet("working")
             },
             onControl: async (control) => {
-              await activeDispatch.attachControl(
-                remoteTurnControl(control, leaseId, activeDispatch)
-              )
+              combinedSignal.throwIfAborted()
+              const recordDisposal = async (
+                proof: import("@cognia/agent-orchestration").StopProof
+              ) => {
+                await activeDispatch.recordRemoteDisposal(proof)
+                disposalConfirmed = true
+              }
+              const durableControl = remoteTurnControl(control, leaseId, {
+                checkpointPause: () => activeDispatch.checkpointPause(),
+                recordRemoteDisposal: recordDisposal,
+              })
+              await activeDispatch.attachControl({
+                ...durableControl,
+                pause: () => {
+                  controlRequested = true
+                  controlOperation = (async () => {
+                    const safe = await durableControl.pause?.()
+                    controlSettled = true
+                    await projectFleet("waiting-input")
+                    return safe
+                  })()
+                  return controlOperation as Promise<boolean>
+                },
+                terminate: () => {
+                  controlRequested = true
+                  controlOperation = (async () => {
+                    try {
+                      const proof = await durableControl.terminate?.()
+                      if (proof?.kind === "ack") await recordDisposal(proof)
+                      await projectFleet(proof ? "ended" : "waiting-input")
+                      return proof
+                    } catch (error) {
+                      await projectFleet("waiting-input")
+                      throw error
+                    } finally {
+                      controlSettled = true
+                    }
+                  })()
+                  return controlOperation as ReturnType<
+                    NonNullable<typeof durableControl.terminate>
+                  >
+                },
+              })
+              combinedSignal.throwIfAborted()
+              startRenewing(control)
             },
             onEvent: async (envelope) => {
               const safeEnvelope = redactText(JSON.stringify(envelope)).redacted
@@ -1757,7 +1871,7 @@ export async function dispatchTeammate(
                 hostRef: target.hostRef,
                 envelope,
               })
-              await projectFleet("working")
+              if (!controlRequested) await projectFleet("working")
               const event = envelope.event
               if (event.kind === "text-delta" && typeof event.delta === "string") {
                 onTurnCapture?.({ type: "text-delta", delta: event.delta })
@@ -1784,6 +1898,16 @@ export async function dispatchTeammate(
               }
             },
           })
+          remoteTurnCompleted = outcome.status === "completed"
+          if (renew) clearInterval(renew)
+          // A current-epoch receipt is evidence even if the lease then lost
+          // the race, so it is recorded before the lease check.
+          if (outcome.disposalProof) await recordCompletionProof(outcome.disposalProof)
+          await renewal
+          leaseController.signal.throwIfAborted()
+          await controlOperation?.catch(() => undefined)
+          if (controlRequested)
+            throw new DOMException("Remote child control requested", "AbortError")
           // The worker finished its turn but is still holding an unresolved
           // permission or elicitation. That is `needs_input`, not a failure, and
           // it now travels as an explicit flag rather than as the unreachable
@@ -1820,13 +1944,6 @@ export async function dispatchTeammate(
                 : `Remote worker turn ${outcome.status}`
             )
           }
-          // WP2a/WP3 will supply the worker receipt. Until then completion
-          // projects normally; only executor settlement/recovery stays closed.
-          if (
-            outcome.disposalProof?.kind === "ack" &&
-            outcome.disposalProof.epoch === dispatchEpoch
-          )
-            await activeDispatch.recordRemoteDisposal(outcome.disposalProof)
           await projectAgentTeamChildLifecycle({
             sourceRun,
             childRunId: activeDispatch.childRunId,
@@ -1834,14 +1951,21 @@ export async function dispatchTeammate(
             state: "completed",
             sourceEventId: `agent-team:${teamCtx.runId}:${leaseId}:completed`,
           })
-          await projectFleet("ended")
+          await projectFleet(disposalConfirmed ? "ended" : "waiting-input")
           const usage = outcome.result.usage as TokenUsage | undefined
           return { text: outcome.result.text ?? "", ...(usage ? { usage } : {}) }
         } catch (error) {
-          await projectFleet("waiting-input")
+          remoteActive = false
+          await controlOperation?.catch(() => undefined)
+          try {
+            await activeDispatch.recordRemoteControlLoss(error)
+          } finally {
+            await projectFleet(disposalConfirmed ? "ended" : "waiting-input")
+          }
           throw error
         } finally {
-          clearInterval(renew)
+          remoteActive = false
+          if (renew) clearInterval(renew)
         }
       }
       // Durable-v2 routes through the run-scoped environment adapter, whose

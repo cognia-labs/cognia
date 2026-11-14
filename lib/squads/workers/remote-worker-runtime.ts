@@ -198,6 +198,10 @@ export interface RemoteWorkerRunInput {
   hostRef: string
   handoff: HandoffEnvelope
   commandId: string
+  dispatchEpoch?: number
+  /** Brain-local lease bookkeeping; only the remaining TTL goes on the wire. */
+  fence?: RemoteWorkerLease
+  placementRequirements?: RemoteWorkerRequirements
   /** Existing session used only by checkpoint-gated disconnect/restart recovery. */
   recoverySessionId?: string
   lastRemoteEventId?: string
@@ -207,12 +211,39 @@ export interface RemoteWorkerRunInput {
   onSession(sessionId: string): Promise<void> | void
   onEvent(event: AgentEventEnvelope): Promise<void> | void
   onControl(control: RemoteWorkerTurnControl): Promise<void> | void
+  /** Turn completion precedes disposal/cleanup; it does not acknowledge stop. */
+  onTurnCompleted?(): void
+  /**
+   * Called as soon as a completed turn's strict receipt is verified, before any
+   * later cleanup (event drain, close) can fail the run: the proof must reach
+   * the durable record even when the run itself then rejects.
+   */
+  onDisposalProof?(proof: import("@cognia/agent-orchestration").StopProof): Promise<void> | void
 }
+
+/**
+ * A pause answer: `false` unconfirmed, `true` stopped without a receipt (an old
+ * Worker whose turn ended), a `StopProof` confirmed and safe to checkpoint, or
+ * a proof whose turn left unprojected events, so the stop is proven but a
+ * checkpoint is not safe.
+ */
+export type RemoteWorkerPauseResult =
+  | boolean
+  | import("@cognia/agent-orchestration").StopProof
+  | { proof: import("@cognia/agent-orchestration").StopProof; checkpointSafe: false }
 
 export interface RemoteWorkerTurnControl {
   steer(message: string, commandId: string): Promise<void>
-  pause(commandId: string): Promise<void>
+  pause(commandId: string): Promise<RemoteWorkerPauseResult>
+  renew?(lease: RemoteWorkerLease): Promise<void>
   terminate(commandId: string): Promise<void | import("@cognia/agent-orchestration").StopProof>
+}
+
+export interface RemoteWorkerLease {
+  childRunId: string
+  dispatchEpoch: number
+  lastRenewalSentAt: number
+  leaseTtlMs: number
 }
 
 /**
@@ -228,7 +259,7 @@ export interface RemoteWorkerTurnControl {
 export interface RemoteWorkerOutcome extends AgentTurnOutcome {
   recoveryRequired?: boolean
   /**
-   * Dormant until the WP2a/WP3 worker receipt is wired. A completed turn still
+   * A completed turn still
    * projects its result without this field, but its executor remains
    * unconfirmed (waitingReason/stop = stop_unconfirmed) and cannot be replayed.
    * Only the worker can acknowledge closed admission and empty TOOL groups.

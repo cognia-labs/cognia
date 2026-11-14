@@ -215,6 +215,8 @@ export interface SessionState {
 export interface EntryPage {
   entries: readonly { envelope: AgentEventEnvelope; [key: string]: unknown }[]
   nextEventId?: string
+  /** Newest persisted event at the time of the read; sent by `event-replay-v2` peers. */
+  headEventId?: string
 }
 
 export interface EntryPageOptions {

@@ -276,6 +276,22 @@ describe("BridgeClient", () => {
     expect(h.sockets[0].lastSent()).toEqual(fixturesWorker("worker_frame"))
   })
 
+  it.each(["socket_closed", "authority_revoked", "replaced", "send_failed"])(
+    "preserves the Worker detach reason %s",
+    async (reason) => {
+      const detached = jest.fn()
+      const h = makeClient({ onWorkerDetach: detached })
+      await handshake(h)
+      h.sockets[0].serverSend({ ...fixturesWorker("worker_detach"), reason })
+      expect(detached).toHaveBeenCalledWith({
+        connectionId: "connection-1",
+        hostRef: "device:worker-a",
+        reason,
+      })
+      await h.client.close()
+    }
+  )
+
   it("invoke while disconnected drops loudly instead of rejecting", async () => {
     const logs: string[] = []
     const h = makeClient({ log: (_level, message) => logs.push(message), reconnect: false })

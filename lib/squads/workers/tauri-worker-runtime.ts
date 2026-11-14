@@ -62,9 +62,13 @@ export async function attachTauriWorkerRuntime(
   let outbound: Promise<unknown> = Promise.resolve()
 
   const pool = new WorkerRpcPool({
-    sendFrame(connectionId, frame) {
+    sendFrame(connectionId, _frame, finalize) {
       outbound = outbound
-        .then(() => call("companion_worker_send_frame", { tenantId, connectionId, frame }))
+        .then(() => {
+          const frame = finalize()
+          if (frame === undefined) return
+          return call("companion_worker_send_frame", { tenantId, connectionId, frame })
+        })
         .catch(() => {
           // A frame that never reached the worker has broken request/response
           // correlation for that connection, and no later frame can repair it.
