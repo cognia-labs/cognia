@@ -14,7 +14,7 @@
 //! under a short lock; lifecycle observation never reaps the pinned leader.
 //! Final teardown revokes signal authority before retiring the group.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 #[cfg(unix)]
@@ -28,8 +28,8 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
 
 use crate::limits::{
-    EXIT_TAIL_DRAIN_GRACE, JOB_OUTPUT_TAIL_BYTES, MAX_JOBS_GLOBAL, MAX_JOBS_PER_SESSION,
-    MAX_LOG_BYTES_GLOBAL,
+    COMPLETION_REAP_MAX_INTERVAL, EXIT_TAIL_DRAIN_GRACE, JOB_OUTPUT_TAIL_BYTES, MAX_JOBS_GLOBAL,
+    MAX_JOBS_PER_SESSION, MAX_LOG_BYTES_GLOBAL, MAX_RETIRED_OWNER_RECORDS,
 };
 use crate::output::JobOutput;
 use crate::store::JobStore;
@@ -182,6 +182,139 @@ impl Drop for JobGroup {
     }
 }
 
+/// Completion reap (ADR-0244). Runs in a job's waiter after its leader exited
+/// and its pipes drained, so a long-running Host keeps no zombie leader, `Child`,
+/// `JobGroup` or origin for work that has ended.
+///
+/// - Ownership that owes no stop proof (a plain App or scheduler job) retires
+///   at once: the leader is reaped and its signal authority dropped, as before
+///   WP1. A survivor that left the group's pipes is no longer the job's.
+/// - Proof-owing ownership (origin-attributed, including session-owned) keeps
+///   the zombie leader pinning the pgid while any other member lives, so
+///   disposal can still signal it. Once the group is confirmed empty the
+///   leader is reaped and only an owner-scoped "ended empty" record remains,
+///   folded into the owner's proof when the owner is disposed.
+/// - A group whose authority was already retired without proof only has its
+///   leader reaped; its unconfirmed record stays for disposal to fold.
+#[cfg(unix)]
+async fn reap_completed_group(
+    job_id: String,
+    group: Arc<Mutex<JobGroup>>,
+    groups: Arc<Mutex<HashMap<String, Arc<Mutex<JobGroup>>>>>,
+    origins: Arc<Mutex<HashMap<String, JobOrigin>>>,
+    reaped: Arc<Mutex<HashMap<String, String>>>,
+    proof_owner: Option<String>,
+) {
+    let mut interval = Duration::from_millis(20);
+    loop {
+        let (pid, empty) = {
+            let group = group.lock();
+            (group.pid, group.empty)
+        };
+        let confirmed_empty =
+            empty || pid.is_some_and(|pgid| group_has_other_members(pgid) == Some(false));
+        let retired_unconfirmed = pid.is_none() && !empty;
+        if proof_owner.is_none() || confirmed_empty || retired_unconfirmed {
+            let retire = proof_owner.is_none() || confirmed_empty;
+            let removed = {
+                let mut map = groups.lock();
+                let current = map
+                    .get(&job_id)
+                    .is_some_and(|tracked| Arc::ptr_eq(tracked, &group));
+                {
+                    let mut group = group.lock();
+                    // The leader's exit is already observed: this only reaps.
+                    group.reap_for_teardown();
+                    if current && retire {
+                        group.owned = false;
+                        group.pid = None;
+                        group.empty |= confirmed_empty;
+                    }
+                }
+                if current && retire {
+                    map.remove(&job_id);
+                    if confirmed_empty {
+                        if let Some(owner) = &proof_owner {
+                            reaped.lock().insert(job_id.clone(), owner.clone());
+                        }
+                    }
+                }
+                current && retire
+            };
+            if removed {
+                origins.lock().remove(&job_id);
+            }
+            return;
+        }
+        tokio::time::sleep(interval).await;
+        interval = (interval * 2).min(COMPLETION_REAP_MAX_INTERVAL);
+        // Disposal or shutdown retired this identity meanwhile.
+        if !groups
+            .lock()
+            .get(&job_id)
+            .is_some_and(|tracked| Arc::ptr_eq(tracked, &group))
+        {
+            group.lock().reap_for_teardown();
+            return;
+        }
+    }
+}
+
+/// Whether any process other than the exited, unreaped leader still belongs to
+/// process group `pgid`. A zombie leader keeps the group signalable on Linux,
+/// so `kill(-pgid, 0)` cannot answer this. `None` where members cannot be
+/// enumerated; the caller then keeps the leader pinned.
+#[cfg(target_os = "linux")]
+fn group_has_other_members(pgid: u32) -> Option<bool> {
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == pgid {
+            continue;
+        }
+        // A process that exits mid-scan simply has no stat file any more.
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        // Fields after the parenthesised command: state ppid pgrp ...
+        let pgrp = stat
+            .rfind(')')
+            .and_then(|end| stat[end + 1..].split_whitespace().nth(2))
+            .and_then(|field| field.parse::<u32>().ok());
+        if pgrp == Some(pgid) {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+#[cfg(target_os = "macos")]
+fn group_has_other_members(pgid: u32) -> Option<bool> {
+    let mut pids = vec![0 as libc::pid_t; 1024];
+    let size = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+    let count =
+        unsafe { libc::proc_listpgrppids(pgid as libc::pid_t, pids.as_mut_ptr().cast(), size) };
+    if count < 0 {
+        return None;
+    }
+    // A full buffer still lists some non-leader member, so truncation is safe.
+    Some(
+        pids.iter()
+            .take((count as usize).min(pids.len()))
+            .any(|&pid| pid > 0 && pid as u32 != pgid),
+    )
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn group_has_other_members(_pgid: u32) -> Option<bool> {
+    None
+}
+
 pub struct JobSupervisor {
     store: Arc<JobStore>,
     log_dir: PathBuf,
@@ -189,13 +322,22 @@ pub struct JobSupervisor {
     /// job is settled and its output has drained.
     live: Arc<Mutex<HashMap<String, Arc<LiveJob>>>>,
     process_groups: Arc<Mutex<HashMap<String, Arc<Mutex<JobGroup>>>>>,
-    origins: Mutex<HashMap<String, JobOrigin>>,
+    origins: Arc<Mutex<HashMap<String, JobOrigin>>>,
     pending_records: Mutex<HashMap<String, JobRecord>>,
     // Owner-level proof, with no retained signalable identity after retirement.
     session_proofs: Mutex<HashMap<String, bool>>,
     admission: tokio::sync::RwLock<()>,
     closed_sessions: Mutex<HashSet<String>>,
     owner_proofs: Mutex<HashMap<String, bool>>,
+    /// Completed groups the waiter confirmed empty and reaped, keyed by job id
+    /// to their admission owner (origin session). Folded into that owner's
+    /// proof and dropped when the owner is disposed.
+    reaped_groups: Arc<Mutex<HashMap<String, String>>>,
+    /// Retired admission owners, oldest first. Owners are executor/attempt
+    /// ids that never return, so only the newest `retired_owner_capacity`
+    /// keep their closed-admission and proof records (ADR-0244).
+    retired_owner_order: Mutex<VecDeque<String>>,
+    retired_owner_capacity: usize,
     all_closed: AtomicBool,
     group_proof_supported: bool,
     exit_listeners: Mutex<Vec<ExitListener>>,
@@ -223,12 +365,15 @@ impl JobSupervisor {
             log_dir,
             live: Arc::new(Mutex::new(HashMap::new())),
             process_groups: Arc::new(Mutex::new(HashMap::new())),
-            origins: Mutex::new(HashMap::new()),
+            origins: Arc::new(Mutex::new(HashMap::new())),
             pending_records: Mutex::new(HashMap::new()),
             session_proofs: Mutex::new(HashMap::new()),
             admission: tokio::sync::RwLock::new(()),
             closed_sessions: Mutex::new(HashSet::new()),
             owner_proofs: Mutex::new(HashMap::new()),
+            reaped_groups: Arc::new(Mutex::new(HashMap::new())),
+            retired_owner_order: Mutex::new(VecDeque::new()),
+            retired_owner_capacity: MAX_RETIRED_OWNER_RECORDS,
             all_closed: AtomicBool::new(false),
             group_proof_supported,
             exit_listeners: Mutex::new(Vec::new()),
@@ -499,6 +644,7 @@ impl JobSupervisor {
                 self.session_proofs
                     .lock()
                     .insert(origin.session_id.clone(), false);
+                self.remember_retired_owner(&origin.session_id);
             }
             // Failed persistence remains unconfirmed even if rollback cleanup
             // succeeds: no durable acceptance record exists for this attempt.
@@ -523,6 +669,12 @@ impl JobSupervisor {
         let waiter_killed = Arc::clone(&killed);
         let waiter_live = Arc::clone(&self.live);
         let waiter_groups = Arc::clone(&self.process_groups);
+        let waiter_origins = Arc::clone(&self.origins);
+        let waiter_reaped = Arc::clone(&self.reaped_groups);
+        // Origin-attributed (including session-owned) jobs owe stop proof;
+        // a plain App or scheduler job does not once its leader has ended.
+        let proof_owner = origin.as_ref().map(|origin| origin.session_id.clone());
+        let reap_id = id.clone();
         let group_proof_supported = self.group_proof_supported;
         let listeners = self.exit_listeners.lock().clone();
         let waiter_command = req.command.clone();
@@ -633,6 +785,20 @@ impl JobSupervisor {
             // the on-disk log, which now has every byte.
             waiter_live.lock().remove(&exit.job_id);
             waiter_notify.notify_waiters();
+            #[cfg(unix)]
+            if group_proof_supported {
+                reap_completed_group(
+                    reap_id,
+                    group,
+                    waiter_groups,
+                    waiter_origins,
+                    waiter_reaped,
+                    proof_owner,
+                )
+                .await;
+            }
+            #[cfg(not(unix))]
+            let _ = (reap_id, waiter_origins, waiter_reaped, proof_owner);
         });
 
         Ok(record)
@@ -849,6 +1015,15 @@ impl JobSupervisor {
                 self.origins.lock().remove(&record.id);
                 self.pending_records.lock().remove(&record.id);
             }
+            // A confirmed owner proof now answers for this owner's own reaped
+            // groups. Origin-attributed App jobs keep theirs for origin disposal.
+            if errors.is_empty() {
+                let mut reaped = self.reaped_groups.lock();
+                for record in &records {
+                    reaped.remove(&record.id);
+                }
+            }
+            self.remember_retired_owner(session_id);
         }
         if errors.is_empty() {
             Ok(stopped)
@@ -878,7 +1053,11 @@ impl JobSupervisor {
 
     pub(crate) async fn kill_origin_session(&self, session_id: &str) -> Result<Vec<String>> {
         let _admission = self.admission.write().await;
-        if !self.closed_sessions.lock().insert(session_id.to_string()) {
+        let first_close = self.closed_sessions.lock().insert(session_id.to_string());
+        if first_close {
+            self.remember_retired_owner(session_id);
+        }
+        if !first_close {
             return if self.session_proofs.lock().get(session_id) == Some(&true) {
                 Ok(Vec::new())
             } else {
@@ -938,6 +1117,14 @@ impl JobSupervisor {
         self.session_proofs
             .lock()
             .insert(session_id.to_string(), confirmed);
+        // A confirmed origin proof now answers for its reaped groups; an
+        // unconfirmed one keeps their per-job records until eviction.
+        if confirmed {
+            self.reaped_groups
+                .lock()
+                .retain(|_, reaped_owner| reaped_owner != session_id);
+        }
+        self.remember_retired_owner(session_id);
         let mut ids: Vec<_> = records.iter().map(|record| record.id.clone()).collect();
         ids.extend(
             self.origins
@@ -1087,6 +1274,10 @@ impl JobSupervisor {
         if let Some(group) = self.process_groups.lock().get(job_id).cloned() {
             return Some(group.lock().probe());
         }
+        // Retired by the completion reap only after it was confirmed empty.
+        if self.reaped_groups.lock().contains_key(job_id) {
+            return Some(false);
+        }
         if let Some(session) = self.store.origin_session(job_id).ok().flatten() {
             if self.session_proofs.lock().get(&session) == Some(&true) {
                 return Some(false);
@@ -1098,6 +1289,32 @@ impl JobSupervisor {
             }
         }
         None
+    }
+
+    /// Bound the per-owner admission and proof records (ADR-0244). Owners are
+    /// executor/attempt ids, one per executor, never reused: keeping every one
+    /// would grow a long-running Host by one entry per turn. Only the newest
+    /// `retired_owner_capacity` owners keep their records. An evicted owner's
+    /// jobs answer "unknown" (`None`), never "stopped", and its executor has
+    /// already closed its own process admission before disposal.
+    fn remember_retired_owner(&self, owner: &str) {
+        let evicted: Vec<String> = {
+            let mut order = self.retired_owner_order.lock();
+            if order.iter().any(|known| known == owner) {
+                return;
+            }
+            order.push_back(owner.to_string());
+            let excess = order.len().saturating_sub(self.retired_owner_capacity);
+            order.drain(..excess).collect()
+        };
+        for owner in evicted {
+            self.closed_sessions.lock().remove(&owner);
+            self.session_proofs.lock().remove(&owner);
+            self.owner_proofs.lock().remove(&owner);
+            self.reaped_groups
+                .lock()
+                .retain(|_, reaped_owner| reaped_owner != &owner);
+        }
     }
 
     fn job_is_live(&self, record: &JobRecord) -> bool {
@@ -1471,6 +1688,166 @@ mod tests {
         );
         assert!(sup.kill_origin_session("origin").await.is_err());
         assert!(sup.list_by_origin_session("other").unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    async fn await_reaped(sup: &JobSupervisor, id: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while sup.process_groups.lock().contains_key(id) {
+            assert!(Instant::now() < deadline, "job {id} group was never reaped");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// The leader is no longer a waitable child of this process: no zombie.
+    #[cfg(unix)]
+    fn assert_leader_reaped(pid: u32) {
+        let mut status = 0;
+        assert_eq!(
+            unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) },
+            -1,
+            "leader {pid} was left as a zombie"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_finished_detached_job_is_reaped_without_keeping_its_group() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let job = sup.spawn(sh("true", JobOwner::App)).await.unwrap();
+        assert_eq!(await_settled(&sup, &job.id).await.status, JobStatus::Exited);
+        await_reaped(&sup, &job.id).await;
+        assert_leader_reaped(job.pid.unwrap());
+        assert!(sup.origins.lock().is_empty());
+        assert!(
+            sup.reaped_groups.lock().is_empty(),
+            "a plain App job owes no stop proof"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_proof_owing_job_stays_pinned_until_its_group_is_empty_then_folds_into_the_owner() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let survivor = sup
+            .spawn_with_origin(
+                sh("sleep 1 </dev/null >/dev/null 2>&1 & exit 0", JobOwner::App),
+                Some(origin_of("durable-attempt")),
+            )
+            .await
+            .unwrap();
+        let quick = sup
+            .spawn(sh("true", session("durable-attempt")))
+            .await
+            .unwrap();
+        assert_eq!(
+            await_settled(&sup, &survivor.id).await.status,
+            JobStatus::Exited
+        );
+        // The descendant still lives: the zombie leader keeps the pgid signalable.
+        assert_eq!(sup.process_group_running(&survivor.id), Some(true));
+        await_reaped(&sup, &quick.id).await;
+        await_reaped(&sup, &survivor.id).await;
+        for job in [&survivor, &quick] {
+            assert_leader_reaped(job.pid.unwrap());
+            assert_eq!(sup.process_group_running(&job.id), Some(false));
+        }
+        assert!(sup.origins.lock().is_empty());
+        assert_eq!(sup.reaped_groups.lock().len(), 2);
+        assert!(sup
+            .kill_origin_session("durable-attempt")
+            .await
+            .unwrap()
+            .is_empty());
+        // The owner's proof now answers for both; nothing per job remains.
+        assert!(sup.reaped_groups.lock().is_empty());
+        for job in [&survivor, &quick] {
+            assert_eq!(sup.process_group_running(&job.id), Some(false));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn owner_cleanup_leaves_reaped_origin_jobs_for_origin_disposal() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        let detached = sup
+            .spawn_with_origin(sh("true", JobOwner::App), Some(origin_of("attempt")))
+            .await
+            .unwrap();
+        await_settled(&sup, &detached.id).await;
+        await_reaped(&sup, &detached.id).await;
+        // Ordinary turn cleanup of the same executor's session-owned jobs.
+        sup.kill_owned_by(&session("attempt")).await.unwrap();
+        assert_eq!(sup.process_group_running(&detached.id), Some(false));
+        assert!(sup.kill_origin_session("attempt").await.is_ok());
+        assert_eq!(sup.process_group_running(&detached.id), Some(false));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_proof_admission_closes_per_executor_so_a_later_turn_can_run_jobs() {
+        let dir = TempDir::new().unwrap();
+        let sup = supervisor(&dir);
+        // Turn 1 of a chat: its executor's cleanup closes that executor only.
+        sup.spawn_attributed(
+            sh("exec sleep 60", session("chat-turn-1-executor")),
+            Some(origin_of("chat-turn-1-executor")),
+            Some(delivered("chat", crate::types::JobNotify::OnExit)),
+        )
+        .await
+        .unwrap();
+        sup.kill_owned_by(&session("chat-turn-1-executor"))
+            .await
+            .unwrap();
+        assert!(sup
+            .spawn(sh("true", session("chat-turn-1-executor")))
+            .await
+            .is_err());
+        // Turn 2 of the same chat runs a background and a detached command.
+        let background = sup
+            .spawn_attributed(
+                sh("true", session("chat-turn-2-executor")),
+                Some(origin_of("chat-turn-2-executor")),
+                Some(delivered("chat", crate::types::JobNotify::OnExit)),
+            )
+            .await;
+        assert!(background.is_ok(), "{background:?}");
+        let detached = sup
+            .spawn_with_origin(
+                sh("true", JobOwner::App),
+                Some(origin_of("chat-turn-2-executor")),
+            )
+            .await;
+        assert!(detached.is_ok(), "{detached:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn retired_owner_records_are_bounded_to_the_newest_executors() {
+        let dir = TempDir::new().unwrap();
+        let mut sup = supervisor(&dir);
+        sup.retired_owner_capacity = 2;
+        for owner in ["executor-1", "executor-2", "executor-3"] {
+            sup.kill_owned_by(&session(owner)).await.unwrap();
+        }
+        assert!(sup
+            .kill_origin_session("executor-4")
+            .await
+            .unwrap()
+            .is_empty());
+        for evicted in ["executor-1", "executor-2"] {
+            assert!(!sup.owner_proofs.lock().contains_key(evicted));
+        }
+        assert!(sup.owner_proofs.lock().contains_key("executor-3"));
+        assert!(sup.closed_sessions.lock().contains("executor-4"));
+        assert_eq!(sup.session_proofs.lock().get("executor-4"), Some(&true));
+        assert_eq!(sup.retired_owner_order.lock().len(), 2);
+        // The retained, newest owners stay closed.
+        assert!(sup.spawn(sh("true", session("executor-3"))).await.is_err());
+        assert!(sup.spawn(sh("true", session("executor-4"))).await.is_err());
     }
 
     /// Poll the store until the job settles or the budget runs out.

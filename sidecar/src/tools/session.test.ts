@@ -94,8 +94,9 @@ function fixture() {
 }
 
 test("session contexts own separate read trackers, tasks and process registries", async () => {
-  const a = createToolSessionContext({ sessionId: "a", sendOptions: {} })
-  const b = createToolSessionContext({ sessionId: "b", sendOptions: {} })
+  // Two executors of one chat: tools are owned by the executor, not the chat id.
+  const a = createToolSessionContext({ sessionId: "chat", executorId: "a", sendOptions: {} })
+  const b = createToolSessionContext({ sessionId: "chat", executorId: "b", sendOptions: {} })
   assert.notEqual(a.readTracker, b.readTracker)
   assert.notEqual(a.taskStore, b.taskStore)
   assert.notEqual(a.bgShells, b.bgShells)
@@ -110,7 +111,10 @@ test("session contexts own separate read trackers, tasks and process registries"
 
 test("paused lease refresh replaces resolvers but preserves the session state", async () => {
   const { events, dependencies } = fixture()
-  const context = createToolSessionContext({ sessionId: "lease", sendOptions: {} }, dependencies)
+  const context = createToolSessionContext(
+    { sessionId: "chat", executorId: "lease", sendOptions: {} },
+    dependencies
+  )
   const before = context.toolContext()
   context.refreshResolvers({ cwd: "/workspace", lsp: { enabled: true } })
   const after = context.toolContext()
@@ -126,7 +130,10 @@ test("paused lease refresh replaces resolvers but preserves the session state", 
 
 test("split and repeated teardown dispose every resource only once", async () => {
   const { events, dependencies } = fixture()
-  const context = createToolSessionContext({ sessionId: "session", sendOptions: {} }, dependencies)
+  const context = createToolSessionContext(
+    { sessionId: "chat", executorId: "session", sendOptions: {} },
+    dependencies
+  )
   context.disposeResolvers()
   context.disposeResolvers()
   assert.deepEqual(events, ["lsp:1", "graph:1"])
@@ -147,7 +154,8 @@ test("one cleanup failure does not skip remaining owned resources", async () => 
 test("host kill acknowledgement is not proof while jobs are still live or unreadable", async () => {
   for (const unreadable of [false, true]) {
     const context = createToolSessionContext({
-      sessionId: "background",
+      sessionId: "chat",
+      executorId: "background",
       sendOptions: { processOrigin: { childRunId: "child", dispatchEpoch: 1 } },
       hostRpc: {
         async call(method) {
@@ -171,7 +179,8 @@ test("ordinary disposal preserves detached jobs; durable disposal reaps and veri
     let live = true
     const scopes: unknown[] = []
     const context = createToolSessionContext({
-      sessionId: "origin",
+      sessionId: "chat",
+      executorId: "origin",
       sendOptions: durable ? { processOrigin: { childRunId: "child", dispatchEpoch: 1 } } : {},
       hostRpc: {
         async call(method, raw) {

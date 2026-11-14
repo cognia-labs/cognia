@@ -200,6 +200,18 @@ fn handle_active_run_event(state: &SidecarState, generation: u64, value: &Value)
                 }
             }
         }
+        // A send the Host refused or failed before any executor bound it never
+        // started anything: release that turn's admission (token, wake hold,
+        // live id). An executor-bound hold still waits for disposal.
+        Some("session_ended")
+            if value.get("sendRefused").and_then(Value::as_bool) == Some(true) =>
+        {
+            if let (Some(session_id), Some(turn_id)) =
+                (session_id, value.get("turnId").and_then(Value::as_str))
+            {
+                state.finish_refused_active_run(generation, session_id, turn_id);
+            }
+        }
         // Turn liveness and the wake assertion are independent. An explicit
         // process snapshot can release power without claiming disposal.
         Some("session_ended" | "turn_settled")
@@ -503,6 +515,14 @@ impl SidecarState {
     fn finish_active_run(&self, generation: u64, session_id: &str) {
         self.release_active_run_matching_from_back(session_id, |hold| {
             hold.generation == Some(generation) && hold.executor_id.is_none()
+        });
+    }
+
+    fn finish_refused_active_run(&self, generation: u64, session_id: &str, turn_id: &str) {
+        self.release_active_run_matching_from_back(session_id, |hold| {
+            hold.generation == Some(generation)
+                && hold.executor_id.is_none()
+                && hold.turn_id.as_deref() == Some(turn_id)
         });
     }
 
@@ -1672,6 +1692,115 @@ mod tests {
             }),
         );
         assert!(state.live_session_ids().is_empty());
+    }
+
+    #[test]
+    fn refused_send_releases_only_its_unbound_turn_admission() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let generation = state.next_epoch();
+        let reason = cognia_power::WakeReason::ActiveRun("refused-chat".into());
+        let holds = |state: &SidecarState| {
+            state
+                .active_runs
+                .lock()
+                .by_session
+                .get("refused-chat")
+                .map_or(0, |holds| holds.len())
+        };
+        let live = state.begin_pending_run("refused-chat", Some("live-command"));
+        let _ = state.activate_pending_run(
+            &live,
+            &serde_json::json!({ "options": { "turnId": "turn-1" } }),
+        );
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "executor_started", "sessionId": "refused-chat",
+                "executorId": "executor", "turnId": "turn-1"
+            }),
+        );
+        let refused = state.begin_pending_run("refused-chat", Some("refused-command"));
+        let _ = state.activate_pending_run(
+            &refused,
+            &serde_json::json!({ "options": { "turnId": "turn-2" } }),
+        );
+        assert_eq!(holds(&state), 2);
+        // An ordinary turn end is not a refusal, and an executor-bound turn's
+        // refusal cannot release the admission its executor still owns.
+        for frame in [
+            serde_json::json!({
+                "type": "session_ended", "sessionId": "refused-chat", "turnId": "turn-2"
+            }),
+            serde_json::json!({
+                "type": "session_ended", "sessionId": "refused-chat",
+                "turnId": "turn-1", "sendRefused": true
+            }),
+        ] {
+            handle_active_run_event(&state, generation, &frame);
+            assert_eq!(holds(&state), 2);
+        }
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "session_ended", "sessionId": "refused-chat",
+                "turnId": "turn-2", "sendRefused": true,
+                "error": "provider-visible payload rejected by the PII gate"
+            }),
+        );
+        assert_eq!(holds(&state), 1);
+        assert!(cognia_power::active_reasons().contains(&reason));
+        assert_eq!(state.live_session_ids(), vec!["refused-chat"]);
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "session_disposed", "sessionId": "refused-chat", "executorId": "executor"
+            }),
+        );
+        assert!(state.live_session_ids().is_empty());
+        assert!(!cognia_power::active_reasons().contains(&reason));
+    }
+
+    #[test]
+    fn leader_settled_signal_releases_wake_when_disposal_proof_never_arrives() {
+        // Windows shape: proof stays unconfirmed, so no session_disposed ever
+        // arrives. The leader-settled turn_settled alone releases power.
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        let generation = state.next_epoch();
+        let reason = cognia_power::WakeReason::ActiveRun("windows-chat".into());
+        let token = state.begin_pending_run("windows-chat", None);
+        let _ = state.activate_pending_run(
+            &token,
+            &serde_json::json!({ "options": { "turnId": "turn-1" } }),
+        );
+        for frame in [
+            serde_json::json!({
+                "type": "executor_started", "sessionId": "windows-chat",
+                "executorId": "claude-executor", "turnId": "turn-1"
+            }),
+            serde_json::json!({
+                "type": "session_ended", "sessionId": "windows-chat", "turnId": "turn-1"
+            }),
+        ] {
+            handle_active_run_event(&state, generation, &frame);
+        }
+        assert!(cognia_power::active_reasons().contains(&reason));
+        handle_active_run_event(
+            &state,
+            generation,
+            &serde_json::json!({
+                "type": "turn_settled", "sessionId": "windows-chat", "turnId": "turn-1",
+                "executorId": "claude-executor", "backgroundProcessesRunning": false
+            }),
+        );
+        assert!(!cognia_power::active_reasons().contains(&reason));
+        // Liveness stays proof-gated: it is the Host's stop answer.
+        assert_eq!(state.live_session_ids(), vec!["windows-chat"]);
+        state.cancel_active_run(token);
     }
 
     #[test]

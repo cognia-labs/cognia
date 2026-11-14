@@ -57,6 +57,14 @@ pub const EXIT_TAIL_DRAIN_GRACE: Duration = Duration::from_millis(250);
 /// Longest a `Monitor` call blocks before degrading to an async watch.
 pub const MONITOR_BLOCKING_THRESHOLD: Duration = Duration::from_secs(5 * 60);
 
+/// Retired admission owners (executor/attempt ids) whose closed-admission and
+/// stop-proof records a Host keeps in memory. Owners never return, so older
+/// records only answer stale queries, which then read as "unknown" (ADR-0244).
+pub const MAX_RETIRED_OWNER_RECORDS: usize = 4096;
+
+/// Longest pause between completion-reap checks of a finished job's group.
+pub const COMPLETION_REAP_MAX_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Marker written into the log when the rate limiter drops bytes. Readers and
 /// tests match on this exact prefix.
 pub const TRUNCATION_MARKER_PREFIX: &str = "\n[cognia: output truncated —";

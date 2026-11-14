@@ -266,3 +266,98 @@ test("H3: native fence refuses an unconfirmed descendant proof after direct PIDs
     await flush()
   }
 })
+
+test("an unconfirmed stop proof still settles the leader and releases its wake hold", async (t) => {
+  // Windows shape: proof can never be confirmed, so session_disposed never
+  // arrives. The leader-settled turn_settled must still report the executor idle.
+  const events: Record<string, unknown>[] = []
+  const toolSession = createToolSessionContext({
+    sessionId: "windows-chat",
+    executorId: "windows-executor",
+    sendOptions: {},
+  })
+  t.mock.method(toolSession, "disposeProcesses", async () => {})
+  t.mock.method(toolSession, "hasRunningProcesses", async () => false)
+  t.mock.method(toolSession, "hasLiveProcesses", async () => true)
+  startAnthropicPump({
+    sessionId: "windows-chat",
+    sendOptions: {},
+    emit: (event: Record<string, unknown>) => {
+      events.push(event)
+    },
+    log() {},
+    toolSession,
+    pluginToolNameAliases: new Map(),
+    mcpAutoReconnect: { onEvent() {} },
+    mcpStderrSink: { end() {} },
+    state: { outstandingPrompts: 1 },
+    waitForProcessExit: async () => {},
+    session: { closeInput() {}, drainPending() {} },
+    q: {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "result", subtype: "success" }
+      },
+      interrupt() {},
+      close() {},
+    },
+  } as unknown as Parameters<typeof startAnthropicPump>[0])
+  await flush()
+  await flush()
+  const executorId = events.find((event) => event.type === "executor_started")?.executorId
+  assert.equal(typeof executorId, "string")
+  assert.deepEqual(
+    events.filter((event) => event.type === "turn_settled"),
+    [
+      {
+        type: "turn_settled",
+        sessionId: "windows-chat",
+        executorId,
+        backgroundProcessesRunning: false,
+      },
+    ]
+  )
+  assert.equal(
+    events.some((event) => event.type === "session_disposed"),
+    false
+  )
+})
+
+test("a CLI whose exit is unknown keeps the executor's wake hold", async (t) => {
+  const events: Record<string, unknown>[] = []
+  const toolSession = createToolSessionContext({ sessionId: "stuck", sendOptions: {} })
+  t.mock.method(toolSession, "disposeProcesses", async () => {})
+  t.mock.method(toolSession, "hasRunningProcesses", async () => false)
+  startAnthropicPump({
+    sessionId: "stuck",
+    sendOptions: {},
+    emit: (event: Record<string, unknown>) => {
+      events.push(event)
+    },
+    log() {},
+    toolSession,
+    pluginToolNameAliases: new Map(),
+    mcpAutoReconnect: { onEvent() {} },
+    mcpStderrSink: { end() {} },
+    state: { outstandingPrompts: 1 },
+    waitForProcessExit: async () => {
+      throw new Error("exit unobserved")
+    },
+    session: { closeInput() {}, drainPending() {} },
+    q: {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "result", subtype: "success" }
+      },
+      interrupt() {},
+      close() {},
+    },
+  } as unknown as Parameters<typeof startAnthropicPump>[0])
+  await flush()
+  await flush()
+  const settled = events.filter((event) => event.type === "turn_settled")
+  assert.equal(settled.length, 1)
+  assert.equal(settled[0]!.backgroundProcessesRunning, true)
+  assert.equal(
+    events.some((event) => event.type === "session_disposed"),
+    false
+  )
+})

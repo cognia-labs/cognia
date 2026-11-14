@@ -62,6 +62,8 @@ A durable Agent Team child can run on another device (ADR-0113). The brain claim
 - Processes that leave their process group (`setsid`, a double fork) fall outside the proof in decision 3. Only a sandboxed workspace (ADR-0182/0183) contains them, just as file-tool limits do not contain a shell (ADR-0245).
 - Per-session accounting of helper processes. Stop proof covers the process groups that Cognia's tool surfaces create: foreground commands, background shells and Host jobs, terminal REPLs, terminals an external agent opens, and the Claude Code CLI. It does not yet cover stdio MCP servers, command hooks, language servers and installers, the shared exec helper behind git/rg/AST tools, `run_code`, or the children an external agent CLI starts by itself. Bringing them in needs one per-session spawn seam that every subprocess goes through. That is planned as its own work package.
 - Windows process trees. Without a Job Object, a reaped leader cannot show that its tree is empty, so a local executor on Windows never produces stop proof: its stops stay `stop_unconfirmed`. Lifecycle (status, release, limits) still follows the leader.
+- Terminals on a Bun runtime whose PTY child cannot be verified as its own process-group leader (no `pid` from Bun, or no group of that number). Their stops stay unconfirmed in the same way; their lifecycle and the wake hold still follow the leader's exit.
+- Stop-proof records of executors that retired long ago. A Host keeps closed admission and proof for its 4096 most recent retired executors; a query about an older one reads as unknown, never as stopped.
 - Grace and propagation numbers. They are measured on the macOS ↔ Linux box rig before any is written into a release gate.
 
 ## Alternatives considered

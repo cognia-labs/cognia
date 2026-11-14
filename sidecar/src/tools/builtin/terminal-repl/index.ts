@@ -94,9 +94,25 @@ export interface BunPtyRuntime {
       }
     }
   ): {
+    /** Bun's Subprocess pid. A PTY child is its own session and group leader. */
+    pid?: number | undefined
     exited: Promise<number | null>
     terminal: { write(data: string): void; resize(cols: number, rows: number): void; close(): void }
     kill(signal?: string): void
+  }
+}
+
+/**
+ * True when `pid` leads a live process group of the same number. Right after
+ * spawn only the child itself can have created that group, so this verifies
+ * the PTY child is a group leader rather than assuming it.
+ */
+function leadsProcessGroup(pid: number): boolean {
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM"
   }
 }
 
@@ -168,8 +184,20 @@ export function isBunPtyRuntime(runtime: unknown): runtime is BunPtyRuntime {
   return typeof candidate?.Terminal === "function" && typeof candidate?.spawn === "function"
 }
 
-/** Adapt Bun's built-in PTY to the narrow node-pty surface used below. */
-export function createBunPtyModule(runtime: BunPtyRuntime): PtyModule {
+/**
+ * Adapt Bun's built-in PTY to the narrow node-pty surface used below.
+ *
+ * Stop proof needs a process-group identity. The adapter exposes Bun's pid
+ * only after verifying that it leads its own group; a runtime without a pid,
+ * or a child that is not a group leader, yields a PTY without one. Such a
+ * session's proof is explicitly unconfirmed (`retireTerminalRepls` returns
+ * false) while its lifecycle still follows the leader's `exited` promise
+ * (`hasRunningSessionTerminalRepls`), so it never blocks turn settlement.
+ */
+export function createBunPtyModule(
+  runtime: BunPtyRuntime,
+  verifyGroupLeader: (pid: number) => boolean = leadsProcessGroup
+): PtyModule {
   return {
     spawn(shell, args, options) {
       let dataListener: ((data: string) => void) | null = null
@@ -191,7 +219,16 @@ export function createBunPtyModule(runtime: BunPtyRuntime): PtyModule {
         settledExit = { exitCode, signal: null }
         exitListener?.(settledExit)
       })
+      const pid =
+        process.platform !== "win32" &&
+        typeof proc.pid === "number" &&
+        Number.isInteger(proc.pid) &&
+        proc.pid > 0 &&
+        verifyGroupLeader(proc.pid)
+          ? proc.pid
+          : undefined
       return {
+        pid,
         write(data) {
           proc.terminal.write(data)
         },

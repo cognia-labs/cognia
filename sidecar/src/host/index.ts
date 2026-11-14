@@ -196,6 +196,9 @@ export function createAgentHost({
     return session
   }
 
+  // `sendRefused` frames end a send this Host refused or failed before it
+  // reached a live executor. The Rust supervisor releases that turn's
+  // admission (wake hold, token, live id) only if no executor ever bound it.
   function handleSend(msg: HostMessage) {
     if (!msg.sessionId) return handlePreparedSend(msg)
     const sessionId = msg.sessionId
@@ -212,6 +215,7 @@ export function createAgentHost({
         emit({
           type: "session_ended",
           sessionId,
+          sendRefused: true,
           ...(msg.options?.turnId ? { turnId: msg.options.turnId } : {}),
           ...(msg.options?.transcriptInvalidationId
             ? { transcriptInvalidationId: msg.options.transcriptInvalidationId }
@@ -240,6 +244,7 @@ export function createAgentHost({
       emit({
         type: "session_ended",
         sessionId,
+        sendRefused: true,
         error: "provider-visible payload rejected by the PII gate",
         ...(options?.turnId ? { turnId: options.turnId } : {}),
         ...(options?.transcriptInvalidationId
@@ -255,6 +260,7 @@ export function createAgentHost({
       emit({
         type: "session_ended",
         sessionId,
+        sendRefused: true,
         error: errorMessage(error),
         ...(options?.turnId ? { turnId: options.turnId } : {}),
         ...(options?.transcriptInvalidationId
@@ -268,6 +274,7 @@ export function createAgentHost({
       emit({
         type: "session_ended",
         sessionId,
+        sendRefused: true,
         errorCode: "RUNTIME_SESSION_NOT_RETAINED",
         error:
           "runtime_session_not_retained: retained context is unavailable; retry to restore conversation history.",
@@ -298,6 +305,7 @@ export function createAgentHost({
         emit({
           type: "session_ended",
           sessionId,
+          sendRefused: true,
           errorCode: "RUNTIME_SESSION_NOT_RETAINED",
           error: "runtime_session_not_retained: runtime changed while preparing the send.",
           ...(options?.turnId ? { turnId: options.turnId } : {}),

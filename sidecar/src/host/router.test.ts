@@ -67,6 +67,7 @@ test("a send whose handler throws ends that session instead of escaping the read
     {
       type: "session_ended",
       sessionId: "s1",
+      sendRefused: true,
       turnId: "t1",
       error: "send failed: Unsupported runtime adapter: external",
     },

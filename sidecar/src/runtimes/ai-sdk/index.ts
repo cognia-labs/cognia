@@ -1891,8 +1891,18 @@ export function dispatchAiSdk({
       // Session loop ended: reap owned jobs, or every origin-tagged job for
       // durable children. Ordinary app-owned detached jobs outlive disposal.
       invalidateCompaction()
+      const [disposal] = await Promise.allSettled([toolSession.disposeProcesses()])
+      // Leader-settled signal, independent of stop proof (ADR-0244): the last
+      // turn's power hint may have seen jobs this disposal has since ended.
+      let backgroundProcessesRunning = true
       try {
-        await toolSession.disposeProcesses()
+        backgroundProcessesRunning = await toolSession.hasRunningProcesses()
+      } catch {
+        // An unreadable process registry must not look idle.
+      }
+      emit({ type: "turn_settled", sessionId, executorId, backgroundProcessesRunning })
+      try {
+        if (disposal.status === "rejected") throw disposal.reason
         if (await toolSession.hasLiveProcesses())
           throw new Error("session process group stop unconfirmed")
         // Parent-visible proof, unlike the host-internal session_closed signal.

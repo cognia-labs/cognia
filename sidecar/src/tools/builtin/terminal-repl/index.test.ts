@@ -10,6 +10,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
+import { spawn as spawnChild } from "node:child_process"
 
 import {
   terminalReplTools,
@@ -201,6 +202,133 @@ test("Bun PTY selection requires both callable terminal and spawn capabilities",
   assert.equal(isBunPtyRuntime({ Terminal: {}, spawn() {} }), false)
   assert.equal(isBunPtyRuntime({ Terminal: class {}, spawn() {} }), true)
 })
+
+/**
+ * A Bun runtime backed by a real setsid child, so the adapter's group
+ * identity, exit evidence and disposal proof run against a live process.
+ */
+function realGroupBunRuntime(exposePid: boolean): BunPtyRuntime {
+  return {
+    Terminal: class {},
+    spawn(command, options) {
+      const child = spawnChild(command[0]!, command.slice(1), {
+        cwd: options.cwd,
+        detached: true,
+        stdio: ["pipe", "pipe", "ignore"],
+      })
+      child.stdout!.on("data", (chunk: Buffer) => options.terminal.data({}, chunk))
+      const exited = new Promise<number | null>((resolve) => {
+        child.once("exit", (code) => resolve(code))
+      })
+      return {
+        ...(exposePid ? { pid: child.pid } : {}),
+        exited,
+        terminal: {
+          write: (data) => void child.stdin!.write(data),
+          resize: () => {},
+          close: () => child.stdin!.destroy(),
+        },
+        kill: (signal) => {
+          try {
+            child.kill((signal ?? "SIGTERM") as NodeJS.Signals)
+          } catch {
+            /* already gone */
+          }
+        },
+      }
+    },
+  }
+}
+
+/** A failed assertion must not leave a real shell holding the test process. */
+function killLeftoverPtys() {
+  for (const session of sessions.values()) {
+    try {
+      session.pty.kill("SIGKILL")
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+test("Bun PTY adapter exposes only a verified group leader as its process identity", () => {
+  const runtime: BunPtyRuntime = {
+    Terminal: class {},
+    spawn() {
+      return {
+        pid: 4242,
+        exited: new Promise<number | null>(() => {}),
+        terminal: { write: () => {}, resize: () => {}, close: () => {} },
+        kill: () => {},
+      }
+    },
+  }
+  const opts = { name: "xterm", cols: 80, rows: 24, cwd: tmpdir, env: {} }
+  const seen: number[] = []
+  const verified = createBunPtyModule(runtime, (pid) => {
+    seen.push(pid)
+    return true
+  }).spawn("/bin/sh", [], opts)
+  assert.equal(verified.pid, process.platform === "win32" ? undefined : 4242)
+  const unverified = createBunPtyModule(runtime, () => false).spawn("/bin/sh", [], opts)
+  assert.equal(unverified.pid, undefined)
+  if (process.platform !== "win32") assert.deepEqual(seen, [4242])
+})
+
+test(
+  "Bun PTY spawn → dispose → proof runs through the adapter's group identity",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    // These run a real process group: drop the fixture's fake process.kill.
+    t.mock.restoreAll()
+    t.after(killLeftoverPtys)
+    reset()
+    __setNodePtyForTesting(createBunPtyModule(realGroupBunRuntime(true)))
+    const result = await execSpawn({
+      agentId: "bun-proof",
+      shell: "/bin/sh",
+      cwd: os.tmpdir(),
+      cols: 80,
+      rows: 24,
+    })
+    assert.equal(result.isError, undefined)
+    const { sessionId } = firstJson<ReplOutput>(result)
+    const session = sessions.get(sessionId)!
+    assert.equal(session.groupProofSupported, true)
+    assert.equal(typeof session.processGroupId, "number")
+    assert.equal(hasRunningSessionTerminalRepls("bun-proof"), true)
+    await disposeTerminalRepls("bun-proof")
+    assert.equal(hasRunningSessionTerminalRepls("bun-proof"), false)
+    assert.equal(hasSessionTerminalRepls("bun-proof"), false)
+    assert.equal(retireTerminalRepls("bun-proof"), true)
+  }
+)
+
+test(
+  "a Bun PTY without a pid is explicitly unconfirmed without blocking its lifecycle",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    t.mock.restoreAll()
+    t.after(killLeftoverPtys)
+    reset()
+    __setNodePtyForTesting(createBunPtyModule(realGroupBunRuntime(false)))
+    const result = await execSpawn({
+      agentId: "bun-no-pid",
+      shell: "/bin/sh",
+      cwd: os.tmpdir(),
+      cols: 80,
+      rows: 24,
+    })
+    const { sessionId } = firstJson<ReplOutput>(result)
+    assert.equal(sessions.get(sessionId)!.groupProofSupported, false)
+    // Disposal follows the leader's exit evidence and completes.
+    await disposeTerminalRepls("bun-no-pid")
+    assert.equal(hasRunningSessionTerminalRepls("bun-no-pid"), false)
+    // Proof stays unconfirmed: the group was never verifiable.
+    assert.equal(hasSessionTerminalRepls("bun-no-pid"), true)
+    assert.equal(retireTerminalRepls("bun-no-pid"), false)
+  }
+)
 
 test("execSpawn returns a sessionId for a happy-path spawn", async () => {
   const fake = makeFakePty()

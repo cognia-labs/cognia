@@ -12,6 +12,7 @@ interface FixtureFrame {
   ok?: boolean
   result?: { retained?: boolean; sdkSessionId?: string; active?: boolean }
   errorCode?: string
+  sendRefused?: boolean
   turnId?: string
   transcriptInvalidationId?: string
   capability?: string
@@ -194,6 +195,8 @@ test(
       })
       const ended = await wait((frame) => frame.type === "session_ended", start)
       assert.equal(ended.turnId, "refused-turn")
+      // The Rust supervisor releases this turn's admission only on this flag.
+      assert.equal(ended.sendRefused, true)
       assert.equal(ended.transcriptInvalidationId, "replacement-generation")
       assert.equal(requests.length, requestCount, "refusal occurs before provider or tool effects")
       return ended
@@ -236,11 +239,13 @@ test(
         burstStart
       )
       assert.equal(refusedBurst.errorCode, "RUNTIME_SESSION_NOT_RETAINED")
+      assert.equal(refusedBurst.sendRefused, true)
       const admittedBurst = await wait(
         (frame) => frame.type === "session_ended" && frame.turnId === "burst-first",
         burstStart
       )
       assert.equal(admittedBurst.error, undefined)
+      assert.equal(admittedBurst.sendRefused, undefined)
       assert.ok(requests.length > burstRequests)
       assert.ok(
         requests.slice(burstRequests).every((request) => request.model === "scripted-burst")

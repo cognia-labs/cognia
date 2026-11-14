@@ -592,6 +592,9 @@ export function createToolHostManager({
           log,
           hostRpc,
           sessionId: active.id,
+          // A lease is one attempt: its TOOL processes and their admission
+          // belong to the lease id, which `retired` never readmits.
+          executorId: active.id,
         })
       const common: Omit<Parameters<typeof buildAiSdkTools>[0], "sendOptions"> = {
         emit: (frame) => {

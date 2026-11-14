@@ -124,6 +124,7 @@ export function routeCommand(
     emitFn({
       type: "session_ended",
       sessionId: msg.sessionId,
+      sendRefused: true,
       ...(msg.options?.turnId ? { turnId: msg.options.turnId } : {}),
       error: `send failed: ${reason}`,
     })

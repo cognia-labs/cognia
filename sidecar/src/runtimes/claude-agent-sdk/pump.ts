@@ -141,8 +141,26 @@ export function startAnthropicPump({
       // Closing a Query can precede the CLI's real exit, and SDK-native Bash /
       // Task jobs are separate from Cognia's tool-session process registry.
       q.close?.()
+      const [cliExit, disposal] = await Promise.allSettled([
+        waitForProcessExit(),
+        toolSession.disposeProcesses(),
+      ])
+      // Leader-settled signal: the executor's power and turn lifecycle follow
+      // the CLI and the leaders of its jobs, never stop proof (ADR-0244). It
+      // releases the wake hold even where proof stays unconfirmed (Windows).
+      let backgroundProcessesRunning = true
       try {
-        await Promise.all([waitForProcessExit(), toolSession.disposeProcesses()])
+        backgroundProcessesRunning =
+          cliExit.status === "rejected" ||
+          liveSdkTasks.size > 0 ||
+          (await toolSession.hasRunningProcesses())
+      } catch {
+        // An unreadable process registry must not look idle.
+      }
+      emit({ type: "turn_settled", sessionId, executorId, backgroundProcessesRunning })
+      try {
+        if (cliExit.status === "rejected") throw cliExit.reason
+        if (disposal.status === "rejected") throw disposal.reason
         if (await toolSession.hasLiveProcesses())
           throw new Error("session process group stop unconfirmed")
         if (liveSdkTasks.size > 0)
