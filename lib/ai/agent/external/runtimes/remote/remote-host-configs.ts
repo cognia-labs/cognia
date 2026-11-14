@@ -98,6 +98,7 @@ export const HOST_CONFIG_CAPABILITIES = Object.freeze({
   // `external_agent_run_turn` takes `attachments`: images staged through the
   // chunked upload plane, resolved and judged against the Host's own agent.
   runTurnAttachments: "external_agent_run_turn_attachments",
+  runTurnResetSession: "external_agent_run_turn_reset_session",
 } as const)
 
 export type HostConfigCapability =
@@ -448,6 +449,11 @@ export function hostSupportsCogniaModelTurns(): boolean {
  */
 export function hostSupportsAttachmentTurns(): boolean {
   return hostConfigsAvailability(HOST_CONFIG_CAPABILITIES.runTurnAttachments).ok
+}
+
+/** Older Hosts reject this optional field in their closed run-turn schema. */
+export function hostSupportsSessionResetTurns(): boolean {
+  return hostConfigsAvailability(HOST_CONFIG_CAPABILITIES.runTurnResetSession).ok
 }
 
 /**

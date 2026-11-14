@@ -45,6 +45,7 @@ import {
   HostNativeSubagentUpdateRequiredError,
   HostConfigTargetError,
   hostConfigsAvailability,
+  hostSupportsSessionResetTurns,
   callApprovedHostConfigCommand,
   callHostConfigCommand,
   callHostConfigCommandAtOrigin,
@@ -97,7 +98,7 @@ export const REMOTE_RUN_COMMANDS = Object.freeze({
 } as const)
 
 export type RemoteTurnStart =
-  | { started: true; runId: string; agentId: string }
+  | { started: true; runId: string; agentId: string; resetExternalSession?: true }
   | { started: false; refusal: RunAdmissionRefusal }
 
 export interface RemoteRunSubscription {
@@ -271,6 +272,7 @@ export async function startRemoteExternalTurn(input: {
   systemPrompt?: string
   allowedTools?: string[]
   externalSessionId?: string
+  resetExternalSession?: boolean
   /**
    * Run this turn on a Cognia provider/model through the Host's gateway, with
    * the Host's credentials (ADR-0090, 2026-10-02). Omitted inherits the Host
@@ -289,6 +291,8 @@ export async function startRemoteExternalTurn(input: {
   const pin = runOrigins.get(input.runId)
   if (pin && !sameTaskWorkspaceOrigin(origin, pin.origin))
     throw new HostConfigTargetError("host-changed", origin)
+  const resetExternalSession =
+    input.resetExternalSession === true && hostSupportsSessionResetTurns()
   // Starting a turn is an interactive approval, like the configuration writes
   // beside it. `callHostConfigCommand` checks the handshake but attaches no
   // lease, and the host refuses an interactive command that arrives without
@@ -313,6 +317,7 @@ export async function startRemoteExternalTurn(input: {
       ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt } : {}),
       ...(input.allowedTools !== undefined ? { allowedTools: input.allowedTools } : {}),
       ...(input.externalSessionId ? { externalSessionId: input.externalSessionId } : {}),
+      ...(resetExternalSession ? { resetExternalSession: true } : {}),
       // The one axis where `null` is sent: it is the explicit "native models"
       // instruction, which the Host must not confuse with "inherit".
       ...(input.cogniaModel !== undefined ? { cogniaModel: copyBinding(input.cogniaModel) } : {}),
@@ -330,7 +335,12 @@ export async function startRemoteExternalTurn(input: {
   )
 
   if (result.started && result.runId) {
-    return { started: true, runId: result.runId, agentId: result.agentId ?? "" }
+    return {
+      started: true,
+      runId: result.runId,
+      agentId: result.agentId ?? "",
+      ...(resetExternalSession ? { resetExternalSession: true } : {}),
+    }
   }
   return {
     started: false,

@@ -783,6 +783,9 @@ export function buildLocalHostFeatureManifest({
         // `session.attachment-upload` (advertised beside it by both Hosts),
         // which the Host judges against its own agent and model.
         "external_agent_run_turn_attachments",
+        // Both Hosts use the shared run service to retire the conversation's
+        // retained session before executing a fresh turn.
+        "external_agent_run_turn_reset_session",
       ],
     }
     // Starting the process. Named per operation like its neighbours: a host

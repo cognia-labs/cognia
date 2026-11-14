@@ -29451,6 +29451,10 @@
             "type": "string",
             "description": "Resume an agent session this conversation already established on the host: a native session id, or a `cognia-gateway:` task session id when the turn runs on a Cognia model."
           },
+          "resetExternalSession": {
+            "type": "boolean",
+            "description": "Retire this conversation's retained external session before running a fresh turn, ignoring resume hints. Send only to a Host advertising `external_agent_run_turn_reset_session`."
+          },
           "cogniaModel": {
             "description": "Cognia provider/model this turn runs on through the host's gateway, using the host's own provider settings and vault. Omit to inherit the host configuration's own setting; `null` selects the agent's native model configuration explicitly. Identifiers only: credentials never cross the wire.",
             "oneOf": [
@@ -112754,5 +112758,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "b51b79ca2ad332a2dadceb67f71fe43b23e6c008a7b441287d1fc3dc1af90fd0"
+  "catalogHash": "44fb59b5daf651495d34f7b5b8a3c66ad5c004c7de0dc8ef404a3a1f782add90"
 }

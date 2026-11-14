@@ -1547,6 +1547,49 @@ mod tests {
     }
 
     #[test]
+    fn external_agent_run_turn_reset_session_accepts_only_optional_boolean() {
+        let contract = cognia_companion::command_manifest::headless_contract().unwrap();
+        let mut args = serde_json::json!({
+            "runId": "after-clear",
+            "chatSessionId": "aside",
+            "stamp": { "configId": "agent", "revision": "rev", "lifecycleGeneration": 1 },
+            "prompt": "continue"
+        });
+        assert!(
+            contract
+                .validate_input("external_agent_run_turn", &args)
+                .is_ok()
+        );
+        for reset in [serde_json::json!(true), serde_json::json!(false)] {
+            args["resetExternalSession"] = reset;
+            assert!(
+                contract
+                    .validate_input("external_agent_run_turn", &args)
+                    .is_ok()
+            );
+        }
+        for reset in [
+            serde_json::json!("true"),
+            serde_json::json!(null),
+            serde_json::json!(1),
+        ] {
+            args["resetExternalSession"] = reset;
+            assert!(
+                contract
+                    .validate_input("external_agent_run_turn", &args)
+                    .is_err()
+            );
+        }
+        args["resetExternalSession"] = serde_json::json!(true);
+        args["unknownField"] = serde_json::json!(true);
+        assert!(
+            contract
+                .validate_input("external_agent_run_turn", &args)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn github_credential_setup_is_internal_and_only_accepts_a_reference() {
         let name = "integration_github_account_connect_from_secret";
         assert!(COMMANDS.contains(&name));

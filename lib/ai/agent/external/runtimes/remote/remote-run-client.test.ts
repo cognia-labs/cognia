@@ -318,6 +318,45 @@ describe("subscribing", () => {
 describe("starting a turn", () => {
   const stamp = { configId: "eac_1", revision: "eacr_1", lifecycleGeneration: 2 }
 
+  it.each([
+    [true, true],
+    [true, false],
+    [false, true],
+    [false, false],
+  ])("gates session reset on the Host marker (%s) and request (%s)", async (supported, reset) => {
+    restoreDeps?.()
+    restoreDeps = __setRemoteHostConfigDepsForTests({
+      hasLocalAuthority: () => false,
+      isRemoteHostActive: () => true,
+      activeHostFeatureManifest: () =>
+        ({
+          schemaVersion: 1,
+          features: {
+            "external-agent.host-configs": {
+              version: 1,
+              operations: [
+                REMOTE_RUN_COMMANDS.run,
+                ...(supported ? ["external_agent_run_turn_reset_session"] : []),
+              ],
+            },
+          },
+        }) as HostFeatureManifest,
+    })
+    reply = { started: true, runId: "run-1" }
+    await startRemoteExternalTurn({
+      runId: "run-1",
+      chatSessionId: "chat-1",
+      stamp,
+      prompt: "after clear",
+      resetExternalSession: reset,
+    })
+    const payload = [...calls, ...localCalls].find(
+      (call) => call.command === REMOTE_RUN_COMMANDS.run
+    )!.payload
+    if (supported && reset) expect(payload).toHaveProperty("resetExternalSession", true)
+    else expect(payload).not.toHaveProperty("resetExternalSession")
+  })
+
   it("sends the stamp and the chat session", async () => {
     reply = { started: true, runId: "run-1", agentId: "eac_1" }
     await expect(

@@ -58,6 +58,7 @@ import {
   HostCogniaModelUpdateRequiredError,
   hostSupportsAttachmentTurns,
   hostSupportsCogniaModelTurns,
+  hostSupportsSessionResetTurns,
 } from "./remote-host-configs"
 import { recordReportedAgentModelSurface } from "../../capability/model-surface-cache"
 import { hostConfigCatalogMountIsLocal } from "../../config/host-config-mount"
@@ -86,6 +87,9 @@ export interface RemoteExecuteOptions {
   chatSessionId: string
   /** Resume a session this chat already established on the host. */
   externalSessionId?: string
+  resetExternalSession?: boolean
+  /** Admission acknowledged by the Host; a refusal never consumes a reset. */
+  onStarted?: (sessionReset: boolean) => void
   /** The model this conversation picked, replayed onto the host's session. */
   model?: string
   /** The composer's thinking level, in the app's vocabulary. */
@@ -421,6 +425,9 @@ export async function executeOnRemoteHostAgent(
       systemPrompt: options.systemPrompt,
       allowedTools: options.allowedTools,
       externalSessionId: options.externalSessionId,
+      ...(options.resetExternalSession === true && hostSupportsSessionResetTurns()
+        ? { resetExternalSession: true }
+        : {}),
       // An explicit `null` ("native") is only sent to a Host that knows the
       // field. An older Host never took a per-turn selection at all: its own
       // configuration decides, exactly as it did before this axis existed.
@@ -433,6 +440,7 @@ export async function executeOnRemoteHostAgent(
       stop()
       return null
     }
+    options.onStarted?.(started.resetExternalSession === true)
     return await finished
   } finally {
     stop()

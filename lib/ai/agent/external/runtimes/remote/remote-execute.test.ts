@@ -31,7 +31,10 @@ jest.mock("./remote-run-client", () => ({
   },
   startRemoteExternalTurn: async (input: Record<string, unknown>) => {
     started.push(input)
-    return startReply
+    return {
+      ...(startReply as object),
+      ...(input.resetExternalSession === true ? { resetExternalSession: true } : {}),
+    }
   },
   cancelRemoteExternalTurn: async (runId: string) => {
     cancelled.push(runId)
@@ -78,6 +81,7 @@ jest.mock("../../config/host-config-mount", () => ({
   hostConfigCatalogMountIsLocal: () => mountIsLocal,
 }))
 let hostTakesCogniaModel = true
+let hostTakesSessionReset = true
 jest.mock("./remote-host-configs", () => {
   class HostCogniaModelUpdateRequiredError extends Error {
     readonly code = "host-update-required"
@@ -87,6 +91,7 @@ jest.mock("./remote-host-configs", () => {
     HostCogniaModelUpdateRequiredError,
     hostSupportsCogniaModelTurns: () => hostTakesCogniaModel,
     hostSupportsAttachmentTurns: () => hostTakesImages,
+    hostSupportsSessionResetTurns: () => hostTakesSessionReset,
   }
 })
 let hostTakesImages = true
@@ -116,9 +121,45 @@ beforeEach(() => {
   mockWorkspaceOrigin = { kind: "local" }
   mountIsLocal = false
   hostTakesCogniaModel = true
+  hostTakesSessionReset = true
   hostTakesImages = true
   stagedFor.length = 0
   stageFails = false
+})
+
+it.each([true, false])(
+  "sends a requested reset only to a supporting Host (%s)",
+  async (supported) => {
+    hostTakesSessionReset = supported
+    const onStarted = jest.fn()
+    const run = executeOnRemoteHostAgent("after clear", {
+      stamp: STAMP,
+      chatSessionId: "chat-1",
+      resetExternalSession: true,
+      onStarted,
+    })
+    expect(onStarted).not.toHaveBeenCalled()
+    handlers?.onTerminal("completed")
+    await run
+    if (supported) expect(started[0]).toHaveProperty("resetExternalSession", true)
+    else expect(started[0]).not.toHaveProperty("resetExternalSession")
+    expect(onStarted).toHaveBeenCalledTimes(1)
+    expect(onStarted).toHaveBeenCalledWith(supported)
+  }
+)
+
+it("does not acknowledge a reset when the Host refuses admission", async () => {
+  startReply = { started: false, refusal: { kind: "stale" } }
+  const onStarted = jest.fn()
+  await expect(
+    executeOnRemoteHostAgent("after clear", {
+      stamp: STAMP,
+      chatSessionId: "chat-1",
+      resetExternalSession: true,
+      onStarted,
+    })
+  ).resolves.toBeNull()
+  expect(onStarted).not.toHaveBeenCalled()
 })
 
 it("rejects protected injection before staging attachments or starting a remote run", async () => {

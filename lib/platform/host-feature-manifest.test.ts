@@ -604,6 +604,7 @@ describe("external-agent.host-configs", () => {
       "external_agent_cognia_models",
       "external_agent_run_turn_cognia_model",
       "external_agent_run_turn_attachments",
+      "external_agent_run_turn_reset_session",
     ])
   })
 

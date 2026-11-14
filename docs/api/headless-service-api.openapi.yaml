@@ -64475,6 +64475,10 @@ paths:
                   type: string
                   description: "Resume an agent session this conversation already established on the host: a native session id, or a
                     `cognia-gateway:` task session id when the turn runs on a Cognia model."
+                resetExternalSession:
+                  type: boolean
+                  description: Retire this conversation's retained external session before running a fresh turn, ignoring resume hints.
+                    Send only to a Host advertising `external_agent_run_turn_reset_session`.
                 cogniaModel:
                   description: "Cognia provider/model this turn runs on through the host's gateway, using the host's own provider settings
                     and vault. Omit to inherit the host configuration's own setting; `null` selects the agent's native

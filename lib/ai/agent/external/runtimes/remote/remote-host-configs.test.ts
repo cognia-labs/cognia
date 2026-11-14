@@ -9,6 +9,7 @@ import {
   fetchHostCogniaModels,
   hostSupportsCogniaModelTurns,
   hostSupportsAttachmentTurns,
+  hostSupportsSessionResetTurns,
   admitRemoteExternalRun,
   callApprovedHostConfigCommand,
   createRemoteHostConfig,
@@ -517,6 +518,24 @@ describe("fetchHostCogniaModels", () => {
   it("rejects a malformed answer rather than rendering it", async () => {
     setup({}, { supported: true, providers: [{ providerId: "p" }] })
     await expect(fetchHostCogniaModels("eac_1")).rejects.toThrow("malformed Cognia model catalog")
+  })
+})
+
+describe("run-turn session reset", () => {
+  it("is supported by local authority", () => {
+    setup({ hasLocalAuthority: () => true })
+    expect(hostSupportsSessionResetTurns()).toBe(true)
+  })
+
+  it("requires the paired Host's marker", () => {
+    setup({
+      isRemoteHostActive: () => true,
+      activeHostFeatureManifest: () =>
+        manifest([...ALL_OPS, HOST_CONFIG_CAPABILITIES.runTurnResetSession]),
+    })
+    expect(hostSupportsSessionResetTurns()).toBe(true)
+    setup({ isRemoteHostActive: () => true, activeHostFeatureManifest: () => manifest() })
+    expect(hostSupportsSessionResetTurns()).toBe(false)
   })
 })
 

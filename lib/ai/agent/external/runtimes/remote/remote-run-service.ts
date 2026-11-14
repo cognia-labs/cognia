@@ -95,6 +95,8 @@ export interface RemoteRunRequest {
   allowedTools?: string[]
   /** Resume an agent session this run already created. */
   externalSessionId?: string
+  /** Retire this conversation's retained session and ignore all resume hints. */
+  resetExternalSession?: boolean
   /**
    * The Cognia provider/model this turn runs on through the Host's gateway,
    * resolved against the Host's own settings and vault (ADR-0090,
@@ -384,6 +386,8 @@ export interface ExternalRunManager extends Partial<
     | "reconnect"
   >
 > {
+  resolveConversationSessionId: ExternalAgentManager["resolveConversationSessionId"]
+  closeSession: ExternalAgentManager["closeSession"]
   getAgent(agentId: string): unknown | undefined
   addAgent(config: ExternalAgentConfig, options?: { connect?: boolean }): Promise<unknown>
   removeAgent(agentId: string): Promise<void>
@@ -394,6 +398,7 @@ export interface ExternalRunManager extends Partial<
     prompt: string,
     options?: {
       sessionId?: string
+      resetExternalSession?: boolean
       model?: string
       attachments?: ExternalAgentImageContent[]
       reasoningEffort?: string
@@ -934,7 +939,10 @@ async function deliverableRunImages(
   }
   if (!manager.resolvePromptAttachments) return images
   const verdict = await manager.resolvePromptAttachments(run.agentId, images, {
-    ...(request.externalSessionId ? { sessionId: request.externalSessionId } : {}),
+    ...(!request.resetExternalSession && request.externalSessionId
+      ? { sessionId: request.externalSessionId }
+      : {}),
+    ...(request.resetExternalSession === true ? { resetExternalSession: true } : {}),
     ...(request.model ? { model: request.model } : {}),
     ...(request.cogniaModel !== undefined ? { cogniaModel: request.cogniaModel } : {}),
   })
@@ -983,7 +991,7 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
     deviceId: request.callerDeviceId,
     seq: 0,
     settled: false,
-    externalSessionId: request.externalSessionId,
+    externalSessionId: request.resetExternalSession ? undefined : request.externalSessionId,
     cogniaBound: !!request.cogniaModel,
     cancel: () => controller.abort(),
     publishing: Promise.resolve(),
@@ -1002,7 +1010,11 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
     let personalRun: Awaited<ReturnType<typeof beginRemotePersonalRun>> | undefined
     try {
       personalRun = await deps.beginPersonalRun(request.chatSessionId)
-      if (request.externalSessionId && !isGatewayTaskSessionId(request.externalSessionId))
+      if (
+        !request.resetExternalSession &&
+        request.externalSessionId &&
+        !isGatewayTaskSessionId(request.externalSessionId)
+      )
         assertSessionOwner(
           agentId,
           request.externalSessionId,
@@ -1038,6 +1050,23 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
           : { captureAvailable: true }
       if (!prepared.captureAvailable) run.workspaceUnavailable = "remote-filesystem"
       controller.signal.throwIfAborted()
+      if (request.resetExternalSession === true) {
+        // The caller has already retired its links. Resolve the Host's own
+        // mapping rather than relying on a client-supplied native id.
+        for (const kind of ["native", "gateway"] as const) {
+          const previous = manager.resolveConversationSessionId(agentId, request.chatSessionId, {
+            kind,
+            originDeviceId: request.callerDeviceId ?? null,
+          })
+          if (!previous) continue
+          const owner = sessionOwners.get(`${agentId}:${previous}`)
+          if (owner)
+            assertSessionOwner(agentId, previous, request.chatSessionId, request.callerDeviceId)
+          await manager.closeSession(agentId, previous)
+          sessionOwners.delete(`${agentId}:${previous}`)
+        }
+      }
+      controller.signal.throwIfAborted()
       const images =
         staged.length > 0 ? await deliverableRunImages(run, manager, request, staged) : []
       const result = await manager.execute(
@@ -1045,7 +1074,8 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
         request.prompt,
         bindPersonalEgressOptions(
           {
-            sessionId: request.externalSessionId,
+            sessionId: request.resetExternalSession ? undefined : request.externalSessionId,
+            ...(request.resetExternalSession === true ? { resetExternalSession: true } : {}),
             ...((run.workspace?.workingDirectory ?? placed.workingDirectory)
               ? { workingDirectory: run.workspace?.workingDirectory ?? placed.workingDirectory }
               : {}),

@@ -3374,6 +3374,33 @@ it("forwards paired-host canonical instructions and the native tool allowlist", 
   )
 })
 
+describe("external_agent_run_turn: session reset", () => {
+  const base = {
+    runId: "run",
+    chatSessionId: "chat",
+    prompt: "after clear",
+    stamp: { configId: "cfg", revision: "rev", lifecycleGeneration: 1 },
+  }
+  beforeEach(() => remoteRunStartMock.mockClear())
+
+  it.each([true, false])("forwards the optional boolean (%s)", async (resetExternalSession) => {
+    await dispatchCommand("external_agent_run_turn", { ...base, resetExternalSession })
+    expect(remoteRunStartMock.mock.calls[0][0]).toHaveProperty(
+      "resetExternalSession",
+      resetExternalSession
+    )
+  })
+
+  it("omits an absent reset and rejects a non-boolean", async () => {
+    await dispatchCommand("external_agent_run_turn", base)
+    expect(remoteRunStartMock.mock.calls[0][0]).not.toHaveProperty("resetExternalSession")
+    await expect(
+      dispatchCommand("external_agent_run_turn", { ...base, resetExternalSession: "true" })
+    ).rejects.toThrow("resetExternalSession must be a boolean")
+    expect(remoteRunStartMock).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("external_agent_run_turn: the Cognia model binding", () => {
   const base = {
     runId: "run",

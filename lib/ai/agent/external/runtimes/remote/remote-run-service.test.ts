@@ -180,6 +180,64 @@ afterEach(() => {
 })
 
 describe("starting a run", () => {
+  it("ignores a stale resume hint during reset and fails closed if the old session cannot close", async () => {
+    h.manager.resolveConversationSessionId = jest.fn((_agentId, _chatId, filter) =>
+      filter?.kind === "native" ? "mapped-old" : null
+    )
+    h.manager.closeSession = jest.fn(async () => {
+      throw new Error("close failed")
+    })
+    await startRemoteExternalRun({
+      runId: "reset-close-failed",
+      chatSessionId: "chat-1",
+      stamp: STAMP,
+      prompt: "after clear",
+      externalSessionId: "unowned-stale-hint",
+      resetExternalSession: true,
+    })
+    await flush()
+    expect(h.manager.closeSession).toHaveBeenCalledWith("eac_1", "mapped-old")
+    expect(h.manager.executed).toEqual([])
+    expect(h.frames.at(-1)).toMatchObject({ terminal: "failed", error: "close failed" })
+    expect(h.released).toContain("reset-close-failed")
+  })
+
+  it.each([undefined, false, true])(
+    "resets only the mapped session when flagged (%s)",
+    async (reset) => {
+      const mapped = new Map([
+        ["chat-1", "native-old"],
+        ["other-chat", "other-native"],
+      ])
+      const closeSession = jest.fn(async (_agentId: string, sessionId: string) => {
+        for (const [chat, native] of mapped) if (native === sessionId) mapped.delete(chat)
+      })
+      h.manager.resolveConversationSessionId = jest.fn(
+        (_agentId, chatId) => mapped.get(chatId) ?? null
+      )
+      h.manager.closeSession = closeSession
+      await startRemoteExternalRun({
+        runId: "run-1",
+        chatSessionId: "chat-1",
+        stamp: STAMP,
+        prompt: "after clear",
+        ...(reset === undefined ? {} : { resetExternalSession: reset }),
+      })
+      if (reset) {
+        expect(closeSession).toHaveBeenCalledWith("eac_1", "native-old")
+        expect(h.manager.executed[0]).toHaveProperty("resetExternalSession", true)
+        expect(mapped.has("chat-1")).toBe(false)
+      } else {
+        expect(closeSession).not.toHaveBeenCalled()
+        expect(h.manager.executed[0]).not.toHaveProperty("resetExternalSession")
+        expect(mapped.get("chat-1")).toBe("native-old")
+      }
+      expect(mapped.get("other-chat")).toBe("other-native")
+      h.finish({ success: true, sessionId: "native-new" })
+      await flush()
+    }
+  )
+
   it("admits, mounts and accepts", async () => {
     const result = await startRemoteExternalRun({
       runId: "run-1",
