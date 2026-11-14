@@ -1,6 +1,6 @@
 /** Shared sidecar tool round-trip for desktop, CLI and the headless brain. */
 import { loggers } from "@cognia/logging"
-import { sendPluginToolResponse, subscribePluginToolExec } from "./ipc"
+import type { sendPluginToolResponse, subscribePluginToolExec } from "./ipc"
 import type { PluginToolExecRequest, PluginToolExecResponse } from "./plugin-tool-ipc"
 import type { RemoteExecutionContext } from "./remote-execution"
 
@@ -112,7 +112,8 @@ async function execute(
   }
   if (!response || signal.aborted) return
   try {
-    await (owner.send ?? sendPluginToolResponse)(response, request.remoteExecutionContext)
+    const send = owner.send ?? (await import("./ipc")).sendPluginToolResponse
+    if (!signal.aborted) await send(response, request.remoteExecutionContext)
   } catch {
     loggers.app.error("plugin_tool_response write failed", { toolUseId: request.toolUseId })
   }
@@ -122,7 +123,9 @@ async function execute(
 export async function subscribePluginToolDispatchBridge(
   deps: PluginToolDispatchBridgeDeps = {}
 ): Promise<() => void> {
-  const subscribe = deps.subscribe ?? subscribePluginToolExec
+  // IPC can cancel active calls through this module. Resolve the default
+  // transport lazily so initialization only goes in one direction.
+  const subscribe = deps.subscribe ?? (await import("./ipc")).subscribePluginToolExec
   let subscription = subscriptions.get(subscribe)
   if (!subscription) {
     subscription = { owners: new Set(), calls: new Map(), inFlight: new Map(), pending: 0 }
