@@ -109,7 +109,11 @@ export async function openWorkspaceBundleTurnLease(
     return null
   }
 
+  // The settled outcome, kept once it lands. A settle or abort that fails is
+  // not cached: the next call tries again (postfix review P08), so a caller's
+  // retry does not keep answering with the first transport failure.
   let completion: Promise<ResourceChange[]> | null = null
+  let attempts = 0
   // Closed on settle AND on abort, and on the failure of either: a scope that
   // outlives its turn is a step-up token available to work nobody approved.
   // `closeApprovalScopeForTurn` is idempotent, so a settle path that already
@@ -122,60 +126,82 @@ export async function openWorkspaceBundleTurnLease(
   // document keeps claiming a turn it can no longer end, answers its own later
   // poll with "I do", and that conversation is refused for good. The rejection
   // is rethrown: this hands the turn on, it does not absorb the failure.
-  const release = <T>(promise: Promise<T>): Promise<T> =>
-    promise
+  const once = (
+    command: "task_workspace_bundle_turn_settle" | "task_workspace_bundle_turn_abort",
+    operation: () => Promise<ResourceChange[]>
+  ): Promise<ResourceChange[]> => {
+    if (completion) return completion
+    // The first attempt runs under the turn's own approval scope; that scope
+    // closes with any failure, so a retry asks for its approval again.
+    const attempt = (
+      attempts++ === 0 ? operation() : runWorkspaceUserAction(command, operation, origin)
+    )
       .catch((error: unknown) => {
         releaseOpenBundleTurn(lease.bundleTurnId, origin)
+        if (completion === attempt) completion = null
         throw error
       })
       .finally(() => closeApprovalScopeForTurn(lease.bundleTurnId, origin))
+    completion = attempt
+    return attempt
+  }
+  // A genuine stop that lands after a settle recorded it unproven clears the
+  // Host's potential writer (never the historical irreversible patch). It is
+  // registered before that settle is awaited, so a settle that fails cannot
+  // drop it, and once per stop promise, however many times the settle retries.
+  const confirming = new WeakSet<Promise<void>>()
+  const confirmLateStop = (
+    executorStop: Promise<void>,
+    proof: Promise<boolean>,
+    finalState: "ready" | "failed" | "cancelled"
+  ) => {
+    if (confirming.has(executorStop)) return
+    confirming.add(executorStop)
+    void proof
+      .then(async (confirmed) => {
+        if (!confirmed) return
+        // After the unproven settle in flight, whatever it answered.
+        await completion?.catch(() => undefined)
+        await runWorkspaceUserAction(
+          "task_workspace_bundle_turn_settle",
+          () => settleWorkspaceBundleTurn(lease.bundleTurnId, finalState, origin, false),
+          origin
+        )
+      })
+      .catch(() => undefined)
+  }
   const settle = (
     finalState: "ready" | "failed" | "cancelled" = "ready",
     executorStop?: Promise<void>
   ) => {
     if (executorStop) {
-      completion ??= release(
-        (async () => {
-          // Rejection/lost transport is not positive evidence. Observe it now,
-          // so a rejected stop does not become an unhandled rejection.
-          const proof = executorStop.then(
-            () => true,
-            () => false
-          )
-          let timer: ReturnType<typeof setTimeout> | undefined
-          const stopped = await Promise.race([
-            proof,
-            new Promise<false>((resolve) => {
-              timer = setTimeout(() => resolve(false), EXECUTOR_STOP_WAIT_MS)
-            }),
-          ])
-          if (timer !== undefined) clearTimeout(timer)
-          const outcome = await settleWorkspaceBundleTurn(
-            lease.bundleTurnId,
-            finalState,
-            origin,
-            !stopped
-          )
-          if (!stopped) {
-            // No directory hold. A later genuine stop clears only the Host's
-            // potential writer, never the historical irreversible patch.
-            void proof
-              .then(async (confirmed) => {
-                if (!confirmed) return
-                await runWorkspaceUserAction(
-                  "task_workspace_bundle_turn_settle",
-                  () => settleWorkspaceBundleTurn(lease.bundleTurnId, finalState, origin, false),
-                  origin
-                )
-              })
-              .catch(() => undefined)
-          }
-          return outcome.resources
-        })()
-      )
-      return completion
+      return once("task_workspace_bundle_turn_settle", async () => {
+        // Rejection/lost transport is not positive evidence. Observe it now,
+        // so a rejected stop does not become an unhandled rejection.
+        const proof = executorStop.then(
+          () => true,
+          () => false
+        )
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const stopped = await Promise.race([
+          proof,
+          new Promise<false>((resolve) => {
+            timer = setTimeout(() => resolve(false), EXECUTOR_STOP_WAIT_MS)
+          }),
+        ])
+        if (timer !== undefined) clearTimeout(timer)
+        // No directory hold while unproven; a later genuine stop confirms.
+        if (!stopped) confirmLateStop(executorStop, proof, finalState)
+        const outcome = await settleWorkspaceBundleTurn(
+          lease.bundleTurnId,
+          finalState,
+          origin,
+          !stopped
+        )
+        return outcome.resources
+      })
     }
-    completion ??= release(
+    return once("task_workspace_bundle_turn_settle", () =>
       settleWorkspaceBundleTurn(
         lease.bundleTurnId,
         finalState,
@@ -183,14 +209,12 @@ export async function openWorkspaceBundleTurnLease(
         ...(executorStopRequired ? ([false] as const) : ([] as const))
       ).then((outcome) => outcome.resources)
     )
-    return completion
   }
   const abort = (executorStop?: Promise<void>) => {
     if (executorStop || executorStopRequired) return settle("cancelled", executorStop)
-    completion ??= release(
+    return once("task_workspace_bundle_turn_abort", () =>
       abortWorkspaceBundleTurn(lease.bundleTurnId, origin).then((outcome) => outcome.resources)
     )
-    return completion
   }
 
   return {

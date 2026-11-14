@@ -191,6 +191,107 @@ describe("openWorkspaceBundleTurnLease", () => {
     expect(settleBundleTurn).toHaveBeenCalledWith("stop-turn", "failed", { kind: "local" }, true)
   })
 
+  describe("a stop-unproven settle that does not land (postfix review P08)", () => {
+    function laterProof() {
+      let stopped!: () => void
+      const proof = new Promise<void>((resolve) => {
+        stopped = resolve
+      })
+      return { proof, stopped }
+    }
+
+    it("still sends the real stop proof that arrives after the first settle failed", async () => {
+      jest.useFakeTimers()
+      const lease = await stopTestLease()
+      const { proof, stopped } = laterProof()
+      settleBundleTurn.mockRejectedValueOnce(new Error("host unreachable"))
+      const first = lease.settle("cancelled", proof)
+      const observed = expect(first).rejects.toThrow("host unreachable")
+      await jest.advanceTimersByTimeAsync(2000)
+      await observed
+      expect(settleBundleTurn).toHaveBeenCalledTimes(1)
+      expect(settleBundleTurn).toHaveBeenLastCalledWith(
+        "stop-turn",
+        "cancelled",
+        { kind: "local" },
+        true
+      )
+
+      stopped()
+      await jest.advanceTimersByTimeAsync(0)
+      expect(settleBundleTurn).toHaveBeenCalledTimes(2)
+      expect(settleBundleTurn).toHaveBeenLastCalledWith(
+        "stop-turn",
+        "cancelled",
+        { kind: "local" },
+        false
+      )
+      expect(runUserAction).toHaveBeenCalledWith(
+        "task_workspace_bundle_turn_settle",
+        expect.any(Function),
+        { kind: "local" }
+      )
+    })
+
+    it("lets a later settle try again instead of answering the first rejection", async () => {
+      jest.useFakeTimers()
+      const lease = await stopTestLease()
+      const { proof, stopped } = laterProof()
+      settleBundleTurn.mockRejectedValueOnce(new Error("host unreachable"))
+      const first = lease.settle("cancelled", proof)
+      const observed = expect(first).rejects.toThrow("host unreachable")
+      await jest.advanceTimersByTimeAsync(2000)
+      await observed
+
+      const retryResources = [{ path: "retry" }]
+      settleBundleTurn.mockResolvedValueOnce({ resources: retryResources })
+      const retry = lease.settle("cancelled", proof)
+      await jest.advanceTimersByTimeAsync(2000)
+      await expect(retry).resolves.toBe(retryResources)
+      expect(settleBundleTurn).toHaveBeenCalledTimes(2)
+      // The turn's own approval closed with the failure; the retry renews it.
+      expect(runUserAction).toHaveBeenCalledWith(
+        "task_workspace_bundle_turn_settle",
+        expect.any(Function),
+        { kind: "local" }
+      )
+      // One late confirmation, not one per attempt.
+      stopped()
+      await jest.advanceTimersByTimeAsync(0)
+      expect(settleBundleTurn).toHaveBeenCalledTimes(3)
+      expect(settleBundleTurn).toHaveBeenLastCalledWith(
+        "stop-turn",
+        "cancelled",
+        { kind: "local" },
+        false
+      )
+      await expect(lease.settle("ready")).resolves.toBe(retryResources)
+    })
+
+    it("settles with the proof a retry already holds", async () => {
+      jest.useFakeTimers()
+      const lease = await stopTestLease()
+      const { proof, stopped } = laterProof()
+      settleBundleTurn.mockRejectedValueOnce(new Error("host unreachable"))
+      const first = lease.settle("cancelled", proof)
+      const observed = expect(first).rejects.toThrow("host unreachable")
+      await jest.advanceTimersByTimeAsync(2000)
+      await observed
+      // The late confirmation itself is what fails this time.
+      settleBundleTurn.mockRejectedValueOnce(new Error("still unreachable"))
+      stopped()
+      await jest.advanceTimersByTimeAsync(0)
+
+      await lease.settle("cancelled", proof)
+      expect(settleBundleTurn).toHaveBeenLastCalledWith(
+        "stop-turn",
+        "cancelled",
+        { kind: "local" },
+        false
+      )
+    })
+  })
+
   it("leases every physical workspace in a bundle and preserves its logical aliases", async () => {
     beginBundleTurn.mockResolvedValue({
       bundleTurnId: "bundle-turn-1",
