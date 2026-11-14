@@ -850,18 +850,34 @@ export async function gitCloneGuarded(
   return gitTargetFromRemote(cloned.rootId, cloned.relativePath)
 }
 
+export interface ReadBlobAtRefOptions {
+  /**
+   * `null` means only "absent": a file that exists at the ref but is not UTF-8
+   * text (binary, NUL bytes, UTF-16, a directory or symlink in its place)
+   * throws instead. For readers that must not mistake an unreadable file for
+   * a missing one, such as the review policy (postfix review P07).
+   */
+  requireText?: boolean
+}
+
 /**
  * Read a file as text at a revision. `null` means absent-at-that-ref or binary
  * — an ordinary answer when diffing two revisions; an unresolvable ref throws.
+ * With `requireText`, `null` means absent only.
  */
 export async function gitReadBlobAtRef(
   repoPath: string,
   gitRef: string,
   path: string,
-  via?: GitCallTarget
+  via?: GitCallTarget,
+  options: ReadBlobAtRefOptions = {}
 ): Promise<string | null> {
   if (!hasGitBridge()) return null
-  return gitCall<string | null>("git_read_blob_at_ref", { repoPath, gitRef, path }, via)
+  return gitCall<string | null>(
+    "git_read_blob_at_ref",
+    { repoPath, gitRef, path, ...(options.requireText ? { requireText: true } : {}) },
+    via
+  )
 }
 
 export async function gitClone(remoteUrl: string, destination: string): Promise<string> {

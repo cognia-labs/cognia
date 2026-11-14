@@ -136,7 +136,7 @@ function operationScope(input: ScmRuntimeInput, scm: SourceControlService, host:
     ? scm
     : {
         ...scm,
-        readFileAt: (repo, rev, path) => gitReadBlobAtRef(repo, rev, path, via),
+        readFileAt: (repo, rev, path, options) => gitReadBlobAtRef(repo, rev, path, via, options),
         diffRevisionFile: (repo, base, target, path) =>
           gitDiffRefsFile(repo, base, target, path, via),
         resetVerificationCheckout: async (repo, sha) => {
@@ -271,7 +271,7 @@ export function createScmRuntime(input: ScmRuntimeInput): ScmRuntime {
       try {
         return await reviewChangeset(changesetId, {
           host: boundHost,
-          readBlob: (repo, ref, path) => boundScm.readFileAt(repo, ref, path),
+          readBlob: (repo, ref, path, options) => boundScm.readFileAt(repo, ref, path, options),
           agent: {
             loadDiff: (repo, base, head, path) => boundScm.diffRevisionFile(repo, base, head, path),
             client: reviewClientFor(input.appSettings),
@@ -325,7 +325,7 @@ export function createScmRuntime(input: ScmRuntimeInput): ScmRuntime {
           return readReviewPolicyAtRef(
             changeset.sourceRoot,
             run.expectedOldSha,
-            (repo, ref, path) => boundScm.readFileAt(repo, ref, path)
+            (repo, ref, path, options) => boundScm.readFileAt(repo, ref, path, options)
           )
         },
         acceptancePortFor: input.projectId

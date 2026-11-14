@@ -70968,6 +70968,8 @@ paths:
                   minLength: 1
                 relativePath:
                   type: string
+                requireText:
+                  type: boolean
               additionalProperties: false
       responses:
         "200":

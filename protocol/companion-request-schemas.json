@@ -11064,6 +11064,9 @@
         },
         "relativePath": {
           "type": "string"
+        },
+        "requireText": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -24064,6 +24067,9 @@
         },
         "path": {
           "type": "string"
+        },
+        "requireText": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

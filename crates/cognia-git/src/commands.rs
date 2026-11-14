@@ -638,14 +638,23 @@ pub async fn git_clone_guarded(
 /// existed since the crate was written and was never exposed as a command, so
 /// the only way to read a historical file was to abuse `git_diff_refs_file` and
 /// hope the file happened to differ.
+///
+/// `require_text` narrows `None` to "absent": a file that exists but is not
+/// UTF-8 text is then an error, for a reader (the review policy) that must not
+/// mistake an unreadable file for a missing one.
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub async fn git_read_blob_at_ref(
     repo_path: String,
     git_ref: String,
     path: String,
+    require_text: Option<bool>,
 ) -> Result<Option<String>, GitError> {
     blocking("git_read_blob_at_ref", move || {
-        read::blob_text_at_ref(&repo_path, &git_ref, &path)
+        if require_text.unwrap_or(false) {
+            read::required_text_at_ref(&repo_path, &git_ref, &path)
+        } else {
+            read::blob_text_at_ref(&repo_path, &git_ref, &path)
+        }
     })
     .await
 }

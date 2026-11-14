@@ -134,7 +134,9 @@ describe("reviewChangeset", () => {
       signal,
       now: () => 7,
     })
-    expect(noPolicy).toHaveBeenCalledWith("/repo", "refs/heads/main", ".cognia/workspace.json")
+    expect(noPolicy).toHaveBeenCalledWith("/repo", "refs/heads/main", ".cognia/workspace.json", {
+      requireText: true,
+    })
     expect(host.recordChangesetReview).toHaveBeenCalledWith("cs-1", {
       headSha: HEAD,
       verdict: "approve",

@@ -206,6 +206,27 @@ pub fn head_blob_text(repo: &Repository, path: &str) -> Option<String> {
 /// at a base ref is an ordinary answer for a consumer diffing two revisions,
 /// while an unresolvable ref is a real failure and stays one.
 pub fn blob_text_at_ref(repo_path: &str, git_ref: &str, path: &str) -> Result<Option<String>> {
+    read_blob_at_ref(repo_path, git_ref, path, false)
+}
+
+/// Text content of `path` at a revision, where only absence is `None`.
+///
+/// A file that exists there but does not read as UTF-8 text (binary, NUL
+/// bytes, UTF-16, a directory or submodule in its place, an object the
+/// repository cannot load) is an error. A policy file is the reason this
+/// exists: read leniently, a present but unreadable `.cognia/workspace.json`
+/// would look absent and its checks would fall back to none (postfix review
+/// P07).
+pub fn required_text_at_ref(repo_path: &str, git_ref: &str, path: &str) -> Result<Option<String>> {
+    read_blob_at_ref(repo_path, git_ref, path, true)
+}
+
+fn read_blob_at_ref(
+    repo_path: &str,
+    git_ref: &str,
+    path: &str,
+    require_text: bool,
+) -> Result<Option<String>> {
     let repo = open_repo(repo_path)?;
     let object = repo.revparse_single(git_ref).map_err(|err| {
         crate::error::GitError::NotFound(format!("unknown ref {git_ref}: {err}").into())
@@ -213,13 +234,36 @@ pub fn blob_text_at_ref(repo_path: &str, git_ref: &str, path: &str) -> Result<Op
     let tree = object.peel_to_tree().map_err(|err| {
         crate::error::GitError::NotFound(format!("ref {git_ref} has no tree: {err}").into())
     })?;
-    let Ok(entry) = tree.get_path(Path::new(path)) else {
-        return Ok(None);
+    let entry = match tree.get_path(Path::new(path)) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(_) if !require_text => return Ok(None),
+        Err(error) => {
+            return Err(GitError::CommandFailed(
+                format!("read {path} at {git_ref}: {}", error.message()).into(),
+            ))
+        }
     };
-    let Ok(blob) = repo.find_blob(entry.id()) else {
-        return Ok(None);
+    let unreadable = |why: &str| -> Result<Option<String>> {
+        if require_text {
+            Err(GitError::CommandFailed(
+                format!("{path} at {git_ref} exists but {why}").into(),
+            ))
+        } else {
+            Ok(None)
+        }
     };
-    Ok(blob_text(blob.content()))
+    if require_text && entry.filemode() == i32::from(git2::FileMode::Link) {
+        return unreadable("is a symbolic link, not a file");
+    }
+    let blob = match repo.find_blob(entry.id()) {
+        Ok(blob) => blob,
+        Err(_) => return unreadable("is not a readable file"),
+    };
+    match blob_text(blob.content()) {
+        Some(text) => Ok(Some(text)),
+        None => unreadable("is not UTF-8 text"),
+    }
 }
 
 /// Text content of `path` from the index (staged), or `None`.
@@ -339,6 +383,63 @@ mod tests {
         fs::write(tmp.path().join("bin.dat"), [0x00u8, 0x01, 0x02]).unwrap();
         commit_all(&repo, "binary");
         assert_eq!(blob_text_at_ref(&root, "HEAD", "bin.dat").unwrap(), None);
+    }
+
+    #[test]
+    fn required_text_at_ref_refuses_a_present_file_it_cannot_read() {
+        let (tmp, repo) = init_repo();
+        let root = tmp.path().to_string_lossy().to_string();
+        fs::create_dir_all(tmp.path().join("dir")).unwrap();
+        fs::write(tmp.path().join("dir/inner.txt"), "x").unwrap();
+        fs::write(tmp.path().join("ok.json"), "{}").unwrap();
+        fs::write(tmp.path().join("nul.json"), b"{\"a\":\x001}").unwrap();
+        // UTF-16LE with a BOM: valid JSON to an editor, not UTF-8 text.
+        let utf16: Vec<u8> = [0xFFu8, 0xFE]
+            .into_iter()
+            .chain("{}".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        fs::write(tmp.path().join("utf16.json"), utf16).unwrap();
+        fs::write(tmp.path().join("latin1.json"), [b'{', 0xE9, b'}']).unwrap();
+        commit_all(&repo, "policies");
+
+        assert_eq!(
+            required_text_at_ref(&root, "HEAD", "ok.json").unwrap(),
+            Some("{}".to_string())
+        );
+        assert_eq!(
+            required_text_at_ref(&root, "HEAD", "missing.json").unwrap(),
+            None
+        );
+        assert_eq!(
+            required_text_at_ref(&root, "HEAD", "missing/deeper.json").unwrap(),
+            None
+        );
+        for unreadable in ["nul.json", "utf16.json", "latin1.json", "dir"] {
+            assert!(
+                matches!(
+                    required_text_at_ref(&root, "HEAD", unreadable),
+                    Err(GitError::CommandFailed(_))
+                ),
+                "{unreadable} read as absent"
+            );
+            // The lenient read keeps answering `None` for diffing callers.
+            assert_eq!(blob_text_at_ref(&root, "HEAD", unreadable).unwrap(), None);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn required_text_at_ref_refuses_a_symlink_in_place_of_the_file() {
+        let (tmp, repo) = init_repo();
+        let root = tmp.path().to_string_lossy().to_string();
+        fs::write(tmp.path().join("real.json"), "{}").unwrap();
+        std::os::unix::fs::symlink("real.json", tmp.path().join("link.json")).unwrap();
+        commit_all(&repo, "link");
+        assert!(required_text_at_ref(&root, "HEAD", "link.json").is_err());
+        assert_eq!(
+            blob_text_at_ref(&root, "HEAD", "link.json").unwrap(),
+            Some("real.json".to_string())
+        );
     }
 
     #[test]

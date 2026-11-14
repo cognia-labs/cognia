@@ -1146,7 +1146,8 @@ pub(super) async fn dispatch(
             let repo_path: String = required(&args, "repoPath")?;
             let git_ref: String = required(&args, "gitRef")?;
             let path: String = required(&args, "path")?;
-            cognia_git::commands::git_read_blob_at_ref(repo_path, git_ref, path)
+            let require_text: Option<bool> = optional(&args, "requireText")?;
+            cognia_git::commands::git_read_blob_at_ref(repo_path, git_ref, path, require_text)
                 .await
                 .map_err(|e| RpcError::internal(e.to_string()))
                 .and_then(to_json)

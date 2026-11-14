@@ -154,7 +154,9 @@ describe("readReviewPolicyAtRef", () => {
       JSON.stringify({ review: { protectedPaths: ["billing/**"] } })
     )
     const result = await readReviewPolicyAtRef("/repo", "refs/heads/main", readBlob)
-    expect(readBlob).toHaveBeenCalledWith("/repo", "refs/heads/main", ".cognia/workspace.json")
+    expect(readBlob).toHaveBeenCalledWith("/repo", "refs/heads/main", ".cognia/workspace.json", {
+      requireText: true,
+    })
     expect(result).toEqual({
       ok: true,
       policy: { ...defaultReviewPolicy(), protectedPaths: ["billing/**"] },
@@ -168,6 +170,20 @@ describe("readReviewPolicyAtRef", () => {
       policy: defaultReviewPolicy(),
       declared: false,
     })
+  })
+
+  it("refuses a present file the strict read cannot decode instead of reading it as absent", async () => {
+    // The native strict read throws for UTF-16, NUL bytes or a directory in
+    // the file's place; the lenient one would have answered `null`.
+    const readBlob = jest.fn(
+      async (_repo: string, _ref: string, _path: string, options?: object) => {
+        if (options) throw new Error(".cognia/workspace.json at main exists but is not UTF-8 text")
+        return null
+      }
+    )
+    await expect(readReviewPolicyAtRef("/repo", "main", readBlob)).rejects.toThrow(
+      "is not UTF-8 text"
+    )
   })
 
   it("refuses an invalid block rather than falling back to defaults", async () => {

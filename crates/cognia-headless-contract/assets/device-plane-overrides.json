@@ -5403,6 +5403,9 @@
           },
           "relativePath": {
             "type": "string"
+          },
+          "requireText": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

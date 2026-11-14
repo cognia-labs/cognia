@@ -334,20 +334,31 @@ export function parseWorkspaceReviewPolicy(source: string): WorkspaceReviewPolic
   return parsed.ok ? { ...parsed, declared: true } : parsed
 }
 
-/** Reads one file at a ref; `null` when the file does not exist there. */
-export type ReadBlobAtRef = (repoPath: string, ref: string, path: string) => Promise<string | null>
+/**
+ * Reads one file at a ref; `null` when the file does not exist there. With
+ * `requireText`, a file that exists but is not UTF-8 text throws.
+ */
+export type ReadBlobAtRef = (
+  repoPath: string,
+  ref: string,
+  path: string,
+  options?: { requireText: true }
+) => Promise<string | null>
 
 /**
  * The review policy as the target ref declares it. A missing file or block is
  * the defaults; an invalid block is a refusal, never the defaults — a broken
  * policy that silently relaxed to defaults would be a downgrade nobody chose.
+ * The file is read strictly: one that exists but is not UTF-8 text (UTF-16,
+ * NUL bytes, a directory in its place) makes the read throw, and every caller
+ * refuses on a throw, instead of reading as absent (postfix review P07).
  */
 export async function readReviewPolicyAtRef(
   repoPath: string,
   ref: string,
   readBlob: ReadBlobAtRef
 ): Promise<WorkspaceReviewPolicyParseResult> {
-  const source = await readBlob(repoPath, ref, WORKSPACE_CONFIG_PATH)
+  const source = await readBlob(repoPath, ref, WORKSPACE_CONFIG_PATH, { requireText: true })
   if (source === null) return { ok: true, policy: defaultReviewPolicy(), declared: false }
   if (new TextEncoder().encode(source).byteLength > WORKSPACE_CONFIG_MAX_BYTES) {
     return {

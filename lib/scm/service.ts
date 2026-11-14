@@ -32,6 +32,7 @@ import {
   gitRevert,
   gitReset,
   gitStatus,
+  type ReadBlobAtRefOptions,
 } from "@/lib/git/commands"
 import type {
   GitBlameLine,
@@ -63,7 +64,13 @@ export interface SourceControlService {
   /** Files changed between two revisions (from their merge base). */
   diffRevisions(repo: string, base: string, target: string): Promise<GitFileChange[]>
   diffRevisionFile(repo: string, base: string, target: string, path: string): Promise<GitDiff>
-  readFileAt(repo: string, rev: string, path: string): Promise<string | null>
+  /** `options.requireText`: a present file that is not text throws instead of `null`. */
+  readFileAt(
+    repo: string,
+    rev: string,
+    path: string,
+    options?: ReadBlobAtRefOptions
+  ): Promise<string | null>
   history(repo: string, query: HistoryQuery): Promise<GitCommit[]>
   blame(repo: string, path: string, rev?: string): Promise<GitBlameLine[]>
   /** Commit the index; resolves to the new commit's SHA. */
@@ -104,7 +111,7 @@ export function createGitSourceControlService(
     diffWorking: (repo, path, staged) => gitDiffFile(repo, path, staged),
     diffRevisions: (repo, base, target) => gitDiffRefsFiles(repo, base, target),
     diffRevisionFile: (repo, base, target, path) => gitDiffRefsFile(repo, base, target, path),
-    readFileAt: (repo, rev, path) => gitReadBlobAtRef(repo, rev, path),
+    readFileAt: (repo, rev, path, options) => gitReadBlobAtRef(repo, rev, path, undefined, options),
     history: (repo, query) =>
       query.path
         ? gitFileHistory(repo, query.path, query.maxCount)

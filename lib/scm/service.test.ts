@@ -64,6 +64,7 @@ describe("createGitSourceControlService", () => {
     await service.diffRevisions("/repo", "main", "HEAD")
     await service.diffRevisionFile("/repo", "main", "HEAD", "a.ts")
     await expect(service.readFileAt("/repo", "main", "a.ts")).resolves.toBe("content")
+    await service.readFileAt("/repo", "main", ".cognia/workspace.json", { requireText: true })
     await service.blame("/repo", "a.ts", "abc")
     await expect(service.commit("/repo", "msg")).resolves.toBe("c0ffee")
     await service.commit("/repo", "msg", { amend: true, signoff: true })
@@ -78,6 +79,10 @@ describe("createGitSourceControlService", () => {
       ["gitDiffRefsFiles", ["/repo", "main", "HEAD"]],
       ["gitDiffRefsFile", ["/repo", "main", "HEAD", "a.ts"]],
       ["gitReadBlobAtRef", ["/repo", "main", "a.ts"]],
+      [
+        "gitReadBlobAtRef",
+        ["/repo", "main", ".cognia/workspace.json", undefined, { requireText: true }],
+      ],
       ["gitBlame", ["/repo", "a.ts", "abc"]],
       ["gitCommit", ["/repo", "msg", false, false]],
       ["gitCommit", ["/repo", "msg", true, true]],

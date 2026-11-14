@@ -91300,6 +91300,8 @@ paths:
                   type: string
                 path:
                   type: string
+                requireText:
+                  type: boolean
               additionalProperties: false
       responses:
         "200":

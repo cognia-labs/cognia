@@ -811,4 +811,17 @@ describe("a pinned Git call target", () => {
     expect(diff.language).toBe("typescript")
     expect(callMock).not.toHaveBeenCalled()
   })
+
+  it("asks for a strict read only when the caller requires text", async () => {
+    const via = { call: jest.fn(async (..._args: unknown[]) => null as never) }
+    await gitReadBlobAtRef("/r", "h1", ".cognia/workspace.json", via, { requireText: true })
+    await gitReadBlobAtRef("/r", "h1", "a.bin", via)
+    expect(via.call.mock.calls).toEqual([
+      [
+        "git_read_blob_at_ref",
+        { repoPath: "/r", gitRef: "h1", path: ".cognia/workspace.json", requireText: true },
+      ],
+      ["git_read_blob_at_ref", { repoPath: "/r", gitRef: "h1", path: "a.bin" }],
+    ])
+  })
 })
