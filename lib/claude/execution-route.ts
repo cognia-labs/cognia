@@ -50,6 +50,12 @@ export interface ExecutionRoute {
   readonly identity: Transport
   /** Calls and subscriptions pinned to that Host. */
   readonly transport: Transport
+  /**
+   * Calls and events still reach this Host after another is selected: true
+   * on the desktop, which keeps the transport open while the route is held;
+   * false on a paired client, whose one transport follows the selection.
+   */
+  readonly reachableAfterSwitch: boolean
   /** The shared transport still resolves to this Host. */
   isCurrent(): boolean
   /** Another holder; release each holder once. */
@@ -82,6 +88,7 @@ function desktopRoute(): ExecutionRoute {
     remote: remote !== null,
     identity: target,
     transport: target,
+    reachableAfterSwitch: true,
     isCurrent: () => getActiveRemoteTransport() === remote,
     retain() {
       holders += 1
@@ -111,12 +118,11 @@ function pairedClientRoute(): ExecutionRoute {
   }
   const pinned: Transport = {
     call<T = unknown>(
-      name: string,
-      args?: Record<string, unknown>,
-      options?: TransportCallOptions
+      ...call: [name: string, args?: Record<string, unknown>, options?: TransportCallOptions]
     ): Promise<T> {
       if (!isCurrent()) return Promise.reject(new ExecutionRouteChangedError(key))
-      return target.call<T>(name, args, options)
+      // The caller's arguments as given: a guard adds nothing to the call.
+      return target.call<T>(...call)
     },
     subscribe<T = unknown>(event: string, handler: (payload: T) => void): () => void {
       // Events after a switch come from the new target, never from this turn.
@@ -136,6 +142,7 @@ function pairedClientRoute(): ExecutionRoute {
     remote: context !== null,
     identity: target,
     transport: pinned,
+    reachableAfterSwitch: false,
     isCurrent,
     retain: () => route,
     release() {},
@@ -148,7 +155,10 @@ function pairedClientRoute(): ExecutionRoute {
  * route once and releases it when the turn no longer needs that Host.
  */
 export function captureExecutionRoute(): ExecutionRoute {
-  return transport instanceof RoutingTransport ? desktopRoute() : pairedClientRoute()
+  // A remote Host transport is selected only on the desktop.
+  return transport instanceof RoutingTransport || getActiveRemoteTransport()
+    ? desktopRoute()
+    : pairedClientRoute()
 }
 
 /**
@@ -171,6 +181,12 @@ const sessionRoutes = new Map<string, SessionRouteEntry>()
 /** How long a finished turn's switched-away Host stays reachable for a deferred close. */
 export const IDLE_ROUTE_RETENTION_MS = 5 * 60_000
 let unsubscribeRouteSwitches: (() => void) | null = null
+/** Told whenever a session's route changes, or the selection does. */
+const routeChangeListeners = new Set<() => void>()
+
+function routesChanged(): void {
+  for (const listener of [...routeChangeListeners]) listener()
+}
 
 function scheduleIdleRouteRelease(entry: SessionRouteEntry): void {
   if (entry.inFlight || !entry.route || entry.idleTimer || entry.route.isCurrent()) return
@@ -179,6 +195,7 @@ function scheduleIdleRouteRelease(entry: SessionRouteEntry): void {
     if (entry.inFlight || !entry.route || entry.route.isCurrent()) return
     entry.route.release()
     entry.route = null
+    routesChanged()
   }, IDLE_ROUTE_RETENTION_MS)
 }
 
@@ -186,6 +203,7 @@ function watchRouteSwitches(): void {
   if (unsubscribeRouteSwitches) return
   unsubscribeRouteSwitches = subscribeActiveRemoteTransport(() => {
     for (const entry of sessionRoutes.values()) scheduleIdleRouteRelease(entry)
+    routesChanged()
   })
 }
 
@@ -195,6 +213,7 @@ export function forgetSessionExecutionRoute(sessionId: string): void {
   sessionRoutes.delete(sessionId)
   if (entry.idleTimer) clearTimeout(entry.idleTimer)
   entry.route?.release()
+  routesChanged()
 }
 
 /** Record that `sessionId`'s turn now runs on `route`'s Host. */
@@ -215,6 +234,7 @@ export function bindSessionExecutionRoute(sessionId: string, route: ExecutionRou
     idleTimer: null,
   })
   watchRouteSwitches()
+  routesChanged()
 }
 
 /**
@@ -247,6 +267,71 @@ export function sessionControlRoute(
     return { transport, remote: getActiveRemoteTransport() !== null }
   }
   throw new ExecutionRouteChangedError(entry.key)
+}
+
+/**
+ * The Host `sessionId`'s turn runs on when that Host is still held but no
+ * longer selected: its answers go there, and its events come from there only.
+ */
+export function detachedSessionRoute(sessionId: string): ExecutionRoute | null {
+  const route = sessionRoutes.get(sessionId)?.route
+  return route && route.reachableAfterSwitch && !route.isCurrent() ? route : null
+}
+
+/**
+ * Hear `event` the way a listener that is not bound to one turn should
+ * across a Host switch (postfix review P05): from the shared transport, except
+ * for a session whose recorded Host is held but no longer selected, whose
+ * events come from that Host and only from it. Without this, every global
+ * listener (the chat view, plugin tool and hook dispatch, control replies)
+ * stopped hearing a turn the moment another Host was selected, and heard
+ * the new Host's events for a session of the same id instead.
+ *
+ * `route` is the detached Host an event came from, or null for the shared
+ * transport.
+ */
+export function subscribeSessionEvents<T>(
+  event: string,
+  sessionOf: (payload: T) => string | undefined,
+  handler: (payload: T, route: ExecutionRoute | null) => void
+): () => void {
+  const fromShared = transport.subscribe<T>(event, (payload) => {
+    const sessionId = sessionOf(payload)
+    if (sessionId && detachedSessionRoute(sessionId)) return
+    handler(payload, null)
+  })
+  const attached = new Map<ExecutionRoute, () => void>()
+  const sync = () => {
+    const wanted = new Set<ExecutionRoute>()
+    for (const entry of sessionRoutes.values()) {
+      const route = entry.route
+      if (route?.reachableAfterSwitch && !route.isCurrent()) wanted.add(route)
+    }
+    for (const [route, unlisten] of attached) {
+      if (wanted.has(route)) continue
+      unlisten()
+      attached.delete(route)
+    }
+    for (const route of wanted) {
+      if (attached.has(route)) continue
+      attached.set(
+        route,
+        route.transport.subscribe<T>(event, (payload) => {
+          const sessionId = sessionOf(payload)
+          if (sessionId && detachedSessionRoute(sessionId) === route) handler(payload, route)
+        })
+      )
+    }
+  }
+  sync()
+  routeChangeListeners.add(sync)
+  watchRouteSwitches()
+  return () => {
+    fromShared()
+    routeChangeListeners.delete(sync)
+    for (const unlisten of attached.values()) unlisten()
+    attached.clear()
+  }
 }
 
 /** Test-only: drop every session's recorded Host. */

@@ -10,19 +10,17 @@ import type { Page, PageRequest } from "@/lib/tauri/companion-paging"
 import type { UnlistenFn } from "@tauri-apps/api/event"
 import type { UIMessage } from "@/types"
 import { transport } from "@/lib/tauri"
-import { localTransport } from "@/lib/tauri/transport-instance"
 import type { Transport } from "@/lib/tauri/transport-types"
 import { detectHostProfile } from "@/lib/platform/capabilities"
-import {
-  getActiveRemoteTransport,
-  isRemoteHostActive,
-  RoutingTransport,
-} from "@/lib/tauri/transport-routing"
+import { getActiveRemoteTransport, isRemoteHostActive } from "@/lib/tauri/transport-routing"
 import {
   ExecutionRouteChangedError,
   bindSessionExecutionRoute,
+  captureExecutionRoute,
   forgetSessionExecutionRoute,
   sessionControlRoute,
+  settleSessionExecutionRoute,
+  subscribeSessionEvents,
   type ExecutionRoute,
 } from "./execution-route"
 import { reportGovernanceProjectionFailure } from "@/lib/db/governance-ledger"
@@ -582,12 +580,29 @@ async function sendPromptToTransport(
     assertSafeModelInput(prompt)
     if (options.initialConversation) assertSafeModelHistory(options.initialConversation)
   }
-  const pinned = delivery?.route
-  if (pinned && !pinned.isCurrent()) throw new ExecutionRouteChangedError(pinned.key)
-  const dispatchTransport =
-    pinned?.identity ??
-    getActiveRemoteTransport() ??
-    (transport instanceof RoutingTransport ? localTransport : transport)
+  // A send that names no route pins one now, the Host it dispatches to, so
+  // the session's controls, answers and events stay with that Host after
+  // another is selected (postfix review P05). It lets the Host go once the
+  // turn ends.
+  const own = delivery?.route ? null : captureExecutionRoute()
+  try {
+    await dispatchPrompt(sessionId, prompt, options, delivery, route, delivery?.route ?? own!, own)
+  } finally {
+    own?.release()
+  }
+}
+
+async function dispatchPrompt(
+  sessionId: string,
+  prompt: SendContent,
+  options: SendOptions | undefined,
+  delivery: PromptDelivery | undefined,
+  route: { pairedHost?: boolean },
+  pinned: ExecutionRoute,
+  own: ExecutionRoute | null
+): Promise<void> {
+  if (!pinned.isCurrent()) throw new ExecutionRouteChangedError(pinned.key)
+  const dispatchTransport = pinned.identity
   const { personalEgressFenced, bindPersonalEgressSession } =
     await import("@/lib/execution/personal-egress")
   const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
@@ -665,18 +680,36 @@ async function sendPromptToTransport(
   // No await between this check and dispatch: cancelled admission cannot
   // lazily restart the Rust sidecar after its capture has declared it stopped.
   delivery?.signal?.throwIfAborted()
-  if (pinned) {
-    if (!pinned.isCurrent()) throw new ExecutionRouteChangedError(pinned.key)
-    bindSessionExecutionRoute(sessionId, pinned)
+  if (!pinned.isCurrent()) throw new ExecutionRouteChangedError(pinned.key)
+  bindSessionExecutionRoute(sessionId, pinned)
+  // A route this send pinned itself has no listener to settle it: the turn's
+  // end on that Host does. Subscribed before dispatch, so a fast end is heard.
+  let unlistenEnd: (() => void) | null = null
+  const settleOwn = () => {
+    unlistenEnd?.()
+    unlistenEnd = null
+    if (own) settleSessionExecutionRoute(sessionId, own)
+  }
+  if (own) {
+    unlistenEnd = own.transport.subscribe<ClaudeEvent>(SIDECAR_EVENT, (event) => {
+      if (event.type !== "session_ended" || event.sessionId !== sessionId) return
+      if (options?.turnId && event.turnId && event.turnId !== options.turnId) return
+      settleOwn()
+    })
   }
   delivery?.onDispatch?.()
-  await (pinned?.transport ?? dispatchTransport).call(command, {
-    sessionId,
-    prompt,
-    options: wireOptions,
-    ...(delivery?.commandId ? { commandId: delivery.commandId } : {}),
-    ...(messageId ? { messageId } : {}),
-  })
+  try {
+    await pinned.transport.call(command, {
+      sessionId,
+      prompt,
+      options: wireOptions,
+      ...(delivery?.commandId ? { commandId: delivery.commandId } : {}),
+      ...(messageId ? { messageId } : {}),
+    })
+  } catch (error) {
+    settleOwn()
+    throw error
+  }
   sentMcpConfigurations.set(sessionId, {
     configuration: mcpConfiguration,
     generation: wireOptions?.transcriptInvalidationId,
@@ -695,12 +728,15 @@ export async function subscribeAgentEvents(
   route?: ExecutionRoute
 ): Promise<UnlistenFn> {
   const { isAgentEventEnvelope } = await import("@cognia/agent-config-types/agent-execution")
-  return (route?.transport ?? transport).subscribe<{ type: string; envelope?: unknown }>(
+  const onPayload = (payload: { type: string; envelope?: unknown }) => {
+    const envelope = payload?.envelope
+    if (isAgentEventEnvelope(envelope)) onEnvelope(envelope)
+  }
+  if (route) return route.transport.subscribe(AGENT_EVENT, onPayload)
+  return subscribeSessionEvents<{ type: string; envelope?: unknown }>(
     AGENT_EVENT,
-    (payload) => {
-      const envelope = payload?.envelope
-      if (isAgentEventEnvelope(envelope)) onEnvelope(envelope)
-    }
+    (payload) => sessionOfEvent(payload?.envelope),
+    onPayload
   )
 }
 
@@ -741,7 +777,7 @@ export async function compactSession(
   assertSafeModelInput(focus, hostOwned || protection === true)
   await assertCurrentControlContentPolicy(sessionId, protection)
   await assertPersonalControlVisibility(sessionId, options)
-  await transport.call(command, {
+  await sessionControlRoute(sessionId).transport.call(command, {
     sessionId,
     focus,
     ...(options?.commandId ? { commandId: options.commandId } : {}),
@@ -768,7 +804,7 @@ export async function restoreSession(
   assertSafeModelHistory(messages, hostOwned || protection === true)
   await assertCurrentControlContentPolicy(sessionId, protection)
   await assertPersonalControlVisibility(sessionId, options)
-  await transport.call("claude_restore", { sessionId, messages })
+  await sessionControlRoute(sessionId).transport.call("claude_restore", { sessionId, messages })
 }
 
 /** Only the CLI's canonical transcript owner may supply this in-process proof. */
@@ -909,7 +945,8 @@ async function sidecarRoundTrip<T>(
   buildArgs: (requestId: string) => Record<string, unknown>,
   label: string,
   timeoutMs: number,
-  beforeDispatch?: () => Promise<void>
+  beforeDispatch?: () => Promise<void>,
+  via: Pick<Transport, "call"> = transport
 ): Promise<T> {
   // Await the subscription before firing so a fast reply can't race the listener.
   await ensureControlListener()
@@ -925,7 +962,7 @@ async function sidecarRoundTrip<T>(
       reject,
       timer,
     })
-    transport.call(command, buildArgs(requestId)).catch((err) => {
+    via.call(command, buildArgs(requestId)).catch((err) => {
       const pending = pendingControl.get(requestId)
       if (!pending) return
       pendingControl.delete(requestId)
@@ -949,7 +986,9 @@ async function sessionControlRequest<T>(
     (requestId) => ({ sessionId, requestId, method, params, commandId: options?.commandId }),
     `control "${method}"`,
     CONTROL_TIMEOUT_MS,
-    method === "steer" ? () => assertPersonalControlVisibility(sessionId, options) : undefined
+    method === "steer" ? () => assertPersonalControlVisibility(sessionId, options) : undefined,
+    // The reply comes back from the same Host through the session-aware listener.
+    sessionControlRoute(sessionId).transport
   )
 }
 
@@ -1397,7 +1436,7 @@ export async function approveTool(
       )
         throw new Error("Local approval identity changed")
     } else
-      await transport.call("claude_approve", {
+      await sessionControlRoute(sessionId).transport.call("claude_approve", {
         sessionId,
         requestId,
         decision,
@@ -1530,7 +1569,7 @@ export async function toolResultDecision(
   updatedToolOutput?: unknown,
   remoteExecutionContext?: RemoteExecutionContext
 ): Promise<void> {
-  await transport.call("claude_tool_result_decision", {
+  await sessionControlRoute(sessionId).transport.call("claude_tool_result_decision", {
     sessionId,
     reviewId,
     updatedToolOutput,
@@ -1570,10 +1609,13 @@ export async function callReserveDecision(
     | { decision: "refused"; code: string; message?: string }
     | { decision: "bypass"; code: string }
 ): Promise<void> {
-  const command = turnsRunOnPairedHost()
-    ? "claude_call_reserve_respond"
-    : "claude_call_reserve_decision"
-  const answer = await transport.call<{ ok?: unknown; error?: { code?: unknown } } | null>(
+  const target = sessionControlRoute(sessionId)
+  const profile = detectHostProfile()
+  const command =
+    profile === "mobile-companion" || profile === "cloud-companion" || target.remote
+      ? "claude_call_reserve_respond"
+      : "claude_call_reserve_decision"
+  const answer = await target.transport.call<{ ok?: unknown; error?: { code?: unknown } } | null>(
     command,
     { sessionId, requestId, ...decision }
   )
@@ -1687,20 +1729,20 @@ export async function onClaudeMessage(
   handler: (evt: ClaudeEvent) => void,
   route?: ExecutionRoute
 ): Promise<UnlistenFn> {
-  // A pinned route hears only its own Host, also after the selection changes.
-  return (route?.transport ?? transport).subscribe<ClaudeEvent>(SIDECAR_EVENT, (event) => {
+  const onEvent = (event: ClaudeEvent, from: ExecutionRoute | null) => {
     const routed = event as ClaudeEvent & { remoteExecutionContext?: unknown }
     const remoteContext = isRemoteExecutionContext(routed.remoteExecutionContext)
       ? routed.remoteExecutionContext
       : undefined
+    const contexts = pluginToolSessionContextsFor(from ?? undefined)
     if (isPluginToolExecEvent(event)) {
-      const contexts = pluginToolSessionContextsFor()
       if (remoteContext) contexts.set(event.sessionId, remoteContext)
       else contexts.delete(event.sessionId)
     }
     if (event.type === "session_ended") {
-      const context = remoteContext ?? pluginToolSessionContextsFor().get(event.sessionId)
-      if (context || !getActiveRemoteTransport())
+      const context = remoteContext ?? contexts.get(event.sessionId)
+      const remote = from ? from.remote : getActiveRemoteTransport() !== null
+      if (context || !remote)
         abortPluginToolCallsForSession(event.sessionId, "session ended", context, event.turnId)
     }
     if (
@@ -1731,7 +1773,15 @@ export async function onClaudeMessage(
         .catch(() => undefined)
     }
     handler(event)
-  })
+  }
+  // A pinned route hears only its own Host, also after the selection changes.
+  if (route) return route.transport.subscribe<ClaudeEvent>(SIDECAR_EVENT, (e) => onEvent(e, route))
+  return subscribeSessionEvents<ClaudeEvent>(SIDECAR_EVENT, sessionOfEvent, onEvent)
+}
+
+function sessionOfEvent(event: unknown): string | undefined {
+  const sessionId = (event as { sessionId?: unknown } | null)?.sessionId
+  return typeof sessionId === "string" ? sessionId : undefined
 }
 
 /**
@@ -1756,7 +1806,7 @@ export async function sendPluginToolResponse(
   resp: PluginToolExecResponse,
   remoteExecutionContext?: RemoteExecutionContext
 ): Promise<void> {
-  await transport.call("claude_plugin_tool_response", {
+  await sessionControlRoute(resp.sessionId).transport.call("claude_plugin_tool_response", {
     sessionId: resp.sessionId,
     toolUseId: resp.toolUseId,
     result: resp.result,
@@ -1802,7 +1852,7 @@ export async function sendPluginHookResponse(resp: {
   result?: unknown
   error?: string
 }): Promise<void> {
-  await transport.call("claude_plugin_hook_response", {
+  await sessionControlRoute(resp.sessionId).transport.call("claude_plugin_hook_response", {
     sessionId: resp.sessionId,
     execId: resp.execId,
     result: resp.result ?? null,
@@ -1842,7 +1892,11 @@ export async function sendProtocolAdapterMessage(
     ...message,
     messageId: crypto.randomUUID(),
   }
-  await transport.call("claude_protocol_adapter_message", {
+  const target =
+    typeof message.sessionId === "string"
+      ? sessionControlRoute(message.sessionId).transport
+      : transport
+  await target.call("claude_protocol_adapter_message", {
     message: routedMessage,
     ...(typeof message.sessionId === "string" ? { sessionId: message.sessionId } : {}),
     ...(remoteExecutionContext ? { remoteExecutionContext } : {}),

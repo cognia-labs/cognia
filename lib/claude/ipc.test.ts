@@ -111,6 +111,8 @@ import {
   restoreSession,
   scanClaudeSkills,
   sendPluginToolResponse,
+  sendPluginHookResponse,
+  toolResultDecision,
   callReserveDecision,
   sendPrompt,
   turnsRunOnPairedHost,
@@ -215,6 +217,7 @@ describe("connector approval review settlement", () => {
         remote: true,
         identity: pinned,
         transport: pinned,
+        reachableAfterSwitch: true,
         isCurrent: () => current,
         retain() {
           holders += 1
@@ -307,6 +310,83 @@ describe("connector approval review settlement", () => {
         expect(callSpy).not.toHaveBeenCalledWith("agent_close_session", expect.anything())
       } finally {
         jest.useRealTimers()
+      }
+    })
+
+    it("answers the turn's Host after another is selected", async () => {
+      const a = hostA()
+      callSpy.mockResolvedValue(undefined)
+      await sendPrompt(
+        "asks",
+        "hi",
+        { turnId: "t1" },
+        { transcriptRuntime: "host-owned", route: a.route }
+      )
+      a.switchAway()
+      callSpy.mockClear()
+      // The ask, the plugin tool and hook, the output review and the call
+      // reservation all came from A; their answers must reach A, not B.
+      await approveTool("asks", "req-1", "allow")
+      await toolResultDecision("asks", "review-1", { rewritten: true })
+      await sendPluginToolResponse({
+        type: "plugin_tool_response",
+        sessionId: "asks",
+        toolUseId: "tool-1",
+        result: "done",
+      })
+      await sendPluginHookResponse({ sessionId: "asks", execId: "exec-1", result: {} })
+      await callReserveDecision("asks", "reserve-1", { decision: "granted" })
+      expect(a.call.mock.calls.map(([command]) => command)).toEqual([
+        "claude_send",
+        "claude_approve",
+        "claude_tool_result_decision",
+        "claude_plugin_tool_response",
+        "claude_plugin_hook_response",
+        // A remote Host relays the reservation answer.
+        "claude_call_reserve_respond",
+      ])
+      expect(callSpy).not.toHaveBeenCalled()
+    })
+
+    it("pins a send that names no route to the Host it dispatched to", async () => {
+      jest.useFakeTimers()
+      const endHandlers: Array<(event: unknown) => void> = []
+      const remoteA = {
+        call: jest.fn(async (..._args: unknown[]) => undefined),
+        subscribe: jest.fn((_channel: string, handler: (event: unknown) => void) => {
+          endHandlers.push(handler)
+          return () => {
+            endHandlers.splice(endHandlers.indexOf(handler), 1)
+          }
+        }),
+      } as unknown as Transport & { call: jest.Mock }
+      const remoteB = {
+        call: jest.fn(async (..._args: unknown[]) => undefined),
+        subscribe: jest.fn(() => () => {}),
+      } as unknown as Transport & { call: jest.Mock }
+      try {
+        setActiveRemoteTransport(remoteA)
+        await sendPrompt("unpinned", "hi", { turnId: "t1" }, { transcriptRuntime: "host-owned" })
+        expect(remoteA.call).toHaveBeenCalledWith(
+          "agent_send",
+          expect.objectContaining({ sessionId: "unpinned" })
+        )
+        setActiveRemoteTransport(remoteB)
+        await interruptSession("unpinned")
+        expect(remoteA.call).toHaveBeenLastCalledWith("claude_interrupt", { sessionId: "unpinned" })
+        expect(remoteB.call).not.toHaveBeenCalled()
+
+        // The turn's end on A lets A go after the retention, like a pinned turn.
+        for (const handler of [...endHandlers])
+          handler({ type: "session_ended", sessionId: "unpinned", turnId: "t1" })
+        jest.advanceTimersByTime(IDLE_ROUTE_RETENTION_MS)
+        await expect(interruptSession("unpinned")).rejects.toBeInstanceOf(
+          ExecutionRouteChangedError
+        )
+        expect(remoteB.call).not.toHaveBeenCalled()
+      } finally {
+        jest.useRealTimers()
+        __resetRoutingForTests()
       }
     })
 
@@ -1620,7 +1700,8 @@ describe("onClaudeMessage", () => {
     expect(captured).toBeDefined()
     captured?.({ type: "ready" })
     expect(handler).toHaveBeenCalledWith({ type: "ready" })
-    expect(unlisten).toBe(unlistenSpy)
+    unlisten()
+    expect(unlistenSpy).toHaveBeenCalledTimes(1)
   })
 
   it("binds an approval response to the context carried by its request event", async () => {
@@ -2307,7 +2388,14 @@ it("tracks credential maps only after dispatch and forgets them on close", async
   const cacheWrites = jest.spyOn(Map.prototype, "set")
   try {
     await sendPrompt("credential-transition", "first", options, { transcriptRuntime: "host-owned" })
-    const entry = cacheWrites.mock.calls.find(([key]) => key === "credential-transition")?.[1]
+    // The session's Host route is recorded under the same key; this is the cache entry.
+    const entry = cacheWrites.mock.calls.find(
+      ([key, value]) =>
+        key === "credential-transition" &&
+        typeof value === "object" &&
+        value !== null &&
+        "configuration" in value
+    )?.[1]
     expect(entry).toEqual({
       configuration: expect.stringMatching(/^[a-f0-9]{32}$/),
       generation: "own-generation",

@@ -5,7 +5,10 @@ function fakeTransport(tag: string) {
   const handlers: Array<(payload: unknown) => void> = []
   const subscribe = jest.fn((_event: string, handler: (payload: unknown) => void) => {
     handlers.push(handler)
-    return () => undefined
+    return () => {
+      const at = handlers.indexOf(handler)
+      if (at >= 0) handlers.splice(at, 1)
+    }
   })
   const destroy = jest.fn()
   const transport = { call, subscribe, destroy } as unknown as Transport & { destroy: jest.Mock }
@@ -13,7 +16,8 @@ function fakeTransport(tag: string) {
     transport,
     call,
     destroy,
-    emit: (payload: unknown) => handlers.forEach((h) => h(payload)),
+    emit: (payload: unknown) => [...handlers].forEach((h) => h(payload)),
+    listeners: () => handlers.length,
   }
 }
 
@@ -43,12 +47,16 @@ import {
 } from "@/lib/tauri/transport-routing"
 import {
   ExecutionRouteChangedError,
+  __resetSessionExecutionRoutesForTests,
+  bindSessionExecutionRoute,
   captureExecutionRoute,
   currentExecutionRouteKey,
+  detachedSessionRoute,
+  forgetSessionExecutionRoute,
+  subscribeSessionEvents,
 } from "./execution-route"
 
-function selectRemote(tag: string) {
-  const remote = fakeTransport(tag)
+function select(tag: string, remote: ReturnType<typeof fakeTransport>) {
   setActiveRemoteTransport(remote.transport)
   setActiveRemoteEndpoint({
     remoteHost: { id: tag, label: tag },
@@ -59,6 +67,10 @@ function selectRemote(tag: string) {
     serverVersion: "1",
   })
   return remote
+}
+
+function selectRemote(tag: string) {
+  return select(tag, fakeTransport(tag))
 }
 
 describe("captureExecutionRoute on the desktop", () => {
@@ -149,5 +161,88 @@ describe("captureExecutionRoute on a paired client", () => {
     await expect(route.transport.call("agent_close_session", {})).rejects.toMatchObject({
       code: "execution_host_changed",
     })
+  })
+})
+
+describe("global listeners across a Host switch (postfix review P05)", () => {
+  type Frame = { sessionId?: string; n: number }
+  let heard: Array<[number, string | null]>
+  let unlisten: () => void
+  beforeEach(() => {
+    __resetSessionExecutionRoutesForTests()
+    __resetRoutingForTests()
+    mockShared = new RoutingTransport(mockLocal.transport)
+    mockContext = null
+    jest.clearAllMocks()
+    heard = []
+  })
+  afterEach(() => {
+    unlisten?.()
+    __resetSessionExecutionRoutesForTests()
+  })
+  const listen = () => {
+    unlisten = subscribeSessionEvents<Frame>(
+      "claude://message",
+      (frame) => frame.sessionId,
+      (frame, from) => heard.push([frame.n, from?.key ?? null])
+    )
+  }
+
+  it("hears a turn from the Host it runs on, and only from there", () => {
+    const a = selectRemote("A")
+    const route = captureExecutionRoute()
+    bindSessionExecutionRoute("s", route)
+    route.release()
+    listen()
+    a.emit({ sessionId: "s", n: 1 })
+
+    const b = selectRemote("B")
+    expect(detachedSessionRoute("s")).toBe(route)
+    expect(a.destroy).not.toHaveBeenCalled()
+    a.emit({ sessionId: "s", n: 2 })
+    // B's session of the same id is not this turn.
+    b.emit({ sessionId: "s", n: 3 })
+    b.emit({ sessionId: "other", n: 4 })
+    // A's other sessions are not routed here: nothing recorded them on A.
+    a.emit({ sessionId: "other", n: 5 })
+    a.emit({ n: 6 })
+
+    // Back on A, its events arrive once, through the shared transport.
+    select("A", a)
+    expect(detachedSessionRoute("s")).toBeNull()
+    a.emit({ sessionId: "s", n: 7 })
+    expect(heard).toEqual([
+      [1, null],
+      [2, "remote:A"],
+      [4, null],
+      [7, null],
+    ])
+  })
+
+  it("stops hearing the old Host once the session lets it go", () => {
+    const a = selectRemote("A")
+    const route = captureExecutionRoute()
+    bindSessionExecutionRoute("s", route)
+    route.release()
+    listen()
+    const b = selectRemote("B")
+    forgetSessionExecutionRoute("s")
+    expect(a.listeners()).toBe(0)
+    a.emit({ sessionId: "s", n: 1 })
+    b.emit({ sessionId: "s", n: 2 })
+    expect(heard).toEqual([[2, null]])
+    expect(a.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it("never holds back a paired client's events, whose old Host is out of reach", () => {
+    const shared = fakeTransport("paired")
+    mockShared = shared.transport
+    mockContext = { targetId: "host-a", routingGeneration: 1, accountId: "acct" }
+    bindSessionExecutionRoute("s", captureExecutionRoute())
+    listen()
+    mockContext = { targetId: "host-b", routingGeneration: 2, accountId: "acct" }
+    expect(detachedSessionRoute("s")).toBeNull()
+    shared.emit({ sessionId: "s", n: 1 })
+    expect(heard).toEqual([[1, null]])
   })
 })
