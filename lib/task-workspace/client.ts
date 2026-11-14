@@ -133,6 +133,11 @@ export interface WorkspaceAcquisitionCallOptions {
    * "cancelled" error. Already aborted means the call is not made.
    */
   signal?: AbortSignal
+  /**
+   * The Host to acquire on, for an operation that later pins, resets and
+   * archives the same workspace there. Defaults to the selected Host.
+   */
+  origin?: TaskWorkspaceOrigin
 }
 
 /**
@@ -762,9 +767,13 @@ export async function acquireWorkspaceBundle(
   const target = input.ownerRef?.trim()
     ? { ownerType: input.ownerType, ownerRef: input.ownerRef }
     : null
-  const stopListening = cancelAcquisitionOnAbort(options.signal, target)
+  const stopListening = cancelAcquisitionOnAbort(options.signal, target, options.origin)
   try {
-    return await transport.call<WorkspaceBundle>("task_workspace_bundle_acquire", { input })
+    return await transport.call<WorkspaceBundle>(
+      "task_workspace_bundle_acquire",
+      { input },
+      options.origin
+    )
   } finally {
     stopListening()
   }
@@ -1097,9 +1106,10 @@ export function listWorkspaceMaintenanceEvents(
 
 export function pinManagedWorkspace(
   workspaceId: string,
-  pinned: boolean
+  pinned: boolean,
+  origin?: TaskWorkspaceOrigin
 ): Promise<ManagedWorkspaceRecord> {
-  return transport.call("task_workspace_managed_pin", { workspaceId, pinned })
+  return transport.call("task_workspace_managed_pin", { workspaceId, pinned }, origin)
 }
 
 export function makeManagedWorkspacePermanent(
@@ -1143,8 +1153,11 @@ export function adoptWorkspaceEnvironment(
   })
 }
 
-export function archiveManagedWorkspace(workspaceId: string): Promise<ManagedWorkspaceRecord> {
-  return transport.call("task_workspace_managed_archive", { workspaceId })
+export function archiveManagedWorkspace(
+  workspaceId: string,
+  origin?: TaskWorkspaceOrigin
+): Promise<ManagedWorkspaceRecord> {
+  return transport.call("task_workspace_managed_archive", { workspaceId }, origin)
 }
 
 export function restoreManagedWorkspace(workspaceId: string): Promise<ManagedWorkspaceRecord> {

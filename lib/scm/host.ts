@@ -8,6 +8,7 @@
  */
 
 import { approvalAwareTransport } from "@/lib/task-workspace/user-action"
+import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
 
 import type {
   AgentChangeset,
@@ -97,10 +98,31 @@ export const SCM_HOST_COMMANDS = {
 
 type Call = <T>(command: string, args: Record<string, unknown>) => Promise<T>
 
+/** Hosts whose calls follow whichever Host is selected when each call is made. */
+const followsSelectedHost = new WeakSet<ScmHost>()
+
 /** The production host over the routed transport. `call` is a test seam. */
-export function createScmHost(
-  call: Call = (command, args) => approvalAwareTransport.call(command, args)
-): ScmHost {
+export function createScmHost(call?: Call): ScmHost {
+  const host = buildScmHost(call ?? ((command, args) => approvalAwareTransport.call(command, args)))
+  if (!call) followsSelectedHost.add(host)
+  return host
+}
+
+/** Every call on the Host `origin` names, whichever Host is selected meanwhile. */
+export function scmHostForOrigin(origin: TaskWorkspaceOrigin): ScmHost {
+  return buildScmHost((command, args) => approvalAwareTransport.call(command, args, origin))
+}
+
+/**
+ * For one operation that must stay on one Host (a check acquires, pins and
+ * archives its checkout there): a host that follows the selection is bound
+ * to `origin`; a caller's own host is kept as it is.
+ */
+export function bindScmHostToOrigin(host: ScmHost, origin: TaskWorkspaceOrigin): ScmHost {
+  return followsSelectedHost.has(host) ? scmHostForOrigin(origin) : host
+}
+
+function buildScmHost(call: Call): ScmHost {
   const c = SCM_HOST_COMMANDS
   return {
     captureChangeset: (input) => call(c.captureChangeset, { input }),

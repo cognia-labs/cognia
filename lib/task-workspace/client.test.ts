@@ -61,6 +61,7 @@ jest.mock("./abandoned-turns", () => ({
 import { useTaskWorkspaceStore } from "@/stores/task-workspace-store"
 import { captureTaskWorkspaceOrigin, openTaskWorkspaceOrigin } from "./origin"
 import * as workspaceClient from "./client"
+import * as userActionModule from "./user-action"
 import {
   abortWorkspaceBundleTurn,
   acquireWorkspaceBundle,
@@ -880,6 +881,32 @@ describe("task workspace client", () => {
       ["task_workspace_policy_set", { policy }],
       ["task_workspace_managed_pin", { workspaceId: "ws-1", pinned: true }],
     ])
+  })
+
+  it("sends acquire, pin and archive to the Host an operation names", async () => {
+    // Postfix review P05: a changeset check pins and archives its checkout
+    // on the Host it acquired it on, whichever Host is selected meanwhile.
+    // The instance the client imported; a later `resetModules` makes new ones.
+    const spy = jest
+      .spyOn(userActionModule.approvalAwareTransport, "call")
+      .mockResolvedValue({} as never)
+    const origin = { kind: "remote" as const, hostId: "A" }
+    const input = {
+      ownerType: "team" as const,
+      ownerRef: "changeset-check:cs-1",
+      environmentKind: "managed" as const,
+      base: { kind: "workingState" as const },
+      roots: [{ logicalRootId: "primary", role: "primary" as const, sourceRoot: "/repo" }],
+    }
+    await acquireWorkspaceBundle(input, { origin })
+    await pinManagedWorkspace("ws-1", true, origin)
+    await archiveManagedWorkspace("ws-1", origin)
+    expect(spy.mock.calls).toEqual([
+      ["task_workspace_bundle_acquire", { input }, origin],
+      ["task_workspace_managed_pin", { workspaceId: "ws-1", pinned: true }, origin],
+      ["task_workspace_managed_archive", { workspaceId: "ws-1" }, origin],
+    ])
+    spy.mockRestore()
   })
 
   it("loads the canonical ownership-aware environment inventory from the host", async () => {

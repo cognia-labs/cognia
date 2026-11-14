@@ -98,7 +98,34 @@ export function setActiveRemoteTransport(next: Transport | null): void {
   const previous = activeRemote
   activeRemote = next
   for (const listener of listeners) listener(next)
-  disposeRemoteTransport(previous)
+  // A turn that started on the previous Host still controls its executor
+  // there; that transport closes when the last such turn lets go of it.
+  if (previous && !retainedRemotes.has(previous)) disposeRemoteTransport(previous)
+}
+
+/** Holders per remote transport that must outlive a Host switch. */
+const retainedRemotes = new Map<Transport, number>()
+
+/**
+ * Keep `remote` open after the active Host changes, for an operation that
+ * started on it and must still interrupt, close and hear its own executor
+ * there. Returns an idempotent release; the transport is disposed when its
+ * last holder releases it and it is no longer the active one.
+ */
+export function retainRemoteTransport(remote: Transport): () => void {
+  retainedRemotes.set(remote, (retainedRemotes.get(remote) ?? 0) + 1)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const holders = (retainedRemotes.get(remote) ?? 1) - 1
+    if (holders > 0) {
+      retainedRemotes.set(remote, holders)
+      return
+    }
+    retainedRemotes.delete(remote)
+    if (activeRemote !== remote) disposeRemoteTransport(remote)
+  }
 }
 
 /** The active remote transport, or `null` when routing locally. */
@@ -146,6 +173,7 @@ export function __resetRoutingForTests(): void {
   activeRemote = null
   activeRemoteEndpoint = null
   listeners.clear()
+  retainedRemotes.clear()
 }
 
 /**

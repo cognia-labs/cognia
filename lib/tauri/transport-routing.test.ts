@@ -11,6 +11,7 @@ import {
   getActiveRemoteEndpoint,
   getActiveRemoteTransport,
   isRemoteHostActive,
+  retainRemoteTransport,
   setActiveRemoteEndpoint,
   setActiveRemoteTransport,
   subscribeActiveRemoteTransport,
@@ -462,5 +463,35 @@ describe("active-remote endpoint + isRemoteHostActive", () => {
     expect(getActiveRemoteEndpoint()).toEqual(endpoint)
     setActiveRemoteEndpoint(null)
     expect(getActiveRemoteEndpoint()).toBeNull()
+  })
+})
+
+describe("retainRemoteTransport", () => {
+  afterEach(() => __resetRoutingForTests())
+
+  it("keeps a switched-away Host open until its last holder releases it", () => {
+    // Postfix review P05: a turn begun on Host A must still reach A after the
+    // person selects B; the switch used to dispose A at once.
+    const a = fakeTransport("a")
+    const b = fakeTransport("b")
+    setActiveRemoteTransport(a.transport)
+    const first = retainRemoteTransport(a.transport)
+    const second = retainRemoteTransport(a.transport)
+    setActiveRemoteTransport(b.transport)
+    expect(a.destroy).not.toHaveBeenCalled()
+    first()
+    first()
+    expect(a.destroy).not.toHaveBeenCalled()
+    second()
+    expect(a.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it("never disposes the active Host when a holder releases it", () => {
+    const a = fakeTransport("a")
+    setActiveRemoteTransport(a.transport)
+    retainRemoteTransport(a.transport)()
+    expect(a.destroy).not.toHaveBeenCalled()
+    setActiveRemoteTransport(null)
+    expect(a.destroy).toHaveBeenCalledTimes(1)
   })
 })

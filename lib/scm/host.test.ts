@@ -1,4 +1,10 @@
-import { SCM_HOST_COMMANDS, createScmHost, scmErrorCode } from "./host"
+import {
+  SCM_HOST_COMMANDS,
+  bindScmHostToOrigin,
+  createScmHost,
+  scmErrorCode,
+  scmHostForOrigin,
+} from "./host"
 
 jest.mock("@/lib/task-workspace/user-action", () => ({
   approvalAwareTransport: { call: jest.fn(async () => "via-transport") },
@@ -75,5 +81,32 @@ describe("scmErrorCode", () => {
     expect(scmErrorCode("target moved")).toBeNull()
     expect(scmErrorCode({ code: 3 })).toBeNull()
     expect(scmErrorCode(null)).toBeNull()
+  })
+})
+
+describe("bindScmHostToOrigin", () => {
+  it("binds a host that follows the selection to the operation's Host and keeps a caller's own", async () => {
+    // Postfix review P05: a check's changeset calls stayed on whichever Host
+    // was selected at each call.
+    const { approvalAwareTransport } = jest.requireMock("@/lib/task-workspace/user-action") as {
+      approvalAwareTransport: { call: jest.Mock }
+    }
+    approvalAwareTransport.call.mockClear()
+    const origin = { kind: "remote" as const, hostId: "A" }
+    const bound = bindScmHostToOrigin(createScmHost(), origin)
+    await bound.getChangeset("cs")
+    expect(approvalAwareTransport.call).toHaveBeenCalledWith(
+      "task_workspace_changeset_get",
+      { changesetId: "cs" },
+      origin
+    )
+    const own = createScmHost(jest.fn(async () => ({})) as never)
+    expect(bindScmHostToOrigin(own, origin)).toBe(own)
+    await scmHostForOrigin(origin).abortIntegration("int")
+    expect(approvalAwareTransport.call).toHaveBeenLastCalledWith(
+      "task_workspace_integration_abort",
+      { integrationId: "int" },
+      origin
+    )
   })
 })

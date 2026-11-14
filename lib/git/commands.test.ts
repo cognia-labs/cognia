@@ -61,6 +61,7 @@ import {
   gitDiffRefsFiles,
   gitDiscard,
   gitDiscardAll,
+  gitReadBlobAtRef,
   gitFetch,
   gitFileHistory,
   gitBlame,
@@ -781,4 +782,33 @@ it("allows physical Git roots only inside the headless execution host, retaining
   }
   hasWebCompanionTargetMock.mockReturnValue(true)
   await expect(gitFetch("/host/workspaces/bot-run")).rejects.toThrow("opaque workspace target")
+})
+
+describe("a pinned Git call target", () => {
+  beforeEach(() => isTauriMock.mockReturnValue(true))
+
+  it("sends a check's reads and reset to the Host it names, not the shared transport", async () => {
+    // Postfix review P05: a changeset check resets its checkout on the Host
+    // it started on, whichever Host is selected meanwhile.
+    const via = { call: jest.fn(async (..._args: unknown[]) => null as never) }
+    via.call.mockResolvedValueOnce(null as never)
+    await gitReadBlobAtRef("/r", "h1", "a.ts", via)
+    via.call.mockResolvedValueOnce({ path: "a.ts", hunks: [] } as never)
+    const diff = await gitDiffRefsFile("/r", "base", "head", "a.ts", via)
+    await gitReset("/r", "hard", "h1", via)
+    await gitDiscardAll("/r", true, via)
+    expect(via.call.mock.calls.map(([command]) => command)).toEqual([
+      "git_read_blob_at_ref",
+      "git_diff_refs_file",
+      "git_reset",
+      "git_discard_all",
+    ])
+    expect(via.call).toHaveBeenCalledWith("git_reset", {
+      repoPath: "/r",
+      mode: "hard",
+      target: "h1",
+    })
+    expect(diff.language).toBe("typescript")
+    expect(callMock).not.toHaveBeenCalled()
+  })
 })

@@ -140,6 +140,14 @@ import {
   writeTextFileConfined,
   ensureDirConfined,
 } from "./ipc"
+import {
+  ExecutionRouteChangedError,
+  IDLE_ROUTE_RETENTION_MS,
+  __resetSessionExecutionRoutesForTests,
+  settleSessionExecutionRoute,
+  type ExecutionRoute,
+} from "./execution-route"
+import type { Transport } from "@/lib/tauri/transport-types"
 
 import {
   __resetRoutingForTests,
@@ -194,6 +202,138 @@ describe("connector approval review settlement", () => {
     })
   })
   afterAll(fixture.dispose)
+
+  describe("a turn's Host survives a Host switch (postfix review P05)", () => {
+    function hostA() {
+      const call = jest.fn(async (..._args: unknown[]) => undefined)
+      const subscribe = jest.fn(() => () => {})
+      const pinned = { call, subscribe } as unknown as Transport
+      let current = true
+      let holders = 0
+      const route: ExecutionRoute = {
+        key: "remote:A",
+        remote: true,
+        identity: pinned,
+        transport: pinned,
+        isCurrent: () => current,
+        retain() {
+          holders += 1
+          return route
+        },
+        release() {
+          holders -= 1
+        },
+      }
+      return {
+        route,
+        call,
+        switchAway: () => {
+          current = false
+        },
+        holders: () => holders,
+      }
+    }
+    afterEach(() => __resetSessionExecutionRoutesForTests())
+
+    it("sends, interrupts and closes on the turn's Host after another is selected", async () => {
+      const a = hostA()
+      callSpy.mockResolvedValue(undefined)
+      await sendPrompt(
+        "routed",
+        "hi",
+        { turnId: "t1" },
+        { transcriptRuntime: "host-owned", route: a.route }
+      )
+      expect(a.call).toHaveBeenCalledWith(
+        "claude_send",
+        expect.objectContaining({ sessionId: "routed", prompt: "hi" })
+      )
+      expect(a.holders()).toBe(1)
+      a.switchAway()
+      await interruptSession("routed")
+      await closeSession("routed")
+      expect(a.call.mock.calls.map(([command]) => command)).toEqual([
+        "claude_send",
+        "claude_interrupt",
+        "agent_close_session",
+      ])
+      expect(callSpy).not.toHaveBeenCalledWith("claude_interrupt", expect.anything())
+      expect(callSpy).not.toHaveBeenCalledWith("agent_close_session", expect.anything())
+      // Closing lets the Host go; a later control follows the selection again.
+      expect(a.holders()).toBe(0)
+      await interruptSession("routed")
+      expect(callSpy).toHaveBeenCalledWith("claude_interrupt", { sessionId: "routed" })
+    })
+
+    it("refuses a send when the Host changed after the turn subscribed", async () => {
+      const a = hostA()
+      a.switchAway()
+      await expect(
+        sendPrompt(
+          "routed",
+          "hi",
+          { turnId: "t1" },
+          { transcriptRuntime: "host-owned", route: a.route }
+        )
+      ).rejects.toBeInstanceOf(ExecutionRouteChangedError)
+      expect(a.call).not.toHaveBeenCalled()
+      expect(a.holders()).toBe(0)
+    })
+
+    it("lets a finished turn's switched-away Host go and then refuses its late controls", async () => {
+      jest.useFakeTimers()
+      try {
+        const a = hostA()
+        callSpy.mockResolvedValue(undefined)
+        await sendPrompt(
+          "late",
+          "hi",
+          { turnId: "t1" },
+          {
+            transcriptRuntime: "host-owned",
+            route: a.route,
+          }
+        )
+        a.switchAway()
+        settleSessionExecutionRoute("late", a.route)
+        // Within the retention a deferred close still reaches the turn's Host.
+        jest.advanceTimersByTime(IDLE_ROUTE_RETENTION_MS - 1)
+        expect(a.holders()).toBe(1)
+        jest.advanceTimersByTime(1)
+        expect(a.holders()).toBe(0)
+        await expect(interruptSession("late")).rejects.toBeInstanceOf(ExecutionRouteChangedError)
+        await expect(closeSession("late")).rejects.toBeInstanceOf(ExecutionRouteChangedError)
+        expect(callSpy).not.toHaveBeenCalledWith("claude_interrupt", expect.anything())
+        expect(callSpy).not.toHaveBeenCalledWith("agent_close_session", expect.anything())
+      } finally {
+        jest.useRealTimers()
+      }
+    })
+
+    it("keeps an in-flight turn's Host however long it runs", async () => {
+      jest.useFakeTimers()
+      try {
+        const a = hostA()
+        callSpy.mockResolvedValue(undefined)
+        await sendPrompt(
+          "running",
+          "hi",
+          { turnId: "t1" },
+          {
+            transcriptRuntime: "host-owned",
+            route: a.route,
+          }
+        )
+        a.switchAway()
+        jest.advanceTimersByTime(IDLE_ROUTE_RETENTION_MS * 3)
+        expect(a.holders()).toBe(1)
+        await interruptSession("running")
+        expect(a.call).toHaveBeenCalledWith("claude_interrupt", { sessionId: "running" })
+      } finally {
+        jest.useRealTimers()
+      }
+    })
+  })
 
   it("round 5: a provider identity cannot mint tool admission, while a Host binding survives send", async () => {
     const { bindToolCallRun, toolCallExecutionRunId } =

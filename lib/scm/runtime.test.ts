@@ -37,6 +37,14 @@ jest.mock("@/lib/task-workspace/client", () => ({
 jest.mock("@/lib/task-workspace/user-action", () => ({
   runWorkspaceUserAction: jest.fn((_command, action) => action()),
 }))
+// The Host selected now; a test switches it mid-check (postfix review P05).
+let selectedOrigin: { kind: "local" } | { kind: "remote"; hostId: string } = { kind: "local" }
+const callTaskWorkspaceOrigin = jest.fn(async (..._args: unknown[]) => undefined)
+jest.mock("@/lib/task-workspace/origin", () => ({
+  ...jest.requireActual("@/lib/task-workspace/origin"),
+  captureTaskWorkspaceOrigin: () => selectedOrigin,
+  callTaskWorkspaceOrigin: (...a: unknown[]) => callTaskWorkspaceOrigin(...a),
+}))
 jest.mock("@/lib/task-workspace/workspace-provisioning", () => ({
   bundleProvisioningForPath: jest.fn(async () => ({ provisioning: { sparsePaths: ["app"] } })),
 }))
@@ -153,6 +161,60 @@ describe("reviewClientFor", () => {
 })
 
 describe("createScmRuntime", () => {
+  afterEach(() => {
+    selectedOrigin = { kind: "local" }
+  })
+
+  it("keeps a check's checkout on the Host it started on after another is selected", async () => {
+    const hostA = { kind: "remote" as const, hostId: "A" }
+    selectedOrigin = hostA
+    reviewChangeset.mockImplementationOnce(async () => {
+      const portInput = createDelegateAcceptancePort.mock.results[0].value.input
+      const root = await portInput.rootForRevision("h1")
+      selectedOrigin = { kind: "remote", hostId: "B" }
+      // Nothing of the run reaches B: it is refused before the reset.
+      await expect(portInput.sandbox.run(profileSpec(root, "test"))).rejects.toThrow(
+        "selected Host changed"
+      )
+      return { changeset: {}, checks: [], policy: null, risk: null, agent: null }
+    })
+    await createScmRuntime({ projectId: "p", appSettings: null, host }).review("cs-1", signal)
+
+    expect(acquireWorkspaceBundle).toHaveBeenCalledWith(expect.anything(), {
+      signal,
+      origin: hostA,
+    })
+    expect(pinManagedWorkspace).toHaveBeenNthCalledWith(1, "verify", true, hostA)
+    expect(pinManagedWorkspace).toHaveBeenNthCalledWith(2, "verify", false, hostA)
+    expect(archiveManagedWorkspace).toHaveBeenCalledWith("verify", hostA)
+    expect(sandboxRun).not.toHaveBeenCalled()
+    expect(gitReset).not.toHaveBeenCalled()
+  })
+
+  it("sends a bound check's Git calls to its own Host", async () => {
+    const hostA = { kind: "remote" as const, hostId: "A" }
+    selectedOrigin = hostA
+    reviewChangeset.mockImplementationOnce(async () => {
+      const portInput = createDelegateAcceptancePort.mock.results[0].value.input
+      const root = await portInput.rootForRevision("h1")
+      sandboxRun.mockResolvedValueOnce({ exitCode: 0 })
+      await portInput.sandbox.run(profileSpec(root, "test"))
+      return { changeset: {}, checks: [], policy: null, risk: null, agent: null }
+    })
+    await createScmRuntime({ projectId: "p", appSettings: null, host }).review("cs-1", signal)
+    const via = (gitReset.mock.calls[0] as unknown[])[3] as {
+      call: (command: string, args: Record<string, unknown>) => Promise<unknown>
+    }
+    selectedOrigin = { kind: "remote", hostId: "B" }
+    await via.call("git_reset", { repoPath: "/frozen", mode: "hard", target: "h1" })
+    expect(callTaskWorkspaceOrigin).toHaveBeenCalledWith(
+      hostA,
+      "git_reset",
+      { repoPath: "/frozen", mode: "hard", target: "h1" },
+      expect.any(Boolean)
+    )
+  })
+
   it("refuses a head changed during checkout acquisition and cleans up without running code", async () => {
     host.getChangeset = jest
       .fn()
@@ -167,7 +229,7 @@ describe("createScmRuntime", () => {
       createScmRuntime({ projectId: "p", appSettings: null, host }).review("cs-1", signal)
     ).rejects.toThrow("head changed")
     expect(sandboxRun).not.toHaveBeenCalled()
-    expect(archiveManagedWorkspace).toHaveBeenCalledWith("verify")
+    expect(archiveManagedWorkspace).toHaveBeenCalledWith("verify", { kind: "local" })
   })
   it("tests the broken pinned Git tree even when the live checkout and an earlier profile repair it", async () => {
     const fixture = mkdtempSync(resolve(".cache/change-lifecycle-fix-2026-11-13/check-head-"))
@@ -285,9 +347,9 @@ describe("createScmRuntime", () => {
         provisioning: { sparsePaths: ["app"] },
         roots: [expect.objectContaining({ sourceRoot: "/source", role: "primary" })],
       }),
-      { signal }
+      { signal, origin: { kind: "local" } }
     )
-    expect(archiveManagedWorkspace).toHaveBeenCalledWith("verify")
+    expect(archiveManagedWorkspace).toHaveBeenCalledWith("verify", { kind: "local" })
   })
 
   it("resets the same checkout and removes even ignored or committed reports before each profile", async () => {
@@ -324,7 +386,7 @@ describe("createScmRuntime", () => {
       "remove-report",
       "run",
     ])
-    expect(gitReset).toHaveBeenNthCalledWith(2, "/frozen", "hard", "h1")
+    expect(gitReset).toHaveBeenNthCalledWith(2, "/frozen", "hard", "h1", expect.anything())
     expect(deleteWorkspaceEntry).toHaveBeenCalledWith("/frozen", "ignored/report.json")
     expect(acquireWorkspaceBundle).toHaveBeenCalledTimes(1)
   })
@@ -343,7 +405,7 @@ describe("createScmRuntime", () => {
     await expect(
       createScmRuntime({ projectId: "p", appSettings: null, host }).review("cs-1", signal)
     ).rejects.toThrow("stop is unproven")
-    expect(pinManagedWorkspace).toHaveBeenCalledWith("verify", true)
+    expect(pinManagedWorkspace).toHaveBeenCalledWith("verify", true, { kind: "local" })
     expect(archiveManagedWorkspace).not.toHaveBeenCalled()
     expect(gitReset).toHaveBeenCalledTimes(1)
   })

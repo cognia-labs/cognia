@@ -18,6 +18,13 @@ import {
   isRemoteHostActive,
   RoutingTransport,
 } from "@/lib/tauri/transport-routing"
+import {
+  ExecutionRouteChangedError,
+  bindSessionExecutionRoute,
+  forgetSessionExecutionRoute,
+  sessionControlRoute,
+  type ExecutionRoute,
+} from "./execution-route"
 import { reportGovernanceProjectionFailure } from "@/lib/db/governance-ledger"
 import type {
   AgentId,
@@ -92,6 +99,18 @@ function currentPluginToolSessionContexts(): Map<string, RemoteExecutionContext>
   if (!contexts) {
     contexts = new Map()
     pluginToolSessionContexts.set(route, contexts)
+  }
+  return contexts
+}
+
+/** The plugin tool contexts of the Host `route` names; local ones key on the shared transport. */
+function pluginToolSessionContextsFor(route?: ExecutionRoute): Map<string, RemoteExecutionContext> {
+  if (!route) return currentPluginToolSessionContexts()
+  const key = route.remote ? route.identity : transport
+  let contexts = pluginToolSessionContexts.get(key)
+  if (!contexts) {
+    contexts = new Map()
+    pluginToolSessionContexts.set(key, contexts)
   }
   return contexts
 }
@@ -287,6 +306,12 @@ type PromptDelivery = {
    * the transcript keeps the row this client already shows.
    */
   messageId?: string
+  /**
+   * The Host this turn was pinned to when its listener subscribed. The send
+   * goes there, or is refused if the selection changed in between, and the
+   * session's later interrupt and close follow it (postfix review P05).
+   */
+  route?: ExecutionRoute
 }
 
 // An AI-SDK runtime retains MCP clients across turns. A changed credential map
@@ -564,7 +589,10 @@ async function sendPromptToTransport(
     assertSafeModelInput(prompt)
     if (options.initialConversation) assertSafeModelHistory(options.initialConversation)
   }
+  const pinned = delivery?.route
+  if (pinned && !pinned.isCurrent()) throw new ExecutionRouteChangedError(pinned.key)
   const dispatchTransport =
+    pinned?.identity ??
     getActiveRemoteTransport() ??
     (transport instanceof RoutingTransport ? localTransport : transport)
   const { personalEgressFenced, bindPersonalEgressSession } =
@@ -644,8 +672,12 @@ async function sendPromptToTransport(
   // No await between this check and dispatch: cancelled admission cannot
   // lazily restart the Rust sidecar after its capture has declared it stopped.
   delivery?.signal?.throwIfAborted()
+  if (pinned) {
+    if (!pinned.isCurrent()) throw new ExecutionRouteChangedError(pinned.key)
+    bindSessionExecutionRoute(sessionId, pinned)
+  }
   delivery?.onDispatch?.()
-  await dispatchTransport.call(command, {
+  await (pinned?.transport ?? dispatchTransport).call(command, {
     sessionId,
     prompt,
     options: wireOptions,
@@ -666,25 +698,29 @@ async function sendPromptToTransport(
 export async function subscribeAgentEvents(
   onEnvelope: (
     envelope: import("@cognia/agent-config-types/agent-execution").AgentEventEnvelope
-  ) => void
+  ) => void,
+  route?: ExecutionRoute
 ): Promise<UnlistenFn> {
   const { isAgentEventEnvelope } = await import("@cognia/agent-config-types/agent-execution")
-  return transport.subscribe<{ type: string; envelope?: unknown }>(AGENT_EVENT, (payload) => {
-    const envelope = payload?.envelope
-    if (isAgentEventEnvelope(envelope)) onEnvelope(envelope)
-  })
+  return (route?.transport ?? transport).subscribe<{ type: string; envelope?: unknown }>(
+    AGENT_EVENT,
+    (payload) => {
+      const envelope = payload?.envelope
+      if (isAgentEventEnvelope(envelope)) onEnvelope(envelope)
+    }
+  )
 }
 
 export async function interruptSession(
   sessionId: string,
-  options?: { commandId?: string }
+  options?: { commandId?: string; route?: ExecutionRoute }
 ): Promise<void> {
-  const context = currentPluginToolSessionContexts().get(sessionId)
+  const target = sessionControlRoute(sessionId, options?.route)
+  const context = pluginToolSessionContextsFor(target.route).get(sessionId)
   // An unknown remote identity must never fall through to local cancellation.
-  if (context || !getActiveRemoteTransport())
-    abortPluginToolCallsForSession(sessionId, "interrupted", context)
+  if (context || !target.remote) abortPluginToolCallsForSession(sessionId, "interrupted", context)
   const command = options?.commandId ? "agent_interrupt" : "claude_interrupt"
-  await transport.call(command, {
+  await target.transport.call(command, {
     sessionId,
     ...(options?.commandId ? { commandId: options.commandId } : {}),
   })
@@ -1559,22 +1595,24 @@ export async function callReserveDecision(
 
 export async function closeSession(
   sessionId: string,
-  options?: { commandId?: string }
+  options?: { commandId?: string; route?: ExecutionRoute }
 ): Promise<void> {
-  const contexts = currentPluginToolSessionContexts()
+  const target = sessionControlRoute(sessionId, options?.route)
+  const contexts = pluginToolSessionContextsFor(target.route)
   const context = contexts.get(sessionId)
-  if (context || !getActiveRemoteTransport())
+  if (context || !target.remote)
     abortPluginToolCallsForSession(sessionId, "session closed", context)
   // Always the canonical command (ADR-0090): it is the one a person brain's
   // channel and a member device's grant admit (P6c, ADR-0253 G12), and it
   // closes exactly as the legacy `claude_close_session` alias does. Its
   // idempotency key is minted here when the caller has none.
-  await transport.call("agent_close_session", {
+  await target.transport.call("agent_close_session", {
     sessionId,
     commandId: options?.commandId ?? crypto.randomUUID(),
   })
   sentMcpConfigurations.delete(sessionId)
   if (contexts.get(sessionId) === context) contexts.delete(sessionId)
+  forgetSessionExecutionRoute(sessionId)
 }
 
 export async function getSidecarStatus(): Promise<{ ready: boolean }> {
@@ -1652,8 +1690,12 @@ export async function restartSidecar(): Promise<void> {
   await transport.call("claude_restart_sidecar")
 }
 
-export async function onClaudeMessage(handler: (evt: ClaudeEvent) => void): Promise<UnlistenFn> {
-  return transport.subscribe<ClaudeEvent>(SIDECAR_EVENT, (event) => {
+export async function onClaudeMessage(
+  handler: (evt: ClaudeEvent) => void,
+  route?: ExecutionRoute
+): Promise<UnlistenFn> {
+  // A pinned route hears only its own Host, also after the selection changes.
+  return (route?.transport ?? transport).subscribe<ClaudeEvent>(SIDECAR_EVENT, (event) => {
     const routed = event as ClaudeEvent & { remoteExecutionContext?: unknown }
     const remoteContext = isRemoteExecutionContext(routed.remoteExecutionContext)
       ? routed.remoteExecutionContext

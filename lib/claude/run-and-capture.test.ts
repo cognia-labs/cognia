@@ -83,6 +83,13 @@ jest.mock("@/lib/policy/action-review/plan-tool-call", () => ({
 }))
 
 const subscribeAgentEventsMock = jest.fn()
+const subscribeRouteMock = jest.fn()
+const interruptRouteMock = jest.fn()
+const settleRouteMock = jest.fn()
+jest.mock("./execution-route", () => ({
+  ...jest.requireActual("./execution-route"),
+  settleSessionExecutionRoute: (...args: unknown[]) => settleRouteMock(...args),
+}))
 jest.mock("./ipc", () => ({
   // A delivery hint is forwarded only when given, so the many three-argument
   // call assertions keep describing the default send.
@@ -90,8 +97,14 @@ jest.mock("./ipc", () => ({
     delivery === undefined
       ? sendPromptMock(sessionId, prompt, options)
       : sendPromptMock(sessionId, prompt, options, delivery),
-  interruptSession: (sessionId: string) => interruptSessionMock(sessionId),
-  onClaudeMessage: (handler: (evt: ClaudeEvent) => void) => onClaudeMessageMock(handler),
+  interruptSession: (sessionId: string, options?: { route?: unknown }) => {
+    interruptRouteMock(options?.route)
+    return interruptSessionMock(sessionId)
+  },
+  onClaudeMessage: (handler: (evt: ClaudeEvent) => void, route?: unknown) => {
+    subscribeRouteMock(route)
+    return onClaudeMessageMock(handler)
+  },
   approveTool: (...args: Parameters<typeof approveTool>) => approveToolMock(...args),
   toolResultDecision: (s: string, r: string, u?: unknown) => toolResultDecisionMock(s, r, u),
   subscribeAgentEvents: (cb: (e: unknown) => void) => subscribeAgentEventsMock(cb),
@@ -322,6 +335,7 @@ describe("runAndCaptureAssistantReply", () => {
       beforeSend,
       signal: expect.any(AbortSignal),
       onDispatch: expect.any(Function),
+      route: expect.objectContaining({ key: expect.any(String) }),
     })
   })
   it("observes an accepted send without treating the receipt as executor stop proof", async () => {
@@ -422,6 +436,7 @@ describe("runAndCaptureAssistantReply", () => {
       {
         signal: expect.any(AbortSignal),
         onDispatch: expect.any(Function),
+        route: expect.objectContaining({ key: expect.any(String) }),
       }
     )
     expect(unlistenMock).toHaveBeenCalledTimes(1)
@@ -446,6 +461,7 @@ describe("runAndCaptureAssistantReply", () => {
       {
         signal: expect.any(AbortSignal),
         onDispatch: expect.any(Function),
+        route: expect.objectContaining({ key: expect.any(String) }),
       }
     )
   })
@@ -468,6 +484,7 @@ describe("runAndCaptureAssistantReply", () => {
         transcriptRuntime: "host-owned",
         signal: expect.any(AbortSignal),
         onDispatch: expect.any(Function),
+        route: expect.objectContaining({ key: expect.any(String) }),
       }
     )
   })
@@ -768,6 +785,30 @@ describe("runAndCaptureAssistantReply", () => {
     await expect(promise).rejects.toMatchObject({ code: "aborted" })
     expect(interruptSessionMock).toHaveBeenCalledWith(SESSION)
     expect(unlistenMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("pins the subscription, the send and the interrupt to one Host and releases it with the listener", async () => {
+    // Postfix review P05: the interrupt followed whichever Host was selected
+    // when it fired, and the subscription moved to it.
+    interruptRouteMock.mockClear()
+    subscribeRouteMock.mockClear()
+    settleRouteMock.mockClear()
+    const ac = new AbortController()
+    const promise = runAndCaptureAssistantReply(SESSION, "hi", undefined, {
+      signal: ac.signal,
+      timeoutMs: 1_000,
+    })
+    await flushUntilSubscribed()
+    for (let i = 0; i < 100 && sendPromptMock.mock.calls.length === 0; i++) await Promise.resolve()
+    const route = subscribeRouteMock.mock.calls[0]![0] as { key: string }
+    expect(route).toEqual(expect.objectContaining({ key: expect.any(String) }))
+    expect(sendPromptMock.mock.calls[0]![3]).toEqual(expect.objectContaining({ route }))
+    expect(settleRouteMock).not.toHaveBeenCalled()
+    ac.abort()
+    await expect(promise).rejects.toMatchObject({ code: "aborted" })
+    expect(interruptRouteMock).toHaveBeenCalledWith(route)
+    expect(unlistenMock).toHaveBeenCalledTimes(1)
+    expect(settleRouteMock).toHaveBeenCalledWith(SESSION, route)
   })
 
   it("keeps the interrupted turn subscribed until its final usage arrives", async () => {
@@ -1553,6 +1594,7 @@ describe("runAndCaptureAssistantReply", () => {
     expect(sendPromptMock).toHaveBeenCalledWith(expect.anything(), "rewritten", expect.anything(), {
       signal: expect.any(AbortSignal),
       onDispatch: expect.any(Function),
+      route: expect.objectContaining({ key: expect.any(String) }),
     })
   })
 
@@ -1569,6 +1611,7 @@ describe("runAndCaptureAssistantReply", () => {
     expect(sendPromptMock).toHaveBeenCalledWith(SESSION, "hi", expect.anything(), {
       signal: expect.any(AbortSignal),
       onDispatch: expect.any(Function),
+      route: expect.objectContaining({ key: expect.any(String) }),
     })
   })
 

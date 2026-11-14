@@ -158,6 +158,21 @@ const transport = {
   },
 }
 
+/**
+ * Where a Git call goes when it must stay on one Host for a whole operation
+ * instead of following the selected one (a changeset check's checkout, which
+ * it acquires, resets and archives on the Host it started on).
+ */
+export interface GitCallTarget {
+  call<T>(command: string, args: Record<string, unknown>): Promise<T>
+}
+
+function gitCall<T>(command: string, args: Record<string, unknown>, via?: GitCallTarget) {
+  return via
+    ? via.call<T>(command, prepareGitTransportArgs(command, args))
+    : transport.call<T>(command, args)
+}
+
 export function getGitOperationAvailability(
   command: string
 ): ReturnType<typeof resolveOperationAvailability> {
@@ -298,17 +313,22 @@ export async function gitDiffRefsFile(
   repoPath: string,
   base: string,
   target: string,
-  path: string
+  path: string,
+  via?: GitCallTarget
 ): Promise<GitDiff> {
   if (!hasGitBridge()) {
     return { path, oldContent: "", newContent: "", hunks: [], isBinary: false, language: null }
   }
-  const diff = await transport.call<GitDiff>("git_diff_refs_file", {
-    repoPath,
-    base,
-    target,
-    path,
-  })
+  const diff = await gitCall<GitDiff>(
+    "git_diff_refs_file",
+    {
+      repoPath,
+      base,
+      target,
+      path,
+    },
+    via
+  )
   return { ...diff, language: languageFromPath(diff.path) }
 }
 
@@ -422,9 +442,13 @@ export async function gitDiscard(
   await transport.call("git_discard", { repoPath, paths, hunkPatch: hunkPatch ?? null })
 }
 
-export async function gitDiscardAll(repoPath: string, includeUntracked: boolean): Promise<void> {
+export async function gitDiscardAll(
+  repoPath: string,
+  includeUntracked: boolean,
+  via?: GitCallTarget
+): Promise<void> {
   if (!hasGitBridge()) return
-  await transport.call("git_discard_all", { repoPath, includeUntracked })
+  await gitCall("git_discard_all", { repoPath, includeUntracked }, via)
 }
 
 export async function gitCommit(
@@ -706,10 +730,11 @@ export async function gitPushTag(repoPath: string, name: string, remote = "origi
 export async function gitReset(
   repoPath: string,
   mode: GitResetMode,
-  target: string
+  target: string,
+  via?: GitCallTarget
 ): Promise<void> {
   if (!hasGitBridge()) return
-  await transport.call("git_reset", { repoPath, mode, target })
+  await gitCall("git_reset", { repoPath, mode, target }, via)
 }
 
 export async function gitRestore(
@@ -832,10 +857,11 @@ export async function gitCloneGuarded(
 export async function gitReadBlobAtRef(
   repoPath: string,
   gitRef: string,
-  path: string
+  path: string,
+  via?: GitCallTarget
 ): Promise<string | null> {
   if (!hasGitBridge()) return null
-  return transport.call<string | null>("git_read_blob_at_ref", { repoPath, gitRef, path })
+  return gitCall<string | null>("git_read_blob_at_ref", { repoPath, gitRef, path }, via)
 }
 
 export async function gitClone(remoteUrl: string, destination: string): Promise<string> {

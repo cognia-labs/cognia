@@ -41,6 +41,11 @@ import {
   toolResultDecision,
   type ApproveToolAttribution,
 } from "./ipc"
+import {
+  captureExecutionRoute,
+  settleSessionExecutionRoute,
+  type ExecutionRoute,
+} from "./execution-route"
 import type {
   ApprovalDecision,
   ClaudeEvent,
@@ -114,6 +119,8 @@ export async function subscribeCaptureFromEnvelopes(
     turnId?: string
     onCanonicalEvent?: (event: CanonicalAgentEvent) => void
     onTerminal?: () => void
+    /** The Host the turn is pinned to; envelopes from any other are not this turn's. */
+    route?: ExecutionRoute
   }
 ): Promise<(() => void) | null> {
   const [
@@ -145,7 +152,7 @@ export async function subscribeCaptureFromEnvelopes(
     }
     if (envelope.event.kind === "lifecycle" && envelope.event.phase === "ended")
       options?.onTerminal?.()
-  })
+  }, options?.route)
 }
 
 export interface RunAndCaptureResult {
@@ -975,6 +982,16 @@ async function captureAssistantReplyCore(
     let sendRejected = false
     let disposedDuringSend = false
     let observedExecutorId: string | undefined
+    // The Host this turn runs on, pinned when its listener subscribes, so
+    // its interrupt, close and lifecycle events stay there (postfix P05).
+    const route: ExecutionRoute = captureExecutionRoute()
+    let routeReleased = false
+    const releaseRoute = () => {
+      if (routeReleased) return
+      routeReleased = true
+      settleSessionExecutionRoute(sessionId, route)
+      route.release()
+    }
     let executorStopped = false
     let resolveExecutorStop: (() => void) | undefined
     const executorStop = cap?.onExecutorStarted
@@ -1182,7 +1199,7 @@ async function captureAssistantReplyCore(
       // stuck state that cascades into every subsequent turn (the renderer
       // reuses the same sessionId, the sidecar queues new messages behind
       // the still-running turn, and every future send times out too).
-      void interruptSession(sessionId).catch(() => undefined)
+      void interruptSession(sessionId, { route }).catch(() => undefined)
       finishErr(
         new RunAndCaptureError(
           `session ${sessionId} did not end within ${timeoutMs}ms`,
@@ -1448,7 +1465,7 @@ async function captureAssistantReplyCore(
       if (idleTimeoutMs <= 0 || settled) return
       if (idleHandle != null) clearTimeout(idleHandle)
       idleHandle = setTimeout(() => {
-        void interruptSession(sessionId).catch(() => undefined)
+        void interruptSession(sessionId, { route }).catch(() => undefined)
         finishErr(
           new RunAndCaptureError(
             `session ${sessionId} stream idle for ${idleTimeoutMs}ms`,
@@ -1485,7 +1502,7 @@ async function captureAssistantReplyCore(
     //     short-circuits before we even subscribe.
     const abortHandler = () => {
       // Best-effort interrupt — the sidecar may already be done.
-      void interruptSession(sessionId).catch(() => undefined)
+      void interruptSession(sessionId, { route }).catch(() => undefined)
       // Before the prompt is sent there is no sidecar tail to drain. Once it is
       // in flight, keep the event subscription alive until `session_ended` so
       // the result usage emitted during interrupt is not lost. Bound the drain:
@@ -1515,6 +1532,7 @@ async function captureAssistantReplyCore(
 
     if (signal?.aborted) {
       // Don't subscribe at all if already aborted.
+      releaseRoute()
       reject(new RunAndCaptureError("aborted before start", "aborted"))
       return
     }
@@ -2159,8 +2177,17 @@ async function captureAssistantReplyCore(
       }
     }
 
-    onClaudeMessage(onEvent)
-      .then(async (un) => {
+    onClaudeMessage(onEvent, route)
+      .then(async (raw) => {
+        // The raw listener is the turn's last user of its Host: the route goes
+        // with it, including when it outlives the capture for a stop proof.
+        const un = () => {
+          try {
+            raw()
+          } finally {
+            releaseRoute()
+          }
+        }
         if (settled) {
           // Aborted (or timed out) before we got the unlistener back —
           // detach immediately so we don't leak.
@@ -2180,6 +2207,7 @@ async function captureAssistantReplyCore(
             },
             {
               turnId,
+              route,
               onTerminal: () => {
                 canonicalTerminalSeen = true
                 const terminal = pendingTerminal
@@ -2237,6 +2265,7 @@ async function captureAssistantReplyCore(
             ...(cap?.transcriptRuntime ? { transcriptRuntime: cap.transcriptRuntime } : {}),
             ...(cap?.beforeSend ? { beforeSend: cap.beforeSend } : {}),
             ...(cap?.currentMessageId ? { messageId: cap.currentMessageId } : {}),
+            route,
           }
         )
           .then(() => {
@@ -2263,6 +2292,7 @@ async function captureAssistantReplyCore(
       })
       .catch((err: unknown) => {
         // A transport can also throw synchronously after the dispatch boundary.
+        if (!unlisten) releaseRoute()
         sendRejected = true
         if (!sendDispatched) {
           promptSent = false
