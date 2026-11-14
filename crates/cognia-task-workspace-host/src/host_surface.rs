@@ -478,12 +478,17 @@ pub fn begin_hosted_bundle_turn(
 pub fn begin_hosted_workspace_bundle_turn(
     bundle_id: String,
     request: BeginWorkspaceBundleTurn,
+    executor_stop_required: Option<bool>,
     sink: Arc<dyn TaskWorkspaceEventSink>,
 ) -> Result<WorkspaceBundleTurnLease, String> {
     let service = service()?;
-    begin_workspace_bundle_turn_and_watch(&service, &bundle_id, request, move |service, run| {
-        service.watch_run(&run.run_id, Arc::clone(&sink))
-    })
+    begin_workspace_bundle_turn_and_watch(
+        &service,
+        &bundle_id,
+        request,
+        executor_stop_required.unwrap_or(false),
+        move |service, run| service.watch_run(&run.run_id, Arc::clone(&sink)),
+    )
 }
 
 #[cfg_attr(feature = "tauri-host", tauri::command)]
@@ -538,12 +543,19 @@ pub async fn task_workspace_bundle_begin(
 pub async fn task_workspace_bundle_turn_begin(
     bundle_id: String,
     request: BeginWorkspaceBundleTurn,
+    executor_stop_required: Option<bool>,
     app: tauri::AppHandle,
 ) -> Result<WorkspaceBundleTurnLease, String> {
     blocking(move |service| {
-        begin_workspace_bundle_turn_and_watch(service, &bundle_id, request, move |service, run| {
-            service.watch_run(&run.run_id, Arc::new(TauriResourceEventSink(app.clone())))
-        })
+        begin_workspace_bundle_turn_and_watch(
+            service,
+            &bundle_id,
+            request,
+            executor_stop_required.unwrap_or(false),
+            move |service, run| {
+                service.watch_run(&run.run_id, Arc::new(TauriResourceEventSink(app.clone())))
+            },
+        )
     })
     .await
 }
@@ -552,10 +564,13 @@ pub async fn task_workspace_bundle_turn_begin(
 pub async fn task_workspace_bundle_turn_settle(
     bundle_turn_id: String,
     final_state: Option<RunState>,
+    executor_stop_unproven: Option<bool>,
 ) -> Result<WorkspaceBundleTurnOutcome, String> {
     blocking(move |service| {
         service
-            .settle_workspace_bundle_turn(&bundle_turn_id, final_state.unwrap_or(RunState::Ready))
+            .settle_workspace_bundle_turn_with_stop_status(
+                &bundle_turn_id, final_state.unwrap_or(RunState::Ready), executor_stop_unproven,
+            )
     })
     .await
 }
@@ -2196,17 +2211,27 @@ fn begin_workspace_bundle_turn_and_watch<F>(
     service: &TaskWorkspaceService,
     bundle_id: &str,
     request: BeginWorkspaceBundleTurn,
+    executor_stop_required: bool,
     mut watch: F,
 ) -> Result<WorkspaceBundleTurnLease, String>
 where
     F: FnMut(&TaskWorkspaceService, &TaskRun) -> Result<(), String>,
 {
-    let turn = service.begin_workspace_bundle_turn(bundle_id, request)?;
+    let turn = service.begin_workspace_bundle_turn_with_stop_requirement(
+        bundle_id,
+        request,
+        executor_stop_required,
+    )?;
     for lease in &turn.runs {
         if matches!(lease.run.state, RunState::Running | RunState::Settling) {
             if let Err(error) = watch(service, &lease.run) {
-                let _ =
-                    service.settle_workspace_bundle_turn(&turn.bundle_turn_id, RunState::Failed);
+                // No executor can have received this turn before watch setup
+                // returns. Refuse launch without retaining a phantom writer.
+                let _ = service.settle_workspace_bundle_turn_with_stop_status(
+                    &turn.bundle_turn_id,
+                    RunState::Failed,
+                    Some(false),
+                );
                 return Err(error);
             }
         }
@@ -2498,6 +2523,91 @@ mod tests {
             .get_or_init(|| std::sync::Mutex::new(()))
             .lock()
             .unwrap()
+    }
+
+    #[test]
+    fn hosted_turn_stop_requirement_survives_legacy_settlement_and_late_acknowledgement() {
+        let _guard = test_guard();
+        let data = TempDir::new().unwrap();
+        let source = TempDir::new().unwrap();
+        std::fs::write(source.path().join("file.txt"), "before").unwrap();
+        let service =
+            Arc::new(TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap());
+        let bundle = service
+            .acquire_workspace_bundle(AcquireWorkspaceBundle {
+                owner_type: cognia_task_workspace::WorkspaceOwnerType::Session,
+                owner_ref: Some("session-test".into()),
+                project_id: None,
+                environment_kind: cognia_task_workspace::WorkspaceEnvironmentKind::Managed,
+                base: cognia_task_workspace::WorkspaceBaseSpec::WorkingState,
+                roots: vec![cognia_task_workspace::WorkspaceBundleRootInput {
+                    logical_root_id: "primary".into(),
+                    role: cognia_task_workspace::WorkspaceRootRole::Primary,
+                    source_root: source.path().to_string_lossy().into_owned(),
+                    provisioning: None,
+                }],
+                provisioning: None,
+                requested_name: None,
+                provisioning_source: None,
+            })
+            .unwrap();
+        let turn = begin_workspace_bundle_turn_and_watch(
+            &service,
+            &bundle.bundle_id,
+            BeginWorkspaceBundleTurn {
+                primary_logical_root_id: "primary".into(),
+                run: begin_input(&source, "stop-test"),
+            },
+            true,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        *slot().write() = Some(Arc::clone(&service));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let first = runtime
+            .block_on(task_workspace_bundle_turn_settle(
+                turn.bundle_turn_id.clone(),
+                Some(RunState::Cancelled),
+                None,
+            ))
+            .unwrap();
+        assert_eq!(
+            service
+                .get_patch_set(&first.runs[0].run_id)
+                .unwrap()
+                .unwrap()
+                .irreversible_reason,
+            Some(cognia_task_workspace::IrreversibleReason::StopUnproven)
+        );
+        let ack = runtime
+            .block_on(task_workspace_bundle_turn_settle(
+                turn.bundle_turn_id,
+                Some(RunState::Ready),
+                Some(false),
+            ))
+            .unwrap();
+        assert_eq!(ack, first);
+        let error = begin_workspace_bundle_turn_and_watch(
+            &service,
+            &bundle.bundle_id,
+            BeginWorkspaceBundleTurn {
+                primary_logical_root_id: "primary".into(),
+                run: begin_input(&source, "watch-failed"),
+            },
+            true,
+            |_, _| Err("watch setup failed".into()),
+        )
+        .unwrap_err();
+        assert_eq!(error, "watch setup failed");
+        // Failure before this turn is returned cannot leave a possible writer
+        // that prevents ordinary workspace archival forever.
+        service
+            .archive_managed_workspace(&bundle.leases[0].workspace_id)
+            .unwrap();
+        *slot().write() = None;
     }
 
     struct NoopSink;

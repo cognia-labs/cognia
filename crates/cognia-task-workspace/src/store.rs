@@ -83,6 +83,10 @@ impl WorkspaceStore {
                    FOREIGN KEY(task_id) REFERENCES task_workspaces(task_id) ON DELETE CASCADE
                  );
                  CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id);
+                 CREATE TABLE IF NOT EXISTS task_run_executor_stops (
+                   run_id TEXT PRIMARY KEY REFERENCES task_runs(run_id) ON DELETE CASCADE,
+                   confirmed INTEGER NOT NULL CHECK(confirmed IN (0,1))
+                 );
                  CREATE TABLE IF NOT EXISTS task_resources (
                    task_id TEXT NOT NULL,
                    run_id TEXT NOT NULL,
@@ -1044,6 +1048,11 @@ impl WorkspaceStore {
         {
             return Ok(false);
         }
+        for run in &runs {
+            if self.in_app_executor_stop_pending(&run.run_id)? {
+                return Ok(false);
+            }
+        }
         let mut statement = self
             .connection
             .prepare("SELECT payload FROM task_patch_sets WHERE task_id=?1")
@@ -1105,22 +1114,70 @@ impl WorkspaceStore {
     }
 
     /// Runs that are running or settling on a directory equal to, containing
-    /// or contained by `root`, leaving `except` out.
+    /// or contained by `root`, leaving `except` out. A settled in-app run
+    /// with an independently unproven stop may still write: it participates
+    /// in overlap/restore checks, but never prevents a new run from beginning.
     pub fn active_runs_intersecting(
         &self,
         root: &Path,
         except: Option<&str>,
     ) -> Result<Vec<TaskRun>, String> {
+        let root = crate::sandbox_snapshot::canonical_lock_root(root)?;
+        let mut pending_query = self
+            .connection
+            .prepare("SELECT run_id FROM task_run_executor_stops WHERE confirmed=0")
+            .map_err(|error| format!("list pending executor stops: {error}"))?;
+        let pending = pending_query
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<HashSet<_>, _>>()
+            .map_err(|error| error.to_string())?;
         let mut found = Vec::new();
         for task in self.list_tasks()? {
-            found.extend(self.list_runs(&task.task_id)?.into_iter().filter(|run| {
-                let execution_root = Path::new(&run.execution_root);
-                Some(run.run_id.as_str()) != except
-                    && matches!(run.state, RunState::Running | RunState::Settling)
-                    && (execution_root.starts_with(root) || root.starts_with(execution_root))
-            }));
+            for run in self.list_runs(&task.task_id)? {
+                if Some(run.run_id.as_str()) == except {
+                    continue;
+                }
+                let active = matches!(run.state, RunState::Running | RunState::Settling);
+                let pending_stop = pending.contains(&run.run_id);
+                if !active && !pending_stop {
+                    continue;
+                }
+                // Managed data directories may themselves be symlinked. Use
+                // the same physical identity as capture admission, including
+                // roots whose last components have not been created yet.
+                let execution_root =
+                    crate::sandbox_snapshot::canonical_lock_root(Path::new(&run.execution_root))?;
+                if execution_root.starts_with(&root) || root.starts_with(&execution_root) {
+                    found.push(run);
+                }
+            }
         }
         Ok(found)
+    }
+
+    /// One small lifecycle observation per run, beside the existing run row.
+    /// Confirmation is monotone: a delayed timeout retry cannot re-arm it.
+    pub(crate) fn record_in_app_executor_stop(
+        &self,
+        run_id: &str,
+        unproven: bool,
+    ) -> Result<(), String> {
+        self.connection
+            .execute(
+                "INSERT INTO task_run_executor_stops(run_id,confirmed) VALUES(?1,?2)
+             ON CONFLICT(run_id) DO UPDATE SET confirmed=MAX(confirmed,excluded.confirmed)",
+                params![run_id, i64::from(!unproven)],
+            )
+            .map_err(|error| format!("record executor stop: {error}"))?;
+        Ok(())
+    }
+
+    pub(crate) fn in_app_executor_stop_pending(&self, run_id: &str) -> Result<bool, String> {
+        self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_run_executor_stops WHERE run_id=?1 AND confirmed=0)",
+            [run_id], |row| row.get(0),
+        ).map_err(|error| format!("read executor stop: {error}"))
     }
 
     /// Mark every run `active_runs_intersecting` finds as overlapped
@@ -3140,6 +3197,85 @@ mod tests {
             second.get_integration(&original.integration_id).unwrap(),
             Some(prepared)
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn active_root_queries_resolve_aliases_and_missing_descendants() {
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("real");
+        let alias = dir.path().join("alias");
+        fs::create_dir_all(real.join("child")).unwrap();
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let store = WorkspaceStore::open(&dir.path().join("data"), 1024 * 1024).unwrap();
+        store
+            .put_task(&TaskWorkspace {
+                task_id: "task".into(),
+                session_id: "session".into(),
+                workspace_root: real.to_string_lossy().into_owned(),
+                state: TaskWorkspaceState::Active,
+                revision: 0,
+                created_at: 1,
+                expires_at: 2,
+                pinned: false,
+            })
+            .unwrap();
+        let mut run = TaskRun {
+            run_id: "run".into(),
+            task_id: "task".into(),
+            parent_run_id: None,
+            agent_id: "agent".into(),
+            agent_kind: "test".into(),
+            execution_root: alias.join("child").to_string_lossy().into_owned(),
+            isolation_kind: IsolationKind::Observed,
+            isolation_ref: None,
+            workspace_id: None,
+            base: crate::WorkspaceBaseSpec::WorkingState,
+            workspace_key: None,
+            execution_run_id: None,
+            trace_id: None,
+            turn_id: None,
+            attempt_id: None,
+            provider_attempt_id: None,
+            surface: None,
+            tracking_policy: ResourceTrackingPolicy::default(),
+            baseline_revision: 0,
+            state: RunState::Running,
+            executor_stop_unconfirmed: false,
+            overlapped: false,
+            created_at: 1,
+            settled_at: None,
+        };
+        store.put_run(&run, &serde_json::json!({})).unwrap();
+        for root in [&real, &real.join("child"), &real.join("child/missing")] {
+            assert_eq!(store.active_runs_intersecting(root, None).unwrap().len(), 1);
+        }
+        assert!(store
+            .active_runs_intersecting(&real, Some("run"))
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .active_runs_intersecting(&dir.path().join("other"), None)
+            .unwrap()
+            .is_empty());
+        assert_eq!(store.mark_overlapping_runs(&real, None).unwrap(), 1);
+        assert!(store.list_runs("task").unwrap()[0].overlapped);
+        run.state = RunState::Ready;
+        store.put_run(&run, &serde_json::json!({})).unwrap();
+        assert!(store
+            .active_runs_intersecting(&real, None)
+            .unwrap()
+            .is_empty());
+        store.record_in_app_executor_stop("run", true).unwrap();
+        assert!(!store.task_is_prunable("task").unwrap());
+        assert_eq!(
+            store.active_runs_intersecting(&real, None).unwrap().len(),
+            1
+        );
+        store.record_in_app_executor_stop("run", false).unwrap();
+        store.record_in_app_executor_stop("run", true).unwrap();
+        assert!(!store.in_app_executor_stop_pending("run").unwrap());
+        assert!(store.task_is_prunable("task").unwrap());
     }
 
     #[test]

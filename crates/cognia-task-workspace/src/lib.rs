@@ -23,6 +23,7 @@ mod ports;
 mod remote_source;
 mod resource;
 mod resource_index;
+mod restore;
 mod revision_patch;
 mod sensitive;
 mod service;

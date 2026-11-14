@@ -20767,6 +20767,10 @@
           "type": "object",
           "additionalProperties": true,
           "example": {}
+        },
+        "executorStopRequired": {
+          "type": "boolean",
+          "description": "The in-app caller requires positive executor-stop evidence before this turn can be reversible."
         }
       },
       "additionalProperties": false
@@ -20793,6 +20797,10 @@
         "bundleTurnId": {
           "type": "string",
           "example": ""
+        },
+        "executorStopUnproven": {
+          "type": "boolean",
+          "description": "True settles a readable but irreversible in-app turn and tracks its possible writer without rejecting later runs; false records an independent positive stop observation. Omitted preserves existing behavior."
         },
         "finalState": {
           "type": "string",

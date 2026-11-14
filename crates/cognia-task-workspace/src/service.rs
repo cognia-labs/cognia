@@ -1248,6 +1248,15 @@ impl TaskWorkspaceService {
         bundle_id: &str,
         request: crate::BeginWorkspaceBundleTurn,
     ) -> Result<crate::WorkspaceBundleTurnLease, String> {
+        self.begin_workspace_bundle_turn_with_stop_requirement(bundle_id, request, false)
+    }
+
+    pub fn begin_workspace_bundle_turn_with_stop_requirement(
+        &self,
+        bundle_id: &str,
+        request: crate::BeginWorkspaceBundleTurn,
+        executor_stop_required: bool,
+    ) -> Result<crate::WorkspaceBundleTurnLease, String> {
         validate_id("taskId", &request.run.task_id)?;
         validate_id("runId", &request.run.run_id)?;
         let bundle = self
@@ -1408,7 +1417,16 @@ impl TaskWorkspaceService {
             created_at: now,
             settled_at: None,
         };
-        if let Err(error) = self.store.lock().put_workspace_bundle_turn(&turn) {
+        let published = (|| {
+            let store = self.store.lock();
+            if executor_stop_required {
+                for lease in &turn.runs {
+                    store.record_in_app_executor_stop(&lease.run.run_id, true)?;
+                }
+            }
+            store.put_workspace_bundle_turn(&turn)
+        })();
+        if let Err(error) = published {
             for opened in &turn.runs {
                 let _ = self.settle_failed_run(&opened.run.run_id);
             }
@@ -1429,6 +1447,15 @@ impl TaskWorkspaceService {
         bundle_turn_id: &str,
         final_state: RunState,
     ) -> Result<crate::WorkspaceBundleTurnOutcome, String> {
+        self.settle_workspace_bundle_turn_with_stop_status(bundle_turn_id, final_state, None)
+    }
+
+    pub fn settle_workspace_bundle_turn_with_stop_status(
+        &self,
+        bundle_turn_id: &str,
+        final_state: RunState,
+        executor_stop_unproven: Option<bool>,
+    ) -> Result<crate::WorkspaceBundleTurnOutcome, String> {
         if !matches!(
             final_state,
             RunState::Ready | RunState::Failed | RunState::Cancelled
@@ -1442,6 +1469,52 @@ impl TaskWorkspaceService {
             .lock()
             .get_workspace_bundle_turn(bundle_turn_id)?
             .ok_or_else(|| format!("workspace bundle turn not found: {bundle_turn_id}"))?;
+        if let Some(unproven) = executor_stop_unproven {
+            // Serialize only publication of the stop observation with begin.
+            // It taints overlapping captures; it does not reserve the root.
+            let _admission = self.lock_run_capture_admission()?;
+            let store = self.store.lock();
+            for lease in &turn.runs {
+                let (run, _baseline) = store
+                    .get_run::<WorkspaceSnapshot>(&lease.run.run_id)?
+                    .ok_or_else(|| format!("unknown task run: {}", lease.run.run_id))?;
+                store.record_in_app_executor_stop(&run.run_id, unproven)?;
+                if store.in_app_executor_stop_pending(&run.run_id)? {
+                    if let Some(mut patch) = store.get_patch_set(&run.run_id)? {
+                        patch.mark_irreversible(crate::IrreversibleReason::StopUnproven);
+                        store.put_patch_set(&patch)?;
+                    }
+                    store
+                        .mark_overlapping_runs(Path::new(&run.execution_root), Some(&run.run_id))?;
+                }
+            }
+        }
+        // A late positive observation clears only the potential writer. The
+        // historical patch/reason and the first terminal outcome never change.
+        if let Some(settled_at) = turn.settled_at {
+            let store = self.store.lock();
+            let mut resources = Vec::new();
+            let mut runs = Vec::new();
+            for lease in &turn.runs {
+                let run_resources = store.list_run_resources(&lease.run.run_id)?;
+                resources.extend(run_resources.iter().cloned());
+                runs.push(crate::WorkspaceBundleTurnRunOutcome {
+                    workspace_id: lease.workspace_id.clone(),
+                    logical_root_ids: lease.logical_root_ids.clone(),
+                    run_id: lease.run.run_id.clone(),
+                    state: lease.run.state,
+                    resources: run_resources,
+                });
+            }
+            return Ok(crate::WorkspaceBundleTurnOutcome {
+                bundle_turn_id: turn.bundle_turn_id,
+                bundle_id: turn.bundle_id,
+                state: turn.state,
+                runs,
+                resources,
+                settled_at,
+            });
+        }
         let mut outcomes = Vec::with_capacity(turn.runs.len());
         let mut all_resources = Vec::new();
         for lease in &mut turn.runs {
@@ -4137,6 +4210,16 @@ impl TaskWorkspaceService {
             &self.store.lock().connection, Path::new(&record.execution_root),
             record.snapshot_task_id.as_deref().unwrap_or(workspace_id),
         )?;
+        {
+            let store = self.store.lock();
+            for run in store.active_runs_intersecting(Path::new(&record.execution_root), None)? {
+                if store.in_app_executor_stop_pending(&run.run_id)? {
+                    return Err(
+                        "cannot archive a workspace while an executor stop is unproven".into(),
+                    );
+                }
+            }
+        }
         if _scratch_lock.is_some() {
             record = self
                 .registry
@@ -4720,6 +4803,33 @@ impl TaskWorkspaceService {
         if run.overlapped {
             // Its diff may hold another run's writes; Undo would remove them.
             patch.mark_irreversible(crate::IrreversibleReason::Overlap);
+        }
+        if store.in_app_executor_stop_pending(&run.run_id)? {
+            patch.mark_irreversible(crate::IrreversibleReason::StopUnproven);
+        }
+        if baseline.unsupported_fidelity != current.unsupported_fidelity
+            || baseline
+                .unsupported_fidelity
+                .iter()
+                .chain(current.unsupported_fidelity.iter())
+                .any(|(path, representation)| {
+                    representation.ends_with(":dirty")
+                        || source_changes.iter().any(|change| {
+                            change.path == *path || change.old_path.as_ref() == Some(path)
+                        })
+                })
+        {
+            patch.mark_irreversible(crate::IrreversibleReason::FidelityUnknown);
+        }
+        #[cfg(not(windows))]
+        if source_changes.iter().any(|change| {
+            change.path.contains('\\')
+                || change
+                    .old_path
+                    .as_deref()
+                    .is_some_and(|path| path.contains('\\'))
+        }) {
+            patch.mark_irreversible(crate::IrreversibleReason::PathUnsupported);
         }
         store.put_patch_set(&patch)?;
         let provenance = if run.isolation_kind == IsolationKind::Observed {
@@ -5417,6 +5527,11 @@ impl TaskWorkspaceService {
     /// root. This recreates historical chat state from content-addressed blobs
     /// and refuses to race a currently running turn on the same task.
     pub fn restore_run_snapshot(&self, run_id: &str) -> Result<TaskRun, String> {
+        // A restore replaces everything in the directory, so it is the one
+        // operation that needs the directory to itself (ADR-0255). Begin holds
+        // this same lock, so no run can start there between the check below
+        // and the end of the replacement.
+        let _admission = self.lock_run_capture_admission()?;
         let (run, snapshot, blobs) = {
             let mut store = self.store.lock();
             let (run, mut snapshot) = store
@@ -5431,9 +5546,28 @@ impl TaskWorkspaceService {
             }) {
                 return Err("cannot restore a snapshot while a task run is active".to_string());
             }
+            let active = store.active_runs_intersecting(Path::new(&run.execution_root), None)?;
+            if let Some(active) = active.first() {
+                return Err(format!(
+                    "cannot restore a snapshot while a run is active in its directory: {}",
+                    active.run_id
+                ));
+            }
             let patch = store
                 .get_patch_set(run_id)?
                 .ok_or_else(|| format!("unknown patch set for run: {run_id}"))?;
+            if !patch.reversible {
+                return Err(format!(
+                    "cannot restore snapshot: {}",
+                    crate::IrreversibleReason::undo_refusal(patch.irreversible_reason)
+                ));
+            }
+            if !snapshot.unsupported_fidelity.is_empty() {
+                return Err(
+                    "cannot restore snapshot: unsupported Git representation has unknown fidelity"
+                        .into(),
+                );
+            }
             for file in patch.files {
                 if let Some(old_path) = file.old_path.as_deref() {
                     snapshot.entries.remove(old_path);
@@ -5481,8 +5615,7 @@ impl TaskWorkspaceService {
                 execution_root.display()
             ));
         }
-        clear_worktree_contents(&execution_root)?;
-        materialize(&execution_root, &snapshot, &blobs)?;
+        crate::restore::replace_worktree_contents(&execution_root, &snapshot, &blobs)?;
         Ok(run)
     }
 
@@ -6795,8 +6928,11 @@ fn create_execution(
                 || match crate::snapshot::apply_git_overlay(execution_root, baseline, blobs, policy)
                 {
                     Ok(true) => Ok(()),
-                    Ok(false) => clear_worktree_contents(execution_root)
-                        .and_then(|_| materialize(execution_root, baseline, blobs)),
+                    Ok(false) => crate::restore::replace_worktree_contents(
+                        execution_root,
+                        baseline,
+                        blobs,
+                    ),
                     Err(error) => Err(error),
                 },
                 |_| FailureClass::Other,
@@ -7131,29 +7267,6 @@ fn is_git_root(workspace_root: &Path) -> bool {
 /// unborn HEAD cannot back `git worktree add --detach <path> HEAD`.
 fn repository_is_worktree_capable(repository: &git2::Repository) -> bool {
     repository.head().is_ok()
-}
-
-fn clear_worktree_contents(execution_root: &Path) -> Result<(), String> {
-    for entry in fs::read_dir(execution_root)
-        .map_err(|error| format!("read worktree {}: {error}", execution_root.display()))?
-    {
-        let entry = entry.map_err(|error| format!("read worktree entry: {error}"))?;
-        if entry.file_name() == ".git" {
-            continue;
-        }
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("stat {}: {error}", path.display()))?;
-        if file_type.is_dir() && !file_type.is_symlink() {
-            fs::remove_dir_all(&path)
-                .map_err(|error| format!("remove {}: {error}", path.display()))?;
-        } else {
-            fs::remove_file(&path)
-                .map_err(|error| format!("remove {}: {error}", path.display()))?;
-        }
-    }
-    Ok(())
 }
 
 fn cleanup_git_worktree(workspace_root: &Path, execution_root: &Path, branch: &str) {
@@ -14146,6 +14259,718 @@ mod tests {
     }
 
     #[test]
+    fn a_snapshot_restore_is_refused_while_a_run_is_active_in_its_directory() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("base.txt"), "base").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut first_input = input(&workspace, "task-restore", "run-1");
+        first_input.workspace_key = Some("chat-1".into());
+        let first = service.begin_run(first_input).unwrap();
+        let execution_root = PathBuf::from(&first.execution_root);
+        fs::write(execution_root.join("first.txt"), "one").unwrap();
+        service.settle_run("run-1").unwrap();
+        fs::write(execution_root.join("later.txt"), "written after the snapshot").unwrap();
+
+        // Another run works in that managed directory in place.
+        let mut inside = input(&workspace, "task-inside", "run-inside");
+        inside.session_id = "session-inside".into();
+        inside.workspace_root = first.execution_root.clone();
+        inside.observe_in_place = true;
+        service.begin_run(inside).unwrap();
+        let error = service.restore_run_snapshot("run-1").unwrap_err();
+        assert!(
+            error.contains("while a run is active in its directory: run-inside"),
+            "{error}"
+        );
+        assert!(execution_root.join("later.txt").exists());
+
+        service.settle_run("run-inside").unwrap();
+        service.restore_run_snapshot("run-1").unwrap();
+        assert!(execution_root.join("first.txt").exists());
+        assert!(!execution_root.join("later.txt").exists());
+        assert_eq!(fs::read_to_string(execution_root.join("base.txt")).unwrap(), "base");
+    }
+
+    #[test]
+    fn full_restore_refuses_an_unrepresented_clean_submodule_without_removing_it() {
+        let data = TempDir::new().unwrap();
+        let source = TempDir::new().unwrap();
+        let submodule = TempDir::new().unwrap();
+        git2::Repository::init(source.path()).unwrap();
+        seed_git_repository(source.path());
+        git2::Repository::init(submodule.path()).unwrap();
+        seed_git_repository(submodule.path());
+        let oid = git_lines(submodule.path(), &["rev-parse", "HEAD"])[0].clone();
+        git_lines(
+            source.path(),
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{oid},sub"),
+            ],
+        );
+        git_lines(source.path(), &["commit", "-m", "gitlink"]);
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let head = git_lines(source.path(), &["rev-parse", "HEAD"])[0].clone();
+        let bundle = service
+            .acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+                owner_type: WorkspaceOwnerType::Session,
+                owner_ref: Some("session-1".into()),
+                project_id: None,
+                environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+                base: WorkspaceBaseSpec::GitRef { git_ref: head },
+                roots: vec![crate::WorkspaceBundleRootInput {
+                    logical_root_id: "primary".into(),
+                    role: crate::WorkspaceRootRole::Primary,
+                    source_root: source.path().to_string_lossy().into_owned(),
+                    provisioning: None,
+                }],
+                provisioning: None,
+                requested_name: None,
+                provisioning_source: None,
+            })
+            .unwrap();
+        let root = Path::new(&bundle.leases[0].alias_path);
+        git_lines(root, &["clone", submodule.path().to_str().unwrap(), "sub"]);
+        let turn = service
+            .begin_workspace_bundle_turn(
+                &bundle.bundle_id,
+                crate::BeginWorkspaceBundleTurn {
+                    primary_logical_root_id: "primary".into(),
+                    run: input(&source, "task", "run"),
+                },
+            )
+            .unwrap();
+        let run_id = &turn.runs[0].run.run_id;
+        fs::write(root.join("README.md"), "ordinary edit").unwrap();
+        service.settle_run(run_id).unwrap();
+        // Ordinary inverse patches need not touch the clean submodule.
+        assert!(service.get_patch_set(run_id).unwrap().unwrap().reversible);
+        let bytes = fs::read(root.join("sub/README.md")).unwrap();
+        assert!(service
+            .restore_run_snapshot(run_id)
+            .unwrap_err()
+            .contains("unknown fidelity"));
+        assert_eq!(fs::read(root.join("sub/README.md")).unwrap(), bytes);
+        assert_eq!(
+            fs::read_to_string(root.join("README.md")).unwrap(),
+            "ordinary edit"
+        );
+    }
+
+    #[test]
+    fn unsupported_git_fidelity_never_enables_undo() {
+        for profile in [
+            "created-lfs",
+            "created-gitlink",
+            "lfs",
+            "submodule",
+            "sparse",
+        ] {
+            let data = TempDir::new().unwrap();
+            let workspace = TempDir::new().unwrap();
+            git2::Repository::init(workspace.path()).unwrap();
+            seed_git_repository(workspace.path());
+            git_lines(workspace.path(), &["config", "core.hooksPath", "/dev/null"]);
+            match profile {
+                "lfs" | "created-lfs" => {
+                    fs::write(workspace.path().join(".gitattributes"), "*.md filter=lfs\n")
+                        .unwrap();
+                    git_lines(workspace.path(), &["add", ".gitattributes"]);
+                    git_lines(workspace.path(), &["commit", "-m", "lfs attribute"]);
+                }
+                "submodule" => {
+                    let oid = git_lines(workspace.path(), &["rev-parse", "HEAD"])[0].clone();
+                    git_lines(
+                        workspace.path(),
+                        &[
+                            "update-index",
+                            "--add",
+                            "--cacheinfo",
+                            &format!("160000,{oid},sub"),
+                        ],
+                    );
+                    git_lines(workspace.path(), &["commit", "-m", "gitlink"]);
+                    fs::create_dir(workspace.path().join("sub")).unwrap();
+                    git2::Repository::init(workspace.path().join("sub")).unwrap();
+                    seed_git_repository(&workspace.path().join("sub"));
+                }
+                "created-gitlink" => {}
+                _ => {
+                    fs::create_dir(workspace.path().join("omitted")).unwrap();
+                    fs::write(workspace.path().join("omitted/file.txt"), "before").unwrap();
+                    git_lines(workspace.path(), &["add", "."]);
+                    git_lines(workspace.path(), &["commit", "-m", "sparse entry"]);
+                    git_lines(workspace.path(), &["sparse-checkout", "set", "empty"]);
+                    assert!(!workspace.path().join("omitted/file.txt").exists());
+                }
+            }
+            let service =
+                TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+            let mut request = input(&workspace, "task", "run");
+            request.observe_in_place = true;
+            service.begin_run(request).unwrap();
+            match profile {
+                "created-lfs" => {
+                    fs::write(workspace.path().join("new.md"), "new LFS content").unwrap()
+                }
+                "created-gitlink" => {
+                    fs::create_dir(workspace.path().join("sub")).unwrap();
+                    git2::Repository::init(workspace.path().join("sub")).unwrap();
+                    seed_git_repository(&workspace.path().join("sub"));
+                    let oid =
+                        git_lines(&workspace.path().join("sub"), &["rev-parse", "HEAD"])[0].clone();
+                    git_lines(
+                        workspace.path(),
+                        &[
+                            "update-index",
+                            "--add",
+                            "--cacheinfo",
+                            &format!("160000,{oid},sub"),
+                        ],
+                    );
+                }
+                "submodule" => {
+                    fs::write(workspace.path().join("sub/README.md"), "changed").unwrap()
+                }
+                "sparse" => {
+                    fs::create_dir(workspace.path().join("omitted")).unwrap();
+                    fs::write(workspace.path().join("omitted/file.txt"), "changed").unwrap();
+                }
+                _ => fs::write(workspace.path().join("README.md"), "changed").unwrap(),
+            }
+            service.settle_run("run").unwrap();
+            let patch = service.get_patch_set("run").unwrap().unwrap();
+            assert!(!patch.reversible, "{profile}");
+            assert_eq!(
+                patch.irreversible_reason,
+                Some(crate::IrreversibleReason::FidelityUnknown),
+                "{profile}"
+            );
+            assert!(service.undo_patch_set("run").is_err());
+        }
+    }
+
+    #[test]
+    fn clean_git_conversions_round_trip_physical_bytes_through_undo() {
+        for conversion in ["crlf", "filter", "autocrlf", "input", "encoding"] {
+            let data = TempDir::new().unwrap();
+            let workspace = TempDir::new().unwrap();
+            git2::Repository::init(workspace.path()).unwrap();
+            seed_git_repository(workspace.path());
+            git_lines(workspace.path(), &["config", "core.hooksPath", "/dev/null"]);
+            git_lines(workspace.path(), &["config", "core.autocrlf", "false"]);
+            let (before, after) = match conversion {
+                "filter" => {
+                    fs::write(
+                        workspace.path().join(".gitattributes"),
+                        "notes.txt filter=fixture\n",
+                    )
+                    .unwrap();
+                    git_lines(
+                        workspace.path(),
+                        &["config", "filter.fixture.clean", "sed s/SMUDGED/CLEAN/g"],
+                    );
+                    git_lines(
+                        workspace.path(),
+                        &["config", "filter.fixture.smudge", "sed s/CLEAN/SMUDGED/g"],
+                    );
+                    (b"SMUDGED\nbase\n".to_vec(), b"SMUDGED\nchanged\n".to_vec())
+                }
+                "encoding" => {
+                    fs::write(
+                        workspace.path().join(".gitattributes"),
+                        "notes.txt working-tree-encoding=UTF-16\n",
+                    )
+                    .unwrap();
+                    let encode = |text: &str| -> Vec<u8> {
+                        [
+                            vec![0xff, 0xfe],
+                            text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+                        ]
+                        .concat()
+                    };
+                    (encode("base\n"), encode("changed\n"))
+                }
+                _ => {
+                    if conversion == "crlf" {
+                        fs::write(
+                            workspace.path().join(".gitattributes"),
+                            "notes.txt text eol=crlf\n",
+                        )
+                        .unwrap();
+                    } else {
+                        git_lines(
+                            workspace.path(),
+                            &[
+                                "config",
+                                "core.autocrlf",
+                                if conversion == "input" {
+                                    "input"
+                                } else {
+                                    "true"
+                                },
+                            ],
+                        );
+                    }
+                    (
+                        b"alpha\r\nbeta\r\n".to_vec(),
+                        b"alpha\r\nchanged\r\n".to_vec(),
+                    )
+                }
+            };
+            let path = workspace.path().join("notes.txt");
+            fs::write(&path, &before).unwrap();
+            git_lines(workspace.path(), &["add", "."]);
+            git_lines(
+                workspace.path(),
+                &[
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "-m",
+                    "conversion",
+                ],
+            );
+            // Refresh the index first: a dirty overlay already retains raw
+            // bytes and would hide the clean-tree regression.
+            git_lines(workspace.path(), &["status", "--porcelain"]);
+            assert!(git_lines(workspace.path(), &["status", "--porcelain"]).is_empty());
+            let repo = git2::Repository::open(workspace.path()).unwrap();
+            let head = repo
+                .head()
+                .unwrap()
+                .peel_to_tree()
+                .unwrap()
+                .get_path(Path::new("notes.txt"))
+                .unwrap()
+                .id();
+            assert_ne!(
+                git2::Oid::hash_object(git2::ObjectType::Blob, &before).unwrap(),
+                head
+            );
+            let service =
+                TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+            let mut request = input(&workspace, "task", "run");
+            request.observe_in_place = true;
+            service.begin_run(request).unwrap();
+            assert!(matches!(
+                service
+                    .store
+                    .lock()
+                    .get_run::<WorkspaceSnapshot>("run")
+                    .unwrap()
+                    .unwrap()
+                    .1
+                    .base,
+                crate::snapshot::SnapshotBase::GitCommit { .. }
+            ));
+            fs::write(&path, &after).unwrap();
+            // The after tree is clean too: status-only capture would lose its
+            // physical representation despite correctly capturing before.
+            git_lines(workspace.path(), &["add", "."]);
+            git_lines(
+                workspace.path(),
+                &[
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "-m",
+                    "clean after conversion",
+                ],
+            );
+            git_lines(workspace.path(), &["status", "--porcelain"]);
+            assert!(git_lines(workspace.path(), &["status", "--porcelain"]).is_empty());
+            service.settle_run("run").unwrap();
+            let patch = service.get_patch_set("run").unwrap().unwrap();
+            let file = patch
+                .files
+                .iter()
+                .find(|file| file.path == "notes.txt")
+                .unwrap();
+            assert_eq!(
+                service
+                    .store
+                    .lock()
+                    .get_blob(file.after_hash.as_ref().unwrap(), now_ms())
+                    .unwrap(),
+                after
+            );
+            service.undo_patch_set("run").unwrap();
+            assert_eq!(
+                service.get_patch_set("run").unwrap().unwrap().state,
+                crate::PatchState::Reverted
+            );
+            assert_eq!(fs::read(&path).unwrap(), before, "{conversion}");
+        }
+    }
+
+    #[test]
+    fn index_flags_cannot_hide_before_bytes_or_writes_after_begin() {
+        for flag in ["--assume-unchanged", "--skip-worktree"] {
+            for added_after_begin in [false, true] {
+                let data = TempDir::new().unwrap();
+                let workspace = TempDir::new().unwrap();
+                git2::Repository::init(workspace.path()).unwrap();
+                seed_git_repository(workspace.path());
+                let path = workspace.path().join("README.md");
+                if !added_after_begin {
+                    git_lines(workspace.path(), &["update-index", flag, "README.md"]);
+                    fs::write(&path, "hidden local before\n").unwrap();
+                }
+                let before = fs::read(&path).unwrap();
+                let service =
+                    TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+                let mut request = input(&workspace, "task", "run");
+                request.observe_in_place = true;
+                service.begin_run(request).unwrap();
+                if added_after_begin {
+                    git_lines(workspace.path(), &["update-index", flag, "README.md"]);
+                }
+                fs::write(&path, "agent after\n").unwrap();
+                service.settle_run("run").unwrap();
+                let patch = service.get_patch_set("run").unwrap().unwrap();
+                assert_eq!(patch.files.len(), 1, "{flag} after={added_after_begin}");
+                assert!(patch.reversible);
+                service.undo_patch_set("run").unwrap();
+                assert_eq!(fs::read(&path).unwrap(), before);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unsupported_backslash_paths_never_target_the_slash_alias() {
+        for change in ["modified", "deleted", "created", "included"] {
+            let data = TempDir::new().unwrap();
+            let workspace = TempDir::new().unwrap();
+            let directory = if change == "included" {
+                git2::Repository::init(workspace.path()).unwrap();
+                seed_git_repository(workspace.path());
+                fs::write(workspace.path().join(".gitignore"), "included/\n").unwrap();
+                fs::write(workspace.path().join(".worktreeinclude"), "included\n").unwrap();
+                workspace.path().join("included")
+            } else {
+                workspace.path().to_path_buf()
+            };
+            fs::create_dir_all(directory.join("a")).unwrap();
+            let literal = directory.join(r"a\b.txt");
+            let alias = directory.join("a/b.txt");
+            fs::write(&alias, "after").unwrap();
+            if change != "created" {
+                fs::write(&literal, "before").unwrap();
+            }
+            let service =
+                TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+            let mut request = input(&workspace, "task", "run");
+            request.observe_in_place = true;
+            service.begin_run(request).unwrap();
+            if change == "deleted" {
+                fs::remove_file(&literal).unwrap();
+            } else {
+                fs::write(&literal, "after").unwrap();
+            }
+            service.settle_run("run").unwrap();
+            let patch = service.get_patch_set("run").unwrap().unwrap();
+            assert!(!patch.reversible, "{change}: {patch:?}");
+            assert_eq!(
+                patch.irreversible_reason,
+                Some(crate::IrreversibleReason::PathUnsupported)
+            );
+            assert!(patch
+                .files
+                .iter()
+                .any(|file| file.path.ends_with(r"a\b.txt")));
+            assert!(service
+                .undo_patch_set("run")
+                .unwrap_err()
+                .contains("lossless key"));
+            assert_eq!(fs::read_to_string(&alias).unwrap(), "after");
+            if change == "deleted" {
+                assert!(!literal.exists());
+            } else {
+                assert_eq!(fs::read_to_string(&literal).unwrap(), "after");
+            }
+        }
+    }
+
+    #[test]
+    fn in_app_bundle_stop_status_is_idempotent_and_keeps_later_runs_safe() {
+        let data = TempDir::new().unwrap();
+        let source = TempDir::new().unwrap();
+        fs::write(source.path().join("file.txt"), "before").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let bundle = service
+            .acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+                requested_name: None,
+                provisioning: None,
+                project_id: None,
+                owner_type: WorkspaceOwnerType::Session,
+                owner_ref: Some("session-1".into()),
+                environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+                base: WorkspaceBaseSpec::WorkingState,
+                roots: vec![crate::WorkspaceBundleRootInput {
+                    logical_root_id: "primary".into(),
+                    role: crate::WorkspaceRootRole::Primary,
+                    source_root: source.path().to_string_lossy().into_owned(),
+                    provisioning: None,
+                }],
+                provisioning_source: None,
+            })
+            .unwrap();
+        let first = service
+            .begin_workspace_bundle_turn_with_stop_requirement(
+                &bundle.bundle_id,
+                crate::BeginWorkspaceBundleTurn {
+                    primary_logical_root_id: "primary".into(),
+                    run: input(&source, "task", "first"),
+                },
+                true,
+            )
+            .unwrap();
+        // A legacy edge can settle first; the later first stop observation
+        // must still revoke Undo on the existing source patch.
+        let settled = service
+            .settle_workspace_bundle_turn(&first.bundle_turn_id, RunState::Cancelled)
+            .unwrap();
+        assert!(
+            !service
+                .get_patch_set(&settled.runs[0].run_id)
+                .unwrap()
+                .unwrap()
+                .reversible
+        );
+        service
+            .settle_workspace_bundle_turn_with_stop_status(
+                &first.bundle_turn_id,
+                RunState::Cancelled,
+                Some(true),
+            )
+            .unwrap();
+        let first_run = &settled.runs[0].run_id;
+        assert_eq!(
+            service
+                .get_patch_set(first_run)
+                .unwrap()
+                .unwrap()
+                .irreversible_reason,
+            Some(crate::IrreversibleReason::StopUnproven)
+        );
+        assert!(service
+            .archive_managed_workspace(&bundle.leases[0].workspace_id)
+            .unwrap_err()
+            .contains("stop is unproven"));
+        let second = service
+            .begin_workspace_bundle_turn(
+                &bundle.bundle_id,
+                crate::BeginWorkspaceBundleTurn {
+                    primary_logical_root_id: "primary".into(),
+                    run: input(&source, "task", "second"),
+                },
+            )
+            .unwrap();
+        fs::write(
+            Path::new(&bundle.leases[0].alias_path).join("file.txt"),
+            "late old write",
+        )
+        .unwrap();
+        service
+            .settle_workspace_bundle_turn(&second.bundle_turn_id, RunState::Ready)
+            .unwrap();
+        assert!(
+            !service
+                .get_patch_set(&second.runs[0].run.run_id)
+                .unwrap()
+                .unwrap()
+                .reversible
+        );
+        let ack = service
+            .settle_workspace_bundle_turn_with_stop_status(
+                &first.bundle_turn_id,
+                RunState::Ready,
+                Some(false),
+            )
+            .unwrap();
+        assert_eq!(
+            ack, settled,
+            "late stop acknowledgement must not recapture or replace terminal state"
+        );
+        service
+            .settle_workspace_bundle_turn_with_stop_status(
+                &first.bundle_turn_id,
+                RunState::Failed,
+                Some(true),
+            )
+            .unwrap();
+        assert!(!service
+            .store
+            .lock()
+            .in_app_executor_stop_pending(first_run)
+            .unwrap());
+        let third = service
+            .begin_workspace_bundle_turn(
+                &bundle.bundle_id,
+                crate::BeginWorkspaceBundleTurn {
+                    primary_logical_root_id: "primary".into(),
+                    run: input(&source, "task", "third"),
+                },
+            )
+            .unwrap();
+        service
+            .settle_workspace_bundle_turn(&third.bundle_turn_id, RunState::Ready)
+            .unwrap();
+        assert!(
+            service
+                .get_patch_set(&third.runs[0].run.run_id)
+                .unwrap()
+                .unwrap()
+                .reversible
+        );
+        assert!(
+            !service
+                .get_patch_set(first_run)
+                .unwrap()
+                .unwrap()
+                .reversible
+        );
+    }
+
+    #[test]
+    fn in_app_unproven_stop_taints_following_runs_without_refusing_the_directory() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("file.txt"), "before").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut first = input(&workspace, "first", "first");
+        first.observe_in_place = true;
+        service.begin_run(first).unwrap();
+        {
+            let store = service.store.lock();
+            store.record_in_app_executor_stop("first", true).unwrap();
+        }
+        service.settle_cancelled_run("first").unwrap();
+        let patch = service.get_patch_set("first").unwrap().unwrap();
+        assert!(!patch.reversible);
+        assert_eq!(
+            patch.irreversible_reason,
+            Some(crate::IrreversibleReason::StopUnproven)
+        );
+        let mut next = input(&workspace, "next", "next");
+        next.observe_in_place = true;
+        service.begin_run(next).unwrap();
+        // This belongs to the old executor, after the next baseline was taken.
+        fs::write(workspace.path().join("file.txt"), "late old write").unwrap();
+        service.settle_run("next").unwrap();
+        assert!(!service.get_patch_set("next").unwrap().unwrap().reversible);
+        {
+            let store = service.store.lock();
+            store.record_in_app_executor_stop("first", false).unwrap();
+            store.record_in_app_executor_stop("first", true).unwrap();
+            assert!(!store.in_app_executor_stop_pending("first").unwrap());
+        }
+        let mut after = input(&workspace, "after", "after");
+        after.observe_in_place = true;
+        service.begin_run(after).unwrap();
+        service.settle_run("after").unwrap();
+        assert!(service.get_patch_set("after").unwrap().unwrap().reversible);
+        assert!(!service.get_patch_set("first").unwrap().unwrap().reversible);
+    }
+
+    #[test]
+    fn snapshot_restore_refuses_every_irreversible_source_without_touching_later_files() {
+        for reason in [
+            None,
+            Some(crate::IrreversibleReason::Capacity),
+            Some(crate::IrreversibleReason::Overlap),
+            Some(crate::IrreversibleReason::StopUnproven),
+            Some(crate::IrreversibleReason::PathUnsupported),
+            Some(crate::IrreversibleReason::FidelityUnknown),
+        ] {
+            let data = TempDir::new().unwrap();
+            let workspace = TempDir::new().unwrap();
+            fs::write(workspace.path().join("base.txt"), "base").unwrap();
+            let service =
+                TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+            let run = service
+                .begin_run(input(&workspace, "restore", "run"))
+                .unwrap();
+            let root = Path::new(&run.execution_root);
+            fs::write(root.join("result.txt"), "result").unwrap();
+            service.settle_run("run").unwrap();
+            let mut patch = service.get_patch_set("run").unwrap().unwrap();
+            patch.reversible = false;
+            patch.irreversible_reason = reason;
+            service.store.lock().put_patch_set(&patch).unwrap();
+            fs::write(root.join("later.txt"), "later user work").unwrap();
+
+            let error = service.restore_run_snapshot("run").unwrap_err();
+            assert!(
+                error.contains(crate::IrreversibleReason::undo_refusal(reason)),
+                "{error}"
+            );
+            assert_eq!(
+                fs::read_to_string(root.join("later.txt")).unwrap(),
+                "later user work"
+            );
+            assert_eq!(
+                fs::read_to_string(root.join("result.txt")).unwrap(),
+                "result"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aliased_execution_roots_allow_concurrency_and_mark_both_runs_read_only() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("base.txt"), "base").unwrap();
+        let real = data.path().join("real");
+        let alias = data.path().join("alias");
+        fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(alias)).unwrap();
+        let managed = service
+            .begin_run(input(&workspace, "managed", "managed"))
+            .unwrap();
+        let root = PathBuf::from(&managed.execution_root);
+        let mut observe = input(&workspace, "observer", "observer");
+        observe.workspace_root = root.canonicalize().unwrap().to_string_lossy().into_owned();
+        observe.observe_in_place = true;
+        let observer = service.begin_run(observe).unwrap();
+        assert!(observer.overlapped);
+        assert!(service.list_runs("managed").unwrap()[0].overlapped);
+        fs::write(root.join("result.txt"), "shared change").unwrap();
+        service.settle_run("managed").unwrap();
+        fs::write(root.join("active.txt"), "observer work").unwrap();
+        assert!(service
+            .restore_run_snapshot("managed")
+            .unwrap_err()
+            .contains("active"));
+        assert_eq!(
+            fs::read_to_string(root.join("active.txt")).unwrap(),
+            "observer work"
+        );
+        service.settle_run("observer").unwrap();
+        for run in ["managed", "observer"] {
+            let patch = service.get_patch_set(run).unwrap().unwrap();
+            assert!(!patch.reversible);
+            assert_eq!(
+                patch.irreversible_reason,
+                Some(crate::IrreversibleReason::Overlap)
+            );
+        }
+        assert!(service.restore_run_snapshot("managed").is_err());
+        assert!(root.join("active.txt").exists());
+    }
+
+    #[test]
     fn pipeline_workspace_rejects_concurrent_runs() {
         let data = TempDir::new().unwrap();
         let workspace = TempDir::new().unwrap();
@@ -16069,11 +16894,19 @@ mod tests {
             &crate::ResourceTrackingPolicy::default(),
         )
         .unwrap();
-        assert_eq!(
+        assert_ne!(
             snapshot.entries["notes.txt"].hash,
             snapshot.entries["overlay.txt"].hash
         );
-        assert!(!overlays.contains("notes.txt"));
+        assert_eq!(
+            blobs[&snapshot.entries["notes.txt"].hash],
+            b"same bytes\r\n"
+        );
+        assert_eq!(
+            blobs[&snapshot.entries["overlay.txt"].hash],
+            b"same bytes\n"
+        );
+        assert!(overlays.contains("notes.txt"));
         assert!(overlays.contains("overlay.txt"));
         ensure_git_archive_removal_safe(&record, &snapshot, &blobs, &overlays, false).unwrap();
         fs::write(root.join("overlay.txt"), b"same bytes\r\n").unwrap();

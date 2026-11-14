@@ -546,6 +546,7 @@ pub(super) async fn dispatch(
             let bundle_id: String = required(&args, "bundleId")?;
             let request: cognia_task_workspace::BeginWorkspaceBundleTurn =
                 required(&args, "request")?;
+            let executor_stop_required: Option<bool> = optional(&args, "executorStopRequired")?;
             let sink: std::sync::Arc<dyn cognia_task_workspace::TaskWorkspaceEventSink> =
                 std::sync::Arc::new(
                     cognia_task_workspace_host::host_surface::BusResourceEventSink(
@@ -554,7 +555,10 @@ pub(super) async fn dispatch(
                 );
             tokio::task::spawn_blocking(move || {
                 cognia_task_workspace_host::host_surface::begin_hosted_workspace_bundle_turn(
-                    bundle_id, request, sink,
+                    bundle_id,
+                    request,
+                    executor_stop_required,
+                    sink,
                 )
             })
             .await
@@ -566,10 +570,12 @@ pub(super) async fn dispatch(
             let bundle_turn_id: String = required(&args, "bundleTurnId")?;
             let final_state: Option<cognia_task_workspace::RunState> =
                 optional(&args, "finalState")?;
+            let executor_stop_unproven: Option<bool> = optional(&args, "executorStopUnproven")?;
             tokio::task::spawn_blocking(move || {
-                cognia_task_workspace_host::host_surface::service()?.settle_workspace_bundle_turn(
+                cognia_task_workspace_host::host_surface::service()?.settle_workspace_bundle_turn_with_stop_status(
                     &bundle_turn_id,
                     final_state.unwrap_or(cognia_task_workspace::RunState::Ready),
+                    executor_stop_unproven,
                 )
             })
             .await
@@ -1719,6 +1725,23 @@ pub(super) async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_executor_stop_observations_require_booleans() {
+        for name in ["executorStopRequired", "executorStopUnproven"] {
+            assert_eq!(
+                optional::<bool>(&serde_json::json!({}), name).unwrap(),
+                None
+            );
+            for value in [true, false] {
+                assert_eq!(
+                    optional::<bool>(&serde_json::json!({name: value}), name).unwrap(),
+                    Some(value)
+                );
+            }
+            assert!(optional::<bool>(&serde_json::json!({name: "false"}), name).is_err());
+        }
+    }
 
     fn headless_host_with_workspace_root(
         root: &std::path::Path,

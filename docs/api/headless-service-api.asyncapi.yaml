@@ -1,9 +1,9 @@
 asyncapi: 3.0.0
 info:
   title: Cognia Headless Service Event and Bridge API
-  version: "3"
+  version: "4"
   description: Generated WebSocket contract for the existing Headless event stream and Brain data-plane bridge.
-  x-cognia-catalog-hash: 44fb59b5daf651495d34f7b5b8a3c66ad5c004c7de0dc8ef404a3a1f782add90
+  x-cognia-catalog-hash: 0f66eea38df8a872ee77fe88c831250bdfe86e3bab6598575dc983ef8bee7199
 servers:
   loopback:
     host: 127.0.0.1:{port}
@@ -285,10 +285,10 @@ components:
               type: string
           catalogHash:
             type: string
-            const: 44fb59b5daf651495d34f7b5b8a3c66ad5c004c7de0dc8ef404a3a1f782add90
+            const: 0f66eea38df8a872ee77fe88c831250bdfe86e3bab6598575dc983ef8bee7199
           contractVersion:
             type: integer
-            const: 3
+            const: 4
         additionalProperties: false
     BridgeHelloAckFrame:
       name: BridgeHelloAckFrame
@@ -318,10 +318,10 @@ components:
             type: string
           catalogHash:
             type: string
-            const: 44fb59b5daf651495d34f7b5b8a3c66ad5c004c7de0dc8ef404a3a1f782add90
+            const: 0f66eea38df8a872ee77fe88c831250bdfe86e3bab6598575dc983ef8bee7199
           contractVersion:
             type: integer
-            const: 3
+            const: 4
         additionalProperties: false
     BridgeHelloRefusedFrame:
       name: BridgeHelloRefusedFrame
@@ -354,10 +354,10 @@ components:
             const: 3
           catalogHash:
             type: string
-            const: 44fb59b5daf651495d34f7b5b8a3c66ad5c004c7de0dc8ef404a3a1f782add90
+            const: 0f66eea38df8a872ee77fe88c831250bdfe86e3bab6598575dc983ef8bee7199
           contractVersion:
             type: integer
-            const: 3
+            const: 4
         additionalProperties: false
     BridgeEventFrame:
       name: BridgeEventFrame

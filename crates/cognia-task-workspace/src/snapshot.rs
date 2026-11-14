@@ -81,6 +81,21 @@ pub struct WorkspaceSnapshot {
     /// capture their final bytes. Persisted with the initial run publication.
     #[serde(default)]
     pub requires_executor_stop_confirmation: bool,
+    /// Unsupported Git representations, retained to refuse lossy Undo when
+    /// they change. Ordinary blobs and clean, untouched gitlinks stay reusable.
+    #[serde(default)]
+    pub unsupported_fidelity: BTreeMap<String, String>,
+}
+
+fn relative_path_key(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        path.to_string_lossy().replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().into_owned()
+    }
 }
 
 #[cfg(test)]
@@ -237,7 +252,7 @@ fn capture_with_budget_recording_overlays(
         let rel = path
             .strip_prefix(&canonical_root)
             .map_err(|_| format!("path escapes workspace: {}", path.display()))?;
-        let rel_path = rel.to_string_lossy().replace('\\', "/");
+        let rel_path = relative_path_key(rel);
         let (kind, bytes) = if file_type.is_symlink() {
             let target = fs::read_link(path)
                 .map_err(|error| format!("read link {}: {error}", path.display()))?;
@@ -287,6 +302,7 @@ fn capture_with_budget_recording_overlays(
             generated_entries,
             base: SnapshotBase::Blobs,
             requires_executor_stop_confirmation: false,
+            unsupported_fidelity: BTreeMap::new(),
         },
         blobs,
     ))
@@ -439,8 +455,20 @@ fn capture_git_stdout(
     args: &[&str],
     budget: &Option<CaptureBudget>,
 ) -> Result<Option<Vec<u8>>, String> {
-    use std::{io::Read, process::Stdio};
-    if budget.is_none() {
+    capture_git_stdout_with_input(root, args, budget, None)
+}
+
+fn capture_git_stdout_with_input(
+    root: &Path,
+    args: &[&str],
+    budget: &Option<CaptureBudget>,
+    input: Option<&[u8]>,
+) -> Result<Option<Vec<u8>>, String> {
+    use std::{
+        io::{Read, Write},
+        process::Stdio,
+    };
+    if budget.is_none() && input.is_none() {
         return Ok(git_stdout(root, args));
     }
     let Ok(mut child) = Command::new("git")
@@ -456,29 +484,148 @@ fn capture_git_stdout(
         .arg("-C")
         .arg(root)
         .args(args)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
     else {
         return Ok(None);
     };
-    let mut bytes = Vec::new();
-    let result = child
-        .stdout
-        .take()
-        .ok_or("git capture pipe")?
-        .take(4 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes);
-    if result.is_err() || bytes.len() > 4 * 1024 * 1024 {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err("workspace capture metadata budget exceeded".into());
+    // Drain stdout while feeding path names, avoiding both ARG_MAX and a
+    // stdin/stdout pipe deadlock on large repositories. The writer is joined.
+    std::thread::scope(|scope| {
+        let writer = input
+            .zip(child.stdin.take())
+            .map(|(input, mut stdin)| scope.spawn(move || stdin.write_all(input)));
+        let mut bytes = Vec::new();
+        let max = if budget.is_some() {
+            4 * 1024 * 1024 + 1
+        } else {
+            u64::MAX
+        };
+        let result = child
+            .stdout
+            .take()
+            .ok_or("git capture pipe")?
+            .take(max)
+            .read_to_end(&mut bytes);
+        if result.is_err() || (budget.is_some() && bytes.len() > 4 * 1024 * 1024) {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some(writer) = writer {
+                let _ = writer.join();
+            }
+            return Err("workspace capture metadata budget exceeded".into());
+        }
+        let status = child
+            .wait()
+            .map_err(|error| format!("wait git capture: {error}"))?;
+        if let Some(writer) = writer {
+            if writer
+                .join()
+                .map_err(|_| "git capture input writer panicked")?
+                .is_err()
+            {
+                return Ok(None);
+            }
+        }
+        Ok(status.success().then_some(bytes))
+    })
+}
+
+/// Status is a hint, not byte identity. These tracked paths need a raw read
+/// even when Git calls them clean. Run this at both begin and settle.
+fn physical_git_paths(
+    root: &Path,
+    rows: &[GitTreeRow],
+    status_paths: &HashSet<String>,
+    budget: &Option<CaptureBudget>,
+    unsupported: &mut BTreeMap<String, String>,
+) -> Result<Option<HashSet<String>>, String> {
+    let input = rows
+        .iter()
+        .map(|row| row.path.as_str())
+        .chain(status_paths.iter().map(String::as_str))
+        .flat_map(|path| path.bytes().chain(std::iter::once(0)))
+        .collect::<Vec<_>>();
+    let Some(attributes) = capture_git_stdout_with_input(
+        root,
+        &[
+            "check-attr",
+            "-z",
+            "--stdin",
+            "text",
+            "eol",
+            "filter",
+            "working-tree-encoding",
+        ],
+        budget,
+        Some(&input),
+    )?
+    else {
+        return Ok(None);
+    };
+    let mut paths = HashSet::new();
+    let fields = attributes.split(|byte| *byte == 0).collect::<Vec<_>>();
+    for record in fields.chunks_exact(3) {
+        if record[1] == b"filter" && record[2] == b"lfs" {
+            unsupported.insert(
+                String::from_utf8(record[0].to_vec()).map_err(|error| error.to_string())?,
+                "lfs".into(),
+            );
+        }
+        if record[2] != b"unspecified" && record[2] != b"unset" {
+            paths.insert(String::from_utf8(record[0].to_vec()).map_err(|error| error.to_string())?);
+        }
     }
-    Ok(child
-        .wait()
-        .ok()
-        .filter(|status| status.success())
-        .map(|_| bytes))
+    let Some(flags) = capture_git_stdout(root, &["ls-files", "-v", "--stage", "-z"], budget)?
+    else {
+        return Ok(None);
+    };
+    for row in flags.split(|byte| *byte == 0).filter(|row| row.len() > 2) {
+        let Some(tab) = row.iter().position(|byte| *byte == b'\t') else {
+            continue;
+        };
+        let path = String::from_utf8(row[tab + 1..].to_vec()).map_err(|error| error.to_string())?;
+        if row[0] == b'S' || row[0].is_ascii_lowercase() {
+            paths.insert(path.clone());
+        }
+        let meta = String::from_utf8_lossy(&row[2..tab]);
+        let mut fields = meta.split_whitespace();
+        if fields.next() == Some("160000") {
+            if let Some(oid) = fields.next() {
+                unsupported.insert(
+                    path.clone(),
+                    format!(
+                        "gitlink:{oid}:{}",
+                        if status_paths.contains(&path) {
+                            "dirty"
+                        } else {
+                            "clean"
+                        }
+                    ),
+                );
+            }
+        }
+    }
+    let config = capture_git_stdout(
+        root,
+        &["config", "--get-regexp", r"^core\.(autocrlf|eol)$"],
+        budget,
+    )?;
+    if config.is_some_and(|raw| {
+        String::from_utf8_lossy(&raw).lines().any(|line| {
+            line.split_once(' ')
+                .is_some_and(|(_, value)| !matches!(value.trim(), "false" | ""))
+        })
+    }) {
+        paths.extend(rows.iter().map(|row| row.path.clone()));
+    }
+    Ok(Some(paths))
 }
 
 /// One row of `git ls-tree -r --long -z`.
@@ -651,7 +798,42 @@ fn capture_git_backed(
     let mut entries = BTreeMap::new();
     let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
 
-    for row in parse_ls_tree(&tree) {
+    let rows = parse_ls_tree(&tree);
+    let status_paths = parse_status_paths(&status)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let mut unsupported_fidelity = BTreeMap::new();
+    let Some(mut physical_paths) = physical_git_paths(
+        canonical_root,
+        &rows,
+        &status_paths,
+        budget,
+        &mut unsupported_fidelity,
+    )?
+    else {
+        return Ok(None);
+    };
+    for record in tree.split(|byte| *byte == 0) {
+        let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
+            continue;
+        };
+        let meta = String::from_utf8_lossy(&record[..tab]);
+        let mut fields = meta.split_whitespace();
+        if fields.next() != Some("160000") || fields.next() != Some("commit") {
+            continue;
+        }
+        let Some(oid) = fields.next() else {
+            continue;
+        };
+        let path =
+            String::from_utf8(record[tab + 1..].to_vec()).map_err(|error| error.to_string())?;
+        let dirty = status_paths.contains(&path);
+        unsupported_fidelity.insert(
+            path,
+            format!("gitlink:{oid}:{}", if dirty { "dirty" } else { "clean" }),
+        );
+    }
+    for row in rows {
         check_capture_entries(entries.len(), budget)?;
         let absolute = canonical_root.join(&row.path);
         if excluded(&absolute, canonical_root, &policy.generated_output_roots) {
@@ -665,6 +847,12 @@ fn capture_git_backed(
         // not written — reporting those as present would make every settle read
         // them back as deletions.
         let Ok(meta) = absolute.symlink_metadata() else {
+            // Preserve evidence of intentionally unmaterialized sparse paths.
+            // A later materialization must not be mistaken for a new file
+            // whose Undo can safely delete its prior Git state.
+            if !status_paths.contains(&row.path) {
+                unsupported_fidelity.insert(row.path.clone(), "unmaterialized".into());
+            }
             continue;
         };
         let kind = if meta.file_type().is_symlink() {
@@ -695,9 +883,10 @@ fn capture_git_backed(
         );
     }
 
-    // Overlay everything the working tree disagrees with HEAD about. This is
-    // the only set whose bytes are read, and on a healthy checkout it is tiny.
-    for path in parse_status_paths(&status) {
+    // Keep the cheap Git object base for ordinary clean paths, but overlay
+    // converted bytes and hidden index-flag writes as well as status paths.
+    physical_paths.extend(status_paths.iter().cloned());
+    for path in physical_paths {
         check_capture_entries(entries.len(), budget)?;
         let absolute = canonical_root.join(&path);
         if excluded(&absolute, canonical_root, &policy.generated_output_roots) {
@@ -722,6 +911,12 @@ fn capture_git_backed(
             continue;
         };
         let hash = git_blob_hash(&bytes, format)?;
+        if !status_paths.contains(&path)
+            && entries.get(&path).is_some_and(|entry| entry.hash == hash)
+        {
+            // This materialized entry really is identical to its Git blob.
+            continue;
+        }
         if let Some(paths) = overlay_paths.as_deref_mut() {
             paths.insert(path.clone());
         }
@@ -751,6 +946,7 @@ fn capture_git_backed(
             generated_entries,
             base: SnapshotBase::GitCommit { commit },
             requires_executor_stop_confirmation: false,
+            unsupported_fidelity,
         },
         blobs,
     )))
@@ -936,7 +1132,7 @@ fn capture_included_entry(
     let rel = path
         .strip_prefix(root)
         .map_err(|_| format!("included path escapes workspace: {}", path.display()))?;
-    let rel_path = rel.to_string_lossy().replace('\\', "/");
+    let rel_path = relative_path_key(rel);
     if is_sensitive_resource(&rel_path) {
         return Err(format!(
             "sensitive path is not allowed in .worktreeinclude: {rel_path}"
@@ -1036,7 +1232,7 @@ fn capture_generated(
             let rel = path
                 .strip_prefix(root)
                 .map_err(|_| format!("generated path escapes workspace: {}", path.display()))?;
-            let rel_path = rel.to_string_lossy().replace('\\', "/");
+            let rel_path = relative_path_key(rel);
             let metadata = path
                 .symlink_metadata()
                 .map_err(|error| format!("stat {}: {error}", path.display()))?;
@@ -1396,6 +1592,19 @@ fn create_symlink(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(unix)]
+    fn capture_keeps_literal_backslash_and_slash_keys_distinct() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("a")).unwrap();
+        std::fs::write(root.path().join(r"a\b.txt"), "literal").unwrap();
+        std::fs::write(root.path().join("a/b.txt"), "nested").unwrap();
+        let (snapshot, blobs) = super::capture(root.path()).unwrap();
+        assert_eq!(snapshot.entries.len(), 2);
+        assert_eq!(blobs[&snapshot.entries[r"a\b.txt"].hash], b"literal");
+        assert_eq!(blobs[&snapshot.entries["a/b.txt"].hash], b"nested");
+    }
+
     #[test]
     fn binary_detection_checks_complete_payload_without_splitting_utf8() {
         let mut bytes = vec![b'a'; 9000];

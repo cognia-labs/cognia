@@ -1,5 +1,5 @@
 {
-  "contractVersion": 3,
+  "contractVersion": 4,
   "commands": [
     {
       "name": "a2ui_bridge_runtime_paths",
