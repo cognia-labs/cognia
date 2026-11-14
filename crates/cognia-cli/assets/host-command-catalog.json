@@ -41098,6 +41098,9 @@
           },
           "path": {
             "type": "string"
+          },
+          "requireText": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -95125,6 +95128,9 @@
         "properties": {
           "integrationId": {
             "type": "string"
+          },
+          "executorStopped": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -97513,6 +97519,11 @@
               "ranAt"
             ],
             "additionalProperties": false
+          },
+          "executorStopUnprovenUntil": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -112766,5 +112777,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "0f66eea38df8a872ee77fe88c831250bdfe86e3bab6598575dc983ef8bee7199"
+  "catalogHash": "485ba1519e6cd5ad97d76d762e844aba61d91950f4f1c1e1e57d2a9af3488592"
 }

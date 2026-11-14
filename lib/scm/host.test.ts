@@ -60,6 +60,35 @@ describe("createScmHost", () => {
     ])
   })
 
+  it("drops the hold and the confirmation only for a Host whose contract predates them", async () => {
+    const olderHost = Object.assign(new Error("contract"), { code: "contract_input_violation" })
+    const call = jest.fn(async (..._args: unknown[]) => ({}))
+    const host = createScmHost(call as never)
+    const check = { profileId: "unit" } as never
+    call.mockRejectedValueOnce(olderHost)
+    await host.recordIntegrationCheck("int", "cand", check, { executorStopUnprovenUntil: 9 })
+    call.mockRejectedValueOnce(olderHost)
+    await host.abortIntegration("int", { executorStopped: true })
+    expect(call.mock.calls).toEqual([
+      [
+        "task_workspace_integration_record_check",
+        { integrationId: "int", candidateSha: "cand", check, executorStopUnprovenUntil: 9 },
+      ],
+      [
+        "task_workspace_integration_record_check",
+        { integrationId: "int", candidateSha: "cand", check },
+      ],
+      ["task_workspace_integration_abort", { integrationId: "int", executorStopped: true }],
+      ["task_workspace_integration_abort", { integrationId: "int" }],
+    ])
+    // Any other refusal is the Host's answer: a held run must not be aborted around it.
+    call.mockRejectedValueOnce({ code: "executor_stop_unproven", message: "held" })
+    await expect(host.abortIntegration("int", { executorStopped: true })).rejects.toMatchObject({
+      code: "executor_stop_unproven",
+    })
+    expect(call).toHaveBeenCalledTimes(5)
+  })
+
   it("goes through the approval-aware transport by default", async () => {
     await expect(createScmHost().getIntegration("int")).resolves.toBe("via-transport")
   })

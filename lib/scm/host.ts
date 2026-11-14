@@ -122,6 +122,20 @@ export function bindScmHostToOrigin(host: ScmHost, origin: TaskWorkspaceOrigin):
   return followsSelectedHost.has(host) ? scmHostForOrigin(origin) : host
 }
 
+/**
+ * A Host older than an optional argument refuses the whole request with
+ * `contract_input_violation`: its input contracts are closed. Only then is
+ * the request sent again without that argument.
+ */
+async function olderHostFallback<T>(attempt: Promise<T>, withoutArgument: () => Promise<T>) {
+  try {
+    return await attempt
+  } catch (error) {
+    if (scmErrorCode(error) !== "contract_input_violation") throw error
+    return withoutArgument()
+  }
+}
+
 function buildScmHost(call: Call): ScmHost {
   const c = SCM_HOST_COMMANDS
   return {
@@ -140,23 +154,31 @@ function buildScmHost(call: Call): ScmHost {
     analyzeIntegration: (changesetIds, targetRef = null) =>
       call(c.analyzeIntegration, { changesetIds, targetRef }),
     prepareIntegration: (input) => call(c.prepareIntegration, { input }),
-    recordIntegrationCheck: (integrationId, candidateSha, check, hold) =>
-      call(c.recordIntegrationCheck, {
-        integrationId,
-        candidateSha,
-        check,
-        ...(hold ? { executorStopUnprovenUntil: hold.executorStopUnprovenUntil } : {}),
-      }),
+    recordIntegrationCheck: (integrationId, candidateSha, check, hold) => {
+      const record = { integrationId, candidateSha, check }
+      if (!hold) return call(c.recordIntegrationCheck, record)
+      return olderHostFallback(
+        call(c.recordIntegrationCheck, {
+          ...record,
+          executorStopUnprovenUntil: hold.executorStopUnprovenUntil,
+        }),
+        // The answer carries no hold; the orchestrator keeps it in this client.
+        () => call(c.recordIntegrationCheck, record)
+      )
+    },
     publishIntegration: (integrationId, candidateSha, requiredChecks) =>
       call(c.publishIntegration, { integrationId, candidateSha, requiredChecks }),
     rebuildIntegration: (integrationId) => call(c.rebuildIntegration, { integrationId }),
     dropIntegrationItem: (integrationId, changesetId) =>
       call(c.dropIntegrationItem, { integrationId, changesetId }),
-    abortIntegration: (integrationId, options) =>
-      call(c.abortIntegration, {
-        integrationId,
-        ...(options?.executorStopped ? { executorStopped: true } : {}),
-      }),
+    abortIntegration: (integrationId, options) => {
+      if (!options?.executorStopped) return call(c.abortIntegration, { integrationId })
+      return olderHostFallback(
+        call(c.abortIntegration, { integrationId, executorStopped: true }),
+        // A Host that cannot take the confirmation never stored a hold either.
+        () => call(c.abortIntegration, { integrationId })
+      )
+    },
     rollbackIntegration: (integrationId) => call(c.rollbackIntegration, { integrationId }),
     getIntegration: (integrationId) => call(c.getIntegration, { integrationId }),
     listIntegrations: (filter = {}) => call(c.listIntegrations, { filter }),
@@ -186,6 +208,8 @@ export type ScmHostErrorCode =
   | "nothing_to_capture"
   | "not_found"
   | "invalid_request"
+  /** The Host's closed input contract refused an argument it predates. */
+  | "contract_input_violation"
 
 /**
  * The typed code of a host error, or null. The host serializes

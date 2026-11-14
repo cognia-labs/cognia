@@ -1785,3 +1785,22 @@ test("scheduled task wire results preserve workspace and ownership metadata", ()
   assert.equal(list({ filter: { projectId: "" } }), false)
   assert.equal(create({ input: { name: "smoke", id: "task", type: "chat", trigger: base.trigger } }), true)
 })
+
+test("integration check hold and its stop confirmation are part of the closed request contracts", () => {
+  // Postfix review P04: a remote Host refused both, so the hold only worked locally.
+  const schemas = buildCompanionRequestSchemaContracts()
+  const ajv = new Ajv2020({ strict: false })
+  const record = ajv.compile(schemas.get("task_workspace_integration_record_check"))
+  const check = { headSha: "h", profileId: "unit", outcome: "passed", tier: null, reportDigest: null, logTail: null, ranAt: 1 }
+  const base = { integrationId: "int", candidateSha: "c", check }
+  assert.equal(record(base), true, JSON.stringify(record.errors))
+  assert.equal(record({ ...base, executorStopUnprovenUntil: 1_800_000_000_000 }), true, JSON.stringify(record.errors))
+  assert.equal(record({ ...base, executorStopUnprovenUntil: -1 }), false)
+  assert.equal(record({ ...base, executorStopUnprovenUntil: "soon" }), false)
+  assert.equal(record({ ...base, unknown: true }), false)
+  const abort = ajv.compile(schemas.get("task_workspace_integration_abort"))
+  assert.equal(abort({ integrationId: "int" }), true, JSON.stringify(abort.errors))
+  assert.equal(abort({ integrationId: "int", executorStopped: true }), true, JSON.stringify(abort.errors))
+  assert.equal(abort({ integrationId: "int", executorStopped: "yes" }), false)
+  assert.equal(abort({ integrationId: "int", unknown: true }), false)
+})

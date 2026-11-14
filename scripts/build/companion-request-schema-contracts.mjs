@@ -608,6 +608,8 @@ const schemas = {
   task_workspace_integration_record_check: integrationReference.extend({
     candidateSha: z.string(),
     check: changesetCheck,
+    // ADR-0255 §3: keep the worktree until this time for an unstopped check.
+    executorStopUnprovenUntil: z.number().int().nonnegative().optional(),
   }),
   task_workspace_integration_publish: integrationReference.extend({
     candidateSha: z.string(),
@@ -615,7 +617,10 @@ const schemas = {
   }),
   task_workspace_integration_rebuild: integrationReference,
   task_workspace_integration_drop_item: integrationReference.extend({ changesetId: z.string() }),
-  task_workspace_integration_abort: integrationReference,
+  // `executorStopped`: a person confirmed the held check stopped.
+  task_workspace_integration_abort: integrationReference.extend({
+    executorStopped: z.boolean().optional(),
+  }),
   task_workspace_integration_rollback: integrationReference,
   task_workspace_environment_delete_branch: z.object({
     workspaceId: z.string().min(1),
