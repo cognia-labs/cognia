@@ -10,7 +10,8 @@
 import { MessageSquareIcon, UsersIcon } from "lucide-react"
 import type { ChatSession } from "@cognia/agent-config-types"
 
-import { filterExposedSessions } from "@/lib/chat/session-exposure"
+import { filterExposedSessions, withScopedAsides } from "@/lib/chat/session-exposure"
+import { filterPersonalAsideParents } from "@/lib/chat/search/engine"
 import { matchTitles } from "./helpers"
 import type {
   GlobalSearchContext,
@@ -40,7 +41,7 @@ export function visibleSessions(
   filters: ParsedGlobalSearchQuery["filters"]
 ): ChatSession[] {
   const exposed = filterExposedSessions(ctx.sessions, "global-search")
-  return exposed.filter((session) => {
+  const eligible = exposed.filter((session) => {
     if (session.platformBinding) return false
     if (!filters.archived && isArchived(session)) return false
     // A conversation with no workspace is shared, not foreign (`byProjectId`):
@@ -52,6 +53,7 @@ export function visibleSessions(
     }
     return true
   })
+  return withScopedAsides(eligible, ctx.sessions)
 }
 
 function workspaceName(
@@ -71,29 +73,54 @@ export function sessionToItem(
   const title = session.title?.trim() || ctx.t("globalSearch.untitledConversation")
   const preview = (session as { lastMessagePreview?: string }).lastMessagePreview
   const showWorkspace = ctx.workspaces.length > 1
+  const parentId =
+    session.kind === "resource-workbench" && session.surfaceBinding?.kind === "session"
+      ? session.surfaceBinding.sessionId
+      : undefined
+  const parent = ctx.sessions.find((s) => s.id === parentId)
   return {
     id: `session:${session.id}`,
     kind: "session",
     title,
     titlePositions,
-    subtitle: preview?.trim() || undefined,
-    meta: showWorkspace ? workspaceName(ctx, session.projectId) : undefined,
+    subtitle: parent
+      ? ctx.t("globalSearch.sideChatOf", {
+          title: parent.title?.trim() || ctx.t("globalSearch.untitledConversation"),
+        })
+      : preview?.trim() || undefined,
+    meta: showWorkspace ? workspaceName(ctx, parent?.projectId ?? session.projectId) : undefined,
     icon: { lucide: session.kind === "team" ? UsersIcon : MessageSquareIcon },
     score,
     timestamp: sessionTimestamp(session),
     extra: {
-      archived: isArchived(session),
+      archived: isArchived(parent ?? session),
       current: ctx.activeSessionId === session.id,
     },
-    action: { type: "open-session", sessionId: session.id },
+    action: {
+      type: "open-session",
+      sessionId: session.id,
+      ...(parentId ? { parentSessionId: parentId } : {}),
+    },
   }
+}
+
+/** Preserve ordinary rows while closing newly searchable asides of withheld parents. */
+async function personalVisibleSessions(
+  ctx: GlobalSearchContext,
+  filters: ParsedGlobalSearchQuery["filters"]
+) {
+  const visible = visibleSessions(ctx, filters)
+  const parents = filterExposedSessions(visible, "global-search")
+  const scoped = withScopedAsides(await filterPersonalAsideParents(parents, visible), visible)
+  const eligible = new Set([...parents, ...scoped].map((s) => s.id))
+  return visible.filter((s) => eligible.has(s.id))
 }
 
 export const sessionsProvider: GlobalSearchProvider = {
   id: SESSIONS_PROVIDER_ID,
   kind: "session",
-  search({ query, ctx, limit }) {
-    const rows = visibleSessions(ctx, query.filters)
+  async search({ query, ctx, limit }) {
+    const rows = await personalVisibleSessions(ctx, query.filters)
     const { hits, total, truncated } = matchTitles(rows, query.needle, {
       getTitle: (s) => s.title ?? "",
       // The id is a legitimate secondary: people paste session ids from logs.
@@ -108,8 +135,9 @@ export const sessionsProvider: GlobalSearchProvider = {
       truncated,
     }
   },
-  suggest({ ctx, limit }) {
-    return visibleSessions(ctx, {})
+  async suggest({ ctx, limit }) {
+    const rows = await personalVisibleSessions(ctx, {})
+    return rows
       .slice()
       .sort((a, b) => sessionTimestamp(b) - sessionTimestamp(a))
       .slice(0, limit)

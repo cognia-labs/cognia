@@ -17,6 +17,7 @@ import { deleteMessage as deleteMessageOnDesktop } from "@/lib/claude/ipc"
 import { isHostUnavailableError } from "@/lib/companion/host-unavailable"
 import { deleteStoredMessage } from "@/lib/db/messages"
 import { useChatStore } from "@/stores/chat"
+import { useSessionAsideIdentity } from "@/hooks/chat/use-session-aside-identity"
 import { useSettingsStore } from "@/stores/settings"
 import { useUIStore } from "@/stores/ui/ui-store"
 import { ConversationTimeline } from "./minimap/conversation-timeline"
@@ -164,7 +165,7 @@ export function MessageList({
   const messageSessionId = (messages[0] as { metadata?: { sessionId?: string } } | undefined)
     ?.metadata?.sessionId
   const selectionSessionId = messageSessionId ?? sessionId
-  const selectionAllowsAside = !selectionSessionId?.startsWith("resource-workbench:")
+  const selectionAllowsAside = !useSessionAsideIdentity(selectionSessionId)
 
   // Split view mounts one MessageList per pane, and the shortcut runtime keys
   // its registry by id (last mount wins) — so without this gate the split pane
@@ -833,6 +834,11 @@ export function MessageList({
   // Only the primary list publishes: the dock hosts its own per-resource chat
   // pane, and letting that register would point every jump at the wrong list.
   const registerJumpToMessage = useChatViewportStore((s) => s.registerJumpToMessage)
+  const registerSessionJump = useChatViewportStore((s) => s.registerSessionJump)
+  useEffect(() => {
+    if (!listSessionId) return
+    return registerSessionJump(listSessionId, jumpToMessage)
+  }, [jumpToMessage, listSessionId, registerSessionJump])
   useEffect(() => {
     if (!ownsShortcuts) return
     registerJumpToMessage(jumpToMessage)

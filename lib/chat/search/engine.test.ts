@@ -1,3 +1,13 @@
+import { prepareOwnerDerivedHistory } from "@/lib/execution/personal-visibility"
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerDerivedHistory: jest.fn(async (messages: unknown[]) => ({
+    messages,
+    withheldMessageIds: [],
+    readers: [],
+    visibilityDigest: "test",
+  })),
+}))
+
 import type { ChatSession } from "@cognia/agent-config-types"
 
 import type { ChatSearchTextRow } from "@/lib/db/chat-search-text"
@@ -528,4 +538,67 @@ describe("searchChatHistory", () => {
     )
     expect(window.results.map((r) => r.createdAt)).toEqual([2_000])
   })
+})
+
+it("finds scoped aside messages only with an eligible parent and explicit discovery opt-in", async () => {
+  const aside = session({
+    id: "aside",
+    kind: "resource-workbench",
+    visibility: "embedded",
+    surfaceBinding: { kind: "session", sessionId: "parent" },
+  })
+  const parent = session({ id: "parent", projectId: "p1" })
+  const rows = [row("aside needle", { sessionId: "aside" })]
+  const query = { query: "needle", includeScopedAsides: true, projectId: "p1" }
+  expect((await searchChatHistory(query, deps(rows, [parent, aside]))).results).toEqual([
+    expect.objectContaining({ sessionId: "aside" }),
+  ])
+  expect(
+    (await searchChatHistory({ query: "needle" }, deps(rows, [parent, aside]))).results
+  ).toEqual([])
+  for (const excluded of [
+    undefined,
+    { ...parent, archivedAt: NOW },
+    { ...parent, projectId: "p2" },
+    { ...parent, platformBinding: { conversationKey: "im" } },
+  ]) {
+    expect(
+      (
+        await searchChatHistory(
+          query,
+          deps(rows, [aside, ...(excluded ? [excluded as ChatSession] : [])])
+        )
+      ).results
+    ).toEqual([])
+  }
+  expect(
+    (
+      await searchChatHistory(
+        { ...query, includeArchived: true },
+        deps(rows, [aside, { ...parent, archivedAt: NOW }])
+      )
+    ).results
+  ).toHaveLength(1)
+})
+
+it("does not discover an aside of a personal-history-hidden parent", async () => {
+  jest.mocked(prepareOwnerDerivedHistory).mockResolvedValueOnce({
+    withheldMessageIds: ["parent"],
+    messages: [],
+    readers: [],
+    visibilityDigest: "private",
+  })
+  const aside = session({
+    id: "aside",
+    kind: "resource-workbench",
+    surfaceBinding: { kind: "session", sessionId: "parent" },
+  })
+  expect(
+    (
+      await searchChatHistory(
+        { query: "needle", includeScopedAsides: true },
+        deps([row("needle", { sessionId: "aside" })], [aside, session({ id: "parent" })])
+      )
+    ).results
+  ).toEqual([])
 })

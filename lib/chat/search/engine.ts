@@ -26,7 +26,7 @@
 import type { ChatSession } from "@cognia/agent-config-types"
 
 import { findOccurrences } from "@/lib/chat/message-search"
-import { isSessionExposed } from "@/lib/chat/session-exposure"
+import { filterExposedSessions, withScopedAsides } from "@/lib/chat/session-exposure"
 import {
   getChatSearchState,
   loadNewestChatSearchText,
@@ -70,6 +70,7 @@ export interface ChatSearchResult {
   archived: boolean
   /** Branch copies of this same text folded into this row. */
   otherBranchCount: number
+  asideParentId?: string
 }
 
 export interface ChatSearchOutcome {
@@ -99,6 +100,8 @@ export interface ChatSearchQuery {
   after?: number
   /** Keep only hits created strictly before this epoch-ms instant. */
   before?: number
+  /** User-facing discovery only; agent/history-tool callers keep the closed default. */
+  includeScopedAsides?: boolean
 }
 
 export interface ChatSearchDeps {
@@ -146,6 +149,38 @@ export function peekResidentCorpus(): Corpus | null {
 export function invalidateResidentCorpus(): void {
   residentCorpus = null
   residentLoad = null
+}
+
+/**
+ * Local discovery uses the owner UI audience, still withholding foreign people
+ * (ADR-0243). Staged model-facing reference titles/bodies keep their own filter;
+ * an unadmitted run's empty audience must not hide every legacy owner chat here.
+ */
+export async function filterPersonalAsideParents(
+  exposed: readonly ChatSession[],
+  candidates: readonly ChatSession[]
+): Promise<ChatSession[]> {
+  const parentIds = new Set(
+    candidates.flatMap((s) =>
+      s.kind === "resource-workbench" && s.surfaceBinding?.kind === "session"
+        ? [s.surfaceBinding.sessionId]
+        : []
+    )
+  )
+  const hidden = new Set<string>()
+  await Promise.all(
+    exposed
+      .filter((s) => parentIds.has(s.id))
+      .map(async (parent) => {
+        const { prepareOwnerDerivedHistory } = await import("@/lib/execution/personal-visibility")
+        const history = await prepareOwnerDerivedHistory(
+          [{ id: parent.id, text: parent.title || parent.id }],
+          { sessionId: parent.id }
+        )
+        if (history.withheldMessageIds.length > 0) hidden.add(parent.id)
+      })
+  )
+  return exposed.filter((s) => !hidden.has(s.id))
 }
 
 function defaultDeps(): ChatSearchDeps {
@@ -283,6 +318,7 @@ export async function searchChatHistory(
     roles,
     after,
     before,
+    includeScopedAsides = false,
   }: ChatSearchQuery,
   overrides: Partial<ChatSearchDeps> & ScoreOptions = {}
 ): Promise<ChatSearchOutcome> {
@@ -343,6 +379,34 @@ export async function searchChatHistory(
     if (row) sessions.set(row.id, row)
   }
 
+  if (includeScopedAsides) {
+    const parentIds = new Set<string>()
+    for (const row of sessions.values()) {
+      if (row.kind === "resource-workbench" && row.surfaceBinding?.kind === "session") {
+        if (!sessions.has(row.surfaceBinding.sessionId)) parentIds.add(row.surfaceBinding.sessionId)
+      }
+    }
+    if (parentIds.size > 0) {
+      for (const parent of await deps.getSessions([...parentIds])) {
+        if (parent) sessions.set(parent.id, parent)
+      }
+    }
+  }
+  const exposed = filterExposedSessions([...sessions.values()], "global-search").filter(
+    (s) =>
+      (includeArchived || s.archivedAt == null) &&
+      (projectId === undefined || (s.projectId ?? "") === projectId)
+  )
+  const asideParents = includeScopedAsides
+    ? await filterPersonalAsideParents(exposed, [...sessions.values()])
+    : exposed
+  const eligible = new Set([
+    ...exposed.map((s) => s.id),
+    ...(includeScopedAsides
+      ? withScopedAsides(asideParents, [...sessions.values()]).map((s) => s.id)
+      : []),
+  ])
+
   const scorable = hits.flatMap((hit) => {
     if (roleSet && !roleSet.has(hit.row.role)) return []
     if (after !== undefined && hit.row.createdAt < after) return []
@@ -350,18 +414,20 @@ export async function searchChatHistory(
     const session = sessions.get(hit.row.sessionId)
     // A hit whose session is gone is a stale projection, not a result.
     if (!session) return []
-    // `subagent` transcripts and embedded workbench sessions are never listed —
-    // the same contract the sidebar and the connector bridge already honour.
-    if (!isSessionExposed(session, "global-search")) return []
-    const archived = session.archivedAt != null
-    if (archived && !includeArchived) return []
-    if (projectId !== undefined && (session.projectId ?? "") !== projectId) return []
+    if (!eligible.has(session.id)) return []
+    const parent =
+      session.kind === "resource-workbench" && session.surfaceBinding?.kind === "session"
+        ? sessions.get(session.surfaceBinding.sessionId)
+        : undefined
+    const scope = parent ?? session
+    const archived = scope.archivedAt != null
     return [
       {
         messageId: hit.row.messageId,
         sessionId: hit.row.sessionId,
         sessionTitle: session.title,
-        projectId: session.projectId ?? hit.row.projectId,
+        projectId: scope.projectId ?? hit.row.projectId,
+        ...(parent ? { asideParentId: parent.id } : {}),
         role: hit.row.role,
         createdAt: hit.row.createdAt,
         count: hit.count,
@@ -404,6 +470,7 @@ export async function searchChatHistory(
     score: hit.score,
     archived: hit.archived,
     otherBranchCount,
+    ...(hit.asideParentId ? { asideParentId: hit.asideParentId } : {}),
   }))
 
   return {

@@ -1,3 +1,13 @@
+import { prepareOwnerDerivedHistory } from "@/lib/execution/personal-visibility"
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerDerivedHistory: jest.fn(async (messages: unknown[]) => ({
+    messages,
+    withheldMessageIds: [],
+    readers: [],
+    visibilityDigest: "test",
+  })),
+}))
+
 import type { ChatSession } from "@cognia/agent-config-types"
 
 import { makeProviderInput, makeTestContext, TEST_NOW } from "../testing"
@@ -135,4 +145,54 @@ describe("sessions provider", () => {
     expect(item.icon && "lucide" in item.icon).toBe(true)
     expect(item.timestamp).toBe(TEST_NOW - 3)
   })
+})
+
+it("labels a side chat by its parent and carries the parent in its open action", async () => {
+  const parent = session({ id: "parent", title: "Research", projectId: "p1" })
+  const aside = session({
+    id: "aside",
+    title: "Counterexample",
+    kind: "resource-workbench",
+    surfaceBinding: { kind: "session", sessionId: "parent" },
+  })
+  const context = ctx({ sessions: [parent, aside] })
+  const out = await sessionsProvider.search(makeProviderInput("counterexample", { ctx: context }))
+  expect(out.items).toHaveLength(1)
+  expect(out.items[0]).toMatchObject({
+    title: "Counterexample",
+    subtitle: 'globalSearch.sideChatOf:{"title":"Research"}',
+    action: { type: "open-session", sessionId: "aside", parentSessionId: "parent" },
+  })
+  for (const excluded of [
+    { ...parent, archivedAt: TEST_NOW },
+    { ...parent, projectId: "other" },
+    { ...parent, platformBinding: sessions.find((s) => s.id === "im")!.platformBinding },
+  ]) {
+    expect(
+      visibleSessions(ctx({ sessions: [excluded, aside] }), { workspace: "current" })
+    ).not.toContainEqual(aside)
+  }
+  expect(visibleSessions(ctx({ sessions: [aside] }), {})).toEqual([])
+})
+
+it("keeps a parent's personal-history-hidden scope closed to aside title discovery", async () => {
+  jest.mocked(prepareOwnerDerivedHistory).mockResolvedValueOnce({
+    withheldMessageIds: ["parent"],
+    messages: [],
+    readers: [],
+    visibilityDigest: "private",
+  })
+  const rows = [
+    session({ id: "parent", title: "Parent" }),
+    session({
+      id: "aside",
+      title: "Needle",
+      kind: "resource-workbench",
+      surfaceBinding: { kind: "session", sessionId: "parent" },
+    }),
+  ]
+  const out = await sessionsProvider.search(
+    makeProviderInput("needle", { ctx: ctx({ sessions: rows }) })
+  )
+  expect(out.items).toEqual([])
 })

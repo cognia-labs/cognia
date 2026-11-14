@@ -86,6 +86,24 @@ describe("formatTranscript", () => {
 })
 
 describe("getSessionTranscriptText", () => {
+  it("applies whole-message personal filtering to a side chat transcript too", async () => {
+    listRecentMessagesMock.mockResolvedValue([
+      { id: "public", role: "user", parts: text("visible aside question") },
+      {
+        id: "private",
+        role: "assistant",
+        parts: text("PRIVATE_ASIDE_BODY"),
+        metadata: {
+          personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+        },
+      },
+    ])
+    const body = await getSessionTranscriptText("aside")
+    expect(body).toContain("visible aside question")
+    expect(body).toContain("[Withheld: personal content of Host owner]")
+    expect(body).not.toContain("PRIVATE_ASIDE_BODY")
+  })
+
   beforeEach(() => {
     listRecentMessagesMock.mockReset()
   })

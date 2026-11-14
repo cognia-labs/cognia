@@ -21608,6 +21608,7 @@
     },
     "showAll": "Show all {count} in {scope}",
     "showMore": "Show more",
+    "sideChatOf": "Side chat of “{title}”",
     "suggestions": "Suggestions",
     "syntax": {
       "after": "after:2026-08-01 · after:7d — newer than",

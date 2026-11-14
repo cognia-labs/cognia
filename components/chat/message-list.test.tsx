@@ -4,6 +4,7 @@
 
 // Stub heavy ai-elements / message-renderer dependencies — this is a logic
 // test for message-list's clear/export flows, not for the renderer chain.
+import "fake-indexeddb/auto"
 import * as ReactForMocks from "react"
 
 jest.mock("@/components/ai-elements/shimmer", () => {
@@ -43,11 +44,18 @@ const messageActionSheetProps: Array<Record<string, unknown>> = []
 // The selection host each rendered message read — what its "Select" menu item
 // would call.
 const selectionHosts: Array<{ start: (id: string) => void } | null> = []
+const messageSelectionToolbarProps: Array<{ sessionId: string; allowAside: boolean }> = []
 const selectionBarProps: Array<{
   messages: { id: string }[]
   selectableCount: number
   onExit: () => void
 }> = []
+jest.mock("./message-selection-toolbar", () => ({
+  MessageSelectionToolbar: (props: { sessionId: string; allowAside: boolean }) => {
+    messageSelectionToolbarProps.push(props)
+    return null
+  },
+}))
 // One identity for the lifetime of the suite, mutated in place. The real
 // `useVirtualizer` hands back a stable instance; a fresh object per render would
 // re-run every effect that lists the virtualizer as a dependency, and the
@@ -251,7 +259,7 @@ jest.mock("@/lib/capacitor/haptics", () => ({
   selectionFeedback: jest.fn(),
 }))
 
-import { render, screen, fireEvent, act } from "@testing-library/react"
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import type { UIMessage } from "ai"
 import { useUnreadMarkerStore } from "@/stores/chat/unread-marker-store"
@@ -307,7 +315,13 @@ const assistantMsg = (id: string, text: string): UIMessage => ({
 const manyMsgs = (n: number): UIMessage[] =>
   Array.from({ length: n }, (_, i) => userMsg(`vm-${i}`, `Msg ${i}`))
 
+const mockAsideSessionGet = jest.fn()
+jest.mock("@/lib/db/schema", () => ({
+  getDb: () => ({ sessions: { get: mockAsideSessionGet } }),
+}))
+
 beforeEach(() => {
+  mockAsideSessionGet.mockReset().mockResolvedValue(undefined)
   useChatStore.getState().clear()
   useChatStore.getState().setActiveSession("ses_1")
   useVirtualizerCalls.length = 0
@@ -318,6 +332,25 @@ beforeEach(() => {
 })
 
 describe("MessageList", () => {
+  it("registers a secondary list by session without replacing the main jump", () => {
+    const mainJump = jest.fn(() => true)
+    useChatViewportStore.getState().registerJumpToMessage(mainJump)
+    const Wrapper = withAdapter(makeAdapter())
+    const { unmount } = render(
+      <Wrapper>
+        <MessageList paneSessionId="aside" messages={manyMsgs(50)} status="idle" />
+      </Wrapper>
+    )
+    const jump = useChatViewportStore.getState().sessionJumps.aside
+    expect(jump).toBeDefined()
+    act(() => expect(jump("vm-1")).toBe(true))
+    expect(useChatViewportStore.getState().jumpToMessage).toBe(mainJump)
+    unmount()
+    expect(useChatViewportStore.getState().sessionJumps.aside).toBeUndefined()
+    expect(useChatViewportStore.getState().jumpToMessage).toBe(mainJump)
+    useChatViewportStore.getState().registerJumpToMessage(null)
+  })
+
   it("renders only the failed local copy of a refused Host enqueue placeholder", () => {
     const Wrapper = withAdapter(makeAdapter())
     const placeholder = {
@@ -2623,6 +2656,31 @@ describe("MessageList — selection mode", () => {
   })
 
   const MESSAGES = [userMsg("m1", "q"), compactMarker, assistantMsg("m2", "a"), userMsg("m3", "q2")]
+
+  it.each(["embedded", "promoted", "unknown"])(
+    "routes selection by the owning persisted session (%s)",
+    async (state) => {
+      const id = "resource-workbench:session:old"
+      mockAsideSessionGet.mockResolvedValue(
+        state === "unknown"
+          ? undefined
+          : { id, kind: state === "embedded" ? "resource-workbench" : "direct" }
+      )
+      render(
+        <Wrapper>
+          <MessageList messages={[inSession(userMsg("m1", "q"), id)]} status="idle" />
+        </Wrapper>
+      )
+      expect(messageSelectionToolbarProps.at(-1)?.allowAside).toBe(false)
+      await waitFor(() => expect(mockAsideSessionGet).toHaveBeenCalledWith(id))
+      if (state === "promoted")
+        await waitFor(() => expect(messageSelectionToolbarProps.at(-1)?.allowAside).toBe(true))
+      expect(messageSelectionToolbarProps.at(-1)).toMatchObject({
+        sessionId: id,
+        allowAside: state === "promoted",
+      })
+    }
+  )
 
   it("renders no tick outside the mode — hovering a message reveals none", () => {
     render(

@@ -74,10 +74,15 @@ export function referenceCandidateFor(item: GlobalSearchItem): EntityMentionCand
       ...base,
       id: messageRefId(sessionId, recordId),
       href: `/?session=${encodeURIComponent(sessionId)}&message=${encodeURIComponent(recordId)}`,
+      sourceSessionId: sessionId,
     }
   }
 
-  return { ...base, id: recordId }
+  return {
+    ...base,
+    id: recordId,
+    ...(entityKind === "session" ? { href: `/?session=${encodeURIComponent(recordId)}` } : {}),
+  }
 }
 
 /** Cheap predicate for the row renderer. */

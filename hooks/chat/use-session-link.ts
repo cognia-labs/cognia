@@ -28,6 +28,8 @@ import {
   PERMALINK_MESSAGE_PARAM,
   PERMALINK_SESSION_PARAM,
   type ReadableParams,
+  resolveSessionLinkTarget,
+  type SessionLinkLookup,
 } from "@/lib/chat/message-permalink"
 import { getSession } from "@/lib/db/sessions"
 import { parseFilesViewParams, type ParsedFilesView } from "@/lib/filespace/link-params"
@@ -35,6 +37,7 @@ import type { OpenFileSpacePathArgs } from "@/lib/filespace/open"
 import type { OpenFileSpacePathResult } from "@/types/filespace"
 import { useChatStore } from "@/stores/chat"
 import { useProjectStore } from "@/stores/project/project-store"
+import { revealSideChat } from "@/lib/slash-commands/actions/side-chat"
 
 /** The session a session-only link names, or null (no link, or a permalink). */
 export function parseSessionLink(params: ReadableParams | null): string | null {
@@ -56,7 +59,7 @@ export interface UseSessionLinkOptions {
   /** Called when a files link's conversation opened but its file did not. */
   onFilesUnresolved?: (result: Exclude<OpenFileSpacePathResult, "opened">) => void
   /** Injected for tests. */
-  lookup?: (sessionId: string) => Promise<{ projectId?: string } | undefined>
+  lookup?: SessionLinkLookup
   /** Injected for tests; defaults to `openFileSpacePath`. */
   openFiles?: (args: OpenFileSpacePathArgs) => Promise<OpenFileSpacePathResult>
 }
@@ -93,39 +96,56 @@ export function useSessionLink({
       callbacks.current.onConsumed()
       callbacks.current.onUnresolved()
     }
-    lookup(sessionId).then(
-      (session) => {
-        if (cancelled) return
-        if (!session) {
-          unresolved()
-          return
+    const controller = new AbortController()
+    const initialActive = useChatStore.getState().activeSessionId
+    resolveSessionLinkTarget(sessionId, lookup)
+      .then(
+        async (target) => {
+          if (cancelled) return
+          if (!target) {
+            unresolved()
+            return
+          }
+          const { session, sessionId: focusId, asideId } = target
+          if (asideId && useChatStore.getState().activeSessionId !== initialActive) return
+          if (
+            session.projectId &&
+            useProjectStore.getState().activeProjectId !== session.projectId
+          ) {
+            useProjectStore.getState().setActiveProject(session.projectId)
+          }
+          if (useChatStore.getState().activeSessionId !== focusId) {
+            useChatStore.getState().setActiveSession(focusId)
+          }
+          if (asideId && !(await revealSideChat(focusId, asideId, undefined, controller.signal))) {
+            if (!cancelled) unresolved()
+            return
+          }
+          if (cancelled) return
+          callbacks.current.onConsumed()
+          callbacks.current.onOpened?.()
+          if (!wantsFiles) return
+          const view: ParsedFilesView = {
+            ...(filesPath ? { path: filesPath } : {}),
+            ...(filesLine ? { line: filesLine } : {}),
+          }
+          void callbacks.current
+            .openFiles({ sessionId: focusId, ...view })
+            .catch((): OpenFileSpacePathResult => "not-found")
+            .then((result) => {
+              if (result !== "opened") callbacks.current.onFilesUnresolved?.(result)
+            })
+        },
+        () => {
+          if (!cancelled) unresolved()
         }
-        if (session.projectId && useProjectStore.getState().activeProjectId !== session.projectId) {
-          useProjectStore.getState().setActiveProject(session.projectId)
-        }
-        if (useChatStore.getState().activeSessionId !== sessionId) {
-          useChatStore.getState().setActiveSession(sessionId)
-        }
-        callbacks.current.onConsumed()
-        callbacks.current.onOpened?.()
-        if (!wantsFiles) return
-        const view: ParsedFilesView = {
-          ...(filesPath ? { path: filesPath } : {}),
-          ...(filesLine ? { line: filesLine } : {}),
-        }
-        void callbacks.current
-          .openFiles({ sessionId, ...view })
-          .catch((): OpenFileSpacePathResult => "not-found")
-          .then((result) => {
-            if (result !== "opened") callbacks.current.onFilesUnresolved?.(result)
-          })
-      },
-      () => {
+      )
+      .catch(() => {
         if (!cancelled) unresolved()
-      }
-    )
+      })
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [sessionId, lookup, wantsFiles, filesPath, filesLine])
 }

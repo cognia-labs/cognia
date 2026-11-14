@@ -176,7 +176,7 @@ export const KIND_PRIORITY: Readonly<Record<GlobalSearchKind, number>> = {
 
 /** What the dialog does when an item is chosen. */
 export type GlobalSearchAction =
-  | { type: "open-session"; sessionId: string; messageId?: string }
+  | { type: "open-session"; sessionId: string; messageId?: string; parentSessionId?: string }
   /**
    * Open a platform-bound (IM) conversation in the Inbox route rather than the
    * main chat, optionally landing on one message (`/inbox/c?key=…&messageId=…`).
@@ -332,6 +332,8 @@ export interface ParsedFilterToken {
  * that is already here — that is what keeps them testable.
  */
 export interface GlobalSearchContext {
+  /** Only the interactive palette opts in; headless contexts keep history closed. */
+  includeScopedAsides?: boolean
   /** Root translator: `t("globalSearch.kinds.session")`. */
   t: (key: string, values?: Record<string, string | number | Date>) => string
   locale: string

@@ -32,12 +32,19 @@ export interface CrossSessionJumpOptions {
   align?: "center" | "start"
   /** Override the hydration ceiling. Tests use this; product code should not. */
   timeoutMs?: number
+  /** Keep this parent active while targeting a mounted side-chat list. */
+  activeSessionId?: string
+  signal?: AbortSignal
 }
 
 /** Whether `sessionId`'s history is loaded and actually contains `messageId`. */
-function rowIsRenderable(sessionId: string, messageId: string): boolean {
+function rowIsRenderable(sessionId: string, messageId: string, activeSessionId: string): boolean {
   const state = useChatStore.getState()
-  if (state.activeSessionId !== sessionId) return false
+  if (state.activeSessionId !== activeSessionId) return false
+  if (sessionId !== activeSessionId) {
+    const slice = state.sessions[sessionId]
+    return !!slice && !slice.messagesLoading && slice.messages.some((m) => m.id === messageId)
+  }
   if (state.messagesLoading) return false
   // The ROW, not merely "loading finished": the list owns the jump and can only
   // reach a message it renders.
@@ -57,19 +64,29 @@ export function jumpToSessionMessage(
   messageId: string,
   options: CrossSessionJumpOptions = {}
 ): Promise<boolean> {
-  const { align, timeoutMs = CROSS_SESSION_JUMP_TIMEOUT_MS } = options
+  const {
+    align,
+    timeoutMs = CROSS_SESSION_JUMP_TIMEOUT_MS,
+    activeSessionId = sessionId,
+    signal,
+  } = options
+  if (signal?.aborted) return Promise.resolve(false)
 
-  if (useChatStore.getState().activeSessionId !== sessionId) {
-    useChatStore.getState().setActiveSession(sessionId)
+  if (useChatStore.getState().activeSessionId !== activeSessionId) {
+    useChatStore.getState().setActiveSession(activeSessionId)
   }
 
   const attempt = (): boolean | null => {
-    if (!rowIsRenderable(sessionId, messageId)) return null
-    const jump = useChatViewportStore.getState().jumpToMessage
+    if (!rowIsRenderable(sessionId, messageId, activeSessionId)) return null
+    const viewport = useChatViewportStore.getState()
+    const jump =
+      sessionId === activeSessionId ? viewport.jumpToMessage : viewport.sessionJumps[sessionId]
     // History is here but the pane has not registered its list yet — keep
     // waiting rather than reporting a failure the next tick would disprove.
     if (!jump) return null
-    return jump(messageId, undefined, align ? { align } : undefined)
+    const landed = jump(messageId, undefined, align ? { align } : undefined)
+    // A side-chat slice can hydrate before React commits its new list callback.
+    return !landed && sessionId !== activeSessionId ? null : landed
   }
 
   const immediate = attempt()
@@ -83,13 +100,14 @@ export function jumpToSessionMessage(
       unsubscribeStore()
       unsubscribeViewport()
       clearTimeout(timer)
+      signal?.removeEventListener("abort", abort)
       resolve(landed)
     }
 
     const check = () => {
       // The user moved on. Dragging them back would be worse than not landing.
       const active = useChatStore.getState().activeSessionId
-      if (active !== null && active !== sessionId) {
+      if (active !== null && active !== activeSessionId) {
         finish(false)
         return
       }
@@ -102,5 +120,7 @@ export function jumpToSessionMessage(
     // separate store — without this the wait can outlast the row's arrival.
     const unsubscribeViewport = useChatViewportStore.subscribe(check)
     const timer = setTimeout(() => finish(false), timeoutMs)
+    const abort = () => finish(false)
+    signal?.addEventListener("abort", abort, { once: true })
   })
 }

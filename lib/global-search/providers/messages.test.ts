@@ -38,7 +38,7 @@ describe("toChatSearchQuery", () => {
     const input = makeProviderInput(
       "from:me is:archived after:2026-08-01 workspace:current needle",
       {
-        ctx: makeTestContext({ scope: "chats", activeProjectId: "p9" }),
+        ctx: makeTestContext({ scope: "chats", activeProjectId: "p9", includeScopedAsides: true }),
         limit: 7,
       }
     )
@@ -46,6 +46,7 @@ describe("toChatSearchQuery", () => {
       query: "needle",
       limit: 7,
       includeArchived: true,
+      includeScopedAsides: true,
       projectId: "p9",
       collapseBySession: true,
       roles: ["user"],
@@ -177,4 +178,49 @@ describe("messages provider", () => {
     expect(coverageOf(outcome({ moreOlderHistory: true }))).toBe("partial")
     expect(coverageOf(outcome())).toBe("complete")
   })
+})
+
+it("labels aside message hits with their parent and opens their own dock transcript", () => {
+  const ctx = makeTestContext({
+    sessions: [
+      { id: "parent", title: "Research" },
+      {
+        id: "aside",
+        title: "Counterexample",
+        kind: "resource-workbench",
+        surfaceBinding: { kind: "session", sessionId: "parent" },
+      },
+    ] as never,
+  })
+  const hit = result({
+    sessionId: "aside",
+    sessionTitle: "Counterexample",
+    asideParentId: "parent",
+  })
+  expect(messageResultToItem(hit, ctx)).toMatchObject({
+    title: "Counterexample",
+    meta: 'globalSearch.sideChatOf:{"title":"Research"}',
+    action: {
+      type: "open-session",
+      sessionId: "aside",
+      messageId: "m1",
+      parentSessionId: "parent",
+    },
+  })
+  // The action survives recents even if the dialog has not loaded its session list yet.
+  expect(messageHitAction(hit, { sessions: [] })).toEqual({
+    type: "open-session",
+    sessionId: "aside",
+    messageId: "m1",
+    parentSessionId: "parent",
+  })
+})
+
+it("keeps headless message history closed unless an interactive context opts in", () => {
+  const input = makeProviderInput("needle")
+  expect(toChatSearchQuery(input.query, makeTestContext(), 10).includeScopedAsides).toBe(false)
+  expect(
+    toChatSearchQuery(input.query, makeTestContext({ includeScopedAsides: true }), 10)
+      .includeScopedAsides
+  ).toBe(true)
 })

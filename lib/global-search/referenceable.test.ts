@@ -18,6 +18,7 @@ describe("referenceCandidateFor", () => {
       entityKind: "session",
       id: "s_1",
       title: "Restacking",
+      href: "/?session=s_1",
     })
   })
 
@@ -70,5 +71,25 @@ describe("referenceCandidateFor", () => {
   it("agrees with the cheap predicate the row renderer uses", () => {
     expect(isReferenceable(item())).toBe(true)
     expect(isReferenceable(item({ id: "workflow:w", kind: "workflow" }))).toBe(false)
+  })
+})
+
+it("keeps aside references addressed to the aside so link consumers can reveal its parent dock", () => {
+  expect(
+    referenceCandidateFor(
+      item({
+        id: "session:aside",
+        action: { type: "open-session", sessionId: "aside", parentSessionId: "parent" },
+      })
+    )
+  ).toMatchObject({ id: "aside", href: "/?session=aside" })
+  expect(
+    referenceCandidateFor(
+      item({ id: "message:source", kind: "message", extra: { sessionId: "aside" } })
+    )
+  ).toMatchObject({
+    id: "aside#source",
+    sourceSessionId: "aside",
+    href: "/?session=aside&message=source",
   })
 })

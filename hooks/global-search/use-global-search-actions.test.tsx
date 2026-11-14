@@ -11,6 +11,16 @@ const push = jest.fn()
 const setTheme = jest.fn()
 const toast = { success: jest.fn(), info: jest.fn(), error: jest.fn() }
 const jump = jest.fn()
+const mockPrepareReferenceTitle = jest.fn(async (..._args: unknown[]) => ({
+  messages: [{ text: "[Withheld: personal content of Host owner]" }],
+}))
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  preparePersonalDerivedHistory: (...args: unknown[]) => mockPrepareReferenceTitle(...args),
+}))
+const revealSideChat = jest.fn(async (..._args: unknown[]) => true)
+jest.mock("@/lib/slash-commands/actions/side-chat", () => ({
+  revealSideChat: (...args: unknown[]) => revealSideChat(...args),
+}))
 const revealPanel = jest.fn()
 const runQuickAction = jest.fn()
 const getQuickAction = jest.fn()
@@ -568,4 +578,57 @@ describe("reference-in-composer", () => {
     expect(close).toHaveBeenCalled()
     off()
   })
+})
+
+it("opens an aside result through its parent and reveals the requested message", async () => {
+  const { result, select } = setup()
+  act(() =>
+    result.current.runItem(
+      item({
+        type: "open-session",
+        sessionId: "aside",
+        parentSessionId: "s1",
+        messageId: "m-aside",
+      })
+    )
+  )
+  await waitFor(() => expect(revealSideChat).toHaveBeenCalledWith("s1", "aside", "m-aside"))
+  expect(select).toHaveBeenCalledWith("s1")
+  expect(jump).not.toHaveBeenCalled()
+})
+
+it("filters a palette aside's display title before handing its reference to the composer", async () => {
+  const { result } = setup()
+  const received = jest.fn()
+  const unsubscribe = onComposerReferenceRequest(received)
+  try {
+    act(() =>
+      result.current.runItem(
+        item({
+          type: "reference-in-composer",
+          candidate: {
+            entityKind: "session",
+            id: "aside",
+            title: "Private-derived aside title",
+            searchText: "",
+            href: "/?session=aside",
+          },
+        })
+      )
+    )
+    await waitFor(() => expect(received).toHaveBeenCalledTimes(1))
+    expect(received.mock.calls[0][0]).toMatchObject({
+      id: "aside",
+      referenceTitle: "[Withheld: personal content of Host owner]",
+    })
+    expect(mockPrepareReferenceTitle).toHaveBeenCalledWith(undefined, expect.anything(), {
+      sessionId: "aside",
+      legacyOwnerArtifact: true,
+    })
+    const { entitySelectionFrom } = await import("@/lib/chat/mentions/entity-sources")
+    const selection = entitySelectionFrom(received.mock.calls[0][0], "public bounded excerpt")
+    expect(JSON.stringify(selection)).not.toContain("Private-derived aside title")
+  } finally {
+    unsubscribe()
+  }
 })

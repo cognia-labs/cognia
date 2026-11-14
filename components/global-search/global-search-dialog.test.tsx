@@ -40,11 +40,32 @@ jest.mock("@cognia/logging", () => ({
 jest.mock("@/components/plugins/plugin-extension-slot", () => ({
   PluginExtensionSlot: () => null,
 }))
+jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerDerivedHistory: async (messages: unknown[]) => ({
+    messages,
+    withheldMessageIds: [],
+    readers: [],
+    visibilityDigest: "test",
+  }),
+}))
+const mockAsideRead = jest.fn(async () => [])
+let mockAsideRows: unknown[] = []
+const mockLiveQuery = jest.fn()
+jest.mock("dexie-react-hooks", () => ({
+  useLiveQuery: (query: () => unknown, deps: unknown[]) => {
+    mockLiveQuery(query, deps)
+    return mockAsideRows
+  },
+}))
+jest.mock("@/lib/db/schema", () => ({
+  getDb: () => ({ sessions: { where: () => ({ equals: () => ({ toArray: mockAsideRead }) }) } }),
+}))
+const mockMainSessions = [{ id: "parent", title: "Research", createdAt: 1, updatedAt: 1 }]
 const useSessionsMock = jest.fn()
 jest.mock("@/hooks/chat", () => ({
   useSessions: (opts?: unknown) => {
     useSessionsMock(opts)
-    return { sessions: [], select: jest.fn(), create: jest.fn() }
+    return { sessions: mockMainSessions, select: jest.fn(), create: jest.fn() }
   },
 }))
 jest.mock("@/hooks/use-platform", () => ({ usePlatform: () => platformRef.current }))
@@ -64,7 +85,11 @@ jest.mock("@/hooks/shortcuts/use-app-shortcut", () => ({
   },
 }))
 jest.mock("@/hooks/global-search/use-global-search-context", () => ({
-  useGlobalSearchContext: ({ scope }: { scope: string }) => ({ ...makeTestContext(), scope }),
+  useGlobalSearchContext: ({ scope, sessions }: { scope: string; sessions: never[] }) => ({
+    ...makeTestContext(),
+    scope,
+    sessions,
+  }),
 }))
 jest.mock("@/hooks/global-search/use-global-search", () => ({
   useGlobalSearch: (opts: unknown) => {
@@ -150,6 +175,7 @@ const lastSearchOptions = () =>
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockAsideRows = []
   shortcutHandlers.clear()
   searchState.outcome = null
   searchState.suggestions = []
@@ -711,4 +737,35 @@ describe("stopTouchPointerSelection", () => {
     stopTouchPointerSelection(mouse as never)
     expect(mouse.stopPropagation).not.toHaveBeenCalled()
   })
+})
+
+it("feeds embedded aside rows to discovery without relying on main-list exposure", async () => {
+  mockAsideRows = [
+    {
+      id: "aside",
+      title: "Counterexample",
+      kind: "resource-workbench",
+      surfaceBinding: { kind: "session", sessionId: "parent" },
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]
+  renderDialog({ open: true })
+  const ctx = lastSearchOptions().ctx as ReturnType<typeof makeTestContext>
+  expect(ctx.sessions.map((s) => s.id)).toEqual(["parent", "aside"])
+  const { sessionsProvider } = await import("@/lib/global-search/providers/sessions")
+  const items = await sessionsProvider.suggest!({
+    ctx,
+    limit: 10,
+    signal: new AbortController().signal,
+  })
+  expect(items).toContainEqual(expect.objectContaining({ id: "session:aside" }))
+  await mockLiveQuery.mock.calls.at(-1)![0]()
+  expect(mockAsideRead).toHaveBeenCalledTimes(1)
+})
+
+it("does not read aside history while the palette is closed", async () => {
+  renderDialog({ open: false })
+  await mockLiveQuery.mock.calls.at(-1)![0]()
+  expect(mockAsideRead).not.toHaveBeenCalled()
 })

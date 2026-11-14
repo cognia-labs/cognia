@@ -15,6 +15,37 @@
  */
 
 import { buildSessionDeeplink } from "@/lib/navigation/cognia-deeplink"
+import type { ChatSession } from "@cognia/agent-config-types"
+import { withScopedAsides } from "./session-exposure"
+
+export type SessionLinkMetadata = Pick<
+  ChatSession,
+  "projectId" | "kind" | "visibility" | "surfaceBinding" | "platformBinding"
+>
+export type SessionLinkLookup = (id: string) => Promise<SessionLinkMetadata | undefined>
+
+async function lookupSessionLink(id: string) {
+  const { getSession } = await import("@/lib/db/sessions")
+  return getSession(id)
+}
+
+/** Links keep the aside's identity; navigation keeps its parent active. */
+export async function resolveSessionLinkTarget(
+  sessionId: string,
+  lookup: SessionLinkLookup = lookupSessionLink
+) {
+  const session = await lookup(sessionId)
+  if (!session) return null
+  if (session.kind !== "resource-workbench" || session.surfaceBinding?.kind !== "session") {
+    return { sessionId, session }
+  }
+  const parentId = session.surfaceBinding.sessionId
+  const parent = await lookup(parentId)
+  const aside = { ...session, id: sessionId }
+  if (!parent || !withScopedAsides([{ ...parent, id: parentId }], [aside]).includes(aside))
+    return null
+  return { sessionId: parentId, session: parent, asideId: sessionId }
+}
 
 export const PERMALINK_SESSION_PARAM = "session"
 export const PERMALINK_MESSAGE_PARAM = "message"

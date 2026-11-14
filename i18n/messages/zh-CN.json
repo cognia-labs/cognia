@@ -21608,6 +21608,7 @@
     },
     "showAll": "在“{scope}”中显示全部 {count} 条",
     "showMore": "显示更多",
+    "sideChatOf": "“{title}”的侧聊",
     "suggestions": "建议",
     "syntax": {
       "after": "after:2026-08-01 · after:7d — 晚于某时间",

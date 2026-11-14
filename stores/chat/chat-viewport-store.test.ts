@@ -1,7 +1,7 @@
 import { useChatViewportStore } from "./chat-viewport-store"
 
 beforeEach(() => {
-  useChatViewportStore.setState({ activeTurnMessageIds: [], jumpToMessage: null })
+  useChatViewportStore.setState({ activeTurnMessageIds: [], jumpToMessage: null, sessionJumps: {} })
 })
 
 describe("chatViewportStore", () => {
@@ -49,4 +49,19 @@ describe("chatViewportStore", () => {
     before.registerJumpToMessage(null)
     expect(useChatViewportStore.getState()).toBe(before)
   })
+})
+
+it("keeps per-session jumps separate and makes unregister ownership-safe", () => {
+  const main = jest.fn(() => true)
+  const oldAside = jest.fn(() => true)
+  const newAside = jest.fn(() => true)
+  const store = useChatViewportStore.getState()
+  store.registerJumpToMessage(main)
+  const removeOld = store.registerSessionJump("aside", oldAside)
+  const removeNew = store.registerSessionJump("aside", newAside)
+  removeOld()
+  expect(useChatViewportStore.getState().sessionJumps.aside).toBe(newAside)
+  expect(useChatViewportStore.getState().jumpToMessage).toBe(main)
+  removeNew()
+  expect(useChatViewportStore.getState().sessionJumps).toEqual({})
 })

@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { filterPersonalAsideParents } from "@/lib/chat/search/engine"
 
 import {
   MAX_MESSAGE_SPAN,
@@ -18,7 +19,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 jest.setTimeout(30_000)
 
 function textPart(value: string) {
-  return { type: "text", text: value }
+  return { type: "text" as const, text: value }
 }
 
 function toolPart(name: string, input: unknown, output: unknown) {
@@ -194,6 +195,74 @@ describe("buildMessageReferenceText", () => {
     await getDb().messages.clear()
   })
   afterAll(dbFixture.dispose)
+
+  it("resolves a message citation into a side chat without widening personal-history access", async () => {
+    const db = getDb()
+    await db.sessions.bulkPut([
+      { id: "parent", title: "Parent", createdAt: 1, updatedAt: 1 },
+      {
+        id: "aside",
+        title: "Aside",
+        kind: "resource-workbench",
+        visibility: "embedded",
+        surfaceBinding: { kind: "session", sessionId: "parent" },
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ])
+    await db.messages.put({
+      id: "aside-message",
+      sessionId: "aside",
+      role: "assistant",
+      parts: [textPart("source aside answer")],
+      createdAt: 1,
+    })
+    const citationId = "message:aside#aside-message"
+    const parsed = parseMessageRefId(citationId.slice("message:".length))!
+    expect(await buildMessageReferenceText(parsed)).toBe("assistant: source aside answer")
+    await db.messages.update("aside-message", {
+      metadata: {
+        personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+      },
+    })
+    expect(await buildMessageReferenceText(parsed)).not.toContain("source aside answer")
+  })
+
+  it("keeps owner discovery usable while excluding a foreign-person parent's aside", async () => {
+    const parent = { id: "owner-parent", title: "Owner research", createdAt: 1, updatedAt: 1 }
+    const aside = {
+      id: "owner-aside",
+      kind: "resource-workbench" as const,
+      title: "Aside",
+      createdAt: 1,
+      updatedAt: 1,
+      surfaceBinding: { kind: "session" as const, sessionId: parent.id },
+    }
+    await getDb().sessions.bulkPut([parent, aside])
+    expect(await filterPersonalAsideParents([parent], [aside])).toEqual([parent])
+    await getDb().messages.put({
+      id: "foreign-source",
+      sessionId: parent.id,
+      role: "assistant",
+      createdAt: 1,
+      parts: [textPart("foreign private information")],
+      metadata: {
+        personalMarks: [
+          {
+            person: {
+              kind: "platform",
+              platform: "lark",
+              adapterId: "foreign",
+              remoteUserId: "another-person",
+            },
+            source: "test",
+            markedAt: 1,
+          },
+        ],
+      },
+    })
+    expect(await filterPersonalAsideParents([parent], [aside])).toEqual([])
+  })
 
   async function seed(sessionId: string, count: number, base = 1_000): Promise<void> {
     await getDb().messages.bulkPut(

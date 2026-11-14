@@ -22,6 +22,7 @@ import { loggers } from "@cognia/logging"
 
 import { messagesToMarkdown } from "@/components/ai-elements/conversation"
 import { jumpToSessionMessage } from "@/lib/chat/cross-session-jump"
+import { revealSideChat } from "@/lib/slash-commands/actions/side-chat"
 import { guildFromSession } from "@/lib/claude/guild"
 import { revealActiveWorkbenchPanel } from "@/lib/context-workbench/active-context"
 import { inboxConversationHref } from "@/lib/inbox/conversation-href"
@@ -108,14 +109,29 @@ export function useGlobalSearchActions({
   const { theme, setTheme } = useTheme()
 
   const openSession = useCallback(
-    (sessionId: string, messageId?: string) => {
-      const target = sessions.find((s) => s.id === sessionId)
+    (sessionId: string, messageId?: string, parentSessionId?: string) => {
+      const row = sessions.find((s) => s.id === sessionId)
+      const parentId =
+        parentSessionId ??
+        (row?.kind === "resource-workbench" && row.surfaceBinding?.kind === "session"
+          ? row.surfaceBinding.sessionId
+          : undefined)
+      const focusId = parentId ?? sessionId
+      const target = sessions.find((s) => s.id === focusId)
       if (host.onSelectSession) {
         // The host owns focusing (mobile also closes its drawer); we still
         // follow the workspace / guild first so its `select` lands correctly.
-        focusSession(target, sessionId, host.onSelectSession)
+        focusSession(target, focusId, host.onSelectSession)
       } else {
-        focusSession(target, sessionId, select)
+        focusSession(target, focusId, select)
+      }
+      if (parentId) {
+        void revealSideChat(parentId, sessionId, messageId)
+          .then((landed) => {
+            if (!landed) toast.error(t("jumpFailed"))
+          })
+          .catch(() => toast.error(t("jumpFailed")))
+        return
       }
       if (!messageId) return
       void jumpToSessionMessage(sessionId, messageId, { align: "center" }).then((landed) => {
@@ -405,7 +421,7 @@ export function useGlobalSearchActions({
     async (action: GlobalSearchAction) => {
       switch (action.type) {
         case "open-session":
-          openSession(action.sessionId, action.messageId)
+          openSession(action.sessionId, action.messageId, action.parentSessionId)
           return
         case "open-inbox-conversation":
           router.push(inboxConversationHref(action.conversationKey, action.messageId))
@@ -460,13 +476,38 @@ export function useGlobalSearchActions({
           // which for Pi packages are the only warnings there are.
           router.push(piPackageInstallHref(action.spec))
           return
-        case "reference-in-composer":
+        case "reference-in-composer": {
           // Handed to the composer through a window event rather than staged
           // here: staging is per entity kind and lives in the mention
           // registry, and the palette must not grow a second copy of it. See
           // `lib/chat/composer-reference-request.ts`.
-          requestComposerReference(action.candidate)
+          let candidate = action.candidate
+          if (
+            candidate.referenceTitle === undefined &&
+            (candidate.entityKind === "session" || candidate.entityKind === "message")
+          ) {
+            const { parseMessageRefId } = await import("@/lib/chat/mentions/message-reference")
+            const sourceSessionId =
+              candidate.entityKind === "session"
+                ? candidate.id
+                : parseMessageRefId(candidate.id)?.sessionId
+            const { preparePersonalDerivedHistory } =
+              await import("@/lib/execution/personal-visibility")
+            // Palette labels are owner UI text, just like the aside picker.
+            // Filter their provenance independently of the bounded body snapshot.
+            const title = await preparePersonalDerivedHistory(
+              undefined,
+              [{ id: candidate.id, text: candidate.title }],
+              {
+                sessionId: sourceSessionId,
+                legacyOwnerArtifact: true,
+              }
+            )
+            candidate = { ...candidate, referenceTitle: title.messages[0].text }
+          }
+          requestComposerReference(candidate)
           return
+        }
         case "callback":
           await action.run()
           return

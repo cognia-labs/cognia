@@ -1,3 +1,4 @@
+import { resolveSessionLinkTarget } from "./message-permalink"
 import {
   PERMALINK_MESSAGE_PARAM,
   PERMALINK_SESSION_PARAM,
@@ -110,4 +111,35 @@ describe("buildConversationLink", () => {
   it("falls back to a relative link without an origin", () => {
     expect(buildConversationLink("ses_1", { desktop: false, origin: null })).toBe("/?session=ses_1")
   })
+})
+
+it("resolves aside navigation to its parent and preserves a promoted chat's own identity", async () => {
+  const lookup = jest.fn(async (id: string) =>
+    id === "aside"
+      ? {
+          kind: "resource-workbench" as const,
+          surfaceBinding: { kind: "session" as const, sessionId: "parent" },
+        }
+      : { projectId: "p" }
+  )
+  expect(await resolveSessionLinkTarget("aside", lookup)).toEqual({
+    sessionId: "parent",
+    session: { projectId: "p" },
+    asideId: "aside",
+  })
+  expect(
+    await resolveSessionLinkTarget("resource-workbench:session:promoted", async () => ({
+      kind: "direct",
+    }))
+  ).toEqual({ sessionId: "resource-workbench:session:promoted", session: { kind: "direct" } })
+  expect(
+    await resolveSessionLinkTarget("aside", async (id) =>
+      id === "parent"
+        ? undefined
+        : {
+            kind: "resource-workbench",
+            surfaceBinding: { kind: "session", sessionId: "parent" },
+          }
+    )
+  ).toBeNull()
 })

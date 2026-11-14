@@ -19,9 +19,16 @@
  * button returns to.
  */
 
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
-import { parseMessagePermalink, type ReadableParams } from "@/lib/chat/message-permalink"
+import {
+  parseMessagePermalink,
+  resolveSessionLinkTarget,
+  type ReadableParams,
+  type SessionLinkLookup,
+} from "@/lib/chat/message-permalink"
+import { revealSideChat } from "@/lib/slash-commands/actions/side-chat"
+import { useProjectStore } from "@/stores/project/project-store"
 import { useChatStore } from "@/stores/chat"
 import { useChatViewportStore } from "@/stores/chat/chat-viewport-store"
 
@@ -46,6 +53,7 @@ export interface UseMessagePermalinkOptions {
    * The caller owns the message, since only it knows which surface is showing.
    */
   onUnresolved?: () => void
+  lookup?: SessionLinkLookup
 }
 
 function stripPermalinkParams() {
@@ -59,6 +67,7 @@ export function useMessagePermalink({
   params,
   onConsumed,
   onUnresolved,
+  lookup,
 }: UseMessagePermalinkOptions): void {
   const parsed = parseMessagePermalink(params)
   // Primitives, so the effects below can depend on the target without a new
@@ -68,6 +77,42 @@ export function useMessagePermalink({
 
   const armedKeyRef = useRef<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [target, setTarget] = useState<{
+    key: string
+    navigation: Awaited<ReturnType<typeof resolveSessionLinkTarget>>
+  } | null>(null)
+  const resolvedTargetRef = useRef<typeof target>(null)
+  useEffect(() => {
+    resolvedTargetRef.current = null
+    if (!sessionId || !messageId) return
+    let cancelled = false
+    let settled = false
+    const initialActive = useChatStore.getState().activeSessionId
+    const settle = (navigation: NonNullable<typeof target>["navigation"]) => {
+      if (cancelled || settled) return
+      settled = true
+      // Do not reclaim focus after the user moved on during the metadata read.
+      if (useChatStore.getState().activeSessionId !== initialActive) return
+      const resolved = { key: `${sessionId}::${messageId}`, navigation }
+      resolvedTargetRef.current = resolved
+      setTarget(resolved)
+    }
+    const timer = setTimeout(() => settle(null), PERMALINK_HYDRATION_TIMEOUT_MS)
+    void resolveSessionLinkTarget(sessionId, lookup).then(
+      (navigation) => {
+        clearTimeout(timer)
+        settle(navigation)
+      },
+      () => {
+        clearTimeout(timer)
+        settle(null)
+      }
+    )
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [sessionId, messageId, lookup])
   // Held in a ref, and refreshed in an effect rather than during render, so
   // `disarm` can stay identity-stable: it is what the giving-up timer closes
   // over, and a new identity per render would rearm that timer endlessly.
@@ -102,10 +147,44 @@ export function useMessagePermalink({
   useEffect(() => {
     if (!sessionId || !messageId) return
     const key = `${sessionId}::${messageId}`
+    if (target?.key !== key || target !== resolvedTargetRef.current) return
+    const navigation = target.navigation
+    if (!navigation) {
+      disarm(true)
+      onUnresolvedRef.current?.()
+      return
+    }
     if (armedKeyRef.current === key) return
     armedKeyRef.current = key
-    if (useChatStore.getState().activeSessionId !== sessionId) {
-      useChatStore.getState().setActiveSession(sessionId)
+    if (navigation.session.projectId) {
+      useProjectStore.getState().setActiveProject(navigation.session.projectId)
+    }
+    if (useChatStore.getState().activeSessionId !== navigation.sessionId) {
+      useChatStore.getState().setActiveSession(navigation.sessionId)
+    }
+    if (navigation.asideId) {
+      const controller = new AbortController()
+      void revealSideChat(
+        navigation.sessionId,
+        navigation.asideId,
+        messageId,
+        controller.signal
+      ).then(
+        (landed) => {
+          if (controller.signal.aborted) return
+          disarm(true)
+          if (!landed) onUnresolvedRef.current?.()
+        },
+        () => {
+          if (controller.signal.aborted) return
+          disarm(true)
+          onUnresolvedRef.current?.()
+        }
+      )
+      return () => {
+        controller.abort()
+        disarm(false)
+      }
     }
     if (timerRef.current != null) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
@@ -116,12 +195,14 @@ export function useMessagePermalink({
       disarm(true)
       onUnresolvedRef.current?.()
     }, PERMALINK_HYDRATION_TIMEOUT_MS)
-  }, [sessionId, messageId, disarm])
+    return () => disarm(false)
+  }, [sessionId, messageId, target, disarm])
 
   // Fire as soon as the linked message is actually on screen.
   useEffect(() => {
     if (!sessionId || !messageId) return
     if (armedKeyRef.current !== `${sessionId}::${messageId}`) return
+    if (target?.navigation?.asideId) return
     // Read fresh: `activeSessionId` from the subscription above is a render
     // behind the `setActiveSession` the arm effect just performed, so trusting
     // it here would disarm the link on the very first pass.
@@ -151,7 +232,16 @@ export function useMessagePermalink({
     // makes the next push a genuine change the hook can observe.
     disarm(true)
     onUnresolvedRef.current?.()
-  }, [sessionId, messageId, activeSessionId, messages, messagesLoading, jumpToMessage, disarm])
+  }, [
+    sessionId,
+    messageId,
+    target,
+    activeSessionId,
+    messages,
+    messagesLoading,
+    jumpToMessage,
+    disarm,
+  ])
 
   useEffect(() => () => disarm(false), [disarm])
 }

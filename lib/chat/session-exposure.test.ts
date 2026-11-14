@@ -1,5 +1,10 @@
 import type { ChatSession } from "@cognia/agent-config-types"
-import { filterExposedSessions, isEmbeddedSession, isSessionExposed } from "./session-exposure"
+import {
+  filterExposedSessions,
+  isEmbeddedSession,
+  isSessionExposed,
+  withScopedAsides,
+} from "./session-exposure"
 
 function session(overrides: Partial<ChatSession> = {}): ChatSession {
   return { id: "s-1", title: "Session", createdAt: 1, updatedAt: 1, ...overrides }
@@ -69,5 +74,52 @@ describe("imported subagent transcripts (ADR-0062)", () => {
   it("does not widen the other embedded kinds", () => {
     const workbench = session({ kind: "resource-workbench", visibility: "embedded" })
     expect(isSessionExposed(workbench, "standard-export")).toBe(false)
+  })
+})
+
+describe("scoped aside discovery", () => {
+  const parent = session({ id: "parent", projectId: "one" })
+  const aside = session({
+    id: "aside",
+    kind: "resource-workbench",
+    visibility: "embedded",
+    surfaceBinding: { kind: "session", sessionId: "parent" },
+  })
+
+  it("includes an aside only when its parent survived the caller's eligibility filters", () => {
+    expect(withScopedAsides([parent], [parent, aside])).toEqual([parent, aside])
+    // Archive, workspace and personal-history filtering all happen BEFORE expansion.
+    expect(withScopedAsides([], [parent, aside])).toEqual([])
+    expect(withScopedAsides([], [aside])).toEqual([])
+  })
+
+  it.each([
+    "main-list",
+    "global-search",
+    "plugin-enumeration",
+    "external-connector",
+    "standard-export",
+  ] as const)("does not change %s exposure", (channel) => {
+    expect(filterExposedSessions([parent, aside], channel)).toEqual([parent])
+  })
+
+  it("does not include other resource or editor sessions, nested asides, or duplicate promoted chats", () => {
+    const promoted = session({ id: "promoted", kind: "direct" })
+    const others = [
+      session({
+        ...aside,
+        id: "canvas",
+        surfaceBinding: { kind: "canvas", documentId: "c" },
+      } as never),
+      session({ ...aside, id: "workflow", kind: "workflow-editor" }),
+      session({ ...aside, id: "builder", kind: "agent-builder" }),
+      session({ ...aside, id: "subagent", kind: "subagent" }),
+      session({ ...aside, id: "nested", surfaceBinding: { kind: "session", sessionId: "aside" } }),
+    ]
+    expect(withScopedAsides([parent, promoted], [parent, aside, promoted, ...others])).toEqual([
+      parent,
+      promoted,
+      aside,
+    ])
   })
 })

@@ -64,3 +64,32 @@ export function filterExposedSessions<T extends ExposableSession>(
 ): T[] {
   return sessions.filter((session) => isSessionExposed(session, channel))
 }
+
+/**
+ * User-facing discovery only: expand an ALREADY eligible global-search result
+ * with its session-bound side chats. Apply archive, workspace and personal
+ * history eligibility to the parents before calling; missing parents stay closed.
+ * Never use this for headless-context, project-history-tool, main-list, plugins,
+ * connectors, exports or sync: their existing exposure channels do not widen.
+ */
+export function withScopedAsides<
+  T extends ExposableSession & {
+    id: string
+    platformBinding?: unknown
+    surfaceBinding?: { kind: string; sessionId?: string }
+  },
+>(exposed: readonly T[], all: readonly T[]): T[] {
+  const parents = filterExposedSessions(exposed, "global-search")
+  const parentIds = new Set(parents.filter((s) => !s.platformBinding).map((s) => s.id))
+  const existing = new Set(parents.map((s) => s.id))
+  return [
+    ...parents,
+    ...all.filter(
+      (s) =>
+        !existing.has(s.id) &&
+        s.kind === "resource-workbench" &&
+        s.surfaceBinding?.kind === "session" &&
+        parentIds.has(s.surfaceBinding.sessionId ?? "")
+    ),
+  ]
+}

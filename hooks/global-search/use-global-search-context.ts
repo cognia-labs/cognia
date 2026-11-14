@@ -157,6 +157,7 @@ export function useGlobalSearchContext({
       now: now.getTime(),
       activeProjectId: activeProjectId ?? null,
       activeSessionId: activeSessionId ?? null,
+      includeScopedAsides: true,
       runtimeSnapshot,
       sessions,
       workspaces,

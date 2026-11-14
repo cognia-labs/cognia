@@ -69,6 +69,8 @@ export interface EntityMentionCandidate {
   /** The record's own id. Round-trips into `EntitySelectionRef.entityId`. */
   id: string
   title: string
+  /** Independently filtered model-facing title when the picker uses an owner UI label. */
+  referenceTitle?: string
   /** Second line on the row and on the chip — status, scope, counts. */
   subtitle?: string
   /** In-app route the staged chip links back to, when the kind has one. */
@@ -335,12 +337,13 @@ export function entitySelectionFrom(
   snapshot: string,
   { capturedAt = Date.now(), fingerprint }: EntitySelectionStamp = {}
 ): EntitySelectionRef {
-  const withheld = snapshot.match(/\[Withheld: personal content of [^\]]+\]/)?.[0]
+  const withheld = (snapshot.match(/\[Withheld: personal content of [^\]]+\]/) ??
+    candidate.referenceTitle?.match(/\[Withheld: personal content of [^\]]+\]/))?.[0]
   return {
     kind: "entity",
     entityKind: candidate.entityKind,
     entityId: candidate.id,
-    title: withheld ?? candidate.title,
+    title: withheld ?? candidate.referenceTitle ?? candidate.title,
     snapshot: entitySnapshotBody(candidate.entityKind, snapshot),
     comment: "",
     capturedAt,
@@ -459,6 +462,7 @@ interface MessageCandidateInput {
   sessionId: string
   messageId: string
   sessionTitle: string
+  referenceTitle?: string
   role: string
   createdAt: number
   excerpt: string
@@ -479,6 +483,7 @@ function messageCandidate(input: MessageCandidateInput): EntityMentionCandidate 
     entityKind: "message",
     id: input.refId,
     title: input.sessionTitle,
+    referenceTitle: input.referenceTitle ?? input.sessionTitle,
     subtitle: `${input.role} · ${date} · ${input.excerpt}`.slice(0, 200),
     // The permalink, so the chip opens the exact message rather than the
     // conversation's tail — `hooks/chat/use-message-permalink.ts` consumes it.
@@ -501,34 +506,109 @@ function messageCandidate(input: MessageCandidateInput): EntityMentionCandidate 
 export async function listableSessionTitles(
   sessionIds: readonly string[]
 ): Promise<Map<string, string>> {
+  const references = await listableSessionReferences(sessionIds)
+  return new Map([...references].map(([id, ref]) => [id, ref.title]))
+}
+
+interface SessionReferenceTitle {
+  title: string
+  referenceTitle?: string
+}
+
+async function listableSessionReferences(
+  sessionIds: readonly string[],
+  ctx: EntityMentionContext = {},
+  scopedAsides = false
+): Promise<Map<string, SessionReferenceTitle>> {
   const unique = [...new Set(sessionIds)]
   if (unique.length === 0) return new Map()
-  const [{ getDb }, { isSessionExposed }] = await Promise.all([
-    import("@/lib/db/schema"),
-    import("@/lib/chat/session-exposure"),
-  ])
-  const sessions = await getDb().sessions.bulkGet(unique)
-  const titles = new Map<string, string>()
-  for (const session of sessions) {
-    if (!session) continue
-    if (!isSessionExposed(session, "global-search")) continue
-    if ((session as { archivedAt?: unknown }).archivedAt != null) continue
-    titles.set(session.id, await personalSessionReferenceTitle(session))
+  const { getDb } = await import("@/lib/db/schema")
+  const rows = (await getDb().sessions.bulkGet(unique)).filter((s) => s !== undefined)
+  if (scopedAsides) {
+    const parentIds = [
+      ...new Set(
+        rows.flatMap((s) =>
+          s.kind === "resource-workbench" && s.surfaceBinding?.kind === "session"
+            ? [s.surfaceBinding.sessionId]
+            : []
+        )
+      ),
+    ].filter((id) => !rows.some((s) => s.id === id))
+    if (parentIds.length > 0) {
+      rows.push(...(await getDb().sessions.bulkGet(parentIds)).filter((s) => s !== undefined))
+    }
+  }
+  const titles = await referenceSessionTitles(rows, ctx, scopedAsides)
+  return new Map([...titles].filter(([id]) => unique.includes(id)))
+}
+
+/** Scope and title attribution are shared by title and index-backed pickers. */
+async function referenceSessionTitles(
+  rows: readonly import("@cognia/agent-config-types").ChatSession[],
+  ctx: EntityMentionContext,
+  scopedAsides: boolean
+): Promise<Map<string, SessionReferenceTitle>> {
+  const { filterExposedSessions, withScopedAsides } = await import("@/lib/chat/session-exposure")
+  const { filterPersonalAsideParents } = await import("@/lib/chat/search/engine")
+  const exposed = filterExposedSessions(rows, "global-search").filter(
+    (s) =>
+      (!scopedAsides || !s.platformBinding) &&
+      s.archivedAt == null &&
+      (!ctx.projectId || !s.projectId || s.projectId === ctx.projectId)
+  )
+  const ordinaryTitles = new Map(
+    await Promise.all(
+      exposed.map(async (s) => [s.id, await personalSessionReferenceTitle(s)] as const)
+    )
+  )
+  // A withheld parent title must not reveal its children through a second list.
+  const parents = scopedAsides ? await filterPersonalAsideParents(exposed, rows) : exposed
+  const visible = scopedAsides ? withScopedAsides(parents, rows) : exposed
+  const titles = new Map<string, SessionReferenceTitle>()
+  for (const session of exposed) {
+    if (session.id !== ctx.sessionId)
+      titles.set(session.id, { title: ordinaryTitles.get(session.id)! })
+  }
+  for (const session of visible) {
+    if (session.id === ctx.sessionId || titles.has(session.id)) continue
+    const title = await personalSessionReferenceTitle(session)
+    const parentId =
+      session.surfaceBinding?.kind === "session" ? session.surfaceBinding.sessionId : undefined
+    const parentTitle = parentId ? ordinaryTitles.get(parentId) : undefined
+    if (parentTitle) {
+      const { getRuntimeTranslator } = await import("@/lib/i18n/runtime-translator")
+      const t = await getRuntimeTranslator("globalSearch")
+      const parent = rows.find((s) => s.id === parentId)!
+      const [displayTitle, displayParent] = await Promise.all([
+        personalSessionReferenceTitle(session, true),
+        personalSessionReferenceTitle(parent, true),
+      ])
+      titles.set(session.id, {
+        title: `${displayTitle} · ${t("sideChatOf", { title: displayParent })}`,
+        referenceTitle: `${title} · ${t("sideChatOf", { title: parentTitle })}`,
+      })
+    }
   }
   return titles
 }
 
 /** A title can summarize private turns outside a bounded transcript window. */
-async function personalSessionReferenceTitle(session: {
-  id: string
-  title: string
-}): Promise<string> {
-  const { preparePersonalDerivedHistory } = await import("@/lib/execution/personal-visibility")
-  const history = await preparePersonalDerivedHistory(
-    undefined,
-    [{ id: session.id, text: session.title || session.id }],
-    { sessionId: session.id, legacyOwnerArtifact: true }
-  )
+async function personalSessionReferenceTitle(
+  session: {
+    id: string
+    title: string
+  },
+  ownerDisplay = false
+): Promise<string> {
+  const { preparePersonalDerivedHistory, prepareOwnerDerivedHistory } =
+    await import("@/lib/execution/personal-visibility")
+  const messages = [{ id: session.id, text: session.title || session.id }]
+  const history = ownerDisplay
+    ? await prepareOwnerDerivedHistory(messages, { sessionId: session.id })
+    : await preparePersonalDerivedHistory(undefined, messages, {
+        sessionId: session.id,
+        legacyOwnerArtifact: true,
+      })
   return history.messages[0].text
 }
 
@@ -578,10 +658,12 @@ const LOCAL_HISTORY_REFERENCES: Record<HistoryReferenceKind, LocalHistoryReferen
 
       if (query.length === 0) {
         const { loadNewestChatSearchText } = await import("@/lib/db/chat-search-text")
-        const rows = (await loadNewestChatSearchText(ENTITY_MENTION_RESULT_LIMIT * 3)).filter(
-          (row) => !ctx.projectId || !row.projectId || row.projectId === ctx.projectId
+        const rows = await loadNewestChatSearchText(ENTITY_MENTION_RESULT_LIMIT * 3)
+        const titles = await listableSessionReferences(
+          rows.map((row) => row.sessionId),
+          ctx,
+          true
         )
-        const titles = await listableSessionTitles(rows.map((row) => row.sessionId))
         return rows
           .filter((row) => titles.has(row.sessionId))
           .slice(0, ENTITY_MENTION_RESULT_LIMIT)
@@ -589,7 +671,8 @@ const LOCAL_HISTORY_REFERENCES: Record<HistoryReferenceKind, LocalHistoryReferen
             messageCandidate({
               sessionId: row.sessionId,
               messageId: row.messageId,
-              sessionTitle: titles.get(row.sessionId) ?? row.sessionId,
+              sessionTitle: titles.get(row.sessionId)!.title,
+              referenceTitle: titles.get(row.sessionId)!.referenceTitle,
               role: row.role,
               createdAt: row.createdAt,
               excerpt: row.text,
@@ -608,21 +691,29 @@ const LOCAL_HISTORY_REFERENCES: Record<HistoryReferenceKind, LocalHistoryReferen
           // in the very conversation the user is aiming at — the opposite of
           // what a message-level reference is for.
           collapseBySession: false,
+          includeScopedAsides: true,
         },
         { pendingRows: pendingSearchRows }
       )
-      const titles = await listableSessionTitles(outcome.results.map((hit) => hit.sessionId))
-      return outcome.results.map((hit) =>
-        messageCandidate({
-          sessionId: hit.sessionId,
-          messageId: hit.messageId,
-          sessionTitle: titles.get(hit.sessionId) ?? "Conversation",
-          role: hit.role,
-          createdAt: hit.createdAt,
-          excerpt: hit.snippet.text,
-          refId: messageRefId(hit.sessionId, hit.messageId),
-        })
+      const titles = await listableSessionReferences(
+        outcome.results.map((hit) => hit.sessionId),
+        ctx,
+        true
       )
+      return outcome.results
+        .filter((hit) => titles.has(hit.sessionId))
+        .map((hit) =>
+          messageCandidate({
+            sessionId: hit.sessionId,
+            messageId: hit.messageId,
+            sessionTitle: titles.get(hit.sessionId)!.title,
+            referenceTitle: titles.get(hit.sessionId)!.referenceTitle,
+            role: hit.role,
+            createdAt: hit.createdAt,
+            excerpt: hit.snippet.text,
+            refId: messageRefId(hit.sessionId, hit.messageId),
+          })
+        )
     },
     async snapshot(id) {
       const { buildMessageReferenceText, parseMessageRefId } = await import("./message-reference")
@@ -745,7 +836,30 @@ function historyReferenceSource(
     ...(shortcut ? { shortcut } : {}),
     async search(query, ctx) {
       const { searchHistoryReferences } = await import("./host-references")
-      return searchHistoryReferences(kind, query, ctx, local)
+      const result = await searchHistoryReferences(kind, query, ctx, local)
+      if (kind !== "message") return result
+      const candidates = result.candidates.filter(
+        (c) => !ctx.sessionId || c.sourceSessionId !== ctx.sessionId
+      )
+      return {
+        ...result,
+        candidates: await Promise.all(
+          candidates.map(async (c) => {
+            if (c.referenceTitle !== undefined) return c
+            const { preparePersonalDerivedHistory } =
+              await import("@/lib/execution/personal-visibility")
+            const title = await preparePersonalDerivedHistory(
+              undefined,
+              [{ id: c.id, text: c.title }],
+              {
+                sessionId: c.sourceSessionId,
+                legacyOwnerArtifact: true,
+              }
+            )
+            return { ...c, referenceTitle: title.messages[0].text }
+          })
+        ),
+      }
     },
     async snapshot(candidate) {
       const { snapshotHistoryReference } = await import("./host-references")
@@ -881,27 +995,17 @@ function registerBuiltinEntityMentionSources(): void {
     prefix: "chat:",
     async load(ctx) {
       const { listSessions } = await import("@/lib/db/sessions")
-      const { filterExposedSessions } = await import("@/lib/chat/session-exposure")
       const rows = await listSessions()
-      const visible =
-        // A subagent's inner transcript, a resource-workbench aside and a
-        // workflow-editor session are all `embedded`: they are reachable from
-        // the turn that owns them, never from a list. Offering them here made
-        // the panel's idea of "a conversation" disagree with every other
-        // surface in the app — this is the same channel ⌘K asks about.
-        filterExposedSessions(rows, "global-search")
-          // Never offer the conversation you are composing in. Its transcript
-          // is already the context — staging a snapshot of it would duplicate
-          // every message the model can see anyway.
-          .filter((s) => s.id !== ctx.sessionId)
-          .filter((s) => !ctx.projectId || !s.projectId || s.projectId === ctx.projectId)
+      const titles = await referenceSessionTitles(rows, ctx, true)
+      const visible = rows.filter((s) => titles.has(s.id))
       return Promise.all(
         visible.map(async (s) => {
-          const title = await personalSessionReferenceTitle(s)
+          const { title, referenceTitle } = titles.get(s.id)!
           return {
             entityKind: "session" as const,
             id: s.id,
             title,
+            ...(referenceTitle ? { referenceTitle } : {}),
             subtitle: new Date(s.updatedAt).toISOString().slice(0, 10),
             href: `/?session=${encodeURIComponent(s.id)}`,
             searchText: haystack(title, s.id),

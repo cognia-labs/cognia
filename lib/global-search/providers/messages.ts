@@ -62,6 +62,7 @@ export function toChatSearchQuery(
     roles: f.roles && f.roles.length > 0 ? f.roles : undefined,
     after: f.after,
     before: f.before,
+    includeScopedAsides: ctx.includeScopedAsides === true,
   }
 }
 
@@ -71,7 +72,7 @@ export function toChatSearchQuery(
  * them in a pane that cannot reply on the platform.
  */
 export function messageHitAction(
-  result: Pick<ChatSearchResult, "sessionId" | "messageId">,
+  result: Pick<ChatSearchResult, "sessionId" | "messageId" | "asideParentId">,
   ctx: Pick<GlobalSearchContext, "sessions">
 ): GlobalSearchAction {
   const binding = ctx.sessions.find((s) => s.id === result.sessionId)?.platformBinding
@@ -82,7 +83,18 @@ export function messageHitAction(
       messageId: result.messageId,
     }
   }
-  return { type: "open-session", sessionId: result.sessionId, messageId: result.messageId }
+  const session = ctx.sessions.find((s) => s.id === result.sessionId)
+  const parentId =
+    result.asideParentId ??
+    (session?.kind === "resource-workbench" && session.surfaceBinding?.kind === "session"
+      ? session.surfaceBinding.sessionId
+      : undefined)
+  return {
+    type: "open-session",
+    sessionId: result.sessionId,
+    messageId: result.messageId,
+    ...(parentId ? { parentSessionId: parentId } : {}),
+  }
 }
 
 export function messageResultToItem(
@@ -90,13 +102,22 @@ export function messageResultToItem(
   ctx: GlobalSearchContext
 ): GlobalSearchItem {
   const roleLabel = ctx.t(`globalSearch.roles.${roleKey(result.role)}`)
+  const action = messageHitAction(result, ctx)
+  const parent =
+    action.type === "open-session" && action.parentSessionId
+      ? ctx.sessions.find((s) => s.id === action.parentSessionId)
+      : undefined
   return {
     id: `message:${result.messageId}`,
     kind: "message",
     title: result.sessionTitle?.trim() || ctx.t("globalSearch.untitledConversation"),
     subtitle: result.snippet.text,
     subtitlePositions: result.snippet.positions,
-    meta: roleLabel,
+    meta: parent
+      ? ctx.t("globalSearch.sideChatOf", {
+          title: parent.title || ctx.t("globalSearch.untitledConversation"),
+        })
+      : roleLabel,
     icon: { lucide: MessageSquareTextIcon },
     score: normalizeMessageScore(result.score),
     timestamp: result.createdAt,
@@ -110,7 +131,7 @@ export function messageResultToItem(
       occurrenceCount: result.count,
       snippet: result.snippet,
     },
-    action: messageHitAction(result, ctx),
+    action,
   }
 }
 

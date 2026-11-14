@@ -280,3 +280,8 @@ describe("useGlobalSearchContext", () => {
     }
   })
 })
+
+it("opts only interactive discovery into scoped aside history", () => {
+  const { result } = renderHook(() => useGlobalSearchContext({ sessions: [], scope: "all" }))
+  expect(result.current.includeScopedAsides).toBe(true)
+})

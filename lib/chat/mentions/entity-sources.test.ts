@@ -1,3 +1,9 @@
+import globalSearchMessages from "@/i18n/messages/en/globalSearch.json"
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  getRuntimeTranslator:
+    async () => (key: keyof typeof globalSearchMessages, values: { title: string }) =>
+      String(globalSearchMessages[key]).replace("{title}", values.title),
+}))
 import enMessages from "@/i18n/messages/en/chat.json"
 import zhMessages from "@/i18n/messages/zh-CN/chat.json"
 
@@ -22,8 +28,17 @@ import {
 import { invalidateEntityMentionCaches } from "./entity-cache"
 import { __setHostHistoryReferenceClientForTests } from "./host-references"
 import type { EntitySelectionKind } from "@/types/artifact/artifact"
-import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
+import {
+  preparePersonalDerivedHistory,
+  prepareOwnerDerivedHistory,
+} from "@/lib/execution/personal-visibility"
 jest.mock("@/lib/execution/personal-visibility", () => ({
+  prepareOwnerDerivedHistory: jest.fn(async (messages: unknown[]) => ({
+    messages,
+    readers: [],
+    withheldMessageIds: [],
+    visibilityDigest: "owner",
+  })),
   preparePersonalDerivedHistory: jest.fn(
     async <T extends { id: string }>(_sessionId: string | undefined, messages: readonly T[]) => ({
       messages: [...messages],
@@ -61,6 +76,8 @@ jest.mock("@/stores/artifact/artifact-store", () => ({
 // Same for `@msg:`, which reaches the ADR-0099 engine rather than a table.
 const searchChatHistoryMock = jest.fn()
 jest.mock("@/lib/chat/search/engine", () => ({
+  filterPersonalAsideParents: (...args: unknown[]) =>
+    jest.requireActual("@/lib/chat/search/engine").filterPersonalAsideParents(...args),
   searchChatHistory: (...args: unknown[]) => searchChatHistoryMock(...args),
 }))
 const loadNewestMock = jest.fn()
@@ -626,7 +643,9 @@ describe("@msg: candidates", () => {
       indexIncomplete: false,
     })
     loadNewestMock.mockResolvedValue([])
-    bulkGetMock.mockResolvedValue([])
+    bulkGetMock.mockImplementation(async (ids: string[]) =>
+      ids.map((id) => ({ id, title: id, projectId: "p" }))
+    )
   })
 
   const hit = (over: Record<string, unknown> = {}) => ({
@@ -707,7 +726,13 @@ describe("@msg: candidates", () => {
       // Pre-isolation rows carry no workspace stamp and must stay reachable.
       { messageId: "c", sessionId: "sc", projectId: "", role: "user", createdAt: 0, text: "x" },
     ])
-    bulkGetMock.mockImplementation(async (ids: string[]) => ids.map((id) => ({ id, title: id })))
+    bulkGetMock.mockImplementation(async (ids: string[]) =>
+      ids.map((id) => ({
+        id,
+        title: id,
+        projectId: id === "sb" ? "q" : id === "sa" ? "p" : undefined,
+      }))
+    )
     const rows = await searchCandidates(source(), "", { projectId: "p" })
     expect(rows.map((r) => r.id)).toEqual(["sa#a", "sc#c"])
   })
@@ -1004,7 +1029,13 @@ describe("history sources on a paired device", () => {
     const source = getEntityMentionSourceByPrefix(prefix)!
     const ctx = { projectId: "p", sessionId: "s" }
     await expect(searchEntityMentionCandidates(source, "deploy", ctx)).resolves.toEqual({
-      candidates: [candidate({ entityKind: kind, id: `host-${kind}` })],
+      candidates: [
+        candidate({
+          entityKind: kind,
+          id: `host-${kind}`,
+          ...(kind === "message" ? { referenceTitle: "Prefers pnpm" } : {}),
+        }),
+      ],
     })
     expect(host.search).toHaveBeenCalledWith(kind, "deploy", ctx)
 
@@ -1090,5 +1121,121 @@ describe("@canvas: source", () => {
     await expect(source.fingerprint!(candidate)).resolves.toBe("2000")
     await expect(source.snapshot({ ...candidate, id: "gone" })).resolves.toBeNull()
     await expect(source.fingerprint!({ ...candidate, id: "gone" })).resolves.toBeNull()
+  })
+})
+
+describe("scoped aside mention discovery", () => {
+  const parent = { id: "parent", title: "Research", updatedAt: 1, projectId: "p" }
+  const aside = {
+    id: "aside",
+    title: "Counterexample",
+    updatedAt: 2,
+    kind: "resource-workbench",
+    surfaceBinding: { kind: "session", sessionId: "parent" },
+  }
+  const msg = {
+    messageId: "m-aside",
+    sessionId: "aside",
+    projectId: "",
+    role: "assistant",
+    createdAt: 1,
+    text: "needle",
+  }
+  beforeEach(() => {
+    invalidateEntityMentionCaches()
+    loadNewestMock.mockResolvedValue([msg])
+    searchChatHistoryMock.mockResolvedValue({
+      results: [
+        { ...msg, sessionTitle: "Counterexample", snippet: { text: "needle", positions: [] } },
+      ],
+    })
+  })
+  async function offer(rows: unknown[], prefix: "chat:" | "msg:", query = "", ctx = {}) {
+    listSessionsMock.mockResolvedValue(rows)
+    bulkGetMock.mockImplementation(async (ids: string[]) =>
+      ids.map((id) => rows.find((s) => (s as { id: string }).id === id))
+    )
+    return searchCandidates(getEntityMentionSourceByPrefix(prefix)!, query, ctx)
+  }
+  it.each(["chat:", "msg:"] as const)(
+    "offers labelled scoped asides through %s",
+    async (prefix) => {
+      const result = await offer([parent, aside], prefix, "", {
+        projectId: "p",
+        sessionId: "parent",
+      })
+      expect(result).toHaveLength(1)
+      expect(result[0].title).toContain("Counterexample")
+      expect(result[0].title).toContain("Side chat of “Research”")
+      expect(result[0].href).toContain("session=aside")
+      expect(await offer([parent, aside], prefix, "", { sessionId: "aside" })).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: prefix === "chat:" ? "aside" : "aside#m-aside" }),
+        ])
+      )
+    }
+  )
+  it.each(["chat:", "msg:"] as const)("inherits parent eligibility in %s", async (prefix) => {
+    for (const excluded of [
+      undefined,
+      { ...parent, archivedAt: 1 },
+      { ...parent, projectId: "other" },
+      { ...parent, platformBinding: { conversationKey: "im" } },
+    ]) {
+      invalidateEntityMentionCaches()
+      const result = await offer([aside, ...(excluded ? [excluded] : [])], prefix, "", {
+        projectId: "p",
+      })
+      expect(result).toEqual([])
+    }
+  })
+  it("filters current, missing and out-of-scope aside content hits instead of falling back to raw titles", async () => {
+    expect(await offer([aside], "msg:", "needle")).toEqual([])
+    expect(await offer([parent, aside], "msg:", "needle", { sessionId: "aside" })).toEqual([])
+    const results = await offer([parent, aside], "msg:", "needle", { projectId: "p" })
+    expect(results[0].title).toContain("Side chat of “Research”")
+    expect(searchChatHistoryMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ includeScopedAsides: true }),
+      expect.anything()
+    )
+  })
+  it.each(["chat:", "msg:"] as const)(
+    "matches owner-visible aside titles in %s while independently filtering the staged title",
+    async (prefix) => {
+      const hidden = "[Withheld: personal content of Host owner]"
+      for (const id of ["parent", "aside"]) {
+        jest.mocked(preparePersonalDerivedHistory).mockResolvedValueOnce({
+          messages: [{ id, text: hidden }],
+          readers: [],
+          withheldMessageIds: [id],
+          visibilityDigest: "private",
+        } as never)
+      }
+      const results = await offer(
+        [parent, aside],
+        prefix,
+        prefix === "chat:" ? "counterexample" : ""
+      )
+      expect(results).toHaveLength(1)
+      expect(results[0].title).toContain("Counterexample")
+      expect(results[0].title).toContain("Research")
+      const staged = entitySelectionFrom(
+        results[0],
+        "public excerpt outside the private title's provenance"
+      )
+      expect(staged.title).toBe(hidden)
+      expect(JSON.stringify(staged)).not.toMatch(/Counterexample|Research/)
+    }
+  )
+
+  it("keeps an aside out when its parent's derived title is withheld", async () => {
+    jest.mocked(prepareOwnerDerivedHistory).mockResolvedValueOnce({
+      messages: [{ id: "parent", text: "[Withheld: personal content of Host owner]" }],
+      withheldMessageIds: ["parent"],
+      readers: [],
+      visibilityDigest: "private",
+    } as never)
+    const results = await offer([parent, aside], "chat:")
+    expect(results.map((c) => c.id)).not.toContain("aside")
   })
 })

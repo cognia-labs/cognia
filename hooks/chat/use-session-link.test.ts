@@ -7,6 +7,11 @@ import { useProjectStore } from "@/stores/project/project-store"
 
 import { parseSessionLink, useSessionLink } from "./use-session-link"
 
+const mockReveal = jest.fn(async (..._args: unknown[]) => true)
+jest.mock("@/lib/slash-commands/actions/side-chat", () => ({
+  revealSideChat: (...args: unknown[]) => mockReveal(...args),
+}))
+
 describe("parseSessionLink", () => {
   it("reads a session-only link and leaves permalinks to their own consumer", () => {
     expect(parseSessionLink(new URLSearchParams("session=s1"))).toBe("s1")
@@ -22,6 +27,7 @@ describe("useSessionLink", () => {
   let setActiveProject: jest.SpyInstance
 
   beforeEach(() => {
+    mockReveal.mockClear()
     setActiveSession = jest
       .spyOn(useChatStore.getState(), "setActiveSession")
       .mockImplementation(() => undefined as never)
@@ -50,6 +56,23 @@ describe("useSessionLink", () => {
     expect(setActiveSession).toHaveBeenCalledWith("s1")
     expect(callbacks.onOpened).toHaveBeenCalledTimes(1)
     expect(callbacks.onUnresolved).not.toHaveBeenCalled()
+  })
+
+  it("opens a session-bound side chat within its parent's workspace", async () => {
+    const lookup = jest.fn(async (id: string) =>
+      id === "aside"
+        ? {
+            kind: "resource-workbench" as const,
+            surfaceBinding: { kind: "session" as const, sessionId: "parent" },
+          }
+        : { projectId: "parent-project" }
+    )
+    const callbacks = run("session=aside", lookup)
+    await waitFor(() => expect(callbacks.onConsumed).toHaveBeenCalledTimes(1))
+    expect(setActiveSession).toHaveBeenCalledWith("parent")
+    expect(setActiveSession).not.toHaveBeenCalledWith("aside")
+    expect(setActiveProject).toHaveBeenCalledWith("parent-project")
+    expect(mockReveal).toHaveBeenCalledWith("parent", "aside", undefined, expect.any(AbortSignal))
   })
 
   it("says so, and focuses nothing, when the conversation does not exist here", async () => {

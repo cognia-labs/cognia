@@ -21,9 +21,8 @@
  *   copy) and exposed nowhere, which is why "go to the message that produced
  *   this artifact" had no seam to call.
  *
- * Only the primary message list registers here. Secondary lists — the dock's
- * own per-resource chat panel is one — would otherwise clobber the main
- * conversation's jump target with their own.
+ * The primary jump stays separate from per-session registrations, so a dock
+ * list can be targeted without clobbering the main conversation's jump.
  */
 
 import { create } from "zustand"
@@ -64,6 +63,9 @@ export interface ChatViewportState {
    */
   jumpToMessage: JumpToMessage | null
   registerJumpToMessage: (jump: JumpToMessage | null) => void
+  sessionJumps: Readonly<Record<string, JumpToMessage>>
+  /** Returns an owner-scoped cleanup; a stale unmount cannot remove a newer list. */
+  registerSessionJump: (sessionId: string, jump: JumpToMessage) => () => void
 }
 
 export type JumpToMessage = (
@@ -75,6 +77,19 @@ export type JumpToMessage = (
 export const useChatViewportStore = create<ChatViewportState>()((set, get) => ({
   activeTurnMessageIds: EMPTY_IDS,
   jumpToMessage: null,
+  sessionJumps: {},
+
+  registerSessionJump: (sessionId, jump) => {
+    set((state) => ({ sessionJumps: { ...state.sessionJumps, [sessionId]: jump } }))
+    return () => {
+      if (get().sessionJumps[sessionId] !== jump) return
+      set((state) => {
+        const sessionJumps = { ...state.sessionJumps }
+        delete sessionJumps[sessionId]
+        return { sessionJumps }
+      })
+    }
+  },
 
   setActiveTurnMessageIds: (ids) => {
     if (sameIds(get().activeTurnMessageIds, ids)) return

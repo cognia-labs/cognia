@@ -25,6 +25,8 @@
  * and would also take mouse hover away on desktop and on hybrid touch laptops.
  */
 
+import { useLiveQuery } from "dexie-react-hooks"
+import { getDb } from "@/lib/db/schema"
 import { SearchIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -142,7 +144,22 @@ export function GlobalSearchDialog({
   // shell, and the cross-workspace live query re-reads every full session row
   // on each `sessions` write (once per persisted streaming chunk). The engine
   // below is already gated on `open`; the list feeding it has to be too.
-  const { sessions, select, create } = useSessions({ crossWorkspace: true, enabled: open })
+  const {
+    sessions: mainSessions,
+    select,
+    create,
+  } = useSessions({ crossWorkspace: true, enabled: open })
+  // useSessions intentionally returns main-list rows only. Read the embedded
+  // candidates here, solely while discovery is open; the provider still requires
+  // an eligible parent before exposing one. No sidebar/agent list is widened.
+  const asideSessions = useLiveQuery(
+    () => (open ? getDb().sessions.where("kind").equals("resource-workbench").toArray() : []),
+    [open]
+  )
+  const sessions = useMemo(
+    () => [...mainSessions, ...(asideSessions ?? [])],
+    [mainSessions, asideSessions]
+  )
   const ctx = useGlobalSearchContext({ sessions, scope })
   // Named, not just "this workspace": the point of the chip is to say WHICH
   // one, since the reason a hit is missing is that it lives in another.

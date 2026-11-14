@@ -128,6 +128,25 @@ describe("the backlink table", () => {
     expect(await countMentionLinksFor("entity", "memory:mem_1")).toBe(1)
   })
 
+  it("indexes and reads a Send-to-main citation back to the exact aside message", async () => {
+    const citation = "message:aside#aside-message"
+    const rows = projectMessageMentionLinks(
+      message({
+        metadata: { mentions: [mention("entity", citation, "Aside answer")] },
+      })
+    )
+    await putMentionLinks(rows)
+    expect(await listMentionLinksFor("entity", citation)).toEqual([
+      expect.objectContaining({
+        sessionId: "s1",
+        messageId: "m1",
+        refId: citation,
+        refLabel: "Aside answer",
+      }),
+    ])
+    expect(await countMentionLinksFor("entity", citation)).toBe(1)
+  })
+
   it("orders citations newest first", async () => {
     await putMentionLinks([
       row({ linkId: "a", messageId: "a", createdAt: 1 }),

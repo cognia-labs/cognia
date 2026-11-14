@@ -10,12 +10,14 @@ interface ChatStateLike {
   activeSessionId: string | null
   messages: UIMessage[]
   messagesLoading: boolean
+  sessions: Record<string, { messages: UIMessage[]; messagesLoading: boolean }>
   setActiveSession: jest.Mock
 }
 
 const chatListeners = new Set<Listener>()
 const chatState: ChatStateLike = {
   activeSessionId: null,
+  sessions: {},
   messages: [],
   messagesLoading: false,
   setActiveSession: jest.fn((id: string) => {
@@ -29,7 +31,8 @@ function notifyChat() {
 }
 
 const viewportListeners = new Set<Listener>()
-const viewportState: { jumpToMessage: jest.Mock | null } = { jumpToMessage: null }
+const viewportState: { jumpToMessage: jest.Mock | null; sessionJumps: Record<string, jest.Mock> } =
+  { jumpToMessage: null, sessionJumps: {} }
 function notifyViewport() {
   for (const listener of [...viewportListeners]) listener()
 }
@@ -78,6 +81,8 @@ beforeEach(() => {
   chatState.messagesLoading = false
   chatState.setActiveSession.mockClear()
   viewportState.jumpToMessage = null
+  viewportState.sessionJumps = {}
+  chatState.sessions = {}
 })
 
 afterEach(() => {
@@ -169,4 +174,38 @@ describe("jumpToSessionMessage", () => {
     expect(viewportListeners.size).toBe(0)
     expect(jest.getTimerCount()).toBe(0)
   })
+})
+
+it("waits for aside hydration and its own list while the parent stays active", async () => {
+  chatState.activeSessionId = "parent"
+  const mainJump = jest.fn(() => true)
+  viewportState.jumpToMessage = mainJump
+  const pending = jumpToSessionMessage("aside", "target", {
+    activeSessionId: "parent",
+    align: "center",
+  })
+  const asideJump = jest.fn(() => true)
+  chatState.sessions.aside = { messages: [message("target")], messagesLoading: false }
+  notifyChat()
+  expect(mainJump).not.toHaveBeenCalled()
+  viewportState.sessionJumps.aside = asideJump
+  notifyViewport()
+  await expect(pending).resolves.toBe(true)
+  expect(asideJump).toHaveBeenCalledWith("target", undefined, { align: "center" })
+  expect(chatState.activeSessionId).toBe("parent")
+  expect(chatState.setActiveSession).not.toHaveBeenCalled()
+})
+
+it("cancels a pending aside jump when the consumer unmounts", async () => {
+  chatState.activeSessionId = "parent"
+  const controller = new AbortController()
+  const pending = jumpToSessionMessage("aside", "target", {
+    activeSessionId: "parent",
+    signal: controller.signal,
+  })
+  controller.abort()
+  await expect(pending).resolves.toBe(false)
+  expect(chatListeners.size).toBe(0)
+  expect(viewportListeners.size).toBe(0)
+  expect(jest.getTimerCount()).toBe(0)
 })
