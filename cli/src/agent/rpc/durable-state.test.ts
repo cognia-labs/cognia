@@ -80,7 +80,30 @@ describe("createDurableRpcStateStore", () => {
         suspendedTurn: null,
         recoveryRequired: false,
         agentBinding: null,
+        dispatchFence: null,
       })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("round-trips a dispatch fence identity and keeps a malformed one fenced", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "cognia-rpc-state-"))
+    try {
+      const store = createDurableRpcStateStore((sessionId) => path.join(root, sessionId))
+      store.update("fenced", (state) => {
+        state.dispatchFence = { childRunId: "child-1", dispatchEpoch: 3 }
+      })
+      expect(createDurableRpcStateStore((id) => path.join(root, id)).read("fenced")).toMatchObject({
+        dispatchFence: { childRunId: "child-1", dispatchEpoch: 3 },
+      })
+
+      const file = path.join(root, "fenced", "rpc-state.json")
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+      parsed.dispatchFence = { childRunId: 7 }
+      writeFileSync(file, JSON.stringify(parsed))
+      expect(store.read("fenced").dispatchFence).toEqual({ childRunId: "", dispatchEpoch: -1 })
+      expect(store.read("missing").dispatchFence).toBeNull()
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

@@ -40,6 +40,15 @@ export interface AgentRpcService {
    * mid-run. Optional so a service that never runs turns need not implement it.
    */
   activeTurns?(): number
+  /** Worker transport loss only; generic RPC EOF continues to drain. */
+  controlLost?(): void
+  /** Node-side authority for WP2b's mandatory pre-execution host_rpc check. */
+  admitWorkerTool?(sessionId: string): {
+    allowed: boolean
+    leaseTtlMs?: number
+    childRunId?: string
+    dispatchEpoch?: number
+  }
   handle<Method extends RpcMethod>(
     method: Method,
     params: RpcMethodMap[Method]["params"],

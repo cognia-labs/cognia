@@ -104,6 +104,7 @@ export const RPC_METHODS = [
   "turn/steer",
   "turn/followUp",
   "turn/abort",
+  "dispatch/renew",
   "turn/wait",
   "session/model/set",
   "session/thinking/set",
@@ -169,6 +170,7 @@ export const SIDE_EFFECTING_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>
   "turn/steer",
   "turn/followUp",
   "turn/abort",
+  "dispatch/renew",
   "session/model/set",
   "session/thinking/set",
   "session/permissionMode/set",
@@ -219,6 +221,9 @@ export type HostNotificationMethod = (typeof HOST_NOTIFICATION_METHODS)[number]
 
 const nonEmptyString = v.pipe(v.string(), v.minLength(1))
 const optionalCommandId = v.optional(nonEmptyString)
+const dispatchEpoch = v.pipe(v.number(), v.integer(), v.minValue(1), v.safeInteger())
+const leaseTtlMs = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(2_147_483_647))
+const dispatchFence = v.object({ childRunId: nonEmptyString, dispatchEpoch, leaseTtlMs })
 const emptyParams = v.object({})
 const okResult = v.looseObject({ ok: v.literal(true) })
 const sessionParams = v.object({ sessionId: nonEmptyString })
@@ -498,6 +503,7 @@ export const rpcMethodSchemas = {
       sessionId: nonEmptyString,
       input: inputSchema,
       commandId: optionalCommandId,
+      fence: v.optional(dispatchFence),
       timeoutMs: v.optional(v.pipe(v.number(), v.minValue(1))),
       idleTimeoutMs: v.optional(v.pipe(v.number(), v.minValue(1))),
       maxSteps: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
@@ -522,13 +528,33 @@ export const rpcMethodSchemas = {
     result: objectResult,
   },
   "turn/abort": {
-    params: v.looseObject({
+    params: v.pipe(
+      v.looseObject({
+        sessionId: nonEmptyString,
+        commandId: optionalCommandId,
+        /** Recorded on the abort receipt and in the audit log. */
+        reason: v.optional(v.string()),
+        targetTurnCommandId: v.optional(nonEmptyString),
+        dispatchEpoch: v.optional(dispatchEpoch),
+        timeoutMs: v.optional(v.pipe(v.number(), v.minValue(1), v.finite())),
+      }),
+      v.check(
+        (params) =>
+          (params.targetTurnCommandId === undefined) === (params.dispatchEpoch === undefined),
+        "strict stop requires targetTurnCommandId and dispatchEpoch"
+      )
+    ),
+    result: objectResult,
+  },
+  "dispatch/renew": {
+    params: v.object({
       sessionId: nonEmptyString,
       commandId: optionalCommandId,
-      /** Recorded on the abort receipt and in the audit log. */
-      reason: v.optional(v.string()),
+      childRunId: nonEmptyString,
+      dispatchEpoch,
+      leaseTtlMs,
     }),
-    result: objectResult,
+    result: v.looseObject({ renewed: v.boolean(), commandId: nonEmptyString }),
   },
   "turn/wait": {
     params: v.looseObject({

@@ -6,6 +6,25 @@ import { RPC_PROTOCOL_VERSION } from "@/packages/agent/src/protocol"
 import { createAgentRpcServer, type AgentRpcServiceContext } from "./server"
 
 describe("createAgentRpcServer", () => {
+  it("keeps worker control-loss handling separate from generic RPC EOF", async () => {
+    const input = new PassThrough()
+    const controlLost = jest.fn()
+    const close = jest.fn(async () => undefined)
+    const server = createAgentRpcServer({
+      input,
+      output: new PassThrough(),
+      diagnostic: new PassThrough(),
+      service: { methods: [], capabilities: [], handle: jest.fn(), close, controlLost },
+      hostVersion: "test",
+      runtimeVersion: "test",
+      instanceId: "test",
+    })
+    const serving = server.serve()
+    input.end()
+    await serving
+    expect(controlLost).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledTimes(1)
+  })
   it("enforces negotiation, validates params, and delegates only supported methods", async () => {
     const input = new PassThrough()
     const output = new PassThrough()

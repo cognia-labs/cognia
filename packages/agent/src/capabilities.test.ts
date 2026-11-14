@@ -11,6 +11,11 @@ const exported = Object.entries(capabilities)
   .map(([, value]) => value as string)
 
 describe("capability identifiers", () => {
+  it("names the independent worker fence and turn interruption contracts", () => {
+    expect(capabilities.CAP_WORKER_SELF_FENCE_V1).toBe("worker-self-fence-v1")
+    expect(capabilities.CAP_TURN_INTERRUPT_V1).toBe("turn-interrupt-v1")
+    expect(capabilities.WORKER_FENCE_GRACE_MS).toBeGreaterThan(0)
+  })
   it("exports at least one capability constant", () => {
     expect(exported.length).toBeGreaterThan(0)
   })

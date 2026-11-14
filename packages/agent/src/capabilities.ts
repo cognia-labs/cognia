@@ -71,6 +71,12 @@ export const CAP_COMPACTION_UNDO_LIVE_V1 = "compaction-undo-live-v1"
 export const CAP_SESSION_FOREST_V1 = "session-forest-v1"
 /** Remote handoff to a worker host. */
 export const CAP_WORKER_DISPATCH_V1 = "worker-dispatch-v1"
+/** Worker closes admission and interrupts when its relative dispatch lease expires. */
+export const CAP_WORKER_SELF_FENCE_V1 = "worker-self-fence-v1"
+/** Targeted interruption with a proof-bearing stop receipt. */
+export const CAP_TURN_INTERRUPT_V1 = "turn-interrupt-v1"
+/** Local interruption budget; cross-device propagation is verified separately. */
+export const WORKER_FENCE_GRACE_MS = 5_000
 /** Host-persisted, immutable, versioned agent definitions (`agent/*`). */
 export const CAP_AGENT_DEFINITIONS_V1 = "agent-definitions-v1"
 /** Turn results validated against a definition's output schema. */

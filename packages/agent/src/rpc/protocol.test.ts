@@ -18,6 +18,39 @@ import {
 } from "./protocol"
 
 describe("RPC protocol", () => {
+  it("validates relative fences and epoch-bound renewals without changing v2", () => {
+    const fence = { childRunId: "child", dispatchEpoch: 2, leaseTtlMs: 100 }
+    expect(parseRpcMethodParams("turn/run", { sessionId: "s", input: "go", fence })).toMatchObject({
+      fence,
+    })
+    expect(parseRpcMethodParams("dispatch/renew", { sessionId: "s", ...fence })).toMatchObject(
+      fence
+    )
+    for (const invalid of [
+      { dispatchEpoch: 0 },
+      { dispatchEpoch: 1.5 },
+      { leaseTtlMs: 0 },
+      { leaseTtlMs: Infinity },
+      { childRunId: "" },
+    ]) {
+      expect(() =>
+        parseRpcMethodParams("dispatch/renew", { sessionId: "s", ...fence, ...invalid })
+      ).toThrow()
+    }
+    expect(
+      parseRpcMethodParams("turn/abort", {
+        sessionId: "s",
+        targetTurnCommandId: "turn",
+        dispatchEpoch: 2,
+        timeoutMs: 10,
+      })
+    ).toMatchObject({ targetTurnCommandId: "turn", dispatchEpoch: 2 })
+    expect(RPC_PROTOCOL_VERSION).toBe(2)
+    expect(() =>
+      parseRpcMethodParams("turn/abort", { sessionId: "s", targetTurnCommandId: "turn" })
+    ).toThrow()
+    expect(() => parseRpcMethodParams("turn/abort", { sessionId: "s", dispatchEpoch: 2 })).toThrow()
+  })
   describe("isJsonRpcRequest", () => {
     it("accepts a valid request", () => {
       expect(isJsonRpcRequest({ jsonrpc: "2.0", id: 1, method: "session.create" })).toBe(true)
@@ -141,6 +174,7 @@ describe("RPC protocol", () => {
         "turn/steer",
         "turn/followUp",
         "turn/abort",
+        "dispatch/renew",
         "turn/wait",
         "session/model/set",
         "session/thinking/set",

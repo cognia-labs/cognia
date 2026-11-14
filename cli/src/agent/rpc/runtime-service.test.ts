@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { PassThrough } from "node:stream"
 
 jest.mock("@/lib/claude/ipc", () => ({
   ...jest.requireActual("@/lib/claude/ipc"),
@@ -31,6 +32,7 @@ import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
 import { createAgentRuntimeService } from "./runtime-service"
 import * as claudeIpc from "@/lib/claude/ipc"
 import type { AgentRpcServiceContext } from "./server"
+import { createAgentRpcServer } from "./server"
 import type { RecordingProxy, RecordedFixture } from "../../eval/replay/recording-proxy"
 
 function recordingProxyFixture() {
@@ -114,6 +116,467 @@ const context = {
 
 describe("createAgentRuntimeService", () => {
   let home: string
+
+  function fencedFixture(
+    options: {
+      teardownFails?: boolean
+      hangs?: boolean
+      proof?: boolean
+      observeExecutor?: boolean
+    } = {}
+  ) {
+    let emitExecutor!: (payload: unknown) => void
+    let started!: () => void
+    let finish!: () => void
+    let toolHandler!: (request: PluginToolExecRequest) => Promise<PluginToolExecResponse>
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const release = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const close = jest.fn(async () => {
+      if (options.teardownFails) throw new Error("teardown failed")
+      if (options.proof !== false)
+        emitExecutor({ type: "session_disposed", sessionId: "session-1", executorId: "executor-1" })
+    })
+    const runTurn = jest.fn(async (params: UnifiedTurnParams) => {
+      await params.subscribePluginTools?.()
+      if (options.observeExecutor !== false)
+        emitExecutor({ type: "executor_started", sessionId: "session-1", executorId: "executor-1" })
+      started()
+      if (!options.hangs) params.signal?.addEventListener("abort", finish, { once: true })
+      await release
+      return {
+        result: {
+          schemaVersion: 1,
+          type: "result",
+          status: params.signal?.aborted ? "cancelled" : "completed",
+          sessionId: "session-1",
+          runId: "run-1",
+          turnId: "turn-1",
+          attemptId: "attempt-1",
+          text: "done",
+          backend: "builtin",
+          model: "test",
+          capabilities: [],
+          session: { persisted: true, turnCount: 1 },
+        },
+        envelopes: [],
+      } as UnifiedTurnResult
+    })
+    const service = createAgentRuntimeService({
+      config: { ...DEFAULT_RESOLVED_CONFIG, cwd: home, model: "test" },
+      home,
+      runTurn,
+      mintSessionId: () => "session-1",
+      subscribeExecutorEvents: async (handler) => {
+        emitExecutor = handler
+        return () => undefined
+      },
+      subscribePluginTools: async (handler) => {
+        toolHandler = handler
+        return () => undefined
+      },
+      createLease: () => ({ close, current: null, openKey: null }) as never,
+    })
+    const fence = { childRunId: "child-1", dispatchEpoch: 2, leaseTtlMs: 100 }
+    const start = async (fenced = true) => {
+      await service.handle("session/create", {}, context as never)
+      const running = service.handle(
+        "turn/run",
+        { sessionId: "session-1", input: "go", commandId: "target", ...(fenced ? { fence } : {}) },
+        context as never
+      )
+      await ready
+      return { running }
+    }
+    const stop = async (extra = {}) =>
+      service.handle(
+        "turn/abort",
+        {
+          sessionId: "session-1",
+          commandId: "stop",
+          targetTurnCommandId: "target",
+          dispatchEpoch: 2,
+          timeoutMs: 20,
+          ...extra,
+        },
+        context as never
+      )
+    return {
+      service,
+      fence,
+      start,
+      stop,
+      finish,
+      ready,
+      runTurn,
+      close,
+      tool: (request: PluginToolExecRequest) => toolHandler(request),
+      emit: (payload: unknown) => emitExecutor(payload),
+    }
+  }
+
+  it("fences a worker-dispatch session after control loss without granting another TTL", async () => {
+    jest.useFakeTimers()
+    const fixture = fencedFixture()
+    try {
+      const { running } = await fixture.start()
+      await jest.advanceTimersByTimeAsync(60)
+      fixture.service.controlLost?.()
+      fixture.service.controlLost?.()
+      await expect(
+        fixture.service.handle(
+          "dispatch/renew",
+          { sessionId: "session-1", ...fixture.fence },
+          context as never
+        )
+      ).resolves.toMatchObject({ renewed: false })
+      expect(fixture.service.admitWorkerTool?.("session-1")).toMatchObject({ allowed: false })
+      await expect(
+        fixture.service.handle(
+          "turn/followUp",
+          { sessionId: "session-1", input: "late" },
+          context as never
+        )
+      ).rejects.toThrow("admission")
+      expect(fixture.runTurn.mock.calls[0][0].signal?.aborted).toBe(false)
+      await jest.advanceTimersByTimeAsync(40)
+      await running
+      expect(fixture.runTurn.mock.calls[0][0].signal?.aborted).toBe(true)
+      expect(fixture.runTurn).toHaveBeenCalledTimes(1)
+      await fixture.service.close()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("the EOF probe drains a fenced dispatch without starting another tool after control loss", async () => {
+    jest.useFakeTimers()
+    const fixture = fencedFixture()
+    const input = new PassThrough()
+    const output = new PassThrough()
+    const server = createAgentRpcServer({
+      input,
+      output,
+      diagnostic: new PassThrough(),
+      service: fixture.service,
+      hostVersion: "test",
+      runtimeVersion: "test",
+      instanceId: "test",
+    })
+    try {
+      await fixture.service.handle("session/create", {}, context as never)
+      const serving = server.serve()
+      for (const frame of [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            client: { name: "probe", version: "1" },
+            protocolVersions: [2],
+            capabilities: [],
+            limits: {},
+          },
+        },
+        { jsonrpc: "2.0", method: "initialized", params: {} },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "turn/run",
+          params: {
+            sessionId: "session-1",
+            input: "go",
+            commandId: "target",
+            fence: fixture.fence,
+          },
+        },
+      ])
+        input.write(`${JSON.stringify(frame)}\n`)
+      await fixture.ready
+      await jest.advanceTimersByTimeAsync(60)
+      // worker-connect owns this notification; plain RPC EOF itself still drains.
+      fixture.service.controlLost?.()
+      input.end()
+      const tool = jest.fn()
+      if (fixture.service.admitWorkerTool?.("session-1").allowed) tool()
+      expect(tool).not.toHaveBeenCalled()
+      expect(fixture.runTurn.mock.calls[0][0].signal?.aborted).toBe(false)
+      await jest.advanceTimersByTimeAsync(40)
+      await serving
+      expect(fixture.runTurn.mock.calls[0][0].signal?.aborted).toBe(true)
+    } finally {
+      fixture.finish()
+      await server.close()
+      jest.useRealTimers()
+    }
+  })
+
+  it("the local watchdog closes tool and turn admission and aborts at the deadline", async () => {
+    jest.useFakeTimers()
+    const fixture = fencedFixture()
+    try {
+      const { running } = await fixture.start()
+      jest.setSystemTime(new Date("2030-01-01T00:00:00Z"))
+      await jest.advanceTimersByTimeAsync(99)
+      expect(fixture.service.admitWorkerTool?.("session-1")).toMatchObject({ allowed: true })
+      await jest.advanceTimersByTimeAsync(1)
+      await running
+      expect(fixture.service.admitWorkerTool?.("session-1")).toMatchObject({ allowed: false })
+      await expect(
+        fixture.service.handle(
+          "turn/run",
+          { sessionId: "session-1", input: "again", fence: fixture.fence },
+          context as never
+        )
+      ).rejects.toThrow("admission")
+      await fixture.service.close()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("renewal is idempotent, matches child and epoch, and cannot revive a closed fence", async () => {
+    jest.useFakeTimers()
+    const fixture = fencedFixture()
+    const renew = (extra = {}) =>
+      fixture.service.handle(
+        "dispatch/renew",
+        { sessionId: "session-1", commandId: "renew", ...fixture.fence, ...extra },
+        context as never
+      )
+    try {
+      const { running } = await fixture.start()
+      await jest.advanceTimersByTimeAsync(50)
+      await expect(renew({ dispatchEpoch: 1, commandId: "old" })).resolves.toMatchObject({
+        renewed: false,
+      })
+      await expect(renew({ dispatchEpoch: 3, commandId: "new" })).resolves.toMatchObject({
+        renewed: false,
+      })
+      await expect(renew({ childRunId: "other", commandId: "other" })).resolves.toMatchObject({
+        renewed: false,
+      })
+      await expect(renew()).resolves.toMatchObject({ renewed: true })
+      await jest.advanceTimersByTimeAsync(50)
+      await expect(renew()).resolves.toMatchObject({ renewed: true })
+      await jest.advanceTimersByTimeAsync(50)
+      await running
+      await expect(renew({ commandId: "late" })).resolves.toMatchObject({ renewed: false })
+      await fixture.service.close()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("strict stop confirms only after the target is idle and its executor disposal is proved", async () => {
+    const fixture = fencedFixture()
+    const { running } = await fixture.start()
+    await fixture.service.handle(
+      "turn/followUp",
+      { sessionId: "session-1", input: "queued" },
+      context as never
+    )
+    await expect(fixture.stop()).resolves.toMatchObject({
+      stopped: true,
+      turnStatus: "cancelled",
+      followUpsDropped: 1,
+      sessionStatus: "idle",
+      targetTurnCommandId: "target",
+      dispatchEpoch: 2,
+    })
+    await running
+    expect(fixture.close).toHaveBeenCalledTimes(1)
+    expect(fixture.runTurn).toHaveBeenCalledTimes(1)
+    await fixture.service.close()
+  })
+
+  it("strict stop cancels pending permissions and elicitations before aborting", async () => {
+    const fixture = fencedFixture()
+    const { running } = await fixture.start()
+    const params = fixture.runTurn.mock.calls[0][0]
+    const permission = params.gate({
+      type: "permission_request",
+      sessionId: "session-1",
+      requestId: "p1",
+      toolUseID: "tool-1",
+      toolName: "write_file",
+      input: {},
+    })
+    const elicitation = fixture.tool({
+      type: "plugin_tool_exec",
+      sessionId: "session-1",
+      toolUseId: "ask-1",
+      name: "ask_user",
+      args: { question: "Continue?" },
+    })
+    let atAbort: Record<string, unknown> | undefined
+    params.signal?.addEventListener(
+      "abort",
+      () => {
+        const state = JSON.parse(
+          readFileSync(path.join(home, "sessions", "session-1", "rpc-state.json"), "utf8")
+        )
+        atAbort = { permissions: state.pendingPermissions, elicitations: state.pendingElicitations }
+      },
+      { once: true }
+    )
+    await expect(fixture.stop()).resolves.toMatchObject({ stopped: true })
+    await expect(permission).resolves.toMatchObject({ decision: "deny" })
+    await expect(elicitation).resolves.toMatchObject({ error: "worker admission closed" })
+    expect(atAbort).toEqual({ permissions: {}, elicitations: {} })
+    await running
+    await fixture.service.close()
+  })
+
+  it("strict stop waits for the exact executor proof after teardown has returned", async () => {
+    const fixture = fencedFixture({ proof: false })
+    const { running } = await fixture.start()
+    let confirmed = false
+    const stopping = fixture.stop({ timeoutMs: 1000 }).then((value) => {
+      confirmed = true
+      return value
+    })
+    await running
+    await Promise.resolve()
+    expect(confirmed).toBe(false)
+    fixture.emit({ type: "session_disposed", sessionId: "session-1", executorId: "executor-1" })
+    await expect(stopping).resolves.toMatchObject({ stopped: true })
+    await fixture.service.close()
+  })
+
+  it("control loss leaves generic unfenced sessions admitted", async () => {
+    const fixture = fencedFixture()
+    const { running } = await fixture.start(false)
+    fixture.service.controlLost?.()
+    expect(fixture.service.admitWorkerTool?.("session-1")).toMatchObject({ allowed: true })
+    expect(fixture.runTurn.mock.calls[0][0].signal?.aborted).toBe(false)
+    fixture.finish()
+    await running
+    await fixture.service.close()
+  })
+
+  it("the watchdog disposes an idle executor that may still own background tools", async () => {
+    jest.useFakeTimers()
+    const fixture = fencedFixture()
+    try {
+      const { running } = await fixture.start()
+      fixture.finish()
+      await running
+      expect(fixture.close).not.toHaveBeenCalled()
+      await jest.advanceTimersByTimeAsync(100)
+      expect(fixture.close).toHaveBeenCalledTimes(1)
+      await fixture.service.close()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it.each([{ targetTurnCommandId: "other" }, { dispatchEpoch: 1 }])(
+    "strict stop leaves a mismatched target or epoch unconfirmed: %j",
+    async (mismatch) => {
+      const fixture = fencedFixture()
+      const { running } = await fixture.start()
+      await expect(fixture.stop(mismatch)).resolves.toMatchObject({ stopped: false })
+      expect(fixture.runTurn.mock.calls[0][0].signal?.aborted).toBe(false)
+      fixture.finish()
+      await running
+      await fixture.service.close()
+    }
+  )
+
+  it("strict stop reports a target that completed naturally as completed", async () => {
+    const fixture = fencedFixture()
+    const { running } = await fixture.start()
+    fixture.finish()
+    await running
+    await expect(fixture.stop()).resolves.toMatchObject({ stopped: true, turnStatus: "completed" })
+    await fixture.service.close()
+  })
+
+  it("strict stop times out without confirming an active target", async () => {
+    jest.useFakeTimers()
+    const fixture = fencedFixture({ hangs: true })
+    try {
+      const { running } = await fixture.start()
+      const stopping = fixture.stop()
+      await jest.advanceTimersByTimeAsync(20)
+      await expect(stopping).resolves.toMatchObject({ stopped: false, sessionStatus: "running" })
+      fixture.finish()
+      await running
+      await fixture.service.close()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("strict stop does not treat a successful close, session_ended or turn_settled as disposal proof", async () => {
+    jest.useFakeTimers()
+    const fixture = fencedFixture({ proof: false })
+    try {
+      const { running } = await fixture.start()
+      const stopping = fixture.stop()
+      fixture.emit({ type: "session_ended", sessionId: "session-1", executorId: "executor-1" })
+      fixture.emit({ type: "turn_settled", sessionId: "session-1", executorId: "executor-1" })
+      fixture.emit({ type: "session_disposed", sessionId: "session-1", executorId: "old-executor" })
+      await jest.advanceTimersByTimeAsync(20)
+      await expect(stopping).resolves.toMatchObject({ stopped: false })
+      await running
+      await fixture.service.close()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("strict stop remains unconfirmed when executor teardown fails", async () => {
+    const fixture = fencedFixture({ teardownFails: true })
+    const { running } = await fixture.start()
+    await expect(fixture.stop()).resolves.toMatchObject({ stopped: false })
+    await running
+    await fixture.service.close().catch(() => undefined)
+  })
+
+  it("strict stop stays unconfirmed for an executor with no observable lifecycle identity", async () => {
+    const fixture = fencedFixture({ observeExecutor: false })
+    const { running } = await fixture.start()
+    await expect(fixture.stop()).resolves.toMatchObject({ stopped: false })
+    await running
+    await fixture.service.close()
+  })
+
+  it("strict stop never reuses old disposal proof for an unobserved replacement executor", async () => {
+    const fixture = fencedFixture()
+    const { running } = await fixture.start()
+    fixture.finish()
+    await running
+    fixture.emit({ type: "session_disposed", sessionId: "session-1", executorId: "executor-1" })
+    // A replacement transport is listening, but its executor has not identified itself.
+    await fixture.runTurn.mock.calls[0][0].subscribePluginTools?.()
+    fixture.emit({ type: "executor_started", sessionId: "session-1", executorId: "" })
+    await expect(fixture.stop()).resolves.toMatchObject({ stopped: false })
+    await fixture.service.close()
+  })
+
+  it.each(["claude-agent-sdk", "ai-sdk", "external"])(
+    "declares Worker fencing only for a sidecar execution profile: %s",
+    async (runtimeAdapter) => {
+      const service = createAgentRuntimeService({
+        config: { ...DEFAULT_RESOLVED_CONFIG, cwd: home, model: "test" },
+        home,
+        workerDispatch: {
+          manifest: { executionProfile: { runtimeAdapter } } as never,
+          resolveHandoffWorkspace: () => home,
+        },
+      })
+      expect(service.capabilities).toContain("turn-interrupt-v1")
+      expect(service.capabilities.includes("worker-self-fence-v1")).toBe(
+        runtimeAdapter !== "external"
+      )
+      await service.close()
+    }
+  )
 
   beforeEach(() => {
     home = mkdtempSync(path.join(os.tmpdir(), "cognia-agent-rpc-"))
@@ -1470,6 +1933,131 @@ describe("createAgentRuntimeService", () => {
     ).toMatchObject({ status: "idle", recoveryRequired: false, pendingPermissions: [] })
 
     await restarted.close()
+  })
+
+  it("a fenced session rebuilt after a restart never resumes its suspended turn or reopens its fence", async () => {
+    let permissionRequested!: () => void
+    const requested = new Promise<void>((resolve) => {
+      permissionRequested = resolve
+    })
+    const runTurn = jest.fn(async (params: UnifiedTurnParams): Promise<UnifiedTurnResult> => {
+      params.onEnvelope?.({
+        schemaVersion: 1,
+        eventId: "session-1:turn-1:turn-1:a0:0",
+        sequence: 0,
+        sessionId: params.sessionId ?? "session-1",
+        runId: "run-1",
+        turnId: "turn-1",
+        attemptId: "turn-1:a0",
+        hostRef: "test",
+        runtime: "builtin",
+        timestamp: new Date(0).toISOString(),
+        event: { kind: "lifecycle", phase: "started" },
+      })
+      permissionRequested()
+      await params.gate({
+        type: "permission_request",
+        sessionId: params.sessionId ?? "session-1",
+        requestId: "permission-1",
+        toolUseID: "tool-use-1",
+        toolName: "write_file",
+        input: { path: "a.txt" },
+      })
+      throw new Error("host stopped")
+    })
+    const config = { ...DEFAULT_RESOLVED_CONFIG, cwd: home, model: "test-model" }
+    const fence = { childRunId: "child-1", dispatchEpoch: 2, leaseTtlMs: 60_000 }
+    const first = createAgentRuntimeService({
+      config,
+      home,
+      runTurn,
+      mintSessionId: () => "session-1",
+    })
+    await first.handle("session/create", {}, context as never)
+    void Promise.resolve(
+      first.handle(
+        "turn/run",
+        { sessionId: "session-1", input: "write", commandId: "run-one", fence },
+        context as never
+      )
+    ).catch(() => undefined)
+    await requested
+    await new Promise((resolve) => setImmediate(resolve))
+    await first.close()
+
+    const restarted = createAgentRuntimeService({ config, home, runTurn })
+    expect(
+      await restarted.handle("session/state", { sessionId: "session-1" }, context as never)
+    ).toMatchObject({ status: "idle", recoveryRequired: false, pendingPermissions: [] })
+    await expect(
+      restarted.handle(
+        "permission/respond",
+        {
+          sessionId: "session-1",
+          requestId: "permission-1",
+          decision: { kind: "approve" },
+          commandId: "permission-command",
+        },
+        context as never
+      )
+    ).rejects.toMatchObject({ structuredError: { code: "usage_error" } })
+    await expect(
+      restarted.handle(
+        "dispatch/renew",
+        { sessionId: "session-1", commandId: "renew-after-restart", ...fence },
+        context as never
+      )
+    ).resolves.toMatchObject({ renewed: false })
+    await expect(
+      restarted.handle(
+        "turn/run",
+        { sessionId: "session-1", input: "again", commandId: "run-two", fence },
+        context as never
+      )
+    ).rejects.toThrow("admission")
+    await expect(
+      restarted.handle(
+        "turn/run",
+        { sessionId: "session-1", input: "unfenced", commandId: "run-three" },
+        context as never
+      )
+    ).rejects.toThrow("admission")
+    expect(restarted.admitWorkerTool?.("session-1")).toMatchObject({
+      allowed: false,
+      childRunId: "child-1",
+      dispatchEpoch: 2,
+      leaseTtlMs: 0,
+    })
+    expect(runTurn).toHaveBeenCalledTimes(1)
+    await restarted.close()
+  })
+
+  it("closing and reopening a fenced session never grants its epoch a fresh lease", async () => {
+    const fixture = fencedFixture()
+    const { running } = await fixture.start()
+    fixture.finish()
+    await running
+    await fixture.service.handle(
+      "session/close",
+      { sessionId: "session-1", commandId: "close" },
+      context as never
+    )
+    await expect(
+      fixture.service.handle(
+        "turn/run",
+        { sessionId: "session-1", input: "again", commandId: "again", fence: fixture.fence },
+        context as never
+      )
+    ).rejects.toThrow("admission")
+    await expect(
+      fixture.service.handle(
+        "dispatch/renew",
+        { sessionId: "session-1", commandId: "renew-after-close", ...fixture.fence },
+        context as never
+      )
+    ).resolves.toMatchObject({ renewed: false })
+    expect(fixture.runTurn).toHaveBeenCalledTimes(1)
+    await fixture.service.close()
   })
 
   it("replays a recovered client-tool result after a host restart", async () => {

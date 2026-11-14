@@ -11,6 +11,9 @@ import {
   CAP_ASSETS_V1,
   CAP_EVALS_V1,
   CAP_TRACE_UNSUBSCRIBE_V1,
+  CAP_TURN_INTERRUPT_V1,
+  CAP_WORKER_SELF_FENCE_V1,
+  WORKER_FENCE_GRACE_MS,
   hasCapability,
 } from "./capabilities"
 import { HostConnection, type ReconnectPolicy } from "./connection"
@@ -48,6 +51,8 @@ import type {
   CogniaDiagnostic,
   CommandOptions,
   CommandReceipt,
+  DispatchFence,
+  DispatchRenewReceipt,
   CompactOptions,
   CompactionResult,
   ElicitationResponse,
@@ -60,6 +65,8 @@ import type {
   ProtocolLimits,
   ResolvedAgentExecutionSpec,
   RunOptions,
+  TurnAbortOptions,
+  StrictStopReceipt,
   SandboxPolicyRecord,
   SandboxStatus,
   SessionCreateOptions,
@@ -326,7 +333,11 @@ export interface CogniaSession extends AsyncDisposable {
   events(options?: SessionEventOptions): AsyncIterable<AgentEventEnvelope>
   steer(input: AgentInput, options?: CommandOptions): Promise<CommandReceipt>
   followUp(input: AgentInput, options?: CommandOptions): Promise<CommandReceipt>
-  abort(options?: CommandOptions & { reason?: string }): Promise<CommandReceipt>
+  abort(
+    options: TurnAbortOptions & { targetTurnCommandId: string; dispatchEpoch: number }
+  ): Promise<StrictStopReceipt | CommandReceipt>
+  abort(options?: TurnAbortOptions): Promise<CommandReceipt>
+  renew(fence: DispatchFence, options?: CommandOptions): Promise<DispatchRenewReceipt>
   waitForIdle(options?: WaitOptions): Promise<SessionState>
   resolvePermission(
     requestId: string,
@@ -370,6 +381,7 @@ export interface CogniaSession extends AsyncDisposable {
 }
 
 type SessionCommandMethod =
+  | "dispatch/renew"
   | "turn/steer"
   | "turn/followUp"
   | "turn/abort"
@@ -480,6 +492,10 @@ class CogniaSessionImpl implements CogniaSession {
             sessionId: this.id,
             input,
             commandId,
+            ...(options.fence &&
+            hasCapability(this.runtime.hostCapabilities, CAP_WORKER_SELF_FENCE_V1)
+              ? { fence: options.fence }
+              : {}),
             ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
             ...(options.idleTimeoutMs !== undefined
               ? { idleTimeoutMs: options.idleTimeoutMs }
@@ -531,12 +547,53 @@ class CogniaSessionImpl implements CogniaSession {
     return this.command("turn/followUp", { input }, options)
   }
 
-  abort(options: CommandOptions & { reason?: string } = {}): Promise<CommandReceipt> {
+  abort(options: TurnAbortOptions = {}): Promise<CommandReceipt> {
+    const supportsInterrupt = hasCapability(this.runtime.hostCapabilities, CAP_TURN_INTERRUPT_V1)
+    const strict =
+      supportsInterrupt &&
+      (options.targetTurnCommandId !== undefined || options.dispatchEpoch !== undefined)
+    if (
+      strict &&
+      (options.targetTurnCommandId === undefined || options.dispatchEpoch === undefined)
+    ) {
+      return Promise.reject(
+        new RpcError(
+          RPC_ERROR_CODES.invalidParams,
+          "strict stop requires targetTurnCommandId and dispatchEpoch"
+        )
+      )
+    }
+    const stopTimeoutMs = options.timeoutMs ?? WORKER_FENCE_GRACE_MS
     return this.command(
       "turn/abort",
-      options.reason !== undefined ? { reason: options.reason } : {},
-      options
+      {
+        ...(options.reason !== undefined ? { reason: options.reason } : {}),
+        ...(supportsInterrupt
+          ? {
+              ...(options.targetTurnCommandId !== undefined
+                ? { targetTurnCommandId: options.targetTurnCommandId }
+                : {}),
+              ...(options.dispatchEpoch !== undefined
+                ? { dispatchEpoch: options.dispatchEpoch }
+                : {}),
+              ...(strict ? { timeoutMs: stopTimeoutMs } : {}),
+            }
+          : {}),
+      },
+      // Leave the server time to return its unconfirmed receipt on timeout.
+      strict ? { ...options, timeoutMs: stopTimeoutMs + this.runtime.requestTimeoutMs } : options
     )
+  }
+
+  async renew(fence: DispatchFence, options: CommandOptions = {}): Promise<DispatchRenewReceipt> {
+    this.assertOpen()
+    if (!hasCapability(this.runtime.hostCapabilities, CAP_WORKER_SELF_FENCE_V1)) {
+      throw new RpcError(
+        RPC_ERROR_CODES.capabilityError,
+        "host does not declare worker-self-fence-v1"
+      )
+    }
+    return this.command("dispatch/renew", { ...fence }, options) as Promise<DispatchRenewReceipt>
   }
 
   async waitForIdle(options: WaitOptions = {}): Promise<SessionState> {

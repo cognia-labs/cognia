@@ -3,10 +3,28 @@ import type {
   ClientToolRegistration,
   CompactionResult,
   SessionState,
+  DispatchFence,
+  StrictStopReceipt,
 } from "./types"
 import { isAgentWorkerManifestV1 } from "./types"
 
 describe("public SDK types", () => {
+  it("carries a relative fence and an explicit strict-stop result", () => {
+    const fence: DispatchFence = { childRunId: "child", dispatchEpoch: 2, leaseTtlMs: 100 }
+    const stop: StrictStopReceipt = {
+      commandId: "stop",
+      stopped: false,
+      turnStatus: "completed",
+      followUpsDropped: 1,
+      sessionStatus: "idle",
+      targetTurnCommandId: "turn",
+      dispatchEpoch: 2,
+    }
+    expect(JSON.parse(JSON.stringify({ fence, stop }))).toMatchObject({
+      fence: { leaseTtlMs: 100 },
+      stop: { stopped: false, turnStatus: "completed" },
+    })
+  })
   it("models compaction as a command with an optional live undo boundary", () => {
     const compacted: CompactionResult = {
       accepted: true,

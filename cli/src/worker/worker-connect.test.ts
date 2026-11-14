@@ -57,6 +57,65 @@ function openingSocket() {
 }
 
 describe("worker connect contract", () => {
+  it.each(["close", "error"])(
+    "closes control before ending RPC input on socket %s",
+    async (event) => {
+      const opened = openingSocket()
+      const order: string[] = []
+      let ready!: () => void
+      const serving = new Promise<void>((resolve) => {
+        ready = resolve
+      })
+      let endServing!: () => void
+      const ended = new Promise<void>((resolve) => {
+        endServing = resolve
+      })
+      const controlLost = jest.fn(() => {
+        order.push("controlLost")
+      })
+      const connecting = connectWorker({
+        deviceConfigPath: "/worker.json",
+        runtimeConfig: config,
+        home: "/tmp/cognia-worker-test",
+        workspace: { list: async () => [] } as never,
+        reconnect: false,
+        readFile: () => rawIdentity,
+        stat: () => ({ mode: 0o100600 }),
+        issueTicket: jest.fn(async () => ({ ticket: "once", expiresAt: 1 })),
+        wsFactory: () => opened.socket,
+        createService: (() => ({ controlLost, close: async () => undefined })) as never,
+        createServer: ((options: { input: Readable }) => {
+          options.input.resume()
+          options.input.once("end", () => {
+            order.push("EOF")
+            endServing()
+          })
+          return {
+            serve: async () => {
+              ready()
+              await ended
+            },
+          }
+        }) as never,
+      })
+      await serving
+      opened.emit(event)
+      await connecting
+      expect(order).toEqual(["controlLost", "EOF"])
+    }
+  )
+
+  it("declares self-fencing only for the two sidecar rails", () => {
+    const builtin = buildWorkerManifest(config, [])
+    expect(builtin.hardCapabilities).toContain("worker-self-fence-v1")
+    expect(builtin.hardCapabilities).toContain("turn-interrupt-v1")
+    expect(builtin.fenceGraceMs).toBe(5000)
+    const external = buildWorkerManifest({ ...config, agentBackend: "codex" }, [])
+    expect(external.executionProfile?.runtimeAdapter).toBe("external")
+    expect(external.hardCapabilities).not.toContain("worker-self-fence-v1")
+    expect(external.hardCapabilities).toContain("turn-interrupt-v1")
+    expect(external.fenceGraceMs).toBeUndefined()
+  })
   it("builds an opaque readiness manifest without credential values or local paths", () => {
     const manifest = buildWorkerManifest(config, ["repository:project:repo"], 2)
     expect(manifest).toMatchObject({

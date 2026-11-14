@@ -4,6 +4,11 @@ import path from "node:path"
 import { PassThrough, Writable } from "node:stream"
 
 import type { AgentWorkerManifestV1, HandoffEnvelope } from "@cognia/agent"
+import {
+  CAP_TURN_INTERRUPT_V1,
+  CAP_WORKER_SELF_FENCE_V1,
+  WORKER_FENCE_GRACE_MS,
+} from "@/packages/agent/src/capabilities"
 import { REMOTE_WORKER_POLICY_CAPABILITY } from "@/lib/squads/workers/remote-worker-policy"
 import type { CompanionConfig } from "@/lib/tauri/companion-storage"
 import { issueSocketTicket, registerCompanionWorker } from "@/lib/tauri/companion-auth"
@@ -149,7 +154,6 @@ async function serveWorkerConnection(
 
   const input = new PassThrough()
   const output = new WorkerSocketWritable(socket)
-  const closeInput = () => input.end()
   socket.addEventListener("message", (event) => {
     if (typeof event.data !== "string" || event.data.includes("\n") || event.data.includes("\r")) {
       socket.close(1002, "invalid Agent RPC frame")
@@ -157,8 +161,6 @@ async function serveWorkerConnection(
     }
     input.write(`${event.data}\n`)
   })
-  socket.addEventListener("close", closeInput)
-  socket.addEventListener("error", closeInput)
 
   const workspaceRefs = new Set(manifest.workspaceBindingRefs)
   const captureLeases = new Set<UnifiedWorkspaceCaptureLease>()
@@ -242,6 +244,13 @@ async function serveWorkerConnection(
       },
     },
   })
+  const closeInput = () => {
+    connectionClosed = true
+    service.controlLost?.()
+    input.end()
+  }
+  socket.addEventListener("close", closeInput)
+  socket.addEventListener("error", closeInput)
   options.onRuntimeReady?.({ activeTurns: () => service.activeTurns?.() ?? 0 })
   const server = (options.createServer ?? createAgentRpcServer)({
     input,
@@ -378,9 +387,16 @@ export function buildWorkerManifest(
       ...resolved.spec.capabilities.effective,
       "worker-dispatch-v1",
       "task-workspace",
+      CAP_TURN_INTERRUPT_V1,
+      ...(["claude-agent-sdk", "ai-sdk"].includes(resolved.profile.runtimeAdapter)
+        ? [CAP_WORKER_SELF_FENCE_V1]
+        : []),
       ...(resolved.profile.runtimeAdapter !== "external" ? [REMOTE_WORKER_POLICY_CAPABILITY] : []),
     ],
     maxActiveTurns,
+    ...(["claude-agent-sdk", "ai-sdk"].includes(resolved.profile.runtimeAdapter)
+      ? { fenceGraceMs: WORKER_FENCE_GRACE_MS }
+      : {}),
     credentialProfileRefs,
     workspaceBindingRefs: [...workspaceBindingRefs].sort(),
     taskWorkspace: { enabled: true },

@@ -229,6 +229,33 @@ export interface RunOptions {
   maxSteps?: number
   includeDiagnostics?: boolean
   commandId?: string
+  fence?: DispatchFence
+}
+
+/** Relative to receipt on the Worker, never an absolute cross-device time. */
+export interface DispatchFence {
+  childRunId: string
+  dispatchEpoch: number
+  leaseTtlMs: number
+}
+
+export interface TurnAbortOptions extends CommandOptions {
+  reason?: string
+  targetTurnCommandId?: string
+  dispatchEpoch?: number
+}
+
+export interface StrictStopReceipt extends CommandReceipt {
+  stopped: boolean
+  turnStatus: AgentRunStatus | "running" | "unknown"
+  followUpsDropped: number
+  sessionStatus: SessionState["status"]
+  targetTurnCommandId: string
+  dispatchEpoch: number
+}
+
+export interface DispatchRenewReceipt extends CommandReceipt {
+  renewed: boolean
 }
 
 export interface CommandOptions {

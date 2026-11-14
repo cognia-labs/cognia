@@ -52,7 +52,7 @@ function createHostHarness(
       } else if (request.method === "session/export") {
         result = { sessionId: "session-1", turns: [] }
       } else {
-        result = overrides.onRequest?.(request) ?? { ok: true, commandId: "command-1" }
+        result = (await overrides.onRequest?.(request)) ?? { ok: true, commandId: "command-1" }
       }
 
       hostToClient.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`)
@@ -77,6 +77,79 @@ function createHostHarness(
 }
 
 describe("createCogniaClient", () => {
+  it("leaves transport time for the strict-stop timeout receipt to arrive", async () => {
+    const host = createHostHarness({
+      capabilities: ["turn-interrupt-v1"],
+      onRequest: async (request) => {
+        if (request.method !== "turn/abort") return undefined
+        await new Promise((resolve) => setTimeout(resolve, 35))
+        return {
+          commandId: "stop",
+          stopped: false,
+          turnStatus: "running",
+          followUpsDropped: 0,
+          sessionStatus: "running",
+          targetTurnCommandId: "target",
+          dispatchEpoch: 2,
+        }
+      },
+    })
+    const client = await createCogniaClient({
+      host: { kind: "streams", ...host.streams },
+      requestTimeoutMs: 40,
+    })
+    try {
+      const session = await client.sessions.create()
+      await expect(
+        session.abort({ targetTurnCommandId: "target", dispatchEpoch: 2, timeoutMs: 20 })
+      ).resolves.toMatchObject({ stopped: false })
+    } finally {
+      await client.close()
+      host.close()
+    }
+  })
+  it.each([false, true])(
+    "sends fence, strict stop and renew only to a capable Worker: %s",
+    async (capable) => {
+      const host = createHostHarness({
+        capabilities: capable ? ["worker-self-fence-v1", "turn-interrupt-v1"] : [],
+        onRequest: (request) =>
+          request.method === "dispatch/renew"
+            ? { commandId: "renew", renewed: true }
+            : { commandId: "stop", stopped: true },
+      })
+      const client = await createCogniaClient({ host: { kind: "streams", ...host.streams } })
+      try {
+        const session = await client.sessions.create()
+        const fence = { childRunId: "child", dispatchEpoch: 2, leaseTtlMs: 100 }
+        await session.run("go", { fence, commandId: "target" })
+        await session.abort({ targetTurnCommandId: "target", dispatchEpoch: 2, timeoutMs: 100 })
+        if (capable) await expect(session.renew(fence)).resolves.toMatchObject({ renewed: true })
+        else await expect(session.renew(fence)).rejects.toMatchObject({ code: "capability_error" })
+        const run = host.requests.find((request) => request.method === "turn/run")!.params
+        const abort = host.requests.find((request) => request.method === "turn/abort")!.params
+        if (capable) {
+          expect(run).toMatchObject({ fence })
+          expect(abort).toMatchObject({
+            targetTurnCommandId: "target",
+            dispatchEpoch: 2,
+            timeoutMs: 100,
+          })
+          expect(
+            host.requests.find((request) => request.method === "dispatch/renew")!.params
+          ).toMatchObject(fence)
+        } else {
+          expect(run).not.toHaveProperty("fence")
+          expect(abort).not.toHaveProperty("targetTurnCommandId")
+          expect(abort).not.toHaveProperty("dispatchEpoch")
+          expect(host.requests.some((request) => request.method === "dispatch/renew")).toBe(false)
+        }
+      } finally {
+        await client.close()
+        host.close()
+      }
+    }
+  )
   it("negotiates v2 before exposing typed runtime and session APIs", async () => {
     const host = createHostHarness()
     const client = await createCogniaClient({ host: { kind: "streams", ...host.streams } })

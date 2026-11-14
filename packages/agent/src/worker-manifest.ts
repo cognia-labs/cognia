@@ -1,4 +1,5 @@
 import * as v from "valibot"
+import { CAP_WORKER_SELF_FENCE_V1 } from "./capabilities"
 
 const nonEmptyString = v.pipe(v.string(), v.minLength(1))
 
@@ -15,35 +16,46 @@ export const agentWorkerExecutionProfileV1Schema = v.object({
   capabilities: v.array(nonEmptyString),
 })
 
-export const agentWorkerManifestV1Schema = v.looseObject({
-  manifestVersion: v.literal(1),
-  runtime: nonEmptyString,
-  models: v.array(nonEmptyString),
-  hardCapabilities: v.array(nonEmptyString),
-  maxActiveTurns: v.pipe(v.number(), v.integer(), v.minValue(1)),
-  credentialProfileRefs: v.array(nonEmptyString),
-  workspaceBindingRefs: v.array(nonEmptyString),
-  taskWorkspace: v.object({ enabled: v.boolean() }),
-  sandbox: v.object({ capabilities: v.array(nonEmptyString) }),
-  platform: v.object({ os: nonEmptyString, arch: nonEmptyString }),
-  executionProfile: v.optional(agentWorkerExecutionProfileV1Schema),
-  /**
-   * How this machine can be brought back when it is asleep.
-   *
-   * A sleeping worker is indistinguishable from a decommissioned one: the
-   * socket is gone, placement rejects it as offline, and nothing ever tries to
-   * change that. Advertising its MAC addresses lets the host send a magic
-   * packet before it gives up. Optional because Wake-on-LAN also has to be
-   * enabled in the machine's firmware, which we cannot detect.
-   */
-  wake: v.optional(
-    v.object({
-      macAddresses: v.array(nonEmptyString),
-      /** Directed broadcast for the worker's subnet, when it knows one. */
-      broadcastAddress: v.optional(nonEmptyString),
-    })
-  ),
-})
+export const agentWorkerManifestV1Schema = v.pipe(
+  v.looseObject({
+    manifestVersion: v.literal(1),
+    runtime: nonEmptyString,
+    models: v.array(nonEmptyString),
+    hardCapabilities: v.array(nonEmptyString),
+    fenceGraceMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0), v.finite())),
+    maxActiveTurns: v.pipe(v.number(), v.integer(), v.minValue(1)),
+    credentialProfileRefs: v.array(nonEmptyString),
+    workspaceBindingRefs: v.array(nonEmptyString),
+    taskWorkspace: v.object({ enabled: v.boolean() }),
+    sandbox: v.object({ capabilities: v.array(nonEmptyString) }),
+    platform: v.object({ os: nonEmptyString, arch: nonEmptyString }),
+    executionProfile: v.optional(agentWorkerExecutionProfileV1Schema),
+    /**
+     * How this machine can be brought back when it is asleep.
+     *
+     * A sleeping worker is indistinguishable from a decommissioned one: the
+     * socket is gone, placement rejects it as offline, and nothing ever tries to
+     * change that. Advertising its MAC addresses lets the host send a magic
+     * packet before it gives up. Optional because Wake-on-LAN also has to be
+     * enabled in the machine's firmware, which we cannot detect.
+     */
+    wake: v.optional(
+      v.object({
+        macAddresses: v.array(nonEmptyString),
+        /** Directed broadcast for the worker's subnet, when it knows one. */
+        broadcastAddress: v.optional(nonEmptyString),
+      })
+    ),
+  }),
+  v.check(
+    (manifest) =>
+      !manifest.hardCapabilities.includes(CAP_WORKER_SELF_FENCE_V1) ||
+      (manifest.fenceGraceMs !== undefined &&
+        (manifest.executionProfile?.runtimeAdapter === "claude-agent-sdk" ||
+          manifest.executionProfile?.runtimeAdapter === "ai-sdk")),
+    "worker-self-fence-v1 requires a sidecar executor and fenceGraceMs"
+  )
+)
 
 export type AgentWorkerExecutionProfileV1 = v.InferOutput<
   typeof agentWorkerExecutionProfileV1Schema

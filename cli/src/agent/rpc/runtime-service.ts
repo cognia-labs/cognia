@@ -97,6 +97,9 @@ import {
   CAP_TRACE_UNSUBSCRIBE_V1,
   CAP_TRACES_REDACTED_V1,
   CAP_WORKER_DISPATCH_V1,
+  CAP_WORKER_SELF_FENCE_V1,
+  CAP_TURN_INTERRUPT_V1,
+  WORKER_FENCE_GRACE_MS,
 } from "@/packages/agent/src/capabilities"
 import {
   RPC_ERROR_CODES,
@@ -150,6 +153,7 @@ const SUPPORTED_METHODS = [
   "turn/steer",
   "turn/followUp",
   "turn/abort",
+  "dispatch/renew",
   "turn/wait",
   "session/model/set",
   "session/thinking/set",
@@ -221,6 +225,8 @@ const SERVICE_CAPABILITIES = [
   CAP_AGENT_SESSION_BINDING_V1,
   CAP_ASSETS_V1,
   CAP_EVALS_V1,
+  CAP_TURN_INTERRUPT_V1,
+  CAP_WORKER_SELF_FENCE_V1,
 ] as const
 
 /**
@@ -271,6 +277,21 @@ interface HostedSession {
   status: "idle" | "running" | "waiting" | "recovery_required" | "closed"
   abortController: AbortController | null
   activeRun: Promise<unknown> | null
+  turnCommandId?: string
+  turnStatus?: "running" | AgentRunResultV1["status"]
+  admissionClosed?: boolean
+  fence?: {
+    childRunId: string
+    dispatchEpoch: number
+    deadline: number
+    closed: boolean
+    timer?: ReturnType<typeof setTimeout>
+  }
+  executors?: Map<string, boolean>
+  executorObservation?: { started: boolean }
+  executorObservationFailed?: boolean
+  disposalWaiters?: Set<() => void>
+  fenceTeardown?: Promise<void>
   pendingPermissions: Map<string, PendingPermission>
   pendingElicitations: Map<string, PendingElicitation>
   consumedExternalToolResponses: Set<string>
@@ -306,6 +327,9 @@ export interface AgentRuntimeServiceOptions {
   createLease?: () => ProviderSessionLease
   mintSessionId?: (now?: number, random?: number) => string
   now?: () => number
+  /** Independent of wall-clock timestamps used in durable records. */
+  monotonicNow?: () => number
+  subscribeExecutorEvents?: (handler: (payload: unknown) => void) => Promise<() => void>
   random?: () => number
   subscribePluginTools?: (
     handler: (request: PluginToolExecRequest) => Promise<PluginToolExecResponse>
@@ -338,6 +362,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
   const runTurn = options.runTurn ?? runUnifiedTurn
   const createLease = options.createLease ?? createProviderSessionLease
   const now = options.now ?? Date.now
+  const monotonicNow = options.monotonicNow ?? (() => performance.now())
   const random = options.random ?? Math.random
   const sessions = new Map<string, HostedSession>()
   const durableState = createDurableRpcStateStore((sessionId) => store.paths(sessionId).dir)
@@ -390,9 +415,216 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
   const compactionSnapshots = new Map<string, CompactionSnapshot>()
   let configuredMcpServers: McpServer[] | null = null
   let closing = false
-  const serviceCapabilities: readonly string[] = options.workerDispatch
-    ? [...SERVICE_CAPABILITIES, CAP_WORKER_DISPATCH_V1]
-    : SERVICE_CAPABILITIES
+  let controlIsLost = false
+  const executorSubscriptions = new Map<string, Promise<() => void>>()
+  const sidecarWorker = options.workerDispatch?.manifest.executionProfile?.runtimeAdapter
+  const canSelfFence = sidecarWorker === "claude-agent-sdk" || sidecarWorker === "ai-sdk"
+  const serviceCapabilities: readonly string[] = [
+    ...SERVICE_CAPABILITIES.filter(
+      (capability) => capability !== CAP_WORKER_SELF_FENCE_V1 || canSelfFence
+    ),
+    ...(options.workerDispatch ? [CAP_WORKER_DISPATCH_V1] : []),
+  ]
+
+  function observeExecutor(payload: unknown): void {
+    if (
+      !isRecord(payload) ||
+      typeof payload.sessionId !== "string" ||
+      typeof payload.executorId !== "string" ||
+      !payload.executorId
+    )
+      return
+    const session = sessions.get(payload.sessionId)
+    if (!session) return
+    if (payload.type === "executor_started") {
+      // A late duplicate must not erase proof already observed for this executor.
+      session.executors ??= new Map()
+      if (!session.executors.has(payload.executorId))
+        session.executors.set(payload.executorId, false)
+    } else if (payload.type === "session_disposed" && session.executors?.has(payload.executorId)) {
+      session.executors.set(payload.executorId, true)
+      for (const wake of session.disposalWaiters ?? []) wake()
+    }
+  }
+
+  async function subscribeExecutors(session: HostedSession): Promise<void> {
+    // A builtin session invokes subscribePluginTools only AFTER bootstrap has
+    // installed its actual StdioTransport, and BEFORE sending start_session.
+    // Keep this listener through boot.shutdown(), where disposal is emitted.
+    const previous = executorSubscriptions.get(session.id)
+    if (session.executorObservation && !session.executorObservation.started)
+      session.executorObservationFailed = true
+    await previous?.then(
+      (unsubscribe) => unsubscribe(),
+      () => undefined
+    )
+    const observation = { started: false }
+    session.executorObservation = observation
+    const subscription = (options.subscribeExecutorEvents ?? onClaudeMessage)((payload) => {
+      if (
+        isRecord(payload) &&
+        payload.type === "executor_started" &&
+        payload.sessionId === session.id &&
+        typeof payload.executorId === "string" &&
+        payload.executorId.length > 0
+      )
+        observation.started = true
+      observeExecutor(payload)
+    })
+    executorSubscriptions.set(session.id, subscription)
+    await subscription.catch(() => {
+      session.executorObservationFailed = true
+    })
+  }
+
+  function dropAdmission(session: HostedSession, abort: boolean): number {
+    session.admissionClosed = true
+    if (session.fence) session.fence.closed = true
+    const dropped = session.followUps.length
+    session.followUps.length = 0
+    denyPending(session, "worker admission closed")
+    cancelPendingElicitations(session, "worker admission closed")
+    session.durableState.update(session.id, (state) => {
+      state.pendingPermissions = {}
+      state.pendingElicitations = {}
+      state.pendingExternalTools = {}
+      state.suspendedTurn = null
+      state.recoveryRequired = false
+    })
+    if (abort) session.abortController?.abort("worker admission closed")
+    return dropped
+  }
+
+  function armFence(session: HostedSession): void {
+    const fence = session.fence!
+    if (fence.timer) clearTimeout(fence.timer)
+    const expire = () => {
+      const remaining = fence.deadline - monotonicNow()
+      if (remaining > 0) {
+        fence.timer = setTimeout(expire, Math.ceil(remaining))
+        fence.timer.unref?.()
+        return
+      }
+      dropAdmission(session, true)
+      // An already-completed turn can still own background tool groups.
+      void retireExecutor(session).catch(() => undefined)
+    }
+    fence.timer = setTimeout(expire, Math.max(0, Math.ceil(fence.deadline - monotonicNow())))
+    fence.timer.unref?.()
+  }
+
+  function admissionOpen(session: HostedSession): boolean {
+    if (session.fence && monotonicNow() >= session.fence.deadline) dropAdmission(session, true)
+    return !session.admissionClosed && session.status !== "closed"
+  }
+
+  function assertAdmission(session: HostedSession): void {
+    if (!admissionOpen(session)) throw structured("permission_denied", "worker admission is closed")
+  }
+
+  function controlLost(): void {
+    if (controlIsLost) return
+    controlIsLost = true
+    for (const session of sessions.values()) {
+      if (session.fence) dropAdmission(session, monotonicNow() >= session.fence.deadline)
+    }
+  }
+
+  function retireExecutor(session: HostedSession): Promise<void> {
+    const activeRun = session.activeRun
+    return (session.fenceTeardown ??= (async () => {
+      await activeRun?.catch(() => undefined)
+      await session.lease.close()
+    })())
+  }
+
+  function admitWorkerTool(sessionId: string) {
+    const session = sessions.get(sessionId)
+    if (!session) return { allowed: false }
+    const allowed = admissionOpen(session)
+    return {
+      allowed,
+      ...(session.fence
+        ? {
+            childRunId: session.fence.childRunId,
+            dispatchEpoch: session.fence.dispatchEpoch,
+            leaseTtlMs: Math.max(0, session.fence.deadline - monotonicNow()),
+          }
+        : {}),
+    }
+  }
+
+  async function strictStop(
+    session: HostedSession,
+    params: Record<string, unknown>,
+    commandId: string
+  ) {
+    const targetTurnCommandId = requireString(params, "targetTurnCommandId")
+    const dispatchEpoch = params.dispatchEpoch
+    const response = (stopped: boolean) => ({
+      ...receipt(commandId),
+      stopped,
+      turnStatus: session.turnStatus ?? "unknown",
+      followUpsDropped,
+      sessionStatus: session.status,
+      targetTurnCommandId,
+      dispatchEpoch,
+    })
+    let followUpsDropped = 0
+    if (
+      session.turnCommandId !== targetTurnCommandId ||
+      !session.fence ||
+      session.fence.dispatchEpoch !== dispatchEpoch
+    )
+      return response(false)
+    followUpsDropped = dropAdmission(session, true)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let wake: (() => void) | undefined
+    let waitEnded = false
+    try {
+      const stopped = await Promise.race([
+        (async () => {
+          await retireExecutor(session)
+          // close()/kill, session_ended and turn_settled are never stop proof.
+          if (
+            waitEnded ||
+            !session.executors?.size ||
+            !session.executorObservation?.started ||
+            session.executorObservationFailed ||
+            (session.spec.runtimeAdapter !== "claude-agent-sdk" &&
+              session.spec.runtimeAdapter !== "ai-sdk")
+          )
+            return false
+          const disposed = () => [...session.executors!.values()].every(Boolean)
+          if (!disposed())
+            await new Promise<void>((resolve) => {
+              wake = () => {
+                if (disposed()) resolve()
+              }
+              session.disposalWaiters ??= new Set()
+              session.disposalWaiters.add(wake)
+            })
+          return (
+            !session.busy && session.activeRun === null && session.status === "idle" && disposed()
+          )
+        })(),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(
+            () => resolve(false),
+            typeof params.timeoutMs === "number" ? params.timeoutMs : WORKER_FENCE_GRACE_MS
+          )
+          timer.unref?.()
+        }),
+      ])
+      return response(stopped)
+    } catch {
+      return response(false)
+    } finally {
+      waitEnded = true
+      if (timer) clearTimeout(timer)
+      if (wake) session.disposalWaiters?.delete(wake)
+    }
+  }
 
   function readEntries(params: Record<string, unknown>): Record<string, unknown> {
     const sessionId = requireString(params, "sessionId")
@@ -453,11 +685,24 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
       agentDefinition
     )
     opened.value.close()
+    if (persisted.dispatchFence) {
+      // A fenced child rebuilt from disk lost its monotonic deadline with the
+      // process that measured it. It never runs again: no resumed turn, no
+      // recovered permission, no renewal (ADR-0244 I4, I9).
+      durableState.update(sessionId, (state) => {
+        state.pendingPermissions = {}
+        state.pendingElicitations = {}
+        state.pendingExternalTools = {}
+        state.suspendedTurn = null
+        state.recoveryRequired = false
+      })
+    }
     const unresolvedCount =
       Object.keys(persisted.pendingPermissions).length +
       Object.keys(persisted.pendingElicitations).length +
       Object.keys(persisted.pendingExternalTools).length
-    const needsRecovery = unresolvedCount > 0 || persisted.suspendedTurn !== null
+    const needsRecovery =
+      !persisted.dispatchFence && (unresolvedCount > 0 || persisted.suspendedTurn !== null)
     if (needsRecovery && !persisted.recoveryRequired) {
       durableState.update(sessionId, (state) => {
         state.recoveryRequired = true
@@ -488,6 +733,17 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
       ...(persisted.workerHandoff ? { workerHandoff: persisted.workerHandoff } : {}),
       ...(persisted.agentBinding ? { agentBinding: persisted.agentBinding } : {}),
       ...(agentDefinition ? { agentDefinition } : {}),
+      ...(persisted.dispatchFence
+        ? {
+            admissionClosed: true,
+            fence: {
+              childRunId: persisted.dispatchFence.childRunId,
+              dispatchEpoch: persisted.dispatchFence.dispatchEpoch,
+              deadline: Number.NEGATIVE_INFINITY,
+              closed: true,
+            },
+          }
+        : {}),
     }
     sessions.set(sessionId, session)
     // Bind the session's provider/search config so plugin `ctx.ai.*` and
@@ -576,7 +832,8 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
   async function dispatch(
     method: RpcMethod,
     typedParams: RpcMethodMap[RpcMethod]["params"],
-    context: AgentRpcServiceContext
+    context: AgentRpcServiceContext,
+    receivedAt: number
   ): Promise<unknown> {
     if (closing) throw new AgentRpcHostError(-1, "runtime is shutting down")
     const params = typedParams as Record<string, unknown>
@@ -881,7 +1138,6 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
       }
       case "turn/run": {
         const session = materialize(requireString(params, "sessionId"))
-        await awaitSandboxBinding(session, context)
         if (session.status === "recovery_required") {
           throw structured(
             "recovery_required",
@@ -890,15 +1146,72 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
         }
         const commandId = commandIdFrom(params)
         return result(
-          await runCommand(session, method, params, () =>
-            runSession(session, lowerInput(params.input), params, context, commandId)
-          )
+          await runCommand(session, method, { ...params, commandId }, async () => {
+            assertAdmission(session)
+            if (session.busy) throw structured("session_busy", "a turn is already active")
+            if (isRecord(params.fence)) {
+              const fence =
+                params.fence as unknown as import("@/packages/agent/src/types").DispatchFence
+              if (
+                session.fence &&
+                (session.fence.childRunId !== fence.childRunId ||
+                  session.fence.dispatchEpoch !== fence.dispatchEpoch)
+              ) {
+                throw structured(
+                  "permission_denied",
+                  "dispatch fence identity cannot change within a session"
+                )
+              }
+              if (!session.fence) {
+                // Persist the identity before the turn can start, so a restart
+                // or a close-and-reopen finds this session fenced and closed.
+                session.durableState.update(session.id, (state) => {
+                  state.dispatchFence = {
+                    childRunId: fence.childRunId,
+                    dispatchEpoch: fence.dispatchEpoch,
+                  }
+                })
+                session.fence = {
+                  childRunId: fence.childRunId,
+                  dispatchEpoch: fence.dispatchEpoch,
+                  deadline: receivedAt + fence.leaseTtlMs,
+                  closed: false,
+                }
+                armFence(session)
+              }
+              if (controlIsLost) dropAdmission(session, false)
+            }
+            await awaitSandboxBinding(session, context)
+            return runSession(session, lowerInput(params.input), params, context, commandId)
+          })
+        )
+      }
+      case "dispatch/renew": {
+        const session = materialize(requireString(params, "sessionId"))
+        return result(
+          await runCommand(session, method, params, async (commandId) => {
+            const fence = session.fence
+            if (
+              !fence ||
+              !admissionOpen(session) ||
+              fence.closed ||
+              controlIsLost ||
+              fence.childRunId !== params.childRunId ||
+              fence.dispatchEpoch !== params.dispatchEpoch
+            ) {
+              return { ...receipt(commandId), renewed: false }
+            }
+            fence.deadline = receivedAt + (params.leaseTtlMs as number)
+            armFence(session)
+            return { ...receipt(commandId), renewed: true }
+          })
         )
       }
       case "turn/steer": {
         const session = materialize(requireString(params, "sessionId"))
         return result(
           await runCommand(session, method, params, async (commandId) => {
+            assertAdmission(session)
             if (!session.busy) throw structured("usage_error", "no active turn to steer")
             const input = lowerInput(params.input)
             await assertPersonalControlOwner(session)
@@ -923,6 +1236,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
         const session = materialize(requireString(params, "sessionId"))
         return result(
           await runCommand(session, method, params, async (commandId) => {
+            assertAdmission(session)
             session.followUps.push({ input: lowerInput(params.input), context })
             if (!session.busy) void drainFollowUps(session)
             return receipt(commandId)
@@ -933,6 +1247,9 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
         const session = materialize(requireString(params, "sessionId"))
         return result(
           await runCommand(session, method, params, async (commandId) => {
+            if (params.targetTurnCommandId !== undefined || params.dispatchEpoch !== undefined) {
+              return strictStop(session, params, commandId)
+            }
             session.abortController?.abort("rpc abort")
             denyPending(session, "turn aborted")
             return receipt(commandId)
@@ -1816,15 +2133,18 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
     prompt: string,
     params: Record<string, unknown>,
     context: AgentRpcServiceContext,
-    _commandId: string,
+    commandId: string,
     recovery?: DurableRpcSuspendedTurn
   ): Promise<Record<string, unknown>> {
+    assertAdmission(session)
     if (session.busy) throw structured("session_busy", "a turn is already active")
     preflightDefinitionTools(session)
     if (session.workerHandoff) {
       options.workerDispatch?.validateHandoffExecution?.(session.workerHandoff)
     }
     session.busy = true
+    session.turnCommandId = commandId
+    session.turnStatus = "running"
     session.status = "running"
     session.consumedExternalToolResponses.clear()
     if (!recovery) {
@@ -1865,6 +2185,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
       const workspaceCaptureLease = session.workspaceCaptureLease
       session.workspaceCaptureLease = undefined
       try {
+        assertAdmission(session)
         const turnParams: UnifiedTurnParams = {
           config: session.config,
           prompt,
@@ -1905,12 +2226,14 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
             : {}),
           signal: controller.signal,
           handleSignals: false,
-          subscribePluginTools: () =>
-            options.subscribePluginTools
+          subscribePluginTools: async () => {
+            await subscribeExecutors(session)
+            return options.subscribePluginTools
               ? options.subscribePluginTools(createRpcPluginToolHandler(session, recovery))
               : subscribePluginToolDispatch({
                   handle: createRpcPluginToolHandler(session, recovery),
-                }),
+                })
+          },
           ...(configuredMcpServers ? { resolveMcpServers: () => [...configuredMcpServers!] } : {}),
           onEnvelope: (envelope: AgentEventEnvelope) => {
             const attemptChanged = session.currentAttemptId !== envelope.attemptId
@@ -1937,6 +2260,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
           ...(params.includeDiagnostics === true ? { includeDiagnostics: true } : {}),
         }
         const { result: runResult } = await runInTurnContext(turnContext, () => runTurn(turnParams))
+        session.turnStatus = runResult.status
         session.durableState.update(session.id, (state) => {
           if (hasPendingRequests(state)) {
             state.recoveryRequired = true
@@ -1957,6 +2281,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
         })
         return outcomeFrom(runResult)
       } catch (error) {
+        session.turnStatus = controller.signal.aborted ? "cancelled" : "failed"
         traceBridge.finish(traceSpanId, {
           errorType: "failed",
           errorMessage: error instanceof Error ? error.message : String(error),
@@ -1986,6 +2311,8 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
     recovery?: DurableRpcSuspendedTurn
   ): PermissionResponder {
     return async (request) => {
+      if (!admissionOpen(session))
+        return { decision: "deny", message: "worker admission is closed" }
       const recovered = findRecoveredResponse(
         recovery?.permissionResponses,
         request.requestId,
@@ -2017,6 +2344,15 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
   ): (request: PluginToolExecRequest) => Promise<PluginToolExecResponse> {
     const fallback = makeConfiguredCliPluginToolHandle(session.config)
     return async (request) => {
+      if (!admissionOpen(session)) {
+        session.abortController?.abort("worker admission closed before tool execution")
+        return {
+          type: "plugin_tool_response",
+          sessionId: session.id,
+          toolUseId: request.toolUseId,
+          error: "worker admission is closed",
+        }
+      }
       if (request.name !== ASK_USER_TOOL_NAME) return fallback(request)
       session.status = "waiting"
       const parsed = parseAskUserArgs(request.args)
@@ -2094,6 +2430,10 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
   }
 
   async function drainFollowUps(session: HostedSession): Promise<void> {
+    if (!admissionOpen(session)) {
+      session.followUps.length = 0
+      return
+    }
     if (session.busy) return
     const next = session.followUps.shift()
     if (!next) return
@@ -2108,6 +2448,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
   }
 
   async function closeSession(session: HostedSession): Promise<void> {
+    if (session.fence?.timer) clearTimeout(session.fence.timer)
     session.abortController?.abort("session closed")
     denyPending(session, "session closed")
     cancelPendingElicitations(session, "session closed")
@@ -2136,6 +2477,15 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
     }
     closing = true
     await Promise.all([...sessions.values()].map((session) => closeSession(session)))
+    await Promise.all(
+      [...executorSubscriptions.values()].map((subscription) =>
+        subscription.then(
+          (unsubscribe) => unsubscribe(),
+          () => undefined
+        )
+      )
+    )
+    executorSubscriptions.clear()
     if (registeredTools.size > 0 || registeredHooks.size > 0) {
       try {
         const { getPluginManager } = await import("@/lib/plugin/core/manager")
@@ -2217,13 +2567,19 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
     params: RpcMethodMap[Method]["params"],
     context: AgentRpcServiceContext
   ): Promise<RpcMethodMap[Method]["result"]> {
+    const receivedAt = monotonicNow()
     const startedAt = now()
     const sessionId =
       typeof (params as Record<string, unknown>).sessionId === "string"
         ? ((params as Record<string, unknown>).sessionId as string)
         : undefined
     try {
-      const value = await dispatch(method, params as RpcMethodMap[RpcMethod]["params"], context)
+      const value = await dispatch(
+        method,
+        params as RpcMethodMap[RpcMethod]["params"],
+        context,
+        receivedAt
+      )
       publishAudit({
         id: randomUUID(),
         at: new Date(startedAt).toISOString(),
@@ -2331,6 +2687,8 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
     ...(options.workerDispatch ? { workerManifest: options.workerDispatch.manifest } : {}),
     handle,
     activeTurns: countActiveTurns,
+    controlLost,
+    admitWorkerTool,
     close,
   }
 

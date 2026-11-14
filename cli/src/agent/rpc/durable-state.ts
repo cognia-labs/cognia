@@ -27,6 +27,20 @@ export interface DurableRpcSessionState {
    * the agent has been updated many times.
    */
   agentBinding: AgentSessionBinding | null
+  /**
+   * The worker-dispatch fence this session ran under (ADR-0244 I3/I4).
+   *
+   * Only the identity persists: the deadline is measured on this process's
+   * monotonic clock and cannot survive it, so a session rebuilt from disk with
+   * a fence is always closed. A restart or a
+   * close-and-reopen never grants a fenced child a fresh lease.
+   */
+  dispatchFence: DurableRpcDispatchFence | null
+}
+
+export interface DurableRpcDispatchFence {
+  childRunId: string
+  dispatchEpoch: number
 }
 
 export interface DurableRpcSuspendedTurn {
@@ -86,6 +100,7 @@ export function createDurableRpcStateStore(
         suspendedTurn: isSuspendedTurn(parsed.suspendedTurn) ? parsed.suspendedTurn : null,
         recoveryRequired: parsed.recoveryRequired === true,
         agentBinding: isAgentSessionBinding(parsed.agentBinding) ? parsed.agentBinding : null,
+        dispatchFence: readDispatchFence(parsed.dispatchFence),
       }
     } catch (error) {
       if (error instanceof Error && error.message === "Persisted worker handoff is invalid")
@@ -124,7 +139,23 @@ function emptyState(): DurableRpcSessionState {
     suspendedTurn: null,
     recoveryRequired: false,
     agentBinding: null,
+    dispatchFence: null,
   }
+}
+
+function readDispatchFence(value: unknown): DurableRpcDispatchFence | null {
+  if (value === undefined || value === null) return null
+  if (
+    isRecord(value) &&
+    typeof value.childRunId === "string" &&
+    typeof value.dispatchEpoch === "number" &&
+    Number.isSafeInteger(value.dispatchEpoch)
+  ) {
+    return { childRunId: value.childRunId, dispatchEpoch: value.dispatchEpoch }
+  }
+  // A fence that was written but no longer parses still fenced this session:
+  // fail closed rather than reopen it as an unfenced generic session.
+  return { childRunId: "", dispatchEpoch: -1 }
 }
 
 function isSuspendedTurn(value: unknown): value is DurableRpcSuspendedTurn {
