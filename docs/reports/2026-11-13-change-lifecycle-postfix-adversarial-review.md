@@ -174,4 +174,6 @@ P01–P03 同时涉及 `service.rs`，实施时应由同一 owner 顺序修改�
 | P02 | `4ab415a796` | settle 在 admission 锁下重读持久化的 `overlapped` 再决定可逆性；Apply/Undo 在写入与打标记期间持有同一把锁；`put_run` 永不清除已存的标记。                                                                                                                                                                                                                   | 独立集成测试 `overlap_survives_concurrent_settle`（两连接、真实 Git、`git status` 屏障），去掉重读后确认失败。borrowed baseline 的发布前空窗由同一把锁覆盖，未单独动态复现。                                 |
 | P04 | `b3ec3118b2` | 停止未证实的扣留写到 Host：orchestrator 随检查记录 `executorStopUnprovenUntil`（检查时限 + 60 秒回收余量；未知时 24 小时，Host 同样上限），Host 把 run 留在 Prepared、`error.code=executorStopUnproven`，在期限前拒绝 abort、drop 和 publish。publication 不再释放该 run，重跑检查与重启 release 透出 Host 拒绝。Agent Changes 的中止需要人确认检查已停止。 | native 两个用例（期限内拒绝、确认后中止、过期后恢复）、orchestrator / publication / host / runtime / UI 用例。残余：旧版 Host 会忽略新增的可选参数，扣留退化为原行为；期限依赖 Host 在检查时限内回收进程组。 |
 
-P05–P09 未处理，按第 7 节顺序留待后续。
+| P05 | `b896d9ee22` | 轮次在订阅时固定 Host：桌面端持有它发送到的 transport，切走的远程 transport 在最后一个持有者释放前不被关闭；发送、interrupt、close 和生命周期订阅都走这条路由，选择已变时拒绝发送。IPC 按会话记录路由，轮次结束且 Host 不再被选中时保留 5 分钟供延后关闭，之后只留名字并拒绝迟到控制。配对客户端无法到达旧目标，目标或路由代数变化后拒绝调用、丢弃事件。变更集检查一次性捕获 origin，检出的获取、pin、重置、归档、changeset 调用和 Git 读取都走该 origin；选中 Host 变化后拒绝运行验收。 | `execution-route`（A→B 后控制与事件仍属 A、B 不受影响、持有计数、配对端失效）、IPC（发送/中断/关闭随路由、选择变化拒绝发送、保留期后拒绝、进行中不释放）、run-and-capture、SCM runtime/host/git/client 用例。残余：未在真实双 Host 上验证；审批、responder 等其他会话内调用仍跟随当前选择；配对端切走后旧轮次的停止只能判为未证实。 |
+
+P06–P09 未处理，按第 7 节顺序留待后续。
