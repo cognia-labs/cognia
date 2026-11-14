@@ -26,6 +26,7 @@ import {
   clearActiveRuntimeTargetContext,
 } from "@/lib/runtime/runtime-target-context"
 import { createHostLlmClient, shouldUseHostLlmClient } from "./host-llm-client"
+import { setActiveRemoteEndpoint, setActiveRemoteTransport } from "@/lib/tauri/transport-routing"
 import { enqueueHostStateIntentIfAvailable } from "@/lib/db/mobile-outbound-queue"
 
 const provider = {
@@ -59,14 +60,94 @@ beforeEach(() => {
 })
 afterEach(() => clearActiveRuntimeTargetContext())
 
-it("keeps standalone and Tauri on their existing network paths", () => {
+it("keeps standalone and a Tauri desktop without a remote Host on their own network paths", () => {
   jest.mocked(loadCompanionConfig).mockReturnValue(null)
   expect(shouldUseHostLlmClient()).toBe(false)
   jest
     .mocked(loadCompanionConfig)
     .mockReturnValue({ targetId: "host-one", deviceId: "device-one" } as never)
   jest.mocked(isTauri).mockReturnValue(true)
+  // A stored pairing does not make a desktop a client of that Host.
   expect(shouldUseHostLlmClient()).toBe(false)
+})
+
+describe("a desktop driving a remote Host", () => {
+  const remote = { call: jest.fn(), subscribe: jest.fn() } as never
+  beforeEach(() => {
+    jest.mocked(isTauri).mockReturnValue(true)
+    jest.mocked(loadCompanionConfig).mockReturnValue(null)
+    setActiveRemoteTransport(remote)
+    setActiveRemoteEndpoint({
+      remoteHost: { id: "box", label: "Build box" },
+      baseUrl: "https://box.example:7890",
+      deviceId: "desktop-device",
+      devicePrivateKeyJwk: {},
+      deviceKeyThumbprint: "thumb",
+      serverVersion: "1.0.0",
+    })
+  })
+  afterEach(() => {
+    setActiveRemoteTransport(null)
+    setActiveRemoteEndpoint(null)
+  })
+
+  it("takes the Host's session admission when the Host offers it HostState", async () => {
+    expect(shouldUseHostLlmClient()).toBe(true)
+    await expect(createHostLlmClient(provider, "titles").complete("Name it")).resolves.toBe("OK")
+    const id = run.mock.calls[0][0]
+    expect(enqueueHostStateIntentIfAvailable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: id,
+        action: expect.objectContaining({ kind: "session.create" }),
+      })
+    )
+    expect(closeSession).toHaveBeenCalledWith(id)
+  })
+
+  it("sends over the pinned route without HostState and closes the session it opened", async () => {
+    jest.mocked(enqueueHostStateIntentIfAvailable).mockResolvedValueOnce(null)
+    run.mockImplementation(async (_id, _prompt, _options, capture) => {
+      await capture?.beforeSend?.()
+      return { text: "OK", resultSubtype: "success" } as never
+    })
+    await expect(createHostLlmClient(provider, "titles").complete("Name it")).resolves.toBe("OK")
+    const id = run.mock.calls[0][0]
+    expect(enqueueHostStateIntentIfAvailable).toHaveBeenCalledTimes(1)
+    expect(closeSession).toHaveBeenCalledWith(id)
+  })
+
+  it("keeps a delivered answer when the direct route's close fails", async () => {
+    jest.mocked(enqueueHostStateIntentIfAvailable).mockResolvedValueOnce(null)
+    jest.mocked(closeSession).mockRejectedValueOnce(new Error("Host unreachable"))
+    run.mockImplementation(async (_id, _prompt, _options, capture) => {
+      await capture?.beforeSend?.()
+      return { text: "OK", resultSubtype: "success" } as never
+    })
+    await expect(createHostLlmClient(provider, "titles").complete("Name it")).resolves.toBe("OK")
+  })
+
+  it("does not close a session it never dispatched", async () => {
+    jest.mocked(enqueueHostStateIntentIfAvailable).mockResolvedValueOnce(null)
+    run.mockRejectedValueOnce(new Error("provider down"))
+    await expect(createHostLlmClient(provider, "titles").complete("Name it")).rejects.toThrow(
+      "provider down"
+    )
+    expect(closeSession).not.toHaveBeenCalled()
+  })
+
+  it("refuses a client built for another remote Host", async () => {
+    const client = createHostLlmClient(provider, "titles")
+    setActiveRemoteTransport({ call: jest.fn(), subscribe: jest.fn() } as never)
+    await expect(client.complete("Name it")).rejects.toThrow("Host connection changed")
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it("stops once the desktop returns to routing locally", async () => {
+    const client = createHostLlmClient(provider, "titles")
+    setActiveRemoteTransport(null)
+    expect(shouldUseHostLlmClient()).toBe(false)
+    await expect(client.complete("Name it")).rejects.toThrow("Host connection changed")
+  })
 })
 it("uses exact credentials and one bounded toolless request, reports usage and closes its own session", async () => {
   const client = createHostLlmClient(provider, "composer-followups")

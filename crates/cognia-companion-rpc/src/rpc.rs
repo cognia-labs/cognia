@@ -452,6 +452,10 @@ const KNOWN_COMMANDS: &[&str] = &[
     "provider_diagnostics_history",
     "provider_diagnostics_start",
     "provider_diagnostics_cancel",
+    // A client whose turns run on this host manages its inference engines,
+    // answered through desktop_writes_bridge (`lib/ai/local-engine/host-rpc.ts`).
+    "provider_local_engine_read",
+    "provider_local_engine_mutate",
     // `@msg:` / `@prompt:` / `^` from a paired device — reads answered through
     // desktop_writes_bridge by the host's own history search.
     "session_reference_search",
@@ -1604,6 +1608,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "host_state_status",
     "provider_diagnostics_status",
     "provider_diagnostics_history",
+    "provider_local_engine_read",
     "session_reference_search",
     "session_reference_snapshot",
     "scheduled_task_list",
@@ -1885,6 +1890,7 @@ const CONTROL_COMMANDS: &[&str] = &[
     "video_cleanup_analysis",
     "provider_diagnostics_start",
     "provider_diagnostics_cancel",
+    "provider_local_engine_mutate",
     "claude_restore",
     "claude_set_mode",
     "claude_plugin_tool_response",

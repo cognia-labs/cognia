@@ -13,10 +13,7 @@ import type {
   LocalModelInfo,
 } from "@cognia/provider-types/local-provider"
 import { LOCAL_PROVIDER_CONFIGS } from "@cognia/provider-core/providers/local-providers"
-import {
-  createLocalProviderService,
-  getInstallInstructions,
-} from "@cognia/provider-core/providers/local-provider-service"
+import { getInstallInstructions } from "@cognia/provider-core/providers/local-provider-service"
 import { buildProviderVerificationFingerprint } from "@cognia/provider-core/providers/completeness"
 import { Button } from "@/components/ui/button"
 import {
@@ -33,6 +30,14 @@ import { useSettingsStore } from "@/stores/settings"
 import { useDraftField } from "@/hooks/settings/use-draft-field"
 import { useHostProfile } from "@/hooks/use-host-profile"
 import { getRuntimeTargetScopeKey } from "@/lib/runtime/runtime-target-context"
+import {
+  createLocalEngineClient,
+  getLocalEngineTarget,
+  LocalEngineHostChangedError,
+  localEngineTargetKey,
+} from "@/lib/ai/local-engine/client"
+import { useLocalEngineTarget } from "@/hooks/provider/use-local-engine-target"
+import { LocalEngineTargetNotice } from "./local-engine-target-notice"
 import { LocalProviderCard } from "./local-provider-card"
 import { ProviderHostNotice } from "./provider-host-notice"
 import { LocalProviderSetupWizard } from "./local-provider-setup-wizard"
@@ -79,10 +84,16 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
   const installInfo = getInstallInstructions(providerId)
   const effectiveBaseUrl = settings?.baseURL?.trim() || config.defaultBaseURL
   const hostProfile = useHostProfile()
-  // On the phone "localhost" is the phone: probing the default base URL can
-  // only fail (and, on Android, hang on the timeout). Probe automatically only
-  // when the user pointed the engine somewhere else; the notice explains why.
-  const isMobileShell = hostProfile === "mobile-companion"
+  // The engines managed here are the ones on the machine that runs this
+  // client's turns: a paired Host, or this device.
+  const target = useLocalEngineTarget()
+  const targetKey = localEngineTargetKey(target)
+  const managesThisDevice = target.kind === "this-device"
+  // On an unpaired phone "localhost" is the phone: probing the default base
+  // URL can only fail (and, on Android, hang on the timeout). Probe
+  // automatically only when the user pointed the engine somewhere else; the
+  // notice explains why. A paired phone probes the Host's engines instead.
+  const isMobileShell = hostProfile === "mobile-companion" && managesThisDevice
   const autoProbeAllowed = !isMobileShell || Boolean(settings?.baseURL?.trim())
   const apiKey = settings?.apiKey?.trim() || undefined
   const customHeaders = settings?.customHeaders
@@ -92,16 +103,28 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
     [effectiveBaseUrl, apiKey, customHeaders]
   )
 
+  // What the previous machine reported does not describe this one.
+  const [shownTargetKey, setShownTargetKey] = useState(targetKey)
+  if (shownTargetKey !== targetKey) {
+    setShownTargetKey(targetKey)
+    setStatus(null)
+  }
+
   const refreshStatus = useCallback(async () => {
     setIsRefreshing(true)
     try {
-      const nextStatus = await createLocalProviderService(providerId, serviceOptions).getStatus()
-      setStatus(nextStatus)
+      const nextStatus = await createLocalEngineClient(providerId, serviceOptions).getStatus()
+      if (localEngineTargetKey(getLocalEngineTarget()) === targetKey) setStatus(nextStatus)
       return nextStatus
+    } catch (error) {
+      // The managed machine changed mid-probe; the re-render for the new one
+      // probes again. Anything else is a real failure.
+      if (error instanceof LocalEngineHostChangedError) return null
+      throw error
     } finally {
       setIsRefreshing(false)
     }
-  }, [providerId, serviceOptions])
+  }, [providerId, serviceOptions, targetKey])
 
   // Probe on mount and whenever the COMMITTED endpoint / key / headers change.
   // The inputs below are draft-buffered, so a keystroke no longer reaches the
@@ -143,8 +166,10 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
     const testedSettings = useSettingsStore.getState().providerSettings[providerId]
     const testedConfig = buildProviderVerificationFingerprint(testedSettings)
     const testedScope = getRuntimeTargetScopeKey()
+    const testedTarget = localEngineTargetKey(getLocalEngineTarget())
     const isCurrent = () =>
       getRuntimeTargetScopeKey() === testedScope &&
+      localEngineTargetKey(getLocalEngineTarget()) === testedTarget &&
       buildProviderVerificationFingerprint(
         useSettingsStore.getState().providerSettings[providerId]
       ) === testedConfig
@@ -160,7 +185,7 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
 
     setIsRefreshing(true)
     try {
-      const service = createLocalProviderService(providerId, serviceOptions)
+      const service = createLocalEngineClient(providerId, serviceOptions)
       const nextStatus = await service.getStatus()
       if (isCurrent()) setStatus(nextStatus)
 
@@ -223,7 +248,11 @@ export function LocalProviderSettings({ providerId }: LocalProviderSettingsProps
   return (
     <TooltipProvider>
       <div className="space-y-6" data-testid="local-provider-settings">
-        <ProviderHostNotice kind="mobile-local" />
+        {managesThisDevice ? (
+          <ProviderHostNotice kind="mobile-local" />
+        ) : (
+          <LocalEngineTargetNotice target={target} />
+        )}
         <LocalProviderCard
           providerId={providerId}
           enabled={settings?.enabled ?? false}

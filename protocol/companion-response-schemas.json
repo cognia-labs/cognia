@@ -16154,6 +16154,167 @@
           "additionalProperties": false
         }
       ]
+    },
+    "LocalEngineWireError": {
+      "type": "object",
+      "x-cognia-wire-source": "lib/ai/local-engine/protocol.ts LocalEngineWireError.",
+      "properties": {
+        "code": {
+          "enum": [
+            "authentication_failed",
+            "http_error",
+            "invalid_headers",
+            "invalid_response",
+            "network_error",
+            "request_failed"
+          ]
+        },
+        "message": { "type": "string" },
+        "status": { "type": "integer" }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "LocalEnginePullJob": {
+      "type": "object",
+      "x-cognia-wire-source": "lib/ai/local-engine/protocol.ts LocalEnginePullJob.",
+      "properties": {
+        "jobId": { "type": "string", "minLength": 1 },
+        "providerId": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["running", "succeeded", "failed"] },
+        "progress": {
+          "type": "object",
+          "properties": {
+            "model": { "type": "string" },
+            "status": { "type": "string" },
+            "digest": { "type": "string" },
+            "total": { "type": "number", "minimum": 0 },
+            "completed": { "type": "number", "minimum": 0 },
+            "percentage": { "type": "number" }
+          },
+          "required": ["model", "status"]
+        },
+        "error": { "type": "string" },
+        "startedAt": { "type": "integer", "minimum": 0 },
+        "updatedAt": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["jobId", "providerId", "model", "state", "startedAt", "updatedAt"],
+      "additionalProperties": false
+    },
+    "LocalEngineReadResult": {
+      "x-cognia-wire-source": "lib/ai/local-engine/host-rpc.ts handleLocalEngineRead: the op's value (status, model list, installation probes, a pull job or model capabilities) or the engine's error.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "value": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "connected": { "type": "boolean" },
+                    "version": { "type": "string" },
+                    "models_count": { "type": "integer", "minimum": 0 },
+                    "error": { "type": "string" },
+                    "latency_ms": { "type": "number", "minimum": 0 }
+                  },
+                  "required": ["connected"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "object": { "type": "string" },
+                      "created": { "type": "number" },
+                      "owned_by": { "type": "string" },
+                      "size": { "type": "number", "minimum": 0 },
+                      "family": { "type": "string" },
+                      "quantization": { "type": "string" },
+                      "context_length": { "type": "number", "minimum": 0 },
+                      "providerId": { "type": "string" },
+                      "installed": { "type": "boolean" },
+                      "running": { "type": "boolean" },
+                      "error": { "type": "string" }
+                    }
+                  }
+                },
+                { "$ref": "#/$defs/LocalEnginePullJob" },
+                {
+                  "type": "object",
+                  "description": "capabilities: Ollama /api/show answers keyed by model id.",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "supportsVision": { "type": "boolean" },
+                      "supportsTools": { "type": "boolean" },
+                      "supportsEmbedding": { "type": "boolean" },
+                      "supportsThinking": { "type": "boolean" },
+                      "contextLength": { "type": "integer", "minimum": 0 },
+                      "architecture": { "type": "string" },
+                      "inferred": { "type": "boolean" }
+                    },
+                    "required": [
+                      "supportsVision",
+                      "supportsTools",
+                      "supportsEmbedding",
+                      "supportsThinking",
+                      "inferred"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              ]
+            }
+          },
+          "required": ["ok", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": false },
+            "error": { "$ref": "#/$defs/LocalEngineWireError" }
+          },
+          "required": ["ok", "error"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "LocalEngineMutateResult": {
+      "x-cognia-wire-source": "lib/ai/local-engine/host-rpc.ts handleLocalEngineMutate: whether the engine supports the change (and the started pull job) or the engine's error.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": true },
+            "value": {
+              "type": "object",
+              "properties": {
+                "supported": { "type": "boolean" },
+                "job": { "$ref": "#/$defs/LocalEnginePullJob" }
+              },
+              "required": ["supported"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["ok", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": { "const": false },
+            "error": { "$ref": "#/$defs/LocalEngineWireError" }
+          },
+          "required": ["ok", "error"],
+          "additionalProperties": false
+        }
+      ]
     }
   },
   "commands": {
@@ -19816,6 +19977,12 @@
     },
     "provider_diagnostics_status": {
       "$ref": "#/$defs/LegacyRecord"
+    },
+    "provider_local_engine_mutate": {
+      "$ref": "#/$defs/LocalEngineMutateResult"
+    },
+    "provider_local_engine_read": {
+      "$ref": "#/$defs/LocalEngineReadResult"
     },
     "provider_profiles_import": {
       "$ref": "#/$defs/ProfileVersion"

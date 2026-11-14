@@ -40001,6 +40001,11 @@
     "lmstudio": "LM Studio",
     "lmstudioDescription": "Desktop app for running local LLMs",
     "local": "Local",
+    "localEngineTarget": {
+      "hostBody": "This client's chats run on that Host, so the engines listed here are the Host's: \"localhost\" in the base URL is the Host, and installing, starting or downloading models happens there.",
+      "hostTitle": "Managing local engines on {host}",
+      "unnamedHostTitle": "Managing local engines on the paired Host"
+    },
     "localProvider": "Local",
     "localProviderApiKeyHint": "Optional API key for secured local endpoints.",
     "localProviderDescriptions": {

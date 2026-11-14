@@ -1013,6 +1013,7 @@
             "history": {}
           }
         },
+        "local_engine": {},
         "profile": {
           "children": {
             "version": {}

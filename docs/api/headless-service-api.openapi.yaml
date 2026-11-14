@@ -157135,6 +157135,758 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
       x-cognia-response-schema-source: contract
+  /internal/_rpc/provider_local_engine_mutate:
+    post:
+      operationId: internalRpcProviderLocalEngineMutate
+      tags:
+        - headless-rpc
+      summary: provider_local_engine_mutate (workspace.write)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: zod-contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                op:
+                  type: string
+                  enum:
+                    - pull
+                    - delete
+                    - stop
+                model:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                providerId:
+                  type: string
+                  enum:
+                    - ollama
+                    - lmstudio
+                    - llamacpp
+                    - llamafile
+                    - vllm
+                    - localai
+                    - jan
+                    - textgenwebui
+                    - koboldcpp
+                    - tabbyapi
+                baseUrl:
+                  type: string
+                  maxLength: 2048
+                apiKey:
+                  type: string
+                  maxLength: 4096
+                customHeaders:
+                  type: object
+                  propertyNames:
+                    type: string
+                  additionalProperties:
+                    type: string
+                    maxLength: 4096
+                  example: {}
+              required:
+                - op
+                - model
+                - providerId
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                x-cognia-wire-source: "lib/ai/local-engine/host-rpc.ts handleLocalEngineMutate: whether the engine supports the change
+                  (and the started pull job) or the engine's error."
+                oneOf:
+                  - type: object
+                    properties:
+                      ok:
+                        const: true
+                      value:
+                        type: object
+                        properties:
+                          supported:
+                            type: boolean
+                          job:
+                            type: object
+                            x-cognia-wire-source: lib/ai/local-engine/protocol.ts LocalEnginePullJob.
+                            properties:
+                              jobId:
+                                type: string
+                                minLength: 1
+                              providerId:
+                                type: string
+                                minLength: 1
+                              model:
+                                type: string
+                                minLength: 1
+                              state:
+                                enum:
+                                  - running
+                                  - succeeded
+                                  - failed
+                              progress:
+                                type: object
+                                properties:
+                                  model:
+                                    type: string
+                                  status:
+                                    type: string
+                                  digest:
+                                    type: string
+                                  total:
+                                    type: number
+                                    minimum: 0
+                                  completed:
+                                    type: number
+                                    minimum: 0
+                                  percentage:
+                                    type: number
+                                required:
+                                  - model
+                                  - status
+                              error:
+                                type: string
+                              startedAt:
+                                type: integer
+                                minimum: 0
+                              updatedAt:
+                                type: integer
+                                minimum: 0
+                            required:
+                              - jobId
+                              - providerId
+                              - model
+                              - state
+                              - startedAt
+                              - updatedAt
+                            additionalProperties: false
+                        required:
+                          - supported
+                        additionalProperties: false
+                    required:
+                      - ok
+                      - value
+                    additionalProperties: false
+                  - type: object
+                    properties:
+                      ok:
+                        const: false
+                      error:
+                        type: object
+                        x-cognia-wire-source: lib/ai/local-engine/protocol.ts LocalEngineWireError.
+                        properties:
+                          code:
+                            enum:
+                              - authentication_failed
+                              - http_error
+                              - invalid_headers
+                              - invalid_response
+                              - network_error
+                              - request_failed
+                          message:
+                            type: string
+                          status:
+                            type: integer
+                        required:
+                          - code
+                          - message
+                        additionalProperties: false
+                    required:
+                      - ok
+                      - error
+                    additionalProperties: false
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/provider_local_engine_read:
+    post:
+      operationId: internalRpcProviderLocalEngineRead
+      tags:
+        - headless-rpc
+      summary: provider_local_engine_read (host.observe)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: zod-contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  properties:
+                    op:
+                      type: string
+                      const: status
+                    providerId:
+                      type: string
+                      enum:
+                        - ollama
+                        - lmstudio
+                        - llamacpp
+                        - llamafile
+                        - vllm
+                        - localai
+                        - jan
+                        - textgenwebui
+                        - koboldcpp
+                        - tabbyapi
+                    baseUrl:
+                      type: string
+                      maxLength: 2048
+                    apiKey:
+                      type: string
+                      maxLength: 4096
+                    customHeaders:
+                      type: object
+                      propertyNames:
+                        type: string
+                      additionalProperties:
+                        type: string
+                        maxLength: 4096
+                      example: {}
+                  required:
+                    - op
+                    - providerId
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    op:
+                      type: string
+                      const: models
+                    providerId:
+                      type: string
+                      enum:
+                        - ollama
+                        - lmstudio
+                        - llamacpp
+                        - llamafile
+                        - vllm
+                        - localai
+                        - jan
+                        - textgenwebui
+                        - koboldcpp
+                        - tabbyapi
+                    baseUrl:
+                      type: string
+                      maxLength: 2048
+                    apiKey:
+                      type: string
+                      maxLength: 4096
+                    customHeaders:
+                      type: object
+                      propertyNames:
+                        type: string
+                      additionalProperties:
+                        type: string
+                        maxLength: 4096
+                      example: {}
+                  required:
+                    - op
+                    - providerId
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    op:
+                      type: string
+                      const: installation
+                    baseUrls:
+                      type: object
+                      propertyNames:
+                        type: string
+                      additionalProperties:
+                        type: string
+                        maxLength: 2048
+                      example: {}
+                  required:
+                    - op
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    op:
+                      type: string
+                      const: pull_status
+                    jobId:
+                      type: string
+                      minLength: 1
+                      maxLength: 128
+                  required:
+                    - op
+                    - jobId
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    op:
+                      type: string
+                      const: capabilities
+                    baseUrl:
+                      type: string
+                      maxLength: 2048
+                    models:
+                      maxItems: 64
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 512
+                  required:
+                    - op
+                    - models
+                  additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                x-cognia-wire-source: "lib/ai/local-engine/host-rpc.ts handleLocalEngineRead: the op's value (status, model list,
+                  installation probes, a pull job or model capabilities) or the engine's error."
+                oneOf:
+                  - type: object
+                    properties:
+                      ok:
+                        const: true
+                      value:
+                        oneOf:
+                          - type: object
+                            properties:
+                              connected:
+                                type: boolean
+                              version:
+                                type: string
+                              models_count:
+                                type: integer
+                                minimum: 0
+                              error:
+                                type: string
+                              latency_ms:
+                                type: number
+                                minimum: 0
+                            required:
+                              - connected
+                            additionalProperties: false
+                          - type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                object:
+                                  type: string
+                                created:
+                                  type: number
+                                owned_by:
+                                  type: string
+                                size:
+                                  type: number
+                                  minimum: 0
+                                family:
+                                  type: string
+                                quantization:
+                                  type: string
+                                context_length:
+                                  type: number
+                                  minimum: 0
+                                providerId:
+                                  type: string
+                                installed:
+                                  type: boolean
+                                running:
+                                  type: boolean
+                                error:
+                                  type: string
+                          - type: object
+                            x-cognia-wire-source: lib/ai/local-engine/protocol.ts LocalEnginePullJob.
+                            properties:
+                              jobId:
+                                type: string
+                                minLength: 1
+                              providerId:
+                                type: string
+                                minLength: 1
+                              model:
+                                type: string
+                                minLength: 1
+                              state:
+                                enum:
+                                  - running
+                                  - succeeded
+                                  - failed
+                              progress:
+                                type: object
+                                properties:
+                                  model:
+                                    type: string
+                                  status:
+                                    type: string
+                                  digest:
+                                    type: string
+                                  total:
+                                    type: number
+                                    minimum: 0
+                                  completed:
+                                    type: number
+                                    minimum: 0
+                                  percentage:
+                                    type: number
+                                required:
+                                  - model
+                                  - status
+                              error:
+                                type: string
+                              startedAt:
+                                type: integer
+                                minimum: 0
+                              updatedAt:
+                                type: integer
+                                minimum: 0
+                            required:
+                              - jobId
+                              - providerId
+                              - model
+                              - state
+                              - startedAt
+                              - updatedAt
+                            additionalProperties: false
+                          - type: object
+                            description: "capabilities: Ollama /api/show answers keyed by model id."
+                            additionalProperties:
+                              type: object
+                              properties:
+                                supportsVision:
+                                  type: boolean
+                                supportsTools:
+                                  type: boolean
+                                supportsEmbedding:
+                                  type: boolean
+                                supportsThinking:
+                                  type: boolean
+                                contextLength:
+                                  type: integer
+                                  minimum: 0
+                                architecture:
+                                  type: string
+                                inferred:
+                                  type: boolean
+                              required:
+                                - supportsVision
+                                - supportsTools
+                                - supportsEmbedding
+                                - supportsThinking
+                                - inferred
+                              additionalProperties: false
+                    required:
+                      - ok
+                      - value
+                    additionalProperties: false
+                  - type: object
+                    properties:
+                      ok:
+                        const: false
+                      error:
+                        type: object
+                        x-cognia-wire-source: lib/ai/local-engine/protocol.ts LocalEngineWireError.
+                        properties:
+                          code:
+                            enum:
+                              - authentication_failed
+                              - http_error
+                              - invalid_headers
+                              - invalid_response
+                              - network_error
+                              - request_failed
+                          message:
+                            type: string
+                          status:
+                            type: integer
+                        required:
+                          - code
+                          - message
+                        additionalProperties: false
+                    required:
+                      - ok
+                      - error
+                    additionalProperties: false
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
   /internal/_rpc/provider_profiles_import:
     post:
       operationId: internalRpcProviderProfilesImport
@@ -228569,6 +229321,8 @@ components:
           - provider_diagnostics_history
           - provider_diagnostics_start
           - provider_diagnostics_status
+          - provider_local_engine_mutate
+          - provider_local_engine_read
           - provider_profiles_import
           - provider_profiles_list
           - provider_profiles_version
@@ -229120,10 +229874,10 @@ x-cognia-generated:
     - protocol/headless-command-dispositions.json
     - protocol/companion-command-renames.json
     - scripts/build/companion-request-schema-contracts.mjs
-  internalCommandCount: 1000
-  generatedRequestSchemaCount: 1000
+  internalCommandCount: 1002
+  generatedRequestSchemaCount: 1002
   runtimeInferredRequestSchemaCount: 0
-  contractRequestSchemaCount: 1000
+  contractRequestSchemaCount: 1002
   genericRequestSchemaCount: 0
-  generatedResponseSchemaCount: 1000
+  generatedResponseSchemaCount: 1002
   loopbackOnly: true

@@ -4,43 +4,65 @@
  * provider and sends no chat settings, tools, memory or conversation history.
  */
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import { loggers } from "@cognia/logging"
 import type { SendOptions } from "@cognia/agent-config-types"
 import type { ResolvedProvider } from "./provider-consumption"
 import type { LlmClient, LlmClientCallOptions, LlmUsageSnapshot } from "@/lib/twin/distill/llm"
-import { isTauri } from "@/lib/tauri"
-import { loadCompanionConfig } from "@/lib/tauri/transport-companion"
-import {
-  getActiveRuntimeTargetContext,
-  getRuntimeTargetScopeKey,
-  subscribeRuntimeTargetContext,
-} from "@/lib/runtime/runtime-target-context"
 import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
 import { withHostUtilitySession } from "./host-utility-session"
+import {
+  getRemoteExecutionHost,
+  isSameExecutionHost,
+  subscribeExecutionHost,
+} from "./execution-host"
+
+/**
+ * Utility model calls follow the machine that executes this client's turns
+ * (`./execution-host.ts`): a paired browser or phone, and a desktop driving a
+ * remote Host, both run them on that Host.
+ */
+const log = loggers.ai
 
 export function shouldUseHostLlmClient(): boolean {
-  const active = getActiveRuntimeTargetContext()
-  const config = loadCompanionConfig()
-  return !isTauri() && !!active && !!config?.deviceId && config.targetId === active.targetId
+  return getRemoteExecutionHost() !== null
 }
 
-function hostScopeKey(): string {
-  const config = loadCompanionConfig()
-  return JSON.stringify([
-    getRuntimeTargetScopeKey(),
-    config?.deviceId,
-    config?.deviceKeyThumbprint,
-    config?.baseUrl,
-    config?.serverFingerprint,
-  ])
+/**
+ * Without HostState admission, a desktop driving a remote Host sends the turn
+ * over its pinned execution route, as its own chat does there, and then closes
+ * the Host session the send opened. The close is best effort: a lost close
+ * must not turn a delivered answer into a failure, and it is only attempted
+ * once the send was dispatched (so it reaches the Host that ran it).
+ */
+async function runOnDesktopRemoteRoute<T>(
+  sessionId: string,
+  run: (onDispatched: () => void) => Promise<T>
+): Promise<T> {
+  let dispatched = false
+  try {
+    return await run(() => {
+      dispatched = true
+    })
+  } finally {
+    if (dispatched) {
+      const { closeSession } = await import("@/lib/claude/ipc")
+      await closeSession(sessionId).catch((error: unknown) => {
+        log.warn("Host utility session close failed", {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    }
+  }
 }
 
 export function createHostLlmClient(
   provider: ResolvedProvider & { model: string },
   featureId: string
 ): LlmClient {
-  const scope = hostScopeKey()
+  const host = getRemoteExecutionHost()
   const assertCurrent = () => {
-    if (!shouldUseHostLlmClient() || hostScopeKey() !== scope) {
+    if (!host || !isSameExecutionHost(host)) {
       throw new Error("Host connection changed during the utility request")
     }
   }
@@ -57,9 +79,10 @@ export function createHostLlmClient(
     }
     const controller = new AbortController()
     const cancel = () => controller.abort()
-    const unsubscribe = subscribeRuntimeTargetContext(() => {
-      if (hostScopeKey() !== scope) cancel()
-    })
+    const onRouteChange = () => {
+      if (!host || !isSameExecutionHost(host)) cancel()
+    }
+    const unsubscribe = subscribeExecutionHost(onRouteChange)
     options?.abortSignal?.addEventListener("abort", cancel, { once: true })
     const sessionId = `utility-${crypto.randomUUID()}`
     const send: SendOptions = {
@@ -90,6 +113,54 @@ export function createHostLlmClient(
         ...(options?.stopSequences ? { stopSequences: options.stopSequences } : {}),
       },
     }
+    // Set by the direct route only: told when the turn is handed to the Host.
+    let onDispatched: (() => void) | undefined
+    const work = async () => {
+      const result = await runAndCaptureAssistantReply(sessionId, prompt, send, {
+        signal: controller.signal,
+        timeoutMs: 30_000,
+        beforeSend: async () => {
+          assertCurrent()
+          controller.signal.throwIfAborted()
+          onDispatched?.()
+        },
+        execution: { kind: "subagent", label: featureId },
+        ...(onPartial
+          ? {
+              onPartial: (text: string) => {
+                assertCurrent()
+                onPartial(text)
+              },
+            }
+          : {}),
+      })
+      assertCurrent()
+      controller.signal.throwIfAborted()
+      if (result.resultSubtype && result.resultSubtype !== "success") {
+        throw new Error(`Host utility request failed (${result.resultSubtype})`)
+      }
+      const delta = {
+        inputTokens: result.usage?.inputTokens ?? 0,
+        outputTokens: result.usage?.outputTokens ?? 0,
+        cacheReadTokens: result.usage?.cacheReadInputTokens ?? 0,
+        cacheCreationTokens: result.usage?.cacheCreationInputTokens ?? 0,
+      }
+      usage.inputTokens += delta.inputTokens
+      usage.outputTokens += delta.outputTokens
+      usage.totalTokens = usage.inputTokens + usage.outputTokens
+      usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + delta.cacheReadTokens
+      usage.cacheCreationTokens = (usage.cacheCreationTokens ?? 0) + delta.cacheCreationTokens
+      options?.onUsage?.(delta)
+      return result.text
+    }
+    // A paired client's turns need a Host-owned session (ADR-0123). A desktop
+    // driving a remote Host takes the same admission when the Host offers it
+    // HostState, and its direct route otherwise.
+    const direct = () =>
+      runOnDesktopRemoteRoute(sessionId, (dispatched) => {
+        onDispatched = dispatched
+        return work()
+      })
     try {
       return await withHostUtilitySession(
         {
@@ -98,44 +169,9 @@ export function createHostLlmClient(
           model: provider.model,
           assertCurrent,
           signal: controller.signal,
+          ...(host?.kind === "desktop-remote" ? { whenUnavailable: direct } : {}),
         },
-        async () => {
-          const result = await runAndCaptureAssistantReply(sessionId, prompt, send, {
-            signal: controller.signal,
-            timeoutMs: 30_000,
-            beforeSend: async () => {
-              assertCurrent()
-              controller.signal.throwIfAborted()
-            },
-            execution: { kind: "subagent", label: featureId },
-            ...(onPartial
-              ? {
-                  onPartial: (text: string) => {
-                    assertCurrent()
-                    onPartial(text)
-                  },
-                }
-              : {}),
-          })
-          assertCurrent()
-          controller.signal.throwIfAborted()
-          if (result.resultSubtype && result.resultSubtype !== "success") {
-            throw new Error(`Host utility request failed (${result.resultSubtype})`)
-          }
-          const delta = {
-            inputTokens: result.usage?.inputTokens ?? 0,
-            outputTokens: result.usage?.outputTokens ?? 0,
-            cacheReadTokens: result.usage?.cacheReadInputTokens ?? 0,
-            cacheCreationTokens: result.usage?.cacheCreationInputTokens ?? 0,
-          }
-          usage.inputTokens += delta.inputTokens
-          usage.outputTokens += delta.outputTokens
-          usage.totalTokens = usage.inputTokens + usage.outputTokens
-          usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + delta.cacheReadTokens
-          usage.cacheCreationTokens = (usage.cacheCreationTokens ?? 0) + delta.cacheCreationTokens
-          options?.onUsage?.(delta)
-          return result.text
-        }
+        work
       )
     } finally {
       unsubscribe()

@@ -182,6 +182,15 @@ jest.mock("./local-provider-setup-wizard", () => ({
   ),
 }))
 
+const mockHostCall = jest.fn()
+let mockActiveHost: { kind: string; transport: unknown; label: string; scopeKey: string } | null =
+  null
+jest.mock("@/lib/ai/execution-host", () => ({
+  getRemoteExecutionHost: () => mockActiveHost,
+  isSameExecutionHost: (host: unknown) => host === mockActiveHost,
+  subscribeExecutionHost: () => () => {},
+}))
+
 jest.mock("./transport-headers-editor", () => ({
   TransportHeadersEditor: () => <div data-testid="headers-editor" />,
 }))
@@ -189,6 +198,7 @@ jest.mock("./transport-headers-editor", () => ({
 describe("LocalProviderSettings", () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockActiveHost = null
     getStatus.mockResolvedValue({
       connected: true,
       version: "0.6.0",
@@ -375,5 +385,89 @@ describe("LocalProviderSettings", () => {
       mockHostProfile = "desktop"
       mockState.providerSettings.ollama.baseURL = savedBaseURL
     }
+  })
+
+  describe("while a Host executes this client's turns", () => {
+    const studio = () => ({
+      kind: "paired-client",
+      transport: { call: mockHostCall, subscribe: jest.fn() },
+      label: "Studio Mac",
+      scopeKey: "studio",
+    })
+    beforeEach(() => {
+      mockHostCall.mockImplementation(async (_command: string, payload: { op: string }) => {
+        if (payload.op === "status") {
+          return { ok: true, value: { connected: true, version: "host-1", latency_ms: 3 } }
+        }
+        if (payload.op === "models") return { ok: true, value: [{ id: "host-model" }] }
+        throw new Error(`unexpected ${payload.op}`)
+      })
+    })
+
+    it("probes the Host's engine even on a phone with the default localhost URL", async () => {
+      mockHostProfile = "mobile-companion"
+      mockActiveHost = studio()
+      const savedBaseURL = mockState.providerSettings.ollama.baseURL
+      mockState.providerSettings.ollama.baseURL = undefined
+      try {
+        render(<LocalProviderSettings providerId="ollama" />)
+        await waitFor(() =>
+          expect(mockHostCall).toHaveBeenCalledWith("provider_local_engine_read", {
+            op: "status",
+            providerId: "ollama",
+            baseUrl: "http://localhost:11434",
+            apiKey: "secret",
+            customHeaders: { "x-test": "1" },
+          })
+        )
+        expect(createLocalProviderService).not.toHaveBeenCalled()
+        // localhost is the Host here, so the phone's caveat would be wrong.
+        expect(screen.queryByTestId("provider-host-notice-mobile-local")).not.toBeInTheDocument()
+        expect(screen.getByTestId("local-engine-target-notice")).toBeInTheDocument()
+      } finally {
+        mockHostProfile = "desktop"
+        mockState.providerSettings.ollama.baseURL = savedBaseURL
+      }
+    })
+
+    it("verifies against the Host's engine and records its models", async () => {
+      mockActiveHost = studio()
+      render(<LocalProviderSettings providerId="ollama" />)
+      fireEvent.click(screen.getByTestId("test-connection"))
+      await waitFor(() =>
+        expect(mockState.setProviderConfig).toHaveBeenCalledWith(
+          "ollama",
+          expect.objectContaining({ verificationStatus: "verified", healthStatus: "healthy" })
+        )
+      )
+      expect(mockState.setProviderConfig).toHaveBeenCalledWith(
+        "ollama",
+        expect.objectContaining({
+          discoveredModels: [expect.objectContaining({ id: "host-model" })],
+        })
+      )
+    })
+
+    it("writes nothing when the Host changed while the probe was in flight", async () => {
+      mockActiveHost = studio()
+      mockHostCall.mockImplementation(async (_command: string, payload: { op: string }) => {
+        if (payload.op === "status") {
+          // The desktop switched Hosts while this answer travelled.
+          mockActiveHost = { ...studio(), scopeKey: "another-host" }
+          return { ok: true, value: { connected: true } }
+        }
+        return { ok: true, value: [] }
+      })
+      render(<LocalProviderSettings providerId="ollama" />)
+      await waitFor(() => expect(mockHostCall).toHaveBeenCalled())
+      mockState.setProviderConfig.mockClear()
+      mockActiveHost = studio()
+      fireEvent.click(screen.getByTestId("test-connection"))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(mockState.setProviderConfig).not.toHaveBeenCalledWith(
+        "ollama",
+        expect.objectContaining({ verificationStatus: "verified" })
+      )
+    })
   })
 })

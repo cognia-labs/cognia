@@ -2881,6 +2881,12 @@
     "provider_diagnostics_status": {
       "to": "provider.diagnostics.status"
     },
+    "provider_local_engine_mutate": {
+      "to": "provider.local_engine.mutate"
+    },
+    "provider_local_engine_read": {
+      "to": "provider.local_engine.read"
+    },
     "provider_profiles_import": {
       "to": "provider.profile.import"
     },

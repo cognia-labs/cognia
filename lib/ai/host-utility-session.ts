@@ -14,6 +14,12 @@ export async function withHostUtilitySession<T>(
     model: string
     assertCurrent: () => void
     signal: AbortSignal
+    /**
+     * What to do when this Host offers no HostState admission to this client.
+     * Omitted: refuse. A desktop driving a remote Host passes its direct route
+     * (`./host-llm-client.ts`), the path its own chat takes there.
+     */
+    whenUnavailable?: () => Promise<T>
   },
   run: () => Promise<T>
 ): Promise<T> {
@@ -38,7 +44,10 @@ export async function withHostUtilitySession<T>(
   signal.throwIfAborted()
   const { awaitHostStateIntentSettlement, enqueueHostStateIntentIfAvailable } = queue
   const scope = getRuntimeSnapshot().host?.hostStateScope
-  if (!scope) throw new Error("Host utility session admission is unavailable")
+  if (!scope) {
+    if (options.whenUnavailable) return options.whenUnavailable()
+    throw new Error("Host utility session admission is unavailable")
+  }
   const hydrate = () => hydrateHostStateSession({ transport, ...scope, sessionId, assertCurrent })
   const row = await enqueueHostStateIntentIfAvailable({
     sessionId,
@@ -50,7 +59,10 @@ export async function withHostUtilitySession<T>(
     },
   })
   assertCurrent()
-  if (!row) throw new Error("Host utility session admission is unavailable")
+  if (!row) {
+    if (options.whenUnavailable) return options.whenUnavailable()
+    throw new Error("Host utility session admission is unavailable")
+  }
   let creation: HostStateIntentSettlement | undefined
   try {
     creation = await awaitHostStateIntentSettlement(row.id, { timeoutMs: SETTLEMENT_TIMEOUT_MS })

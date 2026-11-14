@@ -26,6 +26,32 @@ jest.mock("@cognia/provider-core/providers/local-provider-service", () => ({
     checkAllProvidersInstallation(...(args as [])),
 }))
 
+// The machine that executes this client's turns. `null`: this device.
+const mockHostCall = jest.fn()
+let mockActiveHost: { kind: string; transport: unknown; label: string; scopeKey: string } | null =
+  null
+const mockHostListeners = new Set<() => void>()
+jest.mock("@/lib/ai/execution-host", () => ({
+  getRemoteExecutionHost: () => mockActiveHost,
+  isSameExecutionHost: (host: unknown) => host === mockActiveHost,
+  subscribeExecutionHost: (listener: () => void) => {
+    mockHostListeners.add(listener)
+    return () => mockHostListeners.delete(listener)
+  },
+}))
+
+function switchHost(next: typeof mockActiveHost) {
+  mockActiveHost = next
+  for (const listener of [...mockHostListeners]) listener()
+}
+
+const buildBox = () => ({
+  kind: "desktop-remote",
+  transport: { call: mockHostCall, subscribe: jest.fn() },
+  label: "Build box",
+  scopeKey: "box",
+})
+
 jest.mock("@cognia/provider-core/providers/local-providers", () => ({
   LOCAL_PROVIDER_CONFIGS: {
     ollama: { id: "ollama", label: "Ollama" },
@@ -39,6 +65,7 @@ const oneModel: LocalModelInfo[] = [{ id: "m1", name: "m1" } as LocalModelInfo]
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockActiveHost = null
   getStatus.mockResolvedValue(okStatus)
   listModels.mockResolvedValue(oneModel)
   pullModel.mockResolvedValue({ success: true, unsubscribe: jest.fn() })
@@ -635,5 +662,122 @@ describe("useLocalProvidersScan", () => {
     // replaces them — which is what the effect deps need.
     expect(result.current.detected).toBe(first.detected)
     expect(result.current.results).toBe(first.results)
+  })
+})
+
+describe("useLocalProvider — the execution Host", () => {
+  function answerHost(status: LocalServerStatus, models: LocalModelInfo[]) {
+    mockHostCall.mockImplementation(async (_command: string, payload: { op: string }) => {
+      if (payload.op === "status") return { ok: true, value: status }
+      if (payload.op === "models") return { ok: true, value: models }
+      throw new Error(`unexpected ${payload.op}`)
+    })
+  }
+
+  it("manages the Host's engine while a Host executes this client's turns", async () => {
+    mockActiveHost = buildBox()
+    const hostModels = [{ id: "host-model" } as LocalModelInfo]
+    answerHost({ connected: true, version: "host" } as LocalServerStatus, hostModels)
+    const { result } = renderHook(() =>
+      useLocalProvider({ providerId: "ollama", baseUrl: "http://localhost:11434" })
+    )
+    await waitFor(() => expect(result.current.models).toEqual(hostModels))
+    expect(result.current.target).toMatchObject({ kind: "host", label: "Build box" })
+    expect(result.current.status).toMatchObject({ version: "host" })
+    expect(createLocalProviderService).not.toHaveBeenCalled()
+    expect(mockHostCall).toHaveBeenCalledWith("provider_local_engine_read", {
+      op: "status",
+      providerId: "ollama",
+      baseUrl: "http://localhost:11434",
+    })
+  })
+
+  it("drops this device's answers and re-reads when the desktop switches to a Host", async () => {
+    const { result } = renderHook(() =>
+      useLocalProvider({ providerId: "ollama", baseUrl: "http://localhost:11434" })
+    )
+    await waitFor(() => expect(result.current.models).toEqual(oneModel))
+    const hostModels = [{ id: "host-model" } as LocalModelInfo]
+    answerHost({ connected: true } as LocalServerStatus, hostModels)
+    act(() => switchHost(buildBox()))
+    expect(result.current.target.kind).toBe("host")
+    await waitFor(() => expect(result.current.models).toEqual(hostModels))
+  })
+
+  it("ignores an answer from the machine it no longer manages", async () => {
+    let finish!: (status: LocalServerStatus) => void
+    getStatus.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)))
+    const { result } = renderHook(() =>
+      useLocalProvider({ providerId: "ollama", baseUrl: "http://localhost:11434" })
+    )
+    await waitFor(() => expect(getStatus).toHaveBeenCalled())
+    answerHost({ connected: false, error: "host engine offline" } as LocalServerStatus, [])
+    act(() => switchHost(buildBox()))
+    await waitFor(() => expect(result.current.status?.error).toBe("host engine offline"))
+    await act(async () => finish({ connected: true, version: "stale-device" } as LocalServerStatus))
+    expect(result.current.status?.version).toBeUndefined()
+  })
+
+  it("Cancel detaches a pull that is still running", async () => {
+    let signal: AbortSignal | undefined
+    pullModel.mockImplementation((_name: string, options: { signal?: AbortSignal }) => {
+      signal = options.signal
+      return new Promise((resolve) => {
+        options.signal?.addEventListener("abort", () =>
+          resolve({ success: false, unsubscribe: jest.fn() })
+        )
+      })
+    })
+    const { result } = renderHook(() =>
+      useLocalProvider({ providerId: "ollama", baseUrl: "http://x" })
+    )
+    await waitFor(() => expect(result.current.status).not.toBeNull())
+    let pulling!: Promise<void>
+    act(() => {
+      pulling = result.current.pullModel("big")
+    })
+    await act(async () => {
+      await result.current.cancelPull("big")
+      await pulling
+    })
+    expect(signal?.aborted).toBe(true)
+    expect(result.current.pullStates.get("big")?.status).toBe("cancelled")
+  })
+
+  it("drops the previous machine's download rows on a switch", async () => {
+    pullModel.mockReturnValue(new Promise(() => {}))
+    const { result } = renderHook(() =>
+      useLocalProvider({ providerId: "ollama", baseUrl: "http://x" })
+    )
+    await waitFor(() => expect(result.current.status).not.toBeNull())
+    act(() => {
+      void result.current.pullModel("big")
+    })
+    expect(result.current.pullStates.get("big")?.status).toBe("pulling")
+    answerHost({ connected: true } as LocalServerStatus, [])
+    act(() => switchHost(buildBox()))
+    expect(result.current.pullStates.size).toBe(0)
+  })
+
+  it("forgets the previous machine's scan and scans the Host next", async () => {
+    checkAllProvidersInstallation.mockResolvedValue([
+      { providerId: "ollama", running: true, version: "device" },
+    ])
+    const { result } = renderHook(() => useLocalProvidersScan())
+    await act(async () => {
+      await result.current.scan()
+    })
+    expect(result.current.results.size).toBe(1)
+    mockHostCall.mockResolvedValue({ ok: true, value: [{ providerId: "vllm", running: true }] })
+    act(() => switchHost(buildBox()))
+    expect(result.current.results.size).toBe(0)
+    await act(async () => {
+      await result.current.scan()
+    })
+    expect(result.current.results.get("vllm")).toMatchObject({ connected: true })
+    expect(mockHostCall).toHaveBeenCalledWith("provider_local_engine_read", {
+      op: "installation",
+      baseUrls: {},
+    })
   })
 })

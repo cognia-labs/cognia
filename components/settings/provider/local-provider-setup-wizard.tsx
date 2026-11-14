@@ -28,10 +28,10 @@ import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 import type { LocalProviderName } from "@cognia/provider-types/local-provider"
 import { LOCAL_PROVIDER_CONFIGS } from "@cognia/provider-core/providers/local-providers"
-import {
-  getInstallInstructions,
-  createLocalProviderService,
-} from "@cognia/provider-core/providers/local-provider-service"
+import { getInstallInstructions } from "@cognia/provider-core/providers/local-provider-service"
+import { createLocalEngineClient } from "@/lib/ai/local-engine/client"
+import { useLocalEngineTarget } from "@/hooks/provider/use-local-engine-target"
+import { LocalEngineTargetNotice } from "./local-engine-target-notice"
 
 export interface LocalProviderSetupWizardProps {
   providerId: LocalProviderName
@@ -53,6 +53,8 @@ export function LocalProviderSetupWizard({
   onComplete,
 }: LocalProviderSetupWizardProps) {
   const t = useTranslations("providers")
+  // Install and start the engine on the machine that runs this client's turns.
+  const target = useLocalEngineTarget()
   const [currentStep, setCurrentStep] = useState<SetupStep>("download")
   const [isVerifying, setIsVerifying] = useState(false)
   const [verificationResult, setVerificationResult] = useState<{
@@ -101,7 +103,7 @@ export function LocalProviderSetupWizard({
     setVerificationResult(null)
 
     try {
-      const service = createLocalProviderService(providerId, {
+      const service = createLocalEngineClient(providerId, {
         baseUrl: effectiveBaseUrl,
         apiKey,
         customHeaders,
@@ -402,6 +404,7 @@ export function LocalProviderSetupWizard({
 
   return (
     <div className="space-y-4">
+      <LocalEngineTargetNotice target={target} />
       {renderStepIndicator()}
       {renderStepContent()}
     </div>

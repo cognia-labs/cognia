@@ -24,13 +24,20 @@ import type {
   LocalModelPullProgress,
 } from "@cognia/provider-types/local-provider"
 import {
-  createLocalProviderService,
   getProviderCapabilities,
-  checkAllProvidersInstallation,
   type LocalProviderCapabilities,
 } from "@cognia/provider-core/providers/local-provider-service"
 import { LOCAL_PROVIDER_CONFIGS } from "@cognia/provider-core/providers/local-providers"
 import type { LocalProviderConfig } from "@cognia/provider-core/providers/local-providers"
+import {
+  checkLocalEngineInstallations,
+  createLocalEngineClient,
+  getLocalEngineTarget,
+  LocalEngineHostChangedError,
+  localEngineTargetKey,
+  type LocalEngineTarget,
+} from "@/lib/ai/local-engine/client"
+import { useLocalEngineTarget } from "./use-local-engine-target"
 
 /**
  * Stable, translatable reasons an operation failed.
@@ -82,6 +89,11 @@ export interface UseLocalProviderArgs {
 }
 
 export interface UseLocalProviderResult {
+  /**
+   * The machine whose engine this hook manages: this device, or the Host that
+   * executes this client's turns. Changing it re-reads everything.
+   */
+  target: LocalEngineTarget
   config: LocalProviderConfig | undefined
   capabilities: LocalProviderCapabilities
   status: LocalServerStatus | null
@@ -98,6 +110,11 @@ export interface UseLocalProviderResult {
   cancelPull: (modelName: string) => Promise<void>
   deleteModel: (modelName: string) => Promise<void>
   stopModel: (modelName: string) => Promise<void>
+}
+
+/** A check that the managed machine is still the one a request started on. */
+function sameTarget(targetKey: string): () => boolean {
+  return () => localEngineTargetKey(getLocalEngineTarget()) === targetKey
 }
 
 /** Derive 0–100 from a progress line, or null while the server sends no totals. */
@@ -122,6 +139,8 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
 
   const config = LOCAL_PROVIDER_CONFIGS[providerId]
   const capabilities = getProviderCapabilities(providerId)
+  const target = useLocalEngineTarget()
+  const targetKey = localEngineTargetKey(target)
 
   const [status, setStatus] = useState<LocalServerStatus | null>(null)
   const [models, setModels] = useState<LocalModelInfo[]>([])
@@ -152,24 +171,39 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
     }
   }, [])
 
+  // A switch of the managed machine drops what the previous one reported.
+  const [shownTargetKey, setShownTargetKey] = useState(targetKey)
+  if (shownTargetKey !== targetKey) {
+    setShownTargetKey(targetKey)
+    setStatus(null)
+    setModels([])
+    setError(null)
+    // Another machine's download rows are not this one's.
+    setPullStates(new Map())
+  }
+
   const refresh = useCallback(async () => {
     if (!baseUrl) return
+    const isCurrent = sameTarget(targetKey)
     setIsLoading(true)
     setError(null)
     try {
-      const service = createLocalProviderService(providerId, { baseUrl, apiKey, customHeaders })
+      const service = createLocalEngineClient(providerId, { baseUrl, apiKey, customHeaders })
       const s = await service.getStatus()
+      if (!isCurrent()) return
       setStatus(s)
       const m = await service.listModels()
+      if (!isCurrent()) return
       setModels(m)
       onModelsDiscoveredRef.current?.(m)
     } catch (err) {
+      if (!isCurrent()) return
       setModels([])
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setIsLoading(false)
     }
-  }, [providerId, baseUrl, apiKey, customHeaders])
+  }, [providerId, baseUrl, apiKey, customHeaders, targetKey])
 
   useEffect(() => {
     const initial = setTimeout(() => void refresh(), 0)
@@ -211,42 +245,47 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
 
   const testServer = useCallback(async () => {
     if (!baseUrl) return null
+    const isCurrent = sameTarget(targetKey)
     setIsLoading(true)
     setError(null)
     try {
-      const service = createLocalProviderService(providerId, { baseUrl, apiKey, customHeaders })
+      const service = createLocalEngineClient(providerId, { baseUrl, apiKey, customHeaders })
       const s = await service.getStatus()
+      if (!isCurrent()) return null
       setStatus(s)
       return s
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (isCurrent()) setError(err instanceof Error ? err.message : String(err))
       return null
     } finally {
       setIsLoading(false)
     }
-  }, [providerId, baseUrl, apiKey, customHeaders])
+  }, [providerId, baseUrl, apiKey, customHeaders, targetKey])
 
   const fetchModels = useCallback(async () => {
     if (!baseUrl) return []
+    const isCurrent = sameTarget(targetKey)
     setIsLoading(true)
     setError(null)
     try {
-      const service = createLocalProviderService(providerId, { baseUrl, apiKey, customHeaders })
+      const service = createLocalEngineClient(providerId, { baseUrl, apiKey, customHeaders })
       const m = await service.listModels()
+      if (!isCurrent()) return []
       setModels(m)
       onModelsDiscoveredRef.current?.(m)
       return m
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (isCurrent()) setError(err instanceof Error ? err.message : String(err))
       return []
     } finally {
       setIsLoading(false)
     }
-  }, [providerId, baseUrl, apiKey, customHeaders])
+  }, [providerId, baseUrl, apiKey, customHeaders, targetKey])
 
   const pullModel = useCallback(
     async (modelName: string) => {
       if (!baseUrl) return
+      const isCurrent = sameTarget(targetKey)
       setError(null)
       setPullStates((prev) => {
         const next = new Map(prev)
@@ -260,9 +299,14 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
         return next
       })
 
+      // Registered before the pull resolves, so Cancel detaches a pull that is
+      // still under way (on a Host the client polls until it does).
+      const detach = new AbortController()
+      pullHandles.current.set(modelName, () => detach.abort())
       try {
-        const service = createLocalProviderService(providerId, { baseUrl, apiKey, customHeaders })
+        const service = createLocalEngineClient(providerId, { baseUrl, apiKey, customHeaders })
         const handle = await service.pullModel(modelName, {
+          signal: detach.signal,
           onProgress: (progress) => {
             const pct = percentageOf(progress)
             setPullStates((prev) => {
@@ -282,6 +326,10 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
             })
           },
         })
+        if (detach.signal.aborted) {
+          handle.unsubscribe()
+          return
+        }
         pullHandles.current.set(modelName, handle.unsubscribe)
 
         setPullStates((prev) => {
@@ -303,6 +351,11 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
         pullHandles.current.delete(modelName)
         if (handle.success) await refresh()
       } catch (err) {
+        pullHandles.current.get(modelName)?.()
+        pullHandles.current.delete(modelName)
+        // The managed machine changed under the pull: its row was dropped
+        // with the rest of that machine's state, and the error is not news.
+        if (err instanceof LocalEngineHostChangedError || !isCurrent()) return
         const message = err instanceof Error ? err.message : String(err)
         setError(message)
         setPullStates((prev) => {
@@ -317,11 +370,9 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
           })
           return next
         })
-        pullHandles.current.get(modelName)?.()
-        pullHandles.current.delete(modelName)
       }
     },
-    [providerId, baseUrl, apiKey, customHeaders, refresh]
+    [providerId, baseUrl, apiKey, customHeaders, refresh, targetKey]
   )
 
   /**
@@ -354,7 +405,7 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
       if (!baseUrl) return
       setError(null)
       try {
-        const service = createLocalProviderService(providerId, { baseUrl, apiKey, customHeaders })
+        const service = createLocalEngineClient(providerId, { baseUrl, apiKey, customHeaders })
         const ok = await service.deleteModel(modelName)
         if (!ok) {
           setError(DELETE_UNSUPPORTED)
@@ -373,7 +424,7 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
       if (!baseUrl) return
       setError(null)
       try {
-        const service = createLocalProviderService(providerId, { baseUrl, apiKey, customHeaders })
+        const service = createLocalEngineClient(providerId, { baseUrl, apiKey, customHeaders })
         const ok = await service.stopModel(modelName)
         if (!ok) {
           setError(STOP_UNSUPPORTED)
@@ -388,6 +439,7 @@ export function useLocalProvider(args: UseLocalProviderArgs): UseLocalProviderRe
   )
 
   return {
+    target,
     config,
     capabilities,
     status,
@@ -428,13 +480,24 @@ export function useLocalProvidersScan() {
   /** Guards against overlapping scans — 10 providers × N clicks is a lot of probes. */
   const inFlight = useRef(false)
 
+  // What the previous machine's scan found says nothing about this one.
+  const targetKey = localEngineTargetKey(useLocalEngineTarget())
+  const [shownTargetKey, setShownTargetKey] = useState(targetKey)
+  if (shownTargetKey !== targetKey) {
+    setShownTargetKey(targetKey)
+    setResults(new Map())
+    setError(null)
+  }
+
   const scan = useCallback(async (baseUrls?: Partial<Record<LocalProviderName, string>>) => {
     if (inFlight.current) return
     inFlight.current = true
     setIsScanning(true)
     setError(null)
+    const isCurrent = sameTarget(localEngineTargetKey(getLocalEngineTarget()))
     try {
-      const checks = await checkAllProvidersInstallation(baseUrls)
+      const checks = await checkLocalEngineInstallations(baseUrls)
+      if (!isCurrent()) return
       const next = new Map<LocalProviderName, LocalServerStatus>()
       for (const check of checks) {
         next.set(check.providerId, {
@@ -445,7 +508,7 @@ export function useLocalProvidersScan() {
       }
       setResults(next)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (isCurrent()) setError(err instanceof Error ? err.message : String(err))
     } finally {
       inFlight.current = false
       setIsScanning(false)

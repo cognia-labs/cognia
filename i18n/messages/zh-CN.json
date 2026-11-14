@@ -40001,6 +40001,11 @@
     "lmstudio": "LM Studio",
     "lmstudioDescription": "运行本地大模型的桌面应用",
     "local": "本地",
+    "localEngineTarget": {
+      "hostBody": "此客户端的对话在该 Host 上运行，因此这里列出的是 Host 上的引擎：基础 URL 中的 \"localhost\" 指 Host 本机，安装、启动和下载模型也都在 Host 上进行。",
+      "hostTitle": "正在管理 {host} 上的本地引擎",
+      "unnamedHostTitle": "正在管理已配对 Host 上的本地引擎"
+    },
     "localProvider": "本地",
     "localProviderApiKeyHint": "用于受保护本地端点的可选 API Key。",
     "localProviderDescriptions": {

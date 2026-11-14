@@ -669,6 +669,11 @@
     "mobileLocalBody": "在手机上，\"localhost\" 指的是手机本身。请把 Base URL 指向局域网内运行该引擎的机器，或在已配对的桌面端配置本地引擎。",
     "mobileLocalTitle": "本地引擎运行在本设备上"
   },
+  "localEngineTarget": {
+    "hostBody": "此客户端的对话在该 Host 上运行，因此这里列出的是 Host 上的引擎：基础 URL 中的 \"localhost\" 指 Host 本机，安装、启动和下载模型也都在 Host 上进行。",
+    "hostTitle": "正在管理 {host} 上的本地引擎",
+    "unnamedHostTitle": "正在管理已配对 Host 上的本地引擎"
+  },
   "hoursAgo": "{count}小时前",
   "import": "导入",
   "importConflictWarning": "检测到 {count} 个与现有设置冲突的项目",

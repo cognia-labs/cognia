@@ -156,3 +156,26 @@ it("fails closed when the Host does not offer a session admission path", async (
   expect(run).not.toHaveBeenCalled()
   expect(closeSession).not.toHaveBeenCalled()
 })
+
+describe("a Host that offers this client no HostState admission", () => {
+  it("refuses unless the caller names a route for that case", async () => {
+    enqueue.mockResolvedValueOnce(null as never)
+    await expect(withHostUtilitySession(options(), run)).rejects.toThrow("unavailable")
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it("hands the turn to the caller's route without a declared scope or a queued create", async () => {
+    const whenUnavailable = jest.fn(async () => "direct")
+    jest.mocked(getRuntimeSnapshot).mockReturnValueOnce({} as never)
+    await expect(withHostUtilitySession({ ...options(), whenUnavailable }, run)).resolves.toBe(
+      "direct"
+    )
+    enqueue.mockResolvedValueOnce(null as never)
+    await expect(withHostUtilitySession({ ...options(), whenUnavailable }, run)).resolves.toBe(
+      "direct"
+    )
+    expect(whenUnavailable).toHaveBeenCalledTimes(2)
+    expect(run).not.toHaveBeenCalled()
+    expect(closeSession).not.toHaveBeenCalled()
+  })
+})

@@ -289,6 +289,8 @@ mod tests {
         ("provider_diagnostics_history", OutputShape::Declared(RootType::Object)),
         ("provider_diagnostics_start", OutputShape::Opaque(RootType::Object)),
         ("provider_diagnostics_cancel", OutputShape::Opaque(RootType::Any)),
+        ("provider_local_engine_read", OutputShape::Declared(RootType::Object)),
+        ("provider_local_engine_mutate", OutputShape::Declared(RootType::Object)),
         ("session_reference_search", OutputShape::Declared(RootType::Object)),
         ("session_reference_snapshot", OutputShape::Declared(RootType::Object)),
         ("connector_send", OutputShape::Opaque(RootType::Object)),

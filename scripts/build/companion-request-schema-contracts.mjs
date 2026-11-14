@@ -4,6 +4,24 @@ const stringArray = z.array(z.string())
 const emptyRequest = z.object({})
 const browserSession = z.object({ browserSessionId: z.string().min(1) })
 const historyReferenceKind = z.enum(["message", "prompt", "result"])
+const localEngineProviderId = z.enum([
+  "ollama",
+  "lmstudio",
+  "llamacpp",
+  "llamafile",
+  "vllm",
+  "localai",
+  "jan",
+  "textgenwebui",
+  "koboldcpp",
+  "tabbyapi",
+])
+const localEngineEndpoint = {
+  providerId: localEngineProviderId,
+  baseUrl: z.string().max(2048).optional(),
+  apiKey: z.string().max(4096).optional(),
+  customHeaders: z.record(z.string(), z.string().max(4096)).optional(),
+}
 
 const browserWaitOptions = z.object({
   mode: z.enum(["appear", "disappear"]).optional(),
@@ -889,6 +907,28 @@ const schemas = {
     confirmedMaxEstimatedCostUsd: z.number().nonnegative(),
   }),
   provider_diagnostics_cancel: z.object({ jobId: z.string().min(1) }),
+
+  // A local inference engine on the execution Host (lib/ai/local-engine/protocol.ts).
+  // The Host re-validates the URL (local addresses only) and the headers.
+  provider_local_engine_read: z.discriminatedUnion("op", [
+    z.object({ op: z.literal("status"), ...localEngineEndpoint }),
+    z.object({ op: z.literal("models"), ...localEngineEndpoint }),
+    z.object({
+      op: z.literal("installation"),
+      baseUrls: z.record(z.string(), z.string().max(2048)).optional(),
+    }),
+    z.object({ op: z.literal("pull_status"), jobId: z.string().min(1).max(128) }),
+    z.object({
+      op: z.literal("capabilities"),
+      baseUrl: z.string().max(2048).optional(),
+      models: z.array(z.string().min(1).max(512)).max(64),
+    }),
+  ]),
+  provider_local_engine_mutate: z.object({
+    op: z.enum(["pull", "delete", "stop"]),
+    model: z.string().min(1).max(512),
+    ...localEngineEndpoint,
+  }),
 
   // `@msg:` / `@prompt:` / `^` from a paired device, answered with the host's
   // own history reads (lib/chat/mentions/host-reference-rpc.ts). The bounds are

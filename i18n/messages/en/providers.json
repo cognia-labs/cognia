@@ -669,6 +669,11 @@
     "mobileLocalBody": "On a phone, \"localhost\" is the phone itself. Point the base URL at a machine on your network that runs the engine, or configure local engines on the paired desktop.",
     "mobileLocalTitle": "Local engines run on this device"
   },
+  "localEngineTarget": {
+    "hostBody": "This client's chats run on that Host, so the engines listed here are the Host's: \"localhost\" in the base URL is the Host, and installing, starting or downloading models happens there.",
+    "hostTitle": "Managing local engines on {host}",
+    "unnamedHostTitle": "Managing local engines on the paired Host"
+  },
   "hoursAgo": "{count}h ago",
   "import": "Import",
   "importConflictWarning": "{count} conflict(s) detected with existing settings",

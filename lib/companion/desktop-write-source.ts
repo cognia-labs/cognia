@@ -559,6 +559,16 @@ export async function dispatchCommand(
         await import("@/lib/provider-diagnostics/companion")
       return cancelRemoteProviderDiagnostics(payload)
     }
+    // A client whose turns run here manages this machine's inference engines
+    // (`lib/ai/local-engine/host-rpc.ts`).
+    case "provider_local_engine_read": {
+      const { handleLocalEngineRead } = await import("@/lib/ai/local-engine/host-rpc")
+      return handleLocalEngineRead(payload)
+    }
+    case "provider_local_engine_mutate": {
+      const { handleLocalEngineMutate } = await import("@/lib/ai/local-engine/host-rpc")
+      return handleLocalEngineMutate(payload)
+    }
     // `@msg:` / `@prompt:` / `^` from a paired device, which syncs only the
     // recent end of each conversation (`lib/chat/mentions/host-references.ts`).
     case "session_reference_search": {

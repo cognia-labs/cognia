@@ -65,9 +65,19 @@ jest.mock("@cognia/provider-core/providers/local-provider-service", () => ({
   createLocalProviderService: () => mockCreateLocalProviderService(),
 }))
 
+const mockHostCall = jest.fn()
+let mockActiveHost: { kind: string; transport: unknown; label: string; scopeKey: string } | null =
+  null
+jest.mock("@/lib/ai/execution-host", () => ({
+  getRemoteExecutionHost: () => mockActiveHost,
+  isSameExecutionHost: (host: unknown) => host === mockActiveHost,
+  subscribeExecutionHost: () => () => {},
+}))
+
 describe("LocalProviderSetupWizard", () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockActiveHost = null
     mockCreateLocalProviderService.mockReturnValue({
       getStatus: mockGetStatus,
     })
@@ -490,6 +500,24 @@ describe("LocalProviderSetupWizard", () => {
       // Download step should be highlighted (first step)
       const downloadStep = screen.getByText("Download").closest("div")
       expect(downloadStep).toHaveClass("text-primary")
+    })
+  })
+
+  describe("on the execution Host", () => {
+    it("names the Host the engine must run on", () => {
+      mockActiveHost = {
+        kind: "desktop-remote",
+        transport: { call: mockHostCall, subscribe: jest.fn() },
+        label: "Build box",
+        scopeKey: "box",
+      }
+      render(<LocalProviderSetupWizard providerId="ollama" />)
+      expect(screen.getByTestId("local-engine-target-notice")).toBeInTheDocument()
+    })
+
+    it("shows nothing extra while this device runs its own engines", () => {
+      render(<LocalProviderSetupWizard providerId="ollama" />)
+      expect(screen.queryByTestId("local-engine-target-notice")).not.toBeInTheDocument()
     })
   })
 })

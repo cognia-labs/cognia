@@ -52,6 +52,8 @@ pub(super) const COMMANDS: &[&str] = &[
     "provider_diagnostics_history",
     "provider_diagnostics_start",
     "provider_diagnostics_cancel",
+    "provider_local_engine_read",
+    "provider_local_engine_mutate",
     "session_reference_search",
     "session_reference_snapshot",
     "connector_send",
@@ -837,6 +839,11 @@ pub(super) async fn dispatch(
         | "provider_diagnostics_history"
         | "provider_diagnostics_start"
         | "provider_diagnostics_cancel"
+        // A client whose turns run here manages this host's inference engines
+        // (`lib/ai/local-engine/host-rpc.ts`). The read is ungated like the
+        // other reads; the change is gated by CONTROL_COMMANDS.
+        | "provider_local_engine_read"
+        | "provider_local_engine_mutate"
         // `@msg:` / `@prompt:` / `^` from a paired device, which syncs only the
         // recent end of each conversation. Reads, answered by the host's own
         // history search in `lib/chat/mentions/host-reference-rpc.ts`.

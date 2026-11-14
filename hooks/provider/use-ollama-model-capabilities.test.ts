@@ -8,7 +8,25 @@ jest.mock("@cognia/provider-core/providers/ollama", () => ({
   probeOllamaModelCapabilities: (...args: unknown[]) => probe(...args),
 }))
 
+const mockHostCall = jest.fn()
+let mockActiveHost: { kind: string; transport: unknown; label: string; scopeKey: string } | null =
+  null
+const mockHostListeners = new Set<() => void>()
+jest.mock("@/lib/ai/execution-host", () => ({
+  getRemoteExecutionHost: () => mockActiveHost,
+  isSameExecutionHost: (host: unknown) => host === mockActiveHost,
+  subscribeExecutionHost: (listener: () => void) => {
+    mockHostListeners.add(listener)
+    return () => mockHostListeners.delete(listener)
+  },
+}))
+
 import { useOllamaModelCapabilities } from "./use-ollama-model-capabilities"
+
+function switchHost(next: typeof mockActiveHost) {
+  mockActiveHost = next
+  for (const listener of [...mockHostListeners]) listener()
+}
 
 const visionCaps = {
   supportsVision: true,
@@ -21,6 +39,8 @@ const visionCaps = {
 }
 
 beforeEach(() => {
+  mockActiveHost = null
+  mockHostCall.mockReset()
   probe.mockReset()
   probe.mockResolvedValue(visionCaps)
 })
@@ -140,5 +160,67 @@ describe("useOllamaModelCapabilities", () => {
       release?.(visionCaps)
     })
     await waitFor(() => expect(result.current.isProbing).toBe(false))
+  })
+})
+
+describe("useOllamaModelCapabilities on the execution Host", () => {
+  const host = () => ({
+    kind: "paired-client",
+    transport: { call: mockHostCall, subscribe: jest.fn() },
+    label: "Studio",
+    scopeKey: "studio",
+  })
+
+  it("asks the Host's Ollama, not this device's", async () => {
+    mockActiveHost = host()
+    mockHostCall.mockResolvedValue({ ok: true, value: { "llama3.2": visionCaps } })
+    const { result } = renderHook(() =>
+      useOllamaModelCapabilities({
+        providerId: "ollama",
+        baseUrl: "http://localhost:11434",
+        modelIds: ["llama3.2"],
+      })
+    )
+    await waitFor(() => expect(result.current.capabilities.get("llama3.2")).toEqual(visionCaps))
+    expect(probe).not.toHaveBeenCalled()
+    expect(mockHostCall).toHaveBeenCalledWith("provider_local_engine_read", {
+      op: "capabilities",
+      baseUrl: "http://localhost:11434",
+      models: ["llama3.2"],
+    })
+  })
+
+  it("re-probes the same URL after switching machines", async () => {
+    const { result } = renderHook(() =>
+      useOllamaModelCapabilities({
+        providerId: "ollama",
+        baseUrl: "http://localhost:11434",
+        modelIds: ["llama3.2"],
+      })
+    )
+    await waitFor(() => expect(result.current.capabilities.size).toBe(1))
+    const hostCaps = { ...visionCaps, supportsVision: false }
+    mockHostCall.mockResolvedValue({ ok: true, value: { "llama3.2": hostCaps } })
+    act(() => switchHost(host()))
+    await waitFor(() => expect(result.current.capabilities.get("llama3.2")).toEqual(hostCaps))
+  })
+
+  it("leaves the badges absent and retries after a failed Host probe", async () => {
+    mockActiveHost = host()
+    mockHostCall.mockRejectedValueOnce(new Error("Host unreachable"))
+    const { result, rerender } = renderHook(
+      ({ ids }) =>
+        useOllamaModelCapabilities({
+          providerId: "ollama",
+          baseUrl: "http://localhost:11434",
+          modelIds: ids,
+        }),
+      { initialProps: { ids: ["llama3.2"] } }
+    )
+    await waitFor(() => expect(result.current.isProbing).toBe(false))
+    expect(result.current.capabilities.size).toBe(0)
+    mockHostCall.mockResolvedValue({ ok: true, value: { "llama3.2": visionCaps } })
+    rerender({ ids: ["llama3.2"] })
+    await waitFor(() => expect(result.current.capabilities.size).toBe(1))
   })
 })

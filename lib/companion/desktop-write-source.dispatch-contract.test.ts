@@ -105,6 +105,11 @@ jest.mock("@/lib/pet/remote/host-dispatch", () => ({
   dispatchPetHostCommand: jest.fn(async () => ({ ok: true, grantedXp: 3, grantedCoins: 1 })),
 }))
 
+jest.mock("@/lib/ai/local-engine/host-rpc", () => ({
+  handleLocalEngineRead: jest.fn(async () => ({ ok: true, value: { connected: true } })),
+  handleLocalEngineMutate: jest.fn(async () => ({ ok: true, value: { supported: true } })),
+}))
+
 import { dispatchCommand } from "./desktop-write-source"
 import { registerRun, unregisterRun } from "@/lib/workflow/runtime/run-cancel-registry"
 
@@ -573,5 +578,23 @@ describe("dispatchCommand: pet_*", () => {
     const pet = jest.requireMock("@/lib/pet/remote/host-dispatch") as Record<string, jest.Mock>
     await expect(dispatchCommand("pet_window_get_position", {})).rejects.toThrow()
     expect(pet.dispatchPetHostCommand).not.toHaveBeenCalled()
+  })
+})
+
+describe("local inference engines on this Host", () => {
+  it("hands a client's engine reads and changes to the Host's own engine service", async () => {
+    const engine = jest.requireMock("@/lib/ai/local-engine/host-rpc") as Record<string, jest.Mock>
+    const read = { op: "status", providerId: "ollama", baseUrl: "http://localhost:11434" }
+    await expect(dispatchCommand("provider_local_engine_read", read)).resolves.toEqual({
+      ok: true,
+      value: { connected: true },
+    })
+    expect(engine.handleLocalEngineRead).toHaveBeenCalledWith(read)
+    const change = { op: "pull", providerId: "ollama", model: "llama3" }
+    await expect(dispatchCommand("provider_local_engine_mutate", change)).resolves.toEqual({
+      ok: true,
+      value: { supported: true },
+    })
+    expect(engine.handleLocalEngineMutate).toHaveBeenCalledWith(change)
   })
 })

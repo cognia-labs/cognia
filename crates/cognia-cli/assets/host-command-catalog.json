@@ -363,6 +363,11 @@
       "category": "development"
     },
     {
+      "id": "provider",
+      "title": "Provider",
+      "category": "extensions"
+    },
+    {
       "id": "provider-catalog",
       "title": "Provider Catalog",
       "category": "extensions"
@@ -70894,6 +70899,657 @@
       "outputTyped": true
     },
     {
+      "name": "provider_local_engine_mutate",
+      "category": "extensions",
+      "resource": "provider",
+      "target": "execution",
+      "operation": "side-effect",
+      "capability": "workspace.write",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "provider_local_engine_mutate (workspace.write)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "zod-contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "pull",
+              "delete",
+              "stop"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "providerId": {
+            "type": "string",
+            "enum": [
+              "ollama",
+              "lmstudio",
+              "llamacpp",
+              "llamafile",
+              "vllm",
+              "localai",
+              "jan",
+              "textgenwebui",
+              "koboldcpp",
+              "tabbyapi"
+            ]
+          },
+          "baseUrl": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "apiKey": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "customHeaders": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "example": {}
+          }
+        },
+        "required": [
+          "op",
+          "model",
+          "providerId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "x-cognia-wire-source": "lib/ai/local-engine/host-rpc.ts handleLocalEngineMutate: whether the engine supports the change (and the started pull job) or the engine's error.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "value": {
+                "type": "object",
+                "properties": {
+                  "supported": {
+                    "type": "boolean"
+                  },
+                  "job": {
+                    "type": "object",
+                    "x-cognia-wire-source": "lib/ai/local-engine/protocol.ts LocalEnginePullJob.",
+                    "properties": {
+                      "jobId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "providerId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "state": {
+                        "enum": [
+                          "running",
+                          "succeeded",
+                          "failed"
+                        ]
+                      },
+                      "progress": {
+                        "type": "object",
+                        "properties": {
+                          "model": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "digest": {
+                            "type": "string"
+                          },
+                          "total": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "completed": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "percentage": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "model",
+                          "status"
+                        ]
+                      },
+                      "error": {
+                        "type": "string"
+                      },
+                      "startedAt": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "updatedAt": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "providerId",
+                      "model",
+                      "state",
+                      "startedAt",
+                      "updatedAt"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "supported"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "ok",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "x-cognia-wire-source": "lib/ai/local-engine/protocol.ts LocalEngineWireError.",
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "authentication_failed",
+                      "http_error",
+                      "invalid_headers",
+                      "invalid_response",
+                      "network_error",
+                      "request_failed"
+                    ]
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "ok",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "provider_local_engine_read",
+      "category": "extensions",
+      "resource": "provider",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "provider_local_engine_read (host.observe)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "zod-contract",
+      "inputSchema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "status"
+              },
+              "providerId": {
+                "type": "string",
+                "enum": [
+                  "ollama",
+                  "lmstudio",
+                  "llamacpp",
+                  "llamafile",
+                  "vllm",
+                  "localai",
+                  "jan",
+                  "textgenwebui",
+                  "koboldcpp",
+                  "tabbyapi"
+                ]
+              },
+              "baseUrl": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "apiKey": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "customHeaders": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "example": {}
+              }
+            },
+            "required": [
+              "op",
+              "providerId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "models"
+              },
+              "providerId": {
+                "type": "string",
+                "enum": [
+                  "ollama",
+                  "lmstudio",
+                  "llamacpp",
+                  "llamafile",
+                  "vllm",
+                  "localai",
+                  "jan",
+                  "textgenwebui",
+                  "koboldcpp",
+                  "tabbyapi"
+                ]
+              },
+              "baseUrl": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "apiKey": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "customHeaders": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "example": {}
+              }
+            },
+            "required": [
+              "op",
+              "providerId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "installation"
+              },
+              "baseUrls": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                "example": {}
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "pull_status"
+              },
+              "jobId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "op",
+              "jobId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "capabilities"
+              },
+              "baseUrl": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "models": {
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              }
+            },
+            "required": [
+              "op",
+              "models"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "x-cognia-wire-source": "lib/ai/local-engine/host-rpc.ts handleLocalEngineRead: the op's value (status, model list, installation probes, a pull job or model capabilities) or the engine's error.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "connected": {
+                        "type": "boolean"
+                      },
+                      "version": {
+                        "type": "string"
+                      },
+                      "models_count": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "error": {
+                        "type": "string"
+                      },
+                      "latency_ms": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "connected"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "object": {
+                          "type": "string"
+                        },
+                        "created": {
+                          "type": "number"
+                        },
+                        "owned_by": {
+                          "type": "string"
+                        },
+                        "size": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "family": {
+                          "type": "string"
+                        },
+                        "quantization": {
+                          "type": "string"
+                        },
+                        "context_length": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "providerId": {
+                          "type": "string"
+                        },
+                        "installed": {
+                          "type": "boolean"
+                        },
+                        "running": {
+                          "type": "boolean"
+                        },
+                        "error": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "x-cognia-wire-source": "lib/ai/local-engine/protocol.ts LocalEnginePullJob.",
+                    "properties": {
+                      "jobId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "providerId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "state": {
+                        "enum": [
+                          "running",
+                          "succeeded",
+                          "failed"
+                        ]
+                      },
+                      "progress": {
+                        "type": "object",
+                        "properties": {
+                          "model": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "digest": {
+                            "type": "string"
+                          },
+                          "total": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "completed": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "percentage": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "model",
+                          "status"
+                        ]
+                      },
+                      "error": {
+                        "type": "string"
+                      },
+                      "startedAt": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "updatedAt": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "providerId",
+                      "model",
+                      "state",
+                      "startedAt",
+                      "updatedAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "description": "capabilities: Ollama /api/show answers keyed by model id.",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "supportsVision": {
+                          "type": "boolean"
+                        },
+                        "supportsTools": {
+                          "type": "boolean"
+                        },
+                        "supportsEmbedding": {
+                          "type": "boolean"
+                        },
+                        "supportsThinking": {
+                          "type": "boolean"
+                        },
+                        "contextLength": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "architecture": {
+                          "type": "string"
+                        },
+                        "inferred": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "supportsVision",
+                        "supportsTools",
+                        "supportsEmbedding",
+                        "supportsThinking",
+                        "inferred"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              }
+            },
+            "required": [
+              "ok",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "x-cognia-wire-source": "lib/ai/local-engine/protocol.ts LocalEngineWireError.",
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "authentication_failed",
+                      "http_error",
+                      "invalid_headers",
+                      "invalid_response",
+                      "network_error",
+                      "request_failed"
+                    ]
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "ok",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "outputTyped": true
+    },
+    {
       "name": "provider_profiles_import",
       "category": "extensions",
       "resource": "provider-profiles",
@@ -112777,5 +113433,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "485ba1519e6cd5ad97d76d762e844aba61d91950f4f1c1e1e57d2a9af3488592"
+  "catalogHash": "8f7fcfc765db1d0b2b54856fd08bb3f9d1808a87614edea9a8dace9bbe163a95"
 }
