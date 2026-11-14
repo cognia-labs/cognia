@@ -5,6 +5,8 @@ import type {
 } from "@cognia/router-fusion"
 
 import type { ScmHost } from "../host"
+import { defaultReviewPolicy } from "../review/review-policy"
+const noPolicy = async () => ({ ok: true as const, policy: defaultReviewPolicy(), declared: false })
 import type {
   ChangesetCheck,
   IntegrationAnalysis,
@@ -226,11 +228,130 @@ const input = (
 })
 
 describe("integrateChangesets", () => {
+  it("keeps the integration checkout intact when executor stop is unproven", async () => {
+    const host = fakeHost()
+    const result = await integrateChangesets(input(["a"]), {
+      host,
+      readPolicyAtRef: noPolicy,
+      acceptancePortFor: portFor().factory,
+      executorStopUnproven: () => true,
+    })
+    expect(result).toMatchObject({ kind: "blocked", reason: "executor_stop_unproven", dropped: [] })
+    expect(host.dropIntegrationItem).not.toHaveBeenCalled()
+    expect(host.abortIntegration).not.toHaveBeenCalled()
+    expect(host.publishIntegration).not.toHaveBeenCalled()
+  })
+  it.each(["missing", "failed"])(
+    "blocks the target policy's %s head check even when caller omitted it",
+    async (state) => {
+      const host = fakeHost()
+      host.getChangeset.mockResolvedValue({
+        headSha: "head-a",
+        checks:
+          state === "missing"
+            ? []
+            : [{ profileId: "policy-unit", headSha: "head-a", outcome: "failed" }],
+      } as never)
+      const readPolicyAtRef = jest.fn(async () => ({
+        ok: true as const,
+        declared: true,
+        policy: { ...defaultReviewPolicy(), requiredChecks: ["policy-unit"] },
+      }))
+      const port = portFor()
+      const outcome = await integrateChangesets(input(["a"], { requiredChecks: [] }), {
+        host,
+        readPolicyAtRef,
+        acceptancePortFor: port.factory,
+      })
+      expect(outcome.kind).toBe("blocked")
+      expect(outcome.reason).toBe("checks_unmet")
+      expect(readPolicyAtRef).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedOldSha: "tip-0" })
+      )
+      expect(host.publishIntegration).not.toHaveBeenCalled()
+    }
+  )
+
+  it("unions target policy checks into candidate checks and publish", async () => {
+    const host = fakeHost()
+    host.getChangeset.mockResolvedValue({
+      headSha: "head-a",
+      checks: [{ profileId: "policy-unit", headSha: "head-a", outcome: "passed" }],
+    } as never)
+    const port = portFor()
+    const outcome = await integrateChangesets(input(["a"], { requiredChecks: [] }), {
+      host,
+      acceptancePortFor: port.factory,
+      readPolicyAtRef: async () => ({
+        ok: true,
+        declared: true,
+        policy: {
+          ...defaultReviewPolicy(),
+          requiredChecks: ["policy-unit"],
+        },
+      }),
+    })
+    expect(outcome.kind).toBe("published")
+    expect(port.profiles).toEqual(["policy-unit"])
+    expect(host.publishIntegration).toHaveBeenCalledWith("int-1", "cand-0-a", ["policy-unit"])
+  })
+
+  it("refreshes target policy after rebuild instead of publishing with old requirements", async () => {
+    const host = fakeHost({ moves: 1 })
+    host.getChangeset.mockResolvedValue({ headSha: "head-a", checks: [] } as never)
+    const readPolicyAtRef = jest.fn(async (run: IntegrationRun) => ({
+      ok: true as const,
+      declared: true,
+      policy: {
+        ...defaultReviewPolicy(),
+        requiredChecks: run.expectedOldSha === "tip-0" ? [] : ["new-policy-check"],
+      },
+    }))
+    const outcome = await integrateChangesets(input(["a"], { requiredChecks: [] }), {
+      host,
+      readPolicyAtRef,
+      acceptancePortFor: portFor().factory,
+    })
+    expect(outcome.kind).toBe("blocked")
+    expect(readPolicyAtRef.mock.calls.map(([run]) => run.expectedOldSha)).toEqual([
+      "tip-0",
+      "tip-1",
+    ])
+    expect(host.publishIntegration).toHaveBeenCalledTimes(1)
+  })
+
+  it("refuses an invalid or unreadable target policy without publishing", async () => {
+    for (const unreadable of [false, true]) {
+      const host = fakeHost()
+      const outcome = await integrateChangesets(input(["a"], { requiredChecks: [] }), {
+        host,
+        acceptancePortFor: portFor().factory,
+        readPolicyAtRef: async () => {
+          if (unreadable) throw new Error("target blob unavailable")
+          return {
+            ok: false,
+            problems: [
+              {
+                code: "review_policy_field_unknown",
+                pointer: "/review/typo",
+                message: "unknown field",
+              },
+            ],
+          }
+        },
+      })
+      expect(outcome.kind).toBe("blocked")
+      expect(host.publishIntegration).not.toHaveBeenCalled()
+      expect(host.abortIntegration).toHaveBeenCalled()
+    }
+  })
+
   it("verifies the exact candidate in the integration worktree and publishes it", async () => {
     const host = fakeHost()
     const port = portFor()
     const outcome = await integrateChangesets(input(["a", "b"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: port.factory,
     })
     expect(outcome.kind).toBe("published")
@@ -244,6 +365,7 @@ describe("integrateChangesets", () => {
     const port = portFor()
     const outcome = await integrateChangesets(input(["a", "b"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: port.factory,
     })
     expect(host.prepareIntegration).toHaveBeenCalledWith(
@@ -258,6 +380,7 @@ describe("integrateChangesets", () => {
     const host = fakeHost({ owed: { a: ["unit"] } })
     const outcome = await integrateChangesets(input(["a"], { requiredChecks: [] }), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: null,
     })
     expect(outcome).toMatchObject({ kind: "blocked", reason: "checks_unmet" })
@@ -268,6 +391,7 @@ describe("integrateChangesets", () => {
     const host = fakeHost({ conflicting: ["c"] })
     const outcome = await integrateChangesets(input(["a", "b", "c"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: portFor().factory,
     })
     expect(outcome.kind).toBe("published")
@@ -282,6 +406,7 @@ describe("integrateChangesets", () => {
     const host = fakeHost({ conflicting: ["b"] })
     const outcome = await integrateChangesets(input(["a", "b"], { onConflict: "stop" }), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: portFor().factory,
     })
     expect(outcome.kind).toBe("conflicted")
@@ -294,6 +419,7 @@ describe("integrateChangesets", () => {
     const port = portFor()
     const outcome = await integrateChangesets(input(["a"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: port.factory,
     })
     expect(outcome.kind).toBe("published")
@@ -307,6 +433,7 @@ describe("integrateChangesets", () => {
     const host = fakeHost({ moves: MAX_STALE_REBUILDS + 1 })
     const outcome = await integrateChangesets(input(["a"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: portFor().factory,
     })
     expect(outcome).toEqual(expect.objectContaining({ kind: "blocked", reason: "target_moved" }))
@@ -318,6 +445,7 @@ describe("integrateChangesets", () => {
     const port = portFor(["b"])
     const outcome = await integrateChangesets(input(["a", "b", "c"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: port.factory,
     })
     expect(outcome.kind).toBe("published")
@@ -330,6 +458,7 @@ describe("integrateChangesets", () => {
     const host = fakeHost()
     const outcome = await integrateChangesets(input(["a", "b"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: portFor(["a", "b"]).factory,
     })
     expect(outcome).toEqual(
@@ -340,7 +469,11 @@ describe("integrateChangesets", () => {
 
   it("never publishes when checks are required and no port can verify", async () => {
     const host = fakeHost()
-    const outcome = await integrateChangesets(input(["a"]), { host, acceptancePortFor: null })
+    const outcome = await integrateChangesets(input(["a"]), {
+      host,
+      readPolicyAtRef: noPolicy,
+      acceptancePortFor: null,
+    })
     expect(outcome).toEqual(expect.objectContaining({ kind: "blocked", reason: "checks_unmet" }))
     expect(host.publishIntegration).not.toHaveBeenCalled()
     expect(host.abortIntegration).toHaveBeenCalled()
@@ -350,6 +483,7 @@ describe("integrateChangesets", () => {
     const host = fakeHost()
     const outcome = await integrateChangesets(input(["a"], { requiredChecks: [] }), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: null,
     })
     expect(outcome.kind).toBe("published")
@@ -359,6 +493,7 @@ describe("integrateChangesets", () => {
     const host = fakeHost({ cycles: [["a", "b"]] })
     const outcome = await integrateChangesets(input(["a", "b"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: portFor().factory,
     })
     expect(outcome).toEqual(
@@ -372,6 +507,7 @@ describe("integrateChangesets", () => {
     host.prepareIntegration.mockRejectedValueOnce({ code: "ineligible", message: "missing review" })
     const outcome = await integrateChangesets(input(["a"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: portFor().factory,
     })
     expect(outcome).toEqual(
@@ -387,6 +523,7 @@ describe("integrateChangesets", () => {
     })
     const outcome = await integrateChangesets(input(["a"]), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: portFor().factory,
     })
     expect(outcome).toEqual(
@@ -401,6 +538,7 @@ describe("integrateChangesets", () => {
     controller.abort()
     const outcome = await integrateChangesets(input(["a"], { signal: controller.signal }), {
       host,
+      readPolicyAtRef: noPolicy,
       acceptancePortFor: portFor().factory,
     })
     expect(outcome).toEqual(expect.objectContaining({ kind: "blocked", reason: "aborted" }))

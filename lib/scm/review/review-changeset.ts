@@ -192,8 +192,8 @@ export async function reviewChangeset(
 
 /**
  * The port as seen from one changeset: it only verifies the changeset's own
- * head. Callers build the port with `rootForRevision` from
- * {@link changesetRootForRevision}; this wrapper refuses any other revision
+ * head. SCM runtime supplies the owned checkout of that pinned commit;
+ * this wrapper refuses any other revision
  * before the port is asked, so a check can never run against a tree the
  * changeset did not pin.
  */
@@ -208,18 +208,6 @@ function changesetAcceptancePort(port: AcceptancePort, changeset: AgentChangeset
             message: `changeset ${changeset.changesetId} pins ${changeset.headSha}, not ${request.revision}`,
           }),
   }
-}
-
-/**
- * `rootForRevision` for a changeset: its execution root holds the head's tree
- * (the capture was just taken from it; sensitive files the capture withheld
- * are the only difference, and the acceptance sandbox mounts no credentials).
- */
-export function changesetRootForRevision(
-  changeset: Pick<AgentChangeset, "headSha" | "executionRoot">
-) {
-  return async (revision: string): Promise<string | null> =>
-    revision === changeset.headSha ? changeset.executionRoot : null
 }
 
 /**

@@ -1,3 +1,11 @@
+import type {
+  DelegateAcceptancePortInput,
+  AcceptanceRunSpec,
+} from "@/lib/router-fusion/verify/code-acceptance-host"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs"
+import { resolve, join } from "node:path"
+import { execFileSync, spawnSync } from "node:child_process"
+import type { SourceControlService } from "./service"
 const buildUtilityLlmClient = jest.fn(() => ({ complete: jest.fn(async () => "[]") }))
 jest.mock("@/lib/ai/generation/utility-client", () => ({
   buildUtilityLlmClient: (...args: unknown[]) => buildUtilityLlmClient(...(args as [])),
@@ -6,23 +14,47 @@ jest.mock("@/lib/ai/generation/utility-client", () => ({
 const gitStatus = jest.fn()
 const gitBranches = jest.fn()
 const gitCreateBranch = jest.fn(async () => undefined)
+const gitReset = jest.fn(async () => undefined)
+const gitDiscardAll = jest.fn(async () => undefined)
 jest.mock("@/lib/git/commands", () => ({
   gitStatus: (...a: unknown[]) => gitStatus(...a),
   gitBranches: (...a: unknown[]) => gitBranches(...a),
   gitCreateBranch: (...a: unknown[]) => gitCreateBranch(...(a as [])),
+  gitReset: (...a: unknown[]) => gitReset(...(a as [])),
+  gitDiscardAll: (...a: unknown[]) => gitDiscardAll(...(a as [])),
   gitDiffRefsFile: jest.fn(),
   gitReadBlobAtRef: jest.fn(async () => null),
 }))
 
-const createDelegateAcceptancePort = jest.fn(
-  (input: { rootForRevision: (r: string) => Promise<string | null> }) => ({
-    runProfile: async () => ({ kind: "refused", code: "X", message: "x" }),
-    input,
-  })
-)
+const acquireWorkspaceBundle = jest.fn()
+const archiveManagedWorkspace = jest.fn(async () => undefined)
+const pinManagedWorkspace = jest.fn(async () => undefined)
+jest.mock("@/lib/task-workspace/client", () => ({
+  acquireWorkspaceBundle: (...a: unknown[]) => acquireWorkspaceBundle(...a),
+  archiveManagedWorkspace: (...a: unknown[]) => archiveManagedWorkspace(...(a as [])),
+  pinManagedWorkspace: (...a: unknown[]) => pinManagedWorkspace(...(a as [])),
+}))
+jest.mock("@/lib/task-workspace/user-action", () => ({
+  runWorkspaceUserAction: jest.fn((_command, action) => action()),
+}))
+jest.mock("@/lib/task-workspace/workspace-provisioning", () => ({
+  bundleProvisioningForPath: jest.fn(async () => ({ provisioning: { sparsePaths: ["app"] } })),
+}))
+const statWorkspaceFile = jest.fn(async (..._args: unknown[]) => ({ exists: true }))
+const deleteWorkspaceEntry = jest.fn<Promise<void>, unknown[]>(async () => undefined)
+jest.mock("@/lib/files/workspace-fs", () => ({
+  statWorkspaceFile: (...a: unknown[]) => statWorkspaceFile(...(a as [])),
+  deleteWorkspaceEntry: (...a: unknown[]) => deleteWorkspaceEntry(...(a as [])),
+}))
+const sandboxRun = jest.fn()
+
+const createDelegateAcceptancePort = jest.fn((input: DelegateAcceptancePortInput) => ({
+  runProfile: async () => ({ kind: "refused", code: "X", message: "x" }),
+  input,
+}))
 jest.mock("@/lib/router-fusion/verify/code-acceptance-host", () => ({
   createDelegateAcceptancePort: (input: never) => createDelegateAcceptancePort(input),
-  defaultAcceptanceSandboxHost: jest.fn(() => ({})),
+  defaultAcceptanceSandboxHost: jest.fn(() => ({ availability: jest.fn(), run: sandboxRun })),
   resolveProjectContainerImage: jest.fn(async () => null),
 }))
 jest.mock("@/lib/router-fusion/runtime/delegate-host-ports", () => ({
@@ -53,11 +85,44 @@ jest.mock("./integration/orchestrator", () => ({
 import type { ScmHost } from "./host"
 import { createScmRuntime, reviewClientFor, scmGitPortsFor } from "./runtime"
 
-const changeset = { changesetId: "cs-1", headSha: "h1", executionRoot: "/data/ws-1" }
+const changeset = {
+  changesetId: "cs-1",
+  headSha: "h1",
+  sourceRoot: "/source",
+  executionRoot: "/data/ws-1",
+}
 const host = { getChangeset: jest.fn(async () => changeset) } as unknown as ScmHost
 const signal = new AbortController().signal
+function profileSpec(root: string | null, logicalStepId: string): AcceptanceRunSpec {
+  return {
+    runId: "check",
+    logicalStepId,
+    tier: "os",
+    worktreeRoot: root!,
+    cwd: ".",
+    argv: ["test"],
+    env: {},
+    limits: { cpuSeconds: 1, memoryMb: 128, pids: 8, timeoutMs: 1000 },
+    reportPath: "ignored/report.json",
+    reportMaxBytes: 1024,
+    image: null,
+    signal,
+  }
+}
 
-beforeEach(() => jest.clearAllMocks())
+beforeEach(() => {
+  jest.clearAllMocks()
+  host.getChangeset = jest.fn(async () => changeset) as never
+  acquireWorkspaceBundle.mockResolvedValue({
+    state: "active",
+    leases: [{ workspaceId: "verify", role: "primary", aliasPath: "/frozen" }],
+  })
+  sandboxRun.mockResolvedValue({ exitCode: 0 })
+  gitReset.mockResolvedValue(undefined)
+  gitDiscardAll.mockResolvedValue(undefined)
+  statWorkspaceFile.mockResolvedValue({ exists: true })
+  deleteWorkspaceEntry.mockResolvedValue(undefined)
+})
 
 describe("reviewClientFor", () => {
   it("uses the Source Control panel's AI-review model choice when AI review is on", () => {
@@ -83,7 +148,119 @@ describe("reviewClientFor", () => {
 })
 
 describe("createScmRuntime", () => {
+  it("refuses a head changed during checkout acquisition and cleans up without running code", async () => {
+    host.getChangeset = jest
+      .fn()
+      .mockResolvedValueOnce(changeset)
+      .mockResolvedValueOnce({ ...changeset, headSha: "moved" }) as never
+    reviewChangeset.mockImplementationOnce(async () => {
+      const port = createDelegateAcceptancePort.mock.results[0].value.input
+      await port.rootForRevision("h1")
+      return { changeset: {}, checks: [], policy: null, risk: null, agent: null }
+    })
+    await expect(
+      createScmRuntime({ projectId: "p", appSettings: null, host }).review("cs-1", signal)
+    ).rejects.toThrow("head changed")
+    expect(sandboxRun).not.toHaveBeenCalled()
+    expect(archiveManagedWorkspace).toHaveBeenCalledWith("verify")
+  })
+  it("tests the broken pinned Git tree even when the live checkout and an earlier profile repair it", async () => {
+    const fixture = mkdtempSync(resolve(".cache/change-lifecycle-fix-2026-11-13/check-head-"))
+    const live = join(fixture, "live")
+    const frozen = join(fixture, "verification")
+    mkdirSync(live)
+    const git = (root: string, ...args: string[]) =>
+      execFileSync(
+        "git",
+        [
+          "-C",
+          root,
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "user.name=Regression",
+          "-c",
+          "user.email=regression@example.invalid",
+          ...args,
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+      ).trim()
+    try {
+      git(live, "init", "-b", "main")
+      writeFileSync(join(live, "state.txt"), "broken")
+      writeFileSync(join(live, ".gitignore"), "ignored/\n")
+      git(live, "add", ".")
+      git(live, "commit", "-m", "broken pinned head")
+      const headSha = git(live, "rev-parse", "HEAD")
+      writeFileSync(join(live, "state.txt"), "fixed")
+      host.getChangeset = jest.fn(async () => ({
+        ...changeset,
+        sourceRoot: live,
+        executionRoot: live,
+        headSha,
+      })) as never
+      acquireWorkspaceBundle.mockImplementationOnce(async () => {
+        execFileSync("git", ["clone", "--quiet", live, frozen], { stdio: "pipe" })
+        return {
+          state: "active",
+          leases: [{ workspaceId: "verify", role: "primary", aliasPath: frozen }],
+        }
+      })
+      const service = {
+        resetVerificationCheckout: async (root: string, sha: string) => {
+          git(root, "reset", "--hard", sha)
+          git(root, "clean", "-fd")
+        },
+      } as SourceControlService
+      statWorkspaceFile.mockImplementation(async (root, path) => ({
+        exists: existsSync(join(String(root), String(path))),
+      }))
+      deleteWorkspaceEntry.mockImplementation(async (root, path) => {
+        rmSync(join(String(root), String(path)))
+      })
+      const outcomes: number[] = []
+      sandboxRun.mockImplementation(async (spec: AcceptanceRunSpec) => {
+        expect(readFileSync(join(spec.worktreeRoot, "state.txt"), "utf8")).toBe("broken")
+        expect(existsSync(join(spec.worktreeRoot, spec.reportPath))).toBe(false)
+        const actual = spawnSync(
+          process.execPath,
+          [
+            "-e",
+            "process.exit(require('fs').readFileSync('state.txt','utf8') === 'fixed' ? 0 : 1)",
+          ],
+          { cwd: spec.worktreeRoot }
+        )
+        outcomes.push(actual.status!)
+        writeFileSync(join(spec.worktreeRoot, "state.txt"), "fixed")
+        mkdirSync(join(spec.worktreeRoot, "ignored"), { recursive: true })
+        writeFileSync(join(spec.worktreeRoot, spec.reportPath), "old passing report")
+        return { exitCode: actual.status }
+      })
+      reviewChangeset.mockImplementationOnce(async () => {
+        const port = createDelegateAcceptancePort.mock.results[0].value.input
+        const root = await port.rootForRevision(headSha)
+        for (const id of ["first", "second"]) await port.sandbox.run(profileSpec(root, id))
+        return { changeset: {}, checks: [], policy: null, risk: null, agent: null }
+      })
+      await createScmRuntime({ projectId: "p", appSettings: null, host, service }).review(
+        "cs-1",
+        signal
+      )
+      expect(outcomes).toEqual([1, 1])
+      expect(readFileSync(join(live, "state.txt"), "utf8")).toBe("fixed")
+      expect(acquireWorkspaceBundle).toHaveBeenCalledTimes(1)
+    } finally {
+      rmSync(fixture, { recursive: true, force: true })
+    }
+  })
   it("reviews with the project's acceptance port bound to the changeset's head", async () => {
+    reviewChangeset.mockImplementationOnce(async () => {
+      const portInput = createDelegateAcceptancePort.mock.results[0].value.input
+      expect(await portInput.rootForRevision("other")).toBeNull()
+      expect(acquireWorkspaceBundle).not.toHaveBeenCalled()
+      expect(await portInput.rootForRevision("h1")).toBe("/frozen")
+      return { changeset: {}, checks: [], policy: null, risk: null, agent: null }
+    })
     const runtime = createScmRuntime({ projectId: "project-1", appSettings: null, host })
     await runtime.review("cs-1", signal)
     const [, deps] = reviewChangeset.mock.calls[0] as unknown as [
@@ -96,8 +273,74 @@ describe("createScmRuntime", () => {
       input: { rootForRevision: (r: string) => Promise<string | null>; runId: string }
     }
     expect(input.runId).toBe("changeset:cs-1")
-    await expect(input.rootForRevision("h1")).resolves.toBe("/data/ws-1")
-    await expect(input.rootForRevision("other")).resolves.toBeNull()
+    expect(acquireWorkspaceBundle).toHaveBeenCalledTimes(1)
+    expect(acquireWorkspaceBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base: { kind: "gitRef", gitRef: "h1" },
+        provisioning: { sparsePaths: ["app"] },
+        roots: [expect.objectContaining({ sourceRoot: "/source", role: "primary" })],
+      }),
+      { signal }
+    )
+    expect(archiveManagedWorkspace).toHaveBeenCalledWith("verify")
+  })
+
+  it("resets the same checkout and removes even ignored or committed reports before each profile", async () => {
+    const observed: string[] = []
+    reviewChangeset.mockImplementationOnce(async () => {
+      const portInput = createDelegateAcceptancePort.mock.results[0].value.input
+      const root = await portInput.rootForRevision("h1")
+      for (const logicalStepId of ["first", "second"]) {
+        await portInput.sandbox.run(profileSpec(root, logicalStepId))
+      }
+      return { changeset: {}, checks: [], policy: null, risk: null, agent: null }
+    })
+    gitReset.mockImplementation(async () => {
+      observed.push("reset")
+    })
+    gitDiscardAll.mockImplementation(async () => {
+      observed.push("clean")
+    })
+    deleteWorkspaceEntry.mockImplementation(async () => {
+      observed.push("remove-report")
+    })
+    sandboxRun.mockImplementation(async () => {
+      observed.push("run")
+      return { exitCode: 0 }
+    })
+    await createScmRuntime({ projectId: "p", appSettings: null, host }).review("cs-1", signal)
+    expect(observed).toEqual([
+      "reset",
+      "clean",
+      "remove-report",
+      "run",
+      "reset",
+      "clean",
+      "remove-report",
+      "run",
+    ])
+    expect(gitReset).toHaveBeenNthCalledWith(2, "/frozen", "hard", "h1")
+    expect(deleteWorkspaceEntry).toHaveBeenCalledWith("/frozen", "ignored/report.json")
+    expect(acquireWorkspaceBundle).toHaveBeenCalledTimes(1)
+  })
+
+  it("retains the pinned checkout when a sandbox failure does not prove executor stop", async () => {
+    sandboxRun.mockRejectedValueOnce(new Error("transport disconnected"))
+    reviewChangeset.mockImplementationOnce(async () => {
+      const portInput = createDelegateAcceptancePort.mock.results[0].value.input
+      const root = await portInput.rootForRevision("h1")
+      await expect(portInput.sandbox.run(profileSpec(root, "test"))).rejects.toThrow("disconnected")
+      await expect(portInput.sandbox.run(profileSpec(root, "test"))).rejects.toThrow(
+        "stop is unproven"
+      )
+      return { changeset: {}, checks: [], policy: null, risk: null, agent: null }
+    })
+    await expect(
+      createScmRuntime({ projectId: "p", appSettings: null, host }).review("cs-1", signal)
+    ).rejects.toThrow("stop is unproven")
+    expect(pinManagedWorkspace).toHaveBeenCalledWith("verify", true)
+    expect(archiveManagedWorkspace).not.toHaveBeenCalled()
+    expect(gitReset).toHaveBeenCalledTimes(1)
   })
 
   it("runs no checks without a project, so required checks stay shut", async () => {

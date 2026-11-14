@@ -32,6 +32,7 @@ import {
   type PrepareIntegration,
 } from "../types"
 import { runChangesetChecks, unmetChecks } from "../verify/changeset-checks"
+import type { WorkspaceReviewPolicyParseResult } from "../review/review-policy"
 
 /** Publishes refused because the target moved, retried at most this many times. */
 export const MAX_STALE_REBUILDS = 3
@@ -49,12 +50,15 @@ export interface IntegrateChangesetsInput {
 
 export interface IntegrateChangesetsDeps {
   host: ScmHost
+  /** Policy at this prepared/rebuilt run's immutable expectedOldSha. */
+  readPolicyAtRef: (run: IntegrationRun) => Promise<WorkspaceReviewPolicyParseResult>
   /**
    * The acceptance port, given the run so its `rootForRevision` can answer
    * the candidate's worktree. Null when no port can be built; a run with
    * required checks then never publishes.
    */
   acceptancePortFor: ((run: IntegrationRun) => AcceptancePort) | null
+  executorStopUnproven?: () => boolean
   now?: () => number
 }
 
@@ -162,8 +166,71 @@ export async function integrateChangesets(
       }
     }
     const candidateSha = run.candidateSha
+    let policy: WorkspaceReviewPolicyParseResult
+    try {
+      policy = await deps.readPolicyAtRef(run)
+    } catch (error) {
+      return {
+        kind: "blocked",
+        analysis,
+        run: await abortRun(run),
+        dropped,
+        reason: "policy_unavailable",
+        message: errorMessage(error),
+      }
+    }
+    if (!policy.ok) {
+      return {
+        kind: "blocked",
+        analysis,
+        run: await abortRun(run),
+        dropped,
+        reason: "policy_invalid",
+        message: policy.problems
+          .map((problem) => `${problem.pointer}: ${problem.message}`)
+          .join("; "),
+      }
+    }
+    // A failed/missing head check cannot be replaced by a passing candidate
+    // check. The policy-only obligation was never stored on the changeset.
+    try {
+      if (policy.policy.requiredChecks.length > 0) {
+        for (const item of composedItems(run)) {
+          const changeset = await host.getChangeset(item.changesetId)
+          if (
+            !changeset ||
+            changeset.headSha !== item.headSha ||
+            unmetChecks(policy.policy.requiredChecks, changeset.checks, item.headSha).length > 0
+          ) {
+            return {
+              kind: "blocked",
+              analysis,
+              run: await abortRun(run),
+              dropped,
+              reason: "checks_unmet",
+              message: `changeset ${item.changesetId} has unmet target policy checks`,
+            }
+          }
+        }
+      }
+    } catch (error) {
+      return {
+        kind: "blocked",
+        analysis,
+        run: await abortRun(run),
+        dropped,
+        reason: "policy_unavailable",
+        message: errorMessage(error),
+      }
+    }
     // The host's list also carries each composed changeset's own checks.
-    const requiredChecks = [...new Set([...input.requiredChecks, ...(run.requiredChecks ?? [])])]
+    const requiredChecks = [
+      ...new Set([
+        ...input.requiredChecks,
+        ...(run.requiredChecks ?? []),
+        ...policy.policy.requiredChecks,
+      ]),
+    ]
 
     // ── verify the exact candidate ───────────────────────────────────────────
     if (requiredChecks.length > 0) {
@@ -187,6 +254,11 @@ export async function integrateChangesets(
       })
       for (const check of checks) {
         run = await host.recordIntegrationCheck(run.integrationId, candidateSha, check)
+      }
+      if (deps.executorStopUnproven?.()) {
+        // Keep its worktree: dropping, rebuilding or aborting can replace files
+        // that an executor with a lost transport response may still write.
+        return { kind: "blocked", analysis, run, dropped, reason: "executor_stop_unproven" }
       }
       const unmet = unmetChecks(requiredChecks, run.checks, candidateSha)
       if (unmet.length > 0) {

@@ -5,7 +5,6 @@ import type { AgentChangeset, ChangesetCheck, ChangesetReview } from "../types"
 import type { ReviewAgentDeps } from "./review-agent"
 import {
   approveChangeset,
-  changesetRootForRevision,
   combineVerdict,
   requestChangesetChanges,
   requiredChecksFor,
@@ -375,13 +374,5 @@ describe("human decisions", () => {
         findings: [{ path: "", severity: "critical", note: "Split this into two changes" }],
       })
     )
-  })
-})
-
-describe("changesetRootForRevision", () => {
-  it("answers only the changeset's own head", async () => {
-    const root = changesetRootForRevision({ headSha: HEAD, executionRoot: "/data/ws-1" })
-    await expect(root(HEAD)).resolves.toBe("/data/ws-1")
-    await expect(root("other")).resolves.toBeNull()
   })
 })

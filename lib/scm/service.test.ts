@@ -21,6 +21,8 @@ jest.mock("@/lib/git/commands", () => ({
   gitMerge: mockRecord("gitMerge"),
   gitMergeAbort: mockRecord("gitMergeAbort"),
   gitRevert: mockRecord("gitRevert"),
+  gitReset: mockRecord("gitReset"),
+  gitDiscardAll: mockRecord("gitDiscardAll"),
 }))
 jest.mock("@/lib/task-workspace/user-action", () => ({
   approvalAwareTransport: { call: jest.fn() },
@@ -46,6 +48,14 @@ describe("createGitSourceControlService", () => {
     rollbackIntegration: jest.fn(async () => ({ integrationId: "int" })),
   } as unknown as ScmHost
   const service = createGitSourceControlService(host)
+
+  it("resets only the supplied verification checkout and clears untracked output in order", async () => {
+    await service.resetVerificationCheckout!("/owned-checkout", "pinned")
+    expect(mockCalls).toEqual([
+      ["gitReset", ["/owned-checkout", "hard", "pinned"]],
+      ["gitDiscardAll", ["/owned-checkout", true]],
+    ])
+  })
 
   it("delegates repository operations to the routed git wrappers, local or remote target alike", async () => {
     const remote = "git-workspace:eyJ4IjoxfQ"

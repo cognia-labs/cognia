@@ -23,12 +23,14 @@ import {
   gitDiffFile,
   gitDiffRefsFile,
   gitDiffRefsFiles,
+  gitDiscardAll,
   gitFileHistory,
   gitLog,
   gitMerge,
   gitMergeAbort,
   gitReadBlobAtRef,
   gitRevert,
+  gitReset,
   gitStatus,
 } from "@/lib/git/commands"
 import type {
@@ -74,6 +76,8 @@ export interface SourceControlService {
   abortMerge(repo: string): Promise<void>
   /** Revert one commit with a new commit (the reviewable undo of a published change). */
   revert(repo: string, sha: string): Promise<void>
+  /** Restore an owned, disposable verification checkout before the next profile. */
+  resetVerificationCheckout?(repo: string, sha: string): Promise<void>
   /** Capture an agent's isolated workspace as an immutable, reviewable changeset. */
   snapshot(input: CaptureChangeset): Promise<AgentChangeset>
   /** Undo a published integration by compare-and-swap, or by revert once the target moved on. */
@@ -111,6 +115,10 @@ export function createGitSourceControlService(
     merge: (repo, branch) => gitMerge(repo, branch),
     abortMerge: (repo) => gitMergeAbort(repo),
     revert: (repo, sha) => gitRevert(repo, sha),
+    resetVerificationCheckout: async (repo, sha) => {
+      await gitReset(repo, "hard", sha)
+      await gitDiscardAll(repo, true)
+    },
     snapshot: (input) => host.captureChangeset(input),
     rollback: (integrationId) => host.rollbackIntegration(integrationId),
     changesets: host,

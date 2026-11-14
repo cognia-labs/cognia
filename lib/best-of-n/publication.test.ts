@@ -191,6 +191,7 @@ it("the UI publication path cannot expand its selected winner into a losing chan
   f.deps.runtime.mockResolvedValue({
     integrate: (input: never) =>
       integrateChangesets(input, {
+        readPolicyAtRef: async () => ({ ok: true, declared: false, policy: defaultReviewPolicy() }),
         host: {
           analyzeIntegration: async () => ({
             order: ["cs0", "cs1"],
