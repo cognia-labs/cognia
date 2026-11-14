@@ -38,6 +38,16 @@ use crate::types::{
     NetworkPolicy, SandboxCommand, SandboxError, SandboxHealth, SandboxPolicy, SandboxResult,
 };
 
+/// Cancellation and early errors must signal the group too. A successful
+/// return additionally waits for positive stop and disarms this fallback.
+struct GroupCleanup(Option<u32>);
+
+impl Drop for GroupCleanup {
+    fn drop(&mut self) {
+        crate::proc_group::kill_process_group(self.0);
+    }
+}
+
 /// Absolute path to the system `sandbox-exec`. Apple ships it as part of
 /// the base install; we verify presence in `is_available()`.
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
@@ -132,7 +142,9 @@ impl SandboxedExec for MacOsSandboxBackend {
             cmd.pre_exec(|| {
                 if libc::setsid() == -1 {
                     // Already a group leader on the rare path — fall back.
-                    libc::setpgid(0, 0);
+                    if libc::setpgid(0, 0) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
                 }
                 Ok(())
             });
@@ -142,6 +154,7 @@ impl SandboxedExec for MacOsSandboxBackend {
         let mut child = cmd.spawn().map_err(|e| SandboxError::BackendFailed {
             reason: format!("failed to spawn sandbox-exec: {e}"),
         })?;
+        let mut group_cleanup = GroupCleanup(child.id());
 
         if let Some(payload) = command.stdin {
             if let Some(mut stdin) = child.stdin.take() {
@@ -208,11 +221,7 @@ impl SandboxedExec for MacOsSandboxBackend {
                     // Kill the whole process group (negated pid) so daemonized
                     // grandchildren die too — `kill_on_drop` would only reap
                     // `sandbox-exec` itself.
-                    if let Some(pid) = child_pid {
-                        unsafe {
-                            libc::kill(-(pid as i32), libc::SIGKILL);
-                        }
-                    }
+                    crate::proc_group::kill_process_group(child_pid);
                     timed_out = true;
                     match child.wait().await {
                         Ok(out) => out,
@@ -229,6 +238,19 @@ impl SandboxedExec for MacOsSandboxBackend {
                 }
             }
         };
+        // A successful checker can leave a writer behind with redirected
+        // stdio. Reap it before draining pipes, reporting success or releasing
+        // the scratch directory / mounted verification checkout.
+        if let Err(reason) =
+            crate::proc_group::kill_process_group_and_wait(child_pid, Duration::from_secs(2)).await
+        {
+            stdout_task.abort();
+            stderr_task.abort();
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            return Err(SandboxError::BackendFailed { reason });
+        }
+        group_cleanup.0 = None;
         let (stdout, stdout_truncated) =
             stdout_task.await.map_err(|e| SandboxError::BackendFailed {
                 reason: format!("stdout capture task failed: {e}"),
@@ -581,6 +603,38 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[tokio::test]
+    async fn successful_execution_reaps_background_writers_before_returning() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let result = MacOsSandboxBackend::new().run(SandboxCommand {
+            argv: vec!["/bin/sh".into(), "-c".into(),
+                "(printf started > started.txt; /bin/sleep 0.4; printf late > late.txt) </dev/null >background.out 2>&1 & echo $! > writer.pid; while ! test -f started.txt; do /bin/sleep 0.01; done; printf done".into()],
+            cwd: workspace.clone(), env: Default::default(), stdin: None, timeout: Duration::from_secs(10),
+        }, SandboxPolicy::Bash {
+            writable: vec![workspace.clone()], readable: vec![], network: NetworkPolicy::Off,
+            max_cpu_seconds: 0, max_memory_mb: 0, max_processes: 0,
+        }).await.unwrap();
+        assert_eq!(result.exit_code, 0, "{}", result.stderr);
+        assert!(
+            workspace.join("started.txt").exists(),
+            "the background writer must actually start"
+        );
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let late = workspace.join("late.txt").exists();
+        if let Ok(pid) = std::fs::read_to_string(workspace.join("writer.pid")) {
+            if let Ok(pid) = pid.trim().parse::<i32>() {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
+        }
+        assert!(
+            !late,
+            "a background checker wrote after successful execution returned"
+        );
+    }
 
     #[tokio::test]
     async fn scratch_works_without_granting_workspace_sibling_writes() {

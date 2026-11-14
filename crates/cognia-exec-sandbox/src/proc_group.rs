@@ -45,6 +45,35 @@ pub fn kill_process_group(pid: Option<u32>) {
     }
 }
 
+/// Stop an owned Unix group and positively observe its disappearance before
+/// its writable workspace can be reset or released. Signalling alone is not
+/// evidence that a background writer has finished.
+#[cfg(unix)]
+pub async fn kill_process_group_and_wait(
+    pid: Option<u32>,
+    budget: std::time::Duration,
+) -> Result<(), String> {
+    let Some(pid) = pid else {
+        return Ok(());
+    };
+    kill_process_group(Some(pid));
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        // SAFETY: signal zero probes only the group we created for this run.
+        if unsafe { libc::killpg(pid as libc::pid_t, 0) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(());
+            }
+            return Err(format!("process group stop could not be observed: {error}"));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!("process group {pid} stop is unproven"));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +82,26 @@ mod tests {
     fn kill_process_group_none_is_noop() {
         // Must not panic for a process that never started / has no pid.
         kill_process_group(None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn confirmed_stop_reaps_a_group_after_its_leader_exits() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("sleep 30 </dev/null >/dev/null 2>&1 &")
+            .kill_on_drop(true);
+        apply_process_group(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id();
+        child.wait().await.unwrap();
+        kill_process_group_and_wait(pid, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_ne!(unsafe { libc::killpg(pid.unwrap() as libc::pid_t, 0) }, 0);
+        kill_process_group_and_wait(None, std::time::Duration::ZERO)
+            .await
+            .unwrap();
     }
 
     #[test]
