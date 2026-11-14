@@ -1,6 +1,10 @@
 # 变更链：先止血，再放行并发，再修投影与历史
 
-日期：2026-11-11（Asia/Shanghai）。状态：**Proposed，未实施**。取代 [2026-11-10 change lifecycle convergence](2026-11-10-change-lifecycle-convergence.md)；原文保留，只用作审计项来源和全量映射的对照。并发模型见 [ADR-0255](../content/docs/zh/adr/0255-runs-that-share-a-directory-keep-their-diffs-and-lose-undo.md)。
+日期：2026-11-11（Asia/Shanghai）。状态：**P1 Partial，2026-11-13 修复后复核发现新反例；真实环境验收待完成**。取代 [2026-11-10 change lifecycle convergence](2026-11-10-change-lifecycle-convergence.md)；原文保留，只用作审计项来源和全量映射的对照。并发模型见 [ADR-0255](../content/docs/zh/adr/0255-runs-that-share-a-directory-keep-their-diffs-and-lose-undo.md)。
+
+> **最新修复（2026-11-13）：** 见[P1 修复与验证记录](../reports/2026-11-13-change-lifecycle-p1-repairs.md)。N01/N02、S1-3–S1-7 已补齐实现与核心回归，S1-2/S2 保留同目录并发并补上 alias、不可逆 Restore 和未知停止保护。真实 Tauri/模型/Linux Host 验收、RPC 定向测试仍开放；全局 lint/typecheck/Host parity 有范围外失败。S3/S4 未在本轮实施。[修复前校验](../reports/2026-11-13-change-lifecycle-implementation-validation.md)作为历史基线保留。
+
+> **修复后复核（2026-11-13）：** [新反例与验收顺序](../reports/2026-11-13-change-lifecycle-postfix-adversarial-review.md)确认四个 P1：prune 删除借用的活跃 bundle 根、跨连接 settle 覆盖 overlap 并允许误 Undo、archive 删除未 opt-in stop 表的活跃根、Best-of-N 外层 abort 绕过内层停止未知保护。另有原 Host 控制/监听未固定的 P1 风险。原核心测试通过事实保留，整体 P1 重新打开；优先修目录所有权、结算单调性和外层释放，继续复用原 owner 并保留同目录并发，不增加独占 writer 或 quarantine 平台。本次复核没有实施产品修复。
 
 缺口编号（F01–F18、CF01–CF05）沿用三份报告：[缺口审计](../reports/2026-11-10-turn-diff-gap-audit.md)、[对抗性复核](../reports/2026-11-10-turn-diff-adversarial-review.md)、[联合审计](../reports/2026-11-10-turn-diff-cross-feature-audit.md)。
 
@@ -35,7 +39,7 @@
 - **路径 key**：walk 路径在所有平台上执行 `replace('\\', "/")`。provenance 的 `path()` 拒绝含 `\` 的路径。
 - **停止确认**：`requires_executor_stop_confirmation`、`confirm_executor_stopped` 只有 `worker_cli.rs` 调用，`lib/`、`sidecar/`、`src-tauri/src` 没有调用方。`bind_assistant_message` 只有测试调用。ADR-0244 的状态是 Proposed。
 - **重叠准入**：`check_capture_root_admission` 在 begin 时扫描全部 run，同一根或祖先/后代根上已有 `Running|Settling` 的就地观察 run 时，拒绝第二个就地观察 run。也拒绝与停止未确认的 run 相交的任何获取。
-- **归因记录**：settle 是全根前后对比，不按路径过滤。唯一的工具时刻命令 `task_workspace_record_tool_event` 不带哈希，生产调用方只有 Codex 和 SIWC 的 `onFileChanges`。带哈希的 `record_tool_mutation_receipt` 只有测试构造。sidecar 的 `file-checkpoint.ts` 发出 `file_pre_mutation` 帧，仓内没有消费者。
+- **归因记录**：settle 是全根前后对比，不按路径过滤。唯一的工具时刻命令 `task_workspace_record_tool_event` 不带哈希，生产调用方只有 Codex 和 SIWC 的 `onFileChanges`。带哈希的 `record_tool_mutation_receipt` 只有测试构造。sidecar 的 `file-checkpoint.ts` 发出 `file_pre_mutation` 帧，仓内没有消费者。 **2026-11-13 更正：** 当前 TUI 的 `useAgentSession.tsx` / `runtime/checkpoint-capture.ts` 已消费 before checkpoint；尚未形成 S4 Host before/after hash receipt。
 - **Undo 语义**：以 after 为 base、before 为目标做三方合并（`merge_entry`，回退到 `git merge-file`）。别人的改动能干净合并时保留，不能合并时报冲突。重复的 Apply/Undo 合并结果是无操作，所以不需要客户端幂等键。
 - **不可逆标记**：`PatchSet.reversible` 是整个 patch 的布尔值，目前只在 blob 容量超限且请求允许时置 false。Undo 拒绝不可逆 patch，Task Resources 面板据此禁用按钮。没有逐文件或逐 hunk 的标记，也没有原因字段。
 - **发布 gate**：native 的 `publish_integration` 并集三处 required checks（run 已存、调用方传入、各 changeset 已存），从不读仓库里的策略。`lib/scm/review/review-changeset.ts` 的 `requiredChecksFor` 在评审时并入目标 ref 的策略；`integrate-dialog.tsx` 和 `lib/scm/integration/orchestrator.ts` 不读策略。Squad 和 Best-of-N 自己并入。
@@ -92,24 +96,30 @@
 
 ### S1-2 快照恢复先物化再替换
 
+**已有实现（2026-11-11），最新校验为部分完成（2026-11-13）。** staging helper 测试通过；活动根拒绝测试在 canonical alias 下失败，且 overlap 不可逆来源仍可恢复。见校验报告 N01/N02；本项验收不能记通过。实现与原设计的出入：
+
+- 暂存目录建在执行根的同级目录下，替换是把旧内容逐项改名移到另一个同级目录、再把新内容逐项移入，全部成功后才删旧内容。任何一步失败都按相反顺序移回。连移回也失败时，两个同级目录都保留，报错里写明路径。
+- 恢复期间新的 begin 是等待，不是被拒：恢复和 begin 持同一把准入锁，begin 在恢复结束后继续。
+- 活动运行检查看的是所有任务里执行根与目标相交的运行，包括被恢复的那个运行自己。
+
 `restore_run_snapshot` 改为先把目标快照物化到执行根同一文件系统下的暂存目录，全部成功后再替换执行根内容（保留 `.git`），失败则删除暂存目录，执行根不动。checkout 回退路径走同一函数。
 
-恢复只在该根（含祖先和后代）没有 `Running|Settling` 的 run 时允许，检查和替换都在现有的 capture admission 锁内完成。这是本方案保留的唯一互斥。
+恢复只在该根（含祖先和后代）没有相交活动 run 或仍未确认停止的 in-app run 时允许，检查和替换都在现有的 capture admission 锁内完成。这是本方案保留的唯一互斥。
 
-验收：物化中途缺 blob 或写失败，执行根逐字节不变；恢复期间 begin 同一根被拒绝；有活动 run 时恢复被拒绝并说明原因。
+验收：物化中途缺 blob 或写失败，执行根逐字节不变；恢复期间 begin 等待准入、恢复后继续；有活动 run 时恢复被拒绝并说明原因。
 
 ### S1-3 F02：停止未证实不产生可撤 patch
 
-改动落在两处公共面，不逐个调用点打补丁：
+改动复用公共 lease、capture lifecycle 和现有 Host 命令：
 
-- `lease.settle` 和 `lease.abort` 增加一个可选的执行器停止 promise。传入时先等它，最多等一个固定上限（参照 `dispatch-teammate.ts` 的 2 秒，具体值实施时定）。等到了照常 settle；等不到则仍然 settle 以保留 diff，并把 `stopUnproven` 传给 Host，由 Host 在产出的 patch 上置 `reversible = false`、原因 `stop_unproven`。settle 的 Host 命令为此加一个字段。
-- `agent-execution-service.ts` 和 Scheduler chat 执行器接住 `onExecutorStarted` 给出的 `executorStop`，在取消和超时路径上传给 lease。Scheduler chat 在 abort 时改用 `cancelled`。
+- 三个 in-app owner（AgentExecutionService、Scheduler chat、内置 Best-of-N）在 begin 的顶层参数传 `executorStopRequired`。Host 在 turn 返回之前记录 pending stop，提前的 legacy settle 也不能发布可撤销 patch。这是复核发现的必要补充；仅在 timeout 后才记录会漏掉其间的后续轮次。
+- `lease.settle/abort` 接受独立停止 promise，最多等待 2 秒。未证实时带 `executorStopUnproven: true` 结算，diff 可读、patch 不可撤；未确认的潜在写入者继续污染后续重叠 capture，但不拒绝目录 begin。真正停止后发送 false，正向确认单调生效，不重捕获、不恢复旧 Undo，保留原 terminal outcome 和 Host origin。
+- 对多个尝试聚合全部 stop promises。自己创建的一次性 AI-SDK session 显式关闭；复用 conversation 不强制关闭，等待同一 executor loop 的实际 disposal。Scheduler 同时处理 send ACK 尚未返回时的取消及发送前取消。watcher 初始化失败发生在 executor 获得 turn 之前，清除 requirement 后结算。
 
-不设 `executor_stop_unconfirmed`，所以下一轮可以在同一目录开始，新基线取当时的磁盘状态。
-
+不设新的目录 quarantine 或 participant registry；worker CLI、ADR-0244 远程 helper 的原停止约束不变。
 本项不做：Scheduler 外部 agent 路径不传 signal、`external/manager.ts` 超时不等取消。这两处不 settle 采集，属于 F05，留在待办。worker CLI 和 ADR-0244 的远程 run 路径不变。
 
-验收：用一个取消后延迟写文件的假执行器，在停止 promise 上限内没停的，该轮 patch 不可撤且原因正确，下一轮 begin 成功且基线包含晚到的写入；上限内停下的，patch 可撤且包含全部写入。`cancelRemoteExternalRun` 等待 `run.execution` 的现有行为回归不变。
+验收：用一个取消后延迟写文件的假执行器，在停止 promise 上限内没停的，该轮 patch 不可撤且原因正确，下一轮 begin 成功；旧执行器停止确认前，后续受到污染的轮次同样不可撤。上限内停下且无其他重叠写入者时，patch 可撤且包含已完成写入。`cancelRemoteExternalRun` 等待 `run.execution` 的现有行为回归不变。
 
 ### S1-4 F03：含反斜杠的文件名不可撤
 
@@ -125,7 +135,7 @@
 - `core.autocrlf` 或 `core.eol` 会转换的文本文件；
 - `git ls-files -v` 标出 assume-unchanged 或 skip-worktree 的。
 
-只对这些文件读磁盘内容，原始字节的 blob 哈希等于 HEAD oid 就继续复用 Git 对象，不等就存物理 blob 作基线。普通仓库没有额外开销；开了 autocrlf 的仓库每轮会读全部文本文件，这个成本已接受。submodule、LFS、稀疏检出未物化的条目不做处理，出现在变更集合里时 patch 置不可逆，原因 `fidelity_unknown`。
+begin 和 settle 两端均执行筛选，只对这些文件读磁盘内容，原始字节的 blob 哈希等于 HEAD oid 就继续复用 Git 对象，不等就存物理 blob 作基线。普通 clean 文件不新增全量内容读取，但增加批量 Git 元数据查询；开了 autocrlf 的仓库可能读取更多路径，这个成本已接受。submodule、LFS、稀疏检出未物化的条目不做处理，出现在变更集合里时 patch 置不可逆，原因 `fidelity_unknown`。整目录 Restore 另外拒绝包含无法完整重建表示的 snapshot，避免普通文件变更引发干净 submodule 目录丢失。
 
 验收：真实 Git fixture，干净的 CRLF 文件和带 clean/smudge filter 的文件，capture、修改、Undo 后磁盘字节与修改前逐字节相同。
 
@@ -141,13 +151,13 @@
 
 ### S1-7 CF02：检查在钉住 SHA 的新 checkout 里跑
 
-通用 SCM runtime 的检查改用 Best-of-N 的获取方式：按 changeset 的 head SHA 取一个托管 checkout，检查在它里面执行，报告绑定这个 SHA。同一 head 的多个 profile 共用这个 checkout；每个 profile 跑完后核对 HEAD 和工作区是否仍等于该 SHA，不等就重置后再跑下一个。checkout 在检查执行器结束后才释放。
+通用 SCM runtime 的检查改用 Best-of-N 的获取方式：按 changeset 的 head SHA 取一个托管 checkout，检查在它里面执行，报告绑定这个 SHA。同一 head 的多个 profile 共用这个 checkout；每个 profile 执行前重置 tracked HEAD/源码、清理 untracked 输出并删除声明的 report，包括 ignored/committed report。原 Best-of-N 获取代码由通用 runtime 统一持有，避免套两层 checkout。checkout 在检查执行器结束后才释放；container teardown 失败、macOS owned process group 停止未证实均保留 checkout，不进入 reset/archive/drop/rebuild。
 
 验收：钉住的提交是坏的、活动目录已修好，检查必须失败；第一个 profile 改了源码，第二个 profile 看到的仍是原始内容。
 
 ## 4. S2 放行同目录并发，重叠的轮次只读
 
-**已实现**（2026-11-11）。与下文的出入：
+**核心已实现（2026-11-11），路径身份与恢复边界仍待补（2026-11-13）。** canonical alias 可漏记 overlap，已标 overlap 的 managed patch 仍可 snapshot restore；见校验报告 N01/N02。实现与原设计的出入：
 
 - 开始时分两次看重叠。就地运行在采基线之前先看一次，那时已有的活动运行即使在本运行入库前结算了，本运行也算重叠；入库时再看一次，给仍在活动的对方打标记。
 - 未采集模式的 worker 通过 `assertExecutionAllowed` 进入目录时，该目录上被观察的运行也打标记，因为它们分不清 worker 的写入。
@@ -155,7 +165,7 @@
 - 托管运行不因源目录上有就地运行而算重叠，只有执行根相交才算。
 - 远程外部 agent 路径（`remote-run-service.ts`）遇到仍被拒的情况时还是显示宿主原文，没有改。
 
-见 ADR-0255。现在第二个同目录运行整轮被拒（第 2 节补充核对 1），所以这一段修的是一个现存的功能阻断，不只是归因。它只依赖 S1-0，可以排在 S1-0 之后、与 S1 其余各项并行。
+见 ADR-0255。实施前（2026-11-11 基线）第二个同目录运行整轮被拒（第 2 节补充核对 1），所以这一段修的是一个现存的功能阻断，不只是归因。它只依赖 S1-0，可以排在 S1-0 之后、与 S1 其余各项并行。
 
 实施步骤：
 
@@ -200,27 +210,27 @@ S3-1 和 S3-2 先做，其余依赖它们的修订和 reconcile 入口。每项�
 
 ## 8. 全量缺口映射
 
-| 缺口          | 处理                                          | 位置       |
-| ------------- | --------------------------------------------- | ---------- |
-| F01           | 先落盘再 rename，回滚含当前项，错误不丢       | S1-1       |
-| F02           | 等完成信号；未证实则该轮只读                  | S1-3       |
-| F03           | 含反斜杠路径的 patch 不可撤                   | S1-4       |
-| F04           | index flag 文件读原字节；submodule 等置不可逆 | S1-5       |
-| F05、F06      | 入口覆盖                                      | 待办       |
-| F07           | 已撤回，不处理                                | 无         |
-| F08           | ledger 失效通知刷新                           | S3-4       |
-| F09           | 恢复需根上无活动 run；UI 二次预检             | S1-2、S3-6 |
-| F10           | 显式 sessionId                                | S3-5       |
-| F11           | 区分 loading 与 empty                         | S3-4       |
-| F12、F18      | turn group 与 Host 回查                       | S3-3       |
-| F13、F14、F15 | 性能预算                                      | 待办       |
-| F16           | 延期                                          | 待办       |
-| F17           | 受转换影响的文件读原字节                      | S1-5       |
-| CF01          | orchestrator 并入目标策略                     | S1-6       |
-| CF02          | 钉住 SHA 的新 checkout                        | S1-7       |
-| CF03          | single 与 bundle 共用 reconcile               | S3-2       |
-| CF04          | 事务加单调修订                                | S3-1       |
-| CF05          | Squad target 冻结                             | 待办       |
+| 缺口          | 处理                                                                          | 位置       |
+| ------------- | ----------------------------------------------------------------------------- | ---------- |
+| F01           | staging 后 rename；当前失败项原样，已完成项补偿；错误不丢，pin 按实现说明处理 | S1-1       |
+| F02           | 等完成信号；未证实则该轮只读                                                  | S1-3       |
+| F03           | 含反斜杠路径的 patch 不可撤                                                   | S1-4       |
+| F04           | index flag 文件读原字节；submodule 等置不可逆                                 | S1-5       |
+| F05、F06      | 入口覆盖                                                                      | 待办       |
+| F07           | 已撤回，不处理                                                                | 无         |
+| F08           | ledger 失效通知刷新                                                           | S3-4       |
+| F09           | 恢复需根上无活动 run；UI 二次预检                                             | S1-2、S3-6 |
+| F10           | 显式 sessionId                                                                | S3-5       |
+| F11           | 区分 loading 与 empty                                                         | S3-4       |
+| F12、F18      | turn group 与 Host 回查                                                       | S3-3       |
+| F13、F14、F15 | 性能预算                                                                      | 待办       |
+| F16           | 延期                                                                          | 待办       |
+| F17           | 受转换影响的文件读原字节                                                      | S1-5       |
+| CF01          | orchestrator 并入目标策略                                                     | S1-6       |
+| CF02          | 钉住 SHA 的新 checkout                                                        | S1-7       |
+| CF03          | single 与 bundle 共用 reconcile                                               | S3-2       |
+| CF04          | 事务加单调修订                                                                | S3-1       |
+| CF05          | Squad target 冻结                                                             | 待办       |
 
 ## 9. 验证与提交
 
