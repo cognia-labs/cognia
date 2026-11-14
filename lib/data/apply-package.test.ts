@@ -8,6 +8,12 @@ import { applyBackupPackage } from "./apply-package"
 import { getDb, whenSeeded, __resetDbForTesting } from "@/lib/db/schema"
 import type { BackupPackageV3, BackupPayloadV3 } from "./types"
 import { buildBackupPackage } from "./build-package"
+import type { AppSettings } from "@cognia/agent-config-types"
+import { getSettings, saveSettings } from "@/lib/db/settings"
+import {
+  __resetProviderSecretStoreForTesting,
+  __setProviderSecretBackendForTesting,
+} from "@/lib/settings/provider-secret-store"
 import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
 import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 
@@ -439,7 +445,90 @@ describe("settings merge", () => {
       }),
       { mergeStrategy: "overwrite", includeSessions: false, includeApiKey: true }
     )
-    expect((await db.settings.get("singleton"))?.apiKey).toBe("secret")
+    // ADR-0256: the key reaches the secret store, never the persisted row.
+    expect((await db.settings.get("singleton"))?.apiKey).toBeUndefined()
+    expect((await getSettings()).apiKey).toBe("secret")
+  })
+
+  describe("provider credentials (ADR-0256)", () => {
+    const SECRET = "sk-synthetic-restore-secret"
+    const values = new Map<string, string>()
+    beforeEach(() => {
+      values.clear()
+      __setProviderSecretBackendForTesting({
+        save: async (k, v) => void values.set(k, v),
+        load: async (k) => values.get(k) ?? null,
+        delete: async (k) => void values.delete(k),
+      })
+    })
+    afterAll(() => __resetProviderSecretStoreForTesting())
+
+    function settingsWithProviderKey(apiKey: string): BackupPayloadV3["settings"] {
+      return {
+        id: "singleton",
+        alwaysAllowTools: [],
+        providerSettings: {
+          openai: { providerId: "openai", enabled: true, apiKey, baseURL: "https://api.example" },
+        },
+        customProviders: [{ id: "relay", providerName: "Relay", apiKey: `${apiKey}-relay` }],
+      } as unknown as BackupPayloadV3["settings"]
+    }
+
+    it("round-trips keys from an export that includes them without persisting them", async () => {
+      await saveSettings(
+        settingsWithProviderKey(SECRET) as unknown as Partial<Omit<AppSettings, "id">>,
+        { mirrorToHost: false }
+      )
+      const backup = await buildBackupPackage({ includeSessions: false, includeApiKey: true })
+      expect(JSON.stringify(backup.payload.settings)).toContain(SECRET)
+      const without = await buildBackupPackage({ includeSessions: false, includeApiKey: false })
+      expect(JSON.stringify(without.payload.settings)).not.toContain(SECRET)
+
+      await getDb().settings.clear()
+      values.clear()
+      __setProviderSecretBackendForTesting({
+        save: async (k, v) => void values.set(k, v),
+        load: async (k) => values.get(k) ?? null,
+        delete: async (k) => void values.delete(k),
+      })
+      await applyBackupPackage(backup, {
+        mergeStrategy: "overwrite",
+        includeSessions: false,
+        includeApiKey: true,
+      })
+      expect(JSON.stringify(await getDb().settings.get("singleton"))).not.toContain(SECRET)
+      const read = await getSettings()
+      expect(read.providerSettings?.openai?.apiKey).toBe(SECRET)
+      expect(read.customProviders?.[0]?.apiKey).toBe(`${SECRET}-relay`)
+    })
+
+    it("keeps this device's keys when the backup carries none", async () => {
+      await saveSettings(
+        settingsWithProviderKey("sk-local") as unknown as Partial<Omit<AppSettings, "id">>,
+        { mirrorToHost: false }
+      )
+      await applyBackupPackage(pkg({ settings: settingsWithProviderKey(SECRET) }), {
+        mergeStrategy: "overwrite",
+        includeSessions: false,
+        includeApiKey: false,
+      })
+      expect((await getSettings()).providerSettings?.openai?.apiKey).toBe("sk-local")
+      expect(JSON.stringify(await getDb().settings.get("singleton"))).not.toContain(SECRET)
+    })
+
+    it("does not merge a skipped restore's keys", async () => {
+      await saveSettings(
+        settingsWithProviderKey("sk-local") as unknown as Partial<Omit<AppSettings, "id">>,
+        { mirrorToHost: false }
+      )
+      await applyBackupPackage(pkg({ settings: settingsWithProviderKey(SECRET) }), {
+        mergeStrategy: "skip",
+        includeSessions: false,
+        includeApiKey: true,
+      })
+      expect((await getSettings()).providerSettings?.openai?.apiKey).toBe("sk-local")
+      expect([...values.values()].join()).not.toContain(SECRET)
+    })
   })
 
   it("preserves onboardingDismissedAt across import (never stripped like apiKey)", async () => {

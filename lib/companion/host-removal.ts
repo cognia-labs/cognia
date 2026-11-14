@@ -21,6 +21,7 @@ import {
   toCompanionConfig,
   type CompanionCredentialBook,
 } from "./credential-book"
+import { deleteDatabaseAndProviderSecrets } from "@/lib/settings/provider-secret-store"
 import { revokeCompanionDevice } from "./device-revocation"
 import { switchCompanionHost, type CompanionClientPlatform } from "./host-orchestration"
 
@@ -200,7 +201,7 @@ function productionDependencies(registry: RuntimeTargetRegistry): HostRemovalDep
     deleteRuntimeTarget: (localAccountId, hostId) => registry.deleteTarget(localAccountId, hostId),
     deleteActiveRuntimeTarget: (localAccountId, hostId) =>
       registry.deleteActiveTarget(localAccountId, hostId),
-    deleteDatabase: (name) => Dexie.delete(name),
+    deleteDatabase: deleteDatabaseAndProviderSecrets,
     databaseExists: (name) => Dexie.exists(name),
     removeRecentAlias: removeRecentServer,
     enterUnpaired: async () => {

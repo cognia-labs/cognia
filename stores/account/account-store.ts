@@ -133,6 +133,10 @@ import {
   clearPluginRuntimeAccount,
 } from "@/lib/plugin/security/account-runtime-gate"
 import type { ProfileCloudIdentityCleanup } from "@/lib/identity/forget-profile-identity"
+import {
+  deleteDatabaseAndProviderSecrets,
+  forgetProviderSecretsForDatabases,
+} from "@/lib/settings/provider-secret-store"
 
 export interface CreateLocalAccountInput {
   id?: string
@@ -395,7 +399,12 @@ export function createAccountStore(
       const { ensureActiveDatabaseReady } = await import("@/lib/db/boot")
       return ensureActiveDatabaseReady()
     },
-    removeRuntimeTargets: removeAccountRuntimeTargets,
+    removeRuntimeTargets: async (localAccountId) => {
+      const removed = await removeAccountRuntimeTargets(localAccountId)
+      // ADR-0256: each deleted target database's provider credentials go too.
+      await forgetProviderSecretsForDatabases(removed.deletedDatabases)
+      return removed
+    },
     stopRuntimeSubscriptions: stopRuntimeTargetSubscriptions,
     teardownPluginRuntime: async (localAccountId) => {
       const { teardownPluginAccountRuntime } =
@@ -2138,7 +2147,8 @@ export async function dropDexieAccountDatabase(localAccountId: string): Promise<
     accountDatabaseName(localAccountId),
     ...withFusionDatabase(encryptedAccountDatabaseName(localAccountId)),
   ]) {
-    await Dexie.delete(databaseName)
+    // ADR-0256: the database's provider credentials live beside it.
+    await deleteDatabaseAndProviderSecrets(databaseName)
     if (await Dexie.exists(databaseName)) {
       throw new Error(`Account database deletion could not be verified: ${databaseName}`)
     }

@@ -87,6 +87,12 @@ import {
   PROFILE_STORE_SCHEMA_VERSION,
 } from "@cognia/provider-types"
 import { stripSettingsRowSecrets } from "@/lib/settings/profile-transfer"
+import { isEmptySecretSet, splitSettingsSecrets } from "@/lib/settings/provider-secret-split"
+import {
+  PROVIDER_SECRETS_REF_FIELD,
+  type ProviderSecretsRef,
+} from "@/lib/settings/provider-secret-store"
+import { mergeRestoredProviderSecrets } from "@/lib/db/settings"
 import type {
   RetrievalEncryptedContentRow,
   RetrievalProfileRow,
@@ -235,6 +241,21 @@ export async function applyBackupPackage(
     ? readAllSnapshots(SNAPSHOT_MODULES, snapshotEnv).snapshots
     : {}
 
+  // ADR-0256: provider credentials never enter the restore transaction. With
+  // "Include API keys" they are merged into this database's secret blob first
+  // (the backup winning per credential), and the restored row only carries the
+  // pointer. Without it, this device keeps the keys of providers that remain.
+  const restoredSettings = env.settings
+    ? splitSettingsSecrets(withoutProviderSecretsRef(env.settings))
+    : null
+  let restoredSecretsRef: ProviderSecretsRef | undefined
+  if (restoredSettings && opts.includeApiKey && !isEmptySecretSet(restoredSettings.secrets)) {
+    const existingSettings = await db.settings.get("singleton")
+    if (!(existingSettings && opts.mergeStrategy === "skip")) {
+      restoredSecretsRef = await mergeRestoredProviderSecrets(restoredSettings.secrets)
+    }
+  }
+
   // Select the array overload before binding a deferred transaction scope.
   const transaction: (
     mode: "rw",
@@ -353,12 +374,19 @@ export async function applyBackupPackage(
           (env as Record<string, unknown>)[name] = remapAuthoredReferences(env[name], authoredMaps)
       }
       // --- settings (singleton) -------------------------------------------
-      if (env.settings) {
+      if (env.settings && restoredSettings) {
         const existing = await db.settings.get("singleton")
         const incoming = (
           opts.includeApiKey
-            ? { ...env.settings, id: "singleton" }
-            : { ...(stripSettingsRowSecrets(env.settings) as AppSettings), id: "singleton" }
+            ? {
+                ...restoredSettings.publicRow,
+                ...(restoredSecretsRef ? { [PROVIDER_SECRETS_REF_FIELD]: restoredSecretsRef } : {}),
+                id: "singleton",
+              }
+            : {
+                ...(stripSettingsRowSecrets(restoredSettings.publicRow) as AppSettings),
+                id: "singleton",
+              }
         ) as AppSettings
         if (!existing) {
           await db.settings.put(incoming)
@@ -2090,4 +2118,12 @@ function incrementCounter(target: Record<string, number>, key: string): void {
 
 function incrementCounterBy(target: Record<string, number>, key: string, amount: number): void {
   target[key] = (target[key] ?? 0) + amount
+}
+
+/** A backup row never names a blob: its pointer would belong to another database. */
+function withoutProviderSecretsRef<T extends object>(row: T): T {
+  if (!(PROVIDER_SECRETS_REF_FIELD in row)) return row
+  const copy = { ...row } as Record<string, unknown>
+  delete copy[PROVIDER_SECRETS_REF_FIELD]
+  return copy as T
 }

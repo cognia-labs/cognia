@@ -3498,3 +3498,24 @@ it("forwards captured Host credential identity through confirmed profile deletio
     credentialContext,
   })
 })
+
+test("deleting an account's databases also deletes their provider credentials (ADR-0256)", async () => {
+  const { dropDexieAccountDatabase } = await import("./account-store")
+  const store = await import("@/lib/settings/provider-secret-store")
+  const values = new Map<string, string>([
+    ["cognia-account-acct_gone", "{}"],
+    ["cognia-account-acct_gone-encrypted-v1", "{}"],
+    ["cognia-account-acct_kept-encrypted-v1", "{}"],
+  ])
+  store.__setProviderSecretBackendForTesting({
+    save: async (k, v) => void values.set(k, v),
+    load: async (k) => values.get(k) ?? null,
+    delete: async (k) => void values.delete(k),
+  })
+  try {
+    await dropDexieAccountDatabase("acct_gone")
+    expect([...values.keys()]).toEqual(["cognia-account-acct_kept-encrypted-v1"])
+  } finally {
+    store.__resetProviderSecretStoreForTesting()
+  }
+})

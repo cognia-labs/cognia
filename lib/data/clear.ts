@@ -21,6 +21,7 @@ import { fusionDatabaseName } from "@/lib/router-fusion/gate/database-name"
 import { recordTombstones } from "@/lib/db/tombstones"
 import { purgeDatabaseAppData } from "@/lib/tauri/account-app-data"
 import { loggers } from "@cognia/logging"
+import { forgetProviderSecretsForDatabases } from "@/lib/settings/provider-secret-store"
 
 export type ClearableTable =
   "sessions" | "characters" | "skills" | "teams" | "promptPresets" | "mcpServers" | "settings"
@@ -183,6 +184,8 @@ export async function clearTables(names: ClearableTable[]): Promise<void> {
   }
   await deletion?.finish(true)
   assertActive()
+  // ADR-0256: clearing the settings row also clears its provider credentials.
+  if (names.includes("settings")) await forgetProviderSecretsForDatabases([db.name])
   if (wantsSessions)
     clearTemporarySessionAssets(undefined, {
       db,
@@ -246,6 +249,8 @@ export async function clearAll(): Promise<ClearAllResult> {
   await db.delete()
   clearTemporarySessionAssets()
   await Dexie.delete(fusionName)
+  // ADR-0256: the provider credentials of the deleted settings row.
+  await forgetProviderSecretsForDatabases([mainName])
   for (const name of [mainName, fusionName]) {
     if (await Dexie.exists(name)) {
       throw new Error(`Clear all data could not verify the deletion of ${name}`)

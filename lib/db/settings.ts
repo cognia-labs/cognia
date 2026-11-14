@@ -36,6 +36,24 @@ import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
 import { DEFAULT_PROVIDER_DIAGNOSTICS_PREFERENCES } from "@cognia/provider-types"
 import type { DifficultyRoutingSettings } from "@/types/routing/tool-route"
 import { getDb, withDbReopenRetry } from "./schema"
+import {
+  isEmptySecretSet,
+  joinSettingsSecrets,
+  overlaySecretSets,
+  secretSetsEqual,
+  splitSettingsSecrets,
+  type SettingsSecretSet,
+} from "@/lib/settings/provider-secret-split"
+import {
+  PROVIDER_SECRETS_REF_FIELD,
+  ProviderSecretStoreUnavailableError,
+  deleteProviderSecrets,
+  releaseAdoptedProviderSecrets,
+  resolveProviderSecrets,
+  writeProviderSecrets,
+  type ProviderSecretResolution,
+  type ProviderSecretsRef,
+} from "@/lib/settings/provider-secret-store"
 import { resolveLocalePreference } from "@/lib/i18n/locale-preference"
 import {
   freshInstallWebReader,
@@ -310,23 +328,143 @@ function omitAgentFlowMode(
   return rest
 }
 
-export async function getSettings(scope?: {
-  db: ReturnType<typeof getDb>
-  assertActive(): void
-}): Promise<AppSettings> {
+type SettingsScope = { db: ReturnType<typeof getDb>; assertActive(): void }
+
+/** The persisted row: `AppSettings` without credentials, plus the blob pointer. */
+type PersistedSettingsRow = AppSettings & { [PROVIDER_SECRETS_REF_FIELD]?: ProviderSecretsRef }
+
+/** How the credentials of the row just read were found (ADR-0256). */
+interface ProviderSecretState {
+  dbName: string
+  ref: ProviderSecretsRef | undefined
+  /** Credentials still in plaintext in the persisted row. */
+  legacy: SettingsSecretSet
+  resolution: ProviderSecretResolution
+}
+
+function hasPendingProviderSecretWork(state: ProviderSecretState): boolean {
+  return (
+    state.resolution.status === "ok" &&
+    (!isEmptySecretSet(state.legacy) || state.resolution.adoptFrom !== undefined)
+  )
+}
+
+/**
+ * Join the credentials kept in the secret store back into the persisted row.
+ * Plaintext still in the row (written by an older build or a raw writer) wins
+ * for the fields it carries and is queued for migration.
+ */
+async function hydrateProviderSecrets(
+  dbName: string,
+  persisted: PersistedSettingsRow,
+  scope: SettingsScope | undefined
+): Promise<{ row: AppSettings; state: ProviderSecretState }> {
+  const { [PROVIDER_SECRETS_REF_FIELD]: ref, ...withoutRef } = persisted
+  const { publicRow, secrets: legacy } = splitSettingsSecrets(withoutRef as AppSettings)
+  const resolution = await resolveProviderSecrets(dbName, ref)
+  const stored = resolution.status === "ok" ? resolution.blob?.secrets : undefined
+  const row = joinSettingsSecrets(publicRow, overlaySecretSets(stored, legacy))
+  const state: ProviderSecretState = { dbName, ref, legacy, resolution }
+  if (hasPendingProviderSecretWork(state)) scheduleProviderSecretMigration(dbName, scope)
+  return { row, state }
+}
+
+/** Databases with a migration queued in this process. */
+const scheduledSecretMigrations = new Set<string>()
+
+function scheduleProviderSecretMigration(dbName: string, scope: SettingsScope | undefined): void {
+  if (scheduledSecretMigrations.has(dbName)) return
+  scheduledSecretMigrations.add(dbName)
+  void migrateProviderSecretsOutOfSettingsRow(scope)
+    .catch(() => {
+      // Retried by the next read that still finds plaintext in the row.
+    })
+    .finally(() => scheduledSecretMigrations.delete(dbName))
+}
+
+/**
+ * Move plaintext provider credentials out of the persisted settings row, and
+ * adopt a blob a database migration copied the row away from. A no-op (no
+ * write, no `updatedAt` bump) when there is nothing to move. Resolves `true`
+ * when it wrote.
+ */
+export async function migrateProviderSecretsOutOfSettingsRow(
+  scope?: SettingsScope
+): Promise<boolean> {
+  let wrote = false
+  await saveSettings(() => ({}), {
+    mirrorToHost: false,
+    scope,
+    onlyForPendingProviderSecrets: () => {
+      wrote = true
+    },
+  })
+  return wrote
+}
+
+/**
+ * Restore (ADR-0256 §6): merge a backup's provider credentials into this
+ * database's secret blob, the backup winning per credential, and return the
+ * pointer the restored row must carry. Runs on the settings save queue so it
+ * cannot interleave with a save's read-modify-write of the same blob. Throws
+ * {@link ProviderSecretStoreUnavailableError} when the store refuses it.
+ */
+export async function mergeRestoredProviderSecrets(
+  incoming: SettingsSecretSet,
+  scope?: SettingsScope
+): Promise<ProviderSecretsRef> {
+  const next = saveQueue.then(async () => {
+    const db = scope?.db ?? getDb()
+    const persisted = (await db.settings.get(SINGLETON_ID)) as PersistedSettingsRow | undefined
+    scope?.assertActive()
+    const resolution = await resolveProviderSecrets(
+      db.name,
+      persisted?.[PROVIDER_SECRETS_REF_FIELD]
+    )
+    if (resolution.status === "unavailable") {
+      throw new ProviderSecretStoreUnavailableError(resolution.error)
+    }
+    const legacy = persisted ? splitSettingsSecrets(persisted).secrets : undefined
+    const current = overlaySecretSets(resolution.blob?.secrets, legacy)
+    return writeProviderSecrets(db.name, overlaySecretSets(current, incoming))
+  })
+  saveQueue = next.catch(() => undefined)
+  return next
+}
+
+export async function getSettings(scope?: SettingsScope): Promise<AppSettings> {
+  return (await readSettingsWithSecrets(scope)).settings
+}
+
+async function readSettingsWithSecrets(
+  scope?: SettingsScope
+): Promise<{ settings: AppSettings; secrets: ProviderSecretState | null }> {
   scope?.assertActive()
   // Retried across a connection close: this read is what every window makes at
   // boot, right when the plugin table bridge closes and reopens the shared
   // connection to register plugin stores. Losing it used to strand the whole
   // window on DEFAULTS for the rest of the session (see `withDbReopenRetry`).
-  const row = await withDbReopenRetry(() => {
+  const db = scope?.db ?? getDb()
+  const persisted = (await withDbReopenRetry(() => {
     scope?.assertActive()
     return (scope?.db ?? getDb()).settings.get(SINGLETON_ID)
-  })
+  })) as PersistedSettingsRow | undefined
   scope?.assertActive()
   // Forward-compat: merge defaults under the persisted row so older installs
   // pick up new fields (e.g., searchProviders) without a schema migration.
-  if (!row) return { ...DEFAULTS, webReader: freshInstallWebReader(), ...resolveLocalePreference() }
+  if (!persisted) {
+    return {
+      settings: { ...DEFAULTS, webReader: freshInstallWebReader(), ...resolveLocalePreference() },
+      secrets: null,
+    }
+  }
+  const hydrated = await hydrateProviderSecrets(db.name, persisted, scope)
+  scope?.assertActive()
+  const row = hydrated.row
+  return { settings: normalizeSettingsRow(row), secrets: hydrated.state }
+}
+
+function normalizeSettingsRow(row: AppSettings): AppSettings {
   const reader = normalizeWebReaderSettings(row.webReader, {
     rowExists: true,
     webTools: row.webTools,
@@ -567,6 +705,11 @@ export interface SaveSettingsOptions {
    * so a local cleanup is not replayed onto the host as an intentional edit.
    */
   mirrorToHost?: boolean
+  /**
+   * Internal (migration): write only when the row still holds plaintext
+   * provider credentials or a copied blob to adopt, and call this when it did.
+   */
+  onlyForPendingProviderSecrets?: () => void
 }
 
 export async function saveSettings(
@@ -583,8 +726,16 @@ export async function saveSettings(
   const next = saveQueue.then(() =>
     withDbReopenRetry(async () => {
       options.scope?.assertActive()
-      const current = await getSettings(options.scope)
+      const { settings: current, secrets: secretState } = await readSettingsWithSecrets(
+        options.scope
+      )
       options.scope?.assertActive()
+      if (
+        options.onlyForPendingProviderSecrets &&
+        !(secretState && hasPendingProviderSecretWork(secretState))
+      ) {
+        return current
+      }
       const patch = typeof input === "function" ? input(current) : input
       // Normalized reads must not turn an unrelated preference import/save
       // into an explicit Reader choice on an existing legacy installation.
@@ -626,8 +777,18 @@ export async function saveSettings(
         delete merged.webReader
       }
       migrateLegacyDefaultAccount(merged)
-      await (options.scope?.db ?? getDb()).settings.put(merged)
+      delete (merged as PersistedSettingsRow)[PROVIDER_SECRETS_REF_FIELD]
+      const targetDb = options.scope?.db ?? getDb()
+      const persisted = await persistableSettingsRow(targetDb.name, merged, secretState)
       options.scope?.assertActive()
+      await (options.scope?.db ?? getDb()).settings.put(persisted.row)
+      options.scope?.assertActive()
+      options.onlyForPendingProviderSecrets?.()
+      if (persisted.adoptedFrom) {
+        // The copied entry belongs to a database that may since have been
+        // deleted; its own row (if it still exists) keeps its own blob.
+        await releaseAdoptedProviderSecrets(persisted.adoptedFrom).catch(() => undefined)
+      }
       // ADR-0090 Phase 1: keep the derived Provider Profile Store fresh.
       // Runs inside the serialized queue so derivations observe writes in
       // order; awaited so a caller that immediately reads profiles sees the
@@ -667,6 +828,65 @@ export async function saveSettings(
   // Promise via the `next` reference returned below.
   saveQueue = next.catch(() => undefined)
   return next
+}
+
+/**
+ * Split credentials off the merged row (ADR-0256 §4). The secret blob is
+ * written before the row, and only when the credentials changed. When the
+ * secret store is unavailable, a save that does not change credentials keeps
+ * what the row already had; one that does is refused before anything is
+ * written.
+ */
+async function persistableSettingsRow(
+  dbName: string,
+  merged: AppSettings,
+  state: ProviderSecretState | null
+): Promise<{ row: PersistedSettingsRow; adoptedFrom?: string }> {
+  const { publicRow, secrets } = splitSettingsSecrets(merged)
+  const resolution: ProviderSecretResolution = state?.resolution ?? { status: "ok", blob: null }
+  const stored = resolution.status === "ok" ? resolution.blob : null
+
+  // What the row held when it was read: plaintext still in it, plus its blob.
+  // A save whose credentials equal that changed no credential, so when the
+  // store cannot take the move it may keep the row exactly as it was.
+  const keepAsItWas = (cause: unknown): { row: PersistedSettingsRow } => {
+    const unchanged = overlaySecretSets(stored?.secrets, state?.legacy)
+    if (!secretSetsEqual(secrets, unchanged)) {
+      throw cause instanceof ProviderSecretStoreUnavailableError
+        ? cause
+        : new ProviderSecretStoreUnavailableError(cause)
+    }
+    const row: PersistedSettingsRow = joinSettingsSecrets(publicRow, state?.legacy)
+    if (state?.ref) row[PROVIDER_SECRETS_REF_FIELD] = state.ref
+    return { row }
+  }
+
+  if (resolution.status === "unavailable") return keepAsItWas(resolution.error)
+
+  const adoptedFrom = resolution.adoptFrom
+  const ownsStored = stored !== null && stored.db === dbName && adoptedFrom === undefined
+
+  try {
+    if (isEmptySecretSet(secrets)) {
+      if (ownsStored) await deleteProviderSecrets(dbName)
+      return { row: publicRow, adoptedFrom }
+    }
+
+    if (
+      ownsStored &&
+      state?.ref?.db === dbName &&
+      state.ref.rev === stored.rev &&
+      secretSetsEqual(stored.secrets, secrets)
+    ) {
+      return { row: { ...publicRow, [PROVIDER_SECRETS_REF_FIELD]: state.ref } }
+    }
+
+    const ref = await writeProviderSecrets(dbName, secrets)
+    return { row: { ...publicRow, [PROVIDER_SECRETS_REF_FIELD]: ref }, adoptedFrom }
+  } catch (error) {
+    if (!(error instanceof ProviderSecretStoreUnavailableError)) throw error
+    return keepAsItWas(error)
+  }
 }
 
 function normalizeLegacySubscriptionProvider(

@@ -16,6 +16,11 @@ import { clearBrowserPreviewData } from "@/lib/browser/preview-data"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { purgeDatabaseAppData } from "@/lib/tauri/account-app-data"
 import { clearTables, clearAll } from "./clear"
+import { saveSettings } from "@/lib/db/settings"
+import {
+  __resetProviderSecretStoreForTesting,
+  __setProviderSecretBackendForTesting,
+} from "@/lib/settings/provider-secret-store"
 
 jest.mock("@/lib/browser/preview-data", () => ({ clearBrowserPreviewData: jest.fn() }))
 const clearPreview = clearBrowserPreviewData as jest.Mock
@@ -718,3 +723,30 @@ it.each([false, true])(
     expect(await db.libraryItems.get("upload:own")).toBeDefined()
   }
 )
+
+describe("provider credentials (ADR-0256)", () => {
+  const values = new Map<string, string>()
+  beforeEach(() => {
+    values.clear()
+    __setProviderSecretBackendForTesting({
+      save: async (k, v) => void values.set(k, v),
+      load: async (k) => values.get(k) ?? null,
+      delete: async (k) => void values.delete(k),
+    })
+  })
+  afterAll(() => __resetProviderSecretStoreForTesting())
+
+  it("clearing the settings table also removes its credentials", async () => {
+    await saveSettings({ apiKey: "sk-synthetic" }, { mirrorToHost: false })
+    expect(values.has(getDb().name)).toBe(true)
+    await clearTables(["settings"])
+    expect(values.has(getDb().name)).toBe(false)
+  })
+
+  it("clearing all data also removes the credentials of the deleted database", async () => {
+    await saveSettings({ apiKey: "sk-synthetic" }, { mirrorToHost: false })
+    const name = getDb().name
+    await clearAll()
+    expect(values.has(name)).toBe(false)
+  })
+})
