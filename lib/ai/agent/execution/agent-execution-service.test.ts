@@ -157,6 +157,65 @@ it("routes a tool-enabled run on a Tauri host to the agent rail", async () => {
   expect(result.legacyMigrated).toBe(true)
 })
 
+it.each(["ready", "failed"] as const)(
+  "forwards all independent executor stops to the workspace on %s",
+  async (state) => {
+    let firstStopped!: () => void
+    let secondStopped!: () => void
+    const stopped = new Promise<void>((resolve) => {
+      firstStopped = resolve
+    })
+    const otherStop = new Promise<void>((resolve) => {
+      secondStopped = resolve
+    })
+    const observe = jest.fn()
+    agentRail.mockImplementationOnce(async (_prompt, config) => {
+      config.onExecutorStarted?.(stopped)
+      config.onExecutorStarted?.(otherStop)
+      if (state === "failed") throw new Error("capture timed out")
+      return { text: "done", channel: "sidecar", toolsAvailable: true }
+    })
+    const result = executeAgentTurn(
+      "work",
+      {
+        cwd: "/repo",
+        toolsEnabled: true,
+        onExecutorStarted: observe,
+      },
+      { isTauri: true, isHeadlessHost: false }
+    )
+    if (state === "failed") {
+      await expect(result).rejects.toThrow("capture timed out")
+      expect(abortWorkspaceBundle).toHaveBeenCalledWith(expect.any(Promise))
+    } else {
+      await result
+      expect(settleWorkspaceBundle).toHaveBeenCalledWith("ready", expect.any(Promise))
+    }
+    expect(observe).toHaveBeenCalledWith(stopped)
+    expect(observe).toHaveBeenCalledWith(otherStop)
+    const proof =
+      state === "failed"
+        ? (abortWorkspaceBundle.mock.calls[0] as unknown as [Promise<void>])[0]
+        : (settleWorkspaceBundle.mock.calls[0] as unknown as [string, Promise<void>])[1]
+    let allStopped = false
+    void proof.then(() => {
+      allStopped = true
+    })
+    secondStopped()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(allStopped).toBe(false)
+    firstStopped()
+    await proof
+    expect(allStopped).toBe(true)
+    expect(openWorkspaceBundleTurnLease).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ executorStopRequired: true })
+    )
+  }
+)
+
 it("treats a headless agent host as a real host (no isTauri dependence)", async () => {
   await executeAgentTurn("p", { toolsEnabled: true }, { isTauri: false, isHeadlessHost: true })
   expect(agentRail).toHaveBeenCalledTimes(1)

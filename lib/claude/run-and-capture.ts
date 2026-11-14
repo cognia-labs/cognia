@@ -974,6 +974,7 @@ async function captureAssistantReplyCore(
     let sendAccepted = false
     let sendRejected = false
     let disposedDuringSend = false
+    let observedExecutorId: string | undefined
     let executorStopped = false
     let resolveExecutorStop: (() => void) | undefined
     const executorStop = cap?.onExecutorStarted
@@ -1531,13 +1532,29 @@ async function captureAssistantReplyCore(
     //     channel itself, but subscribing first removes any window of
     //     ambiguity.
     const onEvent = (evt: ClaudeEvent): void => {
+      const lifecycle = evt as {
+        type: string
+        sessionId?: string
+        turnId?: string
+        executorId?: string
+      }
+      if (
+        executorStop &&
+        lifecycle.type === "executor_started" &&
+        lifecycle.sessionId === sessionId &&
+        lifecycle.turnId === turnId &&
+        lifecycle.executorId
+      ) {
+        observedExecutorId = lifecycle.executorId
+      }
       if (executorStop && promptSent && !executorStopped) {
-        const terminal = evt as { type: string; sessionId?: string; turnId?: string }
+        const terminal = lifecycle
         if (
           (terminal.type === "sidecar_exited" && !sendDispatched) ||
           (terminal.sessionId === sessionId &&
             terminal.type === "session_disposed" &&
-            terminal.turnId === turnId)
+            (terminal.turnId === turnId ||
+              (observedExecutorId !== undefined && terminal.executorId === observedExecutorId)))
         ) {
           if (!sendDispatched) {
             // Cancellation is synchronous and the IPC checks it immediately

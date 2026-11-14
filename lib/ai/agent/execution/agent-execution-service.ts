@@ -349,6 +349,7 @@ export async function executeAgentTurn(
       ...acquireOptions
     )
     const lease = await openWorkspaceBundleTurnLease(bundle, primaryLogicalRootId, {
+      executorStopRequired: true,
       taskId: tracking.taskId ?? `agent:${spec.identity.sessionId}`,
       sessionId: spec.identity.sessionId,
       runId: spec.identity.runId,
@@ -371,18 +372,28 @@ export async function executeAgentTurn(
     if (!lease) {
       throw new Error("Registry did not return an Agent Bundle Turn execution root")
     }
+    const executorStops: Promise<void>[] = []
+    const stopEvidence = () =>
+      executorStops.length ? Promise.all(executorStops).then(() => undefined) : undefined
     try {
       const value = await executeResolved({
         ...config,
+        onExecutorStarted: (stopped) => {
+          executorStops.push(stopped)
+          void stopped.catch(() => undefined)
+          config.onExecutorStarted?.(stopped)
+        },
         cwd: lease.primaryAlias,
         ...(lease.additionalAliases.length > 0
           ? { additionalDirectories: [...lease.additionalAliases] }
           : {}),
       })
-      await lease.settle("ready")
+      const stopped = stopEvidence()
+      await (stopped ? lease.settle("ready", stopped) : lease.settle("ready"))
       return { ...value, taskWorkspaceRunId: lease.run.runId }
     } catch (error) {
-      await lease.abort().catch(() => undefined)
+      const stopped = stopEvidence()
+      await (stopped ? lease.abort(stopped) : lease.abort()).catch(() => undefined)
       throw error
     }
   }

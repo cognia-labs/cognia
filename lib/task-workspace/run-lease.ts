@@ -11,6 +11,7 @@ import {
   bindApprovalScopeToTurn,
   closeApprovalScopeForTurn,
   openWorkspaceApprovalScope,
+  runWorkspaceUserAction,
 } from "./user-action"
 import { captureTaskWorkspaceOrigin } from "./origin"
 import type {
@@ -23,7 +24,10 @@ import type {
 
 export interface TaskWorkspaceRunLease {
   run: TaskRun
-  settle: (finalState?: "ready" | "failed" | "cancelled") => Promise<ResourceChange[]>
+  settle: (
+    finalState?: "ready" | "failed" | "cancelled",
+    executorStop?: Promise<void>
+  ) => Promise<ResourceChange[]>
 }
 
 export interface WorkspaceBundleTurnRun {
@@ -38,8 +42,11 @@ export interface WorkspaceBundleTurnLease extends TaskWorkspaceRunLease {
   runs: WorkspaceBundleTurnRun[]
   primaryAlias: string
   additionalAliases: string[]
-  abort: () => Promise<ResourceChange[]>
+  abort: (executorStop?: Promise<void>) => Promise<ResourceChange[]>
 }
+
+/** Bounds UI settlement, not the actual executor's lifetime. */
+export const EXECUTOR_STOP_WAIT_MS = 2000
 
 /**
  * Opens one persisted turn spanning every distinct physical workspace in a
@@ -48,7 +55,7 @@ export interface WorkspaceBundleTurnLease extends TaskWorkspaceRunLease {
 export async function openWorkspaceBundleTurnLease(
   bundle: Pick<WorkspaceBundle, "bundleId" | "leases">,
   primaryLogicalRootId: string,
-  input: BeginTaskWorkspaceTurn,
+  input: BeginTaskWorkspaceTurn & { executorStopRequired?: boolean },
   origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): Promise<WorkspaceBundleTurnLease | null> {
   // A turn's whole workspace lifecycle is `approval: "interactive"` — begin,
@@ -58,15 +65,17 @@ export async function openWorkspaceBundleTurnLease(
   // settles: this is the seam every caller already funnels through, so the
   // lifetime of the approval is exactly the lifetime of the working copy.
   const approval = await openWorkspaceApprovalScope(undefined, origin)
+  const { executorStopRequired, ...runInput } = input
   let lease: Awaited<ReturnType<typeof beginWorkspaceBundleTurn>>
   try {
     lease = await beginWorkspaceBundleTurn(
       bundle.bundleId,
       {
         primaryLogicalRootId,
-        run: input,
+        run: runInput,
       },
-      origin
+      origin,
+      ...(executorStopRequired === undefined ? ([] as const) : ([executorStopRequired] as const))
     )
   } catch (error) {
     // Reconciled while the approval scope is still open: the abort it may
@@ -120,15 +129,64 @@ export async function openWorkspaceBundleTurnLease(
         throw error
       })
       .finally(() => closeApprovalScopeForTurn(lease.bundleTurnId, origin))
-  const settle = (finalState: "ready" | "failed" | "cancelled" = "ready") => {
-    completion ??= release(
-      settleWorkspaceBundleTurn(lease.bundleTurnId, finalState, origin).then(
-        (outcome) => outcome.resources
+  const settle = (
+    finalState: "ready" | "failed" | "cancelled" = "ready",
+    executorStop?: Promise<void>
+  ) => {
+    if (executorStop) {
+      completion ??= release(
+        (async () => {
+          // Rejection/lost transport is not positive evidence. Observe it now,
+          // so a rejected stop does not become an unhandled rejection.
+          const proof = executorStop.then(
+            () => true,
+            () => false
+          )
+          let timer: ReturnType<typeof setTimeout> | undefined
+          const stopped = await Promise.race([
+            proof,
+            new Promise<false>((resolve) => {
+              timer = setTimeout(() => resolve(false), EXECUTOR_STOP_WAIT_MS)
+            }),
+          ])
+          if (timer !== undefined) clearTimeout(timer)
+          const outcome = await settleWorkspaceBundleTurn(
+            lease.bundleTurnId,
+            finalState,
+            origin,
+            !stopped
+          )
+          if (!stopped) {
+            // No directory hold. A later genuine stop clears only the Host's
+            // potential writer, never the historical irreversible patch.
+            void proof
+              .then(async (confirmed) => {
+                if (!confirmed) return
+                await runWorkspaceUserAction(
+                  "task_workspace_bundle_turn_settle",
+                  () => settleWorkspaceBundleTurn(lease.bundleTurnId, finalState, origin, false),
+                  origin
+                )
+              })
+              .catch(() => undefined)
+          }
+          return outcome.resources
+        })()
       )
+      return completion
+    }
+    completion ??= release(
+      settleWorkspaceBundleTurn(
+        lease.bundleTurnId,
+        finalState,
+        origin,
+        ...(executorStopRequired ? ([false] as const) : ([] as const))
+      ).then((outcome) => outcome.resources)
     )
     return completion
   }
-  const abort = () => {
+  const abort = (executorStop?: Promise<void>) => {
+    if (executorStop || executorStopRequired) return settle("cancelled", executorStop)
     completion ??= release(
       abortWorkspaceBundleTurn(lease.bundleTurnId, origin).then((outcome) => outcome.resources)
     )

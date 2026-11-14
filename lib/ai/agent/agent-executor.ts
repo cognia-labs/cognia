@@ -235,6 +235,8 @@ export interface ExecuteAgentConfig {
    * these come from the capture loop; on the text channel only text deltas.
    */
   onEvent?: (event: CaptureStreamEvent) => void
+  /** Independent lifetime evidence; capture completion/timeout is not stop. */
+  onExecutorStarted?: (stopped: Promise<void>) => void
   /**
    * PostToolUse lifecycle hook. Fired after each tool returns on the sidecar
    * channel (driven from the capture loop's `tool-result` events). Observational
@@ -738,6 +740,7 @@ async function runToolEnabledStandalone(
       try {
         result = await runner.runAndCaptureAssistantReply(session.id, prompt, attemptOptions, {
           signal: config.abortSignal,
+          ...(config.onExecutorStarted ? { onExecutorStarted: config.onExecutorStarted } : {}),
           preserveBudgetEvidence: config.isDispatchedSubagent === true,
           ...(typeof config.timeoutMs === "number" || config.isDispatchedSubagent
             ? { timeoutMs: config.timeoutMs ?? 0 }
@@ -874,7 +877,14 @@ async function runToolEnabledStandalone(
     const { forgetContextSessionState } = await import("@/lib/claude/context-session-state")
     forgetContextSessionState(session.id)
     // Ephemeral sessions are torn down; persistent ones survive for resume.
-    if (!persistent) void sessionsDb.deleteSession(session.id).catch(() => undefined)
+    if (!persistent) {
+      // The one-shot runtime must reap its tools too; deleting its DB row is
+      // not executor-stop evidence. Persistent conversations keep their loop.
+      void import("@/lib/claude/ipc")
+        .then(({ closeSession }) => closeSession(session.id))
+        .catch(() => undefined)
+      void sessionsDb.deleteSession(session.id).catch(() => undefined)
+    }
   }
 }
 

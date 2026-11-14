@@ -203,6 +203,7 @@ async function openScheduledWritableBundle(
     signal ? { signal } : {}
   )
   const lease = await openWorkspaceBundleTurnLease(bundle, primaryLogicalRootId, {
+    executorStopRequired: agentKind === "scheduled-chat",
     taskId: `scheduled:${task.id}`,
     sessionId,
     runId: `scheduled:${execution.id}:${agentKind}`,
@@ -861,11 +862,10 @@ async function runChatPrompt(
   const taskLease = taskLeaseInput
     ? await measurePhase(execution, "workspace-lease", () =>
         canonicalManaged
-          ? openWorkspaceBundleTurnLease(
-              canonicalBundle!,
-              canonicalPrimary!.logicalRootId,
-              taskLeaseInput
-            )
+          ? openWorkspaceBundleTurnLease(canonicalBundle!, canonicalPrimary!.logicalRootId, {
+              ...taskLeaseInput,
+              executorStopRequired: true,
+            })
           : openScheduledWritableBundle(
               task,
               execution,
@@ -1005,7 +1005,51 @@ async function runChatPrompt(
   // session after that closes the `first-response` phase.
   let promptSentAt: number | null = null
   let firstEventAt: number | null = null
+  let executorStopped = false
+  let observedExecutorId: string | undefined
+  let sendDispatched = false
+  let delivery: Promise<void> | undefined
+  const requestOwnedDisposal = () => {
+    if (!sessionResult.created || !delivery) return
+    // This run owns newly created conversations. A caller-supplied session
+    // may already serve another turn, so its loop is never closed here.
+    void delivery
+      .catch(() => undefined)
+      .then(() => import("@/lib/claude/ipc"))
+      .then(({ closeSession }) => closeSession(sessionId))
+      .catch(() => undefined)
+  }
+  let collecting = true
+  let confirmExecutorStop!: () => void
+  const executorStop = new Promise<void>((resolve) => {
+    confirmExecutorStop = resolve
+  })
   const unlisten = await onClaudeMessage((evt: ClaudeEvent) => {
+    const terminal = evt as {
+      type: string
+      sessionId?: string
+      turnId?: string
+      executorId?: string
+    }
+    if (
+      terminal.type === "executor_started" &&
+      terminal.sessionId === sessionId &&
+      terminal.turnId === finalOptions.turnId &&
+      terminal.executorId
+    ) {
+      observedExecutorId = terminal.executorId
+    }
+    if (
+      promptSentAt !== null &&
+      terminal.type === "session_disposed" &&
+      terminal.sessionId === sessionId &&
+      (terminal.turnId === finalOptions.turnId ||
+        (observedExecutorId !== undefined && terminal.executorId === observedExecutorId))
+    ) {
+      executorStopped = true
+      confirmExecutorStop()
+    }
+    if (!collecting) return
     if (
       (evt as { sessionId?: string }).sessionId &&
       (evt as { sessionId: string }).sessionId !== sessionId
@@ -1149,6 +1193,7 @@ async function runChatPrompt(
 
   if (signal?.aborted) {
     abortHandler()
+    if (taskLease) await taskLease.settle("cancelled").catch(() => undefined)
     try {
       unlisten()
     } catch {
@@ -1162,6 +1207,7 @@ async function runChatPrompt(
 
   if (signal?.aborted) {
     abortHandler()
+    if (taskLease) await taskLease.settle("cancelled").catch(() => undefined)
     try {
       unlisten()
     } catch {
@@ -1183,11 +1229,26 @@ async function runChatPrompt(
       agentModeId: payload.agentModeId,
     })
     promptSentAt = Date.now()
-    await sendPrompt(sessionId, payload.prompt, finalOptions)
+    delivery = sendPrompt(sessionId, payload.prompt, finalOptions, {
+      signal,
+      onDispatch: () => {
+        sendDispatched = true
+      },
+    }).catch((error) => {
+      if (!sendDispatched) {
+        executorStopped = true
+        confirmExecutorStop()
+      }
+      throw error
+    })
+    await Promise.race([delivery, finished])
     const result = await finished
+    requestOwnedDisposal()
     recordTurnPhases(execution, promptSentAt, firstEventAt, Date.now())
     if (taskLease) {
-      await taskLease.settle(result.success ? "ready" : "failed").catch(() => undefined)
+      await taskLease
+        .settle(result.success ? "ready" : signal?.aborted ? "cancelled" : "failed", executorStop)
+        .catch(() => undefined)
     }
     await permissions.finish(
       result.success ? "completed" : signal?.aborted ? "cancelled" : "failed",
@@ -1195,18 +1256,27 @@ async function runChatPrompt(
     )
     return result
   } catch (err) {
+    requestOwnedDisposal()
     if (promptSentAt !== null) recordTurnPhases(execution, promptSentAt, firstEventAt, Date.now())
-    if (taskLease) await taskLease.settle("failed").catch(() => undefined)
+    if (taskLease)
+      await taskLease
+        .settle(signal?.aborted ? "cancelled" : "failed", executorStop)
+        .catch(() => undefined)
     await permissions.finish("failed", err instanceof Error ? err.message : String(err))
     return { success: false, error: err instanceof Error ? err.message : String(err) }
   } finally {
+    collecting = false
     releaseResponder()
     signal?.removeEventListener("abort", abortHandler)
-    try {
-      unlisten()
-    } catch {
-      /* listener already detached */
+    const closeListener = () => {
+      try {
+        unlisten()
+      } catch {
+        /* listener already detached */
+      }
     }
+    if (!taskLease || promptSentAt === null || executorStopped) closeListener()
+    else void executorStop.then(closeListener)
   }
 }
 

@@ -1301,10 +1301,17 @@ describe("task workspace client", () => {
       reclaim.mockResolvedValue(["turn-1"])
 
       await expect(
-        beginWorkspaceBundleTurn("bundle-1", { primaryLogicalRootId: "primary", run: input })
+        beginWorkspaceBundleTurn(
+          "bundle-1",
+          { primaryLogicalRootId: "primary", run: input },
+          undefined,
+          true
+        )
       ).resolves.toMatchObject({ bundleTurnId: "turn-2" })
       expect(reclaim).toHaveBeenCalledWith("session-1", { kind: "local" })
       expect(call).toHaveBeenCalledTimes(2)
+      for (const args of call.mock.calls)
+        expect(args[1]).toMatchObject({ executorStopRequired: true })
     })
 
     // Nothing was released, so the turn holding the root is live somewhere and
@@ -1416,10 +1423,15 @@ describe("task workspace client", () => {
         settledAt: 2,
       })
 
-    await beginWorkspaceBundleTurn("bundle-1", {
-      primaryLogicalRootId: "primary",
-      run: input,
-    })
+    await beginWorkspaceBundleTurn(
+      "bundle-1",
+      {
+        primaryLogicalRootId: "primary",
+        run: input,
+      },
+      undefined,
+      true
+    )
     await settleWorkspaceBundleTurn("turn-1", "ready")
 
     expect(Object.keys(useTaskWorkspaceStore.getState().activeByRun).sort()).toEqual([
@@ -1435,6 +1447,7 @@ describe("task workspace client", () => {
         {
           bundleId: "bundle-1",
           request: { primaryLogicalRootId: "primary", run: input },
+          executorStopRequired: true,
         },
       ],
       [
@@ -1804,6 +1817,28 @@ describe("task workspace client", () => {
 })
 
 describe("settling a bundle turn", () => {
+  it("forwards both unproven stop and later positive stop observations to the Host", async () => {
+    call.mockResolvedValue({
+      bundleTurnId: "turn-stop",
+      bundleId: "bundle",
+      state: "cancelled",
+      runs: [],
+      resources: [],
+      settledAt: 1,
+    })
+    await settleWorkspaceBundleTurn("turn-stop", "cancelled", undefined, true)
+    await settleWorkspaceBundleTurn("turn-stop", "cancelled", undefined, false)
+    expect(call).toHaveBeenNthCalledWith(1, "task_workspace_bundle_turn_settle", {
+      bundleTurnId: "turn-stop",
+      finalState: "cancelled",
+      executorStopUnproven: true,
+    })
+    expect(call).toHaveBeenNthCalledWith(2, "task_workspace_bundle_turn_settle", {
+      bundleTurnId: "turn-stop",
+      finalState: "cancelled",
+      executorStopUnproven: false,
+    })
+  })
   // The defect: a bundle turn's run id is `run:<session>:<n>:<workspace>`, and
   // the guard compared it against the unsuffixed `runIdForTurn`. It never
   // matched, so no managed chat turn ever settled, the run stayed `running`,

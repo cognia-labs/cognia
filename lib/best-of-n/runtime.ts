@@ -253,6 +253,7 @@ export function createBestOfNExecution(): BestOfNExecution {
       // ends this attempt alone; the group's signal ends them all.
       const ownStop = new AbortController()
       const attemptSignal = AbortSignal.any([signal, ownStop.signal])
+      let executorStop: Promise<void> | undefined
       try {
         await dispatch.setWorkspace({ workspacePath: workspace.physicalRoot })
         await dispatch.attachControl(
@@ -275,6 +276,7 @@ export function createBestOfNExecution(): BestOfNExecution {
           dispatch.run(async (): Promise<CandidateResult> => {
             attemptSignal.throwIfAborted()
             turn.lease = await openWorkspaceBundleTurnLease(bundle, group.repositoryId, {
+              executorStopRequired: describeBestOfNAgent(candidate.agent).kind !== "external",
               taskId: candidate.candidateId,
               sessionId: session.id,
               runId: candidate.candidateId,
@@ -393,6 +395,11 @@ export function createBestOfNExecution(): BestOfNExecution {
                   {
                     signal: attemptSignal,
                     timeoutMs: remainingMs,
+                    onExecutorStarted: (stopped) => {
+                      executorStop = stopped
+                      void stopped.catch(() => undefined)
+                      dispatch.trackLocalStop(stopped)
+                    },
                     onEvent: (event) => {
                       usageTracker.observe(event)
                       dispatch.capture(event)
@@ -409,6 +416,9 @@ export function createBestOfNExecution(): BestOfNExecution {
                   }
                 )
               } finally {
+                // A candidate owns this one-shot conversation, including the
+                // AI-SDK loop that otherwise remains live after its result.
+                void ipc.closeSession(session.id).catch(() => undefined)
                 // Also for an attempt that was cancelled or failed: its calls were billed.
                 const usage = usageTracker.resolve(result?.usage)
                 await bookUsage(
@@ -438,7 +448,9 @@ export function createBestOfNExecution(): BestOfNExecution {
                 )
               text = result.text
             }
-            await turn.lease.settle("ready")
+            await (executorStop
+              ? turn.lease.settle("ready", executorStop)
+              : turn.lease.settle("ready"))
             let changeset
             try {
               changeset = await scm.captureChangeset({
@@ -524,7 +536,9 @@ export function createBestOfNExecution(): BestOfNExecution {
       } catch (error) {
         const cleanup = await Promise.allSettled([
           dispatch.fail(error),
-          turn.lease?.settle(attemptSignal.aborted ? "cancelled" : "failed"),
+          executorStop
+            ? turn.lease?.settle(attemptSignal.aborted ? "cancelled" : "failed", executorStop)
+            : turn.lease?.settle(attemptSignal.aborted ? "cancelled" : "failed"),
         ])
         const failed = cleanup.filter(
           (item): item is PromiseRejectedResult => item.status === "rejected"

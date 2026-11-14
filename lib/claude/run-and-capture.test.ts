@@ -358,6 +358,49 @@ describe("runAndCaptureAssistantReply", () => {
     await flushMicrotasks()
     expect(stopped).toBe(true)
   })
+  it("accepts disposal of the observed runtime loop after its turn id advanced, never a different loop", async () => {
+    let stopped = false
+    const capture = runAndCaptureAssistantReply(
+      SESSION,
+      "work",
+      { turnId: "old-turn" },
+      {
+        timeoutMs: 1000,
+        onExecutorStarted: (proof) => {
+          void proof.then(() => {
+            stopped = true
+          })
+        },
+      }
+    )
+    await flushUntilSubscribed()
+    await flushMicrotasks(50)
+    fire({
+      type: "executor_started",
+      sessionId: SESSION,
+      turnId: "old-turn",
+      executorId: "loop",
+    } as unknown as ClaudeEvent)
+    fire(assistantEvent("done"))
+    fire({ ...sessionEnded(), turnId: "old-turn" } as ClaudeEvent)
+    await capture
+    fire({
+      type: "session_disposed",
+      sessionId: SESSION,
+      turnId: "later-turn",
+      executorId: "other",
+    } as unknown as ClaudeEvent)
+    await flushMicrotasks()
+    expect(stopped).toBe(false)
+    fire({
+      type: "session_disposed",
+      sessionId: SESSION,
+      turnId: "later-turn",
+      executorId: "loop",
+    } as unknown as ClaudeEvent)
+    await flushMicrotasks()
+    expect(stopped).toBe(true)
+  })
   it("resolves with assembled text from the assistant event", async () => {
     const promise = runAndCaptureAssistantReply(SESSION, "hi", undefined, { timeoutMs: 1_000 })
     // Wait for the subscribe to land (broker admission + the IPC `.then` add a

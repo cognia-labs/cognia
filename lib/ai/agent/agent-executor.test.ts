@@ -35,6 +35,8 @@ import { createSession, getSession, deleteSession, setSdkSessionId } from "@/lib
 import { getSettings } from "@/lib/db/settings"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { closeSession } from "@/lib/claude/ipc"
+jest.mock("@/lib/claude/ipc", () => ({ closeSession: jest.fn(async () => undefined) }))
 import { buildRoutingEngine } from "@cognia/provider-routing/build-preview-engine"
 import {
   abortableStreamModel,
@@ -1076,6 +1078,19 @@ describe("executeAgent", () => {
       })
     })
 
+    it("forwards the capture's independent stop promise to the execution owner", async () => {
+      const stopped = Promise.resolve()
+      const observe = jest.fn()
+      mockRunAndCapture.mockImplementationOnce(async (_session, _prompt, _options, capture) => {
+        capture?.onExecutorStarted?.(stopped)
+        return { text: "done", messageId: "done" } as never
+      })
+      await executeAgent("work", { toolsEnabled: true, onExecutorStarted: observe })
+      expect(observe).toHaveBeenCalledWith(stopped)
+      await Promise.resolve()
+      expect(closeSession).toHaveBeenCalledWith("s1")
+    })
+
     it.each(["error_max_turns", "error_max_budget_usd"])(
       "preserves the incomplete sidecar result %s",
       async (resultSubtype) => {
@@ -1475,6 +1490,7 @@ describe("executeAgent", () => {
       expect(mockRunAndCapture.mock.calls[0][0]).toBe("sess-x")
       expect(mockSetSdkSessionId).toHaveBeenCalledWith("sess-x", "sdk-123")
       expect(mockDeleteSession).not.toHaveBeenCalled()
+      expect(closeSession).not.toHaveBeenCalled()
     })
 
     it("throws when the persistent session id is not found", async () => {

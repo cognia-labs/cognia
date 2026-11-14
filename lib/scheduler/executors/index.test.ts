@@ -37,14 +37,19 @@ jest.mock("@/lib/tauri", () => ({
 }))
 
 const approveToolMock = jest.fn(async (..._args: unknown[]) => undefined)
-const sendPromptMock = jest.fn(async (..._args: unknown[]) => undefined)
+const sendPromptMock = jest.fn<Promise<void>, unknown[]>(async () => undefined)
 const onClaudeMessageMock = jest.fn()
 const interruptSessionMock = jest.fn(async (..._args: unknown[]) => undefined)
+const closeSessionMock = jest.fn(async (..._args: unknown[]) => undefined)
+const promptDeliveryMock = jest.fn()
 const ensureSidecarReadyMock = jest.fn(async () => ({ ready: true }))
 jest.mock("@/lib/claude/ipc", () => ({
   ensureSidecarReady: () => ensureSidecarReadyMock(),
-  sendPrompt: (sessionId: string, prompt: string, options?: unknown) =>
-    sendPromptMock(sessionId, prompt, options),
+  sendPrompt: (sessionId: string, prompt: string, options?: unknown, delivery?: unknown) => {
+    promptDeliveryMock(delivery)
+    return sendPromptMock(sessionId, prompt, options)
+  },
+  closeSession: (...args: unknown[]) => closeSessionMock(...args),
   onClaudeMessage: (cb: (evt: unknown) => void) => onClaudeMessageMock(cb),
   interruptSession: (...args: unknown[]) => interruptSessionMock(...args),
   approveTool: (...args: unknown[]) => approveToolMock(...args),
@@ -797,8 +802,117 @@ describe("executeChatTask", () => {
       "hi",
       expect.objectContaining({ cwd: "/bundle/primary" })
     )
-    expect(settleTaskWorkspaceMock).toHaveBeenCalledWith("ready")
+    expect(settleTaskWorkspaceMock).toHaveBeenCalledWith("ready", expect.any(Promise))
+    expect(openWorkspaceBundleTurnLeaseMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ executorStopRequired: true })
+    )
     expect(result.success).toBe(true)
+  })
+
+  it("keeps the independent stop observer until disposal of this scheduled turn", async () => {
+    let receive!: (event: unknown) => void
+    const unlisten = jest.fn()
+    onClaudeMessageMock.mockImplementationOnce(async (cb) => {
+      receive = cb
+      setTimeout(() => receive({ sessionId: "session-created", type: "result" }), 0)
+      return unlisten
+    })
+    await executeChatTask(
+      makeTask({
+        payload: {
+          prompt: "work",
+          executionContext: {
+            location: "managedWorktree",
+            projectId: "project",
+            projectRoot: "/repo",
+            taskWorkspace: { taskId: "task", workspaceKey: "session" },
+            baseRef: "main",
+          },
+        },
+      }),
+      makeExecution(),
+      makeSignal()
+    )
+    const calls = settleTaskWorkspaceMock.mock.calls as unknown as Array<[string, Promise<void>]>
+    const stop = calls[0][1]
+    expect(stop).toBeInstanceOf(Promise)
+    let stopped = false
+    void stop.then(() => {
+      stopped = true
+    })
+    const turnId = (sendPromptMock.mock.calls[0][2] as { turnId: string }).turnId
+    receive({ type: "executor_started", sessionId: "session-created", turnId, executorId: "loop" })
+    receive({ type: "session_disposed", sessionId: "session-created", turnId: "old" })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    expect(unlisten).not.toHaveBeenCalled()
+    receive({
+      type: "session_disposed",
+      sessionId: "session-created",
+      turnId: "later",
+      executorId: "different-loop",
+    })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    receive({
+      type: "session_disposed",
+      sessionId: "session-created",
+      turnId: "later",
+      executorId: "loop",
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(stopped).toBe(true)
+    expect(unlisten).toHaveBeenCalledTimes(1)
+    expect(closeSessionMock).toHaveBeenCalledWith("session-created")
+  })
+
+  it("settles cancellation while send acknowledgement is pending and forwards predispatch cancellation", async () => {
+    let rejectSend!: (error: Error) => void
+    let sent!: () => void
+    const sendStarted = new Promise<void>((resolve) => {
+      sent = resolve
+    })
+    sendPromptMock.mockImplementationOnce(() => {
+      sent()
+      return new Promise<void>((_resolve, reject) => {
+        rejectSend = reject
+      })
+    })
+    onClaudeMessageMock.mockResolvedValueOnce(jest.fn())
+    const controller = new AbortController()
+    const run = executeChatTask(
+      makeTask({
+        payload: {
+          prompt: "work",
+          executionContext: {
+            location: "managedWorktree",
+            projectId: "project",
+            projectRoot: "/repo",
+            taskWorkspace: { taskId: "task", workspaceKey: "session" },
+            baseRef: "main",
+          },
+        },
+      }),
+      makeExecution(),
+      controller.signal
+    )
+    await sendStarted
+    controller.abort()
+    const result = await run
+    expect(result.success).toBe(false)
+    expect(settleTaskWorkspaceMock).toHaveBeenCalledWith("cancelled", expect.any(Promise))
+    expect(promptDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal, onDispatch: expect.any(Function) })
+    )
+    rejectSend(new Error("aborted before dispatch"))
+    await Promise.resolve()
+    const proof = (
+      settleTaskWorkspaceMock.mock.calls as unknown as Array<[string, Promise<void>]>
+    )[0][1]
+    await expect(proof).resolves.toBeUndefined()
   })
 
   it("hands the run's cancel to the worktree checkout", async () => {

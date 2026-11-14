@@ -13,6 +13,7 @@ const dispatch = {
   complete: jest.fn(),
   fail: jest.fn(),
   dispose: jest.fn(),
+  trackLocalStop: jest.fn(),
 }
 const begin = jest.fn<Promise<typeof dispatch>, unknown[]>(async () => dispatch)
 const bundle = {
@@ -29,6 +30,7 @@ const provisioning = jest.fn<
   unknown[]
 >(async () => ({}))
 const settle = jest.fn()
+const openTurnLease = jest.fn(async (..._args: unknown[]) => ({ settle }))
 const options: SendOptions = Object.freeze({
   model: "chosen",
   maxBudgetUsd: 2,
@@ -54,7 +56,7 @@ jest.mock("@/lib/task-workspace/workspace-provisioning", () => ({
   bundleProvisioningForPath: (...args: unknown[]) => provisioning(...args),
 }))
 jest.mock("@/lib/task-workspace/run-lease", () => ({
-  openWorkspaceBundleTurnLease: async () => ({ settle }),
+  openWorkspaceBundleTurnLease: (...args: unknown[]) => openTurnLease(...args),
 }))
 jest.mock("@/lib/task-workspace/user-action", () => ({
   runWorkspaceUserAction: (_name: string, op: () => unknown) => op(),
@@ -77,7 +79,10 @@ jest.mock("@/lib/claude/build-options", () => ({
 jest.mock("@/lib/claude/run-and-capture", () => ({
   runAndCaptureAssistantReply: (...args: unknown[]) => run(...args),
 }))
-jest.mock("@/lib/claude/ipc", () => ({ interruptSession: jest.fn() }))
+jest.mock("@/lib/claude/ipc", () => ({
+  interruptSession: jest.fn(),
+  closeSession: jest.fn(async () => undefined),
+}))
 const recordSurfaceUsage = jest.fn(async (..._args: unknown[]) => null as unknown)
 jest.mock("@/lib/db/session-usage", () => ({
   ...jest.requireActual("@/lib/db/session-usage"),
@@ -123,7 +128,7 @@ jest.mock("@/lib/execution/agent-team-bridge", () => ({
 }))
 import { bestOfNTeam, candidateRowTitle, createBestOfNExecution } from "./runtime"
 import { BestOfNCandidateStoppedError, candidateGrant } from "./core"
-import { interruptSession } from "@/lib/claude/ipc"
+import { interruptSession, closeSession } from "@/lib/claude/ipc"
 import {
   __resetClaimedTurnUsageForTesting,
   isTurnUsageClaimed,
@@ -273,6 +278,27 @@ it("runs only the child through the resolver and ordinary capture gate, without 
     expect.objectContaining({ requiredChecks: ["approved-test"], targetRef: "refs/heads/result" })
   )
   expect(settle).toHaveBeenCalledWith("ready")
+})
+
+it("passes the candidate's actual executor stop to both durable dispatch and turn settlement", async () => {
+  let stopped!: () => void
+  const proof = new Promise<void>((resolve) => {
+    stopped = resolve
+  })
+  run.mockImplementationOnce(async (_session, _prompt, _options, callbacks) => {
+    callbacks.onExecutorStarted(proof)
+    return "done"
+  })
+  await execute()
+  expect(dispatch.trackLocalStop).toHaveBeenCalledWith(proof)
+  expect(settle).toHaveBeenCalledWith("ready", proof)
+  expect(closeSession).toHaveBeenCalledWith("session")
+  expect(openTurnLease).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.any(String),
+    expect.objectContaining({ executorStopRequired: true })
+  )
+  stopped()
 })
 
 describe("candidates as child runs", () => {
@@ -506,6 +532,11 @@ it("runs an external candidate in its own workspace root and keeps its cost unkn
     })
   )
   expect(dispatch.complete).toHaveBeenCalledWith(expect.objectContaining({ text: "external done" }))
+  expect(openTurnLease).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.any(String),
+    expect.objectContaining({ executorStopRequired: false })
+  )
   expect(dispatch.complete).toHaveBeenCalledWith(
     expect.not.objectContaining({ costUsd: expect.anything() })
   )

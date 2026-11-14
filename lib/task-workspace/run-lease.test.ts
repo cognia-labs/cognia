@@ -22,9 +22,16 @@ jest.mock("./client", () => ({
 // fact under test is that the scope is reachable by turn id from a settle path
 // that never held the lease object.
 const openScope = jest.fn()
+const runUserAction = jest.fn((_command: string, action: () => unknown, _origin?: unknown) =>
+  action()
+)
 jest.mock("./user-action", () => {
   const actual = jest.requireActual("./user-action")
-  return { ...actual, openWorkspaceApprovalScope: () => openScope() }
+  return {
+    ...actual,
+    openWorkspaceApprovalScope: () => openScope(),
+    runWorkspaceUserAction: (...args: [string, () => unknown, unknown?]) => runUserAction(...args),
+  }
 })
 
 const releaseTurn = jest.fn()
@@ -51,6 +58,137 @@ describe("openWorkspaceBundleTurnLease", () => {
 
   afterEach(() => {
     for (const turnId of boundApprovalScopeTurnIds()) closeApprovalScopeForTurn(turnId)
+    jest.useRealTimers()
+  })
+
+  async function stopTestLease() {
+    beginBundleTurn.mockResolvedValue({
+      bundleTurnId: "stop-turn",
+      bundleId: "bundle",
+      primaryAlias: "/root",
+      additionalAliases: [],
+      runs: [{ workspaceId: "ws", logicalRootIds: ["app"], run: { runId: "run" } }],
+    })
+    return (await openWorkspaceBundleTurnLease({ bundleId: "bundle", leases: [] }, "app", {
+      taskId: "task",
+      sessionId: "session",
+      runId: "run",
+      agentId: "agent",
+      agentKind: "in-app",
+      executorStopRequired: true,
+      workspaceRoot: "/root",
+    }))!
+  }
+
+  it("requires stop at admission and leaves the native run input unchanged", async () => {
+    await stopTestLease()
+    expect(beginBundleTurn).toHaveBeenCalledWith(
+      "bundle",
+      {
+        primaryLogicalRootId: "app",
+        run: {
+          taskId: "task",
+          sessionId: "session",
+          runId: "run",
+          agentId: "agent",
+          agentKind: "in-app",
+          workspaceRoot: "/root",
+        },
+      },
+      { kind: "local" },
+      true
+    )
+  })
+
+  it("clears an admitted stop requirement when cancelled before any executor starts", async () => {
+    const lease = await stopTestLease()
+    await lease.abort()
+    expect(settleBundleTurn).toHaveBeenCalledWith(
+      "stop-turn",
+      "cancelled",
+      { kind: "local" },
+      false
+    )
+    expect(abortBundleTurn).not.toHaveBeenCalled()
+  })
+
+  it("keeps late stop acknowledgement and its renewed approval on the original Host", async () => {
+    jest.useFakeTimers()
+    const a = { kind: "remote" as const, hostId: "a" }
+    const b = { kind: "remote" as const, hostId: "b" }
+    jest.mocked(captureTaskWorkspaceOrigin).mockReturnValueOnce(a)
+    const lease = await stopTestLease()
+    let stopped!: () => void
+    const proof = new Promise<void>((resolve) => {
+      stopped = resolve
+    })
+    const firstResources = [{ path: "first" }]
+    settleBundleTurn.mockResolvedValueOnce({ resources: firstResources })
+    const result = lease.settle("cancelled", proof)
+    await jest.advanceTimersByTimeAsync(2000)
+    await expect(result).resolves.toBe(firstResources)
+    jest.mocked(captureTaskWorkspaceOrigin).mockReturnValueOnce(b)
+    stopped()
+    await jest.advanceTimersByTimeAsync(0)
+    expect(settleBundleTurn).toHaveBeenNthCalledWith(1, "stop-turn", "cancelled", a, true)
+    expect(settleBundleTurn).toHaveBeenNthCalledWith(2, "stop-turn", "cancelled", a, false)
+    expect(runUserAction).toHaveBeenCalledWith(
+      "task_workspace_bundle_turn_settle",
+      expect.any(Function),
+      a
+    )
+    expect(captureTaskWorkspaceOrigin()).toEqual(b)
+    await expect(lease.settle("ready")).resolves.toBe(firstResources)
+  })
+
+  it("waits for independent stop before settling a cancelled turn", async () => {
+    jest.useFakeTimers()
+    const lease = await stopTestLease()
+    let stopped!: () => void
+    const proof = new Promise<void>((resolve) => {
+      stopped = resolve
+    })
+    const completion = lease.settle("cancelled", proof)
+    await jest.advanceTimersByTimeAsync(1000)
+    expect(settleBundleTurn).not.toHaveBeenCalled()
+    stopped()
+    await completion
+    expect(settleBundleTurn).toHaveBeenCalledWith(
+      "stop-turn",
+      "cancelled",
+      { kind: "local" },
+      false
+    )
+  })
+
+  it("settles read-only on a bounded stop wait and confirms only on the real later stop", async () => {
+    jest.useFakeTimers()
+    const lease = await stopTestLease()
+    let stopped!: () => void
+    const proof = new Promise<void>((resolve) => {
+      stopped = resolve
+    })
+    const completion = lease.abort(proof)
+    await jest.advanceTimersByTimeAsync(2000)
+    await completion
+    expect(settleBundleTurn).toHaveBeenCalledWith("stop-turn", "cancelled", { kind: "local" }, true)
+    expect(abortBundleTurn).not.toHaveBeenCalled()
+    expect(boundApprovalScopeTurnIds()).not.toContain("stop-turn")
+    stopped()
+    await jest.advanceTimersByTimeAsync(0)
+    expect(settleBundleTurn).toHaveBeenLastCalledWith(
+      "stop-turn",
+      "cancelled",
+      { kind: "local" },
+      false
+    )
+  })
+
+  it("a rejected stop promise is not positive stop evidence", async () => {
+    const lease = await stopTestLease()
+    await lease.settle("failed", Promise.reject(new Error("transport disappeared")))
+    expect(settleBundleTurn).toHaveBeenCalledTimes(1)
+    expect(settleBundleTurn).toHaveBeenCalledWith("stop-turn", "failed", { kind: "local" }, true)
   })
 
   it("leases every physical workspace in a bundle and preserves its logical aliases", async () => {

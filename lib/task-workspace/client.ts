@@ -313,10 +313,11 @@ export function isExecutorStopUnconfirmedRefusal(error: unknown): boolean {
 export async function beginWorkspaceBundleTurn(
   bundleId: string,
   request: BeginWorkspaceBundleTurn,
-  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin(),
+  executorStopRequired?: boolean
 ): Promise<WorkspaceBundleTurnLease | null> {
   try {
-    return await beginWorkspaceBundleTurnOnce(bundleId, request, origin)
+    return await beginWorkspaceBundleTurnOnce(bundleId, request, origin, executorStopRequired)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const hostDeferred = /remote.control|not authorized|unknown.command|forbidden/i.test(message)
@@ -330,19 +331,24 @@ export async function beginWorkspaceBundleTurn(
       () => []
     )
     if (released.length === 0) throw error
-    return await beginWorkspaceBundleTurnOnce(bundleId, request, origin)
+    return await beginWorkspaceBundleTurnOnce(bundleId, request, origin, executorStopRequired)
   }
 }
 
 async function beginWorkspaceBundleTurnOnce(
   bundleId: string,
   request: BeginWorkspaceBundleTurn,
-  origin: TaskWorkspaceOrigin
+  origin: TaskWorkspaceOrigin,
+  executorStopRequired?: boolean
 ): Promise<WorkspaceBundleTurnLease> {
   {
     const turn = await transport.call<WorkspaceBundleTurnLease>(
       "task_workspace_bundle_turn_begin",
-      { bundleId, request },
+      {
+        bundleId,
+        request,
+        ...(executorStopRequired === undefined ? {} : { executorStopRequired }),
+      },
       origin
     )
     rememberOpenBundleTurn({
@@ -451,7 +457,8 @@ export async function settleWorkspaceBundleTurn(
   finalState: "ready" | "failed" | "cancelled" = "ready",
   origin = Object.values(useTaskWorkspaceStore.getState().activeByRun).find(
     (run) => run.bundleTurnId === bundleTurnId
-  )?.origin
+  )?.origin,
+  executorStopUnproven?: boolean
 ): Promise<WorkspaceBundleTurnOutcome> {
   const outcome = await changesLedger(
     transport.call<WorkspaceBundleTurnOutcome>(
@@ -459,6 +466,7 @@ export async function settleWorkspaceBundleTurn(
       {
         bundleTurnId,
         finalState,
+        ...(executorStopUnproven === undefined ? {} : { executorStopUnproven }),
       },
       origin
     )
