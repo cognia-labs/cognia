@@ -1647,15 +1647,25 @@ impl TaskWorkspaceService {
         // borrowed/isolated sources, until its explicit stop confirmation.
         // Runs that merely share a directory are admitted and marked
         // overlapped instead (ADR-0255).
+        //
+        // Both roots are compared by physical identity, as
+        // `active_runs_intersecting` does: a run stored through a symlinked
+        // data directory or another alias must not slip past this refusal
+        // (postfix review P09).
+        let root = crate::sandbox_snapshot::canonical_lock_root(root)?;
         let store = self.store.lock();
         for task in store.list_tasks()? {
-            if store.list_runs(&task.task_id)?.iter().any(|run| {
-                run.executor_stop_unconfirmed
-                    && (Path::new(&run.execution_root).starts_with(root)
-                        || root.starts_with(&run.execution_root))
-                    && matches!(run.state, RunState::Running | RunState::Settling)
-            }) {
-                return Err(UNCONFIRMED_EXECUTOR_OVERLAP.into());
+            for run in store.list_runs(&task.task_id)? {
+                if !run.executor_stop_unconfirmed
+                    || !matches!(run.state, RunState::Running | RunState::Settling)
+                {
+                    continue;
+                }
+                let execution_root =
+                    crate::sandbox_snapshot::canonical_lock_root(Path::new(&run.execution_root))?;
+                if execution_root.starts_with(&root) || root.starts_with(&execution_root) {
+                    return Err(UNCONFIRMED_EXECUTOR_OVERLAP.into());
+                }
             }
         }
         Ok(())
@@ -13454,6 +13464,44 @@ mod tests {
             service.begin_run(observed(&workspace, "task-b", "run-b")).unwrap_err(),
             UNCONFIRMED_EXECUTOR_OVERLAP
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unconfirmed_executor_closes_its_root_through_a_path_alias() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::create_dir_all(workspace.path().join("sub")).unwrap();
+        fs::write(workspace.path().join("a.txt"), "a\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        service
+            .begin_worker_run(observed(&workspace, "task-a", "run-a"), None)
+            .unwrap();
+        service.mark_executor_unconfirmed("run-a").unwrap();
+        // The quarantined run names its root through an alias: a symlinked
+        // data directory, or a record stored before roots were canonical
+        // (postfix review P09). Its executor still writes the same files.
+        let alias = data.path().join("alias");
+        std::os::unix::fs::symlink(workspace.path(), &alias).unwrap();
+        for stored in [alias.clone(), alias.join("sub")] {
+            {
+                let store = service.store.lock();
+                let (mut run, baseline) = store
+                    .get_run::<serde_json::Value>("run-a")
+                    .unwrap()
+                    .unwrap();
+                run.execution_root = stored.display().to_string();
+                store.put_run(&run, &baseline).unwrap();
+            }
+            assert_eq!(
+                service
+                    .begin_run(observed(&workspace, "task-b", "run-b"))
+                    .unwrap_err(),
+                UNCONFIRMED_EXECUTOR_OVERLAP,
+                "admitted beside a quarantined executor stored as {}",
+                stored.display()
+            );
+        }
     }
 
     #[test]
