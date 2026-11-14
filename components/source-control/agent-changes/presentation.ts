@@ -1,4 +1,5 @@
 import type { ChangesetState } from "@/lib/scm/types"
+import { EXECUTOR_STOP_UNPROVEN_CODE } from "@/lib/scm/types"
 
 export const REVIEW_REASON_KEYS: Readonly<Record<string, string>> = {
   "protectedPath:ci": "reasons.protectedCi",
@@ -49,7 +50,11 @@ export const INTEGRATION_REASON_KEYS: Readonly<Record<string, string>> = Object.
     "checks_unmet",
     "aborted",
     "host_error",
-  ].map((code) => [code, `integrationReasons.${code}`])
+    "executor_stop_unproven",
+  ]
+    .map((code) => [code, `integrationReasons.${code}`])
+    // The run's own stored code for the same hold.
+    .concat([[EXECUTOR_STOP_UNPROVEN_CODE, "integrationReasons.executor_stop_unproven"]])
 )
 
 export function integrationReasonKey(code: string): string {

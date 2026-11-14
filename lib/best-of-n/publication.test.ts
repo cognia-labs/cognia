@@ -2,6 +2,7 @@ import { createBestOfNPublication } from "./publication"
 import { integrateChangesets } from "@/lib/scm/integration/orchestrator"
 import type { BestOfNGroup } from "@/types/best-of-n"
 import type { AgentChangeset, ChangesetCheck, IntegrationRun } from "@/lib/scm/types"
+import { EXECUTOR_STOP_UNPROVEN_CODE } from "@/lib/scm/types"
 import { defaultReviewPolicy } from "@/lib/scm/review/review-policy"
 
 function fixture() {
@@ -292,4 +293,52 @@ it("after a restart releases only a publishing winner's held integration", async
   expect(f.deps.scm.abortIntegration).toHaveBeenCalledWith("held")
   expect(f.changesets[0].state).toBe("approved")
   expect(f.integrate).not.toHaveBeenCalled()
+})
+
+it("keeps an integration held for an unproven executor stop through publish, re-checks and restart release", async () => {
+  // Postfix review P04: the outer publication aborted (and so reset) the
+  // integration worktree the orchestrator had kept for a live executor.
+  const f = fixture()
+  await f.api.pick("g", "c0")
+  let deadlinePassed = false
+  const realAbort = f.deps.scm.abortIntegration.getMockImplementation()!
+  f.deps.scm.abortIntegration.mockImplementation(async (id: string) => {
+    // The Host's refusal while the hold lasts.
+    if (f.runs.get(id)?.error?.code === EXECUTOR_STOP_UNPROVEN_CODE && !deadlinePassed)
+      throw { code: "executor_stop_unproven", message: "kept until its deadline" }
+    return realAbort(id)
+  })
+  f.integrate.mockImplementationOnce(async () => {
+    const run = {
+      integrationId: "held",
+      state: "prepared",
+      error: { code: EXECUTOR_STOP_UNPROVEN_CODE, message: "kept" },
+    } as IntegrationRun
+    f.runs.set("held", run)
+    Object.assign(f.changesets[0], { state: "integrating", integrationId: "held" })
+    return {
+      kind: "blocked",
+      analysis: {},
+      run,
+      dropped: [],
+      reason: "executor_stop_unproven",
+    } as never
+  })
+
+  const refused = await f.api.publish("g")
+  expect(refused.outcome.reason).toBe("executor_stop_unproven")
+  expect(refused.releaseError).toBeNull()
+  expect(f.deps.scm.abortIntegration).not.toHaveBeenCalled()
+  expect(f.changesets[0].state).toBe("integrating")
+
+  await expect(f.api.checks("g")).rejects.toMatchObject({ code: "executor_stop_unproven" })
+  await expect(f.api.release("g")).rejects.toMatchObject({ code: "executor_stop_unproven" })
+  expect(f.runs.get("held")!.state).toBe("prepared")
+  expect(f.deps.verify).toHaveBeenCalledTimes(2)
+
+  // At the executor's deadline the Host lets the existing recovery release it.
+  deadlinePassed = true
+  expect(await f.api.release("g")).toBe(true)
+  expect(f.runs.get("held")!.state).toBe("aborted")
+  expect(f.changesets[0].state).toBe("approved")
 })

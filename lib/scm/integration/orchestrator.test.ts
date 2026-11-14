@@ -14,7 +14,12 @@ import type {
   IntegrationRun,
   PrepareIntegration,
 } from "../types"
-import { MAX_STALE_REBUILDS, integrateChangesets, integrationRootForRevision } from "./orchestrator"
+import {
+  EXECUTOR_HOLD_FALLBACK_MS,
+  MAX_STALE_REBUILDS,
+  integrateChangesets,
+  integrationRootForRevision,
+} from "./orchestrator"
 
 /**
  * A host that composes changesets the way the real one does, at the level the
@@ -120,7 +125,12 @@ function fakeHost(
       return run
     }),
     recordIntegrationCheck: jest.fn(
-      async (id: string, candidateSha: string, check: ChangesetCheck) => {
+      async (
+        id: string,
+        candidateSha: string,
+        check: ChangesetCheck,
+        _hold?: { executorStopUnprovenUntil: number }
+      ) => {
         const run = runs.get(id)!
         if (run.candidateSha !== candidateSha) throw { code: "stale_candidate", message: "stale" }
         const next = {
@@ -240,6 +250,45 @@ describe("integrateChangesets", () => {
     expect(host.dropIntegrationItem).not.toHaveBeenCalled()
     expect(host.abortIntegration).not.toHaveBeenCalled()
     expect(host.publishIntegration).not.toHaveBeenCalled()
+  })
+  it("stores the hold on the Host until the executor's deadline", async () => {
+    // Postfix review P04: a retry, recovery or manual Abort released the
+    // in-memory hold. The Host now keeps it until the deadline.
+    const host = fakeHost()
+    await integrateChangesets(input(["a"]), {
+      host,
+      readPolicyAtRef: noPolicy,
+      acceptancePortFor: portFor().factory,
+      executorStopUnproven: () => true,
+      executorStopRetainUntil: () => 5_000,
+    })
+    const held = host.recordIntegrationCheck.mock.calls.at(-1)!
+    expect(held[3]).toEqual({ executorStopUnprovenUntil: 5_000 })
+    expect(held[2]).toEqual(host.recordIntegrationCheck.mock.calls[0]![2])
+  })
+  it("holds for the longest time when the executor's deadline is unknown", async () => {
+    const host = fakeHost()
+    await integrateChangesets(input(["a"]), {
+      host,
+      readPolicyAtRef: noPolicy,
+      acceptancePortFor: portFor().factory,
+      executorStopUnproven: () => true,
+      now: () => 1_000,
+    })
+    expect(host.recordIntegrationCheck.mock.calls.at(-1)![3]).toEqual({
+      executorStopUnprovenUntil: 1_000 + EXECUTOR_HOLD_FALLBACK_MS,
+    })
+  })
+  it("records no hold when the executor stopped", async () => {
+    const host = fakeHost()
+    await integrateChangesets(input(["a"]), {
+      host,
+      readPolicyAtRef: noPolicy,
+      acceptancePortFor: portFor().factory,
+      executorStopUnproven: () => false,
+      executorStopRetainUntil: () => null,
+    })
+    for (const call of host.recordIntegrationCheck.mock.calls) expect(call[3]).toBeUndefined()
   })
   it.each(["missing", "failed"])(
     "blocks the target policy's %s head check even when caller omitted it",

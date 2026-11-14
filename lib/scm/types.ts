@@ -188,6 +188,14 @@ export interface IntegrationFailure {
   message: string
 }
 
+/**
+ * `IntegrationRun.error.code` while the Host keeps the run's worktree for a
+ * verification executor that has not proven it stopped (ADR-0255 §3): abort,
+ * drop and publish are refused until its deadline, or until a person aborts
+ * with `executorStopped` confirmed.
+ */
+export const EXECUTOR_STOP_UNPROVEN_CODE = "executorStopUnproven"
+
 export interface IntegrationRun {
   integrationId: string
   repoCommonDir: string

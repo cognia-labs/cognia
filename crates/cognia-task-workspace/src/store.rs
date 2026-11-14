@@ -237,9 +237,63 @@ impl WorkspaceStore {
                WHERE state IN ('preparing', 'prepared', 'publishing');
              CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_runs_active_worktree
                ON integration_runs(repo_common_dir)
-               WHERE state IN ('preparing', 'prepared', 'publishing');",
+               WHERE state IN ('preparing', 'prepared', 'publishing');
+             CREATE TABLE IF NOT EXISTS integration_executor_holds (
+               integration_id TEXT PRIMARY KEY
+                 REFERENCES integration_runs(integration_id) ON DELETE CASCADE,
+               retain_until INTEGER NOT NULL
+             );",
             )
             .map_err(|error| format!("apply changeset migration: {error}"))
+    }
+
+    /// Keep an integration's worktree for a verification executor that has
+    /// not proven it stopped. A later hold only ever extends an earlier one.
+    pub(crate) fn hold_integration_for_executor(
+        &self,
+        integration_id: &str,
+        retain_until: i64,
+    ) -> Result<i64, String> {
+        self.connection
+            .query_row(
+                "INSERT INTO integration_executor_holds(integration_id,retain_until) VALUES(?1,?2)
+                 ON CONFLICT(integration_id) DO UPDATE
+                   SET retain_until=MAX(retain_until,excluded.retain_until)
+                 RETURNING retain_until",
+                params![integration_id, retain_until],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("hold integration for executor: {error}"))
+    }
+
+    /// The hold's end, while it has not passed.
+    pub(crate) fn integration_executor_hold(
+        &self,
+        integration_id: &str,
+        now: i64,
+    ) -> Result<Option<i64>, String> {
+        self.connection
+            .query_row(
+                "SELECT retain_until FROM integration_executor_holds
+                 WHERE integration_id=?1 AND retain_until>?2",
+                params![integration_id, now],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| format!("read integration executor hold: {error}"))
+    }
+
+    pub(crate) fn release_integration_executor_hold(
+        &self,
+        integration_id: &str,
+    ) -> Result<(), String> {
+        self.connection
+            .execute(
+                "DELETE FROM integration_executor_holds WHERE integration_id=?1",
+                [integration_id],
+            )
+            .map(|_| ())
+            .map_err(|error| format!("release integration executor hold: {error}"))
     }
 
     pub fn insert_changeset(

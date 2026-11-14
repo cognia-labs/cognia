@@ -99,11 +99,17 @@ function acceptancePort(
 
 /** The existing acceptance runner still owns execution/report collection.
  * This boundary resets only its disposable checkout and clears stale reports. */
+/** Past a run's own deadline, how long the Host may take to kill its process group. */
+export const VERIFICATION_STOP_GRACE_MS = 60_000
+
 function verificationSandbox(scm: SourceControlService, revision: string) {
   const sandbox = defaultAcceptanceSandboxHost()
   let stopUnproven = false
+  let retainUntil: number | null = null
   return {
     stopUnproven: () => stopUnproven,
+    /** While the stop is unproven: when the Host has killed the run at the latest. */
+    retainUntil: () => (stopUnproven ? retainUntil : null),
     sandbox: {
       availability: (target) => sandbox.availability(target),
       async run(spec) {
@@ -118,8 +124,10 @@ function verificationSandbox(scm: SourceControlService, revision: string) {
         }
         spec.signal.throwIfAborted()
         stopUnproven = true
+        retainUntil = Date.now() + spec.limits.timeoutMs + VERIFICATION_STOP_GRACE_MS
         const result = await sandbox.run(spec)
         stopUnproven = false
+        retainUntil = null
         return result
       },
     } satisfies AcceptanceSandboxHost,
@@ -228,6 +236,7 @@ export function createScmRuntime(input: ScmRuntimeInput): ScmRuntime {
       return integrateChangesets(integration, {
         host,
         executorStopUnproven: () => verification?.stopUnproven() ?? false,
+        executorStopRetainUntil: () => verification?.retainUntil() ?? null,
         readPolicyAtRef: async (run) => {
           const item = composedItems(run)[0]
           const changeset = item ? await host.getChangeset(item.changesetId) : null

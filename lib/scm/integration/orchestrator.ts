@@ -36,6 +36,11 @@ import type { WorkspaceReviewPolicyParseResult } from "../review/review-policy"
 
 /** Publishes refused because the target moved, retried at most this many times. */
 export const MAX_STALE_REBUILDS = 3
+/**
+ * A hold whose executor deadline is unknown lasts the Host's longest (it
+ * clamps to the same day); only a person's confirmation releases it sooner.
+ */
+export const EXECUTOR_HOLD_FALLBACK_MS = 24 * 60 * 60 * 1000
 
 export interface IntegrateChangesetsInput {
   changesetIds: string[]
@@ -59,6 +64,8 @@ export interface IntegrateChangesetsDeps {
    */
   acceptancePortFor: ((run: IntegrationRun) => AcceptancePort) | null
   executorStopUnproven?: () => boolean
+  /** While the stop is unproven, the time by which the Host has killed the executor. */
+  executorStopRetainUntil?: () => number | null
   now?: () => number
 }
 
@@ -258,6 +265,15 @@ export async function integrateChangesets(
       if (deps.executorStopUnproven?.()) {
         // Keep its worktree: dropping, rebuilding or aborting can replace files
         // that an executor with a lost transport response may still write.
+        // The hold is stored on the Host, so a retry, a restart's recovery or
+        // a person's Abort cannot release it before the executor's deadline.
+        const last = checks[checks.length - 1]
+        if (last) {
+          run = await host.recordIntegrationCheck(run.integrationId, candidateSha, last, {
+            executorStopUnprovenUntil:
+              deps.executorStopRetainUntil?.() ?? now() + EXECUTOR_HOLD_FALLBACK_MS,
+          })
+        }
         return { kind: "blocked", analysis, run, dropped, reason: "executor_stop_unproven" }
       }
       const unmet = unmetChecks(requiredChecks, run.checks, candidateSha)

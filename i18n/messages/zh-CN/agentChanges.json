@@ -43,7 +43,8 @@
     "abandon": "放弃",
     "integrate": "集成",
     "rollback": "回滚",
-    "abort": "中止"
+    "abort": "中止",
+    "abortStopped": "已停止，中止"
   },
   "detail": {
     "title": "更改集详情",
@@ -131,7 +132,9 @@
     "abandonDescription": "此操作会将更改集移出队列，并解除对其提交的保留。",
     "continue": "确认",
     "rollbackTitle": "回滚此次集成？",
-    "rollbackDescription": "主机将恢复或撤销已发布到 {ref} 的更改。"
+    "rollbackDescription": "主机将恢复或撤销已发布到 {ref} 的更改。",
+    "executorStoppedTitle": "检查已经停止了吗？",
+    "executorStoppedDescription": "有一次检查运行没有确认已停止，可能仍在写入集成工作树。只有在确定它已不再运行时才中止：工作树会被重置。"
   },
   "errors": {
     "load": "无法加载智能体更改，请重试刷新。",
@@ -219,6 +222,7 @@
     "checks_unmet": "候选提交未通过全部必需检查。",
     "aborted": "集成已取消。",
     "host_error": "主机未能完成集成，请刷新后重试。",
+    "executor_stop_unproven": "某项检查的执行器尚未确认已停止。在检查时限过去之前，集成工作树会被保留。",
     "unknown": "集成已停止：{code}"
   }
 }

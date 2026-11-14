@@ -14,7 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import type { IntegrationRun } from "@/lib/scm/types"
+import { EXECUTOR_STOP_UNPROVEN_CODE, type IntegrationRun } from "@/lib/scm/types"
 import type { AgentChangesActions } from "@/hooks/scm/use-agent-changesets"
 import { integrationReasonKey } from "./presentation"
 
@@ -28,6 +28,12 @@ export function IntegrationRunList({ integrations, actions }: Props) {
   const [rollbackId, setRollbackId] = useState<string | null>(null)
   const rollbackRun = integrations.find(
     (run) => run.integrationId === rollbackId && run.state === "published"
+  )
+  // A run kept for a verification executor whose stop is unproven aborts
+  // only once the person confirms that executor is no longer running.
+  const [stoppedId, setStoppedId] = useState<string | null>(null)
+  const heldRun = integrations.find(
+    (run) => run.integrationId === stoppedId && run.error?.code === EXECUTOR_STOP_UNPROVEN_CODE
   )
   return (
     <section className="space-y-2" aria-label={t("runs.title")}>
@@ -104,7 +110,11 @@ export function IntegrationRunList({ integrations, actions }: Props) {
                 size="sm"
                 variant="outline"
                 disabled={actions.busy}
-                onClick={() => void actions.abort(run.integrationId)}
+                onClick={() =>
+                  run.error?.code === EXECUTOR_STOP_UNPROVEN_CODE
+                    ? setStoppedId(run.integrationId)
+                    : void actions.abort(run.integrationId)
+                }
                 data-testid={`abort-${run.integrationId}`}
               >
                 {t("actions.abort")}
@@ -141,6 +151,40 @@ export function IntegrationRunList({ integrations, actions }: Props) {
               }}
             >
               {t("actions.rollback")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={!!heldRun}
+        onOpenChange={(open) => {
+          if (!open && !actions.busy) setStoppedId(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("confirm.executorStoppedTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("confirm.executorStoppedDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {actions.error && <p role="alert">{t("errors.action")}</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={actions.busy}>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={actions.busy}
+              data-testid="executor-stopped-confirm"
+              onClick={(event) => {
+                event.preventDefault()
+                if (heldRun)
+                  void actions
+                    .abort(heldRun.integrationId, { executorStopped: true })
+                    .then((result) => {
+                      if (result) setStoppedId(null)
+                    })
+              }}
+            >
+              {t("actions.abortStopped")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

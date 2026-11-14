@@ -30,6 +30,30 @@ describe("createScmHost", () => {
     ])
   })
 
+  it("sends the executor hold and the stop confirmation only when given", async () => {
+    const call = jest.fn(async () => ({}))
+    const host = createScmHost(call as never)
+    const check = { profileId: "unit" } as never
+    await host.recordIntegrationCheck("int", "cand", check)
+    await host.recordIntegrationCheck("int", "cand", check, { executorStopUnprovenUntil: 9 })
+    await host.abortIntegration("int")
+    await host.abortIntegration("int", { executorStopped: false })
+    await host.abortIntegration("int", { executorStopped: true })
+    expect(call.mock.calls).toEqual([
+      [
+        "task_workspace_integration_record_check",
+        { integrationId: "int", candidateSha: "cand", check },
+      ],
+      [
+        "task_workspace_integration_record_check",
+        { integrationId: "int", candidateSha: "cand", check, executorStopUnprovenUntil: 9 },
+      ],
+      ["task_workspace_integration_abort", { integrationId: "int" }],
+      ["task_workspace_integration_abort", { integrationId: "int" }],
+      ["task_workspace_integration_abort", { integrationId: "int", executorStopped: true }],
+    ])
+  })
+
   it("goes through the approval-aware transport by default", async () => {
     await expect(createScmHost().getIntegration("int")).resolves.toBe("via-transport")
   })

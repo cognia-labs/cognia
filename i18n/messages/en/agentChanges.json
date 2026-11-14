@@ -43,7 +43,8 @@
     "abandon": "Abandon",
     "integrate": "Integrate",
     "rollback": "Roll back",
-    "abort": "Abort"
+    "abort": "Abort",
+    "abortStopped": "It stopped, abort"
   },
   "detail": {
     "title": "Changeset details",
@@ -131,7 +132,9 @@
     "abandonDescription": "This removes the changeset from the queue and releases its pinned commit.",
     "continue": "Confirm",
     "rollbackTitle": "Roll back this integration?",
-    "rollbackDescription": "The host will restore or revert the published changes on {ref}."
+    "rollbackDescription": "The host will restore or revert the published changes on {ref}.",
+    "executorStoppedTitle": "Has the check stopped?",
+    "executorStoppedDescription": "A check run did not confirm it stopped and may still be writing to the integration worktree. Abort only if you know it is no longer running: the worktree is reset."
   },
   "errors": {
     "load": "Could not load agent changes. Try refreshing.",
@@ -219,6 +222,7 @@
     "checks_unmet": "The candidate did not pass all required checks.",
     "aborted": "The integration was cancelled.",
     "host_error": "The host could not complete the integration. Refresh and retry.",
+    "executor_stop_unproven": "A check's executor has not confirmed it stopped. Its worktree is kept until the check's time limit passes.",
     "unknown": "Integration stopped: {code}"
   }
 }

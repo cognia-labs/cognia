@@ -1628,10 +1628,16 @@ pub async fn task_workspace_integration_record_check(
     integration_id: String,
     candidate_sha: String,
     check: ChangesetCheck,
+    executor_stop_unproven_until: Option<i64>,
 ) -> Result<IntegrationRun, CommandError> {
     scm_blocking(move |service| {
         service
-            .record_integration_check(&integration_id, &candidate_sha, check)
+            .record_integration_check_with_hold(
+                &integration_id,
+                &candidate_sha,
+                check,
+                executor_stop_unproven_until,
+            )
             .map_err(integration_command_error)
     })
     .await
@@ -1679,10 +1685,11 @@ pub async fn task_workspace_integration_drop_item(
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub async fn task_workspace_integration_abort(
     integration_id: String,
+    executor_stopped: Option<bool>,
 ) -> Result<IntegrationRun, CommandError> {
     scm_blocking(move |service| {
         service
-            .abort_integration(&integration_id)
+            .abort_integration_with_confirmation(&integration_id, executor_stopped.unwrap_or(false))
             .map_err(integration_command_error)
     })
     .await
@@ -3022,6 +3029,7 @@ mod tests {
                 integration_id.clone(),
                 candidate.clone(),
                 check(&candidate),
+                None,
             )
             .await
             .unwrap();
@@ -3082,7 +3090,7 @@ mod tests {
                 "not_found"
             );
             assert_eq!(
-                task_workspace_integration_abort("missing".into())
+                task_workspace_integration_abort("missing".into(), None)
                     .await
                     .unwrap_err()
                     .code,

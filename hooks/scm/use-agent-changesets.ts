@@ -154,7 +154,8 @@ export function useAgentChangesets({
       mutate(() => requestChangesetChanges(host, changeset, note)),
     abandon: (id: string) => mutate(() => host.abandonChangeset(id)),
     rollback: (id: string) => mutate(() => host.rollbackIntegration(id)),
-    abort: (id: string) => mutate(() => host.abortIntegration(id)),
+    abort: (id: string, options?: { executorStopped?: boolean }) =>
+      mutate(() => (options ? host.abortIntegration(id, options) : host.abortIntegration(id))),
   }
 }
 

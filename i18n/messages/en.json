@@ -2227,6 +2227,7 @@
     "actions": {
       "abandon": "Abandon",
       "abort": "Abort",
+      "abortStopped": "It stopped, abort",
       "approve": "Approve",
       "integrate": "Integrate",
       "requestChanges": "Request changes",
@@ -2246,6 +2247,8 @@
       "approveDescription": "Your approval applies only to commit {sha}. Review the risk reasons before continuing.",
       "approveTitle": "Approve this head commit?",
       "continue": "Confirm",
+      "executorStoppedDescription": "A check run did not confirm it stopped and may still be writing to the integration worktree. Abort only if you know it is no longer running: the worktree is reset.",
+      "executorStoppedTitle": "Has the check stopped?",
       "rollbackDescription": "The host will restore or revert the published changes on {ref}.",
       "rollbackTitle": "Roll back this integration?"
     },
@@ -2332,6 +2335,7 @@
       "conflict": "Git reported a conflict.",
       "cycles": "Changeset dependencies contain a cycle. Resolve it before integrating.",
       "dependency": "A changeset dependency is unavailable or not satisfied.",
+      "executor_stop_unproven": "A check's executor has not confirmed it stopped. Its worktree is kept until the check's time limit passes.",
       "host_error": "The host could not complete the integration. Refresh and retry.",
       "ineligible": "A changeset does not meet the host eligibility requirements.",
       "invalid_request": "The host rejected the request. Refresh and check your selection.",

@@ -2227,6 +2227,7 @@
     "actions": {
       "abandon": "放弃",
       "abort": "中止",
+      "abortStopped": "已停止，中止",
       "approve": "批准",
       "integrate": "集成",
       "requestChanges": "要求修改",
@@ -2246,6 +2247,8 @@
       "approveDescription": "批准仅适用于提交 {sha}。继续前请确认风险原因。",
       "approveTitle": "批准此提交？",
       "continue": "确认",
+      "executorStoppedDescription": "有一次检查运行没有确认已停止，可能仍在写入集成工作树。只有在确定它已不再运行时才中止：工作树会被重置。",
+      "executorStoppedTitle": "检查已经停止了吗？",
       "rollbackDescription": "主机将恢复或撤销已发布到 {ref} 的更改。",
       "rollbackTitle": "回滚此次集成？"
     },
@@ -2332,6 +2335,7 @@
       "conflict": "Git 报告了冲突。",
       "cycles": "更改集依赖存在循环，请先解决循环依赖。",
       "dependency": "某个更改集依赖不可用或尚未满足。",
+      "executor_stop_unproven": "某项检查的执行器尚未确认已停止。在检查时限过去之前，集成工作树会被保留。",
       "host_error": "主机未能完成集成，请刷新后重试。",
       "ineligible": "某个更改集不满足主机的集成条件。",
       "invalid_request": "主机拒绝了请求，请刷新并检查选择。",

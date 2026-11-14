@@ -1099,10 +1099,13 @@ pub(super) async fn dispatch(
             let integration_id: String = required(&args, "integrationId")?;
             let candidate_sha: String = required(&args, "candidateSha")?;
             let check: cognia_task_workspace::ChangesetCheck = required(&args, "check")?;
+            let executor_stop_unproven_until: Option<i64> =
+                optional(&args, "executorStopUnprovenUntil")?;
             cognia_task_workspace_host::host_surface::task_workspace_integration_record_check(
                 integration_id,
                 candidate_sha,
                 check,
+                executor_stop_unproven_until,
             )
             .await
             .map_err(scm_command_error)
@@ -1143,8 +1146,10 @@ pub(super) async fn dispatch(
         }
         "task_workspace_integration_abort" => {
             let integration_id: String = required(&args, "integrationId")?;
+            let executor_stopped: Option<bool> = optional(&args, "executorStopped")?;
             cognia_task_workspace_host::host_surface::task_workspace_integration_abort(
                 integration_id,
+                executor_stopped,
             )
             .await
             .map_err(scm_command_error)
@@ -1725,6 +1730,29 @@ pub(super) async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integration_executor_hold_arguments_are_optional_and_typed() {
+        let none = serde_json::json!({});
+        assert_eq!(
+            optional::<i64>(&none, "executorStopUnprovenUntil").unwrap(),
+            None
+        );
+        assert_eq!(optional::<bool>(&none, "executorStopped").unwrap(), None);
+        let given = serde_json::json!({"executorStopUnprovenUntil": 42, "executorStopped": true});
+        assert_eq!(
+            optional::<i64>(&given, "executorStopUnprovenUntil").unwrap(),
+            Some(42)
+        );
+        assert_eq!(
+            optional::<bool>(&given, "executorStopped").unwrap(),
+            Some(true)
+        );
+        let wrong =
+            serde_json::json!({"executorStopUnprovenUntil": "42", "executorStopped": "true"});
+        assert!(optional::<i64>(&wrong, "executorStopUnprovenUntil").is_err());
+        assert!(optional::<bool>(&wrong, "executorStopped").is_err());
+    }
 
     #[test]
     fn bundle_executor_stop_observations_require_booleans() {

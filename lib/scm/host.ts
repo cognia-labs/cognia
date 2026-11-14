@@ -44,10 +44,16 @@ export interface ScmHost {
     targetRef?: string | null
   ): Promise<IntegrationAnalysis>
   prepareIntegration(input: PrepareIntegration): Promise<IntegrationRun>
+  /**
+   * `hold.executorStopUnprovenUntil`: the executor behind this check has not
+   * proven it stopped and may write into the integration worktree until then
+   * (its deadline). The Host refuses abort, drop and publish until that time.
+   */
   recordIntegrationCheck(
     integrationId: string,
     candidateSha: string,
-    check: ChangesetCheck
+    check: ChangesetCheck,
+    hold?: { executorStopUnprovenUntil: number }
   ): Promise<IntegrationRun>
   publishIntegration(
     integrationId: string,
@@ -56,7 +62,11 @@ export interface ScmHost {
   ): Promise<IntegrationRun>
   rebuildIntegration(integrationId: string): Promise<IntegrationRun>
   dropIntegrationItem(integrationId: string, changesetId: string): Promise<IntegrationRun>
-  abortIntegration(integrationId: string): Promise<IntegrationRun>
+  /** `executorStopped`: a person confirms a held run's executor has stopped. */
+  abortIntegration(
+    integrationId: string,
+    options?: { executorStopped?: boolean }
+  ): Promise<IntegrationRun>
   rollbackIntegration(integrationId: string): Promise<IntegrationRun>
   getIntegration(integrationId: string): Promise<IntegrationRun | null>
   listIntegrations(filter?: IntegrationRunFilter): Promise<IntegrationRun[]>
@@ -108,14 +118,23 @@ export function createScmHost(
     analyzeIntegration: (changesetIds, targetRef = null) =>
       call(c.analyzeIntegration, { changesetIds, targetRef }),
     prepareIntegration: (input) => call(c.prepareIntegration, { input }),
-    recordIntegrationCheck: (integrationId, candidateSha, check) =>
-      call(c.recordIntegrationCheck, { integrationId, candidateSha, check }),
+    recordIntegrationCheck: (integrationId, candidateSha, check, hold) =>
+      call(c.recordIntegrationCheck, {
+        integrationId,
+        candidateSha,
+        check,
+        ...(hold ? { executorStopUnprovenUntil: hold.executorStopUnprovenUntil } : {}),
+      }),
     publishIntegration: (integrationId, candidateSha, requiredChecks) =>
       call(c.publishIntegration, { integrationId, candidateSha, requiredChecks }),
     rebuildIntegration: (integrationId) => call(c.rebuildIntegration, { integrationId }),
     dropIntegrationItem: (integrationId, changesetId) =>
       call(c.dropIntegrationItem, { integrationId, changesetId }),
-    abortIntegration: (integrationId) => call(c.abortIntegration, { integrationId }),
+    abortIntegration: (integrationId, options) =>
+      call(c.abortIntegration, {
+        integrationId,
+        ...(options?.executorStopped ? { executorStopped: true } : {}),
+      }),
     rollbackIntegration: (integrationId) => call(c.rollbackIntegration, { integrationId }),
     getIntegration: (integrationId) => call(c.getIntegration, { integrationId }),
     listIntegrations: (filter = {}) => call(c.listIntegrations, { filter }),

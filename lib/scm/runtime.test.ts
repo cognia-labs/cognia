@@ -83,7 +83,12 @@ jest.mock("./integration/orchestrator", () => ({
 }))
 
 import type { ScmHost } from "./host"
-import { createScmRuntime, reviewClientFor, scmGitPortsFor } from "./runtime"
+import {
+  VERIFICATION_STOP_GRACE_MS,
+  createScmRuntime,
+  reviewClientFor,
+  scmGitPortsFor,
+} from "./runtime"
 
 const changeset = {
   changesetId: "cs-1",
@@ -341,6 +346,43 @@ describe("createScmRuntime", () => {
     expect(pinManagedWorkspace).toHaveBeenCalledWith("verify", true)
     expect(archiveManagedWorkspace).not.toHaveBeenCalled()
     expect(gitReset).toHaveBeenCalledTimes(1)
+  })
+
+  it("reports, while an integration check's stop is unproven, when the Host has killed it", async () => {
+    const service = { resetVerificationCheckout: jest.fn(async () => undefined) }
+    const runtime = createScmRuntime({
+      projectId: "project-1",
+      appSettings: null,
+      host,
+      service: service as never,
+    })
+    await runtime.integrate({ changesetIds: ["cs-1"], targetRef: "refs/heads/main" } as never)
+    const [, deps] = integrateChangesets.mock.calls[0] as unknown as [
+      unknown,
+      {
+        acceptancePortFor: (run: unknown) => unknown
+        executorStopUnproven: () => boolean
+        executorStopRetainUntil: () => number | null
+      },
+    ]
+    deps.acceptancePortFor({ integrationId: "int-1", candidateSha: "c1", worktreePath: "/wt" })
+    const { input } = createDelegateAcceptancePort.mock.results[0].value as {
+      input: { sandbox: { run: (spec: AcceptanceRunSpec) => Promise<unknown> } }
+    }
+    const now = jest.spyOn(Date, "now").mockReturnValue(10_000)
+    try {
+      sandboxRun.mockResolvedValueOnce({ exitCode: 0 })
+      await input.sandbox.run(profileSpec("/wt", "unit"))
+      expect(deps.executorStopUnproven()).toBe(false)
+      expect(deps.executorStopRetainUntil()).toBeNull()
+      sandboxRun.mockRejectedValueOnce(new Error("transport disconnected"))
+      await expect(input.sandbox.run(profileSpec("/wt", "unit"))).rejects.toThrow("disconnected")
+      expect(deps.executorStopUnproven()).toBe(true)
+      // The spec's wall clock (1 s) plus the kill grace.
+      expect(deps.executorStopRetainUntil()).toBe(10_000 + 1_000 + VERIFICATION_STOP_GRACE_MS)
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it("runs no checks without a project, so required checks stay shut", async () => {

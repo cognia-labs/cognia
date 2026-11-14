@@ -19,7 +19,9 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cognia_task_workspace::{BeginTaskRun, IrreversibleReason, RunState, ServiceConfig, TaskWorkspaceService};
+use cognia_task_workspace::{
+    BeginTaskRun, IrreversibleReason, RunState, ServiceConfig, TaskWorkspaceService,
+};
 use tempfile::TempDir;
 
 fn observed(root: &Path, task: &str, session: &str) -> BeginTaskRun {
@@ -48,7 +50,10 @@ fn git(root: &Path, args: &[&str]) {
 }
 
 fn real_git() -> String {
-    let output = Command::new("sh").args(["-c", "command -v git"]).output().unwrap();
+    let output = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
@@ -64,7 +69,9 @@ fn a_mark_stored_by_another_connection_during_settle_keeps_the_patch_irreversibl
     let data = base.path().join("data");
     let first = Arc::new(TaskWorkspaceService::open(ServiceConfig::new(data.clone())).unwrap());
     let second = TaskWorkspaceService::open(ServiceConfig::new(data)).unwrap();
-    first.begin_run(observed(&root, "first", "session-a")).unwrap();
+    first
+        .begin_run(observed(&root, "first", "session-a"))
+        .unwrap();
 
     let barrier = base.path().join("barrier");
     fs::create_dir_all(&barrier).unwrap();
@@ -100,7 +107,9 @@ fn a_mark_stored_by_another_connection_during_settle_keeps_the_patch_irreversibl
         panic!("the settle capture never reached the barrier");
     }
     // Sharing stays allowed: the second run begins while the first settles.
-    let peer = second.begin_run(observed(&root, "second", "session-b")).unwrap();
+    let peer = second
+        .begin_run(observed(&root, "second", "session-b"))
+        .unwrap();
     assert!(peer.overlapped);
     assert!(second.list_runs("first").unwrap()[0].overlapped);
     fs::write(root.join("peer.txt"), "peer\n").unwrap();
@@ -110,11 +119,17 @@ fn a_mark_stored_by_another_connection_during_settle_keeps_the_patch_irreversibl
     settled.unwrap();
 
     let run = first.list_runs("first").unwrap().remove(0);
-    assert!(run.overlapped, "the mark another connection stored was overwritten");
+    assert!(
+        run.overlapped,
+        "the mark another connection stored was overwritten"
+    );
     let patch = first.get_patch_set("first").unwrap().unwrap();
     assert!(!patch.reversible);
     assert_eq!(patch.irreversible_reason, Some(IrreversibleReason::Overlap));
     assert!(first.undo_patch_set("first").is_err());
     assert!(root.join("peer.txt").is_file());
-    assert_eq!(second.list_runs("second").unwrap()[0].state, RunState::Running);
+    assert_eq!(
+        second.list_runs("second").unwrap()[0].state,
+        RunState::Running
+    );
 }

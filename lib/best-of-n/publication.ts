@@ -5,6 +5,7 @@ import type { ScmRuntime } from "@/lib/scm/runtime"
 import type { ChangesetReviewResult } from "@/lib/scm/review/review-changeset"
 import { approveChangeset, requiredChecksFor } from "@/lib/scm/review/review-changeset"
 import { unmetChecks } from "@/lib/scm/verify/changeset-checks"
+import { EXECUTOR_STOP_UNPROVEN_CODE } from "@/lib/scm/types"
 
 export interface BestOfNCheckResult {
   group: BestOfNGroup
@@ -35,6 +36,11 @@ const HOLDING: ReadonlySet<IntegrationRun["state"]> = new Set([
   "stale",
   "conflicted",
 ])
+
+/** The run is kept for a verification executor that has not proven it stopped. */
+function executorHeld(run: IntegrationRun, reason?: string) {
+  return reason === "executor_stop_unproven" || run.error?.code === EXECUTOR_STOP_UNPROVEN_CODE
+}
 
 function winner(group: BestOfNGroup) {
   const candidate = group.candidates.find((item) => item.candidateId === group.selectedCandidateId)
@@ -92,6 +98,8 @@ export function createBestOfNPublication(deps: PublicationDeps) {
         `Best-of-N winner is held by integration ${changeset.integrationId ?? "unknown"}` +
           (run ? ` (${run.state})` : "")
       )
+    // A held run's abort is refused by the Host until the executor's
+    // deadline; that refusal reaches the caller as it is.
     await deps.scm.abortIntegration(run.integrationId)
     const released = await exactChangeset(group)
     if (released.state === "integrating")
@@ -188,8 +196,15 @@ export function createBestOfNPublication(deps: PublicationDeps) {
         if (outcome.kind !== "published") {
           // Give the winner back now so cancel and archive work while the
           // person fixes the refusal. If this fails, the next checks retry it.
+          // A run held for an executor whose stop is unproven stays held: its
+          // worktree may still be written, and the Host releases it at the
+          // executor's deadline or on a person's confirmation.
           let releaseError: string | null = null
-          if (outcome.run && HOLDING.has(outcome.run.state)) {
+          if (
+            outcome.run &&
+            HOLDING.has(outcome.run.state) &&
+            !executorHeld(outcome.run, outcome.reason)
+          ) {
             try {
               await deps.scm.abortIntegration(outcome.run.integrationId)
             } catch (error) {

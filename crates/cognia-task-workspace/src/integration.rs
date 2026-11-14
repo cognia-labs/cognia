@@ -72,6 +72,14 @@ pub enum IntegrationError {
     RollbackConflict { files: Vec<String> },
     #[error("integration {integration_id} exhausted its three attempts")]
     AttemptsExhausted { integration_id: String },
+    #[error(
+        "integration {integration_id} keeps its worktree until {retain_until}: a verification \
+         executor has not proven it stopped"
+    )]
+    ExecutorStopUnproven {
+        integration_id: String,
+        retain_until: i64,
+    },
 }
 
 impl IntegrationError {
@@ -95,6 +103,7 @@ impl IntegrationError {
             Self::TargetMoved { .. } => "target_moved",
             Self::RollbackConflict { .. } => "rollback_conflict",
             Self::AttemptsExhausted { .. } => "attempts_exhausted",
+            Self::ExecutorStopUnproven { .. } => "executor_stop_unproven",
         }
     }
 
@@ -117,10 +126,18 @@ impl IntegrationError {
             | Self::Checks { .. }
             | Self::TargetCheckedOutDirty { .. }
             | Self::RollbackConflict { .. }
-            | Self::AttemptsExhausted { .. } => false,
+            | Self::AttemptsExhausted { .. }
+            | Self::ExecutorStopUnproven { .. } => false,
         }
     }
 }
+
+/// `IntegrationRun.error.code` while a verification executor's stop is unproven.
+pub const EXECUTOR_STOP_UNPROVEN: &str = "executorStopUnproven";
+/// The longest a hold may last, whatever deadline the caller names: no
+/// acceptance check runs longer, and a forgotten hold must not take the
+/// repository's integration worktree for good.
+const MAX_EXECUTOR_HOLD_MS: i64 = 24 * 60 * 60 * 1000;
 
 type QueueKey = (String, String);
 type QueueLocks = Mutex<HashMap<QueueKey, Arc<Mutex<()>>>>;
@@ -1199,7 +1216,23 @@ impl TaskWorkspaceService {
         &self,
         id: &str,
         candidate_sha: &str,
+        check: ChangesetCheck,
+    ) -> Result<IntegrationRun, IntegrationError> {
+        self.record_integration_check_with_hold(id, candidate_sha, check, None)
+    }
+
+    /// Record a check. `executor_stop_unproven_until` says the executor that
+    /// produced it has not proven it stopped and may still write into the
+    /// integration worktree until then (its deadline, after which the Host
+    /// has killed it). Until that time abort, drop and publish refuse, so
+    /// nothing resets the worktree under it; a person who confirms the
+    /// executor stopped may abort earlier.
+    pub fn record_integration_check_with_hold(
+        &self,
+        id: &str,
+        candidate_sha: &str,
         mut check: ChangesetCheck,
+        executor_stop_unproven_until: Option<i64>,
     ) -> Result<IntegrationRun, IntegrationError> {
         self.with_integration_lock(id, |mut run| {
             if run.state != IntegrationState::Prepared {
@@ -1217,6 +1250,22 @@ impl TaskWorkspaceService {
             }
             crate::changeset::cap_check_log(&mut check);
             let previous = run.clone();
+            if let Some(until) = executor_stop_unproven_until {
+                let now = now_ms();
+                let until = until.clamp(now, now.saturating_add(MAX_EXECUTOR_HOLD_MS));
+                let retain_until = self
+                    .store
+                    .lock()
+                    .hold_integration_for_executor(id, until)
+                    .map_err(IntegrationError::Store)?;
+                run.error = Some(IntegrationFailure {
+                    code: EXECUTOR_STOP_UNPROVEN.into(),
+                    message: format!(
+                        "a verification executor has not proven it stopped; the integration \
+                         worktree is kept until {retain_until}"
+                    ),
+                });
+            }
             run.checks.retain(|old| old.profile_id != check.profile_id);
             run.checks.push(check);
             self.save_progress(&mut run, &previous, &[])?;
@@ -1265,6 +1314,8 @@ impl TaskWorkspaceService {
         changeset_id: &str,
     ) -> Result<IntegrationRun, IntegrationError> {
         self.with_integration_lock(id, |mut run| {
+            // Dropping rebuilds the worktree the executor may still write.
+            self.refuse_while_executor_held(id)?;
             let admin = self.git_admin_lock(Path::new(&run.repo_common_dir));
             let _admin_guard = admin.as_ref().map(|lock| lock.lock());
             if !matches!(
@@ -1323,7 +1374,21 @@ impl TaskWorkspaceService {
     }
 
     pub fn abort_integration(&self, id: &str) -> Result<IntegrationRun, IntegrationError> {
+        self.abort_integration_with_confirmation(id, false)
+    }
+
+    /// Abort, resetting the worktree. While a verification executor's stop
+    /// is unproven this refuses unless `executor_stopped`: a person's
+    /// confirmation that it is no longer running.
+    pub fn abort_integration_with_confirmation(
+        &self,
+        id: &str,
+        executor_stopped: bool,
+    ) -> Result<IntegrationRun, IntegrationError> {
         self.with_integration_lock(id, |mut run| {
+            if !executor_stopped {
+                self.refuse_while_executor_held(id)?;
+            }
             let admin = self.git_admin_lock(Path::new(&run.repo_common_dir));
             let _admin_guard = admin.as_ref().map(|lock| lock.lock());
             if !matches!(
@@ -1341,10 +1406,36 @@ impl TaskWorkspaceService {
             let previous = run.clone();
             let updates = self.queue_integration_changesets(&run)?;
             run.state = IntegrationState::Aborted;
+            if run
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == EXECUTOR_STOP_UNPROVEN)
+            {
+                run.error = None;
+            }
             self.reset_integration_if_unreserved(&run, &run.expected_old_sha)?;
             self.save_progress(&mut run, &previous, &updates)?;
+            self.store
+                .lock()
+                .release_integration_executor_hold(id)
+                .map_err(IntegrationError::Store)?;
             Ok(run)
         })
+    }
+
+    fn refuse_while_executor_held(&self, id: &str) -> Result<(), IntegrationError> {
+        match self
+            .store
+            .lock()
+            .integration_executor_hold(id, now_ms())
+            .map_err(IntegrationError::Store)?
+        {
+            Some(retain_until) => Err(IntegrationError::ExecutorStopUnproven {
+                integration_id: id.into(),
+                retain_until,
+            }),
+            None => Ok(()),
+        }
     }
 
     fn reset_integration_if_unreserved(
@@ -1798,6 +1889,8 @@ impl TaskWorkspaceService {
                 });
             }
             require_candidate(&run, candidate_sha)?;
+            // Checks from an executor that may still be running prove nothing.
+            self.refuse_while_executor_held(id)?;
             for item in &run.items {
                 let changeset = self.integration_changeset(&item.changeset_id)?;
                 self.guard_best_of_n_changeset(&changeset, &run.target_ref)
@@ -3971,6 +4064,96 @@ mod tests {
             }
             assert_eq!(fixture.target(), moved);
         }
+    }
+
+    #[test]
+    fn an_unproven_verification_stop_keeps_the_worktree_until_its_deadline_or_a_confirmation() {
+        // Postfix review P04: an outer abort reset the worktree an executor
+        // with a lost stop could still be writing.
+        let fixture = Fixture::new();
+        let first = fixture.capture("first", &[("left.txt", "first\n")]);
+        let prepared = fixture.prepare(&[&first]);
+        let id = prepared.integration_id.clone();
+        let candidate = prepared.candidate_sha.clone().unwrap();
+        let worktree = PathBuf::from(prepared.worktree_path.as_deref().unwrap());
+        let held = fixture
+            .service
+            .record_integration_check_with_hold(
+                &id,
+                &candidate,
+                check(&candidate, ChangesetCheckOutcome::Inconclusive),
+                Some(now_ms() + 60_000),
+            )
+            .unwrap();
+        assert_eq!(held.error.as_ref().unwrap().code, EXECUTOR_STOP_UNPROVEN);
+        fs::write(worktree.join("late.txt"), "late executor write\n").unwrap();
+
+        for refused in [
+            fixture.service.abort_integration(&id).unwrap_err(),
+            fixture
+                .service
+                .drop_integration_item(&id, &first.changeset_id)
+                .unwrap_err(),
+            fixture
+                .service
+                .publish_integration(&id, &candidate, vec![])
+                .unwrap_err(),
+        ] {
+            assert_eq!(refused.code(), "executor_stop_unproven", "{refused}");
+        }
+        // A shorter later hold never shortens it.
+        fixture
+            .service
+            .record_integration_check_with_hold(
+                &id,
+                &candidate,
+                check(&candidate, ChangesetCheckOutcome::Inconclusive),
+                Some(now_ms()),
+            )
+            .unwrap();
+        assert!(fixture.service.abort_integration(&id).is_err());
+        assert!(worktree.join("late.txt").is_file());
+        let run = fixture.service.get_integration(&id).unwrap().unwrap();
+        assert_eq!(run.state, IntegrationState::Prepared);
+
+        let aborted = fixture
+            .service
+            .abort_integration_with_confirmation(&id, true)
+            .unwrap();
+        assert_eq!(aborted.state, IntegrationState::Aborted);
+        assert!(aborted.error.is_none());
+        assert!(!worktree.join("late.txt").exists());
+        assert!(fixture
+            .service
+            .store
+            .lock()
+            .integration_executor_hold(&id, 0)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn an_expired_verification_hold_lets_the_existing_recovery_abort() {
+        let fixture = Fixture::new();
+        let first = fixture.capture("first", &[("left.txt", "first\n")]);
+        let prepared = fixture.prepare(&[&first]);
+        let candidate = prepared.candidate_sha.clone().unwrap();
+        // A deadline already past is clamped to now and holds nothing.
+        fixture
+            .service
+            .record_integration_check_with_hold(
+                &prepared.integration_id,
+                &candidate,
+                check(&candidate, ChangesetCheckOutcome::Inconclusive),
+                Some(1),
+            )
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let aborted = fixture
+            .service
+            .abort_integration(&prepared.integration_id)
+            .unwrap();
+        assert_eq!(aborted.state, IntegrationState::Aborted);
     }
 
     #[test]
