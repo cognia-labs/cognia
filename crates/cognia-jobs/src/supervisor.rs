@@ -191,9 +191,10 @@ impl Drop for JobGroup {
 ///   WP1. A survivor that left the group's pipes is no longer the job's.
 /// - Proof-owing ownership (origin-attributed, including session-owned) keeps
 ///   the zombie leader pinning the pgid while any other member lives, so
-///   disposal can still signal it. Once the group is confirmed empty the
-///   leader is reaped and only an owner-scoped "ended empty" record remains,
-///   folded into the owner's proof when the owner is disposed.
+///   disposal can still signal it. When member enumeration finds none, the
+///   leader is reaped and the group probed: only ESRCH records it as ended
+///   empty (an owner-scoped record folded into the owner's proof on
+///   disposal). Without ESRCH the group stays unconfirmed and is re-probed.
 /// - A group whose authority was already retired without proof only has its
 ///   leader reaped; its unconfirmed record stays for disposal to fold.
 #[cfg(unix)]
@@ -211,40 +212,60 @@ async fn reap_completed_group(
             let group = group.lock();
             (group.pid, group.empty)
         };
-        let confirmed_empty =
-            empty || pid.is_some_and(|pgid| group_has_other_members(pgid) == Some(false));
         let retired_unconfirmed = pid.is_none() && !empty;
-        if proof_owner.is_none() || confirmed_empty || retired_unconfirmed {
-            let retire = proof_owner.is_none() || confirmed_empty;
-            let removed = {
+        // Enumeration only says when to try: it is not a stop proof.
+        let looks_empty = pid.is_some_and(|pgid| group_has_other_members(pgid) == Some(false));
+        if proof_owner.is_none() || retired_unconfirmed || empty || looks_empty {
+            // Decide under the locks; every guard is released before any await.
+            let finished = {
                 let mut map = groups.lock();
                 let current = map
                     .get(&job_id)
                     .is_some_and(|tracked| Arc::ptr_eq(tracked, &group));
-                {
+                let confirmed_empty = {
                     let mut group = group.lock();
-                    // The leader's exit is already observed: this only reaps.
+                    // The leader's exit is already observed: this only reaps it
+                    // and drops signal authority. Its number stays a probe target.
                     group.reap_for_teardown();
-                    if current && retire {
-                        group.owned = false;
-                        group.pid = None;
-                        group.empty |= confirmed_empty;
-                    }
-                }
-                if current && retire {
-                    map.remove(&job_id);
-                    if confirmed_empty {
-                        if let Some(owner) = &proof_owner {
-                            reaped.lock().insert(job_id.clone(), owner.clone());
+                    // Proof is the group probe's ESRCH after the leader is gone.
+                    group.empty || (group.pid.is_some() && !group.probe())
+                };
+                if proof_owner.is_some() && !retired_unconfirmed && !confirmed_empty && current {
+                    // A member the enumeration missed (or could not see) still
+                    // runs: keep the unconfirmed group and probe until ESRCH.
+                    None
+                } else {
+                    let removed = current && (proof_owner.is_none() || confirmed_empty);
+                    if removed {
+                        {
+                            let mut group = group.lock();
+                            group.owned = false;
+                            group.pid = None;
+                            group.empty |= confirmed_empty;
+                        }
+                        map.remove(&job_id);
+                        if confirmed_empty {
+                            if let Some(owner) = &proof_owner {
+                                reaped.lock().insert(job_id.clone(), owner.clone());
+                            }
                         }
                     }
+                    Some(removed)
                 }
-                current && retire
             };
-            if removed {
-                origins.lock().remove(&job_id);
+            match finished {
+                Some(removed) => {
+                    if removed {
+                        origins.lock().remove(&job_id);
+                    }
+                    return;
+                }
+                None => {
+                    tokio::time::sleep(interval).await;
+                    interval = (interval * 2).min(COMPLETION_REAP_MAX_INTERVAL);
+                    continue;
+                }
             }
-            return;
         }
         tokio::time::sleep(interval).await;
         interval = (interval * 2).min(COMPLETION_REAP_MAX_INTERVAL);
@@ -338,6 +359,10 @@ pub struct JobSupervisor {
     /// keep their closed-admission and proof records (ADR-0244).
     retired_owner_order: Mutex<VecDeque<String>>,
     retired_owner_capacity: usize,
+    /// Owners whose uncertainty no journal row records (a failed journal
+    /// write). Never evicted: forgetting them would turn "unconfirmed" into
+    /// an authoritative empty. Bounded by journal failures, not by turns.
+    unrecorded_uncertain: Mutex<HashSet<String>>,
     all_closed: AtomicBool,
     group_proof_supported: bool,
     exit_listeners: Mutex<Vec<ExitListener>>,
@@ -374,6 +399,7 @@ impl JobSupervisor {
             reaped_groups: Arc::new(Mutex::new(HashMap::new())),
             retired_owner_order: Mutex::new(VecDeque::new()),
             retired_owner_capacity: MAX_RETIRED_OWNER_RECORDS,
+            unrecorded_uncertain: Mutex::new(HashSet::new()),
             all_closed: AtomicBool::new(false),
             group_proof_supported,
             exit_listeners: Mutex::new(Vec::new()),
@@ -644,6 +670,9 @@ impl JobSupervisor {
                 self.session_proofs
                     .lock()
                     .insert(origin.session_id.clone(), false);
+                self.unrecorded_uncertain
+                    .lock()
+                    .insert(origin.session_id.clone());
                 self.remember_retired_owner(&origin.session_id);
             }
             // Failed persistence remains unconfirmed even if rollback cleanup
@@ -1291,6 +1320,23 @@ impl JobSupervisor {
         None
     }
 
+    /// Leader lifecycle rows for power and turn settlement (ADR-0244). Never
+    /// gated on stop proof: an owner whose proof is unconfirmed still reports
+    /// which of its jobs' leaders run. Callers get no group verdict here.
+    pub(crate) fn lifecycle_records(
+        &self,
+        owner: Option<&JobOwner>,
+        include_origin: bool,
+    ) -> Result<Vec<JobRecord>> {
+        match owner {
+            Some(JobOwner::Session { session_id }) if include_origin => {
+                self.origin_records(session_id)
+            }
+            Some(owner) => self.store.list_by_owner(owner),
+            None => self.store.list_all(),
+        }
+    }
+
     /// Bound the per-owner admission and proof records (ADR-0244). Owners are
     /// executor/attempt ids, one per executor, never reused: keeping every one
     /// would grow a long-running Host by one entry per turn. Only the newest
@@ -1308,6 +1354,10 @@ impl JobSupervisor {
             order.drain(..excess).collect()
         };
         for owner in evicted {
+            // Only the journal can re-derive an evicted owner's uncertainty.
+            if self.unrecorded_uncertain.lock().contains(&owner) {
+                continue;
+            }
             self.closed_sessions.lock().remove(&owner);
             self.session_proofs.lock().remove(&owner);
             self.owner_proofs.lock().remove(&owner);
@@ -1822,6 +1872,32 @@ mod tests {
             )
             .await;
         assert!(detached.is_ok(), "{detached:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn eviction_never_turns_a_lost_journal_write_into_a_stop_proof() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(JobStore::new_in_memory().unwrap());
+        let mut sup = JobSupervisor::new(store.clone(), dir.path().join("logs"));
+        sup.retired_owner_capacity = 1;
+        store.fail_next_insert();
+        assert!(sup
+            .spawn_with_origin(sh("true", JobOwner::App), Some(origin_of("lost-journal")))
+            .await
+            .is_err());
+        // Newer executors push the failed owner out of the bounded order.
+        for owner in ["executor-1", "executor-2"] {
+            sup.kill_owned_by(&session(owner)).await.unwrap();
+        }
+        assert!(!sup.owner_proofs.lock().contains_key("executor-1"));
+        // No journal row records the lost job, so its uncertainty stays.
+        assert!(sup.list_by_origin_session("lost-journal").is_err());
+        assert!(sup.kill_origin_session("lost-journal").await.is_err());
+        assert!(sup
+            .spawn_with_origin(sh("true", JobOwner::App), Some(origin_of("lost-journal")))
+            .await
+            .is_err());
     }
 
     #[cfg(unix)]

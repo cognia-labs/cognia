@@ -371,7 +371,11 @@ export function createHostBgShellRegistry({
     return (await listInScope(Boolean(processOrigin))).map(toListRow)
   }
 
-  async function listInScope(includeOrigin: boolean): Promise<HostJobRecord[]> {
+  /**
+   * `lifecycle` asks only which leaders run (power, turn settlement): the Host
+   * answers it even when this executor's stop proof is unconfirmed (ADR-0244).
+   */
+  async function listInScope(includeOrigin: boolean, lifecycle = false): Promise<HostJobRecord[]> {
     // Admission is owned exclusively by this registry. Once closed, absence
     // of even an attempted spawn is a local proof, independent of Host health.
     if (closing && !admittedSpawn) return []
@@ -383,6 +387,7 @@ export function createHostBgShellRegistry({
     const { jobs, originSessionId } = (await hostRpc.call("jobs.list", {
       owner: sessionOwner,
       ...(includeOrigin ? { includeOrigin: true } : {}),
+      ...(lifecycle ? { lifecycle: true } : {}),
     })) as {
       jobs?: HostJobRecord[] | null
       originSessionId?: string
@@ -411,7 +416,9 @@ export function createHostBgShellRegistry({
     killAll,
     list,
     async hasRunningProcesses() {
-      return admittedSpawn && (await listInScope(true)).some((job) => job.status === "running")
+      return (
+        admittedSpawn && (await listInScope(true, true)).some((job) => job.status === "running")
+      )
     },
     async hasLiveProcesses() {
       if (!admittedSpawn) return false

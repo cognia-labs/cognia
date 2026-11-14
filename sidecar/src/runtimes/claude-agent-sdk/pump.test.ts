@@ -361,3 +361,45 @@ test("a CLI whose exit is unknown keeps the executor's wake hold", async (t) => 
     false
   )
 })
+
+test("a CLI leader that exited settles the turn even when its group proof fails", async (t) => {
+  // Windows shape with a real tracker contract: proof rejects, leaders closed.
+  const events: Record<string, unknown>[] = []
+  const toolSession = createToolSessionContext({ sessionId: "unproven", sendOptions: {} })
+  t.mock.method(toolSession, "disposeProcesses", async () => {})
+  t.mock.method(toolSession, "hasRunningProcesses", async () => false)
+  startAnthropicPump({
+    sessionId: "unproven",
+    sendOptions: {},
+    emit: (event: Record<string, unknown>) => {
+      events.push(event)
+    },
+    log() {},
+    toolSession,
+    pluginToolNameAliases: new Map(),
+    mcpAutoReconnect: { onEvent() {} },
+    mcpStderrSink: { end() {} },
+    state: { outstandingPrompts: 1 },
+    waitForProcessExit: async () => {
+      throw new Error("Claude CLI process group stop unconfirmed")
+    },
+    waitForLeaderExit: async () => {},
+    session: { closeInput() {}, drainPending() {} },
+    q: {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "result", subtype: "success" }
+      },
+      interrupt() {},
+      close() {},
+    },
+  } as unknown as Parameters<typeof startAnthropicPump>[0])
+  await flush()
+  await flush()
+  const settled = events.filter((event) => event.type === "turn_settled")
+  assert.equal(settled.length, 1)
+  assert.equal(settled[0]!.backgroundProcessesRunning, false)
+  assert.equal(
+    events.some((event) => event.type === "session_disposed"),
+    false
+  )
+})

@@ -25,6 +25,8 @@ export interface RuntimeQuery extends AsyncIterable<RuntimeEvent> {
   interrupt(): unknown
   close?(): void
   waitForProcessExit?(): Promise<void>
+  /** Every CLI leader has exited, independent of stop proof. */
+  waitForLeaderExit?(): Promise<void>
   reconnectMcpServer?(name: string): Promise<void>
   reloadPlugins?: Query["reloadPlugins"]
 }
@@ -83,4 +85,6 @@ export interface PumpContext extends BaseContext {
   mcpStderrSink: ReturnType<typeof createStderrLogSink>
   toolSession: ToolSessionContext
   waitForProcessExit(): Promise<void>
+  /** Leader lifecycle for turn settlement; falls back to `waitForProcessExit`. */
+  waitForLeaderExit?(): Promise<void>
 }

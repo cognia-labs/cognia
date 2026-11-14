@@ -42,6 +42,14 @@ export function createClaudeProcessTracker() {
         },
       }
     },
+    /**
+     * Leader lifecycle: every spawned CLI child has closed. Unlike
+     * `waitForExit`, this never depends on stop proof (ADR-0244), so a turn
+     * settles where the group cannot be proven empty (Windows, survivors).
+     */
+    waitForLeaderExit(): Promise<void> {
+      return Promise.all(exits).then(() => {})
+    },
     waitForExit() {
       // A delayed protected-query admission cannot spawn after proof was issued.
       sealed = true

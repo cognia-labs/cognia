@@ -800,10 +800,11 @@ for (const groupProofSupported of [true, false]) {
         assert.ok(!result.isError, textOf(result))
         assert.equal(hasSessionForegroundProcesses(sessionId), false)
         assert.equal(hasSessionForegroundGroups(sessionId), true)
-        if (groupProofSupported)
-          await assert.rejects(disposeForegroundGroups(sessionId), /live foreground/)
-        else await disposeForegroundGroups(sessionId)
-        assert.equal(retireForegroundGroups(sessionId), false)
+        // Disposal signals the still-live group after its shell exited, so the
+        // surviving descendant stops; only a supported group can then prove it.
+        await disposeForegroundGroups(sessionId)
+        if (descendant) assert.equal(processAlive(descendant), false, "descendant survived")
+        assert.equal(retireForegroundGroups(sessionId), groupProofSupported)
         assert.equal(
           hasSessionForegroundGroups(sessionId),
           false,

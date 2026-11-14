@@ -26,6 +26,7 @@ export function startAnthropicPump({
   mcpStderrSink,
   toolSession,
   waitForProcessExit,
+  waitForLeaderExit,
 }: PumpContext) {
   const closeInput = session.closeInput
   const executorId = randomUUID()
@@ -141,9 +142,11 @@ export function startAnthropicPump({
       // Closing a Query can precede the CLI's real exit, and SDK-native Bash /
       // Task jobs are separate from Cognia's tool-session process registry.
       q.close?.()
-      const [cliExit, disposal] = await Promise.allSettled([
-        waitForProcessExit(),
+      const proof = waitForProcessExit()
+      const [cliExit, disposal, leaderExit] = await Promise.allSettled([
+        proof,
         toolSession.disposeProcesses(),
+        waitForLeaderExit ? waitForLeaderExit() : proof,
       ])
       // Leader-settled signal: the executor's power and turn lifecycle follow
       // the CLI and the leaders of its jobs, never stop proof (ADR-0244). It
@@ -151,7 +154,7 @@ export function startAnthropicPump({
       let backgroundProcessesRunning = true
       try {
         backgroundProcessesRunning =
-          cliExit.status === "rejected" ||
+          leaderExit.status === "rejected" ||
           liveSdkTasks.size > 0 ||
           (await toolSession.hasRunningProcesses())
       } catch {

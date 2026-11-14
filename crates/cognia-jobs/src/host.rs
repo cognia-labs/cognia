@@ -216,11 +216,19 @@ async fn dispatch_with_supervisor(
                 Some(Value::Null) | None => None,
                 Some(_) => Some(owner_from(params)?),
             };
-            let rows = match (&owner, params.get("includeOrigin").and_then(Value::as_bool)) {
-                (Some(JobOwner::Session { session_id }), Some(true)) => {
-                    sup.list_by_origin_session(session_id)
+            let include_origin = params.get("includeOrigin").and_then(Value::as_bool) == Some(true);
+            // `lifecycle` asks only which leaders run (power, turn settlement):
+            // never gated on stop proof, and it carries no group verdict.
+            let lifecycle = params.get("lifecycle").and_then(Value::as_bool) == Some(true);
+            let rows = if lifecycle {
+                sup.lifecycle_records(owner.as_ref(), include_origin)
+            } else {
+                match (&owner, include_origin) {
+                    (Some(JobOwner::Session { session_id }), true) => {
+                        sup.list_by_origin_session(session_id)
+                    }
+                    _ => sup.list(owner.as_ref()),
                 }
-                _ => sup.list(owner.as_ref()),
             }
             .map_err(|e| e.to_string())?;
             // Keep JobRecord's Rust/source shape compatible. Liveness is an
@@ -228,7 +236,11 @@ async fn dispatch_with_supervisor(
             let jobs = rows
                 .into_iter()
                 .map(|row| {
-                    let running = sup.process_group_running(&row.id);
+                    let running = if lifecycle {
+                        None
+                    } else {
+                        sup.process_group_running(&row.id)
+                    };
                     let mut value = serde_json::to_value(row).map_err(|error| error.to_string())?;
                     if let Some(running) = running {
                         value["processGroupRunning"] = json!(running);
@@ -380,6 +392,44 @@ async fn dispatch_with_supervisor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rpc_lifecycle_list_answers_while_origin_proof_is_unconfirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(JobStore::new_in_memory().unwrap());
+        let sup = JobSupervisor::new(store.clone(), dir.path().join("logs"));
+        let spawn = |command: &str| {
+            json!({
+                "command": command, "program": "/bin/sh", "args": ["-c", command],
+                "cwd": dir.path(), "env": { "PATH": "/usr/bin:/bin" }, "owner": { "kind": "app" },
+                "origin": { "sessionId": "uncertain", "childRunId": "child", "dispatchEpoch": 1 }
+            })
+        };
+        dispatch_with_supervisor(&sup, "jobs.spawn", &spawn("exec sleep 60"))
+            .await
+            .unwrap();
+        // A lost journal write makes this origin's proof unconfirmed for good.
+        store.fail_next_insert();
+        assert!(dispatch_with_supervisor(&sup, "jobs.spawn", &spawn("true"))
+            .await
+            .is_err());
+        let scope = json!({ "owner": { "kind": "session", "sessionId": "uncertain" }, "includeOrigin": true });
+        assert!(dispatch_with_supervisor(&sup, "jobs.list", &scope)
+            .await
+            .is_err());
+        let mut lifecycle = scope.clone();
+        lifecycle["lifecycle"] = json!(true);
+        let list = dispatch_with_supervisor(&sup, "jobs.list", &lifecycle)
+            .await
+            .unwrap();
+        assert_eq!(list["originSessionId"], "uncertain");
+        assert_eq!(list["jobs"].as_array().unwrap().len(), 1);
+        assert_eq!(list["jobs"][0]["status"], "running");
+        // Leader rows only: no group verdict rides along.
+        assert!(list["jobs"][0].get("processGroupRunning").is_none());
+        assert!(sup.kill_origin_session("uncertain").await.is_err());
+    }
 
     #[cfg(unix)]
     #[tokio::test]

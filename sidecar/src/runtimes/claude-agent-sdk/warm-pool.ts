@@ -311,6 +311,7 @@ export function warmPool(deps: Pick<WarmPoolDeps, "log"> = {}) {
           query(prompt) {
             return Object.assign(warm.query(prompt), {
               waitForProcessExit: () => processes.waitForExit(),
+              waitForLeaderExit: () => processes.waitForLeaderExit(),
             })
           },
         }

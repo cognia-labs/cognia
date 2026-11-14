@@ -521,3 +521,25 @@ test("Windows-shaped Host lifecycle exits without converting an acknowledgement 
   await registry.killAll()
   assert.equal(await registry.hasLiveProcesses(), true)
 })
+
+test("leader lifecycle stays readable after the Host marks the executor's proof unconfirmed", async () => {
+  const { hostRpc } = fakeHost({
+    "jobs.spawn": () => ({ id: "job", startedAtMs: 1 }),
+    "jobs.list": (params) => {
+      // The proof-gated read refuses; only the lifecycle read answers.
+      if (params.lifecycle !== true) throw new Error("origin session stop unconfirmed")
+      return {
+        originSessionId: "origin",
+        jobs: [{ id: "job", status: "exited", startedAtMs: 1 }],
+      }
+    },
+  })
+  const registry = createHostBgShellRegistry({
+    hostRpc,
+    sessionId: "origin",
+    processOrigin: { childRunId: "child", dispatchEpoch: 1 },
+  })
+  await registry.spawnBackground({ command: "exit 0", shell: "sh", shellArgs: [] })
+  assert.equal(await registry.hasRunningProcesses(), false)
+  await assert.rejects(registry.hasLiveProcesses(), /stop unconfirmed/)
+})

@@ -41,7 +41,7 @@ function fixtureRegistry(t: TestContext, options?: Parameters<typeof createBgShe
 }
 
 test(
-  "background leader exit loses signal authority and retains unconfirmed owner state",
+  "after a background leader exits, cleanup still stops its group and proves it empty",
   { skip: isWin },
   async (t) => {
     const registry = fixtureRegistry(t)
@@ -51,9 +51,10 @@ test(
       assert.equal(entry.status, "exited")
       assert.equal(registry.list()[0]?.status, "exited")
       assert.equal(registry.hasLiveProcesses?.(), true)
-      await assert.rejects(registry.killAll(), /cleanup failed/)
+      await registry.killAll()
+      assert.throws(() => process.kill(Number(entry.buffer.trim()), 0), { code: "ESRCH" })
       assert.deepEqual(registry.list(), [], "process-level entries retire")
-      assert.equal(registry.hasLiveProcesses?.(), true, "owner retains unconfirmed result")
+      assert.equal(registry.hasLiveProcesses?.(), false, "the owner's group proved empty")
     } finally {
       const descendant = Number(entry.buffer.trim())
       if (descendant > 0) {

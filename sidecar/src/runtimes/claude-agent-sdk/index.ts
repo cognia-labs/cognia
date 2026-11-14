@@ -147,12 +147,14 @@ export function dispatchAnthropic(
     !protectedInvocation && sendOptions.claudeAgentSdk?.prewarm?.enabled === true
   const processTracker = createClaudeProcessTracker()
   let waitForProcessExit = () => processTracker.waitForExit()
+  let waitForLeaderExit = () => processTracker.waitForLeaderExit()
   const spawnQuery = () => {
     const claimed = prewarmEnabled ? pool.claim(sendOptions, options) : null
     if (claimed) {
       const q = claimed.query(inputStream.iterable)
       // A custom pool without exit evidence must fail closed.
       waitForProcessExit = () => q.waitForProcessExit?.() ?? new Promise<void>(() => {})
+      waitForLeaderExit = () => q.waitForLeaderExit?.() ?? waitForProcessExit()
       return q
     }
     return (runtime.query ?? query)({
@@ -287,6 +289,7 @@ export function dispatchAnthropic(
     mcpStderrSink,
     toolSession,
     waitForProcessExit: () => waitForProcessExit(),
+    waitForLeaderExit: () => waitForLeaderExit(),
   })
   return Object.assign(session, {
     reloadExtensions: createClaudeExtensionReloader(q, sendOptions, () => loadedPlugins),

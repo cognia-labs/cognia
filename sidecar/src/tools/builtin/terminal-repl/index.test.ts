@@ -634,16 +634,17 @@ test(
       rows: 24,
     })
     const child = fake.__ptys[0]!
-    let signals = 0
+    const signals: (number | NodeJS.Signals)[] = []
     t.mock.method(process, "kill", (pid: number, signal: number | NodeJS.Signals) => {
       assert.equal(pid, -child.pid)
-      if (signal !== 0) signals++
-      return true // Includes a possible recycled pgid: never authorizes signalling.
+      if (signal !== 0) signals.push(signal)
+      return true // A group that never empties: escalation, but never proof.
     })
     child.exitListener?.({ exitCode: 0 })
     assert.equal(hasSessionTerminalRepls("descendants"), true)
     await assert.rejects(disposeTerminalRepls("descendants"), /cleanup unconfirmed/)
-    assert.equal(signals, 0)
+    // Each signal follows a live probe, so survivors still get the SIGKILL.
+    assert.deepEqual(signals, ["SIGTERM", "SIGKILL"])
     assert.equal(retireTerminalRepls("descendants"), false)
     assert.equal(sessions.size, 0)
   }

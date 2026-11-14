@@ -21,7 +21,7 @@ function makeFakeStream(
 }
 
 test(
-  "foreground shell exit with surviving descendants keeps session disposal unconfirmed",
+  "foreground shell exit with surviving descendants: the fence stops them before it proves isolation",
   {
     skip: process.platform === "win32",
   },
@@ -64,11 +64,10 @@ test(
         events.some((event) => event.type === "session_disposed"),
         false
       )
-      await assert.rejects(
-        session.fencePersonalEgress(),
-        /isolation unconfirmed|live foreground process groups/,
-        "H3: ended direct PIDs do not prove descendant isolation"
-      )
+      // H3: ended direct PIDs alone prove nothing. The fence signals the
+      // still-live group and proves isolation only once it answers ESRCH.
+      await session.fencePersonalEgress()
+      assert.throws(() => process.kill(descendantPid, 0), { code: "ESRCH" })
     } finally {
       session.closeInput()
       await session.closed
@@ -80,7 +79,7 @@ test(
         }
       }
     }
-    assert.equal(events.filter((event) => event.type === "session_disposed").length, 0)
+    assert.equal(events.filter((event) => event.type === "session_disposed").length, 1)
   }
 )
 

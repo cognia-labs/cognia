@@ -58,6 +58,8 @@ test(
       process.kill(Number(output.trim()), 0)
       await assert.rejects(tracker.waitForExit(), /group.*unconfirmed/)
       await assert.rejects(tracker.waitForExit(), /group.*unconfirmed/)
+      // The CLI leader has exited: its lifecycle settles without stop proof.
+      await withinSpawnBudget(tracker.waitForLeaderExit())
     } finally {
       child.kill("SIGKILL")
       if (Number(output.trim()) > 0) {

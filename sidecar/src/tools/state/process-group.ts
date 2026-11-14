@@ -1,11 +1,13 @@
 import type { ChildProcess } from "node:child_process"
 
 /**
- * Node/libuv reaps the leader before emitting exit. After that callback a
- * numeric pgid is only a probe target, never authority to signal: the old
- * group could have emptied and its number been reused. ESRCH retires even
- * that probe identity permanently. Windows needs a Job Object for proof.
- * Keeps probe/signal authority separate from leader lifecycle status.
+ * Node/libuv reaps the leader before emitting exit. After that the pgid number
+ * stays pinned only while the group still has members, so every signal is
+ * sent right after a probe that found the group live: escalation (SIGKILL
+ * after a SIGTERM the leader died of) still reaches survivors. The accepted
+ * residue is the group emptying and its number being reused between those two
+ * calls (ADR-0244). ESRCH retires the identity permanently; retirement ends
+ * signal authority. Windows needs a Job Object for proof.
  */
 export function createProcessGroup(
   pid: number | undefined,
@@ -14,7 +16,6 @@ export function createProcessGroup(
     process.kill(pid, signal)
 ) {
   let identity = pid
-  let leaderExited = false
   let empty = false
   function isLive(): boolean {
     if (empty) return false
@@ -33,11 +34,11 @@ export function createProcessGroup(
   return {
     isLive,
     leaderExited() {
-      leaderExited = true
       isLive()
     },
     signal(signal: NodeJS.Signals | number): boolean {
-      if (!isLive() || leaderExited || !identity || !supported) return false
+      // Probe immediately before the signal: a live group pins its number.
+      if (!supported || !identity || !isLive()) return false
       try {
         kill(-identity, signal)
       } catch {
@@ -48,7 +49,6 @@ export function createProcessGroup(
     retire() {
       const confirmed = !isLive()
       identity = undefined
-      leaderExited = true
       return confirmed
     },
   }

@@ -8,7 +8,7 @@ import { createBashTool } from "./builtin/core-files/bash.ts"
 import { asCallable } from "../../test-support/tool-result.ts"
 
 test(
-  "foreground groups remain session-owned after the shell exits",
+  "foreground groups remain session-owned after the shell exits and disposal stops them",
   {
     skip: process.platform === "win32",
   },
@@ -29,8 +29,9 @@ test(
       assert.ok(!result.isError)
       assert.equal(await context.hasLiveProcesses(), true)
       assert.equal(await sibling.hasLiveProcesses(), false)
-      await assert.rejects(context.disposeProcesses(), /live foreground/)
-      assert.equal(await context.hasLiveProcesses(), true, "owner retains final unconfirmed state")
+      await context.disposeProcesses()
+      assert.throws(() => process.kill(descendant!, 0), { code: "ESRCH" })
+      assert.equal(await context.hasLiveProcesses(), false, "the owner's group proved empty")
     } finally {
       if (descendant) {
         try {
