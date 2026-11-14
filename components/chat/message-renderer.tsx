@@ -15,6 +15,8 @@ import { selectStreamdownPlugins } from "@/components/ai-elements/streamdown-plu
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { MessageMetaLine, MessageShell } from "@/components/chat/message-shell"
 import { UserMessageBody } from "@/components/chat/user-message-body"
+import { entityCitation } from "@/lib/chat/mentions/selection-citations"
+import { messageRefId } from "@/lib/chat/mentions/message-reference"
 import { ReasoningToolRow } from "@/components/chat/message-parts/reasoning-part"
 import {
   chatMarkdownUrlTransform,
@@ -392,6 +394,7 @@ function MessageRendererInner({
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   // Non-null only inside a workbench sidechat — see `AsideTargetProvider`.
   const asideTargetSessionId = useAsideTarget()
+  const tAsides = useTranslations("contextWorkbench.asides")
   // Non-null only inside a transcript that mounts selection mode; a read-only
   // transcript renders this same row and offers no "Select".
   const selectionHost = useTranscriptSelectionHost()
@@ -797,7 +800,7 @@ function MessageRendererInner({
   }, [messageShareContent, t])
 
   const handBack = useCallback(
-    (submit: boolean) => {
+    async (submit: boolean) => {
       const target = submit ? asideTargetSessionId : handBackTargetId
       if (!target) return
       const content = extractText(message).trim()
@@ -806,8 +809,26 @@ function MessageRendererInner({
         .split("\n")
         .map((line) => `> ${line}`)
         .join("\n")}\n\n`
+      const source =
+        asideTargetSessionId && documentSessionId
+          ? await getSession(documentSessionId).catch((error) => {
+              loggers.chat.warn("Could not read side chat title", error)
+              return undefined
+            })
+          : undefined
+      const citations =
+        asideTargetSessionId && documentSessionId
+          ? [
+              entityCitation(
+                "message",
+                messageRefId(documentSessionId, message.id),
+                source?.title || tAsides("fallbackName")
+              ),
+            ]
+          : []
       const claimed = dispatchComposerAppend({
         text,
+        citations,
         sessionId: target,
         submit,
         ...(submit
@@ -824,14 +845,15 @@ function MessageRendererInner({
           candidateId: crypto.randomUUID(),
           prompt: text,
           mode: "append",
+          citations,
         })
         toast.info(t(submit ? "sendToMainDraft" : "bringBackDraft"))
       } else if (!submit) toast.success(t("bringBackDone"))
     },
-    [asideTargetSessionId, handBackTargetId, message, t]
+    [asideTargetSessionId, documentSessionId, handBackTargetId, message, t, tAsides]
   )
-  const handleBringBack = useCallback(() => handBack(false), [handBack])
-  const handleSendToMain = useCallback(() => handBack(true), [handBack])
+  const handleBringBack = useCallback(() => void handBack(false), [handBack])
+  const handleSendToMain = useCallback(() => void handBack(true), [handBack])
 
   const handleSaveAsMemory = useCallback(async () => {
     if (!branchSessionId) return
@@ -1203,7 +1225,12 @@ function MessageRendererInner({
                 {/* process segments (and the tree) inside the fold, the rest after it. */}
                 {message.role === "user" ? (
                   inboundA2UICoversParts ? null : (
-                    <UserMessageBody key={message.id} previewText={messageText}>
+                    <UserMessageBody
+                      key={message.id}
+                      previewText={messageText}
+                      message={message as { metadata?: Record<string, unknown> }}
+                      sessionId={documentSessionId}
+                    >
                       {segments.map((segment, si) => renderSegment(segment, si))}
                       <SubagentTree parts={message.parts} mode={agentFlowMode} />
                     </UserMessageBody>

@@ -993,6 +993,53 @@ test("welcome starter card creates a session, then sends the prompt into it", as
   })
 })
 
+test.each([false, true, undefined])(
+  "workspace and hero preserve direct send outcome: %s",
+  async (outcome) => {
+    sessionsRef.current = [
+      { id: "d-1", title: "Direct", kind: "direct", createdAt: 0, updatedAt: 0 } as ChatSession,
+    ]
+    activeSessionId = "d-1"
+    directChatMock.send.mockResolvedValue(outcome)
+    await act(async () => {
+      render(<DesktopChatWorkspace />)
+    })
+    const props = paneGroupPropsLog.at(-1) as {
+      send: (content: string, sessionId: string) => Promise<boolean | void>
+      onHeroSend: (content: string) => Promise<boolean | void>
+    }
+    await act(async () => {
+      await expect(props.send("question", "d-1")).resolves.toBe(outcome)
+      await expect(props.onHeroSend("question")).resolves.toBe(outcome)
+    })
+  }
+)
+
+test.each([false, true, undefined])(
+  "new-session hero preserves direct send outcome: %s",
+  async (outcome) => {
+    sessionsRef.current = []
+    activeSessionId = null
+    selectedGuild = { kind: "dm" }
+    create.mockResolvedValue({ id: "new-1" } as ChatSession)
+    directChatMock.send.mockResolvedValue(outcome)
+    await act(async () => {
+      render(<DesktopChatWorkspace />)
+    })
+    const props = paneGroupPropsLog.at(-1) as {
+      onHeroSend: (content: string) => Promise<boolean | void>
+    }
+    await act(async () => {
+      await expect(props.onHeroSend("question")).resolves.toBe(outcome)
+    })
+    expect(directChatMock.send).toHaveBeenCalledWith(
+      "question",
+      undefined,
+      expect.objectContaining({ sessionId: "new-1" })
+    )
+  }
+)
+
 test("welcome starter card starts a team conversation when a team guild is selected", async () => {
   sessionsRef.current = []
   activeSessionId = null

@@ -1,8 +1,17 @@
 /** @jest-environment jsdom */
 
-import { renderHook, waitFor } from "@testing-library/react"
+import "fake-indexeddb/auto"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { useResourceWorkbenchSession } from "./use-resource-workbench-session"
 import { useContextWorkbenchStore } from "@/stores/context-workbench/context-workbench-store"
+import { useChatStore } from "@/stores/chat"
+import { toast } from "sonner"
+
+jest.mock("next-intl", () => {
+  const translate = (key: string) => key
+  return { useTranslations: () => translate }
+})
+jest.mock("sonner", () => ({ toast: { error: jest.fn() } }))
 
 const get = jest.fn()
 const put = jest.fn().mockResolvedValue(undefined)
@@ -13,7 +22,12 @@ const first = jest.fn().mockResolvedValue(undefined)
 const equals = jest.fn(() => ({ first }))
 const where = jest.fn(() => ({ equals }))
 jest.mock("@/lib/db/schema", () => ({
-  getDb: () => ({ sessions: { get, put, update, toArray, where } }),
+  getDb: () => ({
+    sessions: { get, put, add: put, update, toArray, where },
+    syncTombstones: { get: async () => undefined },
+    transaction: async (_mode: string, ...args: unknown[]) =>
+      (args.at(-1) as () => Promise<unknown>)(),
+  }),
 }))
 jest.mock("@/lib/db/project-scope", () => ({
   resolveScopeProjectId: jest.fn(async () => "proj-active"),
@@ -28,6 +42,8 @@ beforeEach(() => {
   equals.mockClear()
   where.mockClear()
   useContextWorkbenchStore.setState({ sessionOverrides: {} })
+  useChatStore.setState({ activeSessionId: null, openSessionIds: [], sessions: {} })
+  jest.mocked(toast.error).mockClear()
 })
 
 it("finds an existing aside through the surfaceBindingKey index, not a table scan", async () => {
@@ -166,12 +182,12 @@ it("keeps the same resource session when only the draft revision changes", async
   )
 
   await waitFor(() => expect(result.current?.visibility).toBe("embedded"))
-  expect(get).toHaveBeenCalledTimes(1)
+  expect(get).toHaveBeenCalledTimes(2)
 
   rerender({ draftVersion: 2 })
 
   expect(result.current?.visibility).toBe("embedded")
-  expect(get).toHaveBeenCalledTimes(1)
+  expect(get).toHaveBeenCalledTimes(2)
 })
 
 it("leaves workflow session ownership to the workflow editor", () => {
@@ -193,6 +209,7 @@ it("leaves workflow session ownership to the workflow editor", () => {
 })
 
 it("gives a conversation its own sidechat session", async () => {
+  get.mockImplementation(async (id: string) => (id === "s" ? { id, title: "Main" } : undefined))
   const { result } = renderHook(() =>
     useResourceWorkbenchSession(
       {
@@ -210,7 +227,11 @@ it("gives a conversation its own sidechat session", async () => {
   expect(get).toHaveBeenCalledWith("resource-workbench:session:s")
 })
 
-it("never nests an aside under an aside", () => {
+it.each(["embedded", "unknown"])("never nests under a prefixed %s session", async (state) => {
+  const id = "resource-workbench:session:s"
+  get.mockResolvedValue(
+    state === "embedded" ? { id, kind: "resource-workbench", visibility: "embedded" } : undefined
+  )
   const { result } = renderHook(() =>
     useResourceWorkbenchSession(
       {
@@ -226,9 +247,94 @@ it("never nests an aside under an aside", () => {
   )
 
   expect(result.current).toBeNull()
-  expect(get).not.toHaveBeenCalled()
+  await waitFor(() => expect(get).toHaveBeenCalledWith(id))
+  expect(result.current).toBeNull()
   expect(put).not.toHaveBeenCalled()
 })
+
+it("opens a promoted conversation's aside while retaining its permalink", async () => {
+  const id = "resource-workbench:session:s"
+  get.mockImplementation(async (key: string) =>
+    key === id ? { id, kind: "direct", title: "Promoted" } : undefined
+  )
+  const { result } = renderHook(() =>
+    useResourceWorkbenchSession(
+      { kind: "session", sessionId: id, capabilities: ["ai"] },
+      true,
+      "window-a"
+    )
+  )
+  await waitFor(() => expect(result.current?.kind).toBe("resource-workbench"))
+})
+
+it("handles parent-gone rejection and clears a previously displayed session", async () => {
+  useChatStore.setState({ activeSessionId: "s", openSessionIds: ["s"] })
+  get.mockImplementation(async (id: string) => (id === "s" ? { id, title: "Main" } : undefined))
+  const log = jest.spyOn(console, "error").mockImplementation(() => {})
+  try {
+    const { result, rerender } = renderHook(
+      ({ windowId }) =>
+        useResourceWorkbenchSession(
+          { kind: "session", sessionId: "s", capabilities: ["ai"] },
+          true,
+          windowId
+        ),
+      { initialProps: { windowId: "a" } }
+    )
+    await waitFor(() => expect(result.current).not.toBeNull())
+    get.mockResolvedValue(undefined)
+    rerender({ windowId: "b" })
+    await waitFor(() =>
+      expect(log).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ code: "aside_parent_gone" })
+      )
+    )
+    expect(result.current).toBeNull()
+    expect(useChatStore.getState().activeSessionId).toBeNull()
+    expect(useChatStore.getState().openSessionIds).not.toContain("s")
+    expect(toast.error).toHaveBeenCalledWith("openError")
+  } finally {
+    log.mockRestore()
+  }
+})
+
+it.each(["generic", "cancelled"])(
+  "keeps navigation and suppresses the toast for a %s failure",
+  async (failure) => {
+    useChatStore.setState({ activeSessionId: "s", openSessionIds: ["s"] })
+    let release!: (value: undefined) => void
+    if (failure === "generic") get.mockRejectedValueOnce(new Error("database unavailable"))
+    else
+      get.mockImplementationOnce(
+        () =>
+          new Promise<undefined>((resolve) => {
+            release = resolve
+          })
+      )
+    const log = jest.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const { result, unmount } = renderHook(() =>
+        useResourceWorkbenchSession(
+          { kind: "session", sessionId: "s", capabilities: ["ai"] },
+          true,
+          "a"
+        )
+      )
+      if (failure === "cancelled") {
+        unmount()
+        await act(async () => release(undefined))
+      }
+      await waitFor(() => expect(log).toHaveBeenCalled())
+      expect(result.current).toBeNull()
+      expect(useChatStore.getState().activeSessionId).toBe("s")
+      expect(useChatStore.getState().openSessionIds).toEqual(["s"])
+      expect(toast.error).not.toHaveBeenCalled()
+    } finally {
+      log.mockRestore()
+    }
+  }
+)
 
 it("creates no aside while the dock has no conversation open", () => {
   const { result } = renderHook(() =>

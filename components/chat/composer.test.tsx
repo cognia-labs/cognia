@@ -17,6 +17,10 @@ import { useRemoteDocStaging } from "@/hooks/chat/use-remote-doc-staging"
 jest.mock("@/lib/i18n/runtime-translator", () => ({
   getRuntimeTranslator: async () => (key: string) => key,
 }))
+jest.mock("@/lib/context-workbench/resource-session", () => ({
+  ...jest.requireActual("@/lib/context-workbench/resource-session"),
+  ensureResourceWorkbenchSession: jest.fn(),
+}))
 jest.mock("@/lib/best-of-n/entry", () => ({
   prepareBestOfNChat: jest.fn(async (_sessionId: string, prompt: string, n: number) => ({
     session: {
@@ -305,6 +309,377 @@ function pairCompanionHost(): void {
     },
   })
 }
+
+describe("Composer — side chat input ownership", () => {
+  const sourceCitation = {
+    kind: "entity" as const,
+    id: "message:aside-a#answer",
+    label: "Research",
+    raw: "@message:aside-a#answer",
+  }
+  function renderComposer(onSend: jest.Mock = jest.fn(async () => undefined), id = "ses_42") {
+    const Wrapper = withAdapter(makeAdapter())
+    const tree = (target: string) => (
+      <Wrapper>
+        <Composer
+          session={mkSession({ id: target })}
+          onStartNewSession={async () => undefined}
+          onOpenSettings={() => undefined}
+          onSend={onSend}
+          onStop={() => undefined}
+        />
+      </Wrapper>
+    )
+    const view = render(tree(id))
+    return { view, tree, onSend, textarea: screen.getByRole("textbox") as HTMLTextAreaElement }
+  }
+
+  beforeEach(async () => {
+    const { ensureResourceWorkbenchSession } =
+      await import("@/lib/context-workbench/resource-session")
+    const { getDb } = await import("@/lib/db/schema")
+    const { useSideChatRequestStore } = await import("@/stores/chat/side-chat-request-store")
+    jest
+      .mocked(ensureResourceWorkbenchSession)
+      .mockReset()
+      .mockResolvedValue({
+        id: "aside-a",
+        kind: "resource-workbench",
+      } as ChatSession)
+    useSideChatRequestStore.setState({ pending: {} })
+    jest.spyOn(getDb().sessions, "get").mockResolvedValue(undefined)
+    mockUseCompactLayout.mockReturnValue(false)
+  })
+
+  afterEach(() => jest.restoreAllMocks())
+
+  it.each(["/side", "/btw"])("keeps %s text when opening fails", async (command) => {
+    const { ensureResourceWorkbenchSession } =
+      await import("@/lib/context-workbench/resource-session")
+    const { useSideChatRequestStore } = await import("@/stores/chat/side-chat-request-store")
+    jest.mocked(ensureResourceWorkbenchSession).mockRejectedValueOnce(new Error("parent gone"))
+    const { textarea, onSend } = renderComposer()
+    fireEvent.change(textarea, { target: { value: `${command} keep my question` } })
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" })
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("openError"))
+    await act(async () => {})
+    expect(textarea).toHaveValue(`${command} keep my question`)
+    expect(useSideChatRequestStore.getState().pending).toEqual({})
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it("clears the owning draft only after the side question has been queued", async () => {
+    const { useSideChatRequestStore } = await import("@/stores/chat/side-chat-request-store")
+    const { textarea, onSend } = renderComposer()
+    fireEvent.change(textarea, { target: { value: "/side accepted question" } })
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" })
+    await waitFor(() => expect(textarea).toHaveValue(""))
+    expect(useSideChatRequestStore.getState().pending["aside-a"]).toEqual([
+      expect.objectContaining({ question: "accepted question" }),
+    ])
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it.each(["session switch", "session round trip", "edited draft"])(
+    "does not clear a matching replacement draft after a delayed command: %s",
+    async (change) => {
+      const { ensureResourceWorkbenchSession } =
+        await import("@/lib/context-workbench/resource-session")
+      let finish!: (session: ChatSession) => void
+      jest.mocked(ensureResourceWorkbenchSession).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          })
+      )
+      const { textarea, view, tree } = renderComposer(undefined, "session-a")
+      const text = "/side same question"
+      fireEvent.change(textarea, { target: { value: text } })
+      fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" })
+      await waitFor(() => expect(ensureResourceWorkbenchSession).toHaveBeenCalledTimes(1))
+      if (change !== "edited draft") {
+        view.rerender(tree("session-b"))
+        await act(async () => {})
+        if (change === "session round trip") {
+          view.rerender(tree("session-a"))
+          await act(async () => {})
+        }
+      } else {
+        fireEvent.change(screen.getByRole("textbox"), { target: { value: "another draft" } })
+      }
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: text } })
+      await act(async () => finish({ id: "aside-a", kind: "resource-workbench" } as ChatSession))
+      expect(screen.getByRole("textbox")).toHaveValue(text)
+    }
+  )
+
+  it.each([false, true, undefined])(
+    "recovers only refused sends and keeps turn context: %s",
+    async (outcome) => {
+      const replyTo = { messageId: "reply-1", preview: "Quoted answer" }
+      const citation = { kind: "entity" as const, id: "issue:i1", label: "Broker race" }
+      act(() => {
+        useChatStore.getState().setReplyTo(replyTo, "ses_42")
+        useChatStore.getState().addCitedRef(citation, "ses_42")
+        useChatStore.getState().addContextSelection(
+          {
+            kind: "entity",
+            entityKind: "issue",
+            entityId: "i1",
+            title: "Broker race",
+            snapshot: "ISSUE BODY",
+            comment: "",
+            capturedAt: 1,
+          },
+          "ses_42"
+        )
+      })
+      const { dispatchComposerAppend } = await import("@/lib/chat/composer-append")
+      const { textarea } = renderComposer(jest.fn(async () => outcome))
+      const onSubmitted = jest.fn()
+      jest.mocked(toast.error).mockClear()
+      await act(async () => {
+        dispatchComposerAppend({
+          sessionId: "ses_42",
+          text: "keep this question",
+          submit: true,
+          onSubmitted,
+        })
+      })
+      await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(outcome !== false))
+      expect(textarea).toHaveValue(outcome === false ? "keep this question" : "")
+      const slice = composerReadSlice(useChatStore.getState(), "ses_42")
+      expect(slice.replyTo).toEqual(outcome === false ? replyTo : null)
+      expect(slice.citedRefs).toEqual(outcome === false ? [citation] : [])
+      expect(slice.contextSelections).toHaveLength(outcome === false ? 1 : 0)
+      expect(toast.error).not.toHaveBeenCalled()
+    }
+  )
+
+  it("does not restore a failed turn already owned by the transcript", async () => {
+    const { dispatchComposerAppend } = await import("@/lib/chat/composer-append")
+    const onSend = jest.fn(async (content: unknown) => {
+      useChatStore.getState().replaceSessionMessages("ses_42", [
+        {
+          id: "failed-turn",
+          role: "user",
+          parts: [{ type: "text", text: String(content) }],
+          metadata: { turnAdmission: { state: "failed", code: "workspaceBundleFailed", at: 1 } },
+        },
+      ])
+      return true
+    })
+    const { textarea } = renderComposer(onSend)
+    const onSubmitted = jest.fn()
+    await act(async () => {
+      dispatchComposerAppend({
+        sessionId: "ses_42",
+        text: "> failed turn\n\n",
+        submit: true,
+        onSubmitted,
+      })
+    })
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(true))
+    expect(textarea).toHaveValue("")
+    expect(useChatStore.getState().sessions.ses_42.messages).toEqual([
+      expect.objectContaining({
+        id: "failed-turn",
+        parts: [{ type: "text", text: "> failed turn\n\n" }],
+        metadata: expect.objectContaining({
+          turnAdmission: expect.objectContaining({ state: "failed" }),
+        }),
+      }),
+    ])
+    expect(useComposerIntentStore.getState().pendingBySession.ses_42).toBeUndefined()
+  })
+
+  it("retains a refused merged handoff separately from newer typing without auto-sending", async () => {
+    const { dispatchComposerAppend } = await import("@/lib/chat/composer-append")
+    let finish!: (outcome: boolean) => void
+    const onSend = jest.fn(
+      (
+        _content: unknown,
+        _manifest?: unknown,
+        _templateRun?: unknown,
+        _turnMetadata?: { citations?: unknown }
+      ) =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve
+        })
+    )
+    const { textarea } = renderComposer(onSend)
+    fireEvent.change(textarea, { target: { value: "existing draft" } })
+    const onSubmitted = jest.fn()
+    await act(async () => {
+      dispatchComposerAppend({
+        sessionId: "ses_42",
+        text: "> side conclusion\n\n",
+        citations: [sourceCitation],
+        submit: true,
+        onSubmitted,
+      })
+    })
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1))
+    expect(onSend.mock.calls[0][0]).toBe("existing draft > side conclusion\n\n")
+    fireEvent.change(textarea, { target: { value: "new follow-up typing" } })
+    await act(async () => finish(false))
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(false))
+    expect(onSubmitted).not.toHaveBeenCalledWith(true)
+    expect(textarea).toHaveValue("new follow-up typing")
+    expect(useComposerIntentStore.getState().pendingBySession.ses_42).toMatchObject({
+      prompt: "existing draft > side conclusion\n\n",
+      mode: "append",
+      waitForEmpty: true,
+      citations: [sourceCitation],
+    })
+    expect(composerReadSlice(useChatStore.getState(), "ses_42").citedRefs).toEqual([])
+    onSend.mockResolvedValueOnce(true)
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" })
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
+    expect(onSend.mock.calls[1][0]).toBe("new follow-up typing")
+    expect(onSend.mock.calls[1][3]?.citations).toBeUndefined()
+    await waitFor(() => expect(textarea).toHaveValue("existing draft > side conclusion\n\n"))
+    expect(composerReadSlice(useChatStore.getState(), "ses_42").citedRefs).toEqual([sourceCitation])
+    expect(onSend).toHaveBeenCalledTimes(2)
+  })
+
+  it("retains a failed handoff separately from newer typing, then restores it without auto-sending", async () => {
+    const { dispatchComposerAppend } = await import("@/lib/chat/composer-append")
+    let rejectSend!: (error: Error) => void
+    const onSend = jest.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectSend = reject
+        })
+    )
+    const { textarea } = renderComposer(onSend)
+    const onSubmitted = jest.fn()
+    await act(async () => {
+      dispatchComposerAppend({
+        sessionId: "ses_42",
+        text: "> side conclusion\n\n",
+        submit: true,
+        onSubmitted,
+      })
+    })
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1))
+    fireEvent.change(textarea, { target: { value: "new follow-up typing" } })
+    await act(async () => rejectSend(new Error("provider refused")))
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(false))
+    expect(textarea).toHaveValue("new follow-up typing")
+    expect(useComposerIntentStore.getState().pendingBySession.ses_42).toMatchObject({
+      prompt: "> side conclusion\n\n",
+      mode: "append",
+      waitForEmpty: true,
+    })
+    fireEvent.change(textarea, { target: { value: "" } })
+    await waitFor(() => expect(textarea).toHaveValue("> side conclusion\n\n"))
+    expect(useComposerIntentStore.getState().pendingBySession.ses_42).toBeUndefined()
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps a failed handoff addressed to its original conversation after a switch", async () => {
+    const { dispatchComposerAppend } = await import("@/lib/chat/composer-append")
+    let rejectSend!: (error: Error) => void
+    const onSend = jest.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectSend = reject
+        })
+    )
+    const { view, tree } = renderComposer(onSend, "session-a")
+    const onSubmitted = jest.fn()
+    await act(async () => {
+      dispatchComposerAppend({
+        sessionId: "session-a",
+        text: "> conclusion\n\n",
+        citations: [sourceCitation],
+        submit: true,
+        onSubmitted,
+      })
+    })
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1))
+    view.rerender(tree("session-b"))
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "B's draft" } })
+    await act(async () => rejectSend(new Error("provider refused")))
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(false))
+    expect(screen.getByRole("textbox")).toHaveValue("B's draft")
+    expect(useComposerIntentStore.getState().pendingBySession["session-a"]?.prompt).toBe(
+      "> conclusion\n\n"
+    )
+    expect(useComposerIntentStore.getState().pendingBySession["session-a"]?.citations).toEqual([
+      sourceCitation,
+    ])
+    expect(useComposerIntentStore.getState().pendingBySession["session-b"]).toBeUndefined()
+  })
+
+  it("still sends an existing parent draft together with the handoff quote exactly once", async () => {
+    const { dispatchComposerAppend } = await import("@/lib/chat/composer-append")
+    const { textarea, onSend } = renderComposer()
+    fireEvent.change(textarea, { target: { value: "existing draft" } })
+    const onSubmitted = jest.fn()
+    await act(async () => {
+      dispatchComposerAppend({
+        sessionId: "ses_42",
+        text: "> conclusion\n\n",
+        citations: [sourceCitation],
+        submit: true,
+        onSubmitted,
+      })
+    })
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(true))
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend.mock.calls[0][0]).toBe("existing draft > conclusion\n\n")
+    expect(onSend.mock.calls[0][3]).toMatchObject({ citations: [sourceCitation] })
+    expect(textarea).toHaveValue("")
+    expect(useComposerIntentStore.getState().pendingBySession.ses_42).toBeUndefined()
+  })
+
+  it("consumes an unclaimed handoff with its citation once and sends it on the next turn", async () => {
+    useComposerIntentStore.getState().stage("ses_42", {
+      candidateId: "unclaimed",
+      prompt: "> recovered conclusion\n\n",
+      mode: "append",
+      citations: [sourceCitation, sourceCitation],
+    })
+    const { textarea, onSend } = renderComposer()
+    await waitFor(() => expect(textarea).toHaveValue("> recovered conclusion\n\n"))
+    expect(composerReadSlice(useChatStore.getState(), "ses_42").citedRefs).toEqual([sourceCitation])
+    expect(useComposerIntentStore.getState().pendingBySession.ses_42).toBeUndefined()
+    expect(onSend).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" })
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1))
+    expect(onSend.mock.calls[0][3]).toMatchObject({ citations: [sourceCitation] })
+    expect(composerReadSlice(useChatStore.getState(), "ses_42").citedRefs).toEqual([])
+  })
+
+  it("keeps a refused Send to main quote and source exactly once on retry", async () => {
+    const { dispatchComposerAppend } = await import("@/lib/chat/composer-append")
+    const { textarea, onSend } = renderComposer(jest.fn(async () => false))
+    fireEvent.change(textarea, { target: { value: "existing draft" } })
+    const onSubmitted = jest.fn()
+    await act(async () => {
+      dispatchComposerAppend({
+        sessionId: "ses_42",
+        text: "> conclusion\n\n",
+        citations: [sourceCitation, sourceCitation],
+        submit: true,
+        onSubmitted,
+      })
+    })
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(false))
+    expect(textarea).toHaveValue("existing draft > conclusion\n\n")
+    expect(composerReadSlice(useChatStore.getState(), "ses_42").citedRefs).toEqual([sourceCitation])
+    expect(useComposerIntentStore.getState().pendingBySession.ses_42).toBeUndefined()
+    onSend.mockResolvedValueOnce(true)
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" })
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
+    expect(onSend.mock.calls[1][0]).toBe("existing draft > conclusion\n\n")
+    expect(onSend.mock.calls[1][3]).toMatchObject({ citations: [sourceCitation] })
+    await waitFor(() => expect(textarea).toHaveValue(""))
+    expect(composerReadSlice(useChatStore.getState(), "ses_42").citedRefs).toEqual([])
+  })
+})
 
 describe("Composer — data-hooks integration", () => {
   it("invalidates a captured document destination across session A-B-A", () => {
@@ -1546,7 +1921,7 @@ describe("Composer — review receipts survive a send that never commits", () =>
     expect(useArtifactStore.getState().peekReviewReceipts("ses_42")).toHaveLength(1)
   }
 
-  function renderComposer(onSend: (c: unknown) => Promise<void>) {
+  function renderComposer(onSend: (c: unknown) => Promise<boolean | void>) {
     const Wrapper = withAdapter(makeAdapter())
     render(
       <Wrapper>
@@ -1587,9 +1962,10 @@ describe("Composer — review receipts survive a send that never commits", () =>
     )
   })
 
-  it("keeps the verdict when onSend throws", async () => {
+  it.each(["throws", "refuses"])("keeps the verdict when onSend %s", async (outcome) => {
     seedRejectedReceipt()
     const onSend = jest.fn(async (_c: unknown) => {
+      if (outcome === "refuses") return false
       throw new Error("transport down")
     })
     await send(renderComposer(onSend), "try again")

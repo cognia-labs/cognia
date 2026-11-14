@@ -60,6 +60,10 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Textarea } from "@/components/ui/textarea"
 import { buildAsideContext } from "@/lib/chat/session-aside-context"
 import {
+  isEmbeddedAside,
+  surfaceBindingForContextResource,
+} from "@/lib/context-workbench/resource-session"
+import {
   usePanelInput,
   usePanelInputs,
   type PanelInputs,
@@ -934,7 +938,12 @@ export function useSessionSurfacePanels({
         icon: MessagesSquareIcon,
         order: 15,
         appliesTo: (resource) =>
-          resource.kind === "session" && !resource.sessionId.startsWith("resource-workbench:"),
+          resource.kind === "session" &&
+          (resource.sessionId === "none" ||
+            surfaceBindingForContextResource(
+              resource,
+              !isEmbeddedAside(resource.sessionId, session)
+            ) !== null),
         retention: "stateful",
         requiresChatScope: hasActiveSession,
         renderer: renderers.sidechat,
@@ -1172,6 +1181,7 @@ export function useSessionSurfacePanels({
       newTab,
       pendingRunLearningCount,
       renderers,
+      session,
       sourceCount,
       uncommittedChangeCount,
       unresolvedCommentCount,

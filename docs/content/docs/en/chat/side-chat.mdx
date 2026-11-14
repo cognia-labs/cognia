@@ -35,11 +35,32 @@ one line (what was called on what, and an excerpt of the result). The side chat 
 transcript is reference only, and that it must answer your side question rather than continue the
 main task.
 
-The context is delivered incrementally. The first turn sends a snapshot; later turns send only what
-the main conversation said since, or nothing when it said nothing. A reply the main agent is still
+Context preserves text formatting and includes markers for omitted earlier messages, truncated
+text and attached files; attachment markers contain only the filename and media type.
+
+The chip above the side chat's composer shows how many recent messages are inherited, how many
+earlier messages are omitted, and how many attachments are not carried. Open it to review the
+main conversation's current branch. Messages withheld by personal-history privacy rules are
+hidden, including their filenames; only a neutral hidden count is shown.
+
+Select **Pin for context** to explicitly include an earlier message. Pins belong to this side
+chat and appear in a separate labelled reference block with a 6,000-character budget. Whole
+messages are omitted from the oldest end when that budget is exceeded; a single oversized
+message is truncated. On native Claude resumes, a newly pinned message is delivered on the
+next turn once; fresh snapshots include pins again. Deleted messages and messages outside the
+current branch lose their pins. Clearing the side chat or the main conversation drops pins.
+Unpinning affects future context; it cannot erase text already received by an agent.
+
+Images and files are never inherited automatically. Choose **Attach** beside a file to stage its
+locally available bytes as a normal attachment in this side chat's composer. Review and send it
+there; the usual size limits, provider support and PII checks apply. Files whose local bytes are
+missing or purged are marked unavailable with a reason; filename markers do not recreate them.
+
+The first turn sends a bounded snapshot. Later turns send only new parent material (or nothing
+when unchanged) when resuming a matching native Claude SDK session. External agents and browser
+standalone providers resend the full bounded snapshot each turn. A reply the main agent is still
 writing is marked as in progress and sent again once it is final. If the main conversation was
-edited, branched or cleared since, or the side chat was cleared, the side chat gets a fresh
-snapshot. This keeps every side chat turn cheap and lets the provider reuse its prompt cache.
+edited, branched or cleared since, or the side chat was cleared, the side chat gets a fresh snapshot.
 
 The transcript is sent to the model only. It is not stored in the side chat's messages, and it
 passes the same PII gate as every other model call.

@@ -65,6 +65,7 @@ import { formatContextSelectionsForLLM } from "@/lib/artifacts/format-selection-
 import { refreshSelectionFreshness } from "@/lib/chat/mentions/selection-freshness"
 import { citationsForSelections } from "@/lib/chat/mentions/selection-citations"
 import { mergeContextRefs } from "@/lib/chat/mentions/merge-refs"
+import type { ContextRef } from "@/lib/chat/mentions/types"
 import {
   carriedPreambleSections,
   composeTurnText,
@@ -359,6 +360,8 @@ interface Props {
   /**
    * Dispatch the turn. `manifest` describes the leading attachment blocks so the
    * transcript can render file cards instead of raw extracted text.
+   * Return `false` only when refused before the input reaches the transcript.
+   * `true` (including a retained failed row) and legacy `void` clear the draft.
    */
   onSend: (
     content: SendContent,
@@ -372,7 +375,7 @@ interface Props {
      */
     templateRun?: ChatTemplateRun | null,
     turnMetadata?: ComposerTurnMetadata
-  ) => void | Promise<void>
+  ) => boolean | void | Promise<boolean | void>
   onStop: () => void | Promise<void>
   disabled?: boolean
   /**
@@ -444,6 +447,7 @@ interface Props {
  */
 export type { ComposerTurnMetadata } from "@/lib/chat/turn-metadata"
 import type { ComposerTurnMetadata } from "@/lib/chat/turn-metadata"
+import { SideChatDispatchError } from "@/lib/slash-commands/actions/side-chat"
 
 /** Copilot ⇄ workflow-editor wiring passed down from the workflow chat tab. */
 export interface ComposerWorkflowMention {
@@ -1977,8 +1981,22 @@ function ComposerInner(props: InnerProps) {
   // --- Submit handler ----------------------------------------------------
   const localActionInFlightRef = useRef(false)
   const acceptedPredictionRef = useRef<{ sessionId: string | null; text: string } | null>(null)
+  // Text an auto-sending intent staged, held until the input state catches up.
+  // This one-shot latch also identifies handoffs that need lossless recovery.
+  const pendingAutoSendRef = useRef<{
+    text: string
+    sessionId: string | null
+    onSubmitted?: (sent: boolean) => void
+    recoverHandoff?: boolean
+    citations?: readonly ContextRef[]
+  } | null>(null)
   const submit = useCallback(async (): Promise<boolean> => {
     const text = textInput.value
+    const pendingHandoff = pendingAutoSendRef.current
+    const recoverHandoff =
+      pendingHandoff?.recoverHandoff &&
+      pendingHandoff.sessionId === sessionId &&
+      pendingHandoff.text === text
     const literalPrediction =
       acceptedPredictionRef.current?.sessionId === sessionId &&
       acceptedPredictionRef.current?.text === text
@@ -1991,9 +2009,16 @@ function ComposerInner(props: InnerProps) {
       const command = commandMap.get(asideCommand[1])
       if (!command) return false
       localActionInFlightRef.current = true
+      const owningDraft = currentDraftRef.current
       try {
         const handled = await props.onCommand(command, asideCommand[2] ?? "")
-        if (handled && textInput.value === text) textInput.setInput("")
+        if (
+          handled &&
+          currentDraftRef.current === owningDraft &&
+          owningDraft.sessionId === sessionId &&
+          textInput.value === text
+        )
+          textInput.setInput("")
         return handled
       } finally {
         localActionInFlightRef.current = false
@@ -2195,7 +2220,22 @@ function ComposerInner(props: InnerProps) {
       const currentDraft = currentDraftRef.current
       // A failed request cannot replace follow-up typing or another session's
       // draft. Restore only while its optimistic empty input is still current.
-      if (currentDraft.sessionId !== sessionId || currentDraft.text) return
+      if (currentDraft.sessionId !== sessionId || textInput.value) {
+        if (recoverHandoff && sessionId) {
+          useComposerIntentStore.getState().stage(sessionId, {
+            candidateId: crypto.randomUUID(),
+            prompt: restoreText(text),
+            mode: "append",
+            waitForEmpty: true,
+            citations: pendingHandoff?.citations,
+          })
+          // These sources belong to the deferred text, not newer follow-up
+          // typing. The intent consumer restores them with that text.
+          for (const ref of pendingHandoff?.citations ?? [])
+            useChatStore.getState().removeCitedRef(ref.id, sessionId)
+        }
+        return
+      }
       textInput.setInput(text)
       setPastedBlocks(pasteMap)
       // The text comes back holding SHORT labels, so the label→URL map has to
@@ -3059,15 +3099,6 @@ function ComposerInner(props: InnerProps) {
     sessionId ? state.pendingBySession[sessionId] : undefined
   )
   const consumeComposerIntent = useComposerIntentStore((state) => state.consume)
-  // Text an auto-sending intent staged, held until the input state catches up.
-  // A ref, not state: this is a one-shot latch between two effects, and a
-  // `useState` write inside an effect body is a cascading render
-  // (`react-hooks/set-state-in-effect`). See the handshake below.
-  const pendingAutoSendRef = useRef<{
-    text: string
-    sessionId: string | null
-    onSubmitted?: (sent: boolean) => void
-  } | null>(null)
   // See `restoredAttachments` above: only the ones we could not bring back.
   const tDraft = useTranslations("chat.composer.draftRestore")
   // The next-intl translator isn't a stable reference, so we read it through a
@@ -3244,6 +3275,11 @@ function ComposerInner(props: InnerProps) {
   useEffect(() => {
     if (!sessionId || !pendingComposerIntent || isComposing) return
     if (persistDrafts && draftHydratedFor !== sessionId) return
+    if (
+      pendingComposerIntent.waitForEmpty &&
+      (textValue || attachments.files.length || turnInFlight || followUpInFlight)
+    )
+      return
     const intent = consumeComposerIntent(sessionId, pendingComposerIntent.candidateId)
     if (!intent) return
     if (
@@ -3262,6 +3298,7 @@ function ComposerInner(props: InnerProps) {
       // until the next commit.
       if (intent.autoSend) pendingAutoSendRef.current = { text: merged, sessionId }
     }
+    for (const ref of intent.citations ?? []) useChatStore.getState().addCitedRef(ref, sessionId)
     if (intent.images?.length) {
       const identity = intentIdentity
       void attachmentToFiles({
@@ -3302,6 +3339,10 @@ function ComposerInner(props: InnerProps) {
     pendingComposerIntent,
     persistDrafts,
     sessionId,
+    textValue,
+    attachments.files.length,
+    turnInFlight,
+    followUpInFlight,
   ])
 
   // Second half of the auto-send handshake: fire only once the committed input
@@ -3311,12 +3352,25 @@ function ComposerInner(props: InnerProps) {
     if (pending === null) return
     if (sessionId !== pending.sessionId) {
       pendingAutoSendRef.current = null
+      if (pending.recoverHandoff && pending.sessionId) {
+        useComposerIntentStore.getState().stage(pending.sessionId, {
+          candidateId: crypto.randomUUID(),
+          prompt: pending.text,
+          mode: "append",
+          waitForEmpty: true,
+          citations: pending.citations,
+        })
+        for (const ref of pending.citations ?? [])
+          useChatStore.getState().removeCitedRef(ref.id, pending.sessionId)
+      }
       pending.onSubmitted?.(false)
       return
     }
     if (textValue !== pending.text) return
+    // Capture the addressed handoff before clearing the one-shot latch.
+    const submission = submit()
     pendingAutoSendRef.current = null
-    void submit().then((sent) => pending.onSubmitted?.(sent))
+    void submission.then((sent) => pending.onSubmitted?.(sent))
   }, [textValue, submit, sessionId])
 
   useEffect(() => {
@@ -3719,7 +3773,13 @@ function ComposerInner(props: InnerProps) {
                 addFiles={addStagedFiles}
                 requestSubmit={(text, onSubmitted) => {
                   pendingAutoSendRef.current?.onSubmitted?.(false)
-                  pendingAutoSendRef.current = { text, sessionId, onSubmitted }
+                  pendingAutoSendRef.current = {
+                    text,
+                    sessionId,
+                    onSubmitted,
+                    recoverHandoff: true,
+                    citations: selectComposerCitedRefs(useChatStore.getState(), sessionId),
+                  }
                 }}
               />
             </>
@@ -3973,11 +4033,11 @@ const ComposerAppendBridge = memo(function ComposerAppendBridge({
         appended = `${cur}${sep}${text}`
         textInput.setInput(appended)
       }
-      if (detail.submit) requestSubmit(appended, detail.onSubmitted)
       if (detail.files?.length) addFiles([...detail.files])
       const chat = useChatStore.getState()
       const slice = sessionId ?? null
       for (const ref of detail.citations ?? []) chat.addCitedRef(ref, slice)
+      if (detail.submit) requestSubmit(appended, detail.onSubmitted)
       if (detail.carried?.length) chat.addCarriedPreambles([...detail.carried], slice)
       // A reply the user already picked here wins over the one coming back.
       if (detail.replyTo && !selectComposerReplyTo(chat, slice))
@@ -4335,6 +4395,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
             kind: "action",
             outcome: "failed",
           })
+          // The action already explained the refusal. Retain its question.
+          if (err instanceof SideChatDispatchError) return false
           toast.error(err instanceof Error ? err.message : tCommands("failed"))
         }
         return true
@@ -4852,11 +4914,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
         ...(citations.length > 0 ? { citations } : {}),
         ...(route ? { route } : {}),
       }
-      if (Object.keys(turnMetadata).length > 0) {
-        await onSend(content, attachmentResult.manifest, templateRun, turnMetadata)
-      } else {
-        await onSend(content, attachmentResult.manifest, templateRun)
-      }
+      const outcome =
+        Object.keys(turnMetadata).length > 0
+          ? await onSend(content, attachmentResult.manifest, templateRun, turnMetadata)
+          : await onSend(content, attachmentResult.manifest, templateRun)
+      if (outcome === false) return false
       if (citations.length > 0) {
         // `kinds` is a sorted set joined with `+` — an enum-shaped string like
         // `entity+file`, never a title or anything the user typed.

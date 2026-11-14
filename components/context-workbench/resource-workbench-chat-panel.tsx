@@ -8,6 +8,10 @@ import type { SendContent } from "@cognia/agent-config-types"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { useChatScope } from "@/components/chat/chat-scope-provider"
 import { useClaudeChat } from "@/hooks/chat/use-claude-chat"
+import { useSessionAsideIdentity } from "@/hooks/chat/use-session-aside-identity"
+import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
+import { hostSupportsSessionResetTurns } from "@/lib/ai/agent/external/runtimes/remote/remote-host-configs"
+import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 import { getDb } from "@/lib/db/schema"
 import { listMessages } from "@/lib/db/messages"
 import { consumeStagedPrompt } from "@/lib/chat/attached-session"
@@ -22,6 +26,7 @@ import { resolveSessionAsideRuntimeWithAgent } from "@/lib/context-workbench/ses
 import { useContextWorkbench } from "./context-workbench"
 import { AsideTargetProvider } from "./aside-target"
 import { AsideSwitcher } from "./aside-switcher"
+import { AsideInheritance } from "./aside-inheritance"
 import { useContextWorkbenchStore } from "@/stores/context-workbench/context-workbench-store"
 import { getContextResourceKey } from "@/types/context-workbench"
 import {
@@ -105,11 +110,19 @@ export function ResourceWorkbenchChatPanel({
   const exportSession = useSingleExport()
   const session = useLiveQuery(() => getDb().sessions.get(sessionId), [sessionId]) ?? null
   const parentSessionId = resource.kind === "session" ? resource.sessionId : undefined
+  const parentIsAside = useSessionAsideIdentity(parentSessionId)
   const parentSession = useLiveQuery(
     () => (parentSessionId ? getDb().sessions.get(parentSessionId) : undefined),
     [parentSessionId]
   )
   const parentRuntimeRef = useRuntimeRefForSession(parentSessionId)
+  const asideRuntimeRef = useRuntimeRefForSession(sessionId)
+  // Re-evaluate the capability after the paired Host's handshake changes.
+  useRuntimeSnapshot()
+  useRemoteHostStore(
+    (state) => state.hosts.find((host) => host.id === state.activeHostId)?.featureManifest
+  )
+  const remoteMayRemember = asideRuntimeRef.kind === "host" && !hostSupportsSessionResetTurns()
   const parentFusionMode = useChatFusionMode(parentSessionId)
   const parentComposition = useAgentRuntimeStore((state) =>
     parentSessionId
@@ -205,6 +218,9 @@ export function ResourceWorkbenchChatPanel({
     const status = state.sessions[sessionId]?.status
     return status === "streaming" || status === "awaiting_approval"
   })
+  const unsupportedAsideLane = useChatStore(
+    (state) => state.sessions[sessionId]?.errorMessage === t("asides.unsupportedReadOnlyLane")
+  )
   const saveWriteAccess = async (enabled: boolean) => {
     setSavingAccess(true)
     try {
@@ -279,7 +295,8 @@ export function ResourceWorkbenchChatPanel({
       content: SendContent,
       manifest?: readonly AttachmentManifestEntry[],
       templateRun?: ChatTemplateRun | null,
-      turnMetadata?: ComposerTurnMetadata
+      turnMetadata?: ComposerTurnMetadata,
+      callOptions?: { throwOnError: true }
     ) =>
       withArtifactTarget(async () => {
         const resourceContext = await resolveResourceContext()
@@ -289,6 +306,7 @@ export function ResourceWorkbenchChatPanel({
           attachmentManifest: manifest,
           ...(templateRun ? { templateRun } : {}),
           ...turnMetadataSendOptions(turnMetadata),
+          ...callOptions,
         })
       }),
     [claude, resolveResourceContext, sessionId, withArtifactTarget]
@@ -308,14 +326,16 @@ export function ResourceWorkbenchChatPanel({
       if (!request) continue
       // This is the same callback as ChatPane.onSend: parent context, permissions,
       // and live steering remain owned by the existing controller.
-      void send(request.question).catch(() => {
-        useComposerIntentStore.getState().stage(sessionId, {
-          candidateId: request.id,
-          prompt: request.question,
-          mode: "append",
-        })
-        toast.error(t("asides.sendFailedDraft"))
-      })
+      void send(request.question, undefined, undefined, undefined, { throwOnError: true }).catch(
+        () => {
+          useComposerIntentStore.getState().stage(sessionId, {
+            candidateId: request.id,
+            prompt: request.question,
+            mode: "append",
+          })
+          toast.error(t("asides.sendFailedDraft"))
+        }
+      )
     }
   }, [
     asideTargetSessionId,
@@ -409,7 +429,7 @@ export function ResourceWorkbenchChatPanel({
   // selection state to keep in sync.
   const resourceKey = getContextResourceKey(resource)
   const setSessionOverride = useContextWorkbenchStore((state) => state.setSessionOverride)
-  const binding = surfaceBindingForContextResource(resource)
+  const binding = surfaceBindingForContextResource(resource, !parentIsAside)
   const primaryId = binding ? resourceWorkbenchSessionId(binding) : null
 
   const body = (
@@ -492,6 +512,12 @@ export function ResourceWorkbenchChatPanel({
           })}
         </p>
       ) : null}
+      {session?.asideParentClearedAt !== undefined &&
+      (remoteMayRemember || session.asideParentClearedAt > (session.lastMessageAt ?? 0)) ? (
+        <p role="status" className="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">
+          {t(remoteMayRemember ? "asides.parentClearedRemoteMayRemember" : "asides.parentCleared")}
+        </p>
+      ) : null}
       {selectionHeader ? (
         <div className="shrink-0 border-b" data-testid="resource-chat-selection-header">
           {selectionHeader}
@@ -516,6 +542,15 @@ export function ResourceWorkbenchChatPanel({
             onUseSample={(text) => void send(text).catch(() => undefined)}
             onOpenSettings={() => undefined}
             showHeader={false}
+            runtimeStrip={
+              resource.kind === "session" && !unsupportedAsideLane ? (
+                <AsideInheritance
+                  key={sessionId}
+                  sessionId={sessionId}
+                  parentId={resource.sessionId}
+                />
+              ) : undefined
+            }
           />
         </Suspense>
       </div>

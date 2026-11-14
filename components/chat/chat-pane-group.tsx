@@ -36,7 +36,7 @@ export interface ChatPaneGroupProps {
     manifest?: readonly AttachmentManifestEntry[],
     templateRun?: ChatTemplateRun | null,
     turnMetadata?: ComposerTurnMetadata
-  ) => Promise<void> | void
+  ) => Promise<boolean | void> | boolean | void
   stop: (sessionId: string) => Promise<void> | void
   /** Interrupt the running turn and immediately replay the queued steer. */
   steerNow: (sessionId: string) => Promise<void> | void
@@ -66,7 +66,7 @@ export interface ChatPaneGroupProps {
     manifest?: readonly AttachmentManifestEntry[],
     templateRun?: ChatTemplateRun | null,
     turnMetadata?: ComposerTurnMetadata
-  ) => void | Promise<void>
+  ) => boolean | void | Promise<boolean | void>
   /** Whether that hero composer may address a runtime — see `ChatPane.heroRouting`. */
   heroRouting?: boolean
   onOpenSettings: (tab?: string, params?: Readonly<Record<string, string>>) => void
@@ -212,7 +212,11 @@ export function ChatPaneGroup({
         // "Keep planning" feedback rides the pane's normal send pipeline: a
         // regular user turn with a bubble, session row untouched (still plan).
         onSendPlanFeedback={
-          sessionId ? (feedback) => Promise.resolve(send(feedback, sessionId)) : undefined
+          sessionId
+            ? async (feedback) => {
+                await send(feedback, sessionId)
+              }
+            : undefined
         }
       />
     )

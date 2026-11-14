@@ -315,7 +315,7 @@ import { ChatPane } from "./chat-view"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { MessageList } from "./message-list"
 import { DiagnosticCard, InlineError } from "@/components/error/diagnostic-card"
-import { chatColumnClass } from "./chat-column"
+import { chatDockColumnClass } from "./chat-column"
 import { createDiagnostic } from "@cognia/diagnostics"
 import type { CogniaDiagnostic } from "@cognia/diagnostics"
 import type { ChatSession, SendContent } from "@cognia/agent-config-types"
@@ -800,6 +800,67 @@ describe("ChatPane", () => {
     expect(reconcileOnboardingRequestMessagesMock).toHaveBeenCalledWith("s1", persisted)
     expect(settingsState.completeOnboarding).toHaveBeenCalled()
   })
+
+  it.each([false, true, undefined])(
+    "passes the workspace send outcome through: %s",
+    async (outcome) => {
+      const props = { ...makeProps(), onSend: jest.fn(async () => outcome) }
+      render(<ChatPane {...props} />)
+      const onSend = mockComposerProps.at(-1)?.onSend as (
+        content: SendContent
+      ) => Promise<boolean | void>
+      await act(async () => {
+        await expect(onSend("question")).resolves.toBe(outcome)
+      })
+    }
+  )
+
+  it("settles an onboarding refusal as failure without claiming completion", async () => {
+    readOnboardingRequestMock.mockReturnValue({
+      state: "awaiting-input",
+      skillId: "skill-onboarding",
+    })
+    failOnboardingRequestMock.mockReturnValue({ state: "failed" })
+    const props = { ...makeProps(), onSend: jest.fn(async () => false) }
+    render(<ChatPane {...props} />)
+    const onSend = mockComposerProps.at(-1)?.onSend as (
+      content: SendContent
+    ) => Promise<boolean | void>
+    await act(async () => {
+      await expect(onSend("question")).resolves.toBe(false)
+    })
+    expect(beginOnboardingRequestAttemptMock).toHaveBeenCalledWith("s1")
+    expect(failOnboardingRequestMock).toHaveBeenCalledWith("s1", "onboarding-dispatch-failed")
+    expect(settingsState.skipOnboarding).toHaveBeenCalledWith("task_failed", "first-run")
+    expect(settingsState.completeOnboarding).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])(
+    "keeps refused pending prompts truthful for onboarding=%s",
+    async (onboarding) => {
+      peekPendingChatPromptMock.mockReturnValue({
+        id: "refused-prompt",
+        sessionId: "s1",
+        prompt: "Configure WebDAV",
+        skillIds: [],
+      })
+      readOnboardingRequestMock.mockReturnValue(
+        onboarding ? { state: "awaiting-input", skillId: "skill-onboarding" } : null
+      )
+      failOnboardingRequestMock.mockReturnValue({ state: "failed" })
+      render(<ChatPane {...makeProps()} onSend={async () => false} />)
+      if (onboarding) {
+        await waitFor(() =>
+          expect(acknowledgePendingChatPromptMock).toHaveBeenCalledWith("s1", "refused-prompt")
+        )
+        expect(failOnboardingRequestMock).toHaveBeenCalledWith("s1", "onboarding-dispatch-failed")
+      } else {
+        await act(async () => {})
+        expect(acknowledgePendingChatPromptMock).not.toHaveBeenCalled()
+      }
+      expect(settingsState.completeOnboarding).not.toHaveBeenCalled()
+    }
+  )
 
   it("forwards the attachment manifest from Composer to the workspace sender", async () => {
     const props = makeProps()
@@ -1332,7 +1393,7 @@ describe("ChatPane", () => {
       const { getByRole } = render(<ChatPane {...makeProps()} />)
       const column = getByRole("status").closest('[data-slot="chat-notice-column"]')
       expect(column).not.toBeNull()
-      expect(column).toHaveClass(...chatColumnClass.split(" "))
+      expect(column).toHaveClass(...chatDockColumnClass.split(" "))
       storeState.atCapacity = false
     })
 

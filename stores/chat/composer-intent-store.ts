@@ -2,6 +2,8 @@
 
 import { create } from "zustand"
 import { mergeComposerIntentPrompt } from "@/lib/chat/merge-composer-intent"
+import { mergeContextRefs } from "@/lib/chat/mentions/merge-refs"
+import type { ContextRef } from "@/lib/chat/mentions/types"
 
 export interface PendingComposerIntent {
   candidateId: string
@@ -9,6 +11,8 @@ export interface PendingComposerIntent {
   prompt: string | null
   mode?: "append" | "replace"
   images?: Array<{ data: string; mimeType: string }>
+  /** Source links travel with returned text, including deferred recovery. */
+  citations?: readonly ContextRef[]
   /** Reject a delayed runtime edit if the conversation now points elsewhere. */
   externalSession?: { agentId: string; sessionId: string }
   /**
@@ -20,6 +24,8 @@ export interface PendingComposerIntent {
    * user is expected to adjust before sending.
    */
   autoSend?: boolean
+  /** Keep failed handoffs recoverable without replacing follow-up typing. */
+  waitForEmpty?: boolean
 }
 
 interface ComposerIntentState {
@@ -46,7 +52,8 @@ export const useComposerIntentStore = create<ComposerIntentState>((set, get) => 
   stage: (sessionId, intent) =>
     set((state) => {
       const pending = state.pendingBySession[sessionId]
-      if (pending && intent.prompt === null && !intent.images?.length) return state
+      if (pending && intent.prompt === null && !intent.images?.length && !intent.citations?.length)
+        return state
       const sameRuntime =
         (!pending?.externalSession && !intent.externalSession) ||
         (pending?.externalSession &&
@@ -68,6 +75,10 @@ export const useComposerIntentStore = create<ComposerIntentState>((set, get) => 
                   ? mergeComposerIntentPrompt(intent.prompt ?? "", pending.prompt ?? "")
                   : mergeComposerIntentPrompt(pending.prompt ?? "", intent.prompt ?? ""),
               images: [...(pending.images ?? []), ...(intent.images ?? [])],
+              citations: mergeContextRefs(pending.citations ?? [], intent.citations ?? []),
+              ...(pending.waitForEmpty || intent.waitForEmpty
+                ? { waitForEmpty: true, autoSend: false }
+                : {}),
             }
           : intent
       return { pendingBySession: { ...state.pendingBySession, [sessionId]: combined } }

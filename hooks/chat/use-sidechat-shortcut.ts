@@ -5,12 +5,14 @@ import { toast } from "sonner"
 import { useAppShortcut } from "@/hooks/shortcuts/use-app-shortcut"
 import { useIsMobile } from "@/hooks/ui/use-mobile"
 import { useChatStore } from "@/stores/chat"
+import { useSessionAsideIdentity } from "./use-session-aside-identity"
 import { openSideChat } from "@/lib/slash-commands/actions/side-chat"
 
 /** Only the active main composer registers, even when split panes stay mounted. */
 export function useSidechatShortcut(sessionId?: string, isAside = false): void {
   const mobile = useIsMobile()
   const activeSessionId = useChatStore((state) => state.activeSessionId)
+  const embedded = useSessionAsideIdentity(sessionId)
   const t = useTranslations("contextWorkbench.asides")
   useAppShortcut(
     "chat.sidechat.toggle",
@@ -30,7 +32,7 @@ export function useSidechatShortcut(sessionId?: string, isAside = false): void {
       }
     },
     {
-      enabled: !mobile && !isAside && !!sessionId && activeSessionId === sessionId,
+      enabled: !mobile && !isAside && !embedded && !!sessionId && activeSessionId === sessionId,
       allowInEditable: true,
       preventDefault: true,
     }

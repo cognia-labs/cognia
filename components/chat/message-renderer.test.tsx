@@ -3212,6 +3212,26 @@ describe("turn changes card", () => {
 })
 
 describe("aside return actions", () => {
+  const citation = {
+    kind: "entity",
+    id: "message:aside-session#aside",
+    label: "Research",
+    raw: "@message:aside-session#aside",
+  }
+  const asideMessage = {
+    ...assistantMsg("aside", "conclusion"),
+    metadata: { sessionId: "aside-session" },
+  }
+  beforeEach(async () => {
+    const { getDb } = await import("@/lib/db/schema")
+    jest.spyOn(getDb().sessions, "get").mockResolvedValue({
+      id: "aside-session",
+      title: "Research",
+      kind: "resource-workbench",
+    } as import("@cognia/agent-config-types").ChatSession)
+  })
+  afterEach(() => jest.restoreAllMocks())
+
   it("stages Bring back and Send as drafts when the main composer is absent", async () => {
     const { AsideTargetProvider } = await import("@/components/context-workbench/aside-target")
     const { useComposerIntentStore } = await import("@/stores/chat/composer-intent-store")
@@ -3219,42 +3239,105 @@ describe("aside return actions", () => {
     useComposerIntentStore.setState({ pendingBySession: {} })
     render(
       <AsideTargetProvider sessionId="main">
-        <MessageRenderer message={assistantMsg("aside", "conclusion")} />
+        <MessageRenderer message={asideMessage} />
       </AsideTargetProvider>
     )
     fireEvent.click(screen.getByRole("button", { name: "bringBackTooltip" }))
-    expect(useComposerIntentStore.getState().pendingBySession.main).toMatchObject({
-      prompt: "> conclusion\n\n",
-      mode: "append",
-    })
+    await waitFor(() =>
+      expect(useComposerIntentStore.getState().pendingBySession.main).toMatchObject({
+        prompt: "> conclusion\n\n",
+        mode: "append",
+        citations: [citation],
+      })
+    )
     expect(toast.info).toHaveBeenCalledWith("bringBackDraft")
     fireEvent.click(screen.getByRole("button", { name: "sendToMainLabel" }))
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith("sendToMainDraft"))
+    expect(useComposerIntentStore.getState().pendingBySession.main.citations).toEqual([citation])
     expect(useComposerIntentStore.getState().pendingBySession.main.autoSend).not.toBe(true)
     expect(toast.info).toHaveBeenCalledWith("sendToMainDraft")
   })
 
-  it("acknowledges a claimed send only after the main composer reports acceptance", async () => {
+  it.each([false, true])(
+    "emits the source citation for a claimed handoff (submit=%s)",
+    async (submit) => {
+      const { AsideTargetProvider } = await import("@/components/context-workbench/aside-target")
+      const { COMPOSER_APPEND_EVENT } = await import("@/lib/chat/composer-append")
+      const { toast } = await import("sonner")
+      let detail: import("@/lib/chat/composer-append").ComposerAppendDetail | undefined
+      const listener = (event: Event) => {
+        detail = (event as CustomEvent).detail
+        detail!.claimed = true
+      }
+      window.addEventListener(COMPOSER_APPEND_EVENT, listener)
+      try {
+        render(
+          <AsideTargetProvider sessionId="main">
+            <MessageRenderer message={asideMessage} />
+          </AsideTargetProvider>
+        )
+        jest.mocked(toast.success).mockClear()
+        fireEvent.click(
+          screen.getByRole("button", { name: submit ? "sendToMainLabel" : "bringBackTooltip" })
+        )
+        await waitFor(() =>
+          expect(detail).toMatchObject({
+            sessionId: "main",
+            text: "> conclusion\n\n",
+            submit,
+            citations: [citation],
+          })
+        )
+        if (submit) {
+          expect(toast.success).not.toHaveBeenCalled()
+          detail!.onSubmitted!(true)
+          expect(toast.success).toHaveBeenCalledWith("sendToMainDone")
+        }
+      } finally {
+        window.removeEventListener(COMPOSER_APPEND_EVENT, listener)
+      }
+    }
+  )
+
+  it("reports a retained failed handoff as a draft without claiming it was sent", async () => {
     const { AsideTargetProvider } = await import("@/components/context-workbench/aside-target")
     const { COMPOSER_APPEND_EVENT } = await import("@/lib/chat/composer-append")
+    const { useComposerIntentStore } = await import("@/stores/chat/composer-intent-store")
     const { toast } = await import("sonner")
-    let detail: import("@/lib/chat/composer-append").ComposerAppendDetail | undefined
+    useComposerIntentStore.setState({ pendingBySession: {} })
     const listener = (event: Event) => {
-      detail = (event as CustomEvent).detail
-      detail!.claimed = true
+      const detail = (
+        event as CustomEvent<import("@/lib/chat/composer-append").ComposerAppendDetail>
+      ).detail
+      detail.claimed = true
+      useComposerIntentStore.getState().stage("main", {
+        candidateId: "retained",
+        prompt: detail.text!,
+        citations: detail.citations,
+        mode: "append",
+        waitForEmpty: true,
+      })
+      detail.onSubmitted?.(false)
     }
     window.addEventListener(COMPOSER_APPEND_EVENT, listener)
     try {
       render(
         <AsideTargetProvider sessionId="main">
-          <MessageRenderer message={assistantMsg("aside", "conclusion")} />
+          <MessageRenderer message={asideMessage} />
         </AsideTargetProvider>
       )
       jest.mocked(toast.success).mockClear()
       fireEvent.click(screen.getByRole("button", { name: "sendToMainLabel" }))
-      expect(detail).toMatchObject({ sessionId: "main", text: "> conclusion\n\n", submit: true })
+      await waitFor(() =>
+        expect(useComposerIntentStore.getState().pendingBySession.main).toMatchObject({
+          citations: [citation],
+        })
+      )
+      expect(toast.info).toHaveBeenCalledWith("sendToMainDraft")
       expect(toast.success).not.toHaveBeenCalled()
-      detail!.onSubmitted!(true)
-      expect(toast.success).toHaveBeenCalledWith("sendToMainDone")
+      expect(useComposerIntentStore.getState().pendingBySession.main.prompt).toBe(
+        "> conclusion\n\n"
+      )
     } finally {
       window.removeEventListener(COMPOSER_APPEND_EVENT, listener)
     }

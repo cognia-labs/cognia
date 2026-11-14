@@ -135,6 +135,15 @@ describe("ChatPaneGroup", () => {
     expect(stop).toHaveBeenCalledWith("b")
   })
 
+  it.each([false, true, undefined])("passes the send outcome through: %s", async (outcome) => {
+    const send = jest.fn(async () => outcome)
+    render(<ChatPaneGroup {...makeProps({ send })} />)
+    const pane = paneRenders.find((p) => p.sessionId === "a")!
+    await expect((pane.onSend as (c: string) => Promise<boolean | void>)("hi")).resolves.toBe(
+      outcome
+    )
+  })
+
   it("forwards the composer's attachment manifest through to the pane's session", async () => {
     const send = jest.fn()
     render(<ChatPaneGroup {...makeProps({ send })} />)

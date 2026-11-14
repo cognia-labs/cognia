@@ -1,4 +1,5 @@
 import { useComposerIntentStore } from "./composer-intent-store"
+import type { ContextRef } from "@/lib/chat/mentions/types"
 
 beforeEach(() => {
   useComposerIntentStore.setState({ pendingBySession: {} })
@@ -32,6 +33,22 @@ it("does not consume a newer intent with a stale candidate id", () => {
 
   expect(useComposerIntentStore.getState().consume("session-1", "candidate-old")).toBeNull()
   expect(useComposerIntentStore.getState().pendingBySession["session-1"]).toBeDefined()
+})
+
+it("keeps failed handoffs deferred and prevents a merged intent from auto-sending them", () => {
+  const store = useComposerIntentStore.getState()
+  store.stage("main", {
+    candidateId: "failed-handoff",
+    prompt: "> recovered quote",
+    mode: "append",
+    waitForEmpty: true,
+  })
+  store.stage("main", { candidateId: "later", prompt: "later instruction", autoSend: true })
+  expect(store.consume("main", "later")).toMatchObject({
+    prompt: "> recovered quote\n\nlater instruction",
+    waitForEmpty: true,
+    autoSend: false,
+  })
 })
 
 it("claims one-time UI effects separately by session and effect kind", () => {
@@ -77,5 +94,34 @@ it("preserves multiple returned quotes and a pending draft when focus is request
   expect(store.consume("main", "two")).toMatchObject({
     prompt: "> first\n\n> second",
     mode: "append",
+  })
+})
+
+it("merges and deduplicates source citations with returned quotes", () => {
+  const citation: ContextRef = {
+    kind: "entity",
+    id: "message:aside#answer",
+    label: "Research",
+  }
+  const store = useComposerIntentStore.getState()
+  store.stage("main", {
+    candidateId: "one",
+    prompt: "> conclusion",
+    mode: "append",
+    citations: [citation],
+    waitForEmpty: true,
+  })
+  store.stage("main", {
+    candidateId: "two",
+    prompt: "> second conclusion",
+    mode: "append",
+    citations: [citation],
+  })
+  store.stage("main", { candidateId: "focus", prompt: null })
+  expect(store.consume("main", "two")).toMatchObject({
+    prompt: "> conclusion\n\n> second conclusion",
+    citations: [citation],
+    waitForEmpty: true,
+    autoSend: false,
   })
 })

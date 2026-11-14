@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import type { ChatSession, SessionSurfaceBinding } from "@cognia/agent-config-types"
 import { AsideSwitcher } from "./aside-switcher"
+import { toast } from "sonner"
 
 let asides: ChatSession[] = []
 jest.mock("dexie-react-hooks", () => ({
@@ -117,6 +118,17 @@ describe("AsideSwitcher", () => {
     })
     await waitFor(() => expect(mockCreate).toHaveBeenCalledWith(binding, "Aside 3"))
     expect(onSelect).toHaveBeenCalledWith("extra-2")
+  })
+
+  it("uses the existing creation error when the parent disappears", async () => {
+    mockCreate.mockRejectedValueOnce(
+      Object.assign(new Error("parent gone"), { code: "aside_parent_gone" })
+    )
+    const onSelect = renderSwitcher()
+    await act(async () => fireEvent.click(screen.getByLabelText("New aside")))
+    expect(toast.error).toHaveBeenCalledWith("Couldn't create an aside.")
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(screen.getByLabelText("New aside")).not.toBeDisabled()
   })
 
   it("falls back to a surviving aside when the active one disappears", async () => {

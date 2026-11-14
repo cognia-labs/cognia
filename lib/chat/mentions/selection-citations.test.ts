@@ -1,9 +1,22 @@
 import type { ContextSelectionRef } from "@/types/artifact/artifact"
-import { citationsForSelections } from "./selection-citations"
+import { citationsForSelections, entityCitation } from "./selection-citations"
 
 const base = { snapshot: "body", comment: "", capturedAt: 1 }
 
 describe("citationsForSelections", () => {
+  it("uses the same message identity for handoffs and selection citations", () => {
+    expect(entityCitation("message", "aside#answer", "Research")).toEqual(
+      citationsForSelections([
+        {
+          kind: "entity",
+          entityKind: "message",
+          entityId: "aside#answer",
+          title: "Research",
+          ...base,
+        },
+      ])[0]
+    )
+  })
   it("cites each staged record in the shape the backlink index reads", () => {
     expect(
       citationsForSelections([

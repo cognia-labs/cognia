@@ -991,8 +991,12 @@ describe("useSessionSurfacePanels", () => {
   })
 
   it("keeps sidechat off an embedded resource workbench", () => {
+    const aside = { ...session, id: "resource-workbench:a1", kind: "resource-workbench" as const }
     // An aside to an aside has no main thread to be an aside *to*.
-    const sidechat = panelById(collect(useSessionSurfacePanels, sessionInput()), "session-sidechat")
+    const sidechat = panelById(
+      collect(useSessionSurfacePanels, sessionInput({ activeSessionId: aside.id, session: aside })),
+      "session-sidechat"
+    )
     expect(
       sidechat.appliesTo({
         kind: "session",
@@ -1002,6 +1006,30 @@ describe("useSessionSurfacePanels", () => {
     ).toBe(false)
     expect(sidechat.requiresChatScope).toBe(true)
   })
+
+  it("offers sidechat after promotion preserves the original aside ID", () => {
+    const id = "resource-workbench:a1"
+    const sidechat = panelById(
+      collect(
+        useSessionSurfacePanels,
+        sessionInput({ activeSessionId: id, session: { ...session, id, kind: "direct" } })
+      ),
+      "session-sidechat"
+    )
+    expect(sidechat.appliesTo({ kind: "session", sessionId: id, capabilities: [] })).toBe(true)
+  })
+
+  it.each([null, session])(
+    "hides sidechat until the prefixed resource's own row is known: %j",
+    (row) => {
+      const id = "resource-workbench:unloaded"
+      const sidechat = panelById(
+        collect(useSessionSurfacePanels, sessionInput({ activeSessionId: id, session: row })),
+        "session-sidechat"
+      )
+      expect(sidechat.appliesTo({ kind: "session", sessionId: id, capabilities: [] })).toBe(false)
+    }
+  )
 
   it("feeds the sidechat the thread as it stands now, not as it was", () => {
     const panels = collect(useSessionSurfacePanels, sessionInput())

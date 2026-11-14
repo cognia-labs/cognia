@@ -17,7 +17,7 @@ import type { ContextSelectionRef, EntitySelectionRef } from "@/types/artifact/a
 import type { ContextRef } from "./types"
 import { mergeContextRefs } from "./merge-refs"
 
-function entityCitation(
+export function entityCitation(
   entityKind: EntitySelectionRef["entityKind"],
   entityId: string,
   label: string

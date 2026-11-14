@@ -577,28 +577,27 @@ export function DesktopChatWorkspace() {
       const active = useChatStore.getState().activeSessionId
       if (active) {
         if (isTeamSessionId(active)) {
-          await teamChat.send(content, {
+          return teamChat.send(content, {
             templateRun: templateRun ?? undefined,
             sessionId: active,
             attachmentManifest: manifest,
             ...turnMetadataSendOptions(turnMetadata),
           })
         } else {
-          await directChat.send(content, undefined, {
+          return directChat.send(content, undefined, {
             sessionId: active,
             attachmentManifest: manifest,
             templateRun,
             ...turnMetadataSendOptions(turnMetadata),
           })
         }
-        return
       }
       // Quick-start respects the selected guild, same as the welcome CTA. A
       // bare `create()` auto-applies the default preset, so a direct
       // quick-start needs no character pick.
       if (selectedGuild.kind === "team") {
         const s = await handleNewTeamConversation(selectedGuild.teamId)
-        await teamChat.send(content, {
+        return teamChat.send(content, {
           templateRun: templateRun ?? undefined,
           sessionId: s.id,
           attachmentManifest: manifest,
@@ -613,7 +612,7 @@ export function DesktopChatWorkspace() {
           worktreeName: newChatExecution.worktreeName,
         })
         useImNotifyStore.getState().armSession(s.id)
-        await directChat.send(content, undefined, {
+        return directChat.send(content, undefined, {
           sessionId: s.id,
           attachmentManifest: manifest,
           templateRun,

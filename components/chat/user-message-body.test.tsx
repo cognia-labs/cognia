@@ -3,6 +3,15 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { UserMessageBody } from "./user-message-body"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import { revealSideChat } from "@/lib/slash-commands/actions/side-chat"
+
+jest.mock("@/lib/slash-commands/actions/side-chat", () => ({ revealSideChat: jest.fn() }))
+
+const fixture = createDbTestFixture({ seeded: false })
+beforeAll(fixture.initialize)
+afterAll(fixture.dispose)
 
 let mockBodyHeight = 120
 jest.mock("@/hooks/use-element-height", () => ({
@@ -96,4 +105,64 @@ it("starts a different message collapsed", async () => {
     </UserMessageBody>
   )
   expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false")
+})
+
+it("renders a persisted side-chat source once outside the collapsed preview", async () => {
+  mockBodyHeight = 500
+  const parentId = "body-parent"
+  const asideId = "body-aside"
+  await getDb().sessions.bulkPut([
+    { id: parentId, title: "Main", createdAt: 1, updatedAt: 1 },
+    {
+      id: asideId,
+      title: "Research",
+      kind: "resource-workbench",
+      surfaceBinding: { kind: "session", sessionId: parentId },
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ])
+  const source = { kind: "entity", id: `message:${asideId}#answer`, label: "Research" }
+  await getDb().messages.put({
+    id: "body-user",
+    sessionId: parentId,
+    role: "user",
+    parts: [{ type: "text", text: "> conclusion" }],
+    metadata: {
+      mentions: [source, source, { kind: "file", id: "readme.md" }],
+    },
+    createdAt: 1,
+  })
+  const message = await getDb().messages.get("body-user")
+  render(
+    <UserMessageBody previewText="> conclusion" message={message} sessionId={parentId}>
+      <div>Complete conclusion</div>
+    </UserMessageBody>
+  )
+  const chip = await screen.findByRole("button", { name: "sourceLabel" })
+  expect(screen.getAllByRole("button", { name: "sourceLabel" })).toHaveLength(1)
+  expect(chip.closest("[inert]")).toBeNull()
+  jest.mocked(revealSideChat).mockResolvedValueOnce(true)
+  await userEvent.setup().click(chip)
+  expect(revealSideChat).toHaveBeenCalledWith(parentId, asideId, "answer")
+})
+
+it("keeps non-message citations out of user bubbles", () => {
+  render(
+    <UserMessageBody
+      previewText="Message"
+      sessionId="main"
+      message={{
+        metadata: {
+          mentions: [
+            { kind: "entity", id: "issue:one" },
+            { kind: "file", id: "a.ts" },
+          ],
+        },
+      }}
+    >
+      Message
+    </UserMessageBody>
+  )
+  expect(screen.queryByRole("button")).toBeNull()
 })

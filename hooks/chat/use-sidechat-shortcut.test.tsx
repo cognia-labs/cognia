@@ -1,8 +1,12 @@
 /** @jest-environment jsdom */
-import { act, renderHook } from "@testing-library/react"
+import "fake-indexeddb/auto"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { useSidechatShortcut } from "./use-sidechat-shortcut"
 import { getAppRegistration, __resetAppRuntimeForTesting } from "@/lib/shortcuts/app-runtime"
 import { openSideChat } from "@/lib/slash-commands/actions/side-chat"
+
+const mockGet = jest.fn()
+jest.mock("@/lib/db/schema", () => ({ getDb: () => ({ sessions: { get: mockGet } }) }))
 
 let mockMobile = false
 let mockActive = "main"
@@ -21,7 +25,35 @@ beforeEach(() => {
   jest.clearAllMocks()
   mockMobile = false
   mockActive = "main"
+  mockGet.mockReset().mockResolvedValue(undefined)
 })
+
+it.each(["embedded", "promoted", "unknown"])(
+  "uses persisted identity for a preserved aside ID (%s)",
+  async (state) => {
+    const id = "resource-workbench:session:old"
+    mockActive = id
+    mockGet.mockResolvedValue(
+      state === "unknown"
+        ? undefined
+        : { id, kind: state === "embedded" ? "resource-workbench" : "direct" }
+    )
+    renderHook(() => useSidechatShortcut(id))
+    expect(getAppRegistration("chat.sidechat.toggle")).toBeUndefined()
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith(id))
+    if (state === "promoted")
+      await waitFor(() => expect(getAppRegistration("chat.sidechat.toggle")).toBeDefined())
+    const registration = getAppRegistration("chat.sidechat.toggle")
+    if (state !== "promoted") expect(registration).toBeUndefined()
+    else {
+      expect(registration).toBeDefined()
+      await act(async () =>
+        registration!.handler(new KeyboardEvent("keydown", { key: ";", ctrlKey: true }))
+      )
+      expect(openSideChat).toHaveBeenCalledWith(id)
+    }
+  }
+)
 afterEach(() => document.body.replaceChildren())
 
 it("reveals from the main textarea and returns focus without closing the dock", async () => {

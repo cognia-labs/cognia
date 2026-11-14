@@ -68,6 +68,10 @@ jest.mock("@/stores/chat", () => ({
 }))
 
 let sessions: Array<{ id: string; title?: string }> = []
+let mockIdentityRow: { id: string; kind: string } | undefined
+jest.mock("@/hooks/data/use-client-live-query", () => ({
+  useClientLiveQuery: () => mockIdentityRow,
+}))
 jest.mock("@/stores/chat/session-store", () => ({
   useSessionStore: { getState: () => ({ sessions }) },
 }))
@@ -145,6 +149,7 @@ beforeEach(() => {
   staged.length = 0
   selectionText = null
   sessions = []
+  mockIdentityRow = undefined
   artifacts = {}
   canvasDocuments = {}
 })
@@ -499,6 +504,40 @@ describe("panel selection", () => {
     ])
     expect(staged).toEqual([])
   })
+
+  it.each(["promoted", "embedded", "unknown"])(
+    "gates selection-to-aside by the prefixed parent's current identity: %s",
+    async (identity) => {
+      const parentId = "resource-workbench:session:old"
+      mockIdentityRow =
+        identity === "unknown"
+          ? undefined
+          : { id: parentId, kind: identity === "promoted" ? "direct" : "resource-workbench" }
+      selectionText = "quoted selection"
+      const targetResource: ContextResource = { ...sessionResource, sessionId: parentId }
+      const surfaceId = `wiki:session:${parentId}`
+      existingSurfaces.add(surfaceId)
+      const Panel = createA2UIContextPanelRenderer("wiki-plugin", {
+        ...a2uiDef,
+        resourceKinds: ["session"],
+      })
+      render(<Panel workbenchInstanceId="wb" resource={targetResource} active />)
+      const button = screen.queryByRole("button", { name: /Ask here/i })
+      if (identity === "promoted") {
+        expect(button).toBeEnabled()
+        await userEvent.click(button!)
+        expect(appended).toEqual([
+          {
+            text: "> quoted selection\n\n",
+            sessionId: `resource-workbench:session:${encodeURIComponent(parentId)}`,
+          },
+        ])
+      } else {
+        expect(button === null || button.hasAttribute("disabled")).toBe(true)
+        expect(appended).toEqual([])
+      }
+    }
+  )
 })
 
 describe("selectionTitleForResource", () => {

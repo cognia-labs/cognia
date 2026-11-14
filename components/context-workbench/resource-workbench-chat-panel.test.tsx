@@ -28,6 +28,8 @@ const updateSession = jest.fn().mockResolvedValue(undefined)
 const setSessionOverride = jest.fn()
 let mockParentSession: Record<string, unknown> | undefined
 let mockParentRuntime: AgentRuntimeRef = { kind: "builtin" }
+let mockAsideRuntime: AgentRuntimeRef = { kind: "builtin" }
+let mockHostSupportsReset = true
 let mockParentFusionMode = "auto"
 const mockRuntimeState = {
   sessionCompositions: {} as Record<string, { presetId: string; orchestration?: string }>,
@@ -47,9 +49,14 @@ jest.mock("next-intl", () => ({
     values?.agent ? `${key}:${values.agent}` : key,
 }))
 jest.mock("@/stores/agent/agent-runtime-store", () => ({
-  useRuntimeRefForSession: () => mockParentRuntime,
+  useRuntimeRefForSession: (id: string) =>
+    id === mockScopeId ? mockAsideRuntime : mockParentRuntime,
   useAgentRuntimeStore: (selector: (state: typeof mockRuntimeState) => unknown) =>
     selector(mockRuntimeState),
+}))
+jest.mock("@/hooks/use-runtime-snapshot", () => ({ useRuntimeSnapshot: () => ({}) }))
+jest.mock("@/lib/ai/agent/external/runtimes/remote/remote-host-configs", () => ({
+  hostSupportsSessionResetTurns: () => mockHostSupportsReset,
 }))
 jest.mock("@/stores/chat/fusion-mode-store", () => ({
   useChatFusionMode: () => mockParentFusionMode,
@@ -123,6 +130,13 @@ jest.mock("./aside-switcher", () => ({
     />
   ),
 }))
+jest.mock("./aside-inheritance", () => ({
+  AsideInheritance: ({ sessionId, parentId }: { sessionId: string; parentId: string }) => (
+    <div>
+      inheritance:{sessionId}:{parentId}
+    </div>
+  ),
+}))
 jest.mock("@/stores/context-workbench/context-workbench-store", () => ({
   useContextWorkbenchStore: (selector: (s: { setSessionOverride: jest.Mock }) => unknown) =>
     selector({ setSessionOverride }),
@@ -136,6 +150,7 @@ jest.mock("@/components/chat/chat-view", () => ({
     onUseSample,
     onCreate,
     onOpenSettings,
+    runtimeStrip,
   }: {
     onSend: (
       content: string,
@@ -149,8 +164,10 @@ jest.mock("@/components/chat/chat-view", () => ({
     onUseSample: (content: string) => void
     onCreate: () => void
     onOpenSettings: () => void
+    runtimeStrip?: import("react").ReactNode
   }) => (
     <div data-testid="chat-pane">
+      {runtimeStrip}
       <button type="button" onClick={() => void onSend("Review workflow", undefined, templateRun)}>
         send template
       </button>
@@ -222,6 +239,8 @@ describe("ResourceWorkbenchChatPanel", () => {
   beforeEach(() => {
     jest.clearAllMocks()
     mockScopeId = "resource-session"
+    mockAsideRuntime = { kind: "builtin" }
+    mockHostSupportsReset = true
     mockListMessages.mockResolvedValue([])
     ;(useChatStore.getState().setPendingArtifactEditTarget as jest.Mock).mockClear()
     mockSession = { id: "resource-session", title: "Resource" }
@@ -238,6 +257,64 @@ describe("ResourceWorkbenchChatPanel", () => {
       "flex-col",
       "overflow-hidden"
     )
+  })
+
+  it("shows the parent-clear notice until the aside has a newer message", async () => {
+    mockResource = { kind: "session", sessionId: "main" }
+    mockSession = { ...mockSession, asideParentClearedAt: 20, lastMessageAt: 10 }
+    const { rerender } = await act(async () =>
+      render(<ResourceWorkbenchChatPanel asideTargetSessionId="main" />)
+    )
+    expect(screen.getByRole("status")).toHaveTextContent("asides.parentCleared")
+    await screen.findByTestId("chat-pane")
+    mockSession = { ...mockSession, lastMessageAt: 21 }
+    await act(async () => rerender(<ResourceWorkbenchChatPanel asideTargetSessionId="main" />))
+    expect(screen.queryByText("asides.parentCleared")).not.toBeInTheDocument()
+  })
+
+  it.each([undefined, 20, 21])(
+    "hides the notice without an unacknowledged clear (%s)",
+    async (lastMessageAt) => {
+      mockResource = { kind: "session", sessionId: "main" }
+      mockSession = {
+        ...mockSession,
+        lastMessageAt,
+        ...(lastMessageAt === undefined ? {} : { asideParentClearedAt: 20 }),
+      }
+      await act(async () => render(<ResourceWorkbenchChatPanel asideTargetSessionId="main" />))
+      await screen.findByTestId("chat-pane")
+      expect(screen.queryByText("asides.parentCleared")).not.toBeInTheDocument()
+    }
+  )
+
+  it("shows the parent-clear notice for an aside with no messages", async () => {
+    mockResource = { kind: "session", sessionId: "main" }
+    mockSession = { ...mockSession, asideParentClearedAt: 20 }
+    await act(async () => render(<ResourceWorkbenchChatPanel asideTargetSessionId="main" />))
+    await screen.findByTestId("chat-pane")
+    expect(screen.getByRole("status")).toHaveTextContent("asides.parentCleared")
+  })
+
+  it.each([false, true])(
+    "warns only the remote aside on a Host without reset support (%s)",
+    async (supported) => {
+      mockHostSupportsReset = supported
+      mockAsideRuntime = { kind: "host", configId: "cfg", revision: "rev", lifecycleGeneration: 1 }
+      mockResource = { kind: "session", sessionId: "main" }
+      mockSession = { ...mockSession, asideParentClearedAt: 20, lastMessageAt: 10 }
+      await act(async () => render(<ResourceWorkbenchChatPanel asideTargetSessionId="main" />))
+      expect(screen.getByRole("status")).toHaveTextContent(
+        supported ? "asides.parentCleared" : "asides.parentClearedRemoteMayRemember"
+      )
+    }
+  )
+
+  it("keeps the old-Host warning after another side-chat message", async () => {
+    mockHostSupportsReset = false
+    mockAsideRuntime = { kind: "host", configId: "cfg", revision: "rev", lifecycleGeneration: 1 }
+    mockSession = { ...mockSession, asideParentClearedAt: 20, lastMessageAt: 30 }
+    await act(async () => render(<ResourceWorkbenchChatPanel />))
+    expect(screen.getByRole("status")).toHaveTextContent("asides.parentClearedRemoteMayRemember")
   })
 
   it("preserves template provenance on the scoped user turn", async () => {
@@ -470,6 +547,21 @@ describe("ResourceWorkbenchChatPanel", () => {
     expect(setSessionOverride).toHaveBeenCalledWith(expect.any(String), null)
   })
 
+  it.each(["promoted", "embedded", "unknown"])(
+    "gates the aside picker by the prefixed parent's current identity: %s",
+    async (identity) => {
+      const parentId = "resource-workbench:session:old"
+      mockResource = { kind: "session", sessionId: parentId }
+      mockParentSession =
+        identity === "unknown"
+          ? undefined
+          : { id: parentId, kind: identity === "promoted" ? "direct" : "resource-workbench" }
+      render(<ResourceWorkbenchChatPanel multiAside />)
+      await screen.findByTestId("chat-pane")
+      expect(Boolean(screen.queryByTestId("aside-switcher"))).toBe(identity === "promoted")
+    }
+  )
+
   it("no mobile surface hosts the aside switcher", () => {
     // Three-axis dormancy marking (project rule 7). `components/mobile/` mounts
     // no workbench at all — the only mobile context-workbench is the workflow
@@ -490,6 +582,22 @@ describe("ResourceWorkbenchChatPanel", () => {
       /ResourceWorkbenchChatPanel|AsideSwitcher/.test(fs.readFileSync(f, "utf8"))
     )
     expect(hosts).toEqual([])
+  })
+
+  it("mounts inherited scope in the composer strip only for a supported session aside", async () => {
+    mockResource = { kind: "session", sessionId: "main" }
+    const view = render(<ResourceWorkbenchChatPanel />)
+    expect(await screen.findByText("inheritance:resource-session:main")).toBeVisible()
+    const state = useChatStore.getState()
+    state.sessions = {
+      [mockScopeId]: { errorMessage: "asides.unsupportedReadOnlyLane" },
+    } as typeof state.sessions
+    view.rerender(<ResourceWorkbenchChatPanel />)
+    expect(screen.queryByText("inheritance:resource-session:main")).not.toBeInTheDocument()
+    state.sessions = {}
+    mockResource = { kind: "project-file", relPath: "src/a.ts" }
+    view.rerender(<ResourceWorkbenchChatPanel />)
+    expect(screen.queryByText("inheritance:resource-session:main")).not.toBeInTheDocument()
   })
 })
 
@@ -825,5 +933,26 @@ describe("explicit side chat requests", () => {
       )
     )
     expect(useSideChatRequestStore.getState().pending["chosen-aside"]).toHaveLength(0)
+  })
+
+  it("recovers a controller refusal that fulfills unless explicit errors are requested", async () => {
+    const { useSideChatRequestStore } = await import("@/stores/chat/side-chat-request-store")
+    const { useComposerIntentStore } = await import("@/stores/chat/composer-intent-store")
+    const { toast } = await import("sonner")
+    useComposerIntentStore.setState({ pendingBySession: {} })
+    send.mockImplementationOnce(async (_content, _options, callOptions) => {
+      if (callOptions?.throwOnError) throw new Error("concurrent_stream_cap_reached")
+    })
+    useSideChatRequestStore.getState().enqueue("chosen-aside", "capacity question")
+    render(<ResourceWorkbenchChatPanel asideTargetSessionId="main" />)
+    await waitFor(() => {
+      expect(useComposerIntentStore.getState().pendingBySession["chosen-aside"]).toMatchObject({
+        prompt: "capacity question",
+        mode: "append",
+      })
+    })
+    expect(toast.error).toHaveBeenCalledWith("asides.sendFailedDraft")
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(useSideChatRequestStore.getState().pending["chosen-aside"]).toEqual([])
   })
 })

@@ -22,6 +22,7 @@
  * the plugin is TypeScript, Python or hybrid.
  */
 
+import { useSessionAsideIdentity } from "@/hooks/chat/use-session-aside-identity"
 import {
   useCallback,
   useEffect,
@@ -195,6 +196,8 @@ function PanelSelectionToolbar({
 }) {
   const t = useTranslations("contextWorkbench")
   const anchor = useTranscriptSelection(containerRef)
+  const isAside = useSessionAsideIdentity(resource.kind === "session" ? resource.sessionId : null)
+  const binding = surfaceBindingForContextResource(resource, !isAside)
   const toolbarRef = useRef<HTMLDivElement | null>(null)
   // Escape hides the toolbar for *this* selection; a new selection brings it
   // back. Keyed by content + position because the anchor object is rebuilt on
@@ -254,7 +257,6 @@ function PanelSelectionToolbar({
 
   const askHere = useCallback(async () => {
     if (!anchor) return
-    const binding = surfaceBindingForContextResource(resource)
     if (!binding) return
     const { dispatchComposerAppend } = await import("@/components/chat/composer")
     dispatchComposerAppend({
@@ -265,7 +267,7 @@ function PanelSelectionToolbar({
       sessionId: resourceWorkbenchSessionId(binding),
     })
     window.getSelection()?.removeAllRanges()
-  }, [anchor, resource])
+  }, [anchor, binding])
 
   if (!anchor || !visible) return null
 
@@ -285,6 +287,7 @@ function PanelSelectionToolbar({
         size="sm"
         variant="ghost"
         className="h-9 text-xs sm:h-7"
+        disabled={!binding}
         onClick={() => void askHere()}
       >
         {t("selectionToAside")}

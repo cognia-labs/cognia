@@ -252,7 +252,7 @@ interface ChatPaneProps {
     manifest?: readonly AttachmentManifestEntry[],
     templateRun?: ChatTemplateRun | null,
     turnMetadata?: ComposerTurnMetadata
-  ) => Promise<void>
+  ) => Promise<boolean | void>
   onStop: () => Promise<void>
   /** Interrupt the running turn and immediately replay the queued steer. */
   onSteerNow?: () => Promise<void> | void
@@ -306,7 +306,7 @@ interface ChatPaneProps {
     manifest?: readonly AttachmentManifestEntry[],
     templateRun?: ChatTemplateRun | null,
     turnMetadata?: ComposerTurnMetadata
-  ) => void | Promise<void>
+  ) => boolean | void | Promise<boolean | void>
   /**
    * Whether the hero composer may address a runtime with a leading `@handle`
    * (`Composer.routing`). The shell knows where `onHeroSend` delivers; pass
@@ -652,9 +652,9 @@ function ChatPaneContent({
     }
   )
 
-  const handleSendPlanFeedback = useStableCallback((feedback: string) => {
+  const handleSendPlanFeedback = useStableCallback(async (feedback: string) => {
     restoreIfArchived()
-    return afterFullHistory(() => (onSendPlanFeedback ?? onSend)(feedback))
+    await afterFullHistory(() => (onSendPlanFeedback ?? onSend)(feedback))
   })
 
   const handleSend = useCallback(
@@ -677,7 +677,13 @@ function ChatPaneContent({
       // restore, whose failure the archive hook toasts on its own.
       restoreIfArchived()
       try {
-        await afterFullHistory(() => onSend(content, manifest, templateRun, turnMetadata))
+        const outcome = await afterFullHistory(() =>
+          onSend(content, manifest, templateRun, turnMetadata)
+        )
+        if (outcome === false && boundId) {
+          settleOnboardingProgress(failOnboardingRequest(boundId, "onboarding-dispatch-failed"))
+        }
+        return outcome
       } catch (error) {
         if (boundId) {
           settleOnboardingProgress(
@@ -727,7 +733,12 @@ function ChatPaneContent({
           return
         }
         stageSessionSkillIds(boundId, pendingPrompt.skillIds)
-        return handleSend(pendingPrompt.prompt).then(() => {
+        return handleSend(pendingPrompt.prompt).then((outcome) => {
+          if (outcome === false) {
+            if (request) acknowledgePendingChatPrompt(boundId, pendingPrompt.id)
+            else pendingDispatchRef.current = null
+            return
+          }
           // Legacy/non-onboarding handoffs have no transcript state machine;
           // their sender promise remains the dispatch acknowledgement.
           if (!request) acknowledgePendingChatPrompt(boundId, pendingPrompt.id)
@@ -1171,7 +1182,9 @@ function ChatPaneContent({
         <ExternalAgentSessionPanel
           sessionId={activeSession.id}
           externalSession={activeSession.externalAgentSession}
-          onExecuteCommand={handleSend}
+          onExecuteCommand={async (command) => {
+            await handleSend(command)
+          }}
         />
         {/* The surface swap (loader / welcome ⇄ transcript) is a crossfade IN
           PLACE, not a reflow. `popLayout` lifts the exiting branch out of the
