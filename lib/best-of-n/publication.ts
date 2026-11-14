@@ -5,7 +5,7 @@ import type { ScmRuntime } from "@/lib/scm/runtime"
 import type { ChangesetReviewResult } from "@/lib/scm/review/review-changeset"
 import { approveChangeset, requiredChecksFor } from "@/lib/scm/review/review-changeset"
 import { unmetChecks } from "@/lib/scm/verify/changeset-checks"
-import { EXECUTOR_STOP_UNPROVEN_CODE } from "@/lib/scm/types"
+import { isExecutorHeld } from "@/lib/scm/integration/orchestrator"
 
 export interface BestOfNCheckResult {
   group: BestOfNGroup
@@ -39,7 +39,7 @@ const HOLDING: ReadonlySet<IntegrationRun["state"]> = new Set([
 
 /** The run is kept for a verification executor that has not proven it stopped. */
 function executorHeld(run: IntegrationRun, reason?: string) {
-  return reason === "executor_stop_unproven" || run.error?.code === EXECUTOR_STOP_UNPROVEN_CODE
+  return reason === "executor_stop_unproven" || isExecutorHeld(run)
 }
 
 function winner(group: BestOfNGroup) {

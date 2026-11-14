@@ -10,6 +10,18 @@ import { IntegrationRunList } from "./integration-run-list"
 import { makeHost, makeIntegration } from "./test-fixtures"
 
 jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
+// Runs this client holds for a Host that did not store the hold itself.
+const mockClientHeld = new Set<string>()
+const mockForgetExecutorHold = jest.fn((id: string) => mockClientHeld.delete(id))
+jest.mock("@/lib/scm/integration/orchestrator", () => {
+  const actual = jest.requireActual("@/lib/scm/integration/orchestrator")
+  return {
+    ...actual,
+    isExecutorHeld: (run: IntegrationRun) =>
+      mockClientHeld.has(run.integrationId) || actual.isExecutorHeld(run),
+    forgetExecutorHold: (id: string) => mockForgetExecutorHold(id),
+  }
+})
 
 function setup(state: IntegrationState, overrides: Partial<IntegrationRun> = {}) {
   const run = makeIntegration({
@@ -80,6 +92,20 @@ it("aborts a prepared run and expands the operation log", async () => {
   await userEvent.click(screen.getByTestId("abort-run-1"))
   await waitFor(() => expect(host.abortIntegration).toHaveBeenCalledWith("run-1"))
   expect(host.listIntegrations).toHaveBeenCalledTimes(2)
+})
+
+it("keeps the confirmation for a hold an older Host did not store", async () => {
+  mockClientHeld.add("run-1")
+  const host = setup("prepared", { error: null })
+  expect(screen.getByRole("alert").textContent).toBe("integrationReasons.executor_stop_unproven")
+  await userEvent.click(screen.getByTestId("abort-run-1"))
+  expect(screen.getByText("confirm.executorStoppedTitle")).toBeTruthy()
+  expect(host.abortIntegration).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByTestId("executor-stopped-confirm"))
+  await waitFor(() =>
+    expect(host.abortIntegration).toHaveBeenCalledWith("run-1", { executorStopped: true })
+  )
+  await waitFor(() => expect(mockForgetExecutorHold).toHaveBeenCalledWith("run-1"))
 })
 
 it("aborts a run held for an unproven executor stop only after the person confirms it stopped", async () => {

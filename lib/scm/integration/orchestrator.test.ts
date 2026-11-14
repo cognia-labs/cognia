@@ -17,9 +17,12 @@ import type {
 import {
   EXECUTOR_HOLD_FALLBACK_MS,
   MAX_STALE_REBUILDS,
+  forgetExecutorHold,
   integrateChangesets,
   integrationRootForRevision,
+  isExecutorHeld,
 } from "./orchestrator"
+import { EXECUTOR_STOP_UNPROVEN_CODE } from "../types"
 
 /**
  * A host that composes changesets the way the real one does, at the level the
@@ -266,6 +269,61 @@ describe("integrateChangesets", () => {
     expect(held[3]).toEqual({ executorStopUnprovenUntil: 5_000 })
     expect(held[2]).toEqual(host.recordIntegrationCheck.mock.calls[0]![2])
   })
+  describe("a Host older than the hold contract (postfix review P04 residual)", () => {
+    // Every fake Host numbers its first run `int-1`; earlier tests may hold it.
+    beforeEach(() => forgetExecutorHold("int-1"))
+    it("keeps the hold in this client until the deadline when the Host ignores it", async () => {
+      // `fakeHost` answers the hold the way an older Host does: without the code.
+      const host = fakeHost()
+      const deadline = Date.now() + 60_000
+      const outcome = await integrateChangesets(input(["a"]), {
+        host,
+        readPolicyAtRef: noPolicy,
+        acceptancePortFor: portFor().factory,
+        executorStopUnproven: () => true,
+        executorStopRetainUntil: () => deadline,
+      })
+      const run = outcome.run!
+      expect(run.error).toBeNull()
+      expect(isExecutorHeld(run)).toBe(true)
+      expect(isExecutorHeld(run, deadline)).toBe(false)
+      // Expired once is forgotten, even read with an earlier clock afterwards.
+      expect(isExecutorHeld(run, deadline - 1)).toBe(false)
+    })
+
+    it("lets a person's confirmation release it", async () => {
+      const host = fakeHost()
+      const outcome = await integrateChangesets(input(["a"]), {
+        host,
+        readPolicyAtRef: noPolicy,
+        acceptancePortFor: portFor().factory,
+        executorStopUnproven: () => true,
+      })
+      expect(isExecutorHeld(outcome.run!)).toBe(true)
+      forgetExecutorHold(outcome.run!.integrationId)
+      expect(isExecutorHeld(outcome.run!)).toBe(false)
+    })
+
+    it("leaves the hold to a Host that stores it", async () => {
+      const host = fakeHost()
+      const record = host.recordIntegrationCheck.getMockImplementation()!
+      host.recordIntegrationCheck.mockImplementation(async (id, sha, check, hold) => {
+        const run = await record(id, sha, check, hold)
+        return hold
+          ? { ...run, error: { code: EXECUTOR_STOP_UNPROVEN_CODE, message: "kept" } }
+          : run
+      })
+      const outcome = await integrateChangesets(input(["a"]), {
+        host,
+        readPolicyAtRef: noPolicy,
+        acceptancePortFor: portFor().factory,
+        executorStopUnproven: () => true,
+      })
+      expect(isExecutorHeld(outcome.run!)).toBe(true)
+      expect(isExecutorHeld({ ...outcome.run!, error: null })).toBe(false)
+    })
+  })
+
   it("holds for the longest time when the executor's deadline is unknown", async () => {
     const host = fakeHost()
     await integrateChangesets(input(["a"]), {

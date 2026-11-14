@@ -25,6 +25,7 @@ import type { AcceptancePort } from "@cognia/router-fusion"
 import { scmErrorCode, type ScmHost } from "../host"
 import {
   composedItems,
+  EXECUTOR_STOP_UNPROVEN_CODE,
   type IntegrationAnalysis,
   type IntegrationConflictPolicy,
   type IntegrationRun,
@@ -41,6 +42,37 @@ export const MAX_STALE_REBUILDS = 3
  * clamps to the same day); only a person's confirmation releases it sooner.
  */
 export const EXECUTOR_HOLD_FALLBACK_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Holds a Host did not store. A Host older than the hold contract ignores
+ * `executorStopUnprovenUntil` and answers the run without the
+ * `executorStopUnproven` error, so it would let Abort, drop and publish reset
+ * a worktree a check may still be writing. This client then keeps the hold
+ * itself until the same deadline, or until a person confirms the check
+ * stopped. It does not survive a reload; the Host's own hold does.
+ */
+const unenforcedHolds = new Map<string, number>()
+
+/**
+ * The run is kept for a check that has not proven it stopped: by the Host, or
+ * by this client for an older Host until its deadline.
+ */
+export function isExecutorHeld(
+  run: Pick<IntegrationRun, "integrationId" | "error">,
+  now: number = Date.now()
+): boolean {
+  if (run.error?.code === EXECUTOR_STOP_UNPROVEN_CODE) return true
+  const until = unenforcedHolds.get(run.integrationId)
+  if (until === undefined) return false
+  if (until > now) return true
+  unenforcedHolds.delete(run.integrationId)
+  return false
+}
+
+/** A person confirmed the check stopped, or the run is gone. */
+export function forgetExecutorHold(integrationId: string): void {
+  unenforcedHolds.delete(integrationId)
+}
 
 export interface IntegrateChangesetsInput {
   changesetIds: string[]
@@ -257,11 +289,14 @@ export async function integrateChangesets(
         // The hold is stored on the Host, so a retry, a restart's recovery or
         // a person's Abort cannot release it before the executor's deadline.
         const last = checks[checks.length - 1]
+        const retainUntil = deps.executorStopRetainUntil?.() ?? now() + EXECUTOR_HOLD_FALLBACK_MS
         if (last) {
           run = await host.recordIntegrationCheck(run.integrationId, candidateSha, last, {
-            executorStopUnprovenUntil:
-              deps.executorStopRetainUntil?.() ?? now() + EXECUTOR_HOLD_FALLBACK_MS,
+            executorStopUnprovenUntil: retainUntil,
           })
+        }
+        if (run.error?.code !== EXECUTOR_STOP_UNPROVEN_CODE) {
+          unenforcedHolds.set(run.integrationId, retainUntil)
         }
         return { kind: "blocked", analysis, run, dropped, reason: "executor_stop_unproven" }
       }

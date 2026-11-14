@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { EXECUTOR_STOP_UNPROVEN_CODE, type IntegrationRun } from "@/lib/scm/types"
+import { forgetExecutorHold, isExecutorHeld } from "@/lib/scm/integration/orchestrator"
 import type { AgentChangesActions } from "@/hooks/scm/use-agent-changesets"
 import { integrationReasonKey } from "./presentation"
 
@@ -32,9 +33,7 @@ export function IntegrationRunList({ integrations, actions }: Props) {
   // A run kept for a verification executor whose stop is unproven aborts
   // only once the person confirms that executor is no longer running.
   const [stoppedId, setStoppedId] = useState<string | null>(null)
-  const heldRun = integrations.find(
-    (run) => run.integrationId === stoppedId && run.error?.code === EXECUTOR_STOP_UNPROVEN_CODE
-  )
+  const heldRun = integrations.find((run) => run.integrationId === stoppedId && isExecutorHeld(run))
   return (
     <section className="space-y-2" aria-label={t("runs.title")}>
       <h3 className="text-sm font-medium">{t("runs.title")}</h3>
@@ -54,10 +53,19 @@ export function IntegrationRunList({ integrations, actions }: Props) {
               <span>{t("runs.attempt", { attempt: run.attempt })}</span>
             </div>
             {run.resultSha && <p>{t("runs.result", { sha: run.resultSha.slice(0, 8) })}</p>}
-            {run.error && (
+            {run.error ? (
               <p role="alert">
                 {t(integrationReasonKey(run.error.code), { code: run.error.code })}
               </p>
+            ) : (
+              // An older Host did not store the hold; this client keeps it.
+              isExecutorHeld(run) && (
+                <p role="alert">
+                  {t(integrationReasonKey(EXECUTOR_STOP_UNPROVEN_CODE), {
+                    code: EXECUTOR_STOP_UNPROVEN_CODE,
+                  })}
+                </p>
+              )
             )}
             <ul className="space-y-1">
               {run.items.map((item) => (
@@ -111,7 +119,7 @@ export function IntegrationRunList({ integrations, actions }: Props) {
                 variant="outline"
                 disabled={actions.busy}
                 onClick={() =>
-                  run.error?.code === EXECUTOR_STOP_UNPROVEN_CODE
+                  isExecutorHeld(run)
                     ? setStoppedId(run.integrationId)
                     : void actions.abort(run.integrationId)
                 }
@@ -180,7 +188,9 @@ export function IntegrationRunList({ integrations, actions }: Props) {
                   void actions
                     .abort(heldRun.integrationId, { executorStopped: true })
                     .then((result) => {
-                      if (result) setStoppedId(null)
+                      if (!result) return
+                      forgetExecutorHold(heldRun.integrationId)
+                      setStoppedId(null)
                     })
               }}
             >
