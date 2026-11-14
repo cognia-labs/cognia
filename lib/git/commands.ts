@@ -873,10 +873,29 @@ export async function gitReadBlobAtRef(
   options: ReadBlobAtRefOptions = {}
 ): Promise<string | null> {
   if (!hasGitBridge()) return null
-  return gitCall<string | null>(
-    "git_read_blob_at_ref",
-    { repoPath, gitRef, path, ...(options.requireText ? { requireText: true } : {}) },
-    via
+  const args = { repoPath, gitRef, path }
+  if (!options.requireText) return gitCall<string | null>("git_read_blob_at_ref", args, via)
+  try {
+    return await gitCall<string | null>("git_read_blob_at_ref", { ...args, requireText: true }, via)
+  } catch (error) {
+    if (!isContractInputViolation(error)) throw error
+    // A Host older than `requireText` refuses the argument. Its lenient read
+    // is exact for a file that reads as text; only its `null` cannot say
+    // whether the file is absent or present but unreadable, so that answer
+    // is refused rather than read as absent.
+    const lenient = await gitCall<string | null>("git_read_blob_at_ref", args, via)
+    if (lenient !== null) return lenient
+    throw new Error(
+      `upgrade_required: this Host cannot tell whether ${path} at ${gitRef} is absent or unreadable; update the Host`
+    )
+  }
+}
+
+function isContractInputViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "contract_input_violation"
   )
 }
 

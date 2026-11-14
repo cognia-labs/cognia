@@ -812,6 +812,33 @@ describe("a pinned Git call target", () => {
     expect(callMock).not.toHaveBeenCalled()
   })
 
+  it("reads a policy through a Host older than the strict read, refusing only its ambiguous null", async () => {
+    // Postfix review P07 residual: an older Host refuses `requireText`.
+    const refused = Object.assign(new Error("contract"), { code: "contract_input_violation" })
+    const via = { call: jest.fn(async (..._args: unknown[]) => null as never) }
+    via.call.mockRejectedValueOnce(refused).mockResolvedValueOnce("{}" as never)
+    await expect(
+      gitReadBlobAtRef("/r", "h1", ".cognia/workspace.json", via, { requireText: true })
+    ).resolves.toBe("{}")
+    expect(via.call).toHaveBeenLastCalledWith("git_read_blob_at_ref", {
+      repoPath: "/r",
+      gitRef: "h1",
+      path: ".cognia/workspace.json",
+    })
+
+    via.call.mockRejectedValueOnce(refused).mockResolvedValueOnce(null as never)
+    await expect(
+      gitReadBlobAtRef("/r", "h1", ".cognia/workspace.json", via, { requireText: true })
+    ).rejects.toThrow("upgrade_required")
+
+    // Any other refusal is the Host's answer, not an age problem.
+    via.call.mockRejectedValueOnce(new Error("is not UTF-8 text"))
+    await expect(
+      gitReadBlobAtRef("/r", "h1", ".cognia/workspace.json", via, { requireText: true })
+    ).rejects.toThrow("is not UTF-8 text")
+    expect(via.call).toHaveBeenCalledTimes(5)
+  })
+
   it("asks for a strict read only when the caller requires text", async () => {
     const via = { call: jest.fn(async (..._args: unknown[]) => null as never) }
     await gitReadBlobAtRef("/r", "h1", ".cognia/workspace.json", via, { requireText: true })
