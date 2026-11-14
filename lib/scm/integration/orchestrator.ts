@@ -113,6 +113,9 @@ export async function integrateChangesets(
   const dropped: string[] = []
 
   const analysis = await host.analyzeIntegration(input.changesetIds, input.targetRef)
+  if (input.signal.aborted) {
+    return { kind: "blocked", analysis, run: null, dropped, reason: "aborted" }
+  }
   if (analysis.cycles.length > 0) {
     return { kind: "blocked", analysis, run: null, dropped, reason: "cycles" }
   }
@@ -147,10 +150,21 @@ export async function integrateChangesets(
     }
   }
 
+  // A cancel (the person, a repository switch, an unmount) can land while any
+  // step below is awaited. It is checked again after each await and before
+  // every step that changes the run or the target, not only once per pass
+  // (postfix review P06). A publish whose compare-and-swap committed has
+  // happened: it is reported as published whatever the signal says after.
+  const cancelled = async (): Promise<IntegrationOutcome> => ({
+    kind: "blocked",
+    analysis,
+    run: await abortRun(run),
+    dropped,
+    reason: "aborted",
+  })
+
   for (;;) {
-    if (input.signal.aborted) {
-      return { kind: "blocked", analysis, run: await abortRun(run), dropped, reason: "aborted" }
-    }
+    if (input.signal.aborted) return cancelled()
     if (run.state === "conflicted" || run.state === "failed") {
       // Nothing composed (all conflicted / all dropped). Give the queue back.
       const kind = run.state === "conflicted" ? "conflicted" : "failed"
@@ -186,6 +200,7 @@ export async function integrateChangesets(
         message: errorMessage(error),
       }
     }
+    if (input.signal.aborted) return cancelled()
     if (!policy.ok) {
       return {
         kind: "blocked",
@@ -230,6 +245,7 @@ export async function integrateChangesets(
         message: errorMessage(error),
       }
     }
+    if (input.signal.aborted) return cancelled()
     // The host's list also carries each composed changeset's own checks.
     const requiredChecks = [
       ...new Set([
@@ -276,6 +292,8 @@ export async function integrateChangesets(
         }
         return { kind: "blocked", analysis, run, dropped, reason: "executor_stop_unproven" }
       }
+      // A cancelled check reports nothing about the candidate: no culprit to drop.
+      if (input.signal.aborted) return cancelled()
       const unmet = unmetChecks(requiredChecks, run.checks, candidateSha)
       if (unmet.length > 0) {
         const composed = composedItems(run)
@@ -293,12 +311,14 @@ export async function integrateChangesets(
         // if they do not, the next iteration drops the one before it.
         run = await host.dropIntegrationItem(run.integrationId, culprit.changesetId)
         dropped.push(culprit.changesetId)
+        if (input.signal.aborted) return cancelled()
         if (run.state === "stale") run = await host.rebuildIntegration(run.integrationId)
         continue
       }
     }
 
     // ── publish by compare-and-swap ──────────────────────────────────────────
+    if (input.signal.aborted) return cancelled()
     try {
       run = await host.publishIntegration(run.integrationId, candidateSha, requiredChecks)
       return { kind: "published", analysis, run, dropped }
@@ -311,7 +331,9 @@ export async function integrateChangesets(
         staleRebuilds += 1
         const current = await host.getIntegration(run.integrationId)
         if (!current) throw error
-        run = current.state === "stale" ? await host.rebuildIntegration(run.integrationId) : current
+        run = current
+        if (input.signal.aborted) return cancelled()
+        if (current.state === "stale") run = await host.rebuildIntegration(run.integrationId)
         continue
       }
       return {

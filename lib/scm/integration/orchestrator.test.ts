@@ -581,7 +581,7 @@ describe("integrateChangesets", () => {
     expect(host.rebuildIntegration).not.toHaveBeenCalled()
   })
 
-  it("aborts the run when the caller cancels", async () => {
+  it("prepares nothing when the caller cancelled before it began", async () => {
     const host = fakeHost()
     const controller = new AbortController()
     controller.abort()
@@ -591,7 +591,129 @@ describe("integrateChangesets", () => {
       acceptancePortFor: portFor().factory,
     })
     expect(outcome).toEqual(expect.objectContaining({ kind: "blocked", reason: "aborted" }))
-    expect(host.abortIntegration).toHaveBeenCalled()
+    expect(host.prepareIntegration).not.toHaveBeenCalled()
+    expect(host.publishIntegration).not.toHaveBeenCalled()
+  })
+
+  describe("a cancel that lands while a step is awaited (postfix review P06)", () => {
+    it("does not publish when the cancel arrives during the policy read", async () => {
+      const host = fakeHost()
+      const controller = new AbortController()
+      const outcome = await integrateChangesets(
+        input(["a"], { requiredChecks: [], signal: controller.signal }),
+        {
+          host,
+          readPolicyAtRef: async () => {
+            controller.abort()
+            return noPolicy()
+          },
+          acceptancePortFor: null,
+        }
+      )
+      expect(outcome).toEqual(expect.objectContaining({ kind: "blocked", reason: "aborted" }))
+      expect(host.publishIntegration).not.toHaveBeenCalled()
+      expect(host.abortIntegration).toHaveBeenCalled()
+    })
+
+    it("prepares nothing when the cancel arrives during the analysis", async () => {
+      const host = fakeHost()
+      const controller = new AbortController()
+      const analyze = host.analyzeIntegration.getMockImplementation()!
+      host.analyzeIntegration.mockImplementationOnce(async (...args) => {
+        controller.abort()
+        return analyze(...args)
+      })
+      const outcome = await integrateChangesets(input(["a"], { signal: controller.signal }), {
+        host,
+        readPolicyAtRef: noPolicy,
+        acceptancePortFor: portFor().factory,
+      })
+      expect(outcome).toEqual(
+        expect.objectContaining({ kind: "blocked", reason: "aborted", run: null })
+      )
+      expect(host.prepareIntegration).not.toHaveBeenCalled()
+    })
+
+    it("neither drops nor publishes when the cancel arrives during verification", async () => {
+      const host = fakeHost()
+      const controller = new AbortController()
+      const port = (run: IntegrationRun): AcceptancePort => ({
+        runProfile: async ({ revision }) => {
+          controller.abort()
+          return portFor(["a"])
+            .factory(run)
+            .runProfile({ revision, profileId: "unit" } as never)
+        },
+      })
+      const outcome = await integrateChangesets(input(["a", "b"], { signal: controller.signal }), {
+        host,
+        readPolicyAtRef: noPolicy,
+        acceptancePortFor: port,
+      })
+      expect(outcome).toEqual(expect.objectContaining({ kind: "blocked", reason: "aborted" }))
+      expect(host.dropIntegrationItem).not.toHaveBeenCalled()
+      expect(host.publishIntegration).not.toHaveBeenCalled()
+    })
+
+    it("keeps an unproven executor's hold ahead of the cancel", async () => {
+      const host = fakeHost()
+      const controller = new AbortController()
+      const port = (run: IntegrationRun): AcceptancePort => ({
+        runProfile: async ({ revision }) => {
+          controller.abort()
+          return portFor()
+            .factory(run)
+            .runProfile({ revision, profileId: "unit" } as never)
+        },
+      })
+      const outcome = await integrateChangesets(input(["a"], { signal: controller.signal }), {
+        host,
+        readPolicyAtRef: noPolicy,
+        acceptancePortFor: port,
+        executorStopUnproven: () => true,
+        executorStopRetainUntil: () => 5_000,
+      })
+      expect(outcome).toEqual(
+        expect.objectContaining({ kind: "blocked", reason: "executor_stop_unproven" })
+      )
+      expect(host.abortIntegration).not.toHaveBeenCalled()
+    })
+
+    it("does not rebuild a moved target after the cancel", async () => {
+      const host = fakeHost({ moves: 1 })
+      const controller = new AbortController()
+      const publish = host.publishIntegration.getMockImplementation()!
+      host.publishIntegration.mockImplementationOnce(async (...args) => {
+        controller.abort()
+        return publish(...args)
+      })
+      const outcome = await integrateChangesets(input(["a"], { signal: controller.signal }), {
+        host,
+        readPolicyAtRef: noPolicy,
+        acceptancePortFor: portFor().factory,
+      })
+      expect(outcome).toEqual(expect.objectContaining({ kind: "blocked", reason: "aborted" }))
+      expect(host.rebuildIntegration).not.toHaveBeenCalled()
+      expect(host.publishIntegration).toHaveBeenCalledTimes(1)
+    })
+
+    it("reports a publish whose compare-and-swap committed as published", async () => {
+      const host = fakeHost()
+      const controller = new AbortController()
+      const publish = host.publishIntegration.getMockImplementation()!
+      host.publishIntegration.mockImplementationOnce(async (...args) => {
+        const published = await publish(...args)
+        controller.abort()
+        return published
+      })
+      const outcome = await integrateChangesets(input(["a"], { signal: controller.signal }), {
+        host,
+        readPolicyAtRef: noPolicy,
+        acceptancePortFor: portFor().factory,
+      })
+      expect(outcome.kind).toBe("published")
+      expect(host.abortIntegration).not.toHaveBeenCalled()
+    })
   })
 
   it("answers only the candidate from the run's worktree", async () => {
