@@ -1,6 +1,12 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
+import { invalidateTranscriptRuntime } from "@/lib/chat/transcript/revision-events"
+
+jest.mock("@/lib/chat/transcript/revision-events", () => ({
+  ...jest.requireActual("@/lib/chat/transcript/revision-events"),
+  invalidateTranscriptRuntime: jest.fn(async () => undefined),
+}))
 
 const archiveScratchMock = jest.fn()
 jest.mock("@/lib/task-workspace/managed-workspace", () => ({
@@ -24,6 +30,7 @@ import {
   acquireHostStateLease,
   commitHostStateAction,
   commitHostStateRuntimeProjection,
+  drainHostStateAsideContextRetirement,
   getHostStateAction,
   getHostStateMeta,
   getHostStateSnapshot,
@@ -65,6 +72,7 @@ async function acquireWritableLease(): Promise<Awaited<ReturnType<typeof acquire
 
 describe("HostState durable store", () => {
   beforeEach(async () => {
+    jest.mocked(invalidateTranscriptRuntime).mockReset().mockResolvedValue(undefined)
     archiveScratchMock.mockReset().mockResolvedValue(undefined)
     activateAccountDatabase(scope.accountId, scope.targetId)
     await getDb().delete()
@@ -846,6 +854,121 @@ describe("HostState durable store", () => {
       })
     ).rejects.toThrow("host_state_message_not_found")
     await expect(getDb().hostStateActions.count()).resolves.toBe(0)
+  })
+
+  it.each([undefined, "parent-message"])(
+    "retires aside memory only for a full transcript truncate (%s)",
+    async (afterMessageId) => {
+      await acquireWritableLease()
+      const aside = (id: string, parentId: string) => ({
+        id,
+        title: id,
+        kind: "resource-workbench" as const,
+        surfaceBinding: { kind: "session" as const, sessionId: parentId },
+        surfaceBindingKey: `session:${parentId}`,
+        sdkSessionId: `sdk-${id}`,
+        asideContextCursor: {
+          sdkSessionId: `sdk-${id}`,
+          parentMessageId: "parent-message",
+          tailFingerprint: "h",
+        },
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      await getDb().sessions.bulkPut([
+        aside("aside-1", "session-1"),
+        aside("aside-2", "session-1"),
+        aside("unrelated", "other"),
+      ])
+      await getDb().messages.bulkPut([
+        {
+          id: "parent-message",
+          sessionId: "session-1",
+          role: "user",
+          parts: [{ type: "text", text: "Old parent" }],
+          createdAt: 5,
+        },
+        {
+          id: "aside-message",
+          sessionId: "aside-1",
+          role: "user",
+          parts: [{ type: "text", text: "Own question" }],
+          createdAt: 6,
+        },
+      ])
+      const input = {
+        action: draftAction({
+          action: {
+            kind: "transcript.truncate" as const,
+            ...(afterMessageId ? { afterMessageId } : {}),
+          },
+        }),
+        mutation: { kind: "transcript.revised" as const, transcriptRevision: 1, revision: 1 },
+        now: 10,
+      }
+      await commitHostStateAction(input)
+      for (const id of ["aside-1", "aside-2"]) {
+        const row = await getDb().sessions.get(id)
+        if (afterMessageId) {
+          expect(row).toEqual(aside(id, "session-1"))
+        } else {
+          expect(row?.asideParentClearedAt).toEqual(expect.any(Number))
+          expect(row?.sdkSessionId).toBeUndefined()
+          expect(row?.asideContextCursor).toBeUndefined()
+          expect(invalidateTranscriptRuntime).toHaveBeenCalledWith(id)
+        }
+      }
+      expect(await getDb().messages.get("aside-message")).toBeDefined()
+      expect(await getDb().sessions.get("unrelated")).toEqual(aside("unrelated", "other"))
+      const calls = jest.mocked(invalidateTranscriptRuntime).mock.calls.length
+      await commitHostStateAction(input)
+      expect(invalidateTranscriptRuntime).toHaveBeenCalledTimes(calls)
+    }
+  )
+
+  it("recovers failed aside retirement without skipping siblings or resetting a completed aside again", async () => {
+    await acquireWritableLease()
+    await getDb().sessions.bulkPut(
+      ["aside-a", "aside-b"].map((id) => ({
+        id,
+        title: id,
+        kind: "resource-workbench" as const,
+        surfaceBinding: { kind: "session" as const, sessionId: "session-1" },
+        surfaceBindingKey: "session:session-1",
+        sdkSessionId: `old-${id}`,
+        createdAt: 1,
+        updatedAt: 1,
+      }))
+    )
+    jest.mocked(invalidateTranscriptRuntime).mockImplementation(async (id) => {
+      if (id === "aside-a") throw new Error("runtime unavailable")
+    })
+    const input = {
+      action: draftAction({ action: { kind: "transcript.truncate" as const } }),
+      mutation: { kind: "transcript.revised" as const, transcriptRevision: 1, revision: 1 },
+      now: 10,
+    }
+    expect((await commitHostStateAction(input)).event.outcome).toBe("applied")
+    expect((await getDb().sessions.get("aside-a"))?.sdkSessionId).toBe("old-aside-a")
+    expect((await getDb().sessions.get("aside-b"))?.sdkSessionId).toBeUndefined()
+    expect((await getHostStateAction(1, "action-1"))?.asideContextRetirement?.asideIds).toEqual([
+      "aside-a",
+    ])
+    await getDb().sessions.update("aside-b", { sdkSessionId: "fresh-b" })
+    jest.mocked(invalidateTranscriptRuntime).mockReset().mockResolvedValue(undefined)
+    expect((await commitHostStateAction(input)).duplicate).toBe(true)
+    expect(invalidateTranscriptRuntime).toHaveBeenCalledTimes(1)
+    expect(invalidateTranscriptRuntime).toHaveBeenCalledWith("aside-a")
+    expect((await getDb().sessions.get("aside-b"))?.sdkSessionId).toBe("fresh-b")
+    expect((await getHostStateAction(1, "action-1"))?.asideContextRetirement).toBeUndefined()
+    // A crash after retirement but before its ledger acknowledgement is safe too.
+    const clearedAt = (await getDb().sessions.get("aside-a"))!.asideParentClearedAt!
+    await getDb().sessions.update("aside-a", { sdkSessionId: "fresh-a" })
+    await getDb().hostStateActions.update([1, "action-1"], {
+      asideContextRetirement: { clearedAt, asideIds: ["aside-a"] },
+    })
+    await drainHostStateAsideContextRetirement(1, "action-1")
+    expect((await getDb().sessions.get("aside-a"))?.sdkSessionId).toBe("fresh-a")
   })
 
   // The kept tail's last row becomes the list preview. A user turn that carried

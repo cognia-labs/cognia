@@ -1229,6 +1229,17 @@ async function clearMessagesNow(sessionId: string): Promise<void> {
       if (deleted > 0) revision = await bumpTranscriptRevision(db, sessionId)
     }
   )
+  try {
+    const { retireSessionAsidesParentContext } = await import("./resource-workbench-sessions")
+    await retireSessionAsidesParentContext(sessionId, db)
+  } catch (error) {
+    // The clear committed. An aside can rebuild inherited context lazily on
+    // its next turn, so retirement must not make the parent clear fail.
+    loggers.store.warn("session aside context retirement failed after clear", {
+      sessionId,
+      error: String(error),
+    })
+  }
   publishChatLifecycleEvent({ type: "session-cleared", sessionId }, Dexie.currentTransaction)
   invalidatePersistSnapshot(sessionId)
   markSessionDirty(sessionId)

@@ -40,9 +40,10 @@ export async function purgeOrphanedSessionSideChats(): Promise<number> {
 
   const orphanIds = sideChats.flatMap((row) => {
     const parentId = boundSessionId(row)
-    return parentId !== undefined && !living.has(parentId) ? [row.id] : []
+    return row.kind === "resource-workbench" && parentId !== undefined && !living.has(parentId)
+      ? [row.id]
+      : []
   })
   if (orphanIds.length === 0) return 0
-  await bulkDeleteSessions(orphanIds)
-  return orphanIds.length
+  return bulkDeleteSessions(orphanIds, undefined, { onlyOrphanedSessionAsides: true })
 }

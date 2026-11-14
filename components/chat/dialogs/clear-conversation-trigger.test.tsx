@@ -2,14 +2,33 @@
 // session/messages, the confirm→clear flow, and error handling.
 
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import type { UIMessage } from "ai"
+import { toast } from "sonner"
 
 import { ClearConversationTrigger } from "./clear-conversation-trigger"
 import { DataAdapterProvider } from "@/lib/data-hooks/context"
 import type { DataAdapter } from "@/lib/data-hooks/types"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useChatStore } from "@/stores/chat"
+import {
+  clearMessages as clearStoredMessages,
+  listMessages,
+  persistMessages,
+} from "@/lib/db/messages"
+import { getDb } from "@/lib/db/schema"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { invalidateTranscriptRuntime } from "@/lib/chat/transcript/revision-events"
+
+jest.mock("sonner", () => ({
+  toast: { success: jest.fn(), error: jest.fn() },
+}))
+
+jest.mock("@/lib/chat/transcript/revision-events", () => ({
+  ...jest.requireActual("@/lib/chat/transcript/revision-events"),
+  invalidateTranscriptRuntime: jest.fn(async () => {}),
+}))
 
 function makeAdapter(overrides: Partial<DataAdapter> = {}): DataAdapter {
   return {
@@ -106,6 +125,9 @@ describe("ClearConversationTrigger", () => {
     })
 
     await waitFor(() => expect(clearMessages).toHaveBeenCalledWith("ses_1"))
+    expect(useChatStore.getState().messages).toEqual([])
+    expect(toast.success).toHaveBeenCalledWith("Conversation cleared.")
+    expect(toast.error).not.toHaveBeenCalled()
   })
 
   it("surfaces clear errors without crashing", async () => {
@@ -124,6 +146,9 @@ describe("ClearConversationTrigger", () => {
       fireEvent.click(confirm)
     })
     await waitFor(() => expect(clearMessages).toHaveBeenCalled())
+    expect(useChatStore.getState().messages).toEqual([userMsg("m1")])
+    expect(toast.error).toHaveBeenCalledWith("boom")
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it("handles a non-Error clear rejection without crashing", async () => {
@@ -142,5 +167,49 @@ describe("ClearConversationTrigger", () => {
       fireEvent.click(confirm)
     })
     await waitFor(() => expect(clearMessages).toHaveBeenCalled())
+  })
+
+  describe("aside retirement failure", () => {
+    const dbFixture = createDbTestFixture()
+    beforeAll(dbFixture.initialize)
+    afterAll(dbFixture.dispose)
+
+    it("replaces store messages and shows success after the parent clear commits", async () => {
+      await getDb().sessions.bulkPut([
+        { id: "ses_1", title: "Parent", createdAt: 1, updatedAt: 1 },
+        {
+          id: "broken-aside",
+          title: "Aside",
+          kind: "resource-workbench",
+          surfaceBinding: { kind: "session", sessionId: "ses_1" },
+          surfaceBindingKey: "session:ses_1",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ])
+      await persistMessages("ses_1", [userMsg("m1")])
+      jest.mocked(invalidateTranscriptRuntime).mockImplementation(async (id) => {
+        if (id === "broken-aside") throw new Error("close failed")
+      })
+      try {
+        const user = userEvent.setup()
+        const Wrapper = withAdapter(makeAdapter({ clearMessages: clearStoredMessages }))
+        render(
+          <Wrapper>
+            <ClearConversationTrigger />
+          </Wrapper>
+        )
+        await user.click(screen.getByRole("button", { name: /clear/i }))
+        await user.click(await screen.findByRole("button", { name: /delete messages/i }))
+
+        await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Conversation cleared."))
+        expect(useChatStore.getState().messages).toEqual([])
+        expect(await listMessages("ses_1")).toEqual([])
+        expect(invalidateTranscriptRuntime).toHaveBeenCalledWith("broken-aside")
+        expect(toast.error).not.toHaveBeenCalled()
+      } finally {
+        jest.mocked(invalidateTranscriptRuntime).mockResolvedValue(undefined)
+      }
+    })
   })
 })

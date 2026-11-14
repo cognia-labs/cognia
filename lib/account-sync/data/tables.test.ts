@@ -73,6 +73,15 @@ describe("account sync table policies", () => {
     expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("agentTurnOwner")
   })
 
+  it("keeps side chat parent context retirement on the device", () => {
+    expect(TABLE_POLICIES.sessions.fields.asideContextCursor).toBe("local")
+    expect(TABLE_POLICIES.sessions.fields.asidePinnedParentMessageIds).toBe("local")
+    expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("asidePinnedParentMessageIds")
+    expect(TABLE_POLICIES.sessions.fields.asideParentClearedAt).toBe("local")
+    expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("asideContextCursor")
+    expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("asideParentClearedAt")
+  })
+
   it("keeps original delivery Host bindings device-local", () => {
     expect(TABLE_POLICIES.sessions.fields.deliverySourceHosts).toBe("local")
     expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("deliverySourceHosts")

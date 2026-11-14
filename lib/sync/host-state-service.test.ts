@@ -1,6 +1,11 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
+import { invalidateTranscriptRuntime } from "@/lib/chat/transcript/revision-events"
+jest.mock("@/lib/chat/transcript/revision-events", () => ({
+  ...jest.requireActual("@/lib/chat/transcript/revision-events"),
+  invalidateTranscriptRuntime: jest.fn(async () => undefined),
+}))
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 jest.mock("@/lib/gateway/person-model-ticket", () => ({
@@ -197,6 +202,7 @@ function action(
 
 describe("HostStateService", () => {
   beforeEach(async () => {
+    jest.mocked(invalidateTranscriptRuntime).mockReset().mockResolvedValue(undefined)
     archiveScratchMock.mockReset().mockResolvedValue(undefined)
     activateAccountDatabase(scope.accountId, scope.runtimeTargetId)
     await getDb().delete()
@@ -219,6 +225,51 @@ describe("HostStateService", () => {
     __resetSearchIndexerForTesting()
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  it("redrives unfinished parent-clear retirement before broadcasting the clear", async () => {
+    const publish = jest.fn(async () => undefined)
+    const service = createHostStateService({
+      ...scope,
+      hostId,
+      ownerId: "brain-a",
+      now: () => 100,
+      publish,
+    })
+    await service.start({ now: 0, heartbeat: false })
+    try {
+      await getDb().sessions.put({
+        id: "aside",
+        title: "Aside",
+        kind: "resource-workbench",
+        surfaceBinding: { kind: "session", sessionId: "session-1" },
+        surfaceBindingKey: "session:session-1",
+        sdkSessionId: "old-sdk",
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      jest.mocked(invalidateTranscriptRuntime).mockRejectedValue(new Error("runtime offline"))
+      await expect(
+        service.submit(
+          {
+            ...scope,
+            actions: [action({ kind: "transcript.truncate" })],
+          },
+          owner
+        )
+      ).resolves.toMatchObject({ results: [{ outcome: "applied" }] })
+      expect((await getHostStateAction(1, "action-1"))?.asideContextRetirement?.asideIds).toEqual([
+        "aside",
+      ])
+      expect((await getDb().sessions.get("aside"))?.sdkSessionId).toBe("old-sdk")
+      jest.mocked(invalidateTranscriptRuntime).mockResolvedValue(undefined)
+      await service.recover()
+      expect((await getHostStateAction(1, "action-1"))?.asideContextRetirement).toBeUndefined()
+      expect((await getDb().sessions.get("aside"))?.sdkSessionId).toBeUndefined()
+      expect((await getHostStateAction(1, "action-1"))?.broadcastState).toBe("completed")
+    } finally {
+      await service.stop()
+    }
   })
 
   it("hydrates one owned utility channel without replacing the shared Host sync", async () => {

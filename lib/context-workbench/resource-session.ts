@@ -9,12 +9,15 @@ export interface ResourceSessionRepository {
   get: (id: string) => Promise<ChatSession | undefined>
   findByBinding?: (binding: SessionSurfaceBinding) => Promise<ChatSession | undefined>
   put: (session: ChatSession) => Promise<void>
+  create?: (session: ChatSession) => Promise<ResourceSessionCreateResult>
+  /** Return the fresh repaired row, or undefined if it was removed/promoted. */
+  repair?: (id: string, patch: Partial<ChatSession>) => Promise<ChatSession | undefined>
   update: (id: string, patch: Partial<ChatSession>) => Promise<unknown>
   now?: () => number
   /**
    * Owning workspace for a newly-created embedded session. Injected rather than
-   * imported so this module keeps no dependency on `lib/db` (it is unit-tested
-   * against a plain in-memory repository).
+   * imported so repository operations can be unit-tested against a plain
+   * in-memory implementation.
    *
    * Load-bearing, not cosmetic: `listScopedSessions` reads through the
    * `[projectId+updatedAt]` compound index, and Dexie does not index a row whose
@@ -25,6 +28,25 @@ export interface ResourceSessionRepository {
    * v131 upgrade backfills those.
    */
   resolveProjectId?: (binding: SessionSurfaceBinding) => Promise<string | undefined>
+}
+
+export type ResourceSessionCreateResult =
+  { created: true } | { created: false; reason: "occupied" | "parent-gone" }
+
+export class AsideParentGoneError extends Error {
+  readonly code = "aside_parent_gone"
+  constructor() {
+    super("The aside's parent conversation no longer exists")
+    this.name = "AsideParentGoneError"
+  }
+}
+
+export class AsideSessionContentionError extends Error {
+  readonly code = "aside_session_contention"
+  constructor() {
+    super("The aside changed repeatedly while opening")
+    this.name = "AsideSessionContentionError"
+  }
 }
 
 /**
@@ -39,11 +61,12 @@ export interface ResourceSessionRepository {
  * A `resource-workbench` session is not itself bindable: letting an aside own
  * an aside would nest without limit, and there is no surface that would render
  * the second level anyway. Callers pass the resource, so the guard belongs
- * where the resource is built (`appliesTo`); this function only handles what it
- * is given.
+ * where the resource is built (`appliesTo`). Prefixed IDs fail closed unless
+ * the caller has positively established promotion from the current row.
  */
 export function surfaceBindingForContextResource(
-  resource: ContextResource
+  resource: ContextResource,
+  knownPromoted = false
 ): SessionSurfaceBinding | null {
   switch (resource.kind) {
     case "canvas-document":
@@ -60,10 +83,10 @@ export function surfaceBindingForContextResource(
     case "workflow":
       return { kind: "workflow", workflowId: resource.workflowId }
     case "session":
-      // "none" is the dock's placeholder while no conversation is open, and a
-      // workbench session's own id carries this prefix — binding to the latter
-      // would make an aside of an aside.
-      return resource.sessionId === "none" || resource.sessionId.startsWith("resource-workbench:")
+      // IDs survive promotion, but an unknown prefixed ID is still an aside.
+      // "none" remains the dock's no-conversation placeholder.
+      return resource.sessionId === "none" ||
+        (!knownPromoted && isEmbeddedAside(resource.sessionId))
         ? null
         : { kind: "session", sessionId: resource.sessionId }
   }
@@ -176,9 +199,25 @@ export async function fillResourceSessionConfigGaps(
   return { ...session, ...patch }
 }
 
-function wasPromoted(session: ChatSession): boolean {
+function wasPromoted(
+  session: Pick<ChatSession, "kind" | "surfaceBinding" | "surfaceBindingKey">
+): boolean {
   return (
     session.kind !== "resource-workbench" && !session.surfaceBinding && !session.surfaceBindingKey
+  )
+}
+
+/** Unknown prefixed IDs remain asides until their own row proves promotion. */
+export function isEmbeddedAside(
+  sessionId: string | null | undefined,
+  session?: Pick<
+    ChatSession,
+    "id" | "kind" | "visibility" | "surfaceBinding" | "surfaceBindingKey"
+  > | null
+): boolean {
+  return (
+    !!sessionId?.startsWith("resource-workbench:") &&
+    !(session?.id === sessionId && wasPromoted(session) && session.visibility !== "embedded")
   )
 }
 
@@ -189,69 +228,87 @@ export async function ensureResourceWorkbenchSession(
   workbenchInstanceId?: string
 ): Promise<ChatSession> {
   const primaryId = resourceWorkbenchSessionId(binding, workbenchInstanceId)
-  let id = primaryId
-  const bindingKey = surfaceBindingKey(binding)
-  let existing = await repository.get(id)
-  // Promotion preserves the old row and its permalinks. Deterministic generation
-  // ids let separate windows converge on the next primary without resurrecting
-  // any promoted conversation or selecting an unrelated additional aside.
-  let generation = 0
-  while (existing && wasPromoted(existing)) {
-    id = `${primaryId}#primary:${++generation}`
-    existing = await repository.get(id)
-  }
-  if (!existing && generation === 0) {
-    const bound = await repository.findByBinding?.(binding)
-    if (bound && !wasPromoted(bound)) existing = bound
-  }
-  if (existing) {
-    // `surfaceBindingKey` and `projectId` join the drift check: a row written
-    // before v131 carries neither, and the workbench is the only place that
-    // reliably knows the binding — so repair it here rather than leaving the
-    // row un-indexed and outside the workspace cascade until the next upgrade.
-    if (
-      existing.kind !== "resource-workbench" ||
-      existing.visibility !== "embedded" ||
-      existing.surfaceBindingKey !== bindingKey ||
-      existing.projectId === undefined ||
-      JSON.stringify(existing.surfaceBinding) !== JSON.stringify(binding)
-    ) {
-      const patch: Partial<ChatSession> = {
-        kind: "resource-workbench",
-        visibility: "embedded",
-        surfaceBinding: binding,
-        surfaceBindingKey: bindingKey,
-        updatedAt: repository.now?.() ?? Date.now(),
-      }
-      // Only ever fills a gap — an existing workspace stays put, so repairing a
-      // legacy row can never move a sidechat out from under its conversation.
-      if (existing.projectId === undefined) {
-        const projectId = await repository.resolveProjectId?.(binding)
-        if (projectId !== undefined) patch.projectId = projectId
-      }
-      await repository.update(existing.id, patch)
-      return fillResourceSessionConfigGaps({ ...existing, ...patch }, binding, repository)
+  // Bound contention retries, while allowing any number of already-promoted
+  // generations to retain their stable permalinks.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    let id = primaryId
+    const bindingKey = surfaceBindingKey(binding)
+    let existing = await repository.get(id)
+    // Promotion preserves the old row and its permalinks. Deterministic generation
+    // ids let separate windows converge on the next primary without resurrecting
+    // any promoted conversation or selecting an unrelated additional aside.
+    let generation = 0
+    while (existing && wasPromoted(existing)) {
+      id = `${primaryId}#primary:${++generation}`
+      existing = await repository.get(id)
     }
-    return fillResourceSessionConfigGaps(existing, binding, repository)
-  }
+    if (!existing && generation === 0) {
+      const bound = await repository.findByBinding?.(binding)
+      if (bound && !wasPromoted(bound)) existing = bound
+    }
+    if (existing) {
+      // `surfaceBindingKey` and `projectId` join the drift check: a row written
+      // before v131 carries neither, and the workbench is the only place that
+      // reliably knows the binding — so repair it here rather than leaving the
+      // row un-indexed and outside the workspace cascade until the next upgrade.
+      if (
+        existing.kind !== "resource-workbench" ||
+        existing.visibility !== "embedded" ||
+        existing.surfaceBindingKey !== bindingKey ||
+        existing.projectId === undefined ||
+        JSON.stringify(existing.surfaceBinding) !== JSON.stringify(binding)
+      ) {
+        const patch: Partial<ChatSession> = {
+          kind: "resource-workbench",
+          visibility: "embedded",
+          surfaceBinding: binding,
+          surfaceBindingKey: bindingKey,
+          updatedAt: repository.now?.() ?? Date.now(),
+        }
+        // Only ever fills a gap — an existing workspace stays put, so repairing a
+        // legacy row can never move a sidechat out from under its conversation.
+        if (existing.projectId === undefined) {
+          const projectId = await repository.resolveProjectId?.(binding)
+          if (projectId !== undefined) patch.projectId = projectId
+        }
+        if (repository.repair) {
+          const repaired = await repository.repair(existing.id, patch)
+          if (!repaired) continue
+          return fillResourceSessionConfigGaps(repaired, binding, repository)
+        }
+        await repository.update(existing.id, patch)
+        return fillResourceSessionConfigGaps({ ...existing, ...patch }, binding, repository)
+      }
+      return fillResourceSessionConfigGaps(existing, binding, repository)
+    }
 
-  const now = repository.now?.() ?? Date.now()
-  const parent = binding.kind === "session" ? await repository.get(binding.sessionId) : undefined
-  const session: ChatSession = {
-    ...(parent ? inheritableSessionConfig(parent, "aside") : {}),
-    id,
-    title,
-    kind: "resource-workbench",
-    visibility: "embedded",
-    surfaceBinding: binding,
-    surfaceBindingKey: bindingKey,
-    createdAt: now,
-    updatedAt: now,
+    const now = repository.now?.() ?? Date.now()
+    const parent = binding.kind === "session" ? await repository.get(binding.sessionId) : undefined
+    const session: ChatSession = {
+      ...(parent ? inheritableSessionConfig(parent, "aside") : {}),
+      id,
+      title,
+      kind: "resource-workbench",
+      visibility: "embedded",
+      surfaceBinding: binding,
+      surfaceBindingKey: bindingKey,
+      createdAt: now,
+      updatedAt: now,
+    }
+    const projectId = await repository.resolveProjectId?.(binding)
+    if (projectId !== undefined) session.projectId = projectId
+    if (repository.create) {
+      const result = await repository.create(session)
+      if (!result.created) {
+        if (result.reason === "parent-gone") throw new AsideParentGoneError()
+        continue
+      }
+    } else {
+      await repository.put(session)
+    }
+    return session
   }
-  const projectId = await repository.resolveProjectId?.(binding)
-  if (projectId !== undefined) session.projectId = projectId
-  await repository.put(session)
-  return session
+  throw new AsideSessionContentionError()
 }
 
 export async function migrateResourceSessionBinding(

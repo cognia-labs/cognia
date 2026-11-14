@@ -132,6 +132,8 @@ const SESSION_FIELDS = {
   // holds are both about this device's run, like the binding above.
   asideWriteAccess: "local",
   asideContextCursor: "local",
+  asidePinnedParentMessageIds: "local",
+  asideParentClearedAt: "local",
   powerPolicy: "local",
   sandboxEnabled: "local",
   workspaceConfinementEnabled: "local",

@@ -5,6 +5,7 @@ import { createDbTestFixture } from "./test-fixture"
 import { listMessages, persistMessages } from "./messages"
 import { archiveSession, deleteSession } from "./sessions"
 import { purgeOrphanedSessionSideChats } from "./session-aside-orphans"
+import { promoteEmbeddedSessionPatch } from "@/lib/context-workbench/resource-session"
 
 // Session deletion dynamically imports the artifact store for a best-effort
 // cleanup this suite does not exercise.
@@ -82,6 +83,34 @@ describe("side chats follow their conversation", () => {
 })
 
 describe("purgeOrphanedSessionSideChats", () => {
+  it.each(["promoted", "parent-restored"])(
+    "keeps messages when its snapshot is stale (%s)",
+    async (change) => {
+      const db = getDb()
+      await db.sessions.put(sideChat("stale", "gone"))
+      await persistMessages("stale", [message("kept")])
+      const originalGet = db.sessions.bulkGet.bind(db.sessions)
+      const spy = jest.spyOn(db.sessions, "bulkGet").mockImplementationOnce((async (
+        ids: string[]
+      ) => {
+        const snapshot = await originalGet(ids)
+        if (change === "promoted") {
+          // A stale snapshot can also come from an older client that promoted an orphan.
+          await db.sessions.update("stale", promoteEmbeddedSessionPatch())
+        } else await db.sessions.put(conversation("gone"))
+        return snapshot
+      }) as never)
+      try {
+        expect(await purgeOrphanedSessionSideChats()).toBe(0)
+        expect(await db.sessions.get("stale")).toBeDefined()
+        expect(await listMessages("stale")).toHaveLength(1)
+        expect(await db.syncTombstones.get(["sessions", "stale"])).toBeUndefined()
+      } finally {
+        spy.mockRestore()
+      }
+    }
+  )
+
   it("removes side chats whose conversation is gone and nothing else", async () => {
     await getDb().sessions.bulkPut([
       conversation("alive"),

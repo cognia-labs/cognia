@@ -2567,13 +2567,19 @@ export interface ChatSession {
   surfaceBindingKey?: string
   /** Session-bound aside only. Absent/false is read-only; true uses the parent's permission ceiling. */
   asideWriteAccess?: boolean
+  /** Explicit parent-message pins for this aside; local, non-indexed. */
+  asidePinnedParentMessageIds?: string[]
   /** Provider-only parent context already delivered to this aside's SDK history; not indexed. */
   asideContextCursor?: {
     /** Null acknowledges an empty parent snapshot. */
     parentMessageId: string | null
     tailFingerprint: string
     sdkSessionId: string
+    /** Delivered pins, fingerprinted so edits rebuild rather than resume stale text. */
+    pinnedParentMessageFingerprints?: Record<string, string>
   }
+  /** Last parent clear; inherited provider context was retired, own transcript kept. Not indexed. */
+  asideParentClearedAt?: number
   /** Direct sessions: the persona driving replies. */
   characterId?: string
   /** Team sessions: the team whose members reply. */

@@ -2,11 +2,13 @@ import type { ChatSession, SessionSurfaceBinding } from "@cognia/agent-config-ty
 import {
   ensureResourceWorkbenchSession,
   fillResourceSessionConfigGaps,
+  isEmbeddedAside,
   isPrimaryResourceWorkbenchSessionId,
   promoteEmbeddedSessionPatch,
   migrateResourceSessionBinding,
   resourceWorkbenchSessionId,
   surfaceBindingForContextResource,
+  type ResourceSessionCreateResult,
 } from "./resource-session"
 
 describe("resource workbench sessions", () => {
@@ -206,20 +208,74 @@ describe("resource workbench sessions", () => {
   })
 
   it("refuses to give an aside its own aside", () => {
+    const id = "resource-workbench:session:s"
+    const aside = {
+      id,
+      kind: "resource-workbench" as const,
+      visibility: "embedded" as const,
+      surfaceBinding: { kind: "session" as const, sessionId: "s" },
+    }
     // Nesting would be unbounded and no surface renders the second level.
     expect(
-      surfaceBindingForContextResource({
-        kind: "session",
-        sessionId: "resource-workbench:session:s",
-        capabilities: [],
-      })
+      surfaceBindingForContextResource(
+        { kind: "session", sessionId: id, capabilities: [] },
+        !isEmbeddedAside(id, aside)
+      )
     ).toBeNull()
+  })
+
+  it("binds a promoted conversation with its original permalink", () => {
+    const id = "resource-workbench:session:s"
+    const promoted = { id, kind: "direct" as const }
+    expect(
+      surfaceBindingForContextResource(
+        { kind: "session", sessionId: id, capabilities: [] },
+        !isEmbeddedAside(id, promoted)
+      )
+    ).toEqual({ kind: "session", sessionId: id })
   })
 
   it("refuses the dock's no-conversation placeholder", () => {
     expect(
       surfaceBindingForContextResource({ kind: "session", sessionId: "none", capabilities: [] })
     ).toBeNull()
+  })
+
+  it("refuses a prefixed session whose current row is unknown", () => {
+    expect(
+      surfaceBindingForContextResource({
+        kind: "session",
+        sessionId: "resource-workbench:session:unloaded",
+        capabilities: [],
+      })
+    ).toBeNull()
+  })
+
+  it.each([
+    { id: "other", kind: "direct" as const },
+    { id: "resource-workbench:session:s", kind: "resource-workbench" as const },
+    {
+      id: "resource-workbench:session:s",
+      kind: "direct" as const,
+      surfaceBindingKey: "session:s",
+    },
+    {
+      id: "resource-workbench:session:s",
+      kind: "direct" as const,
+      visibility: "embedded" as const,
+    },
+    {
+      id: "resource-workbench:session:s",
+      kind: "direct" as const,
+      surfaceBinding: { kind: "session" as const, sessionId: "s" },
+    },
+  ])("requires the matching row to have cleared all embedded markers: %j", (row) => {
+    expect(isEmbeddedAside("resource-workbench:session:s", row)).toBe(true)
+  })
+
+  it("never infers aside identity for an unprefixed id", () => {
+    expect(isEmbeddedAside("ordinary")).toBe(false)
+    expect(isEmbeddedAside("ordinary", { id: "ordinary", kind: "resource-workbench" })).toBe(false)
   })
 
   it("gives a session binding its own id namespace", () => {
@@ -313,6 +369,13 @@ describe("aside configuration and primary replacement", () => {
     const repository = {
       get: async (id: string) => rows.get(id),
       put: async (row: ChatSession) => void rows.set(row.id, row),
+      create: jest.fn(async (row: ChatSession): Promise<ResourceSessionCreateResult> => {
+        if (rows.has(row.id)) return { created: false, reason: "occupied" }
+        if (row.surfaceBinding?.kind === "session" && !rows.has(row.surfaceBinding.sessionId))
+          return { created: false, reason: "parent-gone" }
+        rows.set(row.id, row)
+        return { created: true }
+      }),
       update: jest.fn(async (id: string, patch: Partial<ChatSession>) => {
         rows.set(id, { ...rows.get(id)!, ...patch })
       }),
@@ -354,6 +417,41 @@ describe("aside configuration and primary replacement", () => {
     )
     expect(created.model).toBeUndefined()
     expect(created.accountId).toBeUndefined()
+  })
+
+  it("reselects after an occupied create rather than overwriting the winner", async () => {
+    const { rows, repository } = fixture()
+    repository.create.mockImplementationOnce(async (row) => {
+      rows.set(row.id, {
+        ...row,
+        ...promoteEmbeddedSessionPatch(),
+        model: "winner",
+        sdkSessionId: "sdk",
+      })
+      return { created: false, reason: "occupied" }
+    })
+    const created = await ensureResourceWorkbenchSession(binding, "Aside", repository)
+    const primaryId = resourceWorkbenchSessionId(binding)
+    expect(created.id).toBe(`${primaryId}#primary:1`)
+    expect(rows.get(primaryId)).toMatchObject({
+      kind: "direct",
+      model: "winner",
+      sdkSessionId: "sdk",
+    })
+  })
+
+  it("bounds repeated create contention and distinguishes a deleted parent", async () => {
+    const { rows, repository } = fixture()
+    repository.create.mockResolvedValue({ created: false, reason: "occupied" })
+    await expect(
+      ensureResourceWorkbenchSession(binding, "Aside", repository)
+    ).rejects.toMatchObject({ code: "aside_session_contention" })
+    expect(repository.create).toHaveBeenCalledTimes(8)
+    repository.create.mockResolvedValue({ created: false, reason: "parent-gone" })
+    await expect(
+      ensureResourceWorkbenchSession(binding, "Aside", repository)
+    ).rejects.toMatchObject({ code: "aside_parent_gone" })
+    expect(rows.has(resourceWorkbenchSessionId(binding))).toBe(false)
   })
 
   it("fills manually selected additional aside gaps without replacing its configuration", async () => {

@@ -1,5 +1,6 @@
 import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import Dexie from "dexie"
+import { loggers } from "@cognia/logging"
 import { archiveSessionScratchWorkspace } from "@/lib/task-workspace/managed-workspace"
 import { messageMediaRefRows } from "@/lib/db/message-media-refs"
 import { canonicalTurnToHandoffMessage } from "@/lib/chat/import-handoff-session"
@@ -48,6 +49,10 @@ import {
   type SessionWriteOperation,
 } from "@/lib/chat/session-write-guard"
 import { hostSessionMoveRejection, planHostSessionMove } from "./host-state-session-move"
+import {
+  listSessionBoundAsides,
+  retireAsideParentContext,
+} from "@/lib/db/resource-workbench-sessions"
 
 export const HOST_STATE_META_ID = "singleton" as const
 export const HOST_STATE_LEASE_TTL_MS = 30_000
@@ -71,6 +76,8 @@ export interface HostStateActionRow {
   channel: string
   hostSeq: number
   outcome: HostStateActionOutcome
+  /** Durable post-commit work: runtime IPC must run outside the ledger transaction. */
+  asideContextRetirement?: { clearedAt: number; asideIds: string[] }
   payloadDigest: string
   /**
    * Retained while dispatch/broadcast recovery is pending, and dropped once
@@ -440,7 +447,7 @@ export async function commitHostStateAction(
   assertActionChannel(input.action)
   const db = getDb()
   const now = input.now ?? Date.now()
-  return db.transaction(
+  const result = await db.transaction(
     "rw",
     [
       db.hostStateMeta,
@@ -543,12 +550,33 @@ export async function commitHostStateAction(
         updatedAt: now,
       }
       const nextMeta = { ...meta, hostSeq, updatedAt: now }
+      const clearedAsides =
+        event.outcome === "applied" &&
+        input.action.action.kind === "transcript.truncate" &&
+        !input.action.action.afterMessageId
+          ? await listSessionBoundAsides(input.action.sessionId!, db)
+          : []
       const actionRow: HostStateActionRow = {
         hostGeneration: meta.hostGeneration,
         actionId: input.action.actionId,
         channel: input.action.channel,
         hostSeq,
         outcome: event.outcome,
+        ...(clearedAsides.length > 0
+          ? {
+              asideContextRetirement: {
+                clearedAt: Math.max(
+                  now,
+                  Date.now(),
+                  ...clearedAsides.map(
+                    (aside) =>
+                      Math.max(aside.asideParentClearedAt ?? 0, aside.lastMessageAt ?? 0) + 1
+                  )
+                ),
+                asideIds: clearedAsides.map((aside) => aside.id),
+              },
+            }
+          : {}),
         payloadDigest: hostStateDigest(input.action),
         action: input.action,
         event,
@@ -583,6 +611,60 @@ export async function commitHostStateAction(
       }
     }
   )
+  if (
+    result.event.outcome === "applied" &&
+    input.action.action.kind === "transcript.truncate" &&
+    !input.action.action.afterMessageId
+  ) {
+    // Provider retirement calls IPC; keep it outside the committed ledger
+    // transaction. Partial truncation keeps the existing lazy cursor behavior.
+    try {
+      await drainHostStateAsideContextRetirement(
+        input.action.hostGeneration,
+        input.action.actionId,
+        db
+      )
+    } catch (error) {
+      // The clear is already durable. Keep its receipt usable and its pending
+      // work recoverable by processRow/startup/heartbeat, like runtime dispatch.
+      loggers.sync.warn("[host-state] aside context retirement pending", {
+        actionId: input.action.actionId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  return result
+}
+
+/** Replay only unfinished asides, including after a failed close or Host restart. */
+export async function drainHostStateAsideContextRetirement(
+  hostGeneration: number,
+  actionId: string,
+  db = getDb()
+): Promise<void> {
+  const key: [number, string] = [hostGeneration, actionId]
+  const work = (await db.hostStateActions.get(key))?.asideContextRetirement
+  if (!work) return
+  let failure: unknown
+  for (const id of work.asideIds) {
+    try {
+      await retireAsideParentContext(id, db, work.clearedAt)
+      await db.transaction("rw", db.hostStateActions, async () => {
+        const row = await db.hostStateActions.get(key)
+        if (row?.asideContextRetirement?.clearedAt !== work.clearedAt) return
+        const remaining = row.asideContextRetirement.asideIds.filter((asideId) => asideId !== id)
+        await db.hostStateActions.put(
+          compactSettledAction({
+            ...row,
+            asideContextRetirement: remaining.length ? { ...work, asideIds: remaining } : undefined,
+          })
+        )
+      })
+    } catch (error) {
+      failure ??= error
+    }
+  }
+  if (failure) throw failure
 }
 
 /**
@@ -913,13 +995,17 @@ export async function markHostStateSummary(
 
 /** Whether a row still owes the Host any work. */
 export function hostStateActionHasPendingWork(
-  row: Pick<HostStateActionRow, "dispatchState" | "broadcastState" | "summaryState">
+  row: Pick<
+    HostStateActionRow,
+    "dispatchState" | "broadcastState" | "summaryState" | "asideContextRetirement"
+  >
 ): boolean {
   return (
     row.dispatchState === "pending" ||
     row.dispatchState === "failed" ||
     row.broadcastState === "pending" ||
-    row.summaryState === "pending"
+    row.summaryState === "pending" ||
+    (row.asideContextRetirement?.asideIds.length ?? 0) > 0
   )
 }
 

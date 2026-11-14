@@ -1172,21 +1172,48 @@ export async function cleanupManagedExternalAgentSessions(
   }
 }
 
+export interface SessionDeletionOptions {
+  /** Recheck orphan ownership before external cleanup and in the write transaction. */
+  onlyOrphanedSessionAsides: true
+}
+
+async function eligibleDeletionIds(
+  db: ReturnType<typeof getDb>,
+  ids: readonly string[],
+  options?: SessionDeletionOptions
+): Promise<string[]> {
+  const rows = await db.sessions.bulkGet([...ids])
+  if (!options?.onlyOrphanedSessionAsides) return rows.flatMap((row) => (row ? [row.id] : []))
+  const asides = rows.filter(
+    (row): row is ChatSession & { surfaceBinding: { kind: "session"; sessionId: string } } =>
+      row?.kind === "resource-workbench" && row.surfaceBinding?.kind === "session"
+  )
+  const parentIds = asides.map((row) => row.surfaceBinding.sessionId)
+  const parents = await db.sessions.bulkGet(parentIds)
+  return asides.flatMap((row, index) => (parents[index] ? [] : [row.id]))
+}
+
 /**
- * Bulk variant of `deleteSession` for the channel-list batch toolbar.
- * Expands parent-owned attached descendants, then removes their session,
- * message, media-reference, draft, unread, history, peer-message, goal and loop
- * rows in one Dexie `rw` transaction so
- * a mid-cascade failure rolls back atomically. Missing ids are silently
- * skipped. Scheduler tasks and persisted UI stores are external systems and
- * are cleaned up best-effort after the database commit.
+ * Delete sessions and owned descendants through the shared transactional cascade.
+ * The orphan-sweep option also returns the number actually deleted; ordinary
+ * callers retain the existing void result and unconditional deletion behavior.
  */
-export async function bulkDeleteSessions(
+export function bulkDeleteSessions(
   ids: readonly string[],
   scope?: SessionPersistenceScope
-): Promise<void> {
-  const deletion = await prepareBulkDeleteSessions(ids, scope)
-  if (!deletion) return
+): Promise<void>
+export function bulkDeleteSessions(
+  ids: readonly string[],
+  scope: SessionPersistenceScope | undefined,
+  options: SessionDeletionOptions
+): Promise<number>
+export async function bulkDeleteSessions(
+  ids: readonly string[],
+  scope?: SessionPersistenceScope,
+  options?: SessionDeletionOptions
+): Promise<void | number> {
+  const deletion = await prepareBulkDeleteSessions(ids, scope, options)
+  if (!deletion) return options ? 0 : undefined
   try {
     // Dexie must see an async callback to track the cascade's native awaits.
     await deletion.db.transaction("rw", deletion.tables, async (transaction) =>
@@ -1197,6 +1224,7 @@ export async function bulkDeleteSessions(
     throw error
   }
   await deletion.finish(true)
+  if (options) return deletion.deletedCount
 }
 
 /**
@@ -1206,12 +1234,16 @@ export async function bulkDeleteSessions(
  */
 export async function prepareBulkDeleteSessions(
   ids: readonly string[],
-  scope?: SessionPersistenceScope
+  scope?: SessionPersistenceScope,
+  options?: SessionDeletionOptions
 ) {
   scope?.assertActive()
   if (ids.length === 0) return null
   const db = scope?.db ?? getDb()
-  const requestedIds = [...new Set(ids)]
+  const requestedIds = options
+    ? await eligibleDeletionIds(db, [...new Set(ids)], options)
+    : [...new Set(ids)]
+  if (requestedIds.length === 0) return null
   // Native task state is outside Dexie. Stop/revoke/delete it before dropping
   // the durable link, so a host failure leaves a retryable conversation row.
   const cleanupIds = [
@@ -1296,6 +1328,9 @@ export async function prepareBulkDeleteSessions(
   return {
     db,
     tables,
+    get deletedCount() {
+      return deletedIds.length
+    },
     async deleteInsideTransaction(transaction: Transaction): Promise<void> {
       if (
         transaction !== Dexie.currentTransaction ||
@@ -1306,7 +1341,7 @@ export async function prepareBulkDeleteSessions(
         throw new Error("session_deletion_transaction_scope_mismatch")
       scope?.assertActive()
       const at = Date.now()
-      deletedIds = (await db.sessions.bulkGet(requestedIds)).flatMap((row) => (row ? [row.id] : []))
+      deletedIds = await eligibleDeletionIds(db, requestedIds, options)
       if (deletedIds.length === 0) return
       await assertSessionsWritable(db, deletedIds, "delete")
       const attachedDescendants = await listOwnedAttachedDescendantIds(db, deletedIds, {
@@ -1446,7 +1481,7 @@ export async function prepareBulkDeleteSessions(
         }
       }
       scope?.assertActive()
-      clearTemporarySessionAssets(cleanupIds)
+      clearTemporarySessionAssets(options ? deletedIds : cleanupIds)
       await cleanupScheduledLoopTasks(scheduledTaskIds, scope)
       scope?.assertActive()
       const sandboxReleaseErrors: unknown[] = []

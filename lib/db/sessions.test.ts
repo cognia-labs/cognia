@@ -1306,6 +1306,59 @@ describe("updateSession + listSessions", () => {
 })
 
 describe("bulkDeleteSessions", () => {
+  it.each(["promoted", "parent-restored"])(
+    "rechecks orphan eligibility inside the deleting transaction (%s)",
+    async (change) => {
+      const db = getDb()
+      const aside = {
+        id: "orphan",
+        title: "Aside",
+        kind: "resource-workbench",
+        visibility: "embedded",
+        surfaceBinding: { kind: "session", sessionId: "gone" },
+        surfaceBindingKey: "session:gone",
+        projectId: "p",
+        createdAt: 1,
+        updatedAt: 1,
+      } as ChatSession
+      await db.sessions.put(aside)
+      await db.messages.put({
+        id: "kept",
+        sessionId: aside.id,
+        role: "user",
+        parts: [{ type: "text", text: "keep" }],
+        createdAt: 1,
+      } as never)
+      const deletion = await prepareBulkDeleteSessions([aside.id], undefined, {
+        onlyOrphanedSessionAsides: true,
+      })
+      expect(deletion).not.toBeNull()
+      if (change === "promoted")
+        await db.sessions.update(aside.id, {
+          kind: "direct",
+          visibility: undefined,
+          surfaceBinding: undefined,
+          surfaceBindingKey: undefined,
+        })
+      else
+        await db.sessions.put({
+          id: "gone",
+          title: "Restored",
+          kind: "direct",
+          createdAt: 1,
+          updatedAt: 1,
+        })
+      await db.transaction("rw", deletion!.tables, async (tx) =>
+        deletion!.deleteInsideTransaction(tx)
+      )
+      await deletion!.finish(true)
+      expect(deletion!.deletedCount).toBe(0)
+      expect(await db.sessions.get(aside.id)).toBeDefined()
+      expect(await db.messages.get("kept")).toBeDefined()
+      expect(await db.syncTombstones.get(["sessions", aside.id])).toBeUndefined()
+    }
+  )
+
   it.each([true, false])(
     "composes preparation, cascade and post-commit effects with another reset (commit=%s)",
     async (committed) => {

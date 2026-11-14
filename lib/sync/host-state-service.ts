@@ -62,6 +62,7 @@ import {
   acquireHostStateLease,
   commitHostStateAction,
   commitHostStateRuntimeProjection,
+  drainHostStateAsideContextRetirement,
   getHostStateAction,
   getHostStateMeta,
   getHostStateSnapshot,
@@ -2255,6 +2256,10 @@ export function createHostStateService(options: HostStateServiceOptions): HostSt
     row: HostStateActionRow,
     context: { startup?: boolean } = {}
   ): Promise<void> {
+    if (row.asideContextRetirement) {
+      await drainHostStateAsideContextRetirement(row.hostGeneration, row.actionId)
+      row.asideContextRetirement = undefined
+    }
     if (row.dispatchState === "pending" || row.dispatchState === "failed") {
       // Another call is dispatching this very row; it owns the rest of it too.
       if ((await dispatchRow(row, context)) === "busy") return

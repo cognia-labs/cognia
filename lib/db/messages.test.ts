@@ -7,6 +7,7 @@ import {
 // directly, plus the metadata hoisting (senderId/senderKind) round-trip.
 
 import type { UIMessage } from "ai"
+import { loggers } from "@cognia/logging"
 import {
   appendImageEditVersion,
   clearMessages,
@@ -1277,6 +1278,88 @@ it.each(["clear", "delete", "truncate"])(
 )
 
 describe("clearMessages", () => {
+  it("resolves the committed clear and retires other siblings when one aside cannot close", async () => {
+    await putSession("parent-close-failure")
+    await getDb().sessions.bulkPut(
+      ["broken-aside", "healthy-aside"].map((id) => ({
+        id,
+        title: id,
+        kind: "resource-workbench" as const,
+        surfaceBinding: { kind: "session" as const, sessionId: "parent-close-failure" },
+        surfaceBindingKey: "session:parent-close-failure",
+        sdkSessionId: `sdk-${id}`,
+        createdAt: 1,
+        updatedAt: 1,
+      }))
+    )
+    await persistMessages("parent-close-failure", [msg("parent-row", "user", "Old parent")])
+    const { subscribeChatLifecycleEvents } = await import("@/lib/chat/lifecycle-events")
+    const receive = jest.fn()
+    const release = subscribeChatLifecycleEvents(receive)
+    const warn = jest.spyOn(loggers.store, "warn").mockImplementation(() => {})
+    jest.mocked(revisionEvents.invalidateTranscriptRuntime).mockImplementation(async (id) => {
+      if (id === "broken-aside") throw new Error("close failed")
+    })
+    try {
+      await expect(clearMessages("parent-close-failure")).resolves.toBeUndefined()
+      expect(await listMessages("parent-close-failure")).toEqual([])
+      expect((await getDb().sessions.get("healthy-aside"))?.sdkSessionId).toBeUndefined()
+      expect(warn).toHaveBeenCalledWith("session aside context retirement failed after clear", {
+        sessionId: "parent-close-failure",
+        error: "Error: close failed",
+      })
+      expect(receive).toHaveBeenCalledWith({
+        type: "session-cleared",
+        sessionId: "parent-close-failure",
+      })
+    } finally {
+      release()
+      warn.mockRestore()
+      jest.mocked(revisionEvents.invalidateTranscriptRuntime).mockResolvedValue(undefined)
+    }
+  })
+
+  it("retires every bound aside's parent memory while keeping its own messages and other asides", async () => {
+    await putSession("parent-clear")
+    const aside = (id: string, parentId: string) => ({
+      id,
+      title: id,
+      kind: "resource-workbench" as const,
+      surfaceBinding: { kind: "session" as const, sessionId: parentId },
+      surfaceBindingKey: `session:${parentId}`,
+      sdkSessionId: `sdk-${id}`,
+      asideContextCursor: {
+        sdkSessionId: `sdk-${id}`,
+        parentMessageId: "old-parent",
+        tailFingerprint: "h",
+      },
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    await getDb().sessions.bulkPut([
+      aside("aside-primary", "parent-clear"),
+      aside("aside-extra", "parent-clear"),
+      aside("aside-other", "other-parent"),
+    ])
+    await persistMessages("parent-clear", [msg("old-parent", "user", "Old main context")])
+    await persistMessages("aside-primary", [msg("aside-own", "user", "Own aside question")])
+    await persistMessages("aside-extra", [msg("extra-own", "assistant", "Own aside answer")])
+    const own = await listMessages("aside-primary")
+    const extraOwn = await listMessages("aside-extra")
+    await clearMessages("parent-clear")
+    expect(await listMessages("parent-clear")).toEqual([])
+    for (const id of ["aside-primary", "aside-extra"]) {
+      const row = await getDb().sessions.get(id)
+      expect(row?.asideParentClearedAt).toEqual(expect.any(Number))
+      expect(row?.sdkSessionId).toBeUndefined()
+      expect(row?.asideContextCursor).toBeUndefined()
+      expect(revisionEvents.invalidateTranscriptRuntime).toHaveBeenCalledWith(id)
+    }
+    expect(await listMessages("aside-primary")).toEqual(own)
+    expect(await listMessages("aside-extra")).toEqual(extraOwn)
+    expect(await getDb().sessions.get("aside-other")).toEqual(aside("aside-other", "other-parent"))
+  })
+
   it("drops every row in a session", async () => {
     await persistMessages("s1", [msg("a", "user", "1"), msg("b", "assistant", "2")])
     await persistMessages("s2", [msg("c", "user", "x")])

@@ -10,13 +10,17 @@ import { createDbTestFixture } from "./test-fixture"
 import { persistMessages, listMessages } from "./messages"
 import {
   advanceResourceAsideContextCursor,
+  advanceResourceAsideExternalSession,
   clearResourceWorkbenchSession,
   createResourceSessionRepository,
   createResourceWorkbenchSession,
   deleteResourceWorkbenchSession,
   listResourceWorkbenchSessions,
+  listSessionBoundAsides,
+  retireAsideParentContext,
   promoteResourceWorkbenchSession,
   renameResourceWorkbenchSession,
+  updateAsideParentMessagePins,
 } from "./resource-workbench-sessions"
 import {
   ensureResourceWorkbenchSession,
@@ -24,6 +28,7 @@ import {
 } from "@/lib/context-workbench/resource-session"
 import { isSessionExposed } from "@/lib/chat/session-exposure"
 import { emptyWorkingSet } from "@/lib/chat/working-set"
+import { deleteSession } from "./sessions"
 import type { UIMessage } from "ai"
 
 // Session deletion dynamically imports the artifact Zustand store for a
@@ -73,6 +78,139 @@ async function seedPrimary(): Promise<string> {
 
 const uiMsg = (id: string, text: string): UIMessage =>
   ({ id, role: "user", parts: [{ type: "text", text }] }) as UIMessage
+
+function gate() {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { promise, release }
+}
+
+describe("atomic aside ownership", () => {
+  it("does not re-embed a row promoted while legacy repair was pending", async () => {
+    const id = await seedPrimary()
+    await getDb().sessions.update(id, { surfaceBindingKey: undefined })
+    const repository = createResourceSessionRepository()
+    const entered = gate()
+    const resume = gate()
+    const delayed = ensureResourceWorkbenchSession(binding, "Aside", {
+      ...repository,
+      repair: async (rowId, patch) => {
+        entered.release()
+        await resume.promise
+        return repository.repair!(rowId, patch)
+      },
+    })
+    await entered.promise
+    try {
+      await promoteResourceWorkbenchSession(id)
+      await getDb().sessions.update(id, { model: "chosen", sdkSessionId: "sdk" })
+      resume.release()
+      expect((await delayed).id).toBe(`${id}#primary:1`)
+      expect(await getDb().sessions.get(id)).toMatchObject({
+        kind: "direct",
+        model: "chosen",
+        sdkSessionId: "sdk",
+      })
+    } finally {
+      resume.release()
+    }
+  })
+
+  it("refuses additional-aside creation when deletion follows the parent read", async () => {
+    const db = getDb()
+    const originalGet = db.sessions.get.bind(db.sessions)
+    const spy = jest.spyOn(db.sessions, "get").mockImplementationOnce((async (key: string) => {
+      const parent = await originalGet(key)
+      await deleteSession("main-1")
+      return parent
+    }) as never)
+    try {
+      await expect(createResourceWorkbenchSession(binding, "Late extra")).rejects.toMatchObject({
+        code: "aside_parent_gone",
+      })
+      expect(await listResourceWorkbenchSessions(binding)).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("converges after a competing creator promotes the occupied primary", async () => {
+    const repository = createResourceSessionRepository()
+    const entered = gate()
+    const resume = gate()
+    const delayed = ensureResourceWorkbenchSession(binding, "Late", {
+      ...repository,
+      create: async (row) => {
+        entered.release()
+        await resume.promise
+        return repository.create!(row)
+      },
+    })
+    await entered.promise
+    try {
+      const winner = await ensureResourceWorkbenchSession(binding, "Winner", repository)
+      await getDb().sessions.update(winner.id, { sdkSessionId: "sdk", model: "chosen" })
+      await persistMessages(winner.id, [uiMsg("kept", "Keep me")])
+      await promoteResourceWorkbenchSession(winner.id)
+      resume.release()
+      expect((await delayed).id).toBe(`${winner.id}#primary:1`)
+      expect(await getDb().sessions.get(winner.id)).toMatchObject({
+        kind: "direct",
+        sdkSessionId: "sdk",
+        model: "chosen",
+        title: "Winner",
+      })
+      expect(await listMessages(winner.id)).toHaveLength(1)
+    } finally {
+      resume.release()
+    }
+  })
+
+  it("refuses a delayed create after the real parent deletion and tombstone", async () => {
+    const repository = createResourceSessionRepository()
+    const entered = gate()
+    const resume = gate()
+    const delayed = ensureResourceWorkbenchSession(binding, "Late", {
+      ...repository,
+      create: async (row) => {
+        entered.release()
+        await resume.promise
+        return repository.create!(row)
+      },
+    })
+    const rejection = expect(delayed).rejects.toMatchObject({ code: "aside_parent_gone" })
+    await entered.promise
+    try {
+      await deleteSession("main-1")
+      expect(await getDb().syncTombstones.get(["sessions", "main-1"])).toBeDefined()
+    } finally {
+      resume.release()
+    }
+    await rejection
+    expect(await getDb().sessions.get(resourceWorkbenchSessionId(binding))).toBeUndefined()
+  })
+
+  it.each(["missing", "tombstoned"])(
+    "refuses creation and promotion for a %s parent",
+    async (state) => {
+      const id = await seedPrimary()
+      await persistMessages(id, [uiMsg("kept", "Keep me")])
+      if (state === "missing") await getDb().sessions.delete("main-1")
+      else await getDb().syncTombstones.put({ table: "sessions", id: "main-1", deletedAt: 3 })
+      await expect(promoteResourceWorkbenchSession(id)).rejects.toMatchObject({
+        code: "aside_parent_gone",
+      })
+      await expect(createResourceWorkbenchSession(binding, "Extra")).rejects.toMatchObject({
+        code: "aside_parent_gone",
+      })
+      expect((await getDb().sessions.get(id))?.kind).toBe("resource-workbench")
+      expect(await listMessages(id)).toHaveLength(1)
+      expect(await listResourceWorkbenchSessions(binding)).toHaveLength(1)
+    }
+  )
+})
 
 describe("createResourceWorkbenchSession", () => {
   it("inherits parent configuration without activating team or squad executors", async () => {
@@ -171,7 +309,132 @@ describe("renameResourceWorkbenchSession", () => {
   })
 })
 
+describe("retiring inherited parent context", () => {
+  it("lists only the parent's session-bound asides through the binding index", async () => {
+    const primaryId = await seedPrimary()
+    const extra = await createResourceWorkbenchSession(binding, "Extra")
+    await createResourceWorkbenchSession({ kind: "artifact", artifactId: "art-1" }, "Artifact")
+    await getDb().sessions.put({
+      id: "other-aside",
+      kind: "resource-workbench",
+      surfaceBinding: { kind: "session", sessionId: "other-parent" },
+      surfaceBindingKey: "session:other-parent",
+      title: "Other",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    expect((await listSessionBoundAsides("main-1")).map((row) => row.id)).toEqual([
+      primaryId,
+      extra.id,
+    ])
+  })
+
+  it("retires provider links and cursor while preserving the aside transcript and config", async () => {
+    const id = await seedPrimary()
+    await persistMessages(id, [uiMsg("own-question", "Keep this side question")])
+    await getDb().sessions.update(id, {
+      model: "chosen-model",
+      asideWriteAccess: true,
+      sdkSessionId: "old-sdk",
+      forkedFromSdkSessionId: "parent-sdk",
+      sdkSessionStorage: { backend: "filesystem" },
+      externalAgentSession: { agentId: "agent", sessionId: "old-external" },
+      externalAgentGatewaySessions: [{ agentId: "agent", sessionId: "old-gateway" }],
+      branchSeed: { kind: "transcript", content: "Old inherited parent seed" },
+      asideContextCursor: { sdkSessionId: "old-sdk", parentMessageId: "p1", tailFingerprint: "h" },
+      asidePinnedParentMessageIds: ["p1"],
+    })
+    const before = await listMessages(id)
+    await retireAsideParentContext(id)
+    expect(invalidateTranscriptRuntime).toHaveBeenCalledWith(id)
+    const row = await getDb().sessions.get(id)
+    expect(row).toMatchObject({ model: "chosen-model", asideWriteAccess: true })
+    expect(row?.asideParentClearedAt).toBeGreaterThan(row?.lastMessageAt ?? 0)
+    for (const field of [
+      "sdkSessionId",
+      "forkedFromSdkSessionId",
+      "sdkSessionStorage",
+      "externalAgentSession",
+      "externalAgentGatewaySessions",
+      "branchSeed",
+      "asideContextCursor",
+      "asidePinnedParentMessageIds",
+    ])
+      expect(row).not.toHaveProperty(field)
+    expect(await listMessages(id)).toEqual(before)
+    await advanceResourceAsideContextCursor(id, {
+      sdkSessionId: "old-sdk",
+      parentMessageId: "late-parent",
+      tailFingerprint: "late",
+    })
+    expect((await getDb().sessions.get(id))?.asideContextCursor).toBeUndefined()
+  })
+
+  it("keeps the cursor and links when runtime retirement fails", async () => {
+    const id = await seedPrimary()
+    await getDb().sessions.update(id, { sdkSessionId: "still-live" })
+    jest.mocked(invalidateTranscriptRuntime).mockRejectedValueOnce(new Error("close failed"))
+    await expect(retireAsideParentContext(id)).rejects.toThrow("close failed")
+    expect(await getDb().sessions.get(id)).toMatchObject({ sdkSessionId: "still-live" })
+    expect((await getDb().sessions.get(id))?.asideParentClearedAt).toBeUndefined()
+  })
+
+  it("rejects late external-session writes after parent retirement, then accepts a fresh turn", async () => {
+    const id = await seedPrimary()
+    const links = { externalAgentSession: { agentId: "agent", sessionId: "old-external" } }
+    expect(await advanceResourceAsideExternalSession(id, links, {})).toBe(true)
+    await retireAsideParentContext(id)
+    expect(await advanceResourceAsideExternalSession(id, links, {})).toBe(false)
+    expect((await getDb().sessions.get(id))?.externalAgentSession).toBeUndefined()
+    const current = (await getDb().sessions.get(id))!
+    expect(
+      await advanceResourceAsideExternalSession(
+        id,
+        {
+          externalAgentSession: { agentId: "agent", sessionId: "fresh-external" },
+        },
+        current
+      )
+    ).toBe(true)
+    expect((await getDb().sessions.get(id))?.externalAgentSession?.sessionId).toBe("fresh-external")
+  })
+
+  it("does not retire new provider history when recovering a completed or older clear", async () => {
+    const id = await seedPrimary()
+    await retireAsideParentContext(id, getDb(), 100)
+    await getDb().sessions.update(id, { sdkSessionId: "fresh-sdk" })
+    jest.mocked(invalidateTranscriptRuntime).mockClear()
+    await retireAsideParentContext(id, getDb(), 100)
+    await retireAsideParentContext(id, getDb(), 99)
+    expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
+    expect((await getDb().sessions.get(id))?.sdkSessionId).toBe("fresh-sdk")
+  })
+})
+
 describe("clearResourceWorkbenchSession", () => {
+  it("persists explicit inclusion and prunes pins after deletion or a branch switch", async () => {
+    const id = await seedPrimary()
+    await persistMessages("main-1", [uiMsg("pin", "Earlier message"), uiMsg("keep", "Latest")])
+    expect(await updateAsideParentMessagePins(id, { messageId: "pin", included: true })).toEqual([
+      "pin",
+    ])
+    expect((await getDb().sessions.get(id))?.asidePinnedParentMessageIds).toEqual(["pin"])
+    await getDb().messages.delete("pin")
+    expect(await updateAsideParentMessagePins(id)).toEqual([])
+    await persistMessages("main-1", [
+      { ...uiMsg("branch-a", "A"), metadata: { branchGroupId: "group", branchIndex: 0 } },
+      { ...uiMsg("branch-b", "B"), metadata: { branchGroupId: "group", branchIndex: 1 } },
+    ])
+    await getDb().sessions.update("main-1", { activeBranchByGroup: { group: "branch-a" } })
+    expect(
+      await updateAsideParentMessagePins(id, { messageId: "branch-a", included: true })
+    ).toEqual(["branch-a"])
+    await getDb().sessions.update("main-1", { activeBranchByGroup: { group: "branch-b" } })
+    expect(await updateAsideParentMessagePins(id)).toEqual([])
+    expect(
+      await updateAsideParentMessagePins(id, { messageId: "branch-a", included: true })
+    ).toEqual([])
+  })
   it("clears every retained thread seed and cursor while preserving configuration and unlock", async () => {
     const id = await seedPrimary()
     await getDb().sessions.update(id, {
@@ -186,6 +449,7 @@ describe("clearResourceWorkbenchSession", () => {
       externalAgentSession: { agentId: "agent", sessionId: "native-old" },
       externalAgentGatewaySessions: [{ agentId: "agent", sessionId: "native-old" }],
       asideContextCursor: { sdkSessionId: "sdk", parentMessageId: "m1", tailFingerprint: "hash" },
+      asidePinnedParentMessageIds: ["m1"],
       runtimeTranscriptInvalidated: "old-mutation",
       workingSet: emptyWorkingSet(),
     } as Partial<ChatSession>)
@@ -206,6 +470,7 @@ describe("clearResourceWorkbenchSession", () => {
       "externalAgentGatewaySessions",
       "asideContextCursor",
       "runtimeTranscriptInvalidated",
+      "asidePinnedParentMessageIds",
       "workingSet",
     ]) {
       expect(row).not.toHaveProperty(field)
