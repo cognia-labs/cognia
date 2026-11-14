@@ -1,6 +1,7 @@
 "use client"
 import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 import * as personalSinkHost from "@/lib/execution/personal-sink"
+import { readPersonalAsideHistory } from "@/lib/chat/personal-history/aside"
 
 import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
 import {
@@ -291,7 +292,11 @@ import {
   type AsideContextDelivery,
 } from "@/lib/chat/session-aside-context"
 import { createAsideContextDispatch } from "@/lib/context-workbench/aside-context-dispatch"
-import { advanceResourceAsideContextCursor } from "@/lib/db/resource-workbench-sessions"
+import {
+  advanceResourceAsideContextCursor,
+  advanceResourceAsideExternalSession,
+  updateAsideParentMessagePins,
+} from "@/lib/db/resource-workbench-sessions"
 import { getRuntimeSnapshot, isMemberOnPartition } from "@/lib/runtime/runtime-snapshot-store"
 import { isStandaloneChatMode } from "@/lib/runtime/standalone-mode"
 import { runStandaloneTurn } from "@/lib/ai/chat/standalone-engine"
@@ -690,20 +695,13 @@ export async function buildPersonalAsideContext(
   executionRunId: string,
   options: Parameters<typeof prepareAsideContext>[1] = {}
 ) {
-  const sourceSession = await getSession(sourceSessionId)
-  const filtered = await preparePersonalHistory(
-    sessionId,
-    selectVisibleMessages(
-      await listMessages(sourceSessionId),
-      sourceSession?.activeBranchByGroup ?? {}
-    ),
-    { executionRunId, session: sourceSession }
-  )
+  const pins = await updateAsideParentMessagePins(sessionId)
+  const filtered = await readPersonalAsideHistory(sessionId, sourceSessionId, executionRunId)
   const readers = await preparePersonalHistory(sessionId, [], { executionRunId })
   return {
     ...filtered,
     readersDigest: readers.visibilityDigest,
-    delivery: prepareAsideContext(filtered.messages, options),
+    delivery: prepareAsideContext(filtered.messages, { ...options, pins }),
   }
 }
 
@@ -1467,6 +1465,7 @@ export function useClaudeChat() {
 
   const handleTranscriptInvalidated = useCallback(
     (sessionId: string) => {
+      externalGatewayAbortRef.current.get(sessionId)?.abort()
       registry.release(sessionId)
       messagesMirrorRef.current.delete(sessionId)
     },
@@ -1725,6 +1724,9 @@ export function useClaudeChat() {
    *
    * `content` can be a plain string (the common case) or an array of
    * multimodal content blocks (text + image), to support attachments.
+   * Resolve false only for a refusal before the input reaches the transcript;
+   * once a user/steer row takes it, resolve true even if dispatch fails.
+   * `throwOnError` keeps the existing rejection behavior in either case.
    */
   const sendUnexcluded = useCallback(
     async (
@@ -1858,9 +1860,10 @@ export function useClaudeChat() {
          */
         turnRoute?: TurnRoute | null
       }
-    ) => {
+    ): Promise<boolean> => {
       const localAuthorization = localChatRunAuthorization(callOptions)
       const sessionId = callOptions?.sessionId ?? useChatStore.getState().activeSessionId
+      let inputReachedTranscript = false
       // Branch bookkeeping this send arms for the turn it starts: a
       // regenerate's pending reply tag, and an edit's owner entry plus the
       // navigator pick that shows the edit. Every refusal goes through
@@ -1918,9 +1921,9 @@ export function useClaudeChat() {
         }
         return stamp
       }
-      const rejectSend = (error?: unknown): void => {
+      const rejectSend = (error?: unknown): boolean => {
         disarmBranch()
-        if (!callOptions?.throwOnError) return
+        if (!callOptions?.throwOnError) return inputReachedTranscript
         const diagnostic = sessionId
           ? useChatStore.getState().sessions[sessionId]?.errorDiagnostic
           : null
@@ -1934,15 +1937,13 @@ export function useClaudeChat() {
       }
       if (!sessionId) {
         useChatStore.getState().setError(tInlineErr("noSession"))
-        rejectSend(tInlineErr("noSession"))
-        return
+        return rejectSend(tInlineErr("noSession"))
       }
       if (
         (typeof content === "string" && !content.trim()) ||
         (Array.isArray(content) && content.length === 0)
       ) {
-        rejectSend("empty_chat_turn")
-        return
+        return rejectSend("empty_chat_turn")
       }
 
       if (refuseCapturedTurn(sessionId)) {
@@ -1974,7 +1975,7 @@ export function useClaudeChat() {
           (fusion?.sessionId === sessionId && fusion.runId === id)
         ) {
           callOptions.backgroundDelivery.onAccepted()
-          return
+          return true
         }
       }
 
@@ -2008,7 +2009,7 @@ export function useClaudeChat() {
           return false
         }
       }
-      if (!(await modelSelectionReady())) return
+      if (!(await modelSelectionReady())) return false
       const sharedTarget = await getSession(sessionId)
       // A paused project runs nothing (ADR-0204): no brief, report, nudge or
       // typed message starts a turn in its coordinator or threads until the
@@ -2021,8 +2022,7 @@ export function useClaudeChat() {
             sessionId,
             createDiagnostic("projectPaused", { source: "chat", meta: { sessionId } })
           )
-        rejectSend("project_paused")
-        return
+        return rejectSend("project_paused")
       }
       const continuationMessages = selectVisibleMessages(
         store.getState().sessions[sessionId]?.messages ?? [],
@@ -2049,15 +2049,14 @@ export function useClaudeChat() {
             queued: isChatTurnQueued(sessionId),
           })
         ) {
-          rejectSend("continuation_no_longer_available")
-          return
+          return rejectSend("continuation_no_longer_available")
         }
       }
       const turnRoute =
         readTurnRoute(continuationSource?.metadata) ?? callOptions?.turnRoute ?? null
       // An addressed turn that cannot run: refused with the reason, before
       // anything reaches the transcript.
-      const refuseRoute = (route: TurnRoute, reason: string, detail?: string): void => {
+      const refuseRoute = (route: TurnRoute, reason: string, detail?: string): boolean => {
         store.getState().setSessionDiagnostic(
           sessionId,
           createDiagnostic("turnRouteUnavailable", {
@@ -2066,14 +2065,14 @@ export function useClaudeChat() {
             meta: { sessionId, extra: { handle: route.handle, reason } },
           })
         )
-        rejectSend(`turn_route_unavailable:${reason}`)
+        return rejectSend(`turn_route_unavailable:${reason}`)
       }
       // Only a direct chat has a lane of its own to leave for one turn. The
       // composer never offers a route anywhere else; a programmatic send that
       // carries one is refused rather than run unrouted.
       if (turnRoute && !isRoutableSession(sharedTarget)) {
         refuseRoute(turnRoute, "unroutable-session")
-        return
+        return false
       }
       // Route handles resolve to `agent` mentions over THIS conversation's
       // targets, the same list its `@` panel offered.
@@ -2169,7 +2168,7 @@ export function useClaudeChat() {
           toast.info(tCollab("shareReferencesLiveToast"))
         }
         const persistedMessage = await persistAttachments(message)
-        if (!persistedMessage) return
+        if (!persistedMessage) return false
         await sendSharedSessionMessage(sharedTarget, {
           id: persistedMessage.id,
           parts: persistedMessage.parts,
@@ -2199,7 +2198,7 @@ export function useClaudeChat() {
             })
           )
         }
-        return
+        return true
       }
 
       // Concurrency cap backstop: never start a turn over the global execution
@@ -2211,8 +2210,7 @@ export function useClaudeChat() {
       // renderer's streaming panels.
       if (getExecutionBroker().isAtCapacity("ai-turn", sessionId)) {
         console.warn("send blocked: concurrent stream cap reached", { sessionId })
-        rejectSend("concurrent_stream_cap_reached")
-        return
+        return rejectSend("concurrent_stream_cap_reached")
       }
 
       // Steer instead of restart: a fresh user turn while THIS session is still
@@ -2252,8 +2250,7 @@ export function useClaudeChat() {
               undefined,
               personalSinkHost.sessionPersonalSinkContext(sessionId)
             )
-            rejectSend("turn_route_while_busy")
-            return
+            return rejectSend("turn_route_while_busy")
           }
           // Live and queued follow-ups carry content only, including while the
           // initial turn awaits admission and has not bound its runtime lane.
@@ -2274,12 +2271,12 @@ export function useClaudeChat() {
           }
           const text = steerTextOf(content, callOptions?.attachmentManifest?.length ?? 0)
           const blocks = steerBlocksOf(content, callOptions?.attachmentManifest?.length ?? 0)
-          if (!text && blocks.length === 0) return
+          if (!text && blocks.length === 0) return false
 
           const optimistic = await persistAttachments(
             makeUserMessage(content, undefined, callOptions?.attachmentManifest)
           )
-          if (!optimistic) return
+          if (!optimistic) return false
 
           // A new instruction supersedes the context the pending approvals
           // were asked under (Codex 0.154 parity): deny each through its own
@@ -2357,9 +2354,10 @@ export function useClaudeChat() {
               })
               if (queued) {
                 appendSteerMessage(sessionId, optimistic)
+                inputReachedTranscript = true
                 mergeSteerWebSearchIntoLastSend(sessionId, callOptions?.webSearchContext)
                 setSteerMessageState(sessionId, entryId, "accepted")
-                return
+                return true
               }
             } catch (error) {
               store
@@ -2368,10 +2366,11 @@ export function useClaudeChat() {
                   sessionId,
                   toDiagnostic(error, { source: "chat", meta: { sessionId } })
                 )
-              return
+              return inputReachedTranscript
             }
           }
           appendSteerMessage(sessionId, optimistic)
+          inputReachedTranscript = true
 
           // Live steer — the message reaches the model without ending the turn.
           // Two lanes, both best-effort: an external adapter implementing
@@ -2453,7 +2452,7 @@ export function useClaudeChat() {
                   await (remoteClient ?? mgr).steerSession(externalAgentId, link.sessionId, text)
                   mergeSteerWebSearchIntoLastSend(sessionId, callOptions?.webSearchContext)
                   setSteerMessageState(sessionId, entryId, "accepted")
-                  return
+                  return true
                 }
               } catch (err) {
                 console.warn("live steer failed; queueing instead", err)
@@ -2480,7 +2479,7 @@ export function useClaudeChat() {
               }
               mergeSteerWebSearchIntoLastSend(sessionId, callOptions?.webSearchContext)
               setSteerMessageState(sessionId, entryId, "accepted")
-              return
+              return true
             } catch (err) {
               console.warn("live steer failed; queueing instead", err)
             }
@@ -2512,11 +2511,11 @@ export function useClaudeChat() {
                 }
               : {}),
           })
-          return
+          return true
         }
       }
 
-      if (!(await modelSelectionReady())) return
+      if (!(await modelSelectionReady())) return false
       let session = await getSession(sessionId)
       assertSessionWritable(session, "send-message")
       // The lane THIS turn runs on, decided once. An addressed turn resolves
@@ -2532,7 +2531,7 @@ export function useClaudeChat() {
         const lane = resolveRouteLane(turnRoute.target, routeSnapshot)
         if (!lane.ok) {
           refuseRoute(turnRoute, lane.reason, lane.detail)
-          return
+          return false
         }
         routeLane = lane
       }
@@ -2866,8 +2865,7 @@ export function useClaudeChat() {
         asideProviderHistoryMode(sendOptions, isStandaloneChatMode()) === "unsupported"
       ) {
         store.getState().setSessionError(sessionId, tAside("unsupportedReadOnlyLane"))
-        rejectSend(tAside("unsupportedReadOnlyLane"))
-        return
+        return rejectSend(tAside("unsupportedReadOnlyLane"))
       }
       if (isSessionAside) {
         // Native links are filtered by the session's runtime, not by this
@@ -2919,7 +2917,7 @@ export function useClaudeChat() {
       // runtime, and answering it elsewhere is exactly what routing refuses.
       if (turnRoute && turnLane.kind !== "builtin" && sendOptions.toolSurface === "none") {
         refuseRoute(turnRoute, "no-tool-surface")
-        return
+        return false
       }
 
       // Second half of the cap backstop above, run here because the provider is
@@ -2939,8 +2937,7 @@ export function useClaudeChat() {
         useChatStore
           .getState()
           .setSessionError(sessionId, tInlineErr("providerConcurrencyCapReached"))
-        rejectSend(tInlineErr("providerConcurrencyCapReached"))
-        return
+        return rejectSend(tInlineErr("providerConcurrencyCapReached"))
       }
 
       if (callOptions?.webSearchContext) {
@@ -3059,8 +3056,7 @@ export function useClaudeChat() {
             meta: { sessionId },
           })
         )
-        rejectSend(promptDecision.reason || "prompt_blocked_by_plugin")
-        return
+        return rejectSend(promptDecision.reason || "prompt_blocked_by_plugin")
       }
       if (promptDecision.action === "modify") {
         if (typeof promptDecision.modifiedPrompt === "string") {
@@ -3132,8 +3128,7 @@ export function useClaudeChat() {
         // follows the anchor, and the re-issued content answers a question
         // that is no longer the last one.
         if (current[anchorIdx]?.id !== callOptions.regenerateBranch.anchorId) {
-          rejectSend("regenerate_anchor_moved")
-          return
+          return rejectSend("regenerate_anchor_moved")
         }
         const groupId = current[anchorIdx].id
         const { merged: tagged, nextIndexByGroup } = tagBranchSiblings(
@@ -3278,7 +3273,7 @@ export function useClaudeChat() {
       // `steerDrain`'s doc on the option type.
       const skipAppend = callOptions?.skipUserAppend === true || callOptions?.steerDrain === true
       const persistedUserMessage = await persistAttachments(userMsg)
-      if (!persistedUserMessage) return
+      if (!persistedUserMessage) return false
       userMsg = persistedUserMessage
       const next = skipAppend
         ? previousMessages
@@ -3343,8 +3338,7 @@ export function useClaudeChat() {
                 sessionId,
                 toDiagnostic(error, { source: "chat", meta: { sessionId } })
               )
-            rejectSend(error)
-            return
+            return rejectSend(error)
           }
         }
       }
@@ -3371,8 +3365,7 @@ export function useClaudeChat() {
         sendOptions.allowedTools?.some((tool) => !asideToolCeiling.has(tool))
       ) {
         store.getState().setSessionError(sessionId, tAside("unsupportedReadOnlyLane"))
-        rejectSend(tAside("unsupportedReadOnlyLane"))
-        return
+        return rejectSend(tAside("unsupportedReadOnlyLane"))
       }
       const shouldGateWorkbenchPayload =
         callOptions?.resourceContext !== undefined || isEmbeddedSession(session ?? {})
@@ -3419,7 +3412,10 @@ export function useClaudeChat() {
       let resourceDelivery: AsideContextDelivery =
         cachedAsideContext ??
         (isSessionAside && !seededFirstTurn
-          ? prepareAsideContext(parentMessages, { inProgressMessageId })
+          ? prepareAsideContext(parentMessages, {
+              inProgressMessageId,
+              parentClearedAt: session?.asideParentClearedAt,
+            })
           : {
               context: callOptions?.resourceContext ?? "",
               header: isSessionAside ? ASIDE_REFERENCE_HEADER : "Current resource context",
@@ -3571,8 +3567,7 @@ export function useClaudeChat() {
           disarmBranch()
           throw new Error("member_send_unsupported")
         }
-        rejectSend("member_send_unsupported")
-        return
+        return rejectSend("member_send_unsupported")
       }
       if (hostStateEligible) {
         try {
@@ -3611,6 +3606,7 @@ export function useClaudeChat() {
             // Runtime dispatch, transcript persistence and authoritative title
             // updates now belong to HostStateService on every attached surface.
             store.getState().replaceSessionMessages(sessionId, next)
+            inputReachedTranscript = true
             store.getState().setSessionError(sessionId, null)
             store.getState().setSessionStatus(sessionId, "streaming")
             lastUserContentRef.current.set(sessionId, {
@@ -3626,7 +3622,7 @@ export function useClaudeChat() {
               provider: sendOptions.provider ?? "host-state",
               surface: "chat",
             })
-            return
+            return true
           }
         } catch (error) {
           store.getState().setSessionDiagnostic(
@@ -3645,13 +3641,14 @@ export function useClaudeChat() {
             disarmBranch()
             throw error
           }
-          rejectSend(error)
-          return
+          return rejectSend(error)
         }
       }
       if (!skipAppend) {
         store.getState().replaceSessionMessages(sessionId, next)
       }
+      // A skipped append reuses a user turn already owned by the transcript.
+      inputReachedTranscript = true
       // Register this chat turn with the global execution broker so it counts
       // toward — and is observable / cancellable via — the same governor as
       // every headless leg. Acquired before the `streaming` flip so the broker
@@ -3722,8 +3719,7 @@ export function useClaudeChat() {
           // Follow-ups typed while it waited were queued behind it; with it
           // gone they are the next turn.
           drainSteerVia(sessionId, ownedContinuationRef)
-          rejectSend("chat_turn_withdrawn")
-          return
+          return rejectSend("chat_turn_withdrawn")
         }
         console.warn("chat lease acquire failed; sending without admission", leaseErr)
       }
@@ -3866,8 +3862,7 @@ export function useClaudeChat() {
               )
             )
             chatTurnPerformance.finish(sessionId, "failed")
-            rejectSend(result.reason || "squad_dispatch_failed")
-            return
+            return rejectSend(result.reason || "squad_dispatch_failed")
           }
           callOptions?.backgroundDelivery?.onAccepted()
           // The goal is one string: images, a native video and fetched pages
@@ -3949,9 +3944,9 @@ export function useClaudeChat() {
             })
           )
           chatTurnPerformance.finish(sessionId, "failed")
-          rejectSend(error)
+          return rejectSend(error)
         }
-        return
+        return true
       }
 
       // ── Router + Fusion cascade / panel (ADR-0188 B3) ──
@@ -4012,7 +4007,7 @@ export function useClaudeChat() {
           },
         })
         if (callOptions?.backgroundDelivery) await Promise.race([receipt, fusionTurn])
-        return
+        return true
       }
 
       // ── Independent reviewer (ADR-0117 `verified-fresh-agent`) ──
@@ -4275,8 +4270,7 @@ export function useClaudeChat() {
           outcome: "failed",
           errorCode: "cost_budget_exceeded",
         })
-        rejectSend("cost_budget_exceeded")
-        return
+        return rejectSend("cost_budget_exceeded")
       }
       // Durable acceptance (ADR-0123), phase A. `effectiveContent` has been
       // final since the Workbench payload gate — plugin hooks, pipes and
@@ -4384,7 +4378,7 @@ export function useClaudeChat() {
         errorCode: string
         /** True once `startDirectChatExecutionRun` has run for this turn. */
         finishRun?: boolean
-      }): Promise<void> => {
+      }): Promise<boolean> => {
         if (input.finishRun) await finishDirectChatExecutionRun(sessionId, "failed")
         store.getState().setSessionStatus(sessionId, "idle")
         store.getState().setSessionDiagnostic(sessionId, input.diagnostic)
@@ -4421,34 +4415,32 @@ export function useClaudeChat() {
             detail: `${input.diagnostic.code}: ${input.diagnostic.detail || input.diagnostic.message || input.errorCode}`,
           })
         }
-        rejectSend(input.cause ?? (input.diagnostic.message || input.errorCode))
+        return rejectSend(input.cause ?? (input.diagnostic.message || input.errorCode))
       }
       if (turnRuntimeRef) {
         try {
           await assertExternalRuntimeFeatureSupport(sendOptions)
         } catch (error) {
-          await refuseTurn({
+          return await refuseTurn({
             diagnostic: toDiagnostic(error, { source: "chat", meta: { sessionId } }),
             errorCode: "external_runtime_feature_unsupported",
             cause: error,
           })
-          return
         }
       }
       let abortStaleLocalRuntime = () => {}
       if (callOptions?.backgroundDelivery && !durableReceipt) {
-        await refuseTurn({
+        return await refuseTurn({
           diagnostic: toDiagnostic(
             new Error("background_delivery_durable_acceptance_unavailable"),
             { source: "chat", meta: { sessionId } }
           ),
           errorCode: "background_delivery_durable_acceptance_unavailable",
         })
-        return
       }
       if (durableReceipt) {
         dispatchClaim = await claimChatTurnForDispatch(executionRunId)
-        if (dispatchClaim === "owned_elsewhere") return
+        if (dispatchClaim === "owned_elsewhere") return true
         if (dispatchClaim === "claimed") {
           stopAssemblyHeartbeat = startWorkSubmissionLeaseHeartbeat(
             chatSubmissionId(executionRunId),
@@ -4488,7 +4480,7 @@ export function useClaudeChat() {
           .getState()
           .projects.find((candidate) => candidate.id === executionContext?.projectId)
         if (!project) {
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "managed_project_unavailable",
             diagnostic: createDiagnostic("workspaceUnavailable", {
               source: "chat",
@@ -4496,7 +4488,6 @@ export function useClaudeChat() {
               meta: { sessionId },
             }),
           })
-          return
         }
         try {
           const binding = await ensureSessionExecutionBundle({
@@ -4524,10 +4515,10 @@ export function useClaudeChat() {
         } catch (error) {
           if (checkoutAbort.signal.aborted) {
             endStoppedCheckout()
-            return
+            return true
           }
           console.error("managed workspace bundle acquisition failed", error)
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "workspace_bundle_unavailable",
             diagnostic: createDiagnostic("workspaceBundleFailed", {
               source: "chat",
@@ -4535,7 +4526,6 @@ export function useClaudeChat() {
               meta: { sessionId },
             }),
           })
-          return
         }
       }
       const boundWorkspaceRoot = executionContext
@@ -4551,7 +4541,7 @@ export function useClaudeChat() {
           store.getState().setSessionStatus(sessionId, "idle")
           await settleChatTurnForSession(sessionId, { outcome: "cancelled" })
           stopAssemblyHeartbeat()
-          return
+          return true
         }
         if (sharedRun.kind === "acquired") {
           sharedRun.setApprovalDecisionHandler(async (approval, decision) => {
@@ -4571,11 +4561,10 @@ export function useClaudeChat() {
           })
         }
       } catch (error) {
-        await refuseTurn({
+        return await refuseTurn({
           errorCode: "shared_run_coordination_failed",
           diagnostic: toDiagnostic(error, { source: "chat", meta: { sessionId } }),
         })
-        return
       }
       try {
         await startDirectChatExecutionRun({
@@ -4592,12 +4581,11 @@ export function useClaudeChat() {
             : {}),
         })
       } catch (error) {
-        await refuseTurn({
+        return await refuseTurn({
           errorCode: "execution_run_start_failed",
           finishRun: true,
           diagnostic: toDiagnostic(error, { source: "chat", meta: { sessionId } }),
         })
-        return
       }
       try {
         if (isSessionAside && session?.surfaceBinding?.kind === "session") {
@@ -4606,7 +4594,7 @@ export function useClaudeChat() {
             sessionId,
             session.surfaceBinding.sessionId,
             executionRunId,
-            { inProgressMessageId }
+            { inProgressMessageId, parentClearedAt: session.asideParentClearedAt }
           )
           resourceDelivery = fresh.delivery
           personalAsideSourceDigest = fresh.visibilityDigest
@@ -4693,12 +4681,11 @@ export function useClaudeChat() {
           providerPayload.content = effectiveContent
         }
       } catch (error) {
-        await refuseTurn({
+        return await refuseTurn({
           errorCode: "personal_history_preparation_failed",
           finishRun: true,
           diagnostic: toDiagnostic(error, { source: "chat", meta: { sessionId } }),
         })
-        return
       }
       const legacyWorkspaceEnabled = !executionContext && Boolean(sendOptions.cwd)
       if (
@@ -4729,7 +4716,7 @@ export function useClaudeChat() {
         } catch (error) {
           markTaskWorkspaceTurnUnowned(sessionId, chatRunId)
           const beginFailure = error instanceof Error ? error.message : String(error)
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "task_workspace_unavailable",
             finishRun: true,
             // Sharing a folder with another run no longer refuses a turn
@@ -4749,7 +4736,6 @@ export function useClaudeChat() {
                   meta: { sessionId },
                 }),
           })
-          return
         }
       }
       if (
@@ -4757,7 +4743,7 @@ export function useClaudeChat() {
         (executionContext?.location === "managedWorktree" || legacyWorkspaceEnabled)
       ) {
         if (executionContext?.location === "managedWorktree" && !boundWorkspaceRoot) {
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "managed_worktree_unavailable",
             finishRun: true,
             diagnostic: createDiagnostic("workspaceUnavailable", {
@@ -4766,7 +4752,6 @@ export function useClaudeChat() {
               meta: { sessionId },
             }),
           })
-          return
         }
         const anchorMessage = skipAppend
           ? [...previousMessages].reverse().find((message) => message.role === "user")
@@ -4820,7 +4805,7 @@ export function useClaudeChat() {
         // go on to run, isolated or not.
         if (checkoutAbort.signal.aborted) {
           endStoppedCheckout()
-          return
+          return true
         }
         forgetCheckoutAbort()
         // Caught, unlike every other await in this block, because a throw here
@@ -4858,7 +4843,7 @@ export function useClaudeChat() {
           // Typed once, where the host's sentence enters: from here on the
           // refusal is a lease conflict on the working copy, with its holder.
           const conflict = isWorkspaceBusyRefusal(error) ? workingCopyConflict(error) : null
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "task_workspace_unavailable",
             finishRun: true,
             // Two codes, because the two refusals want opposite advice:
@@ -4893,7 +4878,6 @@ export function useClaudeChat() {
                   meta: { sessionId },
                 }),
           })
-          return
         }
         const taskLease = bundleTurnLease
         if (
@@ -4901,7 +4885,7 @@ export function useClaudeChat() {
           (executionContext?.location === "managedWorktree" || legacyWorkspaceEnabled)
         ) {
           markTurnUnowned()
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "task_workspace_unavailable",
             finishRun: true,
             diagnostic: createDiagnostic("workspaceUnavailable", {
@@ -4910,7 +4894,6 @@ export function useClaudeChat() {
               meta: { sessionId },
             }),
           })
-          return
         }
         sendOptions = { ...sendOptions, taskWorkspace: taskEnvelope }
         if (taskLease) {
@@ -4959,7 +4942,7 @@ export function useClaudeChat() {
             executionContext,
           })
         } catch (error) {
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "workspace_port_lease_unavailable",
             finishRun: true,
             diagnostic: createDiagnostic("workspaceUnavailable", {
@@ -4968,7 +4951,6 @@ export function useClaudeChat() {
               meta: { sessionId },
             }),
           })
-          return
         }
       }
 
@@ -4991,7 +4973,7 @@ export function useClaudeChat() {
       if (turnUsesWorkingCopy && executionContext?.environmentId) {
         const environment = await getProjectEnvironment(executionContext.environmentId)
         if (!environment || environment.projectId !== executionContext.projectId) {
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "environment_unavailable",
             finishRun: true,
             diagnostic: createDiagnostic("environmentUnavailable", {
@@ -5000,7 +4982,6 @@ export function useClaudeChat() {
               meta: { sessionId, extra: { environmentId: executionContext.environmentId } },
             }),
           })
-          return
         }
         // The repository's own `.cognia/workspace.json`, merged in when the
         // user has approved it. Resolved through the shared seam rather than
@@ -5022,7 +5003,7 @@ export function useClaudeChat() {
           bypassOnFailure: callOptions?.bypassEnvironmentSetup,
         })
         if (!setup.success) {
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "environment_setup_failed",
             finishRun: true,
             diagnostic: createDiagnostic("environmentSetupFailed", {
@@ -5033,7 +5014,6 @@ export function useClaudeChat() {
               meta: { sessionId, extra: { environmentId: executionContext.environmentId } },
             }),
           })
-          return
         }
       }
 
@@ -5093,7 +5073,7 @@ export function useClaudeChat() {
           // The optimistic user message is rolled back before the refusal:
           // nothing was sent, so it must not stay in the transcript.
           store.getState().replaceSessionMessages(sessionId, previousMessages)
-          await refuseTurn({
+          return await refuseTurn({
             errorCode: "external_agent_not_selected",
             finishRun: true,
             diagnostic: createDiagnostic("externalAgentNotSelected", {
@@ -5101,7 +5081,6 @@ export function useClaudeChat() {
               meta: { sessionId },
             }),
           })
-          return
         }
         // Record the lane this session's turn is actually on, so a follow-up
         // typed while it runs steers this agent rather than whatever the
@@ -5170,7 +5149,7 @@ export function useClaudeChat() {
           })
           if (!readiness.ok) {
             store.getState().replaceSessionMessages(sessionId, previousMessages)
-            await refuseTurn({
+            return await refuseTurn({
               errorCode: "external_agent_unavailable",
               finishRun: true,
               diagnostic: createDiagnostic("externalAgentNotReady", {
@@ -5182,7 +5161,6 @@ export function useClaudeChat() {
                 meta: { sessionId, agentId: extAgentId },
               }),
             })
-            return
           }
         }
         let asideExternalPermission:
@@ -5412,7 +5390,6 @@ export function useClaudeChat() {
         }
 
         const gatewayController = !hostSelection ? new AbortController() : undefined
-        if (gatewayController) externalGatewayAbortRef.current.set(sessionId, gatewayController)
         let externalTurnCompleted = false
         let settleExternalTurn!: () => void
         const externalTurnSettlement = new Promise<void>((resolve) => {
@@ -5568,10 +5545,40 @@ export function useClaudeChat() {
             externalAgentSession: session?.externalAgentSession,
             externalAgentGatewaySessions: session?.externalAgentGatewaySessions,
           }
+          // Capture after this turn's intentional visibility invalidations.
+          // A concurrent parent clear still refuses the already-assembled prompt.
+          const externalSessionSnapshot = isSessionAside ? await getSession(sessionId) : session
+          if (
+            isSessionAside &&
+            externalSessionSnapshot?.asideParentClearedAt !== session?.asideParentClearedAt
+          )
+            throw new Error("personal_history_context_changed")
+          const externalFence = isSessionAside
+            ? await transcriptFenceRef.current?.capture(
+                sessionId,
+                externalSessionSnapshot?.runtimeTranscriptGeneration
+              )
+            : undefined
+          if (externalFence?.shouldPersist?.() === false) return true
+          if (gatewayController) externalGatewayAbortRef.current.set(sessionId, gatewayController)
           let externalSessionWrite = Promise.resolve()
           let externalSessionWriteError: unknown
+          // Streams can arrive before the start RPC returns. Keep the reset
+          // pending until the Host acknowledges admission, including on retry.
+          let remoteRunAccepted = !hostSelection
+          let remoteSessionResetAccepted = false
+          let pendingRemoteSessionId: string | undefined
           const persistExternalSession = (nativeId?: string) => {
-            if (nativeId)
+            if (externalFence?.shouldPersist?.() === false) return
+            if (!remoteRunAccepted) {
+              pendingRemoteSessionId = nativeId ?? pendingRemoteSessionId
+              return
+            }
+            // An older Host accepted the text turn but could not forget. Keep
+            // the one-shot reset pending so upgrading it still starts fresh.
+            if (hostSelection && resetExternalSession && !remoteSessionResetAccepted) return
+            const rememberNativeSession = () => {
+              if (!nativeId) return
               useAgentRuntimeStore.getState().setSessionExternalLink(sessionId, {
                 agentId: extAgentId,
                 sessionId: nativeId,
@@ -5585,16 +5592,17 @@ export function useClaudeChat() {
                     }
                   : {}),
               })
-            const hosted = externalToolHostsRef.current.get(sessionId)
-            // The tool host remembers the agent's OWN session only. A gateway
-            // link is resumed from the row, and only when its binding is the
-            // one selected; remembering it here as well let a later native
-            // turn resume a Cognia task.
-            if (hosted?.agentId === extAgentId && nativeId && !isGatewaySessionLink(nativeId))
-              hosted.nativeSessionId = nativeId
+              const hosted = externalToolHostsRef.current.get(sessionId)
+              if (hosted?.agentId === extAgentId && !isGatewaySessionLink(nativeId))
+                hosted.nativeSessionId = nativeId
+            }
+            // Aside links become visible only after their guarded DB write.
+            // Ordinary conversations keep their existing immediate reconnect.
+            if (!isSessionAside) rememberNativeSession()
             if (
               !nativeId ||
-              (nativeId === persistedExternalSessionId &&
+              (!isSessionAside &&
+                nativeId === persistedExternalSessionId &&
                 persistedExternalVisibilityDigest === externalPersonalHistory.visibilityDigest)
             )
               return
@@ -5614,10 +5622,19 @@ export function useClaudeChat() {
             persistedLinks = { externalAgentSession: link, externalAgentGatewaySessions: retained }
             externalSessionWrite = externalSessionWrite
               .then(async () => {
-                await updateSession(sessionId, {
+                const links = {
                   externalAgentSession: link,
                   externalAgentGatewaySessions: retained,
-                })
+                }
+                if (isSessionAside) {
+                  const accepted = await advanceResourceAsideExternalSession(sessionId, links, {
+                    runtimeTranscriptGeneration:
+                      externalSessionSnapshot?.runtimeTranscriptGeneration,
+                    asideParentClearedAt: externalSessionSnapshot?.asideParentClearedAt,
+                  })
+                  if (!accepted || externalFence?.shouldPersist?.() === false) return
+                  rememberNativeSession()
+                } else await updateSession(sessionId, links)
               })
               .catch((error: unknown) => {
                 externalSessionWriteError = error
@@ -5643,8 +5660,9 @@ export function useClaudeChat() {
           const handleExternalEvent = (
             event: import("@/types/agent/external-agent").ExternalAgentEvent
           ) => {
+            if (gatewayController?.signal.aborted || externalFence?.shouldPersist?.() === false)
+              return
             if (event.type === "session_start") persistExternalSession(event.sessionId)
-            if (gatewayController?.signal.aborted) return
             // First, before anything else in this handler can throw or return:
             // an agent that refused the turn has exactly one useful thing to
             // say, and remembering it must not depend on the projection or the
@@ -5817,6 +5835,11 @@ export function useClaudeChat() {
           let resetExternalSession =
             personalAsideRequiresRebuild ||
             externalVisibilityChanged ||
+            // The manager/tool host can retain a native session after its row
+            // links were retired. A parent clear must start a fresh task too.
+            (isSessionAside &&
+              session?.asideParentClearedAt !== undefined &&
+              !retainedExternalLink) ||
             modelSelection.resetExternalSession === true ||
             (modelSelection.rebind === true && Boolean(hostSelection))
           let verifiedNativeResume = false
@@ -5837,7 +5860,7 @@ export function useClaudeChat() {
             if (nativeRoute) {
               const resolved = manager.resolveConversationSessionId(extAgentId, sessionId)
               nativeConversationSessionId =
-                !externalVisibilityChanged && resolved && !isGatewaySessionLink(resolved)
+                !resetExternalSession && resolved && !isGatewaySessionLink(resolved)
                   ? resolved
                   : undefined
             }
@@ -5980,7 +6003,7 @@ export function useClaudeChat() {
             useAgentRuntimeStore.getState().setSessionExternalLink(sessionId, undefined)
           const hostedSession = externalToolHostsRef.current.get(sessionId)
           const matchingHostedNativeSessionId =
-            nativeRoute && !externalVisibilityChanged
+            nativeRoute && !resetExternalSession
               ? resolveNativeExternalSessionId(sessionId, extAgentId, hostedSession)
               : undefined
           // A session on THIS route: the gateway task the selection names, or
@@ -6197,6 +6220,12 @@ export function useClaudeChat() {
                     lifecycleGeneration: hostSelection.lifecycleGeneration,
                   },
                   chatSessionId: sessionId,
+                  ...(resetExternalSession ? { resetExternalSession: true } : {}),
+                  onStarted: (sessionReset: boolean) => {
+                    remoteRunAccepted = true
+                    remoteSessionResetAccepted = sessionReset
+                    persistExternalSession(pendingRemoteSessionId)
+                  },
                   workspaceCapture: { runId: chatRunId, assistantMessageId: assistantId },
                   // Only the gateway task the selection names. A native turn
                   // after a Cognia one must not hand the Host that task.
@@ -6279,16 +6308,17 @@ export function useClaudeChat() {
           persistExternalSession(result?.sessionId)
           await externalSessionWrite
           if (externalSessionWriteError) throw externalSessionWriteError
-          if (gatewayController?.signal.aborted) return
+          if (gatewayController?.signal.aborted || externalFence?.shouldPersist?.() === false)
+            return true
 
           if (!result) {
             await handleExternalFailure("No external agent available for this request")
-            return
+            return true
           }
 
           if (!result.success) {
             await handleExternalFailure(result.error ?? "External agent execution failed")
-            return
+            return true
           }
 
           const hasVisibleText = assistantParts.some(
@@ -6303,7 +6333,7 @@ export function useClaudeChat() {
           // recovered and answered is still a success.
           if (!hasVisibleText && externalErrorDetail) {
             await handleExternalFailure(externalErrorDetail)
-            return
+            return true
           }
 
           // When the event stream never produced a text track (some agents
@@ -6375,7 +6405,7 @@ export function useClaudeChat() {
             : withRun
           store.getState().replaceSessionMessages(sessionId, finalMessages)
           chatTurnPerformance.beginFinalPersistence(sessionId)
-          await persistMessages(sessionId, finalMessages)
+          await persistMessages(sessionId, finalMessages, externalFence)
           if (result.tokenUsage) {
             await recordExternalAgentUsage({
               sessionId,
@@ -6415,7 +6445,7 @@ export function useClaudeChat() {
           emitSystemBusEvent(SystemEvents.AGENT_COMPLETED, { sessionId })
           externalTurnCompleted = true
         } catch (err) {
-          if (gatewayController?.signal.aborted) return
+          if (gatewayController?.signal.aborted) return true
           const error = err instanceof Error ? err : new Error(String(err))
           await handleExternalFailure(error.message, error)
         } finally {
@@ -6487,8 +6517,8 @@ export function useClaudeChat() {
           // plan step was just dispatched; two turns must never start at once.
           if (!dispatchedNextStep) drainSteerVia(sessionId, ownedContinuationRef)
         }
-        if (store.getState().sessions[sessionId]?.errorDiagnostic) rejectSend()
-        return
+        if (store.getState().sessions[sessionId]?.errorDiagnostic) return rejectSend()
+        return true
       }
       // ── End external agent branch ──────────────────────────────────────
 
@@ -6592,7 +6622,7 @@ export function useClaudeChat() {
         // freeze the execution context. Write-once: on a retry the stored
         // bundle wins, which is what stops a replay from silently re-resolving
         // the project root against whatever the host looks like later.
-        if (durableLeaseLost) return
+        if (durableLeaseLost) return true
         // Router + Fusion (ADR-0188): create the run of a routed turn right
         // before dispatch, after every early return above. A send without the
         // stamp — every send while the switch is off — skips this block.
@@ -6670,8 +6700,8 @@ export function useClaudeChat() {
           // Early prompt assembly precedes direct-run admission. Reproject
           // with the admitted Host identity so an owner's own marked history
           // is restored for engines that consume the whole message list.
-          if (!callOptions?.sharedRequest) {
-            providerPayload.messages = gateWorkbenchProviderPayload({
+          const rebuildProviderMessages = async () =>
+            gateWorkbenchProviderPayload({
               content: "",
               sendOptions,
               messages: withWorkbenchMessageContext(
@@ -6692,6 +6722,8 @@ export function useClaudeChat() {
                 resourceDelivery.header
               ),
             }).messages
+          if (!callOptions?.sharedRequest) {
+            providerPayload.messages = await rebuildProviderMessages()
           }
           const asideSdkTurn =
             isSessionAside &&
@@ -6706,8 +6738,9 @@ export function useClaudeChat() {
                     cursor: session?.asideContextCursor,
                     resumeSdkSessionId: sendOptions.resumeSessionId,
                     inProgressMessageId,
+                    parentClearedAt: session.asideParentClearedAt,
                   }
-                : { inProgressMessageId }
+                : { inProgressMessageId, parentClearedAt: session.asideParentClearedAt }
             )
             if (fresh.visibilityDigest !== personalAsideSourceDigest) {
               await invalidateTranscriptRuntime(sessionId)
@@ -6719,11 +6752,7 @@ export function useClaudeChat() {
               resourceDelivery.context,
               resourceDelivery.header
             ).content
-            providerPayload.messages = withWorkbenchMessageContext(
-              (await preparePersonalHistory(sessionId, next, { executionRunId, session })).messages,
-              resourceDelivery.context,
-              resourceDelivery.header
-            )
+            providerPayload.messages = await rebuildProviderMessages()
           }
           asideContextDispatchRef.current.get(sessionId)?.cancel()
           asideContextDispatchRef.current.delete(sessionId)
@@ -6846,7 +6875,7 @@ export function useClaudeChat() {
         })
         // The host owns the turn now; its `session_ended` seals the run.
         routerFusionAwaitingDispatch = false
-        if (durableLeaseLost) return
+        if (durableLeaseLost) return true
         // The live handoff won this turn. Recording it keeps the periodic
         // pending-work sweep from dispatching the same accepted input again.
         await markChatTurnStarted(executionRunId)
@@ -6921,8 +6950,9 @@ export function useClaudeChat() {
             ...(sendOptions.provider ? { provider: sendOptions.provider } : {}),
           })
         }
-        rejectSend(error)
+        return rejectSend(error)
       }
+      return true
     },
     [
       store,

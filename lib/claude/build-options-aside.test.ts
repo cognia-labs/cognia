@@ -398,6 +398,116 @@ describe("session-bound aside capability grants", () => {
     })
   })
 
+  it("clamps an existing aside and its native inventory by the parent's current allow filter without a registered ceiling", async () => {
+    jest.mocked(getSession).mockResolvedValue({
+      ...parent,
+      toolFilter: { mode: "allow", tools: ["Grep"] },
+    })
+    const opts = await resolve(aside({ toolFilter: { mode: "all" } }))
+    expect(opts.allowedTools).toEqual(["Grep"])
+    expect(opts.claudeAgentSdk?.tools).toEqual(["Grep"])
+  })
+
+  it("denies the parent's currently filtered tools in an unlocked aside without a registered ceiling", async () => {
+    jest.mocked(getSession).mockResolvedValue({
+      ...parent,
+      toolFilter: { mode: "deny", tools: ["Write"] },
+    })
+    const opts = await resolve(aside({ asideWriteAccess: true, toolFilter: { mode: "all" } }))
+    expect(opts.permissionMode).toBe("acceptEdits")
+    expect(opts.disallowedTools).toContain("Write")
+  })
+
+  it("never widens a registered ceiling when the parent's current filter is broader", async () => {
+    recordResolvedPermissionCeiling(parent.id, {
+      allowedTools: ["Grep"],
+      disallowedTools: ["Write"],
+    })
+    jest.mocked(getSession).mockResolvedValue({
+      ...parent,
+      toolFilter: { mode: "allow", tools: ["Read", "Grep"] },
+    })
+    const opts = await resolve(aside({ asideWriteAccess: true }))
+    expect(opts.allowedTools).toEqual(["Grep"])
+    expect(opts.disallowedTools).toContain("Write")
+    expect(opts.claudeAgentSdk?.tools).toEqual(["Grep"])
+  })
+
+  it("keeps an empty registered allowlist empty and unions current denials", async () => {
+    recordResolvedPermissionCeiling(parent.id, { allowedTools: [], disallowedTools: ["Edit"] })
+    const ceiling = await resolveSessionAsideParentPermission(
+      { ...parent, toolFilter: { mode: "deny", tools: ["Write"] } },
+      undefined
+    )
+    expect(ceiling.allowedTools).toEqual([])
+    expect(ceiling.disallowedTools).toEqual(["Edit", "Write"])
+    const opts = await resolve(aside({ asideWriteAccess: true }))
+    expect(opts.allowedTools).toEqual([])
+    expect(opts.toolSurface).toBe("none")
+    expect(opts.claudeAgentSdk?.tools).toEqual([])
+  })
+
+  it("uses session, character, then app precedence for the parent's live filter", async () => {
+    jest.mocked(resolveCharacterById).mockResolvedValue({
+      ...character,
+      toolFilter: { mode: "allow", tools: ["Grep"] },
+    })
+    try {
+      const appSettings = { toolFilter: { mode: "deny", tools: ["Write"] } } as AppSettings
+      const parentWithCharacter = { ...parent, characterId: character.id }
+      expect(
+        await resolveSessionAsideParentPermission(
+          { ...parentWithCharacter, toolFilter: { mode: "all" } },
+          appSettings
+        )
+      ).not.toHaveProperty("allowedTools")
+      expect(
+        await resolveSessionAsideParentPermission(parentWithCharacter, appSettings)
+      ).toMatchObject({ allowedTools: ["Grep"] })
+      expect(await resolveSessionAsideParentPermission(parent, appSettings)).toMatchObject({
+        disallowedTools: ["Write"],
+      })
+    } finally {
+      jest.mocked(resolveCharacterById).mockResolvedValue(undefined)
+    }
+  })
+
+  it.each(["allow", "deny"] as const)(
+    "cascades the parent's current MCP %s subset through fallback without widening a registered subset",
+    async (mode) => {
+      const servers = [
+        { id: "read", name: "ReadServer" },
+        { id: "write", name: "WriteServer" },
+        { id: "extra", name: "ExtraServer" },
+      ]
+      jest.mocked(listEnabledMcpServers).mockResolvedValue(servers as never)
+      jest.mocked(buildRunMcpServerMap).mockImplementationOnce(async () => ({
+        ReadServer: { command: "read-server" },
+        WriteServer: { command: "write-server" },
+        ExtraServer: { command: "extra-server" },
+      }))
+      jest.mocked(getSession).mockResolvedValue({
+        ...parent,
+        projectId: "parent-workspace",
+        toolFilter: { mode, mcpServerIds: mode === "allow" ? ["read", "extra"] : ["write"] },
+      })
+      recordResolvedPermissionCeiling(parent.id, {
+        mcpServers: [{ name: "ReadServer" }, { name: "WriteServer" }],
+      })
+      jest.mocked(runtimeRefForSession).mockReturnValue({ kind: "external", agentId: "pi" })
+      mockGetExternalAgent.mockReturnValue({ config: { protocol: "acp" } })
+      try {
+        const opts = await resolve(aside({ asideWriteAccess: true, toolFilter: { mode: "all" } }))
+        expect(resolvedSessionAsideRuntime(opts)).toEqual({ kind: "builtin" })
+        expect(opts.mcpServers).toEqual({ ReadServer: { command: "read-server" } })
+        expect(opts.settingSources).toEqual([])
+        expect(listEnabledMcpServers).toHaveBeenCalledWith({ projectId: "parent-workspace" })
+      } finally {
+        jest.mocked(listEnabledMcpServers).mockResolvedValue([])
+      }
+    }
+  )
+
   it("caps the parent's UI authority by the external process configured mode", async () => {
     jest.mocked(runtimeRefForSession).mockReturnValue({ kind: "external", agentId: "claude-code" })
     mockGetExternalAgent.mockReturnValue({

@@ -7,11 +7,108 @@ import {
   prepareAsideContext,
   ASIDE_REFERENCE_HEADER,
   ASIDE_DELTA_HEADER,
+  ASIDE_PINNED_CONTEXT_MAX_CHARS,
+  summarizeAsideInheritance,
 } from "./session-aside-context"
 
 function msg(role: "user" | "assistant", text: string): UIMessage {
   return { id: `${role}-${text}`, role, parts: [{ type: "text", text }] } as UIMessage
 }
+
+describe("aside inheritance selection", () => {
+  const parent = Array.from({ length: 30 }, (_, i) => msg("user", `parent ${i}`))
+
+  it("uses the builder's exact selection and separately budgets pinned messages", () => {
+    const pins = [parent[0].id, "deleted"]
+    const summary = summarizeAsideInheritance(parent, { pins })
+    const delivery = prepareAsideContext(parent, { pins })
+    expect(delivery.context).toBe(summary.context)
+    expect(summary.included).toEqual([parent[0].id, ...parent.slice(6).map((m) => m.id)])
+    expect(summary.omitted).toEqual(parent.slice(1, 6).map((m) => m.id))
+    expect(summary.pinnedIncluded).toEqual([parent[0].id])
+    expect(summary.validPins).toEqual([parent[0].id])
+    expect(delivery.context).toContain("Messages the user pinned from the main conversation")
+  })
+
+  it("delivers a newly added pin once on a delta and again on rebuild or edit", () => {
+    const snapshot = prepareAsideContext(parent)
+    const options = {
+      pins: [parent[0].id],
+      cursor: { ...snapshot.cursor!, sdkSessionId: "sdk" },
+      resumeSdkSessionId: "sdk",
+    }
+    const delta = prepareAsideContext(parent, options)
+    expect(delta.header).toBe(ASIDE_DELTA_HEADER)
+    expect(delta.context).toContain("User: parent 0")
+    expect(delta.context).not.toContain("User: parent 29")
+    const cursor = { ...delta.cursor!, sdkSessionId: "sdk" }
+    expect(prepareAsideContext(parent, { ...options, cursor }).context).toBe("")
+    expect(
+      prepareAsideContext(parent, { ...options, cursor, resumeSdkSessionId: "new" }).context
+    ).toContain("User: parent 0")
+    const edited = [
+      { ...parent[0], parts: [{ type: "text" as const, text: "edited pin" }] },
+      ...parent.slice(1),
+    ]
+    const rebuilt = prepareAsideContext(edited, { ...options, cursor })
+    expect(rebuilt.header).toBe(ASIDE_REFERENCE_HEADER)
+    expect(rebuilt.context).toContain("edited pin")
+  })
+
+  it("drops whole pinned messages within their separate budget and reports clipping", () => {
+    const big = msg("user", "x".repeat(ASIDE_PINNED_CONTEXT_MAX_CHARS))
+    const summary = summarizeAsideInheritance([big, ...parent], { pins: [big.id, parent[0].id] })
+    expect(summary.pinnedIncluded).toEqual([parent[0].id])
+    expect(summary.omitted).toContain(big.id)
+    expect(summary.context).not.toContain("x".repeat(100))
+    const single = summarizeAsideInheritance([big, ...parent], { pins: [big.id] })
+    expect(single.truncated).toContain(big.id)
+    expect(single.pinnedIncluded).toContain(big.id)
+  })
+
+  it("lists attachment identities without copying bytes into context", () => {
+    const attachment = {
+      id: "file",
+      role: "user",
+      parts: [
+        {
+          type: "file",
+          filename: "photo.png",
+          mediaType: "image/png",
+          url: "data:image/png;base64,c2VjcmV0",
+        },
+      ],
+    } as UIMessage
+    const summary = summarizeAsideInheritance([attachment])
+    expect(summary.attachments).toEqual([
+      { messageId: "file", partIndex: 0, filename: "photo.png", mediaType: "image/png" },
+    ])
+    expect(summary.context).toContain("[attached file: photo.png (image/png)]")
+    expect(summary.context).not.toContain("c2VjcmV0")
+  })
+
+  it("counts the original once when an extracted document produces multiple file parts", () => {
+    const extractedContent = {
+      attachmentId: "source",
+      contentHash: "a".repeat(64),
+      status: "ready",
+      processor: { id: "test", version: "1" },
+      segments: [{ id: "s", text: "body", locator: { type: "text", start: 0, end: 4 } }],
+    }
+    const document = {
+      id: "document",
+      role: "user",
+      parts: [0, 1].map(() => ({
+        type: "file",
+        filename: "report.pdf",
+        mediaType: "application/pdf",
+        text: "extracted page",
+        extractedContent,
+      })),
+    } as unknown as UIMessage
+    expect(summarizeAsideInheritance([document]).attachments).toHaveLength(1)
+  })
+})
 
 describe("buildAsideContext", () => {
   it("returns nothing for an empty conversation", () => {
@@ -39,14 +136,15 @@ describe("buildAsideContext", () => {
       maxChars: 40,
     })
     // A half message reads as an interrupted speaker, which the model imitates.
-    expect(out).toBe("User: keep me")
+    expect(out).toMatch(/^\[1 .*omitted\]\nUser: keep me$/)
+    expect(out.length).toBeLessThanOrEqual(40)
   })
 
   it("truncates rather than dropping when one message alone exceeds the budget", () => {
     const out = buildAsideContext([msg("user", "B".repeat(100))], { maxChars: 20 })
     expect(out).toHaveLength(20)
     // Keeps the END — the most recent thing said.
-    expect(out).toBe("B".repeat(20))
+    expect(out).toBe(`User: …${"B".repeat(13)}`)
   })
 
   it("skips messages with no quotable text", () => {
@@ -125,6 +223,59 @@ describe("buildAsideContext", () => {
   })
 })
 
+it("keeps parent formatting and marks attachments without copying their bytes or URLs", () => {
+  const message = {
+    id: "structured",
+    role: "user",
+    parts: [
+      { type: "text", text: "root:\r\n  child: true\n\n```ts\n  run()\n```" },
+      { type: "reasoning", text: "do not include" },
+      { type: "file", filename: "photo.jpg", mediaType: "image/jpeg", url: "data:secret" },
+    ],
+  } as unknown as UIMessage
+  expect(buildAsideContext([message])).toBe(
+    "User: root:\n  child: true\n\n```ts\n  run()\n```\n[attached file: photo.jpg (image/jpeg)]"
+  )
+})
+
+it("marks dropped rows once and does not repeat the snapshot's omissions on a delta", () => {
+  const parent = Array.from({ length: 30 }, (_, i) => msg("user", `row ${i}`))
+  const full = prepareAsideContext(parent)
+  expect(full.context).toMatch(/^\[6 earlier messages not included\]\nUser: row 6/)
+  expect(full.cursor?.parentMessageId).toBe(parent.at(-1)!.id)
+  const next = msg("assistant", "new answer")
+  const delta = prepareAsideContext([...parent, next], {
+    cursor: { ...full.cursor!, sdkSessionId: "sdk" },
+    resumeSdkSessionId: "sdk",
+  })
+  expect(delta.context).toBe("Assistant: new answer")
+  expect(delta.header).toBe(ASIDE_DELTA_HEADER)
+  expect(delta.cursor?.parentMessageId).toBe(next.id)
+})
+
+it("keeps labels and advances the cursor for a clipped completed message", () => {
+  const oversized = msg("assistant", "x".repeat(9000))
+  const full = prepareAsideContext([oversized])
+  expect(full.context).toHaveLength(8000)
+  expect(full.context).toMatch(/^Assistant: …x/)
+  expect(full.cursor?.parentMessageId).toBe(oversized.id)
+  const cursor = { ...full.cursor!, sdkSessionId: "sdk" }
+  expect(prepareAsideContext([oversized], { cursor, resumeSdkSessionId: "sdk" }).context).toBe("")
+})
+
+it("counts only omitted new rows in an oversized delta", () => {
+  const parent = [msg("user", "old context")]
+  const full = prepareAsideContext(parent)
+  const newRows = Array.from({ length: 26 }, (_, i) => msg("user", `new ${i}`))
+  const delta = prepareAsideContext([...parent, ...newRows], {
+    cursor: { ...full.cursor!, sdkSessionId: "sdk" },
+    resumeSdkSessionId: "sdk",
+  })
+  expect(delta.context).toMatch(/^\[2 earlier messages not included\]/)
+  expect(delta.context.match(/earlier messages not included/g)).toHaveLength(1)
+  expect(delta.cursor?.parentMessageId).toBe(newRows.at(-1)!.id)
+})
+
 describe("incremental aside delivery", () => {
   const parent = [msg("user", "question"), msg("assistant", "answer")]
   const full = prepareAsideContext(parent)
@@ -194,6 +345,22 @@ it("acknowledges an empty parent once, then sends only subsequent messages", () 
   expect(
     prepareAsideContext([msg("user", "new")], { cursor, resumeSdkSessionId: "sdk" }).context
   ).toBe("User: new")
+})
+
+it("sends a full empty-parent snapshot after clearing retires the cursor and resume id", () => {
+  const cleared = prepareAsideContext([], { parentClearedAt: 100 })
+  expect(cleared).toEqual({
+    header: ASIDE_REFERENCE_HEADER,
+    context: "[The main conversation currently has no visible messages.]",
+    cursor: expect.objectContaining({ parentMessageId: null }),
+  })
+  expect(
+    prepareAsideContext([], {
+      parentClearedAt: 100,
+      cursor: { ...cleared.cursor!, sdkSessionId: "fresh-sdk" },
+      resumeSdkSessionId: "fresh-sdk",
+    }).context
+  ).toBe("")
 })
 
 it("does not advance past a streaming assistant when a parent steer follows it", () => {

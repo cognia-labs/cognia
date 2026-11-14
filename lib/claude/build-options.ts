@@ -1220,6 +1220,23 @@ export async function resolveSessionAsideParentPermission(
       appSettings?.permissionMode ??
       "default")
   const registeredCeiling = getResolvedPermissionCeiling(parent.id)
+  const toolFilter = parent.toolFilter ?? parentCharacter?.toolFilter ?? appSettings?.toolFilter
+  const filterCeiling: ExternalSessionPermissionSpec = {}
+  if (toolFilter && toolFilter.mode !== "all") {
+    if (toolFilter.tools?.length) {
+      if (toolFilter.mode === "allow") filterCeiling.allowedTools = toolFilter.tools
+      else filterCeiling.disallowedTools = toolFilter.tools
+    }
+    if (toolFilter.mcpServerIds?.length) {
+      const serverIds = new Set(toolFilter.mcpServerIds)
+      const enabled = await listEnabledMcpServers({ projectId: parent.projectId ?? null })
+      filterCeiling.mcpServers = enabled
+        .filter((server) =>
+          toolFilter.mode === "allow" ? serverIds.has(server.id) : !serverIds.has(server.id)
+        )
+        .map((server) => ({ name: server.name }))
+    }
+  }
   // A fallback drops the parent's character. Carry its active sandbox policy
   // as a ceiling so choosing the built-in agent cannot discard that boundary.
   const parentSandboxEnabled = resolveSandboxEnabled({
@@ -1234,7 +1251,7 @@ export async function resolveSessionAsideParentPermission(
       : undefined
   )
   const ceiling = {
-    ...registeredCeiling,
+    ...deriveExternalSessionPermission(registeredCeiling ?? {}, filterCeiling),
     ...(sandboxPolicy ? { sandboxPolicy } : {}),
   }
   let permissionMode = capPermissionModeByGrant(requested, {
@@ -5323,6 +5340,23 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     opts.settingSources = []
     opts.mcpServers = {}
     opts.planTools = false
+  } else if (
+    asideRuntime?.runtimeRef.kind === "builtin" &&
+    ctx.permissionCeiling?.allowedTools !== undefined
+  ) {
+    // Native allowedTools grants auto-approval; only tools restricts inventory.
+    // Keep an unlocked aside below the parent's allow ceiling as well.
+    const { SDK_CORE_TOOL_NAMES } = await import("@/lib/skills/recording/tool-catalog")
+    const candidates = Array.isArray(opts.claudeAgentSdk?.tools)
+      ? opts.claudeAgentSdk.tools
+      : SDK_CORE_TOOL_NAMES
+    const allowed = opts.allowedTools ? new Set(opts.allowedTools) : undefined
+    const denied = new Set(opts.disallowedTools ?? [])
+    opts.claudeAgentSdk = {
+      version: 1,
+      ...opts.claudeAgentSdk,
+      tools: candidates.filter((name) => (!allowed || allowed.has(name)) && !denied.has(name)),
+    }
   }
 
   // ADR-0139 — describe only the visual route that survived the final tool

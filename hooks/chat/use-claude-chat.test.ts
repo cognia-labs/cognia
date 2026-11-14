@@ -1505,7 +1505,7 @@ describe("useClaudeChat — actions", () => {
       getSessionMock.mockResolvedValue({ id: "sess-1", title: "New chat", model: "auto" })
     })
     getSessionMock.mockClear()
-    let send!: Promise<void>
+    let send!: Promise<boolean | void>
     try {
       await act(async () => {
         send = result.current.send("hello")
@@ -1546,7 +1546,7 @@ describe("useClaudeChat — actions", () => {
     })
     const selection = persistModelSelection("sess-1", () => gate)
     const handled = selection.catch(() => undefined)
-    let send!: Promise<void>
+    let send!: Promise<boolean | void>
     await act(async () => {
       send = result.current.send("hello")
     })
@@ -1595,7 +1595,7 @@ describe("useClaudeChat — actions", () => {
     const { result } = renderHook(() => useClaudeChat())
     await flush()
     await act(async () => {
-      await result.current.send("hello")
+      await expect(result.current.send("hello")).resolves.toBe(true)
     })
     expect(persistMessagesMock).toHaveBeenCalled()
     expect(sendPromptMock).toHaveBeenCalled()
@@ -2887,9 +2887,21 @@ describe("useClaudeChat — actions", () => {
       const { result } = renderHook(() => useClaudeChat())
       await flush()
       await act(async () => {
-        await result.current.send("hello")
+        await expect(result.current.send("hello")).resolves.toBe(true)
       })
 
+      expect(chatState.messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          parts: [{ type: "text", text: "hello" }],
+          metadata: expect.objectContaining({
+            turnAdmission: expect.objectContaining({
+              state: "failed",
+              code: "workspaceBundleFailed",
+            }),
+          }),
+        }),
+      ])
       expect(ensureSessionExecutionBundleMock).toHaveBeenCalledWith(
         expect.objectContaining({ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
       )
@@ -2930,7 +2942,7 @@ describe("useClaudeChat — actions", () => {
 
       const { result } = renderHook(() => useClaudeChat())
       await flush()
-      let sending: Promise<void> | undefined
+      let sending: Promise<boolean | void> | undefined
       act(() => {
         sending = result.current.send("hello")
       })
@@ -2979,7 +2991,7 @@ describe("useClaudeChat — actions", () => {
 
       const { result } = renderHook(() => useClaudeChat())
       await flush()
-      let sending: Promise<void> | undefined
+      let sending: Promise<boolean | void> | undefined
       act(() => {
         sending = result.current.send("hello")
       })
@@ -4011,7 +4023,7 @@ describe("useClaudeChat — actions", () => {
     )
     const { result } = renderHook(() => useClaudeChat())
     await flush()
-    let sending: Promise<void> = Promise.resolve()
+    let sending: Promise<boolean | void> = Promise.resolve()
     await act(async () => {
       sending = result.current.send("hi")
       await flush()
@@ -9520,6 +9532,49 @@ describe("useClaudeChat — Squad dispatch", () => {
 })
 
 describe("strict chat continuation dispatch", () => {
+  it("resolves false at the concurrent cap and still throws when requested", async () => {
+    isAtCapacityMock.mockReturnValue(true)
+    const { result } = renderHook(useClaudeChat)
+    await flush()
+    await act(async () => {
+      await expect(result.current.send("keep my draft")).resolves.toBe(false)
+      await expect(
+        result.current.send("keep my draft", undefined, { throwOnError: true })
+      ).rejects.toThrow("concurrent_stream_cap_reached")
+    })
+    expect(sendPromptMock).not.toHaveBeenCalled()
+    expect(chatState.messages).toEqual([])
+  })
+
+  it.each([false, true])(
+    "keeps transcript-owned input after cost refusal (throwOnError=%s)",
+    async (throwOnError) => {
+      isCostBudgetConfiguredMock.mockReturnValue(true)
+      enforceCostBudgetMock.mockResolvedValue({
+        allowed: false,
+        blockedBy: [{ scopeKey: "global" }],
+      })
+      const { result } = renderHook(useClaudeChat)
+      await flush()
+      await act(async () => {
+        const sending = result.current.send("budgeted request", undefined, { throwOnError })
+        if (throwOnError) await expect(sending).rejects.toThrow("cost_budget_exceeded")
+        else await expect(sending).resolves.toBe(true)
+      })
+      expect(chatState.messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          parts: [{ type: "text", text: "budgeted request" }],
+        }),
+      ])
+      expect(sendPromptMock).not.toHaveBeenCalled()
+      expect(settleChatTurnForSessionMock).toHaveBeenCalledWith("sess-1", {
+        outcome: "failed",
+        errorCode: "cost_budget_exceeded",
+      })
+    }
+  )
+
   it("rejects a failed sidecar dispatch after preserving the diagnostic", async () => {
     sendPromptMock.mockRejectedValueOnce(new Error("host offline"))
     const { result } = renderHook(useClaudeChat)

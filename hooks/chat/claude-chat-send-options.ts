@@ -236,6 +236,8 @@ export async function prepareTranscriptRuntimeSend(
     !isExternalAgentProviderId(options.provider) &&
     options.contentSafety?.injectionProtection === true &&
     Boolean(session?.sdkSessionId || options.resumeSessionId || options.forkFromSessionId)
+  const replacesNativeHistory =
+    !isExternalAgentProviderId(options.provider) && preparation.replacesHistory === true
   const nativeHasUnseededHistory =
     !session?.sdkSessionId &&
     !options.resumeSessionId &&
@@ -251,10 +253,17 @@ export async function prepareTranscriptRuntimeSend(
     (session?.runtimeTranscriptInvalidated ||
       protectedNativeResume ||
       visibilityRequiresRebuild ||
+      replacesNativeHistory ||
       nativeHasUnseededHistory)
   ) {
     // Native SDK resume identities retain opaque pre-edit history. Start a
     // fresh query with the surviving, gated text transcript instead.
+    if (replacesNativeHistory && !session?.runtimeTranscriptInvalidated) {
+      await invalidateTranscriptRuntime(sessionId)
+      assertDatabaseCurrent()
+      session = await getSession(sessionId)
+      assertDatabaseCurrent()
+    }
     const visible = personalHistory.messages
     const currentId =
       preparation.currentMessageId === undefined ? options.turnId : preparation.currentMessageId

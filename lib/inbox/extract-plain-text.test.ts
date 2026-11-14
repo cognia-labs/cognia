@@ -1,4 +1,4 @@
-import { extractPlainText } from "./extract-plain-text"
+import { extractContextText, extractPlainText } from "./extract-plain-text"
 
 describe("extractPlainText", () => {
   it("returns empty string when parts is not an array", () => {
@@ -60,4 +60,31 @@ describe("extractPlainText", () => {
       ])
     ).toBe("spaced out lines")
   })
+})
+
+it("preserves context formatting without changing the Inbox projection or exposing reasoning", () => {
+  const parts = [
+    { type: "text", text: "  root:\r\n    child: true\r\n" },
+    { type: "reasoning", text: "private reasoning" },
+    { type: "markdown", md: "| a | b |\n| - | - |\n| 1 | 2 |" },
+    { type: "code", language: "ts", code: "if (ok) {\n  run()\n}\n  " },
+  ]
+  expect(extractContextText(parts)).toBe(
+    "  root:\n    child: true\n\n| a | b |\n| - | - |\n| 1 | 2 |\n[ts] if (ok) {\n  run()\n}"
+  )
+  expect(extractPlainText(parts)).toBe(
+    "root: child: true | a | b | | - | - | | 1 | 2 | [ts] if (ok) { run() }"
+  )
+})
+
+it("projects attachment metadata only in context, without reading a URL or content", () => {
+  const parts = [
+    { type: "file", filename: "diagram.png", mediaType: "image/png", url: "data:secret" },
+    { type: "file", filename: "spec.pdf", mediaType: "application/pdf", data: "secret" },
+  ]
+  expect(extractContextText(parts)).toBe(
+    "[attached file: diagram.png (image/png)]\n[attached file: spec.pdf (application/pdf)]"
+  )
+  expect(extractPlainText(parts)).toBe("")
+  expect(extractContextText(null)).toBe("")
 })

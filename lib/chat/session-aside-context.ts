@@ -1,7 +1,9 @@
 import type { UIMessage } from "ai"
 import type { ChatSession } from "@cognia/agent-config-types"
 import { contentFingerprint } from "@/lib/chat/mentions/content-fingerprint"
-import { extractPlainText } from "@/lib/inbox/extract-plain-text"
+import { readAttachmentExtractedContent } from "@cognia/agent-config-types/attachment"
+import { videoAttachmentInfoOfPart } from "@/lib/chat/attachments/video/attachment-info"
+import { extractContextText } from "@/lib/inbox/extract-plain-text"
 import { normalizeToolName, summarizeToolCall, type ToolPartLike } from "@/lib/chat/tool-summary"
 import {
   coerceResultText,
@@ -29,6 +31,10 @@ export const ASIDE_CONTEXT_MAX_MESSAGES = 24
  * chars each), deliberately conservative: this rides on EVERY aside send.
  */
 export const ASIDE_CONTEXT_MAX_CHARS = 8000
+
+/** Explicit parent pins have an independent 6,000-character transcript budget. */
+export const ASIDE_PINNED_CONTEXT_MAX_CHARS = 6000
+export const ASIDE_PINNED_HEADER = "Messages the user pinned from the main conversation"
 
 /** How much of one tool result is quoted. Enough for the fact, not the dump. */
 export const ASIDE_TOOL_RESULT_EXCERPT_CHARS = 280
@@ -81,7 +87,7 @@ export function asideToolFact(part: ToolPartLike): string {
 
 /** One message as the aside reads it, or "" when it has nothing to contribute. */
 export function renderAsideMessage(message: UIMessage): string {
-  const text = extractPlainText(message.parts)
+  const text = extractContextText(message.parts)
   const facts = message.parts.filter(isToolPart).map(asideToolFact)
   const keptFacts = facts.slice(-ASIDE_TOOL_FACTS_PER_MESSAGE)
   const lines = [
@@ -110,28 +116,155 @@ export function buildAsideContext(
   messages: readonly UIMessage[],
   opts: { maxMessages?: number; maxChars?: number } = {}
 ): string {
+  return summarizeAsideInheritance(messages, opts).context
+}
+
+/** Track delivered rows directly: clipping must not hide a row from cursor acknowledgement. */
+function renderAsideContext(
+  messages: readonly UIMessage[],
+  opts: { maxMessages?: number; maxChars?: number } = {}
+): { context: string; included: readonly UIMessage[]; truncated?: string } {
   const maxMessages = opts.maxMessages ?? ASIDE_CONTEXT_MAX_MESSAGES
   const maxChars = opts.maxChars ?? ASIDE_CONTEXT_MAX_CHARS
-  if (messages.length === 0 || maxMessages <= 0 || maxChars <= 0) return ""
+  if (messages.length === 0 || maxMessages <= 0 || maxChars <= 0)
+    return { context: "", included: [] }
 
-  let blocks = messages
-    .map(renderAsideMessage)
-    .filter((block) => block.length > 0)
-    .slice(-maxMessages)
-  let rendered = blocks.join("\n\n")
+  const quotable = messages
+    .map((message) => ({ message, text: renderAsideMessage(message) }))
+    .filter((block) => block.text.length > 0)
+  let blocks = quotable.slice(-maxMessages)
+  if (blocks.length === 0) return { context: "", included: [] }
+  const omission = () => {
+    const dropped = quotable.length - blocks.length
+    if (!dropped) return ""
+    const marker = `[${dropped} earlier messages not included]\n`
+    // Tiny caller budgets still need room for the most recent speaker label.
+    const labelLength = blocks[0].text.indexOf(": ") + 2
+    return marker.length + labelLength + 1 <= maxChars ? marker : `[${dropped} omitted]\n`
+  }
+  let rendered = blocks.map((block) => block.text).join("\n\n")
   // Drop whole messages rather than cutting one mid-sentence: a half message
   // reads as though the speaker was interrupted, which the model then imitates.
-  while (rendered.length > maxChars && blocks.length > 1) {
+  while (omission().length + rendered.length > maxChars && blocks.length > 1) {
     blocks = blocks.slice(1)
-    rendered = blocks.join("\n\n")
+    rendered = blocks.map((block) => block.text).join("\n\n")
   }
   // A single message over budget is still better truncated than dropped — it is
   // the most recent thing said.
-  return rendered.length > maxChars ? rendered.slice(-maxChars) : rendered
+  const prefix = omission()
+  const budget = maxChars - prefix.length
+  let truncated: string | undefined
+  if (rendered.length > budget) {
+    const labelEnd = rendered.indexOf(": ") + 2
+    if (budget < labelEnd + 1) return { context: "", included: [] }
+    const tailLength = budget - labelEnd - 1
+    rendered = `${rendered.slice(0, labelEnd)}…${tailLength ? rendered.slice(-tailLength) : ""}`
+    truncated = blocks[0].message.id
+  }
+  return { context: prefix + rendered, included: blocks.map((block) => block.message), truncated }
 }
 
 export const ASIDE_REFERENCE_HEADER = "Main conversation — reference only"
 export const ASIDE_DELTA_HEADER = "Main conversation — new since your last turn"
+
+export interface AsideInheritanceOptions {
+  maxMessages?: number
+  maxChars?: number
+  pins?: readonly string[]
+  cursor?: ChatSession["asideContextCursor"]
+  resumeSdkSessionId?: string
+  inProgressMessageId?: string
+  parentClearedAt?: number
+}
+
+/** Count source attachments once even when OCR/video processing produced several parts. */
+function parentMessageAttachments(message: UIMessage) {
+  const seen = new Set<string>()
+  return message.parts.flatMap((part, partIndex) => {
+    if (part.type !== "file") return []
+    const extraction = readAttachmentExtractedContent(
+      (part as { extractedContent?: unknown }).extractedContent
+    )
+    const video = videoAttachmentInfoOfPart(part)
+    const key = extraction?.attachmentId ?? video?.groupId ?? `part:${partIndex}`
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [
+      {
+        messageId: message.id,
+        partIndex,
+        filename: video?.filename ?? part.filename ?? "attachment",
+        mediaType: video?.sourceMediaType ?? part.mediaType,
+      },
+    ]
+  })
+}
+
+/** The single selection plan used by both the picker and provider context builder. */
+export function summarizeAsideInheritance(
+  messages: readonly UIMessage[],
+  options: AsideInheritanceOptions = {}
+) {
+  const { cursor, resumeSdkSessionId } = options
+  const byId = new Map(messages.map((message) => [message.id, message]))
+  const validPins = [...new Set(options.pins ?? [])].filter((id) => byId.has(id))
+  const pinIds = new Set(validPins)
+  const cursorIndex = cursor
+    ? messages.findIndex((message) => message.id === cursor.parentMessageId)
+    : -1
+  const incremental = Boolean(
+    cursor &&
+    resumeSdkSessionId === cursor.sdkSessionId &&
+    (cursorIndex >= 0 || cursor.parentMessageId === null) &&
+    contentFingerprint(buildAsideContext(messages.slice(0, cursorIndex + 1))) ===
+      cursor.tailFingerprint &&
+    validPins.every(
+      (id) =>
+        !cursor.pinnedParentMessageFingerprints?.[id] ||
+        cursor.pinnedParentMessageFingerprints[id] ===
+          contentFingerprint(renderAsideMessage(byId.get(id)!))
+    )
+  )
+  const selected = incremental ? messages.slice(cursorIndex + 1) : messages
+  const recent = renderAsideContext(
+    selected.filter((message) => !pinIds.has(message.id)),
+    options
+  )
+  const pinned = renderAsideContext(
+    messages.filter(
+      (message) =>
+        pinIds.has(message.id) &&
+        (!incremental || !cursor?.pinnedParentMessageFingerprints?.[message.id])
+    ),
+    {
+      maxMessages: Number.MAX_SAFE_INTEGER,
+      maxChars: ASIDE_PINNED_CONTEXT_MAX_CHARS,
+    }
+  )
+  const included = new Set([...recent.included, ...pinned.included].map((message) => message.id))
+  return {
+    context: [pinned.context ? `[${ASIDE_PINNED_HEADER}]\n${pinned.context}` : "", recent.context]
+      .filter(Boolean)
+      .join("\n\n"),
+    included: messages.filter((message) => included.has(message.id)).map((message) => message.id),
+    recentIncluded: recent.included.map((message) => message.id),
+    pinnedIncluded: pinned.included.map((message) => message.id),
+    omitted: messages
+      .filter(
+        (message) =>
+          !included.has(message.id) &&
+          renderAsideMessage(message) &&
+          (!incremental ||
+            selected.includes(message) ||
+            (pinIds.has(message.id) && !cursor?.pinnedParentMessageFingerprints?.[message.id]))
+      )
+      .map((message) => message.id),
+    truncated: [pinned.truncated, recent.truncated].filter((id): id is string => !!id),
+    attachments: messages.flatMap(parentMessageAttachments),
+    validPins,
+    incremental,
+  }
+}
 
 export interface AsideContextDelivery {
   context: string
@@ -143,29 +276,23 @@ export interface AsideContextDelivery {
 /** Resolve against a send-time snapshot; never subscribe to parent streaming tokens. */
 export function prepareAsideContext(
   messages: readonly UIMessage[],
-  options: {
-    cursor?: ChatSession["asideContextCursor"]
-    resumeSdkSessionId?: string
-    inProgressMessageId?: string
-  } = {}
+  options: AsideInheritanceOptions = {}
 ): AsideContextDelivery {
-  const { cursor, resumeSdkSessionId, inProgressMessageId } = options
+  const { cursor, inProgressMessageId, parentClearedAt } = options
+  const needsEmptySnapshot = Boolean(cursor || parentClearedAt !== undefined)
+  const delivery = summarizeAsideInheritance(messages, options)
+  const { incremental } = delivery
   const cursorIndex = cursor
     ? messages.findIndex((message) => message.id === cursor.parentMessageId)
     : -1
-  const incremental = Boolean(
-    cursor &&
-    resumeSdkSessionId === cursor.sdkSessionId &&
-    (cursorIndex >= 0 || cursor.parentMessageId === null) &&
-    contentFingerprint(buildAsideContext(messages.slice(0, cursorIndex + 1))) ===
-      cursor.tailFingerprint
-  )
   const selected = incremental ? messages.slice(cursorIndex + 1) : messages
-  const rendered = buildAsideContext(selected)
-  const progress = selected.find((message) => message.id === inProgressMessageId)
+  const rendered = delivery.context
+  const progress = messages.find(
+    (message) => message.id === inProgressMessageId && delivery.included.includes(message.id)
+  )
   const context = rendered
     ? `${rendered}${progress ? "\n[Last assistant message is still in progress.]" : ""}`
-    : !incremental && cursor
+    : !incremental && needsEmptySnapshot
       ? "[The main conversation currently has no visible messages.]"
       : ""
   // Only completed, quotable content can be acknowledged. If the streaming
@@ -176,27 +303,49 @@ export function prepareAsideContext(
   const completed = progressIndex < 0 ? selected : selected.slice(0, progressIndex)
   const lastCompleted = [...completed]
     .reverse()
-    .find(
-      (message) =>
-        message.id !== inProgressMessageId &&
-        renderAsideMessage(message) &&
-        rendered.includes(renderAsideMessage(message).slice(-ASIDE_CONTEXT_MAX_CHARS))
-    )
+    .find((message) => message.id !== inProgressMessageId && delivery.included.includes(message.id))
   const lastIndex = lastCompleted ? messages.findIndex((m) => m.id === lastCompleted.id) : -1
+  const pinFingerprints = Object.fromEntries(
+    delivery.validPins.flatMap((id) => {
+      const message = messages.find((row) => row.id === id)!
+      const parentProgressIndex = messages.findIndex((row) => row.id === inProgressMessageId)
+      const beforeProgress =
+        parentProgressIndex < 0 || messages.findIndex((row) => row.id === id) < parentProgressIndex
+      const fingerprint =
+        delivery.pinnedIncluded.includes(id) && beforeProgress
+          ? contentFingerprint(renderAsideMessage(message))
+          : incremental
+            ? cursor?.pinnedParentMessageFingerprints?.[id]
+            : undefined
+      return fingerprint ? [[id, fingerprint]] : []
+    })
+  )
+  const pinCursor = Object.keys(pinFingerprints).length
+    ? { pinnedParentMessageFingerprints: pinFingerprints }
+    : {}
   return {
     context,
     header: incremental ? ASIDE_DELTA_HEADER : ASIDE_REFERENCE_HEADER,
     ...(lastCompleted
       ? {
           cursor: {
+            ...pinCursor,
             parentMessageId: lastCompleted.id,
             tailFingerprint: contentFingerprint(
               buildAsideContext(messages.slice(0, lastIndex + 1))
             ),
           },
         }
-      : !incremental && messages.length === 0 && cursor
-        ? { cursor: { parentMessageId: null, tailFingerprint: contentFingerprint("") } }
-        : {}),
+      : incremental && delivery.pinnedIncluded.length && cursor
+        ? {
+            cursor: {
+              parentMessageId: cursor.parentMessageId,
+              tailFingerprint: cursor.tailFingerprint,
+              ...pinCursor,
+            },
+          }
+        : !incremental && messages.length === 0 && needsEmptySnapshot
+          ? { cursor: { parentMessageId: null, tailFingerprint: contentFingerprint("") } }
+          : {}),
   }
 }

@@ -50,13 +50,9 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : ""
 }
 
-/**
- * Walk a `UIMessage.parts` array and produce a single plain-text string.
- * Unknown part types are skipped (forward-compatible). The result is
- * whitespace-collapsed and trimmed — callers apply the length cap.
- */
-export function extractPlainText(parts: unknown): string {
-  if (!Array.isArray(parts)) return ""
+/** Share per-part handling while leaving each projection in charge of whitespace. */
+function projectParts(parts: unknown, includeFiles = false): string[] {
+  if (!Array.isArray(parts)) return []
   const buf: string[] = []
   for (const raw of parts as AnyPart[]) {
     if (!isObject(raw)) continue
@@ -76,7 +72,21 @@ export function extractPlainText(parts: unknown): string {
     } else if (type === "a2ui") {
       const mirror = asString(part.plainTextMirror) || asString(part.text)
       if (mirror) buf.push(mirror)
+    } else if (type === "file" && includeFiles) {
+      const filename = asString(part.filename).replace(/\s+/g, " ").trim() || "unnamed"
+      const mediaType = asString(part.mediaType).replace(/\s+/g, " ").trim() || "unknown"
+      buf.push(`[attached file: ${filename} (${mediaType})]`)
     }
   }
-  return buf.join(" ").replace(/\s+/g, " ").trim()
+  return buf
+}
+
+/** Inbox/search projection: collapse whitespace and trim; callers apply the length cap. */
+export function extractPlainText(parts: unknown): string {
+  return projectParts(parts).join(" ").replace(/\s+/g, " ").trim()
+}
+
+/** Model context preserves layout, omits reasoning, and names files without their payloads. */
+export function extractContextText(parts: unknown): string {
+  return projectParts(parts, true).join("\n").replace(/\r\n/g, "\n").trimEnd()
 }

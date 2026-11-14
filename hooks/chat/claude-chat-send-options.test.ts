@@ -1,4 +1,5 @@
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import type { SendOptions } from "@cognia/agent-config-types"
 import {
   buildAiSdkInitialConversation,
   buildSendOptions,
@@ -313,6 +314,152 @@ describe("prepareTranscriptRuntimeSend", () => {
     expect(result.resumeSessionId).toBeUndefined()
     expect(result.appendSystemPrompt).not.toContain("Ignore all previous instructions")
     expect(result.appendSystemPrompt).toContain("withheld")
+  })
+
+  it.each([true, false])(
+    "replaces native retained history only when requested (replacesHistory=%s)",
+    async (replacesHistory) => {
+      jest.mocked(listMessages).mockResolvedValue([
+        { id: "prior", role: "user", parts: [{ type: "text", text: "Contact jane@example.com" }] },
+        { id: "question", role: "user", parts: [{ type: "text", text: "Explain the report" }] },
+        { id: "answer", role: "assistant", parts: [{ type: "text", text: "Replaced answer" }] },
+      ])
+      jest.mocked(getSession).mockResolvedValueOnce({
+        id: "s1",
+        sdkSessionId: "sdk",
+        runtimeTranscriptGeneration: "g1",
+      } as never)
+      if (replacesHistory) {
+        jest.mocked(getSession).mockResolvedValue({
+          id: "s1",
+          runtimeTranscriptInvalidated: "g2",
+          runtimeTranscriptGeneration: "g2",
+        } as never)
+      }
+      const result = await prepareTranscriptRuntimeSend(
+        "s1",
+        {
+          provider: "anthropic",
+          resumeSessionId: "sdk",
+          contentSafety: { injectionProtection: false },
+        },
+        { currentMessageId: "question", replacesHistory }
+      )
+      if (replacesHistory) {
+        expect(invalidateTranscriptRuntime).toHaveBeenCalledTimes(1)
+        expect(getSession).toHaveBeenCalledTimes(2)
+        expect(result.resumeSessionId).toBeUndefined()
+        expect(result.transcriptInvalidationId).toBe("g2")
+        expect(result.appendSystemPrompt).toContain("Contact")
+        expect(result.appendSystemPrompt).not.toContain("jane@example.com")
+        expect(result.appendSystemPrompt).not.toContain("Explain the report")
+        expect(result.appendSystemPrompt).not.toContain("Replaced answer")
+        expect(updateSession).toHaveBeenCalledWith("s1", {
+          sdkSessionId: undefined,
+          forkedFromSdkSessionId: undefined,
+        })
+      } else {
+        expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
+        expect(result.resumeSessionId).toBe("sdk")
+        expect(result.appendSystemPrompt).toBeUndefined()
+      }
+    }
+  )
+
+  it("reuses an already invalidated generation when rebuilding a native aside", async () => {
+    jest.mocked(getSession).mockResolvedValue({
+      id: "s1",
+      runtimeTranscriptInvalidated: "aside-generation",
+      runtimeTranscriptGeneration: "aside-generation",
+    } as never)
+    jest
+      .mocked(listMessages)
+      .mockResolvedValue([
+        { id: "prior", role: "user", parts: [{ type: "text", text: "Aside history" }] },
+      ])
+    const result = await prepareTranscriptRuntimeSend(
+      "s1",
+      { provider: "anthropic", resumeSessionId: "old-aside" },
+      { currentMessageId: "next", replacesHistory: true }
+    )
+    expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
+    expect(result.resumeSessionId).toBeUndefined()
+    expect(result.appendSystemPrompt).toContain("Aside history")
+    expect(result.transcriptInvalidationId).toBe("aside-generation")
+  })
+
+  it("rebuilds a parent-cleared aside from only its visible transcript without a resume or fork id", async () => {
+    jest.mocked(getSession).mockResolvedValue({
+      id: "s1",
+      kind: "resource-workbench",
+      asideParentClearedAt: 100,
+      runtimeTranscriptInvalidated: "parent-clear-generation",
+      runtimeTranscriptGeneration: "parent-clear-generation",
+      activeBranchByGroup: { answer: "visible-answer" },
+    } as never)
+    jest.mocked(listMessages).mockResolvedValue([
+      { id: "own-question", role: "user", parts: [{ type: "text", text: "My side question" }] },
+      {
+        id: "hidden-answer",
+        role: "assistant",
+        parts: [{ type: "text", text: "Hidden branch" }],
+        metadata: { branchGroupId: "answer" },
+      },
+      {
+        id: "visible-answer",
+        role: "assistant",
+        parts: [{ type: "text", text: "My visible answer" }],
+        metadata: { branchGroupId: "answer" },
+      },
+      { id: "next", role: "user", parts: [{ type: "text", text: "Next question" }] },
+    ])
+    const result = await prepareTranscriptRuntimeSend("s1", {
+      provider: "anthropic",
+      turnId: "next",
+      resumeSessionId: "old-sdk",
+      forkFromSessionId: "old-parent-sdk",
+    })
+    expect(result.resumeSessionId).toBeUndefined()
+    expect(result.forkFromSessionId).toBeUndefined()
+    expect(result.appendSystemPrompt).toContain("My side question")
+    expect(result.appendSystemPrompt).toContain("My visible answer")
+    expect(result.appendSystemPrompt).not.toContain("Hidden branch")
+    expect(result.appendSystemPrompt).not.toContain("Next question")
+    expect(result.transcriptInvalidationId).toBe("parent-clear-generation")
+  })
+
+  it("keeps retained external history and session links when replacement is requested", async () => {
+    jest.mocked(getSession).mockResolvedValue({
+      id: "s1",
+      sdkSessionId: "sdk",
+      runtimeTranscriptGeneration: "g1",
+      externalAgentSession: { agentId: "pi-1", sessionId: "external-session" },
+    } as never)
+    jest.mocked(listMessages).mockResolvedValue([
+      { id: "prior", role: "user", parts: [{ type: "text", text: "Earlier side question" }] },
+      { id: "answer", role: "assistant", parts: [{ type: "text", text: "Earlier side answer" }] },
+      { id: "current", role: "user", parts: [{ type: "text", text: "Follow up" }] },
+    ])
+    jest.mocked(updateSession).mockClear()
+    const result = await prepareTranscriptRuntimeSend(
+      "s1",
+      {
+        provider: "cognia:external-agent:pi-1",
+        execution: { runtimeAdapter: "external" } as SendOptions["execution"],
+        resumeSessionId: "sdk",
+        forkFromSessionId: "parent-link",
+        appendSystemPrompt: "Standing guidance",
+        contentSafety: { injectionProtection: false },
+      },
+      { currentMessageId: "current", replacesHistory: true }
+    )
+    expect(invalidateTranscriptRuntime).not.toHaveBeenCalled()
+    expect(updateSession).not.toHaveBeenCalled()
+    expect(getSession).toHaveBeenCalledTimes(1)
+    expect(result.resumeSessionId).toBe("sdk")
+    expect(result.forkFromSessionId).toBe("parent-link")
+    expect(result.appendSystemPrompt).toBe("Standing guidance")
+    expect(result.transcriptInvalidationId).toBe("g1")
   })
   it.each([true, false])(
     "propagates content safety into invalidated native seed history (%s)",

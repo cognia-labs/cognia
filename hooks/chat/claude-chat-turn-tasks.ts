@@ -243,7 +243,7 @@ export type SendFn = (
     promptPreamble?: import("@/lib/chat/prompt-preamble").PromptPreambleSummary
     citations?: readonly import("@/lib/chat/mentions/types").ContextRef[]
   }
-) => Promise<void>
+) => Promise<boolean | void>
 
 /**
  * Goal ids for which we've already surfaced the "can't build a judge client"
