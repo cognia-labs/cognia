@@ -1083,12 +1083,32 @@ impl WorkspaceStore {
         let baseline = serde_json::to_string(baseline).map_err(|error| error.to_string())?;
         self.connection
             .execute(
+                // `overlapped` is set once and never cleared (ADR-0255): a
+                // writer holding an older copy of the run must not undo a
+                // mark another connection stored meanwhile.
                 "INSERT INTO task_runs(run_id,task_id,payload,baseline) VALUES(?1,?2,?3,?4)
-                 ON CONFLICT(run_id) DO UPDATE SET payload=excluded.payload,baseline=excluded.baseline",
+                 ON CONFLICT(run_id) DO UPDATE SET payload=CASE
+                   WHEN json_extract(task_runs.payload,'$.overlapped')=1
+                   THEN json_set(excluded.payload,'$.overlapped',json('true'))
+                   ELSE excluded.payload END,
+                 baseline=excluded.baseline",
                 params![run.run_id, run.task_id, payload, baseline],
             )
             .map_err(|error| format!("put run: {error}"))?;
         Ok(())
+    }
+
+    /// The stored overlap mark alone, without reading the baseline.
+    pub(crate) fn run_overlapped(&self, run_id: &str) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT COALESCE(json_extract(payload,'$.overlapped'),0)=1 FROM task_runs WHERE run_id=?1",
+                [run_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| format!("read run overlap: {error}"))?
+            .ok_or_else(|| format!("unknown task run: {run_id}"))
     }
 
     pub fn get_run<T: serde::de::DeserializeOwned>(
@@ -3261,7 +3281,11 @@ mod tests {
         assert_eq!(store.mark_overlapping_runs(&real, None).unwrap(), 1);
         assert!(store.list_runs("task").unwrap()[0].overlapped);
         run.state = RunState::Ready;
+        // `run` is the copy read before the mark; storing it keeps the mark.
+        assert!(!run.overlapped);
         store.put_run(&run, &serde_json::json!({})).unwrap();
+        assert!(store.list_runs("task").unwrap()[0].overlapped);
+        assert!(store.run_overlapped("run").unwrap());
         assert!(store
             .active_runs_intersecting(&real, None)
             .unwrap()

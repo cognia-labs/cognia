@@ -281,6 +281,13 @@ impl crate::BundleApplier for ServiceBundleApplier<'_> {
             .unwrap_or(&self.service.execution_dir)
             .join("scratch");
         let now = now_ms();
+        // An Apply or Undo writing into a directory marks the runs active
+        // there overlapped. Hold the admission lock across the write and the
+        // mark so a settling run cannot decide its reversibility in between.
+        let _admission = self
+            .service
+            .lock_run_capture_admission()
+            .map_err(|error| bundle_operation_conflict(step, error))?;
         let mut store = self.service.store.lock();
         let mut patch = store
             .get_patch_set(&step.patch.run_id)
@@ -338,6 +345,13 @@ impl crate::BundleApplier for ServiceBundleApplier<'_> {
             .unwrap_or(&self.service.execution_dir)
             .join("scratch");
         let now = now_ms();
+        // An Apply or Undo writing into a directory marks the runs active
+        // there overlapped. Hold the admission lock across the write and the
+        // mark so a settling run cannot decide its reversibility in between.
+        let _admission = self
+            .service
+            .lock_run_capture_admission()
+            .map_err(|error| bundle_operation_conflict(step, error))?;
         let mut store = self.service.store.lock();
         let mut patch = store
             .get_patch_set(&step.patch.run_id)
@@ -4198,6 +4212,10 @@ impl TaskWorkspaceService {
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("workspace {workspace_id} not found"))?;
         let _scratch_lock = self.lock_scratch_record(&record)?;
+        // Begin takes this after the scratch lock and before its root fence.
+        // Holding it until the directory is gone keeps a run from starting on
+        // the root, or on an alias inside it, after the check below.
+        let _admission = self.lock_run_capture_admission()?;
         let _cold_acquisition = self.lock_cold_workspace_acquisition(Path::new(&record.execution_root), true)?;
         let locked_root = record.execution_root.clone();
         record = self.registry.get(workspace_id)
@@ -4212,12 +4230,22 @@ impl TaskWorkspaceService {
         )?;
         {
             let store = self.store.lock();
-            for run in store.active_runs_intersecting(Path::new(&record.execution_root), None)? {
+            // Archive removes the directory. Every run still using it, a
+            // borrowed lease included, keeps it until it settles; one whose
+            // stop is unproven keeps it until that stop is confirmed.
+            let users = store.active_runs_intersecting(Path::new(&record.execution_root), None)?;
+            for run in &users {
                 if store.in_app_executor_stop_pending(&run.run_id)? {
                     return Err(
                         "cannot archive a workspace while an executor stop is unproven".into(),
                     );
                 }
+            }
+            if !users.is_empty() {
+                return Err(
+                    "cannot archive a workspace while a turn is active; retry after it settles"
+                        .into(),
+                );
             }
         }
         if _scratch_lock.is_some() {
@@ -4800,6 +4828,17 @@ impl TaskWorkspaceService {
         if run.isolation_kind == IsolationKind::Observed {
             ledger::mark_observed_applied(&mut patch, task.revision, &baseline);
         }
+        // Another service may mark this run overlapped while it captured
+        // (ADR-0255). Every mark is published under the admission lock, and
+        // this run stays active until it is stored Ready below, so deciding
+        // from a fresh read under that lock sees every mark that can matter:
+        // a run that begins after the lock is released finds this one Ready
+        // and writes only after its capture. Begin takes the lock before the
+        // store, so the store is released first.
+        drop(store);
+        let admission = self.lock_run_capture_admission()?;
+        let mut store = self.store.lock();
+        run.overlapped |= store.run_overlapped(run_id)?;
         if run.overlapped {
             // Its diff may hold another run's writes; Undo would remove them.
             patch.mark_irreversible(crate::IrreversibleReason::Overlap);
@@ -4866,6 +4905,7 @@ impl TaskWorkspaceService {
         };
         store.put_task(&task)?;
         drop(store);
+        drop(admission);
         self.archive_run_workspace(&run, now)?;
         self.run_capture_owners.lock().remove(&run.run_id);
         Ok(changes)
@@ -5337,6 +5377,10 @@ impl TaskWorkspaceService {
                 .collect::<Result<Vec<_>, _>>()?;
             roots.sort();
             roots.dedup();
+            // Begin holds this before its root fence, so take it first: no
+            // run can start on one of these roots between the check below
+            // and the removal.
+            let _admission = self.lock_run_capture_admission()?;
             let mut acquisitions = Vec::new();
             let mut busy = false;
             for root in &roots {
@@ -5357,75 +5401,73 @@ impl TaskWorkspaceService {
                         Err(error) => return Err(error),
                     }
                 }
+                // A directory this task owns may have been lent to another
+                // task's run since. That run keeps it until it settles.
+                for run in runs.iter().filter(|run| run.workspace_id.is_some()) {
+                    let lent = store
+                        .active_runs_intersecting(Path::new(&run.execution_root), None)?
+                        .into_iter()
+                        .any(|user| user.task_id != task.task_id);
+                    if lent {
+                        busy = true;
+                        break;
+                    }
+                }
             }
             if busy { continue; }
             for run in runs {
-                if let Some(workspace_id) = run.workspace_id.as_deref() {
-                    if !removed_workspace_ids.insert(workspace_id.to_string()) {
-                        continue;
-                    }
-                    let record = self
-                        .registry
-                        .get(workspace_id)
-                        .map_err(|error| error.to_string())?
-                        .ok_or_else(|| format!("managed workspace is missing: {workspace_id}"))?;
-                    self.registry
-                        .transition(
-                            workspace_id,
-                            record.owner_type,
-                            record.owner_ref.as_deref(),
-                            WorkspaceState::Removing,
-                            now,
-                        )
-                        .map_err(|error| error.to_string())?;
-                    unlock_git_worktree(
-                        Path::new(&task.workspace_root),
-                        Path::new(&run.execution_root),
-                        run.isolation_kind,
-                    );
-                    cleanup_execution(
-                        Path::new(&task.workspace_root),
-                        Path::new(&run.execution_root),
-                        run.isolation_kind,
-                        run.isolation_ref.as_deref(),
-                    );
-                    if Path::new(&run.execution_root).exists() {
-                        return Err(format!(
-                            "managed workspace removal did not remove execution root: {}",
-                            run.execution_root
-                        ));
-                    }
-                    let reason = crate::registry::compose_lock_reason(workspace_id);
-                    self.registry
-                        .remove_workspace(workspace_id, &reason)
-                        .map_err(|error| error.to_string())?;
-                    self.lifecycle.emit(
-                        crate::lifecycle::WorktreeLifecycleKind::Removed,
-                        &record,
-                        None,
-                        Some("prune"),
-                    );
+                // Without a workspace id the run borrowed its directory: an
+                // observed Local root, or a managed workspace or bundle lease
+                // that its registry record owns. Expiring this task's history
+                // grants no right to delete it; the workspace's own lifecycle
+                // (archive, maintenance) does that.
+                let Some(workspace_id) = run.workspace_id.as_deref() else {
+                    continue;
+                };
+                if !removed_workspace_ids.insert(workspace_id.to_string()) {
                     continue;
                 }
-                let execution_root = Path::new(&run.execution_root);
-                match run.isolation_kind {
-                    IsolationKind::Observed => {},
-                    IsolationKind::GitWorktree => cleanup_git_worktree(
-                        Path::new(&task.workspace_root),
-                        execution_root,
-                        run.isolation_ref.as_deref().unwrap_or_default(),
-                    ),
-                    IsolationKind::Shadow => {
-                        if execution_root.exists() {
-                            fs::remove_dir_all(execution_root).map_err(|error| {
-                                format!(
-                                    "remove execution root {}: {error}",
-                                    execution_root.display()
-                                )
-                            })?;
-                        }
-                    }
+                let record = self
+                    .registry
+                    .get(workspace_id)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("managed workspace is missing: {workspace_id}"))?;
+                self.registry
+                    .transition(
+                        workspace_id,
+                        record.owner_type,
+                        record.owner_ref.as_deref(),
+                        WorkspaceState::Removing,
+                        now,
+                    )
+                    .map_err(|error| error.to_string())?;
+                unlock_git_worktree(
+                    Path::new(&task.workspace_root),
+                    Path::new(&run.execution_root),
+                    run.isolation_kind,
+                );
+                cleanup_execution(
+                    Path::new(&task.workspace_root),
+                    Path::new(&run.execution_root),
+                    run.isolation_kind,
+                    run.isolation_ref.as_deref(),
+                );
+                if Path::new(&run.execution_root).exists() {
+                    return Err(format!(
+                        "managed workspace removal did not remove execution root: {}",
+                        run.execution_root
+                    ));
                 }
+                let reason = crate::registry::compose_lock_reason(workspace_id);
+                self.registry
+                    .remove_workspace(workspace_id, &reason)
+                    .map_err(|error| error.to_string())?;
+                self.lifecycle.emit(
+                    crate::lifecycle::WorktreeLifecycleKind::Removed,
+                    &record,
+                    None,
+                    Some("prune"),
+                );
             }
             self.store.lock().delete_task(&task.task_id)?;
             removed_task_ids.push(task.task_id);
@@ -5701,6 +5743,10 @@ impl TaskWorkspaceService {
         allow_irreversible: bool,
     ) -> Result<crate::ApplyOutcome, String> {
         let now = now_ms();
+        // An Apply or Undo writing into a directory marks the runs active
+        // there overlapped. Hold the admission lock across the write and the
+        // mark so a settling run cannot decide its reversibility in between.
+        let _admission = self.lock_run_capture_admission()?;
         let mut store = self.store.lock();
         let mut patch = store
             .get_patch_set(run_id)?
@@ -5741,6 +5787,10 @@ impl TaskWorkspaceService {
 
     pub fn undo_patch_set(&self, run_id: &str) -> Result<crate::ApplyOutcome, String> {
         let now = now_ms();
+        // An Apply or Undo writing into a directory marks the runs active
+        // there overlapped. Hold the admission lock across the write and the
+        // mark so a settling run cannot decide its reversibility in between.
+        let _admission = self.lock_run_capture_admission()?;
         let mut store = self.store.lock();
         let mut patch = store
             .get_patch_set(run_id)?
@@ -5795,6 +5845,10 @@ impl TaskWorkspaceService {
             return self.apply_patch_set_with_options(run_id, selection, allow_irreversible);
         }
         let now = now_ms();
+        // An Apply or Undo writing into a directory marks the runs active
+        // there overlapped. Hold the admission lock across the write and the
+        // mark so a settling run cannot decide its reversibility in between.
+        let _admission = self.lock_run_capture_admission()?;
         let mut store = self.store.lock();
         let mut patch = store
             .get_patch_set(run_id)?
@@ -15318,6 +15372,126 @@ mod tests {
             WorkspaceState::Active
         );
         assert!(Path::new(&lease.alias_path).is_dir());
+    }
+
+    fn notes_bundle(service: &TaskWorkspaceService, source: &Path) -> crate::WorkspaceBundle {
+        service
+            .acquire_workspace_bundle(crate::AcquireWorkspaceBundle {
+                requested_name: None,
+                provisioning: None,
+                project_id: None,
+                owner_type: WorkspaceOwnerType::Session,
+                owner_ref: Some("session-1".into()),
+                environment_kind: crate::WorkspaceEnvironmentKind::Managed,
+                base: WorkspaceBaseSpec::WorkingState,
+                roots: vec![crate::WorkspaceBundleRootInput {
+                    logical_root_id: "notes".into(),
+                    role: crate::WorkspaceRootRole::Primary,
+                    source_root: source.to_string_lossy().into_owned(),
+                    provisioning: None,
+                }],
+                provisioning_source: None,
+            })
+            .unwrap()
+    }
+
+    fn expire(service: &TaskWorkspaceService, task_id: &str) {
+        let mut task = service.get_task(task_id).unwrap().unwrap();
+        task.expires_at = 0;
+        service.store.lock().put_task(&task).unwrap();
+    }
+
+    #[test]
+    fn prune_leaves_a_borrowed_bundle_directory_to_its_workspace() {
+        // Postfix review P01: an expired task that borrowed a bundle root
+        // deleted it while the bundle stayed Active and another task wrote there.
+        for peer_still_running in [true, false] {
+            let data = TempDir::new().unwrap();
+            let source = TempDir::new().unwrap();
+            fs::write(source.path().join("notes.txt"), "before\n").unwrap();
+            let service =
+                TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+            let bundle = notes_bundle(&service, source.path());
+            let lease = &bundle.leases[0];
+            let finished = service
+                .begin_bundle_run(&bundle.bundle_id, "notes", input(&source, "task-a", "run-a"))
+                .unwrap();
+            service.settle_run(&finished.run_id).unwrap();
+            service.apply_patch_set(&finished.run_id, &[]).unwrap();
+            expire(&service, &finished.task_id);
+            let peer = service
+                .begin_bundle_run(&bundle.bundle_id, "notes", input(&source, "task-b", "run-b"))
+                .unwrap();
+            fs::write(Path::new(&peer.execution_root).join("peer.txt"), "peer\n").unwrap();
+            if !peer_still_running {
+                service.settle_run(&peer.run_id).unwrap();
+            }
+
+            let pruned = service.prune().unwrap();
+
+            assert_eq!(pruned.removed_task_ids, vec![finished.task_id.clone()]);
+            assert!(Path::new(&lease.alias_path).is_dir());
+            assert!(Path::new(&peer.execution_root).join("peer.txt").is_file());
+            let record = service.registry.get(&lease.workspace_id).unwrap().unwrap();
+            assert_eq!(record.state, WorkspaceState::Active);
+            if peer_still_running {
+                let changes = service.settle_run(&peer.run_id).unwrap();
+                assert!(changes.iter().any(|change| change.path == "peer.txt"));
+            }
+        }
+    }
+
+    #[test]
+    fn prune_keeps_an_owned_workspace_another_task_is_using() {
+        let data = TempDir::new().unwrap();
+        let source = TempDir::new().unwrap();
+        fs::write(source.path().join("notes.txt"), "before\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let owned = service.begin_run(input(&source, "task-owner", "run-owner")).unwrap();
+        assert!(owned.workspace_id.is_some());
+        service.settle_run(&owned.run_id).unwrap();
+        service.apply_patch_set(&owned.run_id, &[]).unwrap();
+        expire(&service, &owned.task_id);
+        let mut visitor = input(&source, "task-visitor", "run-visitor");
+        visitor.workspace_root = owned.execution_root.clone();
+        visitor.observe_in_place = true;
+        let visitor = service.begin_run(visitor).unwrap();
+
+        assert!(service.prune().unwrap().removed_task_ids.is_empty());
+        assert!(Path::new(&owned.execution_root).is_dir());
+
+        service.settle_run(&visitor.run_id).unwrap();
+        let pruned = service.prune().unwrap();
+        assert_eq!(pruned.removed_task_ids, vec![owned.task_id.clone()]);
+        assert!(!Path::new(&owned.execution_root).exists());
+    }
+
+    #[test]
+    fn archive_refuses_a_plain_borrowed_run_until_it_settles() {
+        // Postfix review P03: only a pending in-app stop blocked archive, so a
+        // run begun without a stop requirement lost its directory.
+        let data = TempDir::new().unwrap();
+        let source = TempDir::new().unwrap();
+        fs::write(source.path().join("notes.txt"), "before\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let bundle = notes_bundle(&service, source.path());
+        let lease = &bundle.leases[0];
+        let run = service
+            .begin_bundle_run(&bundle.bundle_id, "notes", input(&source, "task-active", "run-active"))
+            .unwrap();
+        fs::write(Path::new(&run.execution_root).join("active.txt"), "active\n").unwrap();
+
+        let error = service.archive_managed_workspace(&lease.workspace_id).unwrap_err();
+
+        assert!(error.contains("while a turn is active"), "{error}");
+        assert!(Path::new(&run.execution_root).join("active.txt").is_file());
+        assert_eq!(
+            service.registry.get(&lease.workspace_id).unwrap().unwrap().state,
+            WorkspaceState::Active
+        );
+        service.settle_run(&run.run_id).unwrap();
+        service.archive_managed_workspace(&lease.workspace_id).unwrap();
+        assert!(!Path::new(&lease.alias_path).exists());
     }
 
     #[test]
