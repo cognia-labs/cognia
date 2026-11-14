@@ -1220,9 +1220,10 @@ impl WorkspaceStore {
                 // Managed data directories may themselves be symlinked. Use
                 // the same physical identity as capture admission, including
                 // roots whose last components have not been created yet.
-                let execution_root =
-                    crate::sandbox_snapshot::canonical_lock_root(Path::new(&run.execution_root))?;
-                if execution_root.starts_with(&root) || root.starts_with(&execution_root) {
+                if crate::sandbox_snapshot::intersects_lock_root(
+                    &root,
+                    Path::new(&run.execution_root),
+                )? {
                     found.push(run);
                 }
             }

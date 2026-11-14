@@ -180,23 +180,29 @@ fn write_record(connection: &Connection, record: &SandboxSnapshotRecord) -> Resu
     Ok(())
 }
 
+/// Whether `other` and `root` name intersecting trees (one inside the other)
+/// by physical identity. `root` is already a [`canonical_lock_root`]; `other`
+/// is resolved here, so a root stored through a symlink or a not-yet-created
+/// suffix compares as the directory it names.
+pub(crate) fn intersects_lock_root(root: &Path, other: &Path) -> Result<bool, String> {
+    let other = canonical_lock_root(other)?;
+    Ok(other.starts_with(root) || root.starts_with(&other))
+}
+
 /// Checked while holding the same store lock as task acquisition.
 pub(crate) fn reject_snapshot_reservation(
     connection: &Connection,
     root: &Path,
     task_id: &str,
 ) -> Result<(), String> {
+    let root = canonical_lock_root(root)?;
     let mut statement=connection.prepare("SELECT workspace_root,json_extract(payload,'$.taskId') FROM sandbox_snapshots WHERE phase IN ('preparing','workspaceCaptured','imageCommitted')").map_err(|e|e.to_string())?;
     let rows = statement
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         .map_err(|e| e.to_string())?;
     for row in rows {
         let (reserved_root, reserved_task) = row.map_err(|e| e.to_string())?;
-        let reserved_root = Path::new(&reserved_root);
-        if reserved_task == task_id
-            || root.starts_with(reserved_root)
-            || reserved_root.starts_with(root)
-        {
+        if reserved_task == task_id || intersects_lock_root(&root, Path::new(&reserved_root))? {
             return Err("snapshot_busy: workspace has a cold snapshot operation".into());
         }
     }
@@ -205,10 +211,8 @@ pub(crate) fn reject_snapshot_reservation(
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?
     {
-        let pending_root =
-            canonical_lock_root(Path::new(&pending_root.map_err(|e| e.to_string())?))?;
-        let root = canonical_lock_root(root)?;
-        if root.starts_with(&pending_root) || pending_root.starts_with(&root) {
+        let pending_root = pending_root.map_err(|e| e.to_string())?;
+        if intersects_lock_root(&root, Path::new(&pending_root))? {
             return Err("snapshot_busy: workspace runtime creation is pending".into());
         }
     }
@@ -2360,6 +2364,26 @@ mod tests {
         )
         .unwrap_err()
         .contains("snapshot_busy"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sandbox_snapshot_reservation_refuses_a_root_named_through_an_alias() {
+        let (data, root, service, request) = fixture();
+        service.begin_sandbox_snapshot(&request).unwrap();
+        // A caller holding a stored, uncanonical root (a symlinked data
+        // directory) reaches the same reservation as the physical path.
+        let alias = data.path().join("root-alias");
+        std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+        for candidate in [alias.clone(), alias.join("not-created-yet")] {
+            assert!(reject_snapshot_reservation(
+                &service.store.lock().connection,
+                &candidate,
+                "new-task"
+            )
+            .unwrap_err()
+            .contains("snapshot_busy"));
+        }
     }
 
     #[test]

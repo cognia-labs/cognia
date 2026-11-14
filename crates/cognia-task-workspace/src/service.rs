@@ -1648,25 +1648,20 @@ impl TaskWorkspaceService {
         // Runs that merely share a directory are admitted and marked
         // overlapped instead (ADR-0255).
         //
-        // Both roots are compared by physical identity, as
-        // `active_runs_intersecting` does: a run stored through a symlinked
-        // data directory or another alias must not slip past this refusal
-        // (postfix review P09).
-        let root = crate::sandbox_snapshot::canonical_lock_root(root)?;
-        let store = self.store.lock();
-        for task in store.list_tasks()? {
-            for run in store.list_runs(&task.task_id)? {
-                if !run.executor_stop_unconfirmed
-                    || !matches!(run.state, RunState::Running | RunState::Settling)
-                {
-                    continue;
-                }
-                let execution_root =
-                    crate::sandbox_snapshot::canonical_lock_root(Path::new(&run.execution_root))?;
-                if execution_root.starts_with(&root) || root.starts_with(&execution_root) {
-                    return Err(UNCONFIRMED_EXECUTOR_OVERLAP.into());
-                }
-            }
+        // The intersection is `active_runs_intersecting`'s, by physical
+        // identity: a run stored through a symlinked data directory or
+        // another alias must not slip past this refusal (postfix review P09).
+        let quarantined = self
+            .store
+            .lock()
+            .active_runs_intersecting(root, None)?
+            .into_iter()
+            .any(|run| {
+                run.executor_stop_unconfirmed
+                    && matches!(run.state, RunState::Running | RunState::Settling)
+            });
+        if quarantined {
+            return Err(UNCONFIRMED_EXECUTOR_OVERLAP.into());
         }
         Ok(())
     }
