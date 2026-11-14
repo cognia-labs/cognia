@@ -1,5 +1,6 @@
 import { PERSONAL_EGRESS_DENIAL } from "@cognia/agent-contracts/personal-egress"
 import { BUILTIN_TOOL_NAMES, type Options } from "@anthropic-ai/claude-agent-sdk"
+import { FenceDeniedError, type WorkerToolAdmission } from "../policy/fence/admission.ts"
 import { personalToolDenied } from "../policy/personal-egress.ts"
 import {
   errorMessage,
@@ -50,6 +51,12 @@ export interface NativeHookOptions {
   redact?: (value: string) => string
   piiGate?: (value: unknown) => boolean
   personalEgressFenced?: () => boolean
+  /**
+   * The session's worker-dispatch admission (ADR-0244 WP2b). A model-backed
+   * hook runs its own query whose tools never reach the outer PreToolUse, so
+   * each nested tool passes admission here.
+   */
+  workerToolAdmission?: WorkerToolAdmission
 }
 type Redact = (value: string) => string
 type PiiGate = (value: unknown) => boolean
@@ -190,6 +197,7 @@ export function createNativeHookExecutor({
   redact = (value) => redactText(value).redacted,
   piiGate = hasNoLeakingPiiDeep,
   personalEgressFenced = () => false,
+  workerToolAdmission,
 }: NativeHookOptions = {}) {
   return async function executeNativeHook(
     handler: HookHandler,
@@ -198,6 +206,14 @@ export function createNativeHookExecutor({
   ): Promise<HookOutcome> {
     if (personalEgressFenced() && handler.type === "mcp_tool")
       return fencedHookOutcome(context.eventName, handler.type)
+    if (workerToolAdmission) {
+      try {
+        workerToolAdmission.assertOpen()
+      } catch (error) {
+        if (!(error instanceof FenceDeniedError)) throw error
+        return { block: error.message }
+      }
+    }
     if ((context.depth ?? 0) >= 1) {
       return { warning: "hook recursion depth exceeded (maximum 1)" }
     }
@@ -237,20 +253,47 @@ export function createNativeHookExecutor({
             PreToolUse: [
               {
                 hooks: [
-                  async (input) =>
-                    personalToolDenied(
-                      "tool_name" in input ? input.tool_name : "",
-                      { personalEgressFenced: personalEgressFenced() },
-                      BUILTIN_TOOL_NAMES
+                  async (input) => {
+                    const toolName = "tool_name" in input ? input.tool_name : ""
+                    if (
+                      personalToolDenied(
+                        toolName,
+                        { personalEgressFenced: personalEgressFenced() },
+                        BUILTIN_TOOL_NAMES
+                      )
                     )
-                      ? {
-                          hookSpecificOutput: {
-                            hookEventName: "PreToolUse",
-                            permissionDecision: "deny",
-                            permissionDecisionReason: PERSONAL_EGRESS_DENIAL,
-                          },
-                        }
-                      : {},
+                      return {
+                        hookSpecificOutput: {
+                          hookEventName: "PreToolUse",
+                          permissionDecision: "deny",
+                          permissionDecisionReason: PERSONAL_EGRESS_DENIAL,
+                        },
+                      }
+                    if (!workerToolAdmission) return {}
+                    try {
+                      // The nested query has no approval callback, so this
+                      // hook is the last check before its tool executes.
+                      await workerToolAdmission.admit(
+                        toolName,
+                        "tool_use_id" in input && typeof input.tool_use_id === "string"
+                          ? input.tool_use_id
+                          : undefined
+                      )
+                      workerToolAdmission.assertAllowed()
+                      return {}
+                    } catch (error) {
+                      if (!(error instanceof FenceDeniedError)) throw error
+                      return {
+                        continue: false,
+                        stopReason: error.code,
+                        hookSpecificOutput: {
+                          hookEventName: "PreToolUse",
+                          permissionDecision: "deny",
+                          permissionDecisionReason: error.message,
+                        },
+                      }
+                    }
+                  },
                 ],
               },
             ],

@@ -14,6 +14,7 @@ import { createDoomLoopGuard } from "../doom-loop.ts"
 import type { PendingApproval } from "./approval.ts"
 import { createAnthropicCanUseTool } from "./sdk-can-use-tool.ts"
 import type { PermissionSendOptions } from "./ladder.ts"
+import { createWorkerToolAdmission, type WorkerToolAdmission } from "../fence/admission.ts"
 
 function mkRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cognia-canusetool-"))
@@ -24,9 +25,11 @@ function mkGate(
   {
     emit = () => {},
     pendingApprovals = new Map(),
+    workerToolAdmission,
   }: {
     emit?: (frame: Record<string, unknown>) => void
     pendingApprovals?: Map<string, PendingApproval>
+    workerToolAdmission?: WorkerToolAdmission
   } = {}
 ) {
   return createAnthropicCanUseTool({
@@ -37,6 +40,7 @@ function mkGate(
     pendingApprovals,
     pluginToolNameAliases: new Map(),
     doomGuard: createDoomLoopGuard(),
+    workerToolAdmission,
   })
 }
 
@@ -572,4 +576,69 @@ test("H1: only the installed native registry mints Host approval ownership", asy
       name === "Read" ? { engine: "claude-agent-sdk", name: "Read" } : undefined
     )
   }
+})
+
+for (const expired of [false, true]) {
+  test(`Claude re-admits after approval and ${expired ? "local expiry" : "host refusal"} interrupts it`, async () => {
+    let now = 0
+    let allowed = true
+    let calls = 0
+    let interrupted = 0
+    const admission = createWorkerToolAdmission({
+      sessionId: "s1",
+      now: () => now,
+      onDenied() {
+        interrupted++
+      },
+      hostRpc: {
+        async call() {
+          calls++
+          return { allowed, leaseTtlMs: 100 }
+        },
+      },
+    })
+    await admission.admit("Bash", "t") // the earlier PreToolUse grant
+    const pendingApprovals = new Map<string, PendingApproval>()
+    const canUseTool = mkGate({}, { pendingApprovals, workerToolAdmission: admission })
+    const waiting = canUseTool("Bash", { command: "pwd" }, { toolUseID: "t" })
+    assert.equal(pendingApprovals.size, 1)
+    assert.equal(calls, 1, "admission waits until after approval")
+    allowed = false
+    now = expired ? 100 : 10
+    ;[...pendingApprovals.values()][0]!.resolve({ behavior: "allow" })
+    const result = await waiting
+    assert.equal(result.behavior, "deny")
+    assert.equal(result.interrupt, true)
+    assert.equal(interrupted, 1)
+    // A lapsed local deadline still asks Node (a renewal may have landed); the
+    // unrenewed lease is refused there.
+    assert.equal(calls, 2)
+  })
+}
+
+test("an approved profile-hook handoff also rechecks worker authority", async () => {
+  let calls = 0
+  const admission = createWorkerToolAdmission({
+    sessionId: "s",
+    onDenied() {},
+    hostRpc: {
+      async call() {
+        calls++
+        return { allowed: false }
+      },
+    },
+  })
+  const authorize = createAnthropicCanUseTool({
+    sendOptions: {},
+    sessionId: "s",
+    emit() {},
+    log() {},
+    pendingApprovals: new Map(),
+    pluginToolNameAliases: new Map(),
+    doomGuard: createDoomLoopGuard(),
+    profileApprovals: new Set(["approved"]),
+    workerToolAdmission: admission,
+  })
+  assert.equal((await authorize("Bash", {}, { toolUseID: "approved" })).behavior, "deny")
+  assert.equal(calls, 1)
 })

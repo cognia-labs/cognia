@@ -17,6 +17,11 @@ export interface CoreFileToolContext {
   /** Same command-level Bash gate; never a new permission authority. */
   authorizeVerificationCommand?:
     ((input: unknown, signal?: AbortSignal) => Promise<unknown>) | undefined
+  /**
+   * Synchronous last check right before each batch command spawns, after every
+   * await (ADR-0244 WP2b worker admission); a throw refuses the command.
+   */
+  beforeVerificationCommand?: (() => void) | undefined
   /** The session working directory; relative tool paths resolve against it. */
   cwd?: string | undefined
   /** Records reads so write/edit can enforce read-before-write. */

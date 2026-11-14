@@ -9,6 +9,7 @@ import { BUILTIN_TOOL_NAMES } from "@anthropic-ai/claude-agent-sdk"
 // renderer may answer with a rewritten input.
 
 import { randomUUID } from "node:crypto"
+import { FenceDeniedError, type WorkerToolAdmission } from "../fence/admission.ts"
 import { personalToolDenied, personalEgressState } from "../personal-egress.ts"
 import { PERSONAL_EGRESS_DENIAL } from "@cognia/agent-contracts/personal-egress"
 
@@ -230,6 +231,7 @@ export interface AnthropicCanUseToolOptions {
    * the SDK ran without consulting `canUseTool`, and skips the ones here.
    */
   explicitSeen?: Set<string>
+  workerToolAdmission?: WorkerToolAdmission | undefined
 }
 
 /**
@@ -248,6 +250,7 @@ export function createAnthropicCanUseTool({
   doomGuard,
   profileApprovals,
   explicitSeen,
+  workerToolAdmission,
 }: AnthropicCanUseToolOptions): (
   modelToolName: string,
   input: Record<string, unknown>,
@@ -260,7 +263,11 @@ export function createAnthropicCanUseTool({
   const verbose =
     process.env.COGNIA_SIDECAR_VERBOSE === "1" || process.env.COGNIA_SIDECAR_VERBOSE === "true"
 
-  return (modelToolName, input, ctx) => {
+  const authorize = (
+    modelToolName: string,
+    input: Record<string, unknown>,
+    ctx: CanUseToolContext
+  ): Promise<ApprovalAnswer> => {
     if (personalToolDenied(modelToolName, sendOptions, BUILTIN_TOOL_NAMES))
       return Promise.resolve({ behavior: "deny", message: PERSONAL_EGRESS_DENIAL })
     // The profile hook already asked a person about this very call and was
@@ -434,5 +441,21 @@ export function createAnthropicCanUseTool({
         return answer
       },
     })
+  }
+  if (!workerToolAdmission) return authorize
+  return async (name, input, ctx) => {
+    const answer = await authorize(name, input, ctx)
+    if (answer.behavior !== "allow") return answer
+    try {
+      // SDK 0.3.305 / CLI 2.1.305 runs PreToolUse before its permission
+      // pipeline. Every allow (including a profile-hook approval handoff)
+      // therefore needs fresh admission after any human wait.
+      await workerToolAdmission.admit(name, ctx.toolUseID)
+      workerToolAdmission.assertAllowed()
+      return answer
+    } catch (error) {
+      if (!(error instanceof FenceDeniedError)) throw error
+      return { behavior: "deny", message: error.message, interrupt: true }
+    }
   }
 }

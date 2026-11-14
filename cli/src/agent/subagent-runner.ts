@@ -99,6 +99,11 @@ export interface RunCliSubagentDeps {
    * advertises `dispatch_agent` to the child and registers its dispatch
    * context for the duration of the run. Omitted ⇒ the child is a leaf. */
   nesting?: CliSubagentNesting
+  /**
+   * The fenced root session whose admission authority every tool of this child
+   * must pass (ADR-0244 WP2b). Absent outside worker dispatch.
+   */
+  workerToolAdmissionSessionId?: string
   // ── Injected seams (tests) ──────────────────────────────────────────────────
   /** The merged lifecycle-hook config to hand the child turn. */
   resolveHooks?: () => SendOptions["hooks"]
@@ -262,6 +267,12 @@ export async function runCliSubagent(
       (tool) => tool.name !== DISPATCH_AGENT_TOOL_NAME && tool.name !== TASK_TOOL_NAME
     )
     if (!sendOptions.pluginTools?.length) delete sendOptions.pluginTools
+    if (deps.workerToolAdmissionSessionId) {
+      // A child of a fenced worker turn runs on the same sidecar, whose
+      // admission handler answers for the root session only.
+      sendOptions.workerToolAdmission = true
+      sendOptions.workerToolAdmissionSessionId = deps.workerToolAdmissionSessionId
+    }
     const turnId = `${childSessionId}:t0`
     const attemptId = `${turnId}:a0`
     sendOptions.turnId = turnId

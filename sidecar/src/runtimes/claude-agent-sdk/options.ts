@@ -39,6 +39,7 @@ import {
   intersectTrustedWorkspaceRoots,
 } from "./sdk-options.ts"
 import { sessionStoreFromSendOptions } from "./session-store.ts"
+import { createWorkerToolAdmission, FenceDeniedError } from "../../policy/fence/admission.ts"
 
 export function buildAnthropicOptions({
   sendOptions,
@@ -55,8 +56,17 @@ export function buildAnthropicOptions({
   doomGuard,
   interruptForLedger,
   surface,
-}: OptionsContext) {
+  onFenceDenied,
+}: OptionsContext & { onFenceDenied?: (error: FenceDeniedError) => void }) {
   personalEgressState(sendOptions)
+  const workerAdmission =
+    sendOptions.workerToolAdmission === true
+      ? createWorkerToolAdmission({
+          sessionId: sendOptions.workerToolAdmissionSessionId ?? sessionId,
+          hostRpc,
+          onDenied: (error) => onFenceDenied?.(error),
+        })
+      : undefined
   const {
     mergedMcpServers,
     pluginToolNameAliases,
@@ -132,6 +142,7 @@ export function buildAnthropicOptions({
     mcpServers: mergedMcpServers,
     allowedTools: modelAllowedTools,
     maxBudgetUsd: sdkMaxBudgetUsd,
+    ...(workerAdmission ? { workerToolAdmission: workerAdmission } : {}),
   })
 
   // Allowlist construction — only fields listed below reach the SDK. This is
@@ -157,6 +168,7 @@ export function buildAnthropicOptions({
     doomGuard,
     profileApprovals,
     explicitSeen,
+    workerToolAdmission: workerAdmission,
   })
   surface.setNestedToolAuthorizer(async (name, input, extra, validateInput) => {
     const { server, bare } = splitToolName(name)
@@ -364,6 +376,15 @@ export function buildAnthropicOptions({
     if (flush) options.sessionStoreFlush = flush
   }
 
+  // A delegated approval is answered by the permission-prompt tool's MCP relay,
+  // a separate process the sidecar never sees between the approval and the
+  // tool's execution, so admission cannot run after that wait (ADR-0244 I3).
+  // A fenced worker-dispatch turn refuses the combination instead of running
+  // tools on an approval that may have outlived its lease.
+  if (workerAdmission && options.permissionPromptToolName)
+    throw new Error(
+      "Worker-dispatch turns cannot use a delegated permission prompt tool: tool admission must run after the approval wait"
+    )
   options = enforceAnthropicPermissionChannel(
     options as unknown as DelegatingSdkOptions,
     sendOptions,
@@ -462,6 +483,7 @@ export function buildAnthropicOptions({
     options.canUseTool = async (name, input, context) => {
       try {
         const answer = await authorize(name, input, context)
+        if (answer?.behavior === "allow") workerAdmission?.assertAllowed()
         if (answer?.behavior === "deny") {
           inFlight.get(context.toolUseID)?.()
           inFlight.delete(context.toolUseID)
@@ -471,9 +493,60 @@ export function buildAnthropicOptions({
       } catch (error) {
         inFlight.get(context.toolUseID)?.()
         inFlight.delete(context.toolUseID)
+        if (error instanceof FenceDeniedError)
+          return { behavior: "deny" as const, message: error.message, interrupt: true }
         throw error
       }
     }
+
+  if (workerAdmission) {
+    const admit: HookCallback = async (input, toolUseId) => {
+      try {
+        await workerAdmission.admit("tool_name" in input ? input.tool_name : "", toolUseId)
+        workerAdmission.assertAllowed()
+        return {}
+      } catch (error) {
+        if (!(error instanceof FenceDeniedError)) throw error
+        const id = toolUseId ?? ("tool_use_id" in input ? String(input.tool_use_id) : "")
+        inFlight.get(id)?.()
+        inFlight.delete(id)
+        return {
+          continue: false,
+          stopReason: error.code,
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: error.message,
+          },
+        }
+      }
+    }
+    // Outside all overlays/matchers/modes. Existing callbacks also end with
+    // admission, so an allow or a slow approval in another hook cannot bypass
+    // the fence. Keep the original hook's result only while authority is live.
+    options.hooks = {
+      ...options.hooks,
+      PreToolUse: [
+        ...(options.hooks?.PreToolUse ?? []).map((entry) => ({
+          ...entry,
+          hooks: entry.hooks.map((hook): HookCallback => async (...args) => {
+            const result = await hook(...args)
+            const admission = await admit(...args)
+            if (!("continue" in admission && admission.continue === false)) {
+              try {
+                workerAdmission.assertAllowed()
+              } catch (error) {
+                if (!(error instanceof FenceDeniedError)) throw error
+                return admit(...args)
+              }
+            }
+            return "continue" in admission && admission.continue === false ? admission : result
+          }),
+        })),
+        { hooks: [admit] },
+      ],
+    }
+  }
 
   options = applyEmbeddedClaudeExecutable(options)
 

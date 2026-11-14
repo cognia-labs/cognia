@@ -1,6 +1,14 @@
 /**
  * @jest-environment node
  */
+// Pass-through: lets a test read what each turn publishes to its subagents.
+jest.mock("./turn-dispatch", () => {
+  const actual = jest.requireActual("./turn-dispatch")
+  return {
+    ...actual,
+    registerTurnSubagentContext: jest.fn(actual.registerTurnSubagentContext),
+  }
+})
 jest.mock("./configured-plugin-tool-handle", () => ({
   makeConfiguredCliPluginToolHandle: jest.fn(() => jest.fn(async () => ({ result: "ok" }))),
 }))
@@ -2504,3 +2512,65 @@ it.each([false, undefined])(
     }
   }
 )
+
+it("binds the sidecar session to the runtime authority and stamps only fenced sends", async () => {
+  const admit = jest.fn(() => ({ allowed: true, leaseTtlMs: 1000 }))
+  const bootstrap = jest.fn(
+    async (_cwd: string, _options?: import("../runtime/bootstrap").BootstrapOptions) => ({
+      transport: {} as never,
+      shutdown: jest.fn(async () => {}),
+    })
+  )
+  const closeSession = jest.fn(async () => {})
+  const registerSpy = (jest.requireMock("./turn-dispatch") as typeof import("./turn-dispatch"))
+    .registerTurnSubagentContext as jest.MockedFunction<
+    typeof import("./turn-dispatch").registerTurnSubagentContext
+  >
+  registerSpy.mockClear()
+  const stamps: unknown[] = []
+  const capture = jest.fn(async (id: string, _content: unknown, options: SendOptions) => {
+    expect(id).toBe("runtime-session")
+    stamps.push(options.workerToolAdmission)
+    return { ...result("ok"), sdkSessionId: "native-sdk-session" }
+  })
+  const session = createAgentSession({
+    config: cfg(),
+    sessionId: "runtime-session",
+    home: HOME,
+    admitWorkerTool: admit,
+    bootstrap,
+    closeSession,
+    capture: capture as never,
+    transcriptFs: memFs().fsx,
+    resolveSkillIds: () => [],
+    ensureDb: async () => {},
+    primePromptOverrides: async () => ({}),
+    resolveOptions: async () => ({ provider: "anthropic", model: "m" }) as never,
+  })
+  try {
+    await session.send("generic", { gate: createPermissionGate({ yes: true }) })
+    await session.send("worker", {
+      gate: createPermissionGate({ yes: true }),
+      workerToolAdmission: true,
+    })
+    await session.send("worker again", {
+      gate: createPermissionGate({ yes: true }),
+      workerToolAdmission: true,
+    })
+    expect(stamps).toEqual([undefined, true, true])
+    // Subagents of a fenced turn are admitted against this root session.
+    expect(registerSpy.mock.calls.map(([params]) => params.workerToolAdmissionSessionId)).toEqual([
+      undefined,
+      "runtime-session",
+      "runtime-session",
+    ])
+    expect(closeSession).toHaveBeenCalledTimes(1)
+    expect(closeSession).toHaveBeenCalledWith("runtime-session")
+    expect(bootstrap.mock.calls[0]?.[1]?.workerToolAdmission).toEqual({
+      sessionId: "runtime-session",
+      admit,
+    })
+  } finally {
+    await session.close()
+  }
+})

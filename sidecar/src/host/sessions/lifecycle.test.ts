@@ -846,6 +846,28 @@ test("fenced and unfenced turns never reuse one live engine session", () => {
   )
 })
 
+test("WP2b: a worker-admitted send never reuses a runtime built with other admission", () => {
+  assert.equal(
+    restartReason({ sendOptions: {} }, { workerToolAdmission: true }),
+    "worker tool admission changed"
+  )
+  assert.equal(
+    restartReason({ sendOptions: { workerToolAdmission: true } }, {}),
+    "worker tool admission changed"
+  )
+  assert.equal(
+    restartReason(
+      { sendOptions: { workerToolAdmission: true, workerToolAdmissionSessionId: "root-a" } },
+      { workerToolAdmission: true, workerToolAdmissionSessionId: "root-b" }
+    ),
+    "worker tool admission changed"
+  )
+  assert.notEqual(
+    restartReason({ sendOptions: { workerToolAdmission: true } }, { workerToolAdmission: true }),
+    "worker tool admission changed"
+  )
+})
+
 test("R2: forwarded hook content carries the Host owner's attempt", () => {
   const owner = {
     multiTurn: true,

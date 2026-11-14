@@ -5519,3 +5519,174 @@ test("F3 AI SDK child recall does not wait on its parent delegation wrapper", as
     await session.closed
   }
 })
+
+for (const kind of ["builtin", "plugin", "mcp", "search"] as const) {
+  for (const expired of [false, true]) {
+    test(`AI SDK worker fence ${expired ? "expiry" : "refusal"} stops ${kind} execution and the whole turn`, async (t) => {
+      const { buildAiSdkMcpTools } = await import("../../mcp/client/tools.ts")
+      const { FenceDeniedError } = await import("../../policy/fence/admission.ts")
+      let now = 0
+      t.mock.method(performance, "now", () => now)
+      const { events, emit } = captureEmit()
+      let allowed = true
+      let admissions = 0
+      let modelCalls = 0
+      let executions = 0
+      let recovered = false
+      let aborted = false
+      const session = startSession({
+        provider: "openai",
+        sessionId: "worker",
+        firstPrompt: "work",
+        sendOptions: {
+          model: "test",
+          providerCredentials: { apiKey: "k", protocol: "openai" },
+          workerToolAdmission: true,
+          permissionMode: "bypassPermissions",
+          toolSearchEnabled: kind === "search",
+          builtinTools: { coreFiles: true },
+          pluginTools: [{ name: "plugin", jsonSchema: { type: "object" } }],
+          mcpServers: { external: { type: "stdio", command: "unused" } },
+        },
+        emit(frame) {
+          emit(frame)
+          if (frame.type === "plugin_tool_exec") {
+            executions++
+            queueMicrotask(() =>
+              session.pendingPluginToolCalls.get(String(frame.toolUseId))!.resolve({ result: "ok" })
+            )
+          }
+        },
+        log() {},
+        hostRpc: {
+          async call(method, params) {
+            if (method !== "worker.admitTool") return { jobs: [], killed: [] }
+            admissions++
+            assert.equal((params as { sessionId: string }).sessionId, "worker")
+            return { allowed, leaseTtlMs: 100 }
+          },
+        },
+        buildMcpTools: (opts) =>
+          buildAiSdkMcpTools({
+            ...opts,
+            createClient: async () => ({
+              async tools() {
+                return {
+                  remote: {
+                    async execute() {
+                      executions++
+                      return "ok"
+                    },
+                  },
+                }
+              },
+              async close() {},
+            }),
+          }),
+        streamText(raw) {
+          modelCalls++
+          const args = streamArgs(raw)
+          return {
+            fullStream: (async function* () {
+              const tool =
+                args.tools[
+                  kind === "builtin"
+                    ? "ls"
+                    : kind === "plugin"
+                      ? "plugin"
+                      : kind === "search"
+                        ? "ToolSearch"
+                        : "mcp__external__remote"
+                ]!
+              const input =
+                kind === "builtin" ? { path: "." } : kind === "search" ? { query: "select:ls" } : {}
+              await tool.execute(input, {
+                toolCallId: "first",
+                messages: [],
+                abortSignal: args.abortSignal,
+              })
+              if (kind === "builtin" || kind === "search") executions++
+              allowed = false
+              if (expired) now = 100
+              let error: unknown
+              try {
+                await tool.execute(input, {
+                  toolCallId: "next",
+                  messages: [],
+                  abortSignal: args.abortSignal,
+                })
+              } catch (err) {
+                error = err
+              }
+              assert.ok(error instanceof FenceDeniedError)
+              aborted = args.abortSignal.aborted
+              // Model the SDK swallowing an execute exception into a tool-error:
+              // the runtime must already have aborted, before this can be retried.
+              yield { type: "tool-error", toolCallId: "next", error }
+              recovered = true
+              yield { type: "text-delta", text: "retry" }
+            })(),
+          }
+        },
+      })
+      try {
+        await waitForEvent(events, (frame) => frame.type === "turn_settled")
+        assert.equal(executions, 1)
+        assert.equal(aborted, true)
+        assert.equal(recovered, false)
+        assert.equal(modelCalls, 1)
+        // A lapsed local deadline still asks Node; the unrenewed lease is refused there.
+        assert.equal(admissions, 2)
+        const end = events.find((frame) => frame.type === "session_ended")!
+        assert.equal(end.reason, "worker_fence_closed")
+        assert.equal(end.code, "worker_fence_closed")
+        assert.equal(
+          events.some((frame) => frame.type === "session_disposed"),
+          false
+        )
+      } finally {
+        session.closeInput()
+        await session.closed
+      }
+      assert.equal(events.filter((frame) => frame.type === "session_disposed").length, 1)
+    })
+  }
+}
+
+test("AI SDK sends without workerToolAdmission execute with no worker RPC", async () => {
+  const { events, emit } = captureEmit()
+  let admissions = 0
+  const session = startSession({
+    provider: "openai",
+    sessionId: "generic",
+    firstPrompt: "work",
+    sendOptions: {
+      model: "test",
+      providerCredentials: { apiKey: "k", protocol: "openai" },
+      permissionMode: "bypassPermissions",
+      builtinTools: { coreFiles: true },
+    },
+    emit,
+    log() {},
+    hostRpc: {
+      async call(method) {
+        if (method === "worker.admitTool") admissions++
+        return { jobs: [], killed: [] }
+      },
+    },
+    streamText: (raw) => ({
+      fullStream: (async function* () {
+        await streamArgs(raw).tools.ls!.execute({ path: "." }, { toolCallId: "t", messages: [] })
+        yield { type: "text-delta", text: "done" }
+      })(),
+    }),
+  })
+  try {
+    await waitForEvent(events, (frame) => frame.type === "turn_settled")
+    assert.equal(admissions, 0)
+    assert.equal(events.find((frame) => frame.type === "session_ended")?.error, undefined)
+  } finally {
+    session.closeInput()
+    await session.closed
+  }
+})

@@ -585,3 +585,93 @@ test("buildAiSdkMcpTools exposes only allowlisted tools of an allowlisted server
   assert.equal(tools["mcp__api__added_later"], undefined)
   assert.ok(tools["mcp__other__any"], "unlisted servers are unaffected")
 })
+
+test("MCP worker admission follows approval and denies before execute or output review", async () => {
+  const { createWorkerToolAdmission, FenceDeniedError } =
+    await import("../../policy/fence/admission.ts")
+  let approve!: () => void
+  const approval = new Promise<void>((resolve) => {
+    approve = resolve
+  })
+  let calls = 0
+  let executed = 0
+  let reviewed = 0
+  const admission = createWorkerToolAdmission({
+    sessionId: "s",
+    onDenied() {},
+    hostRpc: {
+      async call() {
+        calls++
+        return { allowed: false }
+      },
+    },
+  })
+  const tool = wrapMcpToolWithGate(
+    {
+      execute() {
+        executed++
+        return "ok"
+      },
+    },
+    "mcp__s__tool",
+    async (_name, args) => {
+      await approval
+      return args
+    },
+    async () => {
+      reviewed++
+      return "review"
+    },
+    true,
+    admission
+  )
+  const call = execute(tool, {})
+  await Promise.resolve()
+  assert.equal(calls, 0)
+  approve()
+  await assert.rejects(call, FenceDeniedError)
+  assert.equal(calls, 1)
+  assert.equal(executed, 0)
+  assert.equal(reviewed, 0, "fence errors must never become recoverable tool output")
+})
+
+test("MCP final execution checks the cached deadline without another RPC", async () => {
+  const { createWorkerToolAdmission, FenceDeniedError } =
+    await import("../../policy/fence/admission.ts")
+  let now = 0
+  let executed = false
+  let calls = 0
+  const admission = createWorkerToolAdmission({
+    sessionId: "s",
+    now: () => now,
+    onDenied() {},
+    hostRpc: {
+      async call() {
+        calls++
+        return { allowed: true, leaseTtlMs: 10 }
+      },
+    },
+  })
+  const tool = wrapMcpToolWithGate(
+    {
+      execute() {
+        executed = true
+      },
+    },
+    "mcp__s__tool",
+    undefined,
+    undefined,
+    true,
+    {
+      async admit(name, id) {
+        await admission.admit(name, id)
+        now = 10
+      },
+      assertAllowed: () => admission.assertAllowed(),
+      assertOpen: () => admission.assertOpen(),
+    }
+  )
+  await assert.rejects(execute(tool, {}), FenceDeniedError)
+  assert.equal(executed, false)
+  assert.equal(calls, 1)
+})

@@ -43,6 +43,7 @@ export interface CollectToolDefsOptions extends ToolPresentationOptions {
   verificationBudget?: VerificationBudget | undefined
   authorizeVerificationCommand?:
     ((input: unknown, signal?: AbortSignal) => Promise<unknown>) | undefined
+  beforeVerificationCommand?: (() => void) | undefined
   /** Category toggles by id (`git`, `coreFiles`, …). */
   enabled?: Readonly<Record<string, boolean | undefined>> | null | undefined
   lspResolver?: LazyLspResolver | null | undefined

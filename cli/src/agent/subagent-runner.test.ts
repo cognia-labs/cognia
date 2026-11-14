@@ -94,6 +94,27 @@ describe("runCliSubagent", () => {
       )
     }
   )
+  it("stamps a fenced root's admission authority onto the child send and nothing otherwise", async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const fenced = setupDeps()
+    fenced.capture = async (_id, _prompt, options) => {
+      seen.push(options as Record<string, unknown>)
+      return captureResult()
+    }
+    await runCliSubagent(def(), "go", "parent", {
+      ...fenced,
+      workerToolAdmissionSessionId: "root-session",
+    })
+    const generic = setupDeps()
+    generic.capture = fenced.capture
+    await runCliSubagent(def(), "go", "parent", generic)
+    expect(seen[0]).toMatchObject({
+      workerToolAdmission: true,
+      workerToolAdmissionSessionId: "root-session",
+    })
+    expect(seen[1]).not.toHaveProperty("workerToolAdmission")
+    expect(seen[1]).not.toHaveProperty("workerToolAdmissionSessionId")
+  })
   it("drains a nested child host call before releasing its session", async () => {
     const { subscribePluginToolDispatch } = jest.requireMock("../plugin/plugin-tool-dispatch")
     const { makeConfiguredCliPluginToolHandle } = jest.requireMock(

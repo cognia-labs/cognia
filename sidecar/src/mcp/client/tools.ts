@@ -1,5 +1,6 @@
 import type { MCPClientConfig, MCPTransport } from "@ai-sdk/mcp"
 import type { EgressGuard } from "../../platform/net/egress-guard.ts"
+import type { WorkerToolAdmission } from "../../policy/fence/admission.ts"
 import type { McpLogLevel } from "./log.ts"
 import type {
   McpServerEntry,
@@ -218,7 +219,8 @@ export async function buildAiSdkMcpTools({
   maxAttempts = 3,
   connectTimeoutMs = 15_000,
   createEgressGuard = createMcpEgressGuard,
-}: McpToolsOptions) {
+  workerToolAdmission,
+}: McpToolsOptions & { workerToolAdmission?: WorkerToolAdmission | undefined }) {
   /** @type {Record<string, any>} */
   const tools: McpTools = {}
   /** @type {Array<{ close: () => Promise<void> }>} */
@@ -456,7 +458,8 @@ export async function buildAiSdkMcpTools({
         namespaced,
         gate,
         reviewToolOutput,
-        contentSafety?.injectionProtection
+        contentSafety?.injectionProtection,
+        workerToolAdmission
       )
     }
     diag(server, "info", `connected · ${Object.keys(collected).length} tool(s) exposed`)
@@ -491,7 +494,8 @@ export function wrapMcpToolWithGate(
   namespaced: string,
   gate?: McpPermissionGate,
   reviewToolOutput?: McpOutputReviewer,
-  injectionProtection = true
+  injectionProtection = true,
+  workerToolAdmission?: WorkerToolAdmission
 ): McpTool {
   if (!toolDef || typeof toolDef.execute !== "function") {
     return toolDef
@@ -512,6 +516,10 @@ export function wrapMcpToolWithGate(
       const effective = gate
         ? await gate(namespaced, args ?? {}, options?.abortSignal)
         : (args ?? {})
+      if (workerToolAdmission) {
+        await workerToolAdmission.admit(namespaced, options?.toolCallId)
+        workerToolAdmission.assertAllowed()
+      }
       let out
       try {
         out = await originalExecute(effective, options)

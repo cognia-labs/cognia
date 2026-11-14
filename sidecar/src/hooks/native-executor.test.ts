@@ -278,3 +278,55 @@ test("F4: fenced MCP guard denies PreToolUse and only warns for Stop", async () 
   assert.equal(stop.block, undefined)
   assert.equal(calls.length, 0)
 })
+
+test("WP2b: every nested hook tool passes worker admission and a denial stops the nested query", async () => {
+  const { createWorkerToolAdmission } = await import("../policy/fence/admission.ts")
+  const calls: NativeHookQueryInput[] = []
+  const admissions: unknown[] = []
+  let allowed = true
+  const workerToolAdmission = createWorkerToolAdmission({
+    sessionId: "root",
+    onDenied() {},
+    hostRpc: {
+      async call(method: string, params: unknown) {
+        assert.equal(method, "worker.admitTool")
+        admissions.push(params)
+        return allowed ? { allowed: true, leaseTtlMs: 60_000 } : { allowed: false }
+      },
+    },
+  })
+  const execute = createNativeHookExecutor({
+    workerToolAdmission,
+    queryFn: fakeQuery([{ type: "result", subtype: "success", result: "{}" }], calls),
+    allowedTools: ["Bash"],
+  })
+  await execute({ type: "agent", prompt: "work" }, "{}")
+  const hook = calls[0]!.options.hooks!.PreToolUse![0]!.hooks[0]!
+  const signal = new AbortController().signal
+  assert.deepEqual(
+    await hook(
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "n1" } as never,
+      undefined,
+      { signal }
+    ),
+    {}
+  )
+  assert.deepEqual(admissions, [{ sessionId: "root", toolName: "Bash", toolUseId: "n1" }])
+  allowed = false
+  const denied = (await hook(
+    { hook_event_name: "PreToolUse", tool_name: "mcp__fs__write" } as never,
+    undefined,
+    { signal }
+  )) as {
+    continue?: boolean
+    stopReason?: string
+    hookSpecificOutput?: { permissionDecision?: string }
+  }
+  assert.equal(denied.continue, false)
+  assert.equal(denied.stopReason, "worker_fence_closed")
+  assert.equal(denied.hookSpecificOutput?.permissionDecision, "deny")
+  // Once denied, the hook itself is refused before any nested query starts.
+  const refused = await execute({ type: "agent", prompt: "again" }, "{}")
+  assert.match(refused.block ?? "", /admission is closed/)
+  assert.equal(calls.length, 1)
+})

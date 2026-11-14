@@ -1072,6 +1072,110 @@ test("verification batch applies nested Bash deny rules and plan restrictions", 
   await assert.rejects(plan.verification_batch!.execute({ commands }), /plan|denied|approval/i)
 })
 
+test("verification batch admits each command after its approval and runs none once denied", async () => {
+  const { createWorkerToolAdmission } = await import("../../policy/fence/admission.ts")
+  const fs = await import("node:fs")
+  const os = await import("node:os")
+  const path = await import("node:path")
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp2b-batch-"))
+  const marker = path.join(root, "ran")
+  let admitted = 0
+  let denied = 0
+  const workerToolAdmission = createWorkerToolAdmission({
+    sessionId: "budget-test",
+    onDenied() {
+      denied++
+    },
+    hostRpc: {
+      async call(method: string) {
+        assert.equal(method, "worker.admitTool")
+        admitted++
+        // The batch tool itself is admitted; its first command's admission,
+        // after that command's own approval, finds the fence closed.
+        return admitted === 1 ? { allowed: true, leaseTtlMs: 60_000 } : { allowed: false }
+      },
+    },
+  })
+  try {
+    const budget = createVerificationBudget()
+    budget.reset({ startedAtEpochMs: Date.now(), deadlineEpochMs: Date.now() + 360_000 })
+    const tools = build({
+      sendOptions: { builtinTools: { coreFiles: true }, permissionMode: "bypassPermissions" },
+      emit: () => {},
+      sessionId: "budget-test",
+      verificationBudget: budget,
+      workerToolAdmission,
+      readTracker: { record() {}, hasRead: () => false, assertReadBefore() {}, clear() {} },
+    })
+    const commands = [
+      { label: "first", command: `touch ${JSON.stringify(marker)}` },
+      { label: "second", command: `touch ${JSON.stringify(marker)}` },
+    ]
+    const result = JSON.stringify(await tools.verification_batch!.execute({ commands }))
+    assert.doesNotMatch(result, /\"status\":\"passed\"/)
+    assert.equal(fs.existsSync(marker), false)
+    // The first denial latches: the second command is refused without a round trip.
+    assert.equal(admitted, 2)
+    assert.equal(denied, 1)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("verification batch rechecks admission at each spawn, after the approval's own check", async () => {
+  const { createWorkerToolAdmission, FenceDeniedError } =
+    await import("../../policy/fence/admission.ts")
+  const fs = await import("node:fs")
+  const os = await import("node:os")
+  const path = await import("node:path")
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wp2b-spawn-"))
+  const marker = path.join(root, "ran")
+  let checks = 0
+  let closed = false
+  const workerToolAdmission = createWorkerToolAdmission({
+    sessionId: "budget-test",
+    onDenied() {},
+    hostRpc: {
+      get isClosed() {
+        return closed
+      },
+      async call() {
+        return { allowed: true, leaseTtlMs: 60_000 }
+      },
+    },
+  })
+  // Close the channel once the approval callback's own final check has passed,
+  // so only a check at the spawn itself can refuse the command.
+  const assertAllowed = workerToolAdmission.assertAllowed
+  workerToolAdmission.assertAllowed = () => {
+    assertAllowed()
+    // 1: the batch tool's own final check; 2: the command approval's.
+    if (++checks === 2) closed = true
+  }
+  try {
+    const budget = createVerificationBudget()
+    budget.reset({ startedAtEpochMs: Date.now(), deadlineEpochMs: Date.now() + 360_000 })
+    const tools = build({
+      sendOptions: { builtinTools: { coreFiles: true }, permissionMode: "bypassPermissions" },
+      emit: () => {},
+      sessionId: "budget-test",
+      verificationBudget: budget,
+      workerToolAdmission,
+      readTracker: { record() {}, hasRead: () => false, assertReadBefore() {}, clear() {} },
+    })
+    const result = JSON.stringify(
+      await tools.verification_batch!.execute({
+        commands: [{ label: "one", command: `touch ${JSON.stringify(marker)}` }],
+      })
+    )
+    assert.doesNotMatch(result, /\"status\":\"passed\"/)
+    assert.equal(fs.existsSync(marker), false)
+    assert.throws(() => workerToolAdmission.assertOpen(), FenceDeniedError)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("verification batch aggregate stdout and stderr retain the output PII gate", async () => {
   const tools = budgetTools({ permissionMode: "bypassPermissions" })
   const commands = [
@@ -1433,4 +1537,119 @@ test("AI SDK plugin validation accepts pattern keys and preserves their values",
   for (const args of [{ safe_name: 42 }, { other: "ok" }])
     await assert.rejects(tools.fixture!.execute(args), /invalid arguments/)
   assert.deepEqual(received, [{ safe_name: "ok" }])
+})
+
+for (const kind of ["builtin", "plugin"] as const) {
+  test(`${kind} admission follows approval and precedes its final execute`, async () => {
+    const { createWorkerToolAdmission, FenceDeniedError } =
+      await import("../../policy/fence/admission.ts")
+    let approve!: () => void
+    const approval = new Promise<void>((resolve) => {
+      approve = resolve
+    })
+    let admitted = 0
+    let executed = 0
+    let stopped = 0
+    const admission = createWorkerToolAdmission({
+      sessionId: "s",
+      onDenied() {
+        stopped++
+      },
+      hostRpc: {
+        async call() {
+          admitted++
+          return { allowed: false }
+        },
+      },
+    })
+    const gate = async (_name: string, input: unknown) => {
+      await approval
+      return input
+    }
+    const tool =
+      kind === "builtin"
+        ? convert(
+            {
+              name: "test",
+              description: "test",
+              inputSchema: {},
+              async handler() {
+                executed++
+                return { content: [{ type: "text", text: "ok" }] }
+              },
+            },
+            gate,
+            0,
+            undefined,
+            true,
+            false,
+            admission
+          )
+        : (__testing__.pluginToolToAiSdkTool(
+            { name: "plugin", jsonSchema: { type: "object" } },
+            {
+              emit() {
+                executed++
+              },
+              sessionId: "s",
+              pendingPluginToolCalls: new Map(),
+              gate,
+              workerToolAdmission: admission,
+            }
+          ) as unknown as TestAiTool)
+    const call = tool.execute({})
+    await Promise.resolve()
+    assert.equal(admitted, 0)
+    approve()
+    await assert.rejects(call, FenceDeniedError)
+    assert.equal(admitted, 1)
+    assert.equal(executed, 0)
+    assert.equal(stopped, 1)
+  })
+}
+
+test("built-in final execution rechecks the cached local deadline synchronously", async () => {
+  const { createWorkerToolAdmission, FenceDeniedError } =
+    await import("../../policy/fence/admission.ts")
+  let now = 0
+  let executions = 0
+  let calls = 0
+  const admission = createWorkerToolAdmission({
+    sessionId: "s",
+    now: () => now,
+    onDenied() {},
+    hostRpc: {
+      async call() {
+        calls++
+        return { allowed: true, leaseTtlMs: 10 }
+      },
+    },
+  })
+  const tool = convert(
+    {
+      name: "test",
+      description: "test",
+      inputSchema: {},
+      async handler() {
+        executions++
+        return { content: [] }
+      },
+    },
+    undefined,
+    0,
+    undefined,
+    true,
+    false,
+    {
+      async admit(name, id) {
+        await admission.admit(name, id)
+        now = 10
+      },
+      assertAllowed: () => admission.assertAllowed(),
+      assertOpen: () => admission.assertOpen(),
+    }
+  )
+  await assert.rejects(tool.execute({}), FenceDeniedError)
+  assert.equal(executions, 0)
+  assert.equal(calls, 1)
 })

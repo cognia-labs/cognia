@@ -25,6 +25,7 @@ import {
   CLI_HOST_RPC_HANDLERS,
   StdioTransport,
   type HostRpcHandler,
+  type WorkerToolAdmitter,
   type SidecarHandle,
 } from "./stdio-transport"
 import { resolveWorkspacePortEnv } from "./workspace-port-env"
@@ -93,6 +94,8 @@ export interface BootstrapOptions {
   execPath?: string
   /** `host_rpc` handlers. Defaults to {@link cliHostRpcHandlers}. */
   hostRpc?: Readonly<Record<string, HostRpcHandler>>
+  /** Runtime-service authority, bound to this sidecar's logical session. */
+  workerToolAdmission?: { sessionId: string; admit: WorkerToolAdmitter }
 }
 
 export interface SidecarBootstrap {
@@ -414,10 +417,23 @@ function startupDiagnostics(stderr: SpawnedChild["stderr"], env: NodeJS.ProcessE
  * thrown so the sidecar refuses the spawn instead of running without ports.
  */
 export function cliHostRpcHandlers(
-  resolvePortEnv: (cwd: string) => Promise<Record<string, string>> = resolveWorkspacePortEnv
+  resolvePortEnv: (cwd: string) => Promise<Record<string, string>> = resolveWorkspacePortEnv,
+  worker?: BootstrapOptions["workerToolAdmission"]
 ): Readonly<Record<string, HostRpcHandler>> {
   return Object.freeze({
     ...CLI_HOST_RPC_HANDLERS,
+    "worker.admitTool": (params: unknown) => {
+      if (!worker || !params || typeof params !== "object") return { allowed: false }
+      const { sessionId, toolName, toolUseId } = params as Record<string, unknown>
+      if (
+        sessionId !== worker.sessionId ||
+        typeof toolName !== "string" ||
+        !toolName ||
+        (toolUseId !== undefined && typeof toolUseId !== "string")
+      )
+        return { allowed: false }
+      return worker.admit(sessionId)
+    },
     "workspace.portEnv": async (params: unknown) => {
       const cwd =
         params && typeof params === "object" ? (params as { cwd?: unknown }).cwd : undefined
@@ -451,7 +467,7 @@ export async function bootstrapSidecar(opts: BootstrapOptions = {}): Promise<Sid
   })
   const diagnostics = startupDiagnostics(child.stderr, env)
   const transport = new StdioTransport(toHandle(child), {
-    hostRpc: opts.hostRpc ?? cliHostRpcHandlers(),
+    hostRpc: opts.hostRpc ?? cliHostRpcHandlers(undefined, opts.workerToolAdmission),
   })
   setTransport(transport)
   setExtensionHostFileReader(async (file) => new Uint8Array(await fs.promises.readFile(file)))

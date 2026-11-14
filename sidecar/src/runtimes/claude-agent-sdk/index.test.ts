@@ -264,3 +264,156 @@ test("retry elapsed deadline terminates once and drains pending round trips", as
   assert.equal(ended.length, 1)
   assert.match(String(ended[0]!.error), /total invocation deadline/)
 })
+
+for (const name of [
+  "Bash",
+  "mcp__cognia-tools__write",
+  "mcp__cognia-plugin-tools__plugin",
+  "mcp__external__write",
+]) {
+  for (const expired of [false, true]) {
+    test(`worker fence ${expired ? "expiry" : "refusal"} denies ${name} and interrupts the Claude query`, async (t) => {
+      let now = 0
+      t.mock.method(performance, "now", () => now)
+      let allowed = true
+      let calls = 0
+      let interrupted = 0
+      let executed = 0
+      let options!: Options
+      let finish!: () => void
+      const running = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const session = dispatchAnthropic(
+        {
+          sessionId: "worker",
+          firstPrompt: "work",
+          sendOptions: {
+            toolSurface: "full",
+            permissionMode: "bypassPermissions",
+            workerToolAdmission: true,
+          },
+          emit() {},
+          log() {},
+          hostRpc: {
+            async call(method, params) {
+              if (method !== "worker.admitTool") return { jobs: [], killed: [] }
+              calls++
+              assert.deepEqual(params, { sessionId: "worker", toolName: name, toolUseId: "tool" })
+              return { allowed, leaseTtlMs: 100 }
+            },
+          },
+        },
+        {
+          query(args) {
+            options = args.options
+            return {
+              async *[Symbol.asyncIterator]() {
+                await running
+              },
+              interrupt() {
+                interrupted++
+                finish()
+              },
+              close() {
+                finish()
+              },
+            }
+          },
+        }
+      )
+      const pre = options.hooks!.PreToolUse!.at(-1)!.hooks[0]!
+      const invoke = async () => {
+        const decision = await pre(
+          {
+            hook_event_name: "PreToolUse",
+            session_id: "sdk-private-id",
+            transcript_path: "",
+            cwd: ".",
+            tool_name: name,
+            tool_input: {},
+            tool_use_id: "tool",
+          },
+          "tool",
+          { signal: new AbortController().signal }
+        )
+        if (!("continue" in decision && decision.continue === false)) executed++
+        return decision
+      }
+      try {
+        await invoke()
+        allowed = false
+        if (expired) now = 100
+        const result = await invoke()
+        assert.ok("hookSpecificOutput" in result)
+        assert.equal(result.hookSpecificOutput?.hookEventName, "PreToolUse")
+        assert.equal(
+          (result.hookSpecificOutput as { permissionDecision?: string }).permissionDecision,
+          "deny"
+        )
+        await flush()
+        assert.equal(interrupted, 1)
+        assert.equal(executed, 1)
+        const previousCalls = calls
+        await invoke()
+        assert.equal(calls, previousCalls, "denial is session-latched")
+        // A lapsed local deadline still asks Node; the unrenewed lease is refused there.
+        assert.equal(calls, 2)
+      } finally {
+        session.closeInput()
+        finish()
+      }
+    })
+  }
+}
+
+test("Claude sends without workerToolAdmission never ask the worker authority", async () => {
+  let calls = 0
+  let options!: Options
+  const session = dispatchAnthropic(
+    {
+      sessionId: "generic",
+      firstPrompt: "work",
+      sendOptions: { toolSurface: "full", permissionMode: "bypassPermissions" },
+      emit() {},
+      log() {},
+      hostRpc: {
+        async call(method) {
+          if (method === "worker.admitTool") calls++
+          return {}
+        },
+      },
+    },
+    {
+      query(args) {
+        options = args.options
+        return {
+          async *[Symbol.asyncIterator]() {},
+          interrupt() {},
+          close() {},
+        }
+      },
+    }
+  )
+  try {
+    for (const entry of options.hooks?.PreToolUse ?? []) {
+      for (const hook of entry.hooks)
+        await hook(
+          {
+            hook_event_name: "PreToolUse",
+            session_id: "generic",
+            transcript_path: "",
+            cwd: ".",
+            tool_name: "Read",
+            tool_input: {},
+            tool_use_id: "t",
+          },
+          "t",
+          { signal: new AbortController().signal }
+        )
+    }
+    assert.equal(calls, 0)
+  } finally {
+    session.closeInput()
+  }
+})

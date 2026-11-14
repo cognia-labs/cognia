@@ -252,3 +252,37 @@ test("unchanged approved workdir is rechecked after a symlink changes", async ()
     await fs.rm(directory, { recursive: true, force: true })
   }
 })
+
+test("the pre-spawn check runs after authorization and refuses a command without spawning it", async () => {
+  const { budget } = fixture()
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "batch-spawn-"))
+  const marker = path.join(root, "ran")
+  const order: string[] = []
+  let open = true
+  try {
+    const batch = createVerificationBatchTool({
+      cwd: root,
+      verificationBudget: budget,
+      authorizeVerificationCommand: async (args) => {
+        order.push("authorized")
+        // The authority closes after authorization returned, before the spawn.
+        open = false
+        return args
+      },
+      beforeVerificationCommand: () => {
+        order.push("pre-spawn")
+        if (!open) throw new Error("Worker tool admission is closed")
+      },
+    })
+    const result = decode(
+      await batch.handler({
+        commands: [{ label: "one", command: `touch ${JSON.stringify(marker)}` }],
+      })
+    )
+    assert.deepEqual(order, ["authorized", "pre-spawn"])
+    assert.notEqual(result.status, "batch_passed")
+    await assert.rejects(fs.access(marker))
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})

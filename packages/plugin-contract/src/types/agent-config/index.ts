@@ -595,6 +595,13 @@ export type SendOptions = {
   transcriptInvalidationId?: string
   /** Host-derived identity of the readers and withheld canonical message ids. */
   personalVisibilityDigest?: string
+  /**
+   * CLI worker-dispatch sends only (ADR-0244 WP2b): every tool passes the
+   * Worker's fail-closed admission (`worker.admitTool`) right before it runs.
+   */
+  workerToolAdmission?: true
+  /** A subagent of a fenced turn admits against this root session id. */
+  workerToolAdmissionSessionId?: string
   /** Sticky Host egress fence; no approval or disclosure can relax it. */
   personalEgressFenced?: boolean
   personalEgressReadTools?: string[]

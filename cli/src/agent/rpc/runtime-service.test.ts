@@ -458,6 +458,29 @@ describe("createAgentRuntimeService", () => {
     await fixture.service.close()
   })
 
+  it.each([false, true])(
+    "passes worker tool admission for the exact session (fenced=%s)",
+    async (fenced) => {
+      const fixture = fencedFixture()
+      const { running } = await fixture.start(fenced)
+      try {
+        const turn = fixture.runTurn.mock.calls[0][0]
+        expect(turn.sessionId).toBe("session-1")
+        expect(turn.workerToolAdmission).toBe(fenced)
+        expect(turn.admitWorkerTool?.(turn.sessionId!)).toMatchObject({ allowed: true })
+        expect(turn.admitWorkerTool?.("unknown-session")).toEqual({ allowed: false })
+        if (fenced) {
+          fixture.service.controlLost?.()
+          expect(turn.admitWorkerTool?.(turn.sessionId!)).toMatchObject({ allowed: false })
+        }
+      } finally {
+        fixture.finish()
+        await running
+        await fixture.service.close()
+      }
+    }
+  )
+
   it("the watchdog disposes an idle executor that may still own background tools", async () => {
     jest.useFakeTimers()
     const fixture = fencedFixture()

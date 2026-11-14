@@ -47,7 +47,11 @@ import type { EffortTier } from "@/lib/ai/thinking-level"
 import type { TuiAction } from "../tui/state/types"
 import { loadMcpServers } from "../mcp/load-mcp-config"
 import { applyDisabled, readDisabled, readDisabledTools } from "../mcp/mcp-state"
-import { bootstrapSidecar, type SidecarBootstrap } from "../runtime/bootstrap"
+import {
+  bootstrapSidecar,
+  type BootstrapOptions,
+  type SidecarBootstrap,
+} from "../runtime/bootstrap"
 import { CliDbSnapshotError } from "../db/bootstrap"
 import { subscribePluginToolDispatch } from "../plugin/plugin-tool-dispatch"
 import type { UnlistenFn } from "@tauri-apps/api/event"
@@ -125,7 +129,8 @@ export interface AgentSessionParams {
    */
   sessionKind?: import("@cognia/agent-config-types").SessionKind
   home?: string
-  bootstrap?: (cwd: string) => Promise<SidecarBootstrap>
+  bootstrap?: (cwd: string, options?: BootstrapOptions) => Promise<SidecarBootstrap>
+  admitWorkerTool?: NonNullable<BootstrapOptions["workerToolAdmission"]>["admit"]
   resolveOptions?: (ctx: BuildOptionsContext) => Promise<SendOptions>
   /** Definition-owned composition selection, forwarded to the shared resolver. */
   compositionSelection?: AgentCompositionSelectionV1
@@ -222,6 +227,8 @@ export interface AgentModelOption {
 
 export interface SendTurnOptions {
   gate: PermissionResponder
+  /** Set only by the runtime service after this session received a fence. */
+  workerToolAdmission?: boolean
   /**
    * Resolve once no approval is awaiting the user.
    *
@@ -485,7 +492,9 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
   const home = params.home ?? resolveHome(process.env, os.homedir())
   const capture = params.capture ?? defaultCapture
   const bootstrap =
-    params.bootstrap ?? ((cwd: string) => bootstrapSidecar({ cwd, env: process.env }))
+    params.bootstrap ??
+    ((cwd: string, options?: BootstrapOptions) =>
+      bootstrapSidecar({ ...options, cwd, env: process.env }))
   const resolveApprovedTools =
     params.resolveApprovedTools ?? (() => readToolApprovals(home, undefined, params.config.cwd))
   const resolveDisabledMcpTools = params.resolveDisabledMcpTools ?? (() => readDisabledTools(home))
@@ -594,6 +603,7 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
   // its SendOptions and cannot re-resolve the prompt per turn).
   let sendOptionsOverrideMode: PermissionModeValue | null = null
   let turnSequence = 0
+  let workerToolAdmissionEnabled = false
   let personalVisibilityDigest: string | undefined
   const baseAppendPrompts = new WeakMap<SendOptions, string | undefined>()
 
@@ -670,7 +680,11 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
       pendingRestoreNotice = restored ? runtimeHistoryRestoreNotice(restored) : undefined
       publishStatus(session, "initializing")
       try {
-        boot = await bootstrap(params.config.cwd)
+        boot = params.admitWorkerTool
+          ? await bootstrap(params.config.cwd, {
+              workerToolAdmission: { sessionId, admit: params.admitWorkerTool },
+            })
+          : await bootstrap(params.config.cwd)
       } catch (error) {
         publishStatus(session, "failed", error instanceof Error ? error.message : String(error))
         throw error
@@ -728,6 +742,22 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
       }
       const sendOptions = session.sendOptions
       const personalHistory = await prepareCliPersonalHistory(home, sessionId, params.transcriptFs)
+      const admissionEnabled = opts.workerToolAdmission === true
+      if (turnSequence > 0 && admissionEnabled !== workerToolAdmissionEnabled) {
+        // A generic RPC session may receive its first fence on a later turn.
+        // Retained sidecars keep their initial policy: recreate through the
+        // existing close/restore path before sending the new authority stamp.
+        await (params.closeSession ?? defaultCloseSession)(sessionId)
+        restoreRuntimeHistory(
+          sendOptions,
+          readTranscriptTail(home, sessionId, params.transcriptFs),
+          personalHistory,
+          baseAppendPrompts.get(sendOptions)
+        )
+      }
+      workerToolAdmissionEnabled = admissionEnabled
+      if (admissionEnabled) sendOptions.workerToolAdmission = true
+      else delete sendOptions.workerToolAdmission
       if (
         personalHistory.withheldMessageIds.length > 0 &&
         personalVisibilityDigest !== personalHistory.visibilityDigest
@@ -861,6 +891,7 @@ export function createAgentSession(params: AgentSessionParams): AgentSession {
         ...(opts.signal ? { signal: opts.signal } : {}),
         approvedTools: resolveApprovedTools(),
         disabledMcpTools: resolveDisabledMcpTools(),
+        ...(admissionEnabled ? { workerToolAdmissionSessionId: sessionId } : {}),
       })
       // Per-turn twin RAG rides the user content as a <twin-context> block —
       // the cached SendOptions can't carry a fresh system prompt each turn.

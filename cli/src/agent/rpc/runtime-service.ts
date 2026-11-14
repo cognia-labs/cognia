@@ -2202,6 +2202,8 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
           gate,
           sessionId: session.id,
           persist: true,
+          workerToolAdmission: session.fence !== undefined,
+          admitWorkerTool,
           home: options.home,
           store,
           providerSession: session.lease,

@@ -272,3 +272,18 @@ describe("StdioTransport — host_rpc", () => {
     expect(h.writes).toEqual([])
   })
 })
+
+it("standalone worker admission is refused immediately over host_rpc", async () => {
+  const h = makeHandle()
+  new StdioTransport(h.handle)
+  h.emit({
+    type: "host_rpc",
+    rpcId: "fence",
+    method: "worker.admitTool",
+    params: { sessionId: "unknown", toolName: "Read" },
+  })
+  await flush()
+  expect(h.parsedWrites()).toEqual([
+    { type: "host_rpc_result", rpcId: "fence", ok: true, result: { allowed: false } },
+  ])
+})

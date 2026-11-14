@@ -39,6 +39,7 @@ import type { PendingPluginHooks } from "../../hooks/kernel/types.ts"
 import type { McpToolsOptions } from "../../mcp/client/types.ts"
 import type { createAiSdkToolSearchController } from "../../tools/adapters/ai-sdk-tool-search.ts"
 import { record } from "./messages.ts"
+import { createWorkerToolAdmission, FenceDeniedError } from "../../policy/fence/admission.ts"
 export interface DispatchAiSdkOptions {
   provider: string
   sessionId: string
@@ -49,7 +50,10 @@ export interface DispatchAiSdkOptions {
   hostRpc?: HostRpcCaller
   streamText?: (args: Record<string, unknown>) => unknown
   buildMcpTools?: (
-    options: McpToolsOptions
+    options: McpToolsOptions & {
+      workerToolAdmission?:
+        import("../../policy/fence/admission.ts").WorkerToolAdmission | undefined
+    }
   ) => Promise<Awaited<ReturnType<typeof import("../../mcp/client/tools.ts").buildAiSdkMcpTools>>>
   streamIdleTimeoutMs?: number
 }
@@ -425,6 +429,7 @@ export function dispatchAiSdk({
   // stopped consuming the stream AFTER the call completed — it kept billing).
   /** @type {AbortController | null} */
   let activeAbortController: AbortController | null = null
+  let workerFenceError: FenceDeniedError | undefined
   // Router + Fusion (ADR-0188): the ledger stamp for the NEXT turn. The session
   // outlives a single send, so each send hands its own stamp in (`setNextTurnLedger`
   // from `handleSend`); a turn without one is never gated.
@@ -521,7 +526,7 @@ export function dispatchAiSdk({
     if (toolSearchController) {
       if (toolLimit !== null) toolSearchController.setMaxActiveTools(toolLimit)
     } else if (agentScopedSendOptions.toolSearchEnabled === true || overLimit) {
-      const { createAiSdkToolSearchController } =
+      const { createAiSdkToolSearchController, AI_SDK_TOOL_SEARCH_NAME } =
         await import("../../tools/adapters/ai-sdk-tool-search.ts")
       toolSearchController = createAiSdkToolSearchController({
         tools: baseTools,
@@ -537,6 +542,15 @@ export function dispatchAiSdk({
       if (toolSearchController) {
         toolSearchController.restoreConversation(conversation)
         toolsCache = toolSearchController.tools
+        const search = toolsCache[AI_SDK_TOOL_SEARCH_NAME]
+        const execute = search?.execute
+        if (workerAdmission && search && execute) {
+          search.execute = async (input, context) => {
+            await workerAdmission.admit(AI_SDK_TOOL_SEARCH_NAME, context.toolCallId)
+            workerAdmission.assertAllowed()
+            return execute(input, context)
+          }
+        }
       }
     }
     if (!toolSearchController) return
@@ -764,6 +778,39 @@ export function dispatchAiSdk({
   let idleCompaction: Promise<void> | null = null
   const executorId = randomUUID()
 
+  function interruptTurn(reason = "interrupted", error?: FenceDeniedError) {
+    cancelled = true
+    invalidateCompaction()
+    activeAbortController?.abort(error)
+    drainPendingRoundTrips(
+      {
+        pendingApprovals,
+        pendingPluginToolCalls,
+        pendingPluginHookCalls,
+        pendingToolResultReviews,
+        pendingProtocolExecs,
+        ledgerGate: turnLedgerGate ?? undefined,
+        pluginToolFailure: { result: undefined, error: reason },
+      },
+      reason,
+      (requestId) => emit({ type: "permission_interrupted", sessionId, requestId, reason })
+    )
+  }
+
+  const workerAdmission =
+    sendOptions.workerToolAdmission === true
+      ? createWorkerToolAdmission({
+          sessionId: sendOptions.workerToolAdmissionSessionId ?? sessionId,
+          hostRpc,
+          onDenied(error) {
+            workerFenceError = error
+            // AI SDK can convert an execute rejection into a model-visible tool
+            // error. Abort at the source, before it can start another model leg.
+            interruptTurn(error.code, error)
+          },
+        })
+      : undefined
+
   async function runTurn() {
     // A user send can arrive while an idle manual compaction is awaiting its
     // provider. Publish that result before starting this turn's model stream.
@@ -946,6 +993,9 @@ export function dispatchAiSdk({
       // `maybeCompact`, leaving the summary request un-abortable).
       const abortController = new AbortController()
       activeAbortController = abortController
+      // Only a latched denial refuses the turn; a lease renewed since the last
+      // turn's deadline is checked by each tool's admission.
+      workerAdmission?.assertOpen()
       const semantics = createSemanticConsumers({
         sessionId,
         sendOptions,
@@ -1005,6 +1055,7 @@ export function dispatchAiSdk({
             pendingApprovals,
             pendingPluginToolCalls,
             verificationBudget,
+            workerToolAdmission: workerAdmission,
             ...toolSession.toolContext(),
             doomGuard: toolDoomGuard,
             // PostToolUse rewrite at the execute layer (opt-in) — see
@@ -1036,6 +1087,7 @@ export function dispatchAiSdk({
                 doomGuard: mcpDoomGuard,
               })
               const mcp = await buildAiSdkMcpTools({
+                workerToolAdmission: workerAdmission,
                 contentSafety: sendOptions.contentSafety,
                 mcpServers: sendOptions.mcpServers,
                 gate: async (...args) => record(await mcpGate(...args)),
@@ -1783,7 +1835,16 @@ export function dispatchAiSdk({
         startedAt: turnStartedAt,
       })
       flushAdapter(finishEvents)
-      if (ledgerRefusal) {
+      if (workerFenceError) {
+        emit({
+          type: "session_ended",
+          sessionId,
+          error: workerFenceError.message,
+          code: workerFenceError.code,
+          reason: workerFenceError.code,
+          conversationSnapshot: conversation,
+        })
+      } else if (ledgerRefusal) {
         // Router + Fusion refused the next call (budget, limit, deadline). What
         // was produced so far is kept; the turn ends explicitly, never silently.
         emit({
@@ -1811,6 +1872,10 @@ export function dispatchAiSdk({
         emit({ type: "session_ended", sessionId, conversationSnapshot: conversation })
       }
     } catch (err) {
+      if (err instanceof FenceDeniedError) {
+        workerFenceError = err
+        interruptTurn(err.code, err)
+      }
       const policyRefusal = err instanceof SemanticInterceptionError
       if (policyRefusal) activeAbortController?.abort(err)
       // A reserved call that threw instead of streaming: a configuration error
@@ -1837,7 +1902,18 @@ export function dispatchAiSdk({
         const partialUsage = finishUsageSnapshot()
         if (partialUsage)
           flushAdapter(adapter.finish({ usage: partialUsage, startedAt: turnStartedAt }))
-        emit({ type: "session_ended", sessionId, conversationSnapshot: conversation })
+        emit({
+          type: "session_ended",
+          sessionId,
+          conversationSnapshot: conversation,
+          ...(workerFenceError
+            ? {
+                error: workerFenceError.message,
+                code: workerFenceError.code,
+                reason: workerFenceError.code,
+              }
+            : {}),
+        })
       } else {
         emit({
           type: "session_ended",
@@ -1934,31 +2010,7 @@ export function dispatchAiSdk({
     multiTurn: true,
     q: {
       interrupt: async () => {
-        cancelled = true
-        invalidateCompaction()
-        // Abort the in-flight provider request so it stops immediately instead
-        // of running to completion while we ignore the rest of the stream.
-        activeAbortController?.abort()
-        // Resolve every pending round-trip as denied/aborted so the tool gate
-        // (or plugin-tool / tool-result-review / protocol-adapter exec) doesn't
-        // hang forever waiting for a renderer that already timed out.
-        // `handleInterrupt` (claude-host.mjs) calls this BEFORE timeout, and
-        // the renderer-side timeout calls it too — so a stuck session cleans up
-        // regardless of which side triggers the interrupt first.
-        drainPendingRoundTrips(
-          {
-            pendingApprovals,
-            pendingPluginToolCalls,
-            pendingPluginHookCalls,
-            pendingToolResultReviews,
-            pendingProtocolExecs,
-            ledgerGate: turnLedgerGate ?? undefined,
-            pluginToolFailure: { result: undefined, error: "interrupted" },
-          },
-          "interrupted",
-          (requestId) =>
-            emit({ type: "permission_interrupted", sessionId, requestId, reason: "interrupted" })
-        )
+        interruptTurn()
       },
       /** True while a turn is in-flight (exposed for `handleSend` defense). */
       get active() {

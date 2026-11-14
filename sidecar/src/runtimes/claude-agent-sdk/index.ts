@@ -24,6 +24,7 @@ import { makeInputStream } from "../../shared/input-stream.ts"
 import { createCallLedgerGate } from "../common/call-ledger-gate.ts"
 
 import { createDoomLoopGuard } from "../../policy/doom-loop.ts"
+import type { FenceDeniedError } from "../../policy/fence/admission.ts"
 import { createStderrLogSink, buildMcpLogEvent } from "../../mcp/client/log.ts"
 import { createMcpAutoReconnector } from "../../mcp/client/auto-reconnect.ts"
 
@@ -98,6 +99,7 @@ export function dispatchAnthropic(
       : sendOptions.maxBudgetUsd
   /** Late-bound so a ledger refusal inside a hook can stop the query built below. */
   let interruptForLedger = () => {}
+  let interruptForFence = (_error: FenceDeniedError) => {}
 
   const toolSession = createToolSessionContext({
     sendOptions,
@@ -133,6 +135,7 @@ export function dispatchAnthropic(
     pendingPluginHookCalls,
     doomGuard,
     interruptForLedger: () => interruptForLedger(),
+    onFenceDenied: (error) => interruptForFence(error),
     surface,
   })
   // Prewarm (ADR-0090 Stage 4): a warm subprocess has already spawned and run
@@ -234,6 +237,13 @@ export function dispatchAnthropic(
     void Promise.resolve()
       .then(() => q.interrupt())
       .catch((err) => log("warn", `ledger interrupt failed: ${err?.message ?? err}`))
+  }
+  interruptForFence = (error) => {
+    log("warn", error.code)
+    drainRuntimePending(error.code)
+    void Promise.resolve()
+      .then(() => q.interrupt())
+      .catch((err) => log("warn", `worker fence interrupt failed: ${err?.message ?? err}`))
   }
 
   // First-connection self-healing: the SDK's `system/init` event reports each

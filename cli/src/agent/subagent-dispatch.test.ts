@@ -335,6 +335,31 @@ describe("handleCliDispatchAgent", () => {
     expect(resolveSubagentOptions).toHaveBeenCalledWith("reviewer", {})
   })
 
+  it("hands a fenced root's admission id to every descendant, nested contexts included", async () => {
+    const run = jest.fn(
+      async (..._args: Parameters<NonNullable<CliSubagentDispatchContext["run"]>>) => ({
+        text: "child",
+      })
+    )
+    registerCliSubagentContext(
+      "s1",
+      makeCtx({ run, maxDepth: 3, workerToolAdmissionSessionId: "root-session" })
+    )
+    await handleCliDispatchAgent(req({ subagentId: "reviewer", prompt: "check" }))
+    const deps = run.mock.calls[0]?.[3]
+    expect(deps?.workerToolAdmissionSessionId).toBe("root-session")
+    deps?.nesting?.register("grandchild-parent")
+    expect(getCliSubagentContext("grandchild-parent")?.workerToolAdmissionSessionId).toBe(
+      "root-session"
+    )
+    clearCliSubagentContext("grandchild-parent")
+
+    run.mockClear()
+    registerCliSubagentContext("s1", makeCtx({ run }))
+    await handleCliDispatchAgent(req({ subagentId: "reviewer", prompt: "check" }))
+    expect(run.mock.calls[0]?.[3]).not.toHaveProperty("workerToolAdmissionSessionId")
+  })
+
   it("reports an unknown subagent id with the available list", async () => {
     registerCliSubagentContext("s1", makeCtx())
     const resp = await handleCliDispatchAgent(req({ subagentId: "ghost", prompt: "go" }))

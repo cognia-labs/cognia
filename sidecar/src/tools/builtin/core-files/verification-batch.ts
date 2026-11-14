@@ -108,6 +108,7 @@ export function createVerificationBatchTool(context: CoreFileToolContext) {
                 approved,
                 context.cwd
               )
+              context.beforeVerificationCommand?.()
               const result = await bash.handler(
                 {
                   command: approved.command,

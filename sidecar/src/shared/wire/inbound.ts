@@ -23,6 +23,13 @@ import type {
 
 /** Host-visible fields; rail-owned options remain additive on the wire. */
 export interface SendOptions {
+  /** CLI worker-dispatch sends only: mandatory, fail-closed tool admission. */
+  workerToolAdmission?: true
+  /**
+   * A subagent of a fenced turn: admit against the root session that owns the
+   * fence instead of this child's own session id.
+   */
+  workerToolAdmissionSessionId?: string
   personalEgressFenced?: boolean
   personalEgressReadTools?: string[]
   personalEgressState?: { fenced: boolean }

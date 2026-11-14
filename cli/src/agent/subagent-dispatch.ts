@@ -113,6 +113,12 @@ export interface CliSubagentDispatchContext {
   /** The ROOT chat session that owns the whole tree — live entries are keyed to
    * it so nested runs stay visible to the owning TUI session. */
   rootSessionId?: string
+  /**
+   * The fenced worker-dispatch session that owns this tree (ADR-0244 WP2b).
+   * Every descendant's tools are admitted against it; nested contexts inherit
+   * it through the spread below, so no child runs without admission.
+   */
+  workerToolAdmissionSessionId?: string
   /** Injected subagent runner (tests); defaults to {@link runCliSubagent}. */
   run?: (
     def: AgentSummary["def"],
@@ -381,6 +387,9 @@ export async function handleCliDispatchAgent(
         mcpServers: ctx.mcpServers,
         approvedTools: ctx.approvedTools,
         disabledMcpTools: ctx.disabledMcpTools,
+        ...(ctx.workerToolAdmissionSessionId
+          ? { workerToolAdmissionSessionId: ctx.workerToolAdmissionSessionId }
+          : {}),
         onEvent: (event) => {
           if (!settled && !signal?.aborted) applyLiveSubagentEvent(live, event)
         },

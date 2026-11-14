@@ -51,6 +51,7 @@ import type { ProcessSandboxScope } from "../../platform/process/exec.ts"
 import type { LazyLspResolver } from "../../services/lsp/lazy-resolver.ts"
 import type { CodeGraphIndex } from "../../services/code-graph/index-service.ts"
 import type { VerificationBudget } from "../../shared/verification-budget.ts"
+import type { WorkerToolAdmission } from "../../policy/fence/admission.ts"
 
 /** An AI SDK tool as this adapter builds it. */
 type AiSdkTool = Tool
@@ -184,7 +185,8 @@ function builtinDefToAiSdkTool(
   timeoutMs: number,
   reviewToolOutput?: ToolOutputReview,
   injectionProtection = true,
-  preserveMcpResult = false
+  preserveMcpResult = false,
+  workerToolAdmission?: WorkerToolAdmission
 ): AiSdkTool {
   const namespaced = `mcp__${SERVER_NAME}__${def.name}`
   return tool({
@@ -198,6 +200,10 @@ function builtinDefToAiSdkTool(
           )
         : parsed
       const validated = validatedToolInput(def.name, def.inputSchema, effective)
+      if (workerToolAdmission) {
+        await workerToolAdmission.admit(namespaced, options?.toolCallId)
+        workerToolAdmission.assertAllowed()
+      }
       let result: unknown
       try {
         result = await runBuiltinHandler(def, validated, timeoutMs, options?.abortSignal)
@@ -261,6 +267,7 @@ function pluginToolToAiSdkTool(
     sandboxRuntimeRef?: unknown
     turnId?: string | undefined
     attemptId?: string | undefined
+    workerToolAdmission?: WorkerToolAdmission | undefined
   }
 ): AiSdkTool {
   const {
@@ -307,6 +314,10 @@ function pluginToolToAiSdkTool(
         : parsed
       const validated = validatedToolInput(manifest.name, validator, effective)
       const toolUseId = options?.toolCallId || randomUUID()
+      if (context.workerToolAdmission) {
+        await context.workerToolAdmission.admit(namespaced, toolUseId)
+        context.workerToolAdmission.assertAllowed()
+      }
       // Preserve the manifest's lifecycle contract on the AI SDK rail just as
       // buildPluginToolsServer does on the Anthropic rail. In particular,
       // dispatch_agent/ask_user declare `timeoutMs: 0`: the child run or human
@@ -395,6 +406,7 @@ export function buildAiSdkTools({
   doomGuard: providedDoomGuard,
   reviewToolOutput,
   verificationBudget,
+  workerToolAdmission,
 }: {
   sendOptions: AiSdkToolSendOptions
   emit: (frame: Record<string, unknown>) => void
@@ -413,6 +425,7 @@ export function buildAiSdkTools({
   doomGuard?: DoomLoopGuard | undefined
   reviewToolOutput?: ToolOutputReview | undefined
   verificationBudget?: VerificationBudget | undefined
+  workerToolAdmission?: WorkerToolAdmission | undefined
 }): Record<string, AiSdkTool> {
   // An empty `allowedTools` array means "no filtering" on this path. Honor the
   // explicit runtime-wide deny-all contract before collecting any built-in or
@@ -497,8 +510,20 @@ export function buildAiSdkTools({
           verificationBudget,
           authorizeVerificationCommand: async (input: unknown, signal?: AbortSignal) => {
             if (!bashVisible()) throw new Error("Bash is not allowed in this tool surface")
-            return gate(`mcp__${SERVER_NAME}__bash`, input, signal)
+            const approved = await gate(`mcp__${SERVER_NAME}__bash`, input, signal)
+            // Each batch command runs `bash.handler` directly after its own
+            // approval wait, so admission follows that wait (ADR-0244 WP2b).
+            if (workerToolAdmission) {
+              await workerToolAdmission.admit(`mcp__${SERVER_NAME}__bash`)
+              workerToolAdmission.assertAllowed()
+            }
+            return approved
           },
+          // The batch awaits again between this approval and the spawn, so the
+          // synchronous final check runs at the spawn itself.
+          ...(workerToolAdmission
+            ? { beforeVerificationCommand: () => workerToolAdmission.assertAllowed() }
+            : {}),
         }
       : {}),
     enabled: sendOptions.builtinTools,
@@ -512,7 +537,8 @@ export function buildAiSdkTools({
         builtinToolTimeoutMs,
         reviewToolOutput,
         sendOptions.contentSafety?.injectionProtection,
-        true
+        true,
+        workerToolAdmission
       )
       return nested.execute!(input, {
         toolCallId: randomUUID(),
@@ -551,7 +577,9 @@ export function buildAiSdkTools({
         gate,
         builtinToolTimeoutMs,
         reviewToolOutput,
-        sendOptions.contentSafety?.injectionProtection
+        sendOptions.contentSafety?.injectionProtection,
+        false,
+        workerToolAdmission
       ),
       {
         serverName: SERVER_NAME,
@@ -571,6 +599,7 @@ export function buildAiSdkTools({
           sessionId,
           pendingPluginToolCalls,
           gate,
+          workerToolAdmission,
           reviewToolOutput,
           injectionProtection: sendOptions.contentSafety?.injectionProtection,
           get remoteExecutionContext() {

@@ -717,3 +717,67 @@ it("tolerates already-dead children on shutdown and consumes decoded-string stde
   await boot.shutdown()
   expect(f.kill).toHaveBeenCalledTimes(1)
 })
+
+it("answers worker.admitTool through the bound runtime authority and refuses other sessions", async () => {
+  const f = fakeChild()
+  const admit = jest.fn((sessionId: string) => ({
+    allowed: sessionId === "runtime-session",
+    childRunId: "child",
+    dispatchEpoch: 4,
+    leaseTtlMs: 123,
+  }))
+  const booting = bootstrapSidecar({
+    scriptPath: "/x/host.mjs",
+    spawn: () => f.child,
+    workerToolAdmission: { sessionId: "runtime-session", admit },
+  })
+  f.stdout.write('{"type":"ready"}\n')
+  const boot = await booting
+  try {
+    for (const [rpcId, sessionId] of [
+      ["correct", "runtime-session"],
+      ["unknown", "unknown-session"],
+    ]) {
+      f.stdout.write(
+        JSON.stringify({
+          type: "host_rpc",
+          rpcId,
+          method: "worker.admitTool",
+          params: { sessionId, toolName: "Bash", toolUseId: "tool" },
+        }) + "\n"
+      )
+    }
+    await new Promise((resolve) => setImmediate(resolve))
+    const replies = f.writes.map((line) => JSON.parse(line))
+    expect(replies.find((frame) => frame.rpcId === "correct")).toMatchObject({
+      ok: true,
+      result: { allowed: true, childRunId: "child", dispatchEpoch: 4, leaseTtlMs: 123 },
+    })
+    expect(replies.find((frame) => frame.rpcId === "unknown")).toMatchObject({
+      ok: true,
+      result: { allowed: false },
+    })
+    expect(admit).toHaveBeenCalledTimes(1)
+    expect(admit).toHaveBeenCalledWith("runtime-session")
+  } finally {
+    f.exit()
+    await boot.shutdown()
+  }
+})
+
+it("refuses malformed worker admissions and standalone hosts without authority", async () => {
+  const admit = jest.fn(() => ({ allowed: true, leaseTtlMs: 1000 }))
+  const handler = cliHostRpcHandlers(undefined, { sessionId: "s", admit })["worker.admitTool"]!
+  for (const params of [
+    null,
+    {},
+    { sessionId: "s" },
+    { sessionId: "s", toolName: "Read", toolUseId: 1 },
+  ]) {
+    expect(await handler(params)).toEqual({ allowed: false })
+  }
+  expect(admit).not.toHaveBeenCalled()
+  expect(
+    await cliHostRpcHandlers()["worker.admitTool"]!({ sessionId: "s", toolName: "Read" })
+  ).toEqual({ allowed: false })
+})

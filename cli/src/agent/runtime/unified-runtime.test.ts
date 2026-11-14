@@ -1975,3 +1975,24 @@ nativeCaptureTest(
     }
   }
 )
+
+it("passes worker authority to the provider session and the fence stamp to each send", async () => {
+  const admit = jest.fn(() => ({ allowed: true, leaseTtlMs: 1000 }))
+  const fake = fakeSession([{ kind: "reply", text: "done" }])
+  let observed: AgentSessionParams | undefined
+  const send = jest.fn(fake.factory({} as AgentSessionParams).send)
+  const run = await runUnifiedTurn(
+    params(createMemoryFs(), {
+      admitWorkerTool: admit,
+      workerToolAdmission: true,
+      createSession(base) {
+        observed = base
+        return { ...fake.factory(base), send }
+      },
+    })
+  )
+  expect(run.result.status).toBe("completed")
+  expect(observed?.sessionId).toBe(run.result.sessionId)
+  expect(observed?.admitWorkerTool).toBe(admit)
+  expect(send.mock.calls[0]?.[1].workerToolAdmission).toBe(true)
+})

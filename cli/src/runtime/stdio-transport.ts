@@ -50,6 +50,13 @@ type Handler = (payload: unknown) => void
 /** Answers one `host_rpc` method; a throw (or rejection) is sent back as `ok: false`. */
 export type HostRpcHandler = (params: unknown) => unknown
 
+export type WorkerToolAdmitter = (sessionId: string) => {
+  allowed: boolean
+  childRunId?: string
+  dispatchEpoch?: number
+  leaseTtlMs?: number
+}
+
 /**
  * The methods the standalone CLI host answers. `workspace.portEnv` asks for the
  * workspace's leased ports before a shell spawns: the CLI owns no port
@@ -57,6 +64,7 @@ export type HostRpcHandler = (params: unknown) => unknown
  */
 export const CLI_HOST_RPC_HANDLERS: Readonly<Record<string, HostRpcHandler>> = Object.freeze({
   "workspace.portEnv": () => null,
+  "worker.admitTool": () => ({ allowed: false }),
 })
 
 export interface StdioTransportOptions {

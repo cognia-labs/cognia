@@ -84,6 +84,27 @@ describe("registerTurnSubagentContext", () => {
     expect(getCliSubagentContext(s.sessionId)).toBeUndefined()
   })
 
+  it("publishes a fenced turn's admission id and omits it otherwise", () => {
+    const s = session()
+    const base = {
+      session: s,
+      config,
+      home: HOME,
+      gate,
+      approvedTools: new Set<string>(),
+      disabledMcpTools: new Set<string>(),
+    }
+    const clearFenced = registerTurnSubagentContext({
+      ...base,
+      workerToolAdmissionSessionId: s.sessionId,
+    })
+    expect(getCliSubagentContext(s.sessionId)?.workerToolAdmissionSessionId).toBe(s.sessionId)
+    clearFenced()
+    const clearGeneric = registerTurnSubagentContext(base)
+    expect(getCliSubagentContext(s.sessionId)).not.toHaveProperty("workerToolAdmissionSessionId")
+    clearGeneric()
+  })
+
   it("registers nothing when the dispatch tool was never surfaced", () => {
     const s = session({ subagentToolEnabled: false })
     const clear = registerTurnSubagentContext({

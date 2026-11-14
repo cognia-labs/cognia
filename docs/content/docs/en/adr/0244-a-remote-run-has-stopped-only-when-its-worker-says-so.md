@@ -65,6 +65,7 @@ A durable Agent Team child can run on another device (ADR-0113). The brain claim
 - Terminals on a Bun runtime whose PTY child cannot be verified as its own process-group leader (no `pid` from Bun, or no group of that number). Their stops stay unconfirmed in the same way; their lifecycle and the wake hold still follow the leader's exit.
 - Signals to a group whose leader Node has already reaped. A live group pins its pgid number, so a timeout or interrupt still escalates to SIGKILL, sent right after a probe that found the group live. The window between that probe and the signal, in which the group could empty and its number be reused, is accepted, as it was before stop proof.
 - Stop-proof records of executors that retired long ago. A Host keeps closed admission and proof for its 4096 most recent retired executors; a query about an older one reads as unknown, never as stopped.
+- Delegated approval on a fenced worker turn. With `permissionPromptToolName`, the Claude Agent SDK asks an MCP relay process that the sidecar never sees between the approval and the tool's execution, so admission cannot follow that wait. A worker-dispatch turn that configures one is refused when its options are built.
 - Grace and propagation numbers. They are measured on the macOS ↔ Linux box rig before any is written into a release gate.
 
 ## Alternatives considered

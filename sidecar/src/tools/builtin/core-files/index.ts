@@ -93,6 +93,7 @@ export function createCoreTools({
   provider,
   verificationBudget,
   authorizeVerificationCommand,
+  beforeVerificationCommand,
 }: CoreFileToolContext & { taskStore?: SessionTaskStore | undefined } = {}) {
   const ctx: CoreFileToolContext = {
     cwd,
@@ -108,6 +109,7 @@ export function createCoreTools({
     provider,
     verificationBudget,
     authorizeVerificationCommand,
+    beforeVerificationCommand,
   }
   const tools = [
     createGrepTool(ctx),

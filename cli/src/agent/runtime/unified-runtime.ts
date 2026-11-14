@@ -147,6 +147,8 @@ export interface UnifiedTurnParams {
   subscribePluginTools?: AgentSessionParams["subscribePluginTools"]
   /** Override MCP discovery for a host-managed session (for example RPC configure). */
   resolveMcpServers?: AgentSessionParams["resolveMcpServers"]
+  admitWorkerTool?: AgentSessionParams["admitWorkerTool"]
+  workerToolAdmission?: boolean
 
   /**
    * Provider session owned by the CALLER and reused across turns.
@@ -493,6 +495,9 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
       }
       try {
         const captured = await session.send(params.prompt, {
+          ...(params.workerToolAdmission !== undefined
+            ? { workerToolAdmission: params.workerToolAdmission }
+            : {}),
           ...(deadlineEpochMs !== undefined ? { startedAtEpochMs, deadlineEpochMs } : {}),
           ...(params.onAttachments ? { onAttachments: params.onAttachments } : {}),
           gate: params.gate,
@@ -753,6 +758,7 @@ function buildSession(
         : {}),
     ...(params.subscribePluginTools ? { subscribePluginTools: params.subscribePluginTools } : {}),
     ...(params.resolveMcpServers ? { resolveMcpServers: params.resolveMcpServers } : {}),
+    ...(params.admitWorkerTool ? { admitWorkerTool: params.admitWorkerTool } : {}),
     ...(params.compositionSelection ? { compositionSelection: params.compositionSelection } : {}),
     ...(params.outputSchema ? { outputSchema: params.outputSchema } : {}),
   }

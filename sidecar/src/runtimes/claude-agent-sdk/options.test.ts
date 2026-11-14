@@ -489,3 +489,161 @@ test("R6: aborted and approval-denied native calls release their in-flight lease
     session.closeInput()
   }
 })
+
+for (const permissionMode of ["default", "bypassPermissions", "dontAsk"] as const) {
+  test(`worker PreToolUse is unconditional in ${permissionMode} and refuses a missing host channel`, async () => {
+    const { options, session } = captureClaudeRuntime(
+      {
+        workerToolAdmission: true,
+        toolSurface: "full",
+        permissionMode,
+        allowedTools: ["Bash"],
+        claudeAgentSdk: { version: 1, tools: ["Bash"] },
+      },
+      () => ({ async *[Symbol.asyncIterator]() {}, interrupt() {}, close() {} })
+    )
+    try {
+      const mandatory = options.hooks?.PreToolUse?.at(-1)
+      assert.ok(mandatory)
+      assert.equal(mandatory.matcher, undefined)
+      const result = await mandatory.hooks[0]!(
+        {
+          hook_event_name: "PreToolUse",
+          session_id: "sdk-id",
+          transcript_path: "",
+          cwd: ".",
+          tool_name: "Bash",
+          tool_input: {},
+          tool_use_id: "t",
+        },
+        "t",
+        { signal: new AbortController().signal }
+      )
+      assert.equal("continue" in result && result.continue, false)
+      assert.equal("stopReason" in result && result.stopReason, "worker_fence_closed")
+      assert.equal(
+        (result as { hookSpecificOutput: { permissionDecision: string } }).hookSpecificOutput
+          .permissionDecision,
+        "deny"
+      )
+    } finally {
+      session.closeInput()
+    }
+  })
+}
+
+test("a fenced worker turn refuses a delegated permission prompt tool it cannot re-admit after", () => {
+  const query = () => ({ async *[Symbol.asyncIterator]() {}, interrupt() {}, close() {} })
+  assert.throws(
+    () =>
+      captureClaudeRuntime(
+        {
+          workerToolAdmission: true,
+          toolSurface: "full",
+          claudeAgentSdk: { version: 1, permissionPromptToolName: "mcp__permission__review" },
+        },
+        query
+      ),
+    /delegated permission prompt tool/
+  )
+  // Without the worker flag the refusal never fires; the delegate reaches the
+  // existing managed-server check instead.
+  assert.throws(
+    () =>
+      captureClaudeRuntime(
+        {
+          toolSurface: "full",
+          claudeAgentSdk: { version: 1, permissionPromptToolName: "mcp__permission__review" },
+        },
+        query
+      ),
+    /must belong to a managed MCP server/
+  )
+})
+
+test("a configured PreToolUse allow is re-admitted after the hook finishes", async () => {
+  const { dispatchAnthropic } = await import("./index.ts")
+  const { nodeCmd } = await import("../../../test-support/hook-command.ts")
+  let allowed = true
+  let interrupted = 0
+  let options!: import("@anthropic-ai/claude-agent-sdk").Options
+  let finish!: () => void
+  const running = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  const session = dispatchAnthropic(
+    {
+      sessionId: "hook-worker",
+      firstPrompt: "work",
+      emit() {},
+      log() {},
+      sendOptions: {
+        workerToolAdmission: true,
+        toolSurface: "full",
+        permissionMode: "bypassPermissions",
+        hooks: {
+          PreToolUse: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: nodeCmd(
+                    'console.log(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow"}}))'
+                  ),
+                },
+              ],
+            },
+          ],
+        },
+      },
+      hostRpc: {
+        async call() {
+          return { allowed, leaseTtlMs: 10000 }
+        },
+      },
+    },
+    {
+      query(args) {
+        options = args.options
+        return {
+          async *[Symbol.asyncIterator]() {
+            await running
+          },
+          interrupt() {
+            interrupted++
+            finish()
+          },
+          close() {
+            finish()
+          },
+        }
+      },
+    }
+  )
+  const input = {
+    hook_event_name: "PreToolUse" as const,
+    session_id: "sdk-id",
+    transcript_path: "",
+    cwd: ".",
+    tool_name: "Read",
+    tool_input: {},
+    tool_use_id: "t",
+  }
+  const context = { signal: new AbortController().signal }
+  try {
+    await options.hooks!.PreToolUse!.at(-1)!.hooks[0]!(input, "t", context)
+    allowed = false
+    const result = await options.hooks!.PreToolUse![1]!.hooks[0]!(input, "t", context)
+    assert.equal(
+      (result as { hookSpecificOutput: { permissionDecision: string } }).hookSpecificOutput
+        .permissionDecision,
+      "deny"
+    )
+    assert.equal("continue" in result && result.continue, false)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(interrupted, 1)
+  } finally {
+    session.closeInput()
+    finish()
+  }
+})

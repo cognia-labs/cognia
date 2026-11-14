@@ -153,6 +153,14 @@ export function restartReason(existing: HostSession, options?: SendOptions) {
     (existing.sendOptions?.personalEgressFenced === true)
   )
     return "personal egress fence changed"
+  // A runtime builds its worker admission once, from its first send (ADR-0244
+  // WP2b). A fenced send must never be pushed into a runtime built without it.
+  if (
+    (options?.workerToolAdmission === true) !==
+      (existing.sendOptions?.workerToolAdmission === true) ||
+    options?.workerToolAdmissionSessionId !== existing.sendOptions?.workerToolAdmissionSessionId
+  )
+    return "worker tool admission changed"
   if (Array.isArray(options?.initialConversation)) return "transcript restored"
   if (
     options?.personalVisibilityHasWithheld === true &&

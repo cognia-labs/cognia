@@ -30,6 +30,8 @@ export interface TurnDispatchParams {
   signal?: AbortSignal
   approvedTools: Set<string>
   disabledMcpTools: Set<string>
+  /** Set when this turn runs under a worker-dispatch fence (ADR-0244 WP2b). */
+  workerToolAdmissionSessionId?: string
 }
 
 /**
@@ -56,6 +58,9 @@ export function registerTurnSubagentContext(params: TurnDispatchParams): () => v
     mcpServers: session.mcpServers,
     approvedTools: params.approvedTools,
     disabledMcpTools: params.disabledMcpTools,
+    ...(params.workerToolAdmissionSessionId
+      ? { workerToolAdmissionSessionId: params.workerToolAdmissionSessionId }
+      : {}),
   })
   return () => clearCliSubagentContext(session.sessionId)
 }
