@@ -150,31 +150,33 @@ export async function integrateChangesets(
     }
   }
 
+  /** Abort the run, so its changesets return to the queue, and say why. */
+  const giveBack = async (
+    kind: IntegrationOutcomeKind,
+    reason?: string,
+    message?: string
+  ): Promise<IntegrationOutcome> => ({
+    kind,
+    analysis,
+    run: await abortRun(run),
+    dropped,
+    ...(reason ? { reason } : {}),
+    ...(message !== undefined ? { message } : {}),
+  })
   // A cancel (the person, a repository switch, an unmount) can land while any
   // step below is awaited. It is checked again after each await and before
   // every step that changes the run or the target, not only once per pass
   // (postfix review P06). A publish whose compare-and-swap committed has
   // happened: it is reported as published whatever the signal says after.
-  const cancelled = async (): Promise<IntegrationOutcome> => ({
-    kind: "blocked",
-    analysis,
-    run: await abortRun(run),
-    dropped,
-    reason: "aborted",
-  })
+  const cancelled = () => giveBack("blocked", "aborted")
 
   for (;;) {
     if (input.signal.aborted) return cancelled()
     if (run.state === "conflicted" || run.state === "failed") {
       // Nothing composed (all conflicted / all dropped). Give the queue back.
-      const kind = run.state === "conflicted" ? "conflicted" : "failed"
-      return {
-        kind,
-        analysis,
-        run: await abortRun(run),
-        dropped,
-        ...(kind === "failed" ? { reason: "checks_unmet" } : {}),
-      }
+      return run.state === "conflicted"
+        ? giveBack("conflicted")
+        : giveBack("failed", "checks_unmet")
     }
     if (run.state !== "prepared" || !run.candidateSha) {
       return {
@@ -191,27 +193,15 @@ export async function integrateChangesets(
     try {
       policy = await deps.readPolicyAtRef(run)
     } catch (error) {
-      return {
-        kind: "blocked",
-        analysis,
-        run: await abortRun(run),
-        dropped,
-        reason: "policy_unavailable",
-        message: errorMessage(error),
-      }
+      return giveBack("blocked", "policy_unavailable", errorMessage(error))
     }
     if (input.signal.aborted) return cancelled()
     if (!policy.ok) {
-      return {
-        kind: "blocked",
-        analysis,
-        run: await abortRun(run),
-        dropped,
-        reason: "policy_invalid",
-        message: policy.problems
-          .map((problem) => `${problem.pointer}: ${problem.message}`)
-          .join("; "),
-      }
+      return giveBack(
+        "blocked",
+        "policy_invalid",
+        policy.problems.map((problem) => `${problem.pointer}: ${problem.message}`).join("; ")
+      )
     }
     // A failed/missing head check cannot be replaced by a passing candidate
     // check. The policy-only obligation was never stored on the changeset.
@@ -224,26 +214,16 @@ export async function integrateChangesets(
             changeset.headSha !== item.headSha ||
             unmetChecks(policy.policy.requiredChecks, changeset.checks, item.headSha).length > 0
           ) {
-            return {
-              kind: "blocked",
-              analysis,
-              run: await abortRun(run),
-              dropped,
-              reason: "checks_unmet",
-              message: `changeset ${item.changesetId} has unmet target policy checks`,
-            }
+            return giveBack(
+              "blocked",
+              "checks_unmet",
+              `changeset ${item.changesetId} has unmet target policy checks`
+            )
           }
         }
       }
     } catch (error) {
-      return {
-        kind: "blocked",
-        analysis,
-        run: await abortRun(run),
-        dropped,
-        reason: "policy_unavailable",
-        message: errorMessage(error),
-      }
+      return giveBack("blocked", "policy_unavailable", errorMessage(error))
     }
     if (input.signal.aborted) return cancelled()
     // The host's list also carries each composed changeset's own checks.
@@ -258,14 +238,7 @@ export async function integrateChangesets(
     // ── verify the exact candidate ───────────────────────────────────────────
     if (requiredChecks.length > 0) {
       if (!deps.acceptancePortFor) {
-        return {
-          kind: "blocked",
-          analysis,
-          run: await abortRun(run),
-          dropped,
-          reason: "checks_unmet",
-          message: "no acceptance port can verify the candidate",
-        }
+        return giveBack("blocked", "checks_unmet", "no acceptance port can verify the candidate")
       }
       const checks = await runChangesetChecks({
         port: deps.acceptancePortFor(run),
@@ -298,15 +271,7 @@ export async function integrateChangesets(
       if (unmet.length > 0) {
         const composed = composedItems(run)
         const culprit = composed[composed.length - 1]
-        if (!culprit) {
-          return {
-            kind: "failed",
-            analysis,
-            run: await abortRun(run),
-            dropped,
-            reason: "checks_unmet",
-          }
-        }
+        if (!culprit) return giveBack("failed", "checks_unmet")
         // Drop the last composed changeset: if the rest pass, it was the one;
         // if they do not, the next iteration drops the one before it.
         run = await host.dropIntegrationItem(run.integrationId, culprit.changesetId)

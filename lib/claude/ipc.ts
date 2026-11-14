@@ -93,20 +93,13 @@ const personalEgressSessions = new Set<{
 // another host must survive this renderer's Stop or late session-ended event.
 const pluginToolSessionContexts = new WeakMap<object, Map<string, RemoteExecutionContext>>()
 
-function currentPluginToolSessionContexts(): Map<string, RemoteExecutionContext> {
-  const route = getActiveRemoteTransport() ?? transport
-  let contexts = pluginToolSessionContexts.get(route)
-  if (!contexts) {
-    contexts = new Map()
-    pluginToolSessionContexts.set(route, contexts)
-  }
-  return contexts
-}
-
-/** The plugin tool contexts of the Host `route` names; local ones key on the shared transport. */
+/**
+ * The plugin tool contexts of the Host `route` names, or of the selected Host
+ * without one. Local contexts key on the shared transport.
+ */
 function pluginToolSessionContextsFor(route?: ExecutionRoute): Map<string, RemoteExecutionContext> {
-  if (!route) return currentPluginToolSessionContexts()
-  const key = route.remote ? route.identity : transport
+  const remote = route ? (route.remote ? route.identity : null) : getActiveRemoteTransport()
+  const key = remote ?? transport
   let contexts = pluginToolSessionContexts.get(key)
   if (!contexts) {
     contexts = new Map()
@@ -1701,12 +1694,12 @@ export async function onClaudeMessage(
       ? routed.remoteExecutionContext
       : undefined
     if (isPluginToolExecEvent(event)) {
-      const contexts = currentPluginToolSessionContexts()
+      const contexts = pluginToolSessionContextsFor()
       if (remoteContext) contexts.set(event.sessionId, remoteContext)
       else contexts.delete(event.sessionId)
     }
     if (event.type === "session_ended") {
-      const context = remoteContext ?? currentPluginToolSessionContexts().get(event.sessionId)
+      const context = remoteContext ?? pluginToolSessionContextsFor().get(event.sessionId)
       if (context || !getActiveRemoteTransport())
         abortPluginToolCallsForSession(event.sessionId, "session ended", context, event.turnId)
     }
