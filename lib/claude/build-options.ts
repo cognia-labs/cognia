@@ -5297,7 +5297,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       version: 1,
       ...opts.claudeAgentSdk,
       tools: ASIDE_NATIVE_READ_TOOLS.filter((name) => allowed.has(name) && !denied.has(name)),
-      plugins: [],
       skills: [],
     }
     // SDK settings can discover tools independently of Cognia's MCP registry.
@@ -5425,11 +5424,9 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   }
 
   // ADR-0090: stamp the frozen execution spec onto the outgoing SendOptions.
-  // `execution` is the secret-free wire shape the sidecar's dispatch routes on
-  // (runtime adapter instead of the provider-id branch); the legacy
-  // `provider`/proxy fields stay untouched so an older sidecar still routes. A
-  // stamping failure must not break the send — dispatch falls back to the
-  // provider branch and counts it as `legacy_dispatch` telemetry.
+  // `execution` is the secret-free wire shape the sidecar's dispatch routes
+  // on; the sidecar refuses a send without it, so a stamping failure fails
+  // the send here rather than reaching a Host that cannot route it.
   //
   // Whether a `gateway` route is actually reachable is still a flag decision:
   // `gatewayAgentRouteTickets` is what makes `resolveAgentExecutionSpec` return
@@ -5501,9 +5498,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     // spec. The sidecar reads `composition.toolPresentation` to decide which
     // tool surface to register, so this is what makes Code mode reachable at
     // all — and what makes an unsandboxed host resolve down to `native`
-    // before the sidecar ever sees the request. Best-effort like the rest of
-    // this block: a failure leaves `composition` absent, which the sidecar
-    // treats as `native`.
+    // before the sidecar ever sees the request. Best-effort: a failure leaves
+    // `composition` absent, which the sidecar treats as `native`.
     const composition = await resolveTurnCompositionSafely({
       sessionId: session?.id,
       prompt: {
@@ -5559,14 +5555,12 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     }
     ctx.onResolvedExecutionSpec?.(spec)
   } catch (err) {
-    // An explicitly chosen SDK runtime must never fall back to another
-    // engine or send directly when its required gateway lease fails.
+    // An explicitly chosen SDK runtime keeps its own failure (a refused
+    // gateway lease, a wrong wire protocol) so the caller sees why.
     if (experimentalSdk) throw err
-    // Never fail the send over spec stamping. But never hide it either: with
-    // no `execution` on the wire the sidecar takes the legacy provider branch,
-    // no `agent://message` envelopes are emitted and the execution handle has
-    // nothing to bind to, so the `legacy_dispatch` counter needs a cause.
-    console.warn("execution spec stamping failed; sending on the legacy path", err)
+    throw new Error("execution spec stamping failed; the send was not dispatched", {
+      cause: err,
+    })
   }
 
   // Trust proof is host-owned and stamped after plugin option transforms, so a

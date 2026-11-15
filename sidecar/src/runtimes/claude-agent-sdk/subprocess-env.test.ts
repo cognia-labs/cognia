@@ -148,93 +148,11 @@ test("a host-managed proxy is inherited by spec subprocesses and outranks the ov
   assert.equal(env.COGNIA_MANAGED_NETWORK_PROXY, undefined)
 })
 
-test("legacy sessions (no execution spec) keep the historical spread", () => {
+test("a send without an execution spec gets the same allowlisted rebuild", () => {
   const env = buildSubprocessEnv({ env: { EXTRA: "1" } }, hostileParent)
-  // Byte-for-byte legacy behavior: inherited creds INTENTIONALLY survive
-  // because the desktop host injects them into the sidecar process env.
-  assert.equal(env.ANTHROPIC_API_KEY, "sk-parent-leak")
-  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "oauth-parent-leak")
+  assert.equal(env.ANTHROPIC_API_KEY, undefined)
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined)
   assert.equal(env.EXTRA, "1")
-})
-
-test("an explicit legacy OAuth account excludes inherited competing credentials and routes", () => {
-  const inheritedAuth = {
-    ANTHROPIC_AUTH_TOKEN: "parent-bearer",
-    ANTHROPIC_API_KEY: "parent-api-key",
-    ANTHROPIC_BASE_URL: "https://parent.invalid",
-    ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer parent-header",
-    ANTHROPIC_CUSTOM_HEADER_Authorization: "Bearer parent-header",
-    ANTHROPIC_PROFILE: "parent-profile",
-    ANTHROPIC_CONFIG_DIR: "/synthetic/parent-profiles",
-    ANTHROPIC_FEDERATION_RULE_ID: "parent-rule",
-    ANTHROPIC_ORGANIZATION_ID: "parent-org",
-    ANTHROPIC_IDENTITY_TOKEN_FILE: "/synthetic/identity-token",
-    CLAUDE_CODE_USE_BEDROCK: "1",
-    CLAUDE_CODE_USE_VERTEX: "1",
-    CLAUDE_CODE_USE_FOUNDRY: "1",
-    CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "42",
-    CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "43",
-  }
-  const parent = {
-    ...hostileParent,
-    ...inheritedAuth,
-    COGNIA_MANAGED_NETWORK_PROXY: "1",
-    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://collector:4318/v1/traces",
-    CLAUDE_CODE_ENABLE_TELEMETRY: "1",
-  }
-  const env = buildSubprocessEnv(
-    {
-      env: {
-        CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth",
-        CLAUDE_CONFIG_DIR: "/synthetic/selected-account",
-      },
-    },
-    parent
-  )
-  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "selected-oauth")
-  assert.equal(env.CLAUDE_CONFIG_DIR, "/synthetic/selected-account")
-  for (const name of Object.keys(inheritedAuth)) {
-    assert.equal(env[name], undefined, `${name} must not compete with the selected account`)
-  }
-  assert.equal(env.HTTPS_PROXY, parent.HTTPS_PROXY)
-  assert.equal(env.COGNIA_MANAGED_NETWORK_PROXY, "1")
-  assert.equal(env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, parent.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT)
-  assert.equal(env.CLAUDE_CODE_ENABLE_TELEMETRY, "1")
-  assert.equal(env.PATH, parent.PATH)
-  assert.equal(env.OPENAI_API_KEY, parent.OPENAI_API_KEY)
-  assert.equal(parent.ANTHROPIC_API_KEY, "parent-api-key", "parent is not mutated")
-})
-
-for (const credentialName of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
-  test(`an explicit legacy ${credentialName} removes inherited OAuth and honors its route`, () => {
-    const env = buildSubprocessEnv(
-      {
-        env: {
-          [credentialName]: "selected-credential",
-          ANTHROPIC_BASE_URL: "http://127.0.0.1:47823/v1",
-          ANTHROPIC_CUSTOM_HEADERS: "X-Organization: selected",
-        },
-      },
-      { ...hostileParent, ANTHROPIC_AUTH_TOKEN: "parent-bearer" }
-    )
-    assert.equal(env[credentialName], "selected-credential")
-    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined)
-    assert.equal(
-      env[credentialName === "ANTHROPIC_API_KEY" ? "ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY"],
-      undefined
-    )
-    assert.equal(env.ANTHROPIC_BASE_URL, "http://127.0.0.1:47823/v1")
-    assert.equal(env.ANTHROPIC_CUSTOM_HEADERS, "X-Organization: selected")
-    // Removing an existing config directory would fall back to the real default home.
-    assert.equal(env.CLAUDE_CONFIG_DIR, hostileParent.CLAUDE_CONFIG_DIR)
-  })
-}
-
-test("an empty legacy credential overlay does not select an account", () => {
-  const env = buildSubprocessEnv({ env: { CLAUDE_CODE_OAUTH_TOKEN: "" } }, hostileParent)
-  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "")
-  assert.equal(env.ANTHROPIC_API_KEY, hostileParent.ANTHROPIC_API_KEY)
-  assert.equal(env.ANTHROPIC_BASE_URL, hostileParent.ANTHROPIC_BASE_URL)
 })
 
 test(
@@ -293,7 +211,7 @@ test("validateRouteEnv rejects a gateway route whose overlay smuggles a foreign 
     env: { ANTHROPIC_BASE_URL: "https://evil.example" },
   })
   assert.equal(smuggled.ok, false)
-  // Direct routes and legacy sends don't constrain the base URL here.
+  // Direct routes don't constrain the base URL here.
   assert.deepEqual(validateRouteEnv({ execution, env: {} }), { ok: true })
   assert.deepEqual(validateRouteEnv({ env: {} }), { ok: true })
 })
@@ -349,7 +267,7 @@ test("a send can opt out of child telemetry entirely", () => {
   assert.deepEqual(childTelemetryEnv({ telemetry: { child: false } }, TRACED), {})
 })
 
-test("a spec-carrying send gets child telemetry; a legacy one is untouched", () => {
+test("a spec-carrying send gets child telemetry", () => {
   const traced = { ...TRACED, PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-parent" }
 
   const framed = buildSubprocessEnv({ execution, env: {} }, traced)
@@ -358,11 +276,6 @@ test("a spec-carrying send gets child telemetry; a legacy one is untouched", () 
   // Still allowlisted: the credential in the parent env does not come back.
   assert.equal(framed.ANTHROPIC_API_KEY, undefined)
   assert.equal(framed.PATH, "/usr/bin")
-
-  // ADR-0090 constraint 6: the legacy spread is byte-identical to before, and
-  // the parent's OTEL_* already rides along in it anyway.
-  const legacy = buildSubprocessEnv({ env: {} }, traced)
-  assert.deepEqual(legacy, traced)
 })
 
 test("the spec overlay still outranks the host telemetry block", () => {

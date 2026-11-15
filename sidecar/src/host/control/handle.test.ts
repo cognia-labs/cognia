@@ -12,6 +12,11 @@ import {
   extensionControlPreflight,
 } from "./handle.ts"
 
+const EXTENSIBLE_CLAUDE = {
+  runtimeAdapter: "claude-agent-sdk",
+  capabilities: { effective: ["extensions.dynamic"] },
+}
+
 test("legacy plugin refresh uses the same runtime reloader and its frozen capability", async () => {
   let calls = 0
   const session: HostSession = {
@@ -80,7 +85,7 @@ test("live extension control invokes a neutral runtime port and commits only app
   const calls: unknown[] = []
   const session: HostSession = {
     runtimeAdapterId: "claude-agent-sdk",
-    sendOptions: {},
+    sendOptions: { execution: EXTENSIBLE_CLAUDE },
     reloadExtensions: async (options) => {
       calls.push(options)
       return { disposition: held ? "held" : "applied", added: held ? [] : added }
@@ -101,7 +106,19 @@ test("live extension control invokes a neutral runtime port and commits only app
 
 test("extension control rejects unsupported runtimes and retires uncertain timed out mutations", async () => {
   const sessions: Map<string, HostSession> = new Map([
-    ["s", { runtimeAdapterId: "ai-sdk", sendOptions: { provider: "openai" } }],
+    [
+      "s",
+      {
+        runtimeAdapterId: "ai-sdk",
+        sendOptions: {
+          provider: "openai",
+          execution: {
+            runtimeAdapter: "ai-sdk",
+            capabilities: { effective: ["extensions.dynamic"] },
+          },
+        },
+      },
+    ],
   ])
   assert.deepEqual(await routeReloadExtensions(sessions, "s"), {
     ok: false,
@@ -110,6 +127,7 @@ test("extension control rejects unsupported runtimes and retires uncertain timed
   let closed = false
   sessions.set("s", {
     runtimeAdapterId: "claude-agent-sdk",
+    sendOptions: { execution: EXTENSIBLE_CLAUDE },
     reloadExtensions: () => new Promise(() => {}),
     q: {
       close() {
@@ -130,6 +148,7 @@ test("a stale extension reload failure cannot retire a replacement session", asy
     let rejectReload!: (reason: Error) => void
     const session: HostSession = {
       runtimeAdapterId: "claude-agent-sdk",
+      sendOptions: { execution: EXTENSIBLE_CLAUDE },
       reloadExtensions: () =>
         new Promise((_resolve, reject) => {
           rejectReload = reject

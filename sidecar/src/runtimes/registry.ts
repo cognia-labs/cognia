@@ -30,8 +30,7 @@ export const RUNTIME_ADAPTERS = {
   "ai-sdk": {
     id: "ai-sdk",
     capabilities: ADAPTER_CAPABILITIES["ai-sdk"],
-    // The ai-sdk dispatcher derives its provider from sendOptions.provider,
-    // exactly as the legacy branch did.
+    // The ai-sdk dispatcher derives its provider from sendOptions.provider.
     dispatch: (params: DispatchParams) =>
       requireEngine("ai-sdk").dispatch({
         ...params,

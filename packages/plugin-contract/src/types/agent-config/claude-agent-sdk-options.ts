@@ -26,13 +26,6 @@
 
 import type { AgentEffortLevel } from "./agent-modes"
 
-/** `plugins` entry. Paths are canonicalised and root-checked host-side. */
-export interface ClaudeAgentSdkPluginRef {
-  type: "local"
-  path: string
-  skipMcpDiscovery?: boolean
-}
-
 /**
  * Sandbox settings, layered ON TOP of the sidecar's own workspace confinement
  * (`builtin-tools/confinement.mjs`) rather than replacing it. Two independent
@@ -185,7 +178,6 @@ export interface ClaudeAgentSdkOptionsV1 {
       }
 
   // ---- extension surfaces ---------------------------------------------------
-  plugins?: ClaudeAgentSdkPluginRef[]
   pluginDelivery?: "argv" | "initialize"
   skills?: string[] | "all"
   toolAliases?: Record<string, string>
@@ -256,7 +248,6 @@ const optionShape: Record<keyof ClaudeAgentSdkOptionsV1, Shape> = {
   systemPrompt: "record",
   skills: "record",
   tools: "record",
-  plugins: [{ type: "string", path: "string", skipMcpDiscovery: "boolean" }],
   toolAliases: "record",
   toolConfig: { askUserQuestion: { previewFormat: "string" } },
   elicitation: { enabled: "boolean" },
@@ -659,14 +650,7 @@ export function validateClaudeAgentSdkOptions(
     }
   }
 
-  // ---- plugins / skills ------------------------------------------------------
-  for (const plugin of opts.plugins ?? []) {
-    if (plugin?.type !== "local") {
-      errors.push(`claudeAgentSdk.plugins: unsupported plugin type "${plugin?.type}"`)
-    } else if (typeof plugin.path !== "string" || plugin.path.length === 0) {
-      errors.push("claudeAgentSdk.plugins: every entry needs a non-empty path")
-    }
-  }
+  // ---- skills ----------------------------------------------------------------
   if (opts.skills !== undefined && opts.skills !== "all" && !Array.isArray(opts.skills)) {
     errors.push('claudeAgentSdk.skills must be a string array or "all"')
   }

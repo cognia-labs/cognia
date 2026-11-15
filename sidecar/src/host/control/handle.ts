@@ -16,7 +16,7 @@ import type {
 import { runtimeFeaturePolicyKey } from "@cognia/agent-contracts/session-operations"
 import { runtimeFeatureSupported } from "../../runtimes/capabilities.ts"
 
-/** A new neutral operation resolves legacy rails without widening a frozen spec. */
+/** A neutral operation is admitted only when the session's frozen spec grants it. */
 export function extensionControlPreflight(
   session: HostSession | undefined,
   method: "reloadExtensions" | "reloadPlugins",
@@ -24,17 +24,11 @@ export function extensionControlPreflight(
 ) {
   const validation = controlParamError(method, params)
   if (!session) return validation ? { error: validation } : null
-  const adapter =
-    session.runtimeAdapterId ??
-    session.sendOptions?.execution?.runtimeAdapter ??
-    ((session.sendOptions?.provider ?? "anthropic") === "anthropic" ? "claude-agent-sdk" : "ai-sdk")
+  const execution = session.sendOptions?.execution
   const capability = method === "reloadExtensions" ? "extensions.dynamic" : "plugins.native"
   if (
-    !runtimeFeatureSupported(
-      adapter,
-      capability,
-      session.sendOptions?.execution?.runtimeAdapter ? session.sendOptions.execution : undefined
-    ) ||
+    !execution?.runtimeAdapter ||
+    !runtimeFeatureSupported(execution.runtimeAdapter, capability, execution) ||
     !session.reloadExtensions
   )
     return { error: "capability_error", capability }

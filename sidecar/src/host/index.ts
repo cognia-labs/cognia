@@ -38,6 +38,7 @@ import { createUncaughtErrorGuard } from "./lifecycle.ts"
 import {
   SMOKE_DEFAULT_TIMEOUT_MS,
   smokeCredentialGap,
+  smokeSendOptions,
   smokeObserveFrame,
   smokeOutcome,
 } from "./smoke.ts"
@@ -164,9 +165,8 @@ export function createAgentHost({
     // One ref per loop. `handleSend` advances it for later turns on THIS session;
     // a replacement loop gets its own, so this one keeps stamping its old id.
     const turnRef = { id: sendOptions?.turnId }
-    // ADR-0090 Phase 3: sessions carrying a frozen execution spec ALSO emit
-    // canonical `agent_event` envelopes (additive dual channel); legacy
-    // sessions pay nothing.
+    // ADR-0090: every session carries a frozen execution spec and ALSO emits
+    // canonical `agent_event` envelopes alongside the raw wire messages.
     const emitterParams = envelopeEmitterParams({ sessionId, sendOptions, turnRef, emit })
     const baseEmit = emitterParams ? createEnvelopeEmitter(emitterParams) : emit
     const wrappedEmit = makeWrappedEmit(
@@ -483,7 +483,6 @@ export function createAgentHost({
         suppressAlwaysAllowRule: pending.suppressAlwaysAllowRule as boolean | undefined,
         requiresExplicitConsent: pending.requiresExplicitConsent === true,
         interrupt,
-        rich: Boolean(s.sendOptions?.execution),
       })
     )
   }
@@ -582,7 +581,7 @@ export function createAgentHost({
     emitObservers.add(observer)
     console.error(`[sidecar smoke] starting… (deadline ${timeoutMs}ms)`)
     const deadline = Date.now() + timeoutMs
-    const s = startSession("smoke-1", "Reply with the single word PONG.")
+    const s = startSession("smoke-1", "Reply with the single word PONG.", smokeSendOptions())
     if (!s) {
       state.sawError = true
       state.errorReason = "startSession returned null"

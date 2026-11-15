@@ -4,12 +4,10 @@ import type { DispatchParams } from "./types.ts"
 // Returns the same `Session` shape regardless of runtime:
 //   { q, pushUserMessage, closeInput, pendingApprovals, pendingPluginToolCalls }
 //
-// ADR-0090 Phase 3: a frozen execution spec (`sendOptions.execution`,
-// resolved once by `resolveAgentExecutionSpec()`) names its
-// `runtimeAdapter`, and dispatch obeys it — the provider id is no longer
-// re-interpreted when a spec is present. Sends WITHOUT a spec keep the
-// legacy provider-id branch (counted via telemetry so Phase 9 can retire it
-// with evidence).
+// ADR-0090: every send carries a frozen execution spec
+// (`sendOptions.execution`, resolved once by `resolveAgentExecutionSpec()`)
+// naming its `runtimeAdapter`, and dispatch obeys it. The provider id is never
+// re-interpreted: a send without a spec is refused before any runtime starts.
 //
 // Both runners support tool-calling (ADR-0043): the non-Anthropic path bridges
 // built-in + plugin tools to native AI SDK tools and gates execution through the
@@ -21,30 +19,27 @@ import {
   runtimeFeatureValidationError,
 } from "@cognia/agent-contracts/session-operations"
 import { runtimeFeatureSupported, capabilityError } from "./capabilities.ts"
-import { requireEngine } from "./engines.ts"
 import { resolveRuntimeAdapter } from "./registry.ts"
 
-// Legacy-dispatch counter (Phase 9 retirement evidence). Read by the host's
-// telemetry surface; exported for tests.
-export const dispatchTelemetry = { legacyDispatchCount: 0, frozenDispatchCount: 0 }
+export const MISSING_EXECUTION_SPEC_ERROR =
+  "send refused: no frozen execution spec (sendOptions.execution.runtimeAdapter is required)"
+
+/** The frozen spec of a send, or a thrown refusal when the send carries none. */
+export function requireFrozenExecution(sendOptions: DispatchParams["sendOptions"] | undefined) {
+  const execution = sendOptions?.execution
+  if (typeof execution?.runtimeAdapter !== "string" || execution.runtimeAdapter === "")
+    throw new Error(MISSING_EXECUTION_SPEC_ERROR)
+  return execution as typeof execution & { runtimeAdapter: string }
+}
 
 export function validateRuntimeFeatures(
   params: Pick<DispatchParams, "sendOptions" | "emit" | "sessionId">
 ) {
-  const adapterId = params.sendOptions?.execution?.runtimeAdapter
+  const execution = requireFrozenExecution(params.sendOptions)
   const validationError = runtimeFeatureValidationError(params.sendOptions)
   if (validationError) throw new Error(validationError)
-  const effectiveAdapter =
-    adapterId ??
-    ((params.sendOptions.provider ?? "anthropic") === "anthropic" ? "claude-agent-sdk" : "ai-sdk")
   for (const capability of requestedRuntimeCapabilities(params.sendOptions)) {
-    if (
-      !runtimeFeatureSupported(
-        effectiveAdapter,
-        capability,
-        adapterId ? params.sendOptions.execution : undefined
-      )
-    ) {
+    if (!runtimeFeatureSupported(execution.runtimeAdapter, capability, execution)) {
       params.emit(capabilityError(params.sessionId, capability, "send"))
       throw new Error(`unsupported capability: ${capability}`)
     }
@@ -53,35 +48,20 @@ export function validateRuntimeFeatures(
 
 export function dispatch(params: DispatchParams) {
   validateRuntimeFeatures(params)
-  const adapterId = params.sendOptions?.execution?.runtimeAdapter
-  if (adapterId) {
-    const adapter = resolveRuntimeAdapter(adapterId)
-    if (!adapter) {
-      // Fail closed: never guess a runtime. The two cases read differently on
-      // purpose. `external` is a KNOWN adapter that this host cannot serve at
-      // all (an external agent runs in the renderer's external-agent manager,
-      // not here), so a frame carrying it means a turn was routed to the wrong
-      // executor. Anything else is version skew between the resolver and this
-      // host.
-      throw new Error(
-        adapterId === "external"
-          ? 'runtimeAdapter "external" is not served by the sidecar: this turn belongs to the external-agent manager'
-          : `unknown frozen runtimeAdapter: ${adapterId}`
-      )
-    }
-    dispatchTelemetry.frozenDispatchCount += 1
-    return adapter.dispatch(params)
+  const adapterId = requireFrozenExecution(params.sendOptions).runtimeAdapter
+  const adapter = resolveRuntimeAdapter(adapterId)
+  if (!adapter) {
+    // Fail closed: never guess a runtime. The two cases read differently on
+    // purpose. `external` is a KNOWN adapter that this host cannot serve at
+    // all (an external agent runs in the renderer's external-agent manager,
+    // not here), so a frame carrying it means a turn was routed to the wrong
+    // executor. Anything else is version skew between the resolver and this
+    // host.
+    throw new Error(
+      adapterId === "external"
+        ? 'runtimeAdapter "external" is not served by the sidecar: this turn belongs to the external-agent manager'
+        : `unknown frozen runtimeAdapter: ${adapterId}`
+    )
   }
-
-  dispatchTelemetry.legacyDispatchCount += 1
-  const provider = params.sendOptions.provider ?? "anthropic"
-  if (provider === "anthropic") {
-    const engine = requireEngine("claude-agent-sdk")
-    return engine.dispatch(params as Parameters<typeof engine.dispatch>[0])
-  }
-  return requireEngine("ai-sdk").dispatch({
-    ...params,
-    provider,
-    hostRpc: params.hostRpc ?? undefined,
-  })
+  return adapter.dispatch(params)
 }

@@ -68,38 +68,11 @@ describe("validatePreCompactResult", () => {
 })
 
 describe("queryPreCompactDecision", () => {
-  it("returns fallback when hostRpc is null", async () => {
-    const result = await queryPreCompactDecision(null, {
-      sessionId: "s1",
-      messageCount: 10,
-      tokenCount: 5000,
-      compressionRatio: 0.8,
-    })
-    assert.equal(result.source, "fallback")
-  })
-
-  it("returns fallback when hostRpc is closed", async () => {
-    const rpc = {
-      isClosed: true,
-      call: () => {
-        throw new Error("should not be called")
-      },
-    }
-    const result = await queryPreCompactDecision(rpc, {
-      sessionId: "s1",
-      messageCount: 10,
-      tokenCount: 5000,
-      compressionRatio: 0.8,
-    })
-    assert.equal(result.source, "fallback")
-  })
-
   it("returns the plugin decision when the renderer bridge responds", async () => {
     // The transport is the plugin-hook round-trip, NOT `host_rpc`: that frame is
     // answered in Rust and never reaches the renderer, which is why this hook
     // fell back on every call before.
     const result = await queryPreCompactDecision(
-      null,
       { sessionId: "s1", messageCount: 10, tokenCount: 5000, compressionRatio: 0.8 },
       { pluginHookBridge: async () => ({ skipCompaction: true }) }
     )
@@ -110,7 +83,7 @@ describe("queryPreCompactDecision", () => {
   it("falls back when no renderer bridge is supplied", async () => {
     // Headless, or a rail with no renderer: compaction proceeds on its built-in
     // strategy exactly as before.
-    const result = await queryPreCompactDecision(null, {
+    const result = await queryPreCompactDecision({
       sessionId: "s1",
       messageCount: 10,
       tokenCount: 5000,
@@ -120,25 +93,21 @@ describe("queryPreCompactDecision", () => {
   })
 
   it("returns fallback when the bridge throws", async () => {
-    const rpc = {
-      isClosed: false,
-      call: async () => {
-        throw new Error("timeout")
-      },
-    }
-    const result = await queryPreCompactDecision(rpc, {
-      sessionId: "s1",
-      messageCount: 10,
-      tokenCount: 5000,
-      compressionRatio: 0.8,
-    })
+    const result = await queryPreCompactDecision(
+      { sessionId: "s1", messageCount: 10, tokenCount: 5000, compressionRatio: 0.8 },
+      {
+        pluginHookBridge: async () => {
+          throw new Error("timeout")
+        },
+      }
+    )
     assert.equal(result.source, "fallback")
   })
 
   it("passes the context and the hook name through the bridge", async () => {
     let received: PreCompactRequest | undefined
     const ctx = { sessionId: "s1", messageCount: 20, tokenCount: 10000, compressionRatio: 0.75 }
-    await queryPreCompactDecision(null, ctx, {
+    await queryPreCompactDecision(ctx, {
       pluginHookBridge: async (req) => {
         received = req
         return {}

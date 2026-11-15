@@ -151,6 +151,11 @@ async function sample({ runtime, executable, mode, directory, origin, preload })
             prompt: "ping",
             options: {
               provider: "openai",
+              execution: {
+                runtimeAdapter: "ai-sdk",
+                hostRef: "benchmark",
+                route: { kind: "direct" },
+              },
               model: "scripted",
               cwd: home,
               providerCredentials: {

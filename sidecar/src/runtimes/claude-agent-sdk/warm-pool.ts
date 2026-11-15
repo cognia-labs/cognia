@@ -93,11 +93,7 @@ export function unpoolableReason(sendOptions: SendOptions | undefined, options: 
   const nested = sendOptions?.claudeAgentSdk
   if (nested?.sandbox?.allowNestedUserNamespaces === true || nested?.unattendedRetry !== undefined)
     return "per-invocation namespace consent or retry deadline is required"
-  if (!sendOptions?.execution) {
-    // ADR-0090 constraint 6: the legacy queue keeps today's behaviour, and
-    // today it spawns per send.
-    return "no frozen execution spec"
-  }
+  if (!sendOptions?.execution) return "no frozen execution spec"
   if (
     nested?.sessionId ||
     nested?.continue ||
@@ -116,14 +112,11 @@ export function unpoolableReason(sendOptions: SendOptions | undefined, options: 
     // before the session's cwd was known has nothing to checkpoint against.
     return "file checkpointing is enabled"
   }
-  if (
-    nested?.skills !== undefined ||
-    (Array.isArray(nested?.plugins) && nested.plugins.length > 0)
-  ) {
+  if (nested?.skills !== undefined || (sendOptions.runtimeExtensions?.length ?? 0) > 0) {
     // Native local content is resolved when the subprocess initializes. A
     // pooled process would retain it after Workspace Trust is revoked or the
     // next send selects a different extension set.
-    return "native local skills/plugins are enabled"
+    return "native local skills or runtime extensions are enabled"
   }
   if (nested?.extraArgs && Object.keys(nested.extraArgs).length > 0) {
     // Raw flags are intentionally rare and may change subprocess startup

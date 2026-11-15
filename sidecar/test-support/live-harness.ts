@@ -18,6 +18,7 @@ import { spawn } from "node:child_process"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { ADAPTER_CAPABILITIES } from "../src/runtimes/capabilities.ts"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const SIDECAR = path.resolve(HERE, "..", "claude-host.mjs")
@@ -177,6 +178,42 @@ export interface SidecarController {
 }
 
 /**
+ * Stand in for the host's resolver on a `send` frame that names no spec: every
+ * send the sidecar admits carries a frozen execution spec, and its subprocess
+ * env is the allowlisted rebuild, so the mock route and key travel in the
+ * session overlay rather than through the sidecar's own process env. A frame
+ * that already carries `execution` is the case under test and passes as is.
+ */
+export function withFrozenExecution(
+  frame: unknown,
+  { baseUrl, apiKey }: { baseUrl: string; apiKey: string }
+): unknown {
+  if (!frame || typeof frame !== "object") return frame
+  const message = frame as { type?: unknown; options?: Record<string, unknown> }
+  if (message.type !== "send" || message.options?.execution) return frame
+  const options = message.options ?? {}
+  const runtimeAdapter =
+    (options.provider ?? "anthropic") === "anthropic" ? "claude-agent-sdk" : "ai-sdk"
+  return {
+    ...message,
+    options: {
+      ...options,
+      execution: {
+        runtimeAdapter,
+        hostRef: "live-harness",
+        route: { kind: "direct" },
+        capabilities: { effective: [...ADAPTER_CAPABILITIES[runtimeAdapter]] },
+      },
+      env: {
+        ANTHROPIC_BASE_URL: baseUrl,
+        ANTHROPIC_API_KEY: apiKey,
+        ...(options.env as Record<string, string> | undefined),
+      },
+    },
+  }
+}
+
+/**
  * Spawn the real sidecar pointed at a mock Anthropic base URL. Returns a small
  * controller: `send` a JSON-line command, `waitFor(predicate)` an emitted
  * stdout message, and `close()` to tear down.
@@ -235,7 +272,7 @@ export function spawnSidecar({
   })
 
   function send(obj: unknown): void {
-    child.stdin.write(JSON.stringify(obj) + "\n")
+    child.stdin.write(JSON.stringify(withFrozenExecution(obj, { baseUrl, apiKey })) + "\n")
   }
 
   /** Current event count — capture before `send` to wait only for NEW events

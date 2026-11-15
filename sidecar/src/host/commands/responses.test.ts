@@ -19,32 +19,13 @@ import {
 
 const ALLOW_RULE = { type: "addRules", rules: [{ toolName: "Bash" }], destination: "session" }
 
-test("the legacy rail's permission result is unchanged, field for field", () => {
-  // ADR-0090 constraint 6: `claude_send` is still the production queue and this
-  // is the same function on both rails, so the richer fields must be invisible
-  // to it — an extra key here is a behaviour change on a path nobody opted in.
-  assert.deepEqual(buildPermissionResult("allow", { input: { a: 1 } }), {
-    behavior: "allow",
-    updatedInput: { a: 1 },
-  })
-  assert.deepEqual(
-    buildPermissionResult("allow_always", { input: { a: 1 }, suggestions: [ALLOW_RULE] }),
-    { behavior: "allow", updatedInput: { a: 1 } }
-  )
-  assert.deepEqual(buildPermissionResult("deny", { message: "no", interrupt: true }), {
-    behavior: "deny",
-    message: "no",
-  })
-})
-
-test('"always allow" carries the SDK\'s own permission updates on the new rail', () => {
+test('"always allow" carries the SDK\'s own permission updates', () => {
   // Without this the user's "always" held for the renderer's session only: the
   // CLI's rule store never learned the decision, so the next identical call
   // prompted again.
   const res = buildPermissionResult("allow_always", {
     input: { a: 1 },
     suggestions: [ALLOW_RULE],
-    rich: true,
   })
   assert.deepEqual(res.updatedPermissions, [ALLOW_RULE])
   assert.equal(res.decisionClassification, "user_permanent")
@@ -54,14 +35,13 @@ test("a one-off allow classifies as temporary and persists nothing", () => {
   const res = buildPermissionResult("allow", {
     input: {},
     suggestions: [ALLOW_RULE],
-    rich: true,
   })
   assert.equal(res.decisionClassification, "user_temporary")
   assert.equal(res.updatedPermissions, undefined)
 })
 
 test("a deny can interrupt the turn instead of letting the model route around it", () => {
-  const res = buildPermissionResult("deny", { message: "nope", interrupt: true, rich: true })
+  const res = buildPermissionResult("deny", { message: "nope", interrupt: true })
   assert.deepEqual(res, {
     behavior: "deny",
     message: "nope",
@@ -69,7 +49,7 @@ test("a deny can interrupt the turn instead of letting the model route around it
     decisionClassification: "user_reject",
   })
   // Absent unless asked for — a plain refusal should not end the turn.
-  assert.equal(buildPermissionResult("deny", { rich: true }).interrupt, undefined)
+  assert.equal(buildPermissionResult("deny").interrupt, undefined)
 })
 
 test("localSettings suggestions are never written back from a chat click", () => {
@@ -97,7 +77,6 @@ test("malformed suggestions are dropped rather than forwarded as rules", () => {
 
 test("SDK suppressAlwaysAllowRule prevents durable grants even if a stale client sends always", () => {
   const result = buildPermissionResult("allow_always", {
-    rich: true,
     suppressAlwaysAllowRule: true,
     input: { safe: true },
     suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
@@ -118,7 +97,11 @@ test("buildPermissionResult: allow without updatedInput falls back to the origin
 test("buildPermissionResult: allow_always also falls back to the original input", () => {
   const input = { a: 1 }
   const res = buildPermissionResult("allow_always", { input })
-  assert.deepEqual(res, { behavior: "allow", updatedInput: { a: 1 } })
+  assert.deepEqual(res, {
+    behavior: "allow",
+    updatedInput: { a: 1 },
+    decisionClassification: "user_permanent",
+  })
 })
 
 test("buildPermissionResult: an explicit updatedInput is preserved over the original input", () => {
@@ -135,17 +118,23 @@ test("buildPermissionResult: allow with neither updatedInput nor input defaults 
 
 test("buildPermissionResult: allow called with no opts at all still yields an empty record", () => {
   const res = buildPermissionResult("allow")
-  assert.deepEqual(res, { behavior: "allow", updatedInput: {} })
+  assert.deepEqual(res, {
+    behavior: "allow",
+    updatedInput: {},
+    decisionClassification: "user_temporary",
+  })
 })
 
 test("buildPermissionResult: deny carries the message (default when absent)", () => {
   assert.deepEqual(buildPermissionResult("deny", { message: "nope" }), {
     behavior: "deny",
     message: "nope",
+    decisionClassification: "user_reject",
   })
   assert.deepEqual(buildPermissionResult("deny", {}), {
     behavior: "deny",
     message: "denied by user",
+    decisionClassification: "user_reject",
   })
 })
 

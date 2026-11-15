@@ -56,6 +56,33 @@ async function runOnDesktopRemoteRoute<T>(
   }
 }
 
+/**
+ * The frozen execution spec every sidecar send carries. A utility call brings
+ * its own credentials, which only the AI SDK rail reads, so the runtime is
+ * pinned to it whatever the provider; the route is direct because the
+ * credentials travel with the request.
+ */
+async function utilityExecutionSpec(
+  sessionId: string,
+  provider: ResolvedProvider & { model: string }
+): Promise<NonNullable<SendOptions["execution"]>> {
+  const [{ resolveAgentExecutionSpec, sendSpecFromResolved }, { getAgentExecutionFlags }, env] =
+    await Promise.all([
+      import("@/lib/ai/agent/execution/resolve-agent-execution-spec"),
+      import("@/lib/ai/agent/execution/feature-flags"),
+      import("@/lib/ai/agent/execution/host-environment"),
+    ])
+  const { spec } = resolveAgentExecutionSpec({
+    surface: "agent-executor",
+    environment: env.resolveAgentExecutionEnvironment(),
+    flags: getAgentExecutionFlags(),
+    policy: { executionKind: "agent", runtimePolicy: "ai-sdk", routePolicy: "direct" },
+    legacy: { providerId: provider.providerId, modelId: provider.model },
+    identity: { sessionId },
+  })
+  return sendSpecFromResolved(spec)
+}
+
 export function createHostLlmClient(
   provider: ResolvedProvider & { model: string },
   featureId: string
@@ -113,6 +140,7 @@ export function createHostLlmClient(
         ...(options?.stopSequences ? { stopSequences: options.stopSequences } : {}),
       },
     }
+    send.execution = await utilityExecutionSpec(sessionId, provider)
     // Set by the direct route only: told when the turn is handed to the Host.
     let onDispatched: (() => void) | undefined
     const work = async () => {

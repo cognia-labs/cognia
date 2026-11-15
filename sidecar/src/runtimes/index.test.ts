@@ -77,10 +77,12 @@ test("new feature requests honor both the frozen capability ceiling and the actu
 })
 
 test("unsupported portable subagent capabilities fail before an engine runs", () => {
+  const execution = { runtimeAdapter: "ai-sdk", capabilities: { effective: [] } }
   for (const sendOptions of [
-    { provider: "openai", subagentRuntime: { contextMode: "fork" as const } },
+    { provider: "openai", execution, subagentRuntime: { contextMode: "fork" as const } },
     {
       provider: "openai",
+      execution,
       agents: {
         child: {
           description: "Review",
@@ -103,6 +105,29 @@ test("unsupported portable subagent capabilities fail before an engine runs", ()
       /capability/
     )
     assert.equal((events[0] as { type: string }).type, "capability_error")
+  }
+})
+
+test("a send without a frozen execution spec is refused before any runtime starts", () => {
+  for (const sendOptions of [
+    {},
+    { provider: "anthropic" },
+    { provider: "openai" },
+    { execution: {} },
+  ]) {
+    const events: unknown[] = []
+    assert.throws(
+      () =>
+        dispatch({
+          sessionId: "test",
+          firstPrompt: "hello",
+          sendOptions,
+          emit: (event) => events.push(event),
+          log() {},
+        }),
+      /no frozen execution spec/
+    )
+    assert.deepEqual(events, [])
   }
 })
 

@@ -16,9 +16,7 @@ export interface EnvelopeParams {
 // Wraps the raw dispatcher messages the host already emits into
 // `AgentEventEnvelope` frames (`{ type: "agent_event", envelope }`) with
 // monotonic per-attempt sequencing and idempotency-keyed event ids. The raw
-// legacy messages keep flowing unchanged — envelope emission is ADDITIVE and
-// only active for sessions that carry a frozen execution spec, so legacy
-// sessions pay nothing.
+// wire messages keep flowing unchanged — envelope emission is ADDITIVE.
 //
 // The envelope field shape is pinned against the TS side
 // (`@cognia/agent-config-types/agent-execution`) by the shared fixture in

@@ -180,6 +180,12 @@ it("uses exact credentials and one bounded toolless request, reports usage and c
     modelParams: { maxOutputTokens: 128, temperature: 0, maxRetries: 0 },
     compaction: { enabled: false },
   })
+  // Every sidecar send carries a frozen spec; only the AI SDK rail reads the
+  // credentials this request brings, so the runtime is pinned to it.
+  expect(options?.execution).toMatchObject({
+    runtimeAdapter: "ai-sdk",
+    route: expect.objectContaining({ kind: "direct" }),
+  })
   expect(options).not.toHaveProperty("cwd")
   expect(options).not.toHaveProperty("initialConversation")
   expect(capture?.execution).not.toHaveProperty("skip")

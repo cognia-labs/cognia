@@ -151,8 +151,9 @@ free by construction: gateway routes carry an endpoint plus a ticket **id**;
 direct routes carry a credential **profile reference**. Raw keys stay on the
 existing `sendOptions.env` redaction path. The Rust `SendOptions` flattens
 unknown fields, so the sidecar receives the spec unchanged and its dispatch
-(`sidecar/dispatch/index.mjs`) routes on `execution.runtimeAdapter`, counting
-spec-less sends as `legacy_dispatch` telemetry.
+(`sidecar/src/runtimes/index.ts`) routes on `execution.runtimeAdapter`. A send
+without a spec is refused before any runtime starts, and every session's
+subprocess env is the allowlisted rebuild plus the spec-approved overlay.
 
 ## Where things live
 

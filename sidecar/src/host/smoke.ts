@@ -29,6 +29,31 @@ export const SMOKE_CREDENTIAL_ENV = [
 
 export const SMOKE_DEFAULT_TIMEOUT_MS = 60_000
 
+/** Routing variables a smoke run may point at a relay or a local mock. */
+const SMOKE_ROUTE_ENV = ["ANTHROPIC_BASE_URL"]
+
+/**
+ * The smoke turn's send options. Like every send it carries a frozen execution
+ * spec, so its subprocess env is the allowlisted rebuild: the credential the
+ * operator exported reaches Claude Code only through the session overlay.
+ */
+export function smokeSendOptions(env: NodeJS.ProcessEnv = process.env) {
+  const overlay: Record<string, string> = {}
+  for (const name of [...SMOKE_CREDENTIAL_ENV, ...SMOKE_ROUTE_ENV]) {
+    const value = env[name]
+    if (typeof value === "string" && value !== "") overlay[name] = value
+  }
+  return {
+    execution: {
+      runtimeAdapter: "claude-agent-sdk",
+      hostRef: "sidecar-smoke",
+      route: { kind: "direct" },
+      capabilities: { effective: [] },
+    },
+    env: overlay,
+  }
+}
+
 /** Names of the missing credential variables, or null when one is present. */
 export function smokeCredentialGap(env: NodeJS.ProcessEnv = process.env) {
   const present = SMOKE_CREDENTIAL_ENV.some(

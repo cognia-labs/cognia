@@ -46,7 +46,11 @@ test("an engine this host did not load fails closed, naming it", async () => {
       /"ai-sdk" is not loaded/
     )
     assert.throws(
-      () => dispatch({ ...params, sendOptions: { provider: "anthropic" } }),
+      () =>
+        dispatch({
+          ...params,
+          sendOptions: { provider: "anthropic", execution: { runtimeAdapter: "claude-agent-sdk" } },
+        }),
       /"claude-agent-sdk" is not loaded/
     )
     await loadEngines(["ai-sdk"])
@@ -150,6 +154,7 @@ test(
     const host = hostProcess({ [ENGINES_ENV]: "ai-sdk" })
     const options = {
       provider: "openai",
+      execution: { runtimeAdapter: "ai-sdk" },
       model: "scripted",
       cwd: process.cwd(),
       providerCredentials: {
@@ -172,7 +177,11 @@ test(
         type: "send",
         sessionId: "claude-turn",
         prompt: "ping",
-        options: { ...options, provider: "anthropic" },
+        options: {
+          ...options,
+          provider: "anthropic",
+          execution: { runtimeAdapter: "claude-agent-sdk" },
+        },
       })
       const refused = await host.wait(
         (frame) => frame.type === "session_ended" && frame.sessionId === "claude-turn",
@@ -241,6 +250,7 @@ for (const [runtime, executable] of [
           prompt: "ping",
           options: {
             provider: "openai",
+            execution: { runtimeAdapter: "ai-sdk" },
             model: "scripted",
             cwd: process.cwd(),
             providerCredentials: {

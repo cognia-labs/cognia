@@ -379,14 +379,11 @@ export function createCompactor({
       (sendOptions.agentRef === "Plan" || sendOptions.agentRef === "Explore") &&
       comp.useAISummarization !== false
     const signal = job.controller.signal
-    // ── PreCompact plugin hook (ADR-0090 Phase 9) ──────────────────────────
+    // ── PreCompact plugin hook ─────────────────────────────────────────────
     // Gives plugins a chance to skip compaction, inject context, or override
-    // the strategy. This used to route through `host_rpc`, which is answered in
-    // Rust and never reaches the renderer — so it always fell back and the hook
-    // was dead. It now rides the plugin-hook round-trip. Still falls back
-    // gracefully when no renderer is attached.
+    // the strategy over the plugin-hook round-trip. Falls back gracefully when
+    // no renderer is attached.
     const preCompactDecision = await queryPreCompactDecision(
-      hostRpc,
       {
         sessionId,
         messageCount: conversation.length,

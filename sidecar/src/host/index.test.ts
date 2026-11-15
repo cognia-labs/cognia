@@ -138,6 +138,7 @@ test(
     }
     const options = {
       provider: "openai",
+      execution: { runtimeAdapter: "ai-sdk" },
       model: "scripted",
       cwd: workspace,
       permissionMode: "acceptEdits",
@@ -432,6 +433,7 @@ test(
                 prompt: "must not run",
                 options: {
                   provider: "openai",
+                  execution: { runtimeAdapter: "ai-sdk", capabilities: { effective: [] } },
                   turnId: "replacement-turn",
                   transcriptInvalidationId: "replacement-generation",
                   subagentRuntime: { contextMode: "fork" },

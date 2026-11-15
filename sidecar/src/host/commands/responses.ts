@@ -7,7 +7,6 @@ export interface PermissionResponseOptions {
   interrupt?: boolean
   suppressAlwaysAllowRule?: boolean
   requiresExplicitConsent?: boolean
-  rich?: boolean
 }
 
 /**
@@ -33,11 +32,6 @@ export interface PermissionResponseOptions {
  * Suggestions targeting `localSettings` are dropped. Those write to the user's
  * on-disk settings file, and a click in a chat approval dialog is consent for
  * this session, not consent to edit their configuration.
- *
- * `rich` gates all of it. The legacy `claude_send` queue is still production
- * (ADR-0090 constraint 6: flag-off paths keep byte-identical behaviour), and
- * this is the same function on both rails — so the extra fields appear only for
- * a session carrying a frozen execution spec.
  *
  * @param {"allow"|"allow_always"|"deny"} decision
  * @param {{
@@ -85,26 +79,25 @@ export function buildPermissionResult(
     interrupt,
     suppressAlwaysAllowRule = false,
     requiresExplicitConsent = false,
-    rich = false,
   }: PermissionResponseOptions = {}
 ): AllowResult | DenyResult {
   if (decision === "deny" || (requiresExplicitConsent && decision !== "allow")) {
     return {
       behavior: "deny",
       message: message ?? "denied by user",
-      ...(rich && interrupt ? { interrupt: true } : {}),
-      ...(rich ? { decisionClassification: "user_reject" } : {}),
+      ...(interrupt ? { interrupt: true } : {}),
+      decisionClassification: "user_reject",
     }
   }
 
   const always = decision === "allow_always" && !suppressAlwaysAllowRule
-  const durable = rich && always ? persistableSuggestions(suggestions) : []
+  const durable = always ? persistableSuggestions(suggestions) : []
 
   return {
     behavior: "allow",
     updatedInput: updatedInput ?? input ?? {},
     ...(durable.length > 0 ? { updatedPermissions: durable } : {}),
-    ...(rich ? { decisionClassification: always ? "user_permanent" : "user_temporary" } : {}),
+    decisionClassification: always ? "user_permanent" : "user_temporary",
   }
 }
 

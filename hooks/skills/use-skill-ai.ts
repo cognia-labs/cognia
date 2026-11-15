@@ -1,10 +1,13 @@
 "use client"
 
 import { useCallback, useRef } from "react"
+import { resolveSendOptions } from "@/lib/claude/build-options"
 import { closeSession, onClaudeMessage, sendPrompt } from "@/lib/claude/ipc"
 import { isTauri } from "@/lib/tauri"
 import { buildAiSystemPrompt, buildAiUserPrompt, type AiIntent } from "@/lib/skills/ai-prompts"
+import { useSettingsStore } from "@/stores/settings"
 import type {
+  ChatSession,
   ClaudeEvent,
   SDKAssistantMessage,
   SDKEventEnvelope,
@@ -117,8 +120,22 @@ export function useSkillAi(): UseSkillAi {
 
     try {
       const [system, userPrompt] = await prompts
+      // The full resolver picks the provider, its credentials and the frozen
+      // execution spec the sidecar requires; the clamp below then makes this a
+      // one-shot, tool-less rewrite on top of the SDK's default prompt.
+      const {
+        systemPrompt: _resolvedSystemPrompt,
+        appendSystemPrompt: _resolvedAppend,
+        ...base
+      } = await resolveSendOptions({
+        session: { id: sessionId } as unknown as ChatSession,
+        appSettings: useSettingsStore.getState().settings,
+      })
       await sendPrompt(sessionId, userPrompt, {
+        ...base,
         appendSystemPrompt: system,
+        toolSurface: "none",
+        mcpServers: {},
         maxTurns: 1,
         allowedTools: [],
         disallowedTools: ["*"],

@@ -90,7 +90,7 @@ launcher 在 macOS 和 Linux 上执行策略，在 Agent 启动前创建代理�
 
 ## 线上载体
 
-spec 经 `SendOptions.execution`（`AgentExecutionSendSpec`）传输,构造上无密钥:gateway 路由只带 endpoint + ticket **id**;direct 路由只带凭证**档案引用**。原始密钥仍走既有 `sendOptions.env` redaction 集。Rust `SendOptions` flatten 透传,sidecar dispatch（`sidecar/dispatch/index.mjs`）按 `execution.runtimeAdapter` 分发,无 spec 的发送计入 `legacy_dispatch` 遥测。
+spec 经 `SendOptions.execution`（`AgentExecutionSendSpec`）传输,构造上无密钥:gateway 路由只带 endpoint + ticket **id**;direct 路由只带凭证**档案引用**。原始密钥仍走既有 `sendOptions.env` redaction 集。Rust `SendOptions` flatten 透传,sidecar dispatch（`sidecar/src/runtimes/index.ts`）按 `execution.runtimeAdapter` 分发。没有 spec 的发送在任何运行时启动前即被拒绝,每个会话的子进程环境都是白名单重建加上 spec 批准的覆盖层。
 
 ## 位置索引
 

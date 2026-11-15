@@ -143,13 +143,13 @@ test("resume, fork and checkpointing all decline the pool, each with a reason", 
   assert.match(unpoolableReason(send({ forkSession: true }))!, /forking/)
   assert.match(
     unpoolableReason(send({ claudeAgentSdk: { skills: ["review"] } }))!,
-    /native local skills\/plugins/
+    /native local skills/
   )
   assert.match(
     unpoolableReason(
-      send({ claudeAgentSdk: { plugins: [{ type: "local", path: "/w/plugin" }] } })
+      send({ runtimeExtensions: [{ kind: "directory", path: "/w/plugin", discoverMcp: false }] })
     )!,
-    /native local skills\/plugins/
+    /runtime extensions/
   )
   assert.match(
     unpoolableReason(send({ claudeAgentSdk: { extraArgs: { verbose: null } } }))!,

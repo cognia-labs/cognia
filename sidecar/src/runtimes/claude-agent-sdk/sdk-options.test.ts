@@ -225,7 +225,7 @@ test("a missing block isolates native discovery, while malformed blocks throw", 
 
 test("empty native selections explicitly keep SDK filesystem discovery off", () => {
   const { options } = apply(
-    { version: 1, skills: [], plugins: [] },
+    { version: 1, skills: [] },
     {},
     { settingSources: ["user", "project", "local"] }
   )
@@ -389,42 +389,21 @@ test("skipMcpDiscovery survives and defaults to absent", () => {
   })
 })
 
-test("a block whose plugins all get dropped leaves the field unset", () => {
-  withTempWorkspace((container) => {
-    const workspace = join(container, "workspace")
-    const outside = join(container, "outside")
-    mkdirSync(workspace)
-    mkdirSync(outside)
-    const { options } = apply(
-      { version: 1, plugins: [{ type: "local", path: outside }] },
-      {
-        trustedWorkspaceRoots: [realpathSync.native(workspace)],
-        cwd: workspace,
-        activeWorkspaceRoots: [workspace],
-      }
-    )
-    assert.equal(options.plugins, undefined)
-  })
-})
-
-test("native skills and plugins require explicit workspace trust", () => {
+test("native skills require explicit workspace trust", () => {
   assert.throws(
     () => apply({ version: 1, skills: ["review"] }, {}),
     /require an explicit trusted workspace root/
   )
   assert.throws(
     () => apply({ version: 1, plugins: [{ type: "local", path: "/w/p" }] }, {}),
-    /require an explicit trusted workspace root/
+    /claudeAgentSdk\.plugins/
   )
 
   withTempWorkspace((root) => {
-    const plugin = join(root, "p")
-    mkdirSync(plugin)
     const { options } = apply(
       {
         version: 1,
         skills: ["review"],
-        plugins: [{ type: "local", path: plugin }],
       },
       {
         trustedWorkspaceRoots: [realpathSync.native(root)],
@@ -433,7 +412,7 @@ test("native skills and plugins require explicit workspace trust", () => {
       }
     )
     assert.deepEqual(options.skills, ["review"])
-    assert.deepEqual(options.plugins, [{ type: "local", path: realpathSync.native(plugin) }])
+    assert.equal(options.plugins, undefined)
     assert.deepEqual(options.settingSources, ["project", "local"])
   })
 })

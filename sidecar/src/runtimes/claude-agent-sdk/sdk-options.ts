@@ -145,13 +145,13 @@ export function resolvePlugins(
     .filter((root): root is string => root !== null)
   for (const plugin of plugins ?? []) {
     if (plugin?.type !== "local" || typeof plugin.path !== "string" || plugin.path === "") {
-      warnings.push(`claudeAgentSdk.plugins: dropped a malformed entry`)
+      warnings.push(`runtimeExtensions: dropped a malformed entry`)
       continue
     }
     const absolute = canonicalExistingPath(resolvePath(plugin.path))
     if (!absolute || canonicalRoots.length === 0 || !isWithinRoots(absolute, canonicalRoots)) {
       warnings.push(
-        `claudeAgentSdk.plugins: dropped "${plugin.path}" — path must exist inside a trusted workspace root`
+        `runtimeExtensions: dropped "${plugin.path}" — path must exist inside a trusted workspace root`
       )
       continue
     }
@@ -334,13 +334,10 @@ export function createClaudeExtensionReloader(
   return async (options: AgentExtensionReloadOptions = {}): Promise<AgentExtensionReloadResult> => {
     if (typeof query.reloadPlugins !== "function") throw new Error("unsupported_provider")
     // Refreshing reloads existing plugin files too: re-attest their current content.
-    const legacy = (sendOptions.claudeAgentSdk?.plugins ?? []).map((plugin) => ({
-      kind: "directory" as const,
-      path: plugin.path,
-      discoverMcp: plugin.skipMcpDiscovery !== true,
-    }))
-    const current = [...legacy, ...(sendOptions.runtimeExtensions ?? [])]
-    const currentPlugins = resolveClaudeRuntimeExtensions(sendOptions, current)
+    const currentPlugins = resolveClaudeRuntimeExtensions(
+      sendOptions,
+      sendOptions.runtimeExtensions ?? []
+    )
     const inventory = acknowledgedInventory ?? currentPluginInventory()
     if (!inventory) throw new Error("extension_inventory_unavailable")
     const admitted = new Set(currentPlugins.map((plugin) => plugin.path))
@@ -669,9 +666,7 @@ export function applyClaudeAgentSdkOptions<T extends Options>(
 
   const validated = nested as ClaudeAgentSdkOptionsV1
   const localContentRequested =
-    validated.skills === "all" ||
-    (Array.isArray(validated.skills) && validated.skills.length > 0) ||
-    (Array.isArray(validated.plugins) && validated.plugins.length > 0)
+    validated.skills === "all" || (Array.isArray(validated.skills) && validated.skills.length > 0)
   const trustedWorkspaceRoots = ctx.trustedWorkspaceRoots ?? []
   if (localContentRequested && trustedWorkspaceRoots.length === 0) {
     throw new Error(
@@ -732,13 +727,6 @@ export function applyClaudeAgentSdkOptions<T extends Options>(
   // The boundary validator above already requires both host permission gates.
   if (validated.allowDangerouslySkipPermissions) {
     options.allowDangerouslySkipPermissions = true
-  }
-
-  // ---- plugins --------------------------------------------------------------
-  if (validated.plugins) {
-    const resolved = resolvePlugins(validated.plugins, trustedWorkspaceRoots)
-    warnings.push(...resolved.warnings)
-    if (resolved.plugins.length > 0) options.plugins = resolved.plugins
   }
 
   // ---- dialogs --------------------------------------------------------------

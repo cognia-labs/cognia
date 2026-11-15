@@ -1,7 +1,7 @@
 import type { SmokeState } from "./smoke.ts"
 import test from "node:test"
 import assert from "node:assert/strict"
-import { smokeCredentialGap, smokeObserveFrame, smokeOutcome } from "./smoke.ts"
+import { smokeCredentialGap, smokeObserveFrame, smokeOutcome, smokeSendOptions } from "./smoke.ts"
 
 // ---- smoke ------------------------------------------------------------------
 
@@ -65,4 +65,18 @@ test("smokeOutcome exit codes: 0 only for text without error, 1 error, 3 timeout
     3
   )
   assert.equal(smokeOutcome({ sawAssistantText: false, sawError: false }).code, 1)
+})
+
+test("the smoke turn carries a frozen spec and hands its credential over in the overlay", () => {
+  const options = smokeSendOptions({
+    ANTHROPIC_API_KEY: "sk-smoke",
+    ANTHROPIC_BASE_URL: "http://127.0.0.1:9/v1",
+    CLAUDE_CODE_OAUTH_TOKEN: "",
+    OPENAI_API_KEY: "sk-unrelated",
+  })
+  assert.equal(options.execution.runtimeAdapter, "claude-agent-sdk")
+  assert.deepEqual(options.env, {
+    ANTHROPIC_API_KEY: "sk-smoke",
+    ANTHROPIC_BASE_URL: "http://127.0.0.1:9/v1",
+  })
 })

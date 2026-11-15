@@ -22,6 +22,16 @@ jest.mock("@/lib/claude/ipc", () => ({
   sendPrompt: (...args: unknown[]) => sendPromptMock(...args),
 }))
 
+const FROZEN_EXECUTION = { specVersion: 2, runtimeAdapter: "claude-agent-sdk" }
+const resolveSendOptionsMock = jest.fn()
+jest.mock("@/lib/claude/build-options", () => ({
+  resolveSendOptions: (...args: unknown[]) => resolveSendOptionsMock(...args),
+}))
+
+jest.mock("@/stores/settings", () => ({
+  useSettingsStore: { getState: () => ({ settings: { language: "en" } }) },
+}))
+
 jest.mock("@/lib/skills/ai-prompts", () => ({
   buildAiSystemPrompt: () => "system",
   buildAiUserPrompt: (intent: unknown, current: unknown) =>
@@ -36,6 +46,65 @@ beforeEach(() => {
   onClaudeUnsub.mockClear()
   sendPromptMock.mockClear()
   closeSessionMock.mockClear()
+  resolveSendOptionsMock.mockReset().mockResolvedValue({
+    provider: "anthropic",
+    model: "claude-opus-4-8",
+    systemPrompt: "character prompt",
+    appendSystemPrompt: "resolver append",
+    allowedTools: ["Read"],
+    mcpServers: { notes: {} },
+    execution: FROZEN_EXECUTION,
+  })
+})
+
+describe("useSkillAi send options", () => {
+  it("sends the resolver's frozen spec, clamped to a one-shot tool-less rewrite", async () => {
+    const { result } = renderHook(() => useSkillAi())
+    let runPromise!: Promise<string | null>
+    await act(async () => {
+      runPromise = result.current.run("optimize", { name: "s", content: "body" })
+      runPromise.catch(() => undefined)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      for (let i = 0; i < 5 && sendPromptMock.mock.calls.length === 0; i++) await Promise.resolve()
+    })
+    expect(resolveSendOptionsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ id: expect.stringMatching(/^skill-ai-/) }),
+        appSettings: { language: "en" },
+      })
+    )
+    const options = sendPromptMock.mock.calls[0][2]
+    expect(options).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+        execution: FROZEN_EXECUTION,
+        appendSystemPrompt: "system",
+        toolSurface: "none",
+        mcpServers: {},
+        maxTurns: 1,
+        allowedTools: [],
+        disallowedTools: ["*"],
+        permissionMode: "default",
+      })
+    )
+    expect(options).not.toHaveProperty("systemPrompt")
+  })
+
+  it("rejects without sending when the resolver cannot stamp a spec", async () => {
+    resolveSendOptionsMock.mockRejectedValueOnce(new Error("execution spec stamping failed"))
+    const { result } = renderHook(() => useSkillAi())
+    let runPromise!: Promise<string | null>
+    await act(async () => {
+      runPromise = result.current.run("optimize", { name: "s", content: "body" })
+      runPromise.catch(() => undefined)
+    })
+    await expect(runPromise).rejects.toThrow(/stamping failed/)
+    expect(sendPromptMock).not.toHaveBeenCalled()
+  })
 })
 
 describe("useSkillAi", () => {

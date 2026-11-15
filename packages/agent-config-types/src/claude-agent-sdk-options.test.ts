@@ -305,15 +305,9 @@ describe("validateClaudeAgentSdkOptions", () => {
   })
 
   describe("extension surfaces", () => {
-    it("accepts local plugins and rejects anything else", () => {
-      expect(
-        validateClaudeAgentSdkOptions({ ...base, plugins: [{ type: "local", path: "/p" }] }).ok
-      ).toBe(true)
-      expect(errorsOf({ ...base, plugins: [{ type: "remote", path: "https://x" }] })).toMatch(
-        /unsupported plugin type "remote"/
-      )
-      expect(errorsOf({ ...base, plugins: [{ type: "local", path: "" }] })).toMatch(
-        /needs a non-empty path/
+    it("refuses plugin paths: local extensions arrive as runtimeExtensions", () => {
+      expect(errorsOf({ ...base, plugins: [{ type: "local", path: "/p" }] })).toMatch(
+        /claudeAgentSdk\.plugins/
       )
     })
 

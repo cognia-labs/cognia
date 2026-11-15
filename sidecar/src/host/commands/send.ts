@@ -18,10 +18,10 @@ export function assertProviderVisibleContentSafety({
   options?: SendOptions
 }): void {
   if (options?.contentSafety?.injectionProtection !== true) return
-  const adapter =
-    options.execution?.runtimeAdapter ??
-    ((options.provider ?? "anthropic") === "anthropic" ? "claude-agent-sdk" : "ai-sdk")
-  if (adapter === "claude-agent-sdk" && (options.resumeSessionId || options.forkFromSessionId))
+  if (
+    options.execution?.runtimeAdapter === "claude-agent-sdk" &&
+    (options.resumeSessionId || options.forkFromSessionId)
+  )
     throw new ContentSafetyBlockedError(["unverified_native_resume"])
   assertSafeModelInput(prompt)
   if (options.initialConversation) assertSafeModelHistory(options.initialConversation)
@@ -42,10 +42,7 @@ export function retainedRuntimeSendIsSafe(
     return false
   if (
     existing?.multiTurn === true &&
-    (existing.sendOptions?.execution?.runtimeAdapter ??
-      ((existing.sendOptions?.provider ?? "anthropic") === "anthropic"
-        ? "claude-agent-sdk"
-        : "ai-sdk")) === "ai-sdk" &&
+    existing.sendOptions?.execution?.runtimeAdapter === "ai-sdk" &&
     !Array.isArray(options?.initialConversation) &&
     restartReason(existing, options) === "runtime feature policy changed"
   )

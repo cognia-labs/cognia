@@ -22,26 +22,15 @@ export interface PreCompactOptions {
 }
 
 /**
- * Dynamic compaction seam — wires the existing `dispatchPreCompact` plugin hook
- * result back into the sidecar's compaction path via `host_rpc`.
- *
- * Before ADR-0090 Phase 9 (this module), the plugin `onPreCompact` hook was
- * registered but never wired to a live trigger: the renderer-side dispatch
- * existed but had no call site because the sidecar (where compaction runs)
- * cannot import `lib/`. This module bridges that gap through the existing
- * `host_rpc` channel.
+ * Dynamic compaction seam — wires the renderer's `dispatchPreCompact` plugin
+ * hook result into the sidecar's compaction path. The sidecar (where
+ * compaction runs) cannot import `lib/`, so the decision crosses the wire.
  *
  * ## Protocol
  *
- * This module originally documented a `host_rpc` round-trip to the renderer.
- * That never worked: `answer_host_rpc` in `src-tauri/src/claude/sidecar.rs` is
- * deliberately TERMINAL — answered in Rust, never forwarded to the renderer —
- * and it only dispatches `jobs.*` plus the agent-session-store methods. There
- * has never been a `preCompact` method, so every call errored and fell back,
- * which is why `onPreCompact` was marked dormant in `types/plugin/plugin-hooks.ts`.
- *
- * It now rides the same renderer round-trip the `{ type: "plugin" }` hook
- * handler uses (`./plugin-hook-exec.ts`):
+ * It rides the same renderer round-trip the `{ type: "plugin" }` hook handler
+ * uses (`./plugin-hook-exec.ts`); `host_rpc` cannot carry it, because Rust
+ * answers that frame itself and never forwards it to the renderer:
  *   1. sidecar emits { type: "plugin_hook_exec", sessionId, execId,
  *      pluginId: "*", hookId: "onPreCompact", payload }
  *   2. Rust's default branch forwards it on SIDECAR_EVENT (no special case)
@@ -55,7 +44,7 @@ export interface PreCompactOptions {
  * Wire result matches the existing `PreCompactResult`:
  *   { skipCompaction?, contextToInject?, customStrategy? }
  *
- * Fallback: when `host_rpc` times out, errors, or is unavailable (headless), the
+ * Fallback: when the bridge times out, errors, or is absent (headless), the
  * compaction falls back to the already-selected built-in strategy — the plugin
  * decision is NEVER required for compaction to proceed.
  */
@@ -148,13 +137,11 @@ export function validatePreCompactResult(raw: unknown): PreCompactDecision {
  * Call the host's preCompact hook and return the decision.
  * Falls back gracefully on timeout, error, or unavailability.
  *
- * @param {object} hostRpc - retained for call-site compatibility; unused
  * @param {PreCompactContext} context
  * @param {{ log?: (level: string, msg: string) => void, pluginHookBridge?: (req: {hookId: string, payload: unknown, timeoutMs?: number}) => Promise<unknown> }} [opts]
  * @returns {Promise<PreCompactDecision>}
  */
 export async function queryPreCompactDecision(
-  _hostRpc: unknown,
   context: PreCompactContext,
   opts: PreCompactOptions = {}
 ): Promise<PreCompactDecision> {
@@ -166,10 +153,8 @@ export async function queryPreCompactDecision(
     source: "fallback",
   }
 
-  // `hostRpc` is kept in the signature for call-site compatibility but is no
-  // longer the transport — see the protocol note above. The renderer bridge is
-  // supplied through `opts`; without it (headless, or a rail with no renderer)
-  // compaction proceeds on its built-in strategy exactly as before.
+  // The renderer bridge is supplied through `opts`; without it (headless, or a
+  // rail with no renderer) compaction proceeds on its built-in strategy.
   const bridge = opts.pluginHookBridge
   if (typeof bridge !== "function") {
     return fallback

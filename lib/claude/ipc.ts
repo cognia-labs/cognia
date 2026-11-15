@@ -562,7 +562,6 @@ async function sendPromptToTransport(
               outputFormat: sdk.outputFormat,
               permissionPromptToolName: sdk.permissionPromptToolName,
               planModeInstructions: sdk.planModeInstructions,
-              plugins: sdk.plugins,
               skills: sdk.skills,
               toolAliases: sdk.toolAliases,
               toolConfig: sdk.toolConfig,
