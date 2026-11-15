@@ -292,7 +292,7 @@ where
                 Ok(volume) => Some(volume),
                 Err(error) => {
                     inventory.issues.push(WalkIssue {
-                        path: root.clone(),
+                        path: root.display().to_string(),
                         operation: "volume-space",
                         error: error.to_string(),
                     });
@@ -304,7 +304,7 @@ where
         Err(error) => {
             let mut inventory = Inventory::new();
             inventory.issues.push(WalkIssue {
-                path: data_dir.to_path_buf(),
+                path: data_dir.display().to_string(),
                 operation: "resolve-data-dir",
                 error: error.to_string(),
             });
