@@ -97,6 +97,7 @@ export default defineHostModule({
     "lib/squads/squad/squad-control.ts",
     "lib/squads/squad/squad-run-records.ts",
     "lib/squads/squad/squad-run-steps.ts",
+    "lib/squads/squad/squad-stop-status.ts",
     "lib/squads/squad/start-squad-run.ts",
     "lib/squads/squad/watch-squad-run.ts",
     "lib/squads/team-run-context.ts",

@@ -447,6 +447,7 @@
       "class": "module",
       "api": [
         "hooks/fleet/use-fleet-snapshot.ts",
+        "hooks/fleet/use-now-ticker.ts",
         "lib/fleet/format.ts",
         "lib/fleet/managed-session-projection.ts",
         "lib/fleet/types.ts"
