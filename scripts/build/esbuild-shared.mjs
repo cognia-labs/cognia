@@ -64,6 +64,41 @@ export const stubNextPlugin = {
   },
 }
 
+// Packages the CLI's lazy chunks name but no Node process can run. They are
+// reached only through desktop UI the CLI never mounts: the app's UI graph sits
+// behind dynamic imports (plugin chat/context-panel bridges, the UI module
+// registry, the palette actions hook), and esbuild follows those into chunks.
+// Each resolves to a module that throws on load, so the published CLI does not
+// carry WebGL renderers or webview plugins it cannot use, and a code path that
+// ever does load one fails with a clear error instead of an unresolved import.
+// A package the CLI really needs belongs in cli/package.json instead; the two
+// lists are disjoint (esbuild-shared.test.mjs).
+export const CLI_UNAVAILABLE_PACKAGES = Object.freeze({
+  "@tauri-apps/plugin-updater": "the desktop updater runs only inside the Tauri webview",
+  "pixi.js": "the pet's Live2D renderer needs a browser canvas",
+  "untitled-pixi-live2d-engine": "the pet's Live2D renderer needs a browser canvas",
+})
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")
+
+export const stubUnavailablePackagesPlugin = {
+  name: "stub-cli-unavailable-packages",
+  setup(build) {
+    const names = Object.keys(CLI_UNAVAILABLE_PACKAGES).map(escapeRegExp).join("|")
+    build.onResolve({ filter: new RegExp(`^(${names})(/.*)?$`) }, (args) => ({
+      path: args.path,
+      namespace: "cli-unavailable",
+    }))
+    build.onLoad({ filter: /.*/, namespace: "cli-unavailable" }, (args) => {
+      const name = Object.keys(CLI_UNAVAILABLE_PACKAGES).find(
+        (pkg) => args.path === pkg || args.path.startsWith(`${pkg}/`)
+      )
+      const message = `cognia-agent: ${args.path} is not available in the CLI (${CLI_UNAVAILABLE_PACKAGES[name]})`
+      return { contents: `throw new Error(${JSON.stringify(message)})`, loader: "js" }
+    })
+  },
+}
+
 // Load the i18n aggregate messages as DEFAULT-ONLY JSON modules. esbuild's
 // json loader also emits a named export per top-level key, and the messages
 // contain an `eval` namespace — `var eval = ...` is a SyntaxError in the
@@ -100,6 +135,7 @@ export function createCliEsbuildPlugins(root) {
   return [
     createBundleAgentProtocolDependenciesPlugin(root),
     stubNextPlugin,
+    stubUnavailablePackagesPlugin,
     jsonDefaultOnlyPlugin,
   ]
 }

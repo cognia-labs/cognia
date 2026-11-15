@@ -2,10 +2,14 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import path from "node:path"
 import fs from "node:fs"
+import os from "node:os"
+import { pathToFileURL } from "node:url"
 
 import {
+  CLI_UNAVAILABLE_PACKAGES,
   cliEsbuildOptions,
   createCliEsbuildPlugins,
+  loadEsbuild,
   undeclaredCliRuntimeDependencies,
 } from "./esbuild-shared.mjs"
 
@@ -89,7 +93,52 @@ test("the fixture variant drops the shebang and keeps every plugin", () => {
     banner: false,
   })
   assert.equal(options.banner, undefined)
-  assert.equal(options.plugins.length, 3)
+  assert.equal(options.plugins.length, 4)
   assert.ok(options.plugins.some((p) => p.name === "stub-next-runtime"))
+  assert.ok(options.plugins.some((p) => p.name === "stub-cli-unavailable-packages"))
   assert.ok(options.plugins.some((p) => p.name === "json-default-only-messages"))
+})
+
+test("a package the CLI stubs is never one it declares", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "cli/package.json"), "utf8"))
+  const declared = { ...manifest.dependencies, ...manifest.peerDependencies, ...manifest.optionalDependencies }
+  assert.deepEqual(
+    Object.keys(CLI_UNAVAILABLE_PACKAGES).filter((name) => Object.hasOwn(declared, name)),
+    []
+  )
+})
+
+test("unavailable packages leave no external import and fail only when loaded", async () => {
+  const esbuild = await loadEsbuild()
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cli-unavailable-"))
+  try {
+    const entry = path.join(dir, "entry.mjs")
+    fs.writeFileSync(
+      entry,
+      [
+        'export const loaded = true',
+        'export const loadRenderer = () => import("pixi.js")',
+        'export const loadEngine = () => import("untitled-pixi-live2d-engine/cubism")',
+        'export const loadUpdater = () => import("@tauri-apps/plugin-updater")',
+      ].join("\n")
+    )
+    const result = await esbuild.build({
+      ...cliEsbuildOptions({ root, entry, outdir: path.join(dir, "out"), entryNames: "entry", banner: false }),
+      metafile: true,
+      logLevel: "silent",
+    })
+    const externals = Object.values(result.metafile.outputs).flatMap((output) =>
+      output.imports.filter((entry) => entry.external).map((entry) => entry.path)
+    )
+    assert.deepEqual(externals, [])
+    assert.deepEqual(undeclaredCliRuntimeDependencies(result.metafile, {}), [])
+
+    const mod = await import(pathToFileURL(path.join(dir, "out", "entry.mjs")).href)
+    assert.equal(mod.loaded, true)
+    await assert.rejects(mod.loadRenderer(), /pixi\.js is not available in the CLI \(the pet's Live2D renderer/)
+    await assert.rejects(mod.loadEngine(), /untitled-pixi-live2d-engine\/cubism is not available in the CLI/)
+    await assert.rejects(mod.loadUpdater(), /@tauri-apps\/plugin-updater is not available in the CLI \(the desktop updater/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
