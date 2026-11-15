@@ -17,7 +17,7 @@
  * `finally` so a re-used sessionId never inherits a stale context.
  */
 
-import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 
 export interface DispatchContext {
   /** Nesting level the agent owning this session runs at. Top-level chat = 0. */
@@ -64,12 +64,12 @@ export function clearDispatchContext(sessionId: string): void {
 // top-level chat session and a subagent's ephemeral session — both flow through
 // `resolveSendOptions`, so neither needs special-casing.
 
-const resolvedCeilings = new Map<string, ExternalSessionPermissionSpec>()
+const resolvedCeilings = new Map<string, AgentPermissionCeiling>()
 
 /** Record the permission ceiling a session resolved to (called by resolveSendOptions). */
 export function recordResolvedPermissionCeiling(
   sessionId: string,
-  spec: ExternalSessionPermissionSpec
+  spec: AgentPermissionCeiling
 ): void {
   if (!sessionId) return
   resolvedCeilings.set(sessionId, spec)
@@ -78,7 +78,7 @@ export function recordResolvedPermissionCeiling(
 /** Read a session's resolved ceiling, or `undefined` when it has none (no restriction). */
 export function getResolvedPermissionCeiling(
   sessionId: string
-): ExternalSessionPermissionSpec | undefined {
+): AgentPermissionCeiling | undefined {
   return resolvedCeilings.get(sessionId)
 }
 

@@ -22,7 +22,7 @@ description: 暴露给插件的可嵌入 Agent 运行时 —— 带类型的 run
 
 ## 为什么需要它
 
-插件本就能注册工具与 subagent，但唯一能*运行*一个 agent 回合的方式是无类型的 `ctx.agent.executeAgent(config: Record<string, unknown>)`：没有类型契约、不能向插件流式回传、没有结构化输出、无法对工具调用参数做许可/改写，也无法在插件代码内调用宿主工具。Agent SDK 补齐了这些缺口，其可嵌入 Agent 形态借鉴自 VS Code Language Model API、Anthropic Claude Agent SDK（`query()`）、Cursor SDK 与 OpenAI Agents SDK。
+插件本就能注册工具与 subagent，但唯一能*运行*一个 agent 回合的方式是一个无类型的 `Record<string, unknown>` 配置包：没有类型契约、不能向插件流式回传、没有结构化输出、无法对工具调用参数做许可/改写，也无法在插件代码内调用宿主工具。Agent SDK 补齐了这些缺口，其可嵌入 Agent 形态借鉴自 VS Code Language Model API、Anthropic Claude Agent SDK（`query()`）、Cursor SDK 与 OpenAI Agents SDK。
 
 ## run —— 一次性
 

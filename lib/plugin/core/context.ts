@@ -261,15 +261,12 @@ import type {
   PluginAgentRunOptions,
   PluginAgentRunResult,
 } from "@/types/plugin/plugin-agent-sdk"
-import type { FullPluginContext as PublicFullPluginContext } from "@cognia/plugin-sdk/context"
+import type { PluginContext as PublicPluginContext } from "@cognia/plugin-sdk/context"
 import { PluginDisposableScope, withPluginDisposableScope } from "./disposable-scope"
 import { PluginLibraryError } from "../library/access"
 import { PLUGIN_RESOURCE_EFFECTS } from "./resource-effects"
 import { resolvePluginApiPlatform, withGovernedPluginContext } from "../contracts/governed-context"
 import { pluginApiRuntimeForType } from "../contracts/interface-catalog"
-
-/** @deprecated `PluginContext` is now the complete activated context. */
-export type FullPluginContext = PluginContext
 
 // =============================================================================
 // Create Plugin Context
@@ -360,7 +357,7 @@ export function createFullPluginContext(
   plugin: Plugin,
   manager: PluginManager,
   options?: { enableDebug?: boolean; generation?: number }
-): FullPluginContext {
+): PluginContext {
   const pluginId = plugin.manifest.id
 
   // Get the base context (with optional debug mode)
@@ -530,7 +527,7 @@ export function createFullPluginContext(
     pet: createPetAPI({ pluginId, capabilities: plugin.manifest.capabilities ?? [] }),
     resources: createResourcesAPI(pluginId),
     sites: createSitesAPI(),
-  } satisfies PublicFullPluginContext
+  } satisfies PublicPluginContext
   // `config` was the object the context was built with, and the store replaces
   // (never mutates) a plugin's config on every settings change — so a plugin
   // reading `ctx.config` saw its activation-time values forever: privacy mode
@@ -562,7 +559,7 @@ export function createFullPluginContext(
       "ctx",
       governedContext,
       manager.isPluginLedgerV2Enabled?.() === false ? {} : PLUGIN_RESOURCE_EFFECTS
-    ) as FullPluginContext
+    ) as PluginContext
   )
   // Capture every host guard before publishing the mutable plugin context.
   // Re-reading ctx.network would let a plugin intercept and replay genuine
@@ -576,7 +573,7 @@ export function createFullPluginContext(
  */
 export function isFullPluginContext(
   context: PluginBaseContext | PluginContext
-): context is FullPluginContext {
+): context is PluginContext {
   return "session" in context && "project" in context && "vector" in context
 }
 
@@ -1090,29 +1087,6 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
         reason: `plugin ${pluginId} invoked dependency tool ${dependencyId}/${name}`,
       })
       return result
-    },
-
-    executeAgent: async (config: Record<string, unknown>) => {
-      const prompt = typeof config.prompt === "string" ? config.prompt : ""
-      if (!prompt) {
-        throw new Error("agent.execute requires config.prompt")
-      }
-      // Map the legacy config bag onto the typed run options. Legacy callers
-      // used the executor's field names (`systemPrompt` / `defaultProvider`);
-      // translate them to the SDK's (`system` / `provider`). A caller-supplied
-      // `agentId` still chooses the cancellation handle.
-      const { prompt: _ignored, agentId, label, systemPrompt, defaultProvider, ...rest } = config
-      gateToolEnabledRun(pluginId, rest.toolsEnabled === true)
-      const options = {
-        ...(rest as PluginAgentRunOptions),
-        ...(typeof systemPrompt === "string" ? { system: systemPrompt } : {}),
-        ...(typeof defaultProvider === "string" ? { provider: defaultProvider } : {}),
-      }
-      return runPluginAgent(prompt, options, {
-        pluginId,
-        ...(typeof agentId === "string" && agentId ? { agentId } : {}),
-        ...(typeof label === "string" ? { label } : {}),
-      })
     },
 
     runExternalAgent: async (presetOrAgentId, prompt, options) => {

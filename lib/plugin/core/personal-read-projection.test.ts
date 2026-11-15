@@ -138,7 +138,7 @@ it("Q1 sync session metadata survives while a positively marked branch transcrip
   expect(JSON.stringify(result.branchSeed)).not.toContain("private seed")
 })
 
-it("R11 every ctx.agent runner member projects marked invocation output, including executeAgent", async () => {
+it("R11 every ctx.agent runner member projects marked invocation output", async () => {
   const source = ts.createSourceFile(
     "context.ts",
     readFileSync(join(__dirname, "context.ts"), "utf8"),
@@ -184,7 +184,7 @@ it("R11 every ctx.agent runner member projects marked invocation output, includi
       methods.push(property.name.text)
     }
   }
-  expect(methods).toContain("executeAgent")
+  expect(methods).toEqual(expect.arrayContaining(["run", "runStreamed", "runExternalAgent"]))
   const run = await startToolExecutionRun("r11-structural", {
     localAuthorization: LOCAL_PERSON_RUN,
   })

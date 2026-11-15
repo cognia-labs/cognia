@@ -117,7 +117,6 @@ export type { PluginCompactionStrategyDef } from "@cognia/plugin-contract/types/
 export type { PluginContextProviderDef } from "@cognia/plugin-contract/types/plugin/plugin-context-provider"
 export type {
   PluginContextPanelDef,
-  PluginContextPanelIcon,
   PluginContextPanelRenderer,
 } from "@cognia/plugin-contract/types/plugin/plugin-context-panel"
 export type { PluginDeploymentFilterDef } from "@cognia/plugin-contract/types/plugin/plugin-deployment-filter"

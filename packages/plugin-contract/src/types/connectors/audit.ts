@@ -19,7 +19,6 @@ export type AuditKind =
   | "delivery.balanced"
   | "delivery.downgraded"
   | "delivery.diagnostic_direct"
-  | "delivery.legacy_direct"
   // A plugin's `ctx.connectors.forwardMessage`, planned by the outbound policy
   // (ADR-0239) and sent at once: fields: { pluginId, governed, outcome, authority? }.
   | "delivery.forward_direct"

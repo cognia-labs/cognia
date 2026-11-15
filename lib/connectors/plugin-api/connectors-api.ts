@@ -1,5 +1,4 @@
 import { preparePluginHistory } from "@/lib/execution/personal-visibility"
-import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
 import {
   executeConnectorManagement,
   listConnectorManagementOperations,
@@ -84,12 +83,7 @@ import { removeAdapterInstance } from "@/lib/connectors/remove-adapter-instance"
 import { getAdapterRuntimeStateSnapshot } from "@/lib/connectors/outbound-runner"
 import type { AdapterInstanceRow, OutboundJobRow } from "@/lib/db/connector-types"
 import type { ChatSession } from "@cognia/agent-config-types"
-import type {
-  OutboundRequest,
-  OutboundResult,
-  PlatformAdapter,
-  Capability,
-} from "@/types/connectors"
+import type { OutboundRequest, PlatformAdapter, Capability } from "@/types/connectors"
 import type {
   PluginAdapterInstanceInfo,
   PluginBoundSessionInfo,
@@ -348,13 +342,6 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
     },
 
     // ── outbound mutations ───────────────────────────────────────────────────
-    send: (adapterId, req) => legacyDirectSend(pluginId, adapterId, req),
-    sendText: (adapterId, conversationRef, text) =>
-      legacyDirectSend(pluginId, adapterId, {
-        conversationRef,
-        segments: [{ type: "text", text }],
-        metadata: { idempotencyKey: newIdempotencyKey() },
-      }),
     editMessage: (adapterId, messageId, patch) =>
       unknownWrite("connector message edit", () =>
         getBus().editOutbound(adapterId, messageId, patch)
@@ -631,8 +618,6 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
       getOutboundJob: "connectors:read",
       waitForDelivery: "connectors:read",
       getReadReceipt: "connectors:read",
-      send: "connectors:send",
-      sendText: "connectors:send",
       editMessage: "connectors:send",
       deleteMessage: "connectors:send",
       deleteEphemeralCard: "connectors:send",
@@ -682,19 +667,6 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
   )
 }
 
-/** A refusal as the failed result the direct calls return. */
-function refusedResult(error: { code: string; message: string }): OutboundResult {
-  return { ok: false, error: { code: error.code, message: error.message, retryable: false } }
-}
-
-/**
- * The deprecated direct `send` / `sendText`: planned by the outbound policy
- * and sent at once (ADR-0239). A request whose delivery target names its
- * conversation goes to the target the host stored for it; one that names only
- * a platform reference has a recipient nobody can check, so under
- * enforcement it is refused, and in shadow mode it is sent as before and
- * recorded.
- */
 function explicitPluginStreamKey(pluginId: string, streamKey: string): string {
   return `plugin-stream:${JSON.stringify([pluginId, streamKey])}`
 }
@@ -717,57 +689,5 @@ function namespaceExplicitPluginStream(
       ...request.metadata,
       streamKey: explicitPluginStreamKey(pluginId, request.metadata.streamKey),
     },
-  }
-}
-
-async function legacyDirectSend(
-  pluginId: string,
-  adapterId: string,
-  request: OutboundRequest
-): Promise<OutboundResult> {
-  const captured = pluginExecutionContext(pluginId)
-  const source = captured ?? {}
-  const sendOptions = captured ? bindPersonalEgressOptions({}, captured) : undefined
-  request = namespaceExplicitPluginStream(pluginId, structuredClone(request))
-  console.warn(
-    `[connectors-api] plugin ${pluginId} used deprecated direct send; migrate to ctx.connectors.enqueueSend`
-  )
-  const conversationKey = request.deliveryTarget?.address.conversationKey
-  let addressed = request
-  if (conversationKey) {
-    try {
-      addressed = await pluginDestination(adapterId, conversationKey, request)
-    } catch (error) {
-      if (error instanceof PluginDestinationError) return refusedResult(error)
-      throw error
-    }
-  }
-  try {
-    return await getConnectorDeliveryGateway().sendNow(
-      {
-        adapterId,
-        personalContext: personalSinkContextForRun(source, "plugin invocation unavailable"),
-        request: addressed,
-        ...(conversationKey ? { conversationKey } : {}),
-        segments: addressed.segments,
-        ...(addressed.sendOptions?.mode ? { deliveryMode: addressed.sendOptions.mode } : {}),
-        idempotencyKey: addressed.metadata.idempotencyKey,
-        source: "plugin",
-        authorization: { kind: "plugin", pluginId },
-        auditKind: "delivery.legacy_direct",
-        auditFields: {
-          pluginId,
-          reason: "plugin_compatibility_waiver",
-          migrationTarget: "ctx.connectors.enqueueSend",
-        },
-      },
-      (narrowedRequest) =>
-        sendOptions
-          ? getBus().sendOutbound(adapterId, narrowedRequest ?? addressed, sendOptions)
-          : getBus().sendOutbound(adapterId, narrowedRequest ?? addressed)
-    )
-  } catch (error) {
-    if (error instanceof ConnectorDeliveryPiiError) return refusedResult(error)
-    throw error
   }
 }

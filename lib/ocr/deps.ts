@@ -14,8 +14,7 @@
  * `file-path` sources supply the matching resolver.
  */
 
-import { detectPlatform, isHeadlessHost } from "@/lib/platform/detect"
-import type { NativePlatform } from "@/lib/capacitor/_shared"
+import { detectPlatform, isHeadlessHost, type Platform } from "@/lib/platform/detect"
 import { getSharedOcrRegistry } from "./registry"
 import { createOcrCredentialsResolver } from "./credentials"
 import { dexieOcrPageCache, dexieOcrResultCache } from "./cache"
@@ -40,7 +39,7 @@ export type OcrOsTag = "windows" | "macos" | "linux" | "ios" | "android" | "brow
  * engine, so it always reports `"browser"`; Tauri/mobile branch on the
  * user-agent so the router can prefer the matching native engine.
  */
-export function detectOcrOsTag(platform: NativePlatform = detectPlatform()): OcrOsTag {
+export function detectOcrOsTag(platform: Platform = detectPlatform()): OcrOsTag {
   if (platform === "headless") {
     const nodePlatform = (globalThis as typeof globalThis & { process?: { platform?: string } })
       .process?.platform
@@ -66,7 +65,7 @@ export interface BuildOcrDepsOptions {
   /** Override the shared registry (tests). */
   registry?: OcrRegistry
   /** Override the detected shell (tests). */
-  platform?: NativePlatform
+  platform?: Platform
   /** Override the detected OS tag (tests). */
   osTag?: OcrOsTag
   /** Override the credentials resolver (tests). */

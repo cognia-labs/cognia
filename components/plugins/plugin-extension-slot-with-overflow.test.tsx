@@ -8,10 +8,8 @@ import {
   getExtensionRevision,
   subscribeExtensionChanges,
 } from "@/lib/plugin/api/extension-api"
-import type {
-  CanonicalExtensionPoint,
-  PluginPointFormFactor,
-} from "@/lib/plugin/contracts/plugin-points"
+import type { CanonicalExtensionPoint } from "@/lib/plugin/contracts/plugin-points"
+import type { PluginSurfaceFormFactor } from "@/types/plugin/plugin-surface"
 import { recordPluginPointDiagnostic } from "@/lib/plugin/contracts/diagnostics-store"
 
 jest.mock("@/lib/plugin/api/extension-api", () => ({
@@ -36,7 +34,7 @@ interface FakeExt {
   component: React.ComponentType<{
     pluginId: string
     extensionId: string
-    formFactor: PluginPointFormFactor
+    formFactor: PluginSurfaceFormFactor
   }>
   options: { priority?: number; minWidth?: number; maxWidth?: number }
 }

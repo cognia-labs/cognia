@@ -130,9 +130,9 @@ export type InThreadEnqueueInput =
 
 /**
  * A delivery that goes out at once instead of through the queue: a plugin's
- * deprecated direct send, or a forward of messages already sent. It is
- * planned like any other (`immediate`), and refused where another would be
- * drafted, since there is no draft to hold it in.
+ * authorized stream frame, an urgent push, or a forward of messages already
+ * sent. It is planned like any other (`immediate`), and refused where another
+ * would be drafted, since there is no draft to hold it in.
  */
 export interface ImmediateDeliveryInput {
   personalContext: PersonalSinkContext
@@ -157,11 +157,7 @@ export interface ImmediateDeliveryInput {
   source: OutboundJobSource
   authorization: OutboundAuthorization
   /** The audit row the send leaves. */
-  auditKind:
-    | "delivery.legacy_direct"
-    | "delivery.forward_direct"
-    | "delivery.urgent_direct"
-    | "delivery.stream_authorized"
+  auditKind: "delivery.forward_direct" | "delivery.urgent_direct" | "delivery.stream_authorized"
   auditFields?: Record<string, unknown>
 }
 

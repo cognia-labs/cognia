@@ -17,7 +17,6 @@ export {
   getSession,
   removeSession,
   onDidChangeSessions,
-  hydrateFromSecrets,
   __makeSession,
 } from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
 export { runPkceAuthFlow } from "@cognia/plugin-contract/lib/plugin/auth/auth-pkce-flow"

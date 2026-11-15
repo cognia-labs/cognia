@@ -2,8 +2,8 @@ import {
   deriveExternalSessionPermission,
   deriveCapabilityGuards,
   teamPermissionCeiling,
-  type ExternalSessionPermissionSpec,
 } from "./permission-cascade"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import type { AcpCapabilities } from "@/types/agent/external-agent"
 
 it("projects the team's security constraints through the shared permission cascade", () => {
@@ -24,7 +24,7 @@ it("projects the team's security constraints through the shared permission casca
 
 describe("deriveExternalSessionPermission", () => {
   it("returns the parent spec verbatim when no child is given", () => {
-    const parent: ExternalSessionPermissionSpec = {
+    const parent: AgentPermissionCeiling = {
       permissionMode: "default",
       allowedTools: ["Read", "Grep"],
       disallowedTools: ["Bash"],
@@ -93,7 +93,7 @@ describe("deriveExternalSessionPermission", () => {
   })
 
   it("falls back to the parent MCP servers when the child does not narrow them", () => {
-    const parent: ExternalSessionPermissionSpec = { mcpServers: [{ name: "fs" }] }
+    const parent: AgentPermissionCeiling = { mcpServers: [{ name: "fs" }] }
     expect(deriveExternalSessionPermission(parent, {}).mcpServers).toEqual([{ name: "fs" }])
   })
 })

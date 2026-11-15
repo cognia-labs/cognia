@@ -75,25 +75,6 @@ export type PluginPointStatus = "implemented" | "virtual" | "deprecated"
 
 export type PluginPointHostKind = "jsx-mount" | "registration"
 
-/**
- * The shape a slot expects its contributions to take.
- *
- * Without this a plugin author reads `statusbar.right` and `sidebar.right.top`
- * and gets identical information from the contract, then guesses — so a status
- * bar ends up with a full card in it. Declared per point rather than measured,
- * because the answer is a property of the host region and the author needs it
- * at authoring time, not at render time. For the cases where width genuinely
- * varies (the context workbench's narrow/wide/focus modes), slot wrappers carry
- * `container-type: inline-size` so plugin CSS can use `@container` instead.
- *
- *   - `icon`   a single square control; assume ~24-32px and no room for a label
- *   - `row`    one item in a horizontal action row; keep it to a button or two
- *   - `block`  full-width band stacked with host content; any height
- *   - `panel`  an owned region with its own scroll; render a whole view
- */
-/** @deprecated Use `PluginSurfaceFormFactor`; this alias remains source-compatible. */
-export type PluginPointFormFactor = PluginSurfaceFormFactor
-
 export interface PluginPointContract {
   id: string
   kind: PluginPointKind
@@ -113,8 +94,24 @@ export interface PluginPointContract {
    * Hook / runtime / activation contracts leave this undefined.
    */
   hostKind?: PluginPointHostKind
-  /** UI slots only — the shape the host region expects. See the type's doc. */
-  formFactor?: PluginPointFormFactor
+  /**
+   * UI slots only — the shape the host region expects its contributions to
+   * take.
+   *
+   * Without this a plugin author reads `statusbar.right` and `sidebar.right.top`
+   * and gets identical information from the contract, then guesses — so a status
+   * bar ends up with a full card in it. Declared per point rather than measured,
+   * because the answer is a property of the host region and the author needs it
+   * at authoring time, not at render time. For the cases where width genuinely
+   * varies (the context workbench's narrow/wide/focus modes), slot wrappers carry
+   * `container-type: inline-size` so plugin CSS can use `@container` instead.
+   *
+   *   - `icon`   a single square control; assume ~24-32px and no room for a label
+   *   - `row`    one item in a horizontal action row; keep it to a button or two
+   *   - `block`  full-width band stacked with host content; any height
+   *   - `panel`  an owned region with its own scroll; render a whole view
+   */
+  formFactor?: PluginSurfaceFormFactor
   owner: string
   binding: string
   docs: string

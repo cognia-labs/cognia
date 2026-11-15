@@ -2,10 +2,7 @@
  * Plugin-facing Agent SDK contract (ADR-0026 §Agent-SDK).
  *
  * These types describe the embeddable agent runtime exposed to plugins via
- * `ctx.agent.run` / `ctx.agent.runStreamed` / `ctx.agent.invokeTool`. They are
- * the typed replacement for the legacy untyped
- * `ctx.agent.executeAgent(config: Record<string, unknown>)` entry point (kept as
- * a deprecated shim).
+ * `ctx.agent.run` / `ctx.agent.runStreamed` / `ctx.agent.invokeTool`.
  *
  * Kept dependency-free (no imports from `lib/`) so the `types/` layer stays a
  * leaf — the runtime in `lib/plugin/agent-sdk/` adapts these to the executor's
@@ -219,7 +216,7 @@ export interface PluginDispatchSubagentOptions {
    * fail-closed and monotonic across nesting depth. Populated by the host's
    * `dispatch_agent` tool from the caller's recorded ceiling.
    */
-  _permissionCeiling?: import("../../lib/ai/agent/external/policy/permission-cascade").ExternalSessionPermissionSpec
+  _permissionCeiling?: import("../agent/permission-ceiling").AgentPermissionCeiling
   /** ADR-0243 phase 1: the caller's earlier snapshot, observed only on child launch. */
   _actingAuthority?: { runId: string; revision: number }
   /** Host-owned source authority inherited by nested dispatch; stripped from public plugin arguments. */

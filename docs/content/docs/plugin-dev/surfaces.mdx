@@ -61,10 +61,7 @@ export default definePlugin({
 })
 ```
 
-<Callout>
-  `PluginContext` contains the complete host API. `FullPluginContext` remains
-  only as a deprecated compatibility alias; new plugins do not need a cast.
-</Callout>
+<Callout>`PluginContext` contains the complete host API; plugins do not need a cast.</Callout>
 
 `extensions.registerExtension(point, component, options?)`:
 
@@ -311,7 +308,7 @@ they ask for it.
 so check before you animate:
 
 ```tsx
-// `ctx` is the narrowed FullPluginContext from activate(), above.
+// `ctx` is the PluginContext from activate(), above.
 const { motion } = ctx.theme.getTheme()
 if (!motion.reduced) {
   node.animate([{ opacity: 0.4 }, { opacity: 1 }], {

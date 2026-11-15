@@ -44,7 +44,7 @@ description: lib/plugin/core/ 中的 PluginManager 生命周期引擎 —— 一
 | `loader.ts` | 按类型动态加载模块 + 限时拆卸 | `PluginLoader` `:66`；`DEFAULT_TEARDOWN_TIMEOUT_MS` `:25`；`DirtyTeardownReason`/`DirtyTeardownRecord` `:41`/`:43` |
 | `registry.ts` | 贡献存储（tools/components/templates/modes/commands） | `PluginRegistry` `:54`（覆盖于 5 个 `createOverlayRegistry` 之上的门面） |
 | `descriptor.ts` | 从清单构建面向 UI 的 `ExtensionDescriptor` | `buildExtensionDescriptor` `:87`；`derivePluginInstallRootKind` `:20` |
-| `context.ts` | 构建 `PluginContext`/`FullPluginContext` API 对象 | `createPluginContext` `:181`；`createFullPluginContext` `:233`；`isFullPluginContext` `:323`；`teardownPluginWorkflowRegistrations` `:2170`；类型 `FullPluginContext` `:141` |
+| `context.ts` | 构建 `PluginContext` API 对象 | `createPluginContext` `:181`；`createFullPluginContext` `:233`；`isFullPluginContext` `:323`；`teardownPluginWorkflowRegistrations` `:2170`；类型 `FullPluginContext` `:141` |
 | `compatibility.ts` | 对宿主/node/python 做语义化版本门控 → 诊断 | `evaluatePluginCompatibility` `:119`；`CompatibilityRuntime` `:15`；`CompatibilityDiagnostic` `:5` |
 | `validation.ts` | 清单 + 配置的模式/取值校验 | `validatePluginManifest` `:289`；`validatePluginConfig` `:1167`；`parseManifest` `:1311` |
 | `verification.ts` | 构建不可变的 `PluginVerificationSnapshot` + 能力证明 | `createPluginVerificationSnapshot` `:35`；`collectCapabilityRuntimeProofs` `:14` |
@@ -171,7 +171,7 @@ flowchart TB
 
 ## 构建并传入 `activate` 的上下文
 
-整个生命周期的枢纽在于 `loadPlugin` 构建一个 `FullPluginContext` 并把它交给插件的 `activate`。返回的 hooks（若有）会被保留以供后续分发。
+整个生命周期的枢纽在于 `loadPlugin` 构建一个 `PluginContext` 并把它交给插件的 `activate`。返回的 hooks（若有）会被保留以供后续分发。
 
 ```ts
 // manager.ts:1475-1481

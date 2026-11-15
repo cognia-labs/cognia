@@ -2,8 +2,7 @@ import type { AgentTeamConfig } from "@/types/agent/agent-team"
 import type { AcpCapabilities, AcpPermissionMode } from "@/types/agent/external-agent"
 import { clampSandboxPolicy } from "@/lib/sandbox/policy-bridge"
 import { MODE_RANK } from "@cognia/agent-runtime-kit/permission-modes"
-import type { ExternalSessionPermissionSpec } from "@cognia/plugin-contract/lib/ai/agent/external/policy/permission-cascade"
-export type { ExternalSessionPermissionSpec } from "@cognia/plugin-contract/lib/ai/agent/external/policy/permission-cascade"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 
 export { MODE_RANK }
 
@@ -47,9 +46,9 @@ function unionDeny(
 }
 
 function intersectServers(
-  parent: ExternalSessionPermissionSpec["mcpServers"],
-  child: ExternalSessionPermissionSpec["mcpServers"]
-): ExternalSessionPermissionSpec["mcpServers"] {
+  parent: AgentPermissionCeiling["mcpServers"],
+  child: AgentPermissionCeiling["mcpServers"]
+): AgentPermissionCeiling["mcpServers"] {
   if (parent && child) {
     const childNames = new Set(child.map((s) => s.name))
     return parent.filter((s) => childNames.has(s.name))
@@ -66,12 +65,12 @@ function intersectServers(
  * - `mcpServers` intersect by name (cannot expose a server the parent lacks).
  */
 export function deriveExternalSessionPermission(
-  parent: ExternalSessionPermissionSpec,
-  child?: ExternalSessionPermissionSpec
-): ExternalSessionPermissionSpec {
+  parent: AgentPermissionCeiling,
+  child?: AgentPermissionCeiling
+): AgentPermissionCeiling {
   if (!child) return { ...parent }
 
-  const result: ExternalSessionPermissionSpec = {}
+  const result: AgentPermissionCeiling = {}
 
   const permissionMode = clampMode(parent.permissionMode, child.permissionMode)
   if (permissionMode) result.permissionMode = permissionMode
@@ -123,9 +122,9 @@ export function deriveCapabilityGuards(capabilities: AcpCapabilities | undefined
  */
 export function teamPermissionCeiling(
   config: AgentTeamConfig | undefined
-): ExternalSessionPermissionSpec | undefined {
+): AgentPermissionCeiling | undefined {
   if (!config) return undefined
-  const spec: ExternalSessionPermissionSpec = {
+  const spec: AgentPermissionCeiling = {
     ...(config.allowedTools && config.allowedTools.length > 0
       ? { allowedTools: config.allowedTools }
       : {}),

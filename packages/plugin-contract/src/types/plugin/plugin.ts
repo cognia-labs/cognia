@@ -3009,11 +3009,6 @@ export interface PluginAgentAPI {
     args: Record<string, unknown>,
     opts?: PluginInvocationOptions
   ) => Promise<unknown>
-  /**
-   * @deprecated Use {@link run} / {@link runStreamed}. Retained as a thin shim
-   * mapping the legacy untyped config bag onto `run()`.
-   */
-  executeAgent: (config: Record<string, unknown>) => Promise<unknown>
   cancelAgent: (agentId: string) => void
   /**
    * Imperatively run an external coding agent (Claude Code / Codex / Gemini

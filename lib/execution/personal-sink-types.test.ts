@@ -30,7 +30,7 @@ function typeContracts(
     conversationKey: "lark:a:c",
     source: "ai-run",
     authorization: { kind: "system-notice", inboundConversationKey: "lark:a:c" },
-    auditKind: "delivery.legacy_direct",
+    auditKind: "delivery.stream_authorized",
   })
   return absent
 }

@@ -24,8 +24,8 @@ import {
 import {
   getExtensionPointFormFactor,
   type CanonicalExtensionPoint,
-  type PluginPointFormFactor,
 } from "@/lib/plugin/contracts/plugin-points"
+import type { PluginSurfaceFormFactor } from "@/types/plugin/plugin-surface"
 import {
   ensureBootCapability,
   getBootCapabilitySnapshot,
@@ -130,7 +130,7 @@ export function PluginExtensionSlot({ point, className, limit, fallback, context
         const Cmp = ext.component as unknown as React.ComponentType<{
           pluginId: string
           extensionId: string
-          formFactor: PluginPointFormFactor
+          formFactor: PluginSurfaceFormFactor
           context?: Readonly<Record<string, unknown>>
         }>
         return (

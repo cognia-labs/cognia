@@ -140,7 +140,7 @@ it("keeps the Host run through immediate sends and denies private content before
       authorization: { kind: "human", actor: "local-user" },
       personalContext: context,
       segments,
-      auditKind: "delivery.legacy_direct",
+      auditKind: "delivery.stream_authorized",
     },
     send
   )
@@ -574,7 +574,7 @@ describe("ConnectorDeliveryGateway.sendNow (ADR-0239)", () => {
     idempotencyKey: "idem-1",
     source: "plugin" as const,
     authorization: plugin,
-    auditKind: "delivery.legacy_direct" as const,
+    auditKind: "delivery.stream_authorized" as const,
     auditFields: { pluginId: "p1" },
     ...extra,
   })
@@ -610,7 +610,7 @@ describe("ConnectorDeliveryGateway.sendNow (ADR-0239)", () => {
     expect(deps.recordReceipt).toHaveBeenCalledWith(receipt("r1"))
     expect(deps.appendAudit).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "delivery.legacy_direct",
+        kind: "delivery.stream_authorized",
         conversationKey: "slack:adapter-1:C1",
         idempotencyKey: "idem-1",
         fields: {
@@ -684,7 +684,7 @@ describe("ConnectorDeliveryGateway.sendNow (ADR-0239)", () => {
     }))
     expect(deps.appendAudit).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "delivery.legacy_direct",
+        kind: "delivery.stream_authorized",
         reason: "platform_4xx",
         fields: expect.objectContaining({ outcome: "failed" }),
       })

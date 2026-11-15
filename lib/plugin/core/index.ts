@@ -6,12 +6,7 @@ export { PluginManager, getPluginManager, initializePluginManager } from "./mana
 export type { PythonRuntimeInfo } from "./manager"
 export { PluginLoader } from "./loader"
 export { PluginRegistry } from "./registry"
-export {
-  createPluginContext,
-  createFullPluginContext,
-  isFullPluginContext,
-  type FullPluginContext,
-} from "./context"
+export { createPluginContext, createFullPluginContext, isFullPluginContext } from "./context"
 export { validatePluginManifest, validatePluginConfig, parseManifest } from "./validation"
 export type { ValidationError, ValidationResult, ConfigValidationResult } from "./validation"
 export { evaluatePluginCompatibility } from "./compatibility"

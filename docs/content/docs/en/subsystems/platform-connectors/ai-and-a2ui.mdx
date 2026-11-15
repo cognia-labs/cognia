@@ -75,7 +75,7 @@ The existing help dispatcher accepts `<help-trigger> welcome` (normally `/help w
 
 ## The Plugin Surface Builder
 
-Plugins that want to send rich, interactive content through `ctx.connectors.send` need an `A2UIMessageSegment` whose `content` is a valid **id-keyed** component graph. Hand-authoring that graph (keying by id, wiring child refs, minting a mirror) is exactly the friction `surface-builder.ts` removes. Construction is **pure and ungated** — the side-effecting `send()` it feeds stays gated by `connectors:send`.
+Plugins that want to send rich, interactive content through `ctx.connectors.enqueueSend` need an `A2UIMessageSegment` whose `content` is a valid **id-keyed** component graph. Hand-authoring that graph (keying by id, wiring child refs, minting a mirror) is exactly the friction `surface-builder.ts` removes. Construction is **pure and ungated** — the side-effecting `enqueueSend()` it feeds stays gated by `connectors:send`.
 
 `validateA2UISurfaceComponents` (`surface-builder.ts:116`) asserts unique ids, resolves the root, and throws `A2UISurfaceBuildError` (`surface-builder.ts:48`) on any dangling child reference:
 

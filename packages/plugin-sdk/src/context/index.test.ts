@@ -1,5 +1,4 @@
 import type {
-  FullPluginContext,
   NativeVideoInfo,
   PluginContext,
   PluginLibrariesAPI,
@@ -11,7 +10,7 @@ import type {
   VideoAnalysisOptions,
 } from "./index"
 
-describe("public FullPluginContext", () => {
+describe("public PluginContext", () => {
   it("exposes consumer-bound library factories and typed asynchronous imports", async () => {
     const factory: PluginLibraryModuleFactory<{ increment: () => number }> = () => {
       let value = 0
@@ -45,7 +44,7 @@ describe("public FullPluginContext", () => {
       [Key in keyof T]-?: object extends Pick<T, Key> ? Key : never
     }[keyof T]
     type CriticalKeys = "memory" | "pet" | "webview" | "auth" | "uri"
-    type UnexpectedOptionalKeys = Extract<CriticalKeys, OptionalKeys<FullPluginContext>>
+    type UnexpectedOptionalKeys = Extract<CriticalKeys, OptionalKeys<PluginContext>>
     const assertNever = <Value extends never>(): Value | undefined => undefined
 
     expect(assertNever<UnexpectedOptionalKeys>()).toBeUndefined()

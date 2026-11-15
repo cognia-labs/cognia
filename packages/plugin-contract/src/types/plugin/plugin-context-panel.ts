@@ -9,25 +9,14 @@ import type {
   ContextResourceKind,
 } from "../context-workbench"
 
-/**
- * Icon names a contributed panel may name for its activity-rail button.
- *
- * A runtime array for the same reason `CANONICAL_CONTEXT_ACTIVITIES` and
- * `CONTEXT_RESOURCE_READ_PERMISSIONS` are: this list was hand-copied into three
- * places — this union, the host's name→component map, and the manifest
- * validator's allowlist — and only two of them were checked against each other.
- * Names only, so the validator never has to pull `lucide-react` in.
- */
-/** @deprecated Use `PluginIconName`; kept as a source-compatible alias. */
-export type PluginContextPanelIcon = PluginIconName
-
 interface PluginContextPanelDefBase {
   id: string
   resourceKinds: ContextResourceKind[]
   activity: CanonicalContextActivity
   labelKey: string
   label: string
-  icon?: PluginContextPanelIcon
+  /** Activity-rail button icon, from the safe icon set. */
+  icon?: PluginIconName
   order?: number
   requiredCapabilities?: ContextCapability[]
   preferredMode?: ContextPanelMode

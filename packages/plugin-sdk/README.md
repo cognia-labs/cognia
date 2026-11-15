@@ -8,7 +8,7 @@ not public plugin APIs.
 ## Quick start
 
 ```ts
-import { definePlugin, defineTool, type FullPluginContext } from "@cognia/plugin-sdk"
+import { definePlugin, defineTool, type PluginContext } from "@cognia/plugin-sdk"
 
 const echo = defineTool({
   name: "echo",
@@ -30,7 +30,7 @@ export default definePlugin({
     capabilities: ["tools"],
     main: "dist/index.js",
   },
-  async activate(ctx: FullPluginContext) {
+  async activate(ctx: PluginContext) {
     ctx.logger.info(`Loaded ${echo.name}`)
   },
 })
@@ -40,7 +40,7 @@ export default definePlugin({
 
 - `@cognia/plugin-sdk`: all stable author types, contract metadata, and `define*` helpers.
 - `@cognia/plugin-sdk/manifest`: manifest and contribution types plus `definePlugin`.
-- `@cognia/plugin-sdk/context`: `PluginContext`, `FullPluginContext`, and callable API interfaces.
+- `@cognia/plugin-sdk/context`: `PluginContext` and callable API interfaces.
 - `@cognia/plugin-sdk/contracts`: capability, permission, runtime, path-field, and plugin-point metadata.
 - `@cognia/plugin-sdk/events`: stable event constants and event payload types.
 - `@cognia/plugin-sdk/hooks`: lifecycle hook payloads and hook interfaces.
@@ -104,9 +104,8 @@ monorepo aliases or private host packages.
 - Desktop JavaScript plugins run under Cognia's checksum-pinned bundled Node 26 runtime (minimum
   patched version 26.3.1); author manifests cannot select an arbitrary executable.
 
-`FullPluginContext` reflects the full host surface. In particular, `memory`, `pet`, `webview`,
-`auth`, and `uri` are required there; the intentionally partial base `PluginContext` retains
-optional feature fields.
+`PluginContext` reflects the full host surface. In particular, `memory`, `pet`, `webview`,
+`auth`, and `uri` are required there.
 
 ## Compatibility
 

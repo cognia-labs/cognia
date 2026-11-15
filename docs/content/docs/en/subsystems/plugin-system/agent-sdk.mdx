@@ -22,7 +22,7 @@ description: The embeddable agent runtime exposed to plugins — typed run / run
 
 ## Why it exists
 
-Plugins could already register tools and subagents, but the only way to *run* an agentic turn was the untyped `ctx.agent.executeAgent(config: Record<string, unknown>)`. There was no typed contract, no streaming to the plugin, no structured output, no way to gate or rewrite tool-call arguments, and no way to invoke a host tool from inside plugin code. The Agent SDK closes those gaps, borrowing the embeddable-agent shape from the VS Code Language Model API, the Anthropic Claude Agent SDK (`query()`), the Cursor SDK, and the OpenAI Agents SDK.
+Plugins could already register tools and subagents, but the only way to *run* an agentic turn was an untyped `Record<string, unknown>` config bag. There was no typed contract, no streaming to the plugin, no structured output, no way to gate or rewrite tool-call arguments, and no way to invoke a host tool from inside plugin code. The Agent SDK closes those gaps, borrowing the embeddable-agent shape from the VS Code Language Model API, the Anthropic Claude Agent SDK (`query()`), the Cursor SDK, and the OpenAI Agents SDK.
 
 ## run — one-shot
 

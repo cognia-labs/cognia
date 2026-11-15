@@ -15,7 +15,7 @@ It does not expose host registries, executors, factories, test reset functions, 
 | --- | --- |
 | `@cognia/plugin-sdk` | `define*` helpers, stable constants, and public author types |
 | `@cognia/plugin-sdk/manifest` | manifest, capability, permission, and contribution types |
-| `@cognia/plugin-sdk/context` | `PluginContext`, `FullPluginContext`, and callable context API interfaces |
+| `@cognia/plugin-sdk/context` | `PluginContext` and callable context API interfaces |
 | `@cognia/plugin-sdk/hooks` | hook payloads and hook interfaces |
 | `@cognia/plugin-sdk/contracts` | read-only canonical contract metadata |
 | `@cognia/plugin-sdk/events` | stable event constants and event payload types |
@@ -110,7 +110,7 @@ Invalid: `../outside.js`, `C:outside.js`, `C:\\outside.js`, `\\\\server\\share\\
 
 ## Context surface
 
-`PluginContext` is the complete surface the host passes to `activate` and `deactivate`: every namespace is mounted, so call `ctx.agent.registerTool(…)`, not `ctx.agent?.registerTool?.(…)` — optional chaining there only hides a failure. (`ctx.dexie` is the one optional member; it exists when the manifest declares a `dexie` block.) `ctx.config` reads the plugin's current settings on every access. `FullPluginContext` is a deprecated alias. Implementations and `create*API` factories remain host-only.
+`PluginContext` is the complete surface the host passes to `activate` and `deactivate`: every namespace is mounted, so call `ctx.agent.registerTool(…)`, not `ctx.agent?.registerTool?.(…)` — optional chaining there only hides a failure. (`ctx.dexie` is the one optional member; it exists when the manifest declares a `dexie` block.) `ctx.config` reads the plugin's current settings on every access. Implementations and `create*API` factories remain host-only.
 
 Author the manifest with `definePluginManifest({ ...manifestJson, …typedContributions })` and tools with `definePluginTool(…)`; a cast such as `as never` erases the manifest type, so a misspelled contribution field compiles and contributes nothing. A tool without `definition.timeoutMs` gets a 30-second budget — declare one for anything that waits on the network, a model, a sandbox or a file dialog.
 

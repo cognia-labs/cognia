@@ -8,7 +8,6 @@ import type {
   AttachmentDescriptor,
   Capability,
   ConnectorCallbackEvent,
-  ConversationReference,
   ForwardMessageInput,
   HistoryFetchOpts,
   NormalizedInboundEvent,
@@ -258,31 +257,6 @@ export interface PluginConnectorsAPI {
   waitForDelivery(jobId: string, opts?: { timeoutMs?: number }): Promise<PluginOutboundJobStatus>
 
   // ── Outbound mutations (connectors:send, DANGEROUS) ──────────────────────
-  /**
-   * Send a fully-formed request directly for one compatibility cycle.
-   *
-   * The outbound policy (ADR-0239) plans it first, and it is sent at once or
-   * not at all: there is no draft to hold it in. A request whose
-   * `deliveryTarget` names its conversation goes to the target the host
-   * stored for that conversation, whatever its `conversationRef` says. One
-   * that names only a `conversationRef` has a recipient nobody can check:
-   * under enforcement it is refused. A refusal, a destination the host
-   * cannot send to, and a PII rejection are failed results
-   * (`connector_delivery_denied`, `connector_delivery_destination`,
-   * `connector_delivery_pii_rejected`).
-   * @deprecated Use {@link enqueueSend}; this bypasses the queue and emits a waiver audit.
-   */
-  send(adapterId: string, req: OutboundRequest): Promise<OutboundResult>
-  /**
-   * Convenience direct-send retained for one compatibility cycle. It names
-   * only a reference, so under enforcement it is refused (see {@link send}).
-   * @deprecated Use {@link enqueueSend}; this bypasses the queue and emits a waiver audit.
-   */
-  sendText(
-    adapterId: string,
-    conversationRef: ConversationReference,
-    text: string
-  ): Promise<OutboundResult>
   /** Edit an already-sent message in place (when the platform supports it). */
   editMessage(adapterId: string, messageId: string, patch: OutboundRequest): Promise<OutboundResult>
   /** Delete an already-sent message (when the platform supports it). */
@@ -375,11 +349,10 @@ export interface PluginConnectorsAPI {
   streamReply(adapterId: string, req: StreamReplyRequest): Promise<boolean>
   /**
    * Durable send through the outbound queue (per-adapter rate limit,
-   * circuit breaker, quiet hours, per-conversation FIFO, retry — everything
-   * the direct {@link send} bypasses). The payload MUST pass the PII gate
-   * (`hasNoLeakingPiiDeep`) — the queue path is not otherwise scanned;
-   * rejected payloads throw. Jobs are tagged `source: "plugin"` for the
-   * inbox provenance badge / audit trail.
+   * circuit breaker, quiet hours, per-conversation FIFO, retry). The payload
+   * MUST pass the PII gate (`hasNoLeakingPiiDeep`) — the queue path is not
+   * otherwise scanned; rejected payloads throw. Jobs are tagged
+   * `source: "plugin"` for the inbox provenance badge / audit trail.
    *
    * It is sent to the delivery target the host stored for `conversationKey`
    * (refreshed by its inbound messages, or minted by
@@ -414,12 +387,12 @@ export interface PluginConnectorsAPI {
   /**
    * Construct rich, interactive A2UI surfaces (cards / buttons / forms) for
    * outbound messages. Pure local construction — no permission needed; the
-   * `send()` that delivers the result is what's gated by `connectors:send`.
+   * `enqueueSend()` that delivers the result is what's gated by `connectors:send`.
    */
   a2ui: PluginConnectorsA2UIBuilder
   /**
    * Mint a fresh idempotency key for an {@link OutboundRequest} built by hand
-   * (the `a2ui.message` / `sendText` helpers already do this internally).
+   * (the `a2ui.message` helper already does this internally).
    * Pure; no permission required.
    */
   newIdempotencyKey(): string

@@ -500,7 +500,6 @@ export type {
   ContextResourceKind,
   ContextWorkbenchMode,
   PluginContextPanelDef,
-  PluginContextPanelIcon,
   PluginContextPanelRegistration,
   PluginContextPanelRenderer,
   PluginModuleContextPanelDef,

@@ -1878,18 +1878,17 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
   {
     // Native auth/OAuth provider (C1). `ctx.auth.registerProvider` (auth:provide)
     // + `ctx.auth.getSession`/`getSessions` (auth:consume), backed by the
-    // promoted auth-provider registry with secrets-persisted sessions and a
-    // reusable PKCE flow. The declarative `authProviders[]` is metadata for
+    // promoted auth-provider registry (Host connections own session
+    // persistence) and a reusable PKCE flow. The declarative `authProviders[]` is metadata for
     // validation + the consent UI.
     id: "auth-provider",
     support: "supported",
     manifestFields: ["authProviders"],
     runtimeBinding:
-      "ctx.auth.registerProvider + auth-provider-registry (native backing) + auth-secrets-adapter (secrets-persisted) + auth-pkce-flow + ctx.auth.connections (renderer/Host selection and grants) + ctx.auth.exchangeConfidential (trusted auth:exchange gateway)",
+      "ctx.auth.registerProvider + auth-provider-registry (native backing) + auth-pkce-flow + ctx.auth.connections (renderer/Host selection and grants) + ctx.auth.exchangeConfidential (trusted auth:exchange gateway)",
     hostBindings: [
       "lib/plugin/api/auth-api.ts",
       "lib/plugin/auth/auth-provider-registry.ts",
-      "lib/plugin/auth/auth-secrets-adapter.ts",
       "lib/plugin/auth/auth-pkce-flow.ts",
       "lib/plugin/auth/client-secrets.ts",
       "lib/plugin/auth/connections-api.ts",
@@ -1908,7 +1907,6 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "lib/plugin/api/auth-api.test.ts",
-      "lib/plugin/auth/auth-secrets-adapter.test.ts",
       "lib/plugin/auth/client-secrets.test.ts",
       "lib/plugin/auth/connections-api.test.ts",
       "lib/plugin/auth/connection-access.test.ts",

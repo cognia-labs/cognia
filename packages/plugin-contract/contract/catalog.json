@@ -1845,18 +1845,6 @@
           }
         },
         {
-          "id": "agent.executeAgent",
-          "name": "executeAgent",
-          "requiredPermissions": ["agent:control"],
-          "consentTier": "policy",
-          "risk": "high",
-          "idempotent": false,
-          "cancellable": false,
-          "resourceEffect": {
-            "kind": "none"
-          }
-        },
-        {
           "id": "agent.guardrails.list",
           "name": "guardrails.list",
           "requiredPermissions": [],
@@ -4853,30 +4841,6 @@
         {
           "id": "connectors.resolveContacts",
           "name": "resolveContacts",
-          "requiredPermissions": ["connectors:send"],
-          "consentTier": "policy",
-          "risk": "high",
-          "idempotent": false,
-          "cancellable": false,
-          "resourceEffect": {
-            "kind": "none"
-          }
-        },
-        {
-          "id": "connectors.send",
-          "name": "send",
-          "requiredPermissions": ["connectors:send"],
-          "consentTier": "policy",
-          "risk": "high",
-          "idempotent": false,
-          "cancellable": false,
-          "resourceEffect": {
-            "kind": "none"
-          }
-        },
-        {
-          "id": "connectors.sendText",
-          "name": "sendText",
           "requiredPermissions": ["connectors:send"],
           "consentTier": "policy",
           "risk": "high",

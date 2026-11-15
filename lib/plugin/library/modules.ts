@@ -1,5 +1,5 @@
 import type { Plugin } from "@/types/plugin"
-import type { FullPluginContext } from "../core/context"
+import type { PluginContext } from "@/types/plugin"
 import { PluginDisposableScope, withPluginDisposableScope } from "../core/disposable-scope"
 import { PLUGIN_RESOURCE_EFFECTS } from "../core/resource-effects"
 import { loggers } from "../core/logger"
@@ -156,7 +156,7 @@ export class PluginLibraryModules {
     consumerId: string,
     providerId: string,
     moduleName: string,
-    context: FullPluginContext
+    context: PluginContext
   ): Promise<T> {
     const execution = pluginExecutionContext(consumerId) ?? HOST_BACKGROUND
     return withPluginExecutionContext(providerId, execution, () =>
@@ -168,7 +168,7 @@ export class PluginLibraryModules {
     consumerId: string,
     providerId: string,
     moduleName: string,
-    context: FullPluginContext,
+    context: PluginContext,
     execution: PersonalCredentialContext
   ): Promise<T> {
     const started = Date.now()
@@ -273,7 +273,7 @@ export class PluginLibraryModules {
           },
         }),
         PLUGIN_RESOURCE_EFFECTS
-      ) as FullPluginContext
+      ) as PluginContext
       const initialize = async () => {
         try {
           const bundle = await this.host.importLibraryEntry(provider, declaration.entry)

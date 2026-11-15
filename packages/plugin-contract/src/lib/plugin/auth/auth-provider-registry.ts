@@ -138,22 +138,9 @@ export interface ResolvedAuthRequestCredential {
   expiresAt?: string
 }
 
-export interface SecretsAdapter {
-  get(key: string): Promise<string | undefined>
-  set(key: string, value: string): Promise<void>
-  delete(key: string): Promise<void>
-  list(prefix: string): Promise<string[]>
-}
-
 const providers = new Map<string, AuthenticationProvider>()
 
 const sessionListeners = new Set<(event: AuthSessionChangeEvent) => void>()
-
-/**
- * @deprecated Inert compatibility API. Host connections own persistence;
- * installing an adapter never reads, writes or deletes legacy session tokens.
- */
-export function setSecretsAdapter(_adapter: SecretsAdapter | null): void {}
 
 function emit(event: AuthSessionChangeEvent): void {
   queueMicrotask(() => {
@@ -283,11 +270,6 @@ export async function removeSession(providerId: string, sessionId: string): Prom
 export function onDidChangeSessions(listener: (event: AuthSessionChangeEvent) => void): () => void {
   sessionListeners.add(listener)
   return () => sessionListeners.delete(listener)
-}
-
-/** @deprecated Inert: Host connections replace session hydration. Always returns 0. */
-export async function hydrateFromSecrets(): Promise<number> {
-  return 0
 }
 
 // ────────────────────────────────────────────────────────────────────────

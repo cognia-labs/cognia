@@ -55,10 +55,7 @@ import {
   initializePluginPermissions,
   revokePluginPermissions,
 } from "@/lib/plugin/api/permission-api"
-import {
-  getBackgroundAgentManager,
-  __resetBackgroundAgentManagerForTesting,
-} from "@/lib/ai/agent/background-agent-manager"
+import { __resetBackgroundAgentManagerForTesting } from "@/lib/ai/agent/background-agent-manager"
 import { nodeCatalogEntry, __resetPluginCatalogForTesting } from "@/lib/workflow/nodes/catalog"
 import { schedulerDb } from "@/lib/scheduler/scheduler-db"
 import { getTaskScheduler } from "@/lib/scheduler/task-scheduler"
@@ -3100,74 +3097,6 @@ describe("agent imperative API", () => {
     })
   })
 
-  describe("executeAgent", () => {
-    it("returns the run result with a generated agentId", async () => {
-      const ctx = createPluginContext(createMockPlugin(), mockManager)
-      const result = (await ctx.agent.executeAgent({ prompt: "hi" })) as {
-        text: string
-        agentId: string
-      }
-      expect(result.text).toBe("agent reply")
-      expect(typeof result.agentId).toBe("string")
-      expect(result.agentId.length).toBeGreaterThan(0)
-      // The caller signal is threaded through to the executor.
-      expect(mockExecuteAgent).toHaveBeenCalledWith(
-        "hi",
-        expect.objectContaining({ abortSignal: expect.any(AbortSignal) })
-      )
-    })
-
-    it("uses a caller-supplied agentId and de-registers it after completion", async () => {
-      const ctx = createPluginContext(createMockPlugin(), mockManager)
-      const result = (await ctx.agent.executeAgent({ prompt: "hi", agentId: "run-1" })) as {
-        agentId: string
-      }
-      expect(result.agentId).toBe("run-1")
-      // finishAgent dropped the entry → nothing left to cancel.
-      expect(getBackgroundAgentManager().cancelAgent("run-1")).toBe(false)
-    })
-
-    it("throws on empty prompt", async () => {
-      const ctx = createPluginContext(createMockPlugin(), mockManager)
-      await expect(ctx.agent.executeAgent({})).rejects.toThrow(/requires config.prompt/)
-    })
-
-    it("rejects tool-enabled runs without the agent:control permission", async () => {
-      const ctx = createPluginContext(createMockPlugin(), mockManager)
-      await expect(ctx.agent.executeAgent({ prompt: "hi", toolsEnabled: true })).rejects.toThrow(
-        /agent:control/
-      )
-      expect(mockExecuteAgent).not.toHaveBeenCalled()
-    })
-
-    it("allows tool-enabled runs once agent:control is granted", async () => {
-      initializePluginPermissions(PLUGIN_ID, ["agent:control"])
-      mockExecuteAgent.mockResolvedValue({
-        text: "tool reply",
-        channel: "sidecar",
-        toolsAvailable: true,
-      })
-      const ctx = createPluginContext(createMockPlugin(), mockManager)
-      const result = (await ctx.agent.executeAgent({ prompt: "go", toolsEnabled: true })) as {
-        channel: string
-      }
-      expect(result.channel).toBe("sidecar")
-      expect(mockExecuteAgent).toHaveBeenCalledWith(
-        "go",
-        expect.objectContaining({ toolsEnabled: true })
-      )
-    })
-
-    it("maps legacy systemPrompt/defaultProvider onto the typed run options", async () => {
-      const ctx = createPluginContext(createMockPlugin(), mockManager)
-      await ctx.agent.executeAgent({ prompt: "hi", systemPrompt: "S", defaultProvider: "openai" })
-      expect(mockExecuteAgent).toHaveBeenCalledWith(
-        "hi",
-        expect.objectContaining({ systemPrompt: "S", defaultProvider: "openai" })
-      )
-    })
-  })
-
   describe("run / runStreamed", () => {
     it("run() returns a typed result with an agentId", async () => {
       const ctx = createPluginContext(createMockPlugin(), mockManager)
@@ -3180,6 +3109,22 @@ describe("agent imperative API", () => {
       const ctx = createPluginContext(createMockPlugin(), mockManager)
       await expect(ctx.agent.run("hi", { toolsEnabled: true })).rejects.toThrow(/agent:control/)
       expect(mockExecuteAgent).not.toHaveBeenCalled()
+    })
+
+    it("run() allows tool-enabled runs once agent:control is granted", async () => {
+      initializePluginPermissions(PLUGIN_ID, ["agent:control"])
+      mockExecuteAgent.mockResolvedValue({
+        text: "tool reply",
+        channel: "sidecar",
+        toolsAvailable: true,
+      })
+      const ctx = createPluginContext(createMockPlugin(), mockManager)
+      const result = await ctx.agent.run("go", { toolsEnabled: true })
+      expect(result.text).toBe("tool reply")
+      expect(mockExecuteAgent).toHaveBeenCalledWith(
+        "go",
+        expect.objectContaining({ toolsEnabled: true, abortSignal: expect.any(AbortSignal) })
+      )
     })
 
     it("runStreamed() yields events and resolves the result", async () => {

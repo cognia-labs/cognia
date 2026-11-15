@@ -34,7 +34,7 @@ import {
 } from "./subagent-approval-routes"
 import { captureBackgroundDispatchRecovery } from "@/lib/background-tasks/redispatch"
 import { admitBackgroundDispatch } from "@/lib/db/background-tasks"
-import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import type {
   PluginDispatchErrorEnvelope,
   PluginSubagentDispatchResult,
@@ -97,7 +97,7 @@ export interface ResolvedCaller {
   deadlineMs?: number
   budgetRoot: string
   /** The caller's resolved permission ceiling, clamping every child it dispatches. */
-  parentCeiling?: ExternalSessionPermissionSpec
+  parentCeiling?: AgentPermissionCeiling
   /**
    * Max sibling runs one `dispatch_agent` fan-out may keep in flight at once
    * (`subagentNesting.maxConcurrent`). `0` means unlimited. A finite token
@@ -163,7 +163,7 @@ export async function loadNesting(): Promise<NestingSettings> {
  */
 async function fallbackCeilingFromSession(
   sessionId: string
-): Promise<ExternalSessionPermissionSpec | undefined> {
+): Promise<AgentPermissionCeiling | undefined> {
   try {
     const { getSession } = await import("@/lib/db/sessions")
     const mode = (await getSession(sessionId))?.permissionMode

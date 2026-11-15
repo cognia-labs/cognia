@@ -2,7 +2,7 @@
  * Plugin-facing A2UI surface builder.
  *
  * Plugins that want to send rich, interactive content through a connector
- * (`ctx.connectors.send`) need an `A2UIMessageSegment` whose `content` is a
+ * (`ctx.connectors.enqueueSend`) need an `A2UIMessageSegment` whose `content` is a
  * valid {@link A2UISegmentContent} — an **id-keyed** component graph
  * (`{components, dataModel, rootId}`). Hand-authoring that graph (keying by
  * id, wiring child references, minting a plain-text mirror) is exactly the
@@ -152,7 +152,7 @@ export function buildA2UIMessageSegment(
 /**
  * One-shot: build a complete {@link OutboundRequest} carrying a single A2UI
  * surface (plus optional trailing markdown), ready to hand straight to
- * `ctx.connectors.send()`. Mints a surface id and idempotency key when not
+ * `ctx.connectors.enqueueSend()`. Mints a surface id and idempotency key when not
  * supplied.
  */
 export function buildA2UIOutboundRequest(input: A2UIMessageInput): OutboundRequest {

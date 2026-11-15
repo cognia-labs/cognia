@@ -361,7 +361,7 @@ export function createPermissionAPI(
 /**
  * Synchronous host-side check: does `pluginId` hold `permission` in its
  * granted API-permission set? Used by imperative context APIs (e.g. the
- * tool-enabled `agent.executeAgent` / `agent.runExternalAgent` branches) to
+ * tool-enabled `agent.run` / `agent.runExternalAgent` branches) to
  * gate behind the plugin's declared manifest permissions before reaching the
  * sidecar. Returns `false` when the plugin has no initialised permission set.
  */

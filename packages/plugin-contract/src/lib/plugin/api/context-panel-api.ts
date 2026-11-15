@@ -12,7 +12,7 @@ import type {
   ContextResource,
   ContextWorkbenchMode,
 } from "../../../types/context-workbench"
-import type { PluginContextPanelIcon } from "../../../types/plugin/plugin-context-panel"
+import type { PluginIconName } from "../../../types/plugin/plugin-icon"
 
 export type ContextResourceKind = ContextResource["kind"]
 
@@ -46,7 +46,7 @@ export interface PluginContextPanelRegistration {
    * manifest path accepts. Omitting it falls back to the host's generic panel
    * icon, which is what *every* imperatively-registered panel used to get.
    */
-  icon?: PluginContextPanelIcon
+  icon?: PluginIconName
   /**
    * Count rendered on the rail button, recomputed whenever the workbench
    * re-renders. Use this for a count derived from the resource in front; use

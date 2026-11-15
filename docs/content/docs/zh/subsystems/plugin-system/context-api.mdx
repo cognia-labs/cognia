@@ -42,7 +42,7 @@ description: 传递给每个插件 activate(ctx) 的唯一运行时对象，由�
 | `ctx.events` | `context.ts:389` | 内存 emitter（合并 ipc、bus `:274-278`） | 否 | on/off/emit/once（`:394-432`） |
 | `ctx.ui` | `context.ts:456` | toasts / dialogs | 否 | `showToast`（→ sonner）、`showDialog` / `showInputDialog` / `showConfirmDialog`（→ 插件 modal 栈） |
 | `ctx.a2ui` | `context.ts:541` | useA2UIStore | 否 | `createSurface:545`、`updateComponents:553`、`registerComponent:574` |
-| `ctx.agent` | `context.ts:588` | registry + agent-executor | 内联校验 manifest | `registerTool:590`、`executeAgent:615`（toolsEnabled 时需 `agent:control` `:630`）、`runExternalAgent:662`（`agent:dispatch-external` `:668`） |
+| `ctx.agent` | `context.ts:588` | registry + agent-executor | 内联校验 manifest | `registerTool:920`、`run:970` / `runStreamed:988`（toolsEnabled 时需 `agent:control` `:865`）、`runExternalAgent:1092`（`agent:dispatch-external`） |
 | `ctx.settings` | `context.ts:757` | useSettingsStore | 否 | `get:762`、`set:770`、`onChange:781` |
 | `ctx.python` | `context.ts:798` | Rust `plugin_python_*` | 限速器 | `call:801`、`eval:810`、`import:819` |
 | `ctx.network` | `context.ts:865` | fetch / invokePluginApi | 限速器 | get/post `:917`、`download:934`、`upload:973` |
@@ -91,7 +91,7 @@ description: 传递给每个插件 activate(ctx) 的唯一运行时对象，由�
 | `ctx.terminal` | `terminal-api.ts:175` | terminal dock（spawnFromDock） | `terminal:spawn`/`write`/`kill`/`completion`/`safety`（DANGEROUS） | `spawn:206`、`write:236`、`kill:243`、`classifyCommand:304` |
 | `ctx.perf` | `perf-api.ts:42` | perf 后端 | `perf:read`（只读） | `snapshot:44`、`hotspots:45`、`subscribe:48` |
 | `ctx.logs` | `logs-api.ts` | IndexedDB 日志库 + `agentTraces` Dexie 表 | `logs:read`（日志、统计、传输健康）/ `trace:read`（span）—— 只读 | `query`、`stats`、`subscribe`、`transports`、`traces.list`、`traces.timeline`、`traces.subscribe` |
-| `ctx.connectors` | `connectors-api.ts:248` | ConnectorBus + adapterInstances | `connectors:read`/`send`/`manage`（send、manage 为 DANGEROUS） | send / edit / delete + A2UI builder（`:35`） |
+| `ctx.connectors` | `connectors-api.ts:248` | ConnectorBus + adapterInstances | `connectors:read`/`send`/`manage`（send、manage 为 DANGEROUS） | enqueueSend / edit / delete + A2UI builder（`:35`） |
 | `ctx.share` | `share-api.ts:51` | lib/share + shared-links Dexie | `share:read` / `share:create` | `create:53`、`revoke:54`、`getStats:57` |
 | `ctx.backup` | `backup-api.ts:64` | buildExportEnvelope / importEnvelope | `backup:read` / `backup:write`（绝不含 API key） | `create:66`、`restore:75`、`listHistory:82` |
 | `ctx.automation` | `automation-api.ts:101` | lib/automation/client（Computer Use） | `automation:read`/...（全部 DANGEROUS） | `capabilities:53`、`getFocus:54`、`readTree:56` |
@@ -183,13 +183,15 @@ function assertOwned(id: string): void {
 }
 ```
 
-(d) `context.ts:628-634` —— 启用工具的 agent 运行前的内联 manifest 校验：
+(d) `context.ts:865-871` —— 启用工具的 `run` / `runStreamed` 前的 manifest 校验：
 
 ```ts
-if (agentConfig.toolsEnabled === true) {
-  const { pluginHasApiPermission } = await import("@/lib/plugin/api/permission-api")
-  if (!pluginHasApiPermission(pluginId, "agent:control"))
-    throw new Error('agent.executeAgent: tool-enabled runs require the agent:control permission')
+function gateToolEnabledRun(pluginId: string, toolsEnabled: boolean | undefined): void {
+  if (toolsEnabled === true && !pluginHasApiPermission(pluginId, "agent:control")) {
+    throw new Error(
+      'agent run: tool-enabled runs require the "agent:control" permission — declare it in the plugin manifest.'
+    )
+  }
 }
 ```
 
@@ -271,7 +273,6 @@ graph TD
 
 ## 7. 注意事项
 
-- `FullPluginContext`（`context.ts:141-175`）是 `Omit<PluginContext, "storage"> & Omit<PluginContextAPI, "storage">` 再交叉 14 个 ADR-0026 v2 命名空间，从而使基础接口保持不变。
 - ~34 个文件中只有 **11 个**使用 `createGuardedAPI`（即触及平台/宿主的那些）。其余未受控——隔离来自 id 命名空间化（`<pluginId>:<localId>`）加上禁用时的自动清理（`clear*ForPlugin`）。
 - DANGEROUS 权限：`git:write`、所有 `terminal:*`、`connectors:send`、`connectors:manage`、以及每一个 `automation:*`。automation 额外叠加第二道 Rust 门（`automation-api.ts:8-20`）。
 - `consentExempt`（`permission-guard.ts:791`，用于 `terminal-api.ts:331`）允许同步查询/订阅辅助方法共用一个 confirm 级权限却跳过弹层；但仍需要该授权。

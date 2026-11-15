@@ -1,5 +1,5 @@
 import type { Plugin } from "@/types/plugin"
-import type { FullPluginContext } from "../core/context"
+import type { PluginContext } from "@/types/plugin"
 import { PluginDisposableScope } from "../core/disposable-scope"
 import { evaluatePluginBundle } from "../core/evaluate-plugin-bundle"
 import { assertLibraryAccess, authorizeLibraryAccess } from "./access"
@@ -23,7 +23,7 @@ describe("consumer-owned library modules", () => {
   let provider: Plugin
   let check: jest.Mock
   const hostCall = jest.fn(() => "host")
-  const context = { network: { fetch: hostCall } } as unknown as FullPluginContext
+  const context = { network: { fetch: hostCall } } as unknown as PluginContext
 
   it.each([HOST_BACKGROUND, { executionRunId: "original-import" }])(
     "pins a delayed factory to its initiating Host identity and backgrounds disposal: %p",
@@ -203,7 +203,7 @@ describe("consumer-owned library modules", () => {
   it("rechecks grants on retained host calls and disposes registered resources", async () => {
     const dispose = jest.fn()
     load.mockResolvedValue({
-      default: (ctx: FullPluginContext) => {
+      default: (ctx: PluginContext) => {
         expect(pluginExecutionContext("lib")).toEqual(HOST_BACKGROUND)
         ctx.lifecycle.onDispose(dispose)
         return { exports: { host: () => ctx.network.fetch("https://example.test") } }
@@ -265,7 +265,7 @@ describe("consumer-owned library modules", () => {
         handle: (id: number) => new Handle(id),
         signal: () => signal,
       },
-    } as unknown as FullPluginContext
+    } as unknown as PluginContext
     let ctx!: typeof host & {
       data: {
         read(): Promise<{ rows: { id: number }[]; date: Date }>
@@ -326,7 +326,7 @@ describe("consumer-owned library modules", () => {
     })
     await modules.importModule("a", "lib", "utils", {
       events: { on, off },
-    } as unknown as FullPluginContext)
+    } as unknown as PluginContext)
     let retained!: { read(): string }
     const callback = jest.fn((handle) => {
       retained = handle

@@ -43,7 +43,7 @@ import { resolveAgentModel } from "@/lib/agent/agent-profile-policy"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import type { DispatchContext } from "@/lib/claude/agents/dispatch-context-registry"
-import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import { buildJsonInstruction, parseStructured } from "@/lib/workflow/nodes/ai/structured"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { EXECUTOR_FALLBACK_PROMPT } from "@/lib/agent/prompts/executor"
@@ -285,7 +285,7 @@ export interface ExecuteAgentConfig {
    * `dispatch_agent` host tool from the caller's resolved ceiling. Absent for a
    * top-level / unconstrained run (no parent ⇒ no ceiling).
    */
-  permissionCeiling?: ExternalSessionPermissionSpec
+  permissionCeiling?: AgentPermissionCeiling
   /**
    * Permission-ask routing for a dispatched run: registered under the child's
    * ephemeral session id so the renderer's `permission_request` listener can

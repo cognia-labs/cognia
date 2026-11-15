@@ -13,7 +13,7 @@ Contract `1.7.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtim
 | --- | ---: | --- | --- | --- |
 | `ctx.sync` | 5 | `sync:run` | frontend, hybrid | sensitive |
 | `ctx.a2ui` | 8 | None | frontend, hybrid, python | internal |
-| `ctx.agent` | 29 | `agent:control`, `twin:read`, `agent:shared-memory:read`, `agent:dispatch`, `agent:dispatch-external` | frontend, hybrid, python | sensitive |
+| `ctx.agent` | 28 | `agent:control`, `twin:read`, `agent:shared-memory:read`, `agent:dispatch`, `agent:dispatch-external` | frontend, hybrid, python | sensitive |
 | `ctx.agentConfig` | 7 | `agent-config:read`, `agent-config:write` | frontend, hybrid | sensitive |
 | `ctx.ai` | 7 | `ai:chat`, `ai:embed` | frontend, hybrid, python | sensitive |
 | `ctx.artifact` | 12 | `artifact:write`, `artifact:read` | frontend, hybrid | internal |
@@ -30,7 +30,7 @@ Contract `1.7.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtim
 | `ctx.commands` | 7 | `commands:write`, `commands:read` | frontend, hybrid, python | internal |
 | `ctx.companion` | 10 | `companion:read`, `companion:control` | frontend, hybrid | internal |
 | `ctx.configuration` | 5 | `settings:read`, `settings:write` | frontend, hybrid | internal |
-| `ctx.connectors` | 68 | `connectors:send`, `connectors:manage`, `connectors:read` | frontend, hybrid | sensitive |
+| `ctx.connectors` | 66 | `connectors:send`, `connectors:manage`, `connectors:read` | frontend, hybrid | sensitive |
 | `ctx.contextMenu` | 2 | None | frontend, hybrid | internal |
 | `ctx.contextPanels` | 10 | `extension:ui` | frontend, hybrid, python | internal |
 | `ctx.db` | 6 | `database:write`, `database:read` | frontend, hybrid | internal |
@@ -154,7 +154,6 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 | `agent.context.registerProvider` | None | low | No | frontend, hybrid, python |
 | `agent.context.unregisterProvider` | None | low | No | frontend, hybrid, python |
 | `agent.dispatchSubagent` | `agent:dispatch` | medium | No | frontend, hybrid, python |
-| `agent.executeAgent` | `agent:control` | high | No | frontend, hybrid, python |
 | `agent.guardrails.list` | None | low | Yes | frontend, hybrid, python |
 | `agent.guardrails.register` | None | low | No | frontend, hybrid, python |
 | `agent.guardrails.unregister` | None | low | No | frontend, hybrid, python |
@@ -458,8 +457,6 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 | `connectors.removeChatMembers` | `connectors:send` | high | No | frontend, hybrid |
 | `connectors.removeReaction` | `connectors:send` | high | No | frontend, hybrid |
 | `connectors.resolveContacts` | `connectors:send` | high | No | frontend, hybrid |
-| `connectors.send` | `connectors:send` | high | No | frontend, hybrid |
-| `connectors.sendText` | `connectors:send` | high | No | frontend, hybrid |
 | `connectors.sendUrgent` | `connectors:send` | high | No | frontend, hybrid |
 | `connectors.setDispatchRules` | `connectors:send` | high | No | frontend, hybrid |
 | `connectors.setInstanceEnabled` | `connectors:send` | high | No | frontend, hybrid |

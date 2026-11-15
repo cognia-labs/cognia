@@ -1,14 +1,14 @@
 /** Public contract for trusted React panels in the resource Context Workbench. */
 
 export { defineContextPanel } from "../define/define-context-panel"
-/** The safe icon set, for authors enumerating what a rail button may show. */
 export type {
   PluginContextPanelDef,
-  PluginContextPanelIcon,
   PluginContextPanelRenderer,
   PluginModuleContextPanelDef,
   PluginWebviewContextPanelDef,
 } from "@cognia/plugin-contract/types/plugin/plugin-context-panel"
+/** The safe icon set, for authors enumerating what a rail button may show. */
+export type { PluginIconName } from "@cognia/plugin-contract/types/plugin/plugin-icon"
 export type { ContextPanelWebviewRpcRegistration } from "@cognia/plugin-contract/lib/plugin/bridge/context-panel-webview-rpc"
 /** Read permission each resource kind is gated on — the same map the host uses. */
 export { CONTEXT_RESOURCE_READ_PERMISSIONS } from "@cognia/plugin-contract/types/context-workbench"

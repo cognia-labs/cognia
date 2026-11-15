@@ -16,7 +16,6 @@
  */
 
 import { detectPlatform, isNativeMobile } from "@/lib/platform/detect"
-export type { NativePlatform } from "@cognia/plugin-contract/lib/capacitor/_shared"
 
 /**
  * Runtime platform. Delegates to the canonical {@link detectPlatform} in

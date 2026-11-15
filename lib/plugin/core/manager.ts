@@ -64,7 +64,6 @@ import {
   createFullPluginContext,
   createWorkflowAPI,
   teardownPluginWorkflowRegistrations,
-  type FullPluginContext,
 } from "@/lib/plugin/core/context"
 import { buildExtensionDescriptor } from "@/lib/plugin/core/descriptor"
 import {
@@ -922,7 +921,7 @@ export class PluginManager {
   private registry: PluginRegistry
   private hooksManager: PluginLifecycleHooks
   private themesBridge: PluginThemesBridge | null = null
-  private contexts: Map<string, FullPluginContext> = new Map()
+  private contexts: Map<string, PluginContext> = new Map()
   private readonly managedIdeWakeups = new Map<string, number>()
   private readonly libraryModules = new PluginLibraryModules({
     getPluginDisposableScope: (pluginId) => this.getPluginDisposableScope(pluginId),
@@ -1209,7 +1208,7 @@ export class PluginManager {
     consumerId: string,
     providerId: string,
     moduleName: string,
-    context: FullPluginContext
+    context: PluginContext
   ): Promise<T> {
     return this.libraryModules.importModule<T>(consumerId, providerId, moduleName, context)
   }

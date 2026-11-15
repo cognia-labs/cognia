@@ -18,7 +18,8 @@
 
 import { useCallback, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
-import { detectNativePlatform, type NativePlatform } from "@/lib/capacitor/_shared"
+import { detectNativePlatform } from "@/lib/capacitor/_shared"
+import type { Platform } from "@/lib/platform/detect"
 import type { ProbeOutcome } from "@/lib/ocr/probe"
 import type { ExtractDeps } from "@/lib/ocr/index"
 import type { OcrRuntimeStatus } from "@cognia/ocr/runtime-status"
@@ -202,7 +203,7 @@ export interface OcrSectionProps {
   credentials?: Record<string, Record<string, string>>
   onCredentialChange?: (providerId: string, key: string, value: string) => void
   /** Override platform detection (tests). Defaults to runtime detection. */
-  platform?: NativePlatform
+  platform?: Platform
   /**
    * Factory yielding OCR ExtractDeps for the Try It / Compare flows. When
    * omitted, those tabs render but the Run button surfaces a "runtime not
@@ -514,7 +515,7 @@ function buildSidebarRow(
   settings: UserOcrSettings,
   credentials: Record<string, Record<string, string>>,
   probeResults: Record<string, ProbeOutcome>,
-  platform: NativePlatform,
+  platform: Platform,
   runtimeStatuses: Record<string, OcrRuntimeStatus> | undefined,
   t: ReturnType<typeof useTranslations>
 ): OcrSidebarProvider {
@@ -540,7 +541,7 @@ function deriveStatus(
   provider: OcrProviderDescriptor,
   credentials: Record<string, Record<string, string>>,
   lastProbe: ProbeOutcome | undefined,
-  platform: NativePlatform,
+  platform: Platform,
   runtimeStatus?: OcrRuntimeStatus
 ): OcrProviderStatus {
   if (!shellAllowsPlatform(provider.shells, platform)) return "unsupported"
@@ -570,7 +571,7 @@ function deriveStatus(
   return allPresent ? "connected" : "not-configured"
 }
 
-function shellAllowsPlatform(shells: OcrProviderShellSupport, platform: NativePlatform): boolean {
+function shellAllowsPlatform(shells: OcrProviderShellSupport, platform: Platform): boolean {
   switch (platform) {
     case "tauri":
       return shells.tauri

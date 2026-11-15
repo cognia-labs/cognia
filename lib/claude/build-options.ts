@@ -51,10 +51,8 @@ import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
 import { applyUnattendedPermissionProfile } from "./unattended-permission-options"
 import { applyAlwaysExplicitTools } from "./always-explicit-tools"
 import { readOutboundAuthorizationMode } from "@/lib/policy/action-review/policy"
-import {
-  deriveExternalSessionPermission,
-  type ExternalSessionPermissionSpec,
-} from "@/lib/ai/agent/external/policy/permission-cascade"
+import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import {
   getResolvedPermissionCeiling,
   recordResolvedPermissionCeiling,
@@ -873,7 +871,7 @@ export interface BuildOptionsContext {
    * and by the team sidecar path from the team→teammate cascade. Absent for
    * top-level chat (no parent ⇒ no ceiling).
    */
-  permissionCeiling?: import("@/lib/ai/agent/external/policy/permission-cascade").ExternalSessionPermissionSpec
+  permissionCeiling?: AgentPermissionCeiling
   /**
    * Surface that owns this turn — drives the agent-trace root span's `surface`.
    * Defaults to "chat". Connector ai-runs pass "connector", workflow nodes
@@ -1201,7 +1199,7 @@ const HOST_SESSIONLESS_SANDBOX_OWNER = "__always_on_host_sessionless__"
 export async function resolveSessionAsideParentPermission(
   parent: ChatSession | undefined,
   appSettings: AppSettings | null | undefined
-): Promise<ExternalSessionPermissionSpec> {
+): Promise<AgentPermissionCeiling> {
   if (!parent) return { permissionMode: "plan" }
   const parentCharacter = parent.characterId
     ? await resolveCharacterById(parent.characterId)
@@ -1221,7 +1219,7 @@ export async function resolveSessionAsideParentPermission(
       "default")
   const registeredCeiling = getResolvedPermissionCeiling(parent.id)
   const toolFilter = parent.toolFilter ?? parentCharacter?.toolFilter ?? appSettings?.toolFilter
-  const filterCeiling: ExternalSessionPermissionSpec = {}
+  const filterCeiling: AgentPermissionCeiling = {}
   if (toolFilter && toolFilter.mode !== "all") {
     if (toolFilter.tools?.length) {
       if (toolFilter.mode === "allow") filterCeiling.allowedTools = toolFilter.tools
@@ -1279,7 +1277,7 @@ export async function resolveSessionAsideParentPermission(
 /** The panel and every caller resolve plan authority before choosing an aside lane. */
 export async function resolveSessionAsideReadOnly(
   session: ChatSession,
-  parentPermission: ExternalSessionPermissionSpec | undefined,
+  parentPermission: AgentPermissionCeiling | undefined,
   appSettings: AppSettings | null | undefined,
   overrides: Pick<
     BuildOptionsContext,
@@ -4841,7 +4839,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // imposes no ceiling; a child that declares no allow-list under a restricted
   // parent inherits the parent's whitelist (cannot widen to "all").
   if (ctx.permissionCeiling) {
-    const child: ExternalSessionPermissionSpec = {
+    const child: AgentPermissionCeiling = {
       ...(opts.allowedTools ? { allowedTools: opts.allowedTools } : {}),
       ...(opts.disallowedTools ? { disallowedTools: opts.disallowedTools } : {}),
       // `auto` is a Claude-Agent-SDK-only mode (model-classifier approval); the

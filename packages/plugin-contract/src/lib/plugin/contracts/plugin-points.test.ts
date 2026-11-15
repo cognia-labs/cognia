@@ -14,8 +14,8 @@ import {
   validateActivationEvent,
   validateExtensionPoint,
   validateHookPoint,
-  type PluginPointFormFactor,
 } from "./plugin-points"
+import type { PluginSurfaceFormFactor } from "../../../types/plugin/plugin-surface"
 import { EXTENSION_POINT_FORM_FACTORS as SDK_EXTENSION_POINT_FORM_FACTORS } from "@cognia/plugin-sdk/extensions"
 import { CANONICAL_PLUGIN_PERMISSIONS } from "@cognia/plugin-sdk/contracts"
 
@@ -561,7 +561,7 @@ describe("plugin point contracts", () => {
   })
 
   describe("form factor", () => {
-    const VALID: PluginPointFormFactor[] = ["icon", "row", "block", "panel"]
+    const VALID: PluginSurfaceFormFactor[] = ["icon", "row", "block", "panel"]
 
     it("classifies every UI slot", () => {
       // `EXTENSION_POINT_FORM_FACTORS` is a total `Record`, so a new point

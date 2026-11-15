@@ -2,10 +2,8 @@ import type { ChatSession } from "@cognia/agent-config-types"
 import type { AcpCapabilities, ExternalAgentProtocol } from "@/types/agent/external-agent"
 import type { ExternalAgentCapabilityProfileV1 } from "@cognia/agent-config-types/external-agent-capability"
 import { BUILTIN_RUNTIME_REF, type AgentRuntimeRef } from "@/lib/ai/agent/runtime-catalog/types"
-import {
-  deriveExternalSessionPermission,
-  type ExternalSessionPermissionSpec,
-} from "@/lib/ai/agent/external/policy/permission-cascade"
+import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import {
   attestsExternalPermissionMode,
   hasUnsupportedExternalPermissionDimensions,
@@ -22,7 +20,7 @@ export interface SessionAsideRuntimeInput {
   session: ChatSession
   parentRuntimeRef: AgentRuntimeRef
   external?: AsideExternalRuntime
-  parentPermission?: ExternalSessionPermissionSpec
+  parentPermission?: AgentPermissionCeiling
   /** Router/Fusion and other non-direct compositions use Cognia's resolver. */
   forceBuiltin?: boolean
 }
@@ -33,7 +31,7 @@ export function resolveSessionAsideRuntime(input: SessionAsideRuntimeInput): {
   readOnly: boolean
   usesBuiltinFallback: boolean
   fallbackReason?: "read-only-unattested" | "permission-unattested" | "non-direct"
-  permissionCeiling: ExternalSessionPermissionSpec
+  permissionCeiling: AgentPermissionCeiling
 } {
   const requestedReadOnly = input.session.asideWriteAccess !== true
   const permissionCeiling = deriveExternalSessionPermission(

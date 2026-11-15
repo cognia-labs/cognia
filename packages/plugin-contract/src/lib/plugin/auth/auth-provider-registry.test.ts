@@ -3,38 +3,17 @@ import {
   __resetAuthRegistryForTesting,
   getProvider,
   getSession,
-  hydrateFromSecrets,
   listProviders,
   onDidChangeSessions,
   registerAuthenticationProvider,
   removeSession,
-  setSecretsAdapter,
   unregisterAuthenticationProvider,
   unregisterProvidersByPlugin,
   waitForProvider,
   type AuthSession,
   type AuthSessionOptions,
   type AuthenticationProvider,
-  type SecretsAdapter,
 } from "./auth-provider-registry"
-
-function makeMemorySecretsAdapter(): SecretsAdapter {
-  const store = new Map<string, string>()
-  return {
-    async get(key) {
-      return store.get(key)
-    },
-    async set(key, value) {
-      store.set(key, value)
-    },
-    async delete(key) {
-      store.delete(key)
-    },
-    async list(prefix) {
-      return [...store.keys()].filter((k) => k.startsWith(prefix))
-    },
-  }
-}
 
 function makeProvider(overrides: Partial<AuthenticationProvider> = {}): AuthenticationProvider {
   const sessions: AuthSession[] = []
@@ -216,8 +195,6 @@ describe("auth provider registry", () => {
     it("calls provider.removeSession and emits a removed event", async () => {
       const provider = makeProvider()
       registerAuthenticationProvider(provider)
-      const adapter = makeMemorySecretsAdapter()
-      setSecretsAdapter(adapter)
       const session = await getSession("github", ["x"], { createIfNone: true })
 
       const events: AuthSession[][] = []
@@ -230,25 +207,6 @@ describe("auth provider registry", () => {
 
     it("is a silent no-op for an unknown provider", async () => {
       await expect(removeSession("nope", "sid")).resolves.toBeUndefined()
-    })
-  })
-
-  describe("deprecated inert persistence", () => {
-    it("never calls the legacy adapter for create, hydrate or remove", async () => {
-      const adapter = { get: jest.fn(), set: jest.fn(), delete: jest.fn(), list: jest.fn() }
-      setSecretsAdapter(adapter)
-      const session = __makeSession({
-        accessToken: "secret",
-        account: { id: "u", label: "U" },
-        scopes: [],
-      })
-      registerAuthenticationProvider(
-        makeProvider({ getSessions: async () => [session], createSession: async () => session })
-      )
-      await getSession("github", [], { forceNewSession: true })
-      expect(await hydrateFromSecrets()).toBe(0)
-      await removeSession("github", session.id)
-      for (const fn of Object.values(adapter)) expect(fn).not.toHaveBeenCalled()
     })
   })
 

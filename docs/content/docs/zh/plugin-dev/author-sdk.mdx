@@ -13,7 +13,7 @@ description: 面向可分发 Cognia 插件的受支持导入、运行时组合�
 | --- | --- |
 | `@cognia/plugin-sdk` | `define*` 辅助函数、稳定常量和公共作者类型 |
 | `@cognia/plugin-sdk/manifest` | manifest、能力、权限和 contribution 类型 |
-| `@cognia/plugin-sdk/context` | `PluginContext`、`FullPluginContext` 与可调用 context API 接口 |
+| `@cognia/plugin-sdk/context` | `PluginContext` 与可调用 context API 接口 |
 | `@cognia/plugin-sdk/hooks` | hook 载荷与接口 |
 | `@cognia/plugin-sdk/contracts` | 只读规范契约元数据 |
 | `@cognia/plugin-sdk/events` | 稳定事件常量与事件载荷类型 |
@@ -108,7 +108,7 @@ Character pack 头像仅接受 `webDataUrl`。原 `avatarImage.tauriPath` 没有
 
 ## Context 表面
 
-`PluginContext` 是宿主传给 `activate` 与 `deactivate` 的完整表面：每个命名空间都已挂载，所以请写 `ctx.agent.registerTool(…)`，而不是 `ctx.agent?.registerTool?.(…)`——这里的可选链只会掩盖失败。（`ctx.dexie` 是唯一的可选成员，manifest 声明了 `dexie` 块时才存在。）`ctx.config` 每次访问都读取插件当前的设置。`FullPluginContext` 是已废弃的别名。实现与 `create*API` 工厂仍然只属于宿主。
+`PluginContext` 是宿主传给 `activate` 与 `deactivate` 的完整表面：每个命名空间都已挂载，所以请写 `ctx.agent.registerTool(…)`，而不是 `ctx.agent?.registerTool?.(…)`——这里的可选链只会掩盖失败。（`ctx.dexie` 是唯一的可选成员，manifest 声明了 `dexie` 块时才存在。）`ctx.config` 每次访问都读取插件当前的设置。实现与 `create*API` 工厂仍然只属于宿主。
 
 manifest 请用 `definePluginManifest({ ...manifestJson, …带类型的贡献 })` 编写，工具用 `definePluginTool(…)`；`as never` 之类的类型断言会抹掉 manifest 类型，拼错的贡献字段也能编译通过，却什么都不会贡献。没有声明 `definition.timeoutMs` 的工具只有 30 秒预算——凡是要等待网络、模型、沙箱或文件对话框的工具都应声明。
 

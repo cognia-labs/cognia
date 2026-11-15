@@ -8,20 +8,17 @@ import {
   isCapabilityUsable,
   type ExternalAgentCapabilityProfileV1,
 } from "@cognia/agent-config-types/external-agent-capability"
-import {
-  deriveExternalSessionPermission,
-  MODE_RANK,
-  type ExternalSessionPermissionSpec,
-} from "./permission-cascade"
+import { deriveExternalSessionPermission, MODE_RANK } from "./permission-cascade"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import { adaptPermissionMode, PROTOCOL_PERMISSION_MODE_SUPPORT } from "./permission-modes"
 
 /** A hard policy is distinct from the manager's best-effort mode override. */
 export interface PermissionBoundExternalExecutionOptions extends ExternalAgentExecutionOptions {
-  permissionCeiling?: ExternalSessionPermissionSpec
+  permissionCeiling?: AgentPermissionCeiling
 }
 
 export function hasUnsupportedExternalPermissionDimensions(
-  ceiling: ExternalSessionPermissionSpec
+  ceiling: AgentPermissionCeiling
 ): boolean {
   return (
     ceiling.allowedTools !== undefined ||

@@ -64,10 +64,8 @@ import type { TaskExecutor } from "@/lib/scheduler/task-scheduler"
 import type { BuiltInSkillAvailability } from "@/lib/skills/built-in/types"
 import type { Project } from "@/types"
 import type { CapabilityId, HostProfile } from "@/lib/platform/capabilities"
-import type {
-  CanonicalExtensionPoint,
-  PluginPointFormFactor,
-} from "@/lib/plugin/contracts/plugin-points"
+import type { CanonicalExtensionPoint } from "@/lib/plugin/contracts/plugin-points"
+import type { PluginSurfaceFormFactor } from "@/types/plugin/plugin-surface"
 import type { SidebarNavCategory, SidebarNavMeta } from "@/types/shell/sidebar"
 
 /** A lazy entry. The only kind of code a manifest may hold. */
@@ -925,7 +923,7 @@ export interface ModuleComponentModule<P = Record<string, never>> {
  * the context bag its host passes, the same two a plugin contribution gets.
  */
 export interface ModuleSlotProps {
-  formFactor: PluginPointFormFactor
+  formFactor: PluginSurfaceFormFactor
   context?: Readonly<Record<string, unknown>>
 }
 

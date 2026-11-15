@@ -4347,20 +4347,6 @@ API_NAMESPACE_CONTRACTS = [
                 },
             },
             {
-                "id": "agent.executeAgent",
-                "name": "executeAgent",
-                "requiredPermissions": [
-                    "agent:control",
-                ],
-                "consentTier": "policy",
-                "risk": "high",
-                "idempotent": False,
-                "cancellable": False,
-                "resourceEffect": {
-                    "kind": "none",
-                },
-            },
-            {
                 "id": "agent.guardrails.list",
                 "name": "guardrails.list",
                 "requiredPermissions": [],
@@ -7892,34 +7878,6 @@ API_NAMESPACE_CONTRACTS = [
             {
                 "id": "connectors.resolveContacts",
                 "name": "resolveContacts",
-                "requiredPermissions": [
-                    "connectors:send",
-                ],
-                "consentTier": "policy",
-                "risk": "high",
-                "idempotent": False,
-                "cancellable": False,
-                "resourceEffect": {
-                    "kind": "none",
-                },
-            },
-            {
-                "id": "connectors.send",
-                "name": "send",
-                "requiredPermissions": [
-                    "connectors:send",
-                ],
-                "consentTier": "policy",
-                "risk": "high",
-                "idempotent": False,
-                "cancellable": False,
-                "resourceEffect": {
-                    "kind": "none",
-                },
-            },
-            {
-                "id": "connectors.sendText",
-                "name": "sendText",
                 "requiredPermissions": [
                     "connectors:send",
                 ],

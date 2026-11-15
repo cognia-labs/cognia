@@ -52,7 +52,7 @@ window is refused outright, so only one manager instance ever drives discovery a
 | `loader.ts` | Dynamic module loading per type + timed teardown | `PluginLoader` `:66`; `DEFAULT_TEARDOWN_TIMEOUT_MS` `:25`; `DirtyTeardownReason`/`DirtyTeardownRecord` `:41`/`:43` |
 | `registry.ts` | Contribution store (tools/components/templates/modes/commands) | `PluginRegistry` `:54` (facade over 5 `createOverlayRegistry`) |
 | `descriptor.ts` | Build the UI-facing `ExtensionDescriptor` from a manifest | `buildExtensionDescriptor` `:87`; `derivePluginInstallRootKind` `:20` |
-| `context.ts` | Build the `PluginContext`/`FullPluginContext` API object | `createPluginContext` `:181`; `createFullPluginContext` `:233`; `isFullPluginContext` `:323`; `teardownPluginWorkflowRegistrations` `:2170`; type `FullPluginContext` `:141` |
+| `context.ts` | Build the `PluginContext` API object | `createPluginContext` `:181`; `createFullPluginContext` `:233`; `isFullPluginContext` `:323`; `teardownPluginWorkflowRegistrations` `:2170`; type `FullPluginContext` `:141` |
 | `compatibility.ts` | Semver host/node/python gating → diagnostics | `evaluatePluginCompatibility` `:119`; `CompatibilityRuntime` `:15`; `CompatibilityDiagnostic` `:5` |
 | `validation.ts` | Manifest + config schema/value validation | `validatePluginManifest` `:289`; `validatePluginConfig` `:1167`; `parseManifest` `:1311` |
 | `verification.ts` | Build immutable `PluginVerificationSnapshot` + capability proofs | `createPluginVerificationSnapshot` `:35`; `collectCapabilityRuntimeProofs` `:14` |
@@ -185,7 +185,7 @@ so the plugin is left in a consistent state.
 
 ## Context Built and Passed to `activate`
 
-The hinge of the whole lifecycle is `loadPlugin` building a `FullPluginContext` and handing it to the
+The hinge of the whole lifecycle is `loadPlugin` building a `PluginContext` and handing it to the
 plugin's `activate`. The returned hooks (if any) are kept for later fan-out.
 
 ```ts

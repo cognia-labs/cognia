@@ -212,9 +212,6 @@ export const PLUGIN_API_RESOURCE_EFFECTS = {
   "ctx.agent.dispatchSubagent": {
     kind: "none",
   },
-  "ctx.agent.executeAgent": {
-    kind: "none",
-  },
   "ctx.agent.guardrails.list": {
     kind: "none",
   },
@@ -884,12 +881,6 @@ export const PLUGIN_API_RESOURCE_EFFECTS = {
     kind: "none",
   },
   "ctx.connectors.resolveContacts": {
-    kind: "none",
-  },
-  "ctx.connectors.send": {
-    kind: "none",
-  },
-  "ctx.connectors.sendText": {
     kind: "none",
   },
   "ctx.connectors.sendUrgent": {

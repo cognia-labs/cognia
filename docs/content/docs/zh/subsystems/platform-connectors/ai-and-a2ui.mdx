@@ -75,7 +75,7 @@ flowchart TD
 
 ## 插件 Surface 构造器
 
-希望通过 `ctx.connectors.send` 发送富交互内容的插件，需要一个 `content` 为有效**按 id 索引**组件图的 `A2UIMessageSegment`。手写该图（按 id 索引、连线子引用、铸造镜像）正是 `surface-builder.ts` 要消除的摩擦。构造是**纯且无门控**的 —— 它馈入的有副作用的 `send()` 仍由 `connectors:send` 门控。
+希望通过 `ctx.connectors.enqueueSend` 发送富交互内容的插件，需要一个 `content` 为有效**按 id 索引**组件图的 `A2UIMessageSegment`。手写该图（按 id 索引、连线子引用、铸造镜像）正是 `surface-builder.ts` 要消除的摩擦。构造是**纯且无门控**的 —— 它馈入的有副作用的 `enqueueSend()` 仍由 `connectors:send` 门控。
 
 `validateA2UISurfaceComponents`（`surface-builder.ts:116`）断言 id 唯一、解析根，并在任何悬空子引用上抛出 `A2UISurfaceBuildError`（`surface-builder.ts:48`）：
 

@@ -1,19 +1,18 @@
 /**
  * Plugin SDK — `context` subpath.
  *
- * Re-exports `PluginContext` / `FullPluginContext` plus every per-field API
+ * Re-exports `PluginContext` plus every per-field API
  * interface a plugin receives during `activate(ctx)`. Source of truth is
  * `types/plugin/plugin.ts` (core APIs), `types/plugin/plugin.ts`
  * (additional callable APIs available through the runtime surface), and
  * `lib/plugin/core/context.ts` (the full host-mounted context).
  *
  * Partitioning rules — see `../manifest/index.ts`. This module owns:
- *  - `PluginContext` / `FullPluginContext`
+ *  - `PluginContext`
  *  - Every `PluginXxxAPI` interface plus its companion option/result types
  *  - The complete callable API (`PluginContextAPI`)
  */
 
-import type { PluginContext as CtxPluginContext } from "@cognia/plugin-contract/types/plugin/plugin"
 export type * from "@cognia/plugin-contract/types/plugin/plugin-knowledge"
 export type { PluginProjectWebviewAPI } from "@cognia/plugin-contract/types/plugin/plugin"
 
@@ -374,9 +373,6 @@ export type {
   PluginContextWorkbenchState,
 } from "@cognia/plugin-contract/lib/plugin/api/context-panel-api"
 export type { PluginTemplatesAPI } from "../templates"
-
-/** @deprecated `PluginContext` is now the complete activated context. */
-export type FullPluginContext = CtxPluginContext
 
 // =============================================================================
 // Scheduler runtime API (separate file for the manifest types; this is the

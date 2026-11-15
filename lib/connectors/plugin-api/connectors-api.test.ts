@@ -442,11 +442,11 @@ describe("createConnectorsAPI", () => {
       )
     })
 
-    it("passes the Host run to direct sends regardless of a request's claimed run", async () => {
+    it("passes the Host run to connector writes regardless of a request's claimed run", async () => {
       guard.registerPlugin(PLUGIN, ["connectors:send"])
       const api = createConnectorsAPI(PLUGIN)
       await withPluginExecutionContext(PLUGIN, { executionRunId: "host-run" }, () =>
-        api.send("tg", {
+        api.editMessage("tg", "pm_1", {
           conversationRef: { platform: "telegram", adapterId: "tg", chatId: 42 },
           segments: [{ type: "text", text: "hello" }],
           metadata: { idempotencyKey: "host-proof", executionRunId: "forged-run" },
@@ -550,7 +550,6 @@ describe("createConnectorsAPI", () => {
       guard.registerPlugin(PLUGIN, ["connectors:read"])
       const api = createConnectorsAPI(PLUGIN)
       expect(() => api.listAdapters()).not.toThrow()
-      expect(() => api.send("tg", {} as never)).toThrow(PermissionError)
       expect(() => api.editMessage("tg", "m", {} as never)).toThrow(PermissionError)
       expect(() => api.deleteMessage("tg", "m")).toThrow(PermissionError)
       expect(() => api.deleteEphemeralCard("tg", "m")).toThrow(PermissionError)
@@ -761,103 +760,6 @@ describe("createConnectorsAPI", () => {
 
   describe("outbound mutations", () => {
     beforeEach(() => guard.registerPlugin(PLUGIN, ["connectors:read", "connectors:send"]))
-
-    it("send forwards a full outbound request", async () => {
-      const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
-      const api = createConnectorsAPI(PLUGIN)
-      const req = { conversationRef: { x: 1 }, segments: [], metadata: { idempotencyKey: "k" } }
-      const res = await api.send("tg", req as never)
-      expect(res).toEqual({ ok: true, platformMessageId: "m1" })
-      expect(sendOutbound).toHaveBeenCalledWith("tg", req)
-      expect(appendAudit).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "delivery.legacy_direct" })
-      )
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("enqueueSend"))
-      warn.mockRestore()
-    })
-
-    it("plans a direct send as this plugin's, sent at once (ADR-0239)", async () => {
-      const { getConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
-      const spy = jest.spyOn(getConnectorDeliveryGateway(), "sendNow")
-      const api = createConnectorsAPI(PLUGIN)
-      const req = {
-        conversationRef: { conv: "c1" },
-        segments: [{ type: "text", text: "hi" }],
-        metadata: { idempotencyKey: "k2" },
-      }
-      await api.send("tg", req as never)
-      // A reference only: no conversation the policy can check.
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          adapterId: "tg",
-          source: "plugin",
-          authorization: { kind: "plugin", pluginId: PLUGIN },
-          auditKind: "delivery.legacy_direct",
-        }),
-        expect.any(Function)
-      )
-      expect(spy.mock.calls[0]?.[0]).not.toHaveProperty("conversationKey")
-
-      spy.mockResolvedValueOnce({
-        ok: false,
-        error: { code: "connector_delivery_denied", message: "refused", retryable: false },
-      })
-      await expect(api.send("tg", req as never)).resolves.toMatchObject({
-        ok: false,
-        error: { code: "connector_delivery_denied" },
-      })
-      spy.mockRestore()
-    })
-
-    it("sends a direct send that names its conversation to the stored target", async () => {
-      const api = createConnectorsAPI(PLUGIN)
-      const req = {
-        conversationRef: { chatId: 777 },
-        deliveryTarget: { ...TARGET_42, conversationRef: { chatId: 777 } },
-        segments: [{ type: "text", text: "hi" }],
-        metadata: { idempotencyKey: "k3" },
-      }
-      await api.send("tg", req as never)
-      expect(sendOutbound).toHaveBeenCalledWith("tg", {
-        ...req,
-        conversationRef: TARGET_42.conversationRef,
-        deliveryTarget: TARGET_42,
-      })
-    })
-
-    it("returns a direct send's bad destination or PII as a failed result", async () => {
-      const api = createConnectorsAPI(PLUGIN)
-      const elsewhere = {
-        conversationRef: {},
-        deliveryTarget: storedTarget("telegram:tg:99", {}),
-        segments: [],
-        metadata: { idempotencyKey: "k4" },
-      }
-      await expect(api.send("tg", elsewhere as never)).resolves.toMatchObject({
-        ok: false,
-        error: { code: "connector_delivery_destination", retryable: false },
-      })
-      const leaking = {
-        conversationRef: {},
-        segments: [{ type: "text", text: "mail leak@pii.example" }],
-        metadata: { idempotencyKey: "k5" },
-      }
-      await expect(api.send("tg", leaking as never)).resolves.toMatchObject({
-        ok: false,
-        error: { code: "connector_delivery_pii_rejected" },
-      })
-      expect(sendOutbound).not.toHaveBeenCalled()
-    })
-
-    it("sendText wraps text into a single segment with a fresh idempotency key", async () => {
-      const api = createConnectorsAPI(PLUGIN)
-      await api.sendText("tg", { conv: "c1" } as never, "hello")
-      expect(sendOutbound).toHaveBeenCalledWith("tg", {
-        conversationRef: { conv: "c1" },
-        segments: [{ type: "text", text: "hello" }],
-        metadata: { idempotencyKey: "idem-123" },
-      })
-    })
 
     it("editMessage / deleteMessage forward to the bus", async () => {
       const api = createConnectorsAPI(PLUGIN)
@@ -1115,10 +1017,6 @@ describe("createConnectorsAPI", () => {
           firstKey,
           secondKey,
         ])
-        await api.send("tg", { ...final, deliveryTarget: TARGET_42 } as never)
-        expect(
-          (sendOutbound.mock.calls[0][1] as { metadata: { streamKey: string } }).metadata.streamKey
-        ).toBe(firstKey)
       } finally {
         plan.mockRestore()
         queue.mockRestore()

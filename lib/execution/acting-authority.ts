@@ -8,7 +8,7 @@ import {
   type RunAuthorityV1,
   type RunTriggerV1,
 } from "@cognia/plugin-contract/types/execution/run"
-import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { readResolvedPrincipal } from "./resolved-principal"
 import {
@@ -457,7 +457,7 @@ export function recordedRunMetadata(
 }
 
 export function authorityFromPermissionCeiling(
-  ceiling: ExternalSessionPermissionSpec | undefined
+  ceiling: AgentPermissionCeiling | undefined
 ): RunAuthorityV1 | undefined {
   if (!ceiling) return undefined
   return {

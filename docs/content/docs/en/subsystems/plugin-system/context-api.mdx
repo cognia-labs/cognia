@@ -42,7 +42,7 @@ Defined inline in `context.ts`.
 | `ctx.events` | `context.ts:389` | in-mem emitter (+ipc, bus merged `:274-278`) | no | on/off/emit/once (`:394-432`) |
 | `ctx.ui` | `context.ts:456` | toasts / dialogs | no | `showToast` (→ sonner), `showDialog` / `showInputDialog` / `showConfirmDialog` (→ plugin modal stack) |
 | `ctx.a2ui` | `context.ts:541` | useA2UIStore | no | `createSurface:545`, `updateComponents:553`, `registerComponent:574` |
-| `ctx.agent` | `context.ts:588` | registry + agent-executor | manifest-checked inline | `registerTool:590`, `executeAgent:615` (`agent:control` if toolsEnabled `:630`), `runExternalAgent:662` (`agent:dispatch-external` `:668`) |
+| `ctx.agent` | `context.ts:588` | registry + agent-executor | manifest-checked inline | `registerTool:920`, `run:970` / `runStreamed:988` (`agent:control` if toolsEnabled `:865`), `runExternalAgent:1092` (`agent:dispatch-external`) |
 | `ctx.settings` | `context.ts:757` | useSettingsStore | no | `get:762`, `set:770`, `onChange:781` |
 | `ctx.python` | `context.ts:798` | Rust `plugin_python_*` | rate-limiter | `call:801`, `eval:810`, `import:819` |
 | `ctx.network` | `context.ts:865` | fetch / invokePluginApi | rate-limiter | get/post `:917`, `download:934`, `upload:973` |
@@ -91,7 +91,7 @@ From `lib/plugin/api/`.
 | `ctx.terminal` | `terminal-api.ts:175` | terminal dock (spawnFromDock) | `terminal:spawn`/`write`/`kill`/`completion`/`safety` (DANGEROUS) | `spawn:206`, `write:236`, `kill:243`, `classifyCommand:304` |
 | `ctx.perf` | `perf-api.ts:42` | perf backend | `perf:read` (read-only) | `snapshot:44`, `hotspots:45`, `subscribe:48` |
 | `ctx.logs` | `logs-api.ts` | IndexedDB log store + `agentTraces` Dexie table | `logs:read` (logs, stats, transports) / `trace:read` (spans) — read-only | `query`, `stats`, `subscribe`, `transports`, `traces.list`, `traces.timeline`, `traces.subscribe` |
-| `ctx.connectors` | `connectors-api.ts:248` | ConnectorBus + adapterInstances | `connectors:read`/`send`/`manage` (send, manage DANGEROUS) | send / edit / delete + A2UI builder (`:35`) |
+| `ctx.connectors` | `connectors-api.ts:248` | ConnectorBus + adapterInstances | `connectors:read`/`send`/`manage` (send, manage DANGEROUS) | enqueueSend / edit / delete + A2UI builder (`:35`) |
 | `ctx.share` | `share-api.ts:51` | lib/share + shared-links Dexie | `share:read` / `share:create` | `create:53`, `revoke:54`, `getStats:57` |
 | `ctx.backup` | `backup-api.ts:64` | buildExportEnvelope / importEnvelope | `backup:read` / `backup:write` (never API key) | `create:66`, `restore:75`, `listHistory:82` |
 | `ctx.automation` | `automation-api.ts:101` | lib/automation/client (Computer Use) | `automation:read`/... (ALL DANGEROUS) | `capabilities:53`, `getFocus:54`, `readTree:56` |
@@ -183,13 +183,15 @@ function assertOwned(id: string): void {
 }
 ```
 
-(d) `context.ts:628-634` — inline manifest check before a tool-enabled agent run:
+(d) `context.ts:865-871` — manifest check before a tool-enabled `run` / `runStreamed`:
 
 ```ts
-if (agentConfig.toolsEnabled === true) {
-  const { pluginHasApiPermission } = await import("@/lib/plugin/api/permission-api")
-  if (!pluginHasApiPermission(pluginId, "agent:control"))
-    throw new Error('agent.executeAgent: tool-enabled runs require the agent:control permission')
+function gateToolEnabledRun(pluginId: string, toolsEnabled: boolean | undefined): void {
+  if (toolsEnabled === true && !pluginHasApiPermission(pluginId, "agent:control")) {
+    throw new Error(
+      'agent run: tool-enabled runs require the "agent:control" permission — declare it in the plugin manifest.'
+    )
+  }
 }
 ```
 
@@ -271,7 +273,6 @@ graph TD
 
 ## 7. Gotchas
 
-- `FullPluginContext` (`context.ts:141-175`) is `Omit<PluginContext, "storage"> & Omit<PluginContextAPI, "storage">` plus 14 ADR-0026 v2 namespaces intersected so the base interface stays untouched.
 - Only **11 of ~34** files use `createGuardedAPI` (the platform / host-touching ones). The rest are ungated — isolation comes from id-namespacing (`<pluginId>:<localId>`) plus auto-cleanup (`clear*ForPlugin`) on disable.
 - DANGEROUS perms: `git:write`, all `terminal:*`, `connectors:send`, `connectors:manage`, and every `automation:*`. Automation stacks a second Rust gate (`automation-api.ts:8-20`).
 - `consentExempt` (`permission-guard.ts:791`, used in `terminal-api.ts:331`) lets sync query/subscribe helpers share a confirm-tier permission while skipping the overlay; it still requires the grant.

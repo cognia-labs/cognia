@@ -36,7 +36,6 @@ describe("plugin-sdk api/auth-provider", () => {
     expect(typeof sdk.getSession).toBe("function")
     expect(typeof sdk.removeSession).toBe("function")
     expect(typeof sdk.onDidChangeSessions).toBe("function")
-    expect(typeof sdk.hydrateFromSecrets).toBe("function")
     expect(typeof sdk.__makeSession).toBe("function")
     expect(typeof sdk.runPkceAuthFlow).toBe("function")
   })
