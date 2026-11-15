@@ -164,8 +164,9 @@ export class HostConfigTargetError extends Error {
   }
 }
 
-interface HostConfigTarget {
+export interface HostConfigTarget {
   transport: Pick<Transport, "call">
+  assertSupports?: (operation: HostConfigCommand) => void
   assertCurrent(): void
   close(): void
 }
@@ -323,11 +324,13 @@ async function openHostConfigTarget(
 export async function callHostConfigCommandAtOrigin<T>(
   origin: TaskWorkspaceOrigin,
   operation: HostConfigCommand,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  retainedTarget?: HostConfigTarget
 ): Promise<T> {
-  const target = await deps.openTarget(origin, operation)
+  const target = retainedTarget ?? (await deps.openTarget(origin, operation))
   try {
     target.assertCurrent()
+    target.assertSupports?.(operation)
     return await target.transport.call<T>(operation, payload)
   } catch (error) {
     if (error instanceof HostConfigTargetError || error instanceof HostConfigsUnsupportedError)
@@ -335,7 +338,7 @@ export async function callHostConfigCommandAtOrigin<T>(
     target.assertCurrent()
     throw new HostConfigTargetError("host-unreachable", origin, { cause: error })
   } finally {
-    target.close()
+    if (!retainedTarget) target.close()
   }
 }
 
@@ -356,8 +359,22 @@ export async function callHostConfigCommandAtOrigin<T>(
 export async function callApprovedHostConfigCommand<T>(
   operation: HostConfigCommand,
   payload: Record<string, unknown> = {},
-  origin: TaskWorkspaceOrigin = deps.captureOrigin()
+  origin: TaskWorkspaceOrigin = deps.captureOrigin(),
+  retainedTarget?: HostConfigTarget
 ): Promise<T> {
+  if (retainedTarget) {
+    retainedTarget.assertCurrent()
+    retainedTarget.assertSupports?.(operation)
+    const lease =
+      origin.kind === "remote"
+        ? await deps.issueAdminLease([operation], undefined, retainedTarget.transport)
+        : undefined
+    retainedTarget.assertCurrent()
+    return retainedTarget.transport.call<T>(operation, {
+      ...payload,
+      ...(lease ? { adminLease: lease.token } : {}),
+    })
+  }
   if (!sameTaskWorkspaceOrigin(origin, deps.captureOrigin()))
     throw new HostConfigTargetError("host-changed", origin)
   const availability = hostConfigsAvailability(operation)

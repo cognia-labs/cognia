@@ -69,6 +69,10 @@ import {
 } from "../../session/session-models"
 
 export interface RemoteExecuteOptions {
+  /** Abandon this client's ownership; this is not proof of a remote stop. */
+  signal?: AbortSignal
+  onControlLost?: (error?: unknown) => void
+  onReconnected?: () => void
   /** Caller-side content admission before the paired-host handover. */
   contentSafety?: { injectionProtection: boolean }
   systemPrompt?: string
@@ -131,6 +135,7 @@ export interface RemoteAttachmentsWithheld {
 
 export type RemoteExternalAgentResult = ExternalAgentResult & {
   runId: string
+  failureReason?: "control_lost" | "owner_aborted"
   /** The source Host's ledger identities. The client must bind their originating Host. */
   workspace?: RemoteRunWorkspace
   workspaceUnavailable?: RemoteRunFrame["workspaceUnavailable"]
@@ -161,6 +166,40 @@ const TEXT_EVENTS = new Set(["message_delta", "content_block_delta"])
 
 /** Gateway task sessions (`gatewaySessionId` in `config/gateway-task`). */
 const GATEWAY_SESSION_PREFIX = "cognia-gateway:"
+
+/** Client ownership expires after 60 s of lost control, never as stop proof. */
+export const REMOTE_RUN_CONTROL_LOST_TIMEOUT_MS = 60_000
+
+/** A client ownership deadline, shared by Composer and bound-Host capture. */
+export function createRemoteRunControlLossGuard(handlers: {
+  onGiveUp(): void
+  onControlLost?: (error?: unknown) => void
+  onReconnected?: () => void
+}) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let disposed = false
+  return {
+    onControlLost(error?: unknown) {
+      if (disposed || timer) return
+      timer = setTimeout(() => {
+        timer = undefined
+        if (!disposed) handlers.onGiveUp()
+      }, REMOTE_RUN_CONTROL_LOST_TIMEOUT_MS)
+      handlers.onControlLost?.(error)
+    },
+    onReconnected() {
+      if (disposed || !timer) return
+      clearTimeout(timer)
+      timer = undefined
+      handlers.onReconnected?.()
+    },
+    dispose() {
+      disposed = true
+      clearTimeout(timer)
+      timer = undefined
+    },
+  }
+}
 
 /**
  * Keep the Host's report of the session's models for the composer's picker.
@@ -271,7 +310,7 @@ export async function executeOnRemoteHostAgent(
     attachments: options.attachments,
   })
   // This run plane targets the selected Host. Freeze its identity before any
-  // attachment/approval wait, and refuse a route change before dispatch.
+  // attachment/approval wait. Its channel and controls retain this authority.
   const workspaceOrigin = options.workspaceCapture?.origin ?? captureTaskWorkspaceOrigin()
   const databaseScope = options.workspaceCapture ? captureCodeAdoptionDatabaseScope() : undefined
   // A Host built before per-turn Cognia selection closes its request schema
@@ -294,20 +333,9 @@ export async function executeOnRemoteHostAgent(
   )
     throw new Error("Remote external agent input blocked by the outbound PII gate")
   const runId = options.newRunId?.() ?? `rer_${crypto.randomUUID()}`
-  // Staged before the subscription opens: a slow upload must not leave a
-  // subscribed run waiting on a turn that has not been asked for yet.
+  const hostTakesAttachments = hostSupportsAttachmentTurns()
+  const hostTakesSessionReset = hostSupportsSessionResetTurns()
   let attachments: RemoteRunAttachment[] = []
-  if (options.attachments?.length) {
-    if (!hostSupportsAttachmentTurns()) {
-      options.onAttachmentsWithheld?.({ reason: "host" })
-    } else {
-      try {
-        attachments = await stageRemoteRunAttachments(runId, options.attachments)
-      } catch {
-        options.onAttachmentsWithheld?.({ reason: "upload" })
-      }
-    }
-  }
   let text = ""
   let externalSessionId = options.externalSessionId ?? ""
   let workspace: RemoteRunWorkspace | undefined
@@ -318,11 +346,43 @@ export async function executeOnRemoteHostAgent(
   const finished = new Promise<RemoteExternalAgentResult | null>((resolve) => {
     settle = resolve
   })
+  let giveUp!: () => void
+  const abandoned = new Promise<void>((resolve) => {
+    giveUp = resolve
+  })
+  let ended = false
+  let stop = () => {}
+  const abandon = (reason: "control_lost" | "owner_aborted") => {
+    if (ended) return
+    ended = true
+    controlLoss.dispose()
+    stop()
+    settle({
+      runId,
+      success: false,
+      sessionId: externalSessionId,
+      finalResponse: text,
+      messages: [],
+      steps: [],
+      toolCalls: [],
+      duration: Date.now() - startedAt,
+      failureReason: reason,
+      error: `${reason}: control is unavailable; the remote run may still be running`,
+    })
+    giveUp()
+  }
+  const controlLoss = createRemoteRunControlLossGuard({
+    onGiveUp: () => abandon("control_lost"),
+    onControlLost: options.onControlLost,
+    onReconnected: options.onReconnected,
+  })
+  const abort = () => abandon("owner_aborted")
 
-  const stop = subscribeRemoteExternalRun(
+  stop = subscribeRemoteExternalRun(
     runId,
     {
       onEvent: (event, frame) => {
+        if (ended) return
         if (frame?.terminal) {
           workspace = frame.workspace
           workspaceUnavailable = frame.workspaceUnavailable
@@ -335,12 +395,17 @@ export async function executeOnRemoteHostAgent(
         options.onEvent?.(event)
       },
       onGap: options.onGap,
+      onControlLost: controlLoss.onControlLost,
+      onReconnected: controlLoss.onReconnected,
       onAttachmentsWithheld: (withheld) =>
         options.onAttachmentsWithheld?.({
           reason: withheld.reason,
           ...(withheld.model ? { model: withheld.model } : {}),
         }),
       onTerminal: (terminal, error) => {
+        if (ended) return
+        ended = true
+        controlLoss.dispose()
         const finish = () =>
           settle({
             runId,
@@ -399,43 +464,62 @@ export async function executeOnRemoteHostAgent(
     workspaceOrigin
   )
 
+  options.signal?.addEventListener("abort", abort, { once: true })
   try {
+    if (options.signal?.aborted) abort()
+    if (ended) return await finished
+    // Acquire the run's authority before any upload wait. Every chunk uses
+    // that same connection even if the active Host changes during staging.
+    if (options.attachments?.length) {
+      if (!hostTakesAttachments) {
+        options.onAttachmentsWithheld?.({ reason: "host" })
+      } else {
+        try {
+          const staged = await Promise.race([
+            stageRemoteRunAttachments(runId, options.attachments),
+            finished.then(() => undefined),
+          ])
+          if (!staged) return await finished
+          attachments = staged
+        } catch {
+          options.onAttachmentsWithheld?.({ reason: "upload" })
+        }
+      }
+    }
+    if (ended) return await finished
     // Subscribed is not the same as delivered: wait for the host to
     // acknowledge the topic before it has anything to stream on it.
-    await whenRemoteRunChannelSubscribed()
-    if (workspaceOrigin) {
-      const current = captureTaskWorkspaceOrigin()
-      if (
-        current.kind !== workspaceOrigin.kind ||
-        (current.kind === "remote" &&
-          workspaceOrigin.kind === "remote" &&
-          (current.hostId !== workspaceOrigin.hostId ||
-            current.accountId !== workspaceOrigin.accountId))
-      )
-        throw new Error("External run target changed before dispatch")
-    }
-    const started = await startRemoteExternalTurn({
-      runId,
-      origin: workspaceOrigin,
-      chatSessionId: options.chatSessionId,
-      stamp: options.stamp,
-      prompt,
-      model: options.model,
-      reasoningEffort: options.reasoningEffort,
-      systemPrompt: options.systemPrompt,
-      allowedTools: options.allowedTools,
-      externalSessionId: options.externalSessionId,
-      ...(options.resetExternalSession === true && hostSupportsSessionResetTurns()
-        ? { resetExternalSession: true }
-        : {}),
-      // An explicit `null` ("native") is only sent to a Host that knows the
-      // field. An older Host never took a per-turn selection at all: its own
-      // configuration decides, exactly as it did before this axis existed.
-      ...(options.cogniaModel !== undefined && hostTakesCogniaModel
-        ? { cogniaModel: options.cogniaModel }
-        : {}),
-      ...(attachments.length > 0 ? { attachments } : {}),
-    })
+    const ready = await Promise.race([
+      whenRemoteRunChannelSubscribed(runId).then(() => true),
+      finished.then(() => false),
+    ])
+    if (!ready || ended) return await finished
+    const started = await Promise.race([
+      startRemoteExternalTurn({
+        runId,
+        origin: workspaceOrigin,
+        chatSessionId: options.chatSessionId,
+        stamp: options.stamp,
+        prompt,
+        model: options.model,
+        reasoningEffort: options.reasoningEffort,
+        systemPrompt: options.systemPrompt,
+        allowedTools: options.allowedTools,
+        externalSessionId: options.externalSessionId,
+        ...(options.resetExternalSession === true && hostTakesSessionReset
+          ? { resetExternalSession: true }
+          : {}),
+        // An explicit `null` ("native") is only sent to a Host that knows the
+        // field. An older Host never took a per-turn selection at all: its own
+        // configuration decides, exactly as it did before this axis existed.
+        ...(options.cogniaModel !== undefined && hostTakesCogniaModel
+          ? { cogniaModel: options.cogniaModel }
+          : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
+      }),
+      abandoned.then(() => undefined),
+    ])
+    if (!started) return await finished
     if (!started.started) {
       stop()
       return null
@@ -443,6 +527,9 @@ export async function executeOnRemoteHostAgent(
     options.onStarted?.(started.resetExternalSession === true)
     return await finished
   } finally {
+    ended = true
+    controlLoss.dispose()
+    options.signal?.removeEventListener("abort", abort)
     stop()
   }
 }

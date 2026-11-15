@@ -7,6 +7,8 @@ const stop = jest.fn()
 let handlers:
   | {
       onEvent: (e: ExternalAgentEvent, f: unknown) => void
+      onControlLost?: (error?: unknown) => void
+      onReconnected?: () => void
       onTerminal: (t: string, e?: string) => void
       onGap?: (expected: number, received: number) => void
       onAttachmentsWithheld?: (withheld: { reason: string; count: number; model?: string }) => void
@@ -14,6 +16,7 @@ let handlers:
   | undefined
 const stagedFor: Array<{ runId: string; count: number }> = []
 let stageFails = false
+let waitForUpload: Promise<void> | undefined
 let startReply: unknown = { started: true, runId: "run-1" }
 let subscribedRunId: string | undefined
 
@@ -44,6 +47,7 @@ jest.mock("./remote-run-client", () => ({
   remoteExternalRunOrigin: () => mockWorkspaceOrigin,
   stageRemoteRunAttachments: async (runId: string, images: unknown[]) => {
     stagedFor.push({ runId, count: images.length })
+    if (waitForUpload) await waitForUpload
     if (stageFails) throw new Error("attachment_too_many")
     return images.map((_, index) => ({
       ref: `cognia-upload:u${index}`,
@@ -96,15 +100,95 @@ jest.mock("./remote-host-configs", () => {
 })
 let hostTakesImages = true
 
-import { executeOnRemoteHostAgent, interruptRemoteHostAgent } from "./remote-execute"
+import {
+  executeOnRemoteHostAgent,
+  interruptRemoteHostAgent,
+  REMOTE_RUN_CONTROL_LOST_TIMEOUT_MS,
+} from "./remote-execute"
 
 const STAMP = { configId: "eac_1", revision: "eacr_1", lifecycleGeneration: 1 }
+
+it("abandons a missing terminal after bounded control loss and ignores a late terminal", async () => {
+  jest.useFakeTimers()
+  try {
+    const onEvent = jest.fn()
+    const onControlLost = jest.fn()
+    const run = executeOnRemoteHostAgent("go", {
+      stamp: STAMP,
+      chatSessionId: "chat-1",
+      onEvent,
+      onControlLost,
+    })
+    await jest.advanceTimersByTimeAsync(0)
+    handlers?.onControlLost?.(new Error("offline"))
+    await jest.advanceTimersByTimeAsync(REMOTE_RUN_CONTROL_LOST_TIMEOUT_MS - 1)
+    expect(stop).not.toHaveBeenCalled()
+    await jest.advanceTimersByTimeAsync(1)
+    expect(await run).toMatchObject({
+      success: false,
+      failureReason: "control_lost",
+      error: expect.stringContaining("may still be running"),
+    })
+    expect(stop).toHaveBeenCalled()
+    expect(onControlLost).toHaveBeenCalledTimes(1)
+    handlers?.onEvent({ type: "done" } as ExternalAgentEvent, { terminal: "completed" })
+    await flushRunDispatch()
+    handlers?.onTerminal("completed")
+    expect(onEvent).not.toHaveBeenCalled()
+    expect(cancelled).toEqual([])
+  } finally {
+    jest.useRealTimers()
+  }
+})
+
+it("clears the give-up timer when the same origin reconnects", async () => {
+  jest.useFakeTimers()
+  try {
+    const onReconnected = jest.fn()
+    const run = executeOnRemoteHostAgent("go", {
+      stamp: STAMP,
+      chatSessionId: "chat-1",
+      onReconnected,
+    })
+    await jest.advanceTimersByTimeAsync(0)
+    handlers?.onControlLost?.()
+    await jest.advanceTimersByTimeAsync(10_000)
+    handlers?.onReconnected?.()
+    await jest.advanceTimersByTimeAsync(REMOTE_RUN_CONTROL_LOST_TIMEOUT_MS)
+    expect(stop).not.toHaveBeenCalled()
+    expect(onReconnected).toHaveBeenCalledTimes(1)
+    await flushRunDispatch()
+    handlers?.onTerminal("completed")
+    expect((await run)?.success).toBe(true)
+  } finally {
+    jest.useRealTimers()
+  }
+})
+
+it("allows the owner to abort while subscription readiness is still pending", async () => {
+  const controller = new AbortController()
+  waitForChannel = new Promise(() => undefined)
+  const run = executeOnRemoteHostAgent("go", {
+    stamp: STAMP,
+    chatSessionId: "chat-1",
+    signal: controller.signal,
+  })
+  controller.abort()
+  expect(await run).toMatchObject({ success: false, failureReason: "owner_aborted" })
+  expect(started).toEqual([])
+  expect(stop).toHaveBeenCalled()
+})
+
+async function flushRunDispatch() {
+  for (let i = 0; i < 12; i += 1) await Promise.resolve()
+}
 
 function evt(over: Partial<ExternalAgentEvent> & { type: string }): ExternalAgentEvent {
   return { timestamp: new Date(0), ...over } as ExternalAgentEvent
 }
 
 beforeEach(() => {
+  waitForUpload = undefined
   mockDatabaseName = "account-A"
   started.length = 0
   cancelled.length = 0
@@ -139,6 +223,7 @@ it.each([true, false])(
       onStarted,
     })
     expect(onStarted).not.toHaveBeenCalled()
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     if (supported) expect(started[0]).toHaveProperty("resetExternalSession", true)
@@ -190,6 +275,7 @@ it("honors injection opt-out on the normal remote execution path", async () => {
     contentSafety: { injectionProtection: false },
   })
   expect(subscribedRunId).toBe("run-1")
+  await flushRunDispatch()
   handlers?.onTerminal("completed")
   await expect(run).resolves.toMatchObject({ success: true })
   expect(started).toEqual([expect.objectContaining({ prompt })])
@@ -226,6 +312,7 @@ it.each([false, true])(
         ],
       },
     })
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     while (!finish) await Promise.resolve()
     mockDatabaseName = "account-B"
@@ -269,6 +356,7 @@ it("persists Host ledger identities against the captured turn and originating Ho
     ],
   }
   handlers?.onEvent(evt({ type: "session_end" }), { terminal: "completed", workspace })
+  await flushRunDispatch()
   handlers?.onTerminal("completed")
   await expect(run).resolves.toMatchObject({ workspace })
   expect(mockManifest).toHaveBeenCalledWith("task", "task-run", origin)
@@ -313,6 +401,7 @@ it("returns an explicit history-unavailable reason when a retained manifest cann
       ],
     },
   })
+  await flushRunDispatch()
   handlers?.onTerminal("completed")
   await expect(run).resolves.toMatchObject({
     success: true,
@@ -340,6 +429,7 @@ it("records remote-only files as unavailable instead of inventing a clean snapsh
     terminal: "completed",
     workspaceUnavailable: "remote-filesystem",
   })
+  await flushRunDispatch()
   handlers?.onTerminal("completed")
   await expect(run).resolves.toMatchObject({
     success: true,
@@ -370,13 +460,14 @@ it("suppresses an old Host's unavailable notice after switching database scope",
     terminal: "completed",
     workspaceUnavailable: "remote-filesystem",
   })
+  await flushRunDispatch()
   handlers?.onTerminal("completed")
   await expect(run).resolves.toMatchObject({ success: true })
   expect((await run)?.workspaceUnavailable).toBeUndefined()
   expect(mockPersistUnavailableTurn).not.toHaveBeenCalled()
 })
 
-it("refuses a Host/account change during the subscription wait before dispatch", async () => {
+it("keeps dispatch on A after a same-account Host switch during subscription", async () => {
   mockWorkspaceOrigin = { kind: "remote", hostId: "host-A", accountId: "account-A" }
   let subscribed!: () => void
   waitForChannel = new Promise((resolve) => {
@@ -390,8 +481,13 @@ it("refuses a Host/account change during the subscription wait before dispatch",
   })
   mockWorkspaceOrigin = { kind: "remote", hostId: "host-B", accountId: "account-A" }
   subscribed()
-  await expect(run).rejects.toThrow(/target changed/)
-  expect(started).toEqual([])
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(started[0]).toMatchObject({
+    origin: { kind: "remote", hostId: "host-A", accountId: "account-A" },
+  })
+  await flushRunDispatch()
+  handlers?.onTerminal("completed")
+  expect((await run)?.success).toBe(true)
   expect(mockPersistWorkspaceTurn).not.toHaveBeenCalled()
 })
 
@@ -399,10 +495,37 @@ it("pins dispatch even when workspace capture is disabled", async () => {
   const origin = { kind: "remote" as const, hostId: "host-A" }
   mockWorkspaceOrigin = origin
   const run = executeOnRemoteHostAgent("go", { stamp: STAMP, chatSessionId: "chat-1" })
-  await Promise.resolve()
+  await flushRunDispatch()
   expect(started[0]).toMatchObject({ origin })
+  await flushRunDispatch()
   handlers?.onTerminal("completed")
   await run
+})
+
+it("pins a paired run before uploading and keeps A's reset capability after switching to B", async () => {
+  mockWorkspaceOrigin = { kind: "remote", hostId: "companion:host-A", accountId: "account-A" }
+  let uploaded!: () => void
+  waitForUpload = new Promise<void>((resolve) => {
+    uploaded = resolve
+  })
+  const run = executeOnRemoteHostAgent("go", {
+    stamp: STAMP,
+    chatSessionId: "chat-1",
+    resetExternalSession: true,
+    attachments: [{ source: { type: "base64", mediaType: "image/png", data: "AQID" } }] as never,
+  })
+  expect(subscribedRunId).toBeDefined()
+  expect(stagedFor).toHaveLength(1)
+  mockWorkspaceOrigin = { kind: "remote", hostId: "companion:host-B", accountId: "account-A" }
+  hostTakesSessionReset = false
+  uploaded()
+  await flushRunDispatch()
+  expect(started[0]).toMatchObject({
+    origin: { hostId: "companion:host-A" },
+    resetExternalSession: true,
+  })
+  handlers?.onTerminal("completed")
+  expect((await run)?.success).toBe(true)
 })
 
 // The Host reports the session's options at the end of each turn. This client
@@ -448,6 +571,7 @@ describe("the Host's report of the session's models", () => {
       configOptions: KIMI_OPTIONS,
     } as never)
     handlers?.onEvent(report, {})
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     expect(recordReportedAgentModelSurface).toHaveBeenCalledWith(
@@ -488,6 +612,7 @@ describe("the Host's report of the session's models", () => {
       } as never),
       {}
     )
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     expect(recordReportedAgentModelSurface).not.toHaveBeenCalled()
@@ -500,6 +625,7 @@ describe("the Host's report of the session's models", () => {
       newRunId: () => "run-1",
     })
     handlers?.onEvent(evt({ type: "message_delta", sessionId: "s", delta: "x" } as never), {})
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     expect(recordReportedAgentModelSurface).not.toHaveBeenCalled()
@@ -519,6 +645,7 @@ describe("executeOnRemoteHostAgent", () => {
       systemPrompt: "Selected skill: verify results",
       allowedTools: ["read"],
     })
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     expect(started[0]).toMatchObject({
@@ -553,6 +680,7 @@ describe("executeOnRemoteHostAgent", () => {
       newRunId: () => "run-1",
     })
     expect(subscribedRunId).toBe("run-1")
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
   })
@@ -563,6 +691,7 @@ describe("executeOnRemoteHostAgent", () => {
       chatSessionId: "chat-1",
       newRunId: () => "run-1",
     })
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     expect(started[0]).toMatchObject({ runId: "run-1", chatSessionId: "chat-1", stamp: STAMP })
@@ -576,6 +705,7 @@ describe("executeOnRemoteHostAgent", () => {
     })
     handlers?.onEvent(evt({ type: "message_delta", delta: { text: "Hel" } } as never), {})
     handlers?.onEvent(evt({ type: "content_block_delta", text: "lo" } as never), {})
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     const result = await run
     expect(result).toMatchObject({ success: true, finalResponse: "Hello", runId: "run-1" })
@@ -588,6 +718,7 @@ describe("executeOnRemoteHostAgent", () => {
       newRunId: () => "run-1",
     })
     handlers?.onEvent(evt({ type: "message_delta", delta: "raw" } as never), {})
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     expect((await run)?.finalResponse).toBe("raw")
   })
@@ -599,6 +730,7 @@ describe("executeOnRemoteHostAgent", () => {
       newRunId: () => "run-1",
     })
     handlers?.onEvent(evt({ type: "message_delta", delta: { blocks: [] } } as never), {})
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     expect((await run)?.finalResponse).toBe("")
   })
@@ -610,6 +742,7 @@ describe("executeOnRemoteHostAgent", () => {
       newRunId: () => "run-1",
     })
     handlers?.onEvent(evt({ type: "session_start", sessionId: "agent-9" }), {})
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     expect((await run)?.sessionId).toBe("agent-9")
   })
@@ -624,6 +757,7 @@ describe("executeOnRemoteHostAgent", () => {
     })
     handlers?.onEvent(evt({ type: "permission_request" }), {})
     handlers?.onEvent(evt({ type: "message_delta", delta: { text: "x" } } as never), {})
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     expect(seen).toEqual(["permission_request", "message_delta"])
@@ -649,6 +783,7 @@ describe("executeOnRemoteHostAgent", () => {
       chatSessionId: "c",
       newRunId: () => "run-1",
     })
+    await flushRunDispatch()
     handlers?.onTerminal("failed", "spawn failed")
     const result = await run
     expect(result).toMatchObject({ success: false, error: "spawn failed" })
@@ -660,6 +795,7 @@ describe("executeOnRemoteHostAgent", () => {
       chatSessionId: "c",
       newRunId: () => "run-1",
     })
+    await flushRunDispatch()
     handlers?.onTerminal("cancelled")
     expect(await run).toMatchObject({ success: false, error: "cancelled" })
   })
@@ -670,6 +806,7 @@ describe("executeOnRemoteHostAgent", () => {
       chatSessionId: "c",
       newRunId: () => "run-1",
     })
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     expect(stop).toHaveBeenCalled()
@@ -682,6 +819,7 @@ describe("executeOnRemoteHostAgent", () => {
       externalSessionId: "agent-7",
       newRunId: () => "run-1",
     })
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     expect(started[0]).toMatchObject({ externalSessionId: "agent-7" })
@@ -696,6 +834,7 @@ describe("executeOnRemoteHostAgent", () => {
       onGap: (a, b) => gaps.push([a, b]),
     })
     handlers?.onGap?.(2, 5)
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await run
     expect(gaps).toEqual([[2, 5]])
@@ -714,6 +853,7 @@ describe("Cognia model selection on the Host lane", () => {
       newRunId: () => "run-1",
       ...options,
     })
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     return run
   }
@@ -770,13 +910,13 @@ describe("interruptRemoteHostAgent", () => {
 it("waits for the run topic to be acknowledged before starting the turn", async () => {
   channelReady.length = 0
   const run = executeOnRemoteHostAgent("go", { stamp: STAMP, chatSessionId: "chat-1" })
-  await Promise.resolve()
-  await Promise.resolve()
+  await flushRunDispatch()
   // Subscribed first, acknowledged second, started third: `ready:0` records
   // that no turn had been started when the acknowledgement was awaited.
   expect(subscribedRunId).toBeDefined()
   expect(channelReady).toEqual(["ready:0"])
   expect(started).toHaveLength(1)
+  await flushRunDispatch()
   handlers?.onTerminal("completed")
   await run
 })
@@ -813,6 +953,7 @@ describe("the turn's images", () => {
     // The Host's verdict arrives on the run's stream.
     handlers?.onAttachmentsWithheld?.({ reason: "model", count: 2, model: "Pro" })
     expect(onAttachmentsWithheld).toHaveBeenCalledWith({ reason: "model", model: "Pro" })
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await pending
   })
@@ -823,6 +964,7 @@ describe("the turn's images", () => {
     expect(stagedFor).toEqual([])
     expect(started[0]).not.toHaveProperty("attachments")
     expect(onAttachmentsWithheld).toHaveBeenCalledWith({ reason: "host" })
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await pending
   })
@@ -832,6 +974,7 @@ describe("the turn's images", () => {
     const { pending, onAttachmentsWithheld } = await run({ attachments: [image] })
     expect(started[0]).not.toHaveProperty("attachments")
     expect(onAttachmentsWithheld).toHaveBeenCalledWith({ reason: "upload" })
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await pending
   })
@@ -841,6 +984,7 @@ describe("the turn's images", () => {
     expect(stagedFor).toEqual([])
     expect(started[0]).not.toHaveProperty("attachments")
     expect(onAttachmentsWithheld).not.toHaveBeenCalled()
+    await flushRunDispatch()
     handlers?.onTerminal("completed")
     await pending
   })

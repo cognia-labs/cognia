@@ -4,6 +4,13 @@ import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
 
 jest.mock("@/lib/remote-host/management-channel", () => ({
   acquireManagementChannel: jest.fn(),
+  closeManagementChannel: jest.fn(),
+}))
+jest.mock("@/lib/remote-host/target-transport", () => ({
+  ...jest.requireActual("@/lib/remote-host/target-transport"),
+  openRemoteHostTarget: jest.fn(
+    jest.requireActual("@/lib/remote-host/target-transport").openRemoteHostTarget
+  ),
 }))
 
 const calls: Array<{ command: string; payload: unknown }> = []
@@ -13,6 +20,14 @@ const unsubscribe = jest.fn()
 let reply: unknown = {}
 const localCalls: Array<{ command: string; payload: unknown }> = []
 let localFailure: Error | undefined
+jest.mock("@/lib/task-workspace/origin", () => ({
+  ...jest.requireActual("@/lib/task-workspace/origin"),
+  taskWorkspaceHostTransport: jest.fn(() => ({
+    ...jest.requireMock("@/lib/tauri").transport,
+    call: jest.requireMock("@/lib/tauri/transport-instance").localTransport.call,
+  })),
+}))
+
 jest.mock("@/lib/tauri/transport-instance", () => ({
   ...jest.requireActual("@/lib/tauri/transport-instance"),
   localTransport: {
@@ -39,14 +54,19 @@ jest.mock("@/lib/tauri", () => ({
 }))
 
 const uploads: Array<{ scope: string; name: string; mediaType: string; bytes: number[] }> = []
+const uploadCalls: Array<
+  ((name: string, args: Record<string, unknown>) => Promise<unknown>) | undefined
+> = []
 let uploadFails = false
 jest.mock("@/lib/companion/attachment-upload-client", () => ({
   uploadSessionAttachment: async (
     scope: string,
-    file: { name: string; mediaType: string; bytes: Uint8Array }
+    file: { name: string; mediaType: string; bytes: Uint8Array },
+    options?: { call?: (name: string, args: Record<string, unknown>) => Promise<unknown> }
   ) => {
     if (uploadFails) throw new Error("attachment_too_many")
     uploads.push({ scope, name: file.name, mediaType: file.mediaType, bytes: [...file.bytes] })
+    uploadCalls.push(options?.call)
     return {
       ref: `cognia-upload:${uploads.length}`,
       name: file.name,
@@ -61,6 +81,14 @@ import {
   HostConfigsUnsupportedError,
   __setRemoteHostConfigDepsForTests,
 } from "./remote-host-configs"
+import { transport } from "@/lib/tauri"
+import { taskWorkspaceHostTransport } from "@/lib/task-workspace/origin"
+import { openRemoteHostTarget } from "@/lib/remote-host/target-transport"
+import {
+  clearActiveRuntimeTargetContext,
+  setActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
+import type { Transport } from "@/lib/tauri/transport-types"
 import { acquireManagementChannel } from "@/lib/remote-host/management-channel"
 import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 import {
@@ -76,6 +104,7 @@ import {
   stageRemoteRunAttachments,
   startRemoteExternalTurn,
   subscribeRemoteExternalRun,
+  whenRemoteRunChannelSubscribed,
   type RemoteRunFrame,
 } from "./remote-run-client"
 
@@ -106,6 +135,7 @@ function watch() {
 let restoreDeps: (() => void) | undefined
 
 beforeEach(() => {
+  uploadCalls.length = 0
   localCalls.length = 0
   localFailure = undefined
   __resetRemoteRunOriginsForTests()
@@ -122,8 +152,551 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  __resetRemoteRunOriginsForTests()
+  clearActiveRuntimeTargetContext()
   restoreDeps?.()
   restoreDeps = undefined
+})
+
+function runTransport() {
+  const listeners = new Set<(frame: RemoteRunFrame) => void>()
+  let accepted = true
+  let accept: (() => void) | undefined
+  let pending: Promise<void> | undefined
+  const value = {
+    call: jest.fn(async (command: string) =>
+      command === REMOTE_RUN_COMMANDS.run
+        ? { started: true, runId: "run-1" }
+        : command === REMOTE_RUN_COMMANDS.cancel
+          ? { cancelled: true }
+          : { resolved: true }
+    ) as jest.MockedFunction<Transport["call"]>,
+    subscribe: jest.fn((_topic: string, handler: (frame: RemoteRunFrame) => void) => {
+      listeners.add(handler)
+      return () => listeners.delete(handler)
+    }),
+    whenSubscribed: jest.fn(async () => {
+      await pending
+    }),
+    hasSubscribedChannels: jest.fn(() => accepted),
+    reconnectWs: jest.fn(),
+    reconnectRtc: jest.fn(),
+    destroy: jest.fn(),
+  }
+  return {
+    value,
+    emit: (frame: RemoteRunFrame) => {
+      for (const listener of listeners) listener(frame)
+    },
+    drop: () => {
+      accepted = false
+    },
+    delay: () => {
+      accepted = false
+      pending = new Promise((resolve) => {
+        accept = resolve
+      })
+    },
+    accept: () => {
+      accepted = true
+      accept?.()
+      pending = undefined
+    },
+    listeners,
+  }
+}
+
+const runStamp = { configId: "cfg", revision: "r1", lifecycleGeneration: 1 }
+const runManifest = {
+  schemaVersion: 1,
+  features: {
+    "external-agent.host-configs": { version: 1, operations: Object.values(REMOTE_RUN_COMMANDS) },
+  },
+} as unknown as HostFeatureManifest
+
+describe("retained run channels", () => {
+  function approve() {
+    return __setRemoteHostConfigDepsForTests({
+      issueAdminLease: async (operations) => ({ token: "lease-A", operations, expiresAt: 1 }),
+    })
+  }
+
+  it("ends control_lost after an account switch away and back without accepting the lost terminal", async () => {
+    jest.useFakeTimers()
+    const a = runTransport()
+    const events = jest.fn()
+    const lost = jest.fn()
+    setActiveRuntimeTargetContext("account-A", "host-A", 1)
+    useRemoteHostStore.setState({ activeHostId: "companion:host-A" })
+    const realOpen = jest.requireActual("@/lib/remote-host/target-transport").openRemoteHostTarget
+    jest.mocked(openRemoteHostTarget).mockImplementation((ref, options) =>
+      realOpen(ref, {
+        ...options,
+        createTransport: () => a.value,
+        paired: {
+          loadConfig: () => ({
+            targetId: "host-A",
+            accountId: "account-A",
+            baseUrl: "https://a.example",
+            deviceId: "device-A",
+            serverVersion: "1",
+          }),
+          loadRecord: async () => ({
+            hostId: "host-A",
+            accountNamespace: "account-A",
+            label: "A",
+            createdAt: 1,
+            deviceId: "device-A",
+          }),
+        },
+      })
+    )
+    const restore = approve()
+    try {
+      const { executeOnRemoteHostAgent } = await import("./remote-execute")
+      const run = executeOnRemoteHostAgent("go", {
+        stamp: runStamp,
+        chatSessionId: "chat",
+        newRunId: () => "run-1",
+        onEvent: events,
+        onControlLost: lost,
+      })
+      await whenRemoteRunChannelSubscribed("run-1")
+      await jest.advanceTimersByTimeAsync(0)
+      setActiveRuntimeTargetContext("account-B", "host-B", 2)
+      setActiveRuntimeTargetContext("account-A", "host-A", 3)
+      expect(a.value.destroy).toHaveBeenCalledTimes(1)
+      a.emit(frame({ terminal: "completed" }))
+      expect(events).not.toHaveBeenCalled()
+      await jest.advanceTimersByTimeAsync(61_000)
+      expect(await run).toMatchObject({ success: false, failureReason: "control_lost" })
+      expect(lost).toHaveBeenCalledTimes(1)
+      expect(a.listeners.size).toBe(0)
+      expect(() => remoteExternalDecisionOrigin("run-1:p")).toThrow()
+    } finally {
+      __resetRemoteRunOriginsForTests()
+      restore()
+      jest.useRealTimers()
+      jest.mocked(openRemoteHostTarget).mockImplementation(realOpen)
+      useRemoteHostStore.setState({ activeHostId: null })
+    }
+  })
+
+  it("refuses a changed account before dispatch even when the pinned topic becomes ready", async () => {
+    const a = runTransport()
+    a.delay()
+    setActiveRuntimeTargetContext("account-A", "host-A")
+    const release = jest.fn()
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: { featureManifest: runManifest },
+      transport: a.value,
+      release,
+    } as never)
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      { onEvent() {}, onTerminal() {} },
+      { kind: "remote", hostId: "host-A", accountId: "account-A" }
+    )
+    try {
+      const start = startRemoteExternalTurn({
+        runId: "run-1",
+        chatSessionId: "chat",
+        stamp: runStamp,
+        prompt: "go",
+      })
+      await new Promise((resolve) => setImmediate(resolve))
+      setActiveRuntimeTargetContext("account-B", "host-B")
+      a.accept()
+      await expect(start).rejects.toThrow("another account")
+      expect(a.value.call).not.toHaveBeenCalled()
+    } finally {
+      stop()
+    }
+    await Promise.resolve()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not send after the owner releases its lease during approval", async () => {
+    const a = runTransport()
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: { featureManifest: runManifest },
+      transport: a.value,
+      release: jest.fn(),
+    } as never)
+    let approved!: () => void
+    const restore = __setRemoteHostConfigDepsForTests({
+      issueAdminLease: async (operations) => {
+        await new Promise<void>((resolve) => {
+          approved = resolve
+        })
+        return { token: "lease-A", operations, expiresAt: 1 }
+      },
+    })
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      { onEvent() {}, onTerminal() {} },
+      { kind: "remote", hostId: "host-A" }
+    )
+    try {
+      const start = startRemoteExternalTurn({
+        runId: "run-1",
+        chatSessionId: "chat",
+        stamp: runStamp,
+        prompt: "go",
+      })
+      await new Promise((resolve) => setImmediate(resolve))
+      stop()
+      approved()
+      await expect(start).rejects.toMatchObject({ reason: "host-changed" })
+      expect(a.value.call).not.toHaveBeenCalled()
+    } finally {
+      stop()
+      restore()
+    }
+  })
+
+  it("stages every attachment chunk through the retained Host after a route switch", async () => {
+    const a = runTransport()
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: { featureManifest: runManifest },
+      transport: a.value,
+      release: jest.fn(),
+    } as never)
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      { onEvent() {}, onTerminal() {} },
+      { kind: "remote", hostId: "host-A" }
+    )
+    try {
+      await stageRemoteRunAttachments("run-1", [
+        { source: { type: "base64", mediaType: "image/png", data: "AQID" } },
+      ] as never)
+      useRemoteHostStore.setState({ activeHostId: "host-B" })
+      const call = uploadCalls.at(-1)!
+      expect(call).toBeDefined()
+      await call("session_attachment_upload_chunk", { uploadId: "upload-A", offset: 0 })
+      expect(a.value.call).toHaveBeenCalledWith("session_attachment_upload_chunk", {
+        uploadId: "upload-A",
+        offset: 0,
+      })
+      expect(calls).toEqual([])
+    } finally {
+      stop()
+      useRemoteHostStore.setState({ activeHostId: null })
+    }
+  })
+
+  it("waits for the local IPC listener to attach before sending a turn", async () => {
+    const local = runTransport()
+    let attached!: () => void
+    const subscribeAttached = jest.fn(
+      () =>
+        new Promise<() => void>((resolve) => {
+          attached = () => resolve(() => undefined)
+        })
+    )
+    const hostTransport = jest.mocked(taskWorkspaceHostTransport)
+    const original = hostTransport.getMockImplementation()!
+    hostTransport.mockReturnValue({ ...local.value, subscribeAttached } as unknown as Transport)
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      { onEvent() {}, onTerminal() {} },
+      { kind: "local" }
+    )
+    try {
+      const start = startRemoteExternalTurn({
+        runId: "run-1",
+        chatSessionId: "chat",
+        stamp: runStamp,
+        prompt: "go",
+      })
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(local.value.call).not.toHaveBeenCalled()
+      attached()
+      await start
+      expect(local.value.call).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+      hostTransport.mockImplementation(original)
+    }
+  })
+
+  it("keeps frames, cancel, permission and elicitation on ordinary Host A after selecting B", async () => {
+    const a = runTransport()
+    const release = jest.fn()
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: { featureManifest: runManifest },
+      transport: a.value,
+      release,
+    } as never)
+    const restore = approve()
+    const events = jest.fn()
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      { onEvent: events, onTerminal() {} },
+      { kind: "remote", hostId: "host-A" }
+    )
+    try {
+      await startRemoteExternalTurn({
+        runId: "run-1",
+        chatSessionId: "chat",
+        stamp: runStamp,
+        prompt: "go",
+      })
+      useRemoteHostStore.setState({ activeHostId: "host-B" })
+      a.emit(
+        frame({ event: { type: "permission_request", request: { id: "p" } } as ExternalAgentEvent })
+      )
+      a.emit(
+        frame({
+          seq: 2,
+          event: { type: "elicitation_request", request: { id: "q" } } as ExternalAgentEvent,
+        })
+      )
+      await cancelRemoteExternalTurn("run-1")
+      await resolveRemotePermission("run-1:p", "allow")
+      await resolveRemoteElicitation("run-1:q", { requestId: "q", action: "cancel" })
+      expect(events).toHaveBeenCalledTimes(2)
+      expect(a.value.call.mock.calls.map(([command]) => command)).toEqual([
+        REMOTE_RUN_COMMANDS.run,
+        REMOTE_RUN_COMMANDS.cancel,
+        REMOTE_RUN_COMMANDS.resolve,
+        REMOTE_RUN_COMMANDS.resolve,
+      ])
+      expect(acquireManagementChannel).toHaveBeenCalledTimes(1)
+      expect(release).not.toHaveBeenCalled()
+      stop()
+      await Promise.resolve()
+      expect(release).toHaveBeenCalledTimes(1)
+      expect(a.listeners.size).toBe(0)
+    } finally {
+      stop()
+      useRemoteHostStore.setState({ activeHostId: null })
+      restore()
+    }
+  })
+
+  it("retains a paired run on A after selecting B and invalidates a new device identity", async () => {
+    jest.useFakeTimers()
+    const a = runTransport()
+    const events = jest.fn()
+    const lost = jest.fn()
+    let record = {
+      hostId: "host-A",
+      accountNamespace: "account-A",
+      label: "A",
+      createdAt: 1,
+      deviceId: "device-A",
+    }
+    let config = {
+      targetId: "host-A",
+      baseUrl: "https://a.example",
+      deviceId: "device-A",
+      serverVersion: "1",
+      devicePrivateKeyJwk: { kty: "EC", d: "private" },
+    }
+    setActiveRuntimeTargetContext("account-A", "host-A", 1)
+    const realOpen = jest.requireActual("@/lib/remote-host/target-transport").openRemoteHostTarget
+    jest.mocked(openRemoteHostTarget).mockImplementation((ref, options) =>
+      realOpen(ref, {
+        ...options,
+        createTransport: () => a.value,
+        paired: { loadConfig: () => config, loadRecord: async () => record },
+      })
+    )
+    const restore = __setRemoteHostConfigDepsForTests({
+      hasLocalAuthority: () => false,
+      isRemoteHostActive: () => true,
+      activeHostFeatureManifest: () => runManifest,
+      issueAdminLease: async (operations) => ({ token: "lease-A", operations, expiresAt: 1 }),
+    })
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      { onEvent: events, onTerminal() {}, onControlLost: lost },
+      { kind: "remote", hostId: "companion:host-A", accountId: "account-A" }
+    )
+    try {
+      await startRemoteExternalTurn({
+        runId: "run-1",
+        chatSessionId: "chat",
+        stamp: runStamp,
+        prompt: "go",
+      })
+      setActiveRuntimeTargetContext("account-A", "host-B", 2)
+      config = { ...config, targetId: "host-B", deviceId: "device-B" }
+      a.emit(
+        frame({ event: { type: "permission_request", request: { id: "p" } } as ExternalAgentEvent })
+      )
+      await cancelRemoteExternalTurn("run-1")
+      await resolveRemotePermission("run-1:p", "allow")
+      expect(events).toHaveBeenCalledTimes(1)
+      expect(a.value.call.mock.calls.map(([command]) => command)).toEqual([
+        REMOTE_RUN_COMMANDS.run,
+        REMOTE_RUN_COMMANDS.cancel,
+        REMOTE_RUN_COMMANDS.resolve,
+      ])
+      record = { ...record, deviceId: "new-pairing" }
+      await jest.advanceTimersByTimeAsync(1_000)
+      a.emit(frame({ seq: 2 }))
+      await expect(cancelRemoteExternalTurn("run-1")).rejects.toThrow()
+      expect(events).toHaveBeenCalledTimes(1)
+      expect(lost).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+      await Promise.resolve()
+      restore()
+      jest.useRealTimers()
+      jest.mocked(openRemoteHostTarget).mockImplementation(realOpen)
+    }
+    expect(a.value.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps a local run's frames and controls on local IPC while a remote Host is active", async () => {
+    const local = runTransport()
+    const hostTransport = jest.mocked(taskWorkspaceHostTransport)
+    const original = hostTransport.getMockImplementation()!
+    hostTransport.mockReturnValue(local.value as unknown as Transport)
+    const events = jest.fn()
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      { onEvent: events, onTerminal() {} },
+      { kind: "local" }
+    )
+    try {
+      await startRemoteExternalTurn({
+        runId: "run-1",
+        chatSessionId: "chat",
+        stamp: runStamp,
+        prompt: "go",
+      })
+      useRemoteHostStore.setState({ activeHostId: "host-B" })
+      local.emit(
+        frame({ event: { type: "permission_request", request: { id: "p" } } as ExternalAgentEvent })
+      )
+      await cancelRemoteExternalTurn("run-1")
+      await resolveRemotePermission("run-1:p", "allow")
+      expect(events).toHaveBeenCalledTimes(1)
+      expect(local.value.call.mock.calls.map(([command]) => command)).toEqual([
+        REMOTE_RUN_COMMANDS.run,
+        REMOTE_RUN_COMMANDS.cancel,
+        REMOTE_RUN_COMMANDS.resolve,
+      ])
+      expect(acquireManagementChannel).not.toHaveBeenCalled()
+    } finally {
+      stop()
+      hostTransport.mockImplementation(original)
+      useRemoteHostStore.setState({ activeHostId: null })
+    }
+  })
+
+  it("sends only after the pinned topic is accepted on an RTC-only connection", async () => {
+    const a = runTransport()
+    a.delay()
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: { featureManifest: runManifest },
+      transport: a.value,
+      release: jest.fn(),
+    } as never)
+    const restore = approve()
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      { onEvent() {}, onTerminal() {} },
+      { kind: "remote", hostId: "host-A" }
+    )
+    try {
+      const start = startRemoteExternalTurn({
+        runId: "run-1",
+        chatSessionId: "chat",
+        stamp: runStamp,
+        prompt: "go",
+      })
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(a.value.call).not.toHaveBeenCalled()
+      expect(a.listeners.size).toBe(1)
+      a.accept()
+      await start
+      expect(a.value.call).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+      restore()
+    }
+  })
+
+  it("refuses a topic that was answered but rejected instead of treating the wait as acceptance", async () => {
+    const a = runTransport()
+    a.drop()
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: { featureManifest: runManifest },
+      transport: a.value,
+      release: jest.fn(),
+    } as never)
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      { onEvent() {}, onTerminal() {} },
+      { kind: "remote", hostId: "host-A" }
+    )
+    try {
+      await expect(
+        startRemoteExternalTurn({
+          runId: "run-1",
+          chatSessionId: "chat",
+          stamp: runStamp,
+          prompt: "go",
+        })
+      ).rejects.toMatchObject({ reason: "host-unreachable" })
+      expect(a.value.call).not.toHaveBeenCalled()
+    } finally {
+      stop()
+    }
+  })
+
+  it("marks control lost, reconnects to the same channel, and resumes with sequence gaps without a terminal", async () => {
+    jest.useFakeTimers()
+    const a = runTransport()
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: { featureManifest: runManifest },
+      transport: a.value,
+      release: jest.fn(),
+    } as never)
+    const lost = jest.fn(),
+      reconnected = jest.fn(),
+      terminal = jest.fn(),
+      gap = jest.fn(),
+      events = jest.fn()
+    const stop = subscribeRemoteExternalRun(
+      "run-1",
+      {
+        onEvent: events,
+        onTerminal: terminal,
+        onGap: gap,
+        onControlLost: lost,
+        onReconnected: reconnected,
+      },
+      { kind: "remote", hostId: "host-A" }
+    )
+    try {
+      await whenRemoteRunChannelSubscribed("run-1")
+      a.emit(frame())
+      a.drop()
+      await jest.advanceTimersByTimeAsync(1_000)
+      expect(lost).toHaveBeenCalledTimes(1)
+      expect(terminal).not.toHaveBeenCalled()
+      expect(a.value.reconnectWs).toHaveBeenCalledTimes(1)
+      expect(acquireManagementChannel).toHaveBeenCalledTimes(1)
+      a.accept()
+      await jest.advanceTimersByTimeAsync(1_000)
+      expect(reconnected).toHaveBeenCalledTimes(1)
+      a.emit(frame({ seq: 3 }))
+      expect(gap).toHaveBeenCalledWith(2, 3)
+      expect(events).toHaveBeenCalledTimes(2)
+      stop()
+      a.emit(frame({ seq: 4, terminal: "completed" }))
+      expect(terminal).not.toHaveBeenCalled()
+    } finally {
+      stop()
+      jest.useRealTimers()
+    }
+  })
 })
 
 describe("host support", () => {
@@ -626,7 +1199,11 @@ describe("control", () => {
           },
         },
       },
-      transport: { call: hostCall },
+      transport: {
+        call: hostCall,
+        subscribe: (...args: Parameters<typeof transport.subscribe>) =>
+          transport.subscribe(...args),
+      },
       release,
     } as never)
     const restore = __setRemoteHostConfigDepsForTests({
@@ -683,7 +1260,11 @@ describe("control", () => {
     } as unknown as HostFeatureManifest
     jest.mocked(acquireManagementChannel).mockResolvedValue({
       host: { id: "host-A", featureManifest: manifest },
-      transport: { call: hostCall },
+      transport: {
+        call: hostCall,
+        subscribe: (...args: Parameters<typeof transport.subscribe>) =>
+          transport.subscribe(...args),
+      },
       release: jest.fn(),
     } as never)
     const restore = __setRemoteHostConfigDepsForTests({
@@ -848,7 +1429,9 @@ describe("whenRemoteRunChannelSubscribed", () => {
     transport.whenSubscribed = whenSubscribed
     try {
       const { whenRemoteRunChannelSubscribed } = await import("./remote-run-client")
-      await whenRemoteRunChannelSubscribed()
+      const stop = subscribeRemoteExternalRun("ready-run", { onEvent() {}, onTerminal() {} })
+      await whenRemoteRunChannelSubscribed("ready-run")
+      stop()
       expect(whenSubscribed).toHaveBeenCalledWith(["external-agent://session-event"])
     } finally {
       delete transport.whenSubscribed

@@ -210,7 +210,10 @@ export function closeManagementChannel(ref: string, deps: ManagementChannelDeps 
 export function closeStaleManagementChannels(deps: ManagementChannelDeps = {}): void {
   const known = new Set(useRemoteHostStore.getState().hosts.map((host) => host.id))
   for (const [hostRef, entry] of [...channels]) {
-    if (!known.has(hostRef) || isStale(hostRef, entry)) closeEntry(hostRef, entry, deps)
+    const pairedId = pairedHostIdOf(hostRef)
+    const paired = pairedId && isPairedHostTargetCurrent(pairedId, entry.deviceId)
+    if ((!known.has(hostRef) && !paired) || isStale(hostRef, entry))
+      closeEntry(hostRef, entry, deps)
   }
 }
 

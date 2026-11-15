@@ -368,6 +368,7 @@ export class RunAndCaptureError extends Error {
       | "no_assistant_text"
       | "aborted"
       | "send_failed"
+      | "control_lost"
       | "sidecar_exited",
     meta?: { httpStatus?: number; retryAfterMs?: number; partial?: RunAndCapturePartial }
   ) {
@@ -2359,6 +2360,8 @@ async function captureBoundHostExternalReply(
     cancelRemoteExternalTurn,
     resolveRemotePermission,
   } = await import("@/lib/ai/agent/external/runtimes/remote/remote-run-client")
+  const { createRemoteRunControlLossGuard } =
+    await import("@/lib/ai/agent/external/runtimes/remote/remote-execute")
   const { remoteDecisionId } =
     await import("@/lib/ai/agent/external/runtimes/remote/remote-run-service")
   const { canonicalEventFromExternalEvent, captureEventFromCanonical } =
@@ -2412,16 +2415,31 @@ async function captureBoundHostExternalReply(
   })
   // A start RPC can fail after a synchronous event has already rejected capture.
   void finished.catch(() => undefined)
+  let giveUpAdmission!: (error: RunAndCaptureError) => void
+  const controlLostCleanup = new Promise<never>((_resolve, no) => {
+    giveUpAdmission = no
+  })
+  void controlLostCleanup.catch(() => undefined)
   const fail = (
     message: string,
-    code: "session_error" | "aborted" | "send_failed" = "session_error"
+    code: "session_error" | "aborted" | "send_failed" | "control_lost" = "session_error"
   ) => {
     if (settled) return
     settled = true
-    shouldCancel = true
-    if (started) void cancelRemoteExternalTurn(runId).catch(() => undefined)
+    shouldCancel = code !== "control_lost"
+    if (started && shouldCancel) void cancelRemoteExternalTurn(runId).catch(() => undefined)
     reject(new RunAndCaptureError(message, code))
   }
+  const controlLoss = createRemoteRunControlLossGuard({
+    onGiveUp: () => {
+      const message = "control_lost: control is unavailable; the remote run may still be running"
+      fail(message, "control_lost")
+      // An earlier abort/timeout may already have settled `finished` while
+      // admission is still pending. Its ownership must still have a bound.
+      shouldCancel = false
+      giveUpAdmission(new RunAndCaptureError(message, "control_lost"))
+    },
+  })
   const armIdle = () => {
     clearTimeout(idle)
     if (cap?.idleTimeoutMs && busy.size === 0 && !settled) {
@@ -2430,6 +2448,8 @@ async function captureBoundHostExternalReply(
   }
   const abort = () => fail("External agent turn aborted", "aborted")
   const stop = subscribeRemoteExternalRun(runId, {
+    onControlLost: controlLoss.onControlLost,
+    onReconnected: controlLoss.onReconnected,
     onGap: () => fail("External agent stream has missing events"),
     onEvent: (event) => {
       if (settled) return
@@ -2615,8 +2635,15 @@ async function captureBoundHostExternalReply(
     if (cap?.signal?.aborted) abort()
     if (timeoutMs > 0) timer = setTimeout(() => fail("External agent turn timed out"), timeoutMs)
     if (!settled) {
-      const dispatch = (prepared = options) =>
-        startRemoteExternalTurn({
+      const dispatch = (prepared = options) => {
+        if (settled)
+          return Promise.reject(
+            new RunAndCaptureError(
+              "Capture ownership ended before dispatch",
+              shouldCancel ? "aborted" : "control_lost"
+            )
+          )
+        return startRemoteExternalTurn({
           runId,
           chatSessionId: sessionId,
           stamp: {
@@ -2631,38 +2658,46 @@ async function captureBoundHostExternalReply(
           reasoningEffort: prepared?.requestedEffort ?? prepared?.effort,
           externalSessionId: prepared?.resumeSessionId,
         })
-      const result =
+      }
+      const admission =
         cap?.beforeSend || cap?.currentMessageId
-          ? await (
-              await import("@/lib/chat/transcript/revision-events")
-            ).withTranscriptRuntimeLock(sessionId, async () => {
-              const prepared = cap.currentMessageId
-                ? await (
-                    await import("@/hooks/chat/claude-chat-send-options")
-                  ).prepareTranscriptRuntimeSend(sessionId, options ?? {}, {
-                    currentMessageId: cap.currentMessageId,
-                    executionRunId:
-                      cap.outboundPolicy?.executionRunId ??
-                      toolCallExecutionRunId(
-                        sessionId,
-                        options?.turnId,
-                        options?.execution?.identity?.attemptId
-                      ),
-                  })
-                : options
-              await cap.beforeSend?.()
-              if (cap.signal?.aborted)
-                throw new RunAndCaptureError("aborted before send", "aborted")
-              return dispatch(prepared)
-            })
-          : await dispatch()
-      started = result.started
-      if (started && shouldCancel) void cancelRemoteExternalTurn(runId).catch(() => undefined)
-      if (!result.started)
-        fail(`External agent admission refused: ${JSON.stringify(result.refusal)}`, "send_failed")
+          ? (await import("@/lib/chat/transcript/revision-events")).withTranscriptRuntimeLock(
+              sessionId,
+              async () => {
+                const prepared = cap.currentMessageId
+                  ? await (
+                      await import("@/hooks/chat/claude-chat-send-options")
+                    ).prepareTranscriptRuntimeSend(sessionId, options ?? {}, {
+                      currentMessageId: cap.currentMessageId,
+                      executionRunId:
+                        cap.outboundPolicy?.executionRunId ??
+                        toolCallExecutionRunId(
+                          sessionId,
+                          options?.turnId,
+                          options?.execution?.identity?.attemptId
+                        ),
+                    })
+                  : options
+                await cap.beforeSend?.()
+                if (cap.signal?.aborted)
+                  throw new RunAndCaptureError("aborted before send", "aborted")
+                return dispatch(prepared)
+              }
+            )
+          : dispatch()
+      const dispatching = admission.then(async (result) => {
+        started = result.started
+        if (started && shouldCancel) await cancelRemoteExternalTurn(runId).catch(() => undefined)
+        if (!result.started)
+          fail(`External agent admission refused: ${JSON.stringify(result.refusal)}`, "send_failed")
+      })
+      // Keep the pin for late cancellation after abort/timeout, until admission
+      // answers or the independent control-loss bound gives up ownership.
+      await Promise.race([dispatching, controlLostCleanup])
     }
     return await finished
   } finally {
+    controlLoss.dispose()
     clearTimeout(timer)
     clearTimeout(idle)
     releasePersonalEgress()

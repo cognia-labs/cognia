@@ -193,6 +193,47 @@ describe("the refusal is structured and never a fallback", () => {
 })
 
 describe("commands", () => {
+  it("approves and sends on a retained run authority after the active Host changes", async () => {
+    let current = true
+    const targetCall = jest.fn(async () => ({ started: true }) as never)
+    const close = jest.fn()
+    const target = {
+      transport: { call: targetCall },
+      close,
+      assertCurrent() {
+        if (!current) throw new Error("account changed")
+      },
+      assertSupports: jest.fn(),
+    }
+    setup({
+      captureOrigin: () => ({ kind: "remote", hostId: "host-B" }),
+      issueAdminLease: async (operations, _ttl, transport) => {
+        expect(transport).toBe(target.transport)
+        return { token: "lease-A", operations, expiresAt: 1 }
+      },
+    })
+    await callApprovedHostConfigCommand(
+      HOST_CONFIG_COMMANDS.run,
+      { runId: "run-A" },
+      { kind: "remote", hostId: "host-A" },
+      target
+    )
+    expect(targetCall).toHaveBeenCalledWith(HOST_CONFIG_COMMANDS.run, {
+      runId: "run-A",
+      adminLease: "lease-A",
+    })
+    expect(close).not.toHaveBeenCalled()
+    current = false
+    await expect(
+      callApprovedHostConfigCommand(
+        HOST_CONFIG_COMMANDS.run,
+        {},
+        { kind: "remote", hostId: "host-A" },
+        target
+      )
+    ).rejects.toThrow("account changed")
+    expect(targetCall).toHaveBeenCalledTimes(1)
+  })
   it.each([HOST_CONFIG_COMMANDS.run, HOST_CONFIG_COMMANDS.sessionMutate])(
     "refuses %s after the routed event origin changes during approval",
     async (operation) => {

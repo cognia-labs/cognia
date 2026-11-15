@@ -16,11 +16,17 @@
  */
 
 import { getActiveRemoteTransport } from "@/lib/tauri/transport-routing"
-import { captureTaskWorkspaceOrigin, sameTaskWorkspaceOrigin } from "@/lib/task-workspace/origin"
+import {
+  captureTaskWorkspaceOrigin,
+  sameTaskWorkspaceOrigin,
+  openTaskWorkspaceOrigin,
+  taskWorkspaceHostTransport,
+} from "@/lib/task-workspace/origin"
+import { supportsHostFeatureOperation } from "@/lib/platform/host-feature-manifest"
+import type { Transport } from "@/lib/tauri/transport-types"
 import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
 import type { ExternalAgentManager } from "../../manager"
 import type { RemoteSessionTarget, RemoteSessionOperation } from "./remote-run-service"
-import { transport } from "@/lib/tauri"
 import type {
   AcpElicitationResponse,
   ExternalAgentCogniaModelBinding,
@@ -40,7 +46,11 @@ import {
   type RemoteRunFrame,
 } from "./remote-run-service"
 import {
+  HOST_CONFIGS_FEATURE,
   HOST_CONFIG_COMMANDS,
+  HostConfigsUnsupportedError,
+  type HostConfigTarget,
+  type HostConfigCommand,
   HOST_CONFIG_CAPABILITIES,
   HostNativeSubagentUpdateRequiredError,
   HostConfigTargetError,
@@ -57,10 +67,15 @@ export type { RemoteAttachmentsWithheldFrame, RemoteRunAttachment, RemoteRunFram
 // Subscription ownership bounds the lifetime of these pins. In particular,
 // capture callers that only retain a run/decision id still use the dispatch
 // origin; a missing pin is an error, never permission to consult active routing.
+type RunAuthority = Awaited<ReturnType<typeof openTaskWorkspaceOrigin>>
 interface RunOriginPin {
   origin: TaskWorkspaceOrigin
   refs: number
   decisions: Set<string>
+  target: Promise<RunAuthority & HostConfigTarget>
+  ready: Promise<void>
+  sessionResetSupported: boolean
+  stops: Set<() => void>
 }
 const runOrigins = new Map<string, RunOriginPin>()
 const decisionOrigins = new Map<string, RunOriginPin>()
@@ -78,6 +93,7 @@ export function remoteExternalDecisionOrigin(decisionId: string): TaskWorkspaceO
 }
 
 export function __resetRemoteRunOriginsForTests(): void {
+  for (const pin of runOrigins.values()) for (const stop of pin.stops) stop()
   runOrigins.clear()
   decisionOrigins.clear()
 }
@@ -117,6 +133,9 @@ export interface RemoteRunSubscription {
    * one option that is always wrong.
    */
   onGap?: (expected: number, received: number) => void
+  /** Loss of control is not evidence that the remote process stopped. */
+  onControlLost?: (error?: unknown) => void
+  onReconnected?: () => void
 }
 
 /**
@@ -130,17 +149,57 @@ export function subscribeRemoteExternalRun(
   handlers: RemoteRunSubscription,
   origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): () => void {
-  const pin = runOrigins.get(runId) ?? {
+  const existing = runOrigins.get(runId)
+  if (existing && !sameTaskWorkspaceOrigin(existing.origin, origin))
+    throw new HostConfigTargetError("host-changed", origin)
+  const support = new Map(
+    Object.values(HOST_CONFIG_COMMANDS).map((op) => [op, hostConfigsAvailability(op)])
+  )
+  const local: RunAuthority | undefined =
+    !existing && origin.kind === "local"
+      ? {
+          origin,
+          transport: taskWorkspaceHostTransport(),
+          assertCurrent() {},
+          close() {},
+        }
+      : undefined
+  const pin: RunOriginPin = existing ?? {
     origin: { ...origin },
     refs: 0,
-    decisions: new Set<string>(),
+    decisions: new Set(),
+    stops: new Set(),
+    target: Promise.resolve(local ?? openTaskWorkspaceOrigin(origin, { retainedRun: true })).then(
+      (authority) => ({
+        ...authority,
+        assertCurrent() {
+          if (pin.refs === 0) throw new HostConfigTargetError("host-changed", origin)
+          authority.assertCurrent()
+        },
+        assertSupports(operation: HostConfigCommand) {
+          if (origin.kind === "local") return
+          const manifest = authority.host?.featureManifest
+          const availability = manifest
+            ? supportsHostFeatureOperation(manifest, HOST_CONFIGS_FEATURE, operation)
+              ? { ok: true as const }
+              : { ok: false as const, reason: "unsupported" as const }
+            : support.get(operation)!
+          if (!availability.ok)
+            throw new HostConfigsUnsupportedError(availability.reason, operation)
+        },
+      })
+    ),
+    ready: Promise.resolve(),
+    sessionResetSupported: hostSupportsSessionResetTurns(),
   }
   pin.refs += 1
   runOrigins.set(runId, pin)
   let lastSeq = 0
   let settled = false
 
-  const unsubscribe = transport.subscribe<RemoteRunFrame>(EXTERNAL_RUN_EVENT_TOPIC, (frame) => {
+  let stopped = false
+  const receive = (frame: RemoteRunFrame) => {
+    if (stopped) return
     if (!frame || frame.runId !== runId) return
     // A terminal frame is authoritative and singular. Anything after it is a
     // replay of a run this client has already finished rendering.
@@ -169,20 +228,110 @@ export function subscribeRemoteExternalRun(
       settled = true
       handlers.onTerminal(frame.terminal, frame.error)
     }
+  }
+  let unsubscribe: (() => void) | undefined
+  let timer: ReturnType<typeof setInterval> | undefined
+  let lost = false
+  let checking = false
+  const controlLost = (error?: unknown) => {
+    if (stopped || settled || lost) return
+    lost = true
+    handlers.onControlLost?.(error)
+  }
+  const attach = (target: RunAuthority) => {
+    if (stopped) return
+    target.assertCurrent()
+    const receiveCurrent = (frame: RemoteRunFrame) => {
+      try {
+        target.assertCurrent()
+      } catch (error) {
+        controlLost(error)
+        return
+      }
+      receive(frame)
+    }
+    if (target.transport.subscribeAttached) {
+      return target.transport
+        .subscribeAttached(EXTERNAL_RUN_EVENT_TOPIC, receiveCurrent)
+        .then((detach) => {
+          if (stopped) detach()
+          else unsubscribe = detach
+        })
+    }
+    unsubscribe = target.transport.subscribe(EXTERNAL_RUN_EVENT_TOPIC, receiveCurrent)
+  }
+  const attached = local ? attach(local) : undefined
+  const ready = pin.target.then(async (target) => {
+    if (stopped) return
+    if (local) await attached
+    else await attach(target)
+    await accepted(target)
+    if (stopped || settled || !target.transport.hasSubscribedChannels) return
+    timer = setInterval(() => {
+      if (checking || stopped || settled) return
+      checking = true
+      void (async () => {
+        target.assertCurrent()
+        if (!target.transport.hasSubscribedChannels!([EXTERNAL_RUN_EVENT_TOPIC])) {
+          const wasLost = lost
+          controlLost()
+          // Companion already retries its lanes. Wake a fixed-config connection
+          // once on loss; never acquire or follow a replacement active route.
+          if (!wasLost) {
+            const connection = target.transport as Transport & {
+              reconnectWs?: () => void
+              reconnectRtc?: () => unknown
+            }
+            connection.reconnectWs?.()
+            connection.reconnectRtc?.()
+          }
+          await accepted(target)
+        }
+        if (lost && !stopped && !settled) {
+          lost = false
+          handlers.onReconnected?.()
+        }
+      })()
+        .catch(controlLost)
+        .finally(() => {
+          checking = false
+        })
+    }, 1_000)
+    ;(timer as { unref?: () => void }).unref?.()
   })
-  let stopped = false
-  return () => {
+  // A synchronous subscribe API still exposes acquisition/readiness failures
+  // to its owner, without an unhandled rejection for capture-only callers.
+  void ready.catch(controlLost)
+  pin.ready = Promise.all([pin.ready, ready]).then(() => undefined)
+  void pin.ready.catch(() => undefined)
+  const stop = () => {
     if (stopped) return
     stopped = true
-    unsubscribe()
+    if (timer) clearInterval(timer)
+    unsubscribe?.()
+    pin.stops.delete(stop)
     pin.refs -= 1
     if (pin.refs === 0 && runOrigins.get(runId) === pin) {
       runOrigins.delete(runId)
+      void pin.target.then((target) => target.close()).catch(() => undefined)
       for (const decisionId of pin.decisions) {
         if (decisionOrigins.get(decisionId) === pin) decisionOrigins.delete(decisionId)
       }
     }
   }
+  pin.stops.add(stop)
+  return stop
+}
+
+async function accepted(target: RunAuthority): Promise<void> {
+  target.assertCurrent()
+  await target.transport.whenSubscribed?.([EXTERNAL_RUN_EVENT_TOPIC])
+  target.assertCurrent()
+  if (
+    target.transport.hasSubscribedChannels &&
+    !target.transport.hasSubscribedChannels([EXTERNAL_RUN_EVENT_TOPIC])
+  )
+    throw new HostConfigTargetError("host-unreachable", target.origin)
 }
 
 /**
@@ -197,10 +346,15 @@ export function subscribeRemoteExternalRun(
  * case the turn never settled. Transports without the control frame (Tauri,
  * the CLI stdio bridge) resolve immediately.
  */
-export async function whenRemoteRunChannelSubscribed(): Promise<void> {
-  const ready = (transport as { whenSubscribed?: (channels: readonly string[]) => Promise<void> })
-    .whenSubscribed
-  if (typeof ready === "function") await ready.call(transport, [EXTERNAL_RUN_EVENT_TOPIC])
+export async function whenRemoteRunChannelSubscribed(runId?: string): Promise<void> {
+  if (runId) {
+    const pin = runOrigins.get(runId)
+    if (!pin) throw new HostConfigTargetError("host-changed")
+    await pin.ready
+    await accepted(await pin.target)
+  } else {
+    await Promise.all([...runOrigins.keys()].map((id) => whenRemoteRunChannelSubscribed(id)))
+  }
 }
 
 /** The three binding fields by name, so nothing else on the object rides along. */
@@ -227,6 +381,7 @@ export async function stageRemoteRunAttachments(
   runId: string,
   images: readonly ExternalAgentImageContent[]
 ): Promise<RemoteRunAttachment[]> {
+  const targetPromise = runOrigins.get(runId)?.target
   const [{ uploadSessionAttachment }, { decodeDataUrl }] = await Promise.all([
     import("@/lib/companion/attachment-upload-client"),
     import("@/lib/utils/image-bytes"),
@@ -234,17 +389,27 @@ export async function stageRemoteRunAttachments(
   if (images.length > REMOTE_RUN_MAX_ATTACHMENTS) {
     throw new Error(`A remote turn takes at most ${REMOTE_RUN_MAX_ATTACHMENTS} images`)
   }
+  const target = await targetPromise
   const staged: RemoteRunAttachment[] = []
   for (const [index, image] of images.entries()) {
     const { data, mediaType } = image.source
     const decoded = data ? decodeDataUrl(`data:${mediaType};base64,${data}`) : null
     if (!decoded) throw new Error("A remote turn can only stage inline image bytes")
     const extension = mediaType.split("/")[1]?.replace("jpeg", "jpg") ?? "img"
-    const uploaded = await uploadSessionAttachment(remoteRunAttachmentScope(runId, index), {
-      name: `image-${index + 1}.${extension}`,
-      mediaType,
-      bytes: decoded.bytes,
-    })
+    const uploaded = await uploadSessionAttachment(
+      remoteRunAttachmentScope(runId, index),
+      { name: `image-${index + 1}.${extension}`, mediaType, bytes: decoded.bytes },
+      target
+        ? {
+            call: async (command, args) => {
+              target.assertCurrent()
+              const result = await target.transport.call(command, args)
+              target.assertCurrent()
+              return result
+            },
+          }
+        : undefined
+    )
     staged.push({ ref: uploaded.ref, name: uploaded.name, mediaType: uploaded.mediaType })
   }
   return staged
@@ -291,8 +456,10 @@ export async function startRemoteExternalTurn(input: {
   const pin = runOrigins.get(input.runId)
   if (pin && !sameTaskWorkspaceOrigin(origin, pin.origin))
     throw new HostConfigTargetError("host-changed", origin)
+  if (pin) await whenRemoteRunChannelSubscribed(input.runId)
   const resetExternalSession =
-    input.resetExternalSession === true && hostSupportsSessionResetTurns()
+    input.resetExternalSession === true &&
+    (pin?.sessionResetSupported ?? hostSupportsSessionResetTurns())
   // Starting a turn is an interactive approval, like the configuration writes
   // beside it. `callHostConfigCommand` checks the handshake but attaches no
   // lease, and the host refuses an interactive command that arrives without
@@ -331,7 +498,8 @@ export async function startRemoteExternalTurn(input: {
           }
         : {}),
     },
-    origin
+    origin,
+    pin ? await pin.target : undefined
   )
 
   if (result.started && result.runId) {
@@ -362,7 +530,8 @@ export async function cancelRemoteExternalTurn(
   const result = await callHostConfigCommandAtOrigin<{ cancelled: boolean }>(
     origin,
     REMOTE_RUN_COMMANDS.cancel,
-    { runId }
+    { runId },
+    await pinnedTarget(runOrigins.get(runId), origin)
   )
   return result.cancelled === true
 }
@@ -388,6 +557,13 @@ export async function resolveRemoteElicitation(
   return resolve(origin, { decisionId, elicitation: response })
 }
 
+async function pinnedTarget(pin: RunOriginPin | undefined, origin: TaskWorkspaceOrigin) {
+  if (!pin) return undefined
+  if (!sameTaskWorkspaceOrigin(pin.origin, origin))
+    throw new HostConfigTargetError("host-changed", origin)
+  return pin.target
+}
+
 async function resolve(
   origin: TaskWorkspaceOrigin,
   payload: Record<string, unknown>
@@ -395,7 +571,8 @@ async function resolve(
   const result = await callHostConfigCommandAtOrigin<{ resolved: boolean; reason?: string }>(
     origin,
     REMOTE_RUN_COMMANDS.resolve,
-    payload
+    payload,
+    await pinnedTarget(decisionOrigins.get(String(payload.decisionId)), origin)
   )
   if (result.resolved) return { resolved: true }
   return {
@@ -494,7 +671,7 @@ export async function watchRemoteSession(
   const unsubscribe = subscribeRemoteExternalRun(watchId, handlers, origin)
   let timer: ReturnType<typeof setInterval> | undefined
   try {
-    await whenRemoteRunChannelSubscribed()
+    await whenRemoteRunChannelSubscribed(watchId)
     assertTarget()
     const initial = await callRemoteSessionOperation<{
       session: import("@/types/agent/external-agent").ExternalAgentSession

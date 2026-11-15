@@ -4143,6 +4143,13 @@ describe("subscribeCaptureFromEnvelopes (ADR-0090 Phase 3)", () => {
 
 jest.mock("@/lib/ai/agent/external/runtimes/remote/remote-run-service", () => ({
   remoteDecisionId: (runId: string, requestId: string) => `${runId}:${requestId}`,
+  EXTERNAL_RUN_EVENT_TOPIC: "external-agent://session-event",
+}))
+jest.mock("@/lib/remote-host/management-channel", () => ({
+  ...jest.requireActual("@/lib/remote-host/management-channel"),
+  acquireManagementChannel: jest.fn(
+    jest.requireActual("@/lib/remote-host/management-channel").acquireManagementChannel
+  ),
 }))
 const getRemoteConfigMock = jest.fn()
 const startExternalTurnMock = jest.fn()
@@ -4154,15 +4161,24 @@ let externalHandlers:
   | import("@/lib/ai/agent/external/runtimes/remote/remote-run-client").RemoteRunSubscription
   | undefined
 const stopExternalMock = jest.fn()
+let usePinnedExternalSubscription = false
+let beforePinnedExternalSubscribe: (() => void) | undefined
 jest.mock("@/lib/ai/agent/external/runtimes/remote/remote-host-configs", () => ({
+  ...jest.requireActual("@/lib/ai/agent/external/runtimes/remote/remote-host-configs"),
   getRemoteHostConfig: (...args: unknown[]) => getRemoteConfigMock(...args),
 }))
 jest.mock("@/lib/ai/agent/external/runtimes/remote/remote-run-client", () => ({
   subscribeRemoteExternalRun: (
-    _id: string,
+    runId: string,
     handlers: import("@/lib/ai/agent/external/runtimes/remote/remote-run-client").RemoteRunSubscription
   ) => {
     externalHandlers = handlers
+    if (usePinnedExternalSubscription) {
+      beforePinnedExternalSubscribe?.()
+      return jest
+        .requireActual("@/lib/ai/agent/external/runtimes/remote/remote-run-client")
+        .subscribeRemoteExternalRun(runId, handlers, { kind: "remote", hostId: "capture-host" })
+    }
     return stopExternalMock
   },
   startRemoteExternalTurn: (...args: unknown[]) => startExternalTurnMock(...args),
@@ -4176,6 +4192,8 @@ describe("host-owned external agent capture", () => {
   beforeEach(hostRunFixture.restore)
   afterAll(hostRunFixture.dispose)
   beforeEach(() => {
+    usePinnedExternalSubscription = false
+    beforePinnedExternalSubscribe = undefined
     externalHandlers = undefined
     getRemoteConfigMock.mockResolvedValue({
       configId: "pi-1",
@@ -4186,6 +4204,274 @@ describe("host-owned external agent capture", () => {
     getRemoteConfigMock.mockClear()
     stopExternalMock.mockClear()
     cancelExternalTurnMock.mockClear()
+  })
+
+  it("releases the real subscription, run pin and management lease after unbounded capture loses control", async () => {
+    const { acquireManagementChannel } = await import("@/lib/remote-host/management-channel")
+    const client = jest.requireActual<
+      typeof import("@/lib/ai/agent/external/runtimes/remote/remote-run-client")
+    >("@/lib/ai/agent/external/runtimes/remote/remote-run-client")
+    const release = jest.fn()
+    const unsubscribe = jest.fn()
+    let connected = true
+    const transport = {
+      call: jest.fn(),
+      subscribe: jest.fn(() => unsubscribe),
+      whenSubscribed: jest.fn(async () => undefined),
+      hasSubscribedChannels: jest.fn(() => connected),
+    }
+    jest
+      .mocked(acquireManagementChannel)
+      .mockResolvedValueOnce({ host: { id: "capture-host" }, transport, release } as never)
+    usePinnedExternalSubscription = true
+    beforePinnedExternalSubscribe = () =>
+      jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] })
+    let admitted!: () => void
+    const admission = new Promise<void>((resolve) => {
+      admitted = resolve
+    })
+    startExternalTurnMock.mockImplementation(async () => {
+      admitted()
+      return { started: true }
+    })
+    const capture = runAndCaptureAssistantReply(
+      SESSION,
+      "hello",
+      { provider: "cognia:external-agent:pi-1", turnId: "capture-control-loss" },
+      { execution: { skip: true }, timeoutMs: 0, idleTimeoutMs: 0 }
+    )
+    const failed = expect(capture).rejects.toMatchObject({ code: "control_lost" })
+    await waitForCapturePhase(admission, capture)
+    try {
+      await client.whenRemoteRunChannelSubscribed("capture-control-loss")
+      connected = false
+      await jest.advanceTimersByTimeAsync(61_000)
+      await failed
+      expect(unsubscribe).toHaveBeenCalledTimes(1)
+      expect(release).toHaveBeenCalledTimes(1)
+      expect(() => client.remoteExternalRunOrigin("capture-control-loss")).toThrow()
+      expect(cancelExternalTurnMock).not.toHaveBeenCalled()
+      const polls = transport.hasSubscribedChannels.mock.calls.length
+      await jest.advanceTimersByTimeAsync(60_000)
+      expect(transport.hasSubscribedChannels).toHaveBeenCalledTimes(polls)
+    } finally {
+      client.__resetRemoteRunOriginsForTests()
+      usePinnedExternalSubscription = false
+      beforePinnedExternalSubscribe = undefined
+      jest.useRealTimers()
+    }
+  })
+
+  it("ends control_lost without a capture timeout and releases its run ownership", async () => {
+    let admitted!: () => void
+    const admission = new Promise<void>((resolve) => {
+      admitted = resolve
+    })
+    startExternalTurnMock.mockImplementation(async () => {
+      admitted()
+      return { started: true }
+    })
+    const capture = runAndCaptureAssistantReply(
+      SESSION,
+      "hello",
+      { provider: "cognia:external-agent:pi-1" },
+      { execution: { skip: true }, timeoutMs: 0, idleTimeoutMs: 0 }
+    )
+    const failed = expect(capture).rejects.toMatchObject({ code: "control_lost" })
+    await waitForCapturePhase(admission, capture)
+    jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] })
+    try {
+      expect(externalHandlers).toBeDefined()
+      externalHandlers!.onControlLost?.(new Error("offline"))
+      await jest.advanceTimersByTimeAsync(59_999)
+      expect(stopExternalMock).not.toHaveBeenCalled()
+      await jest.advanceTimersByTimeAsync(1)
+      await failed
+      expect(stopExternalMock).toHaveBeenCalledTimes(1)
+      expect(cancelExternalTurnMock).not.toHaveBeenCalled()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("keeps its real origin pin until a late admission can be cancelled after abort", async () => {
+    const { acquireManagementChannel } = await import("@/lib/remote-host/management-channel")
+    const client = jest.requireActual<
+      typeof import("@/lib/ai/agent/external/runtimes/remote/remote-run-client")
+    >("@/lib/ai/agent/external/runtimes/remote/remote-run-client")
+    const release = jest.fn()
+    const call = jest.fn(async () => ({ cancelled: true }))
+    const transport = {
+      call,
+      subscribe: jest.fn(() => jest.fn()),
+      whenSubscribed: jest.fn(async () => undefined),
+      hasSubscribedChannels: jest.fn(() => true),
+    }
+    jest.mocked(acquireManagementChannel).mockResolvedValueOnce({
+      host: {
+        id: "capture-host",
+        featureManifest: {
+          schemaVersion: 1,
+          features: {
+            "external-agent.host-configs": {
+              version: 1,
+              operations: ["external_agent_cancel_run"],
+            },
+          },
+        },
+      },
+      transport,
+      release,
+    } as never)
+    usePinnedExternalSubscription = true
+    cancelExternalTurnMock.mockImplementationOnce((runId) =>
+      client.cancelRemoteExternalTurn(String(runId))
+    )
+    let answer!: (result: { started: boolean }) => void
+    let entered!: () => void
+    const admission = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    startExternalTurnMock.mockImplementation(() => {
+      entered()
+      return new Promise((resolve) => {
+        answer = resolve
+      })
+    })
+    const owner = new AbortController()
+    const capture = runAndCaptureAssistantReply(
+      SESSION,
+      "hello",
+      { provider: "cognia:external-agent:pi-1", turnId: "capture-late-admission" },
+      { execution: { skip: true }, signal: owner.signal, timeoutMs: 0 }
+    )
+    const failed = expect(capture).rejects.toMatchObject({ code: "aborted" })
+    await waitForCapturePhase(admission, capture)
+    try {
+      await client.whenRemoteRunChannelSubscribed("capture-late-admission")
+      owner.abort()
+      expect(client.remoteExternalRunOrigin("capture-late-admission")).toEqual({
+        kind: "remote",
+        hostId: "capture-host",
+      })
+      expect(release).not.toHaveBeenCalled()
+      answer({ started: true })
+      await failed
+      await cancelExternalTurnMock.mock.results[0].value
+      expect(call).toHaveBeenCalledWith("external_agent_cancel_run", {
+        runId: "capture-late-admission",
+      })
+      expect(release).toHaveBeenCalledTimes(1)
+      expect(() => client.remoteExternalRunOrigin("capture-late-admission")).toThrow()
+    } finally {
+      client.__resetRemoteRunOriginsForTests()
+      usePinnedExternalSubscription = false
+    }
+  })
+
+  it("cancels the capture control-loss countdown when the same channel reconnects", async () => {
+    let admitted!: () => void
+    const admission = new Promise<void>((resolve) => {
+      admitted = resolve
+    })
+    startExternalTurnMock.mockImplementation(async () => {
+      admitted()
+      return { started: true }
+    })
+    const capture = runAndCaptureAssistantReply(
+      SESSION,
+      "hello",
+      { provider: "cognia:external-agent:pi-1" },
+      { execution: { skip: true }, timeoutMs: 0, idleTimeoutMs: 0 }
+    )
+    await waitForCapturePhase(admission, capture)
+    jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] })
+    try {
+      externalHandlers!.onControlLost?.()
+      await jest.advanceTimersByTimeAsync(30_000)
+      externalHandlers!.onReconnected?.()
+      await jest.advanceTimersByTimeAsync(60_000)
+      expect(stopExternalMock).not.toHaveBeenCalled()
+      externalHandlers!.onEvent(
+        {
+          type: "message_delta",
+          timestamp: new Date(),
+          delta: { type: "text", text: "resumed" },
+        } as never,
+        {} as never
+      )
+      externalHandlers!.onTerminal("completed", undefined)
+      expect((await capture).text).toBe("resumed")
+      expect(stopExternalMock).toHaveBeenCalledTimes(1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("cleans up a capture with lost control even while run admission never answers", async () => {
+    let admitted!: () => void
+    const admission = new Promise<void>((resolve) => {
+      admitted = resolve
+    })
+    startExternalTurnMock.mockImplementation(() => {
+      admitted()
+      return new Promise(() => undefined)
+    })
+    const capture = runAndCaptureAssistantReply(
+      SESSION,
+      "hello",
+      { provider: "cognia:external-agent:pi-1" },
+      { execution: { skip: true }, timeoutMs: 0, idleTimeoutMs: 0 }
+    )
+    const failed = expect(capture).rejects.toMatchObject({ code: "control_lost" })
+    await waitForCapturePhase(admission, capture)
+    jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] })
+    try {
+      externalHandlers!.onControlLost?.()
+      await jest.advanceTimersByTimeAsync(60_000)
+      await failed
+      expect(stopExternalMock).toHaveBeenCalledTimes(1)
+      expect(cancelExternalTurnMock).not.toHaveBeenCalled()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("gives up lost admission ownership even after an earlier owner abort", async () => {
+    let entered!: () => void
+    let answer!: (result: { started: boolean }) => void
+    const admission = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    startExternalTurnMock.mockImplementation(() => {
+      entered()
+      return new Promise((resolve) => {
+        answer = resolve
+      })
+    })
+    const owner = new AbortController()
+    const capture = runAndCaptureAssistantReply(
+      SESSION,
+      "hello",
+      { provider: "cognia:external-agent:pi-1" },
+      { execution: { skip: true }, signal: owner.signal, timeoutMs: 0, idleTimeoutMs: 0 }
+    )
+    const failed = expect(capture).rejects.toMatchObject({ code: "control_lost" })
+    await waitForCapturePhase(admission, capture)
+    jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] })
+    try {
+      owner.abort()
+      expect(stopExternalMock).not.toHaveBeenCalled()
+      externalHandlers!.onControlLost?.()
+      await jest.advanceTimersByTimeAsync(60_000)
+      await failed
+      expect(stopExternalMock).toHaveBeenCalledTimes(1)
+      answer({ started: true })
+      await Promise.resolve()
+      expect(cancelExternalTurnMock).not.toHaveBeenCalled()
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it("P2 external capture uses the exact Host execution identity before dispatch", async () => {

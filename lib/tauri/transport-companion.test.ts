@@ -44,6 +44,7 @@ import {
   updateCompanionConfigMetadata,
   getCompanionConfigGeneration,
   suspendCompanionTransport,
+  retainCompanionRunConnection,
   type CompanionConfig,
   type TransportTier,
 } from "./transport-companion"
@@ -482,11 +483,19 @@ describe("config helpers", () => {
       clear: async () => undefined,
     })
     const generation = getCompanionConfigGeneration()
-    expect((await hydrateCompanionConfig())?.deviceId).toBe("hydrated-host-b")
-    expect(getCompanionConfigGeneration()).toBe(generation + 1)
-    stored = null
-    expect(await hydrateCompanionConfig()).toBeNull()
-    expect(getCompanionConfigGeneration()).toBe(generation + 2)
+    const changed = jest.fn()
+    window.addEventListener("cognia:companion-config-changed", changed)
+    try {
+      expect((await hydrateCompanionConfig())?.deviceId).toBe("hydrated-host-b")
+      expect(getCompanionConfigGeneration()).toBe(generation + 1)
+      expect(changed).toHaveBeenCalledTimes(1)
+      stored = null
+      expect(await hydrateCompanionConfig()).toBeNull()
+      expect(getCompanionConfigGeneration()).toBe(generation + 2)
+      expect(changed).toHaveBeenCalledTimes(2)
+    } finally {
+      window.removeEventListener("cognia:companion-config-changed", changed)
+    }
   })
 
   it("does not restore a pairing from a storage read that finishes after unpairing", async () => {
@@ -3297,6 +3306,7 @@ function makeFakeRtc(opts: FakeRtcOpts = {}) {
       mediaType: "image/png",
     })),
     subscribe: jest.fn(() => () => undefined),
+    hasSubscribedChannels: jest.fn(() => false),
     getSelectedCandidateKind: jest.fn(async () => opts.kind ?? "host"),
     onStateChange: () => () => undefined,
     reconnectNow: () => true,
@@ -3304,6 +3314,324 @@ function makeFakeRtc(opts: FakeRtcOpts = {}) {
     getSeqCursor: () => ({}),
   }
 }
+
+describe("retained run signaling ownership", () => {
+  it("refreshes endpoints after browser signing-key rehydration with the same room identity", async () => {
+    const config: CompanionConfig = {
+      ...MOCK_CONFIG,
+      accountId: "account-a",
+      targetId: "host-a",
+      rendezvousId: "room-same",
+      signalingRoomDescriptor: {
+        v: 2,
+        roomId: "room-same",
+        roomNonce: "nonce",
+        desktopSigningKey: "desktop-key",
+        mobileSigningKey: "mobile-key",
+        notAfter: 9999999999999,
+      },
+      signalingPrivateKey: {} as CryptoKey,
+    }
+    __setCompanionConfigCacheForTests(config)
+    __setCompanionStorageForTests({
+      load: async () => config,
+      save: async () => undefined,
+      clear: async () => undefined,
+    })
+    let retainedConfig!: () => CompanionConfig
+    const lease = retainCompanionRunConnection(config, undefined, (provider) => {
+      retainedConfig = provider
+      return { call: jest.fn(), subscribe: jest.fn() }
+    })
+    try {
+      const hydrated = { ...config, signalingPrivateKey: {} as CryptoKey }
+      __setCompanionConfigCacheForTests(hydrated)
+      await updateCompanionConfigMetadata(hydrated, { baseUrl: "https://192.168.1.99:7890" })
+      expect(retainedConfig().baseUrl).toBe("https://192.168.1.99:7890")
+      expect(retainedConfig().signalingPrivateKey).toBe(config.signalingPrivateKey)
+    } finally {
+      lease.release()
+    }
+  })
+
+  it("refreshes every verified endpoint field without changing retained credentials", async () => {
+    const config = { ...MOCK_CONFIG, accountId: "account-a", targetId: "host-a" }
+    __setCompanionConfigCacheForTests(config)
+    __setCompanionStorageForTests({
+      load: async () => config,
+      save: async () => undefined,
+      clear: async () => undefined,
+    })
+    let retainedConfig!: () => CompanionConfig
+    const lease = retainCompanionRunConnection(config, undefined, (provider) => {
+      retainedConfig = provider
+      return { call: jest.fn(), subscribe: jest.fn() }
+    })
+    const endpoints = {
+      baseUrl: "https://192.168.1.99:7890",
+      lanBaseUrl: "https://192.168.1.99:7890",
+      tunnelBaseUrl: "https://new-tunnel.example",
+      serverFingerprint: "verified-new-pin",
+    }
+    try {
+      // Hydration can produce the same JWK with a different property order.
+      const hydrated = {
+        ...config,
+        devicePrivateKeyJwk: { d: "test-key", crv: "P-256", kty: "EC" },
+      }
+      __setCompanionConfigCacheForTests(hydrated)
+      await updateCompanionConfigMetadata(hydrated, endpoints)
+      expect(retainedConfig()).toEqual({ ...config, ...endpoints })
+      expect(config.baseUrl).toBe(MOCK_CONFIG.baseUrl)
+    } finally {
+      lease.release()
+    }
+  })
+
+  it.each<[string, Partial<CompanionConfig>]>([
+    ["account", { accountId: "account-b" }],
+    ["Host target", { targetId: "host-b" }],
+    ["device", { deviceId: "replacement-device" }],
+    ["device thumbprint", { deviceKeyThumbprint: "replacement-thumbprint" }],
+    ["device key", { devicePrivateKeyJwk: { kty: "EC", d: "replacement-key" } }],
+    ["signaling key JWK", { signalingPrivateKeyJwk: { kty: "EC", d: "replacement-key" } }],
+    ["runtime signaling key", { signalingPrivateKey: {} as CryptoKey }],
+    ["rendezvous", { rendezvousId: "replacement-room" }],
+    [
+      "room descriptor",
+      {
+        signalingRoomDescriptor: { roomId: "replacement-room" } as NonNullable<
+          CompanionConfig["signalingRoomDescriptor"]
+        >,
+      },
+    ],
+    ["service token", { serviceToken: "replacement-token" }],
+    ["tenant", { tenantId: "replacement-tenant" }],
+  ])(
+    "does not refresh retained endpoints after the %s identity changes",
+    async (_name, replacement) => {
+      const config = { ...MOCK_CONFIG, accountId: "account-a", targetId: "host-a" }
+      __setCompanionConfigCacheForTests(config)
+      __setCompanionStorageForTests({
+        load: async () => config,
+        save: async () => undefined,
+        clear: async () => undefined,
+      })
+      let retainedConfig!: () => CompanionConfig
+      const lease = retainCompanionRunConnection(config, undefined, (provider) => {
+        retainedConfig = provider
+        return { call: jest.fn(), subscribe: jest.fn() }
+      })
+      try {
+        const changed = { ...config, ...replacement }
+        __setCompanionConfigCacheForTests(changed)
+        await updateCompanionConfigMetadata(changed, { baseUrl: "https://replacement.example" })
+        expect(retainedConfig()).toEqual(config)
+      } finally {
+        lease.release()
+      }
+    }
+  )
+
+  it("reconnects retained run subscriptions at the verified updated endpoint", async () => {
+    const config = { ...MOCK_CONFIG, accountId: "account-a", targetId: "host-a" }
+    __setCompanionConfigCacheForTests(config)
+    __setCompanionStorageForTests({
+      load: async () => config,
+      save: async () => undefined,
+      clear: async () => undefined,
+    })
+    const tx = new CompanionTransport()
+    const lease = retainCompanionRunConnection(config, tx, () => {
+      throw new Error("unexpected second connection")
+    })
+    const topic = "external-agent://session-event"
+    const frames = jest.fn()
+    const stop = lease.transport.subscribe(topic, frames)
+    const first = MockWebSocket.lastInstance!
+    first.triggerOpen()
+    first.triggerMessage(JSON.stringify({ type: "subscribed", channels: [topic] }))
+    first.triggerMessage(
+      JSON.stringify({ type: topic, seq: 1, payload: { runId: "retained", seq: 1 } })
+    )
+    try {
+      const next = await updateCompanionConfigMetadata(config, {
+        baseUrl: "https://192.168.1.99:7890",
+        lanBaseUrl: "https://192.168.1.99:7890",
+        tunnelBaseUrl: "https://new-tunnel.example",
+      })
+      expect(next?.baseUrl).toBe("https://192.168.1.99:7890")
+      tx.reconnectWs()
+      const second = MockWebSocket.lastInstance!
+      expect(second).not.toBe(first)
+      expect(second.url).toContain("wss://192.168.1.99:7890/ws/events?")
+      expect(first.closed).toBe(true)
+      second.triggerOpen()
+      second.triggerMessage(JSON.stringify({ type: "subscribed", channels: [topic] }))
+      await tx.whenSubscribed([topic])
+      second.triggerMessage(
+        JSON.stringify({ type: topic, seq: 2, payload: { runId: "retained", seq: 2 } })
+      )
+      expect(frames.mock.calls).toEqual([
+        [{ runId: "retained", seq: 1 }],
+        [{ runId: "retained", seq: 2 }],
+      ])
+    } finally {
+      stop()
+      lease.release()
+      tx.destroy()
+    }
+  })
+
+  it("guards a fixed-provider run connection after adoption as the active route", async () => {
+    const instance = await import("./transport-instance")
+    const previous = instance.transport
+    const config = { ...MOCK_CONFIG, accountId: "account-a", targetId: "host-a" }
+    __setCompanionStorageForTests({
+      load: async () => config,
+      save: async () => undefined,
+      clear: async () => undefined,
+    })
+    const tx = new CompanionTransport({ configProvider: () => config })
+    const lease = retainCompanionRunConnection(config, undefined, () => tx)
+    try {
+      setActiveRuntimeTargetContext("account-a", "host-a")
+      await reloadCompanionConfigForActiveTarget()
+      expect(instance.transport).toBe(tx)
+      lease.release()
+      expect(() => tx.assertRuntimeTargetBinding()).not.toThrow()
+      setActiveRuntimeTargetContext("account-a", "host-b")
+      expect(() => tx.assertRuntimeTargetBinding()).toThrow("companion target scope changed")
+    } finally {
+      lease.release()
+      instance.setTransport(previous)
+    }
+  })
+
+  it("keeps the routed history guard while a retained route awaits replacement", () => {
+    const config = { ...MOCK_CONFIG, accountId: "account-a", targetId: "host-a" }
+    __setCompanionConfigCacheForTests(config)
+    const tx = new CompanionTransport()
+    const lease = retainCompanionRunConnection(config, tx, () => {
+      throw new Error("unexpected second connection")
+    })
+    try {
+      setActiveRuntimeTargetContext("account-a", "host-a")
+      expect(() => tx.assertRuntimeTargetBinding()).not.toThrow()
+      setActiveRuntimeTargetContext("account-a", "host-b")
+      expect(() => tx.assertRuntimeTargetBinding()).toThrow("companion target scope changed")
+    } finally {
+      lease.release()
+      tx.destroy()
+    }
+  })
+
+  it("never sends an RPC whose authorization was revoked while headers were pending", async () => {
+    let releaseHeaders!: (headers: Record<string, string>) => void
+    let preparing!: () => void
+    const entered = new Promise<void>((resolve) => {
+      preparing = resolve
+    })
+    __setAuthorizationHeadersProviderForTests(() => {
+      preparing()
+      return new Promise((resolve) => {
+        releaseHeaders = resolve
+      })
+    })
+    const tx = new CompanionTransport({ configProvider: () => MOCK_CONFIG })
+    const lease = retainCompanionRunConnection(MOCK_CONFIG, tx, () => {
+      throw new Error("unexpected second connection")
+    })
+    const pending = tx.call("external_agent_run_turn", { runId: "revoked" })
+    const rejected = expect(pending).rejects.toThrow("Companion run authority expired")
+    try {
+      await entered
+      lease.invalidate()
+      await rejected
+      releaseHeaders({ Authorization: "Bearer expired" })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      lease.release()
+      tx.destroy()
+    }
+  })
+
+  it("reuses the retained connection when the active route returns to its pairing", async () => {
+    const instance = await import("./transport-instance")
+    const previous = instance.transport
+    const config = { ...MOCK_CONFIG, accountId: "account-a", targetId: "host-a" }
+    let stored = config
+    __setCompanionStorageForTests({
+      load: async () => stored,
+      save: async () => undefined,
+      clear: async () => undefined,
+    })
+    __setCompanionConfigCacheForTests(config)
+    const tx = new CompanionTransport()
+    const close = jest.fn()
+    ;(tx as unknown as { rtc: unknown }).rtc = { ...makeFakeRtc(), close }
+    instance.setTransport(tx)
+    const create = jest.fn(() => {
+      throw new Error("session_replaced")
+    })
+    const first = retainCompanionRunConnection(config, tx, create)
+    const second = retainCompanionRunConnection(config, tx, create)
+    try {
+      stored = { ...config, deviceId: "other-device", targetId: "host-b" }
+      await reloadCompanionConfigForActiveTarget()
+      expect(close).not.toHaveBeenCalled()
+      expect(instance.transport).not.toBe(tx)
+      stored = config
+      await reloadCompanionConfigForActiveTarget()
+      expect(instance.transport).toBe(tx)
+      expect(create).not.toHaveBeenCalled()
+      stored = { ...config, deviceId: "other-device", targetId: "host-b" }
+      await reloadCompanionConfigForActiveTarget()
+      first.release()
+      expect(close).not.toHaveBeenCalled()
+      second.release()
+      expect(close).toHaveBeenCalledTimes(1)
+    } finally {
+      first.release()
+      second.release()
+      instance.setTransport(previous)
+    }
+  })
+  it("shares exactly one signaling session with the active route and concurrent runs", () => {
+    let sessionOpen = false
+    let sessions = 0
+    const join = (tx: CompanionTransport) => {
+      if (sessionOpen) throw new Error("session_replaced")
+      sessionOpen = true
+      sessions += 1
+      const close = jest.fn(() => {
+        sessionOpen = false
+      })
+      ;(tx as unknown as { rtc: unknown }).rtc = { ...makeFakeRtc(), close }
+      return { tx, close }
+    }
+    const { tx, close } = join(new CompanionTransport({ configProvider: () => MOCK_CONFIG }))
+    const create = jest.fn(
+      (provider: () => CompanionConfig) =>
+        join(new CompanionTransport({ configProvider: provider })).tx
+    )
+    const first = retainCompanionRunConnection(MOCK_CONFIG, tx, create)
+    const second = retainCompanionRunConnection(MOCK_CONFIG, tx, create)
+    expect(first.transport).toBe(tx)
+    expect(second.transport).toBe(tx)
+    expect(create).not.toHaveBeenCalled()
+    expect(sessions).toBe(1)
+    tx.destroy() // Active route moved away; retained owners still use its lane.
+    expect(close).not.toHaveBeenCalled()
+    first.release()
+    expect(close).not.toHaveBeenCalled()
+    second.release()
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(sessionOpen).toBe(false)
+  })
+})
 
 /** Open a connected WS for the given (already-stored) config. */
 function openConnectedWs(tx: CompanionTransport): MockWebSocket {
@@ -3617,7 +3945,14 @@ describe("whenSubscribed() — WAN tier", () => {
   it("asks the data lane when it carries the channel and no events socket is up", async () => {
     await setConfig({ ...MOCK_CONFIG, baseUrl: TUNNEL_URL })
     transport = new CompanionTransport()
-    const fakeRtc = { ...makeFakeRtc(), whenSubscribed: jest.fn(async () => undefined) }
+    let accepted = false
+    const fakeRtc = {
+      ...makeFakeRtc(),
+      whenSubscribed: jest.fn(async () => {
+        accepted = true
+      }),
+      hasSubscribedChannels: jest.fn(() => accepted),
+    }
     ;(transport as unknown as { rtc: unknown }).rtc = fakeRtc
     // The socket is still opening (a phone without native pinning never
     // finishes): only the lane's dispatcher can acknowledge.
@@ -3626,6 +3961,21 @@ describe("whenSubscribed() — WAN tier", () => {
 
     await transport.whenSubscribed(["external-agent://stdout"], 60_000)
     expect(fakeRtc.whenSubscribed).toHaveBeenCalledWith(["external-agent://stdout"], 60_000)
+    expect(transport.hasSubscribedChannels(["external-agent://stdout"])).toBe(true)
+    expect(fakeRtc.hasSubscribedChannels).toHaveBeenCalledWith(["external-agent://stdout"])
+  })
+
+  it("accepts the RTC topic while a connected WebSocket has not accepted it", async () => {
+    await setConfig({ ...MOCK_CONFIG, baseUrl: TUNNEL_URL })
+    transport = new CompanionTransport()
+    openConnectedWs(transport)
+    const fakeRtc = { ...makeFakeRtc(), hasSubscribedChannels: jest.fn(() => true) }
+    ;(transport as unknown as { rtc: unknown }).rtc = fakeRtc
+    transport.subscribe("external-agent://session-event", jest.fn())
+    expect(transport.hasSubscribedChannels(["external-agent://session-event"])).toBe(true)
+    await transport.whenSubscribed(["external-agent://session-event"])
+    fakeRtc.hasSubscribedChannels.mockReturnValue(false)
+    expect(transport.hasSubscribedChannels(["external-agent://session-event"])).toBe(false)
   })
 
   it("keeps waiting on the socket when the lane does not carry the channel", async () => {

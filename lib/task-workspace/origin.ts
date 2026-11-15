@@ -1,16 +1,22 @@
 import { isHeadlessHost, isTauri } from "@/lib/platform/detect"
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
 import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
-import { openRemoteHostTarget } from "@/lib/remote-host/target-transport"
+import { openRemoteHostTarget, retainRunAccountAuthority } from "@/lib/remote-host/target-transport"
+import {
+  acquireManagementChannel,
+  closeManagementChannel,
+} from "@/lib/remote-host/management-channel"
 import { issueHostAdminLease } from "@/lib/tauri/admin-lease"
 import { localTransport, transport } from "@/lib/tauri/transport-instance"
 import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
+import type { RemoteHost } from "@/stores/remote-host/remote-host-store"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { TaskWorkspaceOrigin } from "./types"
 
 export interface TaskWorkspaceAuthority {
   origin: TaskWorkspaceOrigin
   transport: Pick<Transport, "call">
+  host?: RemoteHost
   assertCurrent(): void
   close(): void
 }
@@ -25,8 +31,9 @@ export function sameTaskWorkspaceOrigin(a: TaskWorkspaceOrigin, b: TaskWorkspace
 
 /** Open once for a gesture or turn and retain the same authority across awaits. */
 export async function openTaskWorkspaceOrigin(
-  origin: TaskWorkspaceOrigin
-): Promise<TaskWorkspaceAuthority> {
+  origin: TaskWorkspaceOrigin,
+  options: { retainedRun?: boolean } = {}
+): Promise<TaskWorkspaceAuthority & { transport: Transport }> {
   if (origin.kind === "local") {
     if (!isTauri() && !isHeadlessHost()) throw new Error("Local workspace Host is unavailable")
     return { origin, transport: taskWorkspaceHostTransport(), assertCurrent() {}, close() {} }
@@ -35,12 +42,18 @@ export async function openTaskWorkspaceOrigin(
   if (origin.accountId && initial?.accountId !== origin.accountId)
     throw new Error("Workspace run belongs to another account")
   const paired = origin.hostId.startsWith("companion:")
+  const authorization =
+    options.retainedRun && !paired
+      ? retainRunAccountAuthority(origin.accountId, () => closeManagementChannel(origin.hostId))
+      : undefined
   const assertCurrent = () => {
     const current = getActiveRuntimeTargetContext()
     if (origin.accountId && current?.accountId !== origin.accountId)
       throw new Error("Workspace run belongs to another account")
+    authorization?.assertCurrent()
     if (
       paired &&
+      !options.retainedRun &&
       (current?.targetId !== origin.hostId.slice("companion:".length) ||
         current?.accountId !== initial?.accountId ||
         current?.routingGeneration !== initial?.routingGeneration)
@@ -48,23 +61,42 @@ export async function openTaskWorkspaceOrigin(
       throw new Error("Workspace Host connection changed")
     }
   }
-  assertCurrent()
-  const target = await openRemoteHostTarget(origin.hostId)
+  let opened = false
   try {
     assertCurrent()
-    target.assertCurrent?.()
-  } catch (error) {
-    target.close()
-    throw error
-  }
-  return {
-    origin,
-    transport: target.transport,
-    assertCurrent() {
+    const target =
+      options.retainedRun && !paired
+        ? await acquireManagementChannel(origin.hostId).then((lease) => ({
+            ...lease,
+            close: lease.release,
+            assertCurrent: undefined,
+          }))
+        : options.retainedRun
+          ? await openRemoteHostTarget(origin.hostId, { mode: "retained-run" })
+          : await openRemoteHostTarget(origin.hostId)
+    try {
       assertCurrent()
       target.assertCurrent?.()
-    },
-    close: target.close,
+    } catch (error) {
+      target.close()
+      throw error
+    }
+    opened = true
+    return {
+      origin,
+      host: target.host,
+      transport: target.transport,
+      assertCurrent() {
+        assertCurrent()
+        target.assertCurrent?.()
+      },
+      close() {
+        authorization?.close()
+        target.close()
+      },
+    }
+  } finally {
+    if (!opened) authorization?.close()
   }
 }
 

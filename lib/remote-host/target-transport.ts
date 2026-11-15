@@ -3,9 +3,24 @@ import {
   type RemoteHostCredential,
 } from "@/lib/remote-host/credential-vault"
 import { companionCredentialBook, type CompanionHostRecord } from "@/lib/companion/credential-book"
-import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
+import {
+  getActiveRuntimeTargetContext,
+  subscribeRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
+import { getActiveBrowserVault } from "@/lib/runtime/browser-vault"
+import {
+  assertPerformanceSecurityGeneration,
+  getPerformanceSecurityGeneration,
+  subscribePerformanceSecurityBarrier,
+} from "@/lib/perf/security-generation"
+import { getActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import { transport as appTransport } from "@/lib/tauri/transport-instance"
 import type { CompanionConfig } from "@/lib/tauri/companion-storage"
-import { loadCompanionConfig } from "@/lib/tauri/transport-companion"
+import {
+  CompanionTransport,
+  loadCompanionConfig,
+  retainCompanionRunConnection,
+} from "@/lib/tauri/transport-companion"
 import type { Transport } from "@/lib/tauri/transport-types"
 import {
   getRemoteTransportFactory,
@@ -20,11 +35,13 @@ export interface RemoteHostTarget {
   host: RemoteHost
   transport: Transport
   close: () => void
-  /** A paired channel is invalid after a route or device identity changes. */
+  /** A paired channel checks its route, or only pairing/account for a retained run. */
   assertCurrent?: () => void
 }
 
 export interface RemoteHostTargetDeps {
+  /** Only admitted runs may outlive the active paired route. */
+  mode?: "retained-run"
   loadCredential?: (hostId: string) => Promise<RemoteHostCredential | null>
   createTransport?: (configProvider: () => CompanionConfig) => DisposableTransport
   /** The `/pair` Host path's seams; production reads the live app state. */
@@ -51,6 +68,52 @@ export interface PairedHostTargetDeps {
   transport?: () => Transport
 }
 
+/** Use the account's existing lock/switch barrier and Vault unlock lifetime. */
+export function retainRunAccountAuthority(
+  accountId: string | undefined,
+  onInvalidated: () => void,
+  currentAccount: () => string | undefined = () => getActiveRuntimeTargetContext()?.accountId
+): { assertCurrent(): void; close(): void } {
+  const generation = getPerformanceSecurityGeneration()
+  const vault = getActiveBrowserVault()
+  let invalid = false
+  const invalidate = () => {
+    if (invalid) return
+    invalid = true
+    onInvalidated()
+  }
+  const assertCurrent = () => {
+    try {
+      assertPerformanceSecurityGeneration(generation)
+      if (
+        invalid ||
+        (accountId && currentAccount() !== accountId) ||
+        (vault && (getActiveBrowserVault() !== vault || !vault.isUnlocked()))
+      )
+        throw new Error("Run account authorization changed")
+    } catch (error) {
+      invalidate()
+      throw error
+    }
+  }
+  const check = () => {
+    try {
+      assertCurrent()
+    } catch {
+      /* Owner observes control loss. */
+    }
+  }
+  const stopContext = subscribeRuntimeTargetContext(check)
+  const stopSecurity = subscribePerformanceSecurityBarrier(check)
+  return {
+    assertCurrent,
+    close() {
+      stopContext()
+      stopSecurity()
+    },
+  }
+}
+
 /**
  * Whether a `/pair` Host's channel still talks to it: the app's transport
  * serves whichever companion target is active, so a switch to another Host,
@@ -72,115 +135,221 @@ export function isPairedHostTargetCurrent(
 
 /**
  * Open a fixed-config management channel to the active `/pair` Host. Its
- * authority expires when that route or paired device changes. The Host's
- * public record supplies its name and age without exposing private keys.
+ * ordinary authority expires when the active route changes. A retained run
+ * checks the captured account and pairing instead. The public record supplies
+ * its name and age without exposing private keys.
  */
 async function openPairedHostTarget(
   ref: string,
   hostId: string,
-  deps: PairedHostTargetDeps = {}
+  deps: PairedHostTargetDeps = {},
+  options: RemoteHostTargetDeps = {}
 ): Promise<RemoteHostTarget> {
   const currentActive = (deps.activeTarget ?? getActiveRuntimeTargetContext)()
   const currentConfig = (deps.loadConfig ?? loadCompanionConfig)()
   const active = currentActive ? { ...currentActive } : null
   const config = currentConfig ? { ...currentConfig } : null
+  const retained = options.mode === "retained-run"
+  let invalid = false
+  let pairingKnown = true
+  let closed = false
   if (!active || active.targetId !== hostId || config?.targetId !== hostId) {
     throw new Error(`Paired Host ${hostId} is not the Host this app is connected to`)
   }
+  let invalidateConnection = () => {
+    invalid = true
+  }
   const assertCurrent = () => {
+    authorization?.assertCurrent()
     const next = (deps.activeTarget ?? getActiveRuntimeTargetContext)()
     const nextConfig = (deps.loadConfig ?? loadCompanionConfig)()
     if (
       next?.accountId !== active.accountId ||
-      next?.targetId !== active.targetId ||
-      next?.routingGeneration !== active.routingGeneration ||
-      nextConfig?.targetId !== config.targetId ||
-      nextConfig?.deviceId !== config.deviceId
-    )
+      invalid ||
+      closed ||
+      !pairingKnown ||
+      (retained
+        ? nextConfig?.targetId === hostId && nextConfig.deviceId !== config.deviceId
+        : next?.targetId !== active.targetId ||
+          next?.routingGeneration !== active.routingGeneration ||
+          nextConfig?.targetId !== config.targetId ||
+          nextConfig?.deviceId !== config.deviceId)
+    ) {
+      if (
+        retained &&
+        (invalid ||
+          next?.accountId !== active.accountId ||
+          (nextConfig?.targetId === hostId && nextConfig.deviceId !== config.deviceId))
+      )
+        invalidateConnection()
       throw new Error(`Paired Host ${hostId} connection changed`)
+    }
   }
-  const record = await (
+  const authorization = retained
+    ? retainRunAccountAuthority(
+        active.accountId,
+        () => invalidateConnection(),
+        () => (deps.activeTarget ?? getActiveRuntimeTargetContext)()?.accountId
+      )
+    : undefined
+  const loadRecord =
     deps.loadRecord ??
     ((localAccountId, id) =>
       companionCredentialBook().get({ accountNamespace: localAccountId, hostId: id }))
-  )(active.accountId, hostId)
-  assertCurrent()
-  if (!record) throw new Error(`Paired Host ${hostId} is not paired`)
-  const publicConfig: CompanionConfig = { ...config }
-  delete publicConfig.devicePrivateKeyJwk
-  delete publicConfig.signalingPrivateKeyJwk
-  delete publicConfig.signalingPrivateKey
-  delete publicConfig.serviceToken
-  const host: RemoteHost = {
-    id: ref,
-    label: record.label,
-    config: publicConfig,
-    credentialRef: ref,
-    addedAt: record.createdAt,
-    connectionState: "ready",
-  }
-  // A fixed config is essential: the app router and the default companion
-  // transport both follow the currently selected Host after an async boundary.
-  const pinnedConfig = await withSigningKey({ ...config }).catch(() => ({ ...config }))
-  assertCurrent()
-  const pinned = deps.transport
-    ? deps.transport()
-    : (getRemoteTransportFactory() as (provider: () => CompanionConfig) => DisposableTransport)(
-        () => pinnedConfig
-      )
-  const transport: Transport = {
-    ...(pinned.whenSubscribed
-      ? {
-          async whenSubscribed(channels: readonly string[], timeoutMs?: number) {
-            assertCurrent()
-            await pinned.whenSubscribed!(channels, timeoutMs)
-            assertCurrent()
-          },
-        }
-      : {}),
-    ...(pinned.hasSubscribedChannels
-      ? {
-          hasSubscribedChannels(channels: readonly string[]) {
-            assertCurrent()
-            return pinned.hasSubscribedChannels!(channels)
-          },
-        }
-      : {}),
-    async call<T>(
-      command: string,
-      args?: Record<string, unknown>,
-      options?: Parameters<Transport["call"]>[2]
-    ) {
-      assertCurrent()
-      const result = await pinned.call<T>(command, args, options)
-      assertCurrent()
-      return result
-    },
-    subscribe<T>(event: string, handler: (payload: T) => void) {
-      assertCurrent()
-      return pinned.subscribe<T>(event, (payload) => {
-        assertCurrent()
-        handler(payload)
+  let opened = false
+  try {
+    const record = await loadRecord(active.accountId, hostId)
+    assertCurrent()
+    if (!record) throw new Error(`Paired Host ${hostId} is not paired`)
+    const deviceId = record.deviceId
+    const thumbprint = record.deviceKeyThumbprint
+    if (
+      retained &&
+      ((deviceId !== undefined && deviceId !== config.deviceId) ||
+        (thumbprint !== undefined && thumbprint !== config.deviceKeyThumbprint) ||
+        (config.accountId !== undefined && config.accountId !== active.accountId))
+    )
+      throw new Error(`Paired Host ${hostId} connection changed`)
+    const validatePairing = async () => {
+      if (!retained) return
+      const next = await loadRecord(active.accountId, hostId).catch((error: unknown) => {
+        pairingKnown = false
+        throw error
       })
-    },
-    ...(pinned.readBinary
-      ? {
-          async readBinary(resource: Parameters<NonNullable<Transport["readBinary"]>>[0]) {
+      pairingKnown = true
+      if (
+        !next ||
+        next.deviceId !== deviceId ||
+        next.deviceKeyThumbprint !== thumbprint ||
+        next.connection?.status === "revoked"
+      )
+        invalid = true
+      assertCurrent()
+    }
+    await validatePairing()
+    const publicConfig: CompanionConfig = { ...config }
+    delete publicConfig.devicePrivateKeyJwk
+    delete publicConfig.signalingPrivateKeyJwk
+    delete publicConfig.signalingPrivateKey
+    delete publicConfig.serviceToken
+    const host: RemoteHost = {
+      id: ref,
+      label: record.label,
+      config: publicConfig,
+      credentialRef: ref,
+      addedAt: record.createdAt,
+      connectionState: "ready",
+    }
+    // A fixed config is essential: the app router and the default companion
+    // transport both follow the currently selected Host after an async boundary.
+    const admittedConfig = { ...config, accountId: active.accountId, targetId: hostId }
+    const pinnedConfig = await withSigningKey(admittedConfig).catch(() => admittedConfig)
+    assertCurrent()
+    const create =
+      options.createTransport ??
+      (getRemoteTransportFactory() as (provider: () => CompanionConfig) => DisposableTransport)
+    const activeConnection = [deps.transport?.(), getActiveRemoteTransport(), appTransport].find(
+      (candidate) =>
+        candidate instanceof CompanionTransport && candidate.matchesRunPairing(pinnedConfig)
+    )
+    const connection = retained
+      ? retainCompanionRunConnection(pinnedConfig, activeConnection ?? undefined, create)
+      : undefined
+    const pinned =
+      connection?.transport ?? (deps.transport ? deps.transport() : create(() => pinnedConfig))
+    invalidateConnection = () => {
+      invalid = true
+      connection?.invalidate()
+    }
+    // Pairings for inactive Hosts are read from the book, never from the active
+    // route's config. Re-pair/removal/revocation permanently invalidates this lease.
+    const timer = retained
+      ? setInterval(() => {
+          void validatePairing().catch(() => {
+            if (invalid) connection?.invalidate()
+          })
+        }, 1_000)
+      : undefined
+    ;(timer as { unref?: () => void } | undefined)?.unref?.()
+    const transport: Transport = {
+      ...(pinned.whenSubscribed
+        ? {
+            async whenSubscribed(channels: readonly string[], timeoutMs?: number) {
+              await validatePairing()
+              assertCurrent()
+              await pinned.whenSubscribed!(channels, timeoutMs)
+              assertCurrent()
+            },
+          }
+        : {}),
+      ...(pinned.hasSubscribedChannels
+        ? {
+            hasSubscribedChannels(channels: readonly string[]) {
+              assertCurrent()
+              return pinned.hasSubscribedChannels!(channels)
+            },
+          }
+        : {}),
+      async call<T>(
+        command: string,
+        args?: Record<string, unknown>,
+        options?: Parameters<Transport["call"]>[2]
+      ) {
+        await validatePairing()
+        assertCurrent()
+        const result = await pinned.call<T>(command, args, options)
+        assertCurrent()
+        return result
+      },
+      subscribe<T>(event: string, handler: (payload: T) => void) {
+        assertCurrent()
+        return pinned.subscribe<T>(event, (payload) => {
+          try {
             assertCurrent()
-            const result = await pinned.readBinary!(resource)
+          } catch {
+            return
+          }
+          handler(payload)
+        })
+      },
+      ...(pinned.readBinary
+        ? {
+            async readBinary(resource: Parameters<NonNullable<Transport["readBinary"]>>[0]) {
+              assertCurrent()
+              const result = await pinned.readBinary!(resource)
+              assertCurrent()
+              return result
+            },
+          }
+        : {}),
+    }
+    // The run monitor may request a reconnect, always using this fixed config.
+    for (const method of ["reconnectWs", "reconnectRtc"] as const) {
+      const connection = pinned as Transport & Partial<Record<typeof method, () => unknown>>
+      if (connection[method])
+        Object.assign(transport, {
+          [method]: () => {
             assertCurrent()
-            return result
+            return connection[method]!()
           },
-        }
-      : {}),
-  }
-  return {
-    host,
-    transport,
-    assertCurrent,
-    close: () => {
-      if (!deps.transport) (pinned as DisposableTransport).destroy?.()
-    },
+        })
+    }
+    opened = true
+    return {
+      host,
+      transport,
+      assertCurrent,
+      close: () => {
+        if (closed) return
+        closed = true
+        if (timer) clearInterval(timer)
+        authorization?.close()
+        if (connection) connection.release()
+        else if (!deps.transport) (pinned as DisposableTransport).destroy?.()
+      },
+    }
+  } finally {
+    if (!opened) authorization?.close()
   }
 }
 
@@ -194,7 +363,7 @@ export async function openRemoteHostTarget(
   deps: RemoteHostTargetDeps = {}
 ): Promise<RemoteHostTarget> {
   const pairedHostId = pairedHostIdOf(stableHostRef)
-  if (pairedHostId) return openPairedHostTarget(stableHostRef, pairedHostId, deps.paired)
+  if (pairedHostId) return openPairedHostTarget(stableHostRef, pairedHostId, deps.paired, deps)
   const host = useRemoteHostStore.getState().hosts.find((candidate) => {
     const manifestRef =
       candidate.featureManifest?.schemaVersion === 2

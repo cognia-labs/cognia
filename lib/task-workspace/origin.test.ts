@@ -4,6 +4,7 @@ jest.mock("@/lib/platform/detect", () => ({
 }))
 jest.mock("@/lib/runtime/runtime-target-context", () => ({
   getActiveRuntimeTargetContext: jest.fn(() => ({ accountId: "account-a", targetId: "host-a" })),
+  subscribeRuntimeTargetContext: jest.fn(() => () => undefined),
 }))
 jest.mock("@/lib/runtime/runtime-snapshot-store", () => ({
   getRuntimeSnapshot: jest.fn(() => ({ target: null })),
@@ -15,14 +16,22 @@ jest.mock("@/lib/tauri/transport-instance", () => ({
   localTransport: { call: jest.fn() },
   transport: { call: jest.fn() },
 }))
-jest.mock("@/lib/remote-host/target-transport", () => ({ openRemoteHostTarget: jest.fn() }))
+jest.mock("@/lib/remote-host/target-transport", () => ({
+  ...jest.requireActual("@/lib/remote-host/target-transport"),
+  openRemoteHostTarget: jest.fn(),
+}))
+jest.mock("@/lib/remote-host/management-channel", () => ({
+  acquireManagementChannel: jest.fn(),
+  closeManagementChannel: jest.fn(),
+}))
 jest.mock("@/lib/tauri/admin-lease", () => ({ issueHostAdminLease: jest.fn() }))
 
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
 import { localTransport, transport } from "@/lib/tauri/transport-instance"
 import { openRemoteHostTarget } from "@/lib/remote-host/target-transport"
 import { issueHostAdminLease } from "@/lib/tauri/admin-lease"
-import { callTaskWorkspaceOrigin } from "./origin"
+import { callTaskWorkspaceOrigin, openTaskWorkspaceOrigin } from "./origin"
+import { acquireManagementChannel } from "@/lib/remote-host/management-channel"
 
 beforeEach(() => jest.clearAllMocks())
 
@@ -106,4 +115,60 @@ it("does not mutate after the paired device route changes during lease issuance"
     )
   ).rejects.toThrow("connection changed")
   expect(target.transport.call).not.toHaveBeenCalled()
+})
+
+it("retains the management lease for an ordinary run until its owner closes it", async () => {
+  ;(getActiveRuntimeTargetContext as jest.Mock).mockReturnValue({
+    accountId: "account-a",
+    targetId: "host-a",
+  })
+  const release = jest.fn()
+  const lease = { host: {}, transport: { call: jest.fn(), subscribe: jest.fn() }, release }
+  jest.mocked(acquireManagementChannel).mockResolvedValue(lease as never)
+  const authority = await openTaskWorkspaceOrigin(
+    { kind: "remote", hostId: "host-a", accountId: "account-a" },
+    { retainedRun: true }
+  )
+  ;(getActiveRuntimeTargetContext as jest.Mock).mockReturnValue({
+    accountId: "account-a",
+    targetId: "host-b",
+  })
+  expect(() => authority.assertCurrent()).not.toThrow()
+  expect(authority.transport).toBe(lease.transport)
+  expect(release).not.toHaveBeenCalled()
+  ;(getActiveRuntimeTargetContext as jest.Mock).mockReturnValue({
+    accountId: "account-b",
+    targetId: "host-b",
+  })
+  expect(() => authority.assertCurrent()).toThrow("another account")
+  authority.close()
+  expect(release).toHaveBeenCalledTimes(1)
+})
+
+it("opts only a retained run into the route-independent paired target", async () => {
+  ;(getActiveRuntimeTargetContext as jest.Mock).mockReturnValue({
+    accountId: "account-a",
+    targetId: "host-a",
+    routingGeneration: 1,
+  })
+  const target = {
+    host: {},
+    transport: { call: jest.fn(), subscribe: jest.fn() },
+    assertCurrent: jest.fn(),
+    close: jest.fn(),
+  }
+  jest.mocked(openRemoteHostTarget).mockResolvedValue(target as never)
+  const authority = await openTaskWorkspaceOrigin(
+    { kind: "remote", hostId: "companion:host-a", accountId: "account-a" },
+    { retainedRun: true }
+  )
+  expect(openRemoteHostTarget).toHaveBeenCalledWith("companion:host-a", { mode: "retained-run" })
+  ;(getActiveRuntimeTargetContext as jest.Mock).mockReturnValue({
+    accountId: "account-a",
+    targetId: "host-b",
+    routingGeneration: 2,
+  })
+  expect(() => authority.assertCurrent()).not.toThrow()
+  authority.close()
+  expect(target.close).toHaveBeenCalledTimes(1)
 })

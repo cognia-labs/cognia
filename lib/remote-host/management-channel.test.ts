@@ -264,3 +264,15 @@ it("gives the lease back after one piece of work, even when it fails", async () 
 it("stays open longer than a liveness interval", () => {
   expect(MANAGEMENT_CHANNEL_IDLE_MS).toBeGreaterThan(60_000)
 })
+
+it("keeps a currently paired Host channel even though it has no remote-host row", async () => {
+  pairedCurrent = true
+  const t = target(host({ id: "companion:box-A" }))
+  const lease = await acquireManagementChannel("companion:box-A", {
+    openTarget: async () => t.value,
+  })
+  closeStaleManagementChannels()
+  expect(openManagementChannels()).toContain("companion:box-A")
+  expect(t.close).not.toHaveBeenCalled()
+  lease.release()
+})

@@ -483,6 +483,7 @@ export class TransportRtc {
    * one.
    */
   private acknowledgedChannels: Set<string> = new Set()
+  private acceptedChannels: Set<string> = new Set()
   /** Callers parked in {@link whenSubscribed}, with the channels they wait on. */
   private subscribeWaiters: Set<{ channels: readonly string[]; done: () => void }> = new Set()
   private highestSeq: Map<string, number> = new Map()
@@ -1306,6 +1307,7 @@ export class TransportRtc {
         this.channels.delete(event)
         // A later re-subscribe must be acknowledged on its own `add`.
         this.acknowledgedChannels.delete(event)
+        this.acceptedChannels.delete(event)
         this.sendSubscribeFrame("remove", [event])
       }
     }
@@ -1339,6 +1341,10 @@ export class TransportRtc {
     })
   }
 
+  hasSubscribedChannels(channels: readonly string[]): boolean {
+    return this.laneOpen() && channels.every((channel) => this.acceptedChannels.has(channel))
+  }
+
   /** The Host's `event-subscribe` control frame (dispatch.rs `EventControl`). */
   private sendSubscribeFrame(mode: "add" | "remove", channels: string[]): void {
     if (channels.length === 0) return
@@ -1350,6 +1356,8 @@ export class TransportRtc {
   private beginEventObservation(): void {
     if (this.opts.atomicEventWatch) {
       this.watchReady = false
+      this.acknowledgedChannels.clear()
+      this.acceptedChannels.clear()
       this.sendRawFrame(
         JSON.stringify({
           kind: "watch",
@@ -1377,11 +1385,12 @@ export class TransportRtc {
     this.eventCursor = frame.cursor as number
     this.watchHasCursor = true
     this.watchReady = true
-    this.opts.subscriptionObserver(frame)
+    this.acceptSubscribed(frame)
   }
 
   private resendSubscriptions(): void {
     this.acknowledgedChannels.clear()
+    this.acceptedChannels.clear()
     const channels = Array.from(this.channels.keys())
     if (channels.length === 0) return
     this.sendRawFrame(JSON.stringify({ kind: "event-subscribe", mode: "add", channels }))
@@ -1399,8 +1408,12 @@ export class TransportRtc {
   private acceptSubscribed(frame: { channels?: unknown; rejected?: unknown }): void {
     this.opts.subscriptionObserver(frame)
     if (Array.isArray(frame.channels)) {
+      this.acceptedChannels.clear()
       for (const channel of frame.channels) {
-        if (typeof channel === "string") this.acknowledgedChannels.add(channel)
+        if (typeof channel === "string") {
+          this.acceptedChannels.add(channel)
+          this.acknowledgedChannels.add(channel)
+        }
       }
     }
     if (Array.isArray(frame.rejected)) {
@@ -1482,6 +1495,7 @@ export class TransportRtc {
     this.relayOpen = false
     this.helloSent = false
     this.acknowledgedChannels.clear()
+    this.acceptedChannels.clear()
     if (this.negotiationTimer) {
       clearTimeout(this.negotiationTimer)
       this.negotiationTimer = null
@@ -1931,6 +1945,7 @@ export class TransportRtc {
     // The dispatcher these answered for is gone with the peer. Parked waiters
     // keep their own timeout; the next lane re-sends their channels.
     this.acknowledgedChannels.clear()
+    this.acceptedChannels.clear()
     if (this.relayHandshakeTimer) {
       clearTimeout(this.relayHandshakeTimer)
       this.relayHandshakeTimer = null

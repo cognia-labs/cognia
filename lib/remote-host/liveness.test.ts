@@ -4,7 +4,11 @@ import type { RemoteHostTarget } from "@/lib/remote-host/target-transport"
 import type { Transport } from "@/lib/tauri/transport-types"
 import { useRemoteHostStore, type RemoteHost } from "@/stores/remote-host/remote-host-store"
 
-import { __resetManagementChannelsForTests } from "./management-channel"
+import {
+  __resetManagementChannelsForTests,
+  acquireManagementChannel,
+  MANAGEMENT_CHANNEL_IDLE_MS,
+} from "./management-channel"
 import {
   HOST_LIVENESS_INTERVAL_MS,
   HOST_LIVENESS_MAX_BACKOFF_MS,
@@ -66,6 +70,34 @@ beforeEach(() => {
 })
 
 describe("probeHostLiveness", () => {
+  it("does not close a run's retained lease when a probe fails or releases its own lease", async () => {
+    jest.useFakeTimers()
+    try {
+      const close = jest.fn()
+      const channel = {
+        openTarget: jest.fn(async () => ({
+          host: host(),
+          close,
+          transport: {
+            call: jest.fn(async () => {
+              throw new Error("offline")
+            }),
+            subscribe: jest.fn(),
+          },
+        })),
+      }
+      const run = await acquireManagementChannel("h1", channel)
+      await probeHostLiveness("h1", { channel })
+      await jest.advanceTimersByTimeAsync(MANAGEMENT_CHANNEL_IDLE_MS * 2)
+      expect(channel.openTarget).toHaveBeenCalledTimes(1)
+      expect(close).not.toHaveBeenCalled()
+      run.release()
+      await jest.advanceTimersByTimeAsync(MANAGEMENT_CHANNEL_IDLE_MS)
+      expect(close).toHaveBeenCalledTimes(1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
   it("records a version-matched manifest as the host being alive", async () => {
     const call = jest.fn(async () => manifest()) as unknown as Transport["call"]
     const result = await probeHostLiveness("h1", {

@@ -739,9 +739,12 @@ describe("TransportRtc", () => {
       })
       await waiting
       expect(resolved).toBe(true)
+      expect(rtc.hasSubscribedChannels(["external-agent://stdout"])).toBe(true)
+      expect(rtc.hasSubscribedChannels(["external-agent://exit"])).toBe(false)
       // Already answered: no wait at all.
       await expect(rtc.whenSubscribed(["external-agent://stdout"])).resolves.toBeUndefined()
       rtc.close()
+      expect(rtc.hasSubscribedChannels(["external-agent://stdout"])).toBe(false)
     })
 
     it("gives up waiting after the timeout instead of hanging on a silent Host", async () => {
@@ -2635,15 +2638,15 @@ describe("TransportRtc framing and teardown failures", () => {
     const value = "x".repeat(100_000)
     const frames = encodeRtcLogicalMessage(
       JSON.stringify({ kind: "event", event: "topic", seq: 1, payload: value }),
-      "fragmented-event"
+      "00000000-0000-4000-8000-000000000006"
     )
     for (const frame of frames) dc.onmessage?.({ data: frame } as MessageEvent)
     expect(listener).toHaveBeenCalledWith(value)
     expect(dc.sent.map((raw) => JSON.parse(raw))).toContainEqual({
       kind: "chunk/ack",
-      messageId: "fragmented-event",
+      messageId: "00000000-0000-4000-8000-000000000006",
     })
-    dc.push({ kind: "chunk/ack", messageId: "fragmented-event" })
+    dc.push({ kind: "chunk/ack", messageId: "00000000-0000-4000-8000-000000000006" })
     dc.push({ kind: "chunk/start", messageId: "bad", totalBytes: -1, totalChunks: 1 })
     expect(dc.sent.map((raw) => JSON.parse(raw))).toContainEqual(
       expect.objectContaining({ kind: "chunk/cancel", messageId: "bad" })

@@ -103,6 +103,81 @@ function wanTargetKey(config: CompanionConfig): string {
     .join(":")
 }
 
+type RetainedRunTransport = Transport & { destroy?: () => void }
+interface RetainedRunConnection {
+  config: CompanionConfig
+  transport: RetainedRunTransport
+  refs: number
+  routeOwned: boolean
+  invalid: boolean
+}
+const retainedRunConnections = new Map<string, RetainedRunConnection>()
+
+function retainedRunKey(config: CompanionConfig): string {
+  return JSON.stringify([
+    config.accountId,
+    config.targetId,
+    config.deviceId,
+    config.deviceKeyThumbprint,
+    config.rendezvousId,
+  ])
+}
+
+/** One signaling session per pairing, shared by the active route and its runs. */
+export function retainCompanionRunConnection(
+  config: CompanionConfig,
+  active: Transport | undefined,
+  create: (provider: () => CompanionConfig) => RetainedRunTransport
+): { transport: Transport; release(): void; invalidate(): void } {
+  const key = retainedRunKey(config)
+  let entry = retainedRunConnections.get(key)
+  if (!entry) {
+    const reusable = active instanceof CompanionTransport && active.matchesRunPairing(config)
+    const retainedConfig = { ...config }
+    entry = {
+      config: retainedConfig,
+      transport: reusable ? active : create(() => retainedConfig),
+      refs: 0,
+      routeOwned: reusable,
+      invalid: false,
+    }
+    retainedRunConnections.set(key, entry)
+    if (entry.transport instanceof CompanionTransport)
+      entry.transport.bindRetainedRunConnection(entry)
+  }
+  const current = entry
+  current.refs += 1
+  let released = false
+  const forget = () => {
+    if (retainedRunConnections.get(key) === current) retainedRunConnections.delete(key)
+  }
+  return {
+    transport: current.transport,
+    release() {
+      if (released) return
+      released = true
+      if (--current.refs > 0 || current.invalid) return
+      forget()
+      if (current.transport instanceof CompanionTransport)
+        current.transport.bindRetainedRunConnection(null)
+      if (!current.routeOwned) current.transport.destroy?.()
+    },
+    invalidate() {
+      if (current.invalid) return
+      current.invalid = true
+      forget()
+      current.transport.destroy?.()
+    },
+  }
+}
+
+function retainedRouteTransport(config: CompanionConfig): CompanionTransport | undefined {
+  const entry = retainedRunConnections.get(retainedRunKey(config))
+  if (!entry || entry.invalid || !(entry.transport instanceof CompanionTransport)) return
+  entry.routeOwned = true
+  return entry.transport
+}
+
 /** Compare pairing identity while allowing addresses and pins to be refreshed. */
 export function isSameCompanionTarget(
   left: CompanionConfig,
@@ -116,6 +191,24 @@ export function isSameCompanionTarget(
     left.deviceKeyThumbprint === right.deviceKeyThumbprint &&
     left.rendezvousId === right.rendezvousId &&
     left.serviceToken === right.serviceToken
+  )
+}
+
+function isSameRetainedRunPairing(left: CompanionConfig, right: CompanionConfig): boolean {
+  // These credential records are flat; normalize property order after storage hydration.
+  const sameRecord = (a: object | undefined, b: object | undefined) =>
+    JSON.stringify(a, a && Object.keys(a).sort()) === JSON.stringify(b, b && Object.keys(b).sort())
+  return (
+    isSameCompanionTarget(left, right) &&
+    left.tenantId === right.tenantId &&
+    sameRecord(left.devicePrivateKeyJwk, right.devicePrivateKeyJwk) &&
+    sameRecord(left.signalingPrivateKeyJwk, right.signalingPrivateKeyJwk) &&
+    sameRecord(left.signalingRoomDescriptor, right.signalingRoomDescriptor) &&
+    // Browser hydration reimports non-extractable keys; the identical signed
+    // room descriptor pins their public identity across CryptoKey instances.
+    (left.signalingPrivateKeyJwk !== undefined ||
+      left.signalingRoomDescriptor !== undefined ||
+      left.signalingPrivateKey === right.signalingPrivateKey)
   )
 }
 
@@ -157,6 +250,17 @@ export async function updateCompanionConfigMetadata(
         return cachedConfig
       }
       cachedConfig = next
+      const retained = retainedRunConnections.get(retainedRunKey(next))
+      if (retained && !retained.invalid && isSameRetainedRunPairing(next, retained.config)) {
+        // Refresh verified endpoints in place so fixed providers and the active
+        // shared transport see them. Pairing identity and credentials stay pinned.
+        Object.assign(retained.config, {
+          baseUrl: next.baseUrl,
+          lanBaseUrl: next.lanBaseUrl,
+          tunnelBaseUrl: next.tunnelBaseUrl,
+          serverFingerprint: next.serverFingerprint,
+        })
+      }
       return next
     })
   metadataWriteTail = operation
@@ -207,8 +311,8 @@ export async function hydrateCompanionConfig(): Promise<CompanionConfig | null> 
       throw error
     }
     if (generation !== configGeneration) return cachedConfig
-    if (next ? !isSameCompanionTarget(next, cachedConfig) : cachedConfig !== null)
-      configGeneration += 1
+    const changed = next ? !isSameCompanionTarget(next, cachedConfig) : cachedConfig !== null
+    if (changed) configGeneration += 1
     cachedConfig = next
     // `pickTransport()` decides at module load, before the Vault is unlocked and
     // before any runtime target is active, so a browser that IS paired can boot
@@ -223,6 +327,7 @@ export async function hydrateCompanionConfig(): Promise<CompanionConfig | null> 
     const activatedGeneration = configGeneration
     if (cachedConfig)
       await ensureWebCompanionTransport(() => activatedGeneration === configGeneration)
+    if (changed && activatedGeneration === configGeneration) notifyCompanionConfigChanged()
     return cachedConfig
   })
 }
@@ -289,7 +394,7 @@ export async function reloadCompanionConfigForActiveTarget(options?: {
     const next = await companionStorage().load()
     if (generation !== configGeneration) return cachedConfig
     cachedConfig = next
-    if (isPlainBrowser()) {
+    if (isPlainBrowser() || isCapacitor()) {
       if (cachedConfig) {
         await activateWebCompanionTransport()
       } else {
@@ -297,7 +402,7 @@ export async function reloadCompanionConfigForActiveTarget(options?: {
           import("./transport-instance"),
           import("./transport-web"),
         ])
-        setTransport(new WebStubTransport())
+        setTransport(isCapacitor() ? new CompanionTransport() : new WebStubTransport())
       }
     }
     if (options?.notify !== false) notifyCompanionConfigChanged()
@@ -380,9 +485,9 @@ async function registerWebRuntimeTarget(
 }
 
 async function activateWebCompanionTransport(): Promise<void> {
-  if (!isPlainBrowser()) return
+  if (isTauri()) return
   const { setTransport } = await import("./transport-instance")
-  setTransport(new CompanionTransport())
+  setTransport((cachedConfig && retainedRouteTransport(cachedConfig)) || new CompanionTransport())
 }
 
 /**
@@ -399,7 +504,9 @@ async function ensureWebCompanionTransport(isCurrent: () => boolean): Promise<vo
   const instance = await import("./transport-instance")
   if (!isCurrent()) return
   if (instance.transport instanceof CompanionTransport) return
-  instance.setTransport(new CompanionTransport())
+  instance.setTransport(
+    (cachedConfig && retainedRouteTransport(cachedConfig)) || new CompanionTransport()
+  )
 }
 
 function notifyCompanionConfigChanged(): void {
@@ -652,6 +759,9 @@ function withJitter(ms: number): number {
  * storage adapter; short-lived access tokens remain memory-only.
  */
 export class CompanionTransport implements Transport {
+  private retainedRunConnection: RetainedRunConnection | null = null
+  private retainedRunTargetBinding = false
+  private readonly pendingCalls = new Set<AbortController>()
   // ── WebSocket state ────────────────────────────────────────────────────────
   private ws: WebSocket | null = null
   private wsState: "idle" | "connecting" | "connected" | "reconnecting" | "closed" = "idle"
@@ -802,13 +912,29 @@ export class CompanionTransport implements Transport {
 
   /** The active config: injected provider first, storage cache otherwise. */
   private config(): CompanionConfig | null {
-    return this.configProvider ? this.configProvider() : loadCompanionConfig()
+    if (this.retainedRunConnection?.invalid) return null
+    return (
+      this.retainedRunConnection?.config ??
+      (this.configProvider ? this.configProvider() : loadCompanionConfig())
+    )
+  }
+
+  /** Internal run ownership; route teardown must not retire an owned lane. */
+  public bindRetainedRunConnection(entry: RetainedRunConnection | null): void {
+    // A fixed-provider run connection can later become the app's active route.
+    if (entry) this.retainedRunTargetBinding = true
+    this.retainedRunConnection = entry
+  }
+
+  public matchesRunPairing(config: CompanionConfig): boolean {
+    return !this.wsDestroyed && isSameCompanionTarget(config, this.config())
   }
 
   /** Refuse history reads during the gap between database and pairing activation. */
   public assertRuntimeTargetBinding(): void {
+    if (this.retainedRunConnection?.invalid) throw new Error("Companion run authority expired")
     // Headless service transports have an explicit provider and no browser target binding.
-    if (this.configProvider) return
+    if (this.configProvider && !this.retainedRunTargetBinding) return
     const scope = getActiveRuntimeTargetContext()
     if (!scope) return
     const config = this.config()
@@ -1003,7 +1129,7 @@ export class CompanionTransport implements Transport {
       )
     }
 
-    const config = this.config()
+    const config = this.wsDestroyed ? null : this.config()
     if (!config) {
       return Promise.reject(
         new CompanionError({
@@ -1027,13 +1153,14 @@ export class CompanionTransport implements Transport {
     const timeoutMs = transportCommandTimeoutMs(name)
     const deadlineAt = Date.now() + timeoutMs
     const controller = new AbortController()
+    this.pendingCalls.add(controller)
     const signal = controller.signal
     let timer: ReturnType<typeof setTimeout> | undefined
     const expired = new Promise<never>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true })
       timer = setTimeout(() => {
-        controller.abort()
         this.setPlaneHealth({ rpc: "unavailable" })
-        reject(
+        controller.abort(
           new CompanionError({
             code: "timeout",
             message: `request timed out after ${timeoutMs}ms (${name})`,
@@ -1046,6 +1173,7 @@ export class CompanionTransport implements Transport {
     // never ran, and a later round that does run is still the same request.
     const mintedKey = crypto.randomUUID()
     const execute = async (): Promise<T> => {
+      signal.throwIfAborted()
       // ADR-0021 — route through the WebRTC DataChannel when it is open,
       // UNLESS we're on a connected LAN (mDNS HTTPS+WS is preferred when
       // available — WebRTC is consulted only when LAN is unavailable). The
@@ -1071,6 +1199,7 @@ export class CompanionTransport implements Transport {
       ) {
         const rtc = await this.awaitRelayRoute(config, deadlineAt, signal)
         try {
+          signal.throwIfAborted()
           const result = await rtc.call<T>(name, args ?? {}, { idempotencyKey, deadlineAt })
           this.setPlaneHealth({ rpc: "ready" })
           return result
@@ -1082,6 +1211,7 @@ export class CompanionTransport implements Transport {
       }
       if (this.preferRtc()) {
         try {
+          signal.throwIfAborted()
           const params = args ?? {}
           return await this.rtc!.call<T>(name, params, { idempotencyKey, deadlineAt })
         } catch (err) {
@@ -1136,6 +1266,7 @@ export class CompanionTransport implements Transport {
         signal.throwIfAborted()
         const rtc = await this.awaitRelayRoute(config, deadlineAt, signal)
         try {
+          signal.throwIfAborted()
           const result = await rtc.call<T>(name, args ?? {}, { idempotencyKey, deadlineAt })
           this.setPlaneHealth({ rpc: "ready" })
           return result
@@ -1173,6 +1304,7 @@ export class CompanionTransport implements Transport {
       return await Promise.race([executeWithinQuota(), expired])
     } finally {
       clearTimeout(timer)
+      this.pendingCalls.delete(controller)
     }
   }
 
@@ -1332,6 +1464,7 @@ export class CompanionTransport implements Transport {
    * one that should decide what a silent host means.
    */
   async whenSubscribed(channels: readonly string[], timeoutMs = 5_000): Promise<void> {
+    if (this.hasSubscribedChannels(channels)) return
     // On the WAN tier with no events socket — a phone without native pinning
     // never has one — the channels are delivered by the data lane, and only
     // the lane's dispatcher can say it is subscribed. Waiting on socket
@@ -1360,6 +1493,8 @@ export class CompanionTransport implements Transport {
   }
 
   hasSubscribedChannels(channels: readonly string[]): boolean {
+    if (this.rtc && this.rtcCarries(channels) && this.rtc.hasSubscribedChannels(channels))
+      return true
     return (
       this.wsState === "connected" &&
       this.pendingSubscribeFrames === 0 &&
@@ -1436,6 +1571,13 @@ export class CompanionTransport implements Transport {
       configOverride?: CompanionConfig
     }
   ): Promise<void> {
+    if (this.wsDestroyed || this.retainedRunConnection?.invalid) return
+    if (
+      this.retainedRunConnection &&
+      options.configOverride &&
+      !isSameCompanionTarget(options.configOverride, this.retainedRunConnection.config)
+    )
+      throw new Error("Retained run connection cannot change pairing")
     // Retain the options for `reconnectRtc()`'s re-establish path even when
     // this particular call short-circuits — the tier may already be open, but
     // a future failure still needs the config to rebuild.
@@ -2301,7 +2443,9 @@ export class CompanionTransport implements Transport {
     const current = () =>
       !this.wsDestroyed &&
       attempt === this.wsTicketAttempt &&
-      pairing === getCompanionConfigGeneration() &&
+      (this.retainedRunConnection !== null ||
+        this.configProvider !== null ||
+        pairing === getCompanionConfigGeneration()) &&
       isSameCompanionTarget(config, this.config())
     const failed = (error: unknown) => {
       if (!current()) return
@@ -2731,7 +2875,19 @@ export class CompanionTransport implements Transport {
 
   /** Release all resources. Intended for cleanup in tests. */
   public destroy(): void {
+    if (
+      this.retainedRunConnection &&
+      !this.retainedRunConnection.invalid &&
+      this.retainedRunConnection.refs > 0
+    ) {
+      this.retainedRunConnection.routeOwned = false
+      return
+    }
     this.wsDestroyed = true
+    for (const controller of this.pendingCalls) {
+      controller.abort(new Error("Companion run authority expired"))
+    }
+    this.pendingCalls.clear()
     if (this.wsReconnectTimer !== null) {
       clearTimeout(this.wsReconnectTimer)
       this.wsReconnectTimer = null

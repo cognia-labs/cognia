@@ -6,7 +6,18 @@ jest.mock("@/lib/signaling/crypto", () => ({
 }))
 
 import type { CompanionConfig } from "@/lib/tauri/companion-storage"
+import { __setCompanionStorageForTests } from "@/lib/tauri/companion-storage"
 import type { Transport } from "@/lib/tauri/transport-types"
+import {
+  __setCompanionConfigCacheForTests,
+  loadCompanionConfig,
+  updateCompanionConfigMetadata,
+} from "@/lib/tauri/transport-companion"
+import {
+  setActiveRuntimeTargetContext,
+  clearActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
+import { bumpPerformanceSecurityGeneration } from "@/lib/perf/security-generation"
 import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 import {
   isPairedHostTargetCurrent,
@@ -271,4 +282,118 @@ describe("the /pair Host this app is connected to", () => {
       )
     ).toBe(false)
   })
+
+  it("retains a run connection across route changes and refuses a replaced pairing", async () => {
+    let active = { accountId: "acct", targetId: "box", routingGeneration: 1 }
+    let config = { ...liveConfig }
+    let currentRecord = { ...record, deviceId: liveConfig.deviceId }
+    const call = jest.fn(async () => ({ cancelled: true }))
+    const destroy = jest.fn()
+    let emit: ((payload: unknown) => void) | undefined
+    const createTransport = jest.fn((_provider: () => CompanionConfig) => ({
+      call: call as Transport["call"],
+      subscribe: <T>(_topic: string, handler: (payload: T) => void) => {
+        emit = handler as (payload: unknown) => void
+        return () => undefined
+      },
+      destroy,
+    }))
+    const target = await openRemoteHostTarget("companion:box", {
+      mode: "retained-run",
+      createTransport,
+      paired: paired({
+        activeTarget: () => active,
+        loadConfig: () => config,
+        loadRecord: async () => currentRecord as never,
+      }),
+    })
+    const received = jest.fn()
+    target.transport.subscribe("external-agent://session-event", received)
+    active = { ...active, targetId: "desk", routingGeneration: 2 }
+    config = { ...liveConfig, targetId: "desk", deviceId: "desk-device" }
+    emit?.({ seq: 1 })
+    expect(received).toHaveBeenCalledWith({ seq: 1 })
+    await target.transport.call("external_agent_cancel_run", {})
+    await target.transport.call("external_agent_resolve_decision", { decision: "allow" })
+    expect(call).toHaveBeenCalledTimes(2)
+    expect(createTransport.mock.calls[0][0]()).toMatchObject({
+      targetId: "box",
+      deviceId: "phone-device",
+    })
+    currentRecord = { ...currentRecord, deviceId: "replacement" }
+    await expect(target.transport.call("external_agent_cancel_run", {})).rejects.toThrow(
+      "connection changed"
+    )
+    emit?.({ seq: 2 })
+    expect(received).toHaveBeenCalledTimes(1)
+    target.close()
+    expect(destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not refresh a retained endpoint for a replaced device and invalidates its authority", async () => {
+    const config = { ...liveConfig, accountId: "acct" }
+    __setCompanionConfigCacheForTests(config)
+    __setCompanionStorageForTests({
+      load: async () => config,
+      save: async () => undefined,
+      clear: async () => undefined,
+    })
+    let retainedConfig!: () => CompanionConfig
+    const destroy = jest.fn()
+    const target = await openRemoteHostTarget("companion:box", {
+      mode: "retained-run",
+      paired: paired({ loadConfig: loadCompanionConfig }),
+      createTransport: (provider) => {
+        retainedConfig = provider
+        return { call: jest.fn(), subscribe: jest.fn(), destroy }
+      },
+    })
+    try {
+      const replacement = { ...config, deviceId: "replacement-device" }
+      __setCompanionConfigCacheForTests(replacement)
+      await updateCompanionConfigMetadata(replacement, { baseUrl: "https://replacement.example" })
+      expect(retainedConfig()).toMatchObject({ baseUrl: config.baseUrl, deviceId: config.deviceId })
+      expect(() => target.assertCurrent?.()).toThrow("connection changed")
+      expect(destroy).toHaveBeenCalledTimes(1)
+    } finally {
+      target.close()
+      __setCompanionConfigCacheForTests(null)
+      __setCompanionStorageForTests(null)
+    }
+  })
+
+  it.each(["switch", "lock"])(
+    "permanently invalidates retained authority after account %s",
+    async (kind) => {
+      setActiveRuntimeTargetContext("account-a", "box", 1)
+      const call = jest.fn(async () => undefined)
+      const destroy = jest.fn()
+      let emit: ((payload: unknown) => void) | undefined
+      const target = await openRemoteHostTarget("companion:box", {
+        mode: "retained-run",
+        paired: paired({ activeTarget: undefined }),
+        createTransport: () => ({
+          call: call as Transport["call"],
+          destroy,
+          subscribe: <T>(_topic: string, handler: (payload: T) => void) => {
+            emit = handler as (payload: unknown) => void
+            return () => undefined
+          },
+        }),
+      })
+      const received = jest.fn()
+      target.transport.subscribe("external-agent://session-event", received)
+      if (kind === "switch") {
+        setActiveRuntimeTargetContext("other-acct", "box", 2)
+        setActiveRuntimeTargetContext("account-a", "box", 3)
+      } else bumpPerformanceSecurityGeneration("account-a", "account-locked")
+      expect(destroy).toHaveBeenCalledTimes(1)
+      emit?.({ terminal: "completed" })
+      expect(received).not.toHaveBeenCalled()
+      await expect(target.transport.call("external_agent_cancel_run", {})).rejects.toThrow()
+      expect(call).not.toHaveBeenCalled()
+      target.close()
+      clearActiveRuntimeTargetContext()
+    }
+  )
 })
