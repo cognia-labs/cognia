@@ -1,19 +1,20 @@
 import {
-  migrateSelectionToolbarMode,
+  parseSelectionToolbarMode,
   normalizeHostnameRules,
   normalizeSelectionActionLayout,
 } from "./preferences"
 
-describe("migrateSelectionToolbarMode", () => {
-  it("prefers the new mode and migrates the legacy enabled bit", () => {
-    expect(migrateSelectionToolbarMode("manual", false)).toBe("manual")
-    expect(migrateSelectionToolbarMode(undefined, true)).toBe("automatic")
-    expect(migrateSelectionToolbarMode(undefined, false)).toBe("off")
-    expect(migrateSelectionToolbarMode(undefined, undefined)).toBe("off")
+describe("parseSelectionToolbarMode", () => {
+  it("keeps a valid persisted mode", () => {
+    expect(parseSelectionToolbarMode("manual")).toBe("manual")
+    expect(parseSelectionToolbarMode("automatic")).toBe("automatic")
+    expect(parseSelectionToolbarMode("off")).toBe("off")
   })
 
-  it("fails closed for malformed persisted modes", () => {
-    expect(migrateSelectionToolbarMode("always" as never, true)).toBe("automatic")
+  it("fails closed for an absent or malformed persisted mode", () => {
+    expect(parseSelectionToolbarMode(undefined)).toBe("off")
+    expect(parseSelectionToolbarMode(null)).toBe("off")
+    expect(parseSelectionToolbarMode("always")).toBe("off")
   })
 })
 

@@ -1,32 +1,15 @@
 /**
- * The phone's glance layout (ADR-0225 §9, §10): presets, normalization, the
- * one-way read of the layout it replaces, and copying to and from the
- * desktop's layout.
+ * The phone's glance layout (ADR-0225 §9, §10): presets, normalization, and
+ * copying to and from the desktop's layout.
  *
  * One layout feeds two surfaces. The Glance drawer renders every visible
  * entry; the home screen renders the visible entries pinned with `home`, in
  * the same order. The quick module's content on a phone is the layout's own
  * shortcut list (`shortcuts`), not the desktop tray's action catalogue.
- *
- * Before ADR-0225 the home screen had its own model, `mobileHomeLayout`
- * (a shortcut grid plus three section toggles), and the activity dashboard
- * had an on/off of its own (`welcomeStats.enabled`). Until the phone saves a
- * `mobileGlanceLayout`, that old state is read into the new model on every
- * read, so nothing changes on screen and nothing has to be written up front:
- * the first edit stores the new field, and from then on the old one is never
- * read again.
  */
 
-import {
-  resolveWelcomeStatsPrefs,
-  type StoredWelcomeStatsPrefs,
-} from "@/lib/chat/welcome-stats-prefs"
 import { hostModules } from "@/lib/modules/registry"
-import {
-  LEGACY_MOBILE_QUICK_ACTION_IDS,
-  MOBILE_QUICK_ACTION_CATALOG,
-  type MobileHomeLayout,
-} from "@/types/shell/mobile-home"
+import { MOBILE_QUICK_ACTION_CATALOG } from "@/types/shell/mobile-home"
 import {
   DEFAULT_GLANCE_MODULE_OPTIONS,
   GLANCE_MAX_PLUGIN_ENTRIES,
@@ -182,76 +165,29 @@ const SHORTCUT_IDS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Repair a shortcut list: renamed ids mapped, unknown ids dropped, duplicates
+ * Repair a shortcut list: unknown ids dropped, duplicates
  * keep their first place. An explicitly empty list is honoured (the user
  * removed every shortcut); only a missing or malformed one gets the default.
  */
 export function normalizeShortcuts(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [...DEFAULT_GLANCE_MOBILE_SHORTCUTS]
   const out: string[] = []
-  for (const stored of raw) {
-    if (typeof stored !== "string") continue
-    const id = LEGACY_MOBILE_QUICK_ACTION_IDS[stored] ?? stored
+  for (const id of raw) {
+    if (typeof id !== "string") continue
     if (!SHORTCUT_IDS.has(id) || out.includes(id)) continue
     out.push(id)
   }
   return out
 }
 
-/** The pre-ADR-0225 home state a phone may still hold. */
-export interface LegacyMobileHomeState {
-  mobileHomeLayout?: Partial<MobileHomeLayout> | null
-  welcomeStats?: StoredWelcomeStatsPrefs | null
-}
-
-/**
- * Read the old home model into the new one. Each old section becomes the home
- * pin of the module that replaced it: the active-runs card is the Fleet
- * module, the grid is the quick module, the dashboard is the usage and
- * activity modules, and recents stay recents. The modules stay visible in the
- * drawer either way, so turning a section off never loses the data. A home
- * that matches the old default reads as the `balanced` preset.
- */
-export function migrateMobileHomeLayout(legacy: LegacyMobileHomeState): GlanceMobileSettings {
-  const hidden = new Set(
-    Array.isArray(legacy.mobileHomeLayout?.hiddenSections)
-      ? legacy.mobileHomeLayout.hiddenSections
-      : []
-  )
-  const dashboard = resolveWelcomeStatsPrefs(legacy.welcomeStats ?? undefined).enabled
-  const pinned: Partial<Record<string, boolean>> = {
-    fleet: !hidden.has("activeRuns"),
-    quick: !hidden.has("quickActions"),
-    recents: !hidden.has("recents"),
-    usage: dashboard,
-    activity: dashboard,
-  }
-  const base = mobileLayoutFromPreset("balanced")
-  const entries = base.map((entry) =>
-    entry.id in pinned ? { ...entry, home: pinned[entry.id] === true } : entry
-  )
-  const unchanged = entries.every((entry, index) => entry.home === base[index].home)
-  const shortcuts =
-    legacy.mobileHomeLayout?.quickActions === undefined
-      ? [...DEFAULT_GLANCE_MOBILE_SHORTCUTS]
-      : normalizeShortcuts(legacy.mobileHomeLayout.quickActions)
-  return {
-    ...DEFAULT_GLANCE_MOBILE_SETTINGS,
-    preset: unchanged ? "balanced" : "custom",
-    entries,
-    shortcuts,
-  }
-}
-
-/**
- * Read whatever is stored into a valid mobile layout. Never throws. With no
- * stored layout, the old home state (if any) is read instead.
- */
-export function normalizeGlanceMobileSettings(
-  raw: unknown,
-  legacy: LegacyMobileHomeState = {}
-): GlanceMobileSettings {
-  if (!isRecord(raw)) return migrateMobileHomeLayout(legacy)
+/** Read whatever is stored into a valid mobile layout. Never throws. */
+export function normalizeGlanceMobileSettings(raw: unknown): GlanceMobileSettings {
+  if (!isRecord(raw))
+    return {
+      ...DEFAULT_GLANCE_MOBILE_SETTINGS,
+      entries: mobileLayoutFromPreset("balanced"),
+      shortcuts: [...DEFAULT_GLANCE_MOBILE_SHORTCUTS],
+    }
   const preset =
     raw.preset === "custom" ||
     (typeof raw.preset === "string" &&

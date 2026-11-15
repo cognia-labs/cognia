@@ -8,7 +8,6 @@ jest.mock("@/lib/db/sessions", () => ({ countSessions: () => countSessions() }))
 const detectPlatform = jest.fn(() => "tauri")
 jest.mock("@/lib/platform/detect", () => ({ detectPlatform: () => detectPlatform() }))
 
-const save = jest.fn().mockResolvedValue(undefined)
 let storeState: { loaded: boolean; settings: AppSettings | null } = {
   loaded: false,
   settings: null,
@@ -16,7 +15,7 @@ let storeState: { loaded: boolean; settings: AppSettings | null } = {
 jest.mock("@/stores/settings/settings-store", () => ({
   useSettingsStore: Object.assign(
     (selector: (s: typeof storeState) => unknown) => selector(storeState),
-    { getState: () => ({ ...storeState, save }) }
+    { getState: () => storeState }
   ),
 }))
 
@@ -27,7 +26,6 @@ const settingsOf = (patch: Partial<AppSettings> = {}): AppSettings =>
 
 beforeEach(() => {
   countSessions.mockReset().mockResolvedValue(0)
-  save.mockClear()
   detectPlatform.mockReturnValue("tauri")
   storeState = { loaded: false, settings: null }
 })
@@ -62,18 +60,6 @@ describe("useOnboardingGate", () => {
     }
     const { result } = renderHook(() => useOnboardingGate())
     await waitFor(() => expect(result.current.status).toBe("skip"))
-  })
-
-  it("migrates a legacy dismissal exactly once and skips", async () => {
-    storeState = {
-      loaded: true,
-      settings: settingsOf({ onboardingDismissedAt: "2026-05-18T00:00:00.000Z" }),
-    }
-    const { result } = renderHook(() => useOnboardingGate())
-    await waitFor(() => expect(result.current.status).toBe("skip"))
-    expect(save).toHaveBeenCalledWith({
-      onboardingProgress: expect.objectContaining({ path: "legacy_dismissed" }),
-    })
   })
 
   it("releases a latched enter verdict the moment the flow records a skip", async () => {
@@ -121,7 +107,7 @@ describe("useOnboardingGate", () => {
 
   it("does not let a settled record pre-empt the resolving state", () => {
     // Hydrated but not yet counted: the verdict must still come from the
-    // effect, so the legacy-migration write and the count both get to run.
+    // effect, so the session count gets to run.
     storeState = {
       loaded: true,
       settings: settingsOf({

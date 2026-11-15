@@ -29,8 +29,7 @@ export function petAccountIdFrom(settings: AppSettings | null | undefined): stri
   if (!settings) return null
   const provider = subscriptionProviderFor(settings.defaultProvider)
   const providerDefault = provider ? settings.defaultAccountIds?.[provider] : undefined
-  const legacyDefault = provider ? settings.defaultAccountId : undefined
-  return providerDefault ?? legacyDefault ?? settings.installUuid ?? null
+  return providerDefault ?? settings.installUuid ?? null
 }
 
 /**

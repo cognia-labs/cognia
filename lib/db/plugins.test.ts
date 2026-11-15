@@ -27,7 +27,6 @@ import {
 import {
   getPermission,
   listPermissionsForPlugin,
-  listAllPermissions,
   setPermission,
   revokePermission,
   revokeAllPermissionsForPlugin,
@@ -321,12 +320,6 @@ describe("plugin-permissions CRUD", () => {
     await setPermission({ pluginId: "p2", permission: "a", decision: "deny" })
     const rows = await listPermissionsForPlugin("p1")
     expect(rows.map((r) => r.permission).sort()).toEqual(["a", "b"])
-  })
-
-  it("listAllPermissions returns every row", async () => {
-    await setPermission({ pluginId: "p1", permission: "a", decision: "allow" })
-    await setPermission({ pluginId: "p2", permission: "b", decision: "deny" })
-    expect((await listAllPermissions()).length).toBe(2)
   })
 
   it("revokePermission drops a single row", async () => {

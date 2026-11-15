@@ -32,14 +32,12 @@ jest.mock("@/stores/project/project-store", () => ({
 import {
   activateAgentTeamAccountStorage,
   clearAgentTeamAccountStorage,
-  migrateAgentTeamPersisted,
   partializeAgentTeamState,
   purgeAgentTeamAccountStorage,
   useAgentTeamStore,
 } from "./store"
 import { initialState } from "./initial-state"
 import { purgeProjectBuckets } from "@/lib/project/project-bucket-purge"
-import { DEFAULT_PROJECT_ID } from "@/lib/db/project-defaults"
 
 function persistedTeam(id: string, name: string) {
   return {
@@ -67,86 +65,6 @@ it("registers the live agent-team store with project bucket purge", () => {
   purge.mockRestore()
 })
 
-describe("migrateAgentTeamPersisted", () => {
-  it("passes through non-object snapshots and current-version snapshots", () => {
-    expect(migrateAgentTeamPersisted(null, 1)).toBeNull()
-    const current = { defaultConfig: DEFAULT_TEAM_CONFIG }
-    expect(migrateAgentTeamPersisted(current, 4)).toBe(current)
-  })
-
-  it("backfills legacy defaults, templates, cursors, and durable maps", () => {
-    const snapshot = {
-      defaultConfig: {},
-      templates: {
-        valid: { config: {} },
-        noConfig: {},
-      },
-      teams: {
-        live: { id: "live", status: "executing" },
-        done: { id: "done", status: "completed" },
-      },
-      teammates: null,
-      tasks: { task_a: { id: "task_a" } },
-    }
-
-    const migrated = migrateAgentTeamPersisted(snapshot, 1)
-
-    expect(migrated.defaultConfig.governancePolicy).toEqual(DEFAULT_TEAM_CONFIG.governancePolicy)
-    expect(migrated.defaultConfig).toHaveProperty("capabilities", undefined)
-    expect(migrated.defaultConfig).toHaveProperty("sharedMemoryAdapterId", undefined)
-    expect(migrated.templates.valid.config).toEqual(
-      expect.objectContaining({
-        governancePolicy: DEFAULT_TEAM_CONFIG.governancePolicy,
-        capabilities: undefined,
-        sharedMemoryAdapterId: undefined,
-      })
-    )
-    expect(migrated.lastAdapterSyncVersion).toEqual({})
-    expect(migrated.teams.live.status).toBe("idle")
-    expect(migrated.teams.done.status).toBe("completed")
-    expect(migrated.teammates).toEqual({})
-    // v5 backfills an empty comments thread on every legacy task.
-    expect(migrated.tasks).toEqual({ task_a: { id: "task_a", comments: [] } })
-  })
-
-  it("creates a default config when a legacy snapshot omitted it", () => {
-    const migrated = migrateAgentTeamPersisted({ templates: {}, teams: {} }, 1)
-
-    expect(migrated.defaultConfig.governancePolicy).toEqual(DEFAULT_TEAM_CONFIG.governancePolicy)
-    expect(migrated.defaultConfig).toHaveProperty("capabilities", undefined)
-    expect(migrated.lastAdapterSyncVersion).toEqual({})
-  })
-
-  it("passes a v5 snapshot without dispatchDecision/externalPickup through unchanged", () => {
-    // Additive optional fields need no migration branch — a current-version
-    // snapshot missing them must load verbatim and consumers guard for
-    // absence (see store header docblock).
-    const snapshot = {
-      defaultConfig: DEFAULT_TEAM_CONFIG,
-      teams: { t1: { id: "t1", status: "idle" } },
-      teammates: {},
-      tasks: {},
-    }
-    expect(migrateAgentTeamPersisted(snapshot, 5)).toBe(snapshot)
-  })
-
-  it("defaults invalid legacy team maps to empty objects", () => {
-    const migrated = migrateAgentTeamPersisted(
-      {
-        defaultConfig: DEFAULT_TEAM_CONFIG,
-        teams: null,
-        teammates: "bad",
-        tasks: null,
-      },
-      3
-    )
-
-    expect(migrated.teams).toEqual({})
-    expect(migrated.teammates).toEqual({})
-    expect(migrated.tasks).toEqual({})
-  })
-})
-
 describe("partializeAgentTeamState", () => {
   it("persists only durable team state", () => {
     const state = {
@@ -165,7 +83,6 @@ describe("partializeAgentTeamState", () => {
       workspaceTab: initialState.workspaceTab,
       tasksView: initialState.tasksView,
       lastAdapterSyncVersion: initialState.lastAdapterSyncVersion,
-      editorSession: initialState.editorSession,
     })
   })
 
@@ -192,95 +109,66 @@ describe("agent-team account storage buckets", () => {
   it("activates account-local snapshots without leaking the previous account", () => {
     localStorage.setItem(
       "cognia-agent-teams:acct_a",
-      JSON.stringify({ state: { teams: { team_a: persistedTeam("team_a", "Alpha") } } })
+      JSON.stringify({ state: { workspaceTab: "tasks" }, version: 9 })
     )
     localStorage.setItem(
       "cognia-agent-teams:acct_b",
-      JSON.stringify({ state: { teams: { team_b: persistedTeam("team_b", "Beta") } } })
+      JSON.stringify({ state: { workspaceTab: "members" }, version: 9 })
     )
 
     activateAgentTeamAccountStorage("acct_a")
-    expect(Object.keys(useAgentTeamStore.getState().teams)).toEqual(["team_a"])
+    expect(useAgentTeamStore.getState().workspaceTab).toBe("tasks")
 
     activateAgentTeamAccountStorage("acct_b")
-    expect(Object.keys(useAgentTeamStore.getState().teams)).toEqual(["team_b"])
+    expect(useAgentTeamStore.getState().workspaceTab).toBe("members")
   })
 
   it("clears memory without deleting the active account bucket", () => {
     localStorage.setItem(
       "cognia-agent-teams:acct_a",
-      JSON.stringify({ state: { teams: { team_a: persistedTeam("team_a", "Alpha") } } })
+      JSON.stringify({ state: { workspaceTab: "tasks" }, version: 9 })
     )
 
     activateAgentTeamAccountStorage("acct_a")
     clearAgentTeamAccountStorage()
 
-    expect(useAgentTeamStore.getState().teams).toEqual({})
+    expect(useAgentTeamStore.getState().workspaceTab).toBe(initialState.workspaceTab)
     // The bucket survives. It no longer holds the squads themselves (Dexie does
     // from persist v8), so what proves it was not deleted is that the key is
     // still there with the preferences that remain in it.
     expect(localStorage.getItem("cognia-agent-teams:acct_a")).toContain("defaultConfig")
   })
 
-  it("resets a phantom running team to idle on an account switch", () => {
-    // A team persisted mid-run (no live controller survives a switch) must not
-    // rehydrate as if it were still executing.
+  it("never reads teams, or a blob written under another version", () => {
     localStorage.setItem(
       "cognia-agent-teams:acct_a",
       JSON.stringify({
-        state: {
-          teams: { team_a: { ...persistedTeam("team_a", "Alpha"), status: "executing" } },
-        },
+        state: { teams: { team_a: persistedTeam("team_a", "Alpha") }, workspaceTab: "tasks" },
+        version: 9,
       })
     )
-
     activateAgentTeamAccountStorage("acct_a")
-    expect(useAgentTeamStore.getState().teams.team_a?.status).toBe("idle")
-  })
+    expect(useAgentTeamStore.getState().teams).toEqual({})
+    expect(useAgentTeamStore.getState().workspaceTab).toBe("tasks")
 
-  it("stamps DEFAULT_PROJECT_ID on workspace-less teams on an account switch (bypasses migrate)", () => {
     localStorage.setItem(
-      "cognia-agent-teams:acct_a",
-      JSON.stringify({
-        state: {
-          teams: {
-            legacy: persistedTeam("legacy", "Legacy"),
-            scoped: { ...persistedTeam("scoped", "Scoped"), projectId: "proj-A" },
-          },
-        },
-      })
+      "cognia-agent-teams:acct_b",
+      JSON.stringify({ state: { workspaceTab: "members" }, version: 6 })
     )
-    activateAgentTeamAccountStorage("acct_a")
-    const teams = useAgentTeamStore.getState().teams
-    expect(teams.legacy?.projectId).toBe(DEFAULT_PROJECT_ID)
-    expect(teams.scoped?.projectId).toBe("proj-A")
+    activateAgentTeamAccountStorage("acct_b")
+    expect(useAgentTeamStore.getState().workspaceTab).toBe(initialState.workspaceTab)
   })
 })
 
-describe("agent-team onRehydrateStorage stale-status reset", () => {
-  it("resets planning/executing/paused teams to idle on rehydrate; leaves terminal ones", async () => {
+describe("agent-team persisted state", () => {
+  it("has no migrate step, so an older version falls back to the defaults", async () => {
+    expect(useAgentTeamStore.persist.getOptions().migrate).toBeUndefined()
     localStorage.setItem(
       "cognia-agent-teams",
-      JSON.stringify({
-        version: 6,
-        state: {
-          teams: {
-            t_exec: { ...persistedTeam("t_exec", "Exec"), status: "executing" },
-            t_plan: { ...persistedTeam("t_plan", "Plan"), status: "planning" },
-            t_paused: { ...persistedTeam("t_paused", "Paused"), status: "paused" },
-            t_done: { ...persistedTeam("t_done", "Done"), status: "completed" },
-          },
-        },
-      })
+      JSON.stringify({ version: 6, state: { workspaceTab: "tasks" } })
     )
-
     await useAgentTeamStore.persist.rehydrate()
-
-    const teams = useAgentTeamStore.getState().teams
-    expect(teams.t_exec?.status).toBe("idle")
-    expect(teams.t_plan?.status).toBe("idle")
-    expect(teams.t_paused?.status).toBe("idle")
-    expect(teams.t_done?.status).toBe("completed")
+    expect(useAgentTeamStore.getState().workspaceTab).toBe(initialState.workspaceTab)
   })
 
   it("rehydrates without throwing when there is no persisted state", async () => {
@@ -298,33 +186,17 @@ describe("agent-team onRehydrateStorage stale-status reset", () => {
     expect(localStorage.getItem("cognia-agent-teams:acct_b")).toBe("B")
   })
 
-  it("adopts the legacy bucket only when the account bucket is missing", () => {
+  it("never adopts the signed-out bucket into an account", () => {
     localStorage.setItem(
       "cognia-agent-teams",
-      JSON.stringify({ state: { teams: { legacy_team: persistedTeam("legacy_team", "Legacy") } } })
+      JSON.stringify({ state: { teams: { signed_out: persistedTeam("signed_out", "Out") } } })
     )
 
-    activateAgentTeamAccountStorage("acct_legacy")
+    activateAgentTeamAccountStorage("acct_new")
 
-    expect(localStorage.getItem("cognia-agent-teams")).toBeNull()
-    // Adoption is proved by the squad reaching memory, not by it staying in the
-    // bucket: from persist v8 the bucket no longer carries squads at all, and
-    // the Dexie mirror is what writes the adopted rows down.
-    expect(Object.keys(useAgentTeamStore.getState().teams)).toEqual(["legacy_team"])
-    expect(localStorage.getItem("cognia-agent-teams:acct_legacy")).not.toBeNull()
-
-    localStorage.setItem(
-      "cognia-agent-teams",
-      JSON.stringify({ state: { teams: { ignored: persistedTeam("ignored", "Ignored") } } })
-    )
-    localStorage.setItem(
-      "cognia-agent-teams:acct_existing",
-      JSON.stringify({ state: { teams: { existing: persistedTeam("existing", "Existing") } } })
-    )
-    activateAgentTeamAccountStorage("acct_existing")
-
-    expect(localStorage.getItem("cognia-agent-teams")).toContain("ignored")
-    expect(Object.keys(useAgentTeamStore.getState().teams)).toEqual(["existing"])
+    expect(localStorage.getItem("cognia-agent-teams")).toContain("signed_out")
+    expect(useAgentTeamStore.getState().teams).toEqual({})
+    expect(localStorage.getItem("cognia-agent-teams:acct_new")).not.toContain("signed_out")
   })
 
   it("falls back to empty state for missing and malformed account snapshots", () => {

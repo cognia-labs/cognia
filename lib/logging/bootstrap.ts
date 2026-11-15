@@ -54,13 +54,12 @@ import { hasNoLeakingPii } from "@cognia/redact"
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import { isTauri } from "@/lib/platform/detect"
 import { hasHostRuntime } from "@/lib/platform/capabilities"
-import { ingestLangfuseTraceBatch, setLangfuseCredentials } from "@/lib/logging/langfuse-host"
+import { ingestLangfuseTraceBatch } from "@/lib/logging/langfuse-host"
 import {
   configureTauriSidecarTelemetry,
   createTauriOtlpFetch,
   postTauriTelemetryJson,
 } from "./transports/tauri-fetch-shim"
-import { extractLegacyTelemetrySecrets, persistLegacyTelemetrySecrets } from "./telemetry-secrets"
 import { isCredentiallessOtlpEndpoint, resolveOtlpEgressPolicy } from "./otlp-egress-policy"
 import { createEvalOnlineTransport } from "./transports/eval-online-transport"
 import {
@@ -244,7 +243,7 @@ function readStorageJSON<T>(key: string): Partial<T> | null {
 }
 
 function readTransportSettings(): LoggingTransportSettings {
-  let raw = readStorageJSON<LoggingTransportSettings>(LOGGING_TRANSPORTS_STORAGE_KEY)
+  const raw = readStorageJSON<LoggingTransportSettings>(LOGGING_TRANSPORTS_STORAGE_KEY)
   if (!raw) {
     return {
       ...DEFAULT_TRANSPORT_SETTINGS,
@@ -260,88 +259,6 @@ function readTransportSettings(): LoggingTransportSettings {
     }
   }
 
-  const persistedOtlpConfig =
-    raw.agentTraceOtlpConfig && typeof raw.agentTraceOtlpConfig === "object"
-      ? (raw.agentTraceOtlpConfig as Partial<AgentTraceOtlpSettings>)
-      : undefined
-  if (persistedOtlpConfig?.headers && Object.keys(persistedOtlpConfig.headers).length > 0) {
-    raw = {
-      ...raw,
-      agentTraceOtlpConfig: { ...persistedOtlpConfig, headers: {} } as AgentTraceOtlpSettings,
-    }
-    try {
-      localStorage.setItem(LOGGING_TRANSPORTS_STORAGE_KEY, JSON.stringify(raw))
-    } catch {
-      // The in-memory copy is still credential-free when storage is unavailable.
-    }
-  }
-
-  const migration = extractLegacyTelemetrySecrets(raw)
-  if (Object.keys(migration.secrets).length > 0) {
-    raw = migration.settings as Partial<LoggingTransportSettings>
-    if (!isTauri()) {
-      try {
-        // A renderer must not retain plaintext telemetry credentials merely
-        // because a best-effort migration to encrypted browser storage fails.
-        localStorage.setItem(LOGGING_TRANSPORTS_STORAGE_KEY, JSON.stringify(migration.settings))
-      } catch {
-        // The sanitized in-memory settings still prevent credential egress.
-      }
-    }
-    const legacyLangfuse = migration.settings.langfuseConfig as Record<string, unknown> | undefined
-    // Every profile but a standalone browser has a host to hold these
-    // secrets. The old three-term spelling answered false on the headless
-    // brain, which is the one process that keeps them.
-    const hasHost = hasHostRuntime()
-    const publicKey =
-      typeof legacyLangfuse?.publicKey === "string" ? legacyLangfuse.publicKey.trim() : ""
-    const shouldEnableLangfuse =
-      migration.settings.langfuse === true &&
-      Boolean(migration.secrets.langfuseSecretKey && publicKey)
-    const writes: Promise<unknown>[] = [
-      persistLegacyTelemetrySecrets({
-        grafanaCloudApiToken: isTauri() ? migration.secrets.grafanaCloudApiToken : undefined,
-        // Dropped from the legacy store ONLY when the Host write below is
-        // actually carrying it into that account's credential record.
-        //
-        // Every other shape keeps it encrypted here. A hostless static Web
-        // runtime has nowhere else to put it (a later Host pairing requires an
-        // explicit credential save), and a Host whose legacy toggle was off —
-        // or whose public key is blank — is not migrating anything, so
-        // discarding the secret would erase a key the user cannot read back
-        // out of Langfuse.
-        langfuseSecretKey:
-          hasHost && shouldEnableLangfuse ? undefined : migration.secrets.langfuseSecretKey,
-      }),
-    ]
-    if (hasHost && shouldEnableLangfuse) {
-      const legacyBaseUrl =
-        typeof legacyLangfuse?.baseUrl === "string"
-          ? legacyLangfuse.baseUrl
-          : typeof legacyLangfuse?.host === "string"
-            ? legacyLangfuse.host
-            : DEFAULT_TRANSPORT_SETTINGS.langfuseConfig.baseUrl
-      writes.push(
-        setLangfuseCredentials({
-          enabled: true,
-          baseUrl: legacyBaseUrl,
-          publicKey,
-          secretKey: migration.secrets.langfuseSecretKey,
-          environment: "production",
-          captureModelContent: false,
-          captureToolContent: false,
-        })
-      )
-    }
-    void Promise.all(writes)
-      .then(() => {
-        // Erase plaintext only after every keyring write succeeds. A failed
-        // migration must leave the source intact so the next boot can retry.
-        localStorage.setItem(LOGGING_TRANSPORTS_STORAGE_KEY, JSON.stringify(migration.settings))
-      })
-      .catch(() => {})
-  }
-
   const remoteConfig: Partial<RemoteTransportDetailSettings> =
     raw.remoteConfig && typeof raw.remoteConfig === "object"
       ? (raw.remoteConfig as Partial<RemoteTransportDetailSettings>)
@@ -350,15 +267,9 @@ function readTransportSettings(): LoggingTransportSettings {
     raw.nativeConfig && typeof raw.nativeConfig === "object"
       ? (raw.nativeConfig as Partial<NativeTransportDetailSettings>)
       : {}
-  const langfuseConfig: Partial<LangfuseTraceSettings> & {
-    host?: unknown
-    minLevel?: unknown
-  } =
+  const langfuseConfig: Partial<LangfuseTraceSettings> & { minLevel?: unknown } =
     raw.langfuseConfig && typeof raw.langfuseConfig === "object"
-      ? (raw.langfuseConfig as Partial<LangfuseTraceSettings> & {
-          host?: unknown
-          minLevel?: unknown
-        })
+      ? (raw.langfuseConfig as Partial<LangfuseTraceSettings> & { minLevel?: unknown })
       : {}
   const agentTraceConfig: Partial<AgentTraceTransportDetailSettings> =
     raw.agentTraceConfig && typeof raw.agentTraceConfig === "object"
@@ -370,41 +281,14 @@ function readTransportSettings(): LoggingTransportSettings {
       : {}
   const posthogConfig = sanitizePostHogConfig(raw.posthogConfig)
 
-  const hasNewLangfuseEnabled = typeof langfuseConfig.enabled === "boolean"
-  const legacyLangfuseRequested = raw.langfuse === true
   const langfusePublicKey =
     typeof langfuseConfig.publicKey === "string" ? langfuseConfig.publicKey : ""
   const langfuseSecretConfigured = langfuseConfig.secretKeyConfigured === true
-  const langfuseEnabled = hasNewLangfuseEnabled
-    ? langfuseConfig.enabled === true
-    : legacyLangfuseRequested && langfusePublicKey.trim().length > 0 && langfuseSecretConfigured
+  const langfuseEnabled = langfuseConfig.enabled === true
   const langfuseBaseUrl =
     typeof langfuseConfig.baseUrl === "string" && langfuseConfig.baseUrl.trim().length > 0
       ? langfuseConfig.baseUrl
-      : typeof langfuseConfig.host === "string" && langfuseConfig.host.trim().length > 0
-        ? langfuseConfig.host
-        : DEFAULT_TRANSPORT_SETTINGS.langfuseConfig.baseUrl
-
-  // Pre-v4 desktop builds may already have moved the secret out of localStorage
-  // into the old global telemetry namespace. Trigger the Host-only migration
-  // without ever reading that secret into the renderer.
-  if (
-    !hasNewLangfuseEnabled &&
-    !migration.secrets.langfuseSecretKey &&
-    legacyLangfuseRequested &&
-    langfusePublicKey.trim().length > 0 &&
-    langfuseSecretConfigured &&
-    hasHostRuntime()
-  ) {
-    void setLangfuseCredentials({
-      enabled: true,
-      baseUrl: langfuseBaseUrl,
-      publicKey: langfusePublicKey,
-      environment: "production",
-      captureModelContent: false,
-      captureToolContent: false,
-    }).catch(() => {})
-  }
+      : DEFAULT_TRANSPORT_SETTINGS.langfuseConfig.baseUrl
 
   return {
     console: typeof raw.console === "boolean" ? raw.console : DEFAULT_TRANSPORT_SETTINGS.console,

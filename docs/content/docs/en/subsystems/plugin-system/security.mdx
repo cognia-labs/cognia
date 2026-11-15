@@ -121,11 +121,9 @@ check(pluginId: string, operation: string): void {
 
 Rate-limiter keys use legacy `fs:*` / `db:*` operation names, separate from the canonical `filesystem:*` / `database:*` permission strings.
 
-## 6. Persistence & migration — `permission-migration.ts` + `permission-requests.ts`
+## 6. Persistence — `lib/db/plugin-permissions.ts` + `permission-requests.ts`
 
-Granted decisions persist in the Dexie `pluginPermissions` table, one row per `[pluginId+permission]` composite key (`lib/db/plugin-permissions.ts:1-6`), storing `decision` / `expiresAt` / `grantedBy` / `grantedAt`.
-
-`migrateLegacyPermissionNames()` (`permission-migration.ts:37`) runs at manager bootstrap. It rewrites legacy aliases via `LEGACY_TO_CANONICAL` (`{ fs:read → filesystem:read, fs:write → filesystem:write }` `:22`) by revoking and re-calling `setPermission`, preserving fields (`:44-52`); it is idempotent and records a diagnostic per rewrite (`:53`).
+Granted decisions persist in the Dexie `pluginPermissions` table, one row per `[pluginId+permission]` composite key (`lib/db/plugin-permissions.ts:1-6`), storing `decision` / `expiresAt` / `grantedBy` / `grantedAt`. Rows are read under the canonical permission names only: a row stored under a retired alias (such as `fs:read`) never matches a lookup, so the plugin asks again.
 
 `permission-requests.ts` is a centralized single-active-plus-queue manager. `PluginPermissionRequest` (`:11`) is `{ id, pluginId, permission, reason?, kind: "manifest" | "api", timestamp }`. `requestPluginPermission()` (`:68`) enqueues and returns a `Promise<boolean>` in a resolvers map; `resolvePluginPermission(id, granted)` (`:83`) resolves it and dequeues the next request (`:90`). `subscribePermissionRequests` (`:108`) feeds the UI overlay.
 
@@ -225,7 +223,6 @@ flowchart TD
   M["manifest perms (plugin.json)<br/>types/plugin/plugin.ts:262"] --> REG["registerPlugin grant + dangerous to confirm tier<br/>permission-guard.ts:263"]
   REG --> INST["install consent / WASM grant<br/>wasm-grant.ts:76"]
   INST --> STORE["persist grant Dexie pluginId+permission<br/>lib/db/plugin-permissions.ts:30"]
-  STORE --> MIG["legacy-name migration at boot<br/>permission-migration.ts:37"]
 
   CALL["plugin API call"] --> GUARD["createGuardedAPI Proxy<br/>permission-guard.ts:777"]
   GUARD --> CHK["check granted exact no wildcard<br/>permission-guard.ts:402"]
@@ -244,7 +241,7 @@ flowchart TD
 
   POL["policy-runtime fan-out<br/>policy-runtime.ts:55"] --> VER
 
-  class M,REG,INST,STORE,MIG declare
+  class M,REG,INST,STORE declare
   class CALL,GUARD,CHK,RUN,BROKER,RL declare
   class DENY,RLE,REJECT deny
   class LOAD,VER,CRYPTO,POL verify
@@ -257,7 +254,7 @@ flowchart TD
 - **Signature empty-anchor.** If `NEXT_PUBLIC_COGNIA_PLUGIN_PUBKEY` is unset, `OFFICIAL_TRUSTED_PUBLISHERS` is `[]` (`signature.ts:85`); with `trustedPublishersOnly` on, all plugins are rejected. Never reintroduce a `publicKey: ""` publisher.
 - **Test auto-consent / reset.** Tests inject `BrokerOptions.emit` (`consent-broker.ts:68`); use `__resetPermissionGuardForTesting` (`permission-guard.ts:766`) plus `resetPluginConsentBroker` / `resetPluginRateLimiter` / `resetPluginSignatureVerifier`.
 - **Rust parity drift.** A new permission added to the types and `validation.ts` but not to `crates/cognia-cli/src/cmd_lint.rs` fails `rust-capability-parity.test.ts:52`.
-- **Three parallel stores.** The guard's in-memory `grants` (sync `check`), the Dexie `pluginPermissions` table (remembered decisions), and the API-permission map in `permission-api.ts:18` are distinct. `wasm-grant.ts` and `permission-migration.ts` bridge them.
+- **Three parallel stores.** The guard's in-memory `grants` (sync `check`), the Dexie `pluginPermissions` table (remembered decisions), and the API-permission map in `permission-api.ts:18` are distinct. `wasm-grant.ts` bridges them.
 
 <Cards>
   <Card title="Context & API" href="./context-api" description="The guarded ctx namespaces a plugin receives." />

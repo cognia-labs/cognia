@@ -198,7 +198,7 @@ it("preserves a future record until the user confirms replacement", async () => 
   expect(mockSetEntry).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole("switch", { name: "Jina" }))
   fireEvent.click(screen.getByRole("button", { name: "Replace settings" }))
-  await waitFor(() => expect(mockSetEntry).toHaveBeenCalledWith("jina", { enabled: false }))
+  await waitFor(() => expect(mockSetEntry).toHaveBeenCalledWith("jina", { enabled: true }))
   expect(mockTestReader).not.toHaveBeenCalled()
 })
 
@@ -220,7 +220,7 @@ it("loads the new namespace directly in both locales", () => {
 
 it.each([
   ["Default reader", "direct", mockSetDefault],
-  ["External fallback", "off", mockSetFallback],
+  ["External fallback", "configured", mockSetFallback],
   ["Distillation", "required", mockSetDistillation],
 ] as const)(
   "keeps the chosen %s value through future-version confirmation",

@@ -34,10 +34,7 @@ describe("isSetupUnfinished", () => {
     ).toBe(false)
   })
 
-  it("is false for migrated legacy users and for no record at all", () => {
-    expect(isSetupUnfinished(progress({ path: "legacy_dismissed", skippedAt: SKIPPED_AT }))).toBe(
-      false
-    )
+  it("is false for no record at all", () => {
     expect(isSetupUnfinished(undefined)).toBe(false)
   })
 })

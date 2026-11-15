@@ -128,24 +128,6 @@ afterEach(async () => {
   disableDbRuntime?.()
 })
 
-describe("controlSquadRun: legacy history", () => {
-  it("never resumes a backfilled legacy run, even when its status looks resumable", async () => {
-    await seedRun("needs_input")
-    await getDb().agentTeamRuns.update(RUN, { recoveryReason: "legacy_run_not_resumable" })
-    const result = await control(RUN, "resume", { isLive: () => false })
-    expect(result).toEqual({ ok: false, reason: "not_resumable", status: "needs_input" })
-    expect(coordinator.resumeChild).not.toHaveBeenCalled()
-    expect(await events()).not.toContain("run.resumed")
-  })
-
-  it("still lets a backfilled legacy run stop", async () => {
-    await seedRun("needs_input")
-    await getDb().agentTeamRuns.update(RUN, { recoveryReason: "legacy_run_not_resumable" })
-    expect(await control(RUN, "stop")).toEqual({ ok: true, status: "cancelled" })
-    expect(await events()).toContain("run.cancelled")
-  })
-})
-
 describe("controlSquadRun", () => {
   it("refuses an unknown run and a settled one", async () => {
     expect(await control("nope", "pause")).toEqual({ ok: false, reason: "run_not_found" })

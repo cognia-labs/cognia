@@ -24,7 +24,6 @@ export const SELECTION_RESULT_EVENT = "selection://result"
 export const SELECTION_SPEECH_EVENT = "selection://speech"
 /** Toolbar → main window: stop the speech this candidate started. */
 export const SELECTION_SPEECH_STOP_EVENT = "selection://speech-stop"
-export const SELECTION_TOOLBAR_ENABLED_PREF = "selectionToolbar.enabled"
 export const SELECTION_TOOLBAR_MODE_PREF = "selectionToolbar.mode"
 export const SELECTION_TOOLBAR_DISABLED_APPS_PREF = "selectionToolbar.disabledApps"
 export const SELECTION_TOOLBAR_DISABLED_SITES_PREF = "selectionToolbar.disabledSites"

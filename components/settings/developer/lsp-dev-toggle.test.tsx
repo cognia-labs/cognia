@@ -61,9 +61,7 @@ describe("LspDevToggle", () => {
     fireEvent.click(screen.getByRole("switch"))
     expect(saveMock).toHaveBeenCalledTimes(1)
     // The policy (`lib/plugin/vscode-shim/lsp-binary-policy.ts`) reads
-    // `lsp.unsignedAllowed`; writing the pre-unification
-    // `developer.unsignedLspAllowed` here made the toggle inert, because the
-    // startup migration moves that field and then clears it.
+    // `lsp.unsignedAllowed`.
     expect(saveMock).toHaveBeenCalledWith(
       expect.objectContaining({
         lsp: expect.objectContaining({ unsignedAllowed: true }),

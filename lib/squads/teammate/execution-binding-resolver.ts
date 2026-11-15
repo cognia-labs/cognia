@@ -7,8 +7,7 @@
 //
 // Managed override is EXPLICIT in the trace (never silent), pool mode exposes
 // candidate deployment ids ONLY (the coordinator never sees endpoints or
-// credentials), and new raw-credential writes are rejected at the store
-// boundary via `assertNoNewRawTeammateCredentials`.
+// credentials).
 
 import type { AgentExecutionPolicy } from "@cognia/agent-config-types/agent-execution"
 import type { TeammateConfig, TeammateExecutionBinding } from "@/types/agent/agent-team"
@@ -108,50 +107,17 @@ export function resolveTeammateExecutionBinding(
   }
 }
 
-export class RawTeammateCredentialError extends Error {
-  readonly field: "apiKey" | "baseURL"
-
-  constructor(field: "apiKey" | "baseURL") {
-    super(
-      `teammate config rejected: raw "${field}" writes are retired (ADR-0090 Phase 7) — ` +
-        `bind a credential/deployment profile reference via config.execution instead`
-    )
-    this.name = "RawTeammateCredentialError"
-    this.field = field
-  }
-}
-
 /**
- * Reject NEW raw credential material entering a teammate config. Legacy rows
- * stay readable: an unchanged value carried over from `previous` passes, only
- * introducing or changing a raw value throws.
- */
-export function assertNoNewRawTeammateCredentials(
-  next: TeammateConfig | undefined,
-  previous?: TeammateConfig
-): void {
-  for (const field of ["apiKey", "baseURL"] as const) {
-    const incoming = next?.[field]
-    if (incoming && incoming !== previous?.[field]) {
-      throw new RawTeammateCredentialError(field)
-    }
-  }
-}
-
-/**
- * Migrate a legacy raw-credential teammate config onto the reference model:
- * the legacy provider id IS the deployment id in the ADR-0090 P1 profile
- * store (`deriveProfiles` keeps old provider ids as deployment identity), so
- * a legacy `{provider, apiKey, baseURL}` row becomes a pinned
- * `deploymentRef: provider` whose credential resolves through the store's
- * `legacy-provider-settings` reference — the raw values are NOT copied
- * anywhere new and remain only on the legacy row for rollback.
+ * The member binding a teammate config asks for: its `execution` binding, or
+ * a pinned `deploymentRef: provider` when it only names a provider. The
+ * provider id IS the deployment id in the ADR-0090 P1 profile store
+ * (`deriveProfiles` keeps provider ids as deployment identity), so its
+ * credential resolves through the store's `legacy-provider-settings` reference.
  */
 export function migrateTeammateExecutionBinding(
   config: TeammateConfig
 ): TeammateExecutionBinding | undefined {
   if (config.execution) return config.execution
-  if (!config.apiKey && !config.baseURL && !config.provider) return undefined
   if (!config.provider) return undefined
   return { mode: "pinned", deploymentRef: config.provider }
 }

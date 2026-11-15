@@ -162,33 +162,6 @@ describe("useAgentTeamStore deleteTeam", () => {
   })
 })
 
-describe("useAgentTeamStore editorSession", () => {
-  beforeEach(() => reset())
-
-  it("keeps legacy editor sessions as read-only compatibility data", () => {
-    expect(useAgentTeamStore.getState()).not.toHaveProperty("setEditorSession")
-  })
-
-  it("deleteTeam drops the deleted team's editor session", async () => {
-    const team = useAgentTeamStore.getState().createTeam({ name: "E", task: "t" })
-    useAgentTeamStore.setState({
-      editorSession: { [team.id]: { rootKey: "/proj", openPaths: [], activePath: null } },
-    })
-    await useAgentTeamStore.getState().deleteTeam(team.id)
-    expect(useAgentTeamStore.getState().editorSession[team.id]).toBeUndefined()
-  })
-
-  it("purgeProject drops editor sessions for the project's teams", () => {
-    mockActiveProjectId = "proj-1"
-    const team = useAgentTeamStore.getState().createTeam({ name: "P", task: "t" })
-    useAgentTeamStore.setState({
-      editorSession: { [team.id]: { rootKey: "/proj", openPaths: [], activePath: null } },
-    })
-    useAgentTeamStore.getState().purgeProject("proj-1")
-    expect(useAgentTeamStore.getState().editorSession[team.id]).toBeUndefined()
-  })
-})
-
 describe("useAgentTeamStore updateTeam", () => {
   beforeEach(() => {
     reset()
@@ -343,31 +316,14 @@ describe("useAgentTeamStore Teammate CRUD", () => {
     ).toThrow(/Team not found/)
   })
 
-  it("rejects NEW raw apiKey/baseURL writes; legacy unchanged values stay readable (ADR-0090)", () => {
+  it("stores execution bindings by reference (ADR-0090)", () => {
     const team = useAgentTeamStore.getState().createTeam({ name: "X", task: "t" })
-    // New config with a raw key is refused at the store boundary.
-    expect(() =>
-      useAgentTeamStore.getState().addTeammate({
-        teamId: team.id,
-        name: "W",
-        config: { apiKey: "sk-raw-key" },
-      })
-    ).toThrow(/raw "apiKey" writes are retired/)
-
-    // A pinned-reference binding is the sanctioned shape.
     const tm = useAgentTeamStore.getState().addTeammate({
       teamId: team.id,
       name: "W",
       config: { execution: { mode: "pinned", deploymentRef: "dep-1" } },
     })
 
-    // Updating with a NEW raw baseURL is refused; carrying an unchanged
-    // legacy value through an update passes.
-    expect(() =>
-      useAgentTeamStore
-        .getState()
-        .updateTeammate(tm.id, { config: { baseURL: "https://vendor.example" } })
-    ).toThrow(/raw "baseURL" writes are retired/)
     useAgentTeamStore.getState().updateTeammate(tm.id, {
       config: { execution: { mode: "pool", candidateIds: ["dep-1", "dep-2"] } },
     })
@@ -375,14 +331,6 @@ describe("useAgentTeamStore Teammate CRUD", () => {
       mode: "pool",
       candidateIds: ["dep-1", "dep-2"],
     })
-
-    // upsertTeammate (whole-object replace) is guarded too — no bypass channel.
-    expect(() =>
-      useAgentTeamStore.getState().upsertTeammate({
-        ...useAgentTeamStore.getState().teammates[tm.id],
-        config: { apiKey: "sk-smuggled" },
-      })
-    ).toThrow(/raw "apiKey" writes are retired/)
   })
 
   it("upsertTeammate replaces an existing teammate", () => {
@@ -1490,22 +1438,23 @@ describe("account storage isolation", () => {
     reset()
   })
 
-  it("activates an account-local team snapshot without leaking the previous account", () => {
+  it("activates an account-local snapshot without leaking the previous account", () => {
     localStorage.setItem(
       "cognia-agent-teams:acct_a",
-      JSON.stringify({ state: { teams: { team_a: persistedTeam("team_a", "Alpha team") } } })
+      JSON.stringify({ state: { workspaceTab: "tasks" }, version: 9 })
     )
     localStorage.setItem(
       "cognia-agent-teams:acct_b",
-      JSON.stringify({ state: { teams: { team_b: persistedTeam("team_b", "Beta team") } } })
+      JSON.stringify({ state: { workspaceTab: "members" }, version: 9 })
     )
 
     activateAgentTeamAccountStorage("acct_a")
-    expect(Object.keys(useAgentTeamStore.getState().teams)).toEqual(["team_a"])
+    expect(useAgentTeamStore.getState().workspaceTab).toBe("tasks")
 
     activateAgentTeamAccountStorage("acct_b")
-    expect(Object.keys(useAgentTeamStore.getState().teams)).toEqual(["team_b"])
-    expect(useAgentTeamStore.getState().teams.team_a).toBeUndefined()
+    expect(useAgentTeamStore.getState().workspaceTab).toBe("members")
+    // Squads live in Dexie; an account blob that still carries them is not read.
+    expect(useAgentTeamStore.getState().teams).toEqual({})
   })
 
   it("clears in-memory account state without deleting the account snapshot", () => {

@@ -22,9 +22,7 @@ beforeEach(() => {
 })
 
 describe("OnboardingSettingsCard", () => {
-  it("offers the re-entry the migration promises to legacy users", () => {
-    // Without this, marking someone `legacy_dismissed` would mean deciding for
-    // them with no way back.
+  it("offers a way back into setup", () => {
     render(<OnboardingSettingsCard />)
     fireEvent.click(screen.getByTestId("settings-onboarding-restart"))
     expect(push).toHaveBeenCalledWith("/onboarding")

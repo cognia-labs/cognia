@@ -637,27 +637,6 @@ export const usePluginMarketplaceStore = create<PluginMarketplaceState>()(
       name: "cognia-plugin-marketplace",
       version: 3,
       storage: persistLocalStorage(),
-      migrate: (state, version) => {
-        const persisted = (state || {}) as Record<string, unknown>
-        if (version < 2) {
-          return {
-            ...persisted,
-            discoveryState: DEFAULT_DISCOVERY_STATE,
-          }
-        }
-        if (version < 3) {
-          return {
-            ...persisted,
-            browseViewState: {
-              selectedPluginId: null,
-              scrollOffset: 0,
-              detailOpen: false,
-              activeTab: "browse",
-            },
-          }
-        }
-        return persisted
-      },
       partialize: (state) => ({
         favorites: state.favorites,
         recentlyViewed: state.recentlyViewed,

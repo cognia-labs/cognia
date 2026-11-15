@@ -61,17 +61,9 @@ export interface LocalAccountRecord {
   quickUnlock?: QuickUnlockEnrollment[]
 }
 
-export interface LegacyMigrationState {
-  status: "completed"
-  sourceDbName: string
-  targetAccountId: string
-  completedAt: number
-}
-
 export interface AccountRegistryState {
   id: typeof ACCOUNT_REGISTRY_STATE_ID
   activeAccountId: string | null
-  legacyMigration?: LegacyMigrationState
   updatedAt: number
 }
 

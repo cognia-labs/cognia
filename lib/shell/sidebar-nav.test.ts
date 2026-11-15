@@ -11,7 +11,6 @@ import {
   getSidebarCatalog,
   mergeVisibleModeOrder,
   navEntryIcon,
-  migrateLegacyIds,
   moveVisibleMode,
   navItemForPath,
   resolveSidebarLayout,
@@ -32,31 +31,6 @@ describe("SIDEBAR_NAV_ICONS", () => {
   it("maps nothing outside the catalog", () => {
     const ids = new Set(SIDEBAR_NAV_META.map((m) => m.id))
     expect(Object.keys(SIDEBAR_NAV_ICONS).filter((id) => !ids.has(id))).toEqual([])
-  })
-})
-
-describe("migrateLegacyIds", () => {
-  it("returns the same object when nothing needs renaming", () => {
-    const layout = { pinned: ["inbox"], hidden: ["logs"] }
-    expect(migrateLegacyIds(layout)).toBe(layout)
-  })
-
-  it("renames legacy ids in pinned and hidden", () => {
-    expect(migrateLegacyIds({ pinned: ["agent-teams"], hidden: [] })).toEqual({
-      pinned: ["squads"],
-      hidden: [],
-    })
-    expect(migrateLegacyIds({ pinned: [], hidden: ["agent-teams"] })).toEqual({
-      pinned: [],
-      hidden: ["squads"],
-    })
-  })
-
-  it("collapses a legacy id that collides with its new name, keeping first position", () => {
-    expect(migrateLegacyIds({ pinned: ["inbox", "agent-teams", "squads"], hidden: [] })).toEqual({
-      pinned: ["inbox", "squads"],
-      hidden: [],
-    })
   })
 })
 

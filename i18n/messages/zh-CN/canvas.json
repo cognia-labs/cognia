@@ -200,7 +200,6 @@
     "documentLabel": "文档",
     "error": "无法打开",
     "failure": {
-      "expired": "这是旧版本生成的链接，已不可用。请向分享者重新索取。",
       "malformed": "这不是有效的 Canvas 分享链接。",
       "missing": "该链接没有指明文档。",
       "not-found": "本设备上还没有这份文档。"

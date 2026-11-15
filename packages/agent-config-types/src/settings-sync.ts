@@ -201,7 +201,6 @@ export const SETTINGS_SYNC = {
   sessionSummaryCard: { category: "shared" },
   titleBarLayout: { category: "desktop-only" },
   statusBarLayout: { category: "desktop-only" },
-  mobileHomeLayout: { category: "desktop-only" },
   trayPanelLayout: { category: "desktop-only" },
   // The phone's home screen and Glance drawer. One layout per account: every
   // phone renders it, and the desktop's tray settings can copy from it, so it
@@ -349,7 +348,6 @@ export const SETTINGS_SYNC = {
       "A welcome-screen pick seeds the next conversation created on the SAME device (`createSession`); the conversation row then carries the choice and syncs with it. The keys are agent ids, and a phone's local agents are not the desktop's, so a default mirrored across devices would name agents the other side does not have.",
   },
   defaultAccountIds: { category: "desktop-only" },
-  defaultAccountId: { category: "desktop-only" },
   petSettings: { category: "desktop-only" },
   installUuid: { category: "desktop-only" },
   sandboxDefaultEnabled: { category: "desktop-only" },
@@ -366,7 +364,6 @@ export const SETTINGS_SYNC = {
   providerUsageStats: { category: "desktop-only" },
   providerUIPreferences: { category: "desktop-only" },
   providerOnboardingDismissed: { category: "desktop-only" },
-  onboardingDismissedAt: { category: "desktop-only" },
   onboardingProgress: {
     category: "device-local",
     rationale:

@@ -2462,8 +2462,6 @@
       ],
       "reason": "createSquadRunRecords at lib/squads/squad/squad-run-records.ts:78 creates the parent run and canonical ledger together when a squad starts; this table records active/terminal execution state, which is kept in run-tables rather than claimed as a separate queue.",
       "writerFunctions": [
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRun",
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
         "lib/squads/squad/squad-run-records.ts#createSquadRunRecords",
         "lib/db/agent-team-runtime.ts#aggregateAgentTeamRunUsage",
         "lib/db/agent-team-runtime.ts#createAgentTeamRun",
@@ -3464,8 +3462,6 @@
       ],
       "reason": "createSquadRunRecords includes the canonical executionRuns ledger transaction at lib/squads/squad/squad-run-records.ts:78; canonical lifecycle rows record execution truth and are not another implementation of queued work.",
       "writerFunctions": [
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRun",
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
         "lib/squads/squad/squad-run-records.ts#createSquadRunRecords",
         "lib/bot/runtime/run.ts#cancelAcceptedBotDeliveries",
         "lib/bot/runtime/run.ts#cancelBotRun",
@@ -5303,7 +5299,6 @@
         "hooks/workflow/use-latest-run-outputs.ts#getLatestRunOutputs",
         "hooks/workflow/use-step-stream.ts#getStepStream",
         "lib/a2ui/workflow-approval-handler.ts#dispatchAcceptedApproval",
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
         "lib/bot/runtime/run.ts#stopBotExecution",
         "lib/cli-bridge/handlers/agent-team.ts#agentTeamRunStatus",
         "lib/connectors/automation-control.ts#cancelConversationAutomations",

@@ -50,9 +50,8 @@ export interface LegacyCustomProviderRow {
   customName?: string
   name?: string
   enabled?: boolean
-  /** Wire protocol as settings store it. `protocol` is a legacy spelling. */
+  /** Wire protocol as settings store it. */
   apiProtocol?: string
-  protocol?: string
   baseURL?: string
   defaultModel?: string
   /** Model ids the dialog edits; `models` is their legacy alias. */
@@ -153,25 +152,6 @@ function catalogLinkedDeploymentModel(
   }
 }
 
-/** Idempotently upgrade one v1 deployment document to the v2 model links. */
-export function upgradeDeploymentProfileCatalogRefs(
-  deployment: DeploymentProfile
-): DeploymentProfile {
-  return {
-    ...deployment,
-    models: deployment.models.map((model) => {
-      const upstreamId = model.upstreamId ?? model.id
-      return {
-        ...model,
-        upstreamId,
-        offeringRef: model.offeringRef ?? `${deployment.id}:${upstreamId}`,
-        canonicalModelRef:
-          model.canonicalModelRef ?? canonicalModelRef(deployment.providerRef, upstreamId),
-      }
-    }),
-  }
-}
-
 interface VendorAccumulator {
   id: string
   displayName: string
@@ -261,11 +241,7 @@ export function deriveProfiles(input: DeriveProfilesInput): DerivedProfiles {
     .sort((a, b) => a.id.localeCompare(b.id))
 
   for (const row of customRows) {
-    const protocol = hasText(row.apiProtocol)
-      ? row.apiProtocol.trim()
-      : hasText(row.protocol)
-        ? row.protocol.trim()
-        : "openai"
+    const protocol = hasText(row.apiProtocol) ? row.apiProtocol.trim() : "openai"
     // Canonical fields first: edits update `customName` / `customModels`, and
     // the aliases can lag behind on rows written by older builds.
     const displayName = hasText(row.customName) ? row.customName : row.name

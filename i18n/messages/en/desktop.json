@@ -735,10 +735,6 @@
       "description": "A browser tab already has its own chrome, so the bar is off by default — each column draws its own header, and search and commands stay on ⌘K / Ctrl+K. The item list below is the layout the bar comes back with."
     }
   },
-  "shellLayoutNotice": {
-    "description": "Panel toggles, theme, zoom and language now live in the Views menu in the title bar. The pet, OCR and clipboard buttons moved there too. Press ⌘B to show or hide the conversation list.",
-    "title": "Layout simplified"
-  },
   "sidebarUser": {
     "lock": "Lock Cognia",
     "lockFailed": "Cognia could not be locked.",

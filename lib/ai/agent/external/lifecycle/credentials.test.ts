@@ -11,7 +11,6 @@ import {
   credentialKeyId,
   credentialsRequiredByImport,
   extractInlineCredentials,
-  migrateInlineCredentials,
   occupiedSlots,
   persistCredentials,
   redactConfigForLogging,
@@ -296,54 +295,6 @@ describe("applyResolvedCredentials", () => {
       { proxyAuth: { username: "u", password: "p" } }
     )
     expect(launch.network?.proxy).toBeUndefined()
-  })
-})
-
-describe("migrateInlineCredentials", () => {
-  it("leaves a config with no inline secrets untouched", async () => {
-    const source = config()
-    const result = await migrateInlineCredentials(source, memoryStore())
-    expect(result.config).toBe(source)
-    expect(result.migrated).toEqual([])
-  })
-
-  it("moves every secret to the keyring and scrubs the persisted copy", async () => {
-    const store = memoryStore()
-    const result = await migrateInlineCredentials(networked(), store)
-
-    expect(result.failure).toBeUndefined()
-    expect(result.migrated).toEqual(["apiKey", "bearerToken", "headers", "proxyAuth", "processEnv"])
-    expect(JSON.stringify(result.config)).not.toContain(SECRET)
-    expect(result.config.credentialRefs?.apiKey).toBe("agent-1:apiKey")
-    expect(store.entries.get("agent-1:apiKey")).toBe(SECRET)
-    expect(result.config.enabled).toBe(true)
-  })
-
-  it("scrubs the plaintext and disables the agent when the keyring write fails", async () => {
-    const store = memoryStore()
-    store.save = async () => {
-      throw new Error("keyring locked")
-    }
-
-    const result = await migrateInlineCredentials(networked(), store)
-
-    // The whole point: a failed migration must not leave the secret behind.
-    expect(JSON.stringify(result.config)).not.toContain(SECRET)
-    expect(result.config.enabled).toBe(false)
-    expect(result.config.lifecycleStatus).toBe("needs-credentials")
-    expect(result.config.lifecycleReasonCode).toBe("credential_missing")
-    expect(result.migrated).toEqual([])
-    expect(result.failure?.reason).toBe("keyring locked")
-    expect(result.failure?.slots).toContain("apiKey")
-  })
-
-  it("does not log the secret in the failure reason", async () => {
-    const store = memoryStore()
-    store.save = async () => {
-      throw new Error(`refused to store ${"redacted"}`)
-    }
-    const result = await migrateInlineCredentials(networked(), store)
-    expect(result.failure?.reason).not.toContain(SECRET)
   })
 })
 

@@ -7,7 +7,6 @@ import { act, fireEvent, render, screen } from "@testing-library/react"
 import { BarCustomizer } from "./bar-customizer"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useSettingsStore } from "@/stores/settings/settings-store"
-import { DEFAULT_BAR_ITEMS, useUIStore } from "@/stores/ui/ui-store"
 import {
   DEFAULT_STATUS_BAR_LAYOUT,
   DEFAULT_TITLE_BAR_LAYOUT,
@@ -54,7 +53,6 @@ function setLayout(key: "titleBarLayout" | "statusBarLayout", layout: BarLayout)
 
 beforeEach(() => {
   saveMock.mockClear()
-  useUIStore.setState({ barItems: { ...DEFAULT_BAR_ITEMS } })
   useSettingsStore.setState({ settings: {} as never, save: saveMock as never })
 })
 

@@ -2,18 +2,14 @@
 
 /**
  * Mirrors the artifact half of `useArtifactStore` into the Dexie `artifacts` /
- * `artifactVersions` tables, and carries the legacy `cognia-artifacts`
- * localStorage blob into them on first boot (ADR-0158).
+ * `artifactVersions` tables (ADR-0158).
  *
- * Dexie is AUTHORITATIVE here, unlike `lib/canvas/dexie-bridge.ts` where it
- * started life as a backup mirror. The Zustand store keeps the working copy in
- * memory and, after the initial migration commits, `partialize` no longer
- * writes artifacts to localStorage, so:
+ * Dexie is AUTHORITATIVE here. The Zustand store keeps the working copy in
+ * memory and `partialize` never writes artifacts to localStorage, so:
  *
  *   - Hydration seeds the store from Dexie for every artifact memory does not
- *     already hold. Memory still wins on a conflict — it is either what the
- *     user is editing right now, or the legacy blob that has not been migrated
- *     yet, and both are newer than the row.
+ *     already hold. Memory still wins on a conflict — it is what the user is
+ *     editing right now, which is newer than the row.
  *   - The subscription then diffs every store write against the mirror and
  *     pushes adds/updates/deletes. Versions are flattened out of the store's
  *     `Record<artifactId, ArtifactVersion[]>` into their own table so a
@@ -34,7 +30,7 @@
  */
 
 import type { Artifact, ArtifactVersion } from "@/types/artifact/artifact"
-import { completeArtifactDexieMigration, useArtifactStore } from "@/stores/artifact/artifact-store"
+import { ARTIFACT_STORAGE_KEY, useArtifactStore } from "@/stores/artifact/artifact-store"
 import { getDb } from "@/lib/db/schema"
 import { registerPendingAccountWriteFlusher } from "@/lib/accounts/pending-write-flush"
 import {
@@ -45,12 +41,6 @@ import {
   type ArtifactRow,
   type ArtifactVersionRow,
 } from "@/lib/db/artifact-types"
-import {
-  capturePendingArtifactMigration,
-  clearPendingArtifactMigration,
-  getArtifactMigrationScope,
-  type PendingArtifactMigration,
-} from "@/lib/artifacts/localstorage-migration"
 import { loggers } from "@cognia/logging"
 
 /**
@@ -88,32 +78,12 @@ export function __resetArtifactDexieBridgeForTesting(): void {
   retainedWrites.clear()
 }
 
-/**
- * The parked blob went through `JSON.stringify`, so its `Date` fields are ISO
- * strings. The row converters accept either, but the store's own consumers call
- * `.getTime()` directly — so coerce on the way in rather than leaving two
- * shapes of `createdAt` in the same map.
- */
-function rehydrateArtifactMap(raw: Record<string, Artifact>): Record<string, Artifact> {
-  const out: Record<string, Artifact> = {}
-  for (const [id, artifact] of Object.entries(raw)) {
-    if (!artifact || typeof artifact !== "object") continue
-    out[id] = artifactFromRow(artifactRowFrom(artifact))
-  }
-  return out
-}
-
-function rehydrateVersionMap(
-  raw: Record<string, ArtifactVersion[]>
-): Record<string, ArtifactVersion[]> {
-  const out: Record<string, ArtifactVersion[]> = {}
-  for (const [artifactId, versions] of Object.entries(raw)) {
-    if (!Array.isArray(versions)) continue
-    out[artifactId] = versions.map((version) =>
-      artifactVersionFromRow(artifactVersionRowFrom(version))
-    )
-  }
-  return out
+/** The persist bucket currently in use — the account-scoped one after sign-in. */
+function getArtifactStorageScope(): string {
+  const name = (
+    useArtifactStore as unknown as { persist?: { getOptions?: () => { name?: string } } }
+  ).persist?.getOptions?.().name
+  return name ?? ARTIFACT_STORAGE_KEY
 }
 
 interface ArtifactMirrorDiff {
@@ -189,7 +159,6 @@ export function diffArtifactMirror(
  */
 async function hydrateFromDexie(
   db: ReturnType<typeof getDb>,
-  pending: PendingArtifactMigration | null,
   canApply: () => boolean,
   deletedIds: Set<string>,
   changedIds: Set<string>,
@@ -201,26 +170,21 @@ async function hydrateFromDexie(
   ])
   if (!canApply()) return null
 
-  // Rows a previous, interrupted migration parked but never wrote. Restoring
-  // them BEFORE the Dexie read is compared against memory means they take the
-  // same "memory wins" path as anything the store rehydrated itself, and the
-  // initial sync then carries them into Dexie.
-  if (pending || retained) {
+  // A final write a previous bridge could not commit. Restoring it BEFORE the
+  // Dexie read is compared against memory means it takes the same "memory
+  // wins" path as the live store, and the initial sync then carries it into
+  // Dexie.
+  if (retained) {
     useArtifactStore.setState((state) => {
-      const artifacts = { ...rehydrateArtifactMap(pending?.artifacts ?? {}), ...state.artifacts }
-      const artifactVersions = {
-        ...rehydrateVersionMap(pending?.artifactVersions ?? {}),
-        ...state.artifactVersions,
+      const artifacts = { ...state.artifacts }
+      const artifactVersions = { ...state.artifactVersions }
+      for (const [id, artifact] of Object.entries(retained.snapshot.artifacts)) {
+        if (changedIds.has(id)) continue
+        artifacts[id] = artifact
+        artifactVersions[id] = retained.snapshot.versions[id] ?? []
       }
-      if (retained) {
-        for (const [id, artifact] of Object.entries(retained.snapshot.artifacts)) {
-          if (changedIds.has(id)) continue
-          artifacts[id] = artifact
-          artifactVersions[id] = retained.snapshot.versions[id] ?? []
-        }
-        for (const id of retained.deletedIds) {
-          if (!changedIds.has(id)) deletedIds.add(id)
-        }
+      for (const id of retained.deletedIds) {
+        if (!changedIds.has(id)) deletedIds.add(id)
       }
       for (const id of deletedIds) {
         delete artifacts[id]
@@ -285,16 +249,14 @@ export function startArtifactDexieBridge(): () => void {
   if (activeBridge || typeof window === "undefined") return () => {}
 
   const db = getDb()
-  const scope = getArtifactMigrationScope()
+  const scope = getArtifactStorageScope()
   const queueKey = JSON.stringify([db.name, scope])
-  let pending = capturePendingArtifactMigration(scope)
   const predecessor = previousWrites.get(queueKey) ?? Promise.resolve()
   let disposed = false
   let unsubscribe: () => void = () => {}
   let unregisterFlusher: () => void = () => {}
   let mirroredArtifacts: Record<string, Artifact> = {}
   let mirroredVersionIds = new Set<string>()
-  let migrationCompleted = false
   let hydrated = false
   const deletedIds = new Set<string>()
   const changedIds = new Set<string>()
@@ -316,7 +278,6 @@ export function startArtifactDexieBridge(): () => void {
       snapshot,
       deletedIds: new Set([
         ...[...deletedIds].filter((id) => !snapshot.artifacts[id]),
-        ...Object.keys(pending?.artifacts ?? {}).filter((id) => !snapshot.artifacts[id]),
         ...Object.keys(mirroredArtifacts).filter((id) => !snapshot.artifacts[id]),
       ]),
     }
@@ -325,7 +286,7 @@ export function startArtifactDexieBridge(): () => void {
 
   const ownsCurrentScope = () => {
     try {
-      return getDb().name === db.name && getArtifactMigrationScope() === scope
+      return getDb().name === db.name && getArtifactStorageScope() === scope
     } catch {
       // An account can be locked between scheduling a write and starting it.
       return false
@@ -401,16 +362,6 @@ export function startArtifactDexieBridge(): () => void {
           writeFailure = undefined
           retryDelay = ARTIFACT_SYNC_DEBOUNCE_MS
           if (!queued && retainedWrites.get(queueKey) === retained) retainedWrites.delete(queueKey)
-          if (!queued) {
-            // Cleanup is scoped to the committed database even if the account
-            // changed during its transaction. Only the live store's marker
-            // requires the active lifecycle guard.
-            if (pending) clearPendingArtifactMigration(scope)
-            if (canApply() && !migrationCompleted) {
-              migrationCompleted = true
-              completeArtifactDexieMigration()
-            }
-          }
         }
       })
       .finally(() => {
@@ -478,17 +429,8 @@ export function startArtifactDexieBridge(): () => void {
     ready = predecessor
       .then(async () => {
         if (!canApply()) return
-        // The previous instance may have completed migration while we waited.
-        pending = capturePendingArtifactMigration(scope)
         retained = retainedWrites.get(queueKey)
-        const mirror = await hydrateFromDexie(
-          db,
-          pending,
-          canApply,
-          deletedIds,
-          changedIds,
-          retained
-        )
+        const mirror = await hydrateFromDexie(db, canApply, deletedIds, changedIds, retained)
         if (!mirror || !canApply()) return
         mirroredArtifacts = mirror.artifacts
         mirroredVersionIds = mirror.versionIds

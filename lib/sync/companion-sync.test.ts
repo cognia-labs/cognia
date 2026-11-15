@@ -971,9 +971,9 @@ describe("cursor persistence (Wave 4 / ADR-0026)", () => {
   it("keeps a persisted error recorded against a paired host", async () => {
     companionConfig = { deviceId: "host-a" }
     await whenSeeded()
-    const key = (
-      await import("@/lib/companion/credential-book/legacy-migration")
-    ).companionCursorNamespace(companionConfig as never)
+    const key = (await import("@/lib/companion/credential-book/adapter")).companionCursorNamespace(
+      companionConfig as never
+    )
     await getDb().hostSyncCursors.put({
       serverKey: key,
       table: "skills",
@@ -1600,54 +1600,7 @@ describe("cursor namespace keying (ADR-0097 D13)", () => {
     expect(await db.characters.get("from-this-host")).toBeDefined()
   })
 
-  it("adopts cursors an earlier build wrote under this host's bare device id", async () => {
-    // The upgrade path. Without adoption the install's own rows sit under a key
-    // this build no longer recognises, get classified as another host's, and
-    // the mirror of the host we are still paired to is wiped on first launch.
-    await seedCursor("dev-1", 500)
-    const db = getDb()
-    await db.characters.put({ id: "from-this-host", name: "A" } as never)
-
-    companionConfig = { deviceId: "dev-1" }
-    const handler = handlerFor(501)
-    await runSyncDown({
-      transport: makeTransport(),
-      handlers: [{ table: "characters" as const, run: handler }],
-    })
-    await new Promise((r) => setTimeout(r, 5))
-
-    expect(handler.mock.calls[0][1]).toMatchObject({ since: 500 })
-    expect(await db.characters.get("from-this-host")).toBeDefined()
-    // …and the legacy row is gone, so the next run does not see it as foreign.
-    expect(await db.hostSyncCursors.get(["dev-1", "characters"])).toBeUndefined()
-    expect((await db.hostSyncCursors.get(["__local__:dev-1", "characters"]))?.since).toBe(501)
-  })
-
-  it("prefers the namespaced cursor over a stale legacy one for the same host", async () => {
-    await seedCursor("__local__:dev-1", 10)
-    await getDb().hostSyncCursors.put({
-      serverKey: "dev-1",
-      table: "characters",
-      since: 500,
-      lastSyncAt: 1,
-      lastError: null,
-    })
-
-    companionConfig = { deviceId: "dev-1" }
-    const handler = handlerFor(11)
-    await runSyncDown({
-      transport: makeTransport(),
-      handlers: [{ table: "characters" as const, run: handler }],
-    })
-    await new Promise((r) => setTimeout(r, 5))
-
-    // The namespaced row was written by this build against the key we resume
-    // from; the legacy row is a stale duplicate, not a newer watermark.
-    expect(handler.mock.calls[0][1]).toMatchObject({ since: 10 })
-    expect(await getDb().hostSyncCursors.get(["dev-1", "characters"])).toBeUndefined()
-  })
-
-  it("adopts nothing when the pairing carries no device id", async () => {
+  it("does not resume from the unpaired key when the pairing carries no device id", async () => {
     await seedCursor("", 500)
     companionConfig = { deviceId: "", targetId: "host-a" }
 
@@ -1658,8 +1611,8 @@ describe("cursor namespace keying (ADR-0097 D13)", () => {
     })
     await new Promise((r) => setTimeout(r, 5))
 
-    // `""` is the unpaired key, not this host's former key — adopting it would
-    // hand every unpaired client's watermark to the first host it pairs with.
+    // `""` is the unpaired key, not this host's — resuming from it would hand
+    // every unpaired client's watermark to the first host it pairs with.
     expect(handler.mock.calls[0][1]).toMatchObject({ since: 0 })
   })
 

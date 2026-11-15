@@ -21,85 +21,57 @@ describe("useAgentRuntimeStore", () => {
     // Reset to documented defaults before each test
     useAgentRuntimeStore.setState({
       runtimeRef: BUILTIN_RUNTIME_REF,
-      runtime: "claude-sdk",
-      modeId: "general",
-      externalAgentId: null,
-      externalHostConfig: null,
+      defaultComposition: { presetId: "standard" },
     })
   })
 
   it("has the documented defaults", () => {
     const { result } = renderHook(() => useAgentRuntimeStore())
     expect(result.current.runtimeRef).toEqual({ kind: "builtin" })
-    expect(result.current.runtime).toBe("claude-sdk")
-    expect(result.current.modeId).toBe("general")
-    expect(result.current.externalAgentId).toBeNull()
+    expect(result.current.defaultComposition).toEqual({ presetId: "standard" })
   })
 
-  it("setRuntimeRef switches lanes and keeps every deprecated mirror in step", () => {
+  it("setRuntimeRef switches lanes", () => {
     const { result } = renderHook(() => useAgentRuntimeStore())
 
     act(() => result.current.setRuntimeRef({ kind: "external", agentId: "agent-42" }))
-    expect(result.current.runtime).toBe("external")
-    expect(result.current.externalAgentId).toBe("agent-42")
-    expect(result.current.externalHostConfig).toBeNull()
+    expect(result.current.runtimeRef).toEqual({ kind: "external", agentId: "agent-42" })
 
     act(() => result.current.setRuntimeRef(BUILTIN_RUNTIME_REF))
-    expect(result.current.runtime).toBe("claude-sdk")
-    expect(result.current.externalAgentId).toBeNull()
+    expect(result.current.runtimeRef).toEqual({ kind: "builtin" })
   })
 
-  it("setModeId updates the active mode id", () => {
+  it("setModeId maps a flat mode id onto the default composition", () => {
     const { result } = renderHook(() => useAgentRuntimeStore())
 
     act(() => result.current.setModeId("research"))
-    expect(result.current.modeId).toBe("research")
+    expect(result.current.defaultComposition.presetId).toBe("research")
   })
 
-  it("a host ref mirrors the full admission stamp", () => {
-    const { result } = renderHook(() => useAgentRuntimeStore())
-
-    act(() =>
-      result.current.setRuntimeRef({
-        kind: "host",
-        configId: "eac_1",
-        revision: "eacr_1",
-        lifecycleGeneration: 2,
-        name: "Pi",
-      })
-    )
-    expect(result.current.runtime).toBe("external")
-    expect(result.current.externalAgentId).toBeNull()
-    expect(result.current.externalHostConfig).toEqual({
+  it("persists the full host admission stamp", () => {
+    const hostRef = {
+      kind: "host",
       configId: "eac_1",
       revision: "eacr_1",
       lifecycleGeneration: 2,
       name: "Pi",
-    })
+    } as const
+    act(() => useAgentRuntimeStore.getState().setRuntimeRef(hostRef))
+    const stored = JSON.parse(window.localStorage.getItem("cognia-next.agent-runtime") as string)
+    expect(stored.state.runtimeRef).toEqual(hostRef)
   })
 
   it("persists under the documented localStorage key", () => {
     // Trigger a state change to flush the persist middleware
-    act(() => useAgentRuntimeStore.getState().setModeId("persisted-mode"))
+    act(() => useAgentRuntimeStore.getState().setModeId("research"))
 
     // The persist middleware writes synchronously to localStorage on set.
     const stored = window.localStorage.getItem("cognia-next.agent-runtime")
     expect(stored).not.toBeNull()
     const parsed = JSON.parse(stored as string)
-    expect(parsed.state.modeId).toBe("persisted-mode")
-    // v2 (ADR-0117) gained `defaultComposition` and per-session selections,
-    // with `modeId` left as the compatibility adapter. v3 folded the three lane
-    // fields into one `runtimeRef` and left them as deprecated mirrors.
+    expect(parsed.state.defaultComposition.presetId).toBe("research")
+    expect(parsed.state).not.toHaveProperty("modeId")
     expect(parsed.version).toBe(3)
-  })
-
-  it("keeps the legacy mode id and the default composition in step", () => {
-    act(() => useAgentRuntimeStore.getState().setModeId("research"))
-    expect(useAgentRuntimeStore.getState().defaultComposition.presetId).toBe("research")
-
-    act(() => useAgentRuntimeStore.getState().setDefaultComposition({ presetId: "minimal" }))
-    // An unmigrated reader of `modeId` must not see a stale preset.
-    expect(useAgentRuntimeStore.getState().modeId).toBe("minimal")
   })
 
   it("maps a legacy permission mode onto the authority axis", () => {
@@ -109,23 +81,10 @@ describe("useAgentRuntimeStore", () => {
     expect(composition.authority).toBe("acceptEdits")
   })
 
-  it("round-trips an axis mode without collapsing it to its preset", () => {
-    // `plan` maps to `{presetId: "standard", authority: "plan"}`, so mirroring
-    // `presetId` back onto `modeId` answered "standard" for a composition that
-    // is still Plan. `resolveActiveAgentMode` has no `standard` record, so the
-    // legacy send path silently lost plan-mode behaviour.
+  it("keeps an axis mode's legacy id on the selection", () => {
     act(() => useAgentRuntimeStore.getState().setModeId("plan"))
     const composition = useAgentRuntimeStore.getState().defaultComposition
-    expect(composition.authority).toBe("plan")
-
-    act(() => useAgentRuntimeStore.getState().setDefaultComposition(composition))
-    expect(useAgentRuntimeStore.getState().modeId).toBe("plan")
-    expect(useAgentRuntimeStore.getState().defaultComposition.authority).toBe("plan")
-  })
-
-  it("still mirrors the preset when a selection carries no legacy id", () => {
-    act(() => useAgentRuntimeStore.getState().setDefaultComposition({ presetId: "minimal" }))
-    expect(useAgentRuntimeStore.getState().modeId).toBe("minimal")
+    expect(composition).toEqual({ presetId: "standard", authority: "plan", legacyModeId: "plan" })
   })
 
   it("never elevates an unknown legacy mode", () => {
@@ -156,7 +115,6 @@ describe("useAgentRuntimeStore", () => {
     act(() => useAgentRuntimeStore.getState().setModeId("my-reviewer"))
 
     expect(useAgentRuntimeStore.getState().defaultComposition.presetId).toBe("my-reviewer")
-    expect(useAgentRuntimeStore.getState().modeId).toBe("my-reviewer")
 
     useCustomModeStore.setState({ customModes: {} })
   })
@@ -230,97 +188,9 @@ describe("the lane belongs to the session", () => {
   })
 })
 
-describe("v2 to v3 migration", () => {
-  // The migration is exercised through the persist middleware's own entry
-  // point rather than by reaching into the store, so what is tested is the
-  // path a real upgrade takes.
-  const migrate = useAgentRuntimeStore.persist.getOptions().migrate as (
-    persisted: unknown,
-    version: number
-  ) => { runtimeRef: unknown; runtime: string; externalAgentId: string | null }
-
-  it("folds a local external selection into one ref", () => {
-    const next = migrate(
-      { runtime: "external", externalAgentId: "a1", externalHostConfig: null },
-      2
-    )
-    expect(next.runtimeRef).toEqual({ kind: "external", agentId: "a1" })
-  })
-
-  it("prefers the host stamp when a half-applied v2 write left both set", () => {
-    const next = migrate(
-      {
-        runtime: "external",
-        externalAgentId: "a1",
-        externalHostConfig: {
-          configId: "eac_1",
-          revision: "eacr_1",
-          lifecycleGeneration: 3,
-          name: "Pi",
-        },
-      },
-      2
-    )
-    expect(next.runtimeRef).toEqual({
-      kind: "host",
-      configId: "eac_1",
-      revision: "eacr_1",
-      lifecycleGeneration: 3,
-      name: "Pi",
-    })
-  })
-
-  it("drops v2's dead 'external with no target' state to the default lane", () => {
-    // That state could not send a turn. Carrying it forward would only
-    // reproduce the chip's "External (none selected)" dead end.
-    const next = migrate(
-      { runtime: "external", externalAgentId: null, externalHostConfig: null },
-      2
-    )
-    expect(next.runtimeRef).toEqual({ kind: "builtin" })
-    expect(next.runtime).toBe("claude-sdk")
-  })
-
-  it("leaves a v2 builtin selection on the default lane", () => {
-    expect(migrate({ runtime: "claude-sdk" }, 2).runtimeRef).toEqual({ kind: "builtin" })
-  })
-})
-
-describe("the lanes are exclusive by construction", () => {
-  // These used to be four tests policing that three separate fields stayed in
-  // agreement. One ref cannot disagree with itself, so what is left to check is
-  // that each lane's mirrors are complete and that the others are cleared.
-  beforeEach(() => {
-    useAgentRuntimeStore.getState().setRuntimeRef(BUILTIN_RUNTIME_REF)
-  })
-
-  const hostRef = {
-    kind: "host",
-    configId: "eac_1",
-    revision: "eacr_1",
-    lifecycleGeneration: 1,
-    name: "Pi",
-  } as const
-
-  it("a host selection leaves no local agent behind", () => {
-    useAgentRuntimeStore.getState().setRuntimeRef({ kind: "external", agentId: "local-1" })
-    useAgentRuntimeStore.getState().setRuntimeRef(hostRef)
-    expect(useAgentRuntimeStore.getState().externalAgentId).toBeNull()
-    expect(useAgentRuntimeStore.getState().runtimeRef).toEqual(hostRef)
-  })
-
-  it("a local selection leaves no host config behind", () => {
-    useAgentRuntimeStore.getState().setRuntimeRef(hostRef)
-    useAgentRuntimeStore.getState().setRuntimeRef({ kind: "external", agentId: "local-1" })
-    expect(useAgentRuntimeStore.getState().externalHostConfig).toBeNull()
-    expect(useAgentRuntimeStore.getState().externalAgentId).toBe("local-1")
-  })
-
-  it("returning to the builtin lane clears both targets", () => {
-    useAgentRuntimeStore.getState().setRuntimeRef(hostRef)
-    useAgentRuntimeStore.getState().setRuntimeRef(BUILTIN_RUNTIME_REF)
-    expect(useAgentRuntimeStore.getState().externalHostConfig).toBeNull()
-    expect(useAgentRuntimeStore.getState().externalAgentId).toBeNull()
+describe("persisted state from an older version", () => {
+  it("has no migrate step, so an older version falls back to the defaults", () => {
+    expect(useAgentRuntimeStore.persist.getOptions().migrate).toBeUndefined()
   })
 })
 

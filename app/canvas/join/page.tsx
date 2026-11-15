@@ -6,13 +6,6 @@
  * The link carries three identifiers and nothing else (see
  * `lib/canvas/collaboration/share-link.ts`). This page resolves them against
  * the joiner's own membership, loads the document, and only then opens Canvas.
- *
- * What it used to do instead: decode a JSON blob containing the session, its
- * owner, its participants and its permission flags, write an arbitrary
- * `?server=` URL into persisted settings with `enabled: true` and no
- * validation, and then report success without joining anything at all. Both
- * buttons pushed `/` and the decoded ids were dropped. It also never worked,
- * because the panel emitted raw JSON into a parameter this page `atob`ed.
  */
 
 import { Suspense, useCallback, useEffect, useMemo } from "react"
@@ -25,11 +18,7 @@ import { CheckCircle2, AlertCircle } from "lucide-react"
 import { useUIStore } from "@/stores/ui"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { PageLoading } from "@/components/ui/loading-states"
-import {
-  isLegacyCanvasShareLink,
-  parseCanvasShareLink,
-  type CanvasShareTarget,
-} from "@/lib/canvas/collaboration/share-link"
+import { parseCanvasShareLink, type CanvasShareTarget } from "@/lib/canvas/collaboration/share-link"
 import { loggers } from "@cognia/logging"
 
 export default function CanvasJoinPage() {
@@ -43,7 +32,7 @@ export default function CanvasJoinPage() {
 type JoinStatus = "joining" | "success" | "error"
 
 /** What went wrong, in the joiner's terms rather than the transport's. */
-type JoinFailure = "missing" | "malformed" | "expired" | "not-found"
+type JoinFailure = "missing" | "malformed" | "not-found"
 
 interface JoinOutcome {
   status: JoinStatus
@@ -57,12 +46,6 @@ interface JoinOutcome {
  * and what makes the page testable without a mounted effect.
  */
 function readShareLink(params: Pick<URLSearchParams, "get"> | null): JoinOutcome {
-  // An old link names a session id from another device's memory and a server
-  // this client must not trust. "Expired, ask for a new one" is both true and
-  // actionable, unlike a decode failure.
-  if (isLegacyCanvasShareLink(params)) {
-    return { status: "error", failure: "expired", target: null }
-  }
   const parsed = parseCanvasShareLink(params)
   if (!parsed.ok) {
     return { status: "error", failure: parsed.error, target: null }

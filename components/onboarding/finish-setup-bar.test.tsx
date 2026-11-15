@@ -85,13 +85,6 @@ describe("FinishSetupBar", () => {
     expect(useSetupStatus).not.toHaveBeenCalled()
   })
 
-  it("stays hidden for migrated legacy users so upgrades never nag", () => {
-    settings = withPath("legacy_dismissed", { finishBarDismissed: true })
-    setupStatus.gaps = ["model"]
-    const { container } = render(<FinishSetupBar />)
-    expect(container).toBeEmptyDOMElement()
-  })
-
   it("stays hidden once the user closed it", () => {
     settings = withPath("runtime_skipped", { finishBarDismissed: true })
     setupStatus.gaps = ["first-task"]

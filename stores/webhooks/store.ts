@@ -53,71 +53,6 @@ function cloneConfig(config: WebhookConfig): WebhookConfig {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function stringsOnlyHeader(value: unknown): value is WebhookHeader {
-  return isRecord(value) && typeof value.name === "string" && typeof value.value === "string"
-}
-
-function normalizeEndpoint(value: unknown): WebhookEndpoint | null {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== "string" ||
-    typeof value.name !== "string" ||
-    typeof value.url !== "string" ||
-    typeof value.enabled !== "boolean"
-  ) {
-    return null
-  }
-  return {
-    id: value.id,
-    name: value.name,
-    url: value.url,
-    enabled: value.enabled,
-    headers: Array.isArray(value.headers) ? value.headers.filter(stringsOnlyHeader) : [],
-    eventTypes: Array.isArray(value.eventTypes)
-      ? value.eventTypes.filter((item): item is string => typeof item === "string")
-      : undefined,
-  }
-}
-
-function normalizePersistedConfig(value: unknown): WebhookConfig {
-  const defaults = DEFAULT_WEBHOOK_CONFIG
-  if (!isRecord(value)) return cloneConfig(defaults)
-  const delivery = isRecord(value.delivery) ? value.delivery : undefined
-  return {
-    hasSigningSecret: value.hasSigningSecret === true,
-    defaultHeaders: Array.isArray(value.defaultHeaders)
-      ? value.defaultHeaders.filter(stringsOnlyHeader)
-      : [],
-    endpoints: Array.isArray(value.endpoints)
-      ? value.endpoints
-          .map(normalizeEndpoint)
-          .filter((endpoint): endpoint is WebhookEndpoint => endpoint !== null)
-      : [],
-    delivery: normalizeWebhookDelivery(
-      delivery
-        ? {
-            maxRetries: typeof delivery.maxRetries === "number" ? delivery.maxRetries : undefined,
-            timeoutMs: typeof delivery.timeoutMs === "number" ? delivery.timeoutMs : undefined,
-            baseDelayMs:
-              typeof delivery.baseDelayMs === "number" ? delivery.baseDelayMs : undefined,
-          }
-        : undefined
-    ),
-  }
-}
-
-/** Extract outbound settings from the former combined Remote Control store. */
-export function migrateWebhookPersistedState(persisted: unknown): Pick<WebhookState, "config"> {
-  const root = isRecord(persisted) ? persisted : {}
-  const config = isRecord(root.config) ? root.config : root
-  const outbound = isRecord(config.outbound) ? config.outbound : config
-  return { config: normalizePersistedConfig(outbound) }
-}
-
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -158,12 +93,9 @@ export const useWebhookStore = create<WebhookStore>()(
       reset: () => set({ config: cloneConfig(initialConfig), lastError: null }),
     }),
     {
-      // Keep the previous storage key for a single in-place migration so
-      // existing outbound endpoints and delivery limits are not discarded.
       name: "cognia-remote-control",
       storage: persistLocalStorage(),
       version: 1,
-      migrate: (persisted) => migrateWebhookPersistedState(persisted),
       partialize: (state) => ({ config: state.config }),
     }
   )

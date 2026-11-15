@@ -102,19 +102,6 @@ jest.mock("next-intl", () => ({
   },
 }))
 
-beforeEach(() => {
-  window.localStorage.setItem(
-    "cognia.companion.config.v1",
-    JSON.stringify({
-      baseUrl: "http://test:7890",
-      devicePrivateKeyJwk: { kty: "EC", crv: "P-256", d: "private" },
-      deviceKeyThumbprint: "thumbprint",
-      deviceId: "dev-existing",
-      serverVersion: "9.9.9",
-    })
-  )
-})
-
 afterEach(() => {
   jest.clearAllMocks()
   window.localStorage.clear()

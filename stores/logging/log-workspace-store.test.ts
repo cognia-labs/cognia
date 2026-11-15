@@ -5,8 +5,6 @@ import {
   DETAIL_WIDTH_MAX,
   DETAIL_WIDTH_MIN,
   INCIDENT_STATE_FILTERS,
-  migrateLogWorkspace,
-  resolveIncidentStateFilter,
   resolveLogWorkspaceView,
   resolveTraceSubView,
   useLogWorkspaceStore,
@@ -94,92 +92,12 @@ describe("resolveTraceSubView", () => {
   })
 })
 
-describe("migrateLogWorkspace", () => {
-  it("moves the three deleted static views onto the logs channel", () => {
-    for (const view of ["health", "recovery", "advanced"]) {
-      expect(migrateLogWorkspace({ activeView: view }).activeView).toBe("logs")
-    }
-  })
-
-  it("turns the receipts view into an incidents filter", () => {
-    expect(migrateLogWorkspace({ activeView: "receipts" })).toMatchObject({
-      activeView: "incidents",
-      receiptsOnly: true,
-    })
-  })
-
-  it("keeps surviving preferences and drops the removed rail keys", () => {
-    const migrated = migrateLogWorkspace({
-      activeView: "incidents",
-      density: "spacious",
-      detailWidth: 512,
-      activeSource: "mobile",
-      incidentStateFilter: "queued",
-      navigationWidth: 300,
-      navigationCollapsed: true,
-    })
-    expect(migrated).toMatchObject({
-      activeView: "incidents",
-      density: "spacious",
-      detailWidth: 512,
-      activeSource: "mobile",
-      incidentStateFilter: "queued",
-    })
-    expect(migrated).not.toHaveProperty("navigationWidth")
-    expect(migrated).not.toHaveProperty("navigationCollapsed")
-  })
-
-  it("drops the v2 trace window — the shared Grafana range replaced it", () => {
-    const migrated = migrateLogWorkspace({ activeView: "traces", traceWindow: "month" })
-    expect(migrated).not.toHaveProperty("traceWindow")
-    expect(migrated.traceSubView).toBe("explore")
-  })
-
-  it("restores a persisted sub-view and rejects a hostile one", () => {
-    expect(migrateLogWorkspace({ traceSubView: "dashboard" }).traceSubView).toBe("dashboard")
-    expect(migrateLogWorkspace({ traceSubView: "charts" }).traceSubView).toBe("explore")
-  })
-
-  it("clamps and defaults hostile persisted values", () => {
-    expect(
-      migrateLogWorkspace({ detailWidth: 5000, density: "huge", activeSource: "satellite" })
-    ).toMatchObject({
-      detailWidth: DETAIL_WIDTH_MAX,
-      density: "comfortable",
-      activeSource: "all",
-      activeView: "logs",
-    })
-  })
-
-  it("survives a missing or non-object blob", () => {
-    expect(migrateLogWorkspace(undefined)).toEqual({})
-    expect(migrateLogWorkspace("nope")).toEqual({})
-  })
-})
-
 describe("incident state vocabulary", () => {
   it("speaks the service's snake_case lifecycle, packaged included", () => {
     expect(INCIDENT_STATE_FILTERS[0]).toBe("all")
     expect(INCIDENT_STATE_FILTERS).toContain("awaiting_consent")
     expect(INCIDENT_STATE_FILTERS).toContain("packaged")
     expect(INCIDENT_STATE_FILTERS).not.toContain("awaitingConsent")
-  })
-
-  it("resolves legacy and hostile filter values", () => {
-    expect(resolveIncidentStateFilter("all")).toBe("all")
-    expect(resolveIncidentStateFilter("awaitingConsent")).toBe("awaiting_consent")
-    expect(resolveIncidentStateFilter("packaged")).toBe("packaged")
-    expect(resolveIncidentStateFilter("nonsense")).toBe("all")
-    expect(resolveIncidentStateFilter(42)).toBe("all")
-  })
-
-  it("migrates a v3 camelCase state filter onto the service vocabulary", () => {
-    expect(migrateLogWorkspace({ incidentStateFilter: "awaitingConsent" })).toMatchObject({
-      incidentStateFilter: "awaiting_consent",
-    })
-    expect(migrateLogWorkspace({ incidentStateFilter: "bogus" })).toMatchObject({
-      incidentStateFilter: "all",
-    })
   })
 })
 
@@ -201,17 +119,6 @@ describe("errors channel filters", () => {
       crashSource: "all",
       crashLevel: "all",
       crashSearch: "",
-    })
-  })
-
-  it("restores persisted source and level and rejects hostile ones", () => {
-    expect(migrateLogWorkspace({ crashSource: "recent", crashLevel: "error" })).toMatchObject({
-      crashSource: "recent",
-      crashLevel: "error",
-    })
-    expect(migrateLogWorkspace({ crashSource: "disk", crashLevel: "loud" })).toMatchObject({
-      crashSource: "all",
-      crashLevel: "all",
     })
   })
 

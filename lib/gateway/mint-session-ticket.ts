@@ -279,7 +279,6 @@ export async function prepareExternalAgentGatewayRoute(
               value.customProviders?.find((provider) => provider.id === id),
             ]),
           value.defaultProvider,
-          value.defaultAccountId,
           value.defaultAccountIds,
         ])
       : null
@@ -432,10 +431,6 @@ export async function prepareExternalAgentGatewayRoute(
           const { getActiveAccount } = await import("@/lib/subscription/core/transport")
           accountId =
             settings.defaultAccountIds?.[definition.id] ??
-            (settings.defaultProvider === selected.providerId ||
-            settings.defaultProvider === definition.id
-              ? settings.defaultAccountId
-              : undefined) ??
             (await getActiveAccount(definition.id)).activeAccountId
         } else accountId = null
       }

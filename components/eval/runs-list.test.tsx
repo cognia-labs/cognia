@@ -65,17 +65,6 @@ describe("RunsList", () => {
     expect(screen.queryByText("gateFailed")).not.toBeInTheDocument()
   })
 
-  it("badges a legacy run and withholds its gate verdict", () => {
-    // A run written before the scoring fix carries an inflated passAt1, so a
-    // green "gate passed" on it would be a lie.
-    const { scoringVersion: _drop, ...legacy } = RUN
-    ;(useEvalRuns as jest.Mock).mockReturnValueOnce([legacy])
-    render(<RunsList datasetId="d1" gate={{ minPassAt1: 0.5 }} onOpenRun={jest.fn()} />)
-    expect(screen.getByTestId("runs-list-legacy")).toBeInTheDocument()
-    expect(screen.queryByText("gatePassed")).not.toBeInTheDocument()
-    expect(screen.queryByText("gateFailed")).not.toBeInTheDocument()
-  })
-
   it("surfaces the ungraded count when a run left cases unjudged, and hides it otherwise", () => {
     ;(useEvalRuns as jest.Mock).mockReturnValue([
       { ...RUN, gradedCaseCount: 7, ungradedCaseCount: 3 },

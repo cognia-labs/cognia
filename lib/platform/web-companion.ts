@@ -20,15 +20,8 @@
 
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
 
-// Mirrors CONFIG_KEY in lib/tauri/companion-storage.ts (asserted by test).
-export const WEB_COMPANION_CONFIG_KEY = "cognia.companion.config.v1"
-// Mirrors CONFIG_BOOK_KEY in lib/tauri/companion-storage.ts (asserted by test).
-export const WEB_COMPANION_TARGET_BOOK_KEY = "cognia.companion.targets.v2"
 // Mirrors HOST_BOOK_KEY in lib/companion/credential-book/stores.ts (asserted
-// by test). THIS is where a pairing made by the current code actually lands:
-// `MigratingCompanionStorage.save()` writes the credential book and then
-// clears the legacy target book above, so reading only the legacy key made
-// every web pairing look absent on the next page load.
+// by test): where the credential book files a web pairing's public record.
 export const WEB_COMPANION_HOST_BOOK_KEY = "cognia.companion.hosts.v2"
 
 /** Build-time server URL, normalized (no trailing slash); null when unset. */
@@ -81,30 +74,11 @@ function hostBookHasPairing(targetId: string | null): boolean {
   return records.length > 0
 }
 
-/** Legacy pre-credential-book target book. Read only until it migrates away. */
-function legacyTargetBookHasPairing(targetId: string | null): boolean {
-  const raw = window.localStorage.getItem(WEB_COMPANION_TARGET_BOOK_KEY)
-  if (!raw) return false
-  const parsed = JSON.parse(raw) as { version?: unknown; targets?: unknown }
-  if (parsed.version !== 2 || !parsed.targets || typeof parsed.targets !== "object") return false
-  const targets = parsed.targets as Record<string, unknown>
-  const scope = getActiveRuntimeTargetContext()
-  if (scope && targetId) return Boolean(targets[`${scope.accountId}:${targetId}`])
-  return Object.keys(targets).length > 0
-}
-
 /** Whether a canonical cgnp3 pairing exists in this browser. */
 export function hasStoredWebPairing(): boolean {
   if (typeof window === "undefined") return false
   try {
-    const targetId = activeTargetId()
-    if (hostBookHasPairing(targetId)) return true
-    if (legacyTargetBookHasPairing(targetId)) return true
-
-    // The former single-record bearer credential is intentionally ignored;
-    // this breaking upgrade requires a fresh device-key pairing.
-    window.localStorage.removeItem(WEB_COMPANION_CONFIG_KEY)
-    return false
+    return hostBookHasPairing(activeTargetId())
   } catch {
     return false
   }

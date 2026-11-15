@@ -200,7 +200,6 @@
     "documentLabel": "Document",
     "error": "Couldn't open it",
     "failure": {
-      "expired": "This link is from an older version and no longer works. Ask whoever shared it for a new one.",
       "malformed": "This link is not a valid Canvas share link.",
       "missing": "This link does not name a document.",
       "not-found": "This document is not on this device yet."

@@ -10,7 +10,6 @@ import {
   clonePasswordVerifier,
   normalizeAccountDisplayName,
   type AccountRegistryState,
-  type LegacyMigrationState,
   type LocalAccountRecord,
   type PasswordVerifierRecord,
 } from "./account-types"
@@ -117,12 +116,6 @@ export interface CreateAccountInput {
 export interface DeleteAccountOptions {
   replacementAccountId?: string
   now?: number
-}
-
-export interface MarkLegacyMigrationCompletedInput {
-  sourceDbName: string
-  targetAccountId: string
-  completedAt: number
 }
 
 export function accountDatabaseName(localAccountId: string): string {
@@ -418,26 +411,6 @@ export class LocalAccountRegistry {
           updatedAt: nextTimestamp(now, state.updatedAt),
         })
       }
-    })
-  }
-
-  async markLegacyMigrationCompleted(input: MarkLegacyMigrationCompletedInput): Promise<void> {
-    assertAccountId(input.targetAccountId)
-    await this.db.transaction("rw", this.db.accounts, this.db.state, async () => {
-      const account = await this.db.accounts.get(input.targetAccountId)
-      if (!account) throw accountNotFound(input.targetAccountId)
-      const state = await this.ensureState()
-      const legacyMigration: LegacyMigrationState = {
-        status: "completed",
-        sourceDbName: input.sourceDbName,
-        targetAccountId: input.targetAccountId,
-        completedAt: input.completedAt,
-      }
-      await this.db.state.put({
-        ...state,
-        legacyMigration,
-        updatedAt: nextTimestamp(input.completedAt, state.updatedAt),
-      })
     })
   }
 

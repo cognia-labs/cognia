@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { migrateWebhookPersistedState, selectWebhookConfig, useWebhookStore } from "./store"
+import { selectWebhookConfig, useWebhookStore } from "./store"
 import { setWebhookSigningSecret } from "@/lib/webhooks/signing-secret"
 import { DEFAULT_WEBHOOK_DELIVERY } from "@/types/webhooks"
 
@@ -80,50 +80,5 @@ describe("useWebhookStore", () => {
     expect(result).toEqual({ ok: false, error: "keyring offline" })
     expect(useWebhookStore.getState().config.hasSigningSecret).toBe(false)
     expect(useWebhookStore.getState().lastError).toBe("keyring offline")
-  })
-})
-
-describe("migrateWebhookPersistedState", () => {
-  it("extracts only outbound settings from the former combined store", () => {
-    const migrated = migrateWebhookPersistedState({
-      config: {
-        inbound: { enabled: true, port: 47821 },
-        outbound: {
-          hasSigningSecret: true,
-          defaultHeaders: [{ name: "X-Legacy", value: "kept" }],
-          endpoints: [],
-          delivery: { maxRetries: 99, timeoutMs: 5, baseDelayMs: 2 },
-        },
-      },
-      status: { inboundRunning: true },
-      recentCalls: [{ route: "/api/v1/health" }],
-    })
-
-    expect(migrated).toEqual({
-      config: {
-        hasSigningSecret: true,
-        defaultHeaders: [{ name: "X-Legacy", value: "kept" }],
-        endpoints: [],
-        delivery: { maxRetries: 10, timeoutMs: 1000, baseDelayMs: 100 },
-      },
-    })
-    expect(migrated).not.toHaveProperty("status")
-    expect(migrated).not.toHaveProperty("recentCalls")
-  })
-
-  it("rejects malformed persisted endpoint fields", () => {
-    const migrated = migrateWebhookPersistedState({
-      config: {
-        endpoints: [
-          { id: 1, url: false },
-          { id: "ok", name: "n", url: "https://x", enabled: true },
-        ],
-        defaultHeaders: [{ name: 1, value: "bad" }],
-      },
-    })
-    expect(migrated.config.endpoints).toEqual([
-      { id: "ok", name: "n", url: "https://x", enabled: true, headers: [] },
-    ])
-    expect(migrated.config.defaultHeaders).toEqual([])
   })
 })

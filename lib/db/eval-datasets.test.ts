@@ -121,6 +121,7 @@ describe("dataset CRUD", () => {
       totalCostUsd: 0,
       avgLatencyMs: 1,
       createdAt: Date.now(),
+      scoringVersion: 3,
     })
     await saveCaseResult({ runId: "run-1", caseId: "c1", scores: {}, passAt1: true })
 

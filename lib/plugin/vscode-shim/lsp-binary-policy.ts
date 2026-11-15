@@ -97,11 +97,8 @@ interface PolicyDeps {
    * binaries with one-time consent" in Settings → Developer. Production
    * builds always return `false`; dev builds consult the settings store.
    *
-   * Default implementation reads `settings.lsp.unsignedAllowed` via the
-   * settings store, falling back to the pre-unification
-   * `settings.developer.unsignedLspAllowed` for databases the LSP settings
-   * migration (`lib/lsp/migrate-settings.ts`) has not run against yet. Tests
-   * override this with a synchronous boolean.
+   * Default implementation reads `settings.lsp.unsignedAllowed` from the
+   * settings singleton. Tests override this with a synchronous boolean.
    */
   isUnsignedLspAllowed: () => Promise<boolean>
   now: () => number
@@ -114,10 +111,7 @@ async function defaultIsUnsignedLspAllowed(): Promise<boolean> {
   try {
     const settings = await getDb().settings.get("singleton")
     // `lsp.unsignedAllowed` is the field Settings → Language Servers writes.
-    // The legacy `developer.unsignedLspAllowed` is only still consulted
-    // because the migration initializer may not have run yet this session —
-    // reading it alone made the toggle inert the moment migration cleared it.
-    return Boolean(settings?.lsp?.unsignedAllowed ?? settings?.developer?.unsignedLspAllowed)
+    return Boolean(settings?.lsp?.unsignedAllowed)
   } catch {
     return false
   }
@@ -237,7 +231,7 @@ export async function evaluateLspBinary(
         decision = {
           allowed: true,
           requiresPrompt: true,
-          reason: `Dev-mode override (settings.developer.unsignedLspAllowed). Original reason: ${decision.reason}`,
+          reason: `Dev-mode override (settings.lsp.unsignedAllowed). Original reason: ${decision.reason}`,
         }
       }
     } catch {

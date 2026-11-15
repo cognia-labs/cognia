@@ -8,7 +8,7 @@
  * `PetSettings.desktopPet.enabled`); OCR opens its settings section via the
  * shared `requestOpenSettings` request; capture opens the pet console's
  * Insights (Activity), which is the only place `CaptureSettingsPanel` is
- * mounted. Gated by the parent (`barItems.quickActions`).
+ * mounted. Gated by the parent (the `quickActions` title-bar item).
  *
  * The pet toggle used to flip `usePetStore.minimized`, which only the in-app
  * widget read; that widget was never mounted, so the button changed nothing.

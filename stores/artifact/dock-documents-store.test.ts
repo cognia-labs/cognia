@@ -136,7 +136,7 @@ it.each([
 ])("rejects malformed persisted input %p", (value) => {
   expect(persistedDockDocuments(value)).toEqual({ bySession: {} })
 })
-it("ignores unknown versions and validates even same-version merge", async () => {
+it("has no migrate step and validates every merge", () => {
   const options = useDockDocumentsStore.persist.getOptions()
   const state = {
     bySession: {
@@ -147,7 +147,7 @@ it("ignores unknown versions and validates even same-version merge", async () =>
       },
     },
   }
-  expect(await options.migrate!(state, 99)).toEqual({ bySession: {} })
+  expect(options.migrate).toBeUndefined()
   expect(
     options.merge!(state, useDockDocumentsStore.getState()).bySession.s.activeDocumentTabId
   ).toBe("d1")

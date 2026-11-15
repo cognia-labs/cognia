@@ -23,11 +23,6 @@ jest.mock("./crypto-helpers", () => {
   // Simple XOR-based mock encryption for testing (not real crypto)
   const keys = new Map<string, string>()
   return {
-    deriveKey: jest.fn(async (pluginId: string) => {
-      const key = `mock-key-${pluginId}`
-      keys.set(key, pluginId)
-      return key
-    }),
     deriveInstallKey: jest.fn(async (pluginId: string) => {
       const key = `mock-install-key-${pluginId}`
       keys.set(key, pluginId)
@@ -190,81 +185,30 @@ describe("PluginStorageAPI", () => {
   })
 
   describe("namespace isolation", () => {
-    it.each(["get", "has", "keys", "remove", "delete", "clear", "uninstall"] as const)(
-      "R2: %s works on adopted legacy values when migration runs out of origin quota",
-      async (operation) => {
-        const prefix = "cognia:plugin:storage:quota-legacy:"
-        localStorageMock.setItem("cognia:plugin:storage-adoption:quota-legacy", "acct_storage_a")
-        localStorageMock.setItem(prefix + "value", JSON.stringify("legacy"))
-        jest.spyOn(localStorageMock, "setItem").mockImplementation(() => {
-          throw new DOMException("Browser storage is full", "QuotaExceededError")
-        })
-        const api = createStorageAPI("quota-legacy")
-
-        if (operation === "get") await expect(api.get("value")).resolves.toBe("legacy")
-        else if (operation === "has") await expect(api.has("value")).resolves.toBe(true)
-        else if (operation === "keys") await expect(api.keys()).resolves.toEqual(["value"])
-        else {
-          if (operation === "uninstall") clearPluginStorage("quota-legacy")
-          else if (operation === "clear") await api.clear()
-          else await api[operation]("value")
-          expect(localStorageMock.getItem(prefix + "value")).toBeNull()
-          await expect(api.get("value")).resolves.toBeUndefined()
-        }
-      }
-    )
-
-    it("R3: purges adopted legacy payloads and retains their ownership marker", async () => {
-      const adoptionKey = "cognia:plugin:storage-adoption:purged%3Aplugin"
-      const legacyPrefix = "cognia:plugin:storage:purged:plugin:"
-      localStorageMock.setItem(adoptionKey, "acct_storage_a")
-      localStorageMock.setItem(legacyPrefix + "plain", JSON.stringify("private"))
-      localStorageMock.setItem(legacyPrefix + "secure", JSON.stringify("__encrypted:ciphertext"))
+    it("R3: purges only the deleted account's payloads", async () => {
       localStorageMock.setItem(
-        "cognia:plugin:account-storage:acct_storage_a:purged%3Aplugin:moved",
+        "cognia:plugin:account-storage:acct_storage_a:purged%3Aplugin:value",
         "1"
       )
-      localStorageMock.setItem("cognia:plugin:storage-adoption:other", "acct_storage_b")
-      localStorageMock.setItem("cognia:plugin:storage:other:value", "2")
-      localStorageMock.setItem("cognia:plugin:storage:unclaimed:value", "3")
+      localStorageMock.setItem(
+        "cognia:plugin:account-storage:acct_storage_b:purged%3Aplugin:value",
+        "2"
+      )
+      localStorageMock.setItem("cognia:plugin:storage:purged:plugin:value", "3")
 
       purgePluginAccountData("acct_storage_a")
 
-      expect(localStorageMock.getItem(legacyPrefix + "plain")).toBeNull()
-      expect(localStorageMock.getItem(legacyPrefix + "secure")).toBeNull()
       expect(
         localStorageMock.getItem(
-          "cognia:plugin:account-storage:acct_storage_a:purged%3Aplugin:moved"
+          "cognia:plugin:account-storage:acct_storage_a:purged%3Aplugin:value"
         )
       ).toBeNull()
-      expect(localStorageMock.getItem(adoptionKey)).toBe("acct_storage_a")
-      expect(localStorageMock.getItem("cognia:plugin:storage:other:value")).toBe("2")
-      expect(localStorageMock.getItem("cognia:plugin:storage:unclaimed:value")).toBe("3")
-      localStorageMock.setItem(legacyPrefix + "late", "4")
-      activatePluginRuntimeAccount("acct_storage_b")
-      await expect(createStorageAPI("purged:plugin").get("late")).resolves.toBeUndefined()
-    })
-
-    it("R2: accounts for unmoved data in quota checks and replaces legacy values without resurrection", async () => {
-      const legacyPrefix = "cognia:plugin:storage:quota-replacement:"
-      const scopedPrefix = "cognia:plugin:account-storage:acct_storage_a:quota-replacement:"
-      const adoptionKey = "cognia:plugin:storage-adoption:quota-replacement"
-      localStorageMock.setItem(adoptionKey, "acct_storage_a")
-      localStorageMock.setItem(legacyPrefix + "large", JSON.stringify("x".repeat(2_000_000)))
-      const api = createStorageAPI("quota-replacement")
-      expect(await api.getUsage()).toBeGreaterThan(4_000_000)
-      expect(getAllPluginStorageUsage()["quota-replacement"]).toBe(await api.getUsage())
-      await expect(api.set("extra", "y".repeat(700_000))).rejects.toThrow(/storage limit/i)
-      await api.set("large", "replacement")
-      expect(localStorageMock.getItem(legacyPrefix + "large")).toBeNull()
-
-      localStorageMock.setItem(legacyPrefix + "large", JSON.stringify("stale"))
-      expect(await api.keys()).toEqual(["large"])
-      expect(await api.get("large")).toBe("replacement")
-      await api.remove("large")
-      expect(localStorageMock.getItem(legacyPrefix + "large")).toBeNull()
-      expect(localStorageMock.getItem(scopedPrefix + "large")).toBeNull()
-      await expect(api.get("large")).resolves.toBeUndefined()
+      expect(
+        localStorageMock.getItem(
+          "cognia:plugin:account-storage:acct_storage_b:purged%3Aplugin:value"
+        )
+      ).toBe("2")
+      expect(localStorageMock.getItem("cognia:plugin:storage:purged:plugin:value")).toBe("3")
     })
 
     it("B01: isolates reads, keys, usage and clear across active LocalProfiles", async () => {
@@ -285,17 +229,13 @@ describe("PluginStorageAPI", () => {
       expect(await api.keys()).toEqual(["private"])
     })
 
-    it("B01: adopts unscoped legacy data only into the first profile", async () => {
-      const legacy = "cognia:plugin:storage:legacy-plugin:value"
-      localStorageMock.setItem(legacy, JSON.stringify("legacy"))
-      const api = createStorageAPI("legacy-plugin")
-      expect(await api.get("value")).toBe("legacy")
-      expect(localStorageMock.getItem(legacy)).toBeNull()
-      activatePluginRuntimeAccount("acct_storage_b")
+    it("B01: never reads signed-out data into a signed-in profile", async () => {
+      const signedOut = "cognia:plugin:storage:signed-out-plugin:value"
+      localStorageMock.setItem(signedOut, JSON.stringify("signed-out"))
+      const api = createStorageAPI("signed-out-plugin")
       expect(await api.get("value")).toBeUndefined()
-      activatePluginRuntimeAccount("acct_storage_a")
-      await api.clear()
-      expect(await api.get("value")).toBeUndefined()
+      expect(await api.keys()).toEqual([])
+      expect(localStorageMock.getItem(signedOut)).toBe(JSON.stringify("signed-out"))
     })
 
     it("B01: every browser storage operation fails closed without an active account", async () => {
@@ -573,15 +513,15 @@ describe("Headless durable plugin storage", () => {
     expect(await createStorageAPI("other").keys()).toEqual([])
   })
 
-  it("migrates only the owner's legacy namespace once and does not resurrect deleted values", async () => {
-    localStorageMock.setItem("cognia:plugin:storage:owner:legacy", "7")
-    localStorageMock.setItem("cognia:plugin:storage:other:legacy", "9")
+  it("never reads browser localStorage and keeps namespaces apart", async () => {
+    localStorageMock.setItem("cognia:plugin:storage:owner:browser", "7")
     localStorageMock.setItem("unrelated-credential", "never copied")
     const api = createStorageAPI("owner")
-    expect(await api.get("legacy")).toBe(7)
-    await api.delete("legacy")
-    expect(await api.has("legacy")).toBe(false)
-    expect(await api.getOrDefault("legacy", 42)).toBe(42)
+    expect(await api.get("browser")).toBeUndefined()
+    await api.set("value", 9)
+    await api.delete("value")
+    expect(await api.has("value")).toBe(false)
+    expect(await api.getOrDefault("value", 42)).toBe(42)
     await api.set("__proto__", { safe: true })
     expect(await api.keys()).toEqual(["__proto__"])
     expect(await api.getUsage()).toBeGreaterThan(0)
@@ -590,7 +530,8 @@ describe("Headless durable plugin storage", () => {
     expect(JSON.stringify((await getDb().plugins.get("owner"))?.storage)).not.toContain(
       "never copied"
     )
-    expect(await createStorageAPI("other").get("legacy")).toBe(9)
+    await createStorageAPI("other").set("value", 9)
+    expect(await createStorageAPI("owner").get("value")).toBeUndefined()
   })
 
   it("serializes quota and concurrent writes without losing unrelated keys", async () => {

@@ -6,7 +6,6 @@ import type { ApprovedBinaryRow, AutomationAuditLogRow } from "@/lib/db/schema"
 const storedSettings: {
   value: {
     lsp?: { unsignedAllowed?: boolean }
-    developer?: { unsignedLspAllowed?: boolean }
   } | null
 } = { value: null }
 
@@ -360,12 +359,8 @@ describe("lsp-binary-policy", () => {
   })
 
   describe("dev-mode override default read path", () => {
-    // The default `isUnsignedLspAllowed` used to read
-    // `settings.developer.unsignedLspAllowed`, which
-    // `lib/lsp/migrate-settings.ts` moves to `lsp.unsignedAllowed` and then
-    // clears at app start — so the settings toggle could never reach the
-    // policy. Every other test in this file injects the flag, so nothing
-    // caught it.
+    // Every other test in this file injects the flag, so this is the only
+    // coverage of the default read path.
     beforeEach(() => {
       __resetLspBinaryPolicyForTesting()
       storedSettings.value = null
@@ -392,13 +387,8 @@ describe("lsp-binary-policy", () => {
       expect((await verdict()).allowed).toBe(true)
     })
 
-    it("still honours the pre-migration developer.unsignedLspAllowed", async () => {
-      storedSettings.value = { developer: { unsignedLspAllowed: true } }
-      expect((await verdict()).allowed).toBe(true)
-    })
-
-    it("denies when neither field is set", async () => {
-      storedSettings.value = { lsp: {}, developer: {} }
+    it("denies when the field is not set", async () => {
+      storedSettings.value = { lsp: {} }
       expect((await verdict()).allowed).toBe(false)
     })
 

@@ -23,10 +23,7 @@
  * whose URL sync owns `from` / `to` / `view` / `session` / … . The channel used
  * to write bare `range` / `from` / `to` / `f`, so a custom trace window and a
  * Logs time filter fought over the same two params, and whichever sync wrote
- * last silently rewrote the other's view. The legacy keys are still READ — a
- * link minted before the rename must keep opening the view it described — but
- * only when `channel=traces` says the link was meant for this channel, and
- * never written again; the sync deletes each legacy key it consumed.
+ * last silently rewrote the other's view.
  */
 
 import { RANGE_PRESETS, type RangePreset } from "./time-range"
@@ -63,18 +60,6 @@ export const TRACE_EXPLORE_PARAMS = [
   TRACE_URL_KEYS.query,
   TRACE_URL_KEYS.errorsOnly,
 ] as const
-
-/** Pre-rename keys, read (never written) for links that still carry them. */
-export const LEGACY_TRACE_URL_KEYS = {
-  range: "range",
-  from: "from",
-  to: "to",
-  filters: "f",
-} as const
-
-/** The param whose presence licenses reading the legacy keys at all. */
-const CHANNEL_PARAM = "channel"
-const TRACES_CHANNEL = "traces"
 
 export interface UrlControls {
   rangePreset: RangePreset | "custom"
@@ -127,32 +112,6 @@ function parseBound(raw: string | null): number | null {
   return Number.isFinite(value) ? value : null
 }
 
-/** Which key set a query string's view controls should be read from. */
-interface ControlKeys {
-  range: string
-  from: string
-  to: string
-  filters: string
-}
-
-function legacyAllowed(params: URLSearchParams): boolean {
-  return params.get(CHANNEL_PARAM) === TRACES_CHANNEL
-}
-
-/**
- * Resolve which keys carry the controls: the Traces-owned keys whenever ANY of
- * them is present (a link written after the rename is never mixed with stale
- * legacy params), else the legacy keys — but only on a `channel=traces` link.
- */
-function controlKeysFor(params: URLSearchParams): ControlKeys | null {
-  const owned = TRACE_CONTROL_PARAMS.some((key) => params.has(key))
-  if (owned) return TRACE_URL_KEYS
-  if (!legacyAllowed(params)) return null
-  const legacy =
-    params.has(LEGACY_TRACE_URL_KEYS.range) || params.has(LEGACY_TRACE_URL_KEYS.filters)
-  return legacy ? LEGACY_TRACE_URL_KEYS : null
-}
-
 /**
  * Decode controls from a query string or `URLSearchParams`. Returns `null` when
  * no Traces view params are present at all (so the caller can skip applying
@@ -160,10 +119,8 @@ function controlKeysFor(params: URLSearchParams): ControlKeys | null {
  */
 export function decodeControls(search: string | URLSearchParams): UrlControls | null {
   const params = toParams(search)
-  const keys = controlKeysFor(params)
-  if (!keys) return null
-  const range = params.get(keys.range)
-  const f = params.get(keys.filters)
+  const range = params.get(TRACE_URL_KEYS.range)
+  const f = params.get(TRACE_URL_KEYS.filters)
   if (range === null && f === null) return null
 
   let rangePreset: RangePreset | "custom" = "1h"
@@ -173,8 +130,8 @@ export function decodeControls(search: string | URLSearchParams): UrlControls | 
   if (range === "custom") {
     // Both bounds, both finite — or the link is half-formed and the preset
     // falls back to the default rather than inventing a window.
-    const from = parseBound(params.get(keys.from))
-    const to = parseBound(params.get(keys.to))
+    const from = parseBound(params.get(TRACE_URL_KEYS.from))
+    const to = parseBound(params.get(TRACE_URL_KEYS.to))
     if (from !== null && to !== null) {
       rangePreset = "custom"
       customSince = from
@@ -185,28 +142,6 @@ export function decodeControls(search: string | URLSearchParams): UrlControls | 
   }
 
   return { rangePreset, customSince, customUntil, filters: parseFilters(f) }
-}
-
-/**
- * The legacy keys {@link decodeControls} consumed from this query string — the
- * exact set the sync must delete once it has re-written the controls under the
- * new keys. Empty unless the legacy branch was actually taken: a stray `from`
- * on a Logs-channel URL belongs to the Logs panel and is never touched.
- */
-export function consumedLegacyKeys(search: string | URLSearchParams): string[] {
-  const params = toParams(search)
-  if (controlKeysFor(params) !== LEGACY_TRACE_URL_KEYS) return []
-  const consumed: string[] = []
-  const range = params.get(LEGACY_TRACE_URL_KEYS.range)
-  if (range !== null) {
-    consumed.push(LEGACY_TRACE_URL_KEYS.range)
-    if (range === "custom") {
-      if (params.has(LEGACY_TRACE_URL_KEYS.from)) consumed.push(LEGACY_TRACE_URL_KEYS.from)
-      if (params.has(LEGACY_TRACE_URL_KEYS.to)) consumed.push(LEGACY_TRACE_URL_KEYS.to)
-    }
-  }
-  if (params.has(LEGACY_TRACE_URL_KEYS.filters)) consumed.push(LEGACY_TRACE_URL_KEYS.filters)
-  return consumed
 }
 
 /**
@@ -229,19 +164,16 @@ export function ownedParamsSignature(
 }
 
 /**
- * Replace `owned` keys in `search` with `next`, deleting `alsoDelete` (the
- * legacy keys a decode consumed). Returns the new query string WITHOUT a
- * leading `?`. Every key outside those two lists survives untouched.
+ * Replace `owned` keys in `search` with `next`. Returns the new query string
+ * WITHOUT a leading `?`. Every key outside `owned` survives untouched.
  */
 export function replaceOwnedParams(
   search: string,
   owned: readonly string[],
-  next: URLSearchParams,
-  alsoDelete: readonly string[] = []
+  next: URLSearchParams
 ): string {
   const params = new URLSearchParams(search)
   for (const key of owned) params.delete(key)
-  for (const key of alsoDelete) params.delete(key)
   for (const [key, value] of next) params.set(key, value)
   return params.toString()
 }

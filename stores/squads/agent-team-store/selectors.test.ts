@@ -431,28 +431,8 @@ describe("agent-team-store store-level config", () => {
     expect(parsed.state.teams).toBeUndefined()
     expect(parsed.state.teammates).toBeUndefined()
     expect(parsed.state.tasks).toBeUndefined()
-    // v6 persists the project Editor session map.
-    expect(parsed.state.editorSession).toBeDefined()
+    expect(parsed.state.editorSession).toBeUndefined()
     // live runtime ephemera stays out of the persisted slice
     expect(parsed.state.messages).toBeUndefined()
-  })
-
-  it("identity-migrates persisted state across versions", async () => {
-    // Seed an older-version snapshot directly into storage
-    window.localStorage.setItem(
-      "cognia-agent-teams",
-      JSON.stringify({
-        version: 0,
-        state: {
-          displayMode: "compact",
-          workspaceTab: "tasks",
-          defaultConfig: { ...initialState.defaultConfig, maxConcurrentTeammates: 7 },
-          templates: {},
-        },
-      })
-    )
-    // Trigger a rehydrate so the migrate branch is exercised
-    await useAgentTeamStore.persist.rehydrate()
-    expect(useAgentTeamStore.getState().displayMode).toBe("compact")
   })
 })

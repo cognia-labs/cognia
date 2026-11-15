@@ -1,4 +1,3 @@
-const LEGACY_STORAGE_KEY = "cognia:pending-chat-prompt"
 const STORAGE_KEY = "cognia:pending-chat-prompt:v2"
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -25,10 +24,6 @@ interface ReadOptions {
 
 function storageAvailable(): boolean {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined"
-}
-
-function sessionStorageAvailable(): boolean {
-  return typeof window !== "undefined" && typeof window.sessionStorage !== "undefined"
 }
 
 function makeDispatchId(sessionId: string, now: number): string {
@@ -68,42 +63,6 @@ function parseRecord(raw: string | null): PendingChatPrompt | null {
   }
 }
 
-function migrateLegacy(now: number): PendingChatPrompt | null {
-  if (!sessionStorageAvailable()) return null
-  const raw = window.sessionStorage.getItem(LEGACY_STORAGE_KEY)
-  if (!raw) return null
-  window.sessionStorage.removeItem(LEGACY_STORAGE_KEY)
-
-  try {
-    const value = JSON.parse(raw) as {
-      sessionId?: unknown
-      prompt?: unknown
-      expiresAt?: unknown
-    }
-    if (
-      typeof value.sessionId !== "string" ||
-      typeof value.prompt !== "string" ||
-      !value.prompt.trim() ||
-      typeof value.expiresAt !== "number" ||
-      value.expiresAt < now
-    ) {
-      return null
-    }
-    const record: PendingChatPrompt = {
-      id: makeDispatchId(value.sessionId, now),
-      sessionId: value.sessionId,
-      prompt: value.prompt.trim(),
-      skillIds: [],
-      createdAt: now,
-      expiresAt: value.expiresAt,
-    }
-    if (storageAvailable()) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(record))
-    return record
-  } catch {
-    return null
-  }
-}
-
 /**
  * Persist a prompt handoff until the chat transcript proves that dispatch was
  * accepted. The record is device-local and deliberately contains only the
@@ -137,14 +96,13 @@ export function peekPendingChatPrompt(
   options: ReadOptions = {}
 ): PendingChatPrompt | null {
   const now = options.now ?? Date.now()
-  if (!storageAvailable()) return migrateLegacy(now)
+  if (!storageAvailable()) return null
   const raw = window.localStorage.getItem(STORAGE_KEY)
-  let record = parseRecord(raw)
+  const record = parseRecord(raw)
   if (raw && !record) {
     window.localStorage.removeItem(STORAGE_KEY)
     return null
   }
-  record ??= migrateLegacy(now)
   if (!record) return null
   if (record.expiresAt < now) {
     window.localStorage.removeItem(STORAGE_KEY)

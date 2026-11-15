@@ -36,10 +36,7 @@ export function WebReaderSettings() {
   const store = useSettingsStore()
   const settings = store.settings
   const navigate = useSearchSectionNav()
-  const normalized = normalizeWebReaderSettings(settings?.webReader, {
-    rowExists: settings != null,
-    webTools: settings?.webTools,
-  })
+  const normalized = normalizeWebReaderSettings(settings?.webReader)
   const profile = normalized.effective
   const [pendingChange, setPendingChange] = useState<(() => Promise<void>) | null>(null)
   const [confirmed, setConfirmed] = useState(false)

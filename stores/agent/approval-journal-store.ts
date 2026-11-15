@@ -86,16 +86,6 @@ export function stampNotified(
   )
 }
 
-/** Migrate legacy persisted rows (any version) to interrupted. Pure. */
-export function migrateApprovalJournal(persisted: unknown): {
-  entries: PersistedApproval[]
-} {
-  const p = persisted as { entries?: Array<Partial<PersistedApproval>> } | undefined
-  return {
-    entries: (p?.entries ?? []).map((e) => ({ ...e, status: "interrupted" }) as PersistedApproval),
-  }
-}
-
 export const useApprovalJournalStore = create<ApprovalJournalState>()(
   persist(
     (set) => ({
@@ -134,8 +124,6 @@ export const useApprovalJournalStore = create<ApprovalJournalState>()(
         if (!state) return
         state.entries = markUnsettledInterrupted(state.entries)
       },
-      migrate: (persisted) =>
-        migrateApprovalJournal(persisted) as Pick<ApprovalJournalState, "entries">,
     }
   )
 )

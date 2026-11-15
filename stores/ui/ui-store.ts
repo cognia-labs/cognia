@@ -46,58 +46,6 @@ export type SelectedGuild =
  */
 export type MemberStatus = "idle" | "thinking" | "errored"
 
-/**
- * **Legacy.** The individually-toggleable title/status-bar segments, from
- * before either bar was orderable. Both bars now persist a full
- * `{ order, hidden }` layout on `AppSettings.titleBarLayout` /
- * `.statusBarLayout` (see `@/types/shell/bars`), edited from the same place as
- * the nav rail (`/settings?section=sidebar`).
- *
- * This map is kept for exactly one reason: it is the only record of what an
- * existing install had turned off, and it lives in localStorage rather than in
- * settings, so it cannot be folded in by a settings migration.
- * `components/shell/use-bar-layout.ts` reads it once — when settings hold no
- * layout for a bar yet — via `migrateLegacyBarItems`, and the first write
- * through that hook supersedes it permanently. Nothing else may read it, and
- * there is deliberately no setter: the customizer writes settings, not this.
- *
- * The ids are identical to the corresponding ids in the new catalogs, which is
- * what makes that migration an identity mapping.
- */
-export type BarItemId =
-  | "connectivity"
-  | "sync"
-  | "perf"
-  | "accountStatus"
-  | "usage"
-  | "workspace"
-  | "quickActions"
-  | "accountTop"
-
-/**
- * Legacy default visibility per segment — the state a pre-customization
- * install carries when it has never touched a toggle. Mirrors the
- * `defaultHidden` flags in `@/types/shell/bars`, so migrating a fresh install
- * is a no-op that lands exactly on the shipped bar layouts.
- *
- * `perf` is **off** because mounting its component begins native CPU/mem
- * sampling — it is strictly opt-in. `accountTop` is off because
- * `accountStatus` is on: the account button used to render in the title bar
- * AND the status bar at once, the same control twice on one screen.
- * `quickActions` (pet / OCR / clipboard) is off because none of the three is
- * touched per conversation.
- */
-export const DEFAULT_BAR_ITEMS: Record<BarItemId, boolean> = {
-  connectivity: true,
-  sync: true,
-  perf: false,
-  accountStatus: true,
-  usage: true,
-  workspace: true,
-  quickActions: false,
-  accountTop: false,
-}
-
 interface UIState {
   selectedGuild: SelectedGuild
   setSelectedGuild: (g: SelectedGuild) => void
@@ -323,28 +271,6 @@ interface UIState {
    */
   webTitleBarEnabled: boolean
   setWebTitleBarEnabled: (enabled: boolean) => void
-
-  /**
-   * **Legacy, read-only.** Pre-customization per-segment visibility for the
-   * title/status bars — see {@link DEFAULT_BAR_ITEMS}. Its sole consumer is
-   * `components/shell/use-bar-layout.ts`, which folds it into the
-   * settings-backed `BarLayout` the first time a bar resolves without one.
-   * There is deliberately no setter: the customizer writes settings, not this.
-   */
-  barItems: Record<BarItemId, boolean>
-
-  /**
-   * True for exactly one boot: the one where the v3 migration reset this
-   * install's chrome layout. Transient by design — it is not in `partialize`,
-   * so the next launch reads a v3 snapshot and the flag is false again. That
-   * makes "notify once" a property of the data rather than a second persisted
-   * "seen" key someone has to remember to write.
-   *
-   * Consumed by `ShellLayoutNotice`, which explains where the moved controls
-   * went. Fresh installs never see it (they had no v2 snapshot to migrate).
-   */
-  chromeLayoutMigrated: boolean
-  acknowledgeChromeLayout: () => void
 
   /**
    * Transient (never persisted) open state for the in-app Find bar. Set by the
@@ -580,11 +506,6 @@ export const useUIStore = create<UIState>()(
       webTitleBarEnabled: false,
       setWebTitleBarEnabled: (enabled) => set({ webTitleBarEnabled: enabled }),
 
-      chromeLayoutMigrated: false,
-      acknowledgeChromeLayout: () => set({ chromeLayoutMigrated: false }),
-
-      barItems: { ...DEFAULT_BAR_ITEMS },
-
       findOpen: false,
       openFind: () => set({ findOpen: true }),
       closeFind: () => set({ findOpen: false }),
@@ -668,41 +589,12 @@ export const useUIStore = create<UIState>()(
     {
       name: "cognia-ui",
       storage: persistLocalStorage(),
-      // Bumped 0 → 1 when the conversation-sidebar layout fields were added,
-      // 1 → 2 when per-segment `barItems` visibility was added, and 2 → 3 for
-      // the shell de-crowding pass.
-      //
-      // 3 is the first migration that actually drops data, and it has to. Every
-      // one of these keys is written unconditionally by `partialize`, and
-      // `merge` lets the persisted value win — so a user who has ever opened the
-      // app carries a snapshot that pins the OLD defaults forever. Changing
-      // `DEFAULT_BAR_ITEMS` alone would have shipped a no-op to every existing
-      // install (the author's included). Dropping the three keys hands them back
-      // to the new defaults; everything the user actually chose (window layout,
-      // sidebar width, folder collapse state, selected guild) is preserved.
       version: 3,
-      migrate: (persisted, from) => {
-        const p = (persisted ?? {}) as Partial<UIState>
-        if (from >= 3) return p as UIState
-        const {
-          barItems: _barItems,
-          statusBarCollapsed: _statusBarCollapsed,
-          guildRailCollapsed: _guildRailCollapsed,
-          ...kept
-        } = p
-        // Flag this boot so `ShellLayoutNotice` can say what moved. Not
-        // persisted, so it is true exactly once — on the launch that migrated.
-        return { ...kept, chromeLayoutMigrated: true } as UIState
-      },
-      // Deep-merge `barItems` so a snapshot written before a new segment
-      // existed still gains that segment's default (shallow merge would drop
-      // any key the persisted map lacks). Everything else merges shallowly.
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<UIState>
         return {
           ...current,
           ...p,
-          barItems: { ...DEFAULT_BAR_ITEMS, ...(p.barItems ?? {}) },
           // A persisted filter blob written by another build (or hand-edited in
           // localStorage) must not be able to hide every conversation with no
           // visible cause — normalize it back into the known shape on rehydrate.
@@ -729,7 +621,6 @@ export const useUIStore = create<UIState>()(
         guildRailCollapsed: s.guildRailCollapsed,
         statusBarCollapsed: s.statusBarCollapsed,
         webTitleBarEnabled: s.webTitleBarEnabled,
-        barItems: s.barItems,
       }),
     }
   )

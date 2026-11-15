@@ -33,11 +33,7 @@ import type {
   TimelineScale,
   TimelineWindow,
 } from "@/lib/observability/trace-timeline"
-import {
-  TRACE_CONTROL_PARAMS,
-  TRACE_EXPLORE_PARAMS,
-  consumedLegacyKeys,
-} from "@/lib/observability/url-state"
+import { TRACE_CONTROL_PARAMS, TRACE_EXPLORE_PARAMS } from "@/lib/observability/url-state"
 
 export type Breakpoint = "lg" | "md" | "sm"
 
@@ -181,8 +177,7 @@ const DEFAULTS = {
 export const OBSERVABILITY_URL_PARAMS = [...TRACE_CONTROL_PARAMS, ...TRACE_EXPLORE_PARAMS] as const
 
 /**
- * Drop the owned params (and any pre-rename legacy params a `channel=traces`
- * link still carries) from the address bar without navigating.
+ * Drop the owned params from the address bar without navigating.
  *
  * A reset that only touched the store would be undone the moment the channel
  * remounts: the syncs hydrate from the URL on mount and take priority over
@@ -192,7 +187,6 @@ export const OBSERVABILITY_URL_PARAMS = [...TRACE_CONTROL_PARAMS, ...TRACE_EXPLO
 function clearObservabilityUrlParams(): void {
   if (typeof window === "undefined") return
   const params = new URLSearchParams(window.location.search)
-  for (const key of consumedLegacyKeys(params)) params.delete(key)
   for (const key of OBSERVABILITY_URL_PARAMS) params.delete(key)
   const qs = params.toString()
   window.history.replaceState(
@@ -200,42 +194,6 @@ function clearObservabilityUrlParams(): void {
     "",
     qs ? `${window.location.pathname}?${qs}` : window.location.pathname
   )
-}
-
-/**
- * v0 → v1: drop a panel layout written before the registry changed shape.
- *
- * When the dashboard folded into `/logs` → Traces the registry gained five
- * panels (`kpi-rate`, `kpi-tools`, `kpi-tool-failures`, `bd-operation`,
- * `bd-tool`) and lost one (`traces`). `PanelGrid` renders one child per
- * registry entry, and react-grid-layout invents a `{w:1,h:1}` item at the
- * bottom of the grid for any child the saved layout has no entry for — so
- * without this every existing install would have opened on five unreadable
- * tiles beneath a curated grid, a break only upgraders ever see.
- *
- * Dropping `layouts` hands them back to `defaultLayouts()` (the call sites read
- * `stored ?? defaultLayouts()`), which is exactly what a fresh install gets. A
- * hand-arranged grid is worth less than a legible one, and the grid is
- * re-arrangeable in place. Everything else the user chose — range, cadence,
- * filters, thresholds — is preserved.
- *
- * Exported for its test, mirroring `migrateLogWorkspace` in
- * `stores/logging/log-workspace-store.ts`.
- */
-export function migrateObservabilityView(
-  persisted: unknown,
-  from: number
-): Partial<ObservabilityState> {
-  const p = (persisted ?? {}) as Partial<ObservabilityState>
-  if (from >= 1) return p
-  const { layouts: _layouts, ...kept } = p
-  return {
-    ...kept,
-    layouts: null,
-    // The removed panel cannot be hidden any more; leaving its id behind would
-    // carry it into every exported `DashboardConfig` forever.
-    hiddenPanels: (kept.hiddenPanels ?? []).filter((id) => id !== "traces"),
-  }
 }
 
 export const useObservabilityStore = create<ObservabilityState>()(
@@ -288,7 +246,6 @@ export const useObservabilityStore = create<ObservabilityState>()(
       name: "cognia-observability",
       storage: persistLocalStorage(),
       version: 1,
-      migrate: (persisted, from) => migrateObservabilityView(persisted, from) as ObservabilityState,
       // editMode, timelineZoom and the explore query/span stay transient — see
       // the file header and the field docs.
       partialize: (s) => ({

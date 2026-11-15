@@ -10,8 +10,8 @@
  *   1. Construct the production `LspClientAdapter` (Tauri) + a thin
  *      `LspBridgeAdapter` over the existing `monaco-bridge.setDiagnostics`.
  *   2. Call `configureLspRegistry({ client, bridge, ... })`.
- *   3. Subscribe to the settings store so any change to
- *      `developer.userLspServers` triggers `syncUserLspServers`.
+ *   3. Subscribe to the settings store so any change to `settings.lsp`
+ *      triggers `syncUserLspServers`.
  *   4. Apply the initial settings snapshot once on bootstrap.
  *
  * The bootstrap is idempotent — repeated calls return the same

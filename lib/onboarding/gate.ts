@@ -16,8 +16,8 @@ import { isSetupUnfinished } from "./setup-status"
  * credentials or a usable runtime — so the gate itself does not need to know.
  *
  * Returns `true` only when both hold:
- *   - onboarding is not settled on this device (neither completed nor skipped,
- *     and not migrated from the legacy dismissal stamp), and
+ *   - onboarding is not settled on this device (neither completed nor skipped),
+ *     and
  *   - the user has no chat sessions.
  *
  * The session check is what protects a long-time user whose settings row
@@ -30,9 +30,6 @@ import { isSetupUnfinished } from "./setup-status"
  */
 export function shouldEnterOnboarding(settings: AppSettings, sessionsCount: number): boolean {
   if (isOnboardingSettled(settings.onboardingProgress)) return false
-  // Pre-migration read: `migrateLegacyOnboarding` may not have run yet on this
-  // boot, and a legacy user must never flash the flow while it does.
-  if (settings.onboardingDismissedAt) return false
   if (sessionsCount > 0) return false
   return true
 }
@@ -42,12 +39,10 @@ export function shouldEnterOnboarding(settings: AppSettings, sessionsCount: numb
  * back in the app.
  *
  * Only for a *deliberate* early exit that the user has not waved away —
- * `completed` has nothing left to finish, and `legacy_dismissed` is
- * pre-dismissed by the migration so upgrading users are not nagged about a
- * flow they never opted into. This is the precondition only: what the bar
- * *says*, and whether anything is still missing at all, is re-derived from
- * live state by `deriveSetupGaps` (ADR-0193), so a gap closed elsewhere takes
- * the bar with it.
+ * `completed` has nothing left to finish. This is the precondition only: what
+ * the bar *says*, and whether anything is still missing at all, is re-derived
+ * from live state by `deriveSetupGaps` (ADR-0193), so a gap closed elsewhere
+ * takes the bar with it.
  */
 export function shouldShowFinishBar(settings: AppSettings): boolean {
   const progress = settings.onboardingProgress

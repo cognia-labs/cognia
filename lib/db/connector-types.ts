@@ -145,10 +145,10 @@ export interface QQStreamCheckpoint {
 }
 
 export interface InboundLedgerRow {
-  /** `${adapterId}:${namespace}:${platformMessageId}` (or legacy form). */
+  /** `${adapterId}:${namespace}:${platformMessageId}`. */
   id: string
   adapterId: string
-  /** Sliding-window namespace; defaults to `"inbound"` for legacy rows. */
+  /** Sliding-window namespace. */
   namespace: InboundLedgerNamespace
   platformMessageId: string
   receivedAt: number
@@ -323,10 +323,6 @@ export interface ConversationOverrideRow {
    * `runAndCapture` path. Coexists with `characterId` (which still seeds the
    * session identity/title); `squadId` wins routing. Bound via `/team` or the
    * inbox responder selector; `/team off` clears it. Non-indexed additive.
-   *
-   * Named `teamId` before ADR-0252 §6; a row or a relayed write that still
-   * spells it is read and written as `squadId` by the table's hooks
-   * (`lib/db/conversation-override-legacy.ts`).
    */
   squadId?: string
   /**
@@ -336,7 +332,7 @@ export interface ConversationOverrideRow {
    * express "run single-character here even though the bot defaults to a
    * Squad". `true` suppresses BOTH the conversation `squadId` and the bot's
    * `defaultTeamId` (`resolveEffectiveRouting`); re-binding via
-   * `/team <name>` clears the flag. Non-indexed additive. Was `teamDisabled`.
+   * `/team <name>` clears the flag. Non-indexed additive.
    */
   squadDisabled?: boolean
   /**

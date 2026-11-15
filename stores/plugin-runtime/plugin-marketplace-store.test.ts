@@ -471,36 +471,15 @@ describe("comparison set", () => {
   })
 })
 
-describe("persist.migrate", () => {
-  type StoreWithPersist = {
-    persist: { getOptions: () => { migrate: (s: unknown, v: number) => unknown; version: number } }
-  }
-  const persist = (usePluginMarketplaceStore as unknown as StoreWithPersist).persist.getOptions()
-
-  it("v0 → adds the discoveryState block", () => {
-    const out = persist.migrate({}, 0) as { discoveryState?: { query: string } }
-    expect(out.discoveryState).toMatchObject({ query: "", sortBy: "popular" })
-  })
-
-  it("v2 → adds the browseViewState block", () => {
-    const out = persist.migrate({}, 2) as { browseViewState?: { activeTab: string } }
-    expect(out.browseViewState).toMatchObject({
-      selectedPluginId: null,
-      scrollOffset: 0,
-      detailOpen: false,
-      activeTab: "browse",
-    })
-  })
-
-  it("v3 (current) → returns the persisted state untouched", () => {
-    const persisted = { favorites: { x: true } }
-    const out = persist.migrate(persisted, 3) as { favorites: Record<string, true> }
-    expect(out.favorites).toEqual({ x: true })
-  })
-
-  it("null persisted state returns an empty object after migration", () => {
-    const out = persist.migrate(null, 0) as Record<string, unknown>
-    expect(out.discoveryState).toBeDefined()
+describe("persist options", () => {
+  it("has no migrate step, so an older version falls back to the defaults", () => {
+    const options = (
+      usePluginMarketplaceStore as unknown as {
+        persist: { getOptions: () => { migrate?: unknown; version: number } }
+      }
+    ).persist.getOptions()
+    expect(options.version).toBe(3)
+    expect(options.migrate).toBeUndefined()
   })
 })
 

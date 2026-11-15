@@ -1365,28 +1365,6 @@ export const useA2UIStore = create<A2UIState & A2UIActions>()(
         name: "cognia-a2ui-surfaces",
         storage: persistLocalStorage(),
         version: 3,
-        migrate: (persistedState) => {
-          if (!persistedState || typeof persistedState !== "object") {
-            return persistedState as A2UIState & A2UIActions
-          }
-
-          const rawState = persistedState as {
-            surfaces?: unknown
-            activeSurfaceId?: unknown
-          }
-          const normalizedSurfaces = normalizePersistedSurfaces(rawState.surfaces)
-          const activeSurfaceId =
-            typeof rawState.activeSurfaceId === "string" &&
-            normalizedSurfaces[rawState.activeSurfaceId]
-              ? rawState.activeSurfaceId
-              : null
-
-          return {
-            ...persistedState,
-            surfaces: normalizedSurfaces,
-            activeSurfaceId,
-          } as A2UIState & A2UIActions
-        },
         onRehydrateStorage: () => (state) => {
           if (!state) {
             return

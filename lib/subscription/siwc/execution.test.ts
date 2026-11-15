@@ -39,7 +39,11 @@ beforeEach(() => {
   jest.mocked(useAccountStore.getState).mockReturnValue({ unlockedAccountId: "local-a" } as never)
   jest.mocked(useAccountStore.subscribe).mockReturnValue(close)
   jest.mocked(useSettingsStore.getState).mockReturnValue({
-    settings: { customProviders: [], defaultProvider: "codex", defaultAccountId: "legacy" },
+    settings: {
+      customProviders: [],
+      defaultProvider: "codex",
+      defaultAccountIds: { codex: "acct" },
+    },
     addCustomProvider: addProvider,
   } as never)
   jest.mocked(useExternalAgentStore.getState).mockReturnValue({ agents: {}, addAgent } as never)
@@ -64,7 +68,7 @@ it("adds only an independent provider reference, leaving defaults and legacy cre
   expect(useSettingsStore.getState().settings).toEqual({
     customProviders: [],
     defaultProvider: "codex",
-    defaultAccountId: "legacy",
+    defaultAccountIds: { codex: "acct" },
   })
   expect(close).toHaveBeenCalledTimes(1)
 })

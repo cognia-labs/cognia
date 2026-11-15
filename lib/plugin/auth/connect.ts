@@ -32,7 +32,6 @@ import {
 } from "./auth-attempts"
 import { registerAuthCallbackWaiter } from "./callback-acceptor"
 import { requestConnectionPrompt } from "./connection-prompts"
-import { runLegacySessionMigrations } from "./legacy-session-migrations"
 import {
   getConnectionManager,
   ReconnectIdentityMismatch,
@@ -139,9 +138,6 @@ export async function connectProvider(request: ConnectProviderRequest): Promise<
       declared[0]
     if (firstMethod && (provider.describe || definition || requestedMethod))
       checkMethod(firstMethod)
-    // The connection UI can connect directly, bypassing createSession. It must
-    // also wait for activation's legacy lineage handover before exchanging.
-    if (provider.management === "host") await runLegacySessionMigrations(provider)
     active()
     const scopes = [...new Set(request.scopes)]
     const manager = getConnectionManager()

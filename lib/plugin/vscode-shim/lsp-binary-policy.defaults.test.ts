@@ -26,7 +26,7 @@ jest.mock("@/lib/plugin/security/binary-hash", () => ({
 
 const auditAddMock = jest.fn(async () => undefined)
 const settingsGetMock = jest.fn(
-  async () => undefined as { developer?: { unsignedLspAllowed?: boolean } } | undefined
+  async () => undefined as { lsp?: { unsignedAllowed?: boolean } } | undefined
 )
 jest.mock("@/lib/db/schema", () => ({
   getDb: () => ({
@@ -86,8 +86,8 @@ describe("lsp-binary-policy default deps", () => {
     )
   })
 
-  it("reads the dev toggle from settings.developer.unsignedLspAllowed", async () => {
-    settingsGetMock.mockResolvedValue({ developer: { unsignedLspAllowed: true } })
+  it("reads the dev toggle from settings.lsp.unsignedAllowed", async () => {
+    settingsGetMock.mockResolvedValue({ lsp: { unsignedAllowed: true } })
     const result = await evaluateLspBinary({
       pluginId: "p",
       binaryPath: "/plugins/p/bin/lsp",
@@ -112,7 +112,7 @@ describe("lsp-binary-policy default deps", () => {
     const prev = process.env.NODE_ENV
     // NODE_ENV is readonly in @types/node; the policy reads it at call time.
     ;(process.env as Record<string, string | undefined>).NODE_ENV = "production"
-    settingsGetMock.mockResolvedValue({ developer: { unsignedLspAllowed: true } })
+    settingsGetMock.mockResolvedValue({ lsp: { unsignedAllowed: true } })
     try {
       const result = await evaluateLspBinary({
         pluginId: "p",

@@ -1,4 +1,4 @@
-import { buildCanvasSharePath, isLegacyCanvasShareLink, parseCanvasShareLink } from "./share-link"
+import { buildCanvasSharePath, parseCanvasShareLink } from "./share-link"
 
 function query(search: string): URLSearchParams {
   return new URLSearchParams(search)
@@ -61,23 +61,5 @@ describe("parseCanvasShareLink", () => {
     ]) {
       expect(parseCanvasShareLink(query(bad))).toEqual({ ok: false, error: "malformed" })
     }
-  })
-})
-
-describe("isLegacyCanvasShareLink", () => {
-  it("recognises a link carrying a serialized session", () => {
-    expect(isLegacyCanvasShareLink(query("session=eyJhIjoxfQ"))).toBe(true)
-  })
-
-  it("recognises a link carrying a server URL", () => {
-    // `?server=` was written into persisted settings with `enabled: true` and
-    // no validation of scheme or host, so one click pointed the user's
-    // collaboration transport at an arbitrary machine.
-    expect(isLegacyCanvasShareLink(query("server=ws://attacker.example/x"))).toBe(true)
-  })
-
-  it("does not flag a current link", () => {
-    expect(isLegacyCanvasShareLink(query("org=o&workspace=w&document=d"))).toBe(false)
-    expect(isLegacyCanvasShareLink(null)).toBe(false)
   })
 })

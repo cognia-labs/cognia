@@ -126,7 +126,7 @@ describe("resolveAccountId — precedence chain", () => {
         "anthropic",
         chatSession({ accountId: "s-acct" }),
         character({ accountIdOverride: "c-acct" }),
-        settings({ defaultAccountId: "app-acct" })
+        settings({ defaultAccountIds: { anthropic: "app-acct" } })
       )
     ).toBe("s-acct")
   })
@@ -137,7 +137,7 @@ describe("resolveAccountId — precedence chain", () => {
         "anthropic",
         chatSession(),
         character({ accountIdOverride: "c-acct" }),
-        settings({ defaultAccountId: "app-acct" })
+        settings({ defaultAccountIds: { anthropic: "app-acct" } })
       )
     ).toBe("c-acct")
   })
@@ -151,17 +151,6 @@ describe("resolveAccountId — precedence chain", () => {
         settings({ defaultAccountIds: { anthropic: "claude-acct", codex: "codex-acct" } })
       )
     ).toBe("codex-acct")
-  })
-
-  it("reads the legacy default only when defaultProvider matches", () => {
-    const legacy = settings({ defaultProvider: "anthropic", defaultAccountId: "legacy" })
-    expect(resolveAccountId("anthropic", chatSession(), character(), legacy)).toBe("legacy")
-    expect(resolveAccountId("codex", chatSession(), character(), legacy)).toBeNull()
-  })
-
-  it("treats the legacy OpenCode default as scoped for the Go runtime", () => {
-    const legacy = settings({ defaultProvider: "opencode", defaultAccountId: "legacy-go" })
-    expect(resolveAccountId("opencode-go", chatSession(), character(), legacy)).toBe("legacy-go")
   })
 
   it("tolerates null/undefined inputs", () => {

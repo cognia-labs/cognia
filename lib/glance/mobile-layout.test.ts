@@ -7,7 +7,7 @@ import {
   type GlanceModuleId,
 } from "@/types/glance/layout"
 import { getMobileQuickActionCatalog } from "@/lib/shell/mobile-home-nav"
-import { DEFAULT_MOBILE_HOME_LAYOUT, MOBILE_QUICK_ACTION_CATALOG } from "@/types/shell/mobile-home"
+import { MOBILE_QUICK_ACTION_CATALOG } from "@/types/shell/mobile-home"
 
 import {
   DEFAULT_GLANCE_MOBILE_SETTINGS,
@@ -15,7 +15,6 @@ import {
   desktopEntriesFromMobile,
   GLANCE_MOBILE_PRESETS,
   homeEntries,
-  migrateMobileHomeLayout,
   mobileEntriesFromDesktop,
   mobileLayoutFromPreset,
   normalizeGlanceMobileSettings,
@@ -184,16 +183,16 @@ describe("normalizeShortcuts", () => {
     expect(DEFAULT_GLANCE_MOBILE_SHORTCUTS).not.toContain("me")
   })
 
-  it("maps the legacy agentTeams id to squads", () => {
-    expect(normalizeShortcuts(["agentTeams", "inbox"])).toEqual(["squads", "inbox"])
+  it("drops a retired id instead of renaming it", () => {
+    expect(normalizeShortcuts(["agentTeams", "inbox"])).toEqual(["inbox"])
   })
 
   it("drops unknown and non-string ids", () => {
     expect(normalizeShortcuts(["inbox", "gone", 3, null, "me"])).toEqual(["inbox", "me"])
   })
 
-  it("dedupes, keeping the first place, including a legacy id colliding with its new name", () => {
-    expect(normalizeShortcuts(["me", "squads", "me", "agentTeams", "inbox"])).toEqual([
+  it("dedupes, keeping the first place", () => {
+    expect(normalizeShortcuts(["me", "squads", "me", "squads", "inbox"])).toEqual([
       "me",
       "squads",
       "inbox",
@@ -213,114 +212,23 @@ describe("normalizeShortcuts", () => {
     // Squads contributes its shortcut from `lib/squads/module.ts`.
     expect(MOBILE_QUICK_ACTION_CATALOG.some((a) => a.id === "squads")).toBe(false)
     expect(normalizeShortcuts(["squads", "inbox"])).toEqual(["squads", "inbox"])
-    expect(normalizeShortcuts(["agentTeams"])).toEqual(["squads"])
-  })
-})
-
-describe("migrateMobileHomeLayout", () => {
-  it("reads no legacy state as the balanced preset", () => {
-    expect(migrateMobileHomeLayout({})).toEqual(DEFAULT_GLANCE_MOBILE_SETTINGS)
-    expect(migrateMobileHomeLayout({ mobileHomeLayout: null, welcomeStats: null })).toEqual(
-      DEFAULT_GLANCE_MOBILE_SETTINGS
-    )
-  })
-
-  it("reads the old default home as balanced", () => {
-    const out = migrateMobileHomeLayout({
-      mobileHomeLayout: DEFAULT_MOBILE_HOME_LAYOUT,
-      welcomeStats: { enabled: true },
-    })
-    expect(out.preset).toBe("balanced")
-    expect(out.entries).toEqual(mobileLayoutFromPreset("balanced"))
-  })
-
-  it.each([
-    ["activeRuns", "fleet"],
-    ["quickActions", "quick"],
-    ["recents", "recents"],
-  ] as const)("a hidden %s section unpins %s and makes the layout custom", (section, module) => {
-    const out = migrateMobileHomeLayout({
-      mobileHomeLayout: { hiddenSections: [section] },
-    })
-    const target = out.entries.find((e) => e.id === module)!
-    expect(target.home).toBe(false)
-    // The module stays visible in the drawer.
-    expect(target.hidden).toBe(false)
-    expect(out.preset).toBe("custom")
-    const others = pinned(mobileLayoutFromPreset("balanced")).filter((id) => id !== module)
-    for (const id of others) expect(out.entries.find((e) => e.id === id)!.home).toBe(true)
-  })
-
-  it("an off dashboard unpins both usage and activity", () => {
-    const out = migrateMobileHomeLayout({ welcomeStats: { enabled: false } })
-    expect(out.entries.find((e) => e.id === "usage")).toMatchObject({ home: false, hidden: false })
-    expect(out.entries.find((e) => e.id === "activity")).toMatchObject({
-      home: false,
-      hidden: false,
-    })
-    expect(pinned(out.entries)).toEqual(["fleet", "quick", "recents"])
-    expect(out.preset).toBe("custom")
-  })
-
-  it("keeps the order, sizes and visibility of the balanced preset", () => {
-    const out = migrateMobileHomeLayout({
-      mobileHomeLayout: { hiddenSections: ["activeRuns", "quickActions", "recents"] },
-      welcomeStats: { enabled: false },
-    })
-    const base = mobileLayoutFromPreset("balanced")
-    expect(out.entries.map(({ id, size, hidden }) => ({ id, size, hidden }))).toEqual(
-      base.map(({ id, size, hidden }) => ({ id, size, hidden }))
-    )
-    expect(pinned(out.entries)).toEqual([])
-  })
-
-  it("ignores a malformed hiddenSections value", () => {
-    const out = migrateMobileHomeLayout({
-      mobileHomeLayout: { hiddenSections: "recents" as unknown as [] },
-    })
-    expect(out.preset).toBe("balanced")
-  })
-
-  it("carries the shortcuts, normalized", () => {
-    const out = migrateMobileHomeLayout({
-      mobileHomeLayout: { quickActions: ["agentTeams", "bogus", "inbox", "inbox"] },
-    })
-    expect(out.shortcuts).toEqual(["squads", "inbox"])
-    expect(out.preset).toBe("balanced")
-  })
-
-  it("honours an emptied shortcut grid", () => {
-    expect(migrateMobileHomeLayout({ mobileHomeLayout: { quickActions: [] } }).shortcuts).toEqual(
-      []
-    )
-  })
-
-  it("keeps the default options and scope", () => {
-    const out = migrateMobileHomeLayout({ welcomeStats: { enabled: false } })
-    expect(out.scope).toBe("all")
-    expect(out.options).toEqual(DEFAULT_GLANCE_MODULE_OPTIONS)
-    expect(out.version).toBe(1)
   })
 })
 
 describe("normalizeGlanceMobileSettings", () => {
   it.each([[undefined], [null], ["x"], [[]]])(
-    "reads the legacy home when nothing valid is stored (%j)",
+    "defaults to balanced when nothing valid is stored (%j)",
     (raw) => {
-      const legacy = { mobileHomeLayout: { hiddenSections: ["recents" as const] } }
-      expect(normalizeGlanceMobileSettings(raw, legacy)).toEqual(migrateMobileHomeLayout(legacy))
+      expect(normalizeGlanceMobileSettings(raw)).toEqual(DEFAULT_GLANCE_MOBILE_SETTINGS)
     }
   )
 
-  it("defaults to balanced with neither stored nor legacy state", () => {
-    expect(normalizeGlanceMobileSettings(undefined)).toEqual(DEFAULT_GLANCE_MOBILE_SETTINGS)
-  })
-
-  it("prefers a stored layout over the legacy state", () => {
-    const out = normalizeGlanceMobileSettings(
-      { preset: "minimal", entries: mobileLayoutFromPreset("minimal"), shortcuts: ["me"] },
-      { mobileHomeLayout: { quickActions: ["inbox"], hiddenSections: ["activeRuns"] } }
-    )
+  it("reads a stored layout", () => {
+    const out = normalizeGlanceMobileSettings({
+      preset: "minimal",
+      entries: mobileLayoutFromPreset("minimal"),
+      shortcuts: ["me"],
+    })
     expect(out.preset).toBe("minimal")
     expect(out.entries).toEqual(mobileLayoutFromPreset("minimal"))
     expect(out.shortcuts).toEqual(["me"])

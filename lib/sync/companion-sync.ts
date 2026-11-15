@@ -26,7 +26,7 @@
 
 import { subscribeResume } from "@/lib/capacitor/app"
 import { subscribe as subscribeNetwork } from "@/lib/capacitor/network"
-import { companionCursorNamespace } from "@/lib/companion/credential-book/legacy-migration"
+import { companionCursorNamespace } from "@/lib/companion/credential-book/adapter"
 import { getDb } from "@/lib/db/schema"
 import { deleteOutboundJobs } from "@/lib/db/outbound-jobs"
 import { transport } from "@/lib/tauri"
@@ -552,13 +552,6 @@ const stateMap = new Map<SyncableTable, SyncState>()
  */
 let hydratePromise: Promise<void> | null = null
 
-interface HostCursorKeys {
-  /** The key this host's cursors are written under now. */
-  key: string
-  /** Keys the same host's cursors were written under by earlier builds. */
-  legacy: readonly string[]
-}
-
 /**
  * Which host these cursors belong to (ADR-0097 D13).
  *
@@ -574,17 +567,10 @@ interface HostCursorKeys {
  * Unpaired clients get `""`, which is a real key: it keeps their (empty)
  * cursors from colliding with any host's, and the moment they pair, the key
  * changes and the reconciliation below runs.
- *
- * `legacy` carries the pre-namespace key for the *same* host so an existing
- * install can adopt its own cursors instead of mistaking them for another
- * host's — see {@link adoptLegacyCursorKeys}.
  */
-function currentHostCursorKeys(): HostCursorKeys {
+function currentHostCursorKey(): string {
   const config = loadCompanionConfig()
-  if (!config) return { key: "", legacy: [] }
-  const key = companionCursorNamespace(config)
-  const legacy = config.deviceId && config.deviceId !== key ? [config.deviceId] : []
-  return { key, legacy }
+  return config ? companionCursorNamespace(config) : ""
 }
 
 /** The host whose cursors `stateMap` currently holds. */
@@ -593,14 +579,14 @@ let hydratedDatabase: ReturnType<typeof getDb> | null = null
 let hydratedGeneration = -1
 
 async function ensureHydrated(): Promise<void> {
-  const { key: serverKey, legacy } = currentHostCursorKeys()
+  const serverKey = currentHostCursorKey()
   const database = getDb()
   const generation = getCompanionConfigGeneration()
   const assertCurrent = () => {
     if (
       getDb() !== database ||
       getCompanionConfigGeneration() !== generation ||
-      currentHostCursorKeys().key !== serverKey
+      currentHostCursorKey() !== serverKey
     )
       throw new Error("Sync scope changed")
   }
@@ -621,8 +607,6 @@ async function ensureHydrated(): Promise<void> {
   hydratedDatabase = database
   hydratedGeneration = generation
   hydratePromise = (async () => {
-    await adoptLegacyCursorKeys(serverKey, legacy, assertCurrent)
-    assertCurrent()
     await resetMirrorsSharedWithAnotherHost(serverKey, assertCurrent)
     assertCurrent()
     const persisted = await loadCursors(serverKey)
@@ -641,51 +625,6 @@ async function ensureHydrated(): Promise<void> {
     }
   })()
   return hydratePromise
-}
-
-/**
- * Re-file cursors an earlier build wrote under this same host's bare device id.
- *
- * Without this, the first run after the key changed to a cursor namespace would
- * see the install's own rows under a key it no longer recognises, classify them
- * as another host's, and wipe the mirror of the host it is still paired to —
- * a full re-pull of every table on upgrade.
- *
- * The credential-book migration re-files these too, but it runs from
- * `hydrateCompanionConfig()`, and a sync tick can beat it: `loadCompanionConfig`
- * reads a cache, so the orchestrator can observe the new key before the
- * migration has moved anything. Both paths are idempotent, so whichever runs
- * first wins and the other finds nothing.
- *
- * A cursor already under the canonical key wins — it was written by this build
- * against the key we are about to resume from, so the legacy row is a stale
- * duplicate, not a newer watermark.
- */
-async function adoptLegacyCursorKeys(
-  serverKey: string,
-  legacyKeys: readonly string[],
-  assertCurrent: () => void
-): Promise<void> {
-  if (serverKey === "" || legacyKeys.length === 0) return
-  const canonical = await loadCursors(serverKey)
-  assertCurrent()
-  const { clearCursorsForServer } = await import("./cursor-store")
-  for (const legacyKey of legacyKeys) {
-    assertCurrent()
-    const rows = await loadCursors(legacyKey)
-    assertCurrent()
-    if (rows.size === 0) continue
-    for (const [table, row] of rows) {
-      if (canonical.has(table)) continue
-      const adopted = { ...row, serverKey }
-      assertCurrent()
-      await saveCursor(adopted)
-      assertCurrent()
-      canonical.set(table, adopted)
-    }
-    assertCurrent()
-    await clearCursorsForServer(legacyKey)
-  }
 }
 
 /**
@@ -1166,7 +1105,7 @@ async function runHandlerGraph(
 export function runSyncDown(opts: RunSyncDownOptions = {}): Promise<SyncOutcome[]> {
   const isTargeted = opts.only !== undefined || opts.stages !== undefined
   const t = opts.transport ?? transport
-  const requestedHostKey = currentHostCursorKeys().key
+  const requestedHostKey = currentHostCursorKey()
   const requestedGeneration = getCompanionConfigGeneration()
   const requestedDatabase = getDb()
   if (
@@ -1206,7 +1145,7 @@ export function runSyncDown(opts: RunSyncDownOptions = {}): Promise<SyncOutcome[
           opts.signal?.aborted ||
           getCompanionConfigGeneration() !== requestedGeneration ||
           getDb() !== requestedDatabase ||
-          currentHostCursorKeys().key !== requestedHostKey ||
+          currentHostCursorKey() !== requestedHostKey ||
           hydratedServerKey !== requestedHostKey
         const staleHost: SyncOutcome = {
           ok: false,
@@ -1366,13 +1305,13 @@ let stagedScope: {
 export function runStagedSyncDown(opts: RunSyncDownOptions = {}): StagedSyncRun {
   const scope = {
     signal: opts.signal,
-    host: currentHostCursorKeys().key,
+    host: currentHostCursorKey(),
     generation: getCompanionConfigGeneration(),
     database: getDb(),
   }
   const isCurrent = () =>
     !opts.signal?.aborted &&
-    currentHostCursorKeys().key === scope.host &&
+    currentHostCursorKey() === scope.host &&
     getCompanionConfigGeneration() === scope.generation &&
     getDb() === scope.database
   if (

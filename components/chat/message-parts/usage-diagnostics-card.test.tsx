@@ -5,7 +5,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
-import { UsageDiagnosticsCard, legacyWindowsToMeters } from "./usage-diagnostics-card"
+import { UsageDiagnosticsCard } from "./usage-diagnostics-card"
 import { buildUsageScope } from "@/lib/usage/usage-report"
 import type { UsageDiagnosticsBlock } from "@/lib/slash-commands/system-blocks"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
@@ -15,7 +15,7 @@ import { useSettingsStore } from "@/stores/settings"
 const NOW = new Date("2026-08-29T12:00:00Z").getTime()
 const HOUR = 3_600_000
 
-let tickerNow = new Date("2026-08-29T12:00:00Z").getTime()
+const tickerNow = new Date("2026-08-29T12:00:00Z").getTime()
 jest.mock("@/lib/subscription/core/now-ticker", () => ({
   useSubscriptionNow: () => tickerNow,
   SUBSCRIPTION_TICK_MS: 30_000,
@@ -133,7 +133,7 @@ describe("UsageDiagnosticsCard — plan limits", () => {
   })
 
   it("says so when no quota window could be read at all", () => {
-    render(<UsageDiagnosticsCard block={block({ meters: [], windows: undefined })} />)
+    render(<UsageDiagnosticsCard block={block({ meters: [] })} />)
     expect(screen.getByTestId("usage-no-windows")).toBeInTheDocument()
   })
 
@@ -475,85 +475,5 @@ describe("UsageDiagnosticsCard — copy", () => {
     render(<UsageDiagnosticsCard block={block()} />)
     await user.click(screen.getByTestId("usage-copy"))
     await waitFor(() => expect(toastError).toHaveBeenCalled())
-  })
-})
-
-describe("legacyWindowsToMeters", () => {
-  it("renders a v1 block recorded before the block carried meters", () => {
-    render(
-      <UsageDiagnosticsCard
-        block={{
-          kind: "usage",
-          windows: [
-            { key: "fiveHour", utilization: 42, level: "ok", msUntilReset: 4_500_000 },
-            { key: "sevenDay", utilization: null, level: null, msUntilReset: null },
-          ],
-          fallbackPercentage: null,
-          overageDisabledReason: null,
-        }}
-      />
-    )
-    expect(screen.getByTestId("limits-meter-usage-session")).toBeInTheDocument()
-    expect(screen.getByText("42% used")).toBeInTheDocument()
-    // The window the v1 block could not measure is dropped, not shown as 0%.
-    expect(screen.queryByTestId("limits-meter-usage-weekly")).not.toBeInTheDocument()
-  })
-
-  it("still counts down when the shared ticker has not warmed up yet", () => {
-    // `useSyncExternalStore` reads the snapshot one render before it
-    // subscribes, so a cold ticker can hand the first render a 0. Resolving a
-    // stored countdown against that produced a 1970 date — a plausible-looking
-    // wrong answer rather than an obviously missing one.
-    tickerNow = 0
-    try {
-      render(
-        <UsageDiagnosticsCard
-          block={{
-            kind: "usage",
-            windows: [
-              { key: "fiveHour", utilization: 72, level: "warn", msUntilReset: 95 * 60_000 },
-            ],
-            fallbackPercentage: null,
-            overageDisabledReason: null,
-          }}
-        />
-      )
-      expect(screen.getByText("Resets in 1h 35m")).toBeInTheDocument()
-    } finally {
-      tickerNow = NOW
-    }
-  })
-
-  it("counts a v1 block's stored countdown down, instead of dating it", () => {
-    // The v1 shape stores `msUntilReset`, never an instant, and never recorded
-    // when the command ran — a card that resolved that against epoch 0 printed
-    // a calendar date decades out.
-    render(
-      <UsageDiagnosticsCard
-        block={{
-          kind: "usage",
-          windows: [{ key: "fiveHour", utilization: 72, level: "warn", msUntilReset: 95 * 60_000 }],
-          fallbackPercentage: null,
-          overageDisabledReason: null,
-        }}
-      />
-    )
-    expect(screen.getByText("Resets in 1h 35m")).toBeInTheDocument()
-  })
-
-  it("rebases the stored countdown onto the instant the command ran", () => {
-    const [session] = legacyWindowsToMeters(
-      [{ key: "fiveHour", utilization: 10, level: "ok", msUntilReset: HOUR }],
-      NOW
-    )
-    expect(session.resetAt).toBe(NOW + HOUR)
-  })
-
-  it("keeps a window with no reset time rather than inventing one", () => {
-    const [session] = legacyWindowsToMeters(
-      [{ key: "fiveHour", utilization: 10, level: "ok", msUntilReset: null }],
-      NOW
-    )
-    expect(session.resetAt).toBeNull()
   })
 })

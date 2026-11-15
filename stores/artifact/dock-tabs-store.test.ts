@@ -84,32 +84,29 @@ describe("conversation routing memory", () => {
     expect(useDockTabsStore.getState().bySession.a.reviewDestination).toBeNull()
   })
 
-  it.each([1, 2])(
-    "discards review state persisted by older builds at version %s",
-    async (version) => {
-      localStorage.setItem(
-        "cognia-dock-tabs-v1",
-        JSON.stringify({
-          version,
-          state: {
-            bySession: {
-              a: {
-                order: [P],
-                lastUsedAt: Date.now(),
-                reviewAttention: true,
-                reviewDestination: { id: "old", kind: "review", sessionId: "a", rootPath: "/old" },
-              },
+  it.each([2])("discards review state persisted at version %s", async (version) => {
+    localStorage.setItem(
+      "cognia-dock-tabs-v1",
+      JSON.stringify({
+        version,
+        state: {
+          bySession: {
+            a: {
+              order: [P],
+              lastUsedAt: Date.now(),
+              reviewAttention: true,
+              reviewDestination: { id: "old", kind: "review", sessionId: "a", rootPath: "/old" },
             },
           },
-        })
-      )
-      await useDockTabsStore.persist.rehydrate()
-      const entry = useDockTabsStore.getState().bySession.a
-      expect(entry.order).toEqual([P])
-      expect(entry.reviewDestination).toBeUndefined()
-      expect(entry.reviewAttention).toBeUndefined()
-    }
-  )
+        },
+      })
+    )
+    await useDockTabsStore.persist.rehydrate()
+    const entry = useDockTabsStore.getState().bySession.a
+    expect(entry.order).toEqual([P])
+    expect(entry.reviewDestination).toBeUndefined()
+    expect(entry.reviewAttention).toBeUndefined()
+  })
 })
 
 beforeEach(() => {
@@ -320,26 +317,6 @@ describe("persistence", () => {
       engine: "remote",
     })
   })
-  it("reads a version-1 entry as one with no page tabs", async () => {
-    window.localStorage.setItem(
-      "cognia-dock-tabs-v1",
-      JSON.stringify({
-        version: 1,
-        state: {
-          bySession: {
-            s1: { order: [A], dock: { open: true, dismissed: false }, lastUsedAt: Date.now() },
-          },
-        },
-      })
-    )
-    await useDockTabsStore.persist.rehydrate()
-    expect(useDockTabsStore.getState().bySession.s1).toMatchObject({
-      order: [A],
-      pages: [],
-      activePageTabId: null,
-    })
-  })
-
   it("remembers page tabs across a reload", async () => {
     useDockTabsStore.getState().addPageTab("s1", page("a", "http://localhost:3000/"))
     const saved = window.localStorage.getItem("cognia-dock-tabs-v1")

@@ -209,17 +209,12 @@ export async function buildSlackAdapter(row: AdapterInstanceRow): Promise<Platfo
     botToken: () => connectorsKeyringGet(row.id, "botToken").then((t) => t ?? ""),
     appToken: () => connectorsKeyringGet(row.id, "appToken").then((t) => t ?? ""),
     signingSecret: () => connectorsKeyringGet(row.id, "signingSecret").then((t) => t ?? ""),
-    // Canonical key is "userToken"; fall back to the legacy "user_token"
-    // key the Slack OAuth handler wrote before the key unification, so
-    // installs completed via OAuth keep their presence-status support.
     userToken: async () => {
       // Scheduled presence updates have no verified personal authorizer.
       const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
       if (!(await admitPersonalCredential(undefined, { source: "slack-user", person: row.id })).ok)
         return ""
-      const token = await connectorsKeyringGet(row.id, "userToken")
-      if (token) return token
-      return (await connectorsKeyringGet(row.id, "user_token")) ?? ""
+      return (await connectorsKeyringGet(row.id, "userToken")) ?? ""
     },
     selfId,
     transport,

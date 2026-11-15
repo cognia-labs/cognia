@@ -52,10 +52,6 @@ function harness(over: Partial<SquadBootstrapDeps> = {}) {
     installAdapters: () => {
       calls.push("adapters")
     },
-    backfillHistory: async () => {
-      calls.push("history")
-      return { scanned: 2, imported: 1, skipped: 1, recoveryRequired: 0 }
-    },
     recoverInterrupts: async () => {
       calls.push("interrupts")
     },
@@ -219,7 +215,6 @@ describe("runSquadBootstrap", () => {
     const outcome = await handle.done
     expect(outcome).toEqual({
       ok: true,
-      history: { scanned: 2, imported: 1, skipped: 1, recoveryRequired: 0 },
       recovered: [{ runId: "r1", status: "recovering" }],
       recoveries: { armed: 1, alreadyPending: 0 },
       durationMs: 0,
@@ -229,12 +224,11 @@ describe("runSquadBootstrap", () => {
       "startBridge",
       "hydrated",
       "adapters",
-      "history",
       "interrupts",
       "runs",
       "recoveries",
     ])
-    expect(h.stages).toEqual(["hydrate", "adapters", "import_history", "recover", "ready"])
+    expect(h.stages).toEqual(["hydrate", "adapters", "recover", "ready"])
     expect(getSquadRuntimeState()).toBe("ready")
     await expect(awaitSquadRuntimeReady()).resolves.toBe(true)
   })
@@ -263,7 +257,7 @@ describe("runSquadBootstrap", () => {
     })
     const outcome = await runSquadBootstrap(h.deps).done
     expect(outcome).toMatchObject({ ok: false, failedStage: "adapters" })
-    expect(h.calls).not.toContain("history")
+    expect(h.calls).not.toContain("interrupts")
     expect(getSquadRuntimeState()).toBe("failed")
     expect(isSquadRuntimeReady()).toBe(false)
     await expect(awaitSquadRuntimeReady()).resolves.toBe(false)

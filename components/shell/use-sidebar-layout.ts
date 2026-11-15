@@ -30,7 +30,6 @@ import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import {
   getSidebarCatalog,
-  migrateLegacyIds,
   resolveSidebarLayout,
   type ResolvedSidebar,
   type SidebarCatalogItem,
@@ -118,16 +117,13 @@ function enqueueSidebarLayoutMutation(mutate: SidebarLayoutMutation): Promise<vo
   const run = async () => {
     const state = useSettingsStore.getState()
     const stored = state.settings?.sidebarLayout
-    // Mutate the migrated layout, not the raw stored one: the ids callers pass
-    // are current catalog ids, so a stale renamed id in storage would be
-    // invisible to every filter below and survive the edit.
-    const current: SidebarLayout = migrateLegacyIds({
+    const current: SidebarLayout = {
       pinned: stored?.pinned ?? DEFAULT_SIDEBAR_LAYOUT.pinned,
       hidden: stored?.hidden ?? DEFAULT_SIDEBAR_LAYOUT.hidden,
       // Carried through untouched by every feature mutation below — they all
       // spread `current` — so pinning an icon never resets the mode order.
       ...(stored?.modes ? { modes: stored.modes } : {}),
-    })
+    }
     await state.save({ sidebarLayout: mutate(current) })
   }
   // Start the first mutation synchronously so event handlers preserve their

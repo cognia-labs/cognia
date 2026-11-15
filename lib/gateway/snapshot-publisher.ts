@@ -960,11 +960,7 @@ export async function buildEnrichedGatewaySnapshot(
         providerId,
         vaultProviderId,
         rotationEnabled: options.subscriptionRotationProviderIds?.includes(providerId) ?? false,
-        selectedAccountId:
-          settings.defaultAccountIds?.[vaultProviderId] ??
-          (settings.defaultProvider === providerId || settings.defaultProvider === vaultProviderId
-            ? (settings.defaultAccountId ?? undefined)
-            : undefined),
+        selectedAccountId: settings.defaultAccountIds?.[vaultProviderId],
         manualCredential: !!baseProvider?.apiKey,
         transport: baseProvider?.transport,
         ...(providerId === "opencode-go"

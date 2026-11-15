@@ -37,11 +37,21 @@ function report(overrides: Partial<EvalReport> = {}): EvalReport {
     totalCostUsd: 0.1,
     avgLatencyMs: 200,
     createdAt: Date.now(),
+    scoringVersion: 3,
     ...overrides,
   }
 }
 
 describe("eval run persistence", () => {
+  it("does not read back a run scored under other semantics", async () => {
+    const { scoringVersion: _drop, ...older } = report({ runId: "older", datasetId: "d1" })
+    await getDb().evalRuns.put(older)
+    await saveRun(report({ runId: "current", datasetId: "d1" }))
+    expect(await getRun("older")).toBeUndefined()
+    expect((await listRunsByDataset("d1")).map((r) => r.runId)).toEqual(["current"])
+    expect((await listRecentRuns()).map((r) => r.runId)).toEqual(["current"])
+  })
+
   it("saves and reads a run keyed by runId", async () => {
     const r = report({ runId: "run-abc" })
     await saveRun(r)

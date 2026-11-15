@@ -87,9 +87,6 @@ const TELEGRAM_CONFIG_SCHEMA = {
     },
     // Keyring key the Rust webhook verifier reads (axum_app.rs).
     secretToken: { type: "string", title: "Webhook Secret Token" },
-    // Legacy alias for secretToken — kept for rows created before the
-    // keyring key was aligned with the Rust side.
-    webhookSecret: { type: "string", title: "Webhook Secret Token (legacy)" },
   },
   additionalProperties: false,
 }
@@ -382,18 +379,11 @@ export function createTelegramAdapter(opts: TelegramAdapterOptions): PlatformAda
    * Secret Telegram must echo in `X-Telegram-Bot-Api-Secret-Token`.
    *
    * `verify_telegram` (axum_app.rs) reads the `secretToken` keyring key and
-   * answers 401 when it is missing, so that exact key — not the legacy
-   * `webhookSecret` alias — is what makes deliveries verifiable. Rows saved
-   * before the two were aligned only have the legacy key; copy it across
-   * rather than degrading a bot whose operator did configure a secret.
+   * answers 401 when it is missing, so that exact key is what makes deliveries
+   * verifiable.
    */
   async function readWebhookSecret(ctx: AdapterContext): Promise<string | null> {
-    const current = (await ctx.secrets.get("secretToken").catch(() => null))?.trim()
-    if (current) return current
-    const legacy = (await ctx.secrets.get("webhookSecret").catch(() => null))?.trim()
-    if (!legacy) return null
-    await ctx.secrets.set("secretToken", legacy).catch(() => undefined)
-    return legacy
+    return (await ctx.secrets.get("secretToken").catch(() => null))?.trim() || null
   }
 
   /**

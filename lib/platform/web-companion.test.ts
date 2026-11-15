@@ -4,9 +4,7 @@ import {
   buildTimeServerUrl,
   hasStoredWebPairing,
   hasWebCompanionTarget,
-  WEB_COMPANION_CONFIG_KEY,
   WEB_COMPANION_HOST_BOOK_KEY,
-  WEB_COMPANION_TARGET_BOOK_KEY,
 } from "./web-companion"
 import {
   clearActiveRuntimeTargetContext,
@@ -57,27 +55,10 @@ describe("buildTimeServerUrl", () => {
 })
 
 describe("hasStoredWebPairing", () => {
-  it("false with no row / malformed json / missing fields", () => {
-    expect(hasStoredWebPairing()).toBe(false)
-    window.localStorage.setItem(WEB_COMPANION_CONFIG_KEY, "{not json")
-    expect(hasStoredWebPairing()).toBe(false)
-    window.localStorage.setItem(WEB_COMPANION_CONFIG_KEY, JSON.stringify({ baseUrl: "x" }))
+  it("false with no host book", () => {
     expect(hasStoredWebPairing()).toBe(false)
   })
 
-  it("invalidates a complete legacy bearer pairing", () => {
-    window.localStorage.setItem(
-      WEB_COMPANION_CONFIG_KEY,
-      JSON.stringify({ baseUrl: "https://s:7890", deviceJwt: "jwt" })
-    )
-    expect(hasStoredWebPairing()).toBe(false)
-    expect(window.localStorage.getItem(WEB_COMPANION_CONFIG_KEY)).toBeNull()
-  })
-
-  // The regression this module existed to miss: `MigratingCompanionStorage`
-  // writes the credential book and clears the legacy target book, so a pairing
-  // made by the current code is ONLY visible in the host book. Reading the
-  // legacy key alone made every web pairing vanish on the next page load.
   it("detects a pairing persisted by the credential book", () => {
     writeHostBook([{ accountNamespace: "acct_web", hostId: "companion-abc" }])
     expect(hasStoredWebPairing()).toBe(true)
@@ -123,26 +104,6 @@ describe("hasStoredWebPairing", () => {
     )
     expect(hasStoredWebPairing()).toBe(false)
   })
-
-  it("still honours the legacy v2 target book until it migrates away", () => {
-    window.localStorage.setItem(
-      WEB_COMPANION_TARGET_BOOK_KEY,
-      JSON.stringify({
-        version: 2,
-        targets: {
-          "acct_web:companion-one": {
-            targetId: "companion-one",
-            baseUrl: "https://one.example.com",
-          },
-        },
-      })
-    )
-    setActiveRuntimeTargetContext("acct_web", "web-standalone")
-    expect(hasStoredWebPairing()).toBe(false)
-
-    setActiveRuntimeTargetContext("acct_web", "companion-one")
-    expect(hasStoredWebPairing()).toBe(true)
-  })
 })
 
 describe("hasWebCompanionTarget", () => {
@@ -157,17 +118,6 @@ describe("hasWebCompanionTarget", () => {
 })
 
 describe("key parity", () => {
-  it("matches the storage module's CONFIG_KEY and CONFIG_BOOK_KEY", async () => {
-    const fs = await import("node:fs")
-    const path = await import("node:path")
-    const source = fs.readFileSync(
-      path.join(__dirname, "..", "tauri", "companion-storage.ts"),
-      "utf8"
-    )
-    expect(source).toContain(`CONFIG_KEY = "${WEB_COMPANION_CONFIG_KEY}"`)
-    expect(source).toContain(`CONFIG_BOOK_KEY = "${WEB_COMPANION_TARGET_BOOK_KEY}"`)
-  })
-
   it("matches the credential book's HOST_BOOK_KEY", async () => {
     const fs = await import("node:fs")
     const path = await import("node:path")

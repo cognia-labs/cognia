@@ -15,15 +15,8 @@
  *
  * ## One session per LocalProfile (ADR-0149)
  *
- * The session used to live at a single global key, so two LocalProfiles on one
- * machine shared one login — which is exactly the conflation ADR-0149 exists to
- * undo: a profile is an encryption boundary and the person signed into it is a
- * separate fact. The key is now scoped by profile.
- *
- * A blob left at the legacy global key is DELETED rather than adopted. Nothing
- * records which profile it belonged to, and guessing would show one person's
- * token inside another person's profile. Signing in again is cheap; being
- * quietly signed in as somebody else is not.
+ * A profile is an encryption boundary and the person signed into it is a
+ * separate fact, so the key is scoped by profile.
  */
 
 import {
@@ -56,14 +49,6 @@ export interface LogtoReauthMarker {
   metadata: LogtoSessionMetadata
   /** Epoch ms at which the refresh was refused. */
   at: number
-}
-
-/**
- * The pre-ADR-0149 global key. Read only to delete it — see the header.
- */
-export const LEGACY_LOGTO_KEYRING: KeyringRef = {
-  namespace: LOGTO_KEYRING_NAMESPACE,
-  key: "session",
 }
 
 /**
@@ -238,18 +223,4 @@ export async function loadLogtoReauthMarker(
 export async function clearLogtoReauthMarker(localAccountId?: string): Promise<void> {
   await ensureWebPassphrase()
   await clearSecret(logtoReauthKeyringFor(localAccountId), { strict: true })
-}
-
-/**
- * Drop any session left at the pre-ADR-0149 global key.
- *
- * Idempotent and safe to call on every boot. It deletes rather than migrates,
- * because the blob carries no record of which profile it belonged to.
- */
-export async function discardLegacyGlobalLogtoSession(): Promise<boolean> {
-  await ensureWebPassphrase()
-  const raw = await getSecret(LEGACY_LOGTO_KEYRING)
-  if (!raw) return false
-  await clearSecret(LEGACY_LOGTO_KEYRING, { strict: true })
-  return true
 }

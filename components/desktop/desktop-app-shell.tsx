@@ -45,7 +45,6 @@ import { TitleBar } from "@/components/desktop/title-bar"
 import { FindBar } from "@/components/desktop/find-bar"
 import { FileViewerDialog } from "@/components/file-viewer/file-viewer-dialog"
 import { WorkspaceDialogHost } from "@/components/workspace/workspace-dialog-host"
-import { ShellLayoutNotice } from "@/components/desktop/shell-layout-notice"
 import { WindowFocusTracker } from "@/components/desktop/window-focus-tracker"
 import { WindowResizeEdges } from "@/components/desktop/window-resize-edges"
 import { ZoomShortcuts } from "@/components/desktop/zoom-shortcuts"
@@ -311,7 +310,6 @@ export function DesktopAppShell({ children }: { children: React.ReactNode }) {
             can open one. The palette closes before it runs an action, so it
             cannot mount what the action opens. */}
           {desktopChrome ? <WorkspaceDialogHost /> : null}
-          {desktopChrome ? <ShellLayoutNotice /> : null}
           {/* Collapses to zero height on the same clock rather than unmounting —
           hiding it used to drop 24px out of the window in one frame. */}
           {platform === "tauri" ? <StatusBar collapsed={statusBarCollapsed} /> : null}

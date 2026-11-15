@@ -471,44 +471,6 @@ describe("WebRtcCard — TURN credential keyring", () => {
     )
   })
 
-  it("silently migrates legacy plaintext TURN entries on hydrate", async () => {
-    // Seed Dexie with a legacy plaintext credential.
-    await saveSettings({
-      turnServers: [
-        {
-          urls: "turn:turn.example.com:3478",
-          username: "alice",
-          credential: "leg4cy",
-        },
-      ],
-    })
-    renderCard()
-    // The hydrate effect is async (getSettings → migrate → save →
-    // resolve → setForm). Allow a generous waitFor budget so the
-    // jsdom + fake-indexeddb roundtrip lands deterministically.
-    await waitFor(
-      async () => {
-        const s = await getSettings()
-        const persisted = s.turnServers?.[0]
-        expect(persisted).toBeTruthy()
-        expect(isKeyringSentinel(persisted!.credential as string)).toBe(true)
-      },
-      { timeout: 4000 }
-    )
-    // The keyring entry round-trips the original pair.
-    const persisted = (await getSettings()).turnServers![0]
-    expect(persisted.username).toBeUndefined()
-    const keyId = keyIdOfSentinel(persisted.credential as string)!
-    expect(turnStore.map.get(keyId)).toEqual({
-      username: "alice",
-      credential: "leg4cy",
-    })
-    // The textarea displays the resolved plaintext for editing.
-    const ta = (await screen.findByLabelText(/TURN servers/i)) as HTMLTextAreaElement
-    await waitFor(() => expect(ta.value).toContain("alice"), { timeout: 2000 })
-    expect(ta.value).toContain("leg4cy")
-  })
-
   it("save() writes new TURN credentials to keyring, not Dexie", async () => {
     renderCard()
     const ta = await screen.findByLabelText(/TURN servers/i)
@@ -535,7 +497,7 @@ describe("WebRtcCard — TURN credential keyring", () => {
   })
 
   it("save() leaves an existing keyring sentinel alone", async () => {
-    // Pre-seed: a TURN entry already migrated, with a known keyring
+    // Pre-seed: a TURN entry already in the keyring, with a known keyring
     // entry. Simulates the user opening Settings, not touching the
     // textarea, and clicking Save again.
     const knownKeyId = "preexisting-key-id"

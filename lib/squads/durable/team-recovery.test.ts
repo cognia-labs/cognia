@@ -160,14 +160,14 @@ describe("team recovery", () => {
       ])
     })
 
-    it("offers a legacy run only restart or terminate, and reads no children", async () => {
-      await seedParkedRun("legacy_run_not_resumable")
+    it("offers a run whose replacement cleanup failed only restart or terminate, and reads no children", async () => {
+      await seedParkedRun("replacement_cleanup_failed")
       const listChildren = jest.fn(async () => [])
       const h = harness({ listChildren })
       await ensureTeamRecoveryInterrupt(RUN, h.deps)
       expect(listChildren).not.toHaveBeenCalled()
       expect(h.armed[0]?.subject).toMatchObject({
-        reason: "legacy_run_not_resumable",
+        reason: "replacement_cleanup_failed",
         choices: [...LEGACY_RECOVERY_CHOICES],
         uncertainChildIds: [],
       })
@@ -235,7 +235,7 @@ describe("team recovery", () => {
       })
       await getDb().agentTeamRuns.update("run_team_rec02", {
         status: "needs_input",
-        recoveryReason: "legacy_run_not_resumable",
+        recoveryReason: "squad_not_ready",
       })
       await getDb().executionRunInterrupts.add({
         id: "int-open-2",
@@ -594,7 +594,7 @@ describe("team recovery", () => {
     })
 
     it("refuses a choice the interrupt did not offer", async () => {
-      await seedParkedRun("legacy_run_not_resumable")
+      await seedParkedRun("squad_not_ready")
       const h = harness()
       const result = await applyTeamRecoveryDecision(
         RUN,

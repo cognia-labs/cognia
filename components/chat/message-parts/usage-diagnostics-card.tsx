@@ -62,7 +62,7 @@ import { surfaceLabelKey } from "@/lib/usage/usage-surface-labels"
 import { UsageAttributionRow } from "@/components/usage/usage-attribution-row"
 import { writeClipboardText } from "@/lib/tauri/clipboard"
 import { formatDuration, formatTokens } from "@/types/system/usage"
-import type { UsageDiagnosticsBlock, UsageWindowStat } from "@/lib/slash-commands/system-blocks"
+import type { UsageDiagnosticsBlock } from "@/lib/slash-commands/system-blocks"
 import type { LimitsMeter, UsageStatus } from "@/types/subscription"
 import type { UsageDisplayMode } from "@/types/appearance"
 
@@ -114,34 +114,6 @@ const ATTRIBUTION_LIMIT: Record<UsageDisplayMode, number> = {
   detailed: Number.POSITIVE_INFINITY,
 }
 
-/**
- * Project a v1 block's two header windows onto the meter shape the card renders.
- * Blocks recorded before `meters` existed are still in transcripts and must keep
- * working; they simply carry less (no per-model weekly tiers, no reset instant —
- * only a countdown relative to when the command ran).
- */
-export function legacyWindowsToMeters(
-  windows: readonly UsageWindowStat[],
-  generatedAt: number
-): LimitsMeter[] {
-  const meters: LimitsMeter[] = []
-  for (const w of windows) {
-    if (w.utilization == null || w.level == null) continue
-    meters.push({
-      id: w.key === "fiveHour" ? "session" : "weekly",
-      labelKey:
-        w.key === "fiveHour"
-          ? "subscription.limits.meter.session"
-          : "subscription.limits.meter.weekly",
-      kind: "window",
-      usedPct: Math.round(w.utilization),
-      resetAt: w.msUntilReset == null ? null : generatedAt + w.msUntilReset,
-      status: w.level,
-    })
-  }
-  return meters
-}
-
 /** Percent string for a 0–1 share, or the em dash when the share is unknown. */
 function formatShare(share: number | null): string {
   return share == null ? UNKNOWN : `${Math.round(share * 100)}%`
@@ -161,19 +133,7 @@ export function UsageDiagnosticsCard({ block }: { block: UsageDiagnosticsBlock }
   const [mountedAt] = useState(() => (ticked > 0 ? ticked : Date.now()))
   const now = ticked > 0 ? ticked : mountedAt
 
-  // A v1 block stored a countdown, not an instant, and never recorded when the
-  // command ran — so the only origin left is the moment this card mounted.
-  // Frozen (not re-read each tick) because that is what lets the countdown
-  // actually age: rebasing it every tick would pin it at its original value.
-  const legacyOrigin = block.generatedAt ?? block.fetchedAt ?? mountedAt
-
-  const meters = useMemo(() => {
-    if (block.meters && block.meters.length > 0) return block.meters
-    if (block.windows && block.windows.length > 0) {
-      return legacyWindowsToMeters(block.windows, legacyOrigin)
-    }
-    return []
-  }, [block.meters, block.windows, legacyOrigin])
+  const meters = useMemo(() => block.meters ?? [], [block.meters])
 
   const extras = block.extras ?? []
   const availableScopes = useMemo(

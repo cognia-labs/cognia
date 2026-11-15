@@ -300,8 +300,8 @@ export function editorStateToOutput(s: EditorState): EditorOutput {
     avatarColor: s.avatarColor,
     avatarEmoji: s.avatarEmoji.trim() || undefined,
     systemPrompt: s.systemPrompt,
-    // Keep the legacy column for older clients while semantic routing is
-    // the new execution source of truth.
+    // Mirrors the execute route so readers of `model` agree with it, and so
+    // clearing the execute model clears the stored one too.
     model: executeModel,
     modelRouting,
     executionPolicy,

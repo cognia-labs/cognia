@@ -54,7 +54,7 @@ export const WebToolsOff: Story = {
   beforeEach: () => {
     resetStore(useSettingsStore)
     seedStore(useSettingsStore, {
-      settings: makeAppSettings({ webTools: { enabled: false, nativeOnAnthropic: false } }),
+      settings: makeAppSettings({ webTools: { enabled: false } }),
     })
   },
 }

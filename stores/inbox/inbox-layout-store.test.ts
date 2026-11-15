@@ -9,7 +9,6 @@ import {
   INBOX_LAYOUT_BOUNDS,
   INBOX_LAYOUT_DEFAULTS,
   INBOX_LAYOUT_PERSIST_DEBOUNCE_MS,
-  migrateInboxLayoutState,
   useInboxLayoutStore,
 } from "./inbox-layout-store"
 
@@ -154,30 +153,14 @@ describe("useInboxLayoutStore", () => {
     })
   })
 
-  describe("migration", () => {
-    // v1 layouts were persisted while the shell passed bare numbers to
-    // react-resizable-panels v4 (interpreted as pixels), so every drag stored
-    // clamped garbage. v2 discards them and starts from defaults.
-    it("resets v1 layouts to defaults on rehydrate", async () => {
+  describe("rehydration", () => {
+    it("restores a current-version layout", async () => {
       window.localStorage.setItem(
         PERSIST_NAME,
-        JSON.stringify({ state: { sidebarSize: 12, listSize: 18, detailSize: 70 }, version: 1 })
-      )
-      await act(async () => {
-        await useInboxLayoutStore.persist.rehydrate()
-      })
-      const { result } = renderHook(() => useInboxLayoutStore())
-      expect(result.current.sidebarSize).toBe(INBOX_LAYOUT_DEFAULTS.sidebarSize)
-      expect(result.current.listSize).toBe(INBOX_LAYOUT_DEFAULTS.listSize)
-      expect(result.current.detailSize).toBe(INBOX_LAYOUT_DEFAULTS.detailSize)
-    })
-  })
-
-  describe("migration v2 → v3", () => {
-    it("keeps v2 sizes and starts the new preferences empty", async () => {
-      window.localStorage.setItem(
-        PERSIST_NAME,
-        JSON.stringify({ state: { sidebarSize: 20, listSize: 30, detailSize: 50 }, version: 2 })
+        JSON.stringify({
+          state: { sidebarSize: 20, listSize: 30, detailSize: 50, grouping: "adapter" },
+          version: 3,
+        })
       )
       await act(async () => {
         await useInboxLayoutStore.persist.rehydrate()
@@ -186,33 +169,21 @@ describe("useInboxLayoutStore", () => {
       expect(result.current.sidebarSize).toBe(20)
       expect(result.current.listSize).toBe(30)
       expect(result.current.detailSize).toBe(50)
-      expect(result.current.grouping).toBeNull()
-      expect(result.current.collapsedSections).toEqual({})
+      expect(result.current.grouping).toBe("adapter")
     })
 
-    it("drops malformed values instead of trusting them", () => {
-      expect(
-        migrateInboxLayoutState(
-          {
-            sidebarSize: "x",
-            listSize: Number.NaN,
-            detailSize: 50,
-            grouping: "by-adapter",
-            collapsedSections: { ok: true, bad: "yes" },
-          },
-          2
-        )
-      ).toEqual({
-        sidebarSize: INBOX_LAYOUT_DEFAULTS.sidebarSize,
-        listSize: INBOX_LAYOUT_DEFAULTS.listSize,
-        detailSize: 50,
-        grouping: null,
-        collapsedSections: { ok: true },
-      })
-      expect(migrateInboxLayoutState(null, 2).grouping).toBeNull()
-      expect(migrateInboxLayoutState({ collapsedSections: [true] }, 2).collapsedSections).toEqual(
-        {}
+    it("falls back to defaults for an older version", async () => {
+      window.localStorage.setItem(
+        PERSIST_NAME,
+        JSON.stringify({ state: { sidebarSize: 20, listSize: 30, detailSize: 50 }, version: 2 })
       )
+      await act(async () => {
+        await useInboxLayoutStore.persist.rehydrate()
+      })
+      const { result } = renderHook(() => useInboxLayoutStore())
+      expect(result.current.sidebarSize).toBe(INBOX_LAYOUT_DEFAULTS.sidebarSize)
+      expect(result.current.listSize).toBe(INBOX_LAYOUT_DEFAULTS.listSize)
+      expect(result.current.detailSize).toBe(INBOX_LAYOUT_DEFAULTS.detailSize)
     })
   })
 

@@ -1,6 +1,5 @@
 import {
   freshInstallWebReader,
-  legacyCompatibilityWebReader,
   normalizeWebReaderSettings,
   readerPolicyFromSettings,
   toReaderPolicy,
@@ -19,48 +18,27 @@ describe("starting profiles", () => {
       expect(fresh.readers[id]?.enabled).toBe(false)
     }
   })
-
-  it("upgrades preserve prior eligibility and enable no vendor reader", () => {
-    const legacy = legacyCompatibilityWebReader({ enabled: true })
-    expect(legacy.externalFallback).toBe("configured")
-    expect(legacy.readers.jina?.enabled).toBe(true)
-    expect(legacy.readers.fxtwitter?.enabled).toBe(true)
-    for (const id of ["tavily", "exa", "deepseek", "tinyfish"] as const) {
-      expect(legacy.readers[id]?.enabled).toBe(false)
-    }
-  })
-
-  it("maps legacy alwaysDistill to required distillation", () => {
-    expect(legacyCompatibilityWebReader({ enabled: true, alwaysDistill: true }).distillation).toBe(
-      "required"
-    )
-  })
 })
 
 describe("normalizeWebReaderSettings", () => {
-  it("decides fresh vs legacy from the row, not from merged defaults", () => {
-    expect(normalizeWebReaderSettings(undefined, { rowExists: false }).source).toBe("fresh")
-    const legacy = normalizeWebReaderSettings(undefined, {
-      rowExists: true,
-      webTools: { enabled: true, alwaysDistill: true },
-    })
-    expect(legacy.source).toBe("legacy")
-    expect(legacy.effective.distillation).toBe("required")
+  it("gives an absent or malformed record the fresh profile", () => {
+    for (const raw of [undefined, null, "x", []]) {
+      const r = normalizeWebReaderSettings(raw)
+      expect(r.source).toBe("fresh")
+      expect(r.effective).toEqual(freshInstallWebReader())
+    }
   })
 
   it("treats an explicit record as authoritative and fills unlisted readers as off", () => {
-    const r = normalizeWebReaderSettings(
-      {
-        version: 1,
-        defaultReader: "tavily",
-        readers: { tavily: { enabled: true, priority: 3 } },
-        externalFallback: "configured",
-        distillation: "best-effort",
-        timeoutMs: 1,
-        maxAttempts: 99,
-      },
-      { rowExists: true, webTools: { enabled: true, alwaysDistill: true } }
-    )
+    const r = normalizeWebReaderSettings({
+      version: 1,
+      defaultReader: "tavily",
+      readers: { tavily: { enabled: true, priority: 3 } },
+      externalFallback: "configured",
+      distillation: "best-effort",
+      timeoutMs: 1,
+      maxAttempts: 99,
+    })
     expect(r.source).toBe("explicit")
     expect(r.effective.defaultReader).toBe("tavily")
     expect(r.effective.distillation).toBe("best-effort")
@@ -72,15 +50,12 @@ describe("normalizeWebReaderSettings", () => {
   })
 
   it("rejects unknown enum values instead of activating them", () => {
-    const r = normalizeWebReaderSettings(
-      {
-        version: 1,
-        defaultReader: "carrier-pigeon",
-        distillation: "always",
-        externalFallback: "yes",
-      },
-      { rowExists: true }
-    )
+    const r = normalizeWebReaderSettings({
+      version: 1,
+      defaultReader: "carrier-pigeon",
+      distillation: "always",
+      externalFallback: "yes",
+    })
     expect(r.effective.defaultReader).toBe("auto")
     expect(r.effective.distillation).toBe("off")
     expect(r.effective.externalFallback).toBe("off")
@@ -88,10 +63,10 @@ describe("normalizeWebReaderSettings", () => {
 
   it("preserves an unknown future version verbatim but never activates it", () => {
     const future = { version: 2, magic: true }
-    const r = normalizeWebReaderSettings(future, { rowExists: true })
+    const r = normalizeWebReaderSettings(future)
     expect(r.source).toBe("unsupported-version")
     expect(r.preserved).toBe(future)
-    expect(r.effective).toEqual(legacyCompatibilityWebReader(undefined))
+    expect(r.effective).toEqual(freshInstallWebReader())
   })
 })
 
@@ -113,13 +88,9 @@ describe("toReaderPolicy", () => {
     expect(toReaderPolicy(settings).revision).not.toBe(a.revision)
   })
 
-  it("reads a settings snapshot conservatively as an upgrade", () => {
+  it("reads a settings snapshot without a reader profile as the fresh profile", () => {
     const policy = readerPolicyFromSettings({ webTools: { enabled: true } } as AppSettings)
-    expect(policy.enabled.has("jina")).toBe(true)
-    expect(policyFromExplicit().enabled.has("jina")).toBe(false)
+    expect(policy).toEqual(toReaderPolicy(freshInstallWebReader()))
+    expect(policy.enabled.has("jina")).toBe(false)
   })
 })
-
-function policyFromExplicit() {
-  return readerPolicyFromSettings({ webReader: freshInstallWebReader() } as AppSettings)
-}

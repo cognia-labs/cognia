@@ -135,12 +135,7 @@ export const DEFAULT_CANVAS_WORKBENCH: CanvasAIWorkbenchState = {
   actionHistory: [],
   isInlineCommandOpen: false,
 }
-/**
- * The default persist bucket. Exported because the Dexie migration
- * (`lib/artifacts/localstorage-migration.ts`) has to read the same bucket the
- * store writes, and guessing the string there would silently miss the legacy
- * artifacts it exists to rescue.
- */
+/** The default persist bucket; signed-in accounts use `<key>:<localAccountId>`. */
 export const ARTIFACT_STORAGE_KEY = "cognia-artifacts"
 
 // Also invalidate async work when an account is cleared and then reactivated.
@@ -343,26 +338,22 @@ function mergeCanvasEditorContext(
 }
 
 /**
- * Rehydrate the date-bearing maps of a persisted snapshot back into `Date`
- * objects. Zustand `persist` serializes `Date` to ISO strings, so without
- * this every direct consumer of the raw `canvasDocuments` / `artifacts` maps
- * (e.g. CanvasDocumentRail calling `updatedAt.getTime()`) would crash after a
- * reload. The per-action getters rehydrate on read, but the raw state maps must
- * be restored too.
+ * The fields `partialize` writes. Artifacts, their versions and canvas
+ * documents live in Dexie, so nothing else in a persisted blob is read.
  */
-function rehydratePersistedArtifactState<T extends Partial<ArtifactState>>(state: T): T {
-  const next = { ...state }
-  if (next.artifacts) {
-    next.artifacts = Object.fromEntries(
-      Object.entries(next.artifacts).map(([id, artifact]) => [id, rehydrateArtifact(artifact)])
-    )
+function persistedArtifactPreferences(persisted: unknown): Partial<ArtifactState> {
+  if (!persisted || typeof persisted !== "object") return {}
+  const { artifactWorkspace, openArtifactIdsBySession, activeArtifactIdBySession } =
+    persisted as Partial<ArtifactState>
+  return {
+    ...(artifactWorkspace && typeof artifactWorkspace === "object" ? { artifactWorkspace } : {}),
+    ...(openArtifactIdsBySession && typeof openArtifactIdsBySession === "object"
+      ? { openArtifactIdsBySession }
+      : {}),
+    ...(activeArtifactIdBySession && typeof activeArtifactIdBySession === "object"
+      ? { activeArtifactIdBySession }
+      : {}),
   }
-  if (next.canvasDocuments) {
-    next.canvasDocuments = Object.fromEntries(
-      Object.entries(next.canvasDocuments).map(([id, doc]) => [id, rehydrateCanvasDocument(doc)])
-    )
-  }
-  return next
 }
 
 /** Artifacts / canvas documents of a deleted session that the Files page keeps. */
@@ -642,12 +633,6 @@ function resolveNextActiveArtifactId(
 interface ArtifactState {
   // Artifacts
   artifacts: Record<string, Artifact>
-  /**
-   * Keeps the legacy localStorage maps intact until the first authoritative
-   * Dexie transaction commits. Persisted so a reload after a failed write
-   * resumes the migration instead of silently cleaning the only copy.
-   */
-  artifactDexieMigrationPending: boolean
   /**
    * The artifact each chat session is parked on, keyed by session id (see
    * `artifactSessionKey`). Read it through `selectActiveArtifactId` /
@@ -997,7 +982,6 @@ interface ArtifactActions {
 
 const initialState: ArtifactState = {
   artifacts: {},
-  artifactDexieMigrationPending: false,
   activeArtifactIdBySession: {},
   artifactVersions: {},
   artifactWorkspace: INITIAL_ARTIFACT_WORKSPACE,
@@ -2637,110 +2621,19 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
       storage: persistLocalStorage(),
       // v6 — artifacts + their versions left this blob for Dexie.
       // v7 — canvas documents followed them.
-      //
-      // The migrate hook deliberately does NOT strip either: on the first boot
-      // after an upgrade they are the migration source. The artifact bridge
-      // clears its marker only after its initial transaction commits, which
-      // makes `partialize` remove the maps on the following persist write.
       version: 7,
-      migrate: (persistedState: unknown, version) => {
-        const state = persistedState as Record<string, unknown>
-        if (!state.canvasDocuments || typeof state.canvasDocuments !== "object") {
-          state.canvasDocuments = {}
-        }
-        if (!state.artifactVersions || typeof state.artifactVersions !== "object") {
-          state.artifactVersions = {}
-        }
-        const hasLegacyArtifactRows =
-          Object.keys((state.artifacts as Record<string, unknown> | undefined) ?? {}).length > 0 ||
-          Object.keys(state.artifactVersions as Record<string, unknown>).length > 0
-        if (typeof state.artifactDexieMigrationPending !== "boolean") {
-          state.artifactDexieMigrationPending = hasLegacyArtifactRows
-        }
-        if (!state.artifactWorkspace || typeof state.artifactWorkspace !== "object") {
-          state.artifactWorkspace = INITIAL_ARTIFACT_WORKSPACE
-        } else {
-          state.artifactWorkspace = {
-            ...INITIAL_ARTIFACT_WORKSPACE,
-            ...(state.artifactWorkspace as Record<string, unknown>),
-          }
-        }
-        if (version < 4) {
-          // v3 kept one global tab list and one global active id, so a reload
-          // could hand the dock a conversation's tabs while another one was on
-          // screen. Re-bucket by the owning artifact's session and drop the
-          // analysis map, which nothing outside this store ever read.
-          delete state.analysisResults
-          const artifacts = (state.artifacts ?? {}) as Record<string, Artifact | undefined>
-          const legacyOpen = Array.isArray(state.openArtifactIds)
-            ? (state.openArtifactIds as string[])
-            : []
-          const openArtifactIdsBySession: Record<string, string[]> = {}
-          for (const id of legacyOpen) {
-            const artifact = artifacts[id]
-            if (!artifact) continue
-            const sessionKey = artifactSessionKey(artifact.sessionId)
-            const bucket = openArtifactIdsBySession[sessionKey] ?? []
-            if (bucket.length < MAX_OPEN_ARTIFACTS) {
-              bucket.push(id)
-              openArtifactIdsBySession[sessionKey] = bucket
-            }
-          }
-          delete state.openArtifactIds
-          delete state.activeArtifactId
-          state.openArtifactIdsBySession = openArtifactIdsBySession
-          // v3's active id was never written to disk, so there is nothing to
-          // re-bucket here. v5 starts persisting it (see `partialize`).
-          state.activeArtifactIdBySession = {}
-        }
-        if (
-          version < 5 &&
-          (!state.activeArtifactIdBySession || typeof state.activeArtifactIdBySession !== "object")
-        ) {
-          // Anything written before v5 has no active-id map on disk at all.
-          state.activeArtifactIdBySession = {}
-        }
-        return state
-      },
-      // Restore `Date` objects stripped to ISO strings during serialization,
-      // so components reading the raw state maps don't crash on `.getTime()`.
-      merge: (persistedState, currentState) => {
-        const persisted = rehydratePersistedArtifactState(
-          (persistedState ?? {}) as Partial<ArtifactState>
-        )
-        const hasLegacyArtifactRows =
-          Object.keys(persisted.artifacts ?? {}).length > 0 ||
-          Object.keys(persisted.artifactVersions ?? {}).length > 0
-        return {
-          ...currentState,
-          ...persisted,
-          artifactDexieMigrationPending:
-            persisted.artifactDexieMigrationPending === true || hasLegacyArtifactRows,
-        }
-      },
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...persistedArtifactPreferences(persistedState),
+      }),
       partialize: (state) => {
-        // Once the initial migration commits, `artifacts` and
-        // `artifactVersions` are deliberately absent: Dexie owns them from v6
-        // on (`lib/artifacts/dexie-bridge.ts`). Until then the conditional below
-        // retains the full legacy maps so a failed transaction or crash cannot
-        // destroy the only durable copy. They used to be
-        // written here on every keystroke, and to fit the ~5 MB localStorage
-        // ceiling each artifact's content was cut at 100 KB and everything past
-        // the 200 most recent was evicted — silently, and permanently, because
-        // the truncated copy was what the next reload read back.
-        //
-        // Reads still accept them: an install upgrading from v5 has them on
-        // disk, and `merge` has to hand that copy to the store so the bridge
-        // can carry it into Dexie on first boot. The first write after the
-        // bridge confirms that transaction drops them.
+        // `artifacts` and `artifactVersions` are deliberately absent: Dexie
+        // owns them (`lib/artifacts/dexie-bridge.ts`). They used to be written
+        // here on every keystroke, and to fit the ~5 MB localStorage ceiling
+        // each artifact's content was cut at 100 KB and everything past the 200
+        // most recent was evicted — silently, and permanently, because the
+        // truncated copy was what the next reload read back.
         return {
-          ...(state.artifactDexieMigrationPending
-            ? {
-                artifacts: state.artifacts,
-                artifactVersions: state.artifactVersions,
-                artifactDexieMigrationPending: true,
-              }
-            : {}),
           // Only the durable *preferences* survive a reload. `searchQuery` and
           // `sessionId` describe the conversation you happened to be in when
           // the app closed: restoring them boots the artifact list already
@@ -2772,25 +2665,11 @@ export const useArtifactStore = create<ArtifactState & ArtifactActions>()(
           // every state change, and `editorContext.selection` changes on every
           // cursor move, so moving the caret through one large document meant
           // re-stringifying every canvas document the user has.
-          //
-          // Reads still accept them, for the reason v6 kept accepting
-          // artifacts: an install upgrading from v6 has them on disk, and the
-          // bridge needs that copy in memory to mirror it.
         }
       },
     }
   )
 )
-
-/**
- * Called only after the bridge's initial artifacts + versions transaction has
- * committed. Updating the marker triggers Zustand persist, atomically replacing
- * the legacy blob with the preferences-only v6 shape.
- */
-export function completeArtifactDexieMigration(): void {
-  if (!useArtifactStore.getState().artifactDexieMigrationPending) return
-  useArtifactStore.setState({ artifactDexieMigrationPending: false })
-}
 
 registerProjectBucketPurger("artifacts", (projectId) => {
   useArtifactStore.getState().purgeProject(projectId)
@@ -2800,7 +2679,6 @@ export function activateArtifactAccountStorage(accountId: string): void {
   artifactStorageGeneration += 1
   useDockTabsStore.getState().clearReviewState()
   const storageKey = artifactAccountStorageKey(accountId)
-  adoptLegacyArtifactStorage(storageKey)
   useArtifactStore.persist.setOptions({ name: storageKey })
   useArtifactStore.setState({
     ...initialState,
@@ -2820,24 +2698,13 @@ export function purgeArtifactAccountStorage(accountId: string): void {
   window.localStorage.removeItem(artifactAccountStorageKey(accountId))
 }
 
-function adoptLegacyArtifactStorage(storageKey: string): void {
-  if (typeof window === "undefined") return
-  if (window.localStorage.getItem(storageKey)) return
-  const legacySnapshot = window.localStorage.getItem(ARTIFACT_STORAGE_KEY)
-  if (!legacySnapshot) return
-  window.localStorage.setItem(storageKey, legacySnapshot)
-  window.localStorage.removeItem(ARTIFACT_STORAGE_KEY)
-}
-
 function readArtifactPersistedState(storageKey: string): Partial<ArtifactState> {
   if (typeof window === "undefined") return {}
   const snapshot = window.localStorage.getItem(storageKey)
   if (!snapshot) return {}
   try {
     const parsed = JSON.parse(snapshot) as { state?: unknown }
-    return parsed.state && typeof parsed.state === "object"
-      ? rehydratePersistedArtifactState(parsed.state as Partial<ArtifactState>)
-      : {}
+    return persistedArtifactPreferences(parsed.state)
   } catch {
     return {}
   }

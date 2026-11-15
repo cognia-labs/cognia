@@ -45,7 +45,7 @@ export interface CanvasLayoutState {
   previewMode: CanvasPreviewMode
   mobileLeftOpen: boolean
   mobileRightOpen: boolean
-  /** Bumped on migrate / reset so ResizablePanelGroup remounts with new defaults. */
+  /** Bumped on reset so ResizablePanelGroup remounts with new defaults. */
   layoutVersion: number
   /** Pinned document IDs — persisted as string[] and hydrated back to Set. */
   pinnedDocIds: Set<string>
@@ -218,12 +218,6 @@ export const useCanvasLayoutStore = create<CanvasLayoutState>()(
       name: "cognia-canvas-layout",
       storage: persistLocalStorage(),
       version: 6,
-      migrate: (_oldState: unknown, _oldVersion: number) => ({
-        ...CANVAS_LAYOUT_DEFAULTS,
-        layoutVersion: 1,
-        mobileLeftOpen: false,
-        mobileRightOpen: false,
-      }),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Set → array serialization
       partialize: (state): any => ({
         leftSize: state.leftSize,

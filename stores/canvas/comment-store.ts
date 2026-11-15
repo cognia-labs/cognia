@@ -6,9 +6,7 @@
  *  1. update in-memory state synchronously (optimistic + immediate render),
  *  2. fire-and-forget the matching Dexie write through `lib/db/canvas-comments`.
  *
- * Bring documents into memory via `loadCommentsForDocument(docId)`. The
- * legacy localStorage cache (Zustand `persist` v0) is migrated into Dexie on
- * first import and the key is removed.
+ * Bring documents into memory via `loadCommentsForDocument(docId)`.
  */
 
 import { create } from "zustand"
@@ -47,9 +45,6 @@ interface CommentState {
   setActiveThread: (threadId: string | null) => void
   clearDocumentComments: (docId: string) => void
 }
-
-const LEGACY_KEY = "cognia-canvas-comments"
-const LEGACY_MIGRATED_KEY = "cognia-canvas-comments-migrated-v1"
 
 function safeDexieCall<T>(label: string, fn: () => Promise<T>): void {
   fn().catch((err) => {
@@ -239,94 +234,13 @@ export const useCommentStore = create<CommentState>()((set, get) => ({
   },
 }))
 
-/**
- * One-shot legacy migration. The pre-Dexie store persisted comments to
- * `localStorage["cognia-canvas-comments"]` via Zustand `persist`. Pull any
- * surviving payload into Dexie, then drop the key. A separate guard key
- * makes this idempotent across restarts even if the legacy key is restored
- * from a backup.
- */
-export async function hydrateLegacyLocalStorage(): Promise<number> {
-  if (typeof localStorage === "undefined") return 0
-  try {
-    if (localStorage.getItem(LEGACY_MIGRATED_KEY)) return 0
-    const raw = localStorage.getItem(LEGACY_KEY)
-    if (!raw) {
-      localStorage.setItem(LEGACY_MIGRATED_KEY, "1")
-      return 0
-    }
-    const parsed = JSON.parse(raw) as { state?: { comments?: Record<string, unknown[]> } }
-    const grouped = parsed?.state?.comments ?? {}
-    const all: CanvasComment[] = []
-    for (const docComments of Object.values(grouped)) {
-      if (!Array.isArray(docComments)) continue
-      for (const raw of docComments as Record<string, unknown>[]) {
-        const c = reviveLegacyComment(raw)
-        if (c) all.push(c)
-      }
-    }
-    let inserted = 0
-    if (all.length > 0) {
-      inserted = await canvasCommentsDb.bulkImport(all)
-    }
-    localStorage.setItem(LEGACY_MIGRATED_KEY, "1")
-    localStorage.removeItem(LEGACY_KEY)
-    return inserted
-  } catch (err) {
-    loggers.canvas.warn("comment-store hydrateLegacyLocalStorage failed", {
-      error: String(err),
-    })
-    return 0
-  }
-}
-
-function reviveLegacyComment(raw: Record<string, unknown>): CanvasComment | null {
-  if (typeof raw.id !== "string" || typeof raw.documentId !== "string") return null
-  const reviveDate = (v: unknown): Date | undefined => {
-    if (v instanceof Date) return v
-    if (typeof v === "string" || typeof v === "number") {
-      const d = new Date(v)
-      return Number.isNaN(d.getTime()) ? undefined : d
-    }
-    return undefined
-  }
-  return {
-    id: raw.id,
-    documentId: raw.documentId,
-    authorId: typeof raw.authorId === "string" ? raw.authorId : "",
-    authorName: typeof raw.authorName === "string" ? raw.authorName : "",
-    authorAvatarUrl: typeof raw.authorAvatarUrl === "string" ? raw.authorAvatarUrl : undefined,
-    content: typeof raw.content === "string" ? raw.content : "",
-    range:
-      raw.range && typeof raw.range === "object"
-        ? (raw.range as LineRange)
-        : { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 },
-    createdAt: reviveDate(raw.createdAt) ?? new Date(),
-    updatedAt: reviveDate(raw.updatedAt),
-    resolvedAt: reviveDate(raw.resolvedAt),
-    resolvedBy: typeof raw.resolvedBy === "string" ? raw.resolvedBy : undefined,
-    reactions: Array.isArray(raw.reactions) ? (raw.reactions as CanvasComment["reactions"]) : [],
-    parentId: typeof raw.parentId === "string" ? raw.parentId : undefined,
-  }
-}
-
-// Fire the migration on first import. Guarded with try/catch inside
-// hydrateLegacyLocalStorage so a missing localStorage / Dexie / fake-indexeddb
-// instance never crashes module init.
-if (typeof window !== "undefined") {
-  void hydrateLegacyLocalStorage()
-}
-
-export const __TESTING__ = { LEGACY_KEY, LEGACY_MIGRATED_KEY, reviveLegacyComment }
-
 export default useCommentStore
 
 // A deleted document's threads must not survive it in memory. Registered here
 // rather than imported by the artifact store, so deleting a document does not
-// require every consumer of that store to load this one (and run the legacy
-// localStorage migration below). `lib/canvas/dexie-bridge.ts` already imports
-// this module at boot, which is what guarantees the disposer is registered by
-// the time a delete can happen.
+// require every consumer of that store to load this one. `lib/canvas/dexie-bridge.ts`
+// already imports this module at boot, which is what guarantees the disposer is
+// registered by the time a delete can happen.
 registerCanvasDocumentDisposer("canvas-comments", (documentId) => {
   useCommentStore.getState().clearDocumentComments(documentId)
 })

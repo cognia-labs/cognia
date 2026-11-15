@@ -611,11 +611,11 @@ describe("OnboardingFlow", () => {
     })
 
     it("takes the step-by-step path when no path is on record, instead of the intro", () => {
-      // A migrated legacy user, or one who left through "I've done this
-      // before", has no mode — "connect a model" must still land on sign-in.
+      // One who left through "I've done this before" has no mode — "connect a
+      // model" must still land on sign-in.
       settings = {
         id: "singleton",
-        onboardingProgress: { version: 2, path: "legacy_dismissed", finishBarDismissed: true },
+        onboardingProgress: { version: 2, path: "runtime_skipped", finishBarDismissed: true },
       } as AppSettings
       visit("?focus=model")
       render(<OnboardingFlow />)

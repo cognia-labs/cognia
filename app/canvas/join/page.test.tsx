@@ -58,15 +58,6 @@ describe("CanvasJoinPage", () => {
     expect(push).toHaveBeenCalledWith("/")
   })
 
-  it("tells the user an old link is expired rather than showing a decode failure", async () => {
-    // The old link carried a serialized session and, worse, a `?server=` URL
-    // this page wrote into persisted settings with `enabled: true`.
-    renderWith("session=eyJhIjoxfQ&server=ws://attacker.example/x")
-
-    expect(await screen.findByTestId("canvas-join-error")).toHaveTextContent(/older version/i)
-    expect(screen.queryByTestId("canvas-join-open")).not.toBeInTheDocument()
-  })
-
   it("never opens Canvas for a link it could not honour", async () => {
     renderWith("session=eyJhIjoxfQ")
     await screen.findByTestId("canvas-join-error")

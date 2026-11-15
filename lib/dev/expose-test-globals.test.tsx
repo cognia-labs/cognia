@@ -787,7 +787,6 @@ describe("ExposeTestGlobals", () => {
     expect(stored).not.toBeNull()
     expect(stored).toContain("https://192.168.1.42:7891")
     expect(stored).not.toContain("device-private")
-    expect(window.localStorage.getItem("cognia.companion.config.v1")).toBeNull()
 
     await window.__cogniaClearCompanionConfig!()
     expect(window.localStorage.getItem("cognia.companion.hosts.v2") ?? "").not.toContain(

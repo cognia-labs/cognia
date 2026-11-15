@@ -709,7 +709,7 @@ describe("createTelegramAdapter — webhook registration", () => {
     // The Rust receiver 401s every delivery that arrives without a secret, so
     // registering here would point Telegram at a URL that rejects it.
     installBotApi()
-    const ctx = makeWebhookCtx({ secretToken: null, webhookSecret: null })
+    const ctx = makeWebhookCtx({ secretToken: null })
     const adapter = makeWebhookAdapter()
 
     await adapter.start(ctx)
@@ -717,19 +717,6 @@ describe("createTelegramAdapter — webhook registration", () => {
 
     expect(adapter.health().reason).toMatch(/no webhook secret is configured/)
     expect(botApiCalls("setWebhook")).toHaveLength(0)
-    await adapter.stop()
-  })
-
-  it("migrates a legacy webhookSecret onto the key the receiver reads", async () => {
-    installBotApi()
-    const ctx = makeWebhookCtx({ secretToken: null, webhookSecret: "legacy-secret" })
-    const adapter = makeWebhookAdapter()
-
-    await adapter.start(ctx)
-    await waitFor(() => botApiCalls("setWebhook").length === 1, "setWebhook")
-
-    expect(ctx.secrets.set).toHaveBeenCalledWith("secretToken", "legacy-secret")
-    expect(botApiCalls("setWebhook")[0].secret_token).toBe("legacy-secret")
     await adapter.stop()
   })
 

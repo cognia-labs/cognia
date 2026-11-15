@@ -1,20 +1,8 @@
 /** @jest-environment jsdom */
 import { EMPTY_CONVERSATION_FILTERS } from "@/lib/chat/conversation-filters"
 import { act, renderHook } from "@testing-library/react"
-import {
-  DEFAULT_BAR_ITEMS,
-  useMemberActivity,
-  useMemberStatus,
-  useUIStore,
-  type SelectedGuild,
-} from "./ui-store"
+import { useMemberActivity, useMemberStatus, useUIStore, type SelectedGuild } from "./ui-store"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
-import {
-  DEFAULT_STATUS_BAR_LAYOUT,
-  DEFAULT_TITLE_BAR_LAYOUT,
-  STATUS_BAR_ITEMS,
-  TITLE_BAR_ITEMS,
-} from "@/types/shell/bars"
 
 const RESET = {
   selectedGuild: { kind: "dm" } as SelectedGuild,
@@ -34,7 +22,6 @@ const RESET = {
   sidebarWidth: 256,
   channelListView: "active" as const,
   collapsedFolderIds: [] as string[],
-  barItems: { ...DEFAULT_BAR_ITEMS },
   findOpen: false,
   predictionSetupHintHidden: false,
 }
@@ -289,7 +276,6 @@ describe("useUIStore", () => {
         guildRailCollapsed: true,
         statusBarCollapsed: true,
         webTitleBarEnabled: true,
-        barItems: { ...DEFAULT_BAR_ITEMS },
       })
       // Transient fields explicitly excluded
       expect(parsed.state.memberStatus).toBeUndefined()
@@ -298,61 +284,29 @@ describe("useUIStore", () => {
     })
   })
 
-  describe("v3 migration", () => {
-    // `partialize` writes barItems / statusBarCollapsed / guildRailCollapsed
-    // unconditionally and `merge` lets the persisted value win, so anyone who
-    // has ever opened the app pins the old chrome defaults forever. Changing
-    // DEFAULT_BAR_ITEMS without this migration ships a no-op to every existing
-    // install.
-    const writeV2Snapshot = (state: Record<string, unknown>) =>
-      window.localStorage.setItem("cognia-ui", JSON.stringify({ state, version: 2 }))
-
-    it("drops the stale chrome keys so the new defaults apply", async () => {
-      writeV2Snapshot({
-        selectedGuild: { kind: "dm" },
-        sidebarWidth: 320,
-        collapsedFolderIds: ["f1"],
-        guildRailCollapsed: true,
-        statusBarCollapsed: true,
-        barItems: { ...DEFAULT_BAR_ITEMS, accountTop: true, quickActions: true },
-      })
+  describe("persisted state from an older version", () => {
+    it("falls back to the defaults instead of carrying old chrome keys over", async () => {
+      window.localStorage.setItem(
+        "cognia-ui",
+        JSON.stringify({
+          state: { sidebarWidth: 320, guildRailCollapsed: true, statusBarCollapsed: true },
+          version: 2,
+        })
+      )
       await act(async () => {
         await useUIStore.persist.rehydrate()
       })
       const { result } = renderHook(() => useUIStore())
-      expect(result.current.barItems.accountTop).toBe(false)
-      expect(result.current.barItems.quickActions).toBe(false)
+      expect(result.current.sidebarWidth).toBe(256)
       expect(result.current.guildRailCollapsed).toBe(false)
       expect(result.current.statusBarCollapsed).toBe(false)
     })
 
-    it("keeps the preferences the user actually chose", async () => {
-      writeV2Snapshot({
-        selectedGuild: { kind: "team", teamId: "t9" },
-        sidebarWidth: 320,
-        collapsedFolderIds: ["f1"],
-        channelListView: "archived",
-        barItems: { ...DEFAULT_BAR_ITEMS },
-      })
-      await act(async () => {
-        await useUIStore.persist.rehydrate()
-      })
-      const { result } = renderHook(() => useUIStore())
-      expect(result.current.selectedGuild).toEqual({ kind: "team", teamId: "t9" })
-      expect(result.current.sidebarWidth).toBe(320)
-      expect(result.current.collapsedFolderIds).toEqual(["f1"])
-      expect(result.current.channelListView).toBe("archived")
-    })
-
-    it("leaves a v3 snapshot untouched", async () => {
+    it("restores a current-version snapshot as written", async () => {
       window.localStorage.setItem(
         "cognia-ui",
         JSON.stringify({
-          state: {
-            guildRailCollapsed: true,
-            statusBarCollapsed: true,
-            barItems: { ...DEFAULT_BAR_ITEMS, usage: false },
-          },
+          state: { sidebarWidth: 320, guildRailCollapsed: true, statusBarCollapsed: true },
           version: 3,
         })
       )
@@ -360,10 +314,9 @@ describe("useUIStore", () => {
         await useUIStore.persist.rehydrate()
       })
       const { result } = renderHook(() => useUIStore())
-      // Post-migration choices are the user's own — never reset them again.
+      expect(result.current.sidebarWidth).toBe(320)
       expect(result.current.guildRailCollapsed).toBe(true)
       expect(result.current.statusBarCollapsed).toBe(true)
-      expect(result.current.barItems.usage).toBe(false)
     })
   })
 
@@ -412,75 +365,6 @@ describe("useUIStore", () => {
       expect(result.current.statusBarCollapsed).toBe(true)
       act(() => result.current.setStatusBarCollapsed(false))
       expect(result.current.statusBarCollapsed).toBe(false)
-    })
-  })
-
-  // `barItems` is legacy: both bars persist a full `{ order, hidden }` layout
-  // on AppSettings now (see `@/types/shell/bars`). It survives only as the
-  // migration source `components/shell/use-bar-layout.ts` folds in once, so
-  // what matters here is that it still reads back — not that it can be written.
-  describe("barItems (legacy migration source)", () => {
-    it("exposes no setter", () => {
-      const { result } = renderHook(() => useUIStore())
-      expect((result.current as unknown as Record<string, unknown>).toggleBarItem).toBeUndefined()
-    })
-
-    it("keeps ids that match the new bar catalogs, so migration is an identity map", () => {
-      const catalogIds = new Set([
-        ...TITLE_BAR_ITEMS.map((m) => m.id),
-        ...STATUS_BAR_ITEMS.map((m) => m.id),
-      ])
-      for (const id of Object.keys(DEFAULT_BAR_ITEMS)) {
-        expect(catalogIds.has(id)).toBe(true)
-      }
-    })
-
-    it("agrees with the shipped bar layouts about what is hidden", () => {
-      // A fresh install migrates through this map, so a disagreement here would
-      // silently change the default chrome for everyone.
-      const legacyOff = Object.entries(DEFAULT_BAR_ITEMS)
-        .filter(([, on]) => !on)
-        .map(([id]) => id)
-        .sort()
-      // Only over the ids the legacy map knows about: segments added after the
-      // map was frozen (`terminal`) are not legacy ids at all — the migration
-      // leaves them on their shipped default, which `lib/shell/bar-items.test.ts`
-      // pins ("leaves unmentioned ids on their shipped default").
-      const legacyIds = new Set(Object.keys(DEFAULT_BAR_ITEMS))
-      const shippedHidden = [
-        ...DEFAULT_TITLE_BAR_LAYOUT.hidden,
-        ...DEFAULT_STATUS_BAR_LAYOUT.hidden,
-      ]
-        .filter((id) => legacyIds.has(id))
-        .sort()
-      expect(legacyOff).toEqual(shippedHidden)
-    })
-
-    it("defaults to DEFAULT_BAR_ITEMS with perf off", () => {
-      const { result } = renderHook(() => useUIStore())
-      expect(result.current.barItems).toEqual(DEFAULT_BAR_ITEMS)
-      expect(result.current.barItems.perf).toBe(false)
-      expect(result.current.barItems.connectivity).toBe(true)
-    })
-
-    it("ships the account button in exactly one bar", () => {
-      // `accountTop` + `accountStatus` were both on, so the same control
-      // rendered in the title bar AND the status bar at once.
-      expect(DEFAULT_BAR_ITEMS.accountTop).toBe(false)
-      expect(DEFAULT_BAR_ITEMS.accountStatus).toBe(true)
-    })
-
-    it("keeps the one-off launchers out of the title bar by default", () => {
-      // Pet / OCR / clipboard are not touched per conversation — they belong in
-      // the Views menu, not in permanent 32px chrome.
-      expect(DEFAULT_BAR_ITEMS.quickActions).toBe(false)
-    })
-
-    it("reads back a persisted opt-out so the migration can see it", () => {
-      act(() => {
-        useUIStore.setState({ barItems: { ...DEFAULT_BAR_ITEMS, usage: false } })
-      })
-      expect(useUIStore.getState().barItems.usage).toBe(false)
     })
   })
 

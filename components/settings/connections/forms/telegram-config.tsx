@@ -26,11 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { createAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
-import {
-  connectorsHttpRequest,
-  connectorsKeyringDelete,
-  connectorsKeyringSet,
-} from "@/lib/connectors/tauri/commands"
+import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { emitCredentialsRotated } from "@/lib/connectors/credentials-events"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type { TransportMode } from "@/types/connectors/adapter"
@@ -88,17 +84,14 @@ interface TelegramConfigDialogProps {
 function telegramCredentialAccounts(transport: TransportMode): string[] {
   // "secretToken" is the keyring key the Rust webhook verifier reads
   // (crates/cognia-connectors/src/axum_app.rs — X-Telegram-Bot-Api-Secret-Token
-  // check); "webhookSecret" is the legacy key kept for backward compat.
-  return transport === "webhook" ? ["botToken", "secretToken", "webhookSecret"] : ["botToken"]
+  // check).
+  return transport === "webhook" ? ["botToken", "secretToken"] : ["botToken"]
 }
 
 function sameCredentialAccounts(actual: readonly string[], expected: readonly string[]): boolean {
   return actual.length === expected.length && expected.every((account) => actual.includes(account))
 }
 
-// `secretToken` is the canonical webhook secret and the only one read back:
-// `webhookSecret` is a legacy mirror of the same value (see
-// `telegramCredentialAccounts`), so reading both would just ask twice.
 const TELEGRAM_CREDENTIALS = ["botToken", "secretToken"] as const
 
 export function TelegramConfigDialog({
@@ -237,15 +230,6 @@ export function TelegramConfigDialog({
       }
 
       await credentials.persist(adapterId)
-      // The Rust webhook 401-gate reads "secretToken"; "webhookSecret" is the
-      // legacy key kept in step for anything still reading it. Mirrored here
-      // rather than inside the hook because only Telegram has this history.
-      const secretIntent = credentials.intent("secretToken")
-      if (secretIntent === "set") {
-        await connectorsKeyringSet(adapterId, "webhookSecret", webhookSecret.trim())
-      } else if (secretIntent === "clear") {
-        await connectorsKeyringDelete(adapterId, "webhookSecret")
-      }
 
       // Hot-reload the running adapter so the new bot token + webhook
       // secret are picked up without an app restart.

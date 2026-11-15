@@ -16,7 +16,6 @@ import { ConnectionCredentialStore, setHostAuthBackend } from "./connection-cred
 import { withNamedLock } from "@/lib/locks/named-lock"
 import { PluginGatewayError } from "@/lib/plugin/core/transport"
 import { subscribeConnectionPrompts, resolveConnectionPrompt } from "./connection-prompts"
-import { registerLegacySessionMigration } from "./legacy-session-migrations"
 import { detectPlatform } from "@/lib/platform/detect"
 
 jest.mock("@/lib/platform/detect", () => ({
@@ -182,30 +181,6 @@ it("uses the manifest authorization binding for Host-managed providers", async (
   expect(provider.authorize).toHaveBeenCalledWith(
     expect.objectContaining({ clientId: "client", issuer: "https://issuer.test" })
   )
-})
-
-it("refuses to exchange until the registered legacy migration succeeds", async () => {
-  jest.mocked(detectPlatform).mockReturnValue("headless")
-  provider.management = "host"
-  const plugin = (await getPlugin("owner"))!
-  const manifest = plugin.manifest as { authProviders: Array<Record<string, unknown>> }
-  manifest.authProviders[0].authorization = { clientId: "client", issuer: "https://issuer.test" }
-  const migrate = jest.fn(async () => {
-    throw new Error("migration failed")
-  })
-  const dispose = registerLegacySessionMigration("owner", provider.id, {
-    migrate,
-    aliases: async () => new Map(),
-  })
-  try {
-    await expect(
-      connectProvider({ providerId: provider.id, scopes: ["read"], method: "client-credentials" })
-    ).rejects.toMatchObject({ reason: "provider-or-storage-failed" })
-    expect(migrate).toHaveBeenCalledWith(provider)
-    expect(provider.exchange).not.toHaveBeenCalled()
-  } finally {
-    dispose()
-  }
 })
 
 it("requires a declared manifest authorization binding for Host-managed providers", async () => {
@@ -691,25 +666,16 @@ it("refuses headless PKCE with a recovery reason before authorization", async ()
   expect(provider.authorize).not.toHaveBeenCalled()
 })
 
-it("refuses unsupported methods before invoking legacy migration", async () => {
+it("refuses unsupported methods for a Host-managed provider", async () => {
   provider.management = "host"
-  const migrate = jest.fn(async () => {})
-  const dispose = registerLegacySessionMigration("owner", provider.id, {
-    migrate,
-    aliases: async () => new Map(),
+  await expect(
+    connectProvider({ providerId: "acme", scopes: [], method: "client-credentials" })
+  ).rejects.toMatchObject({
+    code: "NOT_SUPPORTED",
+    reason: "confidential-exchange-unavailable",
+    details: { recovery: ["pair-with-desktop", "use-always-on-host"] },
   })
-  try {
-    await expect(
-      connectProvider({ providerId: "acme", scopes: [], method: "client-credentials" })
-    ).rejects.toMatchObject({
-      code: "NOT_SUPPORTED",
-      reason: "confidential-exchange-unavailable",
-      details: { recovery: ["pair-with-desktop", "use-always-on-host"] },
-    })
-    expect(migrate).not.toHaveBeenCalled()
-  } finally {
-    dispose()
-  }
+  expect(provider.exchange).not.toHaveBeenCalled()
 })
 
 it("maps a locked persistent credential store to unlock-vault without describing the API key", async () => {

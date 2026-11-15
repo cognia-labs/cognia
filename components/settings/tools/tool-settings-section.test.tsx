@@ -48,7 +48,6 @@ const settingsState = {
     builtinTools: { ...DEFAULT_BUILTIN_TOOLS },
     webTools: { enabled: true } as {
       enabled: boolean
-      nativeOnAnthropic?: boolean
       preferCognia?: boolean
       preferCogniaSearch?: boolean
       preferCogniaFetch?: boolean
@@ -204,8 +203,8 @@ describe("ToolSettingsSection", () => {
     expect(screen.getByLabelText("toggleAriaLabel:vectorToolTitle")).not.toBeDisabled()
   })
 
-  it("saves independent operation preferences without rewriting legacy settings", () => {
-    settingsState.settings.webTools = { enabled: true, nativeOnAnthropic: true }
+  it("saves independent operation preferences without rewriting the shared preference", () => {
+    settingsState.settings.webTools = { enabled: true }
     render(<ToolSettingsSection />)
     fireEvent.click(screen.getByLabelText("toggleAriaLabel:webPreferCogniaSearchTitle"))
     expect(setWebToolsPreferCogniaSearch).toHaveBeenCalledWith(true)

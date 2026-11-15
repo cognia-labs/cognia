@@ -2322,18 +2322,6 @@ export class PluginManager {
     // Initialize store with plugin directory
     await store.initialize(this.config.pluginDirectory)
 
-    // ADR 0016 P1-8 — rewrite legacy permission names (`fs:read` →
-    // `filesystem:read`, etc.) in the persisted plugin_permissions table.
-    // Idempotent. Runs before scanPlugins so manifest validation sees the
-    // canonical names when re-discovery happens against existing rows.
-    try {
-      const { migrateLegacyPermissionNames } =
-        await import("@/lib/plugin/security/permission-migration")
-      await migrateLegacyPermissionNames()
-    } catch (error) {
-      loggers.manager.warn("[manager] permission migration failed:", error)
-    }
-
     // Forward out-of-process plugin API calls onto the trace surface. Not
     // python-specific — wasm and the vscode sidecar cross the same boundary —
     // so it starts with the manager rather than inside the python branch.

@@ -8,10 +8,7 @@ import {
 } from "@cognia/web-search/types"
 import { getProviderHealth, resetProviderHealth } from "@cognia/web-search/provider-health"
 import { DEFAULT_BACKGROUND_SETTINGS } from "@/types/appearance"
-import {
-  freshInstallWebReader,
-  legacyCompatibilityWebReader,
-} from "@/lib/web/reader/reader-settings"
+import { freshInstallWebReader } from "@/lib/web/reader/reader-settings"
 
 // ---- Mocks ----
 
@@ -57,11 +54,6 @@ const applyProxyToRustMock = jest.fn()
 jest.mock("@/stores/network-proxy", () => ({
   applyProxyToRust: (...args: unknown[]) => applyProxyToRustMock(...args),
   maybeAutoDetectProxy: jest.fn(),
-}))
-
-const migrateLegacyProxyPasswordMock = jest.fn()
-jest.mock("@/lib/network/proxy-credentials", () => ({
-  migrateLegacyProxyPassword: (...args: unknown[]) => migrateLegacyProxyPasswordMock(...args),
 }))
 
 jest.mock("@/lib/plugin/messaging/message-bus", () => {
@@ -122,7 +114,6 @@ beforeEach(() => {
   jest.spyOn(console, "error").mockImplementation(() => {})
   dispatchDiagnosticMock.mockClear()
   applyProxyToRustMock.mockReset().mockResolvedValue(undefined)
-  migrateLegacyProxyPasswordMock.mockReset()
   useSettingsStore.setState(RESET)
 })
 
@@ -169,7 +160,7 @@ describe("account-scoped custom provider configuration", () => {
     const original = baseSettings({
       customProviders: [],
       defaultProvider: "openai",
-      defaultAccountId: "legacy-account",
+      defaultAccountIds: { codex: "codex-account" },
     })
     useSettingsStore.setState({ settings: original })
     let release!: () => void
@@ -191,7 +182,7 @@ describe("account-scoped custom provider configuration", () => {
     await Promise.all([first, second])
     expect(useSettingsStore.getState().settings).toMatchObject({
       defaultProvider: "openai",
-      defaultAccountId: "legacy-account",
+      defaultAccountIds: { codex: "codex-account" },
       customProviders: [expect.objectContaining({ id: provider.id })],
     })
     expect(useSettingsStore.getState().settings?.customProviders).toHaveLength(1)
@@ -286,7 +277,7 @@ async function waitForSaveStart() {
 // ---- load ----
 
 describe("load", () => {
-  it("loads overlay presentation settings without migrating secrets or controlling the host", async () => {
+  it("loads overlay presentation settings without controlling the host", async () => {
     jest.mocked(getWindowRole).mockReturnValue("overlay")
     tauri.isTauri.mockReturnValue(true)
     dbSettings.getSettings.mockResolvedValue(
@@ -298,7 +289,6 @@ describe("load", () => {
           host: "proxy.example",
           port: 8080,
           username: "alice",
-          ...{ password: "legacy" },
           bypass: [],
           proxyWebsockets: true,
           ipLookupEnabled: true,
@@ -307,70 +297,8 @@ describe("load", () => {
     )
     await useSettingsStore.getState().load()
     expect(useSettingsStore.getState().loaded).toBe(true)
-    expect(useSettingsStore.getState().settings?.networkProxy).not.toHaveProperty("password")
-    expect(migrateLegacyProxyPasswordMock).not.toHaveBeenCalled()
     expect(ipc.setApiKey).not.toHaveBeenCalled()
     expect(applyProxyToRustMock).not.toHaveBeenCalled()
-  })
-
-  it("migrates a legacy proxy password before applying a sanitized runtime config", async () => {
-    tauri.isTauri.mockReturnValue(true)
-    const legacyProxy = {
-      mode: "manual" as const,
-      protocol: "http" as const,
-      host: "proxy.example",
-      port: 8080,
-      username: "alice",
-      password: "secret",
-      bypass: ["localhost"],
-      proxyWebsockets: true,
-      ipLookupEnabled: true,
-    }
-    const { password: _password, ...sanitized } = legacyProxy
-    dbSettings.getSettings.mockResolvedValue(baseSettings({ networkProxy: legacyProxy }))
-    dbSettings.saveSettings.mockResolvedValue(baseSettings({ networkProxy: sanitized }))
-    migrateLegacyProxyPasswordMock.mockImplementation(async (_cfg, persist) => {
-      await persist(sanitized)
-      return { settings: sanitized, credentialConfigured: true, migrated: true }
-    })
-
-    await act(async () => {
-      await useSettingsStore.getState().load()
-    })
-
-    expect(dbSettings.saveSettings).toHaveBeenCalledWith(
-      { networkProxy: sanitized },
-      { mirrorToHost: false }
-    )
-    expect(useSettingsStore.getState().settings?.networkProxy).not.toHaveProperty("password")
-    expect(applyProxyToRustMock).toHaveBeenCalledWith(sanitized)
-  })
-
-  it("keeps Rust fail-closed when a legacy credential migration fails", async () => {
-    tauri.isTauri.mockReturnValue(true)
-    const legacyProxy = {
-      mode: "manual" as const,
-      protocol: "http" as const,
-      host: "proxy.example",
-      port: 8080,
-      username: "alice",
-      password: "secret",
-      bypass: ["localhost"],
-      proxyWebsockets: true,
-      ipLookupEnabled: true,
-    }
-    dbSettings.getSettings.mockResolvedValue(baseSettings({ networkProxy: legacyProxy }))
-    migrateLegacyProxyPasswordMock.mockRejectedValue(new Error("keyring unavailable"))
-
-    await act(async () => {
-      await useSettingsStore.getState().load()
-    })
-
-    expect(useSettingsStore.getState().settings?.networkProxy).not.toHaveProperty("password")
-    expect(applyProxyToRustMock).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "manual", username: "alice" })
-    )
-    expect(dispatchDiagnosticMock).toHaveBeenCalled()
   })
 
   it("fetches settings and pushes the api key", async () => {
@@ -918,9 +846,9 @@ describe("setWebToolsEnabled", () => {
     expect(useSettingsStore.getState().settings?.webTools?.enabled).toBe(false)
   })
 
-  it("preserves nativeOnAnthropic when toggling enabled", async () => {
+  it("preserves preferCognia when toggling enabled", async () => {
     useSettingsStore.setState({
-      settings: baseSettings({ webTools: { enabled: true, nativeOnAnthropic: true } }),
+      settings: baseSettings({ webTools: { enabled: true, preferCognia: true } }),
       loaded: true,
     })
     dbSettings.saveSettings.mockImplementation(async (patch) => baseSettings(patch))
@@ -928,7 +856,7 @@ describe("setWebToolsEnabled", () => {
       await useSettingsStore.getState().setWebToolsEnabled(false)
     })
     expect(dbSettings.saveSettings).toHaveBeenCalledWith({
-      webTools: { enabled: false, nativeOnAnthropic: true },
+      webTools: { enabled: false, preferCognia: true },
     })
   })
 })
@@ -946,9 +874,9 @@ describe("independent reader policy actions", () => {
     )
   })
 
-  it("materializes the effective legacy profile without writing provider credentials", async () => {
+  it("materializes the effective fresh profile without writing provider credentials", async () => {
     await useSettingsStore.getState().setWebReaderEntry("tavily", { enabled: true })
-    const expected = legacyCompatibilityWebReader({ enabled: true, alwaysDistill: true })
+    const expected = freshInstallWebReader()
     expected.readers.tavily!.enabled = true
     expect(dbSettings.saveSettings).toHaveBeenCalledWith({ webReader: expected })
     expect(useSettingsStore.getState().settings?.searchProviders).toBe(
@@ -956,7 +884,7 @@ describe("independent reader policy actions", () => {
     )
   })
 
-  it("starts from the inactive future profile's effective compatibility policy", async () => {
+  it("starts from the fresh policy when the stored profile has a future version", async () => {
     useSettingsStore.setState({
       settings: baseSettings({
         webReader: { version: 8, future: "opaque" },
@@ -966,7 +894,7 @@ describe("independent reader policy actions", () => {
     await useSettingsStore.getState().setWebReaderDefault("jina")
     expect(dbSettings.saveSettings).toHaveBeenCalledWith({
       webReader: {
-        ...legacyCompatibilityWebReader({ enabled: true, alwaysDistill: true }),
+        ...freshInstallWebReader(),
         defaultReader: "jina",
       },
     })
@@ -1051,7 +979,7 @@ describe("independent reader policy actions", () => {
 describe("setWebToolsAllowPrivateHosts / setWebToolsAlwaysDistill", () => {
   beforeEach(() => {
     useSettingsStore.setState({
-      settings: baseSettings({ webTools: { enabled: true, nativeOnAnthropic: true } }),
+      settings: baseSettings({ webTools: { enabled: true, preferCognia: true } }),
       loaded: true,
     })
     dbSettings.saveSettings.mockImplementation(async (patch) => baseSettings(patch))
@@ -1062,7 +990,7 @@ describe("setWebToolsAllowPrivateHosts / setWebToolsAlwaysDistill", () => {
       await useSettingsStore.getState().setWebToolsAllowPrivateHosts(true)
     })
     expect(dbSettings.saveSettings).toHaveBeenCalledWith({
-      webTools: { enabled: true, nativeOnAnthropic: true, allowPrivateHosts: true },
+      webTools: { enabled: true, preferCognia: true, allowPrivateHosts: true },
     })
     expect(useSettingsStore.getState().settings?.webTools?.allowPrivateHosts).toBe(true)
   })
@@ -1072,7 +1000,7 @@ describe("setWebToolsAllowPrivateHosts / setWebToolsAlwaysDistill", () => {
       await useSettingsStore.getState().setWebToolsAlwaysDistill(true)
     })
     expect(dbSettings.saveSettings).toHaveBeenCalledWith({
-      webTools: { enabled: true, nativeOnAnthropic: true, alwaysDistill: true },
+      webTools: { enabled: true, preferCognia: true, alwaysDistill: true },
       webReader: expect.objectContaining({ distillation: "required" }),
     })
     expect(useSettingsStore.getState().settings?.webTools?.alwaysDistill).toBe(true)
@@ -3028,14 +2956,6 @@ describe("onboarding actions", () => {
     const saved = dbSettings.saveSettings.mock.calls[0]?.[0] as Partial<AppSettings>
     expect(saved.onboardingProfile).toEqual({ intent: "read-folder", characterId: "char-1" })
   })
-
-  it("never writes the deprecated onboardingDismissedAt stamp", async () => {
-    await act(async () => {
-      await useSettingsStore.getState().completeOnboarding()
-    })
-    const saved = dbSettings.saveSettings.mock.calls[0]?.[0] as Partial<AppSettings>
-    expect(saved).not.toHaveProperty("onboardingDismissedAt")
-  })
 })
 
 // The flat plugin-facing fields are re-derived on every `set({ settings })`,
@@ -3250,40 +3170,5 @@ describe("setProviderConfig — discovered model identity", () => {
       discoveredModelsLastFetched: 9,
     })
     expect(savedOllama()?.discoveredModels).toEqual([{ id: "qwen" }])
-  })
-})
-
-describe("load — legacy verification fingerprints", () => {
-  it("persists a credential-free rewrite of a v2 fingerprint as a repair", async () => {
-    const row = { providerId: "openai", enabled: true, defaultModel: "gpt", apiKey: "sk-legacy" }
-    const legacy = JSON.stringify({
-      verificationContract: "provider-connectivity-v2",
-      apiKey: "sk-legacy",
-      apiKeys: [],
-      currentKeyIndex: 0,
-      baseURL: "",
-      defaultModel: "gpt",
-      apiProtocol: "",
-      customHeaders: [],
-    })
-    dbSettings.getSettings.mockResolvedValue(
-      baseSettings({
-        providerSettings: {
-          openai: { ...row, verificationStatus: "verified", verificationFingerprint: legacy },
-        },
-      })
-    )
-    dbSettings.saveSettings.mockImplementation(async (patch) => baseSettings({ ...patch }))
-    await useSettingsStore.getState().load()
-    const repair = dbSettings.saveSettings.mock.calls.find(
-      ([patch]) => (patch as Partial<AppSettings>).providerSettings
-    )
-    expect(repair?.[1]).toEqual({ mirrorToHost: false })
-    expect(
-      (repair?.[0] as Partial<AppSettings>).providerSettings?.openai?.verificationFingerprint
-    ).not.toContain("sk-legacy")
-    expect(
-      useSettingsStore.getState().settings?.providerSettings?.openai?.verificationFingerprint
-    ).not.toContain("sk-legacy")
   })
 })

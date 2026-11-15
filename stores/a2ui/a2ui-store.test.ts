@@ -1517,58 +1517,21 @@ describe("useA2UIStore", () => {
   })
 
   describe("persist rehydrate normalization", () => {
-    it("migrates legacy components and drops malformed records and ephemeral inline surfaces", async () => {
+    it("falls back to the defaults for an older version", async () => {
       localStorage.setItem(
         "cognia-a2ui-surfaces",
         JSON.stringify({
           version: 2,
           state: {
-            surfaces: {
-              invalid: null,
-              inline: { id: "inline", type: "inline", ready: true },
-              legacy: {
-                type: "panel",
-                components: {
-                  root: { id: "root", component: "DataExplorer", columns: [], data: [] },
-                },
-                ready: true,
-              },
-              metadata: { type: "panel", ready: true },
-            },
-            activeSurfaceId: "legacy",
+            surfaces: { old: { id: "old", type: "panel", rootId: "root", ready: true } },
+            activeSurfaceId: "old",
           },
         })
       )
       await useA2UIStore.persist.rehydrate()
-      const store = useA2UIStore.getState()
-      expect(store.getSurface("invalid")).toBeUndefined()
-      expect(store.getSurface("inline")).toBeUndefined()
-      expect(store.getSurface("legacy")).toMatchObject({
-        id: "legacy",
-        rootId: "root",
-        ready: true,
-        components: { root: { component: "Table" } },
-        dataModel: {},
-      })
-      expect(store.getSurface("metadata")?.ready).toBe(false)
-      expect(store.activeSurfaceId).toBe("legacy")
+      expect(useA2UIStore.getState().surfaces).toEqual({})
+      expect(useA2UIStore.getState().activeSurfaceId).toBeNull()
     })
-
-    it.each([null, "corrupt"])(
-      "recovers an invalid persisted surface collection: %s",
-      async (surfaces) => {
-        localStorage.setItem(
-          "cognia-a2ui-surfaces",
-          JSON.stringify({
-            version: 2,
-            state: { surfaces, activeSurfaceId: "gone" },
-          })
-        )
-        await useA2UIStore.persist.rehydrate()
-        expect(useA2UIStore.getState().surfaces).toEqual({})
-        expect(useA2UIStore.getState().activeSurfaceId).toBeNull()
-      }
-    )
 
     it("should normalize metadata-only surface to non-ready state", async () => {
       localStorage.setItem(
@@ -1587,7 +1550,7 @@ describe("useA2UIStore", () => {
             },
             activeSurfaceId: "surface-meta",
           },
-          version: 2,
+          version: 3,
         })
       )
 

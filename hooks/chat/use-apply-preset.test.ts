@@ -49,7 +49,7 @@ beforeEach(() => {
   toastError.mockClear()
   useChatStore.getState().setEphemeralSkillIds([])
   useChatStore.getState().setPermissionMode(null)
-  useAgentRuntimeStore.setState({ modeId: "default" })
+  useAgentRuntimeStore.setState({ defaultComposition: { presetId: "standard" } })
 })
 
 describe("useApplyPreset", () => {
@@ -89,7 +89,7 @@ describe("useApplyPreset", () => {
       )
     })
     expect(useChatStore.getState().ephemeralSkillIds.sort()).toEqual(["existing", "s_a"])
-    expect(useAgentRuntimeStore.getState().modeId).toBe("research")
+    expect(useAgentRuntimeStore.getState().defaultComposition.presetId).toBe("research")
   })
 
   it("guards a null session: toasts an error and applies nothing", async () => {

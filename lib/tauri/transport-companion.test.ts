@@ -711,14 +711,13 @@ describe("config helpers", () => {
     expect(await loadCompanionConfig()).toBeNull()
   })
 
-  it("hydrateCompanionConfig returns null on malformed JSON in storage", async () => {
+  it("hydrateCompanionConfig fails closed on a malformed host book", async () => {
     // The cache must be primed via `hydrate*`, which delegates to the
-    // storage backend. The web/jsdom backend (`LocalStorageCompanionStorage`)
-    // catches `JSON.parse` failures and returns `null`; verify the fallback
-    // really runs and the cache is left empty so subsequent sync reads via
-    // `loadCompanionConfig` also yield `null`.
-    localStorage.setItem("cognia.companion.config.v1", "not-json{{{")
-    expect(await hydrateCompanionConfig()).toBeNull()
+    // credential book. A host book that does not parse is refused rather than
+    // read as "no pairing", and the cache is left empty so subsequent sync
+    // reads via `loadCompanionConfig` yield `null`.
+    localStorage.setItem("cognia.companion.hosts.v2", "not-json{{{")
+    await expect(hydrateCompanionConfig()).rejects.toThrow("not valid JSON")
     expect(loadCompanionConfig()).toBeNull()
   })
 

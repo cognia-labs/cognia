@@ -9,7 +9,7 @@
 import { getDb } from "@/lib/db/schema"
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { createPluginSystemLogger } from "../core/logger"
-import { deriveKey, deriveInstallKey, encrypt, decrypt } from "./crypto-helpers"
+import { deriveInstallKey, encrypt, decrypt } from "./crypto-helpers"
 import {
   getPluginRuntimeAccountId,
   getPluginRuntimeAccountRevision,
@@ -47,7 +47,6 @@ const STORAGE_PREFIX = "cognia:plugin:storage:"
 const ENCRYPTED_PREFIX = "__encrypted:"
 const MAX_PLUGIN_STORAGE_BYTES = 5 * 1024 * 1024 // 5MB per plugin
 const ACCOUNT_STORAGE_PREFIX = "cognia:plugin:account-storage:"
-const STORAGE_ADOPTION_PREFIX = "cognia:plugin:storage-adoption:"
 const mutations = new Map<string, Promise<void>>()
 const purgeRevisions = new Map<string, number>()
 
@@ -62,7 +61,6 @@ interface BrowserStorageScope {
   revision: number
   purgeRevision: number
   prefix: string
-  legacyPrefix?: string
 }
 
 function accountStoragePrefix(accountId: string): string {
@@ -92,7 +90,7 @@ function storageKeys(prefix: string): string[] {
 function browserScope(pluginId: string): BrowserStorageScope {
   if (!pluginRuntimeAccountAvailable()) throw new PluginStorageAccountError()
   const accountId = getPluginRuntimeAccountId()
-  const scope: BrowserStorageScope = {
+  return {
     accountId,
     revision: getPluginRuntimeAccountRevision(),
     purgeRevision: accountId === null ? 0 : (purgeRevisions.get(accountId) ?? 0),
@@ -101,45 +99,14 @@ function browserScope(pluginId: string): BrowserStorageScope {
         ? getPluginPrefix(pluginId)
         : `${accountStoragePrefix(accountId)}${encodeURIComponent(pluginId)}:`,
   }
-  if (accountId !== null) {
-    const adoptionKey = `${STORAGE_ADOPTION_PREFIX}${encodeURIComponent(pluginId)}`
-    const owner = localStorage.getItem(adoptionKey)
-    if (owner === null || owner === accountId) {
-      const legacyPrefix = getPluginPrefix(pluginId)
-      if (owner === accountId || storageKeys(legacyPrefix).length) {
-        // Claim independently of relocation: origin quota must not prevent the
-        // owner from reading or deleting values that have not moved yet.
-        if (owner === null) localStorage.setItem(adoptionKey, accountId)
-        scope.legacyPrefix = legacyPrefix
-      }
-    }
-  }
-  return scope
-}
-
-function browserPrefixes(scope: BrowserStorageScope): string[] {
-  return scope.legacyPrefix ? [scope.prefix, scope.legacyPrefix] : [scope.prefix]
 }
 
 function readBrowserValue(scope: BrowserStorageScope, key: string): string | null {
-  const value = localStorage.getItem(scope.prefix + key)
-  if (value !== null || !scope.legacyPrefix) return value
-  const legacyKey = scope.legacyPrefix + key
-  const legacyValue = localStorage.getItem(legacyKey)
-  if (legacyValue !== null) {
-    try {
-      localStorage.setItem(scope.prefix + key, legacyValue)
-      localStorage.removeItem(legacyKey)
-    } catch {
-      // Relocation is opportunistic. Keep serving the owned legacy value when
-      // the origin cannot fit both copies; a later read can retry the move.
-    }
-  }
-  return legacyValue
+  return localStorage.getItem(scope.prefix + key)
 }
 
 function clearBrowserStorage(scope: BrowserStorageScope): number {
-  const keys = browserPrefixes(scope).flatMap(storageKeys)
+  const keys = storageKeys(scope.prefix)
   for (const key of keys) localStorage.removeItem(key)
   return keys.length
 }
@@ -154,14 +121,9 @@ function browserUsage(prefix: string): number {
 function writeBrowserValue(scope: BrowserStorageScope, key: string, serialized: string): void {
   assertBrowserAccount(scope)
   const storageKey = scope.prefix + key
-  const prefixes = browserPrefixes(scope)
-  const currentUsage = prefixes.reduce((total, prefix) => total + browserUsage(prefix), 0)
-  const existingSize = prefixes.reduce((total, prefix) => {
-    const existingRaw = localStorage.getItem(prefix + key)
-    return (
-      total + (existingRaw === null ? 0 : 2 * (prefix.length + key.length + existingRaw.length))
-    )
-  }, 0)
+  const currentUsage = browserUsage(scope.prefix)
+  const existingRaw = localStorage.getItem(storageKey)
+  const existingSize = existingRaw === null ? 0 : 2 * (storageKey.length + existingRaw.length)
   const newEntrySize = 2 * (storageKey.length + serialized.length)
   if (currentUsage - existingSize + newEntrySize > MAX_PLUGIN_STORAGE_BYTES) {
     throw new Error(
@@ -170,7 +132,6 @@ function writeBrowserValue(scope: BrowserStorageScope, key: string, serialized: 
     )
   }
   localStorage.setItem(storageKey, serialized)
-  if (scope.legacyPrefix) localStorage.removeItem(scope.legacyPrefix + key)
 }
 
 function mutateBrowserStorage<T>(scope: BrowserStorageScope, fn: () => T | Promise<T>): Promise<T> {
@@ -211,17 +172,8 @@ async function withHeadlessStorage<T>(
     const plugin = await db.plugins.get(pluginId)
     if (!plugin) throw new Error("Plugin storage owner is not installed")
     const values = Object.assign(Object.create(null) as Record<string, string>, plugin.storage)
-    if (plugin.storage === undefined && typeof localStorage !== "undefined") {
-      const prefix = getPluginPrefix(pluginId)
-      for (let index = 0; index < localStorage.length; index++) {
-        const key = localStorage.key(index)
-        if (!key?.startsWith(prefix)) continue
-        const raw = localStorage.getItem(key)
-        if (raw !== null) values[key.slice(prefix.length)] = raw
-      }
-    }
     const result = fn(values)
-    if (mutate || plugin.storage === undefined) {
+    if (mutate) {
       const size = Object.entries(values).reduce(
         (total, [key, value]) => total + 2 * (getStorageKey(pluginId, key).length + value.length),
         0
@@ -290,7 +242,7 @@ export function createStorageAPI(pluginId: string): PluginStorageAPI {
         })
       const scope = browserScope(pluginId)
       await mutateBrowserStorage(scope, () => {
-        for (const prefix of browserPrefixes(scope)) localStorage.removeItem(prefix + key)
+        localStorage.removeItem(scope.prefix + key)
       })
     },
 
@@ -302,14 +254,8 @@ export function createStorageAPI(pluginId: string): PluginStorageAPI {
 
     async keys(): Promise<string[]> {
       if (durable) return withHeadlessStorage(pluginId, false, (values) => Object.keys(values))
-      const scope = browserScope(pluginId)
-      return [
-        ...new Set(
-          browserPrefixes(scope).flatMap((prefix) =>
-            storageKeys(prefix).map((key) => key.slice(prefix.length))
-          )
-        ),
-      ]
+      const { prefix } = browserScope(pluginId)
+      return storageKeys(prefix).map((key) => key.slice(prefix.length))
     },
 
     async delete(key: string): Promise<void> {
@@ -337,10 +283,7 @@ export function createStorageAPI(pluginId: string): PluginStorageAPI {
             0
           )
         )
-      return browserPrefixes(browserScope(pluginId)).reduce(
-        (total, prefix) => total + browserUsage(prefix),
-        0
-      )
+      return browserUsage(browserScope(pluginId).prefix)
     },
 
     async setSecure<T = unknown>(key: string, value: T): Promise<void> {
@@ -376,37 +319,9 @@ export function createStorageAPI(pluginId: string): PluginStorageAPI {
             return undefined
           }
 
-          const encryptedData = raw.slice(ENCRYPTED_PREFIX.length)
-          try {
-            const cryptoKey = await deriveInstallKey(pluginId, scope?.accountId ?? undefined)
-            const decrypted = await decrypt(encryptedData, cryptoKey)
-            return JSON.parse(decrypted) as T
-          } catch {
-            // Adopt both per-install W2.5 blobs and older public-id blobs once,
-            // then bind the ciphertext to the profile that adopted the data.
-            const decryptLegacy = async () => decrypt(encryptedData, await deriveKey(pluginId))
-            const decrypted = scope?.accountId
-              ? await decrypt(encryptedData, await deriveInstallKey(pluginId)).catch(decryptLegacy)
-              : await decryptLegacy()
-            const value = JSON.parse(decrypted) as T
-            if (scope) {
-              try {
-                const encrypted = await encrypt(
-                  decrypted,
-                  await deriveInstallKey(pluginId, scope.accountId ?? undefined)
-                )
-                writeBrowserValue(scope, key, JSON.stringify(`${ENCRYPTED_PREFIX}${encrypted}`))
-              } catch (error) {
-                if (error instanceof PluginStorageAccountError) throw error
-                logger.warn(
-                  `Failed to migrate secure storage key '${key}'; retaining the legacy value`
-                )
-                return value
-              }
-            } else await this.setSecure(key, value)
-            logger.info(`Migrated secure storage key '${key}' to the current encryption key`)
-            return value
-          }
+          const cryptoKey = await deriveInstallKey(pluginId, scope?.accountId ?? undefined)
+          const decrypted = await decrypt(raw.slice(ENCRYPTED_PREFIX.length), cryptoKey)
+          return JSON.parse(decrypted) as T
         }
         return scope ? await mutateBrowserStorage(scope, read) : await read()
       } catch (err) {
@@ -434,12 +349,6 @@ export function clearPluginStorage(pluginId: string): void {
 export function purgePluginAccountData(localAccountId: string): void {
   purgeRevisions.set(localAccountId, (purgeRevisions.get(localAccountId) ?? 0) + 1)
   for (const key of storageKeys(accountStoragePrefix(localAccountId))) localStorage.removeItem(key)
-  for (const adoptionKey of storageKeys(STORAGE_ADOPTION_PREFIX)) {
-    if (localStorage.getItem(adoptionKey) !== localAccountId) continue
-    const pluginId = decodeURIComponent(adoptionKey.slice(STORAGE_ADOPTION_PREFIX.length))
-    for (const key of storageKeys(getPluginPrefix(pluginId))) localStorage.removeItem(key)
-    // Keep the ownership marker so another profile cannot adopt this namespace.
-  }
 }
 
 /**
@@ -464,14 +373,6 @@ export function getAllPluginStorageUsage(): Record<string, number> {
         const bytes = (k.length + (v?.length || 0)) * 2
         usage[pluginId] = (usage[pluginId] || 0) + bytes
       }
-    }
-  }
-  if (accountId !== null) {
-    for (const adoptionKey of storageKeys(STORAGE_ADOPTION_PREFIX)) {
-      if (localStorage.getItem(adoptionKey) !== accountId) continue
-      const pluginId = decodeURIComponent(adoptionKey.slice(STORAGE_ADOPTION_PREFIX.length))
-      const bytes = browserUsage(getPluginPrefix(pluginId))
-      if (bytes > 0) usage[pluginId] = (usage[pluginId] ?? 0) + bytes
     }
   }
   return usage

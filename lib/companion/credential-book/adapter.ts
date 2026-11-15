@@ -18,9 +18,9 @@
 import { importSigningPrivateKey } from "@/lib/signaling/crypto"
 import type { CompanionConfig, CompanionConfigStorage } from "@/lib/tauri/companion-storage"
 
-import { legacyHostId, legacyLabel } from "./legacy-migration"
 import {
   DEFAULT_ACCOUNT_NAMESPACE,
+  deriveCursorNamespace,
   hostKeyOf,
   type CompanionCredentialBook,
   type CompanionHostCredential,
@@ -77,7 +77,47 @@ export async function toCompanionConfig(
   return config
 }
 
-/** Canonical flat-config → book mapping shared by pairing and legacy storage. */
+/**
+ * The stable book id of a flat config's Host.
+ *
+ * `targetId` is the browser build's stable per-host id; `deviceId` is the
+ * identity the Host issued and is unique per pairing everywhere else.
+ */
+export function companionHostIdOf(config: CompanionConfig): string {
+  return config.targetId ?? config.deviceId
+}
+
+/** The label a flat config's Host gets when nothing better names it: its address. */
+export function companionHostLabelOf(config: CompanionConfig): string {
+  try {
+    return new URL(config.baseUrl).hostname || config.baseUrl
+  } catch {
+    return config.baseUrl
+  }
+}
+
+/** The account namespace a flat config names for itself, else `fallback`. */
+function configAccountNamespace(config: CompanionConfig, fallback: string): string {
+  return config.accountId ?? fallback
+}
+
+/**
+ * The cursor namespace a flat {@link CompanionConfig} files under.
+ *
+ * Derived rather than read back from the book because the sync orchestrator
+ * needs it synchronously, before it may touch Dexie. It cannot drift from the
+ * stored value: `hostId` and `accountNamespace` are the record's primary key,
+ * so neither can change while the record exists, and `deriveCursorNamespace`
+ * is a pure function of the two.
+ */
+export function companionCursorNamespace(config: CompanionConfig): string {
+  return deriveCursorNamespace({
+    hostId: companionHostIdOf(config),
+    accountNamespace: configAccountNamespace(config, DEFAULT_ACCOUNT_NAMESPACE),
+  })
+}
+
+/** Canonical flat-config → book mapping shared by pairing and storage. */
 export function companionHostDraftFromConfig(
   config: CompanionConfig,
   accountNamespace: string,
@@ -87,12 +127,12 @@ export function companionHostDraftFromConfig(
     throw new Error("Companion device identity is missing; pair this device again.")
   }
   return {
-    hostId: legacyHostId(config),
+    hostId: companionHostIdOf(config),
     accountNamespace,
     tenantId: config.tenantId ?? existing?.tenantId ?? config.accountId,
     // A re-pair keeps the user's name for the Host; a new one takes the name
     // the Host reported, and only then its address.
-    label: existing?.label ?? config.hostName ?? legacyLabel(config),
+    label: existing?.label ?? config.hostName ?? companionHostLabelOf(config),
     endpoints: {
       baseUrl: config.baseUrl,
       lanBaseUrl: config.lanBaseUrl,
@@ -141,13 +181,15 @@ export class CredentialBookCompanionStorage implements CompanionConfigStorage {
   }
 
   async updateMetadata(config: CompanionConfig, isCurrent: () => boolean): Promise<boolean> {
-    const accountNamespace =
-      config.accountId ?? this.opts.accountNamespace() ?? DEFAULT_ACCOUNT_NAMESPACE
+    const accountNamespace = configAccountNamespace(
+      config,
+      this.opts.accountNamespace() ?? DEFAULT_ACCOUNT_NAMESPACE
+    )
     if (!this.opts.book.updateMetadata)
       throw new Error("Credential book does not support metadata updates")
     return this.opts.book.updateMetadata(
       {
-        hostId: legacyHostId(config),
+        hostId: companionHostIdOf(config),
         accountNamespace,
         deviceId: config.deviceId,
         deviceKeyThumbprint: config.deviceKeyThumbprint ?? "",
@@ -173,7 +215,7 @@ export class CredentialBookCompanionStorage implements CompanionConfigStorage {
     const credential = companionHostCredentialFromConfig(config)
     const accountNamespace =
       this.opts.accountNamespace() ?? config.accountId ?? DEFAULT_ACCOUNT_NAMESPACE
-    const hostId = legacyHostId(config)
+    const hostId = companionHostIdOf(config)
     const key = { hostId, accountNamespace }
     const [existing, previousActive] = await Promise.all([
       this.opts.book.get(key),
@@ -224,8 +266,8 @@ export class CredentialBookCompanionStorage implements CompanionConfigStorage {
 
   async remove(config: CompanionConfig): Promise<void> {
     await this.opts.book.remove({
-      accountNamespace: config.accountId ?? this.namespace(),
-      hostId: legacyHostId(config),
+      accountNamespace: configAccountNamespace(config, this.namespace()),
+      hostId: companionHostIdOf(config),
     })
   }
 

@@ -11,7 +11,6 @@ import { ModuleRuntimeHost } from "./module-runtime-host"
 import { CloudIdentityInitializer } from "./cloud-identity-initializer"
 import { SftpTransferInitializer } from "./sftp-transfer-initializer"
 import { TemplatePlatformInitializer } from "./template-platform-initializer"
-import { VectorCredentialMigrationInitializer } from "./vector-credential-migration-initializer"
 
 export function KnowledgeAgentBootInitializers() {
   useEffect(() => markBootCapabilityReady("knowledge-agents"), [])
@@ -27,7 +26,6 @@ export function KnowledgeAgentBootInitializers() {
       <MemoryJobWorkerInitializer />
       <TwinWorkerInitializer />
       <ProjectKnowledgeWorkerInitializer />
-      <VectorCredentialMigrationInitializer />
       <TemplatePlatformInitializer />
       <SftpTransferInitializer />
     </>

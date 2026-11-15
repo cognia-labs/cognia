@@ -735,10 +735,6 @@
       "description": "浏览器标签页本身已有窗口框架，因此顶部栏默认关闭——各列会绘制自己的标题栏，搜索和命令仍可通过 ⌘K / Ctrl+K 打开。下方的项目列表即顶部栏重新启用后使用的布局。"
     }
   },
-  "shellLayoutNotice": {
-    "description": "面板开关、主题、缩放和语言已移到标题栏的「视图」菜单，桌宠、OCR、剪贴板按钮也在那里。按 ⌘B 可显示或隐藏会话列表。",
-    "title": "布局已简化"
-  },
   "sidebarUser": {
     "lock": "锁定 Cognia",
     "lockFailed": "无法锁定 Cognia。",

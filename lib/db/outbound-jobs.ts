@@ -131,8 +131,6 @@ export const STALE_SENDING_GRACE_MS = 5 * 60_000
 
 /** Maximum rows returned by one due-queue read. */
 export const OUTBOUND_DUE_BATCH_SIZE = 128
-/** Maximum legacy rows inspected during one stale-claim compatibility scan. */
-const STALE_LEGACY_SCAN_BATCH = 128
 
 function newId(): string {
   return "oqj_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8)
@@ -733,8 +731,7 @@ export async function deleteOutboundJob(id: string): Promise<void> {
  * forever. Called by the outbound runner on every drain pass (cheap indexed
  * `status` query; usually empty).
  *
- * The age signal is the `claimedAt` stamp written by {@link markSending};
- * legacy rows claimed before the stamp existed fall back to `createdAt`.
+ * The age signal is the `claimedAt` stamp written by {@link markSending}.
  * Rows inside the grace window (a legitimately in-flight send) are left
  * untouched. Returns the recovered rows so the caller can audit each one.
  */
@@ -744,23 +741,15 @@ export async function recoverStaleSendingJobs(
 ): Promise<OutboundJobRow[]> {
   const db = getDb()
   const cutoff = now - graceMs
-  const indexed = await db.outboundQueue
-    .where("[status+claimedAt]")
-    .between(["sending", -Infinity], ["sending", cutoff], true, true)
-    .limit(OUTBOUND_DUE_BATCH_SIZE)
-    .toArray()
-  // Imported rows can still omit claimedAt after the v151 migration. Keep a
-  // bounded compatibility scan until every supported backup has crossed v151.
-  const legacy = await db.outboundQueue
-    .where("status")
-    .equals("sending")
-    .filter((row) => row.claimedAt === undefined && row.createdAt <= cutoff)
-    .limit(STALE_LEGACY_SCAN_BATCH)
-    .toArray()
-  const sending = [...indexed, ...legacy].filter(isLocallyDispatchable)
+  const sending = (
+    await db.outboundQueue
+      .where("[status+claimedAt]")
+      .between(["sending", -Infinity], ["sending", cutoff], true, true)
+      .limit(OUTBOUND_DUE_BATCH_SIZE)
+      .toArray()
+  ).filter(isLocallyDispatchable)
   const recovered: OutboundJobRow[] = []
   for (const row of sending) {
-    if ((row.claimedAt ?? row.createdAt) > cutoff) continue
     // Transactional re-check: the in-flight send may have settled between
     // the scan and this write; only flip rows that are STILL `sending`.
     const flipped = await db.transaction("rw", db.outboundQueue, async () => {
@@ -810,7 +799,8 @@ export async function findDeliveredByIdempotencyKey(
  * before delivering a due job so per-conversation FIFO holds ACROSS drain
  * passes, not just within one: a deferred older retry must resolve
  * (deliver or dead-letter) before a newer sibling may go out. Bounded
- * index range on `[conversationKey+orderSeq]`, with a legacy createdAt fallback.
+ * index range on `[conversationKey+orderSeq]`; a row without an `orderSeq`
+ * is in no lane.
  */
 function isActiveOutboundRow(row: OutboundJobRow): boolean {
   return (
@@ -824,15 +814,9 @@ function isActiveOutboundRow(row: OutboundJobRow): boolean {
 }
 
 export async function findOlderActiveOutboundSibling(
-  job: Pick<OutboundJobRow, "id" | "conversationKey" | "createdAt" | "orderSeq">
+  job: Pick<OutboundJobRow, "id" | "conversationKey" | "orderSeq">
 ): Promise<OutboundJobRow | undefined> {
-  if (job.orderSeq === undefined) {
-    return getDb()
-      .outboundQueue.where("[conversationKey+createdAt]")
-      .between([job.conversationKey, -Infinity], [job.conversationKey, job.createdAt], true, false)
-      .filter((row) => row.id !== job.id && isActiveOutboundRow(row))
-      .first()
-  }
+  if (job.orderSeq === undefined) return undefined
   return getDb()
     .outboundQueue.where("[conversationKey+orderSeq]")
     .between([job.conversationKey, -Infinity], [job.conversationKey, job.orderSeq], true, false)
@@ -842,16 +826,10 @@ export async function findOlderActiveOutboundSibling(
 
 /** Return the next active FIFO sibling after a terminal conversation head. */
 export async function findNextActiveOutboundSibling(
-  job: Pick<OutboundJobRow, "conversationKey" | "createdAt" | "orderSeq">
+  job: Pick<OutboundJobRow, "conversationKey" | "orderSeq">
 ): Promise<OutboundJobRow | undefined> {
   const active = isActiveOutboundRow
-  if (job.orderSeq === undefined) {
-    return getDb()
-      .outboundQueue.where("[conversationKey+createdAt]")
-      .between([job.conversationKey, job.createdAt], [job.conversationKey, Infinity], false, true)
-      .filter(active)
-      .first()
-  }
+  if (job.orderSeq === undefined) return undefined
   return getDb()
     .outboundQueue.where("[conversationKey+orderSeq]")
     .between([job.conversationKey, job.orderSeq], [job.conversationKey, Infinity], false, true)

@@ -15,8 +15,7 @@
  *
  *   - Hydration seeds the store from Dexie for every document memory
  *     does not already hold. Memory still wins on a conflict — it is
- *     either what the user is editing right now, or the v6 blob that
- *     has not been migrated yet, and both are newer than the row.
+ *     what the user is editing right now, which is newer than the row.
  *   - Subscription: every store change diffs against the mirror and
  *     writes adds/updates/deletes into Dexie. Versions are flattened
  *     out of each document's nested `versions[]` array into the
@@ -266,9 +265,8 @@ async function syncComments(byDoc: Record<string, CanvasComment[]>): Promise<voi
  * backup import lands, since `applyBackupPackage` writes Dexie while the
  * store still holds its old state.
  *
- * Rows already in memory win: they are either what the user is editing
- * right now, or the v6 blob that has not been migrated yet. Versions and
- * comments are bucketed back onto their parent documents.
+ * Rows already in memory win: they are what the user is editing right
+ * now. Versions and comments are bucketed back onto their parent documents.
  */
 async function hydrateFromDexie(): Promise<void> {
   const db = getDb()

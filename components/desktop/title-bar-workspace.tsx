@@ -5,7 +5,7 @@
  * switcher (`variant="wide"` — initial, name, chevron) so clicking opens the
  * project picker popover directly instead of detouring through the command
  * palette. Renders `null` when no project is active. Mounting is gated by the
- * parent (`barItems.workspace`).
+ * parent (the `workspace` title-bar item).
  */
 
 import { WorkspaceSwitcher } from "@/components/shell/workspace-switcher"

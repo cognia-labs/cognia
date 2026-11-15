@@ -6,14 +6,13 @@ import "fake-indexeddb/auto"
 import Dexie from "dexie"
 import type { AppSettings } from "@cognia/agent-config-types"
 import type { KeyringStore } from "@/lib/credentials/keyring-store"
-import { buildProviderVerificationFingerprint } from "@cognia/provider-core/providers/completeness"
 import {
   __resetProviderSecretStoreForTesting,
   __setProviderSecretBackendForTesting,
   PROVIDER_SECRETS_REF_FIELD,
   ProviderSecretStoreUnavailableError,
 } from "@/lib/settings/provider-secret-store"
-import { getSettings, migrateProviderSecretsOutOfSettingsRow, saveSettings } from "./settings"
+import { adoptCopiedProviderSecrets, getSettings, saveSettings } from "./settings"
 import { CogniaDB, __resetDbForTesting, getDb, whenSeeded } from "./schema"
 
 const SECRET = "sk-synthetic-provider-secret"
@@ -119,53 +118,19 @@ describe("provider credentials in the settings row (ADR-0256)", () => {
     expect((await rawRow())?.[PROVIDER_SECRETS_REF_FIELD]).toBeUndefined()
   })
 
-  it("migrates a row written by an older build exactly once", async () => {
-    await getDb().settings.put({ id: "singleton", ...withKeys() } as AppSettings)
-    expect(await migrateProviderSecretsOutOfSettingsRow()).toBe(true)
-    expect(JSON.stringify(await rawRow())).not.toContain(SECRET)
-  })
-
-  it("migrates on read, then leaves the row alone", async () => {
+  it("ignores credentials found in the persisted row itself", async () => {
     await getDb().settings.put({ id: "singleton", ...withKeys() } as AppSettings)
 
-    // The read returns the plaintext keys and queues the migration itself.
-    expect((await getSettings()).providerSettings?.openai?.apiKey).toBe(SECRET)
-
-    // Queued behind the read's migration, so it finds nothing left to move.
-    await migrateProviderSecretsOutOfSettingsRow()
-    const raw = await rawRow()
-    expect(JSON.stringify(raw)).not.toContain(SECRET)
-    expect((await getSettings()).customProviders?.[0]?.apiKey).toBe(`${SECRET}-custom`)
-
-    const updatedAt = raw?.updatedAt
-    expect(await migrateProviderSecretsOutOfSettingsRow()).toBe(false)
-    expect((await rawRow())?.updatedAt).toBe(updatedAt)
-  })
-
-  it("rewrites a v2 fingerprint that embedded the raw key while migrating", async () => {
-    const row = { providerId: "openai", apiKey: SECRET, baseURL: "", defaultModel: "" }
-    const v2 = JSON.stringify({
-      verificationContract: "provider-connectivity-v2",
-      apiKey: SECRET,
-      apiKeys: [],
-      currentKeyIndex: 0,
-      baseURL: "",
-      defaultModel: "",
-      apiProtocol: "",
-      customHeaders: [],
-    })
-    await getDb().settings.put({
-      id: "singleton",
-      providerSettings: { openai: { ...row, verificationFingerprint: v2 } },
-    } as unknown as AppSettings)
-
-    await migrateProviderSecretsOutOfSettingsRow()
-    const raw = await rawRow()
-    expect(JSON.stringify(raw)).not.toContain(SECRET)
     const read = await getSettings()
-    expect(read.providerSettings?.openai?.verificationFingerprint).toBe(
-      buildProviderVerificationFingerprint(read.providerSettings?.openai)
-    )
+    expect(read.apiKey).toBeUndefined()
+    expect(read.providerSettings?.openai?.apiKey).toBeUndefined()
+    expect(read.customProviders?.[0]?.apiKey).toBeUndefined()
+    expect(read.customProviders?.[0]?.baseURL).toBe("https://relay.example/v1")
+    expect(backend.saves).toBe(0)
+
+    await saveSettings({ theme: "dark" }, { mirrorToHost: false })
+    expect(JSON.stringify(await rawRow())).not.toContain(SECRET)
+    expect(backend.saves).toBe(0)
   })
 
   it("refuses a credential change when the secret store is unavailable and writes nothing", async () => {
@@ -201,18 +166,6 @@ describe("provider credentials in the settings row (ADR-0256)", () => {
     expect((await getSettings()).providerSettings?.openai?.apiKey).toBe(SECRET)
   })
 
-  it("leaves legacy plaintext in place until the store comes back", async () => {
-    await getDb().settings.put({ id: "singleton", ...withKeys() } as AppSettings)
-    backend.failing = true
-    await saveSettings({ theme: "dark" }, { mirrorToHost: false })
-    expect(JSON.stringify(await rawRow())).toContain(SECRET)
-
-    backend.failing = false
-    await migrateProviderSecretsOutOfSettingsRow()
-    expect(JSON.stringify(await rawRow())).not.toContain(SECRET)
-    expect((await getSettings()).apiKey).toBe(`${SECRET}-top`)
-  })
-
   it("reads keys another context changed instead of writing a stale cache back", async () => {
     await saveSettings({ apiKey: "first" }, { mirrorToHost: false })
     await getSettings() // warm this context's cache
@@ -242,7 +195,7 @@ describe("provider credentials in the settings row (ADR-0256)", () => {
 
       await getDb().delete() // the migration deletes its source
       expect((await getSettings(scope)).providerSettings?.openai?.apiKey).toBe(SECRET)
-      await migrateProviderSecretsOutOfSettingsRow(scope)
+      await adoptCopiedProviderSecrets(scope)
 
       expect((await rawRow(copy))?.[PROVIDER_SECRETS_REF_FIELD]).toMatchObject({ db: copy.name })
       expect(backend.values.has(copy.name)).toBe(true)

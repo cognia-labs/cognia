@@ -33,10 +33,6 @@
       "symbols": ["maybeAutoPushToCli"],
       "reason": "lib/cli-bridge/auto-push.ts pushes the desktop's agent config, provider credentials and input history into the local cognia CLI home on the same machine. It returns early off Tauri and goes through the src-tauri cli_bridge (ADR-0078). The brain is itself the headless CLI process reading its own home and server secret store, so there is no second local CLI home for it to seed."
     },
-    "components/providers/initializers/cloud-identity-initializer.tsx": {
-      "symbols": ["discardLegacyGlobalLogtoSession"],
-      "reason": "Deletes the pre-ADR-0149 global Logto blob from the desktop keyring (lib/logto/session-store.ts LEGACY_LOGTO_KEYRING). Only a desktop profile upgraded from that era ever held it. lib/headless/runtimes/index.ts already records cloud-identity-initializer as renderer keyring hygiene: the brain keeps its own file-backed session in cli/src/serve/collab-reader.ts and never had the legacy key."
-    },
     "components/providers/initializers/connector-host-writes-initializer.tsx": {
       "symbols": ["createHostAdapterInstanceWriter", "setAdapterInstanceRemoteWriter"],
       "reason": "The CLIENT half of ADR-0224 connector writes. A phone or paired browser that drives a Host routes its connection-form writes through that Host's adapter_instance_mutate under the credential lease (lib/connectors/host-instance-writer.ts). The brain IS the receiving Host. Its connector runtime is registered as connector-runtime in lib/headless/runtimes/connector-runtime.ts, and installing the remote writer there would route the Host's own writes back to itself."
@@ -50,8 +46,8 @@
       "reason": "The renderer half of ADR-0125 durable work submission: it drains the browser-local queue of work this client originated. The brain is the receiving authority, not a submitter, and runs the server half — registered as `work-submission-outbox` in lib/headless/runtimes/initializers.ts. Running both in one process would have the brain drain its own inbox back into itself. installDefaultPhantomRunGuard repairs renderer chat-store projections using this client's HostState replica and mobile outbox (lib/chat/phantom-run-runtime.ts). Those are not the authoritative host turn state. The brain already starts HostStateService through desktop-message-source / desktop-write-source; that service acquires the host lease and settles orphaned turns before serving. Installing the renderer projection repair there would add a second lifecycle writer using client evidence instead of the host authority."
     },
     "components/providers/initializers/developer-mode-initializer.tsx": {
-      "symbols": ["migrateDeveloperMode"],
-      "reason": "A one-way migration of the renderer's legacy localStorage flag cognia.plugins.developerMode into pluginSettings (lib/plugin/devtools/developer-mode.ts readLegacyDeveloperModeFlag returns false without window). The brain never had that browser localStorage, so there is no legacy signal to fold in. Developer mode gates renderer devtools/Creator surfaces the brain does not render."
+      "symbols": ["applyBootDeveloperMode"],
+      "reason": "Turns the renderer's developer mode on for development builds (lib/plugin/devtools/developer-mode.ts). Developer mode gates renderer devtools/Creator surfaces the brain does not render."
     },
     "components/providers/initializers/dock-pages-lifecycle-initializer.tsx": {
       "symbols": [
@@ -165,8 +161,8 @@
       "reason": "Reads the OS-level text selection through the desktop selection-perception bus (ADR-0093/0095). Desktop selection awareness is one of ADR-0059 D7's recorded physical boundaries: there is no OS selection to observe in a container. subscribeQuickActions keeps the selection overlay's action list in step with the plugin quick-action registry. It exists to repaint a native always-on-top window over whatever application currently owns the OS text selection, which is the same recorded ADR-0059 D7 physical boundary as reading the selection aloud. A brain has no window server to paint on and no selection to act on, so the subscription would fire into nothing. Every symbol serves the native selection toolbar over the OS text selection (ADR-0093/0095). They read the current selection candidate and staged selection from the desktop perception bus (lib/tauri/selection-toolbar.ts), classify it, build and run the plugin quick-action catalogue for the overlay window (lib/selection/plugin-actions.ts, action-layout.ts) and speak or stop speaking it through the speech port (ADR-0250 M3). Desktop selection awareness is a recorded ADR-0059 D7 physical boundary: a brain has no OS selection and no overlay window."
     },
     "components/providers/initializers/selection-toolbar-restore-initializer.tsx": {
-      "symbols": ["startSelectionToolbar", "migrateSelectionToolbarMode"],
-      "reason": "Restores the always-on-top native selection-toolbar window (ADR-0093). A recorded physical boundary in ADR-0059 D7 — the brain has no window server to place an overlay on. Folds the legacy enabled flag in the desktop Tauri store prefs into the toolbar mode just before startSelectionToolbar restores the always-on-top native toolbar (lib/selection/preferences.ts, lib/tauri/store.ts). This is the same ADR-0059 D7 window/selection boundary as the excluded startSelectionToolbar. The brain has neither those Tauri prefs nor a window server."
+      "symbols": ["startSelectionToolbar", "parseSelectionToolbarMode"],
+      "reason": "Restores the always-on-top native selection-toolbar window (ADR-0093) from the toolbar mode in the desktop Tauri store prefs (lib/selection/preferences.ts, lib/tauri/store.ts). A recorded physical boundary in ADR-0059 D7 — the brain has no window server to place an overlay on, and none of those Tauri prefs."
     },
     "components/providers/initializers/session-focus-initializer.tsx": {
       "symbols": ["retryTitleIfNeeded"],
@@ -215,13 +211,8 @@
       "reason": "Reattaches this renderer's terminal dock tabs to the PTY sessions that survived a WebView reload (lib/terminal/rehydrate.ts). The PTYs themselves live in the native terminal host (crates/cognia-terminal) and outlive any renderer; what is rehydrated is dock-tab UI state. A brain has no dock tabs to restore, and web and Capacitor clients reattach to a host's sessions through lib/terminal/boot-reattach.ts."
     },
     "components/providers/initializers/tray-panel-initializer.tsx": {
-      "symbols": [
-        "handleTrayUsageCommand",
-        "migrateTrayPanelActions",
-        "onTrayPanelRequest",
-        "sendTrayPanelResult"
-      ],
-      "reason": "The main-window half of the native tray quick panel. It listens for tray-panel://run from the panel window and answers it (lib/tauri/tray-panel.ts), handles the tray's usage-dock command (lib/tray/dispatcher.ts), and imports the action catalogue once from the desktop Tauri store into settings (lib/tray-panel/migrate-actions.ts, ADR-0225 §10). Tray windows are a recorded physical boundary. The brain has no tray, panel window or Tauri store prefs."
+      "symbols": ["handleTrayUsageCommand", "onTrayPanelRequest", "sendTrayPanelResult"],
+      "reason": "The main-window half of the native tray quick panel. It listens for tray-panel://run from the panel window, answers it (lib/tauri/tray-panel.ts) and handles the tray's usage-dock command (lib/tray/dispatcher.ts). Tray windows are a recorded physical boundary. The brain has no tray, panel window or Tauri store prefs."
     },
     "components/providers/initializers/update-center-initializer.tsx": {
       "symbols": [
@@ -242,10 +233,6 @@
         "sendUsageDockState"
       ],
       "reason": "The main-window half of the Capacity Dock (ADR-0165 Phase 2). It opens and closes the native dock window, seeds it over usage-dock:// events and routes its open-full click into the router (lib/usage-dock/client.ts). The dock is a native overlay window, which is a recorded physical boundary. A brain has no window to open and no renderer router to navigate."
-    },
-    "components/providers/initializers/vector-credential-migration-initializer.tsx": {
-      "symbols": ["registerExistingTwinVectorBackend"],
-      "reason": "Both effects in this initializer are a one-time desktop migration, and the initializer says so with its own isTauri() guard. registerExistingTwinVectorBackend re-registers a Twin vector backend from settings that migrateVectorCredentials just moved out of localStorage and into the OS keyring, and its own body opens with `if (!isTauri()) return` (lib/db/twin-runtime-settings.ts:121), so registering it in a brain would install a runtime whose first statement is a return. A brain's vector backend is configured through the server secret store, never migrated out of a browser's localStorage, because it never had one."
     },
     "components/providers/initializers/webview-heartbeat-initializer.tsx": {
       "symbols": ["startWebviewHeartbeat", "takeWhiteScreenRecoveryNotice"],

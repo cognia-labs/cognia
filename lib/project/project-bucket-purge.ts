@@ -66,11 +66,6 @@ function purgeAgentTeamState(state: JsonRecord, projectId: string): void {
     state.tasks,
     (row) => typeof row.teamId !== "string" || !removedTeamIds.has(row.teamId)
   )
-  state.editorSession = isRecord(state.editorSession)
-    ? Object.fromEntries(
-        Object.entries(state.editorSession).filter(([teamId]) => !removedTeamIds.has(teamId))
-      )
-    : {}
   if (typeof state.activeTeamId === "string" && removedTeamIds.has(state.activeTeamId)) {
     state.activeTeamId = null
   }

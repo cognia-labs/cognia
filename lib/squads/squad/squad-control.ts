@@ -5,8 +5,6 @@
  * resume and stop of a Squad run goes through its `controlSquadRun`. This
  * file only answers whether a resume may proceed, and why not:
  *
- *   legacy        a run backfilled from the legacy runtime has no checkpoint
- *                 to resume from. It restarts as a new run (`retry`) or stops.
  *   constraints   a run without its frozen authority snapshot cannot be
  *                 re-entered: it would run with authority nobody granted it.
  *   replay        a child whose last checkpoint is not verified safe makes
@@ -16,7 +14,6 @@
  *                 (`guardSquadResume`, which parks the run itself).
  */
 
-import { LEGACY_RUN_NOT_RESUMABLE } from "@/lib/squads/legacy-run-history"
 import { dexieTeamRunStore } from "@/lib/db/agent-team-runtime"
 import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import { assessStoredRunRecovery } from "@cognia/agent-orchestration/coordinator"
@@ -24,8 +21,6 @@ import type { RunRecoveryAssessment } from "@cognia/agent-orchestration/replay"
 
 export type SquadResumeGuard =
   | { kind: "admit" }
-  /** A legacy-runtime run: refused, left as it is. */
-  | { kind: "legacy" }
   /** No frozen authority snapshot: park it on a recovery decision. */
   | { kind: "missing_constraints" }
   /** A child's last checkpoint cannot be trusted: park it on a recovery decision. */
@@ -58,7 +53,6 @@ export async function guardSquadRunResume(
   options: { reentry: boolean },
   deps: SquadResumeGuardDeps = {}
 ): Promise<SquadResumeGuard> {
-  if (run.recoveryReason === LEGACY_RUN_NOT_RESUMABLE) return { kind: "legacy" }
   if (run.executionConstraints?.version !== 1 || !run.executionConstraints.teamConfig) {
     return { kind: "missing_constraints" }
   }

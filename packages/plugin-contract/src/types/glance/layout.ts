@@ -166,8 +166,7 @@ export interface GlanceMobileEntry extends GlanceLayoutEntry {
  * `trayPanelLayout`; either can copy the other's entries.
  *
  * `shortcuts` is the quick module's content on a phone: the ordered ids of the
- * shortcut catalogue (`MOBILE_QUICK_ACTION_CATALOG`), which used to be
- * `mobileHomeLayout.quickActions`.
+ * shortcut catalogue (`MOBILE_QUICK_ACTION_CATALOG`).
  */
 export interface GlanceMobileSettings {
   version: 1

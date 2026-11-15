@@ -197,7 +197,7 @@ describe("TelegramConfigDialog — create new", () => {
     })
   })
 
-  it("declares botToken, secretToken and webhookSecret in credentialsRef.accounts for webhook create", async () => {
+  it("declares botToken and secretToken in credentialsRef.accounts for webhook create", async () => {
     render(<TelegramConfigDialog open={true} onOpenChange={jest.fn()} row={null} />)
 
     fireEvent.change(screen.getByLabelText(/bot token/i), {
@@ -220,14 +220,14 @@ describe("TelegramConfigDialog — create new", () => {
         expect.objectContaining({
           transportMode: "webhook",
           credentialsRef: expect.objectContaining({
-            accounts: ["botToken", "secretToken", "webhookSecret"],
+            accounts: ["botToken", "secretToken"],
           }),
         })
       )
     })
   })
 
-  it("saves the webhook secret under 'secretToken' (Rust verifier key) AND legacy 'webhookSecret'", async () => {
+  it("saves the webhook secret under 'secretToken', the Rust verifier key", async () => {
     render(<TelegramConfigDialog open={true} onOpenChange={jest.fn()} row={null} />)
 
     fireEvent.change(screen.getByLabelText(/bot token/i), {
@@ -246,19 +246,18 @@ describe("TelegramConfigDialog — create new", () => {
     fireEvent.click(screen.getByRole("button", { name: /create/i }))
 
     await waitFor(() => {
-      // Rust's verify_telegram reads "secretToken" — the old form only wrote
-      // "webhookSecret", so webhook deliveries always 401'd (audited fix #2).
+      // Rust's verify_telegram reads "secretToken" (audited fix #2).
       expect(mockConnectorsKeyringSet).toHaveBeenCalledWith(
         "new-adapter-id",
         "secretToken",
         "shh-secret"
       )
-      expect(mockConnectorsKeyringSet).toHaveBeenCalledWith(
-        "new-adapter-id",
-        "webhookSecret",
-        "shh-secret"
-      )
     })
+    expect(mockConnectorsKeyringSet).not.toHaveBeenCalledWith(
+      "new-adapter-id",
+      "webhookSecret",
+      expect.anything()
+    )
   })
 
   it("shows error toast when token is empty on Save", async () => {
@@ -365,7 +364,7 @@ describe("TelegramConfigDialog — edit existing", () => {
         expect.objectContaining({
           transportMode: "webhook",
           credentialsRef: expect.objectContaining({
-            accounts: ["botToken", "secretToken", "webhookSecret"],
+            accounts: ["botToken", "secretToken"],
           }),
         })
       )
@@ -378,7 +377,7 @@ describe("TelegramConfigDialog — edit existing", () => {
       transportMode: "webhook",
       credentialsRef: {
         keyringService: "com.cognia.platforms",
-        accounts: ["botToken", "secretToken", "webhookSecret"],
+        accounts: ["botToken", "secretToken"],
       },
     }
     // Already configured: the secret lives in the keyring, so re-saving must
@@ -459,7 +458,7 @@ describe("TelegramConfigDialog — webhook secret requirement", () => {
       settings: {},
       credentialsRef: {
         keyringService: "com.cognia.platforms",
-        accounts: ["botToken", "secretToken", "webhookSecret"],
+        accounts: ["botToken", "secretToken"],
       },
       trigger: defaultPrivateChatPolicy(),
       defaultMode: "auto",

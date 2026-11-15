@@ -34,10 +34,6 @@ import type { PersonalCredentialContext } from "@/lib/execution/personal-credent
 
 import { connectProvider } from "@/lib/plugin/auth/connect"
 import {
-  runLegacySessionMigrations,
-  legacySessionAliases,
-} from "@/lib/plugin/auth/legacy-session-migrations"
-import {
   ConnectionUnavailableError,
   getConnectionManager,
 } from "@/lib/plugin/auth/connection-manager"
@@ -102,8 +98,6 @@ function hostManagedProvider(
     throw new Error("Host-managed auth providers require describe and refresh callbacks.")
   if (provider.getSessions || provider.createSession || provider.removeSession)
     throw new Error("Host-managed auth providers cannot implement session callbacks.")
-  const ready = Promise.resolve().then(() => runLegacySessionMigrations(adapted))
-  void ready.catch(() => console.warn("Host auth migration requires recovery"))
 
   async function sessionFor(
     ref: AuthConnectionRef,
@@ -130,8 +124,6 @@ function hostManagedProvider(
     ...provider,
     pluginId,
     async getSessions(scopes) {
-      await ready
-      const aliases = await legacySessionAliases(adapted)
       const rows = await listAuthConnections(provider.id)
       const sessions: AuthSession[] = []
       for (const row of rows) {
@@ -148,14 +140,7 @@ function hostManagedProvider(
             scopes ? hostSessionContexts.get(scopes) : undefined
           )
           if (!scopes || scopes.every((scope) => session.scopes.includes(scope)))
-            sessions.push(
-              ...[
-                session,
-                ...[...aliases]
-                  .filter(([, ref]) => ref === row.id)
-                  .map(([id]) => ({ ...session, id })),
-              ]
-            )
+            sessions.push(session)
         } catch (error) {
           // A concurrent disconnect or provider outage removes this session.
           if (!(error instanceof ConnectionUnavailableError)) throw error
@@ -164,7 +149,6 @@ function hostManagedProvider(
       return sessions
     },
     async createSession(scopes, options) {
-      await ready
       return sessionFor(
         await connectProvider({
           providerId: provider.id,
@@ -178,9 +162,7 @@ function hostManagedProvider(
     async removeSession(sessionId) {
       const credentialContext = pluginExecutionContext(pluginId)
       const pluginAccess = createPluginCredentialAccess(pluginId)
-      await ready
-      const aliases = await legacySessionAliases(adapted)
-      const row = await getAuthConnection(aliases.get(sessionId) ?? sessionId)
+      const row = await getAuthConnection(sessionId)
       if (row?.providerId === provider.id && row.ownerPluginId === pluginId)
         await getConnectionManager().disconnect(row.id, {
           revoke: Boolean(provider.revoke),

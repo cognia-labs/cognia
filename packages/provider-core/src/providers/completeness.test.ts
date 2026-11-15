@@ -8,7 +8,6 @@ import {
   getProviderRequirements,
   hasAnyCredential,
   isValidHttpUrl,
-  upgradeLegacyVerificationFingerprint,
 } from "./completeness"
 
 describe("provider completeness contract", () => {
@@ -126,37 +125,6 @@ describe("provider completeness contract", () => {
         verificationStatus: "verified",
       }).verificationStatus
     ).toBe("stale")
-  })
-
-  it("rewrites a v2 fingerprint and recognises when it no longer matches", () => {
-    const row = { apiKey: "sk-old", baseURL: "https://x/v1", defaultModel: "m" }
-    const v2 = JSON.stringify({
-      verificationContract: "provider-connectivity-v2",
-      apiKey: "sk-old",
-      apiKeys: [],
-      currentKeyIndex: 0,
-      baseURL: "https://x/v1",
-      defaultModel: "m",
-      apiProtocol: "",
-      customHeaders: [],
-    })
-    expect(upgradeLegacyVerificationFingerprint({ ...row, verificationFingerprint: v2 })).toBe(
-      buildProviderVerificationFingerprint(row)
-    )
-    const mismatch = upgradeLegacyVerificationFingerprint({
-      ...row,
-      apiKey: "sk-new",
-      verificationFingerprint: v2,
-    })
-    expect(mismatch).not.toContain("sk-old")
-    expect(mismatch).not.toBe(buildProviderVerificationFingerprint({ ...row, apiKey: "sk-new" }))
-    expect(
-      upgradeLegacyVerificationFingerprint({
-        ...row,
-        verificationFingerprint: buildProviderVerificationFingerprint(row),
-      })
-    ).toBeUndefined()
-    expect(upgradeLegacyVerificationFingerprint(row)).toBeUndefined()
   })
 
   it("infers requirements for catalog, local, and unknown providers", () => {

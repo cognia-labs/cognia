@@ -1,18 +1,11 @@
 /**
  * Normalization and effective-policy resolution for `AppSettings.webReader`.
  *
- * Three starting points, decided by the persisted ROW, never by merged
- * defaults (a merged read cannot tell "never chose" from "chose the default"):
+ * Two starting points:
  *
- * - **Fresh install** (no settings row): direct-first, origin platform
+ * - **Fresh** (no valid `webReader` record): direct-first, origin platform
  *   scrapers on, every remote recipient (FxTwitter, Jina, vendor readers)
  *   off, external fallback off, distillation off.
- * - **Upgrade** (a row without its own `webReader`): the legacy compatibility
- *   profile — the platform scrapers, FxTwitter and Jina stay eligible exactly
- *   as before (Jina only where the host has a CORS-free transport), external
- *   fallback stays on, no vendor reader is enabled, and `alwaysDistill: true`
- *   becomes `required`. No usage history exists, so this preserves prior
- *   eligibility; it does not infer prior use.
  * - **Explicit** valid record: authoritative.
  *
  * A record with an unknown future `version` is preserved verbatim by the
@@ -66,20 +59,7 @@ export function freshInstallWebReader(): WebReaderSettingsV1 {
   }
 }
 
-/** Upgrade compatibility: what an existing install already did, nothing more. */
-export function legacyCompatibilityWebReader(
-  webTools: AppSettings["webTools"] | undefined
-): WebReaderSettingsV1 {
-  return {
-    version: 1,
-    defaultReader: "auto",
-    readers: entries({ direct: true, platform: true, fxtwitter: true, jina: true }),
-    externalFallback: "configured",
-    distillation: webTools?.alwaysDistill === true ? "required" : "off",
-  }
-}
-
-export type WebReaderSettingsSource = "fresh" | "legacy" | "explicit" | "unsupported-version"
+export type WebReaderSettingsSource = "fresh" | "explicit" | "unsupported-version"
 
 export interface NormalizedWebReaderSettings {
   /** The policy to run with. */
@@ -136,28 +116,12 @@ function normalizeV1(raw: Record<string, unknown>): WebReaderSettingsV1 {
   }
 }
 
-/**
- * Normalize a stored `webReader` value.
- *
- * @param raw        the value as persisted on the row (`row.webReader`)
- * @param rowExists  whether a settings row existed at all (false ⇒ fresh install)
- * @param webTools   the row's `webTools`, for the legacy `alwaysDistill` mapping
- */
-export function normalizeWebReaderSettings(
-  raw: unknown,
-  context: { rowExists: boolean; webTools?: AppSettings["webTools"] }
-): NormalizedWebReaderSettings {
-  const fallback = () =>
-    context.rowExists ? legacyCompatibilityWebReader(context.webTools) : freshInstallWebReader()
-  if (raw === undefined || raw === null) {
-    return { effective: fallback(), source: context.rowExists ? "legacy" : "fresh" }
-  }
-  if (!isRecord(raw)) {
-    return { effective: fallback(), source: context.rowExists ? "legacy" : "fresh" }
-  }
+/** Normalize a stored `webReader` value (`row.webReader`). */
+export function normalizeWebReaderSettings(raw: unknown): NormalizedWebReaderSettings {
+  if (!isRecord(raw)) return { effective: freshInstallWebReader(), source: "fresh" }
   if (raw.version !== 1) {
     return {
-      effective: fallback(),
+      effective: freshInstallWebReader(),
       source: "unsupported-version",
       ...(typeof raw.version === "number" ? { preserved: raw as StoredWebReaderSettings } : {}),
     }
@@ -214,13 +178,8 @@ export function toReaderPolicy(settings: WebReaderSettingsV1): ReaderPolicy {
 /**
  * Resolve the effective Reader policy straight from an `AppSettings`
  * snapshot whose `webReader` the settings loader already normalized (absent ⇒
- * treated as an upgrade, which is the conservative reading for a snapshot
- * that cannot prove it is a fresh install).
+ * the fresh profile).
  */
 export function readerPolicyFromSettings(settings: AppSettings | undefined | null): ReaderPolicy {
-  const normalized = normalizeWebReaderSettings(settings?.webReader, {
-    rowExists: true,
-    webTools: settings?.webTools,
-  })
-  return toReaderPolicy(normalized.effective)
+  return toReaderPolicy(normalizeWebReaderSettings(settings?.webReader).effective)
 }

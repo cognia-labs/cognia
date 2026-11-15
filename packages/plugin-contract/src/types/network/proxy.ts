@@ -44,15 +44,6 @@ export interface NetworkProxySettings {
   ipLookupEnabled: boolean
 }
 
-/**
- * Read-only compatibility shape for settings rows written before proxy
- * credentials moved to the OS keyring. New code must never persist this
- * field; it exists only so the boot migration can remove it safely.
- */
-export interface LegacyNetworkProxySettings extends NetworkProxySettings {
-  password?: string
-}
-
 export const DEFAULT_NETWORK_PROXY_SETTINGS: NetworkProxySettings = {
   mode: "off",
   protocol: "http",

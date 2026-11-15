@@ -1,5 +1,4 @@
 {
-  "lib/accounts/legacy-migration.test.ts": "copies and verifies multiple physical databases",
   "lib/db/mobile-outbound-queue.test.ts": "switches the active account database",
   "lib/db/chat-drafts.test.ts": "fake timers stall fake IndexedDB connection reopening; retain full database recreation until timer-safe restore is supported",
   "lib/db/schema-collapsed.test.ts": "compares collapsed and full schema construction",

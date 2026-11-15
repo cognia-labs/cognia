@@ -197,37 +197,3 @@ export function isDefaultBarLayout(
       JSON.stringify(expected.hidden.map((i) => i.id))
   )
 }
-
-/**
- * Legacy per-segment visibility map, persisted by the UI store under
- * `cognia-ui` before the bars became orderable. Read once per install to seed
- * the new layouts so an existing user's hidden segments survive the upgrade —
- * see {@link migrateLegacyBarItems}.
- */
-export type LegacyBarItems = Partial<Record<string, boolean>>
-
-/**
- * Fold a legacy `barItems` map into a `BarLayout` for `bar`, or return `null`
- * when there is nothing to migrate.
- *
- * The legacy ids were chosen to match the new catalog ids exactly, so this is
- * an identity mapping over the subset that bar owns: every id the user turned
- * **off** becomes hidden, every id they turned **on** becomes visible even if
- * it ships hidden today (an explicit opt-in outranks a new default). Ids the
- * map never mentioned fall back to the shipped default. Order is untouched —
- * the legacy map had none.
- */
-export function migrateLegacyBarItems(bar: BarId, legacy: LegacyBarItems): BarLayout | null {
-  const meta = barCatalogMeta(bar)
-  const mentioned = meta.filter((m) => typeof legacy[m.id] === "boolean")
-  if (mentioned.length === 0) return null
-
-  const fallback = defaultBarLayout(bar)
-  const hidden = meta
-    .filter((m) =>
-      typeof legacy[m.id] === "boolean" ? !legacy[m.id] : fallback.hidden.includes(m.id)
-    )
-    .map((m) => m.id)
-
-  return { order: fallback.order, hidden }
-}

@@ -93,9 +93,7 @@ const PAIR_ROUTE = "/pair"
  * ## Exit paths
  *
  * All four persist a record before navigating, because "how did this end" is
- * what the residual finish-setup bar reads to say something specific. That is
- * the whole reason the old single `onboardingDismissedAt` timestamp was not
- * enough.
+ * what the residual finish-setup bar reads to say something specific.
  */
 export function OnboardingFlow() {
   const t = useTranslations("onboarding")

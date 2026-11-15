@@ -1132,46 +1132,7 @@ export const useTerminalStore = create<TerminalStoreState>()(
     }),
     {
       name: "cognia-terminal-layout",
-      // v5 adds the dock edge + its width. v4 recorded stable
-      // host-session/controller layout metadata. Live host snapshots remain
-      // authoritative; this only bridges the reload window.
       version: 5,
-      migrate: (oldState: unknown, oldVersion: number) => {
-        const prev = oldState as
-          | {
-              panelHeightPct?: unknown
-              panelWidthPct?: unknown
-              panelPosition?: unknown
-              pendingReloadLayout?: unknown
-            }
-          | null
-          | undefined
-        return {
-          panelHeightPct:
-            typeof prev?.panelHeightPct === "number"
-              ? clamp(
-                  prev.panelHeightPct,
-                  TERMINAL_LAYOUT_BOUNDS.panelMinPct,
-                  TERMINAL_LAYOUT_BOUNDS.panelMaxPct
-                )
-              : TERMINAL_LAYOUT_DEFAULTS.panelHeightPct,
-          // Absent on v4 and below; anything else on disk is untrusted.
-          panelWidthPct:
-            typeof prev?.panelWidthPct === "number"
-              ? clamp(
-                  prev.panelWidthPct,
-                  TERMINAL_LAYOUT_BOUNDS.panelMinWidthPct,
-                  TERMINAL_LAYOUT_BOUNDS.panelMaxWidthPct
-                )
-              : TERMINAL_LAYOUT_DEFAULTS.panelWidthPct,
-          panelPosition:
-            prev?.panelPosition === "right" || prev?.panelPosition === "bottom"
-              ? prev.panelPosition
-              : TERMINAL_LAYOUT_DEFAULTS.panelPosition,
-          pendingReloadLayout:
-            oldVersion >= 3 ? normalizeReloadLayout(prev?.pendingReloadLayout) : null,
-        }
-      },
       // `panelOpen` intentionally resets to closed. While reattaching, retain
       // the complete pending snapshot; otherwise capture the current live layout.
       // `tabOrder` rides `pendingReloadLayout`, not this — it is keyed by

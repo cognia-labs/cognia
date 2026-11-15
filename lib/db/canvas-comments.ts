@@ -128,10 +128,7 @@ export async function clearForDocument(documentId: string): Promise<void> {
   await clearContextCommentsForResource("canvas-document", documentId)
 }
 
-/**
- * Bulk import — used by the localStorage → Dexie migration in `comment-store`
- * and by the backup snapshot module. Skips rows that already exist.
- */
+/** Bulk import — used by `comment-store` and the backup snapshot module. Skips existing rows. */
 export async function bulkImport(comments: CanvasComment[]): Promise<number> {
   if (comments.length === 0) return 0
   return bulkImportContextComments(

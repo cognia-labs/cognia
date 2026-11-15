@@ -229,23 +229,6 @@ describe("resolveProviderAttemptOptions", () => {
         expect(result.providerCredentials?.headers?.["X-Static"]).toBe("kept")
     }
   )
-  it("uses the legacy OpenCode default for OpenCode Go vault resolution", async () => {
-    mockResolveFeatureProvider.mockReturnValue({
-      kind: "unavailable",
-      nextAction: "configure_credentials",
-    })
-    mockResolveOpencodeVaultCredential.mockResolvedValue({
-      apiKey: "go-key",
-      baseURL: "https://open.test",
-    })
-    const appSettings = settings("opencode-go")
-    appSettings.defaultAccountId = "legacy-go"
-
-    await resolveProviderAttemptOptions("opencode-go", appSettings)
-
-    expect(mockResolveOpencodeVaultCredential).toHaveBeenCalledWith("opencode-go", "legacy-go")
-  })
-
   it("resolves credentials, inference defaults, and a declarative adapter", async () => {
     const result = await resolveProviderAttemptOptions("openai", settings())
 

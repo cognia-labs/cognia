@@ -9,7 +9,6 @@ import {
   isKeyringSentinel,
   keyIdOfSentinel,
   loadTurnCredential,
-  migrateTurnServersToKeyring,
   resolveTurnServerCredentials,
   saveTurnCredential,
   deleteTurnCredential,
@@ -134,80 +133,6 @@ describe("resolveTurnServerCredentials", () => {
       },
     ])
     expect(out).toEqual([{ urls: "turn:turn.example.com:3478" }])
-  })
-
-  it("migrateTurnServersToKeyring: empty input yields no migration", async () => {
-    const r1 = await migrateTurnServersToKeyring(undefined)
-    expect(r1.migrated).toEqual([])
-    expect(r1.didMigrate).toBe(false)
-    const r2 = await migrateTurnServersToKeyring([])
-    expect(r2.migrated).toEqual([])
-    expect(r2.didMigrate).toBe(false)
-  })
-
-  it("migrateTurnServersToKeyring: passes STUN-only entries through", async () => {
-    const out = await migrateTurnServersToKeyring([{ urls: "stun:stun.example.com:3478" }])
-    expect(out.didMigrate).toBe(false)
-    expect(out.migrated).toEqual([{ urls: "stun:stun.example.com:3478" }])
-  })
-
-  it("migrateTurnServersToKeyring: keyring sentinels are idempotent", async () => {
-    const input: RTCIceServer[] = [
-      {
-        urls: "turn:turn.example.com:3478",
-        credential: "kr:already-migrated",
-      },
-    ]
-    const out = await migrateTurnServersToKeyring(input)
-    expect(out.didMigrate).toBe(false)
-    expect(out.migrated).toEqual(input)
-  })
-
-  it("migrateTurnServersToKeyring: writes plaintext entries to keyring and replaces with sentinel", async () => {
-    const input: RTCIceServer[] = [
-      {
-        urls: "turn:turn.example.com:3478",
-        username: "alice",
-        credential: "s3cret",
-      },
-    ]
-    const out = await migrateTurnServersToKeyring(input)
-    expect(out.didMigrate).toBe(true)
-    expect(out.migrated).toHaveLength(1)
-    const m = out.migrated[0]
-    expect(m.urls).toBe("turn:turn.example.com:3478")
-    expect(isKeyringSentinel(m.credential as string)).toBe(true)
-    expect(m.username).toBeUndefined()
-    // The keyring round-trip restores the full pair.
-    const keyId = keyIdOfSentinel(m.credential as string)!
-    expect(await loadTurnCredential(keyId)).toEqual({
-      username: "alice",
-      credential: "s3cret",
-    })
-  })
-
-  it("migrateTurnServersToKeyring: mixes safely with already-migrated entries", async () => {
-    const input: RTCIceServer[] = [
-      { urls: "stun:stun.example.com" },
-      {
-        urls: "turn:legacy.example.com:3478",
-        username: "alice",
-        credential: "s3cret",
-      },
-      {
-        urls: "turn:already.example.com:3478",
-        credential: "kr:existing",
-      },
-    ]
-    const out = await migrateTurnServersToKeyring(input)
-    expect(out.didMigrate).toBe(true)
-    expect(out.migrated).toHaveLength(3)
-    expect(out.migrated[0]).toEqual({ urls: "stun:stun.example.com" })
-    expect(isKeyringSentinel(out.migrated[1].credential as string)).toBe(true)
-    expect(out.migrated[2]).toEqual({
-      urls: "turn:already.example.com:3478",
-      credential: "kr:existing",
-    })
   })
 
   it("resolves a mix of plain + keyring entries in stable order", async () => {

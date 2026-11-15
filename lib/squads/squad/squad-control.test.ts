@@ -100,17 +100,6 @@ describe("guardSquadRunResume", () => {
     ).toEqual({ kind: "admit" })
   })
 
-  it("refuses a backfilled legacy run before anything else", async () => {
-    await seedRun("needs_input")
-    await getDb().agentTeamRuns.update(RUN, {
-      recoveryReason: "legacy_run_not_resumable",
-      executionConstraints: undefined,
-    })
-    expect(await guardSquadRunResume(await current(), { reentry: true })).toEqual({
-      kind: "legacy",
-    })
-  })
-
   it("refuses a run without its frozen authority snapshot", async () => {
     await seedRun("paused")
     await getDb().agentTeamRuns.update(RUN, { executionConstraints: undefined })

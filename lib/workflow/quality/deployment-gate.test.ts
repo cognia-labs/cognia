@@ -32,7 +32,7 @@ function report(overrides: Partial<EvalReport> = {}): EvalReport {
     totalCostUsd: 0.5,
     avgLatencyMs: 1_000,
     createdAt: 9_000,
-    scoringVersion: 2,
+    scoringVersion: 3,
     status: "completed",
     config: {
       targetKind: "workflow",

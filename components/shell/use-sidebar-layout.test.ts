@@ -221,42 +221,12 @@ describe("useSidebarLayout", () => {
     expect(lastSaved().pinned).toEqual(["workflows"])
   })
 
-  describe("renamed ids", () => {
-    beforeEach(() => {
-      useSettingsStore.setState({
-        settings: { sidebarLayout: { pinned: ["agent-teams", "inbox"], hidden: [] } } as never,
-      })
+  it("ignores an id the catalog no longer has", async () => {
+    useSettingsStore.setState({
+      settings: { sidebarLayout: { pinned: ["agent-teams", "inbox"], hidden: [] } } as never,
     })
-
-    it("hides an item stored under its legacy id", async () => {
-      const { result } = renderHook(() => useSidebarLayout())
-      expect(result.current.resolved.pinned.map((i) => i.id)).toContain("squads")
-      await act(async () => {
-        await result.current.hide("squads")
-      })
-      expect(lastSaved()).toEqual({ pinned: ["inbox"], hidden: ["squads"] })
-    })
-
-    it("moves an item stored under its legacy id to More", async () => {
-      const { result } = renderHook(() => useSidebarLayout())
-      await act(async () => {
-        await result.current.unpin("squads")
-      })
-      expect(lastSaved()).toEqual({ pinned: ["inbox"], hidden: [] })
-    })
-
-    it("does not duplicate a pin that exists under both names", async () => {
-      useSettingsStore.setState({
-        settings: {
-          sidebarLayout: { pinned: ["agent-teams", "squads", "inbox"], hidden: [] },
-        } as never,
-      })
-      const { result } = renderHook(() => useSidebarLayout())
-      await act(async () => {
-        await result.current.pin("inbox")
-      })
-      expect(lastSaved().pinned).toEqual(["squads", "inbox"])
-    })
+    const { result } = renderHook(() => useSidebarLayout())
+    expect(result.current.resolved.pinned.map((i) => i.id)).toEqual(["inbox"])
   })
 
   it("resets to the default layout", async () => {

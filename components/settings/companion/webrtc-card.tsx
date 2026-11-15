@@ -48,7 +48,6 @@ import {
   KEYRING_CREDENTIAL_PREFIX,
   freshCredentialKeyId,
   keyIdOfSentinel,
-  migrateTurnServersToKeyring,
   resolveTurnServerCredentials,
   saveTurnCredential,
 } from "@/lib/credentials/turn-credentials"
@@ -137,30 +136,19 @@ export function WebRtcCard() {
   const [pollFailureCount, setPollFailureCount] = useState(0)
   const [pollFailureMessage, setPollFailureMessage] = useState<string | null>(null)
 
-  // Hydrate from Dexie on mount. Also performs the silent migration
-  // of any legacy plaintext TURN credentials into the OS keyring so the
-  // user never has to re-enter them.
+  // Hydrate from Dexie on mount.
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
         const s = await getSettings()
         if (cancelled) return
-        const rawTurn = s.turnServers ?? []
-        // S1 silent migration: plaintext → keyring. The result still
-        // carries the same URL list, but `credential` is now a
-        // `kr:<keyId>` sentinel. Persist back so the next hydrate is a
-        // no-op.
-        const { migrated: migratedTurn, didMigrate } = await migrateTurnServersToKeyring(rawTurn)
-        if (didMigrate && !cancelled) {
-          await saveSettings({ turnServers: migratedTurn })
-        }
         // For display in the textarea we resolve sentinels back to
         // plaintext credentials — the textarea has always shown the
         // user the values it persists, and shipping a feature where
         // "TURN credentials disappear after save" would be a usability
         // regression.
-        const displayTurn = await resolveTurnServerCredentials(migratedTurn)
+        const displayTurn = await resolveTurnServerCredentials(s.turnServers ?? [])
         if (cancelled) return
         const tp = s.turnProvider ?? DEFAULT_TURN_PROVIDER
         setForm({
@@ -244,8 +232,7 @@ export function WebRtcCard() {
       for (const entry of turn) {
         const credential = typeof entry.credential === "string" ? entry.credential : ""
         if (credential.startsWith(KEYRING_CREDENTIAL_PREFIX)) {
-          // Already a sentinel — pass through. Migration handles the
-          // legacy plaintext path on hydrate; this branch covers a
+          // Already a sentinel — pass through. This branch covers a
           // round-trip where the textarea string isn't resolved by
           // the time the user clicks Save.
           turnPersisted.push(entry)

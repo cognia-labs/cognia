@@ -11,7 +11,7 @@
  *
  * Mirrors `stores/canvas/canvas-layout-store.ts` — the artifact data lives in
  * `artifact-store.ts` (persisted v3, widely imported); this keeps the UI layout
- * concern separate so that store's careful partialize/migrate stays untouched.
+ * concern separate so that store's careful partialize stays untouched.
  */
 
 import { create } from "zustand"
@@ -220,7 +220,7 @@ export interface ArtifactDockLayoutState {
    * Surfaces as an unread dot on the chat-header dock toggle; cleared on open.
    */
   unreadArtifact: boolean
-  /** Bumped on migrate / reset so ResizablePanelGroup remounts with new defaults. */
+  /** Bumped on reset so ResizablePanelGroup remounts with new defaults. */
   layoutVersion: number
   /**
    * Runtime-only: bumped only when something asks for a specific width (the
@@ -345,19 +345,6 @@ interface PersistedArtifactDockLayoutState {
   dockCollapsed: boolean
   layoutVersion: number
   mobileSnapPoint: number | string | null
-}
-
-/**
- * Older shapes still on disk: v1/v2 stored a writable `dockMode` (plus a list
- * rail flag), v3 a per-panel sizing `dockProfile`. None of them survives.
- */
-interface LegacyPersistedArtifactDockLayoutState {
-  dockSize?: number
-  dockCollapsed?: boolean
-  listRailOpen?: boolean
-  dockMode?: "artifact" | "workspace" | "browser"
-  dockProfile?: "compact" | "workspace"
-  layoutVersion?: number
 }
 
 const DEFAULTS = {
@@ -652,27 +639,6 @@ export const useArtifactDockLayoutStore = create<ArtifactDockLayoutState>()(
         layoutVersion: state.layoutVersion,
         mobileSnapPoint: state.mobileSnapPoint,
       }),
-      migrate: (persisted: unknown, version) => {
-        const state = (persisted ?? {}) as LegacyPersistedArtifactDockLayoutState &
-          Partial<PersistedArtifactDockLayoutState>
-        if (version >= 4) return state as Partial<PersistedArtifactDockLayoutState>
-        // Before v4 the width followed a per-panel profile, and a compact one
-        // held it at 24%–50% (34% by default), so a stored width under the
-        // single default is that profile's leftover rather than a choice made
-        // for the dock as it is now. Lift it once to the Workspace-sized
-        // default; anything wider was the user's own drag and is kept.
-        const {
-          dockMode: _dockMode,
-          listRailOpen: _listRailOpen,
-          dockProfile: _dockProfile,
-          ...rest
-        } = state
-        const dockSize =
-          typeof rest.dockSize === "number" && rest.dockSize >= ARTIFACT_DOCK_BOUNDS.default
-            ? rest.dockSize
-            : ARTIFACT_DOCK_BOUNDS.default
-        return { ...rest, dockSize } as Partial<PersistedArtifactDockLayoutState>
-      },
       merge: (persisted: unknown, current: ArtifactDockLayoutState) => {
         const p = (persisted ?? {}) as Partial<PersistedArtifactDockLayoutState>
         return {

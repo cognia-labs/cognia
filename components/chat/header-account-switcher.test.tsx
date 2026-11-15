@@ -157,8 +157,8 @@ it("inherits character account overrides before app defaults", () => {
   expect(screen.getByTestId("header-account-switcher")).toHaveTextContent("Personal")
 })
 
-it("uses the legacy default only for its matching provider", () => {
-  settings = { defaultProvider: "codex", defaultAccountId: "account-two" }
+it("uses the default account scoped to the session's provider", () => {
+  settings = { defaultProvider: "codex", defaultAccountIds: { codex: "account-two" } }
   const { rerender } = render(<HeaderAccountSwitcher session={session()} />)
   expect(screen.getByTestId("header-account-switcher")).toHaveTextContent("work@example.com")
   rerender(<HeaderAccountSwitcher session={session({ providerOverride: "opencode-go" })} />)

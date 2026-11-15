@@ -36,7 +36,6 @@ export const NON_PREFERENCE_KEYS = [
   "activeProviderId",
   "lastUpdateCheckAt",
   "lastInboxViewedAt",
-  "onboardingDismissedAt",
   "onboardingProgress",
   "onboardingProfile",
   "pinnedWorkflowIds",

@@ -568,7 +568,7 @@ describe("useExternalAgent core actions", () => {
     const { result } = renderHook(() => useExternalAgent())
     await flush()
     act(() => result.current.setActiveAgent("a1"))
-    expect(useAgentRuntimeStore.getState().externalAgentId).toBe("a1")
+    expect(useAgentRuntimeStore.getState().runtimeRef).toEqual({ kind: "external", agentId: "a1" })
   })
 
   // ...and never switches the lane on its own. Picking an agent in the manager
@@ -732,7 +732,7 @@ describe("useExternalAgent core actions", () => {
     await act(async () => {
       await result.current.removeAgent("a1")
     })
-    expect(useAgentRuntimeStore.getState().externalAgentId).toBeNull()
+    expect(useAgentRuntimeStore.getState().runtimeRef).toEqual({ kind: "builtin" })
   })
 
   it("removeAgent leaves a selection that names a different agent", async () => {
@@ -744,7 +744,7 @@ describe("useExternalAgent core actions", () => {
     await act(async () => {
       await result.current.removeAgent("a1")
     })
-    expect(useAgentRuntimeStore.getState().externalAgentId).toBe("a2")
+    expect(useAgentRuntimeStore.getState().runtimeRef).toEqual({ kind: "external", agentId: "a2" })
   })
 
   it("createSession requires an active agent", async () => {

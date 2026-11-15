@@ -12,7 +12,6 @@ import {
   type TeamDelegationRecord,
 } from "@/types/agent/agent-team"
 import { normalizeAgentTeamConfig, normalizeAgentTeamTask } from "@/lib/squads/agent-team-normalize"
-import { assertNoNewRawTeammateCredentials } from "@/lib/squads/teammate/execution-binding-resolver"
 import { canMoveTask, reorderColumn, sortColumn } from "@/lib/squads/gates/task-move-guard"
 import { assignAgentTeamAvatarId, resolveAgentTeamAvatarId } from "@/lib/squads/avatar"
 import { loggers } from "@cognia/logging"
@@ -128,9 +127,6 @@ function cleanUpTeam(
     if (d.sourceTeamId === teamId) delete restDelegations[id]
   }
 
-  // Drop the team's persisted project-Editor session.
-  const { [teamId]: _es, ...restEditorSession } = state.editorSession
-
   return {
     teams: restTeams,
     teammates: restTeammates,
@@ -139,7 +135,6 @@ function cleanUpTeam(
     consensus: restConsensus,
     sharedMemory: restSharedMemory,
     delegations: restDelegations,
-    editorSession: restEditorSession,
     activeTeamId: state.activeTeamId === teamId ? null : state.activeTeamId,
   }
 }
@@ -464,10 +459,7 @@ export const createAgentTeamActionsSlice = (
       )
       const activeTeamId =
         state.activeTeamId && removedTeamIds.has(state.activeTeamId) ? null : state.activeTeamId
-      const editorSession = Object.fromEntries(
-        Object.entries(state.editorSession).filter(([teamId]) => !removedTeamIds.has(teamId))
-      )
-      return { teams, teammates, tasks, activeTeamId, editorSession }
+      return { teams, teammates, tasks, activeTeamId }
     })
   },
 
@@ -496,8 +488,6 @@ export const createAgentTeamActionsSlice = (
   addTeammate: (input) => {
     const team = get().teams[input.teamId]
     if (!team) throw new Error(`Team not found: ${input.teamId}`)
-    // ADR-0090 Phase 7: new configs bind credentials by REFERENCE only.
-    assertNoNewRawTeammateCredentials(input.config)
 
     const teammateId = nanoid()
     const role = input.role || "teammate"
@@ -548,10 +538,6 @@ export const createAgentTeamActionsSlice = (
   },
 
   upsertTeammate: (teammate) => {
-    // ADR-0090 Phase 7: the raw-credential rejection covers EVERY teammate
-    // write path — upsert included (whole-object replace would otherwise be a
-    // bypass channel). Legacy rows carrying an unchanged value stay readable.
-    assertNoNewRawTeammateCredentials(teammate.config, get().teammates[teammate.id]?.config)
     set((state) => {
       const destinationTeam = state.teams[teammate.teamId]
       if (!destinationTeam) {
@@ -623,12 +609,6 @@ export const createAgentTeamActionsSlice = (
   },
 
   updateTeammate: (teammateId, updates) => {
-    // ADR-0090 Phase 7: reject NEW raw apiKey/baseURL values (legacy rows
-    // carrying an unchanged value stay readable). Checked outside the set()
-    // updater so a rejection never half-applies state.
-    if (updates.config) {
-      assertNoNewRawTeammateCredentials(updates.config, get().teammates[teammateId]?.config)
-    }
     set((state) => {
       const teammate = state.teammates[teammateId]
       if (!teammate) return state

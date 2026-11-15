@@ -7,16 +7,13 @@
  *                    are migrated onto the current definition contract.
  *   2. adapters      The runtime deps, the review gate and the control plane
  *                    are installed. From here `startSquadRun` can dispatch.
- *   3. import        Legacy run history is copied into the canonical records.
- *   4. recover       Pending interrupts are reconciled, then every durable run
+ *   3. recover       Pending interrupts are reconciled, then every durable run
  *                    that was live when the process died is recovered.
- *   5. ready         The readiness signal flips. Launch seams wait on it.
+ *   4. ready         The readiness signal flips. Launch seams wait on it.
  *
  * Recovery before hydration would resume runs over definitions that are still
  * arriving. Dispatch before adapters would throw "runtime not configured" at
- * the first click. History import after recovery would let a legacy row that
- * became `recovery_required` miss the recovery pass that surfaces it. Each
- * stage therefore awaits the one before it, and a launch that arrives early
+ * the first click. Each stage therefore awaits the one before it, and a launch that arrives early
  * is refused with `runtime_not_ready` rather than raced.
  *
  * The bootstrap is keyed on the unlocked account: switching accounts disposes
@@ -32,10 +29,9 @@ import {
   whenAgentTeamDexieBridgeHydrated,
 } from "@/stores/squads/agent-team-store/dexie-bridge"
 import type { SquadBindingCandidates } from "./definition-contract"
-import type { LegacyRunBackfillOutcome } from "./legacy-run-history"
 import type { RecoveryOutcome } from "@cognia/agent-orchestration/coordinator"
 
-export type SquadBootstrapStage = "hydrate" | "adapters" | "import_history" | "recover" | "ready"
+export type SquadBootstrapStage = "hydrate" | "adapters" | "recover" | "ready"
 
 export type SquadRuntimeState = "idle" | "starting" | "ready" | "failed"
 
@@ -43,7 +39,6 @@ export interface SquadBootstrapOutcome {
   ok: boolean
   /** The stage that failed, when `ok` is false. */
   failedStage?: SquadBootstrapStage
-  history?: LegacyRunBackfillOutcome
   recovered?: RecoveryOutcome[]
   recoveries?: { armed: number; alreadyPending: number }
   durationMs: number
@@ -60,7 +55,6 @@ export interface SquadBootstrapDeps {
   resolveCandidates?: (projectId: string | undefined) => Promise<SquadBindingCandidates>
   /** Installs the runtime deps (`configureAgentTeamRuntime(buildAgentTeamRuntimeDeps())`). */
   installAdapters?: () => Promise<void> | void
-  backfillHistory?: (now: number) => Promise<LegacyRunBackfillOutcome>
   recoverInterrupts?: (now: number) => Promise<void>
   recoverRuns?: (signal: AbortSignal) => Promise<RecoveryOutcome[]>
   /** Re-raise the `team_recovery` interrupt of every parked run that lacks one. */
@@ -163,11 +157,6 @@ async function defaultInstallAdapters(): Promise<void> {
   configureAgentTeamRuntime(buildAgentTeamRuntimeDeps())
 }
 
-async function defaultBackfillHistory(now: number): Promise<LegacyRunBackfillOutcome> {
-  const { backfillLegacyTeamRunHistory } = await import("./legacy-run-history")
-  return backfillLegacyTeamRunHistory(now)
-}
-
 async function defaultRecoverInterrupts(now: number): Promise<void> {
   const { recoverPendingRunInterrupts } = await import("@/lib/execution/run-control")
   await recoverPendingRunInterrupts(now)
@@ -231,23 +220,18 @@ export function runSquadBootstrap(deps: SquadBootstrapDeps = {}): SquadBootstrap
       await (deps.installAdapters ?? defaultInstallAdapters)()
       if (stale()) return finish({ ok: false, failedStage: current })
 
-      current = "import_history"
-      stage("import_history")
-      const history = await (deps.backfillHistory ?? defaultBackfillHistory)(now())
-      if (stale()) return finish({ ok: false, failedStage: current, history })
-
       current = "recover"
       stage("recover")
       await (deps.recoverInterrupts ?? defaultRecoverInterrupts)(now())
-      if (stale()) return finish({ ok: false, failedStage: current, history })
+      if (stale()) return finish({ ok: false, failedStage: current })
       const recovered = await (deps.recoverRuns ?? defaultRecoverRuns)(recoveryController.signal)
-      if (stale()) return finish({ ok: false, failedStage: current, history, recovered })
+      if (stale()) return finish({ ok: false, failedStage: current, recovered })
       // After the coordinator's own pass, so a run it just parked is included.
       const recoveries = await (deps.armRecoveries ?? defaultArmRecoveries)()
-      if (stale()) return finish({ ok: false, failedStage: current, history, recovered })
+      if (stale()) return finish({ ok: false, failedStage: current, recovered })
 
       stage("ready")
-      return finish({ ok: true, history, recovered, recoveries })
+      return finish({ ok: true, recovered, recoveries })
     } catch {
       return finish({ ok: false, failedStage: current })
     }

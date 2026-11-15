@@ -53,16 +53,6 @@ describe("isOnboardingSettled", () => {
   it("is true once skipped", () => {
     expect(isOnboardingSettled({ ...base, skippedAt: "2026-08-01T00:00:00.000Z" })).toBe(true)
   })
-
-  it("treats a migrated legacy dismissal as settled", () => {
-    expect(
-      isOnboardingSettled({
-        version: ONBOARDING_STATE_VERSION,
-        path: "legacy_dismissed",
-        skippedAt: "2026-05-18T00:00:00.000Z",
-      })
-    ).toBe(true)
-  })
 })
 
 describe("ONBOARDING_MODES", () => {

@@ -14,8 +14,6 @@ import {
   type ProviderSecretEntry,
 } from "@cognia/provider-types/provider-secrets"
 
-import { repairLegacyProviderFingerprints } from "./provider-fingerprint-repair"
-
 /** Every credential of one settings row, keyed by provider. */
 export interface SettingsSecretSet {
   /** The legacy top-level `AppSettings.apiKey`. */
@@ -48,24 +46,20 @@ function customProviderKey(row: unknown, index: number): string {
 
 /**
  * Split a settings row into the row that may be persisted and its credentials.
- * A verification fingerprint written by a pre-v3 build embeds the raw key; it
- * is upgraded first, because only a row that still holds the key can be
- * rewritten into the credential-free form. Never mutates the input.
+ * Never mutates the input.
  */
 export function splitSettingsSecrets<T extends Partial<ProviderFields>>(
   row: T
 ): { publicRow: T; secrets: SettingsSecretSet } {
-  const repair = repairLegacyProviderFingerprints(row as unknown as AppSettings)
-  const source: T = repair ? { ...row, ...repair } : row
   const secrets = emptySecretSet()
-  const out: Record<string, unknown> = { ...source }
+  const out: Record<string, unknown> = { ...row }
 
   if ("apiKey" in out) {
     if (typeof out.apiKey === "string") secrets.apiKey = out.apiKey
     delete out.apiKey
   }
 
-  const providerSettings = source.providerSettings
+  const providerSettings = row.providerSettings
   if (providerSettings && typeof providerSettings === "object") {
     const next: Record<string, unknown> = {}
     for (const [id, providerRow] of Object.entries(providerSettings)) {
@@ -76,7 +70,7 @@ export function splitSettingsSecrets<T extends Partial<ProviderFields>>(
     out.providerSettings = next
   }
 
-  const customProviders = source.customProviders
+  const customProviders = row.customProviders
   if (Array.isArray(customProviders)) {
     out.customProviders = customProviders.map((providerRow, index) => {
       const split = splitProviderSecrets(providerRow)

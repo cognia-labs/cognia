@@ -151,14 +151,9 @@ export async function rehydrateExternalAgent(
 }
 
 /**
- * Everything that must happen before any adapter is constructed.
- *
- * Two steps, in this order and no other:
- *
- *  1. move legacy inline secrets into the keyring, so no connection is ever
- *     built from a config that still carries plaintext;
- *  2. judge every saved agent and disable the ones that cannot honestly start,
- *     recording a structured reason on each.
+ * Everything that must happen before any adapter is constructed: judge every
+ * saved agent and disable the ones that cannot honestly start, recording a
+ * structured reason on each.
  *
  * Returns the verdicts so rehydration can use them as a gate. Deliberately
  * calls `reviewAll` rather than `reconcile`: registration and connection are
@@ -174,7 +169,6 @@ export async function prepareExternalAgentsForRehydration(): Promise<
 > {
   try {
     const service = await getExternalAgentLifecycleService()
-    await service.migrateLegacyCredentials()
     return await service.reviewAll()
   } catch (error) {
     useExternalAgentStore.setState({
@@ -209,8 +203,7 @@ export function startExternalAgentRehydration(): () => void {
       return
     }
 
-    // Re-read: the preparation step rewrites configs (scrubbing migrated
-    // secrets) and disables the ones it judged unrunnable.
+    // Re-read: the preparation step disables the configs it judged unrunnable.
     const persistedAgents = useExternalAgentStore.getState().getAllAgents()
     const manager = getExternalAgentManager()
     await Promise.all(

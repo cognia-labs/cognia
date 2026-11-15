@@ -1,9 +1,4 @@
-import { isValidSubscriptionProviderId } from "@/types/subscription/credential"
-import type {
-  AppSettings,
-  BuiltinToolsConfig,
-  SubscriptionAccountProvider,
-} from "@cognia/agent-config-types"
+import type { AppSettings, BuiltinToolsConfig } from "@cognia/agent-config-types"
 import {
   DEFAULT_BIOMETRIC_GUARD,
   DEFAULT_BUILTIN_TOOLS,
@@ -34,7 +29,6 @@ import { DEFAULT_EVAL_SETTINGS } from "@/types/eval/settings"
 import { DEFAULT_AUTO_ROUTING, type AutoRoutingSettings } from "@cognia/provider-types/auto-router"
 import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
 import { DEFAULT_PROVIDER_DIAGNOSTICS_PREFERENCES } from "@cognia/provider-types"
-import type { DifficultyRoutingSettings } from "@/types/routing/tool-route"
 import { getDb, withDbReopenRetry } from "./schema"
 import {
   isEmptySecretSet,
@@ -55,11 +49,7 @@ import {
   type ProviderSecretsRef,
 } from "@/lib/settings/provider-secret-store"
 import { resolveLocalePreference } from "@/lib/i18n/locale-preference"
-import {
-  freshInstallWebReader,
-  legacyCompatibilityWebReader,
-  normalizeWebReaderSettings,
-} from "@/lib/web/reader/reader-settings"
+import { freshInstallWebReader, normalizeWebReaderSettings } from "@/lib/web/reader/reader-settings"
 
 const SINGLETON_ID = "singleton" as const
 
@@ -114,12 +104,9 @@ export const DEFAULTS: AppSettings = {
   browserDefaultBackend: "auto",
   cliBridge: { autoSync: false },
   webTools: { enabled: true },
-  // An explicit reset uses fresh-install consent, never the upgrade profile.
   webReader: freshInstallWebReader(),
-  // Legacy dismissal stamp — read once by `lib/onboarding/migrate-legacy.ts`,
-  // never written. Fresh installs have no progress at all, which is what makes
+  // Fresh installs have no progress at all, which is what makes
   // `OnboardingGate` route them into the flow.
-  onboardingDismissedAt: undefined,
   onboardingProgress: undefined,
   onboardingProfile: undefined,
   theme: "system",
@@ -337,22 +324,17 @@ type PersistedSettingsRow = AppSettings & { [PROVIDER_SECRETS_REF_FIELD]?: Provi
 interface ProviderSecretState {
   dbName: string
   ref: ProviderSecretsRef | undefined
-  /** Credentials still in plaintext in the persisted row. */
-  legacy: SettingsSecretSet
   resolution: ProviderSecretResolution
 }
 
-function hasPendingProviderSecretWork(state: ProviderSecretState): boolean {
-  return (
-    state.resolution.status === "ok" &&
-    (!isEmptySecretSet(state.legacy) || state.resolution.adoptFrom !== undefined)
-  )
+function hasCopiedProviderSecretsToAdopt(state: ProviderSecretState): boolean {
+  return state.resolution.status === "ok" && state.resolution.adoptFrom !== undefined
 }
 
 /**
  * Join the credentials kept in the secret store back into the persisted row.
- * Plaintext still in the row (written by an older build or a raw writer) wins
- * for the fields it carries and is queued for migration.
+ * Credential fields found in the row itself are not part of the persisted
+ * shape and are dropped.
  */
 async function hydrateProviderSecrets(
   dbName: string,
@@ -360,42 +342,42 @@ async function hydrateProviderSecrets(
   scope: SettingsScope | undefined
 ): Promise<{ row: AppSettings; state: ProviderSecretState }> {
   const { [PROVIDER_SECRETS_REF_FIELD]: ref, ...withoutRef } = persisted
-  const { publicRow, secrets: legacy } = splitSettingsSecrets(withoutRef as AppSettings)
+  const { publicRow } = splitSettingsSecrets(withoutRef as AppSettings)
   const resolution = await resolveProviderSecrets(dbName, ref)
   const stored = resolution.status === "ok" ? resolution.blob?.secrets : undefined
-  const row = joinSettingsSecrets(publicRow, overlaySecretSets(stored, legacy))
-  const state: ProviderSecretState = { dbName, ref, legacy, resolution }
-  if (hasPendingProviderSecretWork(state)) scheduleProviderSecretMigration(dbName, scope)
+  const row = joinSettingsSecrets(publicRow, stored)
+  const state: ProviderSecretState = { dbName, ref, resolution }
+  if (hasCopiedProviderSecretsToAdopt(state)) scheduleCopiedProviderSecretAdoption(dbName, scope)
   return { row, state }
 }
 
-/** Databases with a migration queued in this process. */
-const scheduledSecretMigrations = new Set<string>()
+/** Databases with an adoption queued in this process. */
+const scheduledSecretAdoptions = new Set<string>()
 
-function scheduleProviderSecretMigration(dbName: string, scope: SettingsScope | undefined): void {
-  if (scheduledSecretMigrations.has(dbName)) return
-  scheduledSecretMigrations.add(dbName)
-  void migrateProviderSecretsOutOfSettingsRow(scope)
+function scheduleCopiedProviderSecretAdoption(
+  dbName: string,
+  scope: SettingsScope | undefined
+): void {
+  if (scheduledSecretAdoptions.has(dbName)) return
+  scheduledSecretAdoptions.add(dbName)
+  void adoptCopiedProviderSecrets(scope)
     .catch(() => {
-      // Retried by the next read that still finds plaintext in the row.
+      // Retried by the next read that still resolves a copied blob.
     })
-    .finally(() => scheduledSecretMigrations.delete(dbName))
+    .finally(() => scheduledSecretAdoptions.delete(dbName))
 }
 
 /**
- * Move plaintext provider credentials out of the persisted settings row, and
- * adopt a blob a database migration copied the row away from. A no-op (no
- * write, no `updatedAt` bump) when there is nothing to move. Resolves `true`
- * when it wrote.
+ * Adopt a blob a database migration copied the row away from (ADR-0256 §3).
+ * A no-op (no write, no `updatedAt` bump) when there is nothing to adopt.
+ * Resolves `true` when it wrote.
  */
-export async function migrateProviderSecretsOutOfSettingsRow(
-  scope?: SettingsScope
-): Promise<boolean> {
+export async function adoptCopiedProviderSecrets(scope?: SettingsScope): Promise<boolean> {
   let wrote = false
   await saveSettings(() => ({}), {
     mirrorToHost: false,
     scope,
-    onlyForPendingProviderSecrets: () => {
+    onlyForCopiedProviderSecrets: () => {
       wrote = true
     },
   })
@@ -424,9 +406,7 @@ export async function mergeRestoredProviderSecrets(
     if (resolution.status === "unavailable") {
       throw new ProviderSecretStoreUnavailableError(resolution.error)
     }
-    const legacy = persisted ? splitSettingsSecrets(persisted).secrets : undefined
-    const current = overlaySecretSets(resolution.blob?.secrets, legacy)
-    return writeProviderSecrets(db.name, overlaySecretSets(current, incoming))
+    return writeProviderSecrets(db.name, overlaySecretSets(resolution.blob?.secrets, incoming))
   })
   saveQueue = next.catch(() => undefined)
   return next
@@ -465,16 +445,12 @@ async function readSettingsWithSecrets(
 }
 
 function normalizeSettingsRow(row: AppSettings): AppSettings {
-  const reader = normalizeWebReaderSettings(row.webReader, {
-    rowExists: true,
-    webTools: row.webTools,
-  })
-  const webReader = !Object.prototype.hasOwnProperty.call(row, "webReader")
-    ? legacyCompatibilityWebReader(row.webTools)
-    : reader.source === "unsupported-version"
+  const reader = normalizeWebReaderSettings(row.webReader)
+  const webReader =
+    reader.source === "unsupported-version"
       ? (reader.preserved ?? reader.effective)
       : reader.effective
-  const autoRouting = mergeAutoRouting(row.autoRouting, row.difficultyRouting)
+  const autoRouting = mergeAutoRouting(row.autoRouting)
   const routingConfig = {
     ...DEFAULT_ROUTING_CONFIG,
     ...(row.routingConfig ?? {}),
@@ -525,22 +501,7 @@ function normalizeSettingsRow(row: AppSettings): AppSettings {
       ...(row.liveVoice ?? {}),
       // Deployments are a replace-not-merge list: spreading defaults under a
       // user's array would resurrect entries they deleted.
-      deployments: (row.liveVoice?.deployments ?? DEFAULT_LIVE_VOICE_SETTINGS.deployments).map(
-        (deployment) => {
-          // Legacy `resourceId` / `appKey` were never used by a production
-          // transport. Drop them at the persistence boundary so ambiguous
-          // values cannot reach the native policy command.
-          const {
-            resourceId: _resourceId,
-            appKey: _appKey,
-            ...active
-          } = deployment as typeof deployment & {
-            resourceId?: unknown
-            appKey?: unknown
-          }
-          return active
-        }
-      ),
+      deployments: row.liveVoice?.deployments ?? DEFAULT_LIVE_VOICE_SETTINGS.deployments,
     },
     videoGeneration: { ...DEFAULT_VIDEO_GENERATION_SETTINGS, ...(row.videoGeneration ?? {}) },
     biometricRequiredFor: {
@@ -550,10 +511,7 @@ function normalizeSettingsRow(row: AppSettings): AppSettings {
     behaviorTelemetry: {
       ...DEFAULTS.behaviorTelemetry!,
       ...(row.behaviorTelemetry ?? {}),
-      enabled:
-        row.behaviorTelemetry?.enabled ??
-        row.telemetryEnabled ??
-        DEFAULTS.behaviorTelemetry!.enabled,
+      enabled: row.behaviorTelemetry?.enabled ?? DEFAULTS.behaviorTelemetry!.enabled,
       destinations: {
         ...DEFAULTS.behaviorTelemetry!.destinations,
         ...(row.behaviorTelemetry?.destinations ?? {}),
@@ -593,13 +551,10 @@ function normalizeSettingsRow(row: AppSettings): AppSettings {
     // features + "More". Arrays replace wholesale (an explicit empty `pinned`
     // is a deliberate user choice, not a missing field).
     sidebarLayout: { ...DEFAULT_SIDEBAR_LAYOUT, ...(row.sidebarLayout ?? {}) },
-    // `titleBarLayout` / `statusBarLayout` are deliberately NOT seeded here.
-    // "Absent" is load-bearing for them: `components/shell/use-bar-layout.ts`
-    // reads it as "this install has never customized the bar" and folds the
-    // legacy `barItems` visibility map (persisted by the UI store before the
-    // bars became orderable) into the first resolved layout. Defaulting them
-    // here would make every existing install look already-customized and throw
-    // that choice away.
+    // `titleBarLayout` / `statusBarLayout` are deliberately NOT seeded here:
+    // `components/shell/use-bar-layout.ts` resolves an absent layout to the
+    // shipped default, so a later change to that default reaches every install
+    // that never customized the bar.
     profile: { ...DEFAULT_USER_PROFILE, ...(row.profile ?? {}) },
     conversationTitle: { ...DEFAULTS.conversationTitle, ...(row.conversationTitle ?? {}) },
     conversationTimeline: {
@@ -620,23 +575,13 @@ function normalizeSettingsRow(row: AppSettings): AppSettings {
   }
 }
 
-function mergeAutoRouting(
-  stored: Partial<AutoRoutingSettings> | undefined,
-  legacyDifficulty: DifficultyRoutingSettings | undefined
-): AutoRoutingSettings {
-  const strategy =
-    stored?.strategy ??
-    (legacyDifficulty?.enabled ? ("difficulty" as const) : DEFAULT_AUTO_ROUTING.strategy)
+function mergeAutoRouting(stored: Partial<AutoRoutingSettings> | undefined): AutoRoutingSettings {
   return {
     ...DEFAULT_AUTO_ROUTING,
     ...(stored ?? {}),
-    strategy,
-    enabled: stored?.enabled ?? legacyDifficulty?.enabled ?? DEFAULT_AUTO_ROUTING.enabled,
-    defaultSelection:
-      stored?.defaultSelection ??
-      (stored?.enabled === true || legacyDifficulty?.enabled === true
-        ? "auto"
-        : DEFAULT_AUTO_ROUTING.defaultSelection),
+    strategy: stored?.strategy ?? DEFAULT_AUTO_ROUTING.strategy,
+    enabled: stored?.enabled ?? DEFAULT_AUTO_ROUTING.enabled,
+    defaultSelection: stored?.defaultSelection ?? DEFAULT_AUTO_ROUTING.defaultSelection,
     preferredProviders: stored?.preferredProviders ?? [],
     excludedProviders: stored?.excludedProviders ?? [],
     dataPolicy: {
@@ -645,7 +590,6 @@ function mergeAutoRouting(
     },
     thresholds: {
       ...DEFAULT_AUTO_ROUTING.thresholds,
-      ...(legacyDifficulty?.enabled ? { powerful: legacyDifficulty.threshold } : {}),
       ...(stored?.thresholds ?? {}),
     },
     candidateAliases: stored?.candidateAliases?.length
@@ -706,10 +650,10 @@ export interface SaveSettingsOptions {
    */
   mirrorToHost?: boolean
   /**
-   * Internal (migration): write only when the row still holds plaintext
-   * provider credentials or a copied blob to adopt, and call this when it did.
+   * Internal (adoption): write only when the row resolved a copied blob to
+   * adopt, and call this when it did.
    */
-  onlyForPendingProviderSecrets?: () => void
+  onlyForCopiedProviderSecrets?: () => void
 }
 
 export async function saveSettings(
@@ -731,28 +675,17 @@ export async function saveSettings(
       )
       options.scope?.assertActive()
       if (
-        options.onlyForPendingProviderSecrets &&
-        !(secretState && hasPendingProviderSecretWork(secretState))
+        options.onlyForCopiedProviderSecrets &&
+        !(secretState && hasCopiedProviderSecretsToAdopt(secretState))
       ) {
         return current
       }
       const patch = typeof input === "function" ? input(current) : input
-      // Normalized reads must not turn an unrelated preference import/save
-      // into an explicit Reader choice on an existing legacy installation.
-      const rawReaderRow = !Object.prototype.hasOwnProperty.call(patch, "webReader")
-        ? await (options.scope?.db ?? getDb()).settings.get(SINGLETON_ID)
-        : undefined
-      options.scope?.assertActive()
-      const migratedCurrent: AppSettings = {
-        ...current,
-        defaultAccountIds: current.defaultAccountIds ? { ...current.defaultAccountIds } : undefined,
-      }
-      migrateLegacyDefaultAccount(migratedCurrent)
       // Bump `updatedAt` on every write so the companion sync source can tell
       // when the singleton changed and re-emit it to paired phones (see
       // `lib/sync/desktop-sync-source.ts:readSettingsDelta`).
       const merged: AppSettings = {
-        ...migratedCurrent,
+        ...current,
         ...patch,
         // Portable profile imports contain preferences only. Merge each
         // provider so omitted local credentials/endpoints remain on this host;
@@ -763,7 +696,7 @@ export async function saveSettings(
             }
           : {}),
         ...resolveLocalePreference({
-          ...migratedCurrent,
+          ...current,
           ...patch,
           // All existing language-only setters express a manual selection.
           ...(patch.language !== undefined && patch.languageMode === undefined
@@ -773,17 +706,13 @@ export async function saveSettings(
         id: SINGLETON_ID,
         updatedAt: Date.now(),
       }
-      if (rawReaderRow && !Object.prototype.hasOwnProperty.call(rawReaderRow, "webReader")) {
-        delete merged.webReader
-      }
-      migrateLegacyDefaultAccount(merged)
       delete (merged as PersistedSettingsRow)[PROVIDER_SECRETS_REF_FIELD]
       const targetDb = options.scope?.db ?? getDb()
       const persisted = await persistableSettingsRow(targetDb.name, merged, secretState)
       options.scope?.assertActive()
       await (options.scope?.db ?? getDb()).settings.put(persisted.row)
       options.scope?.assertActive()
-      options.onlyForPendingProviderSecrets?.()
+      options.onlyForCopiedProviderSecrets?.()
       if (persisted.adoptedFrom) {
         // The copied entry belongs to a database that may since have been
         // deleted; its own row (if it still exists) keeps its own blob.
@@ -846,17 +775,16 @@ async function persistableSettingsRow(
   const resolution: ProviderSecretResolution = state?.resolution ?? { status: "ok", blob: null }
   const stored = resolution.status === "ok" ? resolution.blob : null
 
-  // What the row held when it was read: plaintext still in it, plus its blob.
-  // A save whose credentials equal that changed no credential, so when the
-  // store cannot take the move it may keep the row exactly as it was.
+  // What the row's blob held when it was read. A save whose credentials equal
+  // that changed no credential, so when the store cannot take a write it may
+  // keep the row's pointer exactly as it was.
   const keepAsItWas = (cause: unknown): { row: PersistedSettingsRow } => {
-    const unchanged = overlaySecretSets(stored?.secrets, state?.legacy)
-    if (!secretSetsEqual(secrets, unchanged)) {
+    if (!secretSetsEqual(secrets, stored?.secrets)) {
       throw cause instanceof ProviderSecretStoreUnavailableError
         ? cause
         : new ProviderSecretStoreUnavailableError(cause)
     }
-    const row: PersistedSettingsRow = joinSettingsSecrets(publicRow, state?.legacy)
+    const row: PersistedSettingsRow = { ...publicRow }
     if (state?.ref) row[PROVIDER_SECRETS_REF_FIELD] = state.ref
     return { row }
   }
@@ -887,26 +815,6 @@ async function persistableSettingsRow(
     if (!(error instanceof ProviderSecretStoreUnavailableError)) throw error
     return keepAsItWas(error)
   }
-}
-
-function normalizeLegacySubscriptionProvider(
-  provider: AppSettings["defaultProvider"]
-): SubscriptionAccountProvider | null {
-  if (provider === "opencode-go") return "opencode"
-  return provider && isValidSubscriptionProviderId(provider)
-    ? (provider as SubscriptionAccountProvider)
-    : null
-}
-
-function migrateLegacyDefaultAccount(settings: AppSettings): void {
-  const provider = normalizeLegacySubscriptionProvider(settings.defaultProvider)
-  const legacyAccountId = settings.defaultAccountId
-  if (!legacyAccountId || !provider) return
-  settings.defaultAccountIds = {
-    ...settings.defaultAccountIds,
-    [provider]: settings.defaultAccountIds?.[provider] ?? legacyAccountId,
-  }
-  settings.defaultAccountId = undefined
 }
 
 export async function addAlwaysAllow(toolName: string): Promise<void> {

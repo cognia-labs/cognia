@@ -89,48 +89,6 @@ describe("normalizePersistedPluginStatus", () => {
   })
 })
 
-describe("persist migration (v1 -> v2)", () => {
-  // Regression: a built-in plugin persisted in `status: "error"` by an older
-  // build could never recover — every restart re-threw
-  // "cannot be loaded from status: error". The v2 migration heals it back to a
-  // loadable resting state on rehydrate.
-  it("heals a non-recoverable persisted status on rehydrate", async () => {
-    window.localStorage.setItem(
-      "cognia-plugins",
-      JSON.stringify({
-        version: 1,
-        state: {
-          plugins: {
-            "cognia-clipboard-tools": {
-              manifest: { id: "cognia-clipboard-tools", name: "Clipboard Tools" },
-              status: "error",
-              source: "builtin",
-              path: "builtin://cognia-clipboard-tools",
-              config: {},
-            },
-            "user-disabled-plugin": {
-              manifest: { id: "user-disabled-plugin", name: "Disabled" },
-              status: "disabled",
-              source: "local",
-              path: "/tmp/disabled",
-              config: {},
-            },
-          },
-        },
-      })
-    )
-
-    await usePluginStore.persist.rehydrate()
-
-    const plugins = usePluginStore.getState().plugins
-    expect(plugins["cognia-clipboard-tools"].status).toBe("installed")
-    // User-disabled intent must be preserved through the migration.
-    expect(plugins["user-disabled-plugin"].status).toBe("disabled")
-
-    window.localStorage.clear()
-  })
-})
-
 describe("LocalProfile persistence", () => {
   afterEach(() => {
     clearPluginAccountStorage()
@@ -154,29 +112,6 @@ describe("LocalProfile persistence", () => {
     expect(usePluginStore.getState().rememberedPermissions.demo).toBeDefined()
     activatePluginAccountStorage("acct_b")
     expect(usePluginStore.getState().rememberedPermissions.demo).toBeUndefined()
-  })
-
-  it("revokes global grants and disables third-party plugins during legacy adoption", () => {
-    window.localStorage.setItem(
-      "cognia-plugins",
-      JSON.stringify({
-        version: 2,
-        state: {
-          rememberedPermissions: { demo: { "shell:execute": "allow" } },
-          plugins: {
-            builtin: { manifest: { id: "builtin" }, source: "builtin", status: "enabled" },
-            demo: { manifest: { id: "demo" }, source: "local", status: "enabled" },
-          },
-        },
-      })
-    )
-
-    activatePluginAccountStorage("acct_a")
-
-    expect(usePluginStore.getState().rememberedPermissions).toEqual({})
-    expect(usePluginStore.getState().plugins.builtin.status).toBe("installed")
-    expect(usePluginStore.getState().plugins.demo.status).toBe("disabled")
-    expect(window.localStorage.getItem("cognia-plugins")).toBeNull()
   })
 })
 

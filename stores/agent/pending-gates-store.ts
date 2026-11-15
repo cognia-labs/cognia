@@ -115,13 +115,6 @@ export const usePendingGatesStore = create<PendingGatesState>()(
           g.status === "interrupted" ? g : { ...g, status: "interrupted" as const }
         )
       },
-      // Legacy rows (pre-persist v1) lack `status`; stamp them interrupted.
-      migrate: (persisted) => {
-        const p = persisted as { gates?: Array<Partial<PendingGate>> } | undefined
-        return {
-          gates: (p?.gates ?? []).map((g) => ({ ...g, status: "interrupted" as const })),
-        } as Pick<PendingGatesState, "gates">
-      },
     }
   )
 )

@@ -22,7 +22,6 @@ const stopMock = jest.fn()
 const statusMock = jest.fn()
 const repairMock = jest.fn()
 jest.mock("@/lib/tauri/selection-toolbar", () => ({
-  SELECTION_TOOLBAR_ENABLED_PREF: "selectionToolbar.enabled",
   SELECTION_TOOLBAR_MODE_PREF: "selectionToolbar.mode",
   SELECTION_TOOLBAR_DISABLED_APPS_PREF: "selectionToolbar.disabledApps",
   SELECTION_TOOLBAR_DISABLED_SITES_PREF: "selectionToolbar.disabledSites",
@@ -40,7 +39,6 @@ jest.mock("sonner", () => ({
 beforeEach(() => {
   jest.clearAllMocks()
   getPrefMock.mockImplementation(async (key: string) => {
-    if (key === "selectionToolbar.enabled") return false
     if (key === "selectionToolbar.mode") return null
     if (key === "selectionToolbar.disabledApps") return ["1Password"]
     if (key === "selectionToolbar.disabledSites") return []
@@ -81,7 +79,6 @@ it("loads the disabled app list and starts only after explicit opt-in", async ()
     })
   )
   expect(setPrefMock).toHaveBeenCalledWith("selectionToolbar.mode", "automatic")
-  expect(setPrefMock).toHaveBeenCalledWith("selectionToolbar.enabled", true)
 })
 
 it("persists the normalized disabled app list", async () => {
@@ -122,7 +119,7 @@ it("persists a new translation target", async () => {
 
 it("stops the toolbar when switched back off", async () => {
   getPrefMock.mockImplementation(async (key: string) => {
-    if (key === "selectionToolbar.enabled") return true
+    if (key === "selectionToolbar.mode") return "automatic"
     if (key === "selectionToolbar.disabledApps") return ["1Password"]
     if (key === "selectionToolbar.translateLocale") return "ja"
     return null
@@ -133,7 +130,7 @@ it("stops the toolbar when switched back off", async () => {
   fireEvent.click(screen.getByRole("switch", { name: "toggle" }))
 
   await waitFor(() => expect(stopMock).toHaveBeenCalled())
-  expect(setPrefMock).toHaveBeenCalledWith("selectionToolbar.enabled", false)
+  expect(setPrefMock).toHaveBeenCalledWith("selectionToolbar.mode", "off")
 })
 
 it("keeps the toolbar marked on when stopping it fails", async () => {
@@ -141,7 +138,6 @@ it("keeps the toolbar marked on when stopping it fails", async () => {
   // Persisting "off" would claim capture is disabled while it keeps running,
   // and the next launch would not even try to stop it.
   getPrefMock.mockImplementation(async (key: string) => {
-    if (key === "selectionToolbar.enabled") return true
     if (key === "selectionToolbar.mode") return "automatic"
     if (key === "selectionToolbar.disabledApps") return ["1Password"]
     return null
@@ -157,14 +153,13 @@ it("keeps the toolbar marked on when stopping it fails", async () => {
       description: "stop refused",
     })
   )
-  expect(setPrefMock).toHaveBeenCalledWith("selectionToolbar.enabled", true)
   expect(setPrefMock).toHaveBeenCalledWith("selectionToolbar.mode", "automatic")
-  expect(setPrefMock).not.toHaveBeenCalledWith("selectionToolbar.enabled", false)
+  expect(setPrefMock).not.toHaveBeenCalledWith("selectionToolbar.mode", "off")
 })
 
 it("restarts a running toolbar so a new app block list takes effect at once", async () => {
   getPrefMock.mockImplementation(async (key: string) => {
-    if (key === "selectionToolbar.enabled") return true
+    if (key === "selectionToolbar.mode") return "automatic"
     if (key === "selectionToolbar.disabledApps") return ["1Password"]
     return null
   })
@@ -184,7 +179,7 @@ it("restarts a running toolbar so a new app block list takes effect at once", as
 
 it("reports a failure to restart without losing the saved list", async () => {
   getPrefMock.mockImplementation(async (key: string) => {
-    if (key === "selectionToolbar.enabled") return true
+    if (key === "selectionToolbar.mode") return "automatic"
     if (key === "selectionToolbar.disabledApps") return ["1Password"]
     return null
   })
@@ -199,7 +194,7 @@ it("reports a failure to restart without losing the saved list", async () => {
 
 it("stringifies a non-Error rejection from the restart path too", async () => {
   getPrefMock.mockImplementation(async (key: string) => {
-    if (key === "selectionToolbar.enabled") return true
+    if (key === "selectionToolbar.mode") return "automatic"
     if (key === "selectionToolbar.disabledApps") return ["1Password"]
     return null
   })
@@ -237,7 +232,7 @@ it("survives unmounting before the stored prefs resolve", async () => {
       })
   )
   const { unmount } = render(<SelectionToolbarSettings />)
-  await waitFor(() => expect(releases).toHaveLength(9))
+  await waitFor(() => expect(releases).toHaveLength(8))
   unmount()
   await act(async () => {
     releases.forEach((resolve) => resolve(null))
@@ -245,7 +240,7 @@ it("survives unmounting before the stored prefs resolve", async () => {
   // No "state update on an unmounted component" warning, no throw.
 })
 
-it("supports manual activation and persists it independently of the legacy bit", async () => {
+it("supports manual activation and persists it", async () => {
   render(<SelectionToolbarSettings />)
   await screen.findByDisplayValue("1Password")
 
@@ -319,6 +314,6 @@ it("keeps the toggle off and reports a permission failure", async () => {
   fireEvent.click(screen.getByRole("switch", { name: "toggle" }))
 
   await waitFor(() => expect(toastErrorMock).toHaveBeenCalled())
-  expect(setPrefMock).toHaveBeenCalledWith("selectionToolbar.enabled", false)
+  expect(setPrefMock).toHaveBeenCalledWith("selectionToolbar.mode", "off")
   expect(screen.getByRole("switch", { name: "toggle" })).not.toBeChecked()
 })

@@ -52,7 +52,6 @@ import { resetPluginRateLimiter } from "@/lib/plugin/security/rate-limiter"
 import {
   activateArtifactAccountStorage,
   clearArtifactAccountStorage,
-  completeArtifactDexieMigration,
   purgeArtifactAccountStorage,
   MAX_OPEN_ARTIFACTS,
   selectActiveArtifactId,
@@ -2104,141 +2103,7 @@ describe("clearSessionData additional branches", () => {
   })
 })
 
-describe("persist migration", () => {
-  it("seeds missing top-level keys with safe defaults", () => {
-    // Inject a v1 snapshot and force the persist middleware to migrate on rehydrate
-    const snapshot = JSON.stringify({
-      state: {
-        artifacts: {},
-      },
-      version: 1,
-    })
-    localStorage.setItem("cognia-artifacts", snapshot)
-    jest.isolateModules(() => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require("./artifact-store") as typeof import("./artifact-store")
-      const state = mod.useArtifactStore.getState()
-      expect(state.canvasDocuments).toBeDefined()
-      expect(state.artifactVersions).toBeDefined()
-      expect(state.artifactWorkspace).toBeDefined()
-    })
-  })
-
-  it("rehydrates canvasDocuments/artifacts date fields to Date instances", () => {
-    // Persist serializes Date -> ISO string. After rehydration the raw maps
-    // (read directly by components like CanvasDocumentRail) must hold real
-    // Date objects again, or `updatedAt.getTime()` throws.
-    const snapshot = JSON.stringify({
-      state: {
-        artifacts: {
-          a1: {
-            id: "a1",
-            sessionId: "s",
-            messageId: "m",
-            type: "code",
-            title: "a",
-            content: "x",
-            version: 1,
-            createdAt: "2024-01-01T00:00:00.000Z",
-            updatedAt: "2024-01-02T00:00:00.000Z",
-          },
-        },
-        canvasDocuments: {
-          d1: {
-            id: "d1",
-            sessionId: "s",
-            title: "doc",
-            content: "x",
-            language: "markdown",
-            type: "text",
-            createdAt: "2024-01-01T00:00:00.000Z",
-            updatedAt: "2024-01-02T00:00:00.000Z",
-          },
-        },
-        artifactVersions: {},
-        artifactWorkspace: {},
-      },
-      version: 4,
-    })
-    localStorage.setItem("cognia-artifacts", snapshot)
-    jest.isolateModules(() => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require("./artifact-store") as typeof import("./artifact-store")
-      const state = mod.useArtifactStore.getState()
-      expect(state.canvasDocuments.d1!.updatedAt).toBeInstanceOf(Date)
-      expect(state.canvasDocuments.d1!.createdAt).toBeInstanceOf(Date)
-      expect(state.artifacts.a1!.updatedAt).toBeInstanceOf(Date)
-      expect(state.artifacts.a1!.createdAt).toBeInstanceOf(Date)
-      // The actual crash site: a direct consumer calling .getTime().
-      expect(() => state.canvasDocuments.d1!.updatedAt.getTime()).not.toThrow()
-    })
-  })
-
-  it("merges an existing artifactWorkspace with the initial defaults", () => {
-    const snapshot = JSON.stringify({
-      state: {
-        artifacts: {},
-        canvasDocuments: {},
-        artifactVersions: {},
-        artifactWorkspace: {
-          searchQuery: "preserved",
-        },
-      },
-      version: 1,
-    })
-    localStorage.setItem("cognia-artifacts", snapshot)
-    jest.isolateModules(() => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require("./artifact-store") as typeof import("./artifact-store")
-      const state = mod.useArtifactStore.getState()
-      expect(state.artifactWorkspace.searchQuery).toBe("preserved")
-      expect(state.artifactWorkspace.scope).toBe("session")
-    })
-  })
-
-  it("v3→v4 re-buckets one global tab list by the owning artifact's session", () => {
-    // v3 kept `openArtifactIds` global, so a reload could hand the dock one
-    // conversation's tabs while another was on screen.
-    const artifact = (id: string, sessionId: string) => ({
-      id,
-      sessionId,
-      messageId: "m",
-      type: "code",
-      title: id,
-      content: "x",
-      version: 1,
-      createdAt: "2024-01-01T00:00:00.000Z",
-      updatedAt: "2024-01-02T00:00:00.000Z",
-    })
-    const snapshot = JSON.stringify({
-      state: {
-        artifacts: {
-          a1: artifact("a1", "s1"),
-          a2: artifact("a2", "s2"),
-          a3: artifact("a3", "s1"),
-        },
-        canvasDocuments: {},
-        artifactVersions: {},
-        artifactWorkspace: {},
-        // `gone` was evicted by the LRU cap and must not survive as a tab.
-        openArtifactIds: ["a1", "a2", "gone", "a3"],
-        analysisResults: { r1: { id: "r1", sessionId: "s", messageId: "m" } },
-      },
-      version: 3,
-    })
-    localStorage.setItem("cognia-artifacts", snapshot)
-    jest.isolateModules(() => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require("./artifact-store") as typeof import("./artifact-store")
-      const state = mod.useArtifactStore.getState()
-      expect(state.openArtifactIdsBySession).toEqual({ s1: ["a1", "a3"], s2: ["a2"] })
-      expect(state.activeArtifactIdBySession).toEqual({})
-      const raw = state as unknown as Record<string, unknown>
-      expect(raw.openArtifactIds).toBeUndefined()
-      expect(raw.analysisResults).toBeUndefined()
-    })
-  })
-
+describe("persisted state", () => {
   const onDiskArtifact = (id: string) => ({
     id,
     sessionId: "session",
@@ -2251,43 +2116,58 @@ describe("persist migration", () => {
     updatedAt: "2026-01-01T00:00:00.000Z",
   })
 
-  it("restores a v5 snapshot's per-conversation parking", () => {
-    const snapshot = JSON.stringify({
+  const rehydrate = (snapshot: unknown) => {
+    localStorage.setItem("cognia-artifacts", JSON.stringify(snapshot))
+    let state!: ReturnType<typeof useArtifactStore.getState>
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require("./artifact-store") as typeof import("./artifact-store")
+      state = mod.useArtifactStore.getState()
+    })
+    return state
+  }
+
+  it("restores the current version's preferences", () => {
+    const state = rehydrate({
       state: {
-        artifacts: {
-          a1: onDiskArtifact("a1"),
-          a2: onDiskArtifact("a2"),
-        },
+        artifactWorkspace: { scope: "all" },
         openArtifactIdsBySession: { s1: ["a1"], s2: ["a2"] },
         activeArtifactIdBySession: { s1: "a1", s2: "a2" },
       },
-      version: 5,
+      version: 7,
     })
-    localStorage.setItem("cognia-artifacts", snapshot)
-    jest.isolateModules(() => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require("./artifact-store") as typeof import("./artifact-store")
-      const state = mod.useArtifactStore.getState()
-      expect(state.activeArtifactIdBySession).toEqual({ s1: "a1", s2: "a2" })
-    })
+    expect(state.openArtifactIdsBySession).toEqual({ s1: ["a1"], s2: ["a2"] })
+    expect(state.activeArtifactIdBySession).toEqual({ s1: "a1", s2: "a2" })
+    expect(state.artifactWorkspace.scope).toBe("all")
   })
 
-  it("seeds an empty parking map for a v4 snapshot that predates it", () => {
-    const snapshot = JSON.stringify({
+  it("never reads artifacts, versions or canvas documents from the blob", () => {
+    // Dexie owns them; a blob that still carries them is not read back.
+    const state = rehydrate({
+      state: {
+        artifacts: { a1: onDiskArtifact("a1") },
+        artifactVersions: { a1: [] },
+        canvasDocuments: { d1: { id: "d1" } },
+      },
+      version: 7,
+    })
+    expect(state.artifacts).toEqual({})
+    expect(state.artifactVersions).toEqual({})
+    expect(state.canvasDocuments).toEqual({})
+  })
+
+  it("falls back to the defaults for an older version", () => {
+    const state = rehydrate({
       state: {
         artifacts: { a1: onDiskArtifact("a1") },
         openArtifactIdsBySession: { s1: ["a1"] },
+        activeArtifactIdBySession: { s1: "a1" },
       },
-      version: 4,
+      version: 5,
     })
-    localStorage.setItem("cognia-artifacts", snapshot)
-    jest.isolateModules(() => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require("./artifact-store") as typeof import("./artifact-store")
-      const state = mod.useArtifactStore.getState()
-      expect(state.activeArtifactIdBySession).toEqual({})
-      expect(state.openArtifactIdsBySession).toEqual({ s1: ["a1"] })
-    })
+    expect(state.artifacts).toEqual({})
+    expect(state.openArtifactIdsBySession).toEqual({})
+    expect(state.activeArtifactIdBySession).toEqual({})
   })
 })
 
@@ -2364,50 +2244,6 @@ describe("resolveNextActiveArtifactId fallback paths", () => {
 })
 
 describe("persist partialize — artifacts live in Dexie", () => {
-  it("retains the legacy maps until Dexie confirms the initial migration", () => {
-    const legacyArtifact = {
-      id: "legacy-artifact",
-      sessionId: "s",
-      messageId: "m",
-      type: "code" as const,
-      title: "legacy",
-      content: "must survive",
-      version: 1,
-      createdAt: new Date("2026-01-01T00:00:00.000Z"),
-      updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-    }
-    const legacyVersion = {
-      id: "legacy-version",
-      artifactId: legacyArtifact.id,
-      content: "older",
-      version: 1,
-      createdAt: new Date("2025-12-31T00:00:00.000Z"),
-    }
-    useArtifactStore.setState({
-      artifacts: { [legacyArtifact.id]: legacyArtifact },
-      artifactVersions: { [legacyArtifact.id]: [legacyVersion] },
-      artifactDexieMigrationPending: true,
-    })
-
-    expect(readPartialize()).toMatchObject({
-      artifacts: { [legacyArtifact.id]: legacyArtifact },
-      artifactVersions: { [legacyArtifact.id]: [legacyVersion] },
-      artifactDexieMigrationPending: true,
-    })
-    expect(JSON.parse(localStorage.getItem("cognia-artifacts")!).state.artifacts).toHaveProperty(
-      legacyArtifact.id
-    )
-
-    completeArtifactDexieMigration()
-
-    expect(readPartialize().artifacts).toBeUndefined()
-    expect(readPartialize().artifactVersions).toBeUndefined()
-    expect(readPartialize().artifactDexieMigrationPending).toBeUndefined()
-    const cleaned = JSON.parse(localStorage.getItem("cognia-artifacts")!).state
-    expect(cleaned.artifacts).toBeUndefined()
-    expect(cleaned.artifactVersions).toBeUndefined()
-  })
-
   it("writes neither artifacts nor their versions, whatever their size", async () => {
     // The old partialize wrote both, and to fit the ~5 MB localStorage ceiling
     // it cut each artifact's content at 100 KB and evicted everything past the
@@ -3010,44 +2846,55 @@ describe("account storage isolation", () => {
     localStorage.setItem(
       "cognia-artifacts:acct_a",
       JSON.stringify({
-        state: { artifacts: { art_a: persistedArtifact("art_a", "Alpha artifact") } },
-        version: 3,
+        state: { openArtifactIdsBySession: { session: ["art_a"] } },
+        version: 7,
       })
     )
     localStorage.setItem(
       "cognia-artifacts:acct_b",
       JSON.stringify({
-        state: { artifacts: { art_b: persistedArtifact("art_b", "Beta artifact") } },
-        version: 3,
+        state: { openArtifactIdsBySession: { session: ["art_b"] } },
+        version: 7,
       })
     )
 
     activateArtifactAccountStorage("acct_a")
-    expect(Object.keys(useArtifactStore.getState().artifacts)).toEqual(["art_a"])
+    expect(useArtifactStore.getState().openArtifactIdsBySession).toEqual({ session: ["art_a"] })
 
     activateArtifactAccountStorage("acct_b")
-    expect(Object.keys(useArtifactStore.getState().artifacts)).toEqual(["art_b"])
-    expect(useArtifactStore.getState().artifacts.art_a).toBeUndefined()
+    expect(useArtifactStore.getState().openArtifactIdsBySession).toEqual({ session: ["art_b"] })
+  })
+
+  it("never reads artifacts from an account snapshot", () => {
+    localStorage.setItem(
+      "cognia-artifacts:acct_a",
+      JSON.stringify({
+        state: { artifacts: { art_a: persistedArtifact("art_a", "Alpha artifact") } },
+        version: 7,
+      })
+    )
+
+    activateArtifactAccountStorage("acct_a")
+    expect(useArtifactStore.getState().artifacts).toEqual({})
   })
 
   it("clears in-memory account state without deleting the account snapshot", () => {
     localStorage.setItem(
       "cognia-artifacts:acct_a",
       JSON.stringify({
-        state: { artifacts: { art_a: persistedArtifact("art_a", "Alpha artifact") } },
-        version: 3,
+        state: { openArtifactIdsBySession: { session: ["art_a"] } },
+        version: 7,
       })
     )
 
     activateArtifactAccountStorage("acct_a")
-    expect(useArtifactStore.getState().artifacts.art_a?.title).toBe("Alpha artifact")
+    expect(useArtifactStore.getState().openArtifactIdsBySession).toEqual({ session: ["art_a"] })
 
     clearArtifactAccountStorage()
 
-    expect(useArtifactStore.getState().artifacts).toEqual({})
-    // The bucket still exists — clearing is not deleting. Since v206 it holds
-    // only the dock's preferences; the artifact itself was handed to Dexie by
-    // `lib/artifacts/dexie-bridge.ts` while the account was active.
+    expect(useArtifactStore.getState().openArtifactIdsBySession).toEqual({})
+    // The bucket still exists — clearing is not deleting. It holds only the
+    // dock's preferences; artifacts live in Dexie.
     expect(localStorage.getItem("cognia-artifacts:acct_a")).toBeTruthy()
   })
 
@@ -3065,47 +2912,6 @@ describe("account storage isolation", () => {
 
     expect(localStorage.getItem("cognia-artifacts:acct_a")).toBeNull()
     expect(localStorage.getItem("cognia-artifacts:acct_b")).toContain("art_b")
-  })
-
-  it("adopts the legacy artifact bucket into the first account bucket", () => {
-    localStorage.setItem(
-      "cognia-artifacts",
-      JSON.stringify({
-        state: { artifacts: { legacy_art: persistedArtifact("legacy_art", "Legacy") } },
-        version: 3,
-      })
-    )
-
-    activateArtifactAccountStorage("acct_legacy")
-
-    expect(localStorage.getItem("cognia-artifacts")).toBeNull()
-    expect(localStorage.getItem("cognia-artifacts:acct_legacy")).toBeTruthy()
-    // The rows land in memory, which is what the Dexie bridge mirrors. They no
-    // longer stay in the bucket: `partialize` stopped writing them at v206.
-    expect(Object.keys(useArtifactStore.getState().artifacts)).toEqual(["legacy_art"])
-  })
-
-  it("does not overwrite an existing account bucket during legacy adoption", () => {
-    localStorage.setItem(
-      "cognia-artifacts",
-      JSON.stringify({
-        state: { artifacts: { legacy_art: persistedArtifact("legacy_art", "Legacy") } },
-        version: 3,
-      })
-    )
-    localStorage.setItem(
-      "cognia-artifacts:acct_a",
-      JSON.stringify({
-        state: { artifacts: { art_a: persistedArtifact("art_a", "Alpha") } },
-        version: 3,
-      })
-    )
-
-    activateArtifactAccountStorage("acct_a")
-
-    expect(localStorage.getItem("cognia-artifacts")).toContain("legacy_art")
-    expect(localStorage.getItem("cognia-artifacts:acct_a")).toBeTruthy()
-    expect(Object.keys(useArtifactStore.getState().artifacts)).toEqual(["art_a"])
   })
 
   it("falls back to empty state for missing or malformed account snapshots", () => {

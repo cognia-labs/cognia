@@ -26,7 +26,6 @@ import { getAuthConnection } from "@/lib/db/auth-connections"
 import { getDb } from "@/lib/db/schema"
 import { connectProvider } from "@/lib/plugin/auth/connect"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
-import { registerLegacySessionMigration } from "@/lib/plugin/auth/legacy-session-migrations"
 import {
   ConnectionCredentialStore,
   setHostAuthBackend,
@@ -222,36 +221,6 @@ describe("Host-managed provider session adapter", () => {
     jest.restoreAllMocks()
     __resetIntegrationRegistryForTesting()
     unregisterExternalServicesByPlugin("host-business")
-  })
-
-  it("awaits registered migration before reading aliases for any provider", async () => {
-    let finish!: () => void
-    const gate = new Promise<void>((resolve) => {
-      finish = resolve
-    })
-    const migrate = jest.fn(async () => {
-      await gate
-    })
-    const aliases = jest.fn(async () => new Map())
-    const dispose = registerLegacySessionMigration("host-owner", providerId, { migrate, aliases })
-    const owner = createAuthAPI("host-owner", allow)
-    try {
-      owner.registerProvider(provider)
-      const sessions = owner.getSessions(providerId)
-      await Promise.resolve()
-      expect(migrate).toHaveBeenCalledWith(
-        expect.objectContaining({ pluginId: "host-owner", id: providerId })
-      )
-      expect(aliases).not.toHaveBeenCalled()
-      finish()
-      await expect(sessions).resolves.toEqual([])
-      expect(aliases).toHaveBeenCalledWith(
-        expect.objectContaining({ pluginId: "host-owner", id: providerId })
-      )
-    } finally {
-      finish()
-      dispose()
-    }
   })
 
   it("registers without session callbacks and serves connected, scope-matching sessions", async () => {

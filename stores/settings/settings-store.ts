@@ -105,7 +105,6 @@ import {
   computeEnabledProviderIds,
   seedDefaultMappingsIfNeeded,
 } from "@/lib/routing/seed-default-mappings"
-import { repairLegacyProviderFingerprints } from "@/lib/settings/provider-fingerprint-repair"
 
 function discoveryIdentity(row: Partial<UserProviderSettings> | undefined): string {
   return JSON.stringify({
@@ -359,8 +358,6 @@ interface SettingsState {
   providerUsageStats: Record<string, ProviderModelUsageEntry[]>
   providerUIPreferences: ProviderUIPreferences
   providerOnboardingDismissed: boolean
-  /** ISO 8601 timestamp of when the desktop first-run onboarding dialog was last dismissed/completed. */
-  onboardingDismissedAt: string | undefined
 
   setTheme: (mode: AppTheme) => Promise<void>
   setColorTheme: (preset: ColorThemePreset) => Promise<void>
@@ -688,10 +685,7 @@ function getProvidersMap(
 }
 
 function effectiveWebReader(settings: AppSettings): WebReaderSettingsV1 {
-  return normalizeWebReaderSettings(settings.webReader, {
-    rowExists: true,
-    webTools: settings.webTools,
-  }).effective
+  return normalizeWebReaderSettings(settings.webReader).effective
 }
 
 interface FlatPluginFields {
@@ -708,7 +702,6 @@ interface FlatPluginFields {
   providerUsageStats: Record<string, ProviderModelUsageEntry[]>
   providerUIPreferences: ProviderUIPreferences
   providerOnboardingDismissed: boolean
-  onboardingDismissedAt: string | undefined
   background: BackgroundSettings
   lockScreen: LockScreenSettings
   wallpapers: Wallpaper[]
@@ -748,7 +741,6 @@ function deriveFlatPluginFields(s: AppSettings | null): FlatPluginFields {
       ...(s?.providerUIPreferences ?? {}),
     },
     providerOnboardingDismissed: s?.providerOnboardingDismissed ?? false,
-    onboardingDismissedAt: s?.onboardingDismissedAt ?? undefined,
     background: { ...DEFAULT_BACKGROUND_SETTINGS, ...(s?.background ?? {}) },
     lockScreen: { ...DEFAULT_LOCK_SCREEN, ...(s?.lockScreen ?? {}) },
     wallpapers: s?.wallpapers ?? [],
@@ -916,7 +908,7 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
         // fresh users so the alias-routing engine activates without manual
         // setup. Idempotent: returns the same object when mappings already
         // exist or no providers are enabled.
-        let s = seedDefaultMappingsIfNeeded(repaired)
+        const s = seedDefaultMappingsIfNeeded(repaired)
         // Persist whatever the repair + seed changed so subsequent loads observe
         // it. The repair is purely subtractive (drops orphans / collapses
         // duplicate sourceKey rows) and the seed only fills an empty
@@ -928,13 +920,6 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
         if (s.modelMappings !== repaired.modelMappings) {
           patch.modelMappings = s.modelMappings
         }
-        // Older builds persisted a verification fingerprint that embedded the
-        // raw API key; rewrite it into the credential-free form.
-        const fingerprintRepair = repairLegacyProviderFingerprints(s)
-        if (fingerprintRepair) {
-          s = { ...s, ...fingerprintRepair }
-          Object.assign(patch, fingerprintRepair)
-        }
         if (Object.keys(patch).length > 0) {
           // A repair, not an edit — the user never asked for it, so a paired
           // client must not replay it onto its host (dropping an orphaned
@@ -942,35 +927,6 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
           await saveSettings(patch, { mirrorToHost: false })
         }
         const controlsNativeHost = !isSecondaryOverlayRole(getWindowRole())
-        if (!controlsNativeHost && s.networkProxy) {
-          // Overlays need presentation settings, not credential migration or
-          // writes to the host's global network policy. Keep legacy secrets
-          // out of their renderer state without persisting a migration here.
-          const networkProxy = { ...s.networkProxy }
-          delete (networkProxy as { password?: string }).password
-          s = { ...s, networkProxy }
-        }
-        if (controlsNativeHost && isTauri() && s.networkProxy) {
-          try {
-            const { migrateLegacyProxyPassword } = await import("@/lib/network/proxy-credentials")
-            const migrated = await migrateLegacyProxyPassword(
-              s.networkProxy,
-              async (networkProxy) => {
-                await saveSettings({ networkProxy }, { mirrorToHost: false })
-              }
-            )
-            s = { ...s, networkProxy: migrated.settings }
-          } catch (err) {
-            // Keep the legacy row on disk so the next boot can retry, but
-            // never expose its plaintext password to renderer state or IPC.
-            const { password: _legacyPassword, ...sanitized } =
-              s.networkProxy as typeof s.networkProxy & {
-                password?: string
-              }
-            s = { ...s, networkProxy: sanitized }
-            reportProxyFailure(err)
-          }
-        }
         set({ settings: s, loaded: true, loadFailed: false, loadError: null })
         // The derived Provider Profile Store is per database and is otherwise
         // only refreshed by a provider-touching save. Reconcile it once per
@@ -1126,13 +1082,10 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
 
     setWebReader: async (profile) => {
       const current = get().settings ?? (await getSettings())
-      const webReader = normalizeWebReaderSettings(
-        { ...effectiveWebReader(current), ...profile },
-        {
-          rowExists: true,
-          webTools: current.webTools,
-        }
-      ).effective
+      const webReader = normalizeWebReaderSettings({
+        ...effectiveWebReader(current),
+        ...profile,
+      }).effective
       const next = await saveSettings({ webReader })
       set({ settings: next })
     },

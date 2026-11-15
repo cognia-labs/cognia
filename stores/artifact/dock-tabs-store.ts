@@ -418,14 +418,7 @@ export const useDockTabsStore = create<DockTabsState>()(
     {
       name: "cognia-dock-tabs-v1",
       storage: persistLocalStorage(),
-      // v2: page tabs (ADR-0214, D9). A v1 entry simply has none.
       version: 2,
-      migrate: (persisted) => ({
-        bySession: normalizeAll(
-          (persisted as { bySession?: Record<string, Partial<SessionDockTabs>> } | undefined)
-            ?.bySession
-        ),
-      }),
       partialize: (state) => ({
         bySession: Object.fromEntries(
           Object.entries(pruneByLastUsed(state.bySession)).map(([id, entry]) => [

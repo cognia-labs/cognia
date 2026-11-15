@@ -60,11 +60,7 @@ jest.mock("@/lib/glance/remote/phone-store", () => {
 import { useDocumentHidden } from "@/hooks/use-document-hidden"
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { withEditedMobileEntries, withMobilePreset } from "@/lib/glance/layout-edit"
-import {
-  DEFAULT_GLANCE_MOBILE_SETTINGS,
-  migrateMobileHomeLayout,
-  mobileLayoutFromPreset,
-} from "@/lib/glance/mobile-layout"
+import { DEFAULT_GLANCE_MOBILE_SETTINGS, mobileLayoutFromPreset } from "@/lib/glance/mobile-layout"
 import { DEFAULT_GLANCE_PANEL_SETTINGS, layoutFromPreset } from "@/lib/glance/presets"
 import * as phoneStoreModule from "@/lib/glance/remote/phone-store"
 import { glanceDemandOf } from "@/lib/glance/remote/demand"
@@ -208,26 +204,18 @@ describe("useMobileGlance", () => {
     entries.filter((e) => !e.hidden).map((e) => e.id)
 
   describe("settings", () => {
-    it("reads the legacy home model when no glance layout is stored", () => {
+    it("never reads the pre-glance home model", () => {
       settingsState.settings = {
         mobileHomeLayout: { quickActions: ["inbox"], hiddenSections: ["recents"] },
-        welcomeStats: { enabled: false },
-      }
+      } as never
       const { result } = render()
-      expect(result.current.settings).toEqual(
-        migrateMobileHomeLayout({
-          mobileHomeLayout: { quickActions: ["inbox"], hiddenSections: ["recents"] },
-          welcomeStats: { enabled: false },
-        })
-      )
-      expect(result.current.settings.preset).toBe("custom")
+      expect(result.current.settings).toEqual(DEFAULT_GLANCE_MOBILE_SETTINGS)
       expect(settingsState.save).not.toHaveBeenCalled()
     })
 
-    it("prefers a stored glance layout over the legacy home", () => {
+    it("reads the stored glance layout", () => {
       settingsState.settings = {
         mobileGlanceLayout: { preset: "minimal", entries: mobileLayoutFromPreset("minimal") },
-        mobileHomeLayout: { hiddenSections: ["activeRuns"] },
       }
       const { result } = render()
       expect(result.current.settings.preset).toBe("minimal")
@@ -698,15 +686,6 @@ describe("useMobileGlance", () => {
           withMobilePreset({ ...DEFAULT_GLANCE_MOBILE_SETTINGS, shortcuts: ["me"] }, "agent-ops")
         )
         expect(saved().shortcuts).toEqual(["me"])
-      })
-
-      it("a legacy phone's first edit stores the migrated layout", async () => {
-        settingsState.settings = { mobileHomeLayout: { hiddenSections: ["recents"] } }
-        await send({ kind: "set-scope", scope: "workspace" })
-        expect(saved()).toEqual({
-          ...migrateMobileHomeLayout({ mobileHomeLayout: { hiddenSections: ["recents"] } }),
-          scope: "workspace",
-        })
       })
 
       it("resolves errors.requestFailed when the save fails", async () => {

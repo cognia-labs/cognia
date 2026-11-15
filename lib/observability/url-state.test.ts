@@ -1,9 +1,7 @@
 import {
-  LEGACY_TRACE_URL_KEYS,
   TRACE_CONTROL_PARAMS,
   TRACE_EXPLORE_PARAMS,
   TRACE_URL_KEYS,
-  consumedLegacyKeys,
   decodeControls,
   decodeExploreState,
   encodeControls,
@@ -46,15 +44,6 @@ describe("url-state", () => {
       expect([...TRACE_CONTROL_PARAMS]).toEqual(["trange", "tfrom", "tto", "tf"])
       expect([...TRACE_EXPLORE_PARAMS]).toEqual(["tspan", "tq", "terr"])
       expect([...TRACE_CONTROL_PARAMS, ...TRACE_EXPLORE_PARAMS]).not.toContain("tview")
-    })
-
-    it("names the pre-rename keys", () => {
-      expect(LEGACY_TRACE_URL_KEYS).toEqual({
-        range: "range",
-        from: "from",
-        to: "to",
-        filters: "f",
-      })
     })
   })
 
@@ -184,70 +173,11 @@ describe("url-state", () => {
       expect(decodeControls(encodeControls(controls))).toEqual(controls)
     })
 
-    describe("legacy keys", () => {
-      it("reads range/from/to/f on a channel=traces link", () => {
-        expect(
-          decodeControls(`channel=traces&range=custom&from=100&to=200&f=${opusFilter}`)
-        ).toEqual({
-          rangePreset: "custom",
-          customSince: 100,
-          customUntil: 200,
-          filters: { model: ["opus"] },
-        })
-        expect(decodeControls("channel=traces&range=6h")?.rangePreset).toBe("6h")
-      })
-
-      it("ignores legacy keys without channel=traces (they belong to the Logs panel)", () => {
-        expect(decodeControls("range=6h")).toBeNull()
-        expect(decodeControls("from=100&to=200")).toBeNull()
-        expect(decodeControls(`channel=logs&range=6h&f=${opusFilter}`)).toBeNull()
-      })
-
-      it("ignores a bare from/to pair even on a traces link", () => {
-        expect(decodeControls("channel=traces&from=100&to=200")).toBeNull()
-      })
-
-      it("prefers the owned keys whenever any is present, never mixing in legacy ones", () => {
-        const out = decodeControls(`channel=traces&trange=24h&range=6h&f=${opusFilter}`)
-        expect(out).toEqual({
-          rangePreset: "24h",
-          customSince: null,
-          customUntil: null,
-          filters: {},
-        })
-      })
-
-      it("falls back to 1h on a half-formed legacy custom range", () => {
-        expect(decodeControls("channel=traces&range=custom&from=100")?.rangePreset).toBe("1h")
-      })
-    })
-  })
-
-  describe("consumedLegacyKeys", () => {
-    it("is empty without channel=traces", () => {
-      expect(consumedLegacyKeys("range=6h&from=1&to=2&f=x")).toEqual([])
-    })
-
-    it("is empty when owned keys are present (the legacy branch was not taken)", () => {
-      expect(consumedLegacyKeys("channel=traces&trange=6h&range=24h")).toEqual([])
-    })
-
-    it("lists range and filters for a relative legacy link, leaving from/to alone", () => {
-      expect(consumedLegacyKeys("channel=traces&range=6h&from=1&to=2&f=x")).toEqual(["range", "f"])
-    })
-
-    it("lists range, from and to for a custom legacy link", () => {
+    it("reads only the Traces-owned keys, even on a channel=traces link", () => {
+      expect(decodeControls("channel=traces&range=6h")).toBeNull()
       expect(
-        consumedLegacyKeys(new URLSearchParams("channel=traces&range=custom&from=1&to=2"))
-      ).toEqual(["range", "from", "to"])
-    })
-
-    it("only lists the custom bounds actually present", () => {
-      expect(consumedLegacyKeys("channel=traces&range=custom&from=1")).toEqual(["range", "from"])
-    })
-
-    it("lists a filters-only legacy link", () => {
-      expect(consumedLegacyKeys(`channel=traces&f=${opusFilter}`)).toEqual(["f"])
+        decodeControls(`channel=traces&range=custom&from=100&to=200&f=${opusFilter}`)
+      ).toBeNull()
     })
   })
 
@@ -290,16 +220,6 @@ describe("url-state", () => {
       expect(params.get("traceId")).toBe("t1")
       expect(params.get("from")).toBe("5")
       expect(next.startsWith("?")).toBe(false)
-    })
-
-    it("deletes the extra keys it is told to (consumed legacy keys)", () => {
-      const next = replaceOwnedParams(
-        "channel=traces&range=6h&f=x",
-        TRACE_CONTROL_PARAMS,
-        new URLSearchParams("trange=6h&tf=x"),
-        ["range", "f"]
-      )
-      expect(new URLSearchParams(next).toString()).toBe("channel=traces&trange=6h&tf=x")
     })
 
     it("returns an empty string when nothing is left", () => {

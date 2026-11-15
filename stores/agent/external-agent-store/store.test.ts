@@ -1,10 +1,7 @@
 /**
  * @jest-environment jsdom
  *
- * Coverage for the persisted store wiring (`store.ts`):
- * - `migratePersistedAgents` — flagging non-acp agents
- * - `normalizeLastRunSnapshots` — Date / string timestamp coercion
- * - `migrate` — the function passed to `persist({ migrate })`
+ * Coverage for the persisted store wiring (`store.ts`).
  */
 
 jest.mock("@cognia/logging", () => {
@@ -22,7 +19,7 @@ jest.mock("@cognia/logging", () => {
   }
 })
 
-import type { ExternalAgentStore, StoredExternalAgentConfig } from "./types"
+import type { ExternalAgentStore } from "./types"
 import type { ExternalAgentValiditySnapshot } from "@/types/agent/external-agent"
 import { useExternalAgentStore } from "./store"
 
@@ -35,302 +32,23 @@ beforeEach(() => {
   jest.clearAllMocks()
 })
 
-/**
- * The persist `migrate` function is internal to the store — extract it via
- * the test API exposed by zustand's persist middleware. We pull it through
- * the persist options so we exercise the same code paths the runtime uses.
- */
+/** Persist options, read through zustand's persist API. */
 type PersistOpts = {
   version: number
-  migrate: (state: unknown, version: number) => unknown
+  migrate?: (state: unknown, version: number) => unknown
   partialize: (state: ExternalAgentStore) => unknown
 }
 type StoreWithPersist = { persist: { getOptions: () => PersistOpts } }
 
 const persistOptions = (useExternalAgentStore as unknown as StoreWithPersist).persist.getOptions()
 
-const baseAgent = (overrides: Partial<StoredExternalAgentConfig> = {}): StoredExternalAgentConfig =>
-  ({
-    id: "x",
-    name: "x",
-    description: "",
-    protocol: "acp",
-    transport: "stdio",
-    enabled: true,
-    process: { command: "x" } as never,
-    defaultPermissionMode: "default",
-    tags: [],
-    timeout: 30000,
-    metadata: {},
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    ...overrides,
-  }) as StoredExternalAgentConfig
-
-describe("persist.migrate", () => {
-  it("bumps the persisted version and keeps removed settings out of future writes", () => {
+describe("persist options", () => {
+  it("keeps removed settings out of writes and has no migrate step", () => {
     expect(persistOptions.version).toBe(7)
+    expect(persistOptions.migrate).toBeUndefined()
     expect(persistOptions.partialize(useExternalAgentStore.getState())).not.toHaveProperty(
       "enabled"
     )
-  })
-
-  it("converts a legacy global off state into per-agent disabled states", () => {
-    const persisted = {
-      enabled: false,
-      autoConnectOnStartup: true,
-      activeAgentId: "on",
-      agents: {
-        on: baseAgent({ id: "on" }),
-        off: baseAgent({ id: "off", enabled: false }),
-      },
-    }
-    const out = persistOptions.migrate(persisted, 6) as ExternalAgentStore
-    expect(out).not.toHaveProperty("enabled")
-    expect(out.agents.on.enabled).toBe(false)
-    expect(out.agents.off.enabled).toBe(false)
-    expect(out.autoConnectOnStartup).toBe(true)
-    expect(out.activeAgentId).toBe("on")
-    expect(persisted.agents.on.enabled).toBe(true)
-  })
-
-  it.each([true, undefined])("preserves individual states for legacy global %s", (enabled) => {
-    const persisted = {
-      enabled,
-      agents: { on: baseAgent({ id: "on" }), off: baseAgent({ id: "off", enabled: false }) },
-    }
-    const out = persistOptions.migrate(persisted, 6) as ExternalAgentStore
-    expect(out).not.toHaveProperty("enabled")
-    expect(out.agents.on.enabled).toBe(true)
-    expect(out.agents.off.enabled).toBe(false)
-    expect(persistOptions.migrate(out, 6)).toEqual(out)
-  })
-
-  it("returns sane defaults when the persisted state is null", () => {
-    const out = persistOptions.migrate(null, 0) as ExternalAgentStore
-    expect(out.agents).toEqual({})
-    expect(out.agentValidity).toEqual({})
-    expect(out.benchmarkCapabilityMap).toEqual({})
-    expect(out.lastRunSnapshots).toEqual({})
-    expect(out.chatFailurePolicy).toBe("fallback")
-  })
-
-  it("flags non-acp agents as unsupported via migratePersistedAgents", () => {
-    const persisted = {
-      agents: {
-        legacy: baseAgent({
-          id: "legacy",
-          // @ts-expect-error -- deliberately legacy protocol value
-          protocol: "openai-acp",
-          metadata: { foo: "bar" } as never,
-        }),
-      },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    const meta = out.agents.legacy.metadata as Record<string, unknown>
-    expect(meta.unsupported).toBe(true)
-    expect(meta.unsupportedProtocol).toBe("openai-acp")
-    expect(typeof meta.unsupportedReason).toBe("string")
-    expect(meta.foo).toBe("bar")
-  })
-
-  it("leaves acp agents alone in migratePersistedAgents", () => {
-    const persisted = {
-      agents: {
-        ok: baseAgent({ id: "ok", protocol: "acp" }),
-      },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect((out.agents.ok.metadata as Record<string, unknown>).unsupported).toBeUndefined()
-  })
-
-  it("does NOT flag the supported opencode-v2 protocol as unsupported", () => {
-    // Migration uses the canonical predicate, preserving the current v2 adapter.
-    const persisted = {
-      agents: {
-        oc: baseAgent({ id: "oc", protocol: "opencode-v2" }),
-      },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect((out.agents.oc.metadata as Record<string, unknown>).unsupported).toBeUndefined()
-  })
-
-  it("preserves a retired OpenCode record but marks its old protocol unsupported", () => {
-    const persisted = {
-      agents: { legacy: baseAgent({ id: "legacy", protocol: "opencode" }) },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.agents.legacy.protocol).toBe("opencode")
-    expect(out.agents.legacy.metadata).toMatchObject({
-      unsupported: true,
-      unsupportedProtocol: "opencode",
-    })
-  })
-
-  it("skips falsy agent entries in migratePersistedAgents", () => {
-    const persisted = {
-      agents: {
-        a: baseAgent({ id: "a" }),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        b: null as any,
-      },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.agents.a).toBeDefined()
-    expect(out.agents.b).toBeNull()
-  })
-
-  it("normalizes string timestamps in lastRunSnapshots", () => {
-    const persisted = {
-      lastRunSnapshots: {
-        a: { timestamp: "2024-01-01T00:00:00.000Z", success: true },
-      },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.lastRunSnapshots.a.timestamp).toBeInstanceOf(Date)
-  })
-
-  it("preserves Date timestamps in lastRunSnapshots", () => {
-    const ts = new Date()
-    const persisted = {
-      lastRunSnapshots: {
-        a: { timestamp: ts, success: true },
-      },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.lastRunSnapshots.a.timestamp).toBe(ts)
-  })
-
-  it("drops falsy lastRunSnapshots entries", () => {
-    const persisted = {
-      lastRunSnapshots: {
-        a: { timestamp: new Date(), success: true },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        b: null as any,
-      },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.lastRunSnapshots.a).toBeDefined()
-    expect(out.lastRunSnapshots.b).toBeUndefined()
-  })
-
-  it("seeds benchmarkCapabilityMap baseline for known agents missing one", () => {
-    const persisted = {
-      agents: {
-        a: baseAgent({ id: "a" }),
-      },
-      // no benchmarkCapabilityMap on purpose
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.benchmarkCapabilityMap.a.length).toBeGreaterThan(0)
-  })
-
-  it("preserves an existing benchmarkCapabilityMap entry when present", () => {
-    const seed = [{ id: "kept", title: "kept" }] as never
-    const persisted = {
-      agents: {
-        a: baseAgent({ id: "a" }),
-      },
-      benchmarkCapabilityMap: { a: seed },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.benchmarkCapabilityMap.a).toBe(seed)
-  })
-
-  it("normalizes agentValidity snapshots, falling back to acp protocol when agent is missing", () => {
-    const snapshot: ExternalAgentValiditySnapshot = {
-      executable: true,
-      checkedAt: new Date(),
-      source: "config",
-      sessionExtensions: {
-        "session/list": { state: "unknown" },
-        "session/fork": { state: "unknown" },
-        "session/resume": { state: "unknown" },
-      },
-    } as never
-    const persisted = {
-      agents: {
-        a: baseAgent({ id: "a", protocol: "acp" }),
-      },
-      agentValidity: {
-        a: snapshot,
-        ghost: snapshot,
-      },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.agentValidity.a).toBeDefined()
-    expect(out.agentValidity.ghost).toBeDefined()
-  })
-
-  it("skips falsy agentValidity entries", () => {
-    const persisted = {
-      agents: {
-        a: baseAgent({ id: "a" }),
-      },
-      agentValidity: {
-        a: {
-          executable: true,
-          checkedAt: new Date(),
-          source: "config",
-          sessionExtensions: {
-            "session/list": { state: "unknown" },
-            "session/fork": { state: "unknown" },
-            "session/resume": { state: "unknown" },
-          },
-        },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        b: null as any,
-      },
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.agentValidity.a).toBeDefined()
-    expect(out.agentValidity.b).toBeUndefined()
-  })
-
-  it("drops a stored transport block, because it described the old runtime", () => {
-    // Written in a browser with no Host paired. The same profile opened after
-    // pairing one, or in the desktop app, would keep reporting that the agent
-    // needs the desktop app: nothing about the agent changed, so nothing
-    // rewrites the row, and the panel prefers a stored verdict to the live gate.
-    const base = {
-      checkedAt: new Date(),
-      source: "config" as const,
-      sessionExtensions: {
-        "session/list": { state: "unknown" },
-        "session/fork": { state: "unknown" },
-        "session/resume": { state: "unknown" },
-      },
-    }
-    const persisted = {
-      agents: { a: baseAgent({ id: "a" }), b: baseAgent({ id: "b" }) },
-      agentValidity: {
-        a: {
-          ...base,
-          executable: false,
-          blockingReasonCode: "transport_blocked",
-          blockingReason: "The stdio transport requires the desktop (Tauri) runtime.",
-          recoveryHints: ["useDesktopRuntime"],
-        },
-        b: {
-          ...base,
-          executable: false,
-          blockingReasonCode: "initialization_failed",
-        },
-      },
-    }
-    const out = persistOptions.migrate(persisted, 5) as ExternalAgentStore
-    expect(out.agentValidity.a).toBeUndefined()
-    // The agent-shaped verdict is untouched: a command that failed to start
-    // fails to start in any runtime.
-    expect(out.agentValidity.b).toBeDefined()
-  })
-
-  it("preserves a previously-set chatFailurePolicy", () => {
-    const persisted = {
-      chatFailurePolicy: "strict",
-    }
-    const out = persistOptions.migrate(persisted, 1) as ExternalAgentStore
-    expect(out.chatFailurePolicy).toBe("strict")
   })
 })
 
@@ -387,7 +105,7 @@ describe("persist.partialize", () => {
   })
 })
 
-it("preserves model roles through persistence projection and reload migration", () => {
+it("preserves model roles through the persistence projection", () => {
   const modelRoles = {
     version: 1 as const,
     slots: { "subagent.default": { kind: "inherit-primary" as const } },
@@ -400,9 +118,6 @@ it("preserves model roles through persistence projection and reload migration", 
     modelRoles,
   })
   const projected = persistOptions.partialize(useExternalAgentStore.getState())
-  const reloaded = persistOptions.migrate(
-    JSON.parse(JSON.stringify(projected)),
-    5
-  ) as ExternalAgentStore
+  const reloaded = JSON.parse(JSON.stringify(projected)) as ExternalAgentStore
   expect(reloaded.agents[id].modelRoles).toEqual(modelRoles)
 })

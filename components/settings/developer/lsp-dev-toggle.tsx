@@ -8,12 +8,6 @@
  * LSP binaries spawn after one in-session consent prompt instead of refusing
  * them outright. Every spawn is still audit-logged.
  *
- * It previously read and wrote the pre-unification
- * `developer.unsignedLspAllowed`, which `lib/lsp/migrate-settings.ts` moves to
- * `lsp.unsignedAllowed` and then clears at app start — so the toggle wrote a
- * field the migration deleted and the policy read a field nothing set. Both
- * ends now name `lsp.unsignedAllowed`.
- *
  * Hidden in production builds (returns `null`) so the toggle never
  * appears in shipped binaries. Gate is `process.env.NODE_ENV !==
  * "production"`. `defaultIsUnsignedLspAllowed` in the policy short-circuits on

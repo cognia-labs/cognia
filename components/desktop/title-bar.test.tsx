@@ -226,7 +226,6 @@ jest.mock("@/stores/ui/ui-store", () => {
     requestCreate,
     requestChatHome,
     openFind,
-    barItems: {},
     sidebarCollapsed: uiStateRef.sidebarCollapsed,
     guildRailCollapsed: uiStateRef.guildRailCollapsed,
     statusBarCollapsed: uiStateRef.statusBarCollapsed,

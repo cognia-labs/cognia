@@ -238,7 +238,6 @@ export function useProviderSettings(): UseProviderSettingsResult {
             providerSettings: settings?.providerSettings,
             customProviders: settings?.customProviders,
             defaultAccountIds: settings?.defaultAccountIds,
-            defaultAccountId: settings?.defaultAccountId,
             defaultProvider: settings?.defaultProvider,
           }
         : null,
@@ -247,7 +246,6 @@ export function useProviderSettings(): UseProviderSettingsResult {
       settings?.providerSettings,
       settings?.customProviders,
       settings?.defaultAccountIds,
-      settings?.defaultAccountId,
       settings?.defaultProvider,
     ]
   )

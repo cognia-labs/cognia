@@ -2,7 +2,6 @@ import {
   BUILT_IN_ACTION_IDS,
   DEFAULT_TRAY_PANEL_ACTIONS,
   DELEGATE_PROMPT_FIELD,
-  TRAY_PANEL_ACTIONS_PREF,
   ensureBuiltInActions,
   migrateRetiredNativeEffects,
   resolveLabel,
@@ -56,10 +55,6 @@ describe("shipped catalogue", () => {
   it("gates the stop-automation action on something actually running", () => {
     const stop = DEFAULT_TRAY_PANEL_ACTIONS.find((a) => a.id === "trayPanel.stopAutomation")!
     expect(stop.when).toBe("automation.running")
-  })
-
-  it("uses a versioned pref key", () => {
-    expect(TRAY_PANEL_ACTIONS_PREF).toBe("trayPanel.actions.v1")
   })
 })
 

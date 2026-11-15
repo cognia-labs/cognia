@@ -64,7 +64,7 @@ jest.mock("@/lib/accounts/active-account-id", () => ({
 }))
 
 import { getDefaultBackupPassphrase, rotateBackupKey } from "@/lib/data/backup-key"
-import { deriveInstallKey, encrypt, decrypt, deriveKey } from "@/lib/plugin/api/crypto-helpers"
+import { deriveInstallKey, encrypt, decrypt } from "@/lib/plugin/api/crypto-helpers"
 import { setWebKeyringPassphrase, getSecret, clearSecret } from "@/lib/keyring"
 import {
   saveLogtoSession,
@@ -114,7 +114,6 @@ test("desktop rotation preserves existing plugin install-key ciphertext", async 
   await expect(decrypt(ciphertext, await deriveInstallKey("audit-plugin"))).resolves.toBe(
     "authored-plugin-value"
   )
-  await expect(decrypt(ciphertext, await deriveKey("audit-plugin"))).rejects.toThrow()
   await expect(decrypt(ciphertext, oldKey)).resolves.toBe("authored-plugin-value")
 })
 

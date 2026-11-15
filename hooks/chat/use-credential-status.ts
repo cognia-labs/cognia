@@ -116,10 +116,7 @@ export function useCredentialStatus(target: CredentialTarget = {}): CredentialSt
       const selectedAccount =
         accountId ??
         (gateway
-          ? (settings.defaultAccountIds?.[definition?.id ?? providerId] ??
-            (settings.defaultProvider === providerId || settings.defaultProvider === definition?.id
-              ? settings.defaultAccountId
-              : undefined))
+          ? settings.defaultAccountIds?.[definition?.id ?? providerId]
           : resolveAccountId(providerId, null, null, settings))
       const manual = Boolean(
         configured?.apiKey?.trim() ||

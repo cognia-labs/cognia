@@ -3,7 +3,6 @@ import {
   getBarCatalog,
   isDefaultBarLayout,
   mergeVisibleOrder,
-  migrateLegacyBarItems,
   resolveBarLayout,
   splitStatusBarScopes,
 } from "@/lib/shell/bar-items"
@@ -216,37 +215,6 @@ describe("isDefaultBarLayout", () => {
     const catalog = getBarCatalog("status", "web")
     const resolved = resolveBarLayout(catalog, DEFAULT_STATUS_BAR_LAYOUT)
     expect(isDefaultBarLayout("status", catalog, resolved)).toBe(true)
-  })
-})
-
-describe("migrateLegacyBarItems", () => {
-  it("returns null when the legacy map says nothing about this bar", () => {
-    expect(migrateLegacyBarItems("title", {})).toBeNull()
-    expect(migrateLegacyBarItems("title", { connectivity: false })).toBeNull()
-  })
-
-  it("carries a legacy opt-out over as a hidden id", () => {
-    const migrated = migrateLegacyBarItems("status", { usage: false, perf: false })
-    // `terminal` ships hidden and the legacy map is silent about it, so it
-    // stays hidden alongside the two explicit opt-outs.
-    expect(migrated?.hidden.sort()).toEqual(["perf", "terminal", "usage"])
-  })
-
-  it("lets an explicit legacy opt-in beat a hidden-by-default item", () => {
-    const migrated = migrateLegacyBarItems("status", { perf: true })
-    expect(migrated?.hidden).not.toContain("perf")
-  })
-
-  it("leaves unmentioned ids on their shipped default", () => {
-    const migrated = migrateLegacyBarItems("title", { workspace: false })
-    // `accountTop` / `quickActions` ship hidden and the legacy map is silent
-    // about them, so they stay hidden rather than being force-shown.
-    expect(migrated?.hidden.sort()).toEqual(["accountTop", "quickActions", "workspace"])
-  })
-
-  it("keeps the canonical order — the legacy map had none", () => {
-    const migrated = migrateLegacyBarItems("status", { sync: false })
-    expect(migrated?.order).toEqual(DEFAULT_STATUS_BAR_LAYOUT.order)
   })
 })
 

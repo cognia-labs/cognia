@@ -4,7 +4,6 @@ import { getDb, withDbReopenRetry } from "@/lib/db/schema"
 import { getSettings, saveSettings } from "@/lib/db/settings"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import type { ProviderId } from "@/types/subscription"
-import { getSubscriptionProvider } from "./provider-registry"
 
 import { deleteAccount, getActiveAccount, listAccounts, saveAccount } from "./transport"
 import type { Account } from "@/types/subscription"
@@ -36,7 +35,6 @@ interface ReferenceJournal {
   sessionIds: string[]
   characterIds: string[]
   previousDefaultAccountIds?: AppSettings["defaultAccountIds"]
-  previousLegacyDefaultAccountId?: string
   settingsChanged: boolean
 }
 
@@ -54,9 +52,7 @@ export async function inspectProviderAccountReferences(
   return {
     sessions: sessions.map(({ id, title }) => ({ id, title })),
     characters: characters.map(({ id, name }) => ({ id, name })),
-    isDefault:
-      settings.defaultAccountIds?.[provider] === accountId ||
-      (settings.defaultProvider === provider && settings.defaultAccountId === accountId),
+    isDefault: settings.defaultAccountIds?.[provider] === accountId,
     isActive: active.activeAccountId === accountId,
   }
 }
@@ -67,16 +63,9 @@ export async function setProviderDefaultAccount(
 ): Promise<AppSettings> {
   const current = await getSettings()
   const defaultAccountIds = { ...current.defaultAccountIds }
-  const legacyProvider = getSubscriptionProvider(
-    current.defaultProvider ?? "",
-    current.customProviders
-  )?.id
-  if (current.defaultAccountId && legacyProvider) {
-    defaultAccountIds[legacyProvider] ??= current.defaultAccountId
-  }
   if (accountId) defaultAccountIds[provider] = accountId
   else delete defaultAccountIds[provider]
-  const saved = await saveSettings({ defaultAccountIds, defaultAccountId: undefined })
+  const saved = await saveSettings({ defaultAccountIds })
   publishSettings(saved)
   notifySubscriptionChanged()
   return saved
@@ -140,9 +129,7 @@ async function rewriteReferences(
         .filter((character) => character.accountIdOverride === accountId)
         .toArray()
       const settings = await db.settings.get("singleton")
-      const settingsChanged =
-        settings?.defaultAccountIds?.[provider] === accountId ||
-        (settings?.defaultProvider === provider && settings.defaultAccountId === accountId)
+      const settingsChanged = settings?.defaultAccountIds?.[provider] === accountId
 
       await db.sessions
         .filter((session) => session.accountId === accountId)
@@ -164,10 +151,6 @@ async function rewriteReferences(
         const nextSettings: AppSettings = {
           ...settings,
           defaultAccountIds,
-          defaultAccountId:
-            settings.defaultProvider === provider && settings.defaultAccountId === accountId
-              ? undefined
-              : settings.defaultAccountId,
           updatedAt: transitionAt,
         }
         await db.settings.put(nextSettings)
@@ -179,7 +162,6 @@ async function rewriteReferences(
         sessionIds: sessions.map(({ id }) => id),
         characterIds: characters.map(({ id }) => id),
         previousDefaultAccountIds: settings?.defaultAccountIds,
-        previousLegacyDefaultAccountId: settings?.defaultAccountId,
         settingsChanged,
       }
     })
@@ -220,19 +202,13 @@ async function restoreReferences(
       if (journal.settingsChanged) {
         const settings = await db.settings.get("singleton")
         const expectedDefault = replacementAccountId ?? undefined
-        const transitionedLegacyDefault =
-          journal.previousLegacyDefaultAccountId === accountId
-            ? undefined
-            : journal.previousLegacyDefaultAccountId
         if (
           settings?.updatedAt === journal.transitionAt &&
-          settings.defaultAccountIds?.[provider] === expectedDefault &&
-          settings.defaultAccountId === transitionedLegacyDefault
+          settings.defaultAccountIds?.[provider] === expectedDefault
         ) {
           const restored: AppSettings = {
             ...settings,
             defaultAccountIds: journal.previousDefaultAccountIds,
-            defaultAccountId: journal.previousLegacyDefaultAccountId,
             updatedAt: rollbackAt,
           }
           await db.settings.put(restored)

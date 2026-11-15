@@ -10,13 +10,6 @@
 import { retiredNativeReplacement } from "@/lib/tray/native-actions"
 import type { TrayPanelAction } from "./types"
 
-/**
- * The Tauri-store key the catalogue lived under before ADR-0225 moved it into
- * `AppSettings.trayPanelActions`. Read only by the one-time import
- * (`./migrate-actions.ts`), which deletes it afterwards.
- */
-export const TRAY_PANEL_ACTIONS_PREF = "trayPanel.actions.v1"
-
 /** Field id of the built-in delegate composer, shared by the panel shell. */
 export const DELEGATE_PROMPT_FIELD = "prompt"
 

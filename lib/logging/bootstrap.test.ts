@@ -5,7 +5,6 @@
 import "fake-indexeddb/auto"
 import { IDBFactory } from "fake-indexeddb"
 import { spanToLogEntry } from "@cognia/agent-trace/span-to-log-entry"
-import { waitFor } from "@testing-library/react"
 
 import type { LangfuseTransport } from "./transports/langfuse-transport"
 
@@ -190,7 +189,7 @@ describe("bootstrapLogger persistence + transport attach/detach", () => {
     expect(result.transports.agentTraceOtlpConfig.headers).toEqual({})
   })
 
-  it("purges legacy renderer-owned OTLP headers from persisted settings", async () => {
+  it("never carries persisted renderer-owned OTLP headers into the resolved settings", async () => {
     localStorage.setItem(
       "cognia-logging-transports",
       JSON.stringify({
@@ -209,9 +208,7 @@ describe("bootstrapLogger persistence + transport attach/detach", () => {
     const state = mod.bootstrapLogger()
 
     expect(state.transports.agentTraceOtlpConfig.headers).toEqual({})
-    expect(localStorage.getItem(mod.LOGGING_TRANSPORTS_STORAGE_KEY)).not.toContain(
-      "renderer-secret"
-    )
+    expect(JSON.stringify(state.transports)).not.toContain("renderer-secret")
   })
 
   it("blocks credential-bearing generic Remote URLs in a WebView", async () => {
@@ -492,17 +489,17 @@ describe("bootstrapLogger persistence + transport attach/detach", () => {
     expect(names).not.toContain("remote")
   })
 
-  it("migrates an enabled legacy destination to metadata-only OTLP v4", async () => {
+  it("sends metadata-only batches for an enabled destination", async () => {
     mockIsTauri.mockReturnValue(true)
     localStorage.setItem(
       "cognia-logging-transports",
       JSON.stringify({
         langfuse: true,
         langfuseConfig: {
+          enabled: true,
           publicKey: "pk-native",
           secretKeyConfigured: true,
-          host: "https://langfuse.example/",
-          minLevel: "warn",
+          baseUrl: "https://langfuse.example/",
         },
       })
     )
@@ -538,66 +535,6 @@ describe("bootstrapLogger persistence + transport attach/detach", () => {
     expect(JSON.stringify(batch)).not.toContain("event-create")
   })
 
-  it("moves an enabled legacy Langfuse secret into the account-scoped Host", async () => {
-    mockIsTauri.mockReturnValue(true)
-    localStorage.setItem(
-      "cognia-logging-transports",
-      JSON.stringify({
-        langfuse: true,
-        langfuseConfig: {
-          publicKey: "pk-legacy",
-          secretKey: "sk-legacy",
-          host: "https://langfuse.example",
-          minLevel: "warn",
-        },
-      })
-    )
-
-    const mod = await import("./bootstrap")
-    mod.getLoggingBootstrapState()
-
-    expect(mockSetLangfuseCredentials).toHaveBeenCalledWith({
-      enabled: true,
-      baseUrl: "https://langfuse.example",
-      publicKey: "pk-legacy",
-      secretKey: "sk-legacy",
-      environment: "production",
-      captureModelContent: false,
-      captureToolContent: false,
-    })
-    await waitFor(() =>
-      expect(localStorage.getItem("cognia-logging-transports")).not.toContain("sk-legacy")
-    )
-  })
-
-  it("asks the Host to migrate a legacy secret that was already stored natively", async () => {
-    mockIsTauri.mockReturnValue(true)
-    localStorage.setItem(
-      "cognia-logging-transports",
-      JSON.stringify({
-        langfuse: true,
-        langfuseConfig: {
-          publicKey: "pk-legacy",
-          secretKeyConfigured: true,
-          host: "https://langfuse.example",
-          minLevel: "warn",
-        },
-      })
-    )
-
-    const mod = await import("./bootstrap")
-    mod.getLoggingBootstrapState()
-
-    expect(mockSetLangfuseCredentials).toHaveBeenCalledWith({
-      enabled: true,
-      baseUrl: "https://langfuse.example",
-      publicKey: "pk-legacy",
-      environment: "production",
-      captureModelContent: false,
-      captureToolContent: false,
-    })
-  })
-
   it("does not attach the native exporter when the Rust Langfuse secret is absent", async () => {
     mockIsTauri.mockReturnValue(true)
     localStorage.setItem(
@@ -605,6 +542,7 @@ describe("bootstrapLogger persistence + transport attach/detach", () => {
       JSON.stringify({
         langfuse: true,
         langfuseConfig: {
+          enabled: true,
           publicKey: "pk-native",
           secretKeyConfigured: false,
           baseUrl: "https://langfuse.example/",
@@ -654,24 +592,22 @@ describe("bootstrapLogger persistence + transport attach/detach", () => {
     expect(config.minLevel).toBe("warn")
   })
 
-  it("purges legacy telemetry plaintext from a hostless WebView", async () => {
+  it("never carries a plaintext telemetry secret into the resolved settings", async () => {
     localStorage.setItem(
       "cognia-logging-transports",
       JSON.stringify({
-        langfuseConfig: { publicKey: "pk", secretKey: "sk-legacy" },
+        langfuseConfig: { publicKey: "pk", secretKey: "sk-plaintext" },
         agentTraceOtlpConfig: {
-          grafanaCloud: { instanceId: "123", apiToken: "glc_legacy" },
+          grafanaCloud: { instanceId: "123", apiToken: "glc_plaintext" },
         },
       })
     )
     const mod = await import("./bootstrap")
     const state = mod.bootstrapLogger()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const persisted = localStorage.getItem(mod.LOGGING_TRANSPORTS_STORAGE_KEY) ?? ""
-    expect(persisted).not.toContain("sk-legacy")
-    expect(persisted).not.toContain("glc_legacy")
-    expect(state.transports.langfuseConfig.secretKeyConfigured).toBe(true)
-    expect(state.transports.agentTraceOtlpConfig.grafanaCloud.apiTokenConfigured).toBe(true)
+    expect(JSON.stringify(state.transports)).not.toContain("sk-plaintext")
+    expect(JSON.stringify(state.transports)).not.toContain("glc_plaintext")
+    expect(state.transports.langfuseConfig.secretKeyConfigured).toBe(false)
+    expect(state.transports.agentTraceOtlpConfig.grafanaCloud.apiTokenConfigured).toBe(false)
   })
 
   it("re-reads persisted toggle state on a fresh module load", async () => {

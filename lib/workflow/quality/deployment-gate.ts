@@ -1,4 +1,4 @@
-import { evaluateGate } from "@cognia/eval-core"
+import { evaluateGate, SCORING_VERSION } from "@cognia/eval-core"
 import { getDb } from "@/lib/db/schema"
 import type { WorkflowAppDraft, WorkflowAppRelease } from "@/types/workflow/app"
 
@@ -51,7 +51,7 @@ export async function assertWorkflowDeploymentQuality(input: {
     .filter(
       (candidate) =>
         candidate.status === "completed" &&
-        candidate.scoringVersion === 2 &&
+        candidate.scoringVersion === SCORING_VERSION &&
         candidate.config?.targetKind === "workflow" &&
         candidate.config.targetId === input.workflowId &&
         candidate.config.targetVersionId === input.versionId

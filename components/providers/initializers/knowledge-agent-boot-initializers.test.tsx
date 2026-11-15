@@ -23,9 +23,6 @@ jest.mock("./memory-job-worker-initializer", () => ({
 jest.mock("./template-platform-initializer", () => ({
   TemplatePlatformInitializer: () => <span data-boot="templates" />,
 }))
-jest.mock("./vector-credential-migration-initializer", () => ({
-  VectorCredentialMigrationInitializer: () => <span data-boot="vector-credentials" />,
-}))
 // ADR-0162. Stubbed like its siblings, and asserted below, because the real one
 // renders null: a transfer pump that was dropped from this group would leave
 // every queued transfer sitting at "queued" with nothing to show for it.
@@ -33,8 +30,8 @@ jest.mock("./sftp-transfer-initializer", () => ({
   SftpTransferInitializer: () => <span data-boot="sftp-transfers" />,
 }))
 // The real one renders null, so without this stub the group could drop it and
-// this suite would still pass. Cloud identity hygiene (discarding the legacy
-// global Logto session, resolving a lapsed login) would then simply never run.
+// this suite would still pass. Cloud identity hygiene (resolving a lapsed
+// login) would then simply never run.
 jest.mock("./cloud-identity-initializer", () => ({
   CloudIdentityInitializer: () => <span data-boot="cloud-identity" />,
 }))
@@ -58,7 +55,6 @@ it("mounts knowledge and agent workers and reports readiness", () => {
     "memory",
     "twin",
     "project-kb",
-    "vector-credentials",
     "templates",
     "sftp-transfers",
   ])

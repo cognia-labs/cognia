@@ -53,7 +53,6 @@ describe("CompositionChip", () => {
       useAgentRuntimeStore.setState({
         defaultComposition: { presetId: "standard" },
         sessionCompositions: {},
-        modeId: "standard",
       })
       useCustomModeStore.setState({ customModes: {} })
     })

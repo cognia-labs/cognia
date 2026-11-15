@@ -329,11 +329,7 @@ export async function resolveSubscriptionProviderCredential(
   const accountProvider = definition?.id
   const subscriptionAccountId =
     selectedAccountId === undefined && accountProvider
-      ? (appSettings.defaultAccountIds?.[accountProvider] ??
-        (appSettings.defaultProvider === providerId ||
-        appSettings.defaultProvider === accountProvider
-          ? appSettings.defaultAccountId
-          : null))
+      ? (appSettings.defaultAccountIds?.[accountProvider] ?? null)
       : (selectedAccountId ?? null)
   const credential = isOpencodeChatProviderId(providerId)
     ? await resolveOpencodeVaultCredential(providerId, subscriptionAccountId)

@@ -1096,7 +1096,7 @@ describe("installRuntime — ai-run (happy path)", () => {
     await upsertByConversationKey({
       conversationKey: event.conversationKey,
       sessionId: source!.sessionId,
-      ...(target === "team" ? { teamId: "team" } : { workflowId: "workflow" }),
+      ...(target === "team" ? { squadId: "team" } : { workflowId: "workflow" }),
     })
     const job = await enqueueConnectorInboundJob(event, "queue")
     let entered!: () => void, release!: () => void
@@ -3022,7 +3022,7 @@ it.each(["direct", "team", "workflow"] as const)(
       autonomy: "autopilot",
       allowScheduleTools: true,
       ...(target === "team"
-        ? { teamId: "team" }
+        ? { squadId: "team" }
         : target === "workflow"
           ? { workflowId: "wf" }
           : {}),
@@ -3078,7 +3078,7 @@ describe("installRuntime — ai-run (suppression gate)", () => {
             conversationKey: key,
             sessionId: "s",
             ...suppression,
-            ...(target === "team" ? { teamId: "team" } : { workflowId: "workflow" }),
+            ...(target === "team" ? { squadId: "team" } : { workflowId: "workflow" }),
           })
           await callHandler(makeEvent({ conversationKey: key }), "ai-run")
           expect(mockStartTeamRunFromIM).not.toHaveBeenCalled()
@@ -3098,7 +3098,7 @@ describe("installRuntime — ai-run (suppression gate)", () => {
     await upsertByConversationKey({
       conversationKey: key,
       sessionId: "s",
-      ...(target === "team" ? { teamId: "team" } : { workflowId: "workflow" }),
+      ...(target === "team" ? { squadId: "team" } : { workflowId: "workflow" }),
     })
     await callHandler(makeEvent({ conversationKey: key }), "ai-run")
     expect(mockStartTeamRunFromIM).not.toHaveBeenCalled()
@@ -3303,7 +3303,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
     await upsertByConversationKey({
       conversationKey: key,
       sessionId: "s_team_draft",
-      teamId: "team_r",
+      squadId: "team_r",
     })
 
     await callHandler(makeEvent({ conversationKey: key }), "draft-prepare")
@@ -3514,7 +3514,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
     await upsertByConversationKey({
       conversationKey: key,
       sessionId: "s_team_pii",
-      teamId: "team_r",
+      squadId: "team_r",
     })
 
     await callHandler(
@@ -3581,7 +3581,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
     await upsertByConversationKey({
       conversationKey: key,
       sessionId: "s_team_clean",
-      teamId: "team_r",
+      squadId: "team_r",
     })
 
     await callHandler(makeEvent({ conversationKey: key }), "ai-run", {
@@ -3762,7 +3762,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
     await upsertByConversationKey({
       conversationKey: key,
       sessionId: "s_both",
-      teamId: "team_r",
+      squadId: "team_r",
       workflowId: "wf_n",
     })
 
@@ -5649,7 +5649,7 @@ describe("installRuntime — ai-run (dispatch-failure IM notification)", () => {
       createdAt: 0,
       updatedAt: 0,
     } as never)
-    await upsertOverride({ conversationKey: key, sessionId: "s_tf", teamId: "ghost" })
+    await upsertOverride({ conversationKey: key, sessionId: "s_tf", squadId: "ghost" })
 
     await callHandler(makeEvent({ conversationKey: key }), "ai-run")
     await flushNotify()
@@ -5727,7 +5727,7 @@ describe("installRuntime — ai-run (dispatch-failure IM notification)", () => {
       createdAt: 0,
       updatedAt: 0,
     } as never)
-    await upsertOverride({ conversationKey: key, sessionId: "s_tok", teamId: "team_r" })
+    await upsertOverride({ conversationKey: key, sessionId: "s_tok", squadId: "team_r" })
 
     await callHandler(makeEvent({ conversationKey: key }), "ai-run")
     await flushNotify()
@@ -5764,7 +5764,7 @@ describe("installRuntime — ai-run (dispatch-failure IM notification)", () => {
       reason: "team_not_found",
     } as never)
     await seedSession(key, "s_tfr")
-    await upsertOverride({ conversationKey: key, sessionId: "s_tfr", teamId: "ghost" })
+    await upsertOverride({ conversationKey: key, sessionId: "s_tfr", squadId: "ghost" })
     const event = makeEvent({ conversationKey: key, messageId: "teamfail-msg" })
 
     await callHandler(event, "ai-run")
@@ -5794,7 +5794,7 @@ describe("installRuntime — ai-run (dispatch-failure IM notification)", () => {
         reason: "team_not_found",
       } as never)
       await seedSession(key, `s_dup_${index}`)
-      await upsertOverride({ conversationKey: key, sessionId: `s_dup_${index}`, teamId: "ghost" })
+      await upsertOverride({ conversationKey: key, sessionId: `s_dup_${index}`, squadId: "ghost" })
       await callHandler(makeEvent({ conversationKey: key, messageId: "42" }), "ai-run")
     }
 
@@ -5850,7 +5850,7 @@ describe("installRuntime — ai-run (dispatch-failure IM notification)", () => {
       reason: "team_not_found",
     } as never)
     await seedSession(key, "s_dtf")
-    await upsertOverride({ conversationKey: key, sessionId: "s_dtf", teamId: "ghost" })
+    await upsertOverride({ conversationKey: key, sessionId: "s_dtf", squadId: "ghost" })
 
     await callHandler(makeEvent({ conversationKey: key }), "draft-prepare")
     await flushNotify()

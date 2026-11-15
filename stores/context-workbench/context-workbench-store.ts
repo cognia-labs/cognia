@@ -231,7 +231,7 @@ function normalizeLayout(
     lastUsedAt: layout?.lastUsedAt ?? now,
     // The single choke point for the split invariants, for the same reason
     // `normalizePanelWidths` above is one for widths: every read path —
-    // `pruneContextWorkbenchLayouts`, `updateLayout`, `migrate`, `partialize`,
+    // `pruneContextWorkbenchLayouts`, `updateLayout`, `partialize`,
     // `merge` — funnels through here, so none of them can reintroduce a shape
     // the renderer would have to defend against a second time.
     //
@@ -588,29 +588,6 @@ export const useContextWorkbenchStore = create<ContextWorkbenchState>()(
     name: "cognia-context-workbench-v1",
     storage: persistLocalStorage(),
     version: 3,
-    migrate: (persisted, version) => {
-      const persistedState = persisted as Partial<ContextWorkbenchState> | undefined
-      const now = Date.now()
-      const layouts = Object.fromEntries(
-        Object.entries(persistedState?.layouts ?? {}).map(([scopeKey, layout]) => [
-          scopeKey,
-          normalizeLayout(
-            // Before v3 `splitPanelId` was persisted but dormant — no renderer
-            // ever read it, so anything stored there is a leftover default or a
-            // hand-written value, never a layout a user chose. Restoring it now
-            // would paint a second pane nobody asked for on the first load after
-            // upgrade. Only the migration clears it: `partialize` and `merge`
-            // must not, or a live split would not survive a reload.
-            version < 3 ? { ...layout, splitPanelId: null } : layout,
-            now
-          ),
-        ])
-      )
-      return {
-        layouts: withoutTakeoverModes(pruneContextWorkbenchLayouts(layouts, now)),
-        sessionOverrides: persistedState?.sessionOverrides ?? {},
-      }
-    },
     partialize: (state) => ({
       layouts: withoutTakeoverModes(pruneContextWorkbenchLayouts(state.layouts)),
       sessionOverrides: state.sessionOverrides,

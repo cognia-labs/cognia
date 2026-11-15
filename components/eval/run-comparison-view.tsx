@@ -23,7 +23,6 @@ import {
 } from "@/components/ui/table"
 import { listCaseResults, type EvalRunCaseRow } from "@/lib/db/eval-run-cases"
 import { buildComparison } from "@/lib/ai/eval/compare"
-import { isLegacyScoring } from "@cognia/eval-core"
 import type { EvalRunRow } from "@/lib/db/eval-runs"
 
 export interface RunComparisonViewProps {
@@ -78,15 +77,6 @@ export function RunComparisonView({ runs, inputsByCase = {} }: RunComparisonView
     [selectedReports, resultsByRun, inputsByCase]
   )
 
-  // Runs from before and after the scoring-status change are not comparable:
-  // the legacy ones counted measurement-only scorers as passes, so a "drop"
-  // across the boundary is the fix landing, not a regression.
-  const mixedScoring = useMemo(() => {
-    if (selectedReports.length < 2) return false
-    const legacy = selectedReports.filter(isLegacyScoring).length
-    return legacy > 0 && legacy < selectedReports.length
-  }, [selectedReports])
-
   const toggle = (runId: string) =>
     setOverride((cur) => {
       const base = cur ?? selected
@@ -110,12 +100,6 @@ export function RunComparisonView({ runs, inputsByCase = {} }: RunComparisonView
           </label>
         ))}
       </div>
-
-      {mixedScoring && (
-        <p className="text-destructive text-xs" role="alert" data-testid="mixed-scoring-warning">
-          {t("compare.mixedScoring")}
-        </p>
-      )}
 
       {selected.length < 2 ? (
         <p className="text-muted-foreground text-sm">{t("compare.pickTwo")}</p>

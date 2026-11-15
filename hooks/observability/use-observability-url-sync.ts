@@ -32,8 +32,7 @@
  * store synchronously; a closure-based write right after it would have pushed
  * the stale, pre-hydration values back over the link.
  *
- * Only the owned keys (and legacy keys a decode actually consumed) are
- * rewritten; everything else in the query survives untouched. Client-only and
+ * Only the owned keys are rewritten; everything else in the query survives untouched. Client-only and
  * static-export safe: pure `window.history`/`location`, no RSC navigation.
  */
 
@@ -45,7 +44,6 @@ import {
 } from "@/stores/observability/observability-store"
 import {
   TRACE_CONTROL_PARAMS,
-  consumedLegacyKeys,
   decodeControls,
   encodeControls,
   ownedParamsSignature,
@@ -102,13 +100,12 @@ export function useObservabilityUrlSync(): void {
   /** Fingerprint of the owned params as this hook last wrote or applied them. */
   const lastSignature = useRef<string | null>(null)
 
-  const writeUrl = useRef((legacy: readonly string[] = []) => {
+  const writeUrl = useRef(() => {
     if (typeof window === "undefined") return
     const next = replaceOwnedParams(
       window.location.search,
       TRACE_CONTROL_PARAMS,
-      encodeControls(currentControls()),
-      legacy
+      encodeControls(currentControls())
     )
     const signature = ownedParamsSignature(next, TRACE_CONTROL_PARAMS)
     lastSignature.current = signature
@@ -122,15 +119,14 @@ export function useObservabilityUrlSync(): void {
   useEffect(() => {
     if (typeof window === "undefined") return
     const search = window.location.search
-    const legacy = consumedLegacyKeys(search)
     const signature = ownedParamsSignature(search, TRACE_CONTROL_PARAMS)
-    if (legacy.length === 0 && signature === lastSignature.current) return
+    if (signature === lastSignature.current) return
     const decoded = decodeControls(search)
     if (decoded) applyControls(decoded)
-    // Re-write canonically either way: a legacy link is migrated to the new
-    // keys, and a navigation that DROPPED our params gets the view on screen
-    // written back rather than leaving the address bar describing nothing.
-    writeUrl.current(legacy)
+    // Re-write canonically either way: a navigation that DROPPED our params
+    // gets the view on screen written back rather than leaving the address bar
+    // describing nothing.
+    writeUrl.current()
   }, [navigationKey])
 
   // store → URL on every control change.

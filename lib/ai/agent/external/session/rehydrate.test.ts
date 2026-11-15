@@ -89,10 +89,8 @@ jest.mock("@/stores/agent/external-agent-store", () => ({
   }),
 }))
 
-const migrateLegacyCredentialsMock = jest.fn(async () => ({ migrated: [], failed: [] }))
 const reviewAllMock = jest.fn(async () => new Map())
 const getLifecycleServiceMock = jest.fn(async () => ({
-  migrateLegacyCredentials: migrateLegacyCredentialsMock,
   reviewAll: reviewAllMock,
 }))
 jest.mock("../lifecycle/service", () => ({
@@ -142,10 +140,8 @@ beforeEach(() => {
     getAllAgents: () => [],
     setConnectionStatus: setConnectionStatusMock,
   }
-  migrateLegacyCredentialsMock.mockResolvedValue({ migrated: [], failed: [] })
   reviewAllMock.mockResolvedValue(new Map())
   getLifecycleServiceMock.mockResolvedValue({
-    migrateLegacyCredentials: migrateLegacyCredentialsMock,
     reviewAll: reviewAllMock,
   })
 })
@@ -332,24 +328,6 @@ describe("isRehydratableProtocol", () => {
 })
 
 describe("prepareExternalAgentsForRehydration", () => {
-  it("migrates legacy secrets before it judges anything", async () => {
-    const order: string[] = []
-    migrateLegacyCredentialsMock.mockImplementation(async () => {
-      order.push("migrate")
-      return { migrated: [], failed: [] }
-    })
-    reviewAllMock.mockImplementation(async () => {
-      order.push("review")
-      return new Map()
-    })
-
-    await prepareExternalAgentsForRehydration()
-
-    // Order is the whole point: no adapter may be constructed from a config
-    // that still carries plaintext.
-    expect(order).toEqual(["migrate", "review"])
-  })
-
   it("returns the verdicts the review produced", async () => {
     reviewAllMock.mockResolvedValue(
       new Map([["a1", { status: "blocked", reasonCode: "adapter_unavailable" }]])
@@ -403,7 +381,7 @@ describe("lifecycle verdict gating", () => {
     await flush()
     dispose()
 
-    expect(migrateLegacyCredentialsMock).toHaveBeenCalled()
+    expect(reviewAllMock).toHaveBeenCalled()
     expect(addAgentMock).toHaveBeenCalledTimes(1)
     expect(addAgentMock.mock.calls[0][0].id).toBe("ok")
   })

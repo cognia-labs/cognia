@@ -10,16 +10,7 @@
  * The hook owns the layout transforms (reorder / hide / show / reset) and
  * resolves the stored layout against the platform catalog, so the bar renders
  * `resolved.zones[zone]` and the customizer renders `resolved.visible` /
- * `.hidden`.
- *
- * ## Legacy migration
- *
- * Before the bars became orderable, visibility lived in the UI store's
- * `barItems` boolean map (localStorage, key `cognia-ui`). When settings hold no
- * layout for this bar yet, that map is folded in once — so an install that had
- * turned the perf monitor on or the workspace chip off keeps that choice. The
- * fold is read-only and pure (`migrateLegacyBarItems`); the first write through
- * this hook persists the result to settings and the legacy map stops mattering.
+ * `.hidden`. A bar with no stored layout resolves to its shipped default.
  */
 
 import { useCallback, useMemo } from "react"
@@ -28,13 +19,11 @@ import { usePlatform } from "@/hooks/use-platform"
 import {
   getBarCatalog,
   isDefaultBarLayout,
-  migrateLegacyBarItems,
   resolveBarLayout,
   type BarCatalogItem,
   type ResolvedBar,
 } from "@/lib/shell/bar-items"
 import { useSettingsStore } from "@/stores/settings/settings-store"
-import { useUIStore } from "@/stores/ui/ui-store"
 import { defaultBarLayout, type BarId, type BarLayout } from "@/types/shell/bars"
 
 export interface UseBarLayout {
@@ -60,8 +49,6 @@ export function useBarLayout(bar: BarId): UseBarLayout {
   const platform = usePlatform()
   const settings = useSettingsStore((s) => s.settings)
   const save = useSettingsStore((s) => s.save)
-  // Legacy visibility map — only read when settings hold no layout yet.
-  const legacyBarItems = useUIStore((s) => s.barItems)
 
   const catalog = useMemo(() => getBarCatalog(bar, platform), [bar, platform])
   const validIds = useMemo(() => new Set(catalog.map((c) => c.id)), [catalog])
@@ -76,8 +63,8 @@ export function useBarLayout(bar: BarId): UseBarLayout {
       const fallback = defaultBarLayout(bar)
       return { order: stored.order ?? fallback.order, hidden: stored.hidden ?? fallback.hidden }
     }
-    return migrateLegacyBarItems(bar, legacyBarItems) ?? defaultBarLayout(bar)
-  }, [bar, stored, legacyBarItems])
+    return defaultBarLayout(bar)
+  }, [bar, stored])
 
   const resolved = useMemo(() => resolveBarLayout(catalog, layout), [catalog, layout])
   const isDefault = useMemo(

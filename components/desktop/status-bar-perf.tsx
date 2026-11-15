@@ -5,7 +5,7 @@
  * with a live sparkline, popover detail, and a jump to `/performance`. Reuses
  * `usePerfStream` (which starts/stops the native sampler on mount/unmount) plus
  * the shared `PerfSparkline` / `PerfMetricTile` widgets. Because mounting begins
- * sampling, the parent only mounts this when `barItems.perf` is on. Returns
+ * sampling, the parent only mounts this while `perf` is a visible status-bar item. Returns
  * `null` when the native runtime is unavailable (web).
  */
 

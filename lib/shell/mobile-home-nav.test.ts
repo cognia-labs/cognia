@@ -3,7 +3,8 @@ import {
   resolveMobileShortcuts,
   MOBILE_QUICK_ACTION_ICONS,
 } from "./mobile-home-nav"
-import { MOBILE_QUICK_ACTION_CATALOG, DEFAULT_MOBILE_HOME_LAYOUT } from "@/types/shell/mobile-home"
+import { MOBILE_QUICK_ACTION_CATALOG } from "@/types/shell/mobile-home"
+import { DEFAULT_GLANCE_MOBILE_SHORTCUTS } from "@/lib/glance/mobile-layout"
 import { resolveLucideIcon } from "@/lib/icons/lucide-catalog"
 import { buildNavCatalog, navCatalog } from "@/lib/shell/nav-catalog"
 import type { ModuleNavEntry } from "@/lib/modules/manifest-types"
@@ -131,33 +132,14 @@ describe("mobile-home-nav", () => {
 
   it("the default shortcut list resolves to four active actions", () => {
     const catalog = getMobileQuickActionCatalog()
-    const { active } = resolveMobileShortcuts(catalog, DEFAULT_MOBILE_HOME_LAYOUT.quickActions)
-    expect(active.map((i) => i.id)).toEqual(DEFAULT_MOBILE_HOME_LAYOUT.quickActions)
+    const { active } = resolveMobileShortcuts(catalog, DEFAULT_GLANCE_MOBILE_SHORTCUTS)
+    expect(active.map((i) => i.id)).toEqual(DEFAULT_GLANCE_MOBILE_SHORTCUTS)
   })
 })
 
-/**
- * ADR-0140 retired `/agent-teams` and took it out of navigation, but the mobile
- * quick action still pointed at it, so the tile was a shortcut to a route
- * nothing else links to. The id doubles as the persistence key, so it has to be
- * mapped on read rather than dropped: dropping it deletes the tile from every
- * saved grid instead of moving it.
- */
-describe("the retired agent-teams tile", () => {
-  it("resolves a saved agentTeams tile to the squads one", () => {
-    const { active } = resolveMobileShortcuts(getMobileQuickActionCatalog(), ["agentTeams"])
-    expect(active.map((item) => item.id)).toEqual(["squads"])
-    expect(active[0]!.route).toBe("/squads")
-  })
-
-  it("does not offer the tile twice when both ids are stored", () => {
-    const { active, available } = resolveMobileShortcuts(getMobileQuickActionCatalog(), [
-      "agentTeams",
-      "squads",
-    ])
-    expect(active.filter((item) => item.id === "squads")).toHaveLength(1)
-    expect(available.some((item) => item.id === "squads")).toBe(false)
-  })
+it("drops a stored id the catalog no longer has", () => {
+  const { active } = resolveMobileShortcuts(getMobileQuickActionCatalog(), ["agentTeams", "squads"])
+  expect(active.map((item) => item.id)).toEqual(["squads"])
 })
 
 it("keeps the Squads fallback ordinary and supplies its separate anime artwork", () => {

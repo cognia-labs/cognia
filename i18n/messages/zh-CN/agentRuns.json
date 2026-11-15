@@ -249,7 +249,6 @@
         "terminate": "终止"
       },
       "reasons": {
-        "legacy_run_not_resumable": "此运行早于持久化运行时，没有留下检查点",
         "missing_checkpoint": "没有写入检查点",
         "recover_needs_input": "最后一个检查点需要人工决定",
         "squad_not_ready": "该小队缺少运行所需的绑定",

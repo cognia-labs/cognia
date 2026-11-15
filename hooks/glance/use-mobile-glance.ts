@@ -111,17 +111,8 @@ export function useMobileGlance({
   onRouted,
 }: UseMobileGlanceOptions): UseMobileGlanceResult {
   const stored = useSettingsStore((s) => s.settings?.mobileGlanceLayout)
-  const legacyHome = useSettingsStore((s) => s.settings?.mobileHomeLayout)
-  const legacyStats = useSettingsStore((s) => s.settings?.welcomeStats)
   const saveSettings = useSettingsStore((s) => s.save)
-  const settings = useMemo(
-    () =>
-      normalizeGlanceMobileSettings(stored, {
-        mobileHomeLayout: legacyHome,
-        welcomeStats: legacyStats,
-      }),
-    [stored, legacyHome, legacyStats]
-  )
+  const settings = useMemo(() => normalizeGlanceMobileSettings(stored), [stored])
 
   const hidden = useDocumentHidden()
   const onScreen = (drawerOpen || homeVisible) && !hidden

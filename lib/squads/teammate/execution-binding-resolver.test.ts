@@ -1,7 +1,5 @@
 import {
-  assertNoNewRawTeammateCredentials,
   migrateTeammateExecutionBinding,
-  RawTeammateCredentialError,
   resolveTeammateExecutionBinding,
 } from "./execution-binding-resolver"
 
@@ -99,53 +97,21 @@ describe("resolveTeammateExecutionBinding", () => {
   })
 })
 
-describe("assertNoNewRawTeammateCredentials", () => {
-  it("rejects a NEW raw apiKey or baseURL write with a typed error", () => {
-    expect(() => assertNoNewRawTeammateCredentials({ apiKey: "sk-raw" })).toThrow(
-      RawTeammateCredentialError
-    )
-    expect(() =>
-      assertNoNewRawTeammateCredentials({ baseURL: "https://api.vendor.example" })
-    ).toThrow(RawTeammateCredentialError)
-  })
-
-  it("keeps legacy rows readable: unchanged values carried over pass", () => {
-    const previous = { apiKey: "sk-legacy", baseURL: "https://old.example" }
-    expect(() => assertNoNewRawTeammateCredentials({ ...previous }, previous)).not.toThrow()
-  })
-
-  it("rejects CHANGING an existing raw value (that is a new write)", () => {
-    expect(() =>
-      assertNoNewRawTeammateCredentials({ apiKey: "sk-new" }, { apiKey: "sk-legacy" })
-    ).toThrow(RawTeammateCredentialError)
-  })
-
-  it("accepts configs without raw credentials", () => {
-    expect(() =>
-      assertNoNewRawTeammateCredentials({ model: "m", execution: { mode: "inherit" } })
-    ).not.toThrow()
-  })
-})
-
 describe("migrateTeammateExecutionBinding", () => {
   it("keeps an existing execution binding untouched", () => {
     const execution = { mode: "pinned" as const, deploymentRef: "dep-1" }
     expect(migrateTeammateExecutionBinding({ execution })).toBe(execution)
   })
 
-  it("maps a legacy raw-credential row onto its provider-id deployment ref (no raw copy)", () => {
-    const migrated = migrateTeammateExecutionBinding({
-      provider: "zhipu",
-      apiKey: "sk-legacy",
-      baseURL: "https://open.bigmodel.cn",
+  it("pins a provider-only config onto its provider-id deployment ref", () => {
+    expect(migrateTeammateExecutionBinding({ provider: "zhipu" })).toEqual({
+      mode: "pinned",
+      deploymentRef: "zhipu",
     })
-    expect(migrated).toEqual({ mode: "pinned", deploymentRef: "zhipu" })
-    expect(JSON.stringify(migrated)).not.toContain("sk-legacy")
-    expect(JSON.stringify(migrated)).not.toContain("bigmodel")
   })
 
-  it("returns undefined when there is nothing to migrate", () => {
+  it("returns undefined when the config names neither a binding nor a provider", () => {
     expect(migrateTeammateExecutionBinding({})).toBeUndefined()
-    expect(migrateTeammateExecutionBinding({ apiKey: "sk-x" })).toBeUndefined()
+    expect(migrateTeammateExecutionBinding({ model: "m" })).toBeUndefined()
   })
 })

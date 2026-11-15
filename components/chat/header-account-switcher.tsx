@@ -86,20 +86,9 @@ export function HeaderAccountSwitcher({
     () =>
       characterAccountIdOverride ??
       settings?.defaultAccountIds?.[providerId] ??
-      (settings?.defaultProvider === rawProviderId || settings?.defaultProvider === providerId
-        ? settings.defaultAccountId
-        : undefined) ??
       live.activeAccountId ??
       undefined,
-    [
-      characterAccountIdOverride,
-      live.activeAccountId,
-      providerId,
-      rawProviderId,
-      settings?.defaultAccountId,
-      settings?.defaultAccountIds,
-      settings?.defaultProvider,
-    ]
+    [characterAccountIdOverride, live.activeAccountId, providerId, settings?.defaultAccountIds]
   )
   const inheritsManualKey =
     definition?.authMode !== "anthropic-oauth" &&

@@ -2,7 +2,7 @@
   "name": "@cognia/vector",
   "version": "0.0.0",
   "private": true,
-  "description": "Cognia unified vector store: backend-agnostic IVectorStore interface, embedding adapter, dimension guard, readiness checks, Tauri invoke layer, and credential migration.",
+  "description": "Cognia unified vector store: backend-agnostic IVectorStore interface, embedding adapter, dimension guard, readiness checks, and Tauri invoke layer.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

@@ -383,9 +383,6 @@ export async function controlSquadRun(
       { reentry: !live },
       { now, ...(deps.readiness ? { readiness: deps.readiness } : {}) }
     )
-    if (guard.kind === "legacy") {
-      return { ok: false, reason: "not_resumable", status: run.status }
-    }
     if (guard.kind === "missing_constraints") {
       if (!(await parkRun(runId, "missing_execution_constraints", now()))) {
         return { ok: false, reason: "already_terminal" }

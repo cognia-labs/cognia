@@ -36,7 +36,7 @@ import {
 import { getRun, type EvalRunRow } from "@/lib/db/eval-runs"
 import { useCalibrationSets, useEvalCases, useEvalRunCaseResults } from "@/hooks/eval/use-eval-data"
 import { evaluateGate } from "@cognia/eval-core"
-import { fullyErroredScorers, isLegacyScoring, isPartialRun } from "@cognia/eval-core"
+import { fullyErroredScorers, isPartialRun } from "@cognia/eval-core"
 import { buildCalibrationSeed, judgeScorerIds } from "@/lib/ai/eval/calibration/seed-from-run"
 import { newCalibrationSetId, upsertCalibrationItem } from "@/lib/db/calibration-items"
 import type { GateThresholds } from "@/types/eval/gate"
@@ -317,17 +317,11 @@ export function RunDetail({ runId, gate, onBack }: RunDetailProps) {
     return m
   }, [cases])
 
-  const legacy = run ? isLegacyScoring(run) : false
-  // A legacy run's pass rate is inflated by the old scoring, so its gate
-  // verdict would be equally wrong — withhold it rather than show a green tick.
   const partial = run ? isPartialRun(run) : false
   // A run that stopped early reports rates over the cases that finished —
   // gating on that would grade the agent on an arbitrary prefix.
   const gateResult = useMemo(
-    () =>
-      run && gate && !isLegacyScoring(run) && !isPartialRun(run)
-        ? evaluateGate(run, gate)
-        : undefined,
+    () => (run && gate && !isPartialRun(run) ? evaluateGate(run, gate) : undefined),
     [run, gate]
   )
   const brokenScorers = useMemo(() => (run ? fullyErroredScorers(run) : []), [run])
@@ -371,14 +365,12 @@ export function RunDetail({ runId, gate, onBack }: RunDetailProps) {
         <Badge variant="outline">
           {t("passHatK", { pct: Math.round(run.passHatK * 100), k: run.k })}
         </Badge>
-        {!legacy && (
-          <Badge variant="outline" data-testid="graded-count">
-            {t("graded", {
-              graded: run.gradedCaseCount ?? 0,
-              ungraded: run.ungradedCaseCount ?? 0,
-            })}
-          </Badge>
-        )}
+        <Badge variant="outline" data-testid="graded-count">
+          {t("graded", {
+            graded: run.gradedCaseCount ?? 0,
+            ungraded: run.ungradedCaseCount ?? 0,
+          })}
+        </Badge>
         <Badge variant="secondary">
           {resourceMeasurement(`$${run.totalCostUsd.toFixed(4)}`, run.metricAvailability?.cost)}
         </Badge>
@@ -388,11 +380,6 @@ export function RunDetail({ runId, gate, onBack }: RunDetailProps) {
             run.metricAvailability?.latency
           )}
         </Badge>
-        {legacy && (
-          <Badge variant="outline" data-testid="legacy-scoring">
-            {t("legacyScoring")}
-          </Badge>
-        )}
         {partial && (
           <Badge variant="destructive" data-testid="run-status">
             {t(`status.${run.status}` as never)}
@@ -425,7 +412,6 @@ export function RunDetail({ runId, gate, onBack }: RunDetailProps) {
         </Alert>
       ) : null}
 
-      {legacy && <p className="text-muted-foreground text-xs">{t("legacyScoringHint")}</p>}
       {partial && (
         <p className="text-muted-foreground text-xs" data-testid="partial-hint">
           {t("partialHint", { done: run.caseCount })}
@@ -445,7 +431,7 @@ export function RunDetail({ runId, gate, onBack }: RunDetailProps) {
         </p>
       )}
 
-      {!legacy && (run.ungradedCaseCount ?? 0) > 0 && (
+      {(run.ungradedCaseCount ?? 0) > 0 && (
         <p className="text-muted-foreground text-xs" data-testid="ungraded-hint">
           {t("ungradedHint", { count: run.ungradedCaseCount ?? 0 })}
         </p>

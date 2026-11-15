@@ -27,11 +27,7 @@ import type { LucideIcon } from "lucide-react"
 import type { MobileSpotIconName } from "@/components/mobile/mobile-spot-icon"
 import { resolveLucideIcon } from "@/lib/icons/lucide-catalog"
 import { navCatalog, type NavCatalogEntry } from "@/lib/shell/nav-catalog"
-import {
-  LEGACY_MOBILE_QUICK_ACTION_IDS,
-  MOBILE_QUICK_ACTION_CATALOG,
-  type MobileQuickActionMeta,
-} from "@/types/shell/mobile-home"
+import { MOBILE_QUICK_ACTION_CATALOG, type MobileQuickActionMeta } from "@/types/shell/mobile-home"
 
 /**
  * id → grid icon. Must cover every id in `MOBILE_QUICK_ACTION_CATALOG`; a
@@ -132,11 +128,10 @@ export interface ResolvedMobileQuickActions {
 }
 
 /**
- * Partition `catalog` by a stored shortcut list (`mobileGlanceLayout.shortcuts`,
- * formerly `mobileHomeLayout.quickActions`):
+ * Partition `catalog` by a stored shortcut list (`mobileGlanceLayout.shortcuts`):
  *
  *  - **active**: the stored ids that exist in the catalog, in the user's
- *    stored order (deduped; renamed ids mapped; unknown ids dropped).
+ *    stored order (deduped; unknown ids dropped).
  *  - **available**: everything else (catalog − active), in catalog order — so a
  *    newly-added catalog item shows up in the editor automatically.
  */
@@ -148,10 +143,7 @@ export function resolveMobileShortcuts(
 
   const seen = new Set<string>()
   const active: MobileQuickActionItem[] = []
-  for (const stored of shortcuts) {
-    // Renamed ids are mapped on read. Dropping them instead would delete the
-    // tile from every saved grid rather than moving it.
-    const id = LEGACY_MOBILE_QUICK_ACTION_IDS[stored] ?? stored
+  for (const id of shortcuts) {
     if (seen.has(id)) continue
     const item = byId.get(id)
     if (!item) continue

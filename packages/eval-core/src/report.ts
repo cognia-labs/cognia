@@ -41,17 +41,6 @@ import type {
 export const SCORING_VERSION = 3 as const
 
 /**
- * Earlier reports use different outcome/reliability semantics and cannot be
- * compared with current runs. They remain readable and labeled legacy.
- *
- * Lives here rather than in a component so the run list, the run detail and the
- * comparison grid all answer this the same way.
- */
-export function isLegacyScoring(report: Pick<EvalReport, "scoringVersion">): boolean {
-  return report.scoringVersion !== SCORING_VERSION
-}
-
-/**
  * True when the run did not finish, so its rates cover only the cases that DID
  * run. A partial run must never carry a gate verdict: "80% of the first 10 of
  * 500 cases" is not a statement about the agent.

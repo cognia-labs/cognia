@@ -15,9 +15,10 @@ import {
  *                     stop this one
  *   terminate         stop this one
  *
- * A backfilled legacy run (`legacy_run_not_resumable`) has no children to
- * re-queue: it offers `restart_run` and `terminate` only, and the decision
- * validator refuses the rest against the subject's `choices`.
+ * A run parked before it dispatched anything (`squad_not_ready`,
+ * `missing_execution_constraints`, `replacement_cleanup_failed`) has no
+ * children to re-queue: it offers `restart_run` and `terminate` only, and the
+ * decision validator refuses the rest against the subject's `choices`.
  *
  * The interrupt is the `ExecutionRunInterrupt` the Action Review contract
  * projects, so it is answered from the cockpit, a phone, the CLI or an IM card
@@ -25,7 +26,6 @@ import {
  * has no pending recovery interrupt.
  */
 
-import { LEGACY_RUN_NOT_RESUMABLE } from "@/lib/squads/legacy-run-history"
 import {
   getAgentTeamRun,
   dexieTeamRunStore,
@@ -69,7 +69,6 @@ export const RECOVERY_REASONS: ReadonlySet<string> = new Set([
   "reentry_failed",
   "dispatch_initialization_failed",
   "evidence_incomplete",
-  LEGACY_RUN_NOT_RESUMABLE,
 ])
 
 export interface TeamRecoverySubject extends Record<string, unknown> {
@@ -228,15 +227,14 @@ export async function ensureTeamRecoveryInterrupt(
   const pending = existing.find((row) => row.status === "pending")
   if (pending) return { interruptId: pending.id, pending: true }
 
-  // Nothing to re-queue: a legacy row left no children, and a Squad that is
-  // not ready cannot dispatch them. Both restart as a new run or stop.
-  const legacy =
-    run.recoveryReason === LEGACY_RUN_NOT_RESUMABLE ||
+  // Nothing to re-queue: a Squad that is not ready cannot dispatch children,
+  // and a run without its constraints never did. Both restart as a new run or stop.
+  const childless =
     run.recoveryReason === SQUAD_NOT_READY ||
     run.recoveryReason === "missing_execution_constraints" ||
     run.recoveryReason === "replacement_cleanup_failed"
-  const children = legacy ? [] : await (deps.listChildren ?? defaultListChildren)(runId)
-  const replay = legacy
+  const children = childless ? [] : await (deps.listChildren ?? defaultListChildren)(runId)
+  const replay = childless
     ? { safe: false, uncertainChildIds: [] }
     : await (deps.assessReplay ?? defaultAssessReplay)(runId)
   const hosts = new Set(
@@ -250,7 +248,7 @@ export async function ensureTeamRecoveryInterrupt(
     choices:
       run.executionConstraints?.version !== 1 || !run.executionConstraints.teamConfig
         ? ["terminate"]
-        : [...(legacy ? LEGACY_RECOVERY_CHOICES : ALL_RECOVERY_CHOICES)],
+        : [...(childless ? LEGACY_RECOVERY_CHOICES : ALL_RECOVERY_CHOICES)],
     uncertainChildIds: replay.uncertainChildIds,
     uncertainChildEpochs: Object.fromEntries(
       replay.uncertainChildIds.map((id) => [

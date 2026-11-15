@@ -94,18 +94,6 @@ describe("PendingGatesStore", () => {
     expect(gates[0]?.status).toBe("interrupted")
   })
 
-  it("migrates legacy persisted rows (no status field) to interrupted", async () => {
-    window.localStorage.setItem(
-      "cognia-pending-gates",
-      JSON.stringify({
-        state: { gates: [{ ...budgetGate(), openedAt: 1 }] },
-        version: 0,
-      })
-    )
-    await usePendingGatesStore.persist.rehydrate()
-    expect(usePendingGatesStore.getState().gates[0]?.status).toBe("interrupted")
-  })
-
   /**
    * ADR-0169 moved every Squad gate onto durable run interrupts. The scopes
    * that used to map here now have no modal variant of their own and fall to

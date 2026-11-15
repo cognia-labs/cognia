@@ -205,8 +205,6 @@ export const useDockDocumentsStore = create<DockDocumentsState>()(
       version: 1,
       storage: persistLocalStorage(),
       partialize: (state) => persistedDockDocuments(state),
-      migrate: (value, version) =>
-        version === 1 ? persistedDockDocuments(value) : { bySession: {} },
       merge: (value, current) => ({ ...current, ...persistedDockDocuments(value) }),
     }
   )

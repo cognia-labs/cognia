@@ -66,6 +66,7 @@ export function makeRun(over: Partial<EvalRunRow>): EvalRunRow {
     totalCostUsd: 0.48,
     avgLatencyMs: 1200,
     createdAt: NOW,
+    scoringVersion: 3,
     ...over,
   } as EvalRunRow
 }

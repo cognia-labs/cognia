@@ -1,7 +1,6 @@
-// Coverage for the v1 → v3 migration boundary. The migrator must:
+// Coverage for the backup import boundary. The migrator must:
 //   • detect EncryptedEnvelopeV1 and throw IsEncryptedError
 //   • accept v3 packages and validate the integrity checksum
-//   • wrap v1 envelopes in a synthetic v3 manifest
 //   • reject anything else with UnsupportedSchemaVersionError
 
 import { sha256Hex } from "./crypto"
@@ -125,29 +124,6 @@ describe("migrateEnvelope", () => {
     await expect(migrateEnvelope(pkg)).rejects.toBeInstanceOf(IntegrityCheckFailedError)
   })
 
-  it("wraps a legacy v1 envelope as a v3 package and synthesizes a manifest", async () => {
-    const v1 = {
-      schemaVersion: 1,
-      exportedAt: 1_700_000_000_000,
-      appVersion: "0.0.9",
-      promptPresets: [{ id: "p1", name: "x", content: "y", createdAt: 1, updatedAt: 1 }],
-    }
-    const out = await migrateEnvelope(v1)
-    expect(out.version).toBe("3.0")
-    expect(out.manifest.schemaVersion).toBe(3)
-    expect(out.manifest.appVersion).toBe("0.0.9")
-    expect(out.manifest.exportedAt).toBe(new Date(v1.exportedAt).toISOString())
-    expect(out.payload.promptPresets).toEqual(v1.promptPresets)
-    // Checksum is now valid for the freshly built payload.
-    const expectedChecksum = await sha256Hex(canonicalStringify(out.payload))
-    expect(out.manifest.integrity.checksum).toBe(expectedChecksum)
-  })
-
-  it("falls back to a numeric appVersion default when missing on v1", async () => {
-    const out = await migrateEnvelope({ schemaVersion: 1, exportedAt: 0 })
-    expect(out.manifest.appVersion).toBe("0.0.0")
-  })
-
   it("throws IsEncryptedError when given an encrypted envelope", async () => {
     const env: EncryptedEnvelopeV1 = {
       version: "enc-v1",
@@ -178,6 +154,9 @@ describe("migrateEnvelope", () => {
     await expect(migrateEnvelope({ schemaVersion: 99 })).rejects.toBeInstanceOf(
       UnsupportedSchemaVersionError
     )
+    await expect(
+      migrateEnvelope({ schemaVersion: 1, exportedAt: 0, promptPresets: [] })
+    ).rejects.toBeInstanceOf(UnsupportedSchemaVersionError)
     await expect(migrateEnvelope("not json")).rejects.toBeInstanceOf(UnsupportedSchemaVersionError)
     await expect(migrateEnvelope(null)).rejects.toBeInstanceOf(UnsupportedSchemaVersionError)
   })
@@ -193,9 +172,7 @@ describe("migrateEnvelope", () => {
 })
 
 describe("internal helpers (smoke)", () => {
-  it("isExportEnvelopeV1 / isBackupPackageV3 differentiate shapes", () => {
-    expect(__TESTING__.isExportEnvelopeV1({ schemaVersion: 1 })).toBe(true)
-    expect(__TESTING__.isExportEnvelopeV1({ schemaVersion: 2 })).toBe(false)
+  it("isBackupPackageV3 differentiates shapes", () => {
     expect(__TESTING__.isBackupPackageV3({ version: "3.0", manifest: {}, payload: {} })).toBe(false)
     expect(
       __TESTING__.isBackupPackageV3({

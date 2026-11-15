@@ -121,11 +121,11 @@ check(pluginId: string, operation: string): void {
 
 限流器的键使用旧式 `fs:*` / `db:*` 操作名，与规范的 `filesystem:*` / `database:*` 权限字符串相互独立。
 
-## 6. 持久化与迁移 —— `permission-migration.ts` + `permission-requests.ts`
+## 6. 持久化 —— `lib/db/plugin-permissions.ts` + `permission-requests.ts`
 
 已授予的决策持久化在 Dexie `pluginPermissions` 表，每个 `[pluginId+permission]` 复合主键一行（`lib/db/plugin-permissions.ts:1-6`），存储 `decision` / `expiresAt` / `grantedBy` / `grantedAt`。
 
-`migrateLegacyPermissionNames()`（`permission-migration.ts:37`）在管理器引导时运行。它通过 `LEGACY_TO_CANONICAL`（`{ fs:read → filesystem:read, fs:write → filesystem:write }` `:22`）重写旧式别名 —— 撤销后重新调用 `setPermission` 并保留字段（`:44-52`）；幂等，每次重写记录一条诊断（`:53`）。
+记录只按规范权限名读取：以已退役别名（如 `fs:read`）存储的记录不会匹配任何查询，插件会重新申请。
 
 `permission-requests.ts` 是集中式的单活动加队列管理器。`PluginPermissionRequest`（`:11`）为 `{ id, pluginId, permission, reason?, kind: "manifest" | "api", timestamp }`。`requestPluginPermission()`（`:68`）入队并在 resolvers map 中返回 `Promise<boolean>`；`resolvePluginPermission(id, granted)`（`:83`）解决它并出队下一个请求（`:90`）。`subscribePermissionRequests`（`:108`）为 UI 覆盖层供数据。
 
@@ -218,7 +218,6 @@ flowchart TD
   M["manifest perms (plugin.json)<br/>types/plugin/plugin.ts:262"] --> REG["registerPlugin grant + dangerous to confirm tier<br/>permission-guard.ts:263"]
   REG --> INST["install consent / WASM grant<br/>wasm-grant.ts:76"]
   INST --> STORE["persist grant Dexie pluginId+permission<br/>lib/db/plugin-permissions.ts:30"]
-  STORE --> MIG["legacy-name migration at boot<br/>permission-migration.ts:37"]
 
   CALL["plugin API call"] --> GUARD["createGuardedAPI Proxy<br/>permission-guard.ts:777"]
   GUARD --> CHK["check granted exact no wildcard<br/>permission-guard.ts:402"]
@@ -237,7 +236,7 @@ flowchart TD
 
   POL["policy-runtime fan-out<br/>policy-runtime.ts:55"] --> VER
 
-  class M,REG,INST,STORE,MIG declare
+  class M,REG,INST,STORE declare
   class CALL,GUARD,CHK,RUN,BROKER,RL declare
   class DENY,RLE,REJECT deny
   class LOAD,VER,CRYPTO,POL verify
@@ -250,7 +249,7 @@ flowchart TD
 - **签名空锚点。** 若 `NEXT_PUBLIC_COGNIA_PLUGIN_PUBKEY` 未设置，`OFFICIAL_TRUSTED_PUBLISHERS` 为 `[]`（`signature.ts:85`）；当 `trustedPublishersOnly` 开启时，所有插件都被拒绝。切勿重新引入 `publicKey: ""` 的发布者。
 - **测试自动授权 / 重置。** 测试注入 `BrokerOptions.emit`（`consent-broker.ts:68`）；使用 `__resetPermissionGuardForTesting`（`permission-guard.ts:766`）以及 `resetPluginConsentBroker` / `resetPluginRateLimiter` / `resetPluginSignatureVerifier`。
 - **Rust 一致性漂移。** 新权限若加进类型与 `validation.ts` 却没加进 `crates/cognia-cli/src/cmd_lint.rs`，会令 `rust-capability-parity.test.ts:52` 失败。
-- **三处并行存储。** 守卫的内存 `grants`（同步 `check`）、Dexie `pluginPermissions` 表（记住的决策）、以及 `permission-api.ts:18` 中的 API-权限映射各不相同。`wasm-grant.ts` 与 `permission-migration.ts` 桥接它们。
+- **三处并行存储。** 守卫的内存 `grants`（同步 `check`）、Dexie `pluginPermissions` 表（记住的决策）、以及 `permission-api.ts:18` 中的 API-权限映射各不相同。`wasm-grant.ts` 桥接它们。
 
 <Cards>
   <Card title="上下文与 API" href="./context-api" description="插件收到的受守卫 ctx 命名空间。" />

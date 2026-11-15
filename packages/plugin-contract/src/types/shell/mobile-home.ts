@@ -1,12 +1,12 @@
 /**
  * Pure (icon-free) catalog of the phone's shortcuts (the quick module's
- * content, ADR-0225 §9), and the pre-ADR-0225 home model it came from.
+ * content, ADR-0225 §9).
  *
  * Mirrors `@/types/shell/sidebar`: kept free of React / lucide so
  * `AppSettings` and the persistence layer can import it without pulling the
  * icon set into their module graph. The icon mapping + resolver live in
- * `lib/shell/mobile-home-nav.ts`; the layout that replaced `MobileHomeLayout`
- * is `GlanceMobileSettings` (`@/types/glance/layout`).
+ * `lib/shell/mobile-home-nav.ts`; the layout that holds the shortcut list is
+ * `GlanceMobileSettings` (`@/types/glance/layout`).
  */
 
 /** How a quick action behaves when tapped. */
@@ -14,7 +14,7 @@ export type MobileQuickActionKind = "newChat" | "search" | "route"
 
 /** A customizable quick action on the mobile home welcome grid. */
 export interface MobileQuickActionMeta {
-  /** Stable key — persisted in `MobileHomeLayout`, also the i18n key suffix. */
+  /** Stable key — persisted in `GlanceMobileSettings.shortcuts`, also the i18n key suffix. */
   id: string
   /** Tap behaviour. `route` navigates to `route`; the others fire a callback. */
   kind: MobileQuickActionKind
@@ -45,44 +45,3 @@ export const MOBILE_QUICK_ACTION_CATALOG: readonly MobileQuickActionMeta[] = [
   { id: "devices", kind: "route", route: "/devices", i18nKey: "devices" },
   { id: "me", kind: "route", route: "/me", i18nKey: "me" },
 ] as const
-
-/**
- * Ids that changed name after a layout was already persisted.
- *
- * The id doubles as the persistence key, so renaming one silently drops it from
- * every saved home grid: the tile does not move, it disappears. Mapped on read
- * instead, which is the same treatment `LEGACY_SIDEBAR_NAV_IDS` gives the rail.
- *
- * `agentTeams` pointed at `/agent-teams`, which ADR-0140 retired and took out
- * of navigation, so the tile was a shortcut to a route nothing else links to.
- */
-export const LEGACY_MOBILE_QUICK_ACTION_IDS: Readonly<Record<string, string>> = {
-  agentTeams: "squads",
-}
-
-/** The home sections the pre-ADR-0225 model could hide. */
-export type MobileHomeSectionId = "quickActions" | "recents" | "activeRuns"
-
-/**
- * Legacy (pre-ADR-0225) customization of the mobile home, still stored as
- * `AppSettings.mobileHomeLayout` on phones that have not saved a glance
- * layout yet. `quickActions` is the ordered shortcut list; `hiddenSections`
- * turned whole blocks off. Read once into the glance model by
- * `migrateMobileHomeLayout` (`lib/glance/mobile-layout.ts`), never written.
- */
-export interface MobileHomeLayout {
-  /** Ordered action ids shown on the home grid. */
-  quickActions: string[]
-  /** Section ids hidden on the home welcome. */
-  hiddenSections: MobileHomeSectionId[]
-}
-
-/**
- * Default: a lean grid (new chat / search / workflows / discover), every
- * section visible. Its `quickActions` are also the glance layout's default
- * shortcuts.
- */
-export const DEFAULT_MOBILE_HOME_LAYOUT: MobileHomeLayout = {
-  quickActions: ["newChat", "search", "workflows", "discover"],
-  hiddenSections: [],
-}

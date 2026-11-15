@@ -497,7 +497,7 @@ describe("withShortcuts", () => {
   const settings: GlanceMobileSettings = { ...DEFAULT_GLANCE_MOBILE_SETTINGS, preset: "minimal" }
 
   it("normalizes the list and keeps the preset and entries", () => {
-    const out = withShortcuts(settings, ["agentTeams", "bogus", "me", "me"])
+    const out = withShortcuts(settings, ["squads", "bogus", "me", "me"])
     expect(out.shortcuts).toEqual(["squads", "me"])
     expect(out.preset).toBe("minimal")
     expect(out.entries).toBe(settings.entries)

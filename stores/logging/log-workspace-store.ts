@@ -25,11 +25,7 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
-import {
-  INCIDENT_CLIENT_STATES,
-  normalizeIncidentClientState,
-  type IncidentClientState,
-} from "@/lib/diagnostic-service/types"
+import { INCIDENT_CLIENT_STATES, type IncidentClientState } from "@/lib/diagnostic-service/types"
 import { persistLocalStorage } from "@/stores/persist-storage"
 import { useObservabilityStore } from "@/stores/observability/observability-store"
 import type { CrashLogLevelFilter, CrashLogSourceFilter } from "@/types/logging"
@@ -74,28 +70,6 @@ export type IncidentStateFilter = "all" | IncidentClientState
 export const INCIDENT_STATE_FILTERS: readonly IncidentStateFilter[] = [
   "all",
   ...INCIDENT_CLIENT_STATES,
-]
-
-/** Narrow an untrusted value (stale persisted state) to a state filter. */
-export function resolveIncidentStateFilter(raw: unknown): IncidentStateFilter {
-  if (raw === "all") return "all"
-  return normalizeIncidentClientState(raw) ?? "all"
-}
-
-const CRASH_SOURCE_FILTERS: readonly CrashLogSourceFilter[] = [
-  "all",
-  "recent",
-  "persisted",
-  "diagnostic",
-]
-const CRASH_LEVEL_FILTERS: readonly CrashLogLevelFilter[] = [
-  "all",
-  "trace",
-  "debug",
-  "info",
-  "warn",
-  "error",
-  "fatal",
 ]
 
 export const LOG_WORKSPACE_VIEWS: readonly LogWorkspaceView[] = [
@@ -189,62 +163,6 @@ interface LogWorkspaceState {
   resetWorkspace: () => void
 }
 
-/**
- * v1 persisted `activeView` values that no longer exist. `health`, `recovery`
- * and `advanced` were static copy, so anyone parked on them wanted the page's
- * actual subject: logs. `receipts` becomes `incidents` + `receiptsOnly`.
- */
-const LEGACY_VIEWS: Record<string, { activeView: LogWorkspaceView; receiptsOnly?: boolean }> = {
-  health: { activeView: "logs" },
-  recovery: { activeView: "logs" },
-  advanced: { activeView: "logs" },
-  receipts: { activeView: "incidents", receiptsOnly: true },
-}
-
-/** Exported for the store's unit test — persist's `migrate` is otherwise only
- * reachable through a real rehydration. */
-export function migrateLogWorkspace(persisted: unknown): Partial<LogWorkspaceState> {
-  if (typeof persisted !== "object" || persisted === null) return {}
-  const raw = persisted as Record<string, unknown>
-  const legacy = typeof raw.activeView === "string" ? LEGACY_VIEWS[raw.activeView] : undefined
-
-  return {
-    activeView: legacy?.activeView ?? resolveLogWorkspaceView(raw.activeView as string | undefined),
-    density: (["compact", "comfortable", "spacious"] as const).includes(
-      raw.density as LogWorkspaceDensity
-    )
-      ? (raw.density as LogWorkspaceDensity)
-      : DEFAULTS.density,
-    detailWidth:
-      typeof raw.detailWidth === "number"
-        ? clamp(raw.detailWidth, DETAIL_WIDTH_MIN, DETAIL_WIDTH_MAX)
-        : DEFAULTS.detailWidth,
-    activeSource: (["all", "desktop", "mobile"] as const).includes(
-      raw.activeSource as LogWorkspaceSource
-    )
-      ? (raw.activeSource as LogWorkspaceSource)
-      : DEFAULTS.activeSource,
-    // v3 persisted the camelCase `awaitingConsent`; v4 speaks the service's
-    // `awaiting_consent`. Anything else unrecognized falls back to `all`
-    // rather than to a filter nothing can match.
-    incidentStateFilter: resolveIncidentStateFilter(raw.incidentStateFilter),
-    receiptsOnly: legacy?.receiptsOnly ?? Boolean(raw.receiptsOnly),
-    // v2 persisted `traceWindow` ("today" | "week" | "month" | "all"). The
-    // channel now shares the dashboard's Grafana-style range, which lives in
-    // `stores/observability`, so the field is dropped rather than translated —
-    // there is no honest mapping from a calendar-aligned "today" onto a
-    // sliding preset.
-    traceSubView: resolveTraceSubView(raw.traceSubView as string | undefined),
-    traceErrorsOnly: Boolean(raw.traceErrorsOnly),
-    crashSource: CRASH_SOURCE_FILTERS.includes(raw.crashSource as CrashLogSourceFilter)
-      ? (raw.crashSource as CrashLogSourceFilter)
-      : DEFAULTS.crashSource,
-    crashLevel: CRASH_LEVEL_FILTERS.includes(raw.crashLevel as CrashLogLevelFilter)
-      ? (raw.crashLevel as CrashLogLevelFilter)
-      : DEFAULTS.crashLevel,
-  }
-}
-
 export const useLogWorkspaceStore = create<LogWorkspaceState>()(
   persist(
     (set) => ({
@@ -278,14 +196,6 @@ export const useLogWorkspaceStore = create<LogWorkspaceState>()(
       storage: persistLocalStorage(),
       // Everything but the Errors channel's search text: see `crashSearch`.
       partialize: ({ crashSearch: _crashSearch, ...persisted }) => persisted,
-      // The v1 blob carries `activeView: "health"` plus `navigationWidth` /
-      // `navigationCollapsed` for a rail that no longer exists. Without this
-      // every existing install would rehydrate into a channel that renders
-      // nothing. v2 additionally carries `traceWindow`, which the shared
-      // Grafana-style range replaced — `migrateLogWorkspace` simply drops it.
-      // v3 carries the camelCase `awaitingConsent` state filter, which v4
-      // rewrites onto the service vocabulary.
-      migrate: (persisted) => migrateLogWorkspace(persisted) as LogWorkspaceState,
     }
   )
 )

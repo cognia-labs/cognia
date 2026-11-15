@@ -179,7 +179,6 @@ async function seedAll() {
   await saveSettings({
     apiKey: "secret",
     defaultModel: "claude",
-    onboardingDismissedAt: "2026-05-18T12:00:00.000Z",
     profile: { displayName: "Max", bio: "hello", avatarDataUrl: "data:image/webp;base64,AA" },
   })
   await db.characters.put({
@@ -393,10 +392,6 @@ describe("buildBackupPackage", () => {
     expect(pkg.manifest.device?.id).toEqual(expect.any(String))
     expect(pkg.manifest.device?.platform).toBe("web")
     expect(pkg.payload.settings?.apiKey).toBeUndefined()
-    // onboardingDismissedAt rides on the generic settings blob — never
-    // stripped (unlike apiKey) so the user's "I've seen the wizard" flag
-    // survives backup/restore.
-    expect(pkg.payload.settings?.onboardingDismissedAt).toBe("2026-05-18T12:00:00.000Z")
     // The local user profile rides the settings blob — survives backup/restore
     // with no dedicated payload field.
     expect(pkg.payload.settings?.profile).toEqual({

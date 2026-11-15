@@ -650,7 +650,7 @@ describe("buildSlackAdapter", () => {
   })
 
   it("refuses ambient Slack personal tokens for unproven scheduled presence", async () => {
-    const keyring = new Map<string, string>([["user_token", "xoxp-legacy"]])
+    const keyring = new Map<string, string>([["userToken", "xoxp-user"]])
     mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
       if (cmd === "connectors_keyring_get") {
         const credential = (args as { credential?: string })?.credential ?? ""
@@ -666,11 +666,7 @@ describe("buildSlackAdapter", () => {
     const callArgs = mockCreateSlackAdapter.mock.calls[0][0] as {
       userToken: () => Promise<string>
     }
-    // Neither key grants personal authority without an admitted requester.
-    await expect(callArgs.userToken()).resolves.toBe("")
-
-    // Adding the canonical credential cannot widen the unproven lane.
-    keyring.set("userToken", "xoxp-new")
+    // A stored user token grants no personal authority without an admitted requester.
     await expect(callArgs.userToken()).resolves.toBe("")
   })
 })

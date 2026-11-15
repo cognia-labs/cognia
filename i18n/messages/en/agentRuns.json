@@ -249,7 +249,6 @@
         "terminate": "Terminate"
       },
       "reasons": {
-        "legacy_run_not_resumable": "this run predates the durable runtime and left no checkpoint",
         "missing_checkpoint": "no checkpoint was written",
         "recover_needs_input": "the last checkpoint needs a decision",
         "squad_not_ready": "the Squad is missing a binding it needs to run",

@@ -9,6 +9,7 @@
  */
 
 import type { EvalReport } from "@/types/eval/eval"
+import { SCORING_VERSION } from "@cognia/eval-core"
 import { getDb } from "./schema"
 import { deleteCaseResultsForRun } from "./eval-run-cases"
 import type { EvalRunRow } from "@cognia/plugin-contract/lib/db/eval-runs"
@@ -19,14 +20,22 @@ export async function saveRun(report: EvalReport): Promise<void> {
   await getDb().evalRuns.put(report)
 }
 
+/** Reports scored under other semantics are not comparable and are not read back. */
+function isCurrentScoring(row: EvalRunRow): boolean {
+  return row.scoringVersion === SCORING_VERSION
+}
+
 export async function getRun(runId: string): Promise<EvalRunRow | undefined> {
   if (!runId) return undefined
-  return getDb().evalRuns.get(runId)
+  const row = await getDb().evalRuns.get(runId)
+  return row && isCurrentScoring(row) ? row : undefined
 }
 
 export async function listRunsByDataset(datasetId: string): Promise<EvalRunRow[]> {
   if (!datasetId) return []
-  const rows = await getDb().evalRuns.where("datasetId").equals(datasetId).toArray()
+  const rows = (await getDb().evalRuns.where("datasetId").equals(datasetId).toArray()).filter(
+    isCurrentScoring
+  )
   rows.sort((a, b) => b.createdAt - a.createdAt)
   return rows
 }
@@ -34,7 +43,7 @@ export async function listRunsByDataset(datasetId: string): Promise<EvalRunRow[]
 export async function listRecentRuns(limit = 50): Promise<EvalRunRow[]> {
   const safe = Math.max(0, Math.floor(limit))
   if (safe === 0) return []
-  const rows = await getDb().evalRuns.toArray()
+  const rows = (await getDb().evalRuns.toArray()).filter(isCurrentScoring)
   rows.sort((a, b) => b.createdAt - a.createdAt)
   return rows.slice(0, safe)
 }

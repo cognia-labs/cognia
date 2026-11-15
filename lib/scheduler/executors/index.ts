@@ -277,7 +277,7 @@ function reconcileLegacyPromptFields(
 /**
  * Resolve a payload `agentModeId` against the built-in registry first, then
  * the custom-mode store. Returns:
- *   - `undefined` — defer to `useAgentRuntimeStore.modeId` (default behaviour
+ *   - `undefined` — defer to the session's composition (default behaviour
  *     of `resolveSendOptions` when `ctx.agentMode` is omitted).
  *   - `null`      — explicitly opt OUT of mode application.
  *   - `AgentModeConfig` — apply the resolved mode.

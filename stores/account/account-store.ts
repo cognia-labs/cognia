@@ -37,10 +37,6 @@ import {
   lockAccountContentCipher,
 } from "@/lib/accounts/content-cipher"
 import {
-  legacyDatabaseExists,
-  migrateLegacyDatabaseToAccount,
-} from "@/lib/accounts/legacy-migration"
-import {
   createPasswordVerifier,
   rotateNativePassword,
   unbindLocalAccount,
@@ -1045,14 +1041,6 @@ export function createAccountStore(
                 "The native account session could not be established."
               )
             }
-          }
-
-          if (isFirstAccount && (await legacyDatabaseExists())) {
-            dependencies.activateContentCipher(account.id, encryptedAccountDatabaseName(account.id))
-            await migrateLegacyDatabaseToAccount({
-              registry: dependencies.registry,
-              targetAccountId: account.id,
-            })
           }
 
           if (shouldActivate) await settlePendingAccountWrites()

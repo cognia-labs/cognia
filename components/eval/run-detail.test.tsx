@@ -177,20 +177,9 @@ describe("RunDetail", () => {
     expect(screen.getByTestId("graded-count")).toHaveTextContent('{"graded":2,"ungraded":3}')
   })
 
-  it("badges a legacy run, hides the graded counts, and withholds its gate verdict", async () => {
-    const { scoringVersion: _drop, ...legacy } = RUN
-    ;(getRun as jest.Mock).mockResolvedValue(legacy)
-    render(<RunDetail runId="r1" gate={{ minPassAt1: 0.1 }} onBack={jest.fn()} />)
-    expect(await screen.findByTestId("legacy-scoring")).toBeInTheDocument()
-    expect(screen.queryByTestId("graded-count")).not.toBeInTheDocument()
-    expect(screen.queryByText("gatePassed")).not.toBeInTheDocument()
-    expect(screen.queryByText("gateFailed")).not.toBeInTheDocument()
-  })
-
-  it("shows unknown legacy provenance and Team limits from the recorded configuration", async () => {
+  it("shows unknown provenance and Team limits from the recorded configuration", async () => {
     ;(getRun as jest.Mock).mockResolvedValue({
       ...RUN,
-      scoringVersion: undefined,
       config: { targetKind: "team", scorerIds: [], k: 1 },
     })
     ;(useEvalRunCaseResults as jest.Mock).mockReturnValue([])

@@ -66,10 +66,7 @@ jest.mock("@/lib/perf/security-generation", () => ({
 }))
 
 const mockListAccounts = jest.fn<Promise<LocalAccountRecord[]>, []>()
-const mockGetState = jest.fn<
-  Promise<{ activeAccountId: string | null; legacyMigration?: unknown }>,
-  []
->()
+const mockGetState = jest.fn<Promise<{ activeAccountId: string | null }>, []>()
 const mockCreateRegistryAccount = jest.fn<Promise<LocalAccountRecord>, [unknown]>()
 const mockRenameRegistryAccount = jest.fn<Promise<LocalAccountRecord>, [string, string]>()
 const mockUpdatePasswordVerifier = jest.fn<
@@ -179,14 +176,6 @@ jest.mock("@/lib/runtime/runtime-target-context", () => ({
   setActiveRuntimeTargetContext: (...args: [string, string]) =>
     mockSetActiveRuntimeTargetContext(...args),
   clearActiveRuntimeTargetContext: () => mockClearActiveRuntimeTargetContext(),
-}))
-
-const mockLegacyDatabaseExists = jest.fn<Promise<boolean>, []>()
-const mockMigrateLegacyDatabaseToAccount = jest.fn<Promise<unknown>, [unknown]>()
-
-jest.mock("@/lib/accounts/legacy-migration", () => ({
-  legacyDatabaseExists: mockLegacyDatabaseExists,
-  migrateLegacyDatabaseToAccount: mockMigrateLegacyDatabaseToAccount,
 }))
 
 const mockActivateAccountDatabase = jest.fn<void, [string]>()
@@ -683,8 +672,6 @@ beforeEach(() => {
     async (_accountId, _currentPassword, _currentVerifier, newPassword, targetVerifier) =>
       targetVerifier ?? verifier(newPassword)
   )
-  mockLegacyDatabaseExists.mockResolvedValue(false)
-  mockMigrateLegacyDatabaseToAccount.mockResolvedValue({})
   mockCreateRegistryAccount.mockImplementation(async (input) => {
     const value = input as {
       id?: string
@@ -1362,8 +1349,7 @@ describe("browser tab session unlock", () => {
 })
 
 describe("account store create and unlock", () => {
-  it("creates the first account, migrates legacy data when present, and unlocks that database", async () => {
-    mockLegacyDatabaseExists.mockResolvedValue(true)
+  it("creates the first account and unlocks that database", async () => {
     const store = makeStore()
 
     const created = await store
@@ -1376,11 +1362,6 @@ describe("account store create and unlock", () => {
         id: "acct_first",
         displayName: "First",
         activate: true,
-      })
-    )
-    expect(mockMigrateLegacyDatabaseToAccount).toHaveBeenCalledWith(
-      expect.objectContaining({
-        targetAccountId: "acct_first",
       })
     )
     expect(created.id).toBe("acct_first")
@@ -1406,7 +1387,6 @@ describe("account store create and unlock", () => {
       .createAccount({ id: "acct_beta", displayName: "Beta", password: "beta-password" })
 
     expect(beta.id).toBe("acct_beta")
-    expect(mockMigrateLegacyDatabaseToAccount).not.toHaveBeenCalled()
     expect(store.getState().activeAccountId).toBe("acct_alpha")
     expect(store.getState().unlockedAccountId).toBe("acct_alpha")
     expect(mockActivateAccountDatabase).toHaveBeenLastCalledWith("acct_alpha")

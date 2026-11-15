@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 /**
  * setSecure/getSecure with the REAL crypto-helpers (W2.5): per-install key
- * derivation, legacy-blob migration, and SSR failure mode.
+ * derivation, profile isolation, and SSR failure mode.
  */
 
 import { webcrypto } from "node:crypto"
@@ -25,15 +25,14 @@ jest.mock("@/lib/data/backup-key", () => ({
 }))
 
 import { createStorageAPI } from "./storage-api"
-import { deriveKey, deriveInstallKey, encrypt, decrypt } from "./crypto-helpers"
+import { deriveInstallKey, encrypt } from "./crypto-helpers"
 import {
   activatePluginRuntimeAccount,
   clearPluginRuntimeAccount,
 } from "../security/account-runtime-gate"
 
 const PLUGIN = "secure-plugin"
-const LEGACY_STORAGE_KEY = `cognia:plugin:storage:${PLUGIN}:token`
-const STORAGE_KEY = `cognia:plugin:account-storage:acct_secure_a:${PLUGIN}:token`
+const SIGNED_OUT_STORAGE_KEY = `cognia:plugin:storage:${PLUGIN}:token`
 
 describe("setSecure / getSecure with per-install key", () => {
   beforeEach(() => {
@@ -41,32 +40,6 @@ describe("setSecure / getSecure with per-install key", () => {
     localStorage.clear()
     mockPassphrase.mockResolvedValue("device-master-key")
     activatePluginRuntimeAccount("acct_secure_a")
-  })
-
-  it("R2: reads adopted legacy ciphertext even when relocation and re-encryption exceed quota", async () => {
-    const legacyKey = await deriveInstallKey(PLUGIN)
-    const blob = await encrypt(JSON.stringify("legacy-secret"), legacyKey)
-    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(`__encrypted:${blob}`))
-    localStorage.setItem(`cognia:plugin:storage-adoption:${PLUGIN}`, "acct_secure_a")
-    const setItem = jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("Browser storage is full", "QuotaExceededError")
-    })
-    const api = createStorageAPI(PLUGIN)
-
-    await expect(api.getSecure("token")).resolves.toBe("legacy-secret")
-    expect(localStorage.getItem(LEGACY_STORAGE_KEY)).not.toBeNull()
-    activatePluginRuntimeAccount("acct_secure_b")
-    await expect(api.getSecure("token")).resolves.toBeUndefined()
-    activatePluginRuntimeAccount("acct_secure_a")
-    setItem.mockRestore()
-    await expect(api.getSecure("token")).resolves.toBe("legacy-secret")
-    expect(localStorage.getItem(LEGACY_STORAGE_KEY)).toBeNull()
-    const migrated = (JSON.parse(localStorage.getItem(STORAGE_KEY)!) as string).slice(
-      "__encrypted:".length
-    )
-    await expect(decrypt(migrated, await deriveInstallKey(PLUGIN, "acct_secure_a"))).resolves.toBe(
-      JSON.stringify("legacy-secret")
-    )
   })
 
   it("B01: secure values do not cross LocalProfiles", async () => {
@@ -85,45 +58,12 @@ describe("setSecure / getSecure with per-install key", () => {
     await expect(api.getSecure("token")).resolves.toEqual({ secret: "s3cr3t" })
   })
 
-  it("does NOT decrypt with the legacy public-id key alone", async () => {
+  it("never reads signed-out ciphertext into a signed-in profile", async () => {
+    const blob = await encrypt(JSON.stringify("signed-out"), await deriveInstallKey(PLUGIN))
+    localStorage.setItem(SIGNED_OUT_STORAGE_KEY, JSON.stringify(`__encrypted:${blob}`))
     const api = createStorageAPI(PLUGIN)
-    await api.setSecure("token", "value")
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) as string) as string
-    const blob = raw.slice("__encrypted:".length)
-    const legacyKey = await deriveKey(PLUGIN)
-    await expect(decrypt(blob, legacyKey)).rejects.toBeDefined()
-  })
-
-  it("migrates a legacy blob to the install key on first read", async () => {
-    // Simulate a pre-W2.5 write: encrypted with the public-id key.
-    const legacyKey = await deriveKey(PLUGIN)
-    const legacyBlob = await encrypt(JSON.stringify("legacy-value"), legacyKey)
-    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(`__encrypted:${legacyBlob}`))
-
-    const api = createStorageAPI(PLUGIN)
-    await expect(api.getSecure("token")).resolves.toBe("legacy-value")
-
-    // The stored blob must now decrypt with the install key.
-    const migrated = (JSON.parse(localStorage.getItem(STORAGE_KEY) as string) as string).slice(
-      "__encrypted:".length
-    )
-    const installKey = await deriveInstallKey(PLUGIN, "acct_secure_a")
-    await expect(decrypt(migrated, installKey)).resolves.toBe(JSON.stringify("legacy-value"))
-    expect(localStorage.getItem(LEGACY_STORAGE_KEY)).toBeNull()
-  })
-
-  it("B01: migrates W2.5 per-install ciphertext into the adopting profile key", async () => {
-    const oldKey = await deriveInstallKey(PLUGIN)
-    const oldBlob = await encrypt(JSON.stringify("install-value"), oldKey)
-    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(`__encrypted:${oldBlob}`))
-    const api = createStorageAPI(PLUGIN)
-    await expect(api.getSecure("token")).resolves.toBe("install-value")
-    const migrated = (await api.get<string>("token"))!.slice("__encrypted:".length)
-    await expect(decrypt(migrated, await deriveInstallKey(PLUGIN, "acct_secure_a"))).resolves.toBe(
-      JSON.stringify("install-value")
-    )
-    await expect(decrypt(migrated, oldKey)).rejects.toThrow()
-    expect(localStorage.getItem(LEGACY_STORAGE_KEY)).toBeNull()
+    await expect(api.getSecure("token")).resolves.toBeUndefined()
+    expect(localStorage.getItem(SIGNED_OUT_STORAGE_KEY)).not.toBeNull()
   })
 
   it("B01: profile keys prevent decrypting ciphertext copied into another namespace", async () => {

@@ -115,8 +115,7 @@ describe("LspServersSection runtime block", () => {
   })
 
   it("renders a stored server that is missing its languages instead of crashing", () => {
-    // Entries can arrive from a settings import or the legacy
-    // `developer.userLspServers` migration, neither of which runs the add
+    // Entries can arrive from a settings import, which does not run the add
     // dialog's validation. `languages.join()` on an absent array took the whole
     // settings page down with it.
     settingsRef.settings = {

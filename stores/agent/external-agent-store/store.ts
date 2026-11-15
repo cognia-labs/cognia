@@ -4,94 +4,7 @@ import { persistLocalStorage } from "@/stores/persist-storage"
 import { initialState } from "./initial-state"
 import { createExternalAgentActionsSlice } from "./slices/actions.slice"
 import type { ExternalAgentStore } from "./types"
-import {
-  getUnsupportedProtocolReason,
-  isSupportedExternalAgentProtocol,
-} from "@/lib/ai/agent/external/config/config-normalizer"
-import {
-  createExternalAgentBenchmarkBaseline,
-  normalizeExternalAgentValiditySnapshot,
-  withoutEnvironmentScopedVerdicts,
-} from "@/lib/ai/agent/external/canonical-contract"
-
-/** Version 7 replaces the legacy global off flag with per-agent disabled states. */
-const EXTERNAL_AGENT_STORE_VERSION = 7
-
-type PersistedExternalAgentState = Partial<
-  Pick<
-    ExternalAgentStore,
-    | "agents"
-    | "delegationRules"
-    | "activeAgentId"
-    | "agentValidity"
-    | "benchmarkCapabilityMap"
-    | "lastRunSnapshots"
-    | "defaultPermissionMode"
-    | "autoConnectOnStartup"
-    | "showConnectionNotifications"
-    | "chatFailurePolicy"
-    | "overviewBannerCollapsed"
-    | "railGroupBy"
-  >
->
-
-function migratePersistedAgents(
-  agents: PersistedExternalAgentState["agents"]
-): PersistedExternalAgentState["agents"] {
-  if (!agents) {
-    return agents
-  }
-
-  const migrated = { ...agents }
-  for (const [agentId, agent] of Object.entries(migrated)) {
-    if (!agent) {
-      continue
-    }
-
-    // Mirror the canonical predicate (acp + opencode), not a bare "acp"
-    // literal, so a persisted `opencode` agent isn't falsely stamped
-    // unsupported. Registry-backed / plugin protocols are intentionally NOT
-    // consulted here — the registry-aware connect-time gate
-    // (getExternalAgentExecutionBlock) is the single source of executability;
-    // adapters aren't guaranteed registered at store-hydration time.
-    if (!isSupportedExternalAgentProtocol(agent.protocol)) {
-      migrated[agentId] = {
-        ...agent,
-        metadata: {
-          ...(agent.metadata ?? {}),
-          unsupported: true,
-          unsupportedProtocol: agent.protocol,
-          unsupportedReason: getUnsupportedProtocolReason(agent.protocol),
-        },
-      }
-    }
-  }
-
-  return migrated
-}
-
-function normalizeLastRunSnapshots(
-  snapshots: PersistedExternalAgentState["lastRunSnapshots"]
-): PersistedExternalAgentState["lastRunSnapshots"] {
-  if (!snapshots) {
-    return snapshots
-  }
-
-  return Object.entries(snapshots).reduce<
-    NonNullable<PersistedExternalAgentState["lastRunSnapshots"]>
-  >((acc, [agentId, snapshot]) => {
-    if (!snapshot) {
-      return acc
-    }
-
-    acc[agentId] = {
-      ...snapshot,
-      timestamp:
-        snapshot.timestamp instanceof Date ? snapshot.timestamp : new Date(snapshot.timestamp),
-    }
-    return acc
-  }, {})
-}
+import { withoutEnvironmentScopedVerdicts } from "@/lib/ai/agent/external/canonical-contract"
 
 export const useExternalAgentStore = create<ExternalAgentStore>()(
   persist(
@@ -101,49 +14,8 @@ export const useExternalAgentStore = create<ExternalAgentStore>()(
     }),
     {
       name: "cognia-external-agents",
-      version: EXTERNAL_AGENT_STORE_VERSION,
+      version: 7,
       storage: persistLocalStorage(),
-      migrate: (persistedState) => {
-        const { enabled: legacyEnabled, ...state } = (persistedState ??
-          {}) as PersistedExternalAgentState & { enabled?: boolean }
-        const agents = migratePersistedAgents(state.agents) ?? {}
-        // Preserve the intent of a saved global off state without keeping a
-        // hidden master gate or launching previously suspended agents.
-        if (legacyEnabled === false) {
-          for (const [id, agent] of Object.entries(agents)) {
-            if (agent) agents[id] = { ...agent, enabled: false }
-          }
-        }
-        const normalizedValidity = Object.entries(state.agentValidity ?? {}).reduce<
-          Record<string, ExternalAgentStore["agentValidity"][string]>
-        >((acc, [agentId, snapshot]) => {
-          if (!snapshot) {
-            return acc
-          }
-          const protocol = agents[agentId]?.protocol ?? "acp"
-          acc[agentId] = normalizeExternalAgentValiditySnapshot(snapshot, {
-            fallbackProtocol: protocol,
-            fallbackSource: snapshot.source,
-          })
-          return acc
-        }, {})
-        const benchmarkCapabilityMap = Object.keys(agents).reduce<
-          Record<string, ExternalAgentStore["benchmarkCapabilityMap"][string]>
-        >((acc, agentId) => {
-          acc[agentId] =
-            state.benchmarkCapabilityMap?.[agentId] ?? createExternalAgentBenchmarkBaseline()
-          return acc
-        }, {})
-        const lastRunSnapshots = normalizeLastRunSnapshots(state.lastRunSnapshots) ?? {}
-        return {
-          ...state,
-          agents,
-          agentValidity: withoutEnvironmentScopedVerdicts(normalizedValidity),
-          benchmarkCapabilityMap,
-          lastRunSnapshots,
-          chatFailurePolicy: state.chatFailurePolicy ?? "fallback",
-        } as ExternalAgentStore
-      },
       partialize: (state) => ({
         agents: state.agents,
         delegationRules: state.delegationRules,

@@ -8,11 +8,7 @@ jest.mock("@cognia/vector/invoke", () => ({
 }))
 
 import { isTauri } from "@/lib/tauri"
-import {
-  getTwinRuntimeSettings,
-  registerExistingTwinVectorBackend,
-  saveTwinRuntimeSettings,
-} from "./twin-runtime-settings"
+import { getTwinRuntimeSettings, saveTwinRuntimeSettings } from "./twin-runtime-settings"
 import { getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
 import { DEFAULT_TWIN_RUNTIME_SETTINGS, type TwinRuntimeSettings } from "@/types/twin"
@@ -108,6 +104,30 @@ describe("twin-runtime-settings CRUD", () => {
     expect(persisted.secretRefs?.embedding).toBe("embedding-api-key")
   })
 
+  it("ignores an inline secret left in the row instead of moving it", async () => {
+    const table = getDb().settings as unknown as {
+      get(id: string): Promise<{ secretRefs?: unknown }>
+      put(row: unknown): Promise<unknown>
+    }
+    await table.put({
+      id: "twin-runtime",
+      payload: {
+        ...DEFAULT_TWIN_RUNTIME_SETTINGS,
+        embedding: { ...DEFAULT_TWIN_RUNTIME_SETTINGS.embedding, apiKey: "sk-inline" },
+        storage: {
+          vectorBackend: "qdrant",
+          qdrant: { url: "http://localhost:6333", apiKey: "qd-inline" },
+        },
+      },
+    })
+
+    const loaded = await getTwinRuntimeSettings()
+    expect(loaded.embedding.apiKey).toBe("")
+    expect(loaded.storage.qdrant?.apiKey).toBeUndefined()
+    expect(loaded.storage.qdrant?.url).toBe("http://localhost:6333")
+    expect((await table.get("twin-runtime")).secretRefs).toBeUndefined()
+  })
+
   it("round-trips extraNameHints incl. CJK names", async () => {
     await saveTwinRuntimeSettings({
       ...DEFAULT_TWIN_RUNTIME_SETTINGS,
@@ -141,32 +161,6 @@ describe("twin-runtime-settings CRUD", () => {
     })
   })
 
-  it("backfills the Rust vector registry once at boot for existing Tauri settings", async () => {
-    const settings = {
-      ...DEFAULT_TWIN_RUNTIME_SETTINGS,
-      storage: {
-        vectorBackend: "qdrant" as const,
-        qdrant: { url: "http://localhost:6334", apiKey: "existing-secret" },
-      },
-    }
-    await saveTwinRuntimeSettings(settings)
-    saveVectorCredentials.mockClear()
-    mockedIsTauri.mockReturnValue(true)
-
-    await registerExistingTwinVectorBackend()
-
-    expect(saveVectorCredentials).toHaveBeenCalledWith("twin-runtime-qdrant", {
-      provider: "qdrant",
-      url: "http://localhost:6334",
-      api_key: "existing-secret",
-      collection_name: undefined,
-    })
-    expect(useVectorStore.getState().settings).toMatchObject({
-      provider: "qdrant",
-      qdrantConfigId: "twin-runtime-qdrant",
-    })
-  })
-
   it("keeps reading settings free of registry writes", async () => {
     await saveTwinRuntimeSettings({
       ...DEFAULT_TWIN_RUNTIME_SETTINGS,
@@ -184,32 +178,6 @@ describe("twin-runtime-settings CRUD", () => {
       storage: { vectorBackend: "qdrant", qdrant: { url: "http://localhost:6334" } },
     })
     expect(saveVectorCredentials).not.toHaveBeenCalled()
-  })
-
-  it("backfills a no-auth cloud endpoint even when the legacy row has no secret references", async () => {
-    await (getDb().settings as unknown as { put(row: unknown): Promise<unknown> }).put({
-      id: "twin-runtime",
-      payload: {
-        ...DEFAULT_TWIN_RUNTIME_SETTINGS,
-        storage: {
-          vectorBackend: "weaviate",
-          weaviate: { url: "https://weaviate.example" },
-        },
-      },
-    })
-    mockedIsTauri.mockReturnValue(true)
-
-    await registerExistingTwinVectorBackend()
-
-    expect(saveVectorCredentials).toHaveBeenCalledWith("twin-runtime-weaviate", {
-      provider: "weaviate",
-      url: "https://weaviate.example",
-      api_key: undefined,
-    })
-    expect(useVectorStore.getState().settings).toMatchObject({
-      provider: "weaviate",
-      weaviateConfigId: "twin-runtime-weaviate",
-    })
   })
 
   // The keyring write is a second durable step, not a precondition. Aborting

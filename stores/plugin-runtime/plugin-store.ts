@@ -211,7 +211,7 @@ const initialState: PluginStoreState & {
   eventListeners: new Map(),
 }
 
-const LEGACY_PLUGIN_STORAGE_KEY = "cognia-plugins"
+const PLUGIN_STORAGE_KEY = "cognia-plugins"
 
 /**
  * The plugin snapshot carries every plugin's full manifest (~0.5 MB with the
@@ -1157,41 +1157,9 @@ export const usePluginStore = create<PluginState>()(
       },
     }),
     {
-      name: LEGACY_PLUGIN_STORAGE_KEY,
+      name: PLUGIN_STORAGE_KEY,
       version: 2,
       storage: pluginPersistStorage,
-      migrate: (persistedState: unknown, version: number) => {
-        const state = persistedState as Record<string, unknown>
-        if (version === 0) {
-          // v0 -> v1: Ensure pluginDirectory field exists
-          if (!state.pluginDirectory) {
-            state.pluginDirectory = null
-          }
-          if (!state.plugins || typeof state.plugins !== "object") {
-            state.plugins = {}
-          }
-        }
-        if (version < 2) {
-          // v1 -> v2: Heal plugins that an older build persisted in a
-          // non-recoverable status (`error`, `loaded`, `enabling`, …). Those
-          // statuses make `loadPlugin` throw "cannot be loaded from status: <x>"
-          // on every restart, so a built-in that errored once stays broken
-          // forever. Collapse each persisted status back to a loadable resting
-          // state so the next activation can recover it.
-          const plugins = state.plugins
-          if (plugins && typeof plugins === "object") {
-            for (const entry of Object.values(plugins as Record<string, unknown>)) {
-              if (entry && typeof entry === "object" && "status" in entry) {
-                const row = entry as { status?: PluginStatus }
-                if (row.status) {
-                  row.status = normalizePersistedPluginStatus(row.status)
-                }
-              }
-            }
-          }
-        }
-        return state
-      },
       partialize: (state) => ({
         // Only persist essential plugin state
         removedPlugins: state.removedPlugins,
@@ -1263,24 +1231,13 @@ installPluginRecordReader((pluginId) => usePluginStore.getState().plugins[plugin
 // register one is loaded through this store.
 installHostPluginDispatch()
 
-/**
- * Select the persisted plugin policy for one LocalProfile. The old global
- * snapshot is adopted once, with every remembered grant removed and every
- * third-party plugin disabled so an upgrade cannot silently inherit authority.
- */
+/** Select the persisted plugin policy for one LocalProfile. */
 export function activatePluginAccountStorage(localAccountId: string): void {
   if (typeof window === "undefined") return
   // Land the outgoing key's pending snapshot under ITS name before the store
   // is pointed elsewhere, and before the localStorage reads below.
   pluginPersistStorage.flush()
   const storageKey = pluginAccountStorageKey(localAccountId)
-  if (window.localStorage.getItem(storageKey) === null) {
-    const legacy = window.localStorage.getItem(LEGACY_PLUGIN_STORAGE_KEY)
-    if (legacy) {
-      window.localStorage.setItem(storageKey, sanitizeLegacyPluginSnapshot(legacy))
-      window.localStorage.removeItem(LEGACY_PLUGIN_STORAGE_KEY)
-    }
-  }
   usePluginStore.persist.setOptions({ name: storageKey })
   usePluginStore.setState(readPluginAccountState(storageKey))
 }
@@ -1288,7 +1245,7 @@ export function activatePluginAccountStorage(localAccountId: string): void {
 export function clearPluginAccountStorage(): void {
   // The signed-out account keeps its latest snapshot on disk.
   pluginPersistStorage.flush()
-  usePluginStore.persist.setOptions({ name: LEGACY_PLUGIN_STORAGE_KEY })
+  usePluginStore.persist.setOptions({ name: PLUGIN_STORAGE_KEY })
   usePluginStore.setState({ ...initialState, eventListeners: new Map() })
 }
 
@@ -1326,29 +1283,6 @@ function readPluginAccountState(storageKey: string): Partial<PluginState> {
     }
   } catch {
     return { ...initialState, eventListeners: new Map() }
-  }
-}
-
-function sanitizeLegacyPluginSnapshot(raw: string): string {
-  try {
-    const parsed = JSON.parse(raw) as { state?: Partial<PluginState>; version?: number }
-    const state = parsed.state ?? {}
-    const plugins = Object.fromEntries(
-      Object.entries(state.plugins ?? {}).map(([id, plugin]) => [
-        id,
-        {
-          ...plugin,
-          status: plugin.source === "builtin" ? "installed" : "disabled",
-        },
-      ])
-    )
-    return JSON.stringify({
-      ...parsed,
-      version: 2,
-      state: { ...state, plugins, rememberedPermissions: {} },
-    })
-  } catch {
-    return JSON.stringify({ version: 2, state: {} })
   }
 }
 

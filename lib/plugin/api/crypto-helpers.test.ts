@@ -26,7 +26,7 @@ jest.mock("@/lib/data/backup-key", () => ({
   }),
 }))
 
-import { deriveKey, deriveInstallKey, encrypt, decrypt } from "./crypto-helpers"
+import { deriveInstallKey, encrypt, decrypt } from "./crypto-helpers"
 
 it("B01: binds the install key to both profile and plugin", async () => {
   const key = await deriveInstallKey("plugin-a", "acct_a")
@@ -45,57 +45,14 @@ it("derives live plugin encryption from the persistent install root with plugin 
     "saved plugin state"
   )
   await expect(decrypt(ciphertext, await deriveInstallKey("plugin-b"))).rejects.toThrow()
-  await expect(decrypt(ciphertext, await deriveKey("plugin-a"))).rejects.toThrow()
 })
 
 describe("crypto-helpers", () => {
-  describe("deriveKey", () => {
-    it("should derive a CryptoKey from a plugin ID", async () => {
-      const key = await deriveKey("test-plugin")
-      expect(key).toBeDefined()
-      expect(key.type).toBe("secret")
-      expect(key.algorithm).toMatchObject({ name: "AES-GCM", length: 256 })
-    })
-
-    it("should derive different keys for different plugin IDs", async () => {
-      const key1 = await deriveKey("plugin-a")
-      const key2 = await deriveKey("plugin-b")
-
-      // Encrypt the same data with both keys
-      const data = "test-data"
-      const enc1 = await encrypt(data, key1)
-      const enc2 = await encrypt(data, key2)
-
-      // Different keys should produce different ciphertext
-      // (also different IVs, but cross-decrypt should fail)
-      await expect(decrypt(enc1, key2)).rejects.toThrow()
-      await expect(decrypt(enc2, key1)).rejects.toThrow()
-    })
-
-    it("should derive the same key for the same plugin ID and salt", async () => {
-      const key1 = await deriveKey("plugin-x", "custom-salt")
-      const key2 = await deriveKey("plugin-x", "custom-salt")
-
-      const data = "roundtrip-test"
-      const encrypted = await encrypt(data, key1)
-      const decrypted = await decrypt(encrypted, key2)
-      expect(decrypted).toBe(data)
-    })
-
-    it("should derive different keys with different salts", async () => {
-      const key1 = await deriveKey("plugin-x", "salt-1")
-      const key2 = await deriveKey("plugin-x", "salt-2")
-
-      const encrypted = await encrypt("data", key1)
-      await expect(decrypt(encrypted, key2)).rejects.toThrow()
-    })
-  })
-
   describe("encrypt / decrypt", () => {
     let key: CryptoKey
 
     beforeAll(async () => {
-      key = await deriveKey("roundtrip-plugin")
+      key = await deriveInstallKey("roundtrip-plugin")
     })
 
     it("should encrypt and decrypt a simple string", async () => {

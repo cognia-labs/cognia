@@ -9,12 +9,6 @@ import type {
 import type { WorkflowNodeKind, WorkflowRow } from "@/types/workflow/visual"
 import { getDb } from "@/lib/db/schema"
 import { getProvider } from "@/lib/plugin/auth/auth-provider-registry"
-import {
-  legacySessionAliases,
-  runLegacySessionMigrations,
-} from "@/lib/plugin/auth/legacy-session-migrations"
-import { connectionAccess } from "@/lib/plugin/auth/connection-access"
-import { getAuthConnection, type AuthConnectionRow } from "@/lib/db/auth-connections"
 import { reprojectIntegrationAccountsForPlugin } from "@/lib/db/integrations"
 
 interface MigrationBackup {
@@ -241,7 +235,11 @@ export async function migrateLegacyIntegration(
   }
 }
 
-/** Existing account ids own subscriptions, external refs and plugin cursor keys: never replace them. */
+/**
+ * Existing account ids own subscriptions, external refs and plugin cursor keys:
+ * never replace them. No Host lineage maps an account that predates
+ * connections onto one, so each such account is flagged for reconnection.
+ */
 async function rebindLegacyConnections(
   pluginId: string,
   plan: IntegrationMigrationPlan
@@ -266,135 +264,73 @@ async function rebindLegacyConnections(
     alreadyApplied,
   })
   if (previous) return result(Number(previous.detail?.migratedAccounts ?? 0), true)
-  const accounts = (
-    await db.integrationAccounts.where("pluginId").equals(pluginId).toArray()
-  ).filter((row) => row.integrationId === plan.integrationId && !row.connectionId)
-  const access = connectionAccess(pluginId, () => {})
-  const changes: Array<{ account: IntegrationAccount; connection: AuthConnectionRow }> = []
-  const missing: IntegrationAccount[] = []
-  for (const account of accounts) {
-    const provider = getProvider(account.providerId)
-    if (provider) await runLegacySessionMigrations(provider)
-    const ref = provider
-      ? (await legacySessionAliases(provider)).get(account.authSessionId)
-      : undefined
-    const connection = ref ? await getAuthConnection(ref) : undefined
-    if (
-      !connection ||
-      connection.providerId !== account.providerId ||
-      (account.providerOwnerPluginId !== undefined &&
-        account.providerOwnerPluginId !== connection.ownerPluginId) ||
-      !(await access.visible(connection, plan.rebindLegacyConnections!.service))
-    ) {
-      missing.push(account)
-    } else changes.push({ account, connection })
-  }
+  const unbound = () =>
+    db.integrationAccounts
+      .where("pluginId")
+      .equals(pluginId)
+      .filter((row) => row.integrationId === plan.integrationId && !row.connectionId)
+      .toArray()
+  const accounts = await unbound()
   let racedResult: IntegrationMigrationResult | undefined
-  await db.transaction(
-    "rw",
-    [db.integrationAccounts, db.integrationAudit, db.authConnections, db.serviceConnections],
-    async () => {
-      // Recheck completion and every source row under the same write transaction.
-      const raced = await ledger()
-        .filter((row) => row.kind === completedKind)
-        .first()
-      if (raced) {
-        racedResult = result(Number(raced.detail?.migratedAccounts ?? 0), true)
-        return
-      }
-      const currentAccounts = (
-        await db.integrationAccounts.where("pluginId").equals(pluginId).toArray()
-      ).filter((row) => row.integrationId === plan.integrationId && !row.connectionId)
-      if (currentAccounts.length !== accounts.length)
-        throw new Error("Integration migration conflict: account inventory changed")
-      for (const snapshot of accounts) {
-        const current = await db.integrationAccounts.get(snapshot.id)
-        if (JSON.stringify(current) !== JSON.stringify(snapshot))
-          throw new Error("Integration migration conflict: account changed")
-      }
-      const now = new Date().toISOString()
-      if (missing.length) {
-        for (const account of missing)
-          await db.integrationAccounts.put({
-            ...account,
-            health: "degraded",
-            status: {
-              health: "degraded",
-              code: "legacy-connection-unmatched",
-              checkedAt: now,
-              recoveryAction: "reconnect",
-            },
-            updatedAt: now,
-          })
-        const kind = `migration.${plan.id}.needs-attention`
-        if (
-          !(await ledger()
-            .filter((row) => row.kind === kind)
-            .first())
-        )
-          await db.integrationAudit.add({
-            ...auditRow(pluginId, plan.integrationId, kind, {
-              accountIds: missing.map((row) => row.id),
-            }),
-            outcome: "failed",
-          })
-        return
-      }
-      const existing = await db.integrationAccounts.where("pluginId").equals(pluginId).toArray()
-      const refs = new Set<string>()
-      for (const { account, connection } of changes) {
-        const current = await db.authConnections.get(connection.id)
-        if (
-          !current ||
-          current.revision !== connection.revision ||
-          current.providerId !== connection.providerId ||
-          current.ownerPluginId !== connection.ownerPluginId
-        )
-          throw new Error("Integration migration conflict: connection changed")
-        if (
-          refs.has(connection.id) ||
-          existing.some(
-            (row) =>
-              row.id !== account.id &&
-              row.integrationId === plan.integrationId &&
-              row.connectionId === connection.id
-          )
-        )
-          throw new Error("Integration migration conflict: connection already bound")
-        refs.add(connection.id)
-      }
+  await db.transaction("rw", [db.integrationAccounts, db.integrationAudit], async () => {
+    // Recheck completion and every source row under the same write transaction.
+    const raced = await ledger()
+      .filter((row) => row.kind === completedKind)
+      .first()
+    if (raced) {
+      racedResult = result(Number(raced.detail?.migratedAccounts ?? 0), true)
+      return
+    }
+    if ((await unbound()).length !== accounts.length)
+      throw new Error("Integration migration conflict: account inventory changed")
+    for (const snapshot of accounts) {
+      const current = await db.integrationAccounts.get(snapshot.id)
+      if (JSON.stringify(current) !== JSON.stringify(snapshot))
+        throw new Error("Integration migration conflict: account changed")
+    }
+    if (accounts.length === 0) {
       const backup: MigrationBackup = {
-        accounts,
+        accounts: [],
         subscriptions: [],
         workflows: [],
-        createdAccountIds: accounts.map((row) => row.id),
+        createdAccountIds: [],
         createdSubscriptionIds: [],
       }
       await db.integrationAudit.add(
         auditRow(pluginId, plan.integrationId, migrationKind(plan.id, "backup"), { backup })
       )
-      const revisions: MigrationRevisions = { accounts: {}, subscriptions: {}, workflows: {} }
-      for (const { account, connection } of changes) {
-        await db.integrationAccounts.put({
-          ...account,
-          connectionId: connection.id,
-          providerOwnerPluginId: connection.ownerPluginId,
-          health: "unknown",
-          status: undefined,
-          updatedAt: now,
-        })
-        revisions.accounts[account.id] = now
-      }
-      await reprojectIntegrationAccountsForPlugin(pluginId)
       await db.integrationAudit.add(
-        auditRow(pluginId, plan.integrationId, completedKind, {
-          migratedAccounts: changes.length,
-          postMigration: revisions,
-        })
+        auditRow(pluginId, plan.integrationId, completedKind, { migratedAccounts: 0 })
       )
+      return
     }
-  )
-  return racedResult ?? result(missing.length ? 0 : changes.length, false)
+    const now = new Date().toISOString()
+    for (const account of accounts)
+      await db.integrationAccounts.put({
+        ...account,
+        health: "degraded",
+        status: {
+          health: "degraded",
+          code: "legacy-connection-unmatched",
+          checkedAt: now,
+          recoveryAction: "reconnect",
+        },
+        updatedAt: now,
+      })
+    const kind = `migration.${plan.id}.needs-attention`
+    if (
+      !(await ledger()
+        .filter((row) => row.kind === kind)
+        .first())
+    )
+      await db.integrationAudit.add({
+        ...auditRow(pluginId, plan.integrationId, kind, {
+          accountIds: accounts.map((row) => row.id),
+        }),
+        outcome: "failed",
+      })
+  })
+  return racedResult ?? result(0, false)
 }
 
 export async function rollbackIntegrationMigration(

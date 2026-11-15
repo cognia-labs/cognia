@@ -237,9 +237,6 @@
     "lib/accounts/account-types.ts": {
       "bareAccountId": 3
     },
-    "lib/accounts/legacy-migration.ts": {
-      "bareAccountId": 6
-    },
     "lib/accounts/password-client.ts": {
       "bareAccountId": 5
     },
@@ -272,9 +269,6 @@
     },
     "lib/companion/credential-book/index.ts": {
       "bareAccountId": 2
-    },
-    "lib/companion/credential-book/legacy-migration.ts": {
-      "bareAccountId": 3
     },
     "lib/companion/credential-book/stores.ts": {
       "bareAccountId": 3

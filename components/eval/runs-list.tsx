@@ -10,7 +10,7 @@ import { useTranslations } from "next-intl"
 import { Badge } from "@/components/ui/badge"
 import { useEvalRuns } from "@/hooks/eval/use-eval-data"
 import { evaluateGate } from "@cognia/eval-core"
-import { isLegacyScoring, isPartialRun } from "@cognia/eval-core"
+import { isPartialRun } from "@cognia/eval-core"
 import type { EvalRunRow } from "@/lib/db/eval-runs"
 import type { GateThresholds } from "@/types/eval/gate"
 
@@ -44,11 +44,8 @@ export function RunsListView({ runs, gate, onOpenRun }: RunsListViewProps) {
   return (
     <ul className="flex flex-col gap-1" data-testid="runs-list">
       {runs.map((run) => {
-        // Legacy runs carry an inflated pass rate, so their gate verdict would
-        // be equally wrong — badge them and withhold it.
-        const legacy = isLegacyScoring(run)
         const partial = isPartialRun(run)
-        const gateResult = gate && !legacy && !partial ? evaluateGate(run, gate) : undefined
+        const gateResult = gate && !partial ? evaluateGate(run, gate) : undefined
         return (
           <li key={run.runId} className="motion-safe:animate-in motion-safe:fade-in">
             <button
@@ -72,7 +69,7 @@ export function RunsListView({ runs, gate, onOpenRun }: RunsListViewProps) {
                     {t("passHatK", { pct: Math.round(run.passHatK * 100), k: run.k })}
                   </Badge>
                 )}
-                {!legacy && (run.ungradedCaseCount ?? 0) > 0 && (
+                {(run.ungradedCaseCount ?? 0) > 0 && (
                   <Badge variant="outline" data-testid="runs-list-ungraded">
                     {t("ungraded", { count: run.ungradedCaseCount ?? 0 })}
                   </Badge>
@@ -86,11 +83,6 @@ export function RunsListView({ runs, gate, onOpenRun }: RunsListViewProps) {
                         })
                       : `$${run.totalCostUsd.toFixed(2)}`}
                 </Badge>
-                {legacy && (
-                  <Badge variant="outline" data-testid="runs-list-legacy">
-                    {t("legacyScoring")}
-                  </Badge>
-                )}
                 {partial && (
                   <Badge variant="destructive" data-testid="runs-list-status">
                     {t(`status.${run.status}` as never)}

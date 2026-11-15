@@ -18,14 +18,6 @@ describe("petAccountIdFrom", () => {
     ).toBe("codex")
   })
 
-  it("retains legacy singular-default compatibility", () => {
-    expect(
-      petAccountIdFrom(
-        settings({ defaultProvider: "anthropic", defaultAccountId: "acct", installUuid: "uuid" })
-      )
-    ).toBe("acct")
-  })
-
   it("falls back to the install uuid", () => {
     expect(petAccountIdFrom(settings({ installUuid: "uuid" }))).toBe("uuid")
   })
@@ -36,16 +28,17 @@ describe("petAccountIdFrom", () => {
         settings({
           defaultProvider: "openai",
           defaultAccountIds: { codex: "codex-account" },
-          defaultAccountId: "stale-legacy-account",
           installUuid: "uuid",
         })
       )
     ).toBe("uuid")
   })
 
-  it("normalizes an OpenCode Go legacy default", () => {
+  it("maps the OpenCode Go provider onto the OpenCode account map", () => {
     expect(
-      petAccountIdFrom(settings({ defaultProvider: "opencode-go", defaultAccountId: "go-account" }))
+      petAccountIdFrom(
+        settings({ defaultProvider: "opencode-go", defaultAccountIds: { opencode: "go-account" } })
+      )
     ).toBe("go-account")
   })
 

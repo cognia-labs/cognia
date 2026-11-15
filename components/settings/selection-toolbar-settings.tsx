@@ -19,7 +19,6 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   SELECTION_TOOLBAR_DISABLED_APPS_PREF,
   SELECTION_TOOLBAR_DISABLED_SITES_PREF,
-  SELECTION_TOOLBAR_ENABLED_PREF,
   SELECTION_TOOLBAR_MODE_PREF,
   getSelectionToolbarStatus,
   repairSelectionToolbarPermission,
@@ -43,7 +42,7 @@ import {
   type SearchEngineId,
 } from "@/lib/selection/search-engines"
 import {
-  migrateSelectionToolbarMode,
+  parseSelectionToolbarMode,
   normalizeHostnameRules,
   type SelectionToolbarMode,
 } from "@/lib/selection/preferences"
@@ -82,8 +81,7 @@ export function SelectionToolbarSettings() {
   useEffect(() => {
     let alive = true
     void Promise.all([
-      getPref<boolean>(SELECTION_TOOLBAR_ENABLED_PREF),
-      getPref<SelectionToolbarMode>(SELECTION_TOOLBAR_MODE_PREF),
+      getPref<unknown>(SELECTION_TOOLBAR_MODE_PREF),
       getPref<string[]>(SELECTION_TOOLBAR_DISABLED_APPS_PREF),
       getPref<string[]>(SELECTION_TOOLBAR_DISABLED_SITES_PREF),
       getPref<string>(SELECTION_TRANSLATE_LOCALE_PREF),
@@ -92,7 +90,6 @@ export function SelectionToolbarSettings() {
       getSelectionToolbarStatus(),
     ]).then(
       ([
-        savedEnabled,
         savedMode,
         disabledApps,
         disabledSites,
@@ -102,10 +99,7 @@ export function SelectionToolbarSettings() {
         liveStatus,
       ]) => {
         if (!alive) return
-        const nextMode = migrateSelectionToolbarMode(
-          savedMode ?? undefined,
-          savedEnabled ?? undefined
-        )
+        const nextMode = parseSelectionToolbarMode(savedMode)
         setMode(nextMode)
         setEnabled(nextMode !== "off")
         setDisabledAppsText(Array.isArray(disabledApps) ? disabledApps.join("\n") : "")
@@ -140,10 +134,7 @@ export function SelectionToolbarSettings() {
       }
       setMode(nextMode)
       setEnabled(nextMode !== "off")
-      await Promise.all([
-        setPref(SELECTION_TOOLBAR_MODE_PREF, nextMode),
-        setPref(SELECTION_TOOLBAR_ENABLED_PREF, nextMode !== "off"),
-      ])
+      await setPref(SELECTION_TOOLBAR_MODE_PREF, nextMode)
     } catch (error) {
       // Which way to fail depends on which call failed.
       //
@@ -157,10 +148,7 @@ export function SelectionToolbarSettings() {
       const persistedMode = stopFailed ? mode : "off"
       setMode(persistedMode)
       setEnabled(persistedMode !== "off")
-      await Promise.all([
-        setPref(SELECTION_TOOLBAR_MODE_PREF, persistedMode),
-        setPref(SELECTION_TOOLBAR_ENABLED_PREF, persistedMode !== "off"),
-      ])
+      await setPref(SELECTION_TOOLBAR_MODE_PREF, persistedMode)
       toast.error(t(stopFailed ? "disableFailed" : "enableFailed"), {
         description: error instanceof Error ? error.message : String(error),
       })

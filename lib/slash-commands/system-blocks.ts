@@ -16,7 +16,6 @@ export type {
   SlashCommandResultBlock,
   SystemMessageBlock,
   UsageDiagnosticsBlock,
-  UsageWindowStat,
 } from "@cognia/plugin-contract/lib/slash-commands/system-blocks"
 
 /** UI message part type carrying a {@link SystemMessageBlock}. */

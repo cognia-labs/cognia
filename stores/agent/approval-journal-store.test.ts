@@ -3,7 +3,6 @@ import {
   useApprovalJournalStore,
   toPersistedApproval,
   markUnsettledInterrupted,
-  migrateApprovalJournal,
   stampNotified,
   unannouncedInterrupted,
   type PersistedApproval,
@@ -95,7 +94,7 @@ describe("persist rehydration", () => {
   })
 })
 
-describe("rehydrate + migrate helpers", () => {
+describe("rehydrate helpers", () => {
   it("markUnsettledInterrupted flips pending/settled rows to interrupted", () => {
     const out = markUnsettledInterrupted([
       { ...entry({ requestId: "a" }), status: "pending" },
@@ -104,13 +103,6 @@ describe("rehydrate + migrate helpers", () => {
     expect(out.every((e) => e.status === "interrupted")).toBe(true)
     // The already-interrupted entry is returned by reference (unchanged).
     expect(out[1]).toMatchObject({ requestId: "b" })
-  })
-
-  it("migrateApprovalJournal stamps legacy rows interrupted and tolerates undefined", () => {
-    expect(migrateApprovalJournal({ entries: [{ requestId: "x" }] }).entries[0].status).toBe(
-      "interrupted"
-    )
-    expect(migrateApprovalJournal(undefined).entries).toEqual([])
   })
 })
 
@@ -191,10 +183,6 @@ describe("announce-once bookkeeping", () => {
     const entries = useApprovalJournalStore.getState().entries
     expect(unannouncedInterrupted(entries).map((e) => e.requestId)).toEqual(["new"])
     expect(entries.find((e) => e.requestId === "told")?.notifiedAt).toBe(7)
-    // The legacy migration path keeps it too.
-    expect(
-      migrateApprovalJournal({ entries: [{ requestId: "m", notifiedAt: 3 }] }).entries[0]
-    ).toMatchObject({ status: "interrupted", notifiedAt: 3 })
     window.localStorage.clear()
     reset()
   })

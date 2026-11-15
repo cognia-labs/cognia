@@ -451,7 +451,7 @@ describe("outbound-jobs", () => {
       }
     })
 
-    it("reconciles legacy terminal/missing rows and preserves pending work on startup", async () => {
+    it("reconciles terminal/missing rows and preserves pending work on startup", async () => {
       const sent = await create(),
         missing = await create(),
         pending = await create()
@@ -1466,25 +1466,6 @@ describe("outbound-jobs", () => {
       expect(recovered).toHaveLength(0)
       expect((await getDb().outboundQueue.get(row.id))?.status).toBe("sending")
     })
-
-    it("falls back to createdAt for legacy rows without a claim stamp", async () => {
-      const now = Date.now()
-      await getDb().outboundQueue.add({
-        id: "legacy-1",
-        adapterId: "adp_1",
-        conversationKey: "conv_legacy",
-        request: makeRequest("k_legacy"),
-        status: "sending",
-        attempts: 2,
-        createdAt: now - STALE_SENDING_GRACE_MS - 1_000,
-        nextAttemptAt: now - STALE_SENDING_GRACE_MS - 1_000,
-        idempotencyKey: "k_legacy",
-        source: "ai-run",
-      })
-      const recovered = await recoverStaleSendingJobs(now)
-      expect(recovered.map((r) => r.id)).toEqual(["legacy-1"])
-      expect((await getDb().outboundQueue.get("legacy-1"))?.status).toBe("failed")
-    })
   })
 
   // ── P3 — post-claim rate-limit unclaim ───────────────────────────────
@@ -1757,7 +1738,7 @@ describe("atomic manual transcript", () => {
   })
 })
 
-describe("delivery feedback and legacy queue recovery", () => {
+describe("delivery feedback", () => {
   it("resolves an active waiter when the persisted delivery becomes sent", async () => {
     const job = await enqueue({
       adapterId: "adp_1",
@@ -1803,29 +1784,6 @@ describe("delivery feedback and legacy queue recovery", () => {
     })
     expect(await pickNextDue()).toBeUndefined()
   })
-
-  it.each(["pending", "failed", "sending"] as const)(
-    "orders legacy %s siblings by createdAt and skips terminal rows",
-    async (status) => {
-      const rows = await enqueueOutboundMany(
-        ["head", "active", "tail"].map((key) => ({
-          adapterId: "adp_1",
-          conversationKey: "legacy-fifo",
-          request: makeRequest(key),
-          source: "manual" as const,
-        }))
-      )
-      const legacy = rows.map((row, index) => {
-        const { orderSeq: _orderSeq, ...rest } = row
-        return { ...rest, createdAt: 100 + index, status: index === 1 ? status : ("sent" as const) }
-      })
-      await getDb().outboundQueue.bulkPut(legacy)
-      expect((await findOlderActiveOutboundSibling(legacy[2]))?.id).toBe(legacy[1].id)
-      expect((await findNextActiveOutboundSibling(legacy[0]))?.id).toBe(legacy[1].id)
-      expect(await findOlderActiveOutboundSibling(legacy[0])).toBeUndefined()
-      expect(await findNextActiveOutboundSibling(legacy[2])).toBeUndefined()
-    }
-  )
 })
 
 it("returns a due retry even when a one-row batch allocates no initial failed quota", async () => {

@@ -4146,27 +4146,17 @@ export interface AppSettings {
     /** Expose web_search / web_fetch to the agent. Default true. */
     enabled: boolean
     /**
-     * Opt-in (default false): on the Anthropic (Agent SDK) path, use the SDK's
-     * built-in WebSearch / WebFetch — server-side extraction + citations,
-     * Anthropic's own token budget — instead of the custom multi-provider,
-     * host-routed web tools. Ignored for non-Anthropic providers, where the
-     * native tools aren't available and the custom ones are always used.
-     */
-    nativeOnAnthropic?: boolean
-    /**
      * Opt-in (default false): use Cognia's multi-provider, host-routed web
      * tools EVEN WHERE the runtime brings its own search.
      *
-     * The inverse of {@link nativeOnAnthropic}, and the field that replaces it.
-     * Native-first is now the default (`lib/chat/web-access.ts`): preferring
+     * Native-first is the default (`lib/chat/web-access.ts`): preferring
      * the provider-backed tools meant a subscriber with no search key was
      * handed a `web_search` that could only fail, while the natives that would
      * have worked sat behind an opt-in defaulting off. This is the escape
      * hatch for someone who wants the multi-provider search anyway — a
      * provider with better recency/domain filters, or a native they do not
      * want billed. Honoured only when a search provider is actually
-     * configured; `nativeOnAnthropic` is kept for back-compat and, being
-     * native-first already, is now a no-op when true.
+     * configured.
      */
     preferCognia?: boolean
     /**
@@ -5378,17 +5368,9 @@ export interface AppSettings {
    */
   statusBarLayout?: import("@cognia/plugin-contract/types/shell/bars").BarLayout
   /**
-   * Legacy (pre-ADR-0225) customization of the mobile home: the ordered
-   * quick-action grid + which home sections are hidden. Superseded by
-   * `mobileGlanceLayout`; read only by `migrateMobileHomeLayout`
-   * (`lib/glance/mobile-layout.ts`) until the phone first saves that field,
-   * and never written again. See `@/types/shell/mobile-home` for the model.
-   */
-  mobileHomeLayout?: import("@cognia/plugin-contract/types/shell/mobile-home").MobileHomeLayout
-  /**
    * The desktop tray panel's glance layout (ADR-0225): module order, sizes and
    * visibility, the preset it came from, width step, max height, data scope
-   * and per-module options. Lives in settings JSON like `mobileHomeLayout`, so
+   * and per-module options. Lives in settings JSON, so
    * it is backed up and account-synced without a Dexie migration. Read through
    * `normalizeGlancePanelSettings` (`lib/glance/presets.ts`), never raw.
    */
@@ -5399,16 +5381,13 @@ export interface AppSettings {
    * entry), their order and sizes, scope, options and the quick module's
    * shortcut list. One per account, shared between the phones and the desktop
    * so either platform can copy the other's layout. `undefined` means the
-   * phone still reads its pre-ADR-0225 home (`mobileHomeLayout` and
-   * `welcomeStats.enabled`) into this model on every read. Read through
+   * shipped default. Read through
    * `normalizeGlanceMobileSettings` (`lib/glance/mobile-layout.ts`), never raw.
    */
   mobileGlanceLayout?: import("@cognia/plugin-contract/types/glance/layout").GlanceMobileSettings
   /**
    * The tray panel's action catalogue (quick actions and the delegate bar's
-   * primary action). Imported once from the Tauri store pref
-   * `trayPanel.actions.v1` (`lib/tray-panel/migrate-actions.ts`); `undefined`
-   * means the shipped catalogue. Read through `resolveTrayPanelActions`
+   * primary action). `undefined` means the shipped catalogue. Read through `resolveTrayPanelActions`
    * (`lib/tray-panel/catalogue.ts`), never raw. The panel window receives it
    * in the glance snapshot.
    */
@@ -5889,15 +5868,6 @@ export interface AppSettings {
    */
   defaultAccountIds?: Partial<Record<SubscriptionAccountProvider, string>>
   /**
-   * Default account override (ADR-0028) for sessions / characters that do not
-   * set their own `accountId` / `accountIdOverride`. Refers to a UUIDv7 in
-   * `ProviderVault::accounts[]` for the provider matched by `defaultProvider`.
-   * Undefined keeps today's behaviour exactly — the single global active pointer
-   * (`ActiveAccountState`) remains the source of truth.
-   */
-  /** @deprecated Migrated into {@link defaultAccountIds} on the next settings write. */
-  defaultAccountId?: string
-  /**
    * Pet subsystem preferences (v67). Undefined ⇒ defaults from
    * `DEFAULT_PET_SETTINGS`. See `components/settings/pet/pet-section.tsx`.
    */
@@ -6026,18 +5996,6 @@ export interface AppSettings {
   providerDiagnostics?: import("@cognia/provider-types").ProviderDiagnosticsPreferences
   /** Whether the user dismissed the first-time providers onboarding banner. */
   providerOnboardingDismissed?: boolean
-  /**
-   * @deprecated Read-only migration source, superseded by {@link onboarding}.
-   *
-   * ISO 8601 timestamp recorded the first time the user dismissed or completed
-   * the old desktop first-run onboarding *dialog*. It collapsed "finished",
-   * "bailed on step 1" and "hit Esc" into one value, which is why nothing
-   * writes it any more. `lib/onboarding/migrate-legacy.ts` reads it once and
-   * projects it to `onboarding.progress.path = "legacy_dismissed"`; the field
-   * itself is retained so the migration stays idempotent across devices and so
-   * an exported backup taken before the migration still restores meaningfully.
-   */
-  onboardingDismissedAt?: string
   /**
    * First-run onboarding completion bookkeeping (ADR-0122). Kept separate from
    * {@link onboardingProfile} because the two sync differently and
@@ -6355,9 +6313,7 @@ export interface AppSettings {
    * under any project-local `.cognia/lsp.json` by
    * `lib/lsp/resolve-config.ts`.
    *
-   * Stored in the settings singleton (no dedicated Dexie table). Migrated
-   * from the former `developer.userLspServers` /
-   * `developer.unsignedLspAllowed` fields.
+   * Stored in the settings singleton (no dedicated Dexie table).
    */
   lsp?: LspSettings
 
@@ -6416,22 +6372,6 @@ export interface DeveloperSettings {
    * `ChatMiddlewareFlagInitializer`.
    */
   chatMiddlewareExecution?: boolean
-
-  /**
-   * When `true`, the VS Code LSP binary policy
-   * @deprecated Migrated to `AppSettings.lsp.unsignedAllowed` by
-   * `lib/lsp/migrate-settings.ts`. Read only during the one-time
-   * migration; cleared afterwards. Kept on the type so the migration can
-   * still see legacy values.
-   */
-  unsignedLspAllowed?: boolean
-
-  /**
-   * @deprecated Migrated to `AppSettings.lsp.servers` by
-   * `lib/lsp/migrate-settings.ts`. Read only during the one-time
-   * migration; cleared afterwards.
-   */
-  userLspServers?: UserLspServerEntry[]
 }
 
 /**

@@ -148,10 +148,6 @@ function deviceKeySecretName(key: CompanionHostKey): string {
   return `companion-host:${hostRecordKey(key)}:device-private-jwk`
 }
 
-function legacyJwtSecretName(key: CompanionHostKey): string {
-  return `companion-host:${hostRecordKey(key)}:device-jwt`
-}
-
 function signingSecretName(key: CompanionHostKey): string {
   return `companion-host:${hostRecordKey(key)}:signaling-private-jwk`
 }
@@ -187,7 +183,6 @@ export class VaultHostCredentialStore implements HostCredentialStore {
       deviceKeySecretName(key),
       JSON.stringify(credential.devicePrivateKeyJwk)
     )
-    await vault.deleteSecret(legacyJwtSecretName(key))
     if (credential.signalingPrivateKeyJwk) {
       await vault.storeSecret(
         signingSecretName(key),
@@ -202,7 +197,6 @@ export class VaultHostCredentialStore implements HostCredentialStore {
     const vault = this.requireVault(key)
     await Promise.all([
       vault.deleteSecret(deviceKeySecretName(key)),
-      vault.deleteSecret(legacyJwtSecretName(key)),
       vault.deleteSecret(signingSecretName(key)),
     ])
   }
@@ -271,7 +265,6 @@ export class SecureStorageHostCredentialStore implements HostCredentialStore {
       key: deviceKeySecretName(key),
       value: JSON.stringify(credential.devicePrivateKeyJwk),
     })
-    await plugin.remove({ key: legacyJwtSecretName(key) }).catch(ignoreMissingSecureStorageItem)
     if (credential.signalingPrivateKeyJwk) {
       await plugin.set({
         key: signingSecretName(key),
@@ -286,7 +279,6 @@ export class SecureStorageHostCredentialStore implements HostCredentialStore {
     const plugin = await this.loader()
     await Promise.all([
       plugin.remove({ key: deviceKeySecretName(key) }).catch(ignoreMissingSecureStorageItem),
-      plugin.remove({ key: legacyJwtSecretName(key) }).catch(ignoreMissingSecureStorageItem),
       plugin.remove({ key: signingSecretName(key) }).catch(ignoreMissingSecureStorageItem),
     ])
   }

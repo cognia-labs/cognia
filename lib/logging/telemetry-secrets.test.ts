@@ -13,9 +13,7 @@ import { isTauri } from "@/lib/platform/detect"
 import { clearSecret, getSecret, setSecret } from "@/lib/keyring"
 import {
   clearTelemetrySecret,
-  extractLegacyTelemetrySecrets,
   hasTelemetrySecret,
-  persistLegacyTelemetrySecrets,
   persistTelemetrySecret,
 } from "./telemetry-secrets"
 
@@ -31,28 +29,6 @@ describe("telemetry secret persistence", () => {
     jest.mocked(clearSecret).mockReset()
   })
 
-  it("removes legacy plaintext values and replaces them with references", () => {
-    const result = extractLegacyTelemetrySecrets({
-      langfuseConfig: { publicKey: "pk", secretKey: "sk-live-secret" },
-      agentTraceOtlpConfig: {
-        grafanaCloud: { instanceId: "123", apiToken: "glc_secret" },
-      },
-    })
-
-    expect(result.secrets).toEqual({
-      langfuseSecretKey: "sk-live-secret",
-      grafanaCloudApiToken: "glc_secret",
-    })
-    expect(result.settings).toMatchObject({
-      langfuseConfig: { publicKey: "pk", secretKeyConfigured: true },
-      agentTraceOtlpConfig: {
-        grafanaCloud: { instanceId: "123", apiTokenConfigured: true },
-      },
-    })
-    expect(JSON.stringify(result.settings)).not.toContain("sk-live-secret")
-    expect(JSON.stringify(result.settings)).not.toContain("glc_secret")
-  })
-
   it("uses the write-only telemetry command in Tauri", async () => {
     invokeMock.mockResolvedValue(undefined)
     await persistTelemetrySecret("grafanaCloudApiToken", "glc_secret")
@@ -60,16 +36,6 @@ describe("telemetry secret persistence", () => {
       kind: "grafanaCloudApiToken",
       value: "glc_secret",
     })
-  })
-
-  it("does not invent nested settings or migrate empty legacy values", () => {
-    expect(extractLegacyTelemetrySecrets(null)).toEqual({ settings: {}, secrets: {} })
-    const result = extractLegacyTelemetrySecrets({
-      langfuseConfig: { secretKey: "" },
-      agentTraceOtlpConfig: { grafanaCloud: { apiToken: "" } },
-    })
-    expect(result.secrets).toEqual({})
-    expect(JSON.stringify(result.settings)).not.toMatch(/secretKey|apiToken"/)
   })
 
   it("supports Tauri clear/has while keeping readback unavailable", async () => {
@@ -106,14 +72,5 @@ describe("telemetry secret persistence", () => {
       persistTelemetrySecret("grafanaCloudApiToken", "glc_browser_secret")
     ).rejects.toThrow(/secure desktop Host/)
     expect(setSecret).not.toHaveBeenCalled()
-  })
-
-  it("persists every non-empty migrated secret", async () => {
-    invokeMock.mockResolvedValue(undefined)
-    await persistLegacyTelemetrySecrets({
-      grafanaCloudApiToken: "grafana",
-      langfuseSecretKey: undefined,
-    })
-    expect(invokeMock).toHaveBeenCalledTimes(1)
   })
 })

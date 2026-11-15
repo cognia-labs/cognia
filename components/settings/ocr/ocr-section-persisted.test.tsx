@@ -96,21 +96,17 @@ describe("OcrSectionPersisted", () => {
     expect(buildOcrDeps).toHaveBeenCalledWith({ settings: DEFAULT_OCR_SETTINGS })
   })
 
-  it("migrates a legacy local HTTP plaintext key into the OCR keyring", async () => {
+  it("never moves a key still stored in settings into the OCR keyring", async () => {
     liveSettings = {
       ...DEFAULT_OCR_SETTINGS,
       providerConfig: {
-        "local-http": { endpoint: "http://localhost:1224/api/ocr", apiKey: "legacy-key" },
+        "local-http": { endpoint: "http://localhost:1224/api/ocr", apiKey: "settings-key" },
       },
     }
     render(<OcrSectionPersisted />)
 
-    await waitFor(() =>
-      expect(setOcrSecret).toHaveBeenCalledWith("local-http", "apiKey", "legacy-key")
-    )
-    const migrated = saveSettings.mock.calls.at(-1)![0].ocrSettings
-    expect(migrated.providerConfig["local-http"].apiKey).toBeUndefined()
-    expect(migrated.providerConfig["local-http"].endpoint).toBe("http://localhost:1224/api/ocr")
+    await waitFor(() => expect(getOcrSecret).toHaveBeenCalled())
+    expect(setOcrSecret).not.toHaveBeenCalledWith("local-http", "apiKey", "settings-key")
   })
 
   it("normalizes an unavailable saved default provider to auto", async () => {

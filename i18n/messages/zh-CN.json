@@ -3018,7 +3018,6 @@
           "dispatch_initialization_failed": "小队未能准备任务调度",
           "evidence_incomplete": "缺少必需的完成证据",
           "launch_failed": "小队未能启动此运行",
-          "legacy_run_not_resumable": "此运行早于持久化运行时，没有留下检查点",
           "missing_checkpoint": "没有写入检查点",
           "missing_execution_constraints": "缺少启动时保存的权限约束，无法安全恢复此运行",
           "recover_needs_input": "最后一个检查点需要人工决定",
@@ -7601,7 +7600,6 @@
       "documentLabel": "文档",
       "error": "无法打开",
       "failure": {
-        "expired": "这是旧版本生成的链接，已不可用。请向分享者重新索取。",
         "malformed": "这不是有效的 Canvas 分享链接。",
         "missing": "该链接没有指明文档。",
         "not-found": "本设备上还没有这份文档。"
@@ -15171,10 +15169,6 @@
         "label": "显示顶部栏"
       }
     },
-    "shellLayoutNotice": {
-      "description": "面板开关、主题、缩放和语言已移到标题栏的「视图」菜单，桌宠、OCR、剪贴板按钮也在那里。按 ⌘B 可显示或隐藏会话列表。",
-      "title": "布局已简化"
-    },
     "sidebarUser": {
       "lock": "锁定 Cognia",
       "lockFailed": "无法锁定 Cognia。",
@@ -17902,7 +17896,6 @@
       "case": "用例",
       "fail": "失败",
       "loading": "正在加载逐例结果…",
-      "mixedScoring": "你正在对比评分修复前后的运行。旧运行把纯测量类评分器算作通过，因此跨越这条分界线的下降是修复生效，而不是能力退化。",
       "noCases": "所选运行没有记录逐用例结果。",
       "pass": "通过",
       "pickTwo": "至少选择两个运行进行对比。",
@@ -18457,8 +18450,6 @@
       "gatePassed": "门限通过",
       "graded": "已判定 {graded} · 无判定 {ungraded}",
       "latency": "{ms} 毫秒",
-      "legacyScoring": "旧评分口径",
-      "legacyScoringHint": "这次运行早于评分修复：当时纯测量类评分器被算作通过，因此它的通过率偏高，且无法与新运行对比。其质量门结论已隐藏。",
       "loading": "正在加载运行…",
       "noCases": "该运行没有逐用例结果。",
       "outputTruncated": "（已截断）",
@@ -18500,7 +18491,6 @@
       "empty": "暂无运行记录 — 配置并运行该数据集。",
       "gateFailed": "门限未过",
       "gatePassed": "门限通过",
-      "legacyScoring": "旧评分口径",
       "openRun": "打开运行 {label}",
       "passAt1": "pass@1 {pct}%",
       "passHatK": "pass^{k} {pct}%",

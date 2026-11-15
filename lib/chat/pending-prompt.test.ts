@@ -44,17 +44,14 @@ describe("pending chat prompt", () => {
     expect(peekPendingChatPrompt("session-1", { now: 1_003 })).toBeNull()
   })
 
-  it("migrates the previous session-scoped handoff without losing it", () => {
+  it("never reads the previous session-scoped key", () => {
     sessionStorage.setItem(
       "cognia:pending-chat-prompt",
-      JSON.stringify({ sessionId: "session-1", prompt: "legacy", expiresAt: 2_000 })
+      JSON.stringify({ sessionId: "session-1", prompt: "old", expiresAt: 2_000 })
     )
 
-    expect(peekPendingChatPrompt("session-1", { now: 1_000 })).toEqual(
-      expect.objectContaining({ prompt: "legacy", skillIds: [] })
-    )
-    expect(sessionStorage.getItem("cognia:pending-chat-prompt")).toBeNull()
-    expect(localStorage.getItem("cognia:pending-chat-prompt:v2")).not.toBeNull()
+    expect(peekPendingChatPrompt("session-1", { now: 1_000 })).toBeNull()
+    expect(localStorage.getItem("cognia:pending-chat-prompt:v2")).toBeNull()
   })
 
   it("rejects empty and expired prompts", () => {

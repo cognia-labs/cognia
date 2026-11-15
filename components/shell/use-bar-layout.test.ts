@@ -6,7 +6,6 @@ import { act, renderHook } from "@testing-library/react"
 
 import { useBarLayout } from "./use-bar-layout"
 import { useSettingsStore } from "@/stores/settings/settings-store"
-import { useUIStore, DEFAULT_BAR_ITEMS } from "@/stores/ui/ui-store"
 import {
   DEFAULT_STATUS_BAR_LAYOUT,
   DEFAULT_TITLE_BAR_LAYOUT,
@@ -26,7 +25,6 @@ const saveMock = jest.fn(
 beforeEach(() => {
   saveMock.mockClear()
   useSettingsStore.setState({ settings: {} as never, save: saveMock as never })
-  useUIStore.setState({ barItems: { ...DEFAULT_BAR_ITEMS } })
 })
 
 const lastSaved = (key: "titleBarLayout" | "statusBarLayout"): BarLayout =>
@@ -106,35 +104,15 @@ describe("useBarLayout — resolution", () => {
   })
 })
 
-describe("useBarLayout — legacy migration", () => {
-  it("carries a legacy opt-out into the first resolved layout", () => {
-    useUIStore.setState({ barItems: { ...DEFAULT_BAR_ITEMS, usage: false } })
-    const { result } = renderHook(() => useBarLayout("status"))
-    // `terminal` is not a legacy id; it stays on its shipped (hidden) default.
-    expect(ids(result.current.resolved.hidden).sort()).toEqual(["perf", "terminal", "usage"])
-    expect(result.current.isDefault).toBe(false)
-  })
-
-  it("carries a legacy opt-in for a hidden-by-default segment", () => {
-    useUIStore.setState({ barItems: { ...DEFAULT_BAR_ITEMS, perf: true } })
-    const { result } = renderHook(() => useBarLayout("status"))
-    expect(ids(result.current.resolved.hidden)).toEqual(["terminal"])
-  })
-
-  it("migrates a fresh install to exactly the shipped default", () => {
+describe("useBarLayout — no stored layout", () => {
+  it("resolves a fresh install to exactly the shipped default", () => {
     const title = renderHook(() => useBarLayout("title"))
     expect(title.result.current.isDefault).toBe(true)
+    expect(title.result.current.layout).toEqual(DEFAULT_TITLE_BAR_LAYOUT)
     expect(ids(title.result.current.resolved.hidden).sort()).toEqual(["accountTop", "quickActions"])
   })
 
-  it("falls back to the shipped default when the legacy map is empty", () => {
-    useUIStore.setState({ barItems: {} as never })
-    const { result } = renderHook(() => useBarLayout("title"))
-    expect(result.current.layout).toEqual(DEFAULT_TITLE_BAR_LAYOUT)
-  })
-
-  it("stops consulting the legacy map once settings hold a layout", () => {
-    useUIStore.setState({ barItems: { ...DEFAULT_BAR_ITEMS, usage: false } })
+  it("uses the stored layout once settings hold one", () => {
     useSettingsStore.setState({
       settings: {
         statusBarLayout: { order: DEFAULT_STATUS_BAR_LAYOUT.order, hidden: [] },

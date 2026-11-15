@@ -132,11 +132,7 @@ export interface ResolvedLspServer extends LspServerConfig {
   overriddenBy?: LspServerSource
 }
 
-/**
- * First-class `AppSettings.lsp` slice. Replaces the former
- * `DeveloperSettings.userLspServers` / `DeveloperSettings.unsignedLspAllowed`
- * fields (migrated in `lib/lsp/migrate-settings.ts`).
- */
+/** First-class `AppSettings.lsp` slice. */
 export interface LspSettings {
   /** User-authored servers, including overrides of builtin defaults by id. */
   servers: LspServerConfig[]
@@ -147,7 +143,7 @@ export interface LspSettings {
   enabled?: boolean
   /**
    * Dev-only: allow unsigned plugin LSP binaries to spawn after a single
-   * in-session consent prompt. Migrated from `developer.unsignedLspAllowed`.
+   * in-session consent prompt.
    */
   unsignedAllowed?: boolean
   /**

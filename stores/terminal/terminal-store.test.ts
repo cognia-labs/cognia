@@ -100,52 +100,8 @@ describe("dock layout state", () => {
     })
   })
 
-  it("migrate drops a v1 persisted panelOpen but keeps the tuned height", () => {
-    const { migrate } = useTerminalStore.persist.getOptions()
-    const migrated = migrate?.({ panelOpen: true, panelHeightPct: 40 }, 1) as {
-      panelHeightPct: number
-      pendingReloadLayout: unknown
-      panelOpen?: boolean
-    }
-    expect(migrated.panelOpen).toBeUndefined()
-    expect(migrated.panelHeightPct).toBe(40)
-    expect(migrated.pendingReloadLayout).toBeNull()
-  })
-
-  it("migrate falls back to the default height when the old value is invalid", () => {
-    const { migrate } = useTerminalStore.persist.getOptions()
-    const migrated = migrate?.({ panelHeightPct: "junk" }, 1) as { panelHeightPct: number }
-    expect(migrated.panelHeightPct).toBe(TERMINAL_LAYOUT_DEFAULTS.panelHeightPct)
-  })
-
-  it("migrate v4 → v5 fills in the dock edge and width", () => {
-    const { migrate } = useTerminalStore.persist.getOptions()
-    const migrated = migrate?.({ panelHeightPct: 40 }, 4) as {
-      panelPosition: string
-      panelWidthPct: number
-    }
-    expect(migrated.panelPosition).toBe("bottom")
-    expect(migrated.panelWidthPct).toBe(TERMINAL_LAYOUT_DEFAULTS.panelWidthPct)
-  })
-
-  it("migrate v5 keeps a valid dock edge and clamps an out-of-range width", () => {
-    const { migrate } = useTerminalStore.persist.getOptions()
-    const migrated = migrate?.({ panelPosition: "right", panelWidthPct: 500 }, 5) as {
-      panelPosition: string
-      panelWidthPct: number
-    }
-    expect(migrated.panelPosition).toBe("right")
-    expect(migrated.panelWidthPct).toBe(TERMINAL_LAYOUT_BOUNDS.panelMaxWidthPct)
-  })
-
-  it("migrate rejects a garbage dock edge rather than trusting localStorage", () => {
-    const { migrate } = useTerminalStore.persist.getOptions()
-    const migrated = migrate?.({ panelPosition: "sideways", panelWidthPct: "wide" }, 5) as {
-      panelPosition: string
-      panelWidthPct: number
-    }
-    expect(migrated.panelPosition).toBe(TERMINAL_LAYOUT_DEFAULTS.panelPosition)
-    expect(migrated.panelWidthPct).toBe(TERMINAL_LAYOUT_DEFAULTS.panelWidthPct)
+  it("has no migrate step, so an older version falls back to the defaults", () => {
+    expect(useTerminalStore.persist.getOptions().migrate).toBeUndefined()
   })
 })
 

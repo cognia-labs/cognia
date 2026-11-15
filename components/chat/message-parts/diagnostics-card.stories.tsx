@@ -186,18 +186,3 @@ export const UsageDegraded: Story = {
     } satisfies UsageDiagnosticsBlock,
   },
 }
-
-// A v1 block, as recorded before the block carried fused meters.
-export const UsageLegacyBlock: Story = {
-  args: {
-    block: {
-      kind: "usage",
-      windows: [
-        { key: "fiveHour", utilization: 72, level: "warn", msUntilReset: 1000 * 60 * 95 },
-        { key: "sevenDay", utilization: null, level: null, msUntilReset: null },
-      ],
-      fallbackPercentage: 0.12,
-      overageDisabledReason: null,
-    } satisfies UsageDiagnosticsBlock,
-  },
-}

@@ -31,7 +31,6 @@ import {
   loadLogtoSession,
   clearLogtoSession,
   clearLogtoReauthMarker,
-  discardLegacyGlobalLogtoSession,
   loadLogtoReauthMarker,
   logtoKeyringFor,
   logtoReauthKeyringFor,
@@ -39,7 +38,6 @@ import {
   loadLogtoAuthRevision,
   saveLogtoAuthRevision,
   markLogtoSessionForReauth,
-  LEGACY_LOGTO_KEYRING,
   __resetLogtoWebPassphraseForTests,
   type LogtoReauthMarker,
 } from "./session-store"
@@ -251,28 +249,6 @@ describe("one session per LocalProfile (ADR-0149)", () => {
 
     await clearLogtoSession("acct_other")
     expect(clearMock).toHaveBeenCalledWith(logtoKeyringFor("acct_other"), { strict: true })
-  })
-
-  it("never reuses the pre-ADR-0149 global key for a profile", () => {
-    expect(LEGACY_LOGTO_KEYRING.key).toBe("session")
-    expect(logtoKeyringFor("acct_active").key).not.toBe(LEGACY_LOGTO_KEYRING.key)
-  })
-})
-
-describe("discardLegacyGlobalLogtoSession", () => {
-  it("deletes a blob left at the global key rather than adopting it", async () => {
-    // Adopting would show one person's token inside another person's profile,
-    // and nothing in the blob records who it belonged to.
-    getMock.mockResolvedValue(JSON.stringify(sampleSession))
-    expect(await discardLegacyGlobalLogtoSession()).toBe(true)
-    expect(clearMock).toHaveBeenCalledWith(LEGACY_LOGTO_KEYRING, { strict: true })
-    expect(setMock).not.toHaveBeenCalled()
-  })
-
-  it("is a no-op when there is nothing to discard", async () => {
-    getMock.mockResolvedValue(null)
-    expect(await discardLegacyGlobalLogtoSession()).toBe(false)
-    expect(clearMock).not.toHaveBeenCalled()
   })
 })
 

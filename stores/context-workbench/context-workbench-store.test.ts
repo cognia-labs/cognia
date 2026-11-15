@@ -158,10 +158,6 @@ describe("context workbench layout store", () => {
       useContextWorkbenchStore.getState()
     ) as { layouts: Record<string, ContextWorkbenchLayout> }
     expect(merged.layouts["window-a::canvas:doc-1"]?.mode).toBe("narrow")
-    const migrated = options.migrate?.({ layouts: focused, sessionOverrides: {} }, 1) as {
-      layouts: Record<string, ContextWorkbenchLayout>
-    }
-    expect(migrated.layouts["window-a::canvas:doc-1"]?.mode).toBe("narrow")
   })
 
   it("keeps focus live in memory for as long as the user holds it", () => {
@@ -559,39 +555,6 @@ describe("context workbench layout store", () => {
         activePanelId: "comments",
         splitPanelId: null,
       })
-    })
-
-    it("does not resurrect a dormant split written before version 3", () => {
-      const options = useContextWorkbenchStore.persist.getOptions()
-      const stored: Record<string, ContextWorkbenchLayout> = {
-        "window-a::canvas:doc-1": {
-          mode: "wide",
-          width: 360,
-          panelWidths: {},
-          activePanelId: "comments",
-          userPinned: false,
-          activatedPanelIds: ["comments"],
-          pendingPanelIds: [],
-          lastUsedAt: Date.now(),
-          splitPanelId: "review",
-          splitRatio: 70,
-        },
-      }
-
-      const fromLegacy = options.migrate?.({ layouts: stored, sessionOverrides: {} }, 2) as {
-        layouts: Record<string, ContextWorkbenchLayout>
-      }
-      expect(fromLegacy.layouts["window-a::canvas:doc-1"]).toMatchObject({
-        splitPanelId: null,
-        // The ratio is a remembered preference, so it survives even though the
-        // split it belonged to does not.
-        splitRatio: 70,
-      })
-
-      const fromCurrent = options.migrate?.({ layouts: stored, sessionOverrides: {} }, 3) as {
-        layouts: Record<string, ContextWorkbenchLayout>
-      }
-      expect(fromCurrent.layouts["window-a::canvas:doc-1"]?.splitPanelId).toBe("review")
     })
 
     it("carries a live split through a persist round trip, but not out of focus", () => {

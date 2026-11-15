@@ -105,38 +105,17 @@ describe("useObservabilityUrlSync", () => {
     })
   })
 
-  describe("legacy keys", () => {
-    it("reads range/from/to/f on a channel=traces link, then migrates them to the new keys", () => {
-      setUrl(`?channel=traces&traceId=t1&range=custom&from=100&to=200&f=${opusFilter}`)
-      mount()
-      const s = useObservabilityStore.getState()
-      expect(s.rangePreset).toBe("custom")
-      expect(s.customSince).toBe(100)
-      expect(s.customUntil).toBe(200)
-      expect(s.filters).toEqual({ model: ["opus"] })
-
-      const p = params()
-      expect(p.get("trange")).toBe("custom")
-      expect(p.get("tfrom")).toBe("100")
-      expect(p.get("tto")).toBe("200")
-      expect(JSON.parse(p.get("tf") ?? "null")).toEqual({ model: ["opus"] })
-      for (const legacy of ["range", "from", "to", "f"]) expect(p.has(legacy)).toBe(false)
-      // Foreign params survive the migration.
-      expect(p.get("channel")).toBe("traces")
-      expect(p.get("traceId")).toBe("t1")
-    })
-
-    it("never reads or deletes from/to on a non-traces URL", () => {
+  describe("pre-rename keys", () => {
+    it("neither reads nor deletes range/from/to/f, even on a traces link", () => {
       useObservabilityStore.setState({ rangePreset: "6h" })
-      setUrl("?channel=logs&range=24h&from=100&to=200")
+      setUrl("?channel=traces&range=24h&from=100&to=200&f=x")
       mount()
       expect(useObservabilityStore.getState().rangePreset).toBe("6h")
       const p = params()
-      expect(p.get("channel")).toBe("logs")
       expect(p.get("range")).toBe("24h")
       expect(p.get("from")).toBe("100")
       expect(p.get("to")).toBe("200")
-      // The persisted view is still written under the owned key.
+      expect(p.get("f")).toBe("x")
       expect(p.get("trange")).toBe("6h")
     })
   })
@@ -219,16 +198,6 @@ describe("useObservabilityUrlSync", () => {
       rerender()
       expect(useObservabilityStore.getState().rangePreset).toBe("7d")
       expect(useObservabilityStore.getState().filters).toEqual({ model: ["opus"] })
-    })
-
-    it("migrates legacy keys arriving through a later navigation", () => {
-      const { rerender } = mount()
-      setUrl("?channel=traces&range=24h")
-      rerender()
-      expect(useObservabilityStore.getState().rangePreset).toBe("24h")
-      const p = params()
-      expect(p.get("trange")).toBe("24h")
-      expect(p.has("range")).toBe(false)
     })
 
     it("writes the on-screen view back when a navigation dropped the owned params", () => {

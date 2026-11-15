@@ -392,30 +392,7 @@ export async function getIntegrationIngressEndpoint(
   pluginId: string,
   accountId: string
 ): Promise<IntegrationIngressEndpoint | undefined> {
-  const account = await getIntegrationAccount(pluginId, accountId)
-  if (!account) return undefined
-  if (account.ingressEndpoint) return account.ingressEndpoint
-  const legacy = await getDb()
-    .integrationSubscriptions.where("accountId")
-    .equals(accountId)
-    .filter(
-      (subscription) =>
-        subscription.pluginId === pluginId &&
-        Boolean(subscription.ingressRouteId && subscription.ingressSecretHandle)
-    )
-    .first()
-  if (!legacy?.ingressRouteId || !legacy.ingressSecretHandle) return undefined
-  const endpoint: IntegrationIngressEndpoint = {
-    id: crypto.randomUUID(),
-    accountId,
-    routeId: legacy.ingressRouteId,
-    secretHandle: legacy.ingressSecretHandle,
-    enabled: legacy.enabled,
-    createdAt: legacy.createdAt,
-    updatedAt: nowIso(),
-  }
-  await updateIntegrationAccount(pluginId, accountId, { ingressEndpoint: endpoint })
-  return endpoint
+  return (await getIntegrationAccount(pluginId, accountId))?.ingressEndpoint
 }
 
 export async function ensureIntegrationIngressEndpoint(

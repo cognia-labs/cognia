@@ -15,7 +15,6 @@ import {
   type TeamTaskStatus,
   type TeamDisplayMode,
   type AgentTeamWorkspaceTab,
-  type AgentTeamEditorSession,
   type TeamDelegationRecord,
   type TeamDelegationStatus,
   type TeamExecutionReport,
@@ -71,11 +70,6 @@ export interface AgentTeamState {
   workspaceTab: AgentTeamWorkspaceTab
   /** Tasks tab presentation: flat list or kanban board. Persisted. */
   tasksView: "list" | "board"
-  /**
-   * Per-team project Editor tab session (open files, active file, selected
-   * root, layout). Persisted so reopening the tab restores the working set.
-   */
-  editorSession: Record<string, AgentTeamEditorSession>
 
   // Settings
   defaultConfig: AgentTeamConfig

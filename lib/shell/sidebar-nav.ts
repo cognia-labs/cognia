@@ -49,12 +49,7 @@ import { resolveLucideIcon } from "@/lib/icons/lucide-catalog"
 import type { RuntimeSnapshot } from "@/lib/runtime/operation-availability"
 import { getSurfaceContract, shouldShowSurface } from "@/lib/runtime/surface-contract"
 import { navCatalog, type NavCatalogEntry } from "@/lib/shell/nav-catalog"
-import {
-  CANVAS_MODE_ID,
-  LEGACY_SIDEBAR_NAV_IDS,
-  type SidebarLayout,
-  type SidebarModesLayout,
-} from "@/types/shell/sidebar"
+import { CANVAS_MODE_ID, type SidebarLayout, type SidebarModesLayout } from "@/types/shell/sidebar"
 
 /**
  * id → rail icon. Must cover every id in `SIDEBAR_NAV_META`; a module's
@@ -183,36 +178,7 @@ export function resolveSidebarLayout(
   catalog: SidebarCatalogItem[],
   layout: SidebarLayout
 ): ResolvedSidebar {
-  return partitionByLayout(catalog, migrateLegacyIds(layout))
-}
-
-/**
- * Rewrite ids that were renamed after layouts were already saved.
- *
- * Without this a rename reads as "the item vanished from my rail" — the
- * partition drops unknown ids by design, so a stale `agent-teams` pin would
- * silently become an unpinned Squads entry sitting in More.
- *
- * Exported because the write path needs it too: the layout mutators in
- * `components/shell/use-sidebar-layout.ts` operate on the stored arrays, and a
- * `hide("squads")` against a stored `"agent-teams"` pin used to filter for an
- * id that was not there — the stale pin survived, still resolved as pinned,
- * and the action did nothing. A rename can also collide with a pin the user
- * already added under the new name, so the mapped arrays are de-duplicated
- * (first occurrence wins, which keeps the user's order).
- */
-export function migrateLegacyIds(layout: SidebarLayout): SidebarLayout {
-  const map = (ids: readonly string[]) => [
-    ...new Set(ids.map((id) => LEGACY_SIDEBAR_NAV_IDS[id] ?? id)),
-  ]
-  const pinned = map(layout.pinned)
-  const hidden = map(layout.hidden)
-  const changed =
-    pinned.length !== layout.pinned.length ||
-    hidden.length !== layout.hidden.length ||
-    pinned.some((id, i) => id !== layout.pinned[i]) ||
-    hidden.some((id, i) => id !== layout.hidden[i])
-  return changed ? { ...layout, pinned, hidden } : layout
+  return partitionByLayout(catalog, layout)
 }
 
 /**

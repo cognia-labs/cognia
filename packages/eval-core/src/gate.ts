@@ -8,7 +8,7 @@
 
 import type { EvalReport, ScorerAggregate } from "./domain/eval"
 import type { GateThresholds, GateResult, GateVerdict } from "./domain/gate"
-import { isLegacyScoring, isPartialRun } from "./report"
+import { isPartialRun } from "./report"
 
 export type { GateThresholds, GateResult, GateVerdict } from "./domain/gate"
 
@@ -31,7 +31,6 @@ export function evaluateGate(report: EvalReport, thresholds: GateThresholds): Ga
   const partial = isPartialRun(report) || (report.incompleteCaseCount ?? 0) > 0
   if (partial)
     inconclusiveReasons.push("run has incomplete repetitions; reliability is not established")
-  if (isLegacyScoring(report)) inconclusiveReasons.push("report uses legacy scoring semantics")
 
   // A run that graded nothing reports `passAt1: 0`, which every floor below
   // would read as total failure. No evidence is not a failing grade — say so

@@ -427,7 +427,7 @@ export function PairOnboardingClient() {
       const { settings, completeOnboarding } = useSettingsStore.getState()
       // Pairing supplies the phone's runtime and credentials. Persist its
       // first-run exit before navigating, or OnboardingGate sends it back.
-      if (!isOnboardingSettled(settings?.onboardingProgress) && !settings?.onboardingDismissedAt) {
+      if (!isOnboardingSettled(settings?.onboardingProgress)) {
         await completeOnboarding()
       }
     }

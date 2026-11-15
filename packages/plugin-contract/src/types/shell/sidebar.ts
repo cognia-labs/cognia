@@ -316,17 +316,6 @@ export const DEFAULT_SIDEBAR_SIDE: SidebarSide = "left"
 export const GUILD_RAIL_WIDTH_PX = 56
 
 /**
- * Ids that changed name after a layout was already persisted.
- *
- * The id doubles as the persistence key, so renaming one silently drops it
- * from every saved rail — the item does not move, it disappears. Mapped on
- * read instead, which costs one lookup and keeps the rename invisible.
- */
-export const LEGACY_SIDEBAR_NAV_IDS: Readonly<Record<string, string>> = {
-  "agent-teams": "squads",
-}
-
-/**
  * The rail's shipped pins.
  *
  * This used to be "every `feature` item", which put eleven icons on the rail

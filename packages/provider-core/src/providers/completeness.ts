@@ -124,12 +124,9 @@ interface SettingsLike {
 
 /**
  * v3 stores credential material only as a one-way digest and covers the API
- * flavor and Bedrock connection identity. v2 embedded raw keys; rows still
- * carrying a v2 fingerprint are rewritten by
- * {@link upgradeLegacyVerificationFingerprint}.
+ * flavor and Bedrock connection identity.
  */
 const PROVIDER_VERIFICATION_CONTRACT = "provider-connectivity-v3"
-const LEGACY_VERIFICATION_CONTRACT_V2 = "provider-connectivity-v2"
 
 const ALLOWED: ProviderGuardResult = { allowed: true }
 
@@ -302,48 +299,6 @@ export function buildProviderVerificationFingerprint(settings?: SettingsLike): s
         }
       : null,
   })
-}
-
-/** The v2 layout, reproduced only to recognise rows written by older builds. */
-function buildLegacyV2Fingerprint(settings?: SettingsLike): string {
-  return JSON.stringify({
-    verificationContract: LEGACY_VERIFICATION_CONTRACT_V2,
-    apiKey: settings?.apiKey?.trim() || "",
-    apiKeys: Array.isArray(settings?.apiKeys) ? settings!.apiKeys!.map((key) => key.trim()) : [],
-    currentKeyIndex: settings?.currentKeyIndex ?? 0,
-    baseURL: settings?.baseURL?.trim() || "",
-    defaultModel: settings?.defaultModel?.trim() || "",
-    apiProtocol: settings?.apiProtocol ?? "",
-    customHeaders: sortedHeaders(settings),
-  })
-}
-
-/** Stored marker for a v2 fingerprint that no longer matched its row. */
-const LEGACY_MISMATCH_FINGERPRINT = JSON.stringify({
-  verificationContract: PROVIDER_VERIFICATION_CONTRACT,
-  legacy: "mismatch",
-})
-
-/**
- * Rewrite a fingerprint persisted by an older build that embedded the raw key.
- * Returns the value to store, or `undefined` when the row needs no rewrite.
- * A v2 fingerprint that still matches its row becomes the v3 fingerprint (the
- * verification keeps holding); one that no longer matches becomes a
- * credential-free marker that keeps the row stale.
- */
-export function upgradeLegacyVerificationFingerprint(settings?: SettingsLike): string | undefined {
-  const stored = settings?.verificationFingerprint
-  if (!stored) return undefined
-  let contract: unknown
-  try {
-    contract = (JSON.parse(stored) as { verificationContract?: unknown }).verificationContract
-  } catch {
-    return undefined
-  }
-  if (contract !== LEGACY_VERIFICATION_CONTRACT_V2) return undefined
-  return stored === buildLegacyV2Fingerprint(settings)
-    ? buildProviderVerificationFingerprint(settings)
-    : LEGACY_MISMATCH_FINGERPRINT
 }
 
 function resolveVerificationStatus(

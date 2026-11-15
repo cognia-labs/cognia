@@ -12,8 +12,11 @@ import {
 import {
   CredentialBookCompanionStorage,
   toCompanionConfig,
+  companionCursorNamespace,
   companionHostDraftFromConfig,
   companionHostCredentialFromConfig,
+  companionHostIdOf,
+  companionHostLabelOf,
 } from "./adapter"
 import { createCredentialBook } from "./book"
 import {
@@ -556,5 +559,46 @@ describe("adapter validation and compensation boundaries", () => {
     ).toBe(false)
     await storage.remove(paired)
     expect(await book.list()).toEqual([])
+  })
+})
+
+describe("companionHostIdOf / companionHostLabelOf", () => {
+  it("prefers the browser target id so a web install does not duplicate", () => {
+    expect(companionHostIdOf(config({ targetId: "target-9" }))).toBe("target-9")
+  })
+
+  it("falls back to the device id", () => {
+    expect(companionHostIdOf(config())).toBe("dev-1")
+  })
+
+  it("labels from the host name", () => {
+    expect(companionHostLabelOf(config())).toBe("studio.local")
+  })
+
+  it("falls back to the raw base URL when it cannot be parsed", () => {
+    expect(companionHostLabelOf(config({ baseUrl: "not a url" }))).toBe("not a url")
+  })
+})
+
+describe("companionCursorNamespace", () => {
+  it("matches the namespace the book stores for the same pairing", async () => {
+    const { book, storage } = harness()
+    const paired = config({ accountId: "acct_a", targetId: "host-9" })
+    await storage.save(paired)
+    // The sync orchestrator derives this synchronously instead of reading the
+    // record back; if the two ever disagreed it would resume from a watermark
+    // no host owns.
+    const record = await book.get({ accountNamespace: "acct_a", hostId: "host-9" })
+    expect(record?.cursorNamespace).toBe(companionCursorNamespace(paired))
+  })
+
+  it("files an account-less pairing under the reserved namespace", () => {
+    expect(companionCursorNamespace(config())).toBe("__local__:dev-1")
+  })
+
+  it("percent-encodes both halves so a separator in either cannot forge a key", () => {
+    expect(companionCursorNamespace(config({ accountId: "a:b", deviceId: "c:d" }))).toBe(
+      "a%3Ab:c%3Ad"
+    )
   })
 })

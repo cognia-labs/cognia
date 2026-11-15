@@ -3,12 +3,6 @@
 // than one nested object, because `SETTINGS_SYNC` classifies one entry per
 // top-level key and these two halves must sync differently. Nesting them would
 // have silently forced a single classification on both.
-//
-// The predecessor was a single `onboardingDismissedAt` timestamp, which
-// collapsed "finished the flow", "bailed on the first step" and "hit Esc by
-// accident" into one indistinguishable value. That field is retained on
-// `AppSettings` for one-way migration reads only (see
-// `lib/onboarding/migrate-legacy.ts`); nothing writes it any more.
 
 /**
  * Which shell the app is running in. Onboarding steps declare the shells they
@@ -60,12 +54,8 @@ export const ONBOARDING_MODES = ["express", "custom"] as const satisfies readonl
  *                         place (the name predates the recommended path; it is
  *                         also the placeholder of a record still in progress).
  *  - `task_failed`      — picked a starter card but the run errored out.
- *  - `legacy_dismissed` — migrated from the old `onboardingDismissedAt`
- *                         timestamp, whose true intent is unrecoverable. Never
- *                         re-prompts on its own; Settings offers a re-run.
  */
-export type OnboardingPath =
-  "completed" | "provider_skipped" | "runtime_skipped" | "task_failed" | "legacy_dismissed"
+export type OnboardingPath = "completed" | "provider_skipped" | "runtime_skipped" | "task_failed"
 
 /**
  * Current schema version of {@link OnboardingProgress}.
@@ -148,12 +138,7 @@ export function resolveOnboardingMode(
   return undefined
 }
 
-/**
- * Whether the flow still owes this device a run.
- *
- * `legacy_dismissed` counts as settled — the migration deliberately does not
- * re-prompt users who already dismissed the old dialog, however they meant it.
- */
+/** Whether the flow has been completed or skipped on this device. */
 export function isOnboardingSettled(progress: OnboardingProgress | undefined): boolean {
   if (!progress) return false
   return Boolean(progress.completedAt) || Boolean(progress.skippedAt)

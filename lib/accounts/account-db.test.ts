@@ -428,42 +428,6 @@ describe("LocalAccountRegistry", () => {
     db.close()
   })
 
-  it("records legacy migration completion only for an existing account", async () => {
-    const { db, registry } = await freshRegistry("legacy-migration")
-    await registry.createAccount({
-      id: "acct_legacy",
-      displayName: "Legacy",
-      passwordVerifier: verifier,
-      now: 1,
-    })
-
-    await expect(
-      registry.markLegacyMigrationCompleted({
-        sourceDbName: "cognia-claude",
-        targetAccountId: "acct_missing",
-        completedAt: 2,
-      })
-    ).rejects.toThrow(/does not exist/i)
-
-    await registry.markLegacyMigrationCompleted({
-      sourceDbName: "cognia-claude",
-      targetAccountId: "acct_legacy",
-      completedAt: 3,
-    })
-
-    await expect(registry.getState()).resolves.toMatchObject({
-      activeAccountId: "acct_legacy",
-      legacyMigration: {
-        status: "completed",
-        sourceDbName: "cognia-claude",
-        targetAccountId: "acct_legacy",
-        completedAt: 3,
-      },
-    })
-
-    db.close()
-  })
-
   it("generates an account id with crypto.randomUUID when no id is provided", async () => {
     const originalCrypto = globalThis.crypto
     Object.defineProperty(globalThis, "crypto", {

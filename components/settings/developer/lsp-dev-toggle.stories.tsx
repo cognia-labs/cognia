@@ -5,7 +5,7 @@ import { resetStore, seedStore } from "@/lib/storybook/seed-stores"
 import { useSettingsStore } from "@/stores/settings"
 import type { AppSettings } from "@cognia/agent-config-types"
 
-// `LspDevToggle` controls `developer.unsignedLspAllowed`. It hides itself in
+// `LspDevToggle` controls `lsp.unsignedAllowed`. It hides itself in
 // production builds; the `isDevBuild` prop is the test seam that forces the
 // branch, so stories pin it explicitly rather than depending on NODE_ENV.
 function seedSettings(patch: Partial<AppSettings>) {
@@ -41,8 +41,8 @@ export const Default: Story = {}
 // Dev build with unsigned LSP binaries already allowed.
 export const Allowed: Story = {
   beforeEach: seedSettings({
-    developer: { unsignedLspAllowed: true },
-  } as unknown as Partial<AppSettings>),
+    lsp: { servers: [], unsignedAllowed: true },
+  }),
 }
 
 // Production build — the component renders nothing (returns `null`).

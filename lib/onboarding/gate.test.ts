@@ -40,13 +40,6 @@ describe("shouldEnterOnboarding", () => {
     expect(shouldEnterOnboarding(settings, 0)).toBe(true)
   })
 
-  it("stays out for a legacy dismissal that has not been migrated yet", () => {
-    // The migration runs on boot; the gate must not flash the flow in the
-    // window before it lands.
-    const settings = makeSettings({ onboardingDismissedAt: "2026-05-18T00:00:00.000Z" })
-    expect(shouldEnterOnboarding(settings, 0)).toBe(false)
-  })
-
   it("stays out for a long-time user with sessions but no progress record", () => {
     expect(shouldEnterOnboarding(makeSettings(), 3)).toBe(false)
   })
@@ -95,11 +88,6 @@ describe("shouldShowFinishBar", () => {
 
   it("hides after a completed run", () => {
     const settings = makeSettings({ onboardingProgress: progress({ path: "completed" }) })
-    expect(shouldShowFinishBar(settings)).toBe(false)
-  })
-
-  it("hides for migrated legacy users so upgrades never nag", () => {
-    const settings = makeSettings({ onboardingProgress: progress({ path: "legacy_dismissed" }) })
     expect(shouldShowFinishBar(settings)).toBe(false)
   })
 

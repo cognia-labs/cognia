@@ -746,18 +746,7 @@
       "field": "CompanionConfig.accountId",
       "contract": "lib/tauri/companion-storage.ts",
       "test": "lib/companion/credential-book/adapter.test.ts",
-      "source": "accountNamespace: config.accountId ?? this.namespace(),",
-      "occurrences": 1,
-      "reason": "Persisted companion configuration and remote relay requests retain the established local-profile namespace key for existing paired hosts."
-    },
-    {
-      "file": "lib/companion/credential-book/adapter.ts",
-      "rule": "bareAccountId",
-      "scope": "local-profile",
-      "field": "CompanionConfig.accountId",
-      "contract": "lib/tauri/companion-storage.ts",
-      "test": "lib/companion/credential-book/adapter.test.ts",
-      "source": "config.accountId ?? this.opts.accountNamespace() ?? DEFAULT_ACCOUNT_NAMESPACE",
+      "source": "return config.accountId ?? fallback",
       "occurrences": 1,
       "reason": "Persisted companion configuration and remote relay requests retain the established local-profile namespace key for existing paired hosts."
     },
@@ -2080,28 +2069,6 @@
       "source": "accountId: string",
       "occurrences": 1,
       "reason": "Encrypted workflow artifacts persist the local-profile key and bind it into authenticated additional data; changing it would invalidate existing artifact ownership and decryption."
-    },
-    {
-      "file": "lib/companion/credential-book/index.ts",
-      "rule": "bareAccountId",
-      "scope": "local-profile",
-      "field": "CompanionConfig.accountId",
-      "contract": "lib/tauri/companion-storage.ts",
-      "test": "lib/companion/credential-book/index.test.ts",
-      "source": "((legacy.accountId ?? DEFAULT_LOCAL_ACCOUNT_ID) !== namespace ||",
-      "occurrences": 1,
-      "reason": "Legacy CompanionConfig persists its owning local profile as accountId; migration and clearing must read this existing wire field without transferring credentials across profiles."
-    },
-    {
-      "file": "lib/companion/credential-book/index.ts",
-      "rule": "bareAccountId",
-      "scope": "local-profile",
-      "field": "CompanionConfig.accountId",
-      "contract": "lib/tauri/companion-storage.ts",
-      "test": "lib/companion/credential-book/index.test.ts",
-      "source": "(legacy && (legacy.accountId ?? DEFAULT_LOCAL_ACCOUNT_ID) !== operationNamespace)",
-      "occurrences": 1,
-      "reason": "Legacy CompanionConfig persists its owning local profile as accountId; migration and clearing must read this existing wire field without transferring credentials across profiles."
     },
     {
       "file": "crates/cognia-file-share/src/commands.rs",

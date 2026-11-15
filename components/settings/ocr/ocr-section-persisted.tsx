@@ -56,7 +56,6 @@ export function OcrSectionPersisted(): React.ReactElement | null {
     null
   )
   const [runtimeStatuses, setRuntimeStatuses] = useState<Record<string, OcrRuntimeStatus>>({})
-  const migratedLegacyKeyRef = React.useRef<string | null>(null)
   const normalizedDefaultRef = React.useRef<string | null>(null)
 
   useEffect(() => {
@@ -77,40 +76,6 @@ export function OcrSectionPersisted(): React.ReactElement | null {
     () => settings ?? DEFAULT_OCR_SETTINGS,
     [settings]
   )
-
-  useEffect(() => {
-    const localConfig = effectiveSettings.providerConfig["local-http"] ?? {}
-    const legacyKey = typeof localConfig.apiKey === "string" ? localConfig.apiKey.trim() : ""
-    if (!legacyKey || migratedLegacyKeyRef.current === legacyKey) return
-    migratedLegacyKeyRef.current = legacyKey
-    let cancelled = false
-    void (async () => {
-      const existing = await getOcrSecret("local-http", "apiKey").catch(() => null)
-      if (!existing) await setOcrSecret("local-http", "apiKey", legacyKey)
-      if (cancelled) return
-      setCredentials((previous) => ({
-        ...(previous ?? {}),
-        "local-http": { ...(previous?.["local-http"] ?? {}), apiKey: existing ?? legacyKey },
-      }))
-      const nextLocalConfig = { ...localConfig }
-      delete nextLocalConfig.apiKey
-      await saveSettings({
-        ocrSettings: {
-          ...effectiveSettings,
-          providerConfig: {
-            ...effectiveSettings.providerConfig,
-            "local-http": nextLocalConfig,
-          },
-        },
-      })
-    })().catch((error) => {
-      migratedLegacyKeyRef.current = null
-      toast.error(error instanceof Error ? error.message : String(error))
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [effectiveSettings])
 
   const handleChange = useCallback((next: UserOcrSettings) => {
     void saveSettings({ ocrSettings: next }).catch((err) => {

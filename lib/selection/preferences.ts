@@ -8,12 +8,9 @@ export interface SelectionActionLayout {
 
 const MODES: readonly SelectionToolbarMode[] = ["off", "automatic", "manual"]
 
-export function migrateSelectionToolbarMode(
-  mode: SelectionToolbarMode | undefined,
-  legacyEnabled: boolean | undefined
-): SelectionToolbarMode {
-  if (MODES.includes(mode as SelectionToolbarMode)) return mode as SelectionToolbarMode
-  return legacyEnabled ? "automatic" : "off"
+/** The persisted toolbar mode, or `"off"` when it is absent or malformed. */
+export function parseSelectionToolbarMode(mode: unknown): SelectionToolbarMode {
+  return MODES.includes(mode as SelectionToolbarMode) ? (mode as SelectionToolbarMode) : "off"
 }
 
 function normalizeHostnameRule(value: string): string | undefined {

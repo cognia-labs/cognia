@@ -499,36 +499,11 @@ describe("useArtifactDockLayoutStore", () => {
       expect(readPersisted()?.state).not.toHaveProperty("workspaceContext")
     })
 
-    it.each([
-      ["v1 list-rail layout", 1, { dockSize: 41, listRailOpen: true }],
-      ["v2 dockMode", 2, { dockSize: 38, dockMode: "workspace" }],
-      ["v3 compact profile", 3, { dockSize: 34, dockProfile: "compact" }],
-    ])(
-      "lifts a %s width left by the old compact profile to the Workspace default",
-      async (_label, version, state) => {
-        window.localStorage.setItem(
-          PERSIST_NAME,
-          JSON.stringify({ state: { dockCollapsed: false, layoutVersion: 2, ...state }, version })
-        )
-
-        await act(async () => {
-          await useArtifactDockLayoutStore.persist.rehydrate()
-        })
-
-        const restored = useArtifactDockLayoutStore.getState()
-        expect(restored.dockSize).toBe(ARTIFACT_DOCK_BOUNDS.default)
-        expect(restored.dockCollapsed).toBe(false)
-        expect(restored).not.toHaveProperty("dockMode")
-        expect(restored).not.toHaveProperty("listRailOpen")
-        expect(restored).not.toHaveProperty("dockProfile")
-      }
-    )
-
-    it("keeps a pre-v4 width the user had dragged wider than the default", async () => {
+    it("falls back to the defaults for a pre-v4 layout", async () => {
       window.localStorage.setItem(
         PERSIST_NAME,
         JSON.stringify({
-          state: { dockSize: 58, dockCollapsed: true, dockProfile: "workspace", layoutVersion: 1 },
+          state: { dockSize: 58, dockCollapsed: false, dockProfile: "workspace", layoutVersion: 1 },
           version: 3,
         })
       )
@@ -537,7 +512,9 @@ describe("useArtifactDockLayoutStore", () => {
         await useArtifactDockLayoutStore.persist.rehydrate()
       })
 
-      expect(useArtifactDockLayoutStore.getState().dockSize).toBe(58)
+      const restored = useArtifactDockLayoutStore.getState()
+      expect(restored.dockSize).toBe(ARTIFACT_DOCK_BOUNDS.default)
+      expect(restored).not.toHaveProperty("dockProfile")
     })
 
     it("queues review reveals and lets the consumer clear only the matching request", () => {

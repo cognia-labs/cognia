@@ -118,13 +118,12 @@ describe("MobileShortcutsEditor", () => {
     expect(availableIds()).toEqual([])
   })
 
-  it("shows the renamed agentTeams id as Squads, and drops unknown ids", async () => {
+  it("drops ids the catalog no longer has", async () => {
     const user = userEvent.setup()
-    const { onChange } = renderEditor(["agentTeams", "nope", "search"])
+    const { onChange } = renderEditor(["agentTeams", "nope", "squads", "search"])
     expect(activeIds()).toEqual(["squads", "search"])
     expect(screen.getByRole("button", { name: "Reorder Squads" })).toBeInTheDocument()
     expect(availableIds()).not.toContain("squads")
-    // An edit writes the current id back, so the legacy one does not linger.
     await user.click(screen.getByRole("button", { name: "Remove Search" }))
     expect(onChange).toHaveBeenCalledWith(["squads"])
   })

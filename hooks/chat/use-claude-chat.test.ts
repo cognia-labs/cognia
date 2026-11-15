@@ -1421,8 +1421,6 @@ afterEach(() => {
   // subsequent tests keep taking the default claude-sdk path.
   useAgentRuntimeStore.setState({
     runtimeRef: { kind: "builtin" },
-    runtime: "claude-sdk",
-    externalAgentId: null,
     sessionCompositions: {},
     sessionExternalLinks: {},
   })

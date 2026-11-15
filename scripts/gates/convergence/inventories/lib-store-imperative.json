@@ -6,8 +6,8 @@
     "date": "2026-11-01"
   },
   "metrics": {
-    "static": 285,
-    "all": 401
+    "static": 284,
+    "all": 400
   },
   "members": [
     {
@@ -2098,17 +2098,6 @@
     },
     {
       "key": "lib/lsp/lsp-status-store.ts",
-      "owner": "lib/lsp",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/settings/settings-store.ts"
-      ]
-    },
-    {
-      "key": "lib/lsp/migrate-settings-initializer.ts",
       "owner": "lib/lsp",
       "note": "",
       "imports": [

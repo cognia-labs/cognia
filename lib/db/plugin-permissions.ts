@@ -19,10 +19,6 @@ export async function listPermissionsForPlugin(pluginId: string): Promise<Plugin
   return getDb().pluginPermissions.where("pluginId").equals(pluginId).toArray()
 }
 
-export async function listAllPermissions(): Promise<PluginPermissionRow[]> {
-  return getDb().pluginPermissions.toArray()
-}
-
 /**
  * Idempotent upsert. The runtime calls this after the user grants / denies a
  * permission via the prompt; later calls just refresh `grantedAt`.

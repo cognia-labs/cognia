@@ -70,12 +70,6 @@ export function resolveAccountId(
     const scopedDefault = settings?.defaultAccountIds?.[scopedProvider]
     if (scopedDefault) return scopedDefault
   }
-  if (
-    (settings?.defaultProvider === providerId || settings?.defaultProvider === scopedProvider) &&
-    settings.defaultAccountId
-  ) {
-    return settings.defaultAccountId
-  }
   return null
 }
 

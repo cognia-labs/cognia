@@ -53,7 +53,6 @@ function routingSliceKey(settings: AppSettings | null | undefined): string {
     m: settings?.modelMappings,
     r: settings?.routingConfig,
     a: settings?.defaultAccountIds,
-    legacyAccount: settings?.defaultAccountId,
     // The two Router + Fusion gateway switches ride on the snapshot (ADR-0188
     // B2). Without them here, turning a gateway lane on or off would reach the
     // gateway only on the next periodic push.

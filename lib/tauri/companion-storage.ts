@@ -1,39 +1,31 @@
 "use client"
 
 /**
- * Persistent storage abstraction for the desktop server credentials the
- * mobile / web companion needs (`baseUrl`, device identity, `deviceId`,
- * `serverVersion`).
+ * The pairing record the mobile / web companion needs to reach its desktop
+ * server (`baseUrl`, device identity, `deviceId`, `serverVersion`), and the
+ * storage facade every consumer reads it through.
  *
- * Two backends:
- *   - {@link LocalStorageCompanionStorage} — `window.localStorage`. Used by
- *     the web build and by jsdom-based unit tests.
- *   - {@link SecureStorageCompanionStorage} — `capacitor-secure-storage-plugin`,
- *     which routes to iOS Keychain / Android Keystore. Used in Capacitor
- *     mobile builds. The plugin is loaded via dynamic `import()` so the
- *     web bundle never pulls native code that wouldn't run there anyway.
- *
- * The selection is one-way: pick a backend at module init via
- * {@link pickCompanionStorage} and reuse a single instance for the
- * lifetime of the app.
+ * The record lives in the multi-host credential book (ADR-0097): public host
+ * records in localStorage (web) or native secure storage (Capacitor), private
+ * keys in the Browser Vault or secure storage. {@link companionStorage} fronts
+ * the book with the flat `CompanionConfig` shape for the account's *active*
+ * host; multi-host callers talk to `companionCredentialBook()` directly.
  *
  * Async-everywhere is intentional. Capacitor's secure-storage plugin only
  * exposes async methods, and forcing the same shape on the web backend
  * keeps callers from branching on platform.
  */
 
-import {
-  isMissingSecureStorageItem,
-  ignoreMissingSecureStorageItem,
-} from "@/lib/capacitor/secure-storage"
-import { makeDefaultLoader } from "@/lib/capacitor/_shared"
 // The credential book imports this module for its TYPES only (`import type`),
 // so this is a one-way runtime edge, not a cycle.
-import { MigratingCompanionStorage } from "@/lib/companion/credential-book"
+import {
+  CredentialBookCompanionStorage,
+  activeAccountNamespace,
+  companionCredentialBook,
+} from "@/lib/companion/credential-book"
 import { isCapacitor } from "@/lib/platform/detect"
-import { getActiveBrowserVault, type EncryptedVaultSecret } from "@/lib/runtime/browser-vault"
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
-import { importSigningPrivateKey, type RoomDescriptor } from "@/lib/signaling/crypto"
+import type { RoomDescriptor } from "@/lib/signaling/crypto"
 
 export interface CompanionConfig {
   /** Stable runtime target id. Added by Web registration after first pair. */
@@ -77,12 +69,12 @@ export interface CompanionConfig {
   /** Target-specific ICE servers returned by the Host auth configuration. */
   iceServers?: RTCIceServer[]
   /**
-   * Mobile role ECDSA private key. Capacitor persists this JWK inside native
-   * secure storage; the web backend moves it into IndexedDB as a
-   * non-extractable CryptoKey before writing public config to localStorage.
+   * Mobile role ECDSA private key. The credential book keeps this JWK in
+   * native secure storage (Capacitor) or the Browser Vault (web), never in the
+   * public host record.
    */
   signalingPrivateKeyJwk?: JsonWebKey
-  /** Runtime-only non-extractable key loaded by the web identity store. */
+  /** Runtime-only key imported from {@link signalingPrivateKeyJwk} on load. */
   signalingPrivateKey?: CryptoKey
   /**
    * Local app/Vault account namespace that owns this target. This is not the
@@ -125,375 +117,25 @@ export interface CompanionConfigStorage {
   remove?(config: CompanionConfig): Promise<void>
 }
 
-const CONFIG_KEY = "cognia.companion.config.v1"
-const CONFIG_BOOK_KEY = "cognia.companion.targets.v2"
-const SIGNALING_KEY_DB = "cognia-signaling-identity-v2"
-const SIGNALING_KEY_STORE = "keys"
-
-interface BrowserSignalingKeyStore {
-  save(deviceId: string, jwk: JsonWebKey): Promise<CryptoKey>
-  load(deviceId: string): Promise<CryptoKey | null>
-  clear(deviceId: string): Promise<void>
-}
-
-interface BrowserVaultSecretAdapter {
-  localAccountId: string
-  encryptSecret(name: string, value: string): Promise<EncryptedVaultSecret>
-  decryptSecret(name: string, secret: EncryptedVaultSecret): Promise<string>
-  storeSecret(name: string, value: string): Promise<void>
-  loadSecret(name: string): Promise<string | null>
-  deleteSecret(name: string): Promise<void>
-}
-
-type PublicBrowserCompanionConfig = Omit<
-  CompanionConfig,
-  "serviceToken" | "devicePrivateKeyJwk" | "signalingPrivateKeyJwk" | "signalingPrivateKey"
->
-
-interface BrowserCompanionTargetBook {
-  version: 2
-  targets: Record<string, PublicBrowserCompanionConfig>
-}
-
-type StoredBrowserCompanionConfig = Omit<CompanionConfig, "serviceToken">
-
-class IndexedDbSignalingKeyStore implements BrowserSignalingKeyStore {
-  async save(deviceId: string, jwk: JsonWebKey): Promise<CryptoKey> {
-    const key = await importSigningPrivateKey(jwk)
-    const database = await this.open()
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(SIGNALING_KEY_STORE, "readwrite")
-      transaction.objectStore(SIGNALING_KEY_STORE).put(key, deviceId)
-      transaction.oncomplete = () => resolve()
-      transaction.onerror = () => reject(transaction.error)
-      transaction.onabort = () => reject(transaction.error)
-    })
-    database.close()
-    return key
-  }
-
-  async load(deviceId: string): Promise<CryptoKey | null> {
-    const database = await this.open()
-    const key = await new Promise<CryptoKey | undefined>((resolve, reject) => {
-      const request = database
-        .transaction(SIGNALING_KEY_STORE, "readonly")
-        .objectStore(SIGNALING_KEY_STORE)
-        .get(deviceId)
-      request.onsuccess = () => resolve(request.result as CryptoKey | undefined)
-      request.onerror = () => reject(request.error)
-    })
-    database.close()
-    return key ?? null
-  }
-
-  async clear(deviceId: string): Promise<void> {
-    const database = await this.open()
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(SIGNALING_KEY_STORE, "readwrite")
-      transaction.objectStore(SIGNALING_KEY_STORE).delete(deviceId)
-      transaction.oncomplete = () => resolve()
-      transaction.onerror = () => reject(transaction.error)
-      transaction.onabort = () => reject(transaction.error)
-    })
-    database.close()
-  }
-
-  private open(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(SIGNALING_KEY_DB, 1)
-      request.onupgradeneeded = () => {
-        if (!request.result.objectStoreNames.contains(SIGNALING_KEY_STORE)) {
-          request.result.createObjectStore(SIGNALING_KEY_STORE)
-        }
-      }
-      request.onsuccess = () => resolve(request.result)
-      request.onerror = () => reject(request.error)
-    })
-  }
-}
-
-// ---------------------------------------------------------------------------
-// LocalStorage backend (web + tests)
-// ---------------------------------------------------------------------------
-
-export class LocalStorageCompanionStorage implements CompanionConfigStorage {
-  constructor(
-    private readonly signalingKeys: BrowserSignalingKeyStore = new IndexedDbSignalingKeyStore(),
-    private readonly vaultProvider: () => BrowserVaultSecretAdapter | null = getActiveBrowserVault
-  ) {}
-
-  async load(): Promise<CompanionConfig | null> {
-    if (typeof window === "undefined") return null
-    try {
-      const vault = this.vaultProvider()
-      if (!vault) return null
-      const scope = getActiveRuntimeTargetContext()
-      const targetId = scope?.accountId === vault.localAccountId ? scope.targetId : null
-      const book = readBrowserTargetBook()
-      const accountTargets = Object.entries(book.targets)
-        .filter(([key]) => key.startsWith(`${vault.localAccountId}:`))
-        .map(([, value]) => value)
-      const publicConfig = targetId
-        ? book.targets[browserTargetKey(vault.localAccountId, targetId)]
-        : accountTargets.length === 1
-          ? accountTargets[0]
-          : undefined
-      if (publicConfig) {
-        return this.hydrateTarget(publicConfig, vault)
-      }
-
-      // Old bearer-token pairings are deliberately invalidated by this
-      // breaking upgrade. Remove the public pointer and require re-pairing.
-      const raw = window.localStorage.getItem(CONFIG_KEY)
-      if (!raw) return null
-      const stored = JSON.parse(raw) as StoredBrowserCompanionConfig
-      const legacyTargetId = stored.targetId ?? stored.deviceId
-      await Promise.all([
-        vault.deleteSecret(companionJwtSecretName(legacyTargetId)),
-        vault.deleteSecret(companionSigningSecretName(legacyTargetId)),
-      ])
-      window.localStorage.removeItem(CONFIG_KEY)
-      return null
-    } catch {
-      return null
-    }
-  }
-
-  async save(config: CompanionConfig): Promise<void> {
-    if (typeof window === "undefined") return
-    const vault = this.vaultProvider()
-    if (!vault) throw new Error("Browser Vault must be unlocked before saving a pairing.")
-    const targetId = config.targetId ?? config.deviceId
-    if (!config.devicePrivateKeyJwk || !config.deviceKeyThumbprint) {
-      throw new Error("Companion device identity is missing; pair this device again.")
-    }
-    await vault.storeSecret(
-      companionDeviceKeySecretName(targetId),
-      JSON.stringify(config.devicePrivateKeyJwk)
-    )
-    if (config.signalingPrivateKeyJwk) {
-      await vault.storeSecret(
-        companionSigningSecretName(targetId),
-        JSON.stringify(config.signalingPrivateKeyJwk)
-      )
-    }
-    const publicConfig = { ...config } as PublicBrowserCompanionConfig
-    delete (publicConfig as Partial<CompanionConfig>).serviceToken
-    delete (publicConfig as Partial<CompanionConfig>).devicePrivateKeyJwk
-    delete (publicConfig as Partial<CompanionConfig>).signalingPrivateKey
-    delete (publicConfig as Partial<CompanionConfig>).signalingPrivateKeyJwk
-    const book = readBrowserTargetBook()
-    book.targets[browserTargetKey(vault.localAccountId, targetId)] = {
-      ...publicConfig,
-      targetId,
-    }
-    writeBrowserTargetBook(book)
-    window.localStorage.removeItem(CONFIG_KEY)
-  }
-
-  async clear(): Promise<void> {
-    if (typeof window === "undefined") return
-    const vault = this.vaultProvider()
-    const scope = getActiveRuntimeTargetContext()
-    if (vault) {
-      const book = readBrowserTargetBook()
-      const accountKeys = Object.keys(book.targets).filter((key) =>
-        key.startsWith(`${vault.localAccountId}:`)
-      )
-      const targetId =
-        scope?.accountId === vault.localAccountId
-          ? scope.targetId
-          : accountKeys.length === 1
-            ? accountKeys[0].slice(vault.localAccountId.length + 1)
-            : null
-      if (!targetId) {
-        window.localStorage.removeItem(CONFIG_KEY)
-        return
-      }
-      const key = browserTargetKey(vault.localAccountId, targetId)
-      const existing = book.targets[key]
-      if (existing) {
-        const cleanup: Array<Promise<void>> = [
-          vault.deleteSecret(companionJwtSecretName(targetId)),
-          vault.deleteSecret(companionDeviceKeySecretName(targetId)),
-          vault.deleteSecret(companionSigningSecretName(targetId)),
-        ]
-        if (existing.signalingRoomDescriptor) {
-          cleanup.push(this.signalingKeys.clear(existing.deviceId))
-        }
-        await Promise.all(cleanup)
-        delete book.targets[key]
-        writeBrowserTargetBook(book)
-      }
-    }
-    window.localStorage.removeItem(CONFIG_KEY)
-  }
-
-  private async hydrateTarget(
-    publicConfig: PublicBrowserCompanionConfig,
-    vault: BrowserVaultSecretAdapter
-  ): Promise<CompanionConfig | null> {
-    const targetId = publicConfig.targetId ?? publicConfig.deviceId
-    const serializedDeviceKey = await vault.loadSecret(companionDeviceKeySecretName(targetId))
-    if (!serializedDeviceKey || !publicConfig.deviceKeyThumbprint) return null
-    const config: CompanionConfig = {
-      ...publicConfig,
-      targetId,
-      devicePrivateKeyJwk: JSON.parse(serializedDeviceKey) as JsonWebKey,
-    }
-    if (config.signalingRoomDescriptor) {
-      const serialized = await vault.loadSecret(companionSigningSecretName(targetId))
-      if (serialized) {
-        config.signalingPrivateKey = await importSigningPrivateKey(
-          JSON.parse(serialized) as JsonWebKey
-        )
-      } else {
-        const legacyKey = await this.signalingKeys.load(config.deviceId)
-        if (legacyKey) config.signalingPrivateKey = legacyKey
-      }
-    }
-    return config
-  }
-}
-
-function browserTargetKey(accountId: string, targetId: string): string {
-  return `${accountId}:${targetId}`
-}
-
-function readBrowserTargetBook(): BrowserCompanionTargetBook {
-  const raw = window.localStorage.getItem(CONFIG_BOOK_KEY)
-  if (!raw) return { version: 2, targets: {} }
-  const parsed = JSON.parse(raw) as BrowserCompanionTargetBook
-  if (parsed.version !== 2 || !parsed.targets || typeof parsed.targets !== "object") {
-    throw new Error("Browser Companion target book is incompatible.")
-  }
-  return parsed
-}
-
-function writeBrowserTargetBook(book: BrowserCompanionTargetBook): void {
-  if (Object.keys(book.targets).length === 0) {
-    window.localStorage.removeItem(CONFIG_BOOK_KEY)
-    return
-  }
-  window.localStorage.setItem(CONFIG_BOOK_KEY, JSON.stringify(book))
-}
-
-function companionJwtSecretName(identity: string): string {
-  return `companion:${identity}:device-jwt`
-}
-
-function companionDeviceKeySecretName(identity: string): string {
-  return `companion:${identity}:device-private-jwk`
-}
-
-function companionSigningSecretName(identity: string): string {
-  return `companion:${identity}:signaling-private-jwk`
-}
-
-// ---------------------------------------------------------------------------
-// SecureStorage backend (Capacitor)
-// ---------------------------------------------------------------------------
-
-// Minimal slice of capacitor-secure-storage-plugin's API surface. Avoids a
-// hard import at module load so the web bundle does not try to resolve a
-// native package that has no web fallback.
-interface SecureStoragePluginShape {
-  set(opts: { key: string; value: string }): Promise<{ value: boolean }>
-  get(opts: { key: string }): Promise<{ value: string }>
-  remove(opts: { key: string }): Promise<{ value: boolean }>
-}
-
-type SecureStoragePluginLoader = () => Promise<SecureStoragePluginShape>
-
-// Resolve the SecureStorage plugin the SAME way every other native wrapper
-// does — via `lib/capacitor/_shared.ts:makeDefaultLoader`, which reads the
-// proxy `registerNativePlugins()` populates onto `window.Capacitor.Plugins`
-// at mobile boot FIRST and only then falls back to a `webpackIgnore`'d dynamic
-// import. The bare `import("capacitor-secure-storage-plugin")` never resolves
-// inside the static-export WebView (the npm package isn't bundled and there's
-// no node_modules), so the previous import-only loader made `save()` THROW on
-// device → the pairing key could never persist. The package-name literal is
-// kept so the loader still works if the global proxy is somehow absent.
-const defaultSecureStoragePluginLoader: SecureStoragePluginLoader =
-  makeDefaultLoader<SecureStoragePluginShape>(
-    "capacitor-secure-storage-plugin",
-    "SecureStoragePlugin"
-  )
-
-export class SecureStorageCompanionStorage implements CompanionConfigStorage {
-  private readonly loader: SecureStoragePluginLoader
-
-  constructor(loader: SecureStoragePluginLoader = defaultSecureStoragePluginLoader) {
-    this.loader = loader
-  }
-
-  async load(): Promise<CompanionConfig | null> {
-    try {
-      const plugin = await this.loader()
-      const { value } = await plugin.get({ key: CONFIG_KEY })
-      if (!value) return null
-      const config = JSON.parse(value) as CompanionConfig
-      if (!config.devicePrivateKeyJwk || !config.deviceKeyThumbprint) {
-        await plugin.remove({ key: CONFIG_KEY }).catch(ignoreMissingSecureStorageItem)
-        return null
-      }
-      if (config.signalingPrivateKeyJwk) {
-        config.signalingPrivateKey = await importSigningPrivateKey(config.signalingPrivateKeyJwk)
-      }
-      return config
-    } catch (error) {
-      if (isMissingSecureStorageItem(error)) return null
-      throw error
-    }
-  }
-
-  async save(config: CompanionConfig): Promise<void> {
-    if (!config.devicePrivateKeyJwk || !config.deviceKeyThumbprint) {
-      throw new Error("Companion device identity is missing; pair this device again.")
-    }
-    const plugin = await this.loader()
-    const persisted = { ...config }
-    delete persisted.serviceToken
-    delete persisted.signalingPrivateKey
-    await plugin.set({ key: CONFIG_KEY, value: JSON.stringify(persisted) })
-  }
-
-  async clear(): Promise<void> {
-    try {
-      const plugin = await this.loader()
-      await plugin.remove({ key: CONFIG_KEY })
-    } catch (error) {
-      ignoreMissingSecureStorageItem(error)
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Selection
-// ---------------------------------------------------------------------------
-
 /**
- * The pre-book storage for this platform.
+ * The active storage: the multi-host credential book behind the flat
+ * `CompanionConfig` shape.
  *
- * Still exported and still the only writer of the legacy records: it is what
- * the credential-book migration reads from, and keeping it whole is what makes
- * an interrupted migration re-runnable rather than destructive (ADR-0097).
- */
-export function pickLegacyCompanionStorage(): CompanionConfigStorage {
-  return isCapacitor() ? new SecureStorageCompanionStorage() : new LocalStorageCompanionStorage()
-}
-
-/**
- * The active storage: the multi-host credential book, fronted by the one-shot
- * migration off {@link pickLegacyCompanionStorage}.
- *
- * The `CompanionConfig` shape is unchanged — every downstream consumer
- * (transport, connectivity, sync, endpoint refresh) still reads and writes the
- * same flat record for the account's *active* host. Multi-host callers talk to
- * `companionCredentialBook()` directly.
+ * Every downstream consumer (transport, connectivity, sync, endpoint refresh)
+ * reads and writes the same flat record for the account's *active* host.
  */
 export function pickCompanionStorage(): CompanionConfigStorage {
-  return new MigratingCompanionStorage({ legacy: pickLegacyCompanionStorage() })
+  return new CredentialBookCompanionStorage({
+    book: companionCredentialBook(),
+    accountNamespace: activeAccountNamespace,
+    activeHostId: () => {
+      const targetId = getActiveRuntimeTargetContext()?.targetId
+      // A phone boots under the `mobile-companion` placeholder target before
+      // it knows which Host it is paired to; that placeholder resolves through
+      // the account's active-host pointer instead of naming a host.
+      return isCapacitor() && targetId === "mobile-companion" ? undefined : targetId
+    },
+  })
 }
 
 // Module-scope singleton — picked once at first import.

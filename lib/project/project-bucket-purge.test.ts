@@ -49,7 +49,6 @@ it("purges loaded stores and every persisted account bucket for one project", ()
           removeTask: { id: "removeTask", teamId: "removeTeam" },
           keepTask: { id: "keepTask", teamId: "keepTeam" },
         },
-        editorSession: { removeTeam: {}, keepTeam: {} },
         activeTeamId: "removeTeam",
       },
     })
@@ -73,7 +72,6 @@ it("purges loaded stores and every persisted account bucket for one project", ()
     teams: { keepTeam: expect.any(Object) },
     teammates: { keepMate: expect.any(Object) },
     tasks: { keepTask: expect.any(Object) },
-    editorSession: { keepTeam: {} },
     activeTeamId: null,
   })
 })

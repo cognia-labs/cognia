@@ -6,12 +6,10 @@ import "fake-indexeddb/auto"
 import type { AppSettings } from "@cognia/agent-config-types"
 import { DEFAULT_BACKGROUND_SETTINGS } from "@/types/appearance"
 import { DEFAULT_UPDATE_SETTINGS } from "@cognia/agent-config-types"
+import { DEFAULT_AUTO_ROUTING } from "@cognia/provider-types/auto-router"
 import { DEFAULTS, addAlwaysAllow, getSettings, removeAlwaysAllow, saveSettings } from "./settings"
 import { __resetDbForTesting, getDb, whenSeeded } from "./schema"
-import {
-  freshInstallWebReader,
-  legacyCompatibilityWebReader,
-} from "@/lib/web/reader/reader-settings"
+import { freshInstallWebReader } from "@/lib/web/reader/reader-settings"
 import { exportSettingsProfile, importSettingsProfile } from "@/lib/settings/profile-transfer"
 
 beforeEach(async () => {
@@ -45,9 +43,13 @@ describe("getSettings", () => {
       lastRunAt: "2026-10-21T00:00:00.000Z",
     })
   })
-  it("does not create a reader choice when a legacy host imports unrelated preferences", async () => {
-    const { webReader: _reader, ...legacy } = DEFAULTS
-    await getDb().settings.put(legacy)
+  it("gives a row without a reader profile the fresh-install defaults", async () => {
+    const { webReader: _reader, ...withoutReader } = DEFAULTS
+    await getDb().settings.put({
+      ...withoutReader,
+      webTools: { enabled: true, alwaysDistill: true },
+    })
+    expect((await getSettings()).webReader).toEqual(freshInstallWebReader())
     const imported = importSettingsProfile({
       schema: "cognia-settings",
       version: 1,
@@ -55,8 +57,7 @@ describe("getSettings", () => {
     })
     if (!imported.ok) throw new Error("Expected valid profile")
     await saveSettings(imported.patch)
-    expect(Object.hasOwn((await getDb().settings.get("singleton"))!, "webReader")).toBe(false)
-    expect((await getSettings()).webReader).toEqual(legacyCompatibilityWebReader(legacy.webTools))
+    expect((await getDb().settings.get("singleton"))?.webReader).toEqual(freshInstallWebReader())
   })
   it("applies portable search preferences without losing local credentials or endpoint grants", async () => {
     await saveSettings({
@@ -105,19 +106,13 @@ describe("getSettings", () => {
       allowPrivateEndpoint: true,
     })
   })
-  it("distinguishes fresh, legacy, explicit and future reader profiles without writing", async () => {
+  it("distinguishes fresh, explicit and future reader profiles without writing", async () => {
     const put = jest.spyOn(getDb().settings, "put")
     expect((await getSettings()).webReader).toEqual(freshInstallWebReader())
     expect(put).not.toHaveBeenCalled()
     put.mockRestore()
 
     const { webReader: _reader, ...legacy } = DEFAULTS
-    await getDb().settings.put({ ...legacy, webTools: { enabled: true, alwaysDistill: true } })
-    expect((await getSettings()).webReader).toEqual(
-      legacyCompatibilityWebReader({ enabled: true, alwaysDistill: true })
-    )
-    expect((await getDb().settings.get("singleton"))?.webReader).toBeUndefined()
-
     const explicit = { ...freshInstallWebReader(), distillation: "best-effort" as const }
     await getDb().settings.put({ ...legacy, webReader: explicit })
     expect((await getSettings()).webReader).toEqual(explicit)
@@ -289,7 +284,6 @@ describe("getSettings", () => {
       webTools: {
         enabled: true,
         preferCognia: true,
-        nativeOnAnthropic: true,
         alwaysDistill: true,
         allowPrivateHosts: true,
       },
@@ -298,7 +292,6 @@ describe("getSettings", () => {
     expect((await getSettings()).webTools).toEqual({
       enabled: true,
       preferCognia: true,
-      nativeOnAnthropic: true,
       alwaysDistill: true,
       allowPrivateHosts: true,
     })
@@ -386,7 +379,7 @@ describe("getSettings", () => {
     expect(s.importedVscodeThemes).toEqual([])
   })
 
-  it("normalizes legacy auto and difficulty routing into the existing settings block", async () => {
+  it("merges routing defaults under a partial autoRouting block, ignoring difficultyRouting", async () => {
     await getDb().settings.put({
       id: "singleton",
       permissionMode: "default",
@@ -407,12 +400,12 @@ describe("getSettings", () => {
 
     expect(first.autoRouting).toMatchObject({
       enabled: true,
-      strategy: "difficulty",
-      defaultSelection: "auto",
+      strategy: DEFAULT_AUTO_ROUTING.strategy,
+      defaultSelection: DEFAULT_AUTO_ROUTING.defaultSelection,
       candidateAliases: ["quick", "normal", "deep"],
       thresholds: { balanced: 0.2, powerful: 0.8 },
     })
-    expect(first.routingConfig?.strategy).toBe("difficulty")
+    expect(first.routingConfig?.strategy).toBe(DEFAULT_AUTO_ROUTING.strategy)
     expect(second.autoRouting).toEqual(first.autoRouting)
   })
 
@@ -525,46 +518,6 @@ describe("getSettings", () => {
     expect(s.liveVoice?.deployments).toEqual([])
   })
 
-  it("drops legacy live-voice resourceId and appKey fields", async () => {
-    await getDb().settings.put({
-      id: "singleton",
-      permissionMode: "default",
-      alwaysAllowTools: [],
-      liveVoice: {
-        enabled: true,
-        region: "cn",
-        deployments: [
-          {
-            id: "qwen-cn",
-            provider: "qwen",
-            region: "cn",
-            enabled: true,
-            workspaceId: "workspace-1",
-            resourceId: "ambiguous-old-value",
-            appKey: "must-not-leave-settings",
-          },
-        ],
-      },
-    } as unknown as Awaited<ReturnType<typeof getSettings>>)
-
-    const deployment = (await getSettings()).liveVoice?.deployments[0]
-    expect(deployment).toMatchObject({ workspaceId: "workspace-1" })
-    expect(deployment).not.toHaveProperty("resourceId")
-    expect(deployment).not.toHaveProperty("appKey")
-  })
-
-  it("defaults onboardingDismissedAt to undefined for fresh installs", async () => {
-    const s = await getSettings()
-    expect(s.onboardingDismissedAt).toBeUndefined()
-  })
-
-  it("preserves a saved onboardingDismissedAt across get/save round-trips", async () => {
-    const ts = "2026-05-18T12:00:00.000Z"
-    await saveSettings({ onboardingDismissedAt: ts })
-    const s = await getSettings()
-    expect(s.onboardingDismissedAt).toBe(ts)
-  })
-
   it("merges defaults under a partially-populated row (forward compat)", async () => {
     // Write only the bare minimum to simulate an older install that didn't
     // know about searchProviders.
@@ -608,66 +561,9 @@ describe("getSettings", () => {
       maxStoredEvents: 10_000,
     })
   })
-
-  it("migrates the legacy telemetry opt-in when no structured policy was persisted", async () => {
-    await getDb().settings.put({
-      id: "singleton",
-      permissionMode: "default",
-      alwaysAllowTools: [],
-      telemetryEnabled: true,
-    } as unknown as Awaited<ReturnType<typeof getSettings>>)
-
-    expect((await getSettings()).behaviorTelemetry?.enabled).toBe(true)
-  })
 })
 
 describe("saveSettings", () => {
-  it.each(["anthropic", "commandcode", "custom-provider", "plugin:provider"] as const)(
-    "migrates the legacy %s account into the provider map",
-    async (provider) => {
-      await getDb().settings.put({
-        ...DEFAULTS,
-        id: "singleton",
-        defaultProvider: provider,
-        defaultAccountId: "legacy-account",
-      })
-
-      const saved = await saveSettings({ reduceMotion: true })
-
-      expect(saved.defaultAccountIds).toEqual({ [provider]: "legacy-account" })
-      expect(saved.defaultAccountId).toBeUndefined()
-    }
-  )
-
-  it("keeps a legacy account bound to its original provider when the default provider changes", async () => {
-    await getDb().settings.put({
-      ...DEFAULTS,
-      id: "singleton",
-      defaultProvider: "anthropic",
-      defaultAccountId: "legacy-claude",
-    })
-
-    const saved = await saveSettings({ defaultProvider: "codex" })
-
-    expect(saved.defaultAccountIds).toEqual({ anthropic: "legacy-claude" })
-    expect(saved.defaultProvider).toBe("codex")
-    expect(saved.defaultAccountId).toBeUndefined()
-  })
-
-  it("normalizes a legacy OpenCode Go default into the OpenCode account map", async () => {
-    await getDb().settings.put({
-      ...DEFAULTS,
-      id: "singleton",
-      defaultProvider: "opencode-go",
-      defaultAccountId: "legacy-go",
-    })
-
-    const saved = await saveSettings({ reduceMotion: true })
-
-    expect(saved.defaultAccountIds).toEqual({ opencode: "legacy-go" })
-    expect(saved.defaultAccountId).toBeUndefined()
-  })
-
   it("persists the patch and returns the merged row", async () => {
     const out = await saveSettings({ theme: "dark", apiKey: "sk-test" })
     expect(out.theme).toBe("dark")

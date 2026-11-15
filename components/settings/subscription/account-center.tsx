@@ -90,10 +90,7 @@ export function AccountCenter() {
   const detail = detailResult?.key === selectedAccountKey ? detailResult.value : null
   const detailLoading = !!selectedAccountKey && detailResult?.key !== selectedAccountKey
   const activeAccountId = selectedState?.activeAccountId ?? null
-  const defaultAccountId = selected
-    ? (settings?.defaultAccountIds?.[selected.provider] ??
-      (settings?.defaultProvider === selected.provider ? settings.defaultAccountId : undefined))
-    : undefined
+  const defaultAccountId = selected ? settings?.defaultAccountIds?.[selected.provider] : undefined
 
   useEffect(() => {
     if (!selected || !selectedAccountKey) return
@@ -199,11 +196,7 @@ export function AccountCenter() {
               <ul className="space-y-1" aria-label={t("listLabel")}>
                 {accounts.map((account) => {
                   const state = states[account.provider]
-                  const defaultId =
-                    settings?.defaultAccountIds?.[account.provider] ??
-                    (settings?.defaultProvider === account.provider
-                      ? settings.defaultAccountId
-                      : undefined)
+                  const defaultId = settings?.defaultAccountIds?.[account.provider]
                   return (
                     <li key={accountKey(account)}>
                       <Surface asChild layer="raised" radius="control">

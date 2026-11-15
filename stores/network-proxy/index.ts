@@ -22,13 +22,11 @@ import { isProxyActive } from "@/lib/network/proxy-config"
 import { notifyNetworkProxyApplied } from "@/lib/network/proxy-events"
 import {
   applyProxyPasswordMutation,
-  migrateLegacyProxyPassword,
   type ProxyPasswordMutation,
 } from "@/lib/network/proxy-credentials"
 import { loggers } from "@cognia/logging"
 import {
   DEFAULT_NETWORK_PROXY_SETTINGS,
-  type LegacyNetworkProxySettings,
   type NetworkProxySettings,
   type ProxyActiveStatus,
   type ProxyCandidate,
@@ -66,12 +64,10 @@ let lastPushedSerialized: string | null = null
  */
 export async function applyProxyToRust(cfg?: NetworkProxySettings | null): Promise<void> {
   if (!isTauri() || !isMainAppWindow()) return
-  const source = (cfg ?? getNetworkProxy()) as LegacyNetworkProxySettings
   // Native proxy_apply resolves credentials only when the policy needs them.
   // A presence check here would make even direct traffic depend on keychain
-  // availability during startup. Touch keyring only for an actual legacy row.
-  const migration = source.password === undefined ? null : await migrateLegacyProxyPassword(source)
-  const settings = migration?.settings ?? source
+  // availability during startup.
+  const settings = cfg ?? getNetworkProxy()
   const payload = {
     mode: settings.mode,
     protocol: settings.protocol,
@@ -86,13 +82,6 @@ export async function applyProxyToRust(cfg?: NetworkProxySettings | null): Promi
   await invoke("proxy_apply", { input: payload })
   lastPushedSerialized = serialized
   notifyNetworkProxyApplied()
-
-  if (migration?.migrated) {
-    // Persist the sanitized row only after both keyring verification and the
-    // atomic native apply succeed. The recursive apply triggered by `save` is
-    // deduped by the marker above.
-    await useSettingsStore.getState().save({ networkProxy: settings })
-  }
 
   if (isProxyActive(settings)) {
     log.debug(`Applied proxy endpoint ${settings.protocol}://${settings.host}:${settings.port}`)

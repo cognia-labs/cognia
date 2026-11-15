@@ -109,10 +109,7 @@ export function ToolSettingsSection() {
   // Reads follow the Reader's distillation mode; the switch shows whether it
   // is `required`, whichever control set it.
   const webAlwaysDistill =
-    normalizeWebReaderSettings(settings?.webReader, {
-      rowExists: settings != null,
-      webTools: settings?.webTools,
-    }).effective.distillation === "required"
+    normalizeWebReaderSettings(settings?.webReader).effective.distillation === "required"
   const skillToolEnabled = settings?.selfInvokeTools?.skill ?? false
   const slashCommandToolEnabled = settings?.selfInvokeTools?.slashCommand ?? false
   const teamCollaborationToolEnabled = settings?.selfInvokeTools?.teamCollaboration ?? false

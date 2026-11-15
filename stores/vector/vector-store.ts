@@ -7,8 +7,7 @@
  * keyring via the Rust side after ADR-0022 — this store now only holds
  * the provider selection, embedding config, and per-provider `configId`
  * pointers. The actual secrets are addressed by `configId` and resolved
- * server-side. See lib/vector/migrations/credential-migration.ts for the
- * one-shot upgrade path from the pre-ADR-0022 cleartext layout.
+ * server-side.
  */
 
 import { create } from "zustand"
@@ -52,9 +51,8 @@ export const useVectorStore = create<VectorStoreState>()(
     {
       name: "cognia-vector-settings",
       storage: persistLocalStorage(),
-      // Bump on every credential-layout migration so the one-shot
-      // credential-migration script can detect pre-ADR-0022 state and
-      // run exactly once.
+      // Bump when the persisted shape changes; Zustand then discards a
+      // persisted state from an older version.
       version: 2,
     }
   )

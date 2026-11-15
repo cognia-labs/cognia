@@ -6,8 +6,7 @@
  * reference it without pulling Dexie into their import graph.
  *
  * API keys are resolved through the shared credential seam. The Dexie row
- * stores stable references only; legacy cleartext rows are migrated after a
- * durable Vault/keyring adapter becomes available.
+ * stores stable references only; a key found inline in the row is ignored.
  */
 
 import { getDb } from "./schema"
@@ -77,21 +76,14 @@ export async function getTwinRuntimeSettings(): Promise<TwinRuntimeSettings> {
       ...DEFAULT_TWIN_RUNTIME_SETTINGS.storage,
       vectorBackend: derivedVectorBackendDefault(),
     }
-    const merged: TwinRuntimeSettings = {
+    const merged = stripInlineSecrets({
       ...DEFAULT_TWIN_RUNTIME_SETTINGS,
       ...row.payload,
       storage: { ...storageDefault, ...row.payload.storage },
       embedding: { ...DEFAULT_TWIN_RUNTIME_SETTINGS.embedding, ...row.payload.embedding },
       llm: { ...DEFAULT_TWIN_RUNTIME_SETTINGS.llm, ...row.payload.llm },
-    }
-    if (row.secretRefs) {
-      await hydrateSecretReferences(merged, row.secretRefs)
-    } else if (hasInlineSecrets(merged) && secretStore.isPersistent?.()) {
-      // A durable adapter is available, so migrate the legacy row only after
-      // the keyring/Vault writes complete. A failure leaves the old row intact
-      // and the next read can retry safely.
-      await saveTwinRuntimeSettings(merged)
-    }
+    })
+    if (row.secretRefs) await hydrateSecretReferences(merged, row.secretRefs)
     return merged
   }
   return {
@@ -101,27 +93,6 @@ export async function getTwinRuntimeSettings(): Promise<TwinRuntimeSettings> {
       vectorBackend: derivedVectorBackendDefault(),
     },
   }
-}
-
-/**
- * Register a pre-existing Twin vector backend with the Rust credential
- * registry once per app start.
- *
- * Settings saved before that registry existed carry either Twin secret
- * references or a no-auth cloud endpoint with no references at all, and either
- * shape needs registering for the backend to work without a manual re-save.
- *
- * This is a boot step, not part of reading settings: `getTwinRuntimeSettings`
- * is called by the startup probe and by every runtime-adapter build, and doing
- * a keyring write plus a global vector-store mutation on each of those made a
- * plain read silently reconfigure the app. Transient failures stay retryable
- * on the next start and must never surface to the settings form.
- */
-export async function registerExistingTwinVectorBackend(): Promise<void> {
-  if (!isTauri()) return
-  const settings = await getTwinRuntimeSettings()
-  const vectorConfigId = await persistTwinVectorCredentials(settings).catch(() => undefined)
-  if (vectorConfigId) syncSharedVectorSettings(settings, vectorConfigId)
 }
 
 export async function saveTwinRuntimeSettings(payload: TwinRuntimeSettings): Promise<void> {
@@ -202,10 +173,6 @@ function secretValues(payload: TwinRuntimeSettings): Record<TwinRuntimeSecretSlo
     weaviate: payload.storage.weaviate?.apiKey?.trim() ?? "",
     milvus: payload.storage.milvus?.token?.trim() ?? "",
   }
-}
-
-function hasInlineSecrets(payload: TwinRuntimeSettings): boolean {
-  return Object.values(secretValues(payload)).some(Boolean)
 }
 
 function stripInlineSecrets(payload: TwinRuntimeSettings): TwinRuntimeSettings {

@@ -37,25 +37,14 @@ async function deriveKeyFromMaterial(material: string, salt: string): Promise<Cr
 }
 
 /**
- * LEGACY key derivation: keyed solely on the PUBLIC plugin id, so anyone
- * holding the localStorage blob (or a backup export) plus the plugin id can
- * decrypt. Kept only so `getSecure` can read — and transparently migrate —
- * values written before the per-install key existed. Never use for writes.
- */
-export async function deriveKey(pluginId: string, salt?: string): Promise<CryptoKey> {
-  return deriveKeyFromMaterial(pluginId, salt ?? `${SALT_PREFIX}${pluginId}`)
-}
-
-/**
  * Derive the AES-GCM key for `setSecure` from the per-install master key
  * (the stable per-install credential root — the same root `ctx.secrets` uses on
  * web) combined with the plugin id and, for browser/desktop storage, the
- * LocalProfile id. The unscoped form remains for Headless and legacy reads.
- * Confidentiality now rests on a secret
- * that never leaves the device rather than on the public plugin id.
+ * LocalProfile id. The unscoped form serves Headless and signed-out storage.
+ * Confidentiality rests on a secret that never leaves the device rather than
+ * on the public plugin id.
  *
- * Throws when no master key is available (SSR) — callers must not silently
- * fall back to the legacy public-id key.
+ * Throws when no master key is available (SSR).
  */
 export async function deriveInstallKey(
   pluginId: string,

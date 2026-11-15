@@ -19,7 +19,6 @@ import type {
   ExternalAgentPresetId,
   NonExecutablePresetId,
 } from "../../lib/ai/agent/external/config/presets"
-import type { ProjectEditorSession } from "../editor/project-editor"
 import type {
   AgentTeamEnvironmentRef,
   AgentTeamEvidencePolicy,
@@ -146,14 +145,6 @@ export type AgentTeamWorkspaceTab =
   | "editor"
   | "members"
   | "settings"
-
-/**
- * Persisted per-team state of the project Editor tab. Restores the open file
- * set, active file, selected project root (main repo vs a worktree), and the
- * three-pane layout when the tab is reopened. Unsaved draft content is NOT
- * persisted — the on-disk file is the source of truth.
- */
-export type AgentTeamEditorSession = ProjectEditorSession
 
 /**
  * Current operator focus inside the Agent Team workspace
@@ -907,26 +898,12 @@ export interface TeammateConfig {
   /** Custom system prompt */
   systemPrompt?: string
   /**
-   * Provider override.
-   * @deprecated ADR-0090 Phase 7: readable for legacy rows; new configs use
-   * `execution` (pinned `deploymentRef`) instead.
+   * Provider override. Without an `execution` binding it pins the deployment
+   * whose id is this provider id.
    */
   provider?: ProviderName
   /** Model override */
   model?: string
-  /**
-   * API key override.
-   * @deprecated ADR-0090 Phase 7: deprecated-READABLE only. New writes are
-   * rejected (`assertNoNewRawTeammateCredentials`); use a credential profile
-   * reference on `execution` instead — raw keys never enter new team configs.
-   */
-  apiKey?: string
-  /**
-   * Base URL override.
-   * @deprecated ADR-0090 Phase 7: deprecated-READABLE only. New writes are
-   * rejected; endpoints live on the deployment profile (`execution`).
-   */
-  baseURL?: string
   /** Temperature override */
   temperature?: number
   /** Max steps override */

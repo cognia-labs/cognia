@@ -64,13 +64,13 @@ jest.mock("@/stores/agent", () => ({
   useAgentRuntimeStore: { getState: jest.fn() },
 }))
 
-// Since ADR-0117 the send path resolves the turn's mode from the SESSION's
-// composition, not the app-wide `modeId`. That reads `compositionForSession`
-// off the store module directly, so it needs its own mock — driving `modeId`
-// alone no longer decides anything.
+// The send path resolves the turn's mode from the SESSION's composition
+// (`compositionForSession`) and its lane from `runtimeRefForSession`, both read
+// off the store module directly, so it needs its own mock.
 jest.mock("@/stores/agent/agent-runtime-store", () => ({
   useAgentRuntimeStore: { getState: jest.fn(() => ({})) },
   compositionForSession: jest.fn(() => ({ presetId: "standard" })),
+  runtimeRefForSession: jest.fn(() => ({ kind: "builtin" })),
 }))
 
 jest.mock("@/stores/agent/custom-mode-store", () => ({
@@ -414,9 +414,7 @@ beforeEach(() => {
   ;(recordSkillUsage as jest.Mock).mockResolvedValue(undefined)
   ;(listEnabledMcpServers as jest.Mock).mockResolvedValue([])
   ;(buildMcpServerMapResolved as jest.Mock).mockReturnValue({})
-  ;(useAgentRuntimeStore as unknown as { getState: jest.Mock }).getState.mockReturnValue({
-    modeId: undefined,
-  })
+  ;(useAgentRuntimeStore as unknown as { getState: jest.Mock }).getState.mockReturnValue({})
   ;(compositionForSession as jest.Mock).mockReturnValue({ presetId: "standard" })
   ;(useCustomModeStore as unknown as { getState: jest.Mock }).getState.mockReturnValue({
     customModes: {},

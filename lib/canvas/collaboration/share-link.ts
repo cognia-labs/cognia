@@ -75,17 +75,3 @@ export function parseCanvasShareLink(
   }
   return { ok: true, target: { orgId, workspaceId, documentId } }
 }
-
-/**
- * Whether a link is one of the old ones.
- *
- * Those cannot be honoured: they name a session id from another device's
- * in-memory store and a server this client must not trust. The joiner is told
- * the link is expired and to ask for a new one, which is true and actionable,
- * rather than being shown a decode failure.
- */
-export function isLegacyCanvasShareLink(
-  params: Pick<URLSearchParams, "get"> | null | undefined
-): boolean {
-  return Boolean(params?.get("session") || params?.get("server"))
-}

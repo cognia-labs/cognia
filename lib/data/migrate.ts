@@ -1,6 +1,5 @@
 // Schema-version boundary for backup imports. Accepts:
 //   • EncryptedEnvelopeV1   → throws IsEncryptedError so the caller can prompt
-//   • v1 ExportEnvelope     → wraps in synthetic v3 manifest (lossless)
 //   • v3 BackupPackage      → recomputes & validates the integrity checksum
 //   • anything else         → throws UnsupportedSchemaVersionError
 //
@@ -13,9 +12,7 @@ import {
   IntegrityCheckFailedError,
   IsEncryptedError,
   UnsupportedSchemaVersionError,
-  type BackupManifestV3,
   type BackupPackageV3,
-  type BackupPayloadV3,
   type EncryptedEnvelopeV1,
 } from "./types"
 
@@ -40,28 +37,6 @@ export function isEncryptedEnvelope(input: unknown): input is EncryptedEnvelopeV
     !!obj.kdf &&
     typeof obj.kdf === "object"
   )
-}
-
-/** Sniff for the legacy v1 ExportEnvelope (`schemaVersion: 1` flat object). */
-function isExportEnvelopeV1(input: unknown): input is V1Shape {
-  if (!input || typeof input !== "object") return false
-  const obj = input as { schemaVersion?: unknown }
-  return obj.schemaVersion === 1
-}
-
-/** Loose mirror of the old v1 type for migration purposes only. */
-interface V1Shape {
-  schemaVersion: 1
-  exportedAt: number
-  appVersion?: string
-  settings?: BackupPayloadV3["settings"]
-  characters?: BackupPayloadV3["characters"]
-  skills?: BackupPayloadV3["skills"]
-  teams?: BackupPayloadV3["teams"]
-  promptPresets?: BackupPayloadV3["promptPresets"]
-  mcpServers?: BackupPayloadV3["mcpServers"]
-  sessions?: BackupPayloadV3["sessions"]
-  messages?: BackupPayloadV3["messages"]
 }
 
 /**
@@ -90,8 +65,8 @@ function sortKeys(value: unknown): unknown {
 }
 
 /**
- * Convert the raw `JSON.parse` of an import file to a current-shape
- * `BackupPackageV3`, validating the integrity checksum if present.
+ * Accept the raw `JSON.parse` of an import file as a `BackupPackageV3`,
+ * validating the integrity checksum if present.
  */
 export async function migrateEnvelope(input: unknown): Promise<BackupPackageV3> {
   if (isEncryptedEnvelope(input)) {
@@ -108,53 +83,7 @@ export async function migrateEnvelope(input: unknown): Promise<BackupPackageV3> 
     return pkg
   }
 
-  if (isExportEnvelopeV1(input)) {
-    return wrapV1AsV3(input)
-  }
-
   throw new UnsupportedSchemaVersionError(input)
 }
 
-/**
- * Wrap a legacy v1 envelope as a v3 package by lifting the flat fields into
- * a `payload` block and synthesizing a manifest. The integrity checksum is
- * computed over the freshly-canonicalized payload.
- */
-async function wrapV1AsV3(env: V1Shape): Promise<BackupPackageV3> {
-  const payload: BackupPayloadV3 = {
-    settings: env.settings,
-    characters: env.characters,
-    skills: env.skills,
-    teams: env.teams,
-    promptPresets: env.promptPresets,
-    mcpServers: env.mcpServers,
-    sessions: env.sessions,
-    messages: env.messages,
-  }
-
-  const manifest: BackupManifestV3 = {
-    version: "3.0",
-    schemaVersion: EXPORT_SCHEMA_VERSION,
-    traceId: synthTraceId(env.exportedAt),
-    exportedAt: new Date(env.exportedAt).toISOString(),
-    appVersion: env.appVersion ?? "0.0.0",
-    backend: "web-dexie",
-    integrity: {
-      algorithm: "SHA-256",
-      checksum: await sha256Hex(canonicalStringify(payload)),
-    },
-  }
-
-  return { version: "3.0", manifest, payload }
-}
-
-/** Stable but recognizable trace id for migrated v1 files. */
-function synthTraceId(exportedAt: number): string {
-  // Random UUID-shaped string keeps tooling happy. We don't need cryptographic
-  // uniqueness here — just something the user can paste into a bug report.
-  const seed = Number.isFinite(exportedAt) ? exportedAt : Date.now()
-  const hex = (seed >>> 0).toString(16).padStart(8, "0")
-  return `${hex}-v1xx-migrated-from-v1xxxxxx`.slice(0, 36)
-}
-
-export const __TESTING__ = { wrapV1AsV3, sortKeys, isExportEnvelopeV1, isBackupPackageV3 }
+export const __TESTING__ = { sortKeys, isBackupPackageV3 }

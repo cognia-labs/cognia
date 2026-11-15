@@ -4,7 +4,6 @@ import {
   deriveProfiles,
   exportProfilesRedacted,
   importProfiles,
-  upgradeDeploymentProfileCatalogRefs,
   type DeriveProfilesInput,
 } from "./profile-migration"
 
@@ -40,7 +39,7 @@ function fixtureInput(): DeriveProfilesInput {
         id: "my-claude-relay",
         name: "My Claude Relay",
         enabled: true,
-        protocol: "anthropic",
+        apiProtocol: "anthropic",
         baseURL: "https://relay.example/anthropic",
         defaultModel: "claude-sonnet-5",
         models: [{ id: "claude-sonnet-5" }, { id: "claude-haiku-4-5-20251001" }],
@@ -151,24 +150,6 @@ describe("deriveProfiles", () => {
     expect(glm?.models.find((model) => model.id === "glm-4.6")?.canonicalModelRef).toBe(
       "zhipu:glm-4.6"
     )
-  })
-
-  it("idempotently upgrades v1 deployment models without replacing existing references", () => {
-    const v1 = {
-      id: "openrouter-main",
-      providerRef: "openrouter",
-      endpoint: "https://openrouter.ai/api/v1",
-      transportProfileRef: "tp-openai-bearer",
-      models: [{ id: "openai/gpt-test" }],
-    }
-    const upgraded = upgradeDeploymentProfileCatalogRefs(v1)
-    expect(upgraded.models[0]).toEqual({
-      id: "openai/gpt-test",
-      upstreamId: "openai/gpt-test",
-      offeringRef: "openrouter-main:openai/gpt-test",
-      canonicalModelRef: "openai:gpt-test",
-    })
-    expect(upgradeDeploymentProfileCatalogRefs(upgraded)).toEqual(upgraded)
   })
 })
 

@@ -138,8 +138,7 @@ export async function handleSlackOAuth(
   await connectorsKeyringSet(adapterId, "botToken", body.access_token)
   if (body.authed_user?.access_token) {
     // "userToken" is the key `buildSlackAdapter` resolves for
-    // setPresenceStatus (with a legacy fallback to the old "user_token"
-    // key this handler wrote before the unification).
+    // setPresenceStatus.
     await connectorsKeyringSet(adapterId, "userToken", body.authed_user.access_token)
   }
 

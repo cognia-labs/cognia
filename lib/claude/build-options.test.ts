@@ -133,13 +133,13 @@ jest.mock("@/stores/agent", () => ({
   useAgentRuntimeStore: { getState: jest.fn() },
 }))
 
-// Since ADR-0117 the send path resolves the turn's mode from the SESSION's
-// composition, not the app-wide `modeId`. That reads `compositionForSession`
-// off the store module directly, so it needs its own mock — driving `modeId`
-// alone no longer decides anything.
+// The send path resolves the turn's mode from the SESSION's composition
+// (`compositionForSession`) and its lane from `runtimeRefForSession`, both read
+// off the store module directly, so it needs its own mock.
 jest.mock("@/stores/agent/agent-runtime-store", () => ({
   useAgentRuntimeStore: { getState: jest.fn(() => ({})) },
   compositionForSession: jest.fn(() => ({ presetId: "standard" })),
+  runtimeRefForSession: jest.fn(() => ({ kind: "builtin" })),
 }))
 
 jest.mock("@/lib/ai/agent/external/manager", () => ({
@@ -565,7 +565,7 @@ beforeEach(() => {
   mListMcp.mockResolvedValue([])
   mBuildMap.mockReturnValue({})
   mGetTeam.mockResolvedValue(undefined)
-  mRuntimeGet.mockReturnValue({ modeId: undefined })
+  mRuntimeGet.mockReturnValue({})
   // Production-faithful default: `defaultComposition` is always populated, so
   // a session with no explicit choice still runs Standard (→ the `general`
   // built-in, which contributes no prompt and no tools).
@@ -3694,7 +3694,7 @@ describe("resolveSendOptions — system prompt assembly", () => {
 describe("resolveSendOptions — agent mode resolution", () => {
   it("ctx.agentMode === null opts the turn out of mode application", async () => {
     mBuildModeUpdate.mockReturnValue({ agentModeId: "should-not-run" })
-    mRuntimeGet.mockReturnValue({ modeId: "general" })
+    mRuntimeGet.mockReturnValue({})
 
     const opts = await resolveSendOptions({ agentMode: null })
     expect(mBuildModeUpdate).not.toHaveBeenCalled()
@@ -7274,8 +7274,8 @@ describe("web access resolution (lib/chat/web-access.ts)", () => {
     (opts.pluginTools ?? []).map((t) => t.name)
 
   afterEach(() => {
-    const { useAgentRuntimeStore } = jest.requireMock("@/stores/agent/agent-runtime-store")
-    useAgentRuntimeStore.getState.mockReturnValue({})
+    const { runtimeRefForSession } = jest.requireMock("@/stores/agent/agent-runtime-store")
+    runtimeRefForSession.mockReturnValue({ kind: "builtin" })
   })
 
   // Native-first. The SDK already exposes WebSearch/WebFetch on an unnarrowed
@@ -7338,46 +7338,37 @@ describe("web access resolution (lib/chat/web-access.ts)", () => {
     expect(opts.disallowedTools).toEqual(expect.arrayContaining(["WebSearch", "WebFetch"]))
   })
 
-  it.each([false, true])(
-    "keeps native search and routes only fetch to Cognia (legacy native opt-in: %s)",
-    async (nativeOnAnthropic) => {
-      const opts = await resolveSendOptions({
-        character: makeChar({ id: "c1" }),
-        appSettings: {
-          webTools: { enabled: true, nativeOnAnthropic, preferCogniaFetch: true },
-        } as AppSettings,
-      })
-      expect(webNames(opts)).not.toContain("web_search")
-      expect(webNames(opts)).toContain("web_fetch")
-      expect(opts.disallowedTools).toContain("WebFetch")
-      expect(opts.disallowedTools).not.toContain("WebSearch")
-      if (nativeOnAnthropic) {
-        expect(opts.allowedTools).toContain("WebSearch")
-        expect(opts.allowedTools).not.toContain("WebFetch")
-      }
-    }
-  )
+  it("keeps native search and routes only fetch to Cognia", async () => {
+    const opts = await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      appSettings: {
+        webTools: { enabled: true, preferCogniaFetch: true },
+      } as AppSettings,
+    })
+    expect(webNames(opts)).not.toContain("web_search")
+    expect(webNames(opts)).toContain("web_fetch")
+    expect(opts.disallowedTools).toContain("WebFetch")
+    expect(opts.disallowedTools).not.toContain("WebSearch")
+  })
 
   it("keeps native fetch and routes only search to Cognia", async () => {
     const opts = await resolveSendOptions({
       character: makeChar({ id: "c1" }),
       appSettings: {
         ...COGNIA_WEB_SETTINGS,
-        webTools: { enabled: true, nativeOnAnthropic: true, preferCogniaSearch: true },
+        webTools: { enabled: true, preferCogniaSearch: true },
       } as AppSettings,
     })
     expect(webNames(opts)).toContain("web_search")
     expect(webNames(opts)).not.toContain("web_fetch")
     expect(opts.disallowedTools).toContain("WebSearch")
     expect(opts.disallowedTools).not.toContain("WebFetch")
-    expect(opts.allowedTools).toContain("WebFetch")
-    expect(opts.allowedTools).not.toContain("WebSearch")
   })
 
   it("keeps Cognia's Reader for an external agent that only declares native search", async () => {
-    const { useAgentRuntimeStore } = jest.requireMock("@/stores/agent/agent-runtime-store")
+    const { runtimeRefForSession } = jest.requireMock("@/stores/agent/agent-runtime-store")
     const { getExternalAgentManager } = jest.requireMock("@/lib/ai/agent/external/manager")
-    useAgentRuntimeStore.getState.mockReturnValue({ runtime: "external", externalAgentId: "agent" })
+    runtimeRefForSession.mockReturnValue({ kind: "external", agentId: "agent" })
     getExternalAgentManager.mockReturnValue({
       // A `web.fetch` row is not part of the capability vocabulary; it is
       // ignored rather than read as evidence of a native fetch.
@@ -7419,9 +7410,9 @@ describe("web access resolution (lib/chat/web-access.ts)", () => {
   })
 
   it("gives an external agent without native search both Cognia tools", async () => {
-    const { useAgentRuntimeStore } = jest.requireMock("@/stores/agent/agent-runtime-store")
+    const { runtimeRefForSession } = jest.requireMock("@/stores/agent/agent-runtime-store")
     const { getExternalAgentManager } = jest.requireMock("@/lib/ai/agent/external/manager")
-    useAgentRuntimeStore.getState.mockReturnValue({ runtime: "external", externalAgentId: "agent" })
+    runtimeRefForSession.mockReturnValue({ kind: "external", agentId: "agent" })
     getExternalAgentManager.mockReturnValue({
       getAgentCapabilityProfile: () => ({ effective: { "web.search": { level: "unsupported" } } }),
     })
@@ -7436,9 +7427,9 @@ describe("web access resolution (lib/chat/web-access.ts)", () => {
   })
 
   it("routes an external agent's page reads through Cognia even when the selected provider is Anthropic", async () => {
-    const { useAgentRuntimeStore } = jest.requireMock("@/stores/agent/agent-runtime-store")
+    const { runtimeRefForSession } = jest.requireMock("@/stores/agent/agent-runtime-store")
     const { getExternalAgentManager } = jest.requireMock("@/lib/ai/agent/external/manager")
-    useAgentRuntimeStore.getState.mockReturnValue({ runtime: "external", externalAgentId: "agent" })
+    runtimeRefForSession.mockReturnValue({ kind: "external", agentId: "agent" })
     getExternalAgentManager.mockReturnValue({
       getAgentCapabilityProfile: () => ({
         effective: { "web.search": { level: "native" }, "web.fetch": { level: "unsupported" } },
@@ -7469,21 +7460,11 @@ describe("web access resolution (lib/chat/web-access.ts)", () => {
     expect(webNames(opts)).not.toContain("web_fetch")
   })
 
-  it("swaps to native WebSearch/WebFetch on the Anthropic path when opted in", async () => {
-    const opts = await resolveSendOptions({
-      character: makeChar({ id: "c1" }),
-      appSettings: { webTools: { enabled: true, nativeOnAnthropic: true } } as AppSettings,
-    })
-    expect(webNames(opts)).not.toContain("web_search")
-    expect(webNames(opts)).not.toContain("web_fetch")
-    expect(opts.allowedTools).toEqual(expect.arrayContaining(["WebSearch", "WebFetch"]))
-  })
-
-  it("keeps the custom tools for non-Anthropic providers even when opted in", async () => {
+  it("keeps the custom tools for non-Anthropic providers", async () => {
     const opts = await resolveSendOptions({
       character: makeChar({ id: "c1", providerId: "openai", model: "gpt-4o-mini" }),
       appSettings: {
-        webTools: { enabled: true, nativeOnAnthropic: true },
+        webTools: { enabled: true },
         searchProviders: {
           tavily: { providerId: "tavily", enabled: true, apiKey: "tvly-0123456789abcdef" },
         },
@@ -7491,15 +7472,6 @@ describe("web access resolution (lib/chat/web-access.ts)", () => {
     })
     expect(webNames(opts)).toEqual(expect.arrayContaining(["web_search", "web_fetch"]))
     expect(opts.allowedTools ?? []).not.toContain("WebSearch")
-  })
-
-  it("un-disallows WebSearch/WebFetch when opted in", async () => {
-    const opts = await resolveSendOptions({
-      character: makeChar({ id: "c1", disallowedTools: ["WebSearch", "Bash"] }),
-      appSettings: { webTools: { enabled: true, nativeOnAnthropic: true } } as AppSettings,
-    })
-    expect(opts.disallowedTools ?? []).not.toContain("WebSearch")
-    expect(opts.disallowedTools ?? []).toContain("Bash")
   })
 
   it("keeps the custom tools in standalone mode even on Anthropic", async () => {
@@ -7516,7 +7488,7 @@ describe("web access resolution (lib/chat/web-access.ts)", () => {
       const opts = await resolveSendOptions({
         character: makeChar({ id: "c1" }),
         appSettings: {
-          webTools: { enabled: true, nativeOnAnthropic: true },
+          webTools: { enabled: true },
           searchProviders: {
             tavily: { providerId: "tavily", enabled: true, apiKey: "tvly-0123456789abcdef" },
           },

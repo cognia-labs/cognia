@@ -253,7 +253,7 @@
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/agentTeamRuns",
       "owner": "lib/db",
-      "note": "createSquadRunRecords adds the parent row and directly adds its canonical execution row at lib/squads/squad/squad-run-records.ts:180 and lib/squads/squad/squad-run-records.ts:217; backfillLegacyTeamRun also directly adds the canonical row at lib/squads/legacy-run-history.ts:150. Standalone createAgentTeamRun/updateAgentTeamRun writers do not reach that ledger, and these direct writes do not satisfy the import-bound referenceOverride policy. The table has no canonical reference field, so its conservative classification is none despite the linked squad-creation path.",
+      "note": "createSquadRunRecords adds the parent row and directly adds its canonical execution row at lib/squads/squad/squad-run-records.ts:180 and lib/squads/squad/squad-run-records.ts:217. Standalone createAgentTeamRun/updateAgentTeamRun writers do not reach that ledger, and these direct writes do not satisfy the import-bound referenceOverride policy. The table has no canonical reference field, so its conservative classification is none despite the linked squad-creation path.",
       "database": "CogniaDB@lib/db/schema.ts",
       "file": "lib/db/schema.ts",
       "table": "agentTeamRuns",
@@ -293,18 +293,14 @@
       "reference": "none",
       "referenceField": null,
       "writers": [
-        "lib/squads/legacy-run-history.ts",
         "lib/squads/squad/squad-run-records.ts",
         "lib/db/agent-team-runtime.ts",
         "lib/dev/expose-test-globals.tsx"
       ],
       "ledgerWriters": [
-        "lib/squads/legacy-run-history.ts",
         "lib/squads/squad/squad-run-records.ts"
       ],
       "writerFunctions": [
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRun",
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
         "lib/squads/squad/squad-run-records.ts#createSquadRunRecords",
         "lib/db/agent-team-runtime.ts#aggregateAgentTeamRunUsage",
         "lib/db/agent-team-runtime.ts#createAgentTeamRun",
@@ -2449,7 +2445,6 @@
         "hooks/workflow/use-latest-run-outputs.ts#getLatestRunOutputs",
         "hooks/workflow/use-step-stream.ts#getStepStream",
         "lib/a2ui/workflow-approval-handler.ts#dispatchAcceptedApproval",
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
         "lib/bot/runtime/run.ts#stopBotExecution",
         "lib/cli-bridge/handlers/agent-team.ts#agentTeamRunStatus",
         "lib/connectors/automation-control.ts#cancelConversationAutomations",
@@ -3489,7 +3484,6 @@
       "reference": "none",
       "referenceField": null,
       "writers": [
-        "lib/squads/legacy-run-history.ts",
         "lib/squads/squad/squad-run-records.ts",
         "lib/bot/runtime/run.ts",
         "lib/db/execution-runs.ts",
@@ -3500,7 +3494,6 @@
         "lib/work-submission/service.ts"
       ],
       "ledgerWriters": [
-        "lib/squads/legacy-run-history.ts",
         "lib/squads/squad/squad-run-records.ts",
         "lib/bot/runtime/run.ts",
         "lib/execution/delegation.ts",
@@ -3510,8 +3503,6 @@
       ],
       "reason": "createSquadRunRecords writes the canonical ledger at lib/squads/squad/squad-run-records.ts:217; this inventory measures extra run tables relative to that authority, so the canonical executionRuns table is excluded by definition.",
       "writerFunctions": [
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRun",
-        "lib/squads/legacy-run-history.ts#backfillLegacyTeamRunHistory",
         "lib/squads/squad/squad-run-records.ts#createSquadRunRecords",
         "lib/bot/runtime/run.ts#cancelAcceptedBotDeliveries",
         "lib/bot/runtime/run.ts#cancelBotRun",

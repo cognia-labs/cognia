@@ -196,9 +196,6 @@
  *   session's pages into the desktop chat dock's page tabs and closes a
  *   conversation's pages when the renderer switches away from it (ADR-0214).
  *   The brain hosts no local Chromium and has no dock or active conversation.
- * - `vector-credential-migration-initializer` — migrates browser localStorage
- *   secrets into the desktop OS keyring; headless hosts have neither source
- *   storage nor a renderer-owned credential settings store to rehydrate.
  * - `twin-job-worker` — Twin vector stores currently dispatch through Tauri
  *   commands. The headless bridge is a response/event transport rather than a
  *   general command RPC surface, so registering the renderer worker here would
@@ -208,10 +205,9 @@
  *   `Channel`; the brain-side bridge-owned worker pool is installed and torn
  *   down by `serveCommand` after its authenticated bridge connects.
  * - `cloud-identity-initializer` — keyring hygiene for the renderer's
- *   per-profile Logto session (discarding the pre-ADR-0149 global blob,
- *   resolving a lapsed login into a re-auth marker at boot). The brain keeps
- *   its own file-backed session in `cli/src/serve/collab-reader.ts` and
- *   refreshes it there.
+ *   per-profile Logto session (resolving a lapsed login into a re-auth marker
+ *   at boot). The brain keeps its own file-backed session in
+ *   `cli/src/serve/collab-reader.ts` and refreshes it there.
  */
 
 import "./host-event-publisher"

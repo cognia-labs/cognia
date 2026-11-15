@@ -4,7 +4,6 @@ import { persistLocalStorage } from "@/stores/persist-storage"
 import type { ProjectEditorSession } from "@/types/editor/project-editor"
 
 const STORAGE_KEY = "cognia-project-editor-sessions"
-const LEGACY_AGENT_TEAM_STORAGE_KEY = "cognia-agent-teams"
 
 interface ProjectEditorSessionState {
   sessions: Record<string, ProjectEditorSession>
@@ -14,7 +13,6 @@ interface ProjectEditorSessionState {
 interface PersistedEnvelope {
   state?: {
     sessions?: Record<string, ProjectEditorSession>
-    editorSession?: Record<string, ProjectEditorSession>
   }
 }
 
@@ -40,14 +38,6 @@ function readEnvelope(key: string): PersistedEnvelope | null {
 function readSessions(key: string): Record<string, ProjectEditorSession> {
   const sessions = readEnvelope(key)?.state?.sessions
   return sessions && typeof sessions === "object" ? sessions : {}
-}
-
-function importLegacyTeamSessions(accountId: string): Record<string, ProjectEditorSession> {
-  const legacy = readEnvelope(`${LEGACY_AGENT_TEAM_STORAGE_KEY}:${accountId}`)?.state?.editorSession
-  if (!legacy || typeof legacy !== "object") return {}
-  return Object.fromEntries(
-    Object.entries(legacy).map(([teamId, session]) => [`team:${teamId}`, session])
-  )
 }
 
 export const useProjectEditorSessionStore = create<ProjectEditorSessionState>()(
@@ -80,10 +70,7 @@ export const useProjectEditorSessionStore = create<ProjectEditorSessionState>()(
 export function activateProjectEditorAccountStorage(accountId: string): void {
   if (typeof window === "undefined") return
   const storageKey = accountStorageKey(accountId)
-  const hasCurrentSnapshot = window.localStorage.getItem(storageKey) !== null
-  const sessions = hasCurrentSnapshot
-    ? readSessions(storageKey)
-    : importLegacyTeamSessions(accountId)
+  const sessions = readSessions(storageKey)
   useProjectEditorSessionStore.persist.setOptions({ name: storageKey })
   useProjectEditorSessionStore.setState({ ...DEFAULTS, sessions })
 }

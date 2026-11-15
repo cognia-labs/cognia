@@ -69,44 +69,6 @@ function sanitizeCollapsedSections(value: unknown): Record<string, boolean> {
   return Object.fromEntries(entries.slice(-INBOX_COLLAPSED_SECTIONS_MAX))
 }
 
-function finiteOr(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback
-}
-
-/**
- * Persisted-state migration.
- *
- * v1 → anything: v1 layouts were persisted while `<InboxShell />` passed bare
- * numbers to react-resizable-panels v4 (interpreted as pixels, not percent),
- * so every drag stored clamped garbage — discarded.
- * v2 → v3: sizes are kept; v3 adds the grouping and collapse choices.
- */
-export function migrateInboxLayoutState(
-  persisted: unknown,
-  version: number
-): Pick<
-  InboxLayoutState,
-  "sidebarSize" | "listSize" | "detailSize" | "grouping" | "collapsedSections"
-> {
-  const old = (persisted && typeof persisted === "object" ? persisted : {}) as Record<
-    string,
-    unknown
-  >
-  const sizes =
-    version >= 2
-      ? {
-          sidebarSize: finiteOr(old.sidebarSize, INBOX_LAYOUT_DEFAULTS.sidebarSize),
-          listSize: finiteOr(old.listSize, INBOX_LAYOUT_DEFAULTS.listSize),
-          detailSize: finiteOr(old.detailSize, INBOX_LAYOUT_DEFAULTS.detailSize),
-        }
-      : { ...INBOX_LAYOUT_DEFAULTS }
-  return {
-    ...sizes,
-    grouping: isInboxGrouping(old.grouping) ? old.grouping : null,
-    collapsedSections: sanitizeCollapsedSections(old.collapsedSections),
-  }
-}
-
 let pendingFlush: ReturnType<typeof setTimeout> | null = null
 
 function clamp(value: number, min: number, max: number): number {
@@ -166,10 +128,7 @@ export const useInboxLayoutStore = create<InboxLayoutState>()(
     {
       name: "cognia-inbox-layout",
       storage: persistLocalStorage(),
-      // See `migrateInboxLayoutState` for what each bump changed.
       version: 3,
-      migrate: (oldState: unknown, oldVersion: number) =>
-        migrateInboxLayoutState(oldState, oldVersion) as InboxLayoutState,
       partialize: (state) => ({
         sidebarSize: state.sidebarSize,
         listSize: state.listSize,

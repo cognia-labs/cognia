@@ -225,8 +225,8 @@ export function deleteTurnCredential(keyId: string): Promise<void> {
   return pickBackend().delete(keyId)
 }
 
-/** Generate a fresh credential keyId. Used by the migration path and
- *  by the "save new TURN entry" path in `WebRtcCard`. Cryptographically
+/** Generate a fresh credential keyId. Used by the "save new TURN entry"
+ *  path in `WebRtcCard`. Cryptographically
  *  random to avoid collision with existing keyring entries. */
 export function freshCredentialKeyId(): string {
   // crypto.randomUUID is available in every supported runtime (Tauri
@@ -249,61 +249,6 @@ export function isKeyringSentinel(credential: string | undefined | null): boolea
 export function keyIdOfSentinel(credential: string | undefined | null): string | null {
   if (!isKeyringSentinel(credential)) return null
   return credential!.slice(KEYRING_CREDENTIAL_PREFIX.length)
-}
-
-/** Migrate any legacy plaintext TURN entries to the keyring.
- *
- * - Entries with an empty / missing credential pass through unchanged.
- * - Entries whose credential is already a `"kr:<keyId>"` sentinel pass
- *   through unchanged (already migrated).
- * - Entries with plaintext `username` + `credential` get a fresh
- *   keyId, the pair is written to the keyring, and the returned entry
- *   carries the sentinel in `credential` (and clears `username`).
- *
- * `didMigrate` is `true` when at least one entry was rewritten — the
- * caller can use this to decide whether to persist the result back to
- * Dexie. Idempotent on repeat invocations.
- */
-export async function migrateTurnServersToKeyring(
-  servers: RTCIceServer[] | undefined
-): Promise<{ migrated: RTCIceServer[]; didMigrate: boolean }> {
-  if (!servers || servers.length === 0) {
-    return { migrated: [], didMigrate: false }
-  }
-  let didMigrate = false
-  const migrated: RTCIceServer[] = []
-  for (const server of servers) {
-    const credentialRaw = typeof server.credential === "string" ? server.credential : undefined
-    const username = typeof server.username === "string" ? server.username : ""
-    if (!credentialRaw || isKeyringSentinel(credentialRaw)) {
-      migrated.push(server)
-      continue
-    }
-    // Plaintext credential present — promote to keyring.
-    const keyId = freshCredentialKeyId()
-    try {
-      await saveTurnCredential(keyId, {
-        username,
-        credential: credentialRaw,
-      })
-    } catch (err) {
-      console.warn(
-        "[turn-credentials] keyring write failed during migration; leaving plaintext entry as-is",
-        err
-      )
-      migrated.push(server)
-      continue
-    }
-    didMigrate = true
-    migrated.push({
-      urls: server.urls,
-      // Username is stored alongside the credential in the keyring blob,
-      // so we clear it from the Dexie copy too. Resolution time pulls
-      // both fields back together.
-      credential: `${KEYRING_CREDENTIAL_PREFIX}${keyId}`,
-    })
-  }
-  return { migrated, didMigrate }
 }
 
 /** Take an array of `RTCIceServer` entries (possibly with keyring

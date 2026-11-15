@@ -31,7 +31,7 @@ describe("useProjectEditorSessionStore", () => {
     })
   })
 
-  it("imports legacy team editor sessions on first account activation", () => {
+  it("never imports editor sessions from the agent-team snapshot", () => {
     window.localStorage.setItem(
       "cognia-agent-teams:acct-a",
       JSON.stringify({ state: { editorSession: { team1: legacySession } }, version: 6 })
@@ -39,19 +39,10 @@ describe("useProjectEditorSessionStore", () => {
 
     activateProjectEditorAccountStorage("acct-a")
 
-    expect(useProjectEditorSessionStore.getState().sessions["team:team1"]).toEqual(legacySession)
-    expect(
-      JSON.parse(window.localStorage.getItem("cognia-project-editor-sessions:acct-a") ?? "{}").state
-        ?.sessions?.["team:team1"]
-    ).toEqual(legacySession)
-    expect(window.localStorage.getItem("cognia-agent-teams:acct-a")).not.toBeNull()
-
-    clearProjectEditorAccountStorage()
-    activateProjectEditorAccountStorage("acct-a")
-    expect(useProjectEditorSessionStore.getState().sessions["team:team1"]).toEqual(legacySession)
+    expect(useProjectEditorSessionStore.getState().sessions).toEqual({})
   })
 
-  it("keeps account snapshots isolated and never overwrites a new snapshot with legacy data", () => {
+  it("keeps account snapshots isolated", () => {
     activateProjectEditorAccountStorage("acct-a")
     useProjectEditorSessionStore.getState().setSession("session:a", legacySession)
 
@@ -103,17 +94,6 @@ describe("useProjectEditorSessionStore", () => {
       JSON.stringify({ state: {} })
     )
     activateProjectEditorAccountStorage("no-sessions")
-    expect(useProjectEditorSessionStore.getState().sessions).toEqual({})
-  })
-
-  it("ignores a malformed legacy editor session map", () => {
-    window.localStorage.setItem(
-      "cognia-agent-teams:bad-legacy",
-      JSON.stringify({ state: { editorSession: "invalid" } })
-    )
-
-    activateProjectEditorAccountStorage("bad-legacy")
-
     expect(useProjectEditorSessionStore.getState().sessions).toEqual({})
   })
 })

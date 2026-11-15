@@ -21,9 +21,8 @@ import { useSetupStatus } from "@/hooks/onboarding/use-setup-status"
  *    guide callout: what is still missing, with a button straight to it — or
  *    that nothing is. It ignores the bar's dismissal on purpose: closing the
  *    reminder is "stop nagging me", and this is where the user comes to ask.
- *  - **Run setup again.** The old dialog wrote a dismissal timestamp on any
- *    exit — including a stray Esc — and there was no way back. This is the
- *    re-entry the migration promises to everyone it marks `legacy_dismissed`.
+ *  - **Run setup again.** Re-enters the flow for a device that already
+ *    completed or skipped it.
  *  - **The capability tour.** It used to be the last three screens of setup,
  *    which meant every user was told about six subsystems before they had seen
  *    the product do anything. It is optional now, and this is where it lives.

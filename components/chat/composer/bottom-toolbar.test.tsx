@@ -178,8 +178,6 @@ jest.mock("@/components/ai-elements/context", () => ({
 // Agent store state — mutated by tests that need a different lane or mode.
 let agentRuntimeState = {
   runtimeRef: { kind: "builtin" } as { kind: string; agentId?: string },
-  modeId: "general" as string,
-  setModeId: jest.fn(),
 }
 
 jest.mock("@/stores/agent", () => ({
@@ -272,8 +270,6 @@ beforeEach(() => {
   }
   agentRuntimeState = {
     runtimeRef: { kind: "builtin" },
-    modeId: "general",
-    setModeId: jest.fn(),
   }
   for (const key of Object.keys(lastSelectorProps)) delete lastSelectorProps[key]
   mockToolbarWidth = 0

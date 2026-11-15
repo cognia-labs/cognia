@@ -5,9 +5,8 @@
  * `recordInbound(adapterId, platformMessageId, namespace?, conversationKey?)`
  * stores a row keyed by the compound index
  * `[adapterId+namespace+platformMessageId]` and returns `true` if it is newly
- * recorded, `false` if it is a duplicate. `namespace` defaults to `"inbound"`
- * so every existing caller keeps its pre-v38 semantics. Callers handling
- * connector callbacks pass `"callback"`.
+ * recorded, `false` if it is a duplicate. `namespace` defaults to `"inbound"`.
+ * Callers handling connector callbacks pass `"callback"`.
  *
  * `conversationKey` scopes the dedup key per conversation: several platforms
  * (Telegram `message_id`, Slack `ts`) only guarantee message-id uniqueness per
@@ -15,9 +14,6 @@
  * whose ids collided across chats. The key is composed into the stored
  * `platformMessageId` string (`${conversationKey}#${messageId}`) so no Dexie
  * schema change is needed — the existing compound index keeps working.
- * Pre-existing unscoped rows simply age out of the capped window; the only
- * cost is that a redelivery straddling the upgrade dedups against a key the
- * old row does not carry (a one-time, bounded double-delivery risk).
  *
  * `pruneOldest` keeps the 10,000 newest windowed rows and, apart from them,
  * the 50,000 newest delivered-message rows (`"outbound"`), and never prunes
@@ -126,9 +122,7 @@ export async function recordInbound(
 
   const row: InboundLedgerRow = {
     // Embed namespace in the primary key so two namespaces can store the
-    // same platformMessageId without colliding. Pre-v38 rows keep their
-    // legacy `${adapterId}:${platformMessageId}` ids; the compound index
-    // makes them queryable too, so we never need to rename them.
+    // same platformMessageId without colliding.
     id: `${adapterId}:${namespace}:${dedupId}`,
     adapterId,
     namespace,
@@ -163,7 +157,6 @@ export async function pruneOldest(
 ): Promise<void> {
   const db = getDb()
   const total = await db.inboundLedger.count()
-  // Rows without a namespace (pre-v38) are not in the index: they count as windowed.
   const delivered = await db.inboundLedger.where("namespace").equals(DELIVERED_NAMESPACE).count()
   // One row per conversation and chat a delivery landed in: bounded by the
   // conversations, and needed for as long as they are.

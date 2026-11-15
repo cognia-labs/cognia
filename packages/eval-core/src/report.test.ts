@@ -3,7 +3,6 @@ import {
   buildReport,
   fullyErroredScorers,
   gatingScores,
-  isLegacyScoring,
   repetitionVerdict,
   SCORING_VERSION,
 } from "./report"
@@ -98,16 +97,10 @@ describe("repetitionVerdict", () => {
   })
 })
 
-describe("isLegacyScoring", () => {
-  it("treats a missing scoringVersion as legacy", () => {
-    expect(isLegacyScoring({ scoringVersion: undefined })).toBe(true)
-    expect(isLegacyScoring({ scoringVersion: 2 })).toBe(true)
-    expect(isLegacyScoring({ scoringVersion: 3 })).toBe(false)
-  })
-
-  it("never flags a freshly built report", () => {
-    expect(isLegacyScoring(build([{ caseId: "a", repetitions: [rep([sc("s1", 1, true)])] }]))).toBe(
-      false
+describe("scoringVersion", () => {
+  it("stamps the current scoring semantics on a freshly built report", () => {
+    expect(build([{ caseId: "a", repetitions: [rep([sc("s1", 1, true)])] }]).scoringVersion).toBe(
+      SCORING_VERSION
     )
   })
 })

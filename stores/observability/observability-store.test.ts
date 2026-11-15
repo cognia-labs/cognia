@@ -5,7 +5,6 @@
 import {
   OBSERVABILITY_URL_PARAMS,
   REFRESH_OPTIONS,
-  migrateObservabilityView,
   useObservabilityStore,
   type PanelLayouts,
 } from "./observability-store"
@@ -269,7 +268,7 @@ describe("observability-store", () => {
     expect(s.exploreSpanId).toBeNull()
   })
 
-  it("resetView clears the owned and legacy params from a traces URL, leaving foreign ones", () => {
+  it("resetView clears the owned params from a traces URL, leaving foreign ones", () => {
     window.history.replaceState(
       {},
       "",
@@ -286,18 +285,6 @@ describe("observability-store", () => {
     expect(p.get("tview")).toBe("dashboard")
   })
 
-  it("resetView clears pre-rename legacy params on a channel=traces link", () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/logs?channel=traces&traceId=t1&range=custom&from=1&to=2&f=x"
-    )
-    useObservabilityStore.getState().resetView()
-    const p = new URLSearchParams(window.location.search)
-    for (const legacy of ["range", "from", "to", "f"]) expect(p.has(legacy)).toBe(false)
-    expect(p.toString()).toBe("channel=traces&traceId=t1")
-  })
-
   it("resetView leaves from/to alone on a non-traces URL (they are the Logs panel's)", () => {
     window.history.replaceState({}, "", "/logs?channel=logs&from=1&to=2&range=6h&trange=24h")
     useObservabilityStore.getState().resetView()
@@ -311,54 +298,5 @@ describe("observability-store", () => {
     useObservabilityStore.getState().resetView()
     expect(window.location.search).toBe("")
     expect(window.location.pathname).toBe("/logs")
-  })
-})
-
-describe("migrateObservabilityView", () => {
-  const v0 = {
-    // Written before the registry gained kpi-rate / kpi-tools /
-    // kpi-tool-failures / bd-operation / bd-tool and lost `traces`.
-    layouts: {
-      lg: [
-        { i: "kpi-cost", x: 0, y: 0, w: 3, h: 2 },
-        { i: "traces", x: 0, y: 34, w: 12, h: 8 },
-      ],
-      md: [],
-      sm: [],
-    },
-    rangePreset: "6h",
-    refreshMs: 30_000,
-    filters: { model: ["opus"] },
-    thresholds: { cost: { warn: 1, crit: 2 } },
-    hiddenPanels: ["traces", "ts-cost"],
-  }
-
-  it("drops a layout written before the panel registry changed shape", () => {
-    // Left in place, the saved layout has no entry for the five new panels and
-    // react-grid-layout would stack them as 1x1 tiles at the bottom of the grid.
-    expect(migrateObservabilityView(v0, 0).layouts).toBeNull()
-  })
-
-  it("keeps everything the user actually chose", () => {
-    const next = migrateObservabilityView(v0, 0)
-    expect(next.rangePreset).toBe("6h")
-    expect(next.refreshMs).toBe(30_000)
-    expect(next.filters).toEqual({ model: ["opus"] })
-    expect(next.thresholds).toEqual({ cost: { warn: 1, crit: 2 } })
-  })
-
-  it("forgets the removed panel's hidden-state entry", () => {
-    // `traces` is not a panel any more, so carrying its id would push it into
-    // every exported DashboardConfig from here on.
-    expect(migrateObservabilityView(v0, 0).hiddenPanels).toEqual(["ts-cost"])
-  })
-
-  it("passes a current snapshot through untouched", () => {
-    const current = { ...v0, layouts: { lg: [], md: [], sm: [] } }
-    expect(migrateObservabilityView(current, 1)).toBe(current)
-  })
-
-  it("survives an absent or empty snapshot", () => {
-    expect(migrateObservabilityView(undefined, 0)).toEqual({ layouts: null, hiddenPanels: [] })
   })
 })

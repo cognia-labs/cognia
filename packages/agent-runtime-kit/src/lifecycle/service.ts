@@ -57,7 +57,6 @@ import {
   applyResolvedCredentials,
   clearCredentials,
   extractInlineCredentials,
-  migrateInlineCredentials,
   occupiedSlots,
   persistCredentials,
   resolveCredentials,
@@ -502,51 +501,6 @@ export class ExternalAgentLifecycleService<TRegistry = unknown> {
       bound += 1
     }
     return bound
-  }
-
-  /**
-   * Move every legacy inline secret into the keyring.
-   *
-   * Must run BEFORE any adapter is constructed, so no connection is ever built
-   * from a config still carrying plaintext. A keyring failure is contained to
-   * the one Agent: it is scrubbed and disabled, and boot continues — a browser
-   * shell with a locked vault must not be able to brick startup.
-   */
-  async migrateLegacyCredentials(): Promise<{
-    migrated: string[]
-    failed: { agentId: string; reason: string }[]
-  }> {
-    const migrated: string[] = []
-    const failed: { agentId: string; reason: string }[] = []
-
-    for (const config of this.deps.store.getAllAgents()) {
-      if (occupiedSlots(extractInlineCredentials(config)).length === 0) continue
-
-      try {
-        const result = await migrateInlineCredentials(config, this.deps.keyring)
-        this.deps.store.replaceAgentConfig(config.id, result.config)
-        if (result.failure) {
-          failed.push({ agentId: config.id, reason: result.failure.reason })
-        } else {
-          migrated.push(config.id)
-        }
-      } catch (error) {
-        // `migrateInlineCredentials` already contains keyring failures; this
-        // catches a store failure, where the plaintext is still persisted.
-        failed.push({
-          agentId: config.id,
-          reason: error instanceof Error ? error.message : String(error),
-        })
-        this.deps.store.updateAgent(config.id, { enabled: false })
-        this.markVerdict(config.id, {
-          status: "needs-credentials",
-          reasonCode: "credential_missing",
-          reason: "inline credentials could not be migrated",
-        })
-      }
-    }
-
-    return { migrated, failed }
   }
 
   // --------------------------------------------------------------------

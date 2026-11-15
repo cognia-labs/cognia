@@ -53,37 +53,14 @@ export interface CostDiagnosticsBlock {
 }
 
 /**
- * One Anthropic subscription quota window, as the FIRST version of the `/usage`
- * block recorded it. Only the two header-derived windows existed then.
- *
- * Still read, never written: transcripts persist their message parts, so a card
- * rendered from a chat that ran before the block gained `meters` must keep
- * working. New blocks carry {@link UsageDiagnosticsBlock.meters} instead, which
- * also covers the per-model weekly tiers the header path cannot see.
- */
-export interface UsageWindowStat {
-  key: "fiveHour" | "sevenDay"
-  /** Whole-percent utilization, or null when the window wasn't reported. */
-  utilization: number | null
-  level: UsageLevel | null
-  msUntilReset: number | null
-}
-
-/**
  * `/usage` — plan quota plus the local spend that explains it.
  *
  * The two planes are deliberately separate fields (see `lib/usage/usage-report.ts`):
  * `meters`/`extras` are the provider's accounting of the plan, `scopes` is what
  * this install recorded. Neither is derivable from the other.
- *
- * Every field below `overageDisabledReason` is optional because a persisted v1
- * block has none of them; the renderer treats absent as "this block predates
- * the field", not as "measured zero".
  */
 export interface UsageDiagnosticsBlock {
   kind: "usage"
-  /** @deprecated v1 shape. Present only on blocks recorded before `meters`. */
-  windows?: UsageWindowStat[]
   /**
    * Fused quota windows — session / weekly / weekly_opus / weekly_sonnet, plus
    * any tier the provider added that we don't model yet (those carry a raw

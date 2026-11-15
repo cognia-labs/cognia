@@ -153,9 +153,6 @@ export interface SyncCursorRow {
    * there, blending two machines' data into one local store. Keying by the
    * *device* id then over-corrected: it is minted per pairing, so re-pairing to
    * the same desktop also read as a different host and forced a full re-pull.
-   *
-   * Rows written by a pre-namespace build are adopted on first run — see
-   * `companion-sync.ts:adoptLegacyCursorKeys`.
    */
   serverKey: string
   /** Part of the compound primary key — the SyncableTable name. */

@@ -593,7 +593,7 @@ export interface BuildOptionsContext {
   memoryPath?: string
   /**
    * Optional explicit Agent Mode override. When omitted, `resolveSendOptions`
-   * reads the active mode id from `useAgentRuntimeStore` and looks it up in
+   * resolves the session's composition from `useAgentRuntimeStore` against
    * the built-in or custom mode registries. Pass `null` to opt OUT of mode
    * application (e.g., diagnostics dumps).
    */
@@ -1766,7 +1766,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   }
 
   // --- Agent Mode (built-in / custom / plugin) ----------------------------
-  // Reads the active mode id from `useAgentRuntimeStore` unless ctx supplies
+  // Reads the session's composition from `useAgentRuntimeStore` unless ctx supplies
   // an explicit override. Modes are a *prompt modifier* — their systemPrompt
   // appends to the base prompt (under the same `---` separator as skills) and
   // their tools union into the allowedTools whitelist.
@@ -3628,16 +3628,13 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   let externalWebRuntime = false
   const externalNativeWeb = await (async () => {
     try {
-      const { useAgentRuntimeStore } = await import("@/stores/agent/agent-runtime-store")
-      const runtimeState = useAgentRuntimeStore.getState()
-      externalWebRuntime = runtimeState.runtime === "external"
-      if (!externalWebRuntime || !runtimeState.externalAgentId) {
+      const runtimeRef = runtimeRefForSession(session?.id)
+      externalWebRuntime = runtimeRef.kind !== "builtin"
+      if (runtimeRef.kind !== "external") {
         return { search: false, fetch: false }
       }
       const { getExternalAgentManager } = await import("@/lib/ai/agent/external/manager")
-      const profile = getExternalAgentManager().getAgentCapabilityProfile(
-        runtimeState.externalAgentId
-      )
+      const profile = getExternalAgentManager().getAgentCapabilityProfile(runtimeRef.agentId)
       // The capability vocabulary declares native web SEARCH only. With no
       // evidence of an independent native fetch, page reading stays on
       // Cognia's Reader (and its policy) rather than being assumed native.
@@ -3646,9 +3643,6 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       return { search: false, fetch: false }
     }
   })()
-  // The legacy explicit opt-in pre-approves the operations that still use the
-  // native route, clearing their entries from `disallowedTools`.
-  const explicitNativeOptIn = appSettings?.webTools?.nativeOnAnthropic === true
   // Has anything already narrowed this turn's tool surface — a character's
   // allow-list, a skill's, the session's tool filter?
   //
@@ -3661,7 +3655,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const surfaceNarrowed = (opts.allowedTools?.length ?? 0) > 0
   const sdkNativeWeb =
     !externalWebRuntime && anthropicNativeWebSearch(providerId, isStandaloneChatMode())
-  const sdkNativeAvailable = sdkNativeWeb && (explicitNativeOptIn || !surfaceNarrowed)
+  const sdkNativeAvailable = sdkNativeWeb && !surfaceNarrowed
   const webAccess = resolveWebAccess({
     ...(appSettings?.webTools ? { webTools: appSettings.webTools } : {}),
     // External natives are not governed by the SDK's allowedTools filter.
@@ -3731,38 +3725,10 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     if (webAccess.fetch === "cognia" || webAccess.reason === "disabled") denied.add("WebFetch")
     opts.disallowedTools = [...denied]
   }
-  // Reaching native BY DEFAULT writes nothing: on an unnarrowed turn the SDK
-  // already exposes WebSearch / WebFetch, and naming them in `allowedTools`
-  // would convert "no filtering" into "these two and nothing else" — which a
-  // parent permission ceiling then intersects down to the empty set.
-  //
-  // The legacy opt-in keeps its documented widening. It carries that same
-  // empty-allow-list hazard, but it is a choice someone made explicitly and
-  // narrowing it here would change behaviour nobody asked to change.
-  //
-  // Scoped to the SDK's natives: `WebSearch` / `WebFetch` are Agent-SDK tool
-  // names, so pre-approving them for a turn that reads `native` because an
-  // EXTERNAL agent brings its own search would name two tools that runtime has
-  // never heard of — and, on an otherwise unfiltered turn, narrow it to them.
-  if (
-    (webAccess.search === "native" || webAccess.fetch === "native") &&
-    explicitNativeOptIn &&
-    sdkNativeWeb
-  ) {
-    const allow = new Set(opts.allowedTools ?? [])
-    if (webAccess.search === "native") allow.add("WebSearch")
-    else allow.delete("WebSearch")
-    if (webAccess.fetch === "native") allow.add("WebFetch")
-    else allow.delete("WebFetch")
-    opts.allowedTools = [...allow]
-    if (opts.disallowedTools?.length) {
-      opts.disallowedTools = opts.disallowedTools.filter(
-        (name) =>
-          !(name === "WebSearch" && webAccess.search === "native") &&
-          !(name === "WebFetch" && webAccess.fetch === "native")
-      )
-    }
-  }
+  // Reaching native writes nothing: on an unnarrowed turn the SDK already
+  // exposes WebSearch / WebFetch, and naming them in `allowedTools` would
+  // convert "no filtering" into "these two and nothing else" — which a parent
+  // permission ceiling then intersects down to the empty set.
 
   // Plugin conversion is a prompt-skill-backed capability, not a global
   // plugin-tool toggle. Preload its two typed tools when the skill is active,

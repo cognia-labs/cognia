@@ -243,25 +243,6 @@ it("binds provider description and refresh callbacks to Host background or the a
   expect(pluginExecutionContext("owner")).toBeUndefined()
 })
 
-it("retains a known tenant when importing failed legacy credentials without tenant metadata", async () => {
-  const f = fixture()
-  const description = {
-    issuer: "https://issuer",
-    clientId: "client",
-    principal: { kind: "user" as const, id: "user" },
-    accountLabel: "Account",
-    scopes: ["read"],
-  }
-  const ref = await f.manager.importLegacyCredentials(
-    f.provider,
-    { ...description, tenantId: "known-tenant" },
-    old,
-    true
-  )
-  expect(await f.manager.importLegacyCredentials(f.provider, description, old, true)).toBe(ref)
-  expect(f.rows.get(ref)).toMatchObject({ tenantId: "known-tenant", status: "needs-reauth" })
-})
-
 it("refreshes each connection with its stored OAuth client and issuer", async () => {
   const f = fixture()
   const requests: Array<{ clientId: string; issuer: string; secret: string }> = []

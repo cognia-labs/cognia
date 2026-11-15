@@ -337,12 +337,11 @@ export interface EvalReport {
   avgLatencyMs: number
   createdAt: number
   /**
-   * Scoring-semantics version. `2` introduced ScoreStatus. `3` separates
-   * execution failure, partial-case reliability and metric availability.
-   * Earlier reports remain readable, but their rates and resource metrics are
-   * not comparable with version 3 and cannot issue a current gate verdict.
+   * Scoring-semantics version (`SCORING_VERSION`): execution failure,
+   * partial-case reliability and metric availability are separated. A row
+   * stamped with any other version is not read back.
    */
-  scoringVersion?: 2 | 3
+  scoringVersion?: 3
   /**
    * How far the run got. Written as `"running"` BEFORE the first case, then
    * overwritten when it settles.

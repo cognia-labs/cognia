@@ -5,7 +5,6 @@ import { isOnboardingSettled } from "@cognia/agent-config-types"
 
 import { countSessions } from "@/lib/db/sessions"
 import { detectPlatform } from "@/lib/platform/detect"
-import { migrateLegacyOnboarding } from "@/lib/onboarding/migrate-legacy"
 import { resolveOnboardingShell } from "@/lib/onboarding/shell"
 import { shouldEnterOnboarding } from "@/lib/onboarding/gate"
 import { useSettingsStore } from "@/stores/settings/settings-store"
@@ -69,11 +68,8 @@ export function useOnboardingGate(): OnboardingGateResult {
 
   const [status, setStatus] = useState<OnboardingGateStatus>("resolving")
 
-  // Live, unlike the count above — see the docblock. `onboardingDismissedAt`
-  // is the pre-migration legacy stamp; `shouldEnterOnboarding` honours it too.
-  const settled =
-    !!settings &&
-    (isOnboardingSettled(settings.onboardingProgress) || !!settings.onboardingDismissedAt)
+  // Live, unlike the count above — see the docblock.
+  const settled = !!settings && isOnboardingSettled(settings.onboardingProgress)
 
   useEffect(() => {
     if (!loaded) return
@@ -82,22 +78,6 @@ export function useOnboardingGate(): OnboardingGateResult {
     let cancelled = false
 
     void (async () => {
-      // One-way migration of the pre-ADR-0122 dismissal stamp. Awaited rather
-      // than fire-and-forget so the record is durable before we decide — a
-      // crash between the two would otherwise re-prompt an upgrading user.
-      // `shouldEnterOnboarding` reads the legacy stamp too, so the verdict is
-      // the same either way; this only protects the *next* boot.
-      const migrated = migrateLegacyOnboarding(current)
-      if (migrated) {
-        log.info("migrating legacy onboarding dismissal", { path: migrated.path })
-        try {
-          await useSettingsStore.getState().save({ onboardingProgress: migrated })
-        } catch (err) {
-          log.error("legacy onboarding migration failed", err)
-        }
-      }
-      if (cancelled) return
-
       const sessionCount = await countSessions().catch((err) => {
         // A failed count must not trap a real first-run user outside the flow,
         // nor drop an existing user into it. Treating it as "has sessions" is
@@ -122,8 +102,7 @@ export function useOnboardingGate(): OnboardingGateResult {
       cancelled = true
     }
     // Deliberately keyed on `loaded` alone. Re-running on every `settings`
-    // identity change would revisit a verdict that is meant to be latched —
-    // and the migration write above changes that identity.
+    // identity change would revisit a verdict that is meant to be latched.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded])
 
