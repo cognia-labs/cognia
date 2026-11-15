@@ -95,12 +95,6 @@ export async function runTriggerPassthrough(ctx: StepExecutionContext) {
   }
 }
 
-// ── flow.loop ─────────────────────────────────────────────────────────────
-// Iterator-style loop over an array (forEach), a fixed count (times), or a
-// truthiness condition (while). Every mode is hard-capped at
-// `maxIterations` (default 10000) to prevent runaway loops.
-export const LOOP_HARD_CAP = 100_000
-
 // ── flow.subworkflow ──────────────────────────────────────────────────────
 // Recursively invoke another workflow as a step. The subworkflow runs in a
 // fresh run id (so its events don't pollute the parent's timeline); the
@@ -1158,25 +1152,4 @@ export function resolveAggregateInput(ctx: StepExecutionContext): unknown[] {
     return Array.isArray(v) ? v : [v]
   }
   return values
-}
-
-/**
- * Evaluate a `flow.loop.while` condition with the iteration count exposed.
- * Both `$item` (the raw index) and `$loop.index` resolve to the current `i`.
- */
-export function evalLoopExpression(
-  expression: string,
-  iteration: number,
-  ctx: StepExecutionContext
-): unknown {
-  return resolveExpression(expression, {
-    upstream: {
-      ...ctx.upstream,
-      $item: iteration,
-      $loop: { index: iteration },
-    },
-    trigger: ctx.trigger,
-    staticData: {},
-    params: ctx.params as Record<string, unknown>,
-  })
 }

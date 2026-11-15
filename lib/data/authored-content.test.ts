@@ -27,7 +27,7 @@ async function seedGraph() {
   const db = getDb()
   const workflow = {
     id: "w",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Draft",
     nodes: [],
     edges: [],

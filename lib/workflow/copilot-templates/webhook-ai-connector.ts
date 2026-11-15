@@ -19,7 +19,7 @@ function buildGraph(slots: CopilotSlotValues): VisualWorkflow {
   const conversationKey = String(slots.conversationKey ?? "alerts")
   return {
     id: `wf_copilot_webhook_ai_connector_${NOW}`,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: `Webhook → AI → ${conversationKey}`,
     description: `Listen on /${webhookPath}, extract structured fields from the request body, draft a notification with AI, and forward to ${adapterId}/${conversationKey}.`,
     icon: "Webhook",
@@ -61,7 +61,7 @@ function buildGraph(slots: CopilotSlotValues): VisualWorkflow {
       {
         id: "n_draft",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 620, y: 200 },
         data: {
           label: "Draft notification",

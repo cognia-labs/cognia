@@ -1380,7 +1380,7 @@ const AiPromptParams = z.object({
   baseURL: optionalString,
   systemPrompt: optionalString,
   // Optional twin-bound character — injects the twin's retrieved context into
-  // the system prompt when the character has a twinId (see ai-prompt-v2.ts).
+  // the system prompt when the character has a twinId (see ai-prompt.ts).
   characterId: optionalString,
   userPrompt: requiredString("required"),
   temperature: numberRange(0, 2).optional(),
@@ -1554,7 +1554,7 @@ const AiEnsembleParams = z.object({
 
 // ── Flow ────────────────────────────────────────────────────────────────────
 
-// Structured condition language (typeVersion 2) — mirrors
+// Structured condition language — mirrors
 // `types/workflow/conditions.ts`. Operand fields are expression strings.
 const conditionOperatorSchema = z.enum([
   "eq",
@@ -1587,30 +1587,13 @@ const conditionGroupSchema = z.object({
   conditions: z.array(conditionSchema),
 })
 
-// Legacy (typeVersion 1) truthiness-expression shape.
-const BranchParamsV1 = z.object({
-  condition: requiredString("required"),
-  truthyLabel: optionalString,
-  falsyLabel: optionalString,
-})
-
-// typeVersion 2 — structured condition group routing to true/false handles.
-const BranchParamsV2 = z.object({
+// Structured condition group routing to the true/false handles.
+const BranchParams = z.object({
   conditions: conditionGroupSchema,
 })
 
-// Kind-only consumers retain compatibility with both generations. Nodes with
-// a declared version use the matching schema in paramsSchemaFor below.
-const BranchParams = z.union([BranchParamsV2, BranchParamsV1])
-
-const SwitchParamsV1 = z.object({
-  subject: requiredString("required"),
-  cases: z.array(z.object({ value: z.unknown(), label: z.string() })).min(1, "switchCasesRequired"),
-  defaultLabel: optionalString,
-})
-
-// typeVersion 2 — ordered cases, each with a stable id + condition group.
-const SwitchParamsV2 = z.object({
+// Ordered cases, each with a stable id + condition group.
+const SwitchParams = z.object({
   cases: z
     .array(
       z.object({
@@ -1621,8 +1604,6 @@ const SwitchParamsV2 = z.object({
     )
     .min(1, "switchCasesRequired"),
 })
-
-const SwitchParams = z.union([SwitchParamsV2, SwitchParamsV1])
 
 const SplitParams = z.object({
   branchLabels: z.array(z.string()).min(2, "splitBranchesRequired"),
@@ -1646,33 +1627,8 @@ const JoinParams = z.object({
     .optional(),
 })
 
-// Legacy (typeVersion 1) flat array-transform loop.
-const LoopParamsV1 = z
-  .object({
-    mode: z.enum(["forEach", "times", "while"]).optional(),
-    times: numberRange(0).optional(),
-    inputExpression: optionalString,
-    bodyExpression: requiredString("required"),
-    whileCondition: optionalString,
-    maxIterations: numberRange(1, 1_000_000).optional(),
-  })
-  .refine(
-    (v) => {
-      const mode = v.mode ?? "forEach"
-      if (mode === "while")
-        return typeof v.whileCondition === "string" && v.whileCondition.length > 0
-      if (mode === "forEach")
-        return typeof v.inputExpression === "string" && v.inputExpression.length > 0
-      return typeof v.times === "number" && v.times > 0
-    },
-    {
-      message: "loopBodyRequired",
-      path: ["mode"],
-    }
-  )
-
-// typeVersion 2 — container sub-canvas (types/workflow/visual.ts LoopNodeParams).
-const LoopParamsV2 = z
+// Container sub-canvas (types/workflow/visual.ts LoopNodeParams).
+const LoopParams = z
   .object({
     mode: z.enum(["forEach", "times", "while"]),
     source: optionalString,
@@ -1683,9 +1639,7 @@ const LoopParamsV2 = z
     iterationConcurrency: numberRange(1, 64).optional(),
     batchSize: numberRange(1, 100_000).optional(),
     maxIterations: numberRange(1, 100_000).optional(),
-    onItemError: z
-      .enum(["fail", "continue-with-null", "remove-failed", "break", "skip"])
-      .optional(),
+    onItemError: z.enum(["fail", "continue-with-null", "remove-failed", "break"]).optional(),
   })
   .refine(
     (v) => {
@@ -1718,9 +1672,6 @@ const LoopParamsV2 = z
       })
     }
   })
-
-// Schema lookup is keyed by kind only — accept both generations.
-const LoopParams = z.union([LoopParamsV2, LoopParamsV1])
 
 const WaitParams = z.object({
   mode: z.enum(["duration", "event"]).optional(),
@@ -2788,37 +2739,25 @@ export type ParamsSchemas = typeof PARAMS_SCHEMAS
 /** Test-only export so the matrix test can iterate every kind. */
 export const KNOWN_KINDS: readonly WorkflowNodeKind[] = WORKFLOW_NODE_KINDS
 
-const VERSIONED_PARAMS_SCHEMAS: Partial<Record<WorkflowNodeKind, Record<number, z.ZodTypeAny>>> = {
-  "flow.branch": { 1: BranchParamsV1, 2: BranchParamsV2 },
-  "flow.switch": { 1: SwitchParamsV1, 2: SwitchParamsV2 },
-  "flow.loop": { 1: LoopParamsV1, 2: LoopParamsV2 },
-}
-
 /**
- * Validate against a declared version when present. Kind-only consumers keep
- * legacy compatibility; plugin / unknown kinds delegate to their JSON Schema.
+ * The params schema for a built-in kind. Each built-in kind has exactly one
+ * params shape; plugin / unknown kinds delegate to their JSON Schema.
  */
-export function paramsSchemaFor(kind: WorkflowNodeKind, typeVersion?: number): z.ZodTypeAny {
-  const versions = VERSIONED_PARAMS_SCHEMAS[kind]
-  if (versions && typeVersion !== undefined) return versions[typeVersion] ?? z.never()
+export function paramsSchemaFor(kind: WorkflowNodeKind): z.ZodTypeAny {
   return PARAMS_SCHEMAS[kind] ?? z.record(z.string(), z.unknown())
 }
 
 const jsonParamsSchemas = new Map<string, Record<string, unknown>>()
 
 /** The authoring contract, derived from the same input schema used by validation. */
-export function paramsJsonSchemaFor(
-  kind: WorkflowNodeKind,
-  typeVersion: number
-): Record<string, unknown> {
-  const key = `${kind}@${typeVersion}`
-  let schema = jsonParamsSchemas.get(key)
+export function paramsJsonSchemaFor(kind: WorkflowNodeKind): Record<string, unknown> {
+  let schema = jsonParamsSchemas.get(kind)
   if (!schema) {
-    schema = z.toJSONSchema(paramsSchemaFor(kind, typeVersion), {
+    schema = z.toJSONSchema(paramsSchemaFor(kind), {
       io: "input",
       unrepresentable: "any",
     })
-    jsonParamsSchemas.set(key, schema)
+    jsonParamsSchemas.set(kind, schema)
   }
   return schema
 }

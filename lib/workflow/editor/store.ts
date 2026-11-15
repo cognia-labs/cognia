@@ -968,9 +968,7 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
               // workflow-ai plugin tools, "user" / undefined otherwise.
               authoredBy: overrides?.authoredBy,
               kind,
-              // New nodes author at the kind's current generation (e.g.
-              // branch/switch v2 structured conditions); loaded graphs keep
-              // their stored version.
+              // New nodes author at the kind's one supported typeVersion.
               typeVersion: authoringTypeVersionFor(kind),
             },
           }
@@ -1179,14 +1177,12 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
           if (parentId !== null) {
             if (parentId === nodeId) return
             const parent = nodes.find((n) => n.id === parentId)
-            // Only containers host children: loop containers (flow.loop v2) and
-            // group frames (annotation.group v2). Refuse cycles through the
+            // Only containers host children: loop containers (flow.loop) and
+            // group frames (annotation.group). Refuse cycles through the
             // node's own descendants.
             const parentKind = parent?.data.kind
             const isContainerParent =
-              !!parent &&
-              (parentKind === "flow.loop" || parentKind === "annotation.group") &&
-              parent.data.typeVersion >= 2
+              !!parent && (parentKind === "flow.loop" || parentKind === "annotation.group")
             if (!isContainerParent) return
             let cur: typeof parent | undefined = parent
             while (cur?.parentId) {
@@ -1634,8 +1630,7 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
             }
             const result = validateNodeParams(
               node.data.kind as WorkflowNodeKind,
-              (node.data.params as Record<string, unknown> | undefined) ?? {},
-              node.data.typeVersion
+              (node.data.params as Record<string, unknown> | undefined) ?? {}
             )
             if (result.hasErrors) nextValidation[id] = result
             else delete nextValidation[id]
@@ -1674,8 +1669,8 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
           const groupPos = { x: bounds.x - padding, y: bounds.y - padding * 1.5 }
           const group: RFWorkflowNode = {
             id,
-            // typeVersion 2 renders as a real container (group-container-node)
-            // that hosts its members as React Flow children.
+            // Renders as a real container (group-container-node) that hosts its
+            // members as React Flow children.
             type: "groupContainer",
             position: groupPos,
             width,
@@ -1805,8 +1800,7 @@ export function createEditorStore(initial: VisualWorkflow): EditorStore {
           if (!node) return { fields: {}, summary: [], hasErrors: false }
           const result = validateNodeParams(
             node.data.kind as WorkflowNodeKind,
-            (node.data.params as Record<string, unknown> | undefined) ?? {},
-            node.data.typeVersion
+            (node.data.params as Record<string, unknown> | undefined) ?? {}
           )
           const current = get().validationByStepId
           if (!result.hasErrors) {

@@ -328,5 +328,5 @@ async function recordInChannel(
 function authoringCatalogEntry(entry: NodeCatalogEntry): NodeCatalogEntry {
   if (entry.pluginId || !KNOWN_KINDS.includes(entry.kind)) return entry
   const typeVersion = defaultTypeVersionFor(entry.kind)
-  return { ...entry, typeVersion, paramsSchema: paramsJsonSchemaFor(entry.kind, typeVersion) }
+  return { ...entry, typeVersion, paramsSchema: paramsJsonSchemaFor(entry.kind) }
 }

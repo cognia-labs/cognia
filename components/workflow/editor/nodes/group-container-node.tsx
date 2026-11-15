@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Group container node (annotation.group typeVersion 2) — a resizable visual
+ * Group container node (annotation.group) — a resizable visual
  * frame that hosts its members as React Flow child nodes (`parentId` + `extent:
  * 'parent'`). Unlike the loop container, a group is NOT an execution boundary:
  * its children are ordinary top-level nodes at run time (see the orchestrator's

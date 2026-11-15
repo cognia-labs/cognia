@@ -10,11 +10,9 @@ import {
 import { guardWorkflowEgress } from "@/lib/workflow/runtime/egress-guard"
 import { validateAgainstJsonSchema } from "../ai/schema-validate"
 import {
-  LOOP_HARD_CAP,
   MAX_SUBWORKFLOW_DEPTH,
   aggregateArray,
   evalItemExpression,
-  evalLoopExpression,
   firstUpstream,
   isTruthy,
   nonRetryable,
@@ -47,40 +45,6 @@ registerNodeExecutor({
 })
 
 // ── flow.branch ───────────────────────────────────────────────────────────
-// `params.condition` arrives already-resolved by `resolveDeep` upstream, so
-// the executor decides truthiness directly. A richer condition language
-// (JS comparisons, regex tests) lands in Phase 6 alongside `data.code`.
-registerNodeExecutor({
-  kind: "flow.branch",
-  typeVersion: 1,
-  execute: async (ctx) => {
-    const params = ctx.params as {
-      condition?: unknown
-      truthyLabel?: string
-      falsyLabel?: string
-    }
-    const truthyLabel =
-      typeof params.truthyLabel === "string" && params.truthyLabel.trim()
-        ? params.truthyLabel.trim()
-        : "true"
-    const falsyLabel =
-      typeof params.falsyLabel === "string" && params.falsyLabel.trim()
-        ? params.falsyLabel.trim()
-        : "false"
-    // Empty / unset condition → falsy branch (matches user intuition that
-    // "no condition set" means default).
-    if (params.condition === undefined || params.condition === "") {
-      return { output: { decision: falsyLabel }, decision: falsyLabel }
-    }
-    const decision = isTruthy(params.condition) ? truthyLabel : falsyLabel
-    return {
-      output: { decision, evaluated: params.condition },
-      decision,
-    }
-  },
-})
-
-// ── flow.branch (typeVersion 2) ───────────────────────────────────────────
 // Structured condition language (types/workflow/conditions.ts). Operands are
 // authored as expression strings but arrive resolved (resolveDeep runs over
 // `params` before execution), so the executor hands the resolved group to the
@@ -92,8 +56,7 @@ registerNodeExecutor({
   execute: async (ctx) => {
     const params = ctx.params as { conditions?: ResolvedConditionGroup }
     const group = params.conditions
-    // No conditions configured → "false" branch (matches the v1 intuition
-    // that an unset condition means "no").
+    // No conditions configured → "false" branch: an unset condition means "no".
     const passed =
       !!group && Array.isArray(group.conditions) && group.conditions.length > 0
         ? evaluateConditionGroup(group)
@@ -179,31 +142,6 @@ registerNodeExecutor({
 })
 
 // ── flow.switch ───────────────────────────────────────────────────────────
-// Multi-way branch. Picks the case label whose `value` equals the resolved
-// `subject`. Falls through to `defaultLabel` (or "default") when no case
-// matches. The orchestrator treats the result the same as flow.branch's
-// decision — non-chosen edges get propagateSkip()'d.
-registerNodeExecutor({
-  kind: "flow.switch",
-  typeVersion: 1,
-  execute: async (ctx) => {
-    const params = ctx.params as {
-      subject?: unknown
-      cases?: Array<{ value: unknown; label: string }>
-      defaultLabel?: string
-    }
-    const cases = Array.isArray(params.cases) ? params.cases : []
-    const defaultLabel = params.defaultLabel?.trim() || "default"
-    const matched = cases.find((c) => c.value === params.subject)
-    const decision = matched?.label?.trim() || defaultLabel
-    return {
-      output: { decision, evaluated: params.subject },
-      decision,
-    }
-  },
-})
-
-// ── flow.switch (typeVersion 2) ───────────────────────────────────────────
 // Ordered cases, each holding a structured condition group. The FIRST case
 // whose group passes wins; otherwise the "default" handle. Decisions are
 // stable case ids (not display labels) so renaming a case never re-routes.
@@ -286,123 +224,6 @@ registerNodeExecutor({
       return { output: { ...base, aggregated } }
     }
     return { output: base }
-  },
-})
-
-registerNodeExecutor({
-  kind: "flow.loop",
-  typeVersion: 1,
-  execute: async (ctx) => {
-    const params = ctx.params as {
-      mode?: "forEach" | "while" | "times"
-      times?: number
-      input?: unknown
-      inputExpression?: unknown
-      bodyExpression?: string
-      whileCondition?: unknown
-      /**
-       * Raw expression string evaluated per iteration with `$loop.index` /
-       * `$item = i` in scope. Authored without `{{ }}` so `resolveDeep`
-       * passes it through unchanged.
-       */
-      whileExpression?: string
-      maxIterations?: number
-    }
-    const mode = params.mode ?? "forEach"
-    const requestedMax = Math.floor(Number(params.maxIterations ?? 10000))
-    const maxIterations = Math.max(1, Math.min(LOOP_HARD_CAP, requestedMax))
-    let cappedAt: number | undefined
-
-    if (mode === "times") {
-      const times = Math.max(0, Math.floor(Number(params.times ?? 0)))
-      const effective = Math.min(times, maxIterations)
-      if (times > maxIterations) cappedAt = maxIterations
-      const items = Array.from({ length: effective }, (_, i) => i)
-      return {
-        output: { iterations: items.length, items, cappedAt },
-        logs: cappedAt
-          ? [
-              {
-                level: "warn" as const,
-                message: `loop.times capped at ${cappedAt} (requested ${times})`,
-              },
-            ]
-          : undefined,
-      }
-    }
-
-    if (mode === "while") {
-      // Two paths:
-      //   • `whileExpression` (raw expression string, no `{{ }}`): re-evaluated
-      //     against an iteration-local scope (`$loop.index`, `$item = i`) each
-      //     pass. This is the field forms should expose for real per-iteration
-      //     conditions.
-      //   • `whileCondition` (already-resolved value passed through
-      //     `resolveDeep`): static for the duration of the call. Useful only
-      //     for "run exactly maxIterations times when truthy at entry, zero
-      //     otherwise" semantics; back-compat for older saved workflows.
-      const rawWhileExpression =
-        typeof params.whileExpression === "string" && params.whileExpression.trim()
-          ? params.whileExpression.trim()
-          : null
-      const items: number[] = []
-      let i = 0
-      let aborted = false
-      while (i < maxIterations) {
-        // Honor abort signals between iterations so a wall-clock timeout or
-        // user cancel can land mid-loop instead of waiting for the cap.
-        if (ctx.signal.aborted) {
-          aborted = true
-          break
-        }
-        const cond = rawWhileExpression
-          ? evalLoopExpression(rawWhileExpression, i, ctx)
-          : params.whileCondition
-        if (!isTruthy(cond)) break
-        items.push(i)
-        i += 1
-        // Yield to the microtask queue periodically so the event loop can
-        // process the abort listener (and React renders, in dev mode).
-        if (i % 100 === 0) await Promise.resolve()
-      }
-      if (i === maxIterations) {
-        cappedAt = maxIterations
-      }
-      const logs: Array<{ level: "warn" | "info"; message: string }> = []
-      if (cappedAt !== undefined) {
-        logs.push({ level: "warn", message: `loop.while capped at ${cappedAt}` })
-      }
-      if (aborted) {
-        logs.push({ level: "info", message: "loop.while aborted by signal" })
-      }
-      return {
-        output: { iterations: items.length, items, cappedAt, mode: "while", aborted },
-        logs: logs.length > 0 ? logs : undefined,
-      }
-    }
-
-    // forEach mode
-    const inputCandidate = Array.isArray(params.input)
-      ? params.input
-      : Array.isArray(params.inputExpression)
-        ? params.inputExpression
-        : firstUpstream(ctx)
-    if (!Array.isArray(inputCandidate)) {
-      return { output: { iterations: 0, items: [] as unknown[] } }
-    }
-    const input =
-      inputCandidate.length > maxIterations
-        ? inputCandidate.slice(0, maxIterations)
-        : inputCandidate
-    if (inputCandidate.length > maxIterations) cappedAt = maxIterations
-    const expr = params.bodyExpression?.trim() ?? ""
-    const items = input.map((item) => evalItemExpression(expr, item, ctx) ?? item)
-    return {
-      output: { iterations: items.length, items, cappedAt },
-      logs: cappedAt
-        ? [{ level: "warn" as const, message: `loop.forEach capped at ${cappedAt}` }]
-        : undefined,
-    }
   },
 })
 

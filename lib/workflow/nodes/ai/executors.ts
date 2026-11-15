@@ -1,14 +1,10 @@
 import { registerNodeExecutor } from "../registry"
-import { guardWorkflowEgress } from "@/lib/workflow/runtime/egress-guard"
 import { generateTextEmbedding } from "@cognia/provider-embedding/multimodal-embedding"
 // ── AI structured-output helpers (shared by ai.prompt / ai.extract) ─────────
-// parseStructured / buildJsonInstruction moved to ./ai/structured so the
-// ai.prompt v2 module can share them without a circular import.
+// parseStructured / buildJsonInstruction live in ./structured so the
+// ai.prompt module can share them without a circular import.
 import { buildJsonInstruction, parseStructured } from "./structured"
-import { runStructuredTurn } from "./structured-turn"
-import { validateAgainstJsonSchema } from "./schema-validate"
 import { coerceToType, nonRetryable, resolveNodeApiKey } from "../shared/executor-support"
-import { ledgerUtilityCalls } from "@/lib/router-fusion/gate/utility-ledger"
 import { runAiPromptFusionAction } from "./fusion-action"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt, type PromptResolutionContext } from "@/lib/prompts/types"
@@ -77,218 +73,21 @@ function nodePromptContext(ctx: { projectId?: string }): PromptResolutionContext
 }
 
 // ── ai.prompt ─────────────────────────────────────────────────────────────
-// Real LLM call via `createLlmClient` when provider + apiKey are present in
-// params (or resolvable via secret refs). When credentials aren't available
-// the executor falls back to a clearly-marked echo stub so workflows authored
-// before keys were configured still run end-to-end.
-registerNodeExecutor({
-  kind: "ai.prompt",
-  typeVersion: 1,
-  execute: async (ctx) => {
-    // Router + Fusion action (ADR-0188 D3): a node set to `cascade`, `panel`
-    // or `direct` runs as a fusion run instead of one call. `auto` — every
-    // node by default — and a switched-off surface answer null after one
-    // property read, and the executor below is untouched (D37).
-    const fusionStep = await runAiPromptFusionAction(ctx)
-    if (fusionStep) return fusionStep
-    const params = ctx.params as {
-      provider?: string
-      model?: string
-      apiKey?: string
-      baseURL?: string
-      apiFlavor?: import("@cognia/provider-types/provider").ApiFlavor
-      headers?: Record<string, string>
-      systemPrompt?: string
-      userPrompt?: string
-      temperature?: number
-      /** "json" enables structured output — the completion is parsed into
-       *  `output.structured` (with `output.parseError` on failure). */
-      responseFormat?: "text" | "json"
-      /** Optional shape hint injected into the JSON-mode system prompt. */
-      jsonSchema?: string
-      /**
-       * Optional JSON object schema the JSON-mode output must satisfy (D3).
-       * When set on a real (non-stub) call, the completion is validated and
-       * auto-fixed once; `schemaValid` / `schemaErrors` ride the output.
-       */
-      outputSchema?: Record<string, unknown>
-      /** `fail` (default) throws on violation; `soft` keeps the unvalidated value. */
-      onSchemaViolation?: "fail" | "soft"
-      piiGate?: "off" | "block" | "redact"
-    }
-    const apiKey = await resolveNodeApiKey(ctx, params.apiKey)
-    const userPrompt = params.userPrompt ?? ""
-    const jsonMode = params.responseFormat === "json"
-    const outputSchema = params.outputSchema
-    const enforceSchema = jsonMode && !!outputSchema && Object.keys(outputSchema).length > 0
-    // When an output schema is declared it doubles as the JSON shape hint.
-    const schemaHint = enforceSchema ? JSON.stringify(outputSchema, null, 2) : params.jsonSchema
-    // In JSON mode, append an instruction (and optional shape) so the model
-    // returns parseable JSON regardless of the authored system prompt.
-    const systemPrompt = jsonMode
-      ? [params.systemPrompt, buildJsonInstruction(schemaHint)].filter(Boolean).join("\n\n")
-      : params.systemPrompt
-    const guarded = guardWorkflowEgress({
-      securityContext: ctx.securityContext,
-      sink: "model",
-      requestedMode: params.piiGate,
-      value: { systemPrompt, userPrompt },
-    })
-
-    // Shared tail: attach `structured` / `parseError` when JSON mode is on.
-    // A declared schema is validated softly here (no retry, never throws) so
-    // the stub / pre-credential path still runs end-to-end.
-    const finalize = (out: {
-      provider?: string
-      model?: string
-      completion: string
-      usage: { inputTokens: number; outputTokens: number; totalTokens: number }
-      stub: boolean
-    }) => {
-      const withPii = guarded.redacted ? { ...out, piiRedacted: true } : out
-      if (!jsonMode) return { output: withPii }
-      const parsed = parseStructured(out.completion)
-      const schemaFields =
-        enforceSchema && !parsed.error
-          ? (() => {
-              const v = validateAgainstJsonSchema(outputSchema, parsed.value)
-              return v.ok ? { schemaValid: true } : { schemaValid: false, schemaErrors: v.errors }
-            })()
-          : enforceSchema
-            ? { schemaValid: false }
-            : {}
-      return {
-        output: {
-          ...withPii,
-          structured: parsed.value,
-          ...(parsed.error ? { parseError: parsed.error } : {}),
-          ...schemaFields,
-        },
-      }
-    }
-
-    if (!params.provider || !params.model || !apiKey) {
-      ctx.log(
-        "warn",
-        "ai.prompt: provider / model / apiKey missing — using stub echo. " +
-          "Configure them on the node (or via credential refs) for a real LLM call."
-      )
-      // JSON mode returns a parseable empty object so downstream structured
-      // consumers get an object (not a parse error) before keys are configured.
-      return finalize({
-        provider: params.provider,
-        model: params.model,
-        completion: jsonMode ? "{}" : `[ai.prompt stub] ${guarded.value.userPrompt}`,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        stub: true,
-      })
-    }
-    const { createLlmClient } = await import("@/lib/twin/distill/llm")
-    const built = createLlmClient({
-      provider: params.provider as Parameters<typeof createLlmClient>[0]["provider"],
-      model: params.model,
-      apiKey,
-      baseURL: params.baseURL,
-      apiFlavor: params.apiFlavor,
-      headers: params.headers,
-      defaultTemperature: params.temperature,
-    })
-    // Router + Fusion reserves and settles this call when the `agentsWorkflows`
-    // switch is on (ADR-0188 D27). Off — the default — `ledgerUtilityCalls`
-    // returns the client it was given and nothing else is loaded.
-    // The workflow runtime also runs on the headless brain, which never loads
-    // the settings store; this read works on both hosts.
-    const { currentRouterFusionGateSettings } =
-      await import("@/lib/router-fusion/gate/current-settings")
-    const client = ledgerUtilityCalls(built, {
-      binding: {
-        surface: "agentsWorkflows",
-        origin: "workflow",
-        featureId: `workflow:${ctx.stepId}`,
-        providerId: params.provider,
-        modelId: params.model,
-        workspaceId: ctx.projectId ?? null,
-      },
-      settings: await currentRouterFusionGateSettings(),
-    })
-    // Emit a `chat` span for the LLM call so eval (and observability) can
-    // assemble the workflow run. The eval workflow target threads `ctx.traceId`;
-    // ai.classify / ai.extract delegate to this executor, so they're covered too.
-    const { startSpan, endSpan } = await import("@cognia/agent-trace/emitter")
-    const span = startSpan({
-      operationName: "chat",
-      providerName: "cognia.workflow",
-      surface: "workflow",
-      sessionId: ctx.runId,
-      ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
-      ...(params.model ? { requestModel: params.model } : {}),
-    })
-    let completion = ""
-    let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
-    try {
-      // One model call; `fix` carries the corrective re-prompt on the auto-fix
-      // retry (only reached when an output schema is enforced).
-      const runOnce = async (fix?: string) => {
-        const up = fix ? `${guarded.value.userPrompt}\n\n${fix}` : guarded.value.userPrompt
-        completion = await client.complete(up, {
-          system: guarded.value.systemPrompt,
-          temperature: params.temperature,
-        })
-        const parsed = parseStructured(completion)
-        return { object: parsed.value, parseError: parsed.error }
-      }
-      if (enforceSchema) {
-        await runStructuredTurn({
-          outputSchema,
-          onSchemaViolation: params.onSchemaViolation,
-          runOnce,
-        })
-      } else {
-        await runOnce()
-      }
-      usage = client.getUsageSnapshot?.() ?? usage
-    } catch (err) {
-      endSpan(span.spanId, {
-        errorType: err instanceof Error ? err.name : "Error",
-        errorMessage: err instanceof Error ? err.message : String(err),
-      })
-      throw err
-    }
-    endSpan(span.spanId, {
-      usage: {
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        cacheReadTokens: 0,
-        cacheCreationTokens: 0,
-      },
-      ...(params.model ? { responseModel: params.model } : {}),
-      outputPreview: completion.slice(0, 200),
-    })
-    return finalize({
-      provider: params.provider,
-      model: params.model,
-      completion,
-      usage,
-      stub: false,
-    })
-  },
-})
-
-// ── ai.prompt v2 ──────────────────────────────────────────────────────────
-// Adds routed mode (ADR-0043 provider-routing engine + fallback chains),
-// the PII gate, live output streaming, and per-step usage/cost reporting.
-// Explicit mode stays wire-compatible with v1 (including the echo stub).
-// Full logic lives in ./ai/ai-prompt-v2 so it's independently testable.
+// Explicit mode (direct provider/model/credentials, with a clearly-marked echo
+// stub when no credentials resolve) or routed mode (ADR-0043 provider-routing
+// engine + fallback chains), behind the PII gate, with live output streaming
+// and per-step usage/cost reporting. Full logic lives in ./ai-prompt so it's
+// independently testable.
 registerNodeExecutor({
   kind: "ai.prompt",
   typeVersion: 2,
   execute: async (ctx) => {
-    // Same seam as v1: the action is decided before the executor's own mode
+    // The action is decided before the executor's own mode
     // (`explicit` / `routed`), because a fusion run replaces the call rather
     // than changing how one call is routed.
     const fusionStep = await runAiPromptFusionAction(ctx)
     if (fusionStep) return fusionStep
-    return (await import("./ai-prompt-v2")).executeAiPromptV2(ctx)
+    return (await import("./ai-prompt")).executeAiPrompt(ctx)
   },
 })
 
@@ -355,9 +154,9 @@ registerNodeExecutor({
       })
     ).text
     ctx.signal?.throwIfAborted()
-    // Delegate to ai.prompt v2 — explicit mode is wire-compatible with v1
-    // (same provider handling + stub fallback) and inherits routed mode +
-    // the PII gate when those params are set on the classify node.
+    // Delegate to ai.prompt's explicit mode (same provider handling + stub
+    // fallback); routed mode and the PII gate apply when those params are set
+    // on the classify node.
     const aiPrompt = (await import("../registry")).getExecutor("ai.prompt", 2)
     if (!aiPrompt) throw new Error("ai.classify: ai.prompt executor unavailable")
     const inner = await aiPrompt.execute({

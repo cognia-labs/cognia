@@ -80,7 +80,7 @@ async function run(
   kind: string,
   params: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
-  const reg = getExecutor(kind as never, 1)
+  const reg = getExecutor(kind as never, kind === "ai.prompt" ? 2 : 1)
   if (!reg) throw new Error(`no executor for ${kind}`)
   const result = await reg.execute(makeCtx(params))
   return result.output as Record<string, unknown>
@@ -236,7 +236,7 @@ describe("B1 — ai.prompt structured output", () => {
 
   it("typed output: throws after the retry when unmet (fail default)", async () => {
     completeMock.mockResolvedValue('{"title":"hi"}')
-    const reg = getExecutor("ai.prompt" as never, 1)!
+    const reg = getExecutor("ai.prompt" as never, 2)!
     await expect(
       reg.execute(
         makeCtx({
@@ -469,7 +469,7 @@ describe("ai.prompt — Router + Fusion action", () => {
     warnings: ["one member timed out"],
   }
 
-  it("runs the step as a fusion run instead of a model call (v1)", async () => {
+  it("runs the step as a fusion run instead of a model call", async () => {
     fusionSettings = { routerFusion: { enabled: true, surfaces: { agentsWorkflows: true } } }
     runAgentsWorkflowsFusionMock.mockResolvedValue(answered)
     const out = await run("ai.prompt", {

@@ -82,7 +82,7 @@ describe("@cognia/plugin-sdk/templates", () => {
           {
             id: "prompt",
             type: "ai.prompt",
-            typeVersion: 1,
+            typeVersion: 2,
             position: { x: 0, y: 0 },
             data: { label: "Review", params: { prompt: "Review this change" } },
           },
@@ -138,7 +138,7 @@ describe("@cognia/plugin-sdk/templates", () => {
               {
                 id: "one",
                 type: "ai.prompt",
-                typeVersion: 1,
+                typeVersion: 2,
                 position: { x: 0, y: 0 },
                 data: { label: "One" },
               },

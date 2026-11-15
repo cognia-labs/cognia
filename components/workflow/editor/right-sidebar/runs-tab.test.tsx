@@ -44,7 +44,7 @@ const messages = {
 function workflow(): VisualWorkflow {
   return {
     id: "wf",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "WF",
     createdAt: 1,
     updatedAt: 1,
@@ -52,7 +52,7 @@ function workflow(): VisualWorkflow {
       {
         id: "n_step",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 0, y: 0 },
         data: { label: "Step", params: {} },
       },

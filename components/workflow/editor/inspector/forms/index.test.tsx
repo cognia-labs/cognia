@@ -969,7 +969,6 @@ describe("AI provider protocol fields", () => {
     const onChange = jest.fn()
     const { container } = wrap(
       <AiPromptConfig
-        typeVersion={2}
         params={{ provider: "openrouter", apiFlavor: "chat", headersJson: "{}" }}
         onChange={onChange}
       />

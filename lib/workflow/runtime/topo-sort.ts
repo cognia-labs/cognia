@@ -4,7 +4,7 @@
  *
  * The sorter operates on the validated graph — `validateGraphIntegrity` has
  * already rejected dangling endpoints and ALL cycles (iteration lives inside
- * `flow.loop` v2 containers, never in top-level back-edges). Historically the
+ * `flow.loop` containers, never in top-level back-edges). Historically the
  * sorter silently REMOVED edges targeting `flow.loop`/`flow.wait` nodes as
  * "authorized back-edges" — but the scheduler never re-traversed them, so a
  * cyclic graph ran every node exactly once while looking valid. That
@@ -131,7 +131,7 @@ export function topoSort(
     throw new Error(
       `Cycle detected through nodes: ${remaining.join(", ")}. ` +
         "Top-level back-edges never re-execute — move the nodes that should repeat " +
-        "INSIDE a flow.loop container (typeVersion 2) instead."
+        "INSIDE a flow.loop container instead."
     )
   }
 

@@ -101,7 +101,7 @@ const mockListEditorStores = jest.mocked(listEditorStores)
 function createState() {
   const workflow = {
     id: "wf-1",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Workflow",
     nodes: [],
     edges: [],

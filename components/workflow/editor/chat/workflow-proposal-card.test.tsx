@@ -21,7 +21,7 @@ import { workflowEditorRevision } from "@/lib/workflow/editor/editor-revision"
 function workflow(id: string): VisualWorkflow {
   return {
     id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: id,
     nodes: [],
     edges: [],

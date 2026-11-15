@@ -67,7 +67,7 @@ import { MobileEditorTopbar } from "./mobile-editor-topbar"
 function buildWorkflow(): VisualWorkflow {
   return {
     id: "wf_top",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Daily Digest",
     createdAt: 1,
     updatedAt: 1,
@@ -75,7 +75,7 @@ function buildWorkflow(): VisualWorkflow {
       {
         id: "ai_a",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 0, y: 0 },
         data: { label: "AI", params: {} },
       },

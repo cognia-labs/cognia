@@ -38,7 +38,7 @@ function chainWorkflow(): VisualWorkflow {
   // n_a → n_b → n_c, each copying its upstream's value.
   return {
     id: "wf_x",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "chain",
     createdAt: 0,
     updatedAt: 0,

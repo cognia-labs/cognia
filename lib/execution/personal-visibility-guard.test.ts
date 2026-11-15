@@ -326,8 +326,7 @@ const REVIEWED_SITES: Record<string, string> = {
     "listMessages:1;preparePersonalHistory:1;resume:forkFromSessionId:1;resume:resumeSessionId:4;resume:sdkSessionId:1;stored-message-read:2",
   "lib/workflow/nodes/actions/memory-recall.ts": "withPersonalMemoryVisibility:1",
   "lib/workflow/nodes/ai/ai-prompt-routed.ts": "complete:3",
-  "lib/workflow/nodes/ai/ai-prompt-v2.ts": "complete:1",
-  "lib/workflow/nodes/ai/executors.ts": "complete:1",
+  "lib/workflow/nodes/ai/ai-prompt.ts": "complete:1",
   "lib/workflow/nodes/sessions/index.ts":
     "listMessages:4;preparePersonalDerivedHistory:1;preparePersonalHistory:3",
   "lib/workflow/nodes/teams/index.ts": "listMessages:1",

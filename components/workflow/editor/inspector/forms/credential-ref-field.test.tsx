@@ -29,7 +29,7 @@ beforeAll(() => {
 function makeWorkflow(credentials?: VisualWorkflow["credentials"]): VisualWorkflow {
   return {
     id: "wf",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "t",
     createdAt: 0,
     updatedAt: 0,
@@ -37,7 +37,7 @@ function makeWorkflow(credentials?: VisualWorkflow["credentials"]): VisualWorkfl
       {
         id: "n1",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 0, y: 0 },
         data: { label: "n1", params: { userPrompt: "hi" } },
       },

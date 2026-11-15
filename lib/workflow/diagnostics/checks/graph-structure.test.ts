@@ -15,7 +15,7 @@ function node(id: string, type = "ai.prompt", extra: Partial<WorkflowNode> = {})
 function wf(nodes: WorkflowNode[], edges: VisualWorkflow["edges"] = []): VisualWorkflow {
   return {
     id: "w",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "T",
     createdAt: 0,
     updatedAt: 0,

@@ -13,7 +13,7 @@ import {
 function emptyWorkflow(): VisualWorkflow {
   return {
     id: "wf_test",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Empty",
     createdAt: 1,
     updatedAt: 1,
@@ -44,7 +44,7 @@ function nodeGroupDefinition(): WorkflowNodeGroupDefinition {
         {
           id: "prompt",
           type: "ai.prompt",
-          typeVersion: 1,
+          typeVersion: 2,
           position: { x: 0, y: 0 },
           data: { label: "Review", params: { prompt: "Review this" } },
         },
@@ -433,7 +433,7 @@ describe("editor store — loadWorkflow", () => {
       {
         id: "n_other",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 100, y: 100 },
         data: { label: "Other", params: {} },
       },
@@ -1183,28 +1183,20 @@ describe("editor store — validation", () => {
 })
 
 describe("editor store — applyProposalOps", () => {
-  it("validates proposal params against each node version before presenting run readiness", () => {
+  it("validates proposal params before presenting run readiness", () => {
     const store = createEditorStore(emptyWorkflow())
     const result = store.getState().applyProposalOps([
       {
         type: "add_node",
-        nodeId: "modern",
+        nodeId: "branch",
         kind: "flow.branch",
         position: { x: 0, y: 0 },
         data: { params: { condition: "true" } },
       },
-      {
-        type: "add_node",
-        nodeId: "legacy",
-        kind: "flow.branch",
-        typeVersion: 1,
-        position: { x: 0, y: 200 },
-        data: { params: { condition: "true" } },
-      },
     ])
-    expect(result.applied).toBe(2)
-    expect(store.getState().validationByStepId.modern.fields).toHaveProperty("conditions")
-    expect(store.getState().validationByStepId.legacy).toBeUndefined()
+    expect(result.applied).toBe(1)
+    expect(store.getState().nodes[0].data.typeVersion).toBe(2)
+    expect(store.getState().validationByStepId.branch.fields).toHaveProperty("conditions")
   })
 
   it("rejects a proposal whose expected semantic revision is stale", () => {

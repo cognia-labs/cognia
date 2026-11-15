@@ -13,7 +13,7 @@ description: 节点执行器注册表、调色板目录、各 kind 的 Zod 参�
 
 <StatGrid>
 - **153 个节点 kind**，分布于 7 个分类（标准口径）
-- **`kind@typeVersion`** 注册表键；每个内置项的 typeVersion 均为 1
+- **`kind@typeVersion`** 注册表键；每个内置项只有一个 typeVersion（`flow.branch` / `flow.switch` / `flow.loop` / `ai.prompt` / `annotation.group` 为 2，其余为 1）
 - **`"first-wins-cross-plugin"`** 冲突策略，内置项胜出（`registry.ts:77`）
 - **`LOOP_HARD_CAP=100_000`** + **`MAX_SUBWORKFLOW_DEPTH=10`** 安全上限
 </StatGrid>
@@ -99,16 +99,20 @@ flowchart LR
 GitHub Delivery 与 Desktop Automation 现在也在该 registry 中拥有具体 schema，尽管它们的执行器不在 `built-ins.ts`。当前仍保持宽松的只剩 6 个仅由合成器生成的 `pattern.*` 节点；它们的 params 由编排合成器产出，而不是直接在 inspector 中编辑。
 
 ```ts
-// lib/workflow/nodes/params-schemas.ts:283
+// lib/workflow/nodes/params-schemas.ts — flow.loop is a container sub-canvas
 const LoopParams = z.object({
-  mode: z.enum(["forEach", "times", "while"]).optional(),
-  times: numberRange(0).optional(),
-  inputExpression: optionalString,
-  bodyExpression: requiredString("required"),
-  whileCondition: optionalString,
-  maxIterations: numberRange(1, 1_000_000).optional(),
-}).refine(/* while -> whileCondition, forEach -> inputExpression, else times > 0 */, {
-  message: "loopBodyRequired",
+  mode: z.enum(["forEach", "times", "while"]),
+  source: optionalString,
+  times: z.union([numberRange(0), z.string()]).optional(),
+  whileExpression: optionalString,
+  conditionTiming: z.enum(["pre", "post"]).optional(),
+  output: optionalString,
+  iterationConcurrency: numberRange(1, 64).optional(),
+  batchSize: numberRange(1, 100_000).optional(),
+  maxIterations: numberRange(1, 100_000).optional(),
+  onItemError: z.enum(["fail", "continue-with-null", "remove-failed", "break"]).optional(),
+}).refine(/* forEach -> source, while -> whileExpression, else times */, {
+  message: "loopSourceRequired",
   path: ["mode"],
 })
 ```
@@ -150,25 +154,25 @@ const LoopParams = z.object({
 | `trigger.manual` | L85 | 手动入口。 |
 | `trigger.team` | L101 | 透传——**不**启动团队。 |
 | `flow.set` | L113 | 设置静态 / 表达式值。 |
-| `flow.branch` | L139 | 双向真值判定。 |
-| `flow.switch` | L359 | 多分支路由。 |
+| `flow.branch` | `data/flow.ts` | 结构化条件组，路由到固定的 `true` / `false` 句柄。 |
+| `flow.switch` | `data/flow.ts` | 有序的 case，每个是一个条件组；首个命中胜出，否则走 `default`。 |
 | `flow.split` | L383 | 透传；由编排器扇出。 |
 | `flow.join` | L394 | 按 `joinPolicy` 冻结 `ctx.upstream`。 |
-| `flow.loop` | L416 | `forEach` / `times` / `while`；感知 abort（`LOOP_HARD_CAP=100_000` L415）。 |
+| `flow.loop` | `runtime/loop-container.ts` | 容器子画布：对其内部节点执行 `forEach` / `times` / `while`（`LOOP_HARD_CAP=100_000`）。 |
 | `flow.wait` | L534 | 仅 duration；event 模式为 no-op。 |
 | `flow.subworkflow` | L1213 | 递归 `runWorkflow`（`MAX_SUBWORKFLOW_DEPTH=10` L1212）。 |
 
 ```ts
-// lib/workflow/nodes/built-ins.ts:139
+// lib/workflow/nodes/data/flow.ts — flow.branch
 execute: async (ctx) => {
-  const params = ctx.params as { condition?: unknown; truthyLabel?: string; falsyLabel?: string }
-  const truthyLabel = /* ... */ "true"
-  const falsyLabel = /* ... */ "false"
-  if (params.condition === undefined || params.condition === "") {
-    return { output: { decision: falsyLabel }, decision: falsyLabel }
-  }
-  const decision = isTruthy(params.condition) ? truthyLabel : falsyLabel
-  return { output: { decision, evaluated: params.condition }, decision }
+  const params = ctx.params as { conditions?: ResolvedConditionGroup }
+  const group = params.conditions
+  const passed =
+    !!group && Array.isArray(group.conditions) && group.conditions.length > 0
+      ? evaluateConditionGroup(group)
+      : false
+  const decision = passed ? "true" : "false"
+  return { output: { decision, conditionCount: group?.conditions?.length ?? 0 }, decision }
 }
 ```
 
@@ -266,7 +270,7 @@ flowchart TD
 - **幂等**：`ctx` / `runStep` 维护逐 run 的输出缓存；存在 pin 时 `honorPinData` 短路（跳过执行器）。
 - **Fail-open**：`ai.prompt` 桩、`ai.embed` hash 回退、`twin.rag` 降级、twin-injector base、`io.webhook.respond` 延迟。
 - **Fail-closed / 不可重试**：缺失必填项时 `nonRetryable()`、`data.code`、terminal、subworkflow 深度上限（10）。`io.http` 有显式重试分支；`action.team.task.dispatch` 可重试，故每次重试会重新认领一名 teammate。
-- **已解析参数**：`params` 在 `execute` 之前已经过 `resolveDeep` 展开。`flow.loop` 的 `while` / `forEach` 使用原始表达式字符串，每次迭代以 `$item` / `$loop` 在作用域内重新求值。长执行器尊重 abort。
+- **已解析参数**：`params` 在 `execute` 之前已经过 `resolveDeep` 展开。`flow.loop` 的内部节点在每次迭代中都能访问 `$item` / `$loop`；容器的 `output` 表达式把每次迭代映射为 `items[]` 中的一项。长执行器尊重 abort。
 
 ## 相关页面
 

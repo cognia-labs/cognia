@@ -190,7 +190,7 @@ jest.mock("@xyflow/react", () => {
 function buildSample(): VisualWorkflow {
   return {
     id: "wf_test",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Sample workflow",
     createdAt: 1,
     updatedAt: 1,
@@ -205,7 +205,7 @@ function buildSample(): VisualWorkflow {
       {
         id: "n_b",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "Prompt", params: {} },
       },
@@ -547,7 +547,7 @@ describe("WorkflowEditorCanvas — run gate", () => {
         {
           id: "n_b",
           type: "ai.prompt",
-          typeVersion: 1,
+          typeVersion: 2,
           position: { x: 200, y: 0 },
           data: { label: "Prompt", params: { userPrompt: "hello" } },
         },

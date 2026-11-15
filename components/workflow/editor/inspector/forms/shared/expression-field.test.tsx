@@ -42,7 +42,7 @@ beforeAll(() => {
 function workflow(): VisualWorkflow {
   return {
     id: "wf-expression-completion",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Expression completion",
     createdAt: 1,
     updatedAt: 1,
@@ -65,7 +65,7 @@ function workflow(): VisualWorkflow {
       {
         id: "current",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "Current", params: {} },
       },

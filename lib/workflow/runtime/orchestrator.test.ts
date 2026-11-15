@@ -82,7 +82,7 @@ import { getDb } from "@/lib/db/schema"
 import { listRecentGovernanceAuditGaps } from "@/lib/db/governance-ledger"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { listRunEvents } from "./event-log"
-import type { TriggerEvent, VisualWorkflow } from "@/types/workflow/visual"
+import type { TriggerEvent, VisualWorkflow, WorkflowNodeKind } from "@/types/workflow/visual"
 import type { WorkflowExecutionBinding } from "@/types/workflow/deployment"
 
 // Cold-opening the full schema ladder on fresh fake-indexeddb regularly
@@ -114,7 +114,7 @@ function buildWorkflow(
 ): VisualWorkflow {
   return {
     id: "wf_x",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Test workflow",
     createdAt: 0,
     updatedAt: 0,
@@ -229,7 +229,7 @@ describe("runWorkflow — end-to-end happy paths", () => {
         {
           id: "n_prompt",
           type: "ai.prompt",
-          typeVersion: 1,
+          typeVersion: 2,
           position: { x: 400, y: 0 },
           data: {
             label: "ai",
@@ -242,14 +242,17 @@ describe("runWorkflow — end-to-end happy paths", () => {
         {
           id: "n_branch",
           type: "flow.branch",
-          typeVersion: 1,
+          typeVersion: 2,
           position: { x: 600, y: 0 },
           data: {
             label: "branch",
             params: {
-              condition: "{{ $node['n_prompt'].out.completion }}",
-              truthyLabel: "yes",
-              falsyLabel: "no",
+              conditions: {
+                combinator: "all",
+                conditions: [
+                  { left: "{{ $node['n_prompt'].out.completion }}", operator: "truthy" },
+                ],
+              },
             },
           },
         },
@@ -288,7 +291,7 @@ describe("runWorkflow — end-to-end happy paths", () => {
         {
           id: "n_prompt",
           type: "ai.prompt",
-          typeVersion: 1,
+          typeVersion: 2,
           position: { x: 200, y: 0 },
           data: {
             label: "ai",
@@ -354,7 +357,7 @@ describe("runWorkflow — end-to-end happy paths", () => {
 })
 
 describe("runWorkflow — branch decisions", () => {
-  it("skips the non-chosen branch when a flow.branch picks a label", async () => {
+  it("skips the non-chosen branch when a flow.branch picks a handle", async () => {
     const wf = buildWorkflow(
       [
         {
@@ -367,14 +370,15 @@ describe("runWorkflow — branch decisions", () => {
         {
           id: "n_branch",
           type: "flow.branch",
-          typeVersion: 1,
+          typeVersion: 2,
           position: { x: 200, y: 0 },
           data: {
             label: "branch",
             params: {
-              condition: "{{ $trigger.payload.takeYes }}",
-              truthyLabel: "yes",
-              falsyLabel: "no",
+              conditions: {
+                combinator: "all",
+                conditions: [{ left: "{{ $trigger.payload.takeYes }}", operator: "truthy" }],
+              },
             },
           },
         },
@@ -395,8 +399,8 @@ describe("runWorkflow — branch decisions", () => {
       ],
       [
         { id: "e1", source: "n_start", target: "n_branch" },
-        { id: "e2", source: "n_branch", target: "n_yes", label: "yes" },
-        { id: "e3", source: "n_branch", target: "n_no", label: "no" },
+        { id: "e2", source: "n_branch", target: "n_yes", sourceHandle: "true" },
+        { id: "e3", source: "n_branch", target: "n_no", sourceHandle: "false" },
       ]
     )
 
@@ -420,12 +424,14 @@ describe("runWorkflow — branch decisions", () => {
         availableRouteKeys: ["e2", "e3"],
         policySnapshot: expect.objectContaining({
           nodeType: "flow.branch",
-          nodeTypeVersion: 1,
-          params: expect.objectContaining({ condition: "{{ $trigger.payload.takeYes }}" }),
+          nodeTypeVersion: 2,
+          params: expect.objectContaining({
+            conditions: expect.objectContaining({ combinator: "all" }),
+          }),
         }),
-        evaluationSnapshot: expect.objectContaining({ decision: "yes" }),
+        evaluationSnapshot: expect.objectContaining({ decision: "true" }),
         reasonCode: "condition-evaluated",
-        rationale: "flow.branch@1 selected 1 of 2 routes after evaluating its frozen policy.",
+        rationale: "flow.branch@2 selected 1 of 2 routes after evaluating its frozen policy.",
       })
     )
     await expect(listRecentGovernanceAuditGaps()).resolves.toEqual([
@@ -667,8 +673,37 @@ describe("runWorkflow — loop container (flow.loop v2)", () => {
 
 describe("runWorkflow — failure handling", () => {
   it("reports a failed run when an executor is missing for a node kind", async () => {
-    // A known kind authored at an unsupported future type version reaches the
-    // missing-executor path without depending on any Marketplace plugin.
+    // A plugin-namespaced kind whose plugin is not installed passes
+    // validation and reaches the missing-executor path at run time.
+    const wf = buildWorkflow(
+      [
+        {
+          id: "n_start",
+          type: "trigger.manual",
+          typeVersion: 1,
+          position: { x: 0, y: 0 },
+          data: { label: "start", params: {} },
+        },
+        {
+          id: "n_note",
+          type: "absentplugin.action.create" as WorkflowNodeKind,
+          typeVersion: 1,
+          position: { x: 200, y: 0 },
+          data: {
+            label: "create resource",
+            params: { title: "Example" },
+          },
+        },
+      ],
+      [{ id: "e1", source: "n_start", target: "n_note" }]
+    )
+    const r = await runWorkflow({ workflow: wf, trigger })
+    expect(r.status).toBe("failed")
+    expect(r.error?.nodeId).toBe("n_note")
+    expect(r.error?.message).toMatch(/no executor registered/i)
+  })
+
+  it("refuses a built-in kind authored at an unsupported type version", async () => {
     const wf = buildWorkflow(
       [
         {
@@ -683,18 +718,16 @@ describe("runWorkflow — failure handling", () => {
           type: "action.agent.turn",
           typeVersion: 99,
           position: { x: 200, y: 0 },
-          data: {
-            label: "create resource",
-            params: { title: "Example" },
-          },
+          data: { label: "create resource", params: { title: "Example" } },
         },
       ],
       [{ id: "e1", source: "n_start", target: "n_note" }]
     )
     const r = await runWorkflow({ workflow: wf, trigger })
     expect(r.status).toBe("failed")
-    expect(r.error?.nodeId).toBe("n_note")
-    expect(r.error?.message).toMatch(/no executor registered/i)
+    expect(r.error?.message).toMatch(
+      /action\.agent\.turn@99; only action\.agent\.turn@1 is supported/
+    )
   })
 
   it("rejects an invalid workflow at the validate boundary", async () => {
@@ -875,8 +908,8 @@ describe("runWorkflow — plugin hook dispatches", () => {
         },
         {
           id: "n_note",
-          type: "action.agent.turn",
-          typeVersion: 99,
+          type: "absentplugin.action.create" as WorkflowNodeKind,
+          typeVersion: 1,
           position: { x: 200, y: 0 },
           data: {
             label: "create resource",
@@ -1217,7 +1250,7 @@ describe("runWorkflow — concurrent scheduling", () => {
     maxConcurrency: number
   ): VisualWorkflow => ({
     id: "wf_concurrent",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "concurrent",
     createdAt: 0,
     updatedAt: 0,
@@ -1522,7 +1555,7 @@ describe("runWorkflow — errorPolicy", () => {
     }
     return {
       id: "wf_x",
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "Fail workflow",
       createdAt: 0,
       updatedAt: 0,
@@ -1666,7 +1699,7 @@ describe("runWorkflow — per-node errorHandling", () => {
     }
     return {
       id: "wf_x",
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "Per-node fail workflow",
       createdAt: 0,
       updatedAt: 0,
@@ -1786,7 +1819,7 @@ describe("runWorkflow — flow.join any/race", () => {
     })
     const workflow: VisualWorkflow = {
       id: "wf_race",
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "race",
       createdAt: 0,
       updatedAt: 0,

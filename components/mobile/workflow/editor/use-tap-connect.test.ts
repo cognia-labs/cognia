@@ -11,7 +11,7 @@ import { useTapConnect } from "./use-tap-connect"
 function buildWorkflow(): VisualWorkflow {
   return {
     id: "wf_tap",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Tap",
     createdAt: 1,
     updatedAt: 1,
@@ -26,14 +26,14 @@ function buildWorkflow(): VisualWorkflow {
       {
         id: "ai_a",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "AI A", params: {}, errorHandling: { onError: "errorBranch" } },
       },
       {
         id: "ai_b",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 400, y: 0 },
         data: { label: "AI B", params: {} },
       },

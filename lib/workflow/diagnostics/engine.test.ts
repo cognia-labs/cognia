@@ -1,3 +1,4 @@
+import { defaultTypeVersionFor } from "@/lib/workflow/editor/node-handles"
 import type { VisualWorkflow, WorkflowEdge, WorkflowNode } from "@/types/workflow/visual"
 import { runDiagnostics } from "./engine"
 import { EMPTY_DIAGNOSTICS } from "./types"
@@ -6,7 +7,7 @@ function node(id: string, type = "ai.prompt", extra: Partial<WorkflowNode> = {})
   return {
     id,
     type: type as WorkflowNode["type"],
-    typeVersion: 1,
+    typeVersion: defaultTypeVersionFor(type as WorkflowNode["type"]),
     position: { x: 0, y: 0 },
     data: { label: id, params: {} },
     ...extra,
@@ -16,7 +17,7 @@ function node(id: string, type = "ai.prompt", extra: Partial<WorkflowNode> = {})
 function wf(nodes: WorkflowNode[], edges: WorkflowEdge[] = []): VisualWorkflow {
   return {
     id: "wf_t",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "T",
     createdAt: 0,
     updatedAt: 0,
@@ -34,7 +35,7 @@ function wf(nodes: WorkflowNode[], edges: WorkflowEdge[] = []): VisualWorkflow {
 const codesOf = (r: ReturnType<typeof runDiagnostics>) => r.diagnostics.map((d) => d.code)
 
 describe("runDiagnostics", () => {
-  it("diagnoses a version-2 branch carrying only legacy condition params", () => {
+  it("diagnoses a branch carrying unstructured condition params", () => {
     const workflow = wf([
       node("branch", "flow.branch", {
         typeVersion: 2,

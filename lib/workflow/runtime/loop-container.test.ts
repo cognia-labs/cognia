@@ -1,5 +1,5 @@
 /**
- * flow.loop typeVersion 2 — container sub-canvas execution. Covers the
+ * flow.loop — container sub-canvas execution. Covers the
  * consensus semantics: forEach/times/while modes, explicit output mapping
  * into `items[]`, `$item`/`$loop` reset per iteration, staticData
  * accumulation across iterations, break/continue (innermost only),
@@ -894,12 +894,12 @@ describe("loop-level error handling (onItemError)", () => {
     })
   })
 
-  it("skip: omits the failed item, collects errors[], and finishes the loop", async () => {
+  it("remove-failed: omits the failed item, collects errors[], and finishes the loop", async () => {
     const { workflow, loopNode } = loopWorkflow(
       {
         mode: "forEach",
         source: "{{ $trigger.payload.items }}",
-        onItemError: "skip",
+        onItemError: "remove-failed",
         output: "{{ $node['bad'].ok }}",
       },
       [node("bad", "testplugin.victimfail" as never, { victim: "{{ $item }}" }, "loop1")]
@@ -939,24 +939,17 @@ describe("loop-level error handling (onItemError)", () => {
     ])
   })
 
-  it("remove-failed: compacts failed items exactly like the legacy skip value", async () => {
-    const makeWorkflow = (onItemError: "remove-failed" | "skip") =>
-      loopWorkflow(
-        {
-          mode: "forEach",
-          source: "{{ $trigger.payload.items }}",
-          onItemError,
-          output: "{{ $node['bad'].ok }}",
-        },
-        [node("bad", "testplugin.victimfail" as never, { victim: "{{ $item }}" }, "loop1")]
-      )
-
-    const current = makeWorkflow("remove-failed")
-    const legacy = makeWorkflow("skip")
-    await expect(run(current.workflow, current.loopNode)).resolves.toMatchObject({
-      output: { items: ["a", "c"], count: 3 },
-    })
-    await expect(run(legacy.workflow, legacy.loopNode)).resolves.toMatchObject({
+  it("remove-failed: compacts failed items out of items[]", async () => {
+    const { workflow, loopNode } = loopWorkflow(
+      {
+        mode: "forEach",
+        source: "{{ $trigger.payload.items }}",
+        onItemError: "remove-failed",
+        output: "{{ $node['bad'].ok }}",
+      },
+      [node("bad", "testplugin.victimfail" as never, { victim: "{{ $item }}" }, "loop1")]
+    )
+    await expect(run(workflow, loopNode)).resolves.toMatchObject({
       output: { items: ["a", "c"], count: 3 },
     })
   })
@@ -1009,7 +1002,7 @@ describe("loop-level error handling (onItemError)", () => {
       {
         mode: "forEach",
         source: "{{ $trigger.payload.items }}",
-        onItemError: "skip",
+        onItemError: "remove-failed",
         output: "{{ $loop.index }}",
       },
       [failing]
@@ -1021,12 +1014,12 @@ describe("loop-level error handling (onItemError)", () => {
     expect("errors" in out).toBe(false)
   })
 
-  it("skip under parallel iterations keeps errors[] ordered by index", async () => {
+  it("remove-failed under parallel iterations keeps errors[] ordered by index", async () => {
     const { workflow, loopNode } = loopWorkflow(
       {
         mode: "forEach",
         source: "{{ $trigger.payload.items }}",
-        onItemError: "skip",
+        onItemError: "remove-failed",
         iterationConcurrency: 3,
         output: "{{ $node['bad'].ok }}",
       },
@@ -1060,7 +1053,7 @@ describe("loop-level error handling (onItemError)", () => {
     expect(out.errors?.length).toBeGreaterThanOrEqual(1)
   })
 
-  it("skip applies to while mode too (iteration error does not end the loop)", async () => {
+  it("remove-failed applies to while mode too (iteration error does not end the loop)", async () => {
     registerNodeExecutor({
       kind: "testplugin.idxfail" as never,
       typeVersion: 1,
@@ -1075,7 +1068,7 @@ describe("loop-level error handling (onItemError)", () => {
         mode: "while",
         whileExpression: "always",
         maxIterations: 3,
-        onItemError: "skip",
+        onItemError: "remove-failed",
         output: "{{ $node['bad'].ok }}",
       },
       [node("bad", "testplugin.idxfail" as never, { idx: "{{ $loop.index }}" }, "loop1")]
@@ -1093,7 +1086,7 @@ describe("loop-level error handling (onItemError)", () => {
 
   it("success path output carries NO errors key (backward compatible shape)", async () => {
     const { workflow, loopNode } = loopWorkflow(
-      { mode: "forEach", source: "{{ $trigger.payload.items }}", onItemError: "skip" },
+      { mode: "forEach", source: "{{ $trigger.payload.items }}", onItemError: "remove-failed" },
       [node("body", "flow.set", { variable: "v", value: "x" }, "loop1")]
     )
     const result = await run(workflow, loopNode)

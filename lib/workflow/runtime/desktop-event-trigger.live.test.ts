@@ -40,7 +40,7 @@ jest.setTimeout(30_000)
 function wf(id: string, params: Record<string, unknown>): WorkflowRow {
   return {
     id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: id,
     createdAt: 0,
     updatedAt: 0,

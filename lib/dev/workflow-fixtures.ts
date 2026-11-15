@@ -7,6 +7,7 @@
  */
 
 import type { WorkflowDraft } from "@/lib/db/workflows"
+import { defaultTypeVersionFor } from "@/lib/workflow/editor/node-handles"
 import type { WorkflowEdge, WorkflowNode, WorkflowNodeKind } from "@/types/workflow/visual"
 
 type Params = Record<string, unknown>
@@ -31,7 +32,7 @@ function workflowNode(
   return {
     id,
     type,
-    typeVersion: 1,
+    typeVersion: defaultTypeVersionFor(type),
     position,
     data: { label, params },
   }
@@ -92,7 +93,6 @@ const VALID_PLAN_STEPS = '[{"title":"Draft answer","kind":"agent_turn"}]'
 const VALID_TASK_EXPORT = '{"version":1,"tasks":[]}'
 
 const FIXTURES = {
-  // Existing fixtures kept for back-compat.
   "manual-ai": () =>
     single("E2E Manual AI", {
       id: "n_prompt",
@@ -104,7 +104,13 @@ const FIXTURES = {
     name: "E2E Branch",
     nodes: [
       manualTrigger(),
-      workflowNode("n_branch", "flow.branch", "Branch", { condition: "true" }, { x: 360, y: 120 }),
+      workflowNode(
+        "n_branch",
+        "flow.branch",
+        "Branch",
+        { conditions: { combinator: "all", conditions: [{ left: "true", operator: "truthy" }] } },
+        { x: 360, y: 120 }
+      ),
       workflowNode(
         "n_true",
         "flow.set",
@@ -152,7 +158,13 @@ const FIXTURES = {
         { expression: "input.text.toUpperCase()" },
         { x: 560, y: 120 }
       ),
-      workflowNode("n_branch", "flow.branch", "Decide", { condition: "true" }, { x: 800, y: 120 }),
+      workflowNode(
+        "n_branch",
+        "flow.branch",
+        "Decide",
+        { conditions: { combinator: "all", conditions: [{ left: "true", operator: "truthy" }] } },
+        { x: 800, y: 120 }
+      ),
       workflowNode(
         "n_true",
         "flow.set",
@@ -259,7 +271,12 @@ const FIXTURES = {
       id: "n_br",
       type: "flow.branch",
       label: "Branch",
-      params: { condition: "input.ok" },
+      params: {
+        conditions: {
+          combinator: "all",
+          conditions: [{ left: "{{ input.ok }}", operator: "truthy" }],
+        },
+      },
     }),
   "flow-switch": () => ({
     name: "E2E Flow Switch",
@@ -270,12 +287,14 @@ const FIXTURES = {
         "flow.switch",
         "Switch",
         {
-          subject: "input.kind",
-          cases: [
-            { value: "alpha", label: "alpha" },
-            { value: "beta", label: "beta" },
-          ],
-          defaultLabel: "default",
+          cases: ["alpha", "beta"].map((id) => ({
+            id,
+            label: id,
+            when: {
+              combinator: "all",
+              conditions: [{ left: "{{ input.kind }}", operator: "eq", right: id }],
+            },
+          })),
         },
         { x: 320, y: 120 }
       ),

@@ -152,7 +152,7 @@ export function synthesizeUltracodeWorkflow(
   const now = Date.now()
   const workflow: VisualWorkflow = {
     id: buildTeamWorkflowId(input.team.id),
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: `${input.team.name} — ultracode`,
     description: input.plan.summary,
     nodes,

@@ -76,13 +76,13 @@ const NODES: PluginWorkflowTemplateNode[] = [
   {
     id: "rank",
     type: "ai.prompt",
-    typeVersion: 1,
+    typeVersion: 2,
     position: { x: 480, y: 0 },
     data: {
       label: "聚类打分",
       params: {
         // `routed` uses the app's configured provider routing. WITHOUT it the
-        // node falls into `ai-prompt-v2`'s explicit branch, which needs
+        // node falls into `ai-prompt`'s explicit branch, which needs
         // provider+model+apiKey ON THE NODE — the template has no place to put
         // them, so every run hit the "using stub echo" fallback, `save` failed
         // to parse the echo and swallowed it, and the daily cron wrote 0 rows

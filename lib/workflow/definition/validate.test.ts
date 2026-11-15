@@ -10,7 +10,7 @@ import { DEFAULT_MAX_CONCURRENCY, type VisualWorkflow } from "@/types/workflow/v
 function baseWorkflow(overrides: Partial<VisualWorkflow> = {}): VisualWorkflow {
   return {
     id: "wf_x",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Test",
     createdAt: 0,
     updatedAt: 0,
@@ -25,7 +25,7 @@ function baseWorkflow(overrides: Partial<VisualWorkflow> = {}): VisualWorkflow {
       {
         id: "n2",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "Prompt", params: {} },
       },
@@ -361,7 +361,7 @@ describe("validateGraphIntegrity", () => {
     wf.nodes.push({
       id: "n3",
       type: "ai.prompt",
-      typeVersion: 1,
+      typeVersion: 2,
       position: { x: 400, y: 0 },
       data: { label: "Prompt", params: {} },
     })
@@ -392,7 +392,7 @@ describe("validateGraphIntegrity", () => {
     wf.nodes.push({
       id: "n3",
       type: "ai.prompt",
-      typeVersion: 1,
+      typeVersion: 2,
       position: { x: 400, y: 0 },
       data: { label: "Prompt", params: {} },
     })

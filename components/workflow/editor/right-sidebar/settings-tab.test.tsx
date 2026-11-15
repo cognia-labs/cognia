@@ -119,7 +119,7 @@ const messages = {
 function makeWorkflow(): VisualWorkflow {
   return {
     id: "wf",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "WF",
     createdAt: 1,
     updatedAt: 1,

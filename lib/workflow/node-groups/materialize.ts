@@ -133,15 +133,12 @@ export function validateWorkflowNodeGroup(
     const node = nodes[index]
     if (!node.parentId) continue
     const parent = nodeById.get(node.parentId)
-    const parentIsContainer =
-      parent?.type === "flow.loop"
-        ? parent.typeVersion >= 2
-        : parent?.type === "annotation.group" && parent.typeVersion >= 2
+    const parentIsContainer = parent?.type === "flow.loop" || parent?.type === "annotation.group"
     if (node.parentId === node.id || !parent || !parentIsContainer) {
       issues.push({
         code: "node.parent",
         path: `payload.nodes[${index}].parentId`,
-        message: `Parent "${node.parentId}" must be a v2 loop or annotation group container`,
+        message: `Parent "${node.parentId}" must be a loop or annotation group container`,
       })
       continue
     }
@@ -204,7 +201,7 @@ const FRAME_PADDING = { left: 32, right: 32, top: 48, bottom: 32 }
 function asVisualWorkflow(definition: WorkflowNodeGroupDefinition): VisualWorkflow {
   return {
     id: definition.id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: definition.metadata.name,
     description: definition.metadata.description,
     createdAt: definition.createdAt,

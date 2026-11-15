@@ -13,7 +13,7 @@ Every workflow step is a `kind@typeVersion` pair resolved through an overlay reg
 
 <StatGrid>
 - **153 node kinds** across 7 categories (canonical)
-- **`kind@typeVersion`** registry key; every built-in is typeVersion 1
+- **`kind@typeVersion`** registry key; each built-in has exactly one typeVersion (`flow.branch` / `flow.switch` / `flow.loop` / `ai.prompt` / `annotation.group` are 2, the rest 1)
 - **`"first-wins-cross-plugin"`** conflict policy, built-ins win (`registry.ts:77`)
 - **`LOOP_HARD_CAP=100_000`** + **`MAX_SUBWORKFLOW_DEPTH=10`** safety caps
 </StatGrid>
@@ -99,16 +99,20 @@ Each kind owns a Zod schema validating `node.data.params`; all errors surface as
 GitHub Delivery and Desktop Automation now have concrete schemas in this registry, even though their executors live outside `built-ins.ts`. The remaining permissive family is the 6 synthesizer-only `pattern.*` nodes, whose params are emitted by the orchestration synthesizer instead of edited directly.
 
 ```ts
-// lib/workflow/nodes/params-schemas.ts:283
+// lib/workflow/nodes/params-schemas.ts — flow.loop is a container sub-canvas
 const LoopParams = z.object({
-  mode: z.enum(["forEach", "times", "while"]).optional(),
-  times: numberRange(0).optional(),
-  inputExpression: optionalString,
-  bodyExpression: requiredString("required"),
-  whileCondition: optionalString,
-  maxIterations: numberRange(1, 1_000_000).optional(),
-}).refine(/* while -> whileCondition, forEach -> inputExpression, else times > 0 */, {
-  message: "loopBodyRequired",
+  mode: z.enum(["forEach", "times", "while"]),
+  source: optionalString,
+  times: z.union([numberRange(0), z.string()]).optional(),
+  whileExpression: optionalString,
+  conditionTiming: z.enum(["pre", "post"]).optional(),
+  output: optionalString,
+  iterationConcurrency: numberRange(1, 64).optional(),
+  batchSize: numberRange(1, 100_000).optional(),
+  maxIterations: numberRange(1, 100_000).optional(),
+  onItemError: z.enum(["fail", "continue-with-null", "remove-failed", "break"]).optional(),
+}).refine(/* forEach -> source, while -> whileExpression, else times */, {
+  message: "loopSourceRequired",
   path: ["mode"],
 })
 ```
@@ -150,25 +154,25 @@ All host built-ins register at import (`built-ins.ts:1`), and the module side-ef
 | `trigger.manual` | L85 | Manual entry point. |
 | `trigger.team` | L101 | Passthrough — does **not** start a team. |
 | `flow.set` | L113 | Sets static / expression values. |
-| `flow.branch` | L139 | Two-way truthy decision. |
-| `flow.switch` | L359 | Multi-case routing. |
+| `flow.branch` | `data/flow.ts` | Structured condition group routed to the fixed `true` / `false` handles. |
+| `flow.switch` | `data/flow.ts` | Ordered cases, each a condition group; first match wins, else `default`. |
 | `flow.split` | L383 | Passthrough; orchestrator fans out. |
 | `flow.join` | L394 | Freezes `ctx.upstream` per `joinPolicy`. |
-| `flow.loop` | L416 | `forEach` / `times` / `while`; abort-aware (`LOOP_HARD_CAP=100_000` L415). |
+| `flow.loop` | `runtime/loop-container.ts` | Container sub-canvas: `forEach` / `times` / `while` over its body nodes (`LOOP_HARD_CAP=100_000`). |
 | `flow.wait` | L534 | Duration only; event mode no-op. |
 | `flow.subworkflow` | L1213 | Recursive `runWorkflow` (`MAX_SUBWORKFLOW_DEPTH=10` L1212). |
 
 ```ts
-// lib/workflow/nodes/built-ins.ts:139
+// lib/workflow/nodes/data/flow.ts — flow.branch
 execute: async (ctx) => {
-  const params = ctx.params as { condition?: unknown; truthyLabel?: string; falsyLabel?: string }
-  const truthyLabel = /* ... */ "true"
-  const falsyLabel = /* ... */ "false"
-  if (params.condition === undefined || params.condition === "") {
-    return { output: { decision: falsyLabel }, decision: falsyLabel }
-  }
-  const decision = isTruthy(params.condition) ? truthyLabel : falsyLabel
-  return { output: { decision, evaluated: params.condition }, decision }
+  const params = ctx.params as { conditions?: ResolvedConditionGroup }
+  const group = params.conditions
+  const passed =
+    !!group && Array.isArray(group.conditions) && group.conditions.length > 0
+      ? evaluateConditionGroup(group)
+      : false
+  const decision = passed ? "true" : "false"
+  return { output: { decision, conditionCount: group?.conditions?.length ?? 0 }, decision }
 }
 ```
 
@@ -266,7 +270,7 @@ See ADR-0017 (<a href="../../adr/0017-workflow-plugin-extension-points">workflow
 - **Idempotency**: `ctx` / `runStep` keep a per-run output cache; `honorPinData` short-circuits (skips the executor) when a pin is present.
 - **Fail-open**: `ai.prompt` stub, `ai.embed` hash fallback, `twin.rag` degraded, twin-injector base, `io.webhook.respond` deferred.
 - **Fail-closed / non-retryable**: `nonRetryable()` on missing required, `data.code`, terminal, subworkflow depth cap (10). `io.http` has an explicit retry case; `action.team.task.dispatch` is `retryable` so each retry re-claims a teammate.
-- **Resolved params**: `params` arrive already `resolveDeep`-expanded before `execute`. `flow.loop` `while` / `forEach` use raw expression strings re-evaluated per iteration with `$item` / `$loop` in scope. Long executors honor abort.
+- **Resolved params**: `params` arrive already `resolveDeep`-expanded before `execute`. `flow.loop` body nodes see `$item` / `$loop` in scope on every iteration; the container's `output` expression maps each iteration to one entry of `items[]`. Long executors honor abort.
 
 ## Related pages
 

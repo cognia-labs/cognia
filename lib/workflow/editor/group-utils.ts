@@ -1,6 +1,6 @@
 /**
  * Group-container helpers (B2) — pure functions over the editor's React Flow
- * node/edge arrays. A group (`annotation.group` typeVersion 2) hosts its
+ * node/edge arrays. A group (`annotation.group`) hosts its
  * members via `parentId`; these resolve the membership and the in-group entry
  * points used by the "Run this block" action.
  *

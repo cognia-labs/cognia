@@ -411,7 +411,7 @@ describe("synthesizeTeamWorkflow", () => {
       initialConcurrency: 2,
     })
     // Smoke check key fields the validator demands.
-    expect(workflow.schemaVersion).toBe(1)
+    expect(workflow.schemaVersion).toBe(2)
     expect(workflow.settings.errorPolicy).toBe("stop")
     expect(workflow.settings.concurrency).toBeGreaterThanOrEqual(1)
     expect(workflow.settings.retryDefaults).toBeDefined()

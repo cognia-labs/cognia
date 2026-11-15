@@ -242,7 +242,6 @@ export function MobileCanvas({
     const handles = src
       ? outputHandlesFor({
           kind: src.data.kind,
-          typeVersion: src.data.typeVersion,
           params: (src.data.params as Record<string, unknown>) ?? {},
         })
       : null

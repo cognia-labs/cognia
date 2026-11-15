@@ -14,7 +14,7 @@ function node(id: string, type: string): WorkflowNode {
 function wf(nodes: WorkflowNode[]): VisualWorkflow {
   return {
     id: "w",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "T",
     createdAt: 0,
     updatedAt: 0,

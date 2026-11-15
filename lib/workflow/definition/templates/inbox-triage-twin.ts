@@ -18,7 +18,7 @@ const NOW = 1_730_000_000_000
 export function inboxTriageTwinTemplate(): VisualWorkflow {
   return {
     id: "wf_builtin_inbox_triage_twin",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Inbox triage with Twin RAG",
     description:
       "Receives an inbound connector message, redacts PII, retrieves relevant context from the employee Twin, classifies intent, and routes the reply to one of three character personas or escalates to a team.",
@@ -96,13 +96,69 @@ export function inboxTriageTwinTemplate(): VisualWorkflow {
       {
         id: "n_switch",
         type: "flow.switch",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 1140, y: 260 },
         data: {
           label: "Route by intent",
           params: {
-            on: "{{ $node['n_classify'].out.label }}",
-            cases: ["billing", "technical", "account", "escalation"],
+            cases: [
+              {
+                id: "billing",
+                label: "billing",
+                when: {
+                  combinator: "all",
+                  conditions: [
+                    {
+                      left: "{{ $node['n_classify'].out.label }}",
+                      operator: "eq",
+                      right: "billing",
+                    },
+                  ],
+                },
+              },
+              {
+                id: "technical",
+                label: "technical",
+                when: {
+                  combinator: "all",
+                  conditions: [
+                    {
+                      left: "{{ $node['n_classify'].out.label }}",
+                      operator: "eq",
+                      right: "technical",
+                    },
+                  ],
+                },
+              },
+              {
+                id: "account",
+                label: "account",
+                when: {
+                  combinator: "all",
+                  conditions: [
+                    {
+                      left: "{{ $node['n_classify'].out.label }}",
+                      operator: "eq",
+                      right: "account",
+                    },
+                  ],
+                },
+              },
+              {
+                id: "escalation",
+                label: "escalation",
+                when: {
+                  combinator: "all",
+                  conditions: [
+                    {
+                      left: "{{ $node['n_classify'].out.label }}",
+                      operator: "eq",
+                      right: "escalation",
+                    },
+                  ],
+                },
+              },
+            ],
           },
         },
       },
@@ -178,10 +234,10 @@ export function inboxTriageTwinTemplate(): VisualWorkflow {
       { id: "e2", source: "n_redact", target: "n_rag" },
       { id: "e3", source: "n_rag", target: "n_classify" },
       { id: "e4", source: "n_classify", target: "n_switch" },
-      { id: "e5", source: "n_switch", target: "n_reply_billing", label: "billing" },
-      { id: "e6", source: "n_switch", target: "n_reply_technical", label: "technical" },
-      { id: "e7", source: "n_switch", target: "n_reply_account", label: "account" },
-      { id: "e8", source: "n_switch", target: "n_escalate", label: "escalation" },
+      { id: "e5", source: "n_switch", target: "n_reply_billing", sourceHandle: "billing" },
+      { id: "e6", source: "n_switch", target: "n_reply_technical", sourceHandle: "technical" },
+      { id: "e7", source: "n_switch", target: "n_reply_account", sourceHandle: "account" },
+      { id: "e8", source: "n_switch", target: "n_escalate", sourceHandle: "escalation" },
       { id: "e9", source: "n_reply_billing", target: "n_log" },
       { id: "e10", source: "n_reply_technical", target: "n_log" },
       { id: "e11", source: "n_reply_account", target: "n_log" },

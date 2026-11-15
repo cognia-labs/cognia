@@ -608,20 +608,9 @@
     }
   },
   "branch": {
-    "condition": {
-      "hint": "表达式，求值为真值则走真分支。支持 '{{ }}' 表达式。",
-      "label": "条件",
-      "placeholder": "'{{ $node[''n_classify''].out.label }}' === 'urgent'"
-    },
     "conditions": {
       "hint": "条件组通过时走「真」端口，否则走「假」端口。",
       "label": "条件组"
-    },
-    "falsyLabel": {
-      "label": "假分支标签"
-    },
-    "truthyLabel": {
-      "label": "真分支标签"
     }
   },
   "catch": {
@@ -1751,42 +1740,11 @@
       "label": "超时（毫秒，可选）"
     }
   },
-  "loop": {
-    "bodyExpression": {
-      "hint": "每轮迭代的值。$item 是 forEach 模式下的当前元素。",
-      "label": "Body 表达式",
-      "placeholder": "$item.name"
-    },
-    "inputExpression": {
-      "hint": "求值后得到要迭代的数组。留空时使用第一条上游输出。",
-      "label": "输入表达式",
-      "placeholder": "'{{ $node[''n_search''].out.results }}'"
-    },
-    "maxIterations": {
-      "hint": "硬性上限。达到后强制退出循环。",
-      "label": "最大迭代次数"
-    },
-    "mode": {
-      "label": "模式",
-      "options": {
-        "forEach": "对数组逐项",
-        "times": "重复 N 次",
-        "while": "当条件为真"
-      }
-    },
-    "times": {
-      "label": "次数"
-    },
-    "whileCondition": {
-      "hint": "每轮迭代都会重新求值。为假或达到 maxIterations 时退出。",
-      "label": "While 条件"
-    }
-  },
   "loopJump": {
     "breakIntro": "在当前迭代结束后停止最内层循环。无需配置。",
     "continueIntro": "跳过当前迭代的剩余部分。无需配置。"
   },
-  "loopV2": {
+  "loop": {
     "batchSize": {
       "hint": "把数组分成串行执行的批次；批内迭代仍按「并行迭代数」并行。留空 = 单一批次。",
       "label": "批次大小",
@@ -2867,24 +2825,6 @@
     }
   },
   "switch": {
-    "cases": {
-      "addCase": "添加 case",
-      "hint": "先匹配先生效，严格等值。",
-      "label": "Cases",
-      "labelPlaceholder": "标签",
-      "removeCase": "移除 case",
-      "valuePlaceholder": "值"
-    },
-    "defaultLabel": {
-      "label": "默认标签"
-    },
-    "subject": {
-      "hint": "求值后与各 case 进行匹配的表达式。",
-      "label": "Subject",
-      "placeholder": "'{{ $node[''n_classify''].out.label }}'"
-    }
-  },
-  "switchV2": {
     "cases": {
       "addCase": "添加分支",
       "caseLabelPlaceholder": "分支标签",

@@ -21,7 +21,7 @@ import { configureWorkflowApi } from "../store-bridge"
 function workflow(id: string): VisualWorkflow {
   return {
     id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: id,
     nodes: [],
     edges: [],

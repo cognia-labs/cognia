@@ -13,7 +13,7 @@ import { useEffectivePerfTier } from "./use-effective-perf-tier"
 function emptyWorkflow(): VisualWorkflow {
   return {
     id: "wf_test",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Empty",
     createdAt: 1,
     updatedAt: 1,

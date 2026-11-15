@@ -28,7 +28,7 @@ it("delivers real registry changes with ownership and stops after cleanup", asyn
   const stop = installWorkflowRegistryHookSource()
   registerNodeExecutor({
     kind: "ai.prompt",
-    typeVersion: 1,
+    typeVersion: 2,
     pluginId: "node-owner",
     execute: async () => ({ output: {} }),
   })
@@ -37,12 +37,12 @@ it("delivers real registry changes with ownership and stops after cleanup", asyn
   await Promise.resolve()
   expect(dispatch.dispatchWorkflowNodeRegister).toHaveBeenCalledWith({
     kind: "ai.prompt",
-    typeVersion: 1,
+    typeVersion: 2,
     pluginId: "node-owner",
   })
   expect(dispatch.dispatchWorkflowNodeUnregister).toHaveBeenCalledWith({
     kind: "ai.prompt",
-    typeVersion: 1,
+    typeVersion: 2,
     pluginId: "node-owner",
   })
   registerPluginTrigger({

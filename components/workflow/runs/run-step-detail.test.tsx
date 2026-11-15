@@ -13,7 +13,7 @@ import { RunStepDetail } from "./run-step-detail"
 
 const workflow: VisualWorkflow = {
   id: "wf1",
-  schemaVersion: 1,
+  schemaVersion: 2,
   name: "t",
   createdAt: 0,
   updatedAt: 0,

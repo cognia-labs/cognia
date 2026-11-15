@@ -19,7 +19,7 @@ function definition(): WorkflowNodeGroupDefinition {
         {
           id: "prompt",
           type: "ai.prompt",
-          typeVersion: 1,
+          typeVersion: 2,
           position: { x: 100, y: 50 },
           data: { label: "Review", params: { prompt: "Review" } },
         },

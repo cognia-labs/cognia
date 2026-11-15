@@ -1,9 +1,8 @@
 /**
  * @jest-environment jsdom
  *
- * flow.branch / flow.switch typeVersion 2 — structured-condition executors.
- * Co-located with built-ins.ts; split from built-ins.test.ts to keep the
- * (already heavy) v1 suite size in check.
+ * flow.branch / flow.switch — structured-condition executors. Split from
+ * index.test.ts to keep that suite's size in check.
  */
 import "fake-indexeddb/auto"
 // Importing built-ins triggers their side-effecting registrations.
@@ -49,7 +48,7 @@ async function execV2(
   return reg.execute(makeCtx(kind, params))
 }
 
-describe("flow.branch v2", () => {
+describe("flow.branch", () => {
   it("routes to the true handle when the group passes", async () => {
     const r = await execV2("flow.branch", {
       conditions: {
@@ -94,7 +93,7 @@ describe("flow.branch v2", () => {
   })
 })
 
-describe("flow.switch v2", () => {
+describe("flow.switch", () => {
   const cases = [
     {
       id: "c_low",

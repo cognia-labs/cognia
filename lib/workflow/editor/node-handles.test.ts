@@ -10,19 +10,12 @@ import {
 
 describe("outputHandlesFor", () => {
   it("returns null for plain single-output kinds", () => {
-    expect(outputHandlesFor({ kind: "ai.prompt", typeVersion: 1, params: {} })).toBeNull()
-    expect(outputHandlesFor({ kind: "flow.set", typeVersion: 1, params: {} })).toBeNull()
+    expect(outputHandlesFor({ kind: "ai.prompt", params: {} })).toBeNull()
+    expect(outputHandlesFor({ kind: "flow.set", params: {} })).toBeNull()
   })
 
-  it("returns null for v1 branch/switch (legacy single handle + edge labels)", () => {
-    expect(
-      outputHandlesFor({ kind: "flow.branch", typeVersion: 1, params: { condition: "x" } })
-    ).toBeNull()
-    expect(outputHandlesFor({ kind: "flow.switch", typeVersion: 1, params: {} })).toBeNull()
-  })
-
-  it("branch v2 exposes true/false handles", () => {
-    const handles = outputHandlesFor({ kind: "flow.branch", typeVersion: 2, params: {} })
+  it("branch exposes true/false handles", () => {
+    const handles = outputHandlesFor({ kind: "flow.branch", params: {} })
     expect(handles).toEqual([
       { id: "true", kind: "true" },
       { id: "false", kind: "false" },
@@ -32,7 +25,6 @@ describe("outputHandlesFor", () => {
   it("approval gate exposes approved/rejected handles from v1 (ADR 0061)", () => {
     const handles = outputHandlesFor({
       kind: "action.approval.request",
-      typeVersion: 1,
       params: {},
     })
     expect(handles).toEqual([
@@ -44,7 +36,6 @@ describe("outputHandlesFor", () => {
   it("human input exposes authored action handles plus the fixed timeout route", () => {
     const handles = outputHandlesFor({
       kind: "action.humanInput.request",
-      typeVersion: 1,
       params: {
         actions: [
           { id: "submit", label: "Submit" },
@@ -61,10 +52,9 @@ describe("outputHandlesFor", () => {
     ])
   })
 
-  it("switch v2 exposes one handle per case plus default", () => {
+  it("switch exposes one handle per case plus default", () => {
     const handles = outputHandlesFor({
       kind: "flow.switch",
-      typeVersion: 2,
       params: {
         cases: [
           { id: "c_a", label: "Alpha", when: { combinator: "all", conditions: [] } },
@@ -79,15 +69,14 @@ describe("outputHandlesFor", () => {
     ])
   })
 
-  it("switch v2 with no cases still exposes the default handle", () => {
-    const handles = outputHandlesFor({ kind: "flow.switch", typeVersion: 2, params: {} })
+  it("switch with no cases still exposes the default handle", () => {
+    const handles = outputHandlesFor({ kind: "flow.switch", params: {} })
     expect(handles).toEqual([{ id: "default", kind: "default" }])
   })
 
   it("case handles fall back to the id when no label is set", () => {
     const handles = outputHandlesFor({
       kind: "flow.switch",
-      typeVersion: 2,
       params: { cases: [{ id: "c_x", when: { combinator: "all", conditions: [] } }] },
     })
     expect(handles?.[0]).toEqual({ id: "c_x", kind: "case", label: undefined })
@@ -182,13 +171,11 @@ describe("stack decision handles", () => {
     // that decides without declaring handles makes a plainly-drawn edge (route
     // key "default") skip everything downstream — the graph looks fine and the
     // run quietly does nothing.
-    expect(outputHandlesFor({ kind: "action.stack.validate", typeVersion: 1, params: {} })).toEqual(
-      [
-        { id: "ok", kind: "ok" },
-        { id: "problems", kind: "problems" },
-      ]
-    )
-    expect(outputHandlesFor({ kind: "action.stack.restack", typeVersion: 1, params: {} })).toEqual([
+    expect(outputHandlesFor({ kind: "action.stack.validate", params: {} })).toEqual([
+      { id: "ok", kind: "ok" },
+      { id: "problems", kind: "problems" },
+    ])
+    expect(outputHandlesFor({ kind: "action.stack.restack", params: {} })).toEqual([
       { id: "restacked", kind: "restacked" },
       { id: "conflict", kind: "conflict" },
     ])
@@ -196,7 +183,7 @@ describe("stack decision handles", () => {
 
   it("the stack kinds that do not decide keep the plain single handle", () => {
     for (const kind of ["action.stack.list", "action.stack.parent", "action.stack.push"] as const) {
-      expect(outputHandlesFor({ kind, typeVersion: 1, params: {} })).toBeNull()
+      expect(outputHandlesFor({ kind, params: {} })).toBeNull()
     }
   })
 

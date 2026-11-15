@@ -9,7 +9,7 @@ import {
 function wf(id: string, nodes: WorkflowRow["nodes"]): WorkflowRow {
   return {
     id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: id,
     createdAt: 0,
     updatedAt: 0,

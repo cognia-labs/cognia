@@ -46,7 +46,7 @@ describe("buildQuickActionPrompt", () => {
       expect(out).toContain("no validation errors")
     })
 
-    it("includes version-specific branch errors in the validate prompt", () => {
+    it("includes branch params errors in the validate prompt", () => {
       const node = makeNode("branch", "flow.branch", "Branch", { condition: "true" })
       node.data.typeVersion = 2
       const prompt = buildQuickActionPrompt("validate", makeState({ nodes: [node] }))

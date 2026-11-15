@@ -17,7 +17,7 @@ const NOW = 1_730_000_000_000
 export function httpRetryFallbackTemplate(): VisualWorkflow {
   return {
     id: "wf_builtin_http_retry_fallback",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "HTTP retry with fallback",
     description:
       "Calls an HTTP endpoint, retries once with exponential backoff if it returns 5xx, and falls through to an AI-summarized alert when both attempts fail. Reusable scaffold for any external-API integration that needs graceful degradation.",
@@ -55,12 +55,17 @@ export function httpRetryFallbackTemplate(): VisualWorkflow {
       {
         id: "n_branch_1",
         type: "flow.branch",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 580, y: 200 },
         data: {
           label: "5xx?",
           params: {
-            condition: "{{ $node['n_http_1'].out.status >= 500 }}",
+            conditions: {
+              combinator: "all",
+              conditions: [
+                { left: "{{ $node['n_http_1'].out.status }}", operator: "gte", right: "500" },
+              ],
+            },
           },
           notes: "True branch → retry. False branch → fall through to summarize.",
         },
@@ -93,19 +98,24 @@ export function httpRetryFallbackTemplate(): VisualWorkflow {
       {
         id: "n_branch_2",
         type: "flow.branch",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 1320, y: 100 },
         data: {
           label: "Still 5xx?",
           params: {
-            condition: "{{ $node['n_http_2'].out.status >= 500 }}",
+            conditions: {
+              combinator: "all",
+              conditions: [
+                { left: "{{ $node['n_http_2'].out.status }}", operator: "gte", right: "500" },
+              ],
+            },
           },
         },
       },
       {
         id: "n_fallback",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 1580, y: 100 },
         data: {
           label: "Summarize failure",
@@ -136,10 +146,16 @@ export function httpRetryFallbackTemplate(): VisualWorkflow {
     edges: [
       { id: "e1", source: "n_start", target: "n_http_1" },
       { id: "e2", source: "n_http_1", target: "n_branch_1" },
-      { id: "e3", source: "n_branch_1", target: "n_wait", label: "5xx" },
+      { id: "e3", source: "n_branch_1", target: "n_wait", sourceHandle: "true", label: "5xx" },
       { id: "e4", source: "n_wait", target: "n_http_2" },
       { id: "e5", source: "n_http_2", target: "n_branch_2" },
-      { id: "e6", source: "n_branch_2", target: "n_fallback", label: "still failed" },
+      {
+        id: "e6",
+        source: "n_branch_2",
+        target: "n_fallback",
+        sourceHandle: "true",
+        label: "still failed",
+      },
       { id: "e7", source: "n_fallback", target: "n_alert" },
     ],
   }

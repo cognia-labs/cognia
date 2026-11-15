@@ -66,7 +66,7 @@ function expectValid(workflow: VisualWorkflow, dormantNodeIds: string[] = []) {
   expect(validation.ok ? [] : validation.errors).toEqual([])
   for (const n of workflow.nodes) {
     if (dormantNodeIds.includes(n.id)) continue
-    const result = validateNodeParams(n.type as WorkflowNodeKind, n.data.params, n.typeVersion)
+    const result = validateNodeParams(n.type as WorkflowNodeKind, n.data.params)
     expect({ id: n.id, summary: result.summary }).toEqual({ id: n.id, summary: [] })
   }
 }

@@ -1,20 +1,21 @@
 import { migrateWorkflow } from "./migrate"
+import { registerWorkflowKindAliases, __resetWorkflowKindAliasesForTesting } from "./kind-aliases"
 import { DEFAULT_WORKFLOW_SETTINGS, type VisualWorkflow } from "@/types/workflow/visual"
 
-function baseV1(): VisualWorkflow {
+function workflow(): VisualWorkflow {
   return {
     id: "wf_x",
-    schemaVersion: 1,
-    name: "legacy",
+    schemaVersion: 2,
+    name: "current",
     createdAt: 1,
     updatedAt: 1,
     nodes: [
       {
         id: "n1",
         type: "flow.loop",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 0, y: 0 },
-        data: { label: "Loop", params: { mode: "forEach" } },
+        data: { label: "Loop", params: { mode: "times", times: 2 } },
       },
     ],
     edges: [],
@@ -22,25 +23,31 @@ function baseV1(): VisualWorkflow {
   }
 }
 
+afterEach(() => __resetWorkflowKindAliasesForTesting())
+
 describe("migrateWorkflow", () => {
-  it("stamps schemaVersion 2 on a v1 workflow", () => {
-    const out = migrateWorkflow(baseV1())
+  it("returns a workflow with no aliased kinds by reference", () => {
+    const wf = workflow()
+    expect(migrateWorkflow(wf)).toBe(wf)
+  })
+
+  it("never rewrites schemaVersion or typeVersion", () => {
+    const out = migrateWorkflow(workflow())
     expect(out.schemaVersion).toBe(2)
+    expect(out.nodes[0].typeVersion).toBe(2)
   })
 
-  it("leaves a legacy flat flow.loop at typeVersion 1 (transform mode preserved)", () => {
-    const out = migrateWorkflow(baseV1())
-    expect(out.nodes[0].typeVersion).toBe(1)
-    expect(out.nodes[0].type).toBe("flow.loop")
-  })
-
-  it("is idempotent — a v2 workflow passes through unchanged (same reference)", () => {
-    const v2 = migrateWorkflow(baseV1())
-    expect(migrateWorkflow(v2)).toBe(v2)
+  it("resolves plugin-declared kind aliases", () => {
+    registerWorkflowKindAliases("acme", { "acme.old": "acme.action.new" })
+    const wf = workflow()
+    wf.nodes[0] = { ...wf.nodes[0], type: "acme.old" as VisualWorkflow["nodes"][number]["type"] }
+    const out = migrateWorkflow(wf)
+    expect(out).not.toBe(wf)
+    expect(out.nodes[0].type).toBe("acme.action.new")
   })
 
   it("preserves unknown / additive fields", () => {
-    const wf = { ...baseV1(), variables: { API_KEY: "x" }, staticData: { acc: 1 } }
+    const wf = { ...workflow(), variables: { API_KEY: "x" }, staticData: { acc: 1 } }
     const out = migrateWorkflow(wf)
     expect(out.variables).toEqual({ API_KEY: "x" })
     expect(out.staticData).toEqual({ acc: 1 })

@@ -154,7 +154,7 @@ import { MobileWorkflowEditor } from "./mobile-workflow-editor"
 function buildWorkflow(): VisualWorkflow {
   return {
     id: "wf_edit",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Editor",
     createdAt: 1,
     updatedAt: 1,
@@ -169,7 +169,7 @@ function buildWorkflow(): VisualWorkflow {
       {
         id: "n2",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "AI", params: {} },
       },

@@ -1,5 +1,5 @@
 /**
- * Routed execution path for `ai.prompt` typeVersion 2 (`mode: "routed"`).
+ * Routed execution path for `ai.prompt` (`mode: "routed"`).
  *
  * Instead of a hardcoded provider+model+apiKey, the node consults the
  * ADR-0043 provider-routing engine (model-alias mappings, strategy, health /
@@ -111,7 +111,7 @@ export interface RoutedPromptLedger {
 /**
  * The ledger binding every workflow AI node uses: its calls are Agent/workflow
  * work (`agentsWorkflows`), booked per step, in the workflow's own workspace —
- * the same binding `ai.prompt` v1 gives its client.
+ * the same binding `ai.prompt`'s explicit mode gives its client.
  */
 export function workflowNodeLedger(
   ctx: Pick<StepExecutionContext, "stepId" | "projectId">

@@ -4,7 +4,7 @@ import type { VisualWorkflow } from "@/types/workflow/visual"
 function wf(kinds: string[]): VisualWorkflow {
   return {
     id: "wf_1",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "w",
     nodes: kinds.map((kind, i) => ({
       id: `n${i}`,

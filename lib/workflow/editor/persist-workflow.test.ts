@@ -18,7 +18,7 @@ import type { VisualWorkflow } from "@/types/workflow/visual"
 function buildWorkflow(nodeType: string): VisualWorkflow {
   return {
     id: "wf_persist",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Persist",
     createdAt: 1,
     updatedAt: 1,
@@ -59,7 +59,7 @@ describe("persistEditorWorkflow", () => {
     expect(result).toEqual({ issueCount: 0, publicationInvalidated: false })
   })
 
-  it("reports version-specific params errors from the persisted snapshot", async () => {
+  it("reports params errors from the persisted snapshot", async () => {
     const workflow = buildWorkflow("flow.branch")
     workflow.nodes[0].typeVersion = 2
     workflow.nodes[0].data.params = { condition: "true" }

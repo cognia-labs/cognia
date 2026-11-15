@@ -23,7 +23,7 @@ function buildGraph(slots: CopilotSlotValues): VisualWorkflow {
   const conversationKey = String(slots.conversationKey ?? "ops")
   return {
     id: `wf_copilot_cron_report_${NOW}`,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: `Scheduled report — ${conversationKey}`,
     description: `Run on cron "${cronExpression}", fetch ${sourceUrl}, summarize with AI, and forward to ${adapterId}/${conversationKey}.`,
     icon: "Clock",
@@ -62,7 +62,7 @@ function buildGraph(slots: CopilotSlotValues): VisualWorkflow {
       {
         id: "n_summary",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 620, y: 200 },
         data: {
           label: "Summarize",

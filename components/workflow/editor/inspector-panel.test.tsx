@@ -116,7 +116,7 @@ const MESSAGES = {
 function buildWorkflow(): VisualWorkflow {
   return {
     id: "wf_test",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Sample",
     createdAt: 1,
     updatedAt: 1,
@@ -124,14 +124,14 @@ function buildWorkflow(): VisualWorkflow {
       {
         id: "n_a",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 0, y: 0 },
         data: { label: "Prompt A", params: {} },
       },
       {
         id: "n_b",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "Prompt B", params: {} },
       },

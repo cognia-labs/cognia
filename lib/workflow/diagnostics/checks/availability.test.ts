@@ -14,7 +14,7 @@ function node(id: string, extra: Partial<WorkflowNode["data"]> = {}): WorkflowNo
 function wf(nodes: WorkflowNode[], credentials?: VisualWorkflow["credentials"]): VisualWorkflow {
   return {
     id: "w",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "T",
     createdAt: 0,
     updatedAt: 0,

@@ -89,10 +89,9 @@ function extractIssueParams(issue: ZodIssue): Record<string, string | number> | 
  */
 export function validateNodeParams(
   kind: WorkflowNodeKind,
-  params: Record<string, unknown> | undefined,
-  typeVersion?: number
+  params: Record<string, unknown> | undefined
 ): NodeValidationResult {
-  const schema = paramsSchemaFor(kind, typeVersion)
+  const schema = paramsSchemaFor(kind)
   const parsed = schema.safeParse(params ?? {})
   if (parsed.success) {
     return { fields: {}, summary: [], hasErrors: false }
@@ -131,11 +130,7 @@ export function validateAllNodes(
 ): Record<string, NodeValidationResult> {
   const out: Record<string, NodeValidationResult> = {}
   for (const node of nodes) {
-    const result = validateNodeParams(
-      node.data.kind as WorkflowNodeKind,
-      node.data.params,
-      node.data.typeVersion
-    )
+    const result = validateNodeParams(node.data.kind as WorkflowNodeKind, node.data.params)
     if (result.hasErrors) out[node.id] = result
   }
   return out

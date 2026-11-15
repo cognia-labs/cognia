@@ -922,7 +922,6 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
         e.preventDefault()
         const handles = outputHandlesFor({
           kind: node.data.kind as WorkflowNodeKind,
-          typeVersion: node.data.typeVersion ?? 1,
           params: (node.data.params as Record<string, unknown>) ?? {},
         })
         state.setPendingConnectFrom({

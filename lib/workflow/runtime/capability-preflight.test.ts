@@ -133,7 +133,7 @@ describe("runWorkflow capability preflight integration", () => {
   function buildWorkflow(nodes: VisualWorkflow["nodes"]): VisualWorkflow {
     return {
       id: "wf_cap",
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "Capability test workflow",
       createdAt: 0,
       updatedAt: 0,

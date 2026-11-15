@@ -629,7 +629,7 @@ describe("regenerateNodeIds", () => {
   it("rewrites node ids and patches edge endpoints", () => {
     const wf: VisualWorkflow = {
       id: "wf_x",
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "x",
       createdAt: 0,
       updatedAt: 0,
@@ -748,7 +748,7 @@ describe("schemaVersion 2 funnel", () => {
   it("getWorkflow migrates a stored v1 row to v2 on read", async () => {
     const legacy: VisualWorkflow = {
       id: "wf_legacy",
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "old",
       createdAt: 1,
       updatedAt: 1,
@@ -764,7 +764,7 @@ describe("schemaVersion 2 funnel", () => {
   it("listWorkflows and listWorkflowsByUpdated migrate v1 rows on read", async () => {
     const legacy: VisualWorkflow = {
       id: "wf_legacy_list",
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "old-list",
       createdAt: 1,
       updatedAt: 1,
@@ -781,7 +781,7 @@ describe("schemaVersion 2 funnel", () => {
 
   it("replaceWorkflow writes schemaVersion 2", async () => {
     const wf = await createWorkflow({ name: "rw" })
-    await replaceWorkflow({ ...wf, schemaVersion: 1, name: "rw2" })
+    await replaceWorkflow({ ...wf, schemaVersion: 2, name: "rw2" })
     const out = await getWorkflow(wf.id)
     expect(out?.schemaVersion).toBe(2)
     expect(out?.name).toBe("rw2")

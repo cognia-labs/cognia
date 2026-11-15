@@ -11,7 +11,7 @@ function templateWorkflow(): VisualWorkflow {
   })
   return {
     id: "wf_template",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "template",
     nodes: [node("cron", 0), node("fetch", 200), node("Send Message!", 400)],
     edges: [

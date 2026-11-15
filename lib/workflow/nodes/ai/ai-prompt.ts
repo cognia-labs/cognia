@@ -1,26 +1,26 @@
 /**
- * `ai.prompt` typeVersion 2 — the full executor logic, kept out of
- * built-ins.ts so it's independently testable.
+ * `ai.prompt` — the full executor logic, kept out of executors.ts so it's
+ * independently testable.
  *
- * v2 over v1:
- *   - `mode: "routed"` consults the ADR-0043 provider-routing engine
- *     (alias mappings + fallback chains) instead of hardcoded credentials.
+ *   - `mode: "explicit"` calls a direct provider/model with the node's own
+ *     credentials; `mode: "routed"` consults the ADR-0043 provider-routing
+ *     engine (alias mappings + fallback chains).
  *   - `piiGate` ("off" | "block" | "redact") runs before any text egress.
  *   - Streams deltas through `ctx.emitStream` (live output in the run UI).
  *   - Reports token/cost usage through `ctx.reportUsage` (`step_usage`).
  *
- * Structured output (D3) matches v1 exactly: when JSON mode declares an
- * `outputSchema`, the completion is validated against it with ONE bounded
- * auto-fix retry (`runStructuredTurn`), and `onSchemaViolation` decides
- * whether a persistent violation throws (`fail`, default — feeds the node's
- * errorPolicy machinery) or rides the output as `schemaValid: false`
- * (`soft`). The legacy `jsonSchema` string param stays a shape HINT only.
- * `ai.classify` / `ai.extract` delegate here and inherit the contract.
+ * Structured output (D3): when JSON mode declares an `outputSchema`, the
+ * completion is validated against it with ONE bounded auto-fix retry
+ * (`runStructuredTurn`), and `onSchemaViolation` decides whether a persistent
+ * violation throws (`fail`, default — feeds the node's errorPolicy machinery)
+ * or rides the output as `schemaValid: false` (`soft`). The free-text
+ * `jsonSchema` param is a shape HINT only. `ai.classify` / `ai.extract`
+ * delegate here and inherit the contract.
  *
- * Explicit mode keeps v1's deliberate echo-stub when credentials are
- * missing (so half-configured workflows still run end-to-end); routed mode
- * has NO stub — a missing route or missing keys is a hard, descriptive error.
- * The stub never enforces the schema (there is no model to auto-fix).
+ * Explicit mode keeps a deliberate echo-stub when credentials are missing (so
+ * half-configured workflows still run end-to-end); routed mode has NO stub — a
+ * missing route or missing keys is a hard, descriptive error. The stub never
+ * enforces the schema (there is no model to auto-fix).
  */
 
 import { resolveNodeApiKey } from "../shared/executor-support"
@@ -32,11 +32,11 @@ import { buildJsonInstruction, parseStructured } from "./structured"
 import { runStructuredTurn, type SchemaViolationMode } from "./structured-turn"
 import { validateAgainstJsonSchema } from "./schema-validate"
 
-export interface AiPromptV2Params {
+export interface AiPromptParams {
   mode?: "explicit" | "routed"
   /** Routed mode: the model alias resolved through the mapping registry. */
   modelAlias?: string
-  /** Explicit mode: direct provider/model/credentials (v1 contract). */
+  /** Explicit mode: direct provider/model/credentials. */
   provider?: string
   model?: string
   apiKey?: string
@@ -83,13 +83,13 @@ interface PromptOutcome {
   routingReason?: string
 }
 
-export async function executeAiPromptV2(ctx: StepExecutionContext): Promise<StepExecutionResult> {
-  const params = ctx.params as AiPromptV2Params
+export async function executeAiPrompt(ctx: StepExecutionContext): Promise<StepExecutionResult> {
+  const params = ctx.params as AiPromptParams
   const jsonMode = params.responseFormat === "json"
   const outputSchema = params.outputSchema
   const enforceSchema = jsonMode && !!outputSchema && Object.keys(outputSchema).length > 0
-  // A declared output schema doubles as the JSON shape hint (v1 parity);
-  // otherwise the legacy `jsonSchema` string hint applies.
+  // A declared output schema doubles as the JSON shape hint; otherwise the
+  // free-text `jsonSchema` hint applies.
   const schemaHint = enforceSchema ? JSON.stringify(outputSchema, null, 2) : params.jsonSchema
   const baseSystem = jsonMode
     ? [params.systemPrompt, buildJsonInstruction(schemaHint)].filter(Boolean).join("\n\n")
@@ -131,9 +131,8 @@ export async function executeAiPromptV2(ctx: StepExecutionContext): Promise<Step
   const gated = { ...guarded.value, redacted: guarded.redacted }
 
   // Shared tail: attach `structured` / `parseError` in JSON mode, plus the
-  // soft `schemaValid` / `schemaErrors` stamp when a schema is enforced —
-  // identical to v1's finalize so the two versions' outputs stay
-  // shape-compatible for downstream expressions.
+  // soft `schemaValid` / `schemaErrors` stamp when a schema is enforced, so
+  // explicit and routed outputs share one shape for downstream expressions.
   const finalize = (out: PromptOutcome): StepExecutionResult => {
     const withPii = gated.redacted ? { ...out, piiRedacted: true } : out
     if (!jsonMode) return { output: withPii }
@@ -160,8 +159,7 @@ export async function executeAiPromptV2(ctx: StepExecutionContext): Promise<Step
   /**
    * Drive one-or-two model calls through the typed-output contract. `callOnce`
    * owns the actual model invocation (routed or explicit); the auto-fix retry
-   * appends the corrective re-prompt to the user prompt — same placement as
-   * v1. Returns the LAST outcome (the retry's completion when one happened);
+   * appends the corrective re-prompt to the user prompt. Returns the LAST outcome (the retry's completion when one happened);
    * `runStructuredTurn` throws in `fail` mode when the schema still fails.
    */
   const runWithSchema = async (
@@ -271,7 +269,7 @@ export async function executeAiPromptV2(ctx: StepExecutionContext): Promise<Step
     }
   }
 
-  // ── explicit mode (v1 contract + streaming + usage reporting) ────────────
+  // ── explicit mode (direct credentials + streaming + usage reporting) ─────
   const apiKey = await resolveNodeApiKey(ctx, params.apiKey)
 
   if (!params.provider || !params.model || !apiKey) {
@@ -310,8 +308,7 @@ export async function executeAiPromptV2(ctx: StepExecutionContext): Promise<Step
     defaultTemperature: params.temperature,
   })
   // Router + Fusion reserves and settles each call — the auto-fix retry
-  // included — when the `agentsWorkflows` switch is on (ADR-0188 D27), exactly
-  // as v1 does. Off, the default, `ledgerUtilityCalls` returns `built` itself.
+  // included — when the `agentsWorkflows` switch is on (ADR-0188 D27). Off, the default, `ledgerUtilityCalls` returns `built` itself.
   // The settings read works on the headless brain too, which never loads the
   // settings store.
   const client = ledgerUtilityCalls(built, {

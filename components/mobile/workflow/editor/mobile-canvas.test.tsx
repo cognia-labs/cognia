@@ -104,7 +104,7 @@ import { MobileCanvas } from "./mobile-canvas"
 function buildWorkflow(): VisualWorkflow {
   return {
     id: "wf_c",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Canvas",
     createdAt: 1,
     updatedAt: 1,
@@ -112,7 +112,7 @@ function buildWorkflow(): VisualWorkflow {
       {
         id: "n1",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 0, y: 0 },
         data: { label: "N1", params: {} },
       },

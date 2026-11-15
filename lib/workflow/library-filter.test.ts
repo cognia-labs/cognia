@@ -12,7 +12,7 @@ import type { WorkflowRow } from "@/types/workflow/visual"
 
 function wf(partial: Partial<WorkflowRow> & { id: string; name: string }): WorkflowRow {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     createdAt: 0,
     updatedAt: 0,
     nodes: [],

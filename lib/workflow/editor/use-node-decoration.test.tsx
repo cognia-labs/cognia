@@ -10,7 +10,7 @@ import type { VisualWorkflow } from "@/types/workflow/visual"
 function makeWorkflow(): VisualWorkflow {
   return {
     id: "wf_test",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Test",
     description: "",
     nodes: [],

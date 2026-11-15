@@ -1,5 +1,5 @@
 /**
- * flow.loop typeVersion 2 — container sub-canvas execution (Dify-style).
+ * flow.loop — container sub-canvas execution (Dify-style).
  *
  * The container node owns a body subgraph: every node whose `parentId`
  * points at the container. Per iteration the body runs under the SAME
@@ -60,7 +60,7 @@ const DEFAULT_WHILE_MAX = 1_000
 
 export interface RunLoopContainerInput {
   workflow: VisualWorkflow
-  /** The `flow.loop` typeVersion 2 container node. */
+  /** The `flow.loop` container node. */
   node: WorkflowNode
   trigger: TriggerEvent
   /** Upstream outputs visible to the container (and to its body). */
@@ -159,8 +159,7 @@ export async function runLoopContainer(
       ? Math.floor(rawParams.batchSize)
       : 0
   // Container-level backstop for errors the child's own handling didn't absorb.
-  const onItemError =
-    rawParams.onItemError === "skip" ? "remove-failed" : (rawParams.onItemError ?? "fail")
+  const onItemError = rawParams.onItemError ?? "fail"
   const errorsByIndex = new Map<number, LoopItemError>()
 
   await logger.stepStarted(loopId, { mode, iterationConcurrency })
@@ -456,7 +455,7 @@ async function runSubgraph(input: RunSubgraphInput): Promise<SubgraphResult> {
     }
     // Nested container — recurse with a namespaced id so its cache key and
     // event provenance stay unique per outer iteration.
-    if (child.type === "flow.loop" && child.typeVersion >= 2) {
+    if (child.type === "flow.loop") {
       const release = await gate.acquire(input.signal)
       try {
         const nested = await runLoopContainer({

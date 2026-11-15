@@ -48,7 +48,7 @@ export function projectPluginWorkflowTemplate(input: WorkflowTemplateEntry): Vis
 
   return {
     id: runtimeId,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: entry.name,
     description: entry.description,
     icon: entry.icon,

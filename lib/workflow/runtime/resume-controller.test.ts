@@ -62,7 +62,7 @@ describe("resumeInFlightRuns", () => {
   it("counts a successful replay as succeeded", async () => {
     const snapshot = {
       id: "wf_resumed",
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "Resumed",
       createdAt: 0,
       updatedAt: 0,
@@ -100,7 +100,7 @@ describe("resumeInFlightRuns", () => {
   it("counts a failing replay as failed without throwing", async () => {
     const snapshot = {
       id: "wf_bad",
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "Bad",
       createdAt: 0,
       updatedAt: 0,

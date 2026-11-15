@@ -83,7 +83,7 @@ function chain(steps: Step[], settings: Partial<WorkflowSettings> = {}): VisualW
   const ids = ["t", ...steps.map((s) => s.id)]
   return {
     id: "wf_budget",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Budget",
     createdAt: 0,
     updatedAt: 0,

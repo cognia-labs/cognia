@@ -20,7 +20,7 @@ beforeEach(async () => {
 function makeStore(): EditorStore {
   const wf: VisualWorkflow = {
     id: "wf_x",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "t",
     createdAt: 0,
     updatedAt: 0,
@@ -35,7 +35,7 @@ function makeStore(): EditorStore {
       {
         id: "n_b",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "Beta", params: {} },
       },

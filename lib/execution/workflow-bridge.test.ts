@@ -37,14 +37,14 @@ function workflowRun(overrides: Partial<WorkflowRunRow> = {}): WorkflowRunRow {
       id: "wf-1",
       name: "Release",
       description: "",
-      schemaVersion: 1,
+      schemaVersion: 2,
       createdAt: 1,
       updatedAt: 1,
       nodes: [
         {
           id: "step-1",
           type: "ai.prompt",
-          typeVersion: 1,
+          typeVersion: 2,
           position: { x: 0, y: 0 },
           data: { label: "Draft", params: {} },
         },

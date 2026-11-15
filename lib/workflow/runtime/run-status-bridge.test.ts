@@ -127,7 +127,7 @@ function makeRun(id: string, workflowId: string, startedAt: number): WorkflowRun
     startedAt,
     workflowSnapshot: {
       id: workflowId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       name: "wf",
       createdAt: startedAt,
       updatedAt: startedAt,

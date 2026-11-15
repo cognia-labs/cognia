@@ -25,7 +25,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store"
 function makeWorkflow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
   return {
     id: "wf_a",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Daily digest",
     folderId: ROOT_FOLDER_ID,
     createdAt: 0,

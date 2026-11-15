@@ -1,4 +1,4 @@
-import { executeAiPromptV2 } from "./ai-prompt-v2"
+import { executeAiPrompt } from "./ai-prompt"
 import type { StepExecutionContext } from "@/types/workflow/visual"
 
 const mockStartSpan = jest.fn(() => ({ spanId: "span1", traceId: "trace1" }))
@@ -75,10 +75,10 @@ beforeEach(() => {
   injectTwinContextMock.mockResolvedValue({ systemPrompt: "", applied: false })
 })
 
-describe("executeAiPromptV2 — explicit mode", () => {
-  it("falls back to the stub echo when credentials are missing (v1 parity)", async () => {
+describe("executeAiPrompt — explicit mode", () => {
+  it("falls back to the stub echo when credentials are missing", async () => {
     const ctx = makeCtx({ userPrompt: "hi" })
-    const result = await executeAiPromptV2(ctx)
+    const result = await executeAiPrompt(ctx)
     const output = result.output as { completion: string; stub: boolean }
     expect(output.stub).toBe(true)
     expect(output.completion).toBe("[ai.prompt stub] hi")
@@ -91,7 +91,7 @@ describe("executeAiPromptV2 — explicit mode", () => {
       { provider: "openai", model: "gpt-x", apiKey: "k", userPrompt: "hi" },
       { reportUsage }
     )
-    const result = await executeAiPromptV2(ctx)
+    const result = await executeAiPrompt(ctx)
     const output = result.output as { completion: string; stub: boolean; costUsd?: number }
     expect(output.completion).toBe("real completion")
     expect(output.stub).toBe(false)
@@ -141,7 +141,7 @@ describe("executeAiPromptV2 — explicit mode", () => {
       },
       { projectId: "ws-1" }
     )
-    await executeAiPromptV2(ctx)
+    await executeAiPrompt(ctx)
     expect(mockBeginLedgeredUtilityCall).toHaveBeenCalledTimes(2)
     expect(mockBeginLedgeredUtilityCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -163,7 +163,7 @@ describe("executeAiPromptV2 — explicit mode", () => {
 
   it("sends the explicit call untouched while the switch is off", async () => {
     const ctx = makeCtx({ provider: "openai", model: "gpt-x", apiKey: "k", userPrompt: "hi" })
-    await executeAiPromptV2(ctx)
+    await executeAiPrompt(ctx)
     expect(mockBeginLedgeredUtilityCall).not.toHaveBeenCalled()
     expect(mockComplete.mock.calls[0][1]).not.toHaveProperty("maxRetries")
   })
@@ -180,7 +180,7 @@ describe("executeAiPromptV2 — explicit mode", () => {
       userPrompt: "hi",
     })
 
-    await executeAiPromptV2(ctx)
+    await executeAiPrompt(ctx)
 
     expect(mockCreateLlmClient).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -205,7 +205,7 @@ describe("executeAiPromptV2 — explicit mode", () => {
       characterId: "char_1",
     })
 
-    await executeAiPromptV2(ctx)
+    await executeAiPrompt(ctx)
 
     expect(injectTwinContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -245,7 +245,7 @@ describe("executeAiPromptV2 — explicit mode", () => {
       }
     )
 
-    const result = await executeAiPromptV2(ctx)
+    const result = await executeAiPrompt(ctx)
 
     const sentSystem = mockComplete.mock.calls[0][1].system as string
     expect(sentSystem).not.toContain("alice@example.com")
@@ -265,7 +265,7 @@ describe("executeAiPromptV2 — explicit mode", () => {
       responseFormat: "json",
     })
 
-    await executeAiPromptV2(ctx)
+    await executeAiPrompt(ctx)
 
     const sentSystem = mockComplete.mock.calls[0][1].system as string
     expect(sentSystem).toContain("TWIN-WRAPPED")
@@ -285,14 +285,14 @@ describe("executeAiPromptV2 — explicit mode", () => {
       characterId: "char_1",
     })
 
-    await executeAiPromptV2(ctx)
+    await executeAiPrompt(ctx)
 
     expect(mockComplete).toHaveBeenCalledWith("hi", expect.objectContaining({ system: "base" }))
   })
 
   it("does not consult the twin injector when no characterId is set", async () => {
     const ctx = makeCtx({ provider: "openai", model: "gpt-x", apiKey: "k", userPrompt: "hi" })
-    await executeAiPromptV2(ctx)
+    await executeAiPrompt(ctx)
     expect(injectTwinContextMock).not.toHaveBeenCalled()
   })
 
@@ -306,7 +306,7 @@ describe("executeAiPromptV2 — explicit mode", () => {
       { provider: "openai", model: "gpt-x", apiKey: "k", userPrompt: "hi" },
       { emitStream }
     )
-    const result = await executeAiPromptV2(ctx)
+    const result = await executeAiPrompt(ctx)
     expect((result.output as { completion: string }).completion).toBe("abcd")
     expect(emitStream.mock.calls.map((c) => c[0])).toEqual(["ab", "cd"])
     expect(mockComplete).not.toHaveBeenCalled()
@@ -321,14 +321,14 @@ describe("executeAiPromptV2 — explicit mode", () => {
       userPrompt: "hi",
       responseFormat: "json",
     })
-    const result = await executeAiPromptV2(ctx)
+    const result = await executeAiPrompt(ctx)
     expect((result.output as { structured: unknown }).structured).toEqual({ x: 1 })
   })
 
   it("ends the span with error info when the call fails", async () => {
     mockComplete.mockRejectedValue(new Error("provider down"))
     const ctx = makeCtx({ provider: "openai", model: "gpt-x", apiKey: "k", userPrompt: "hi" })
-    await expect(executeAiPromptV2(ctx)).rejects.toThrow("provider down")
+    await expect(executeAiPrompt(ctx)).rejects.toThrow("provider down")
     expect(mockEndSpan).toHaveBeenCalledWith(
       "span1",
       expect.objectContaining({ errorMessage: "provider down" })
@@ -336,7 +336,7 @@ describe("executeAiPromptV2 — explicit mode", () => {
   })
 })
 
-describe("executeAiPromptV2 — structured output contract (D3)", () => {
+describe("executeAiPrompt — structured output contract (D3)", () => {
   const outputSchema = {
     type: "object",
     properties: { title: { type: "string" } },
@@ -353,7 +353,7 @@ describe("executeAiPromptV2 — structured output contract (D3)", () => {
 
   it("bakes the declared schema into the JSON instruction", async () => {
     mockComplete.mockResolvedValue('{"title":"ok"}')
-    await executeAiPromptV2(makeCtx(schemaParams))
+    await executeAiPrompt(makeCtx(schemaParams))
     const sentSystem = mockComplete.mock.calls[0][1].system as string
     expect(sentSystem).toContain('"title"')
     expect(sentSystem).toContain("Respond with ONLY a single valid JSON value")
@@ -361,7 +361,7 @@ describe("executeAiPromptV2 — structured output contract (D3)", () => {
 
   it("validates and stamps schemaValid on a conforming completion", async () => {
     mockComplete.mockResolvedValue('{"title":"ok"}')
-    const result = await executeAiPromptV2(makeCtx(schemaParams))
+    const result = await executeAiPrompt(makeCtx(schemaParams))
     const output = result.output as { structured: unknown; schemaValid?: boolean }
     expect(output.structured).toEqual({ title: "ok" })
     expect(output.schemaValid).toBe(true)
@@ -370,7 +370,7 @@ describe("executeAiPromptV2 — structured output contract (D3)", () => {
 
   it("auto-fix retries ONCE with the corrective re-prompt appended to the user prompt", async () => {
     mockComplete.mockResolvedValueOnce('{"nope": 1}').mockResolvedValueOnce('{"title":"fixed"}')
-    const result = await executeAiPromptV2(makeCtx(schemaParams))
+    const result = await executeAiPrompt(makeCtx(schemaParams))
     const output = result.output as { structured: unknown; schemaValid?: boolean }
     expect(output.structured).toEqual({ title: "fixed" })
     expect(output.schemaValid).toBe(true)
@@ -382,7 +382,7 @@ describe("executeAiPromptV2 — structured output contract (D3)", () => {
 
   it("throws after the failed auto-fix in fail mode (default), ending the span with the error", async () => {
     mockComplete.mockResolvedValue('{"nope": 1}')
-    await expect(executeAiPromptV2(makeCtx(schemaParams))).rejects.toThrow(
+    await expect(executeAiPrompt(makeCtx(schemaParams))).rejects.toThrow(
       /did not satisfy the required schema/
     )
     expect(mockComplete).toHaveBeenCalledTimes(2)
@@ -394,7 +394,7 @@ describe("executeAiPromptV2 — structured output contract (D3)", () => {
 
   it("soft mode keeps the unvalidated value and stamps schemaValid:false + errors", async () => {
     mockComplete.mockResolvedValue('{"nope": 1}')
-    const result = await executeAiPromptV2(makeCtx({ ...schemaParams, onSchemaViolation: "soft" }))
+    const result = await executeAiPrompt(makeCtx({ ...schemaParams, onSchemaViolation: "soft" }))
     const output = result.output as {
       structured: unknown
       schemaValid?: boolean
@@ -426,7 +426,7 @@ describe("executeAiPromptV2 — structured output contract (D3)", () => {
         routingReason: "r",
       })
     const reportUsage = jest.fn()
-    const result = await executeAiPromptV2(
+    const result = await executeAiPrompt(
       makeCtx(
         {
           mode: "routed",
@@ -453,7 +453,7 @@ describe("executeAiPromptV2 — structured output contract (D3)", () => {
   })
 
   it("the credential-less stub never enforces the schema (no model to auto-fix)", async () => {
-    const result = await executeAiPromptV2(
+    const result = await executeAiPrompt(
       makeCtx({ userPrompt: "hi", responseFormat: "json", outputSchema })
     )
     const output = result.output as { stub: boolean; schemaValid?: boolean }
@@ -464,7 +464,7 @@ describe("executeAiPromptV2 — structured output contract (D3)", () => {
 
   it("a bare jsonSchema string stays a hint only — no validation fields", async () => {
     mockComplete.mockResolvedValue('{"anything": true}')
-    const result = await executeAiPromptV2(
+    const result = await executeAiPrompt(
       makeCtx({
         provider: "openai",
         model: "gpt-x",
@@ -481,7 +481,7 @@ describe("executeAiPromptV2 — structured output contract (D3)", () => {
   })
 })
 
-describe("executeAiPromptV2 — PII gate", () => {
+describe("executeAiPrompt — PII gate", () => {
   it("blocks PII prompts before any call when piiGate=block", async () => {
     const ctx = makeCtx({
       provider: "openai",
@@ -490,7 +490,7 @@ describe("executeAiPromptV2 — PII gate", () => {
       userPrompt: "email me at bob@example.com",
       piiGate: "block",
     })
-    await expect(executeAiPromptV2(ctx)).rejects.toMatchObject({
+    await expect(executeAiPrompt(ctx)).rejects.toMatchObject({
       code: "pii_blocked",
       retryable: false,
     })
@@ -506,14 +506,14 @@ describe("executeAiPromptV2 — PII gate", () => {
       userPrompt: "email me at bob@example.com",
       piiGate: "redact",
     })
-    const result = await executeAiPromptV2(ctx)
+    const result = await executeAiPrompt(ctx)
     expect((result.output as { piiRedacted?: boolean }).piiRedacted).toBe(true)
     const sentPrompt = mockComplete.mock.calls[0][0] as string
     expect(sentPrompt).not.toContain("bob@example.com")
   })
 })
 
-describe("executeAiPromptV2 — routed mode", () => {
+describe("executeAiPrompt — routed mode", () => {
   it("delegates to runRoutedPrompt and reports routed usage", async () => {
     mockRunRoutedPrompt.mockResolvedValue({
       provider: "p2",
@@ -526,7 +526,7 @@ describe("executeAiPromptV2 — routed mode", () => {
     })
     const reportUsage = jest.fn()
     const ctx = makeCtx({ mode: "routed", modelAlias: "fast", userPrompt: "hi" }, { reportUsage })
-    const result = await executeAiPromptV2(ctx)
+    const result = await executeAiPrompt(ctx)
     const output = result.output as Record<string, unknown>
     expect(output.completion).toBe("routed text")
     expect(output.provider).toBe("p2")
@@ -554,7 +554,7 @@ describe("executeAiPromptV2 — routed mode", () => {
   it("fails the span and rethrows when routing fails", async () => {
     mockRunRoutedPrompt.mockRejectedValue(new Error("no usable provider"))
     const ctx = makeCtx({ mode: "routed", modelAlias: "fast", userPrompt: "hi" })
-    await expect(executeAiPromptV2(ctx)).rejects.toThrow("no usable provider")
+    await expect(executeAiPrompt(ctx)).rejects.toThrow("no usable provider")
     expect(mockEndSpan).toHaveBeenCalledWith(
       "span1",
       expect.objectContaining({ errorMessage: "no usable provider" })
@@ -576,7 +576,7 @@ describe("executeAiPromptV2 — routed mode", () => {
       userPrompt: "hi",
       responseFormat: "json",
     })
-    const result = await executeAiPromptV2(ctx)
+    const result = await executeAiPrompt(ctx)
     expect((result.output as { structured: unknown }).structured).toEqual({ ok: true })
   })
 })

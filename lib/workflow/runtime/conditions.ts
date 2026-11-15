@@ -1,6 +1,6 @@
 /**
  * Pure evaluation of the structured condition language (`flow.branch` /
- * `flow.switch` typeVersion 2 — see `types/workflow/conditions.ts`).
+ * `flow.switch` — see `types/workflow/conditions.ts`).
  *
  * Operand strings are authored as workflow expressions, but by the time an
  * executor runs them they have already been resolved to typed values by
@@ -205,11 +205,9 @@ function isEmpty(v: unknown): boolean {
 
 /**
  * Truthiness with the convention that the literal strings "false" and "0"
- * are false (params arrive stringly-typed from expression concat). This is
- * intentionally STRICTER than the legacy `isTruthy` in
- * `lib/workflow/nodes/built-ins.ts` (which treats any non-empty string as
- * true) — the v2 condition language fixes that footgun; v1 nodes keep the
- * old behavior.
+ * are false (params arrive stringly-typed from expression concat) —
+ * intentionally STRICTER than the executor-support `isTruthy` used by
+ * `data.transform` filters, which treats any non-empty string as true.
  */
 function isTruthy(v: unknown): boolean {
   if (typeof v === "string") {

@@ -18,6 +18,7 @@ import {
   type WorkflowNodeKind,
 } from "@/types/workflow/visual"
 import { validateConnection } from "@/lib/workflow/editor/connection-validator"
+import { defaultTypeVersionFor } from "@/lib/workflow/editor/node-handles"
 
 const workflowNodeKindSchema = z.custom<WorkflowNodeKind>(
   (val) =>
@@ -81,7 +82,7 @@ const nodeDataSchema = z
 const nodeSchema = z.object({
   id: z.string().min(1),
   type: workflowNodeKindSchema,
-  /** Container nesting (schemaVersion 2) — must reference a real node id;
+  /** Container nesting — must reference a real node id;
    * referential integrity is enforced in `validateGraphIntegrity`. */
   parentId: z.string().min(1).optional(),
   typeVersion: z.number().int().min(1),
@@ -193,13 +194,13 @@ const workflowDerivationSchema = z.object({
 /**
  * Top-level workflow envelope. Note: `nodes` and `edges` integrity (edge
  * endpoints reference real node ids; no cycles — iteration lives inside
- * `flow.loop` v2 containers) is checked separately in
+ * `flow.loop` containers) is checked separately in
  * `validateGraphIntegrity` below — zod can enforce shape but not graph
  * constraints.
  */
 export const visualWorkflowSchema = z.object({
   id: z.string().min(1),
-  schemaVersion: z.union([z.literal(1), z.literal(2)]),
+  schemaVersion: z.literal(2),
   name: z.string().min(1, "Workflow name is required").max(120),
   description: z.string().optional(),
   icon: z.string().optional(),
@@ -244,6 +245,7 @@ export type GraphIntegrityCode =
   | "invalidConnection"
   | "missingTrigger"
   | "connectorEgressPolicy"
+  | "unsupportedTypeVersion"
   | "selfParent"
   | "missingParent"
   | "parentNotContainer"
@@ -269,7 +271,7 @@ export interface GraphIntegrityIssue {
  * The set of nodes that form a cycle. EVERY cycle is unauthorized: the
  * orchestrator schedules the graph as a DAG and silently drops back-edges, so
  * a "loop" drawn as a top-level cycle runs each node exactly ONCE — the only
- * construct that actually iterates is the `flow.loop` typeVersion-2 CONTAINER
+ * construct that actually iterates is the `flow.loop` CONTAINER
  * (whose body nodes carry `parentId` and never form top-level edges).
  * Historically a cycle passing through any `flow.loop`/`flow.wait` node was
  * "authorized", which validated graphs whose runtime behavior was a silent
@@ -412,7 +414,21 @@ export function collectGraphIntegrityIssues(wf: VisualWorkflow): GraphIntegrityI
     })
   }
 
-  // Loop-body integrity (schemaVersion 2 containers).
+  // Built-in kinds run at exactly one typeVersion; a node authored at any
+  // other version has no executor and is refused here, before it can run.
+  for (const node of wf.nodes) {
+    if (!(WORKFLOW_NODE_KINDS as readonly string[]).includes(node.type)) continue
+    const current = defaultTypeVersionFor(node.type)
+    if (node.typeVersion === current) continue
+    issues.push({
+      severity: "error",
+      code: "unsupportedTypeVersion",
+      nodeId: node.id,
+      params: { kind: node.type, typeVersion: node.typeVersion, current },
+    })
+  }
+
+  // Loop-body integrity (containers).
   const nodeById = new Map(wf.nodes.map((n) => [n.id, n]))
 
   // Connection semantics are shared with every editor authoring path. This
@@ -449,14 +465,14 @@ export function collectGraphIntegrityIssues(wf: VisualWorkflow): GraphIntegrityI
   const isLoopContainer = (id: string | undefined): boolean => {
     if (!id) return false
     const n = nodeById.get(id)
-    return !!n && n.type === "flow.loop" && n.typeVersion >= 2
+    return !!n && n.type === "flow.loop"
   }
-  // annotation.group (typeVersion 2) is a VISUAL container — it may host
+  // annotation.group is a VISUAL container — it may host
   // children too, but unlike a loop it is not an execution boundary.
   const isGroupContainer = (id: string | undefined): boolean => {
     if (!id) return false
     const n = nodeById.get(id)
-    return !!n && n.type === "annotation.group" && n.typeVersion >= 2
+    return !!n && n.type === "annotation.group"
   }
   const isContainer = (id: string | undefined): boolean =>
     isLoopContainer(id) || isGroupContainer(id)
@@ -469,7 +485,7 @@ export function collectGraphIntegrityIssues(wf: VisualWorkflow): GraphIntegrityI
       seen.add(p)
       const pn = nodeById.get(p)
       if (!pn) break
-      if (pn.type === "flow.loop" && pn.typeVersion >= 2) return p
+      if (pn.type === "flow.loop") return p
       p = pn.parentId
     }
     return undefined
@@ -561,14 +577,16 @@ function stringifyIntegrityIssue(issue: GraphIntegrityIssue): string {
       return "Workflow has no trigger node; manual run only."
     case "connectorEgressPolicy":
       return `Connector-triggered external sink ${issue.nodeId} (${p.kind}) must explicitly choose piiGate=block or piiGate=redact before publishing.`
+    case "unsupportedTypeVersion":
+      return `Node ${issue.nodeId} uses ${p.kind}@${p.typeVersion}; only ${p.kind}@${p.current} is supported`
     case "selfParent":
       return `Node ${issue.nodeId} cannot be its own parent`
     case "missingParent":
       return `Node ${issue.nodeId} has a parentId referencing missing node ${p.parentId}`
     case "parentNotContainer":
       return (
-        `Node ${issue.nodeId} has parentId ${p.parentId}, which is not a loop container ` +
-        "(flow.loop typeVersion 2)"
+        `Node ${issue.nodeId} has parentId ${p.parentId}, which is not a container ` +
+        "(flow.loop or annotation.group)"
       )
     case "flowOutsideLoop":
       return `${p.kind} node ${issue.nodeId} must live inside a loop body`
@@ -578,7 +596,7 @@ function stringifyIntegrityIssue(issue: GraphIntegrityIssue): string {
       // Re-collapsed by the caller; never reached via the per-node path.
       return (
         `Cycle detected through nodes: ${p.nodes}. Top-level back-edges never re-execute — ` +
-        "move the nodes that should repeat INSIDE a flow.loop container (typeVersion 2) instead."
+        "move the nodes that should repeat INSIDE a flow.loop container instead."
       )
   }
 }
@@ -590,7 +608,7 @@ function stringifyIntegrityIssue(issue: GraphIntegrityIssue): string {
  *
  * ALL cycles are rejected: the scheduler drops back-edges, so a cyclic graph
  * would validate and then silently run every node once. Iteration is expressed
- * with the `flow.loop` typeVersion-2 container, whose body is a nested
+ * with the `flow.loop` container, whose body is a nested
  * sub-canvas — never a top-level back-edge.
  *
  * Derived from `collectGraphIntegrityIssues` so the runtime strings and the
@@ -613,7 +631,7 @@ export function validateGraphIntegrity(wf: VisualWorkflow): GraphIntegrityResult
     errors.push(
       `Cycle detected through nodes: ${cycleNodes.join(", ")}. ` +
         "Top-level back-edges never re-execute — move the nodes that should repeat " +
-        "INSIDE a flow.loop container (typeVersion 2) instead."
+        "INSIDE a flow.loop container instead."
     )
   }
   return { errors, warnings }

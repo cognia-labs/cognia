@@ -1,6 +1,6 @@
 /**
- * Output-handle model for multi-output nodes (`flow.branch` / `flow.switch`
- * typeVersion 2) — the single source of truth shared by:
+ * Output-handle model for multi-output nodes (`flow.branch` / `flow.switch`)
+ * — the single source of truth shared by:
  *
  *   • the node renderer (`components/workflow/editor/nodes/workflow-node.tsx`)
  *     — which handles to draw and how to label them;
@@ -45,7 +45,6 @@ export interface OutputHandleSpec {
 
 export interface NodeShapeForHandles {
   kind: WorkflowNodeKind
-  typeVersion: number
   params: Record<string, unknown>
 }
 
@@ -104,7 +103,6 @@ export function outputHandlesFor(node: NodeShapeForHandles): OutputHandleSpec[] 
       { id: "conflict", kind: "conflict" },
     ]
   }
-  if (node.typeVersion < 2) return null
   if (node.kind === "flow.branch") {
     return [
       { id: "true", kind: "true" },
@@ -126,21 +124,15 @@ export function outputHandlesFor(node: NodeShapeForHandles): OutputHandleSpec[] 
 }
 
 /**
- * Authoring default `typeVersion` per kind. New canvas nodes for kinds with a
- * structured v2 params shape start at 2; existing graphs keep whatever
- * version they were authored with (executors for v1 stay registered).
+ * The one supported `typeVersion` per built-in kind (1 unless listed). Each
+ * built-in kind registers an executor at exactly this version, and
+ * `validateWorkflow` refuses a node authored at any other.
  */
 const DEFAULT_TYPE_VERSIONS: Partial<Record<WorkflowNodeKind, number>> = {
   "flow.branch": 2,
   "flow.switch": 2,
-  // New loops author as container sub-canvases; legacy flat-transform loops
-  // (typeVersion 1) keep running unchanged.
   "flow.loop": 2,
-  // v2 adds routed mode (provider-routing engine), the PII gate, streaming,
-  // and usage reporting; explicit mode stays wire-compatible with v1.
   "ai.prompt": 2,
-  // New group frames are real containers (host children via parentId); legacy
-  // v1 groups stay visual-only rectangles rendered by the workflow node.
   "annotation.group": 2,
 }
 

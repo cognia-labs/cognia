@@ -2,7 +2,7 @@
 
 /**
  * Structured condition group editor — the shared field-operator-value row
- * builder used by the `flow.branch` / `flow.switch` (typeVersion 2) inspector
+ * builder used by the `flow.branch` / `flow.switch` inspector
  * forms. Edits a `WorkflowConditionGroup` (types/workflow/conditions.ts):
  * an AND/OR combinator over rows of `left <operator> right`.
  *

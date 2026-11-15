@@ -30,7 +30,7 @@ import {
   type WorkflowNode,
 } from "@/types/workflow/visual"
 
-const branchExecutors = [1, 2].map((version) => getExecutor("flow.branch", version)!)
+const branchExecutor = getExecutor("flow.branch", 2)!
 
 const execSpy = jest.fn(async (_ctx: StepExecutionContext) => ({ output: { real: true } }))
 
@@ -59,7 +59,7 @@ const node: WorkflowNode = {
 function makeWorkflow(pinData?: Record<string, unknown>): VisualWorkflow {
   return {
     id: "wf",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "t",
     createdAt: 0,
     updatedAt: 0,
@@ -718,46 +718,36 @@ describe("credential refs reach the executor", () => {
   })
 })
 
-describe("version-specific node params", () => {
+describe("flow.branch params", () => {
   it.each([
-    [1, 0, "false"],
-    [1, 17, "true"],
-    [2, 3, "false"],
-    [2, 10, "true"],
-    [2, 17, "true"],
-  ] as const)(
-    "executes the real branch v%s for value %s as %s",
-    async (version, value, decision) => {
-      registerNodeExecutor(branchExecutors[version - 1])
-      const input = await buildInput({})
-      input.trigger = { ...trigger, payload: { value } }
-      input.node = {
-        ...node,
-        type: "flow.branch",
-        typeVersion: version,
-        data: {
-          label: "Branch",
-          params:
-            version === 1
-              ? { condition: "{{ $trigger.payload.value }}" }
-              : {
-                  conditions: {
-                    combinator: "all",
-                    conditions: [
-                      { left: "{{ $trigger.payload.value }}", operator: "gte", right: "10" },
-                    ],
-                  },
-                },
+    [3, "false"],
+    [10, "true"],
+    [17, "true"],
+  ] as const)("executes the real branch for value %s as %s", async (value, decision) => {
+    registerNodeExecutor(branchExecutor)
+    const input = await buildInput({})
+    input.trigger = { ...trigger, payload: { value } }
+    input.node = {
+      ...node,
+      type: "flow.branch",
+      typeVersion: 2,
+      data: {
+        label: "Branch",
+        params: {
+          conditions: {
+            combinator: "all",
+            conditions: [{ left: "{{ $trigger.payload.value }}", operator: "gte", right: "10" }],
+          },
         },
-      }
-      input.workflow = { ...input.workflow, nodes: [input.node] }
-      const result = await runStep(input)
-      expect(result.decision).toBe(decision)
-      expect(result.output).toMatchObject({ decision })
+      },
     }
-  )
+    input.workflow = { ...input.workflow, nodes: [input.node] }
+    const result = await runStep(input)
+    expect(result.decision).toBe(decision)
+    expect(result.output).toMatchObject({ decision })
+  })
 
-  it("rejects legacy params before executing a version-2 branch", async () => {
+  it("rejects unstructured params before executing a branch", async () => {
     const execute = jest.fn(async () => ({ output: { decision: "false" } }))
     registerNodeExecutor({ kind: "flow.branch", typeVersion: 2, execute })
     const input = await buildInput({})

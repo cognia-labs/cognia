@@ -32,7 +32,7 @@ const messages = {
 function workflow(): VisualWorkflow {
   return {
     id: "wf",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "WF",
     createdAt: 1,
     updatedAt: 1,
@@ -47,14 +47,14 @@ function workflow(): VisualWorkflow {
       {
         id: "p",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "Prompt", params: { userPrompt: "{{ $node['ghost'].out.x }}" } },
       },
       {
         id: "island",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 400, y: 0 },
         data: { label: "Island", params: { userPrompt: "hi" } },
       },

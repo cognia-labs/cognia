@@ -51,7 +51,7 @@ jest.mock("@/lib/templates/catalog", () => {
             {
               id: "prompt",
               type: "ai.prompt",
-              typeVersion: 1,
+              typeVersion: 2,
               position: { x: 0, y: 0 },
               data: { label: "Review" },
             },

@@ -66968,7 +66968,8 @@
       "savedWithWarnings": "已保存（含 {count} 条警告）。",
       "selfParent": "节点不能将自身作为容器。",
       "synthesizerOnly": "该节点由{lifecycle, select, team {agent-team} plan {计划} other {}}合成器产出，需要那次运行的上下文。请通过 action.team.run（或 action.plan.run）驱动，而不是本工作流的运行按钮。",
-      "title": "问题"
+      "title": "问题",
+      "unsupportedTypeVersion": "该节点基于 {kind} 的版本 {typeVersion} 创建，此版本已不再支持。请重新创建为 {kind} 节点（版本 {current}）。"
     },
     "edgeInspector": {
       "comment": "备注",
@@ -67827,20 +67828,9 @@
         }
       },
       "branch": {
-        "condition": {
-          "hint": "表达式，求值为真值则走真分支。支持 '{{ }}' 表达式。",
-          "label": "条件",
-          "placeholder": "'{{ $node[''n_classify''].out.label }}' === 'urgent'"
-        },
         "conditions": {
           "hint": "条件组通过时走「真」端口，否则走「假」端口。",
           "label": "条件组"
-        },
-        "falsyLabel": {
-          "label": "假分支标签"
-        },
-        "truthyLabel": {
-          "label": "真分支标签"
         }
       },
       "catch": {
@@ -69118,41 +69108,6 @@
         }
       },
       "loop": {
-        "bodyExpression": {
-          "hint": "每轮迭代的值。$item 是 forEach 模式下的当前元素。",
-          "label": "Body 表达式",
-          "placeholder": "$item.name"
-        },
-        "inputExpression": {
-          "hint": "求值后得到要迭代的数组。留空时使用第一条上游输出。",
-          "label": "输入表达式",
-          "placeholder": "'{{ $node[''n_search''].out.results }}'"
-        },
-        "maxIterations": {
-          "hint": "硬性上限。达到后强制退出循环。",
-          "label": "最大迭代次数"
-        },
-        "mode": {
-          "label": "模式",
-          "options": {
-            "forEach": "对数组逐项",
-            "times": "重复 N 次",
-            "while": "当条件为真"
-          }
-        },
-        "times": {
-          "label": "次数"
-        },
-        "whileCondition": {
-          "hint": "每轮迭代都会重新求值。为假或达到 maxIterations 时退出。",
-          "label": "While 条件"
-        }
-      },
-      "loopJump": {
-        "breakIntro": "在当前迭代结束后停止最内层循环。无需配置。",
-        "continueIntro": "跳过当前迭代的剩余部分。无需配置。"
-      },
-      "loopV2": {
         "batchSize": {
           "hint": "把数组分成串行执行的批次；批内迭代仍按「并行迭代数」并行。留空 = 单一批次。",
           "label": "批次大小",
@@ -69207,6 +69162,10 @@
           "label": "循环条件",
           "placeholder": "'{{ $static.keepGoing }}'"
         }
+      },
+      "loopJump": {
+        "breakIntro": "在当前迭代结束后停止最内层循环。无需配置。",
+        "continueIntro": "跳过当前迭代的剩余部分。无需配置。"
       },
       "manualTrigger": {
         "inputSchema": {
@@ -70238,24 +70197,6 @@
       },
       "switch": {
         "cases": {
-          "addCase": "添加 case",
-          "hint": "先匹配先生效，严格等值。",
-          "label": "Cases",
-          "labelPlaceholder": "标签",
-          "removeCase": "移除 case",
-          "valuePlaceholder": "值"
-        },
-        "defaultLabel": {
-          "label": "默认标签"
-        },
-        "subject": {
-          "hint": "求值后与各 case 进行匹配的表达式。",
-          "label": "Subject",
-          "placeholder": "'{{ $node[''n_classify''].out.label }}'"
-        }
-      },
-      "switchV2": {
-        "cases": {
           "addCase": "添加分支",
           "caseLabelPlaceholder": "分支标签",
           "caseTitle": "分支 {index}",
@@ -71203,10 +71144,12 @@
         "body": "正文",
         "branch": "分支",
         "branchLabels": "分支标签",
+        "cases": "分支",
         "characterId": "角色",
         "code": "代码",
         "command": "命令",
         "completionPolicy": "完成策略",
+        "conditions": "条件",
         "content": "内容",
         "conversationKey": "会话",
         "councillors": "议会成员",
@@ -73808,8 +73751,8 @@
       "invalidType": "应为 {expected}",
       "invalidUrl": "请输入有效的 http(s) URL 或 '{{ }}' 表达式",
       "loopBatchSizeMode": "批次大小仅适用于「遍历数组」循环",
-      "loopBodyRequired": "请按所选循环模式提供输入表达式或迭代次数",
       "loopConditionTimingMode": "条件判断时机仅适用于「条件循环」",
+      "loopSourceRequired": "请按所选循环模式提供数据源、迭代次数或循环条件",
       "maxValue": "数值至多为 {max}",
       "minItems": "至少添加 {min} 项",
       "minLength": "长度至少为 {min} 个字符",

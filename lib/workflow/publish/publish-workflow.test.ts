@@ -153,7 +153,7 @@ describe("publishWorkflow", () => {
         {
           id: "n_prompt",
           type: "ai.prompt",
-          typeVersion: 1,
+          typeVersion: 2,
           position: { x: 100, y: 100 },
           data: { label: "changed", params: { prompt: "changed after publish" } },
         },

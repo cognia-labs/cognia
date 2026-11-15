@@ -9,7 +9,7 @@ import { DEFAULT_WORKFLOW_SETTINGS, type VisualWorkflow } from "@/types/workflow
 function sample(): VisualWorkflow {
   return {
     id: "wf_x",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Test",
     createdAt: 0,
     updatedAt: 0,
@@ -26,7 +26,7 @@ function sample(): VisualWorkflow {
       {
         id: "n2",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "Prompt", params: {} },
       },
@@ -164,7 +164,7 @@ describe("parentId + authoredBy round-trip", () => {
         {
           id: "child",
           type: "ai.prompt",
-          typeVersion: 1,
+          typeVersion: 2,
           parentId: "loop",
           position: { x: 10, y: 20 },
           data: { label: "AI", params: {}, authoredBy: "ai" },
@@ -198,7 +198,7 @@ describe("parentId + authoredBy round-trip", () => {
     expect(rf.edges[0].targetHandle).toBe("in")
   })
 
-  it("renders annotation.group v2 as the groupContainer node type (v1 stays workflowNode)", () => {
+  it("renders annotation.group as the groupContainer node type", () => {
     const base = wf()
     base.nodes[0] = {
       id: "grp",
@@ -210,17 +210,6 @@ describe("parentId + authoredBy round-trip", () => {
     base.nodes[1] = { ...base.nodes[1], parentId: "grp" }
     const rf = workflowToReactFlow(base)
     expect(rf.nodes.find((n) => n.id === "grp")?.type).toBe("groupContainer")
-
-    const v1 = wf()
-    v1.nodes[0] = {
-      id: "grp",
-      type: "annotation.group",
-      typeVersion: 1,
-      position: { x: 0, y: 0 },
-      data: { label: "Group", params: {} },
-    }
-    v1.nodes[1] = { ...v1.nodes[1], parentId: undefined }
-    expect(workflowToReactFlow(v1).nodes.find((n) => n.id === "grp")?.type).toBe("workflowNode")
   })
 
   it("maps locked → draggable:false and round-trips the locked flag", () => {
@@ -234,14 +223,9 @@ describe("parentId + authoredBy round-trip", () => {
     expect(rf.nodes.find((n) => n.id === "loop")?.draggable).toBeUndefined()
   })
 
-  it("renders flow.loop v2 as the loopContainer node type (v1 stays workflowNode)", () => {
+  it("renders flow.loop as the loopContainer node type", () => {
     const rf = workflowToReactFlow(wf())
     expect(rf.nodes.find((n) => n.id === "loop")?.type).toBe("loopContainer")
-
-    const v1 = wf()
-    v1.nodes[0] = { ...v1.nodes[0], typeVersion: 1 }
-    const rf1 = workflowToReactFlow(v1)
-    expect(rf1.nodes.find((n) => n.id === "loop")?.type).toBe("workflowNode")
   })
 
   it("orders parents before children regardless of authored order (React Flow v12 requirement)", () => {

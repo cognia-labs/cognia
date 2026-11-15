@@ -28,6 +28,8 @@ import { WORKFLOW_NODE_KINDS, type WorkflowNodeKind } from "@/types/workflow/vis
 const KINDS_WITHOUT_HOST_EXECUTOR: ReadonlySet<WorkflowNodeKind> = new Set<WorkflowNodeKind>([
   "annotation.note",
   "annotation.group",
+  // A loop is a container the orchestrator runs itself (`runtime/loop-container.ts`).
+  "flow.loop",
 ])
 
 describe("executor coverage parity", () => {

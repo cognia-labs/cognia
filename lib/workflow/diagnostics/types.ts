@@ -22,6 +22,7 @@ export type DiagnosticCode =
   | "danglingTarget"
   | "invalidConnection"
   | "missingTrigger"
+  | "unsupportedTypeVersion"
   | "selfParent"
   | "missingParent"
   | "parentNotContainer"

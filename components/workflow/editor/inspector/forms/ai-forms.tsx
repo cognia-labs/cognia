@@ -41,12 +41,11 @@ import type { ConfigProps } from "./form-support"
 import { FusionActionField } from "@/components/router-fusion/fusion-action-field"
 
 // ── ai.prompt ─────────────────────────────────────────────────────────────
-export function AiPromptConfig({ params, onChange, typeVersion }: ConfigProps) {
+export function AiPromptConfig({ params, onChange }: ConfigProps) {
   const t = useTranslations("workflows.forms.aiPrompt")
   const tFusion = useTranslations("routerFusionModes")
-  const v2 = (typeVersion ?? 1) >= 2
   const mode = (readString(params, "mode") || "explicit") as "explicit" | "routed"
-  const routed = v2 && mode === "routed"
+  const routed = mode === "routed"
   const modelAlias = readString(params, "modelAlias")
   const piiGate = readString(params, "piiGate") || "block"
   const systemPrompt = readString(params, "systemPrompt")
@@ -57,19 +56,18 @@ export function AiPromptConfig({ params, onChange, typeVersion }: ConfigProps) {
   const characterId = readString(params, "characterId")
   return (
     <FieldGroup>
-      {v2 ? (
-        <Field label={t("mode.label")} htmlFor="ai-mode" hint={t("mode.hint")} name="mode">
-          <Select value={mode} onValueChange={(v) => onChange(patchParam(params, "mode", v))}>
-            <SelectTrigger id="ai-mode">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="explicit">{t("mode.explicit")}</SelectItem>
-              <SelectItem value="routed">{t("mode.routed")}</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-      ) : null}
+      <Field label={t("mode.label")} htmlFor="ai-mode" hint={t("mode.hint")} name="mode">
+        <Select value={mode} onValueChange={(v) => onChange(patchParam(params, "mode", v))}>
+          <SelectTrigger id="ai-mode">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="explicit">{t("mode.explicit")}</SelectItem>
+            <SelectItem value="routed">{t("mode.routed")}</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+
       {routed ? (
         <Field
           label={t("modelAlias.label")}
@@ -87,16 +85,15 @@ export function AiPromptConfig({ params, onChange, typeVersion }: ConfigProps) {
       ) : (
         <AiExplicitProviderFields params={params} onChange={onChange} t={t} idPrefix="ai" />
       )}
-      {v2 ? (
-        <PiiGateField
-          id="ai-pii"
-          value={piiGate}
-          params={params}
-          onChange={onChange}
-          t={t}
-          allowOff
-        />
-      ) : null}
+      <PiiGateField
+        id="ai-pii"
+        value={piiGate}
+        params={params}
+        onChange={onChange}
+        t={t}
+        allowOff
+      />
+
       {/* Router + Fusion action (ADR-0188 D3). Auto — the default — leaves the
           node exactly as it was; the other modes run the step as a fusion run. */}
       <Field label={tFusion("field.label")} htmlFor="ai-fusion-action" name="action">
@@ -110,20 +107,19 @@ export function AiPromptConfig({ params, onChange, typeVersion }: ConfigProps) {
           onDeliveryChange={(value) => onChange(patchParam(params, "delegateDelivery", value))}
         />
       </Field>
-      {v2 ? (
-        <Field
-          label={t("characterId.label")}
-          htmlFor="ai-character"
-          hint={t("characterId.hint")}
-          name="characterId"
-        >
-          <CharacterPicker
-            id="ai-character"
-            value={characterId}
-            onChange={(v) => onChange(patchParam(params, "characterId", v))}
-          />
-        </Field>
-      ) : null}
+      <Field
+        label={t("characterId.label")}
+        htmlFor="ai-character"
+        hint={t("characterId.hint")}
+        name="characterId"
+      >
+        <CharacterPicker
+          id="ai-character"
+          value={characterId}
+          onChange={(v) => onChange(patchParam(params, "characterId", v))}
+        />
+      </Field>
+
       <Field label={t("systemPrompt.label")} htmlFor="ai-system" name="systemPrompt">
         <ExpressionField
           id="ai-system"

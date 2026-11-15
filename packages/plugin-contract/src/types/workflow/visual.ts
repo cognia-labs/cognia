@@ -678,11 +678,11 @@ export const WORKFLOW_NODE_KINDS: readonly WorkflowNodeKind[] = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Top-level shape version. Bumped on breaking changes to the JSON shape.
- * The optional `variables` map added alongside the Settings tab is additive
- * (every prior row stays valid) so it does NOT require a version bump.
+ * Top-level shape version. Bumped on breaking changes to the JSON shape; only
+ * the current version is accepted. The optional `variables` map added
+ * alongside the Settings tab is additive so it does NOT require a version bump.
  */
-export type VisualWorkflowSchemaVersion = 1 | 2
+export type VisualWorkflowSchemaVersion = 2
 
 /**
  * The visual workflow definition. Named `VisualWorkflow` (not
@@ -799,9 +799,9 @@ export interface WorkflowNode<TParams = Record<string, unknown>> {
   id: string
   type: WorkflowNodeKind
   /**
-   * Parent container node id (e.g. a `flow.loop` v2 container). Set on nodes
+   * Parent container node id (e.g. a `flow.loop` container). Set on nodes
    * that live inside another node's sub-canvas; React Flow renders these with
-   * `extent: 'parent'`. Undefined for top-level nodes. (schemaVersion 2)
+   * `extent: 'parent'`. Undefined for top-level nodes.
    */
   parentId?: string
   /** Per-node-type schema version; nodes evolve their params shape via this. */
@@ -1628,9 +1628,7 @@ export const BUILTIN_NODE_SUBCATEGORIES = [
 ] as const
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Loop container params (flow.loop typeVersion 2). The legacy typeVersion 1
-// flat-transform params shape is untyped (Record<string, unknown>) and stays
-// valid — this type describes only the new container authoring.
+// Loop container params (flow.loop) — the container sub-canvas authoring shape.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface LoopNodeParams {
@@ -1675,9 +1673,8 @@ export interface LoopNodeParams {
    * `"continue-with-null"` preserves source alignment with a `null` item;
    * `"remove-failed"` records the failure and compacts it from `items[]`;
    * `"break"` records it and stops the loop with partial output.
-   * `"skip"` is the legacy serialized alias for `"remove-failed"`.
    */
-  onItemError?: "fail" | "continue-with-null" | "remove-failed" | "break" | "skip"
+  onItemError?: "fail" | "continue-with-null" | "remove-failed" | "break"
 }
 
 /** One failed iteration collected by any non-failing `onItemError` policy. */

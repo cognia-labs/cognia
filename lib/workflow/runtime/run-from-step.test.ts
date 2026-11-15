@@ -32,7 +32,7 @@ const ev = (
 
 const workflow: VisualWorkflow = {
   id: "wf_1",
-  schemaVersion: 1,
+  schemaVersion: 2,
   name: "wf",
   createdAt: 0,
   updatedAt: 0,

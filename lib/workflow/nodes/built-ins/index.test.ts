@@ -6,6 +6,7 @@ import { markSent } from "@/lib/db/outbound-jobs"
 // Importing built-ins triggers their side-effecting registrations.
 import "."
 import { getExecutor } from "../registry"
+import { defaultTypeVersionFor } from "@/lib/workflow/editor/node-handles"
 // Production hosts install the Agent Team node implementations from their
 // composition root (ADR-0217); this suite exercises them through the registry.
 import { installTeamWorkflowNodeRuntime } from "@/lib/squads/workflow-nodes/install"
@@ -131,7 +132,7 @@ async function exec(
   kind: WorkflowNodeKind,
   ctx: StepExecutionContext<Record<string, unknown>>
 ): Promise<StepExecutionResult> {
-  const reg = getExecutor(kind, 1)
+  const reg = getExecutor(kind, defaultTypeVersionFor(kind))
   if (!reg) throw new Error(`No executor for ${kind}`)
   return reg.execute(ctx)
 }
@@ -193,30 +194,6 @@ describe("flow.set", () => {
     await expect(
       exec("flow.set", makeCtx("flow.set", { variable: "  ", value: 1 }))
     ).rejects.toThrow(/non-empty/)
-  })
-})
-
-describe("flow.branch", () => {
-  it("picks the truthy label when condition is truthy", async () => {
-    const r = await exec(
-      "flow.branch",
-      makeCtx("flow.branch", { condition: true, truthyLabel: "yes", falsyLabel: "no" })
-    )
-    expect(r.decision).toBe("yes")
-  })
-
-  it("picks the falsy label when condition is empty / false / 0", async () => {
-    for (const c of [false, "", 0, null, undefined, [], {}]) {
-      const r = await exec(
-        "flow.branch",
-        makeCtx("flow.branch", {
-          condition: c as unknown as boolean,
-          truthyLabel: "yes",
-          falsyLabel: "no",
-        })
-      )
-      expect(r.decision).toBe("no")
-    }
   })
 })
 
@@ -430,35 +407,6 @@ describe("data.code", () => {
   })
 })
 
-describe("flow.switch", () => {
-  it("picks the matching case label", async () => {
-    const r = await exec(
-      "flow.switch",
-      makeCtx("flow.switch", {
-        subject: "urgent",
-        cases: [
-          { value: "urgent", label: "alert" },
-          { value: "normal", label: "queue" },
-        ],
-        defaultLabel: "default",
-      })
-    )
-    expect(r.decision).toBe("alert")
-  })
-
-  it("falls through to default when no case matches", async () => {
-    const r = await exec(
-      "flow.switch",
-      makeCtx("flow.switch", {
-        subject: "unknown",
-        cases: [{ value: "urgent", label: "alert" }],
-        defaultLabel: "fallback",
-      })
-    )
-    expect(r.decision).toBe("fallback")
-  })
-})
-
 describe("flow.split", () => {
   it("forwards upstream as a single payload", async () => {
     const r = await exec("flow.split", makeCtx("flow.split", {}, { up: 42 }))
@@ -497,30 +445,6 @@ describe("flow.join", () => {
   it("omits 'aggregated' when no aggregate operation is configured", async () => {
     const r = await exec("flow.join", makeCtx("flow.join", { joinPolicy: "all" }, { a: 1 }))
     expect(r.output).not.toHaveProperty("aggregated")
-  })
-})
-
-describe("flow.loop", () => {
-  it("handles times mode by emitting an index array", async () => {
-    const r = await exec("flow.loop", makeCtx("flow.loop", { mode: "times", times: 3 }))
-    expect(r.output).toEqual({ iterations: 3, items: [0, 1, 2] })
-  })
-
-  it("handles forEach mode over an upstream array", async () => {
-    const r = await exec(
-      "flow.loop",
-      makeCtx(
-        "flow.loop",
-        { mode: "forEach", bodyExpression: "{{ $node['$item'].n }}" },
-        { up: [{ n: 1 }, { n: 2 }, { n: 3 }] }
-      )
-    )
-    expect(r.output).toEqual({ iterations: 3, items: [1, 2, 3] })
-  })
-
-  it("returns an empty iteration when input is not an array", async () => {
-    const r = await exec("flow.loop", makeCtx("flow.loop", { mode: "forEach" }))
-    expect(r.output).toEqual({ iterations: 0, items: [] })
   })
 })
 
@@ -774,7 +698,7 @@ describe("ai.prompt", () => {
     expect((r2.output as { stub: boolean }).stub).toBe(true)
   })
 
-  it("blocks connector-origin PII before the v1 model path", async () => {
+  it("blocks connector-origin PII before the model call", async () => {
     const ctx = {
       ...makeCtx("ai.prompt", {
         provider: "openai",

@@ -17,7 +17,7 @@ import type { VisualWorkflow } from "@/types/workflow/visual"
 function workflowWithUnknownRef(): VisualWorkflow {
   return {
     id: "wf_diag",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Diag",
     createdAt: 1,
     updatedAt: 1,
@@ -32,7 +32,7 @@ function workflowWithUnknownRef(): VisualWorkflow {
       {
         id: "p",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 200, y: 0 },
         data: { label: "Prompt", params: { userPrompt: "{{ $node['ghost'].out.x }}" } },
       },

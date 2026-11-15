@@ -34,7 +34,7 @@ jest.mock("@xyflow/react", () => ({
 function makeWorkflow(): VisualWorkflow {
   return {
     id: "wf_test",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Test",
     createdAt: 1,
     updatedAt: 1,
@@ -207,7 +207,7 @@ describe("WorkflowNodeComponent", () => {
             id="n_a"
             type="workflowNode"
             selected={false}
-            data={{ label: "Prompt", params: {}, kind: "ai.prompt", typeVersion: 1 }}
+            data={{ label: "Prompt", params: {}, kind: "ai.prompt", typeVersion: 2 }}
             positionAbsoluteX={0}
             positionAbsoluteY={0}
             dragging={false}
@@ -387,8 +387,8 @@ describe("WorkflowNodeComponent", () => {
     expect(screen.queryByTestId("wf-node-handle-error-n_t")).toBeNull()
   })
 
-  // ── labeled multi-output handles (branch/switch v2) ──────────────────────
-  it("renders true/false handles with labels for a v2 branch", () => {
+  // ── labeled multi-output handles (branch/switch) ─────────────────────────
+  it("renders true/false handles with labels for a branch", () => {
     const { store } = withStore()
     renderNode({ store, id: "n_b", kind: "flow.branch", typeVersion: 2 })
     expect(screen.getByTestId("wf-node-handle-out-n_b-true")).toBeInTheDocument()
@@ -397,7 +397,7 @@ describe("WorkflowNodeComponent", () => {
     expect(screen.getByTestId("wf-node-handle-label-n_b-false")).toHaveTextContent(/false/i)
   })
 
-  it("renders one handle per case plus default for a v2 switch", () => {
+  it("renders one handle per case plus default for a switch", () => {
     const { store } = withStore()
     renderNode({
       store,
@@ -418,16 +418,10 @@ describe("WorkflowNodeComponent", () => {
     expect(screen.getByTestId("wf-node-handle-label-n_s-c_b")).toHaveTextContent("Beta")
   })
 
-  it("keeps the error handle alongside v2 decision handles under 'branch' policy", () => {
+  it("keeps the error handle alongside decision handles under 'branch' policy", () => {
     renderNode({ store: branchStore(), id: "n_b", kind: "flow.branch", typeVersion: 2 })
     expect(screen.getByTestId("wf-node-handle-out-n_b-true")).toBeInTheDocument()
     expect(screen.getByTestId("wf-node-handle-error-n_b")).toBeInTheDocument()
-  })
-
-  it("v1 branch keeps the single unlabeled output handle", () => {
-    const { store } = withStore()
-    renderNode({ store, id: "n_b", kind: "flow.branch", typeVersion: 1 })
-    expect(screen.queryByTestId("wf-node-handle-out-n_b-true")).toBeNull()
   })
 
   // ── mobile tap-to-connect (handle-tap entry, gated on store.touchConnect) ──
@@ -497,7 +491,7 @@ describe("WorkflowNodeComponent", () => {
           {
             id: "island",
             type: "ai.prompt",
-            typeVersion: 1,
+            typeVersion: 2,
             position: { x: 200, y: 0 },
             data: { label: "Island", params: { userPrompt: "hi" } },
           },
@@ -522,7 +516,7 @@ describe("WorkflowNodeComponent", () => {
           {
             id: "p",
             type: "ai.prompt",
-            typeVersion: 1,
+            typeVersion: 2,
             position: { x: 200, y: 0 },
             data: { label: "P", params: { userPrompt: "hi" } },
           },
@@ -554,7 +548,7 @@ describe("WorkflowNodeComponent", () => {
           {
             id: "p",
             type: "ai.prompt",
-            typeVersion: 1,
+            typeVersion: 2,
             position: { x: 200, y: 0 },
             data: { label: "P", params: { userPrompt: "{{ $node['ghost'].out.x }}" } },
           },

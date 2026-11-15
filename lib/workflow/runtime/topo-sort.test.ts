@@ -7,7 +7,7 @@ function wf(
 ): VisualWorkflow {
   return {
     id: "wf",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "x",
     createdAt: 0,
     updatedAt: 0,

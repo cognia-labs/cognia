@@ -11,7 +11,7 @@ import { CanvasContextMenu, type ContextTarget } from "./canvas-context-menu"
 function makeWorkflow(): VisualWorkflow {
   return {
     id: "wf_test",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Test",
     createdAt: 1,
     updatedAt: 1,

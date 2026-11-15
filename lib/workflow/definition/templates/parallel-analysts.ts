@@ -18,7 +18,7 @@ const NOW = 1_730_000_000_000
 export function parallelAnalystsTemplate(): VisualWorkflow {
   return {
     id: "wf_builtin_parallel_analysts",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Parallel multi-analyst",
     description:
       "Fans the input out to four specialised LLM analysts in parallel (correctness, security, performance, UX), joins the answers, then asks a classifier to pick the most useful one to forward to a character.",
@@ -62,7 +62,7 @@ export function parallelAnalystsTemplate(): VisualWorkflow {
       {
         id: "n_ai_correctness",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 860, y: 80 },
         data: {
           label: "Correctness analyst",
@@ -77,7 +77,7 @@ export function parallelAnalystsTemplate(): VisualWorkflow {
       {
         id: "n_ai_security",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 860, y: 240 },
         data: {
           label: "Security analyst",
@@ -92,7 +92,7 @@ export function parallelAnalystsTemplate(): VisualWorkflow {
       {
         id: "n_ai_performance",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 860, y: 400 },
         data: {
           label: "Performance analyst",
@@ -107,7 +107,7 @@ export function parallelAnalystsTemplate(): VisualWorkflow {
       {
         id: "n_ai_ux",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 860, y: 560 },
         data: {
           label: "UX analyst",

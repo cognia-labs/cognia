@@ -37,7 +37,7 @@ import type { VisualWorkflow } from "@/types/workflow/visual"
 function wf(): VisualWorkflow {
   return {
     id: "wf_cp",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Copilot WF",
     createdAt: 1,
     updatedAt: 1,

@@ -903,7 +903,7 @@
   "lib/workflow/editor/store-registry.ts | registerEditorStore | notify | 1",
   "lib/workflow/editor/store-registry.ts | unregisterEditorStore | notify | 1",
   "lib/workflow/nodes/ai/ai-prompt-routed.ts | complete | stream | 1",
-  "lib/workflow/nodes/ai/ai-prompt-v2.ts | callOnce | stream | 1",
+  "lib/workflow/nodes/ai/ai-prompt.ts | callOnce | stream | 1",
   "lib/workflow/nodes/notifications/index.ts | <module>.execute | notify | 1",
   "lib/workflow/nodes/shared/image-source.ts | resolveImageBytes | fetch | 1",
   "lib/workflow/runtime/approval-notify.ts | defaultNotify | notify | 1",

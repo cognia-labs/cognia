@@ -987,15 +987,9 @@ describe("ai schemas", () => {
 })
 
 describe("flow schemas", () => {
-  it("flow.branch requires condition", () => {
+  it("flow.branch requires a condition group", () => {
     expect(PARAMS_SCHEMAS["flow.branch"].safeParse({}).success).toBe(false)
-    expect(PARAMS_SCHEMAS["flow.branch"].safeParse({ condition: "x === 1" }).success).toBe(true)
-  })
-
-  it("flow.switch requires subject and at least one case", () => {
-    const s = PARAMS_SCHEMAS["flow.switch"]
-    expect(s.safeParse({ subject: "x", cases: [] }).success).toBe(false)
-    expect(s.safeParse({ subject: "x", cases: [{ value: "a", label: "A" }] }).success).toBe(true)
+    expect(PARAMS_SCHEMAS["flow.branch"].safeParse({ condition: "x === 1" }).success).toBe(false)
   })
 
   it("flow.split requires at least 2 branch labels", () => {
@@ -1007,7 +1001,7 @@ describe("flow schemas", () => {
     expect(PARAMS_SCHEMAS["flow.join"].safeParse({}).success).toBe(true)
   })
 
-  it("flow.loop accepts the v2 container shape per mode", () => {
+  it("flow.loop accepts the container shape per mode", () => {
     const s = PARAMS_SCHEMAS["flow.loop"]
     expect(
       s.safeParse({ mode: "forEach", source: "{{ $node['n1'].items }}", output: "{{ $item }}" })
@@ -1020,7 +1014,7 @@ describe("flow schemas", () => {
     expect(s.safeParse({ mode: "while" }).success).toBe(false)
   })
 
-  it("flow.loop v2 scopes conditionTiming to while mode", () => {
+  it("flow.loop scopes conditionTiming to while mode", () => {
     const s = PARAMS_SCHEMAS["flow.loop"]
     expect(
       s.safeParse({ mode: "while", whileExpression: "{{ $static.go }}", conditionTiming: "post" })
@@ -1039,7 +1033,7 @@ describe("flow schemas", () => {
     ).toBe(false)
   })
 
-  it("flow.loop v2 scopes batchSize to forEach mode and requires >= 1", () => {
+  it("flow.loop scopes batchSize to forEach mode and requires >= 1", () => {
     const s = PARAMS_SCHEMAS["flow.loop"]
     expect(s.safeParse({ mode: "forEach", source: "{{ $x }}", batchSize: 5 }).success).toBe(true)
     expect(s.safeParse({ mode: "forEach", source: "{{ $x }}", batchSize: 0 }).success).toBe(false)
@@ -1048,9 +1042,9 @@ describe("flow schemas", () => {
     expect(s.safeParse({ mode: "while", whileExpression: "x", batchSize: 2 }).success).toBe(false)
   })
 
-  it("flow.loop v2 accepts onItemError on every mode and rejects unknown values", () => {
+  it("flow.loop accepts onItemError on every mode and rejects unknown values", () => {
     const s = PARAMS_SCHEMAS["flow.loop"]
-    for (const policy of ["fail", "skip", "break"]) {
+    for (const policy of ["fail", "continue-with-null", "remove-failed", "break"]) {
       expect(
         s.safeParse({ mode: "forEach", source: "{{ $x }}", onItemError: policy }).success
       ).toBe(true)
@@ -1059,9 +1053,11 @@ describe("flow schemas", () => {
         s.safeParse({ mode: "while", whileExpression: "x", onItemError: policy }).success
       ).toBe(true)
     }
-    expect(s.safeParse({ mode: "forEach", source: "{{ $x }}", onItemError: "retry" }).success).toBe(
-      false
-    )
+    for (const policy of ["retry", "skip"]) {
+      expect(
+        s.safeParse({ mode: "forEach", source: "{{ $x }}", onItemError: policy }).success
+      ).toBe(false)
+    }
   })
 
   it("flow.break / flow.continue accept empty params", () => {
@@ -1069,7 +1065,7 @@ describe("flow schemas", () => {
     expect(PARAMS_SCHEMAS["flow.continue"].safeParse({}).success).toBe(true)
   })
 
-  it("flow.branch accepts the v2 structured-conditions shape", () => {
+  it("flow.branch accepts the structured-conditions shape", () => {
     const s = PARAMS_SCHEMAS["flow.branch"]
     expect(
       s.safeParse({
@@ -1087,7 +1083,7 @@ describe("flow schemas", () => {
     ).toBe(false)
   })
 
-  it("flow.switch accepts the v2 cases shape (id + when group)", () => {
+  it("flow.switch accepts the cases shape (id + when group)", () => {
     const s = PARAMS_SCHEMAS["flow.switch"]
     expect(
       s.safeParse({
@@ -1103,25 +1099,15 @@ describe("flow schemas", () => {
         ],
       }).success
     ).toBe(true)
-    // v2 with empty cases fails (needs at least one)
+    // Empty cases fail (needs at least one); the subject/value shape is refused.
     expect(s.safeParse({ cases: [] }).success).toBe(false)
+    expect(s.safeParse({ subject: "x", cases: [{ value: "a", label: "A" }] }).success).toBe(false)
   })
 
-  it("flow.loop requires bodyExpression and per-mode source", () => {
+  it("flow.loop refuses the flat transform shape", () => {
     const s = PARAMS_SCHEMAS["flow.loop"]
-    // Missing body
     expect(s.safeParse({}).success).toBe(false)
-    // Default mode = forEach: needs inputExpression
-    expect(s.safeParse({ bodyExpression: "x" }).success).toBe(false)
-    expect(s.safeParse({ bodyExpression: "x", inputExpression: "$node.a.out" }).success).toBe(true)
-    // times mode: needs times > 0
-    expect(s.safeParse({ bodyExpression: "x", mode: "times", times: 0 }).success).toBe(false)
-    expect(s.safeParse({ bodyExpression: "x", mode: "times", times: 3 }).success).toBe(true)
-    // while mode: needs whileCondition
-    expect(s.safeParse({ bodyExpression: "x", mode: "while" }).success).toBe(false)
-    expect(
-      s.safeParse({ bodyExpression: "x", mode: "while", whileCondition: "true" }).success
-    ).toBe(true)
+    expect(s.safeParse({ bodyExpression: "x", inputExpression: "$node.a.out" }).success).toBe(false)
   })
 
   it("flow.wait happy default", () => {
@@ -1263,9 +1249,9 @@ describe("flow.wait event-mode schema", () => {
   })
 })
 
-describe("version-specific params schemas", () => {
-  it("keeps incompatible flow generations separate when the version is known", () => {
-    for (const [kind, legacy, modern] of [
+describe("flow params schemas", () => {
+  it("accepts only the structured shape for each flow kind", () => {
+    for (const [kind, retired, current] of [
       ["flow.branch", { condition: "true" }, { conditions: { combinator: "all", conditions: [] } }],
       [
         "flow.switch",
@@ -1278,23 +1264,16 @@ describe("version-specific params schemas", () => {
         { mode: "times", times: 2 },
       ],
     ] as const) {
-      expect(paramsSchemaFor(kind, 1).safeParse(legacy).success).toBe(true)
-      expect(paramsSchemaFor(kind, 1).safeParse(modern).success).toBe(false)
-      expect(paramsSchemaFor(kind, 2).safeParse(legacy).success).toBe(false)
-      expect(paramsSchemaFor(kind, 2).safeParse(modern).success).toBe(true)
-      expect(paramsSchemaFor(kind, 3).safeParse(modern).success).toBe(false)
+      expect(paramsSchemaFor(kind).safeParse(retired).success).toBe(false)
+      expect(paramsSchemaFor(kind).safeParse(current).success).toBe(true)
     }
   })
 
-  it("exports JSON input schemas for all builtins without losing branch version shape", () => {
-    for (const kind of KNOWN_KINDS) expect(paramsJsonSchemaFor(kind, 1)).toEqual(expect.any(Object))
-    expect(paramsJsonSchemaFor("flow.branch", 2)).toMatchObject({
+  it("exports JSON input schemas for all builtins", () => {
+    for (const kind of KNOWN_KINDS) expect(paramsJsonSchemaFor(kind)).toEqual(expect.any(Object))
+    expect(paramsJsonSchemaFor("flow.branch")).toMatchObject({
       required: ["conditions"],
       properties: { conditions: { type: "object" } },
-    })
-    expect(paramsJsonSchemaFor("flow.branch", 1)).toMatchObject({
-      required: ["condition"],
-      properties: { condition: { type: "string" } },
     })
   })
 })

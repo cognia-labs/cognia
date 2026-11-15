@@ -46,7 +46,7 @@ beforeEach(async () => {
 
 const snapshot: VisualWorkflow = {
   id: "wf1",
-  schemaVersion: 1,
+  schemaVersion: 2,
   name: "Usage workflow",
   createdAt: 0,
   updatedAt: 0,

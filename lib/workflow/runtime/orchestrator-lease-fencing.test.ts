@@ -42,7 +42,7 @@ afterAll(dbFixture.dispose)
 function waitingWorkflow(): VisualWorkflow {
   return {
     id: "wf_fence",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Fenced",
     createdAt: 0,
     updatedAt: 0,

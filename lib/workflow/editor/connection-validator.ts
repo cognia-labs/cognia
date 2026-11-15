@@ -120,13 +120,12 @@ export function validateConnection(
     }
   }
 
-  // Labeled-output-handle integrity (branch/switch v2). Only enforceable when
-  // the caller supplied typeVersion + params (the canvas always does); shape-
+  // Labeled-output-handle integrity (branch/switch). Only enforceable when
+  // the caller supplied the full node data (typeVersion + params) (the canvas always does); shape-
   // only callers skip this check, preserving the "allow over block" posture.
   if (typeof source.data.typeVersion === "number") {
     const handles = outputHandlesFor({
       kind: source.data.kind,
-      typeVersion: source.data.typeVersion,
       params: source.data.params ?? {},
     })
     if (handles && params.sourceHandle !== "error") {

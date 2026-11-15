@@ -177,15 +177,9 @@ describe("BrowserModelConfig", () => {
   })
 })
 
-describe("AiPromptConfig — v2 routed mode + PII gate", () => {
-  it("hides v2 controls for typeVersion 1 nodes", () => {
-    wrap(<AiPromptConfig params={{ userPrompt: "x" }} onChange={jest.fn()} typeVersion={1} />)
-    expect(screen.queryByLabelText("Provider mode")).toBeNull()
-    expect(screen.queryByLabelText("PII gate")).toBeNull()
-  })
-
-  it("shows mode + PII gate selects for typeVersion 2 and keeps explicit fields", () => {
-    wrap(<AiPromptConfig params={{ userPrompt: "x" }} onChange={jest.fn()} typeVersion={2} />)
+describe("AiPromptConfig — routed mode + PII gate", () => {
+  it("shows mode + PII gate selects and keeps explicit fields", () => {
+    wrap(<AiPromptConfig params={{ userPrompt: "x" }} onChange={jest.fn()} />)
     expect(screen.getByLabelText("Provider mode")).toBeInTheDocument()
     expect(screen.getByLabelText("PII gate")).toBeInTheDocument()
     // Default mode = explicit → provider/model/key fields stay visible.
@@ -195,13 +189,7 @@ describe("AiPromptConfig — v2 routed mode + PII gate", () => {
 
   it("swaps explicit credential fields for the model alias in routed mode", () => {
     const onChange = jest.fn()
-    wrap(
-      <AiPromptConfig
-        params={{ userPrompt: "x", mode: "routed" }}
-        onChange={onChange}
-        typeVersion={2}
-      />
-    )
+    wrap(<AiPromptConfig params={{ userPrompt: "x", mode: "routed" }} onChange={onChange} />)
     expect(screen.queryByLabelText("Provider")).toBeNull()
     expect(screen.queryByLabelText("API key")).toBeNull()
     const alias = screen.getByLabelText("Model alias")
@@ -408,29 +396,17 @@ describe("AiEmbedConfig — provider (B3)", () => {
 })
 
 /**
- * The twin-bound `characterId` is honoured only by the v2 `ai.prompt`
- * executor (`ai-prompt-v2.ts` injects the character's twin context into the
- * system prompt). It had no field at all, so twin grounding was unreachable;
- * rendering it on a v1 node would be the same bug in reverse, since v1 drops
- * the param on the floor.
+ * The twin-bound `characterId` is honoured by the `ai.prompt` executor
+ * (`ai-prompt.ts` injects the character's twin context into the system prompt).
  */
 describe("AiPromptConfig — twin-bound character", () => {
-  it("offers the character picker on a v2 node", () => {
+  it("offers the character picker", () => {
     const onChange = jest.fn()
-    const { container } = wrap(
-      <AiPromptConfig params={{ userPrompt: "x" }} onChange={onChange} typeVersion={2} />
-    )
+    const { container } = wrap(<AiPromptConfig params={{ userPrompt: "x" }} onChange={onChange} />)
     const field = container.querySelector('[data-field="characterId"]')
     expect(field).not.toBeNull()
     fireEvent.change(field!.querySelector("input")!, { target: { value: "char-1" } })
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ characterId: "char-1" }))
-  })
-
-  it("hides it on a v1 node, whose executor ignores the param", () => {
-    const { container } = wrap(
-      <AiPromptConfig params={{ userPrompt: "x" }} onChange={jest.fn()} typeVersion={1} />
-    )
-    expect(container.querySelector('[data-field="characterId"]')).toBeNull()
   })
 })
 
@@ -450,14 +426,9 @@ describe("AiPromptConfig — Router + Fusion action", () => {
 
   it("writes the chosen action onto the node's params", async () => {
     const onChange = jest.fn()
-    wrap(<AiPromptConfig params={{ userPrompt: "x" }} onChange={onChange} typeVersion={2} />)
+    wrap(<AiPromptConfig params={{ userPrompt: "x" }} onChange={onChange} />)
     fireEvent.click(screen.getByTestId("fusion-action-trigger"))
     fireEvent.click(await screen.findByRole("option", { name: /^Panel/ }))
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ action: "panel" }))
-  })
-
-  it("renders on a v1 node too, whose executor honours the action as well", () => {
-    wrap(<AiPromptConfig params={{ userPrompt: "x" }} onChange={jest.fn()} typeVersion={1} />)
-    expect(screen.getByTestId("fusion-action-trigger")).toHaveTextContent("Auto")
   })
 })

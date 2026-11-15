@@ -40,25 +40,18 @@ import { SchemaForm, type JsonSchema } from "./schema-form"
 import { useLiveQuery } from "dexie-react-hooks"
 import { getWorkflow } from "@/lib/db/workflows"
 import {
-  BranchConfigV1,
-  BranchConfigV2,
-  LoopConfigV1,
-  LoopConfigV2,
+  BranchConditionsForm,
+  LoopContainerForm,
   NOTE_COLOR_OPTIONS,
   PiiGateField,
-  SwitchConfigV1,
-  SwitchConfigV2,
+  SwitchCasesForm,
   parseObjectJson,
 } from "./form-support"
 import type { ConfigProps } from "./form-support"
 
 // ── flow.branch ───────────────────────────────────────────────────────────
-export function BranchConfig({ params, onChange, typeVersion }: ConfigProps) {
-  const t = useTranslations("workflows.forms.branch")
-  if ((typeVersion ?? 1) >= 2) {
-    return <BranchConfigV2 params={params} onChange={onChange} />
-  }
-  return <BranchConfigV1 params={params} onChange={onChange} t={t} />
+export function BranchConfig({ params, onChange }: ConfigProps) {
+  return <BranchConditionsForm params={params} onChange={onChange} />
 }
 
 // ── flow.set ──────────────────────────────────────────────────────────────
@@ -559,11 +552,8 @@ export function GenericJsonConfig({ params, onChange }: ConfigProps) {
 }
 
 // ── flow.switch ───────────────────────────────────────────────────────────
-export function SwitchConfig({ params, onChange, typeVersion }: ConfigProps) {
-  if ((typeVersion ?? 1) >= 2) {
-    return <SwitchConfigV2 params={params} onChange={onChange} />
-  }
-  return <SwitchConfigV1 params={params} onChange={onChange} />
+export function SwitchConfig({ params, onChange }: ConfigProps) {
+  return <SwitchCasesForm params={params} onChange={onChange} />
 }
 
 // ── flow.split ────────────────────────────────────────────────────────────
@@ -695,11 +685,8 @@ export function JoinConfig({ params, onChange }: ConfigProps) {
 }
 
 // ── flow.loop ─────────────────────────────────────────────────────────────
-export function LoopConfig({ params, onChange, typeVersion }: ConfigProps) {
-  if ((typeVersion ?? 1) >= 2) {
-    return <LoopConfigV2 params={params} onChange={onChange} />
-  }
-  return <LoopConfigV1 params={params} onChange={onChange} />
+export function LoopConfig({ params, onChange }: ConfigProps) {
+  return <LoopContainerForm params={params} onChange={onChange} />
 }
 
 // ── flow.break / flow.continue ────────────────────────────────────────────

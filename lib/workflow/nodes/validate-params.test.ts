@@ -2,32 +2,34 @@ import { flattenSummary, validateAllNodes, validateNodeParams } from "./validate
 import type { WorkflowNodeKind } from "@/types/workflow/visual"
 
 describe("validateNodeParams", () => {
-  it("validates branch params against the node's declared version", () => {
-    const legacy = { condition: "{{ $trigger.payload.value >= 10 }}" }
+  it("validates branch params against the structured condition shape", () => {
+    const retired = { condition: "{{ $trigger.payload.value >= 10 }}" }
     const structured = {
       conditions: {
         combinator: "all",
         conditions: [{ left: "{{ $trigger.payload.value }}", operator: "gte", right: "10" }],
       },
     }
-    expect(validateNodeParams("flow.branch", legacy, 2).fields).toHaveProperty("conditions")
-    expect(validateNodeParams("flow.branch", structured, 2).hasErrors).toBe(false)
-    expect(validateNodeParams("flow.branch", legacy, 1).hasErrors).toBe(false)
-    expect(validateNodeParams("flow.branch", structured, 1).hasErrors).toBe(true)
+    expect(validateNodeParams("flow.branch", retired).fields).toHaveProperty("conditions")
+    expect(validateNodeParams("flow.branch", structured).hasErrors).toBe(false)
   })
 
-  it("preserves declared versions when validating the whole editor graph", () => {
+  it("validates every node in the editor graph", () => {
     const result = validateAllNodes([
       {
-        id: "modern",
+        id: "invalid",
         data: { kind: "flow.branch", typeVersion: 2, params: { condition: "true" } },
       },
       {
-        id: "legacy",
-        data: { kind: "flow.branch", typeVersion: 1, params: { condition: "true" } },
+        id: "valid",
+        data: {
+          kind: "flow.branch",
+          typeVersion: 2,
+          params: { conditions: { combinator: "all", conditions: [] } },
+        },
       },
     ])
-    expect(Object.keys(result)).toEqual(["modern"])
+    expect(Object.keys(result)).toEqual(["invalid"])
   })
 
   it("returns no errors for a happy params object", () => {
@@ -66,10 +68,10 @@ describe("validateNodeParams", () => {
   })
 
   it("collapses object-level refine failures under _root", () => {
-    const r = validateNodeParams("flow.loop", { bodyExpression: "x" })
+    const r = validateNodeParams("flow.loop", { mode: "forEach" })
     expect(r.hasErrors).toBe(true)
     // The refine targets `path: ["mode"]`
-    expect(r.fields["mode"].key).toBe("loopBodyRequired")
+    expect(r.fields["mode"].key).toBe("loopSourceRequired")
   })
 
   it("treats unknown / plugin kinds as always-valid", () => {

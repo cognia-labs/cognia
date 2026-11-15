@@ -16,7 +16,7 @@ import type { VisualWorkflow } from "@cognia/plugin-sdk"
 function workflow(id: string): VisualWorkflow {
   return {
     id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: id,
     nodes: [],
     edges: [],

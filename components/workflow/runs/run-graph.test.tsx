@@ -38,7 +38,7 @@ const workflow = {
   nodes: ["read", "left", "right"].map((id, i) => ({
     id,
     type: "ai.prompt",
-    typeVersion: 1,
+    typeVersion: 2,
     position: { x: i * 200, y: 0 },
     data: { label: id, params: {} },
   })),

@@ -297,7 +297,7 @@ export function synthesizeTeamWorkflow(input: SynthesizeInput): SynthesizeResult
 
   const workflow: VisualWorkflow = {
     id: workflowId,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: input.team.name,
     description: input.team.description,
     nodes,

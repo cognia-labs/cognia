@@ -24,7 +24,7 @@ const saveMock = jest.fn(async () => {})
 function makeWorkflow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
   return {
     id: "wf_a",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "WF",
     folderId: ROOT_FOLDER_ID,
     createdAt: 0,

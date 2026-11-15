@@ -68,7 +68,7 @@ function buildWorkflow(
 ): VisualWorkflow {
   return {
     id: "wf_f",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "fail wf",
     createdAt: 0,
     updatedAt: 0,

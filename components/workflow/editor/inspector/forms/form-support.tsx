@@ -54,12 +54,6 @@ export type TranslationFn = ReturnType<typeof useTranslations>
 export interface ConfigProps {
   params: Params
   onChange: ChangeFn
-  /**
-   * The node's `typeVersion` — forms with a structured v2 params generation
-   * (branch/switch) dispatch on it. Omitted by callers that predate the
-   * field; treated as 1 (legacy shape).
-   */
-  typeVersion?: number
 }
 
 export function parseObjectJson(raw: string): Record<string, unknown> | null {
@@ -728,8 +722,8 @@ export const ENSEMBLE_AGG_DEFAULTS: Record<string, Record<string, unknown>> = {
   "synthesize-by-final-agent": { kind: "synthesize-by-final-agent" },
 }
 
-/** typeVersion 2 — structured condition group routing to true/false handles. */
-export function BranchConfigV2({ params, onChange }: { params: Params; onChange: ChangeFn }) {
+/** Structured condition group routing to the true/false handles. */
+export function BranchConditionsForm({ params, onChange }: { params: Params; onChange: ChangeFn }) {
   const t = useTranslations("workflows.forms.branch")
   const conditions = (params.conditions ?? undefined) as WorkflowConditionGroup | undefined
   return (
@@ -747,56 +741,6 @@ export function BranchConfigV2({ params, onChange }: { params: Params; onChange:
           onChange={(next) => onChange(patchParam(params, "conditions", next))}
         />
       </Field>
-    </FieldGroup>
-  )
-}
-
-export function BranchConfigV1({
-  params,
-  onChange,
-  t,
-}: {
-  params: Params
-  onChange: ChangeFn
-  t: ReturnType<typeof useTranslations>
-}) {
-  const condition = readString(params, "condition")
-  const truthy = readString(params, "truthyLabel", "true")
-  const falsy = readString(params, "falsyLabel", "false")
-  return (
-    <FieldGroup>
-      <Field
-        label={t("condition.label")}
-        htmlFor="br-cond"
-        hint={t("condition.hint")}
-        name="condition"
-        required
-      >
-        <ExpressionField
-          id="br-cond"
-          value={condition}
-          onChange={(v) => onChange(patchParam(params, "condition", v))}
-          multiline
-          rows={2}
-          placeholder={t("condition.placeholder")}
-        />
-      </Field>
-      <FieldRow>
-        <Field label={t("truthyLabel.label")} htmlFor="br-tlabel" name="truthyLabel">
-          <Input
-            id="br-tlabel"
-            value={truthy}
-            onChange={(e) => onChange(patchParam(params, "truthyLabel", e.target.value))}
-          />
-        </Field>
-        <Field label={t("falsyLabel.label")} htmlFor="br-flabel" name="falsyLabel">
-          <Input
-            id="br-flabel"
-            value={falsy}
-            onChange={(e) => onChange(patchParam(params, "falsyLabel", e.target.value))}
-          />
-        </Field>
-      </FieldRow>
     </FieldGroup>
   )
 }
@@ -915,9 +859,9 @@ export interface SwitchCaseV2 {
   when: WorkflowConditionGroup
 }
 
-/** typeVersion 2 — ordered cases, each with a stable id + condition group. */
-export function SwitchConfigV2({ params, onChange }: { params: Params; onChange: ChangeFn }) {
-  const t = useTranslations("workflows.forms.switchV2")
+/** Ordered cases, each with a stable id + condition group. */
+export function SwitchCasesForm({ params, onChange }: { params: Params; onChange: ChangeFn }) {
+  const t = useTranslations("workflows.forms.switch")
   const tBuilder = useTranslations("workflows.forms.conditionBuilder")
   const cases = Array.isArray(params.cases) ? (params.cases as SwitchCaseV2[]) : []
 
@@ -949,7 +893,7 @@ export function SwitchConfigV2({ params, onChange }: { params: Params; onChange:
                     updateCases(next)
                   }}
                   placeholder={t("cases.caseLabelPlaceholder")}
-                  data-testid={`switch-v2-case-label-${i}`}
+                  data-testid={`switch-case-label-${i}`}
                 />
                 <Button
                   type="button"
@@ -957,7 +901,7 @@ export function SwitchConfigV2({ params, onChange }: { params: Params; onChange:
                   variant="ghost"
                   onClick={() => updateCases(cases.filter((_, j) => j !== i))}
                   aria-label={t("cases.removeCase")}
-                  data-testid={`switch-v2-remove-case-${i}`}
+                  data-testid={`switch-remove-case-${i}`}
                 >
                   <Trash2 className="size-3.5" />
                 </Button>
@@ -989,7 +933,7 @@ export function SwitchConfigV2({ params, onChange }: { params: Params; onChange:
                 },
               ])
             }
-            data-testid="switch-v2-add-case"
+            data-testid="switch-add-case"
           >
             <Plus className="size-3.5 mr-1" /> {t("cases.addCase")}
           </Button>
@@ -1000,99 +944,9 @@ export function SwitchConfigV2({ params, onChange }: { params: Params; onChange:
   )
 }
 
-export function SwitchConfigV1({ params, onChange }: { params: Params; onChange: ChangeFn }) {
-  const t = useTranslations("workflows.forms.switch")
-  const subject = readString(params, "subject")
-  const cases = Array.isArray(params.cases)
-    ? (params.cases as Array<{ value: unknown; label: string }>)
-    : []
-  const defaultLabel = readString(params, "defaultLabel", "default")
-
-  function updateCases(next: Array<{ value: unknown; label: string }>) {
-    onChange(patchParam(params, "cases", next))
-  }
-
-  return (
-    <FieldGroup>
-      <Field
-        label={t("subject.label")}
-        htmlFor="sw-subject"
-        hint={t("subject.hint")}
-        name="subject"
-        required
-      >
-        <Textarea
-          id="sw-subject"
-          value={subject}
-          onChange={(e) => onChange(patchParam(params, "subject", e.target.value))}
-          rows={2}
-          className="font-mono text-xs"
-          placeholder={t("subject.placeholder")}
-        />
-      </Field>
-      <Field
-        label={t("cases.label")}
-        htmlFor="sw-cases"
-        hint={t("cases.hint")}
-        name="cases"
-        required
-      >
-        <div className="space-y-2">
-          {cases.map((c, i) => (
-            <div key={i} className="flex gap-2 items-start">
-              <Input
-                value={typeof c.value === "string" ? c.value : JSON.stringify(c.value)}
-                onChange={(e) => {
-                  const next = [...cases]
-                  next[i] = { ...c, value: e.target.value }
-                  updateCases(next)
-                }}
-                placeholder={t("cases.valuePlaceholder")}
-              />
-              <Input
-                value={c.label}
-                onChange={(e) => {
-                  const next = [...cases]
-                  next[i] = { ...c, label: e.target.value }
-                  updateCases(next)
-                }}
-                placeholder={t("cases.labelPlaceholder")}
-              />
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                onClick={() => updateCases(cases.filter((_, j) => j !== i))}
-                aria-label={t("cases.removeCase")}
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
-            </div>
-          ))}
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => updateCases([...cases, { value: "", label: "" }])}
-          >
-            <Plus className="size-3.5 mr-1" /> {t("cases.addCase")}
-          </Button>
-        </div>
-      </Field>
-      <Field label={t("defaultLabel.label")} htmlFor="sw-default" name="defaultLabel">
-        <Input
-          id="sw-default"
-          value={defaultLabel}
-          onChange={(e) => onChange(patchParam(params, "defaultLabel", e.target.value))}
-        />
-      </Field>
-    </FieldGroup>
-  )
-}
-
-/** typeVersion 2 — container sub-canvas (body nodes live inside the loop). */
-export function LoopConfigV2({ params, onChange }: { params: Params; onChange: ChangeFn }) {
-  const t = useTranslations("workflows.forms.loopV2")
+/** Container sub-canvas (body nodes live inside the loop). */
+export function LoopContainerForm({ params, onChange }: { params: Params; onChange: ChangeFn }) {
+  const t = useTranslations("workflows.forms.loop")
   const mode = readString(params, "mode", "forEach")
   const source = readString(params, "source")
   // `times` may be a literal number or an expression string.
@@ -1104,8 +958,7 @@ export function LoopConfigV2({ params, onChange }: { params: Params; onChange: C
   const iterationConcurrency = readNumber(params, "iterationConcurrency", 1)
   const batchSize = readNumber(params, "batchSize", 0)
   const maxIterations = readNumber(params, "maxIterations", 0)
-  const authoredOnItemError = readString(params, "onItemError", "fail")
-  const onItemError = authoredOnItemError === "skip" ? "remove-failed" : authoredOnItemError
+  const onItemError = readString(params, "onItemError", "fail")
   return (
     <FieldGroup>
       <p className="text-xs text-muted-foreground">{t("intro")}</p>
@@ -1121,7 +974,7 @@ export function LoopConfigV2({ params, onChange }: { params: Params; onChange: C
             onChange(next)
           }}
         >
-          <SelectTrigger id="lp2-mode" data-testid="loop-v2-mode">
+          <SelectTrigger id="lp2-mode" data-testid="loop-mode">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1195,7 +1048,7 @@ export function LoopConfigV2({ params, onChange }: { params: Params; onChange: C
               onChange(patchParam(params, "conditionTiming", v === "pre" ? undefined : v))
             }
           >
-            <SelectTrigger id="lp2-condition-timing" data-testid="loop-v2-condition-timing">
+            <SelectTrigger id="lp2-condition-timing" data-testid="loop-condition-timing">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1230,7 +1083,7 @@ export function LoopConfigV2({ params, onChange }: { params: Params; onChange: C
             onChange={(e) =>
               onChange(patchParam(params, "iterationConcurrency", Number(e.target.value) || 1))
             }
-            data-testid="loop-v2-concurrency"
+            data-testid="loop-concurrency"
           />
         </Field>
       ) : null}
@@ -1251,7 +1104,7 @@ export function LoopConfigV2({ params, onChange }: { params: Params; onChange: C
               onChange(patchParam(params, "batchSize", Number.isFinite(n) && n > 0 ? n : undefined))
             }}
             placeholder={t("batchSize.placeholder")}
-            data-testid="loop-v2-batch-size"
+            data-testid="loop-batch-size"
           />
         </Field>
       ) : null}
@@ -1287,7 +1140,7 @@ export function LoopConfigV2({ params, onChange }: { params: Params; onChange: C
             onChange(patchParam(params, "onItemError", v === "fail" ? undefined : v))
           }
         >
-          <SelectTrigger id="lp2-on-item-error" data-testid="loop-v2-on-item-error">
+          <SelectTrigger id="lp2-on-item-error" data-testid="loop-on-item-error">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1297,111 +1150,6 @@ export function LoopConfigV2({ params, onChange }: { params: Params; onChange: C
             <SelectItem value="break">{t("onItemError.break")}</SelectItem>
           </SelectContent>
         </Select>
-      </Field>
-    </FieldGroup>
-  )
-}
-
-export function LoopConfigV1({ params, onChange }: { params: Params; onChange: ChangeFn }) {
-  const t = useTranslations("workflows.forms.loop")
-  const mode = readString(params, "mode", "forEach")
-  const times = readNumber(params, "times", 1)
-  const inputExpr = readString(params, "inputExpression")
-  const bodyExpr = readString(params, "bodyExpression")
-  const whileCondition = readString(params, "whileCondition")
-  const maxIterations = readNumber(params, "maxIterations", 10000)
-  return (
-    <FieldGroup>
-      <Field label={t("mode.label")} htmlFor="lp-mode" name="mode">
-        <Select value={mode} onValueChange={(v) => onChange(patchParam(params, "mode", v))}>
-          <SelectTrigger id="lp-mode">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="forEach">{t("mode.options.forEach")}</SelectItem>
-            <SelectItem value="times">{t("mode.options.times")}</SelectItem>
-            <SelectItem value="while">{t("mode.options.while")}</SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
-      {mode === "times" ? (
-        <Field label={t("times.label")} htmlFor="lp-times" name="times" required>
-          <Input
-            id="lp-times"
-            type="number"
-            min={0}
-            value={times}
-            onChange={(e) => onChange(patchParam(params, "times", Number(e.target.value) || 0))}
-          />
-        </Field>
-      ) : null}
-      {mode === "forEach" ? (
-        <Field
-          label={t("inputExpression.label")}
-          htmlFor="lp-input"
-          hint={t("inputExpression.hint")}
-          name="inputExpression"
-          required
-        >
-          <Textarea
-            id="lp-input"
-            value={inputExpr}
-            onChange={(e) => onChange(patchParam(params, "inputExpression", e.target.value))}
-            rows={2}
-            className="font-mono text-xs"
-            placeholder={t("inputExpression.placeholder")}
-          />
-        </Field>
-      ) : null}
-      {mode === "while" ? (
-        <Field
-          label={t("whileCondition.label")}
-          htmlFor="lp-while"
-          hint={t("whileCondition.hint")}
-          name="whileCondition"
-          required
-        >
-          <Textarea
-            id="lp-while"
-            value={whileCondition}
-            onChange={(e) => onChange(patchParam(params, "whileCondition", e.target.value))}
-            rows={2}
-            className="font-mono text-xs"
-          />
-        </Field>
-      ) : null}
-      <Field
-        label={t("bodyExpression.label")}
-        htmlFor="lp-body"
-        hint={t("bodyExpression.hint")}
-        name="bodyExpression"
-        required
-      >
-        <Textarea
-          id="lp-body"
-          value={bodyExpr}
-          onChange={(e) => onChange(patchParam(params, "bodyExpression", e.target.value))}
-          rows={2}
-          className="font-mono text-xs"
-          placeholder={t("bodyExpression.placeholder")}
-        />
-      </Field>
-      <Field
-        label={t("maxIterations.label")}
-        htmlFor="lp-max"
-        hint={t("maxIterations.hint")}
-        name="maxIterations"
-      >
-        <Input
-          id="lp-max"
-          type="number"
-          min={1}
-          max={1000000}
-          value={maxIterations}
-          onChange={(e) =>
-            onChange(patchParam(params, "maxIterations", Number(e.target.value) || 10000))
-          }
-        />
       </Field>
     </FieldGroup>
   )

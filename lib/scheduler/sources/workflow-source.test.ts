@@ -23,7 +23,7 @@ function makeRow(overrides: Partial<WorkflowTriggerRow> = {}): WorkflowTriggerRo
 function makeWorkflow(overrides: Partial<VisualWorkflow> = {}): VisualWorkflow {
   return {
     id: "wf-1",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Daily digest",
     createdAt: 1_600_000_000_000,
     updatedAt: 1_600_000_000_000,

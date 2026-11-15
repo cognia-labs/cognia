@@ -119,9 +119,10 @@ describe("REFACTOR_PIPELINE_TEMPLATE shape", () => {
     expect(fromVerdict.find((e) => e.sourceHandle === "true")?.target).toBe("doc")
     expect(fromVerdict.find((e) => e.sourceHandle === "false")?.target).toBe("stopChanges")
     // The handles the edges use are the ones the editor/orchestrator emit.
-    expect(
-      outputHandlesFor({ kind: "flow.branch", typeVersion: 2, params: {} })?.map((h) => h.id)
-    ).toEqual(["true", "false"])
+    expect(outputHandlesFor({ kind: "flow.branch", params: {} })?.map((h) => h.id)).toEqual([
+      "true",
+      "false",
+    ])
   })
 
   it("evaluates the verdict condition fail-closed", () => {

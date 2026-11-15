@@ -26,7 +26,7 @@ function template(
 ): VisualWorkflow {
   return {
     id: partial.id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: partial.name,
     description: partial.description,
     icon: partial.icon,
@@ -61,7 +61,7 @@ function helloWorldTemplate(): VisualWorkflow {
       {
         id: "n_prompt",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 380, y: 120 },
         data: {
           label: "Greet the user",
@@ -139,7 +139,7 @@ function httpDataPipelineTemplate(): VisualWorkflow {
       {
         id: "n_summary",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 880, y: 140 },
         data: {
           label: "Summarize",
@@ -179,7 +179,7 @@ function conditionalReplyTemplate(): VisualWorkflow {
       {
         id: "n_classify",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 320, y: 200 },
         data: {
           label: "Classify intent",
@@ -194,14 +194,21 @@ function conditionalReplyTemplate(): VisualWorkflow {
       {
         id: "n_branch",
         type: "flow.branch",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 620, y: 200 },
         data: {
           label: "Question?",
           params: {
-            condition: "{{ $node['n_classify'].out.completion }}",
-            truthyLabel: "yes",
-            falsyLabel: "no",
+            conditions: {
+              combinator: "all",
+              conditions: [
+                {
+                  left: "{{ $node['n_classify'].out.completion }}",
+                  operator: "contains",
+                  right: "question",
+                },
+              ],
+            },
           },
         },
       },
@@ -229,8 +236,8 @@ function conditionalReplyTemplate(): VisualWorkflow {
     edges: [
       { id: "e1", source: "n_start", target: "n_classify" },
       { id: "e2", source: "n_classify", target: "n_branch" },
-      { id: "e3", source: "n_branch", target: "n_yes", label: "yes" },
-      { id: "e4", source: "n_branch", target: "n_no", label: "no" },
+      { id: "e3", source: "n_branch", target: "n_yes", sourceHandle: "true" },
+      { id: "e4", source: "n_branch", target: "n_no", sourceHandle: "false" },
     ],
   })
 }
@@ -268,7 +275,7 @@ function skillBundleTemplate(): VisualWorkflow {
       {
         id: "n_prompt",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 660, y: 140 },
         data: {
           label: "Use skills",
@@ -324,17 +331,37 @@ function inboundTriageTemplate(): VisualWorkflow {
       {
         id: "n_switch",
         type: "flow.switch",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 560, y: 80 },
         data: {
           label: "Route by label",
           params: {
-            subject: "{{ $node['n_classify'].out.label }}",
             cases: [
-              { value: "urgent", label: "urgent" },
-              { value: "spam", label: "spam" },
+              {
+                id: "urgent",
+                label: "urgent",
+                when: {
+                  combinator: "all",
+                  conditions: [
+                    {
+                      left: "{{ $node['n_classify'].out.label }}",
+                      operator: "eq",
+                      right: "urgent",
+                    },
+                  ],
+                },
+              },
+              {
+                id: "spam",
+                label: "spam",
+                when: {
+                  combinator: "all",
+                  conditions: [
+                    { left: "{{ $node['n_classify'].out.label }}", operator: "eq", right: "spam" },
+                  ],
+                },
+              },
             ],
-            defaultLabel: "default",
           },
         },
       },
@@ -370,8 +397,8 @@ function inboundTriageTemplate(): VisualWorkflow {
     edges: [
       { id: "e1", source: "n_inbound", target: "n_classify" },
       { id: "e2", source: "n_classify", target: "n_switch" },
-      { id: "e3", source: "n_switch", target: "n_draft", label: "urgent" },
-      { id: "e4", source: "n_switch", target: "n_default", label: "default" },
+      { id: "e3", source: "n_switch", target: "n_draft", sourceHandle: "urgent" },
+      { id: "e4", source: "n_switch", target: "n_default", sourceHandle: "default" },
     ],
   })
 }
@@ -408,7 +435,7 @@ function dailyDigestTemplate(): VisualWorkflow {
       {
         id: "n_summary",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 480, y: 80 },
         data: {
           label: "Summarise",
@@ -475,7 +502,7 @@ function ragFaqTemplate(): VisualWorkflow {
       {
         id: "n_answer",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 480, y: 80 },
         data: {
           label: "Grounded answer",
@@ -533,7 +560,7 @@ function webhookEchoTemplate(): VisualWorkflow {
       {
         id: "n_rewrite",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 240, y: 80 },
         data: {
           label: "Rewrite",
@@ -597,14 +624,16 @@ function loopOverItemsTemplate(): VisualWorkflow {
       {
         id: "n_loop",
         type: "flow.loop",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 480, y: 80 },
+        width: 360,
+        height: 200,
         data: {
           label: "For each post",
           params: {
             mode: "forEach",
-            inputExpression: "{{ $node['n_fetch'].out.body }}",
-            bodyExpression: "$item.title",
+            source: "{{ $node['n_fetch'].out.body }}",
+            output: "{{ $item.title }}",
             maxIterations: 100,
           },
         },
@@ -618,7 +647,7 @@ function loopOverItemsTemplate(): VisualWorkflow {
           label: "Render summary",
           params: {
             template:
-              "Processed {{ $node['n_loop'].out.iterations }} items:\n{{ $node['n_loop'].out.items }}",
+              "Processed {{ $node['n_loop'].out.count }} items:\n{{ $node['n_loop'].out.items }}",
           },
         },
       },
@@ -690,7 +719,7 @@ function subworkflowOrchestratorTemplate(): VisualWorkflow {
       {
         id: "n_merge",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 900, y: 120 },
         data: {
           label: "Merge",

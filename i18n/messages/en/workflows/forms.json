@@ -608,20 +608,9 @@
     }
   },
   "branch": {
-    "condition": {
-      "hint": "Expression that resolves to a truthy value. Supports '{{ }}' expressions.",
-      "label": "Condition",
-      "placeholder": "'{{ $node[''n_classify''].out.label }}' === 'urgent'"
-    },
     "conditions": {
       "hint": "Routes to the true handle when the group passes, otherwise false.",
       "label": "Conditions"
-    },
-    "falsyLabel": {
-      "label": "Falsy label"
-    },
-    "truthyLabel": {
-      "label": "Truthy label"
     }
   },
   "catch": {
@@ -1751,42 +1740,11 @@
       "label": "Timeout (ms, optional)"
     }
   },
-  "loop": {
-    "bodyExpression": {
-      "hint": "Per-iteration value. $item is the current array element (forEach mode).",
-      "label": "Body expression",
-      "placeholder": "$item.name"
-    },
-    "inputExpression": {
-      "hint": "Resolves to the array to iterate. If empty, the first upstream output is used.",
-      "label": "Input expression",
-      "placeholder": "'{{ $node[''n_search''].out.results }}'"
-    },
-    "maxIterations": {
-      "hint": "Hard cap. Loop breaks early at this count.",
-      "label": "Max iterations"
-    },
-    "mode": {
-      "label": "Mode",
-      "options": {
-        "forEach": "For each item in array",
-        "times": "Repeat N times",
-        "while": "While condition is truthy"
-      }
-    },
-    "times": {
-      "label": "Times"
-    },
-    "whileCondition": {
-      "hint": "Re-evaluated each iteration. Loop ends when this is falsy or maxIterations is reached.",
-      "label": "While condition"
-    }
-  },
   "loopJump": {
     "breakIntro": "Stops the innermost loop after the current iteration. No configuration needed.",
     "continueIntro": "Skips the rest of the current iteration. No configuration needed."
   },
-  "loopV2": {
+  "loop": {
     "batchSize": {
       "hint": "Groups items into sequential batches; items inside a batch run with the parallel-iterations setting. Empty = one batch.",
       "label": "Batch size",
@@ -2867,24 +2825,6 @@
     }
   },
   "switch": {
-    "cases": {
-      "addCase": "Add case",
-      "hint": "First match wins. Strict equality.",
-      "label": "Cases",
-      "labelPlaceholder": "label",
-      "removeCase": "Remove case",
-      "valuePlaceholder": "value"
-    },
-    "defaultLabel": {
-      "label": "Default label"
-    },
-    "subject": {
-      "hint": "Expression evaluated and matched against cases.",
-      "label": "Subject",
-      "placeholder": "'{{ $node[''n_classify''].out.label }}'"
-    }
-  },
-  "switchV2": {
     "cases": {
       "addCase": "Add case",
       "caseLabelPlaceholder": "Case label",

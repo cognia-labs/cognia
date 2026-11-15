@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Loop container node (flow.loop typeVersion 2) — a resizable sub-canvas that
+ * Loop container node (flow.loop) — a resizable sub-canvas that
  * hosts its body nodes as React Flow child nodes (`parentId` + `extent:
  * 'parent'`). The header shows the loop mode + source; the translucent body
  * area is the drop zone the canvas re-parents nodes into.

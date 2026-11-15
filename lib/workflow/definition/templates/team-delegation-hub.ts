@@ -21,7 +21,7 @@ const NOW = 1_730_000_000_000
 export function teamDelegationHubTemplate(): VisualWorkflow {
   return {
     id: "wf_builtin_team_delegation_hub",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Team delegation hub",
     description:
       "Classifies the request (research / coding / other), then delegates it on behalf of an auto-composed coordinator team to a digital twin, Claude Code, or a background agent — and posts the outcome to the team blackboard.",
@@ -74,17 +74,41 @@ export function teamDelegationHubTemplate(): VisualWorkflow {
       {
         id: "n_switch",
         type: "flow.switch",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 800, y: 260 },
         data: {
           label: "Route by kind",
           params: {
-            subject: "{{ $node['n_classify'].out.label }}",
             cases: [
-              { value: "research", label: "research" },
-              { value: "coding", label: "coding" },
+              {
+                id: "research",
+                label: "research",
+                when: {
+                  combinator: "all",
+                  conditions: [
+                    {
+                      left: "{{ $node['n_classify'].out.label }}",
+                      operator: "eq",
+                      right: "research",
+                    },
+                  ],
+                },
+              },
+              {
+                id: "coding",
+                label: "coding",
+                when: {
+                  combinator: "all",
+                  conditions: [
+                    {
+                      left: "{{ $node['n_classify'].out.label }}",
+                      operator: "eq",
+                      right: "coding",
+                    },
+                  ],
+                },
+              },
             ],
-            defaultLabel: "default",
           },
         },
       },
@@ -168,9 +192,9 @@ export function teamDelegationHubTemplate(): VisualWorkflow {
       { id: "e1", source: "n_start", target: "n_compose" },
       { id: "e2", source: "n_compose", target: "n_classify" },
       { id: "e3", source: "n_classify", target: "n_switch" },
-      { id: "e4", source: "n_switch", target: "n_twin", label: "research" },
-      { id: "e5", source: "n_switch", target: "n_external", label: "coding" },
-      { id: "e6", source: "n_switch", target: "n_background", label: "default" },
+      { id: "e4", source: "n_switch", target: "n_twin", sourceHandle: "research" },
+      { id: "e5", source: "n_switch", target: "n_external", sourceHandle: "coding" },
+      { id: "e6", source: "n_switch", target: "n_background", sourceHandle: "default" },
       { id: "e7", source: "n_twin", target: "n_join" },
       { id: "e8", source: "n_external", target: "n_join" },
       { id: "e9", source: "n_background", target: "n_join" },

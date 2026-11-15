@@ -443,7 +443,7 @@ export const WorkflowNodeComponent = memo(function WorkflowNodeComponent(
     (hasErrorHandle({ kind: data.kind, errorHandling: data.errorHandling }) ||
       storeBits?.errorPolicy === "branch")
 
-  // Labeled decision handles (branch/switch v2) — single source of truth in
+  // Labeled decision handles (branch/switch) — single source of truth in
   // `node-handles.ts`, shared with the connection validator and smart edge.
   // Memoized on the actual inputs so unrelated re-renders skip the handle
   // resolution walk.
@@ -452,11 +452,10 @@ export const WorkflowNodeComponent = memo(function WorkflowNodeComponent(
       showOutput
         ? outputHandlesFor({
             kind: data.kind,
-            typeVersion: data.typeVersion,
             params: (data.params as Record<string, unknown>) ?? {},
           })
         : null,
-    [showOutput, data.kind, data.typeVersion, data.params]
+    [showOutput, data.kind, data.params]
   )
 
   // The lastRun footer is suppressed while a run is actively in progress so

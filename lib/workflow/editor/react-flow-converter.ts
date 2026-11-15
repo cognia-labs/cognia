@@ -59,13 +59,12 @@ export function workflowToReactFlow(wf: VisualWorkflow): ConvertedWorkflow {
   const nodes: RFWorkflowNode[] = ordered.map((n) => {
     const node: RFWorkflowNode = {
       id: n.id,
-      // Loop containers (typeVersion 2) render as a resizable sub-canvas;
-      // annotation.group (typeVersion 2) renders as a resizable group frame
-      // that hosts its children. Legacy v1 groups stay plain workflow nodes.
+      // Loop containers render as a resizable sub-canvas; annotation.group
+      // renders as a resizable group frame that hosts its children.
       type:
-        n.type === "flow.loop" && n.typeVersion >= 2
+        n.type === "flow.loop"
           ? "loopContainer"
-          : n.type === "annotation.group" && n.typeVersion >= 2
+          : n.type === "annotation.group"
             ? "groupContainer"
             : "workflowNode",
       position: { x: n.position.x, y: n.position.y },

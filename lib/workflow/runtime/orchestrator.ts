@@ -487,7 +487,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   }
   const stepLogger = budget?.logger ?? logger
 
-  // Loop-container bodies (schemaVersion 2): nodes whose parent is a flow.loop
+  // Loop-container bodies: nodes whose parent is a flow.loop
   // container belong to that container's sub-canvas and are executed by the
   // loop runtime — they must NEVER be scheduled at the top level.
   //
@@ -495,7 +495,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   // nesting), but a group is NOT an execution boundary — its children are
   // ordinary top-level nodes at run time. So only LOOP children are excluded.
   const loopContainerIds = new Set(
-    validated.nodes.filter((n) => n.type === "flow.loop" && n.typeVersion >= 2).map((n) => n.id)
+    validated.nodes.filter((n) => n.type === "flow.loop").map((n) => n.id)
   )
   const childNodeIds = new Set(
     validated.nodes
@@ -769,10 +769,10 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
           signal: stepAc.signal,
         })
-        // Loop containers (schemaVersion 2) run their body subgraph through
+        // Loop containers run their body subgraph through
         // the loop runtime; everything else goes through the plain step path.
         const result: { output: unknown; decision?: string | string[]; fromCache: boolean } =
-          node.type === "flow.loop" && node.typeVersion >= 2
+          node.type === "flow.loop"
             ? await runLoopContainer({
                 workflow: validated as VisualWorkflow,
                 node,
@@ -845,10 +845,10 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
 
         // Branch routing — if a node returned `decision`, mark non-chosen
         // outgoing edges' targets as skipped. `sourceHandle` is the stable
-        // routing key (v2 multi-output handles emit decisions as handle ids);
-        // `label` is the v1 fallback for edges drawn from a single handle and
-        // routed by display label. Handle must win — otherwise renaming an
-        // edge's label on a v2 node would silently re-route the run.
+        // routing key (multi-output handles emit decisions as handle ids);
+        // `label` routes edges drawn from a single handle for nodes whose
+        // decision is a label (e.g. ai.classify). Handle must win — otherwise
+        // renaming an edge's label on a branch/switch would re-route the run.
         if (result.decision !== undefined) {
           const decisions = Array.isArray(result.decision) ? result.decision : [result.decision]
           const chosen = new Set(decisions)
@@ -1264,7 +1264,7 @@ function computeTerminalNodes(
   graph = createWorkflowGraphIndex(workflow)
 ): string[] {
   const loopContainerIds = new Set(
-    workflow.nodes.filter((n) => n.type === "flow.loop" && n.typeVersion >= 2).map((n) => n.id)
+    workflow.nodes.filter((n) => n.type === "flow.loop").map((n) => n.id)
   )
   return workflow.nodes
     .filter(

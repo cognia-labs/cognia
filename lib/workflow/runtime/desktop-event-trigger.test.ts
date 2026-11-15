@@ -50,7 +50,7 @@ import type { WorkflowRow } from "@/types/workflow/visual"
 function wf(id: string, params: Record<string, unknown>): WorkflowRow {
   return {
     id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: id,
     createdAt: 0,
     updatedAt: 0,

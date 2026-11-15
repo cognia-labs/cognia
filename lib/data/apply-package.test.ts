@@ -1196,7 +1196,7 @@ describe("applyBackupPackage — learned memory", () => {
         {
           id: "portable-workflow",
           name: "Definition",
-          schemaVersion: 1,
+          schemaVersion: 2,
           nodes: [],
           edges: [],
           settings: {},

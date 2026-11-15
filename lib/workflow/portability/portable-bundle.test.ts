@@ -37,7 +37,7 @@ function workflow(overrides: Partial<VisualWorkflow> = {}): VisualWorkflow {
       {
         id: "prompt",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 100, y: 0 },
         data: {
           label: "Prompt",

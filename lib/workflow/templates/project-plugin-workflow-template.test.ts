@@ -39,7 +39,7 @@ describe("projectPluginWorkflowTemplate", () => {
     expect(wf.id).toBe("p:fetch-summarize")
     expect(wf.isTemplate).toBe(true)
     expect(wf.isBuiltIn).toBe(false)
-    expect(wf.schemaVersion).toBe(1)
+    expect(wf.schemaVersion).toBe(2)
     expect(wf.nodes).toHaveLength(2)
     expect(wf.edges).toHaveLength(1)
   })

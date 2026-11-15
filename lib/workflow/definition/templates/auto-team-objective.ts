@@ -17,7 +17,7 @@ const NOW = 1_730_000_000_000
 export function autoTeamObjectiveTemplate(): VisualWorkflow {
   return {
     id: "wf_builtin_auto_team_objective",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Auto team from objective",
     description:
       "Run with an objective in the payload — the workflow auto-composes an agent team (routing assessment, roster, task decomposition), runs it to completion, then reports the final result and per-task outcomes.",

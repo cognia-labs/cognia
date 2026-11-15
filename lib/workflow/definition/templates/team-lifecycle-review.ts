@@ -19,7 +19,7 @@ const NOW = 1_730_000_000_000
 export function teamLifecycleReviewTemplate(): VisualWorkflow {
   return {
     id: "wf_builtin_team_lifecycle_review",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Team lifecycle + review panel",
     description:
       "Composes an agent team from the payload objective, briefs it on the blackboard, runs the full lifecycle, then has two independent AI reviewers verify the team's final result before the merged report is stored.",
@@ -105,7 +105,7 @@ export function teamLifecycleReviewTemplate(): VisualWorkflow {
       {
         id: "n_review_correct",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 1560, y: 120 },
         data: {
           label: "Correctness reviewer",
@@ -121,7 +121,7 @@ export function teamLifecycleReviewTemplate(): VisualWorkflow {
       {
         id: "n_review_complete",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 1560, y: 360 },
         data: {
           label: "Completeness reviewer",

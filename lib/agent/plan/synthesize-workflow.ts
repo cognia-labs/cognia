@@ -123,7 +123,7 @@ export function synthesizePlanWorkflow(plan: AgentPlan): SynthesizePlanResult {
 
   const workflow: VisualWorkflow = {
     id: workflowId,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: plan.title,
     description: plan.description ?? "",
     nodes,

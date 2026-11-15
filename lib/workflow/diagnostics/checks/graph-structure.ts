@@ -63,9 +63,7 @@ export function checkReachability(wf: VisualWorkflow): Diagnostic[] {
  * Warn at author time so the degradation is never a surprise.
  */
 export function checkLoopBodyJoinPolicy(wf: VisualWorkflow): Diagnostic[] {
-  const loopContainerIds = new Set(
-    wf.nodes.filter((n) => n.type === "flow.loop" && n.typeVersion >= 2).map((n) => n.id)
-  )
+  const loopContainerIds = new Set(wf.nodes.filter((n) => n.type === "flow.loop").map((n) => n.id))
   const out: Diagnostic[] = []
   for (const node of wf.nodes) {
     if (node.type !== "flow.join") continue

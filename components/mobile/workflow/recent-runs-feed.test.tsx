@@ -51,7 +51,7 @@ const wf = (id: string, name: string): WorkflowRow =>
   ({
     id,
     name,
-    schemaVersion: 1,
+    schemaVersion: 2,
     nodes: [],
     edges: [],
     settings: {},
