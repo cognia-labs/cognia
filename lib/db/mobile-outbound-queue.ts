@@ -4,6 +4,7 @@
  * can exercise individual transitions without spinning up the orchestrator.
  */
 
+import type { Transaction } from "dexie"
 import { nanoid } from "nanoid"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import {
@@ -379,7 +380,7 @@ export async function enqueueInScope(
       scope.assertActive()
       // A nested enqueue returns before its parent commits. Fence that entire
       // lifetime, including the gap after the final asynchronous scope check.
-      let root = transaction
+      let root: Transaction = transaction
       while (root.parent) root = root.parent
       const unsubscribe = subscribeRuntimeTargetContext(() => {
         try {
