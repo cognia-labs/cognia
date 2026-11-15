@@ -137,7 +137,7 @@ describe("syncSessions managed workspace boundary", () => {
     )
   })
 
-  it("does not read previous rows for sessions without a managed binding", async () => {
+  it("reads previous plain sessions too so their device-local binding can be preserved", async () => {
     const table = getDb().sessions
     const read = jest.spyOn(table, "bulkGet")
     const rows = [
@@ -152,7 +152,7 @@ describe("syncSessions managed workspace boundary", () => {
     ]
     try {
       expect((await syncSessions(transportFor(rows), { since: 0 })).ok).toBe(true)
-      expect(read).not.toHaveBeenCalled()
+      expect(read).toHaveBeenCalledWith(["plain", "local"])
       expect(await table.get("plain")).toEqual(rows[0])
       expect(await table.get("local")).toEqual(rows[1])
     } finally {
@@ -160,7 +160,7 @@ describe("syncSessions managed workspace boundary", () => {
     }
   })
 
-  it("reads only managed merge rows and preserves duplicate-id last-write behavior", async () => {
+  it("reads merge rows and preserves duplicate-id last-write behavior", async () => {
     const context = {
       location: "managedWorktree",
       projectId: "p",
@@ -202,7 +202,7 @@ describe("syncSessions managed workspace boundary", () => {
           )
         ).ok
       ).toBe(true)
-      expect(read).toHaveBeenCalledWith(["managed", "managed"])
+      expect(read).toHaveBeenCalledWith(["managed", "plain", "managed"])
       expect(await table.get("managed")).toMatchObject({
         title: "Last",
         executionContext: {
@@ -213,6 +213,60 @@ describe("syncSessions managed workspace boundary", () => {
     } finally {
       read.mockRestore()
     }
+  })
+
+  it("keeps this device's binding to A when a synced update arrives", async () => {
+    const hostBinding = {
+      origin: { kind: "remote" as const, hostId: "a" },
+      workspaceRoot: "/a/repo",
+    }
+    await getDb().sessions.put({
+      id: "bound",
+      title: "Local",
+      createdAt: 1,
+      updatedAt: 10,
+      hostBinding,
+      workingDir: "/a/repo",
+      sdkSessionId: "a-sdk",
+    })
+    await syncSessions(
+      transportFor([
+        {
+          id: "bound",
+          title: "Updated",
+          createdAt: 1,
+          updatedAt: 20,
+          workingDir: "/foreign/repo",
+          sdkSessionId: "foreign-sdk",
+        },
+      ]),
+      { since: 0 }
+    )
+    // The binding stays; the source Host's working dir and resume id win.
+    expect(await getDb().sessions.get("bound")).toMatchObject({
+      title: "Updated",
+      hostBinding,
+      workingDir: "/foreign/repo",
+      sdkSessionId: "foreign-sdk",
+    })
+  })
+
+  it("ignores an inbound Host binding on both new and existing unbound rows", async () => {
+    await getDb().sessions.put({ id: "existing", title: "Local", createdAt: 1, updatedAt: 10 })
+    await syncSessions(
+      transportFor(
+        ["new", "existing"].map((id) => ({
+          id,
+          title: "Incoming",
+          createdAt: 1,
+          updatedAt: 20,
+          hostBinding: { origin: { kind: "remote", hostId: "foreign" }, workspaceRoot: "/foreign" },
+        }))
+      ),
+      { since: 0 }
+    )
+    for (const id of ["new", "existing"])
+      expect(await getDb().sessions.get(id)).not.toHaveProperty("hostBinding")
   })
 })
 

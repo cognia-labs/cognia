@@ -26,6 +26,271 @@ import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { getExecutionRun } from "@/lib/db/execution-runs"
+import {
+  guardBuiltinSessionHostSend,
+  registerSessionHostPromptHandler,
+  type SessionHostPromptHandler,
+} from "@/lib/chat/session-host-binding"
+import { getDb } from "@/lib/db/schema"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { useRemoteHostStore, type RemoteHost } from "@/stores/remote-host/remote-host-store"
+import { act, renderHook } from "@testing-library/react"
+import { acquireSessionTurnLease } from "@/lib/execution/session-turn-lock"
+import { useChatStore } from "@/stores/chat/chat-store"
+
+jest.mock("@/lib/execution/session-turn-lock", () => ({
+  ...jest.requireActual("@/lib/execution/session-turn-lock"),
+  acquireSessionTurnLease: jest.fn(),
+}))
+
+const promptSessionHostSend = jest.fn<
+  ReturnType<SessionHostPromptHandler>,
+  Parameters<SessionHostPromptHandler>
+>(async () => false)
+jest.mock("@/lib/task-workspace/origin", () => ({
+  ...jest.requireActual("@/lib/task-workspace/origin"),
+  callTaskWorkspaceOrigin: jest.fn(async () => ({
+    roots: [{ path: "/host/repo", source: "desktop-project" }],
+  })),
+}))
+
+describe("public built-in send Host guard before turn admission", () => {
+  const fixture = createDbTestFixture({ seeded: false })
+  const remoteState = useRemoteHostStore.getState()
+  const runtimeState = useAgentRuntimeStore.getState()
+  beforeAll(fixture.initialize)
+  afterAll(fixture.dispose)
+  beforeEach(async () => {
+    await fixture.restore()
+    promptSessionHostSend.mockReset().mockResolvedValue(false)
+    registerSessionHostPromptHandler(promptSessionHostSend)
+    jest.mocked(acquireSessionTurnLease).mockReset()
+    useAgentRuntimeStore.setState({ runtimeRef: { kind: "builtin" }, sessionRuntimeRefs: {} })
+    useRemoteHostStore.setState({
+      hosts: ["a", "b"].map(
+        (id) =>
+          ({
+            id,
+            label: `Host ${id}`,
+            connectionState: "ready",
+            capabilities: ["sidecar"],
+            config: {},
+          }) as RemoteHost
+      ),
+      activeHostId: "b",
+    })
+  })
+  afterEach(() => {
+    useRemoteHostStore.setState(remoteState, true)
+    useAgentRuntimeStore.setState(runtimeState, true)
+  })
+
+  it("refuses, never sends elsewhere, when no prompt UI is installed", async () => {
+    registerSessionHostPromptHandler(promptSessionHostSend)()
+    await getDb().sessions.put({
+      id: "s",
+      title: "A",
+      createdAt: 1,
+      updatedAt: 1,
+      hostBinding: { origin: { kind: "remote", hostId: "a" } },
+    })
+    expect(await guardBuiltinSessionHostSend("s")).toBe(false)
+    expect(promptSessionHostSend).not.toHaveBeenCalled()
+  })
+
+  it("blocks a session bound to A while B is active and offers switching to A", async () => {
+    const hostBinding = {
+      origin: { kind: "remote" as const, hostId: "a" },
+      workspaceRoot: "/a/repo",
+    }
+    await getDb().sessions.put({ id: "s", title: "A", createdAt: 1, updatedAt: 1, hostBinding })
+    expect(await guardBuiltinSessionHostSend("s")).toBe(false)
+    expect(promptSessionHostSend).toHaveBeenCalledWith({
+      sessionId: "s",
+      binding: hostBinding,
+      decision: "switch-required",
+    })
+    expect((await getDb().sessions.get("s"))?.hostBinding).toEqual(hostBinding)
+  })
+
+  it("blocks actual send before admission when A is bound and B is active", async () => {
+    await getDb().sessions.put({
+      id: "s",
+      title: "Bound",
+      createdAt: 1,
+      updatedAt: 1,
+      hostBinding: { origin: { kind: "remote", hostId: "a" } },
+    })
+    const { result } = renderHook(() => useClaudeChat())
+    await act(async () => {
+      expect(await result.current.send("hello", undefined, { sessionId: "s" })).toBe(false)
+    })
+    expect(acquireSessionTurnLease).not.toHaveBeenCalled()
+    expect(promptSessionHostSend).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "switch-required" })
+    )
+  })
+
+  it("persists the first binding before actual send attempts admission", async () => {
+    await getDb().sessions.put({ id: "s", title: "New", createdAt: 1, updatedAt: 1 })
+    jest.mocked(acquireSessionTurnLease).mockImplementationOnce(async () => {
+      expect((await getDb().sessions.get("s"))?.hostBinding).toEqual({
+        origin: { kind: "remote", hostId: "b" },
+        workspaceRoot: "/host/repo",
+      })
+      return null
+    })
+    const { result } = renderHook(() => useClaudeChat())
+    await act(async () => {
+      await expect(result.current.send("hello", undefined, { sessionId: "s" })).rejects.toThrow(
+        "session_turn_busy"
+      )
+    })
+    expect(acquireSessionTurnLease).toHaveBeenCalledWith("s", true)
+  })
+
+  it("releases admission and refuses dispatch if the target changes while admission waits", async () => {
+    useRemoteHostStore.setState({ activeHostId: "a" })
+    await getDb().sessions.put({
+      id: "s",
+      title: "Bound",
+      createdAt: 1,
+      updatedAt: 1,
+      hostBinding: { origin: { kind: "remote", hostId: "a" } },
+    })
+    const release = jest.fn(async () => undefined)
+    jest.mocked(acquireSessionTurnLease).mockImplementationOnce(async () => {
+      useRemoteHostStore.setState({ activeHostId: "b" })
+      return release
+    })
+    const { result } = renderHook(() => useClaudeChat())
+    await act(async () => {
+      expect(await result.current.send("hello", undefined, { sessionId: "s" })).toBe(false)
+    })
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it("refuses a concurrent session rebind while admission waits even if the active Host stays A", async () => {
+    useRemoteHostStore.setState({ activeHostId: "a" })
+    await getDb().sessions.put({
+      id: "s",
+      title: "Bound",
+      createdAt: 1,
+      updatedAt: 1,
+      hostBinding: { origin: { kind: "remote", hostId: "a" }, workspaceRoot: "/a" },
+    })
+    const release = jest.fn(async () => undefined)
+    jest.mocked(acquireSessionTurnLease).mockImplementationOnce(async () => {
+      await getDb().sessions.update("s", {
+        hostBinding: { origin: { kind: "remote", hostId: "b" }, workspaceRoot: "/b" },
+      })
+      return release
+    })
+    const { result } = renderHook(() => useClaudeChat())
+    await act(async () => {
+      expect(await result.current.send("hello", undefined, { sessionId: "s" })).toBe(false)
+    })
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not re-guard a dispatch joining a live turn lease", async () => {
+    useRemoteHostStore.setState({ activeHostId: "a" })
+    await getDb().sessions.put({
+      id: "s",
+      title: "Bound",
+      createdAt: 1,
+      updatedAt: 1,
+      hostBinding: { origin: { kind: "remote", hostId: "a" } },
+    })
+    const previousChat = useChatStore.getState()
+    const release = jest.fn(async () => undefined)
+    jest.mocked(acquireSessionTurnLease).mockResolvedValueOnce(release)
+    const { result, unmount } = renderHook(() => useClaudeChat())
+    try {
+      act(() => useChatStore.getState().setSessionStatus("s", "streaming"))
+      // Empty content stops before provider work while the streaming slice
+      // retains the admitted lease, just as an awaited live turn does.
+      await act(async () => {
+        expect(await result.current.send("", undefined, { sessionId: "s" })).toBe(false)
+      })
+      await getDb().sessions.update("s", {
+        hostBinding: { origin: { kind: "remote", hostId: "b" } },
+      })
+      await act(async () => {
+        expect(await result.current.send("", undefined, { sessionId: "s" })).toBe(false)
+      })
+      expect(acquireSessionTurnLease).toHaveBeenCalledTimes(1)
+      expect(promptSessionHostSend).not.toHaveBeenCalled()
+    } finally {
+      act(() => useChatStore.getState().setSessionStatus("s", "idle"))
+      unmount()
+      useChatStore.setState(previousChat, true)
+    }
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it("binds an unbound session to the active Host and its reported workspace before admission", async () => {
+    await getDb().sessions.put({ id: "s", title: "New", createdAt: 1, updatedAt: 1 })
+    expect(await guardBuiltinSessionHostSend("s")).toMatchObject({
+      origin: { kind: "remote", hostId: "b" },
+    })
+    expect((await getDb().sessions.get("s"))?.hostBinding).toEqual({
+      origin: { kind: "remote", hostId: "b" },
+      workspaceRoot: "/host/repo",
+    })
+    expect(promptSessionHostSend).not.toHaveBeenCalled()
+  })
+
+  it("offers unavailable recovery and never changes the binding to a ready alternative", async () => {
+    useRemoteHostStore.setState((state) => ({
+      hosts: state.hosts.map((host) =>
+        host.id === "b" ? { ...host, connectionState: "disconnected" } : host
+      ),
+    }))
+    const hostBinding = { origin: { kind: "remote" as const, hostId: "b" } }
+    await getDb().sessions.put({
+      id: "s",
+      title: "Offline",
+      createdAt: 1,
+      updatedAt: 1,
+      hostBinding,
+    })
+    expect(await guardBuiltinSessionHostSend("s")).toBe(false)
+    expect(promptSessionHostSend).toHaveBeenCalledWith({
+      sessionId: "s",
+      binding: hostBinding,
+      decision: "host-unavailable",
+    })
+    expect((await getDb().sessions.get("s"))?.hostBinding).toEqual(hostBinding)
+  })
+
+  it("rechecks live state after Wait before allowing the original bound Host", async () => {
+    useRemoteHostStore.setState({ activeHostId: "a" })
+    useRemoteHostStore.setState((state) => ({
+      hosts: state.hosts.map((host) =>
+        host.id === "a" ? { ...host, connectionState: "connecting" } : host
+      ),
+    }))
+    await getDb().sessions.put({
+      id: "s",
+      title: "Waiting",
+      createdAt: 1,
+      updatedAt: 1,
+      hostBinding: { origin: { kind: "remote", hostId: "a" } },
+    })
+    promptSessionHostSend.mockImplementationOnce(async () => {
+      useRemoteHostStore.setState((state) => ({
+        hosts: state.hosts.map((host) =>
+          host.id === "a" ? { ...host, connectionState: "ready" } : host
+        ),
+      }))
+      return true
+    })
+    expect(await guardBuiltinSessionHostSend("s")).toMatchObject({
+      origin: { kind: "remote", hostId: "a" },
+    })
+  })
+})
 
 jest.mock("@/lib/db/execution-runs", () => ({
   ...jest.requireActual("@/lib/db/execution-runs"),

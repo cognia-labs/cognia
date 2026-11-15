@@ -35,6 +35,9 @@ export function inheritableSessionConfig(
     systemPrompt: parent.systemPrompt,
     activePresetId: parent.activePresetId,
     workingDir: parent.workingDir,
+    // A branch continues on the same Host and workspace (ADR-0244 I8); its
+    // working directory above is only meaningful there.
+    hostBinding: parent.hostBinding,
     permissionMode: parent.permissionMode,
     bareMode: parent.bareMode,
     debugMode: parent.debugMode,

@@ -33,6 +33,7 @@ import { surfaceBindingKey } from "@/lib/context-workbench/resource-session"
 import { readVerifiedSessionListRows } from "./session-list"
 import { isTauri } from "@/lib/platform/detect"
 import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
+import { sameTaskWorkspaceOrigin } from "@/lib/task-workspace/origin"
 
 export interface SessionPersistenceScope {
   db: ReturnType<typeof getDb>
@@ -492,6 +493,39 @@ export async function updateSession(
         { type: "session-updated", previous, current: { ...previous, ...patch } },
         Dexie.currentTransaction
       )
+  })
+}
+
+/** Rebinding explicitly discards Host-owned runtime and working-copy handles. */
+export async function updateSessionHostBinding(
+  id: string,
+  hostBinding: NonNullable<ChatSession["hostBinding"]>,
+  options: { onlyIfUnbound?: boolean } = {}
+): Promise<void> {
+  const db = getDb()
+  await db.transaction("rw", db.sessions, async () => {
+    const previous = await db.sessions.get(id)
+    if (!previous) throw new Error("Session no longer exists")
+    if (getDb() !== db) throw new Error("Session database changed")
+    if (options.onlyIfUnbound && previous.hostBinding) return
+    const changed = previous.hostBinding
+      ? !sameTaskWorkspaceOrigin(previous.hostBinding.origin, hostBinding.origin) ||
+        previous.hostBinding.workspaceRoot !== hostBinding.workspaceRoot
+      : hostBinding.origin.kind === "remote"
+    await updateSession(id, {
+      hostBinding,
+      ...(changed
+        ? {
+            workingDir: hostBinding.workspaceRoot,
+            executionContext: undefined,
+            sdkSessionId: undefined,
+            sdkSessionStorage: undefined,
+            forkedFromSdkSessionId: undefined,
+          }
+        : hostBinding.workspaceRoot
+          ? { workingDir: hostBinding.workspaceRoot }
+          : {}),
+    })
   })
 }
 
@@ -1004,6 +1038,7 @@ export async function forkSessionFromParent(parentId: string): Promise<ChatSessi
     systemPrompt: parent.systemPrompt,
     activePresetId: parent.activePresetId,
     workingDir: parent.workingDir,
+    hostBinding: parent.hostBinding,
     permissionMode: parent.permissionMode,
     messageDisplayOverride: parent.messageDisplayOverride,
     bareMode: parent.bareMode,

@@ -54,6 +54,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
+import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
 
 export interface ExecutionHostSwitchOptions {
   /**
@@ -172,15 +173,20 @@ export function useExecutionHostSwitch(): ExecutionHostSwitch {
       options: ExecutionHostSwitchOptions = {}
     ): Promise<ExecutionHostSwitchOutcome> => {
       const { hosts, activeHostId } = useRemoteHostStore.getState()
-      const host = hostId === null ? null : hosts.find((candidate) => candidate.id === hostId)
-      if (hostId !== null && !host) {
+      // Removing a desktop registry overlay reveals the shell's paired Host;
+      // it does not select physical local execution on a paired web/mobile client.
+      const base = getRuntimeSnapshot().target
+      const pairedBase = base?.kind === "companion" && hostId === `companion:${base.id}`
+      const routeId = pairedBase ? null : hostId
+      const host = routeId === null ? null : hosts.find((candidate) => candidate.id === routeId)
+      if (routeId !== null && !host) {
         options.onSettled?.(false)
         return "unknown-host"
       }
-      const already = hostId === activeHostId
+      const already = routeId === activeHostId
       // "Reconnect" to local has nothing to re-run: the local transport has no
       // handshake, so it is the same no-op as asking for where you already are.
-      const reconnect = Boolean(options.reconnect) && hostId !== null
+      const reconnect = Boolean(options.reconnect) && routeId !== null
       if (already && !reconnect) {
         options.onSwitched?.()
         options.onSettled?.(true)
@@ -189,14 +195,18 @@ export function useExecutionHostSwitch(): ExecutionHostSwitch {
       if (await runActive()) {
         open({
           kind: "switch",
-          hostId,
-          label: host ? host.label : t("executionHost.local"),
+          hostId: routeId,
+          label: host
+            ? host.label
+            : pairedBase
+              ? t("executionHost.pairedHost")
+              : t("executionHost.local"),
           reconnect: already && reconnect,
           options,
         })
         return "confirming"
       }
-      commitSwitch(hostId)
+      commitSwitch(routeId)
       options.onSwitched?.()
       options.onSettled?.(true)
       return "switched"

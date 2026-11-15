@@ -12,33 +12,36 @@ export function syncSessions(transport: Transport, cursor: SyncCursor): Promise<
       table: "sessions",
       getTable: () => getDb().sessions,
       applyRows: async (rows, assertCurrent) => {
-        const table = getDb().sessions
-        const managedIds = rows
-          .filter((row) => row.executionContext?.workspaceBinding?.kind === "managed")
-          .map((row) => row.id)
-        // Only managed bindings use device-local context. Keep the async scope
-        // fence even when this slice needs no previous encrypted session rows.
-        const existing: (ChatSession | undefined)[] = await (managedIds.length > 0
-          ? table.bulkGet(managedIds)
-          : [])
-        const localContexts = new Map(
-          existing
-            .filter((row): row is ChatSession => row !== undefined)
-            .map((row) => [row.id, row.executionContext])
-        )
-        assertCurrent()
-        await table.bulkPut(
-          rows.map((row) => {
-            if (!row.executionContext) return row
-            return {
-              ...row,
-              executionContext: mergePortableManagedContext(
-                row.executionContext,
-                localContexts.get(row.id)
-              ),
-            }
-          })
-        )
+        const db = getDb()
+        const table = db.sessions
+        await db.transaction("rw", table, async () => {
+          // Every session can have a device-local Host binding. Read and merge
+          // atomically so an arriving delta cannot erase a concurrent choice.
+          const existing = new Map(
+            (await table.bulkGet(rows.map((row) => row.id)))
+              .filter((row): row is ChatSession => row !== undefined)
+              .map((row) => [row.id, row])
+          )
+          assertCurrent()
+          await table.bulkPut(
+            rows.map(({ hostBinding: _untrustedBinding, ...row }) => {
+              const local = existing.get(row.id)
+              // Only the binding is this device's own. Everything else on the
+              // row (working dir, SDK resume ids, execution context) is the
+              // source Host's truth and must not be frozen at a local copy.
+              const merged = row.executionContext
+                ? {
+                    ...row,
+                    executionContext: mergePortableManagedContext(
+                      row.executionContext,
+                      local?.executionContext
+                    ),
+                  }
+                : row
+              return local?.hostBinding ? { ...merged, hostBinding: local.hostBinding } : merged
+            })
+          )
+        })
       },
     },
     transport,

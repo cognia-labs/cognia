@@ -126,6 +126,9 @@ const SESSION_FIELDS = {
   runtimeExtensions: "local",
   transcriptRevision: "local",
   executionContext: "local",
+  // The Host and workspace a built-in session targets name this device's Host
+  // registry (ADR-0244 I8); another device picks its own on first send.
+  hostBinding: "local",
   surfaceBinding: "local",
   surfaceBindingKey: "local",
   // A side chat's edit grant and the parent context its SDK session already

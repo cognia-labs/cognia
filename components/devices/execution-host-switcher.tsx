@@ -26,7 +26,7 @@
  * goes through too, so this popover is one caller rather than the only guard.
  */
 
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -40,6 +40,17 @@ import { SITE_TONE_DOT, SITE_TONE_TEXT, type SiteTone } from "@/components/sites
 import { useRemoteHostStore, type RemoteHost } from "@/stores/remote-host/remote-host-store"
 import { cn } from "@/lib/utils"
 import { addsHostsToRegistry, COMPANION_ADD_HOST_HREF } from "@/lib/devices/pair-entry"
+import { captureTaskWorkspaceOrigin } from "@/lib/task-workspace/origin"
+import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
+import {
+  getRuntimeSnapshot,
+  getServerRuntimeSnapshot,
+  subscribeRuntimeSnapshot,
+} from "@/lib/runtime/runtime-snapshot-store"
+import {
+  getActiveRuntimeTargetContext,
+  subscribeRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 /**
  * Connection state to tone.
@@ -59,6 +70,22 @@ const STATE_TONE: Record<RemoteHost["connectionState"], SiteTone> = {
   disconnected: "neutral",
 }
 
+/**
+ * A target's display name, never its registry id: a paired base Host
+ * (`companion:<id>`) and a Host since removed from the registry get a label.
+ * `t` is the `devices.executionHost` translator.
+ */
+export function executionHostOriginLabel(
+  origin: TaskWorkspaceOrigin,
+  hosts: readonly Pick<RemoteHost, "id" | "label">[],
+  t: (key: "local" | "pairedHost" | "removedHost") => string
+): string {
+  if (origin.kind === "local") return t("local")
+  const row = hosts.find((host) => host.id === origin.hostId)
+  if (row) return row.label
+  return origin.hostId.startsWith("companion:") ? t("pairedHost") : t("removedHost")
+}
+
 export function hostTone(host: RemoteHost | null): SiteTone {
   // No host means local execution, which is a fact rather than a status: the
   // dot stays neutral so the bar does not read as an alert at rest.
@@ -68,16 +95,54 @@ export function hostTone(host: RemoteHost | null): SiteTone {
 interface SwitcherState {
   hosts: readonly RemoteHost[]
   active: RemoteHost | null
+  origin: TaskWorkspaceOrigin
+  baseOrigin: TaskWorkspaceOrigin
+  baseTone: SiteTone
 }
 
-function useSwitcherState(): SwitcherState {
+const readOriginKey = () => JSON.stringify(captureTaskWorkspaceOrigin())
+const readServerOriginKey = () => '{"kind":"local"}'
+const subscribeOrigin = (listener: () => void) => {
+  const unsubscribe = [
+    useRemoteHostStore.subscribe(listener),
+    subscribeRuntimeSnapshot(listener),
+    subscribeRuntimeTargetContext(listener),
+  ]
+  return () => unsubscribe.forEach((close) => close())
+}
+
+export function useExecutionHostTargets(): SwitcherState {
   const hosts = useRemoteHostStore((s) => s.hosts)
   const activeHostId = useRemoteHostStore((s) => s.activeHostId)
   const active = useMemo(
     () => hosts.find((host) => host.id === activeHostId) ?? null,
     [hosts, activeHostId]
   )
-  return { hosts, active }
+  const originKey = useSyncExternalStore(subscribeOrigin, readOriginKey, readServerOriginKey)
+  const origin = useMemo(() => JSON.parse(originKey) as TaskWorkspaceOrigin, [originKey])
+  const snapshot = useSyncExternalStore(
+    subscribeRuntimeSnapshot,
+    getRuntimeSnapshot,
+    getServerRuntimeSnapshot
+  )
+  const accountId = getActiveRuntimeTargetContext()?.accountId
+  const baseOrigin: TaskWorkspaceOrigin =
+    snapshot.target?.kind === "companion"
+      ? {
+          kind: "remote",
+          hostId: `companion:${snapshot.target.id}`,
+          ...(accountId ? { accountId } : {}),
+        }
+      : { kind: "local" }
+  const baseTone: SiteTone =
+    snapshot.target?.kind !== "companion"
+      ? "neutral"
+      : snapshot.connectionState === "online"
+        ? "success"
+        : snapshot.connectionState === "connecting"
+          ? "info"
+          : "warning"
+  return { hosts, active, origin, baseOrigin, baseTone }
 }
 
 export interface ExecutionHostSwitcherProps {
@@ -97,7 +162,7 @@ export function ExecutionHostSwitcher({
   onAddHost,
 }: ExecutionHostSwitcherProps) {
   const t = useTranslations("devices.executionHost")
-  const { hosts, active } = useSwitcherState()
+  const { hosts, active } = useExecutionHostTargets()
   const { requestSwitch, dialog } = useExecutionHostSwitch()
   const [open, setOpen] = useState(false)
 
@@ -278,7 +343,7 @@ export function ExecutionHostChip(props: Omit<ExecutionHostSwitcherProps, "varia
  * rule `StatusBarTerminal` and `agentThreads` already follow.
  */
 export function StatusBarExecutionHost() {
-  const { hosts, active } = useSwitcherState()
+  const { hosts, active } = useExecutionHostTargets()
   const router = useRouter()
   // The status bar has no add-host sheet of its own, so "Add a host" hands
   // over to the device console's: `?addHost=` is the deep link `/servers`

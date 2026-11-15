@@ -14,6 +14,8 @@
     "hint": "Where this window's file, git and agent calls run.",
     "local": "This machine",
     "localDetail": "Terminals, files and git run here.",
+    "pairedHost": "Paired Host",
+    "removedHost": "Removed Host",
     "manage": "Manage devices",
     "state": {
       "connecting": "Connecting",

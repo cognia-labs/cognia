@@ -87,7 +87,9 @@ export function exportToRichMarkdown(data: RichExportData): string {
 
 /** A pretty-printed JSON snapshot — full lossless dump of session + messages. */
 export function exportToRichJSON(data: RichExportData): string {
-  const { session, messages, exportedAt } = data
+  const { session: fullSession, messages, exportedAt } = data
+  // The Host binding names this device's Host registry; it never leaves it.
+  const { hostBinding: _hostBinding, ...session } = fullSession
   return JSON.stringify(
     {
       version: "cognia-next-1.0",

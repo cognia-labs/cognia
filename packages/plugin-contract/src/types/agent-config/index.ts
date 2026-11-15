@@ -2540,6 +2540,19 @@ export interface ChatSession {
   issueId?: string
   /** Durable Local/managed-worktree binding reused by subsequent turns. */
   executionContext?: import("@cognia/plugin-contract/types/execution-context").SessionExecutionContext
+  /**
+   * Built-in chat's device-local execution target (ADR-0244 I8). Non-indexed;
+   * never leaves this device: stripped from companion sync, account sync
+   * (`local`), portable and rich exports, and an inbound copy is ignored while
+   * this device's own binding is kept. Branches inherit it. `origin` uses the
+   * TaskWorkspaceOrigin shape; hostId is this device's registry id (including
+   * companion:<id>), and accountId is part of its identity. workspaceRoot is
+   * the existing workingDir/projectRoot path reported by that Host.
+   */
+  hostBinding?: {
+    origin: { kind: "local" } | { kind: "remote"; hostId: string; accountId?: string }
+    workspaceRoot?: string
+  }
   title: string
   /** Monotonic lineage for timeline pages, turn details, and opaque cursors. */
   transcriptRevision?: number

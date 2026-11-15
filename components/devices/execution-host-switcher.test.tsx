@@ -1,8 +1,17 @@
 /**
  * @jest-environment jsdom
  */
-import { act, render, screen } from "@testing-library/react"
+import { act, render, renderHook, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { useExecutionHostTargets } from "./execution-host-switcher"
+import {
+  setRuntimeSnapshot,
+  __resetRuntimeSnapshotForTesting,
+} from "@/lib/runtime/runtime-snapshot-store"
+import {
+  clearActiveRuntimeTargetContext,
+  setActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 jest.mock("next-intl", () => ({
   useTranslations: (ns: string) => (key: string, vals?: Record<string, unknown>) =>
@@ -26,7 +35,12 @@ jest.mock("@/lib/devices/execution-host-guard", () => ({
 
 import { useRemoteHostStore, type RemoteHost } from "@/stores/remote-host/remote-host-store"
 
-import { ExecutionHostSwitcher, StatusBarExecutionHost, hostTone } from "./execution-host-switcher"
+import {
+  ExecutionHostSwitcher,
+  StatusBarExecutionHost,
+  executionHostOriginLabel,
+  hostTone,
+} from "./execution-host-switcher"
 
 function host(overrides: Partial<RemoteHost> = {}): RemoteHost {
   return {
@@ -61,12 +75,70 @@ beforeEach(() => {
 
 afterAll(() => useRemoteHostStore.setState(initial, true))
 
+it("tracks paired target, account and connection changes without registry mutation", () => {
+  const { result } = renderHook(() => useExecutionHostTargets())
+  try {
+    act(() => {
+      setActiveRuntimeTargetContext("account-a", "paired-a")
+      setRuntimeSnapshot({
+        target: { kind: "companion", id: "paired-a", platform: "web", hostKind: "desktop" },
+        connectionState: "online",
+        vaultState: "unlocked",
+      })
+    })
+    expect(result.current.origin).toEqual({
+      kind: "remote",
+      hostId: "companion:paired-a",
+      accountId: "account-a",
+    })
+    expect(result.current.baseTone).toBe("success")
+    act(() => setActiveRuntimeTargetContext("account-b", "paired-a"))
+    expect(result.current.origin).toEqual({
+      kind: "remote",
+      hostId: "companion:paired-a",
+      accountId: "account-b",
+    })
+    act(() =>
+      setRuntimeSnapshot({
+        target: { kind: "companion", id: "paired-b", platform: "web", hostKind: "desktop" },
+        connectionState: "offline",
+        vaultState: "unlocked",
+      })
+    )
+    expect(result.current.baseOrigin).toEqual({
+      kind: "remote",
+      hostId: "companion:paired-b",
+      accountId: "account-b",
+    })
+    expect(result.current.baseTone).toBe("warning")
+    expect(result.current.hosts).toEqual([])
+  } finally {
+    act(() => {
+      clearActiveRuntimeTargetContext()
+      __resetRuntimeSnapshotForTesting()
+    })
+  }
+})
+
 /**
  * The five connection states must not collapse into connected/not-connected.
  * `degraded` (answered, failed its capability probe), `versionMismatch` (needs
  * an upgrade before it accepts writes) and `revoked` (threw this device out)
  * each imply a different next step.
  */
+it("labels a target by name, never by its registry id", () => {
+  const t = (key: string) => `t:${key}`
+  const hosts = [{ id: "h1", label: "Dev box" }]
+  expect(executionHostOriginLabel({ kind: "local" }, hosts, t)).toBe("t:local")
+  expect(executionHostOriginLabel({ kind: "remote", hostId: "h1" }, hosts, t)).toBe("Dev box")
+  expect(executionHostOriginLabel({ kind: "remote", hostId: "companion:p" }, hosts, t)).toBe(
+    "t:pairedHost"
+  )
+  expect(executionHostOriginLabel({ kind: "remote", hostId: "gone" }, hosts, t)).toBe(
+    "t:removedHost"
+  )
+})
+
 it("keeps every connection state on its own tone", () => {
   expect(hostTone(null)).toBe("neutral")
   expect(hostTone(host({ connectionState: "ready" }))).toBe("success")

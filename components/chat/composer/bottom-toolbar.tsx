@@ -86,6 +86,7 @@ import { ComposerCredentialBadge } from "./credential-badge"
 import { SessionCostBadgeLive } from "@/components/chat/session-cost-badge-live"
 import { useComposerSessionId } from "./composer-session-context"
 import { BestOfNChip, BestOfNSelect, type BestOfNChoiceProps } from "./best-of-n-chip"
+import { SessionHostTargetChip } from "./session-host-target-chip"
 
 interface BottomToolbarProps {
   session: ChatSession | null
@@ -252,7 +253,15 @@ function GenericBottomToolbar({
   // On an org member's shared Host the conversation runs as one of the org's
   // allowed agents, fixed when it was created (P6g), so the member's agent chip
   // takes this slot: the local runtime lanes do not run there.
-  const runtimeChip = (dense: boolean) =>
+  const runtimeChip = (dense: boolean) => (
+    <>
+      {session && runtimeRef.kind === "builtin" && (
+        <SessionHostTargetChip session={session} disabled={isStreaming} />
+      )}
+      {runtimeControl(dense)}
+    </>
+  )
+  const runtimeControl = (dense: boolean) =>
     personAgents.agents ? (
       <PersonAgentChip
         agents={personAgents.agents}

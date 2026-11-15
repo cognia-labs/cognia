@@ -21,6 +21,7 @@ const parent: ChatSession = {
   sandboxTierFollowsDefault: false,
   computerUseTarget: "local",
   workingDir: "/work",
+  hostBinding: { origin: { kind: "remote", hostId: "host-a" }, workspaceRoot: "/work" },
   permissionMode: "acceptEdits",
   systemPrompt: "Instructions",
   activePresetId: "preset",

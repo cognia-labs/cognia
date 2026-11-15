@@ -43,6 +43,7 @@ export function portableSessionReferences<T extends ChatSession>(
   membership: AuthoredIdMaps
 ): T {
   const row = { ...session }
+  delete row.hostBinding
   for (const [field, parent] of [
     ["projectId", "projects"],
     ["folderId", "sessionFolders"],

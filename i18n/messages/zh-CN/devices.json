@@ -14,6 +14,8 @@
     "hint": "这个窗口的文件、Git 与 Agent 调用会落在哪台机器上。",
     "local": "本机",
     "localDetail": "终端、文件与 Git 都在这里运行。",
+    "pairedHost": "已配对主机",
+    "removedHost": "已移除的主机",
     "manage": "管理设备",
     "state": {
       "connecting": "连接中",

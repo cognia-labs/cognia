@@ -191,6 +191,13 @@ export const CHROME_BUDGET = {
    * It is also a conditional control, not an unconditional one: it renders only
    * where the active surface publishes a depth ladder (`./effort-surface`), so
    * a session on Haiku or a non-reasoning model still measures 8.
+   *
+   * Not counted: the conversation's Host target chip (ADR-0244 I8). It renders
+   * only once there is something to choose or to warn about — another Host is
+   * registered, a paired Host is the base, or the session is bound away from
+   * the active Host — so the default single-device toolbar still measures 9.
+   * A multi-Host user gets the extra slot because "where will this run" is the
+   * same pre-turn question model and permission answer.
    */
   composerToolbar: 9,
   /**

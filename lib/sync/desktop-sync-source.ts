@@ -322,7 +322,7 @@ async function readSessionsDelta(
   // first so a cold sidebar fills with recent history before older rows.
   // finalizeDelta still advances the cursor to the maximum across all rows.
   const rows = (await getDb().sessions.where("updatedAt").above(since).reverse().toArray()).map(
-    (row) =>
+    ({ hostBinding: _hostBinding, ...row }) =>
       row.executionContext
         ? { ...row, executionContext: portableExecutionContext(row.executionContext) }
         : row

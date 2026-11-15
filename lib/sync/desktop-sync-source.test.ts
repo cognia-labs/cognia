@@ -50,6 +50,28 @@ import {
 } from "@/lib/signaling/provisioned-turn-state"
 
 describe("readDexieDelta", () => {
+  it("never sends a device-local session Host binding in a companion delta", async () => {
+    const hostBinding = {
+      origin: {
+        kind: "remote" as const,
+        hostId: "device-local-registry-id",
+        accountId: "private-account",
+      },
+      workspaceRoot: "/host/private-workspace",
+    }
+    await getDb().sessions.put({
+      id: "bound-session",
+      title: "Bound",
+      createdAt: 1,
+      updatedAt: 2,
+      hostBinding,
+    })
+    const delta = await readDexieDelta("sessions", 0)
+    expect(delta.rows).toHaveLength(1)
+    expect(delta.rows[0]).toMatchObject({ id: "bound-session" })
+    expect(delta.rows[0]).not.toHaveProperty("hostBinding")
+    expect((await getDb().sessions.get("bound-session"))?.hostBinding).toEqual(hostBinding)
+  })
   it("carries pending provider correlation in the body-free outbound status projection", () => {
     const pendingReceipt = { id: "audit", acceptedAt: 1 }
     const result = projectOutboundJobRow({

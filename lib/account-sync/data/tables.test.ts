@@ -51,6 +51,8 @@ describe("account sync table policies", () => {
     expect(TABLE_POLICIES.sessions.fields.runtimeExtensions).toBe("local")
     expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("runtimeExtensions")
     expect(TABLE_POLICIES.sessions.fields.sdkSessionId).toBe("local")
+    expect(TABLE_POLICIES.sessions.fields.hostBinding).toBe("local")
+    expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("hostBinding")
     expect(TABLE_POLICIES.sessions.fields.platformBinding).toBe("local")
     expect(TABLE_POLICIES.memories.fields.vectorDocId).toBe("local")
     expect(TABLE_POLICIES.memories.fields.vectorTextHash).toBe("local")

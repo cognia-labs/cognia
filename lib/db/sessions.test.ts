@@ -31,6 +31,7 @@ import {
   getSessionsByIds,
   updateSession,
   updateSessionAgentModel,
+  updateSessionHostBinding,
   setSessionActiveBranchSelection,
   listSessions,
   countSessions,
@@ -531,6 +532,42 @@ describe("createSession — without default preset", () => {
     expect(session.executionContext).toEqual(executionContext)
     await expect(getSession(session.id)).resolves.toMatchObject({ executionContext })
   })
+
+  it("persists the non-indexed Host binding without moving workspace ownership", async () => {
+    const session = await createSession({ title: "Bound" })
+    const binding = { origin: { kind: "local" as const }, workspaceRoot: "/repo" }
+    await updateSessionHostBinding(session.id, binding)
+    expect(await getSession(session.id)).toMatchObject({
+      hostBinding: binding,
+      projectId: session.projectId,
+      workingDir: "/repo",
+    })
+  })
+
+  it("drops the previous Host's runtime and working-copy handles on an explicit rebind", async () => {
+    const session = await createSession({ title: "Rebind" })
+    await updateSession(session.id, {
+      hostBinding: { origin: { kind: "remote", hostId: "a" }, workspaceRoot: "/a/repo" },
+      workingDir: "/a/repo",
+      sdkSessionId: "host-a-sdk",
+      executionContext: {
+        location: "local",
+        projectId: session.projectId!,
+        projectRoot: "/a/repo",
+        taskWorkspace: { taskId: "t", workspaceKey: "w" },
+      },
+    })
+    await updateSessionHostBinding(session.id, {
+      origin: { kind: "remote", hostId: "b" },
+      workspaceRoot: "/b/repo",
+    })
+    const saved = await getSession(session.id)
+    expect(saved?.hostBinding?.origin).toEqual({ kind: "remote", hostId: "b" })
+    expect(saved?.workingDir).toBe("/b/repo")
+    expect(saved?.sdkSessionId).toBeUndefined()
+    expect(saved?.executionContext).toBeUndefined()
+    expect(saved?.projectId).toBe(session.projectId)
+  })
 })
 
 describe("createSession — default thinking level", () => {
@@ -651,6 +688,21 @@ describe("createSession — external-agent default model", () => {
 })
 
 describe("forkSessionFromParent", () => {
+  it("keeps the SDK source Host binding instead of adopting the active Host", async () => {
+    const hostBinding = {
+      origin: { kind: "remote" as const, hostId: "a" },
+      workspaceRoot: "/a/repo",
+    }
+    const parent = await createSession({
+      title: "Bound parent",
+      sdkSessionId: "a-sdk",
+      hostBinding,
+    })
+    const fork = await forkSessionFromParent(parent.id)
+    expect(fork.hostBinding).toEqual(hostBinding)
+    expect((await getSession(fork.id))?.hostBinding).toEqual(hostBinding)
+    expect(fork.forkedFromSdkSessionId).toBe("a-sdk")
+  })
   it("refuses personal authority after a plain branch then SDK fork loses its programmatic creator", async () => {
     const root = await createSession({
       title: "Automation",

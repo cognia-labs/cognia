@@ -186,6 +186,27 @@ async function seedGraph() {
   for (const [table, values] of Object.entries(rows)) await db.table(table).bulkPut(values)
 }
 
+it.each(["v3", "v4"])(
+  "keeps device-local session Host bindings out of %s exports",
+  async (format) => {
+    await seedGraph()
+    const hostBinding = {
+      origin: {
+        kind: "remote" as const,
+        hostId: "device-local-registry-id",
+        accountId: "private-account",
+      },
+      workspaceRoot: "/host/private-workspace",
+    }
+    await getDb().sessions.update("s", { hostBinding })
+    const backup = await exportGraph(format)
+    expect(backup.payload.sessions?.find((session) => session.id === "s")).not.toHaveProperty(
+      "hostBinding"
+    )
+    expect((await getDb().sessions.get("s"))?.hostBinding).toEqual(hostBinding)
+  }
+)
+
 async function exportGraph(format: string): Promise<BackupPackageV3> {
   return format === "v3"
     ? buildBackupPackage(options, { storage: null })

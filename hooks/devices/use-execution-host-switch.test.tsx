@@ -3,6 +3,10 @@
  */
 import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import {
+  setRuntimeSnapshot,
+  __resetRuntimeSnapshotForTesting,
+} from "@/lib/runtime/runtime-snapshot-store"
 
 jest.mock("next-intl", () => ({
   useTranslations: (ns: string) => (key: string, vals?: Record<string, unknown>) =>
@@ -68,6 +72,31 @@ beforeEach(() => {
 afterAll(() => useRemoteHostStore.setState(initial, true))
 
 describe("requestSwitch", () => {
+  it("restores the underlying paired Host through the same in-flight guard", async () => {
+    anyActive = true
+    seed([host("h1", "Registry overlay")], "h1")
+    setRuntimeSnapshot({
+      target: { kind: "companion", id: "paired-host", platform: "web", hostKind: "desktop" },
+      vaultState: "unlocked",
+      connectionState: "online",
+    })
+    try {
+      const { api } = mount()
+      const onSwitched = jest.fn()
+      await act(async () => {
+        expect(await api().requestSwitch("companion:paired-host", { onSwitched })).toBe(
+          "confirming"
+        )
+      })
+      expect(deactivate).not.toHaveBeenCalled()
+      await userEvent.click(screen.getByTestId("execution-host-confirm"))
+      expect(deactivate).toHaveBeenCalledTimes(1)
+      expect(onSwitched).toHaveBeenCalledTimes(1)
+      expect(activateHost).not.toHaveBeenCalled()
+    } finally {
+      __resetRuntimeSnapshotForTesting()
+    }
+  })
   it("switches straight away when nothing is running", async () => {
     const { api } = mount()
     const onSwitched = jest.fn()

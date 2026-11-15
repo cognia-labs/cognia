@@ -110,6 +110,20 @@ describe("exportToRichJSON", () => {
     expect(parsed.statistics.assistantMessages).toBe(2)
     expect(parsed.statistics.hasToolCalls).toBe(true)
   })
+
+  it("leaves the device-local Host binding out of the exported session", () => {
+    const parsed = JSON.parse(
+      exportToRichJSON({
+        ...data,
+        session: {
+          ...session,
+          hostBinding: { origin: { kind: "remote", hostId: "a" }, workspaceRoot: "/a/repo" },
+        },
+      })
+    )
+    expect(parsed.session.id).toBe("s1")
+    expect(parsed.session).not.toHaveProperty("hostBinding")
+  })
 })
 
 describe("exportToPlainText", () => {

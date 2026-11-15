@@ -21,6 +21,7 @@ import type { PersonalCredentialContext } from "@/lib/execution/personal-credent
 
 import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 import { waitForModelSelection } from "@/lib/chat/model-selection"
+import { guardBuiltinSessionHostSend } from "@/lib/chat/session-host-binding"
 
 import { withWorkbenchMessageContext } from "@/lib/context-workbench/provider-context"
 
@@ -2837,6 +2838,11 @@ export function useClaudeChat() {
                   ? { runtimeRef: turnLane }
                   : undefined
           ))
+        // A recorded workspace on the session's Host wins; without one the
+        // resolver's cwd stands.
+        if (turnLane.kind === "builtin" && session?.hostBinding?.workspaceRoot) {
+          sendOptions = { ...sendOptions, cwd: session.hostBinding.workspaceRoot }
+        }
         if (turnLane.kind !== "builtin" && sendOptions.toolSurface !== "none") {
           await assertExternalRuntimeFeatureSupport(sendOptions)
         }
@@ -3659,7 +3665,9 @@ export function useClaudeChat() {
       // Resolved before the lease so the slot names the directory this turn
       // actually writes into. Best-effort: an unresolvable cwd means no slot,
       // which is what it was before any of this existed.
-      const turnCwd = await resolveEffectiveCwdForSession(session).catch(() => null)
+      const turnCwd =
+        (turnLane.kind === "builtin" ? session?.hostBinding?.workspaceRoot : undefined) ??
+        (await resolveEffectiveCwdForSession(session).catch(() => null))
       // The user message this turn belongs to — appended above, or already in
       // the transcript for a re-issued turn.
       const turnMessage = skipAppend ? turnMessageId(previousMessages) : userMsg.id
@@ -7037,8 +7045,14 @@ export function useClaudeChat() {
           return busy()
         return invokeOwnedSend(existing, args, true)
       }
+      const hostPermit = await guardBuiltinSessionHostSend(sessionId)
+      if (hostPermit === false) return false
       const release = await acquireSessionTurnLease(sessionId, true)
       if (!release) return busy()
+      if (hostPermit && !(await hostPermit.isCurrent())) {
+        void release()
+        return false
+      }
       // A Stop that began after admission resolved still fences this turn.
       if (sessionStopPending(sessionId)) {
         void release()
