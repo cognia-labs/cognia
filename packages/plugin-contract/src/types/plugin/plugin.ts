@@ -894,8 +894,6 @@ export interface PluginManifest {
   openApiProviders?: PluginOpenApiProviderDef[]
   /** Domain-scoped browser providers referenced by `services[].providers`. */
   browserSiteProviders?: BrowserSiteProviderDef[]
-  /** One-major compatibility aliases resolved only while this plugin is enabled. */
-  workflowKindAliases?: Record<string, string>
 
   // Plugin-first Computer Use plumbing (M1·T1)
   /** MCP server presets contributed by this plugin (mcp-server-preset capability). */

@@ -21,7 +21,6 @@ import { DEFAULT_WORKFLOW_SETTINGS } from "@/types/workflow/visual"
 import { ROOT_FOLDER_ID } from "@/types/workflow/folder"
 import { getDb } from "./schema"
 import { recordTombstones } from "./tombstones"
-import { migrateWorkflow } from "@/lib/workflow/definition/migrate"
 import {
   deleteWorkflowWithPublication,
   replaceWorkflowWithPublication,
@@ -68,13 +67,11 @@ async function projectPersistedWorkflowTriggers(
 }
 
 export async function listWorkflows(): Promise<WorkflowRow[]> {
-  const rows = await getDb().workflows.orderBy("name").toArray()
-  return rows.map(migrateWorkflow)
+  return getDb().workflows.orderBy("name").toArray()
 }
 
 export async function listWorkflowsByUpdated(): Promise<WorkflowRow[]> {
-  const rows = await getDb().workflows.orderBy("updatedAt").reverse().toArray()
-  return rows.map(migrateWorkflow)
+  return getDb().workflows.orderBy("updatedAt").reverse().toArray()
 }
 
 export async function listTemplateWorkflows(): Promise<WorkflowRow[]> {
@@ -86,8 +83,7 @@ export async function listTemplateWorkflows(): Promise<WorkflowRow[]> {
 }
 
 export async function getWorkflow(id: string): Promise<WorkflowRow | undefined> {
-  const row = await getDb().workflows.get(id)
-  return row ? migrateWorkflow(row) : undefined
+  return getDb().workflows.get(id)
 }
 
 export type WorkflowDraft = Pick<VisualWorkflow, "name"> &

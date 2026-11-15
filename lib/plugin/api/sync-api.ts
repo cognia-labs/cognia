@@ -98,8 +98,7 @@ export async function assertSyncConnection(
       !account ||
       account.connectionId !== ref ||
       account.providerId !== connection.providerId ||
-      (account.providerOwnerPluginId !== undefined &&
-        account.providerOwnerPluginId !== connection.ownerPluginId)
+      account.providerOwnerPluginId !== connection.ownerPluginId
     )
       continue
     const grants = await checked(() => listConsumerGrants(projection.id, pluginId))

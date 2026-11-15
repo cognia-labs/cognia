@@ -1582,9 +1582,6 @@ export const PLUGIN_API_RESOURCE_EFFECTS = {
   "ctx.integrations.listSubscriptions": {
     kind: "none",
   },
-  "ctx.integrations.migrateLegacy": {
-    kind: "none",
-  },
   "ctx.integrations.publishEvent": {
     kind: "none",
   },
@@ -1595,9 +1592,6 @@ export const PLUGIN_API_RESOURCE_EFFECTS = {
     kind: "none",
   },
   "ctx.integrations.requeueIngressDeadletter": {
-    kind: "none",
-  },
-  "ctx.integrations.rollbackMigration": {
     kind: "none",
   },
   "ctx.integrations.updateAccount": {

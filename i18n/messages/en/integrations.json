@@ -5,8 +5,7 @@
     "connectionReasons": {
       "grantRequired": "Calendar access was not granted or was revoked. Review read access to resume sync.",
       "revisionChanged": "The connection changed. Review access before resuming sync; the previous cursor was kept.",
-      "unavailable": "The connection is disconnected or its provider is unavailable. Reconnect to resume sync.",
-      "migrationNeedsAttention": "No migrated connection matches this legacy account. Restore its original connection; subscriptions and sync cursors were kept."
+      "unavailable": "The connection is disconnected or its provider is unavailable. Reconnect to resume sync."
     },
     "add": "Add account",
     "advanced": "Advanced",

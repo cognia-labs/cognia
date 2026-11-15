@@ -138,7 +138,6 @@ describe("Feishu Calendar plugin", () => {
     const context = {
       storage: { get: jest.fn(), set: jest.fn() },
       integrations: {
-        migrateLegacy: jest.fn(),
         listAccounts: jest.fn(async () => []),
         listSubscriptions: jest.fn(),
         authenticatedRequest: jest.fn(),
@@ -220,7 +219,6 @@ describe("Feishu Calendar plugin", () => {
         },
       },
       integrations: {
-        migrateLegacy: jest.fn(),
         listAccounts: async () => [{ id: "account", enabled: true, connectionId: "ref" }],
         listSubscriptions: async () => [
           { enabled: true, resourceKind: "calendar", resourceId: "cal" },

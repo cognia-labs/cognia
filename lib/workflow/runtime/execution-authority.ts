@@ -3,7 +3,6 @@ import { generateTraceId } from "@cognia/logging"
 import Dexie from "dexie"
 
 import { getDb } from "@/lib/db/schema"
-import { migrateWorkflow } from "@/lib/workflow/definition/migrate"
 import {
   resolveLockedWorkflowDeployment,
   resolveWorkflowDeployment,
@@ -563,7 +562,7 @@ async function executeLegacyPublishedWorkflow(
     )
   }
   const version = persistedVersion
-  const immutableWorkflow = migrateWorkflow(version.definition)
+  const immutableWorkflow = version.definition
   assertTriggerBinding(immutableWorkflow, input.triggerId, input.triggerKind)
   const runId = input.requestedRunId ?? `run_${nanoid(12)}`
   const traceId = input.traceId ?? generateTraceId()

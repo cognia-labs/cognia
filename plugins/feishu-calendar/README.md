@@ -35,17 +35,7 @@ Every request uses `integrations.authenticatedRequest` with its account's
 Other issuers are refused. Network rules permit only calendar v4 paths on those
 two deployments, without auth/token endpoints.
 
-## Migration and synchronization
-
-Activation calls `integrations.migrateLegacy` with ledger id
-`feishu-calendar-host-connections-v1`. The Host reads 5b's legacy-session alias
-map and rebinds existing integration accounts in place. Account ids, labels,
-externalRefs, subscriptions and account/calendar cursor keys remain stable.
-The ledger and snapshots survive audit pruning. Compare-and-swap checks refuse
-concurrent account/connection changes and duplicate bindings; the transaction
-rolls back on conflict. No alias match records `legacy-connection-unmatched`
-needs-attention, retains all original data and permits a later retry. Rollback
-preserves post-migration user edits and reports conflicts.
+## Synchronization
 
 The five-minute task uses full scans followed by incremental `sync_token`
 reads. Only a completed scan commits its terminal cursor. Pending generations
@@ -64,7 +54,7 @@ sync leases are outside this phase.
 ## ES-32 behavior table
 
 All rows use the existing Integration action/resource/event interfaces in
-`feishu-calendar`. The migration above preserves their account references.
+`feishu-calendar`.
 Tests exercise the actual `FeishuCalendarClient` with stubbed API responses.
 Supported means the mapping is verified locally, not that live vendor acceptance
 has been performed.
@@ -96,7 +86,6 @@ be edited. Standalone package tests build only their isolated test packages.
 日历只消费 Host 的 `auth.feishu` 连接，可使用 `feishu-auth` 或内置 Lark。
 在 Host 配置认证应用，在 Integrations 选择连接并分别批准读取与写入；日历不再
 收集 App ID、App Secret 或回调地址。订阅选择日历；按时间窗口查询与增量同步
-分开处理。旧账户通过 alias ledger 原地重绑，保留订阅、externalRefs 和游标；
-无匹配时标记待处理，冲突时事务回滚。撤权、断连或连接修订变化都会停止同步，
+分开处理。撤权、断连或连接修订变化都会停止同步，
 保留已完成游标并显示恢复原因。重复例外集合的编辑、原生推送及本地提醒调度未
 开放，界面明确标注为只读或未启用。

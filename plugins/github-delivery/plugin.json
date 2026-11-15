@@ -1532,31 +1532,6 @@
       ]
     }
   ],
-  "workflowKindAliases": {
-    "trigger.github.webhook": "trigger.integration.event",
-    "action.github.openPr": "github-delivery.action.openPr",
-    "action.github.closePr": "github-delivery.action.closePr",
-    "action.github.mergePr": "github-delivery.action.mergePr",
-    "action.github.reviewPr": "github-delivery.action.reviewPr",
-    "action.github.reviewPrInline": "github-delivery.action.reviewPrInline",
-    "action.github.commentPr": "github-delivery.action.commentPr",
-    "action.github.commentIssue": "github-delivery.action.commentIssue",
-    "action.github.replyToReviewComment": "github-delivery.action.replyToReviewComment",
-    "action.github.updateComment": "github-delivery.action.updateComment",
-    "action.github.labelIssue": "github-delivery.action.labelIssue",
-    "action.github.closeIssue": "github-delivery.action.closeIssue",
-    "action.github.updateIssue": "github-delivery.action.updateIssue",
-    "action.github.createIssue": "github-delivery.action.createIssue",
-    "action.github.getIssue": "github-delivery.action.getIssue",
-    "action.github.getPullRequest": "github-delivery.action.getPullRequest",
-    "action.github.getCommitStatus": "github-delivery.action.getCommitStatus",
-    "action.github.listIssueComments": "github-delivery.action.listIssueComments",
-    "action.github.searchIssues": "github-delivery.action.searchIssues",
-    "action.github.createRelease": "github-delivery.action.createRelease",
-    "action.github.generateChangelog": "github-delivery.action.generateChangelog",
-    "action.github.pushTag": "github-delivery.action.pushTag",
-    "action.github.runIssueLoop": "github-delivery.action.runIssueLoop"
-  },
   "i18n": {
     "locales": {
       "en": {

@@ -24006,7 +24006,6 @@
       "configured": "Configured",
       "connectionReasons": {
         "grantRequired": "Calendar access was not granted or was revoked. Review read access to resume sync.",
-        "migrationNeedsAttention": "No migrated connection matches this legacy account. Restore its original connection; subscriptions and sync cursors were kept.",
         "revisionChanged": "The connection changed. Review access before resuming sync; the previous cursor was kept.",
         "unavailable": "The connection is disconnected or its provider is unavailable. Reconnect to resume sync."
       },
@@ -36801,7 +36800,7 @@
         "hooks:chat-intercept": "Intercept every chat prompt, tool call, and tool result — can rewrite or block them",
         "integrations:events": "Publish normalized Integration events to workflows and Inbox",
         "integrations:execute": "Run Integration actions and authenticated platform requests",
-        "integrations:manage": "Manage Integration accounts, subscriptions, ingress, and migrations",
+        "integrations:manage": "Manage Integration accounts, subscriptions, and ingress",
         "integrations:read": "Read Integration definitions, accounts, subscriptions, and job status",
         "ipc:call": "Call or send messages to another plugin over inter-plugin IPC (incl. RPC)",
         "ipc:expose": "Expose RPC methods that other plugins can invoke over IPC",

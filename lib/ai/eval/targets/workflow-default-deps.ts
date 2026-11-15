@@ -18,13 +18,11 @@ export function defaultWorkflowTargetDeps(scope?: EvalPersistenceScope): Workflo
         signal?.throwIfAborted()
       }
       assertActive()
-      const [{ getWorkflow }, { getWorkflowVersion }, { runWorkflow }, { migrateWorkflow }] =
-        await Promise.all([
-          import("@/lib/db/workflows"),
-          import("@/lib/db/workflow-deployments"),
-          import("@/lib/workflow/runtime/orchestrator"),
-          import("@/lib/workflow/definition/migrate"),
-        ])
+      const [{ getWorkflow }, { getWorkflowVersion }, { runWorkflow }] = await Promise.all([
+        import("@/lib/db/workflows"),
+        import("@/lib/db/workflow-deployments"),
+        import("@/lib/workflow/runtime/orchestrator"),
+      ])
       assertActive()
       const version = versionId
         ? await (scope ? scope.db.workflowVersions.get(versionId) : getWorkflowVersion(versionId))
@@ -35,11 +33,10 @@ export function defaultWorkflowTargetDeps(scope?: EvalPersistenceScope): Workflo
           `eval workflow target: version "${versionId}" does not belong to workflow "${workflowId}"`
         )
       }
-      const definition =
+      const workflow =
         version?.definition ??
         (await (scope ? scope.db.workflows.get(workflowId) : getWorkflow(workflowId)))
       assertActive()
-      const workflow = definition && scope && !version ? migrateWorkflow(definition) : definition
       if (!workflow) throw new Error(`eval workflow target: workflow "${workflowId}" not found`)
       const result = await runWorkflow({
         workflow,

@@ -23,20 +23,9 @@ export type CalendarSyncHost = {
 }
 
 interface SyncState {
-  version: 1 | 2
-  syncToken?: string
+  version: 2
   fingerprints: Record<string, string>
   pending?: Record<string, { previous?: string }>
-  /**
-   * A v1 scan (this id) was interrupted at upgrade: it published before it
-   * saved fingerprints, so an accepted change may be newer than the stored
-   * fingerprint. The first completed Host run restates every live event once.
-   */
-  restate?: string
-}
-
-type StoredSyncState = Omit<SyncState, "pending"> & {
-  pending?: SyncState["pending"] | { id: string; mode: "full" | "incremental"; startedAt: string }
 }
 
 export interface CalendarSyncResult {
@@ -104,25 +93,11 @@ export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: Abo
     let published = 0
     let failure: unknown
     const state = async (): Promise<SyncState> => {
-      const stored = await host.storage.get<StoredSyncState>(storageKey)
-      if (
-        stored &&
-        (![1, 2].includes(stored.version) ||
-          !stored.fingerprints ||
-          typeof stored.fingerprints !== "object")
-      )
+      const stored = await host.storage.get<SyncState>(storageKey)
+      if (!stored || stored.version !== 2) return { version: 2, fingerprints: {} }
+      if (!stored.fingerprints || typeof stored.fingerprints !== "object")
         throw new Error("Unsupported Feishu calendar sync checkpoint")
-      if (!stored) return { version: 2, fingerprints: {} }
-      // v1's pending generation was a cursor checkpoint, not a publication intent.
-      const legacyId =
-        stored.version === 1 && typeof stored.pending?.id === "string"
-          ? (stored.pending.id as string)
-          : undefined
-      return {
-        ...stored,
-        pending: legacyId ? undefined : (stored.pending as SyncState["pending"]),
-        ...(legacyId ? { restate: legacyId } : {}),
-      }
+      return stored
     }
     // ctx.storage logs and swallows some browser write failures (quota), so a
     // write-ahead entry or fingerprint counts only once it reads back.
@@ -148,11 +123,8 @@ export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: Abo
       abort: AbortSignal
     ) => {
       abort.throwIfAborted()
-      const identity =
-        previousFingerprint === fingerprint && current.restate
-          ? [accountId, calendarId, eventId, "restated", current.restate, fingerprint]
-          : [accountId, calendarId, eventId, kind, previousFingerprint ?? ""]
-      if (kind !== "deleted" && identity[3] !== "restated") identity.push(fingerprint)
+      const identity = [accountId, calendarId, eventId, kind, previousFingerprint ?? ""]
+      if (kind !== "deleted") identity.push(fingerprint)
       const id = `feishu-calendar:${await digest(identity)}`
       const pending = { ...current.pending, [eventId]: { previous: previousFingerprint } }
       // Write ahead without event content. Fingerprints stay at the last settled
@@ -234,10 +206,7 @@ export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: Abo
         // An accepted publication may have outlived its fingerprint write.
         // Incremental pages cannot repair a transition that reverted or vanished.
         const recovering = await state()
-        if (
-          mode === "incremental" &&
-          (Object.keys(recovering.pending ?? {}).length || recovering.restate)
-        )
+        if (mode === "incremental" && Object.keys(recovering.pending ?? {}).length)
           syncCursorInvalid()
         try {
           const client = await connectedCalendarClient(host, accountId, abort)
@@ -281,12 +250,7 @@ export function createCalendarSync(host: CalendarSyncHost, lifecycleSignal?: Abo
           }
           const fingerprint = await digest(event)
           const previous = previousFingerprint(current, eventId)
-          if (
-            previous === fingerprint &&
-            !Object.hasOwn(current.pending ?? {}, eventId) &&
-            !current.restate
-          )
-            continue
+          if (previous === fingerprint && !Object.hasOwn(current.pending ?? {}, eventId)) continue
           // Pending entries must republish even if the remote returned to the
           // previous fingerprint: a different value may already have been accepted.
           await publish(

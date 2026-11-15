@@ -94,8 +94,6 @@ export async function checkIntegrationAccountHealth(
   verifiedBotAccount?: VerifiedBotAccount
 ): Promise<IntegrationAccountStatus> {
   const account = await requireAccount(pluginId, accountId)
-  if (!account.connectionId && account.status?.code === "legacy-connection-unmatched")
-    return account.status
   const provider = getIntegrationAccountStatusProvider(pluginId, account.integrationId)
   if (!provider) {
     throw new Error(`Integration "${account.integrationId}" does not provide health checks`)

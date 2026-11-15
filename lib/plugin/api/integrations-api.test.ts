@@ -54,10 +54,6 @@ jest.mock("@/lib/integrations/github-auth", () => ({
   __esModule: true,
   ...jest.requireActual("@/lib/integrations/github-auth"),
 }))
-jest.mock("@/lib/integrations/migration", () => ({
-  __esModule: true,
-  ...jest.requireActual("@/lib/integrations/migration"),
-}))
 
 let outboundSettings: object = { agentPermissions: {} }
 jest.mock("@/lib/policy/action-review/plan-context", () => ({
@@ -71,20 +67,6 @@ jest.mock("./bot-integration-binding", () => ({
 }))
 
 describe("ctx.integrations", () => {
-  it("keeps migration available during activation before Integration registration", async () => {
-    const api = createIntegrationsAPI("example-delivery", () => true)
-    await expect(
-      api.migrateLegacy({
-        id: "activation-migration",
-        integrationId: "not-yet-registered",
-        accounts: [],
-        subscriptions: [],
-        workflowKindAliases: {},
-        rebindLegacyConnections: { service: "auth.example" },
-      })
-    ).resolves.toMatchObject({ migratedAccounts: 0, alreadyApplied: false })
-  })
-
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
@@ -810,7 +792,6 @@ it("delegates account, publication and recovery operations with the calling plug
   const actions = await import("@/lib/integrations/action-runner")
   const ingress = await import("@/lib/integrations/ingress-client")
   const events = await import("@/lib/integrations/events")
-  const migrations = await import("@/lib/integrations/migration")
   const api = createIntegrationsAPI("owner", () => true)
   try {
     const list = jest.spyOn(database, "listIntegrationAccounts").mockResolvedValue([])
@@ -895,19 +876,6 @@ it("delegates account, publication and recovery operations with the calling plug
       .mockResolvedValue(true)
     await api.requeueIngressDeadletter("account", "route", "delivery")
     expect(replay).toHaveBeenCalledWith("owner", "account", "route", "delivery")
-    const migrate = jest
-      .spyOn(migrations, "migrateLegacyIntegration")
-      .mockResolvedValue({} as never)
-    await api.migrateLegacy({} as never)
-    expect(migrate).toHaveBeenCalledWith("owner", {})
-    const rollback = jest.spyOn(migrations, "rollbackIntegrationMigration").mockResolvedValue({
-      migrationId: "migration",
-      conflictedIds: { accounts: [], subscriptions: [], workflows: ["edited"] },
-    })
-    expect(await api.rollbackMigration("migration")).toMatchObject({
-      conflictedIds: { workflows: ["edited"] },
-    })
-    expect(rollback).toHaveBeenCalledWith("owner", "migration")
   } finally {
     jest.restoreAllMocks()
   }

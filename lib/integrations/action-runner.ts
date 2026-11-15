@@ -53,7 +53,6 @@ import { liveQuery } from "dexie"
 import { loggers } from "@cognia/logging"
 import {
   appendIntegrationAudit,
-  bindIntegrationAccountProviderOwner,
   cancelIntegrationActionJobRecord,
   claimIntegrationActionJob,
   enqueueIntegrationActionJob,
@@ -174,8 +173,7 @@ async function authorizeAccountConnection(
     )
     if (
       connection.providerId !== account.providerId ||
-      (account.providerOwnerPluginId !== undefined &&
-        connection.ownerPluginId !== account.providerOwnerPluginId)
+      connection.ownerPluginId !== account.providerOwnerPluginId
     )
       throw new ConnectionUnavailableError("provider-owner-changed")
   } catch (error) {
@@ -550,8 +548,7 @@ async function defaultAuthenticatedRequest<T>(
   const assertProviderOwner = async () => {
     if (
       getProvider(account.providerId) !== provider ||
-      (account.providerOwnerPluginId !== undefined &&
-        account.providerOwnerPluginId !== provider.pluginId)
+      account.providerOwnerPluginId !== provider.pluginId
     ) {
       const message = `Auth provider owner changed for account "${connectorAccountId}"; reconnect the account`
       await updateIntegrationAccount(pluginId, connectorAccountId, {
@@ -647,17 +644,6 @@ async function defaultAuthenticatedRequest<T>(
         })
       : { accessToken: session!.accessToken }
   await assertProviderOwner()
-  // Legacy accounts adopt the first successfully resolved provider owner
-  // (trust on first use); subsequent resolutions must retain that binding.
-  if (account.providerOwnerPluginId === undefined) {
-    const bound = await bindIntegrationAccountProviderOwner(
-      pluginId,
-      connectorAccountId,
-      provider.pluginId
-    )
-    account.providerOwnerPluginId = bound.providerOwnerPluginId
-    await assertProviderOwner()
-  }
   if (requestAuth.type === "bearer") {
     headers.set("authorization", `Bearer ${credential.accessToken}`)
   } else {

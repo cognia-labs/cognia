@@ -326,13 +326,13 @@ it("settles an unseen pending creation with a tombstone even without a saved fin
   })
 })
 
-it.each([1, 2])("loads a v%s fingerprint state without pending publications", async (version) => {
+it("loads a fingerprint state without pending publications", async () => {
   const f = fixture()
   f.page([event()], "base")
   await f.sync.syncCalendar("a", "cal")
   const key = 'calendar-sync:["a","cal"]'
   const saved = f.values.get(key) as { fingerprints: Record<string, string> }
-  f.values.set(key, { version, fingerprints: saved.fingerprints })
+  f.values.set(key, { version: 2, fingerprints: saved.fingerprints })
   await getDb().externalSyncCursors.clear()
   f.page([event()], "rebuilt")
   expect(await f.sync.syncCalendar("a", "cal")).toMatchObject({ mode: "full", published: 0 })
@@ -609,46 +609,27 @@ it("resumes the failed incremental page using the Host checkpoint", async () => 
   expect(await cursor()).toMatchObject({ cursor: "next" })
 })
 
-it("restates an interrupted v1 scan once without seeding the old cursor, cleaning only after completion", async () => {
+it("ignores a checkpoint in an older shape and rebuilds it from a full scan", async () => {
   const f = fixture()
   f.page([event()], "first")
   await f.sync.syncCalendar("a", "cal")
   const storageKey = [...f.values.keys()][0]
   const saved = f.values.get(storageKey) as { fingerprints: Record<string, string> }
-  // A v1 scan published before saving fingerprints, so its pending generation
-  // means an accepted change may be newer than the stored fingerprint.
   f.values.set(storageKey, {
     version: 1,
     fingerprints: saved.fingerprints,
-    syncToken: "legacy-token",
-    pending: { id: "legacy-generation", mode: "incremental", startedAt: "2026-11-01T00:00:00Z" },
+    syncToken: "old-token",
+    pending: { id: "old-generation", mode: "incremental", startedAt: "2026-11-01T00:00:00Z" },
   })
   await getDb().externalSyncCursors.clear()
-  f.page([event()], "", "legacy-rebuild-page-two")
-  f.request.mockRejectedValueOnce(new Error("remote unavailable"))
-  await expect(f.sync.syncCalendar("a", "cal")).rejects.toThrow("sync-failed")
-  // The unchanged event is restated even though its fingerprint matches.
-  expect(f.publishEvent).toHaveBeenCalledTimes(2)
-  expect(f.publishEvent.mock.calls[1][0]).toMatchObject({ eventType: "calendar.event.updated" })
-  expect(f.values.get(storageKey)).toMatchObject({
-    version: 1,
-    syncToken: "legacy-token",
-    restate: "legacy-generation",
-  })
-  await allowRetry()
-  f.page([], "fresh")
+  f.page([event()], "fresh")
   await f.sync.syncCalendar("a", "cal")
   expect(new URL(f.request.mock.calls.at(-1)![1]).searchParams.has("sync_token")).toBe(false)
-  expect(new URL(f.request.mock.calls.at(-1)![1]).searchParams.get("page_token")).toBe(
-    "legacy-rebuild-page-two"
-  )
+  // Nothing from the older checkpoint is read: the event counts as new.
   expect(f.publishEvent).toHaveBeenCalledTimes(2)
+  expect(f.publishEvent.mock.calls[1][0]).toMatchObject({ eventType: "calendar.event.created" })
   expect(f.values.get(storageKey)).toEqual({ version: 2, fingerprints: saved.fingerprints })
   expect(await cursor()).toMatchObject({ cursor: "fresh" })
-  // Restated once: a later full pass over the same data publishes nothing.
-  await f.host.sync.reset(targetKey())
-  f.page([event()], "again")
-  expect(await f.sync.syncCalendar("a", "cal")).toMatchObject({ published: 0 })
 })
 
 it("publishes nothing when a write-ahead entry does not persist", async () => {

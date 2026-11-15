@@ -102,7 +102,6 @@ const CONNECTION_STATUS_TRANSLATIONS = {
   "consumer-grant-required": "accounts.connectionReasons.grantRequired",
   "connection-revision-changed": "accounts.connectionReasons.revisionChanged",
   "connection-unavailable": "accounts.connectionReasons.unavailable",
-  "legacy-connection-unmatched": "accounts.connectionReasons.migrationNeedsAttention",
 } as const
 
 const GITHUB_EVENT_TRANSLATIONS = {

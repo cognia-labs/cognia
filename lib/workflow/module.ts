@@ -60,7 +60,6 @@ export default defineHostModule({
     "hooks/workflow/use-raf-throttle.ts",
     "lib/workflow/api/workflow-api-service.ts",
     "lib/workflow/copilot-templates/index.ts",
-    "lib/workflow/definition/migrate.ts",
     "lib/workflow/definition/read-only.ts",
     "lib/workflow/editor/copilot-slash-commands.ts",
     "lib/workflow/editor/store.ts",

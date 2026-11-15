@@ -285,23 +285,6 @@ export async function bindIntegrationAccountConnection(
   return row
 }
 
-/** Atomically pin a legacy account once; concurrent resolutions cannot rebind it. */
-export async function bindIntegrationAccountProviderOwner(
-  pluginId: string,
-  accountId: string,
-  providerOwnerPluginId: string | null
-): Promise<IntegrationAccountRow> {
-  const db = getDb()
-  return db.transaction("rw", db.integrationAccounts, async () => {
-    const existing = await getIntegrationAccount(pluginId, accountId)
-    if (!existing) throw new Error(`Integration account "${accountId}" was not found`)
-    if (existing.providerOwnerPluginId !== undefined) return existing
-    const row = { ...existing, providerOwnerPluginId, updatedAt: nowIso() }
-    await db.integrationAccounts.put(row)
-    return row
-  })
-}
-
 /**
  * The recipient list has its own writer
  * ({@link setIntegrationAccountOutboundRecipients}). The type keeps it out of a
@@ -905,12 +888,9 @@ export async function pruneIntegrationRetention(now = Date.now()): Promise<{
   const audit = await getDb()
     .integrationAudit.where("createdAt")
     .below(auditCutoff)
-    // These rows are the migration ledger and rollback snapshots, not disposable logs.
+    // Pending cleanup and uninstall markers are work still owed, not disposable logs.
     .filter(
-      (row) =>
-        !/^migration\..+\.(backup|completed)$/.test(row.kind) &&
-        row.kind !== "access.cleanup.pending" &&
-        row.kind !== "auth.provider-uninstalling"
+      (row) => row.kind !== "access.cleanup.pending" && row.kind !== "auth.provider-uninstalling"
     )
     .delete()
   return { events, audit }

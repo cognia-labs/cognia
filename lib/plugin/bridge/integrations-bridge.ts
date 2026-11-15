@@ -17,10 +17,6 @@ import {
   approveIntegrationActionJob,
   executeIntegrationAction,
 } from "@/lib/integrations/action-runner"
-import {
-  registerWorkflowKindAliases,
-  unregisterWorkflowKindAliases,
-} from "@/lib/workflow/definition/kind-aliases"
 import { listExternalCapabilities, listExternalServices } from "@/lib/external-services/catalog"
 import {
   authorizeExternalCapability,
@@ -185,7 +181,6 @@ export async function registerIntegrationsForPlugin(
     resourceProviders,
     accountStatusProviders,
   })
-  registerWorkflowKindAliases(pluginId, manifest.workflowKindAliases ?? {})
 
   const workflow = createWorkflowAPI(pluginId)
   const disposers: Array<() => void> = []
@@ -315,6 +310,5 @@ export async function registerIntegrationsForPlugin(
 export async function unregisterIntegrationsForPlugin(pluginId: string): Promise<void> {
   for (const dispose of workflowDisposers.get(pluginId) ?? []) dispose()
   workflowDisposers.delete(pluginId)
-  unregisterWorkflowKindAliases(pluginId)
   unregisterIntegrationsByPlugin(pluginId)
 }

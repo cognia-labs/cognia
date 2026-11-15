@@ -8051,18 +8051,6 @@
           }
         },
         {
-          "id": "integrations.migrateLegacy",
-          "name": "migrateLegacy",
-          "requiredPermissions": ["integrations:manage"],
-          "consentTier": "policy",
-          "risk": "high",
-          "idempotent": false,
-          "cancellable": false,
-          "resourceEffect": {
-            "kind": "none"
-          }
-        },
-        {
           "id": "integrations.publishEvent",
           "name": "publishEvent",
           "requiredPermissions": ["integrations:events"],
@@ -8104,18 +8092,6 @@
           "requiredPermissions": ["integrations:manage"],
           "consentTier": "policy",
           "risk": "medium",
-          "idempotent": false,
-          "cancellable": false,
-          "resourceEffect": {
-            "kind": "none"
-          }
-        },
-        {
-          "id": "integrations.rollbackMigration",
-          "name": "rollbackMigration",
-          "requiredPermissions": ["integrations:manage"],
-          "consentTier": "policy",
-          "risk": "high",
           "idempotent": false,
           "cancellable": false,
           "resourceEffect": {

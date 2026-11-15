@@ -35,10 +35,6 @@ import {
 } from "@/lib/integrations/action-runner"
 import { publishIntegrationEvent } from "@/lib/integrations/events"
 import { githubAppIdentity } from "@/lib/integrations/github-auth"
-import {
-  migrateLegacyIntegration,
-  rollbackIntegrationMigration,
-} from "@/lib/integrations/migration"
 import { getRegisteredIntegration, listRegisteredIntegrations } from "@/lib/integrations/registry"
 import {
   checkIntegrationAccountHealth,
@@ -428,14 +424,6 @@ export function createIntegrationsAPI(
       const { requeueIntegrationIngressDeadletter } =
         await import("@/lib/integrations/ingress-client")
       return requeueIntegrationIngressDeadletter(pluginId, connectorAccountId, routeId, deliveryId)
-    },
-    async migrateLegacy(plan) {
-      requirePermission(hasPermission, "integrations:manage", "ctx.integrations.migrateLegacy")
-      return migrateLegacyIntegration(pluginId, plan)
-    },
-    async rollbackMigration(migrationId) {
-      requirePermission(hasPermission, "integrations:manage", "ctx.integrations.rollbackMigration")
-      return rollbackIntegrationMigration(pluginId, migrationId)
     },
   }
   const outbound = new Set([

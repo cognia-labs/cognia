@@ -288,21 +288,10 @@ export const manifest = definePluginManifest({
 export default definePlugin({
   manifest,
   activate: async (context: PluginContext) => {
-    const migrate = () =>
-      context.integrations.migrateLegacy({
-        id: "feishu-calendar-host-connections-v1",
-        integrationId: "feishu-calendar",
-        accounts: [],
-        subscriptions: [],
-        workflowKindAliases: {},
-        rebindLegacyConnections: { service: CALENDAR_SERVICE },
-      })
-    await migrate()
     sync = createCalendarSync(context, context.lifecycle.signal)
     const current = sync
     context.lifecycle.onDispose(
       context.scheduler.registerHandler("syncSubscribedCalendars", async (_args, task) => {
-        await migrate()
         const result = await current.syncSubscriptions(task.signal)
         return {
           success: result.errors.length === 0,

@@ -174,6 +174,11 @@ describe("Integration action runner", () => {
     setGithubIssueLoopDesktopHostAvailableForTesting()
   })
 
+  // Creation stamps the provider owner; a test that registers the provider
+  // after creating the account stamps it the same way.
+  const stampProviderOwner = (accountId: string, owner: string | null) =>
+    getDb().integrationAccounts.update(accountId, { providerOwnerPluginId: owner })
+
   async function setup(
     updateHandler: (
       input: Record<string, unknown>,
@@ -320,6 +325,7 @@ describe("Integration action runner", () => {
         }),
       }
       const dispose = registerAuthenticationProvider(provider)
+      await stampProviderOwner(account.id, provider.pluginId)
       const values = new Map<string, string>()
       const lock: typeof import("@/lib/plugin/auth/connection-credentials").withAuthLock = (
         name,
@@ -620,6 +626,7 @@ describe("Integration action runner", () => {
         },
         removeSession: async () => undefined,
       })
+      await stampProviderOwner(account.id, null)
       setIntegrationAuthenticatedRequestExecutorForTesting()
       const originalFetch = global.fetch
       const fetchMock = jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -858,73 +865,112 @@ describe("Integration action runner", () => {
     expect(await getDb().integrationActionJobs.where("status").equals("succeeded").count()).toBe(9)
   })
 
-  it.each([false, true])(
-    "review regression: refuses a retained account after its provider owner is replaced (legacy=%s)",
-    async (legacy) => {
-      setIntegrationAuthenticatedRequestExecutorForTesting()
-      const session = {
-        id: "opaque",
-        accessToken: "host-secret",
-        account: { id: "acct", label: "Account" },
-        scopes: [],
-      }
-      const provider = {
-        id: "review-oauth",
-        label: "Provider",
-        getSessions: jest.fn(async () => [session]),
-        createSession: async () => session,
-        removeSession: async () => undefined,
-      }
-      registerAuthenticationProvider({ ...provider, pluginId: "provider-a" })
-      const account = await setup(undefined, ["https://api.example.test"], "required", provider.id)
-      if (legacy)
-        await getDb().integrationAccounts.update(account.id, { providerOwnerPluginId: undefined })
-      else expect(account).toMatchObject({ providerOwnerPluginId: "provider-a" })
-      const fetchMock = jest.spyOn(global, "fetch").mockResolvedValue({
-        status: 200,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ ok: true }),
-      } as Response)
-      try {
-        await authenticatedIntegrationRequest(
+  it("review regression: refuses a retained account after its provider owner is replaced", async () => {
+    setIntegrationAuthenticatedRequestExecutorForTesting()
+    const session = {
+      id: "opaque",
+      accessToken: "host-secret",
+      account: { id: "acct", label: "Account" },
+      scopes: [],
+    }
+    const provider = {
+      id: "review-oauth",
+      label: "Provider",
+      getSessions: jest.fn(async () => [session]),
+      createSession: async () => session,
+      removeSession: async () => undefined,
+    }
+    registerAuthenticationProvider({ ...provider, pluginId: "provider-a" })
+    const account = await setup(undefined, ["https://api.example.test"], "required", provider.id)
+    expect(account).toMatchObject({ providerOwnerPluginId: "provider-a" })
+    const fetchMock = jest.spyOn(global, "fetch").mockResolvedValue({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ ok: true }),
+    } as Response)
+    try {
+      await authenticatedIntegrationRequest(
+        "example-delivery",
+        account.id,
+        "https://api.example.test/items",
+        undefined,
+        { localAuthorization: LOCAL_PERSON_RUN }
+      )
+      expect(await getDb().integrationAccounts.get(account.id)).toMatchObject({
+        providerOwnerPluginId: "provider-a",
+      })
+      releaseAuthProviderOwnership("provider-a")
+      const replacement = jest.fn(async () => [session])
+      registerAuthenticationProvider({
+        ...provider,
+        pluginId: "provider-b",
+        getSessions: replacement,
+      })
+      await expect(
+        authenticatedIntegrationRequest(
           "example-delivery",
           account.id,
           "https://api.example.test/items",
           undefined,
           { localAuthorization: LOCAL_PERSON_RUN }
         )
-        expect(await getDb().integrationAccounts.get(account.id)).toMatchObject({
-          providerOwnerPluginId: "provider-a",
-        })
-        releaseAuthProviderOwnership("provider-a")
-        const replacement = jest.fn(async () => [session])
-        registerAuthenticationProvider({
-          ...provider,
-          pluginId: "provider-b",
-          getSessions: replacement,
-        })
-        await expect(
-          authenticatedIntegrationRequest(
-            "example-delivery",
-            account.id,
-            "https://api.example.test/items",
-            undefined,
-            { localAuthorization: LOCAL_PERSON_RUN }
-          )
-        ).rejects.toThrow(/provider.*owner.*changed/i)
-        expect(replacement).not.toHaveBeenCalled()
-        expect(fetchMock).toHaveBeenCalledTimes(1)
-        expect(await getDb().integrationAccounts.get(account.id)).toMatchObject({
-          providerOwnerPluginId: "provider-a",
-          health: "revoked",
-          status: { code: "provider-owner-changed", recoveryAction: "reconnect" },
-        })
-      } finally {
-        releaseAuthProviderOwnership("provider-a")
-        releaseAuthProviderOwnership("provider-b")
-      }
+      ).rejects.toThrow(/provider.*owner.*changed/i)
+      expect(replacement).not.toHaveBeenCalled()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(await getDb().integrationAccounts.get(account.id)).toMatchObject({
+        providerOwnerPluginId: "provider-a",
+        health: "revoked",
+        status: { code: "provider-owner-changed", recoveryAction: "reconnect" },
+      })
+    } finally {
+      releaseAuthProviderOwnership("provider-a")
+      releaseAuthProviderOwnership("provider-b")
     }
-  )
+  })
+
+  it("refuses an account without a recorded provider owner and asks for a reconnect", async () => {
+    setIntegrationAuthenticatedRequestExecutorForTesting()
+    const session = {
+      id: "opaque",
+      accessToken: "host-secret",
+      account: { id: "acct", label: "Account" },
+      scopes: [],
+    }
+    const getSessions = jest.fn(async () => [session])
+    registerAuthenticationProvider({
+      id: "review-oauth",
+      label: "Provider",
+      pluginId: "provider-a",
+      getSessions,
+      createSession: async () => session,
+      removeSession: async () => undefined,
+    })
+    const account = await setup(undefined, ["https://api.example.test"], "required", "review-oauth")
+    await getDb().integrationAccounts.update(account.id, { providerOwnerPluginId: undefined })
+    const fetchMock = jest.spyOn(global, "fetch")
+    try {
+      await expect(
+        authenticatedIntegrationRequest(
+          "example-delivery",
+          account.id,
+          "https://api.example.test/items",
+          undefined,
+          { localAuthorization: LOCAL_PERSON_RUN }
+        )
+      ).rejects.toThrow(/provider.*owner.*changed/i)
+      expect(getSessions).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+      const stored = await getDb().integrationAccounts.get(account.id)
+      expect(stored?.providerOwnerPluginId).toBeUndefined()
+      expect(stored).toMatchObject({
+        health: "revoked",
+        status: { code: "provider-owner-changed", recoveryAction: "reconnect" },
+      })
+    } finally {
+      fetchMock.mockRestore()
+      releaseAuthProviderOwnership("provider-a")
+    }
+  })
 
   it("queues secondary-window approval for the owner drain without executing there", async () => {
     const handler = jest.fn(async () => ({ updated: true }))
@@ -1019,6 +1065,7 @@ describe("Integration action runner", () => {
         },
         removeSession: async () => {},
       })
+      await stampProviderOwner(account.id, "example-delivery")
       const previousFetch = global.fetch
       global.fetch = jest.fn(
         async () =>
@@ -2532,6 +2579,7 @@ describe("Integration action runner", () => {
         },
         removeSession: async () => {},
       })
+      await stampProviderOwner(account.id, "example-delivery")
       setIntegrationAuthenticatedRequestExecutorForTesting()
       const originalFetch = global.fetch
       const fetch = jest.fn(
@@ -2671,6 +2719,7 @@ describe("Integration action runner", () => {
         },
         removeSession: async () => {},
       })
+      await stampProviderOwner(account.id, "example-delivery")
       const originalFetch = global.fetch
       const fetch = jest.fn(
         async () =>

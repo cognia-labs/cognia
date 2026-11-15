@@ -9,7 +9,6 @@ import {
 } from "@/lib/external-services/catalog"
 import {
   appendIntegrationAudit,
-  bindIntegrationAccountProviderOwner,
   bindIntegrationAccountConnection,
   cancelIntegrationActionJobRecord,
   claimIntegrationActionJob,
@@ -252,51 +251,41 @@ describe("Integration persistence", () => {
     }
   )
 
-  it("pins a legacy account once under competing owner adoptions and health updates", async () => {
+  it("leaves an account created without a registered provider unbound, even through a patch", async () => {
     const account = await createIntegrationAccount("consumer", {
       integrationId: "example",
-      providerId: "legacy-provider",
+      providerId: "unregistered-provider",
       authSessionId: "session",
       remoteAccountId: "user",
       label: "User",
     })
-    const [first, second] = await Promise.all([
-      bindIntegrationAccountProviderOwner("consumer", account.id, "provider-a"),
-      bindIntegrationAccountProviderOwner("consumer", account.id, "provider-b"),
-      updateIntegrationAccount("consumer", account.id, { health: "healthy" }),
-    ])
-    expect(second.providerOwnerPluginId).toBe(first.providerOwnerPluginId)
-    expect((await getDb().integrationAccounts.get(account.id))?.providerOwnerPluginId).toBe(
-      first.providerOwnerPluginId
-    )
+    expect(account.providerOwnerPluginId).toBeUndefined()
     await updateIntegrationAccount("consumer", account.id, {
       providerOwnerPluginId: "forged",
     } as unknown as Parameters<typeof updateIntegrationAccount>[2])
-    expect((await getDb().integrationAccounts.get(account.id))?.providerOwnerPluginId).toBe(
-      first.providerOwnerPluginId
-    )
+    expect(
+      (await getDb().integrationAccounts.get(account.id))?.providerOwnerPluginId
+    ).toBeUndefined()
   })
 
-  it("retains migration markers and backups while pruning old audit entries", async () => {
+  it("retains pending cleanup and uninstall markers while pruning old audit entries", async () => {
     const old = "2026-01-01T00:00:00.000Z"
     await getDb().integrationAudit.bulkAdd(
-      ["migration.legacy.v1.backup", "migration.legacy.v1.completed", "action.completed"].map(
-        (kind) => ({
-          id: kind,
-          pluginId: "owner",
-          integrationId: "example",
-          kind,
-          outcome: "succeeded" as const,
-          createdAt: old,
-        })
-      )
+      ["access.cleanup.pending", "auth.provider-uninstalling", "action.completed"].map((kind) => ({
+        id: kind,
+        pluginId: "owner",
+        integrationId: "example",
+        kind,
+        outcome: "succeeded" as const,
+        createdAt: old,
+      }))
     )
     expect(await pruneIntegrationRetention(Date.parse("2026-10-31T00:00:00Z"))).toMatchObject({
       audit: 1,
     })
     expect((await getDb().integrationAudit.toArray()).map((row) => row.kind).sort()).toEqual([
-      "migration.legacy.v1.backup",
-      "migration.legacy.v1.completed",
+      "access.cleanup.pending",
+      "auth.provider-uninstalling",
     ])
   })
 

@@ -444,9 +444,6 @@
     "lib/integrations/ingress-client.ts": {
       "bareAccountId": 15
     },
-    "lib/integrations/migration.ts": {
-      "bareAccountId": 5
-    },
     "lib/integrations/providers.ts": {
       "bareAccountId": 9
     },

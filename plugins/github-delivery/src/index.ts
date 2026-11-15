@@ -1292,16 +1292,6 @@ export const githubIntegration: PluginIntegrationDef = {
   allowedOrigins: [API_ORIGIN],
 }
 
-export const workflowKindAliases = {
-  "trigger.github.webhook": "trigger.integration.event",
-  ...Object.fromEntries(
-    actionDefinitions.map((action) => [
-      `action.github.${action.id}`,
-      `github-delivery.action.${action.id}`,
-    ])
-  ),
-}
-
 /**
  * Contributions derived from the runtime tables above. `plugin.json` holds
  * everything else (identity, permissions, runtime compatibility, services,
@@ -1332,7 +1322,6 @@ export const manifest = definePluginManifest({
   ...manifestJson,
   integrations: [githubIntegration],
   browserSiteProviders,
-  workflowKindAliases,
 })
 
 export default definePlugin({

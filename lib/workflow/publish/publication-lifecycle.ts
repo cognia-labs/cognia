@@ -4,7 +4,6 @@ import { getDb, withDbReopenRetry } from "@/lib/db/schema"
 import { upsertSkillByCanonicalId, workflowSkillBody } from "@/lib/db/skills"
 import { recordTombstones } from "@/lib/db/tombstones"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
-import { migrateWorkflow } from "@/lib/workflow/definition/migrate"
 import { assertWorkflowWritable } from "@/lib/workflow/definition/read-only"
 import { validateWorkflow } from "@/lib/workflow/definition/validate"
 import {
@@ -168,13 +167,12 @@ export async function publishWorkflowLifecycle(
               .where("[accountId+workflowId+environment]")
               .equals([accountId, workflowId, "production"])
               .first(),
-          ]).then(([stored, skills, versions, existingDeployment]) => {
-            if (!stored) throw new Error(`publishWorkflow: workflow ${workflowId} not found`)
+          ]).then(([existing, skills, versions, existingDeployment]) => {
+            if (!existing) throw new Error(`publishWorkflow: workflow ${workflowId} not found`)
             // A derived workflow is not its own definition: publishing it would
             // mint a second skill for the playbook skill it came from.
-            assertWorkflowWritable(stored)
+            assertWorkflowWritable(existing)
 
-            const existing = migrateWorkflow(stored)
             const validation = validateWorkflow(existing)
             if (!validation.ok) {
               throw new Error(
@@ -250,12 +248,11 @@ export async function publishWorkflowLifecycle(
     // are already durable. Accept that race only when the full publication
     // projection (workflow contract + generated Skill) is present and exact.
     const db = getDb()
-    const [stored, skill] = await Promise.all([
+    const [workflow, skill] = await Promise.all([
       db.workflows.get(workflowId),
       findWorkflowSkill(workflowId),
     ])
-    if (!stored || !skill) throw error
-    const workflow = migrateWorkflow(stored)
+    if (!workflow || !skill) throw error
     const workflowInterface = derivePublishedInterface(workflow)
     const toolName = toolNameForWorkflow(workflow)
     if (
@@ -311,9 +308,8 @@ export async function unpublishWorkflowLifecycle(workflowId: string): Promise<vo
           .first(),
       ])
       if (stored) {
-        const migrated = migrateWorkflow(stored)
         await db.workflows.put({
-          ...migrated,
+          ...stored,
           interface: undefined,
           published: undefined,
           updatedAt: Date.now(),
@@ -383,7 +379,7 @@ export async function rollbackWorkflowLifecycle(
         published,
       }
       const draft: VisualWorkflow = {
-        ...migrateWorkflow(stored),
+        ...stored,
         interface: version.interface,
         published,
         updatedAt: Date.now(),
@@ -429,11 +425,10 @@ export async function updateWorkflowWithPublication(
 ): Promise<WorkflowMutationResult | undefined> {
   const db = getDb()
   return db.transaction("rw", db.workflows, db.skills, async () => {
-    const stored = await db.workflows.get(id)
-    if (!stored) return undefined
+    const existing = await db.workflows.get(id)
+    if (!existing) return undefined
 
-    assertWorkflowWritable(stored)
-    const existing = migrateWorkflow(stored)
+    assertWorkflowWritable(existing)
     const {
       id: _ignoredId,
       createdAt: _ignoredCreatedAt,
@@ -551,13 +546,12 @@ export async function reconcileWorkflowPublications(): Promise<WorkflowPublicati
       // its request queue drains; a sequential read leaves a gap before the
       // second request and makes the reconciliation writes fail with
       // TransactionInactiveError.
-      const [workflowRows, skills, versions, deployments] = await Promise.all([
+      const [workflows, skills, versions, deployments] = await Promise.all([
         db.workflows.toArray(),
         db.skills.toArray(),
         db.workflowVersions.toArray(),
         db.workflowDeployments.toArray(),
       ])
-      const workflows = workflowRows.map(migrateWorkflow)
       const workflowById = new Map(workflows.map((workflow) => [workflow.id, workflow]))
       const versionById = new Map(versions.map((version) => [version.id, version]))
       const deploymentById = new Map(deployments.map((deployment) => [deployment.id, deployment]))

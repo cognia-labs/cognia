@@ -1517,42 +1517,6 @@ function validateExternalServices(
   }
 }
 
-function validateWorkflowKindAliases(
-  manifest: PluginManifest,
-  pushError: (field: string, code: string, message: string, hint?: string) => void
-): void {
-  const aliases = manifest.workflowKindAliases
-  if (aliases === undefined) return
-  if (!isPlainObject(aliases)) {
-    pushError(
-      "workflowKindAliases",
-      "manifest.workflow_kind_aliases.invalid_type",
-      '"workflowKindAliases" must be an object if provided'
-    )
-    return
-  }
-  for (const [legacyKind, targetKind] of Object.entries(aliases)) {
-    if (!legacyKind.trim() || typeof targetKind !== "string" || !targetKind.trim()) {
-      pushError(
-        `workflowKindAliases.${legacyKind}`,
-        "manifest.workflow_kind_aliases.invalid_entry",
-        "Workflow kind aliases require non-empty source and target kinds"
-      )
-      continue
-    }
-    if (
-      targetKind !== "trigger.integration.event" &&
-      !targetKind.startsWith(`${manifest.id}.action.`)
-    ) {
-      pushError(
-        `workflowKindAliases.${legacyKind}`,
-        "manifest.workflow_kind_aliases.target_outside_plugin",
-        `Workflow kind alias target "${targetKind}" must belong to plugin "${manifest.id}"`
-      )
-    }
-  }
-}
-
 /**
  * `petItems[]` / `petAchievements[]` shapes, through the same validator the
  * overlay registration and the SDK define-helpers use. Icons are checked with
@@ -3263,7 +3227,6 @@ export function validatePluginManifest(
   validateIntegrations(m as unknown as PluginManifest, pushError)
   validateAuthProviders(m.authProviders, pushError)
   validateExternalServices(m as unknown as PluginManifest, pushError)
-  validateWorkflowKindAliases(m as unknown as PluginManifest, pushError)
   validatePetContributions(m as unknown as PluginManifest, pushError)
   validateNativeLucideIcons(m as unknown as PluginManifest, pushError, pushWarning)
   validateLazyFactoryArray(

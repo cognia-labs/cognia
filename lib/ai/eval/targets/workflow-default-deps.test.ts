@@ -16,9 +16,6 @@ jest.mock("@/lib/workflow/runtime/orchestrator", () => ({
   })),
 }))
 jest.mock("@/lib/db/agent-traces", () => ({ queryByTrace: jest.fn(async () => []) }))
-jest.mock("@/lib/workflow/definition/migrate", () => ({
-  migrateWorkflow: (workflow: unknown) => workflow,
-}))
 
 import { defaultWorkflowTargetDeps } from "./workflow-default-deps"
 import { getWorkflow } from "@/lib/db/workflows"

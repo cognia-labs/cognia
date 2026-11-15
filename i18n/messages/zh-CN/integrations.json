@@ -5,8 +5,7 @@
     "connectionReasons": {
       "grantRequired": "日历权限未获批准或已被撤销。请检查读取授权后恢复同步。",
       "revisionChanged": "连接已变更。请重新检查授权后恢复同步；原游标已保留。",
-      "unavailable": "连接已断开或认证提供方不可用。请重新连接后恢复同步。",
-      "migrationNeedsAttention": "没有已迁移的连接与此旧账户匹配。请恢复原连接；订阅和同步游标均已保留。"
+      "unavailable": "连接已断开或认证提供方不可用。请重新连接后恢复同步。"
     },
     "add": "添加账号",
     "advanced": "高级",

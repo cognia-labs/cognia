@@ -71,7 +71,7 @@
     "hooks:chat-intercept": "Intercept every chat prompt, tool call, and tool result — can rewrite or block them",
     "integrations:events": "Publish normalized Integration events to workflows and Inbox",
     "integrations:execute": "Run Integration actions and authenticated platform requests",
-    "integrations:manage": "Manage Integration accounts, subscriptions, ingress, and migrations",
+    "integrations:manage": "Manage Integration accounts, subscriptions, and ingress",
     "integrations:read": "Read Integration definitions, accounts, subscriptions, and job status",
     "ipc:call": "Call or send messages to another plugin over inter-plugin IPC (incl. RPC)",
     "ipc:expose": "Expose RPC methods that other plugins can invoke over IPC",

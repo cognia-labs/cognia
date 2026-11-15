@@ -11658,20 +11658,6 @@ API_NAMESPACE_CONTRACTS = [
                 },
             },
             {
-                "id": "integrations.migrateLegacy",
-                "name": "migrateLegacy",
-                "requiredPermissions": [
-                    "integrations:manage",
-                ],
-                "consentTier": "policy",
-                "risk": "high",
-                "idempotent": False,
-                "cancellable": False,
-                "resourceEffect": {
-                    "kind": "none",
-                },
-            },
-            {
                 "id": "integrations.publishEvent",
                 "name": "publishEvent",
                 "requiredPermissions": [
@@ -11721,20 +11707,6 @@ API_NAMESPACE_CONTRACTS = [
                 ],
                 "consentTier": "policy",
                 "risk": "medium",
-                "idempotent": False,
-                "cancellable": False,
-                "resourceEffect": {
-                    "kind": "none",
-                },
-            },
-            {
-                "id": "integrations.rollbackMigration",
-                "name": "rollbackMigration",
-                "requiredPermissions": [
-                    "integrations:manage",
-                ],
-                "consentTier": "policy",
-                "risk": "high",
                 "idempotent": False,
                 "cancellable": False,
                 "resourceEffect": {

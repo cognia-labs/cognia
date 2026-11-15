@@ -147,6 +147,7 @@ it("checks Host integration grants without requiring a legacy builtin to declare
     id: "github-account",
     pluginId: "github-delivery",
     providerId: "github-pat",
+    providerOwnerPluginId: null,
     connectionId: "github-ref",
   } as never)
   await db.serviceConnections.put({
@@ -430,6 +431,7 @@ it("requires a current consumer grant, binds a lease and purges on revocation", 
     id: "account",
     pluginId: "sync-test",
     providerId: "provider",
+    providerOwnerPluginId: "auth",
     connectionId: "ref",
   } as never)
   await db.serviceConnections.put({

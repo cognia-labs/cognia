@@ -24006,7 +24006,6 @@
       "configured": "已配置",
       "connectionReasons": {
         "grantRequired": "日历权限未获批准或已被撤销。请检查读取授权后恢复同步。",
-        "migrationNeedsAttention": "没有已迁移的连接与此旧账户匹配。请恢复原连接；订阅和同步游标均已保留。",
         "revisionChanged": "连接已变更。请重新检查授权后恢复同步；原游标已保留。",
         "unavailable": "连接已断开或认证提供方不可用。请重新连接后恢复同步。"
       },
@@ -36801,7 +36800,7 @@
         "hooks:chat-intercept": "拦截每一条聊天提示词、工具调用和工具结果——可以改写或阻止它们",
         "integrations:events": "向工作流和收件箱发布标准化的集成事件",
         "integrations:execute": "执行集成操作和经过认证的平台请求",
-        "integrations:manage": "管理集成的账户、订阅、入站通道和迁移",
+        "integrations:manage": "管理集成的账户、订阅和入站通道",
         "integrations:read": "读取集成定义、账户、订阅和任务状态",
         "ipc:call": "通过插件间 IPC（含 RPC）调用其他插件或向其发送消息",
         "ipc:expose": "公开可供其他插件通过 IPC 调用的 RPC 方法",

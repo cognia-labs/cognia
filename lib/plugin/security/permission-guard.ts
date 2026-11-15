@@ -288,7 +288,7 @@ export const PERMISSION_DESCRIPTIONS: Record<PluginPermission, string> = {
   "integrations:read": "Read Integration definitions, accounts, subscriptions, and job status",
   "integrations:events": "Publish normalized Integration events to workflows and Inbox",
   "integrations:execute": "Run Integration actions and authenticated platform requests",
-  "integrations:manage": "Manage Integration accounts, subscriptions, ingress, and migrations",
+  "integrations:manage": "Manage Integration accounts, subscriptions, and ingress",
   "pet:read": "Read the desktop pet's public state and subscribe to its events",
   "pet:interact": "Care for the desktop pet and grant budget-capped rewards",
   "hooks:chat-intercept":

@@ -378,9 +378,9 @@ export interface IntegrationAccount {
   connectionId?: string
   remoteAccountId: string
   /**
-   * Host-stamped auth provider owner; null identifies a host provider.
-   * Legacy accounts without this field adopt the current owner on their first
-   * successful credential resolution (trust on first use).
+   * Host-stamped auth provider owner; null identifies a host provider. An
+   * account without it is unbound: the Host refuses its credentials and asks
+   * for a reconnect.
    */
   providerOwnerPluginId?: string | null
   /** Host-approved additional origins, used for explicit self-hosted installations. */
@@ -536,37 +536,6 @@ export interface IntegrationAuditEntry {
   createdAt: string
 }
 
-export interface IntegrationMigrationPlan {
-  id: string
-  integrationId: string
-  accounts: Array<IntegrationAccountInput & { id: string }>
-  subscriptions: Array<IntegrationSubscriptionInput & { id: string }>
-  workflowKindAliases: Record<string, string>
-  /** Rebind existing rows in place using the Host's legacy-session alias ledger.
-   * The Host validates ownership and performs a compare-and-swap transaction.
-   * No credentials, aliases, subscriptions or cursors are supplied by the plugin.
-   */
-  rebindLegacyConnections?: { service: string }
-}
-
-export interface IntegrationMigrationResult {
-  migrationId: string
-  migratedAccounts: number
-  migratedSubscriptions: number
-  migratedWorkflows: number
-  alreadyApplied: boolean
-}
-
-export interface IntegrationMigrationRollbackResult {
-  migrationId: string
-  /** Rows edited or deleted since migration; rollback leaves them untouched. */
-  conflictedIds: {
-    accounts: string[]
-    subscriptions: string[]
-    workflows: string[]
-  }
-}
-
 export interface PluginIntegrationsAPI {
   listDefinitions(): PluginIntegrationDef[]
   listAccounts(integrationId?: string): Promise<IntegrationAccount[]>
@@ -611,7 +580,4 @@ export interface PluginIntegrationsAPI {
     routeId: string,
     deliveryId: string
   ): Promise<boolean>
-  migrateLegacy(plan: IntegrationMigrationPlan): Promise<IntegrationMigrationResult>
-  /** Older hosts return void; current hosts report rows preserved due to conflicts. */
-  rollbackMigration(migrationId: string): Promise<IntegrationMigrationRollbackResult | void>
 }

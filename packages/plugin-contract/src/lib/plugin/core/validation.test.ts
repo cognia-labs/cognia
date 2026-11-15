@@ -1214,25 +1214,6 @@ describe("Plugin Validation", () => {
       )
     })
 
-    it("restricts workflow kind alias targets to the owning Integration plugin", () => {
-      const manifest = createValidManifest()
-      manifest.id = "github-delivery"
-      manifest.workflowKindAliases = {
-        "trigger.github.webhook": "trigger.integration.event",
-        "action.github.openPr": "github-delivery.action.openPr",
-      }
-      expect(validatePluginManifest(manifest).valid).toBe(true)
-
-      manifest.workflowKindAliases["action.github.mergePr"] = "other-plugin.action.mergePr"
-      expect(validatePluginManifest(manifest).diagnostics).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "manifest.workflow_kind_aliases.target_outside_plugin",
-          }),
-        ])
-      )
-    })
-
     it("checks pet item and achievement shapes with the shared validator", () => {
       const manifest = createValidManifest()
       manifest.capabilities = [...(manifest.capabilities ?? []), "pet-item", "pet-achievement"]

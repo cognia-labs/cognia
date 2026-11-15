@@ -152,19 +152,3 @@ installation config (`config.scopes.<kind>`). An action that declares no
 selectors carries no scope check — the credential-slot allowlist and the
 write-approval gate still apply. A selector the installation cannot satisfy
 fails closed.
-
-## GitHub compatibility migration
-
-The `github-delivery` package keeps the existing plugin ID and legacy Dexie
-namespace for one major version. On activation it:
-
-1. encrypts a backup of legacy repository configuration;
-2. moves PAT/App credentials into host secret storage;
-3. transactionally creates Integration accounts and repository subscriptions;
-4. rewrites legacy Workflow kinds through `workflowKindAliases`;
-5. verifies the new rows before clearing raw credentials from legacy rows.
-
-Migration is idempotent. `rollbackGithubMigration(ctx)` restores the original
-Workflow kinds, Integration rows, and legacy repository rows from the encrypted
-backup. The signed compatibility bundle is shipped under
-`packages/plugin-sdk/contract/compat/`.
