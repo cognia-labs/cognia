@@ -428,7 +428,7 @@
       "contract": "crates/cognia-subscription/src/vault.rs",
       "test": "crates/cognia-subscription/src/vault.rs",
       "source": "credential.account_id = Some(\"workspace-1\".into());",
-      "occurrences": 2,
+      "occurrences": 1,
       "reason": "Regression fixture sets the persisted Codex credential accountId (ChatGPT workspace routing claim). The serde field retains the provider contract and tests reject disagreement with the signed workspace claim."
     },
     {
