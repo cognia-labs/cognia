@@ -1,6 +1,6 @@
 # Mesh M1a 实施计划：停止/恢复安全 + 目标固定
 
-状态：计划已定稿，未开始实施。创建：2026-10-31（Asia/Shanghai）。上游：[评审修订稿](./2026-10-31-cognia-mesh-cross-device-workspace.md) §4 M1a；决策 [ADR-0244](../content/docs/en/adr/0244-a-remote-run-has-stopped-only-when-its-worker-says-so.md)；证据 [台账](../evidence/2026-10-31-mesh-cross-device-workspace.md)。实施方式：每个工作包交给 Codex `gpt-6.1-sol` xhigh 实现，Claude 审查 diff、亲自重跑验证，并由第二模型做对抗审查后再提交。
+状态：WP1–WP7 已实施并提交（WP1 227e9e729d，WP2a 33ca2bcd5f，WP2b 7b0b3f6015，WP3 f432dc4512，WP4 ede1cc48a1，WP6 dd79e45f95，WP5 5250318f85，WP7 2ed6c4a112）；WP8 真实环境验收未执行（2026-11-16 用户决定不部署新 Host 镜像，台账 V2、V6、Q1 保持未关闭）；WP9 未开始。创建：2026-10-31（Asia/Shanghai）。上游：[评审修订稿](./2026-10-31-cognia-mesh-cross-device-workspace.md) §4 M1a；决策 [ADR-0244](../content/docs/en/adr/0244-a-remote-run-has-stopped-only-when-its-worker-says-so.md)；证据 [台账](../evidence/2026-10-31-mesh-cross-device-workspace.md)。实施方式：每个工作包交给 Codex `gpt-6.1-sol` xhigh 实现，Claude 审查 diff、亲自重跑验证，并由第二模型做对抗审查后再提交。
 
 ## 1. 目标与验收
 
@@ -190,6 +190,7 @@ M1a 结束时，跨设备运行满足：
 - **Scope**：不改产品代码；脚本放在 `scripts/smoke/`（如需要），证据写入台账。
 - **内容**：在 macOS 桌面 ↔ Linux Box（ADR-0224 那台）上运行五个场景：受控双 Worker、断网、主动撤销、Host 重启、审批等待。测量隔离宽限期、撤销传播和续约到达时延，再把数字写入 ADR-0244 和发布门槛。
 - **验收**：台账 V2、V6 变为 passed；Q1 得到回答。
+- **结果（2026-11-16）**：未执行。为此重建了 authoring kit（a1f113309d，kit `ff94f19f0641`），并构建了 a1f113309d 的 Host 镜像 `sha-a1f1133-full`（digest `b6bfc3ac…`）；用户决定跳过部署，Box 仍运行 M1a 之前的镜像。重跑时从部署这一镜像开始：Box 做 Host，Mac 以 `cognia-agent worker` 做两个 Worker，模型用本机 aiden 代理；需打开 `agentTeamRemoteDispatch`，Worker 绑定 `repository:<projectId>:<repoId>`。
 
 ## 4. 顺序与依赖
 

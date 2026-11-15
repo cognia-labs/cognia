@@ -69,7 +69,7 @@ A durable Agent Team child can run on another device (ADR-0113). The brain claim
 - Signals to a group whose leader Node has already reaped. A live group pins its pgid number, so a timeout or interrupt still escalates to SIGKILL, sent right after a probe that found the group live. The window between that probe and the signal, in which the group could empty and its number be reused, is accepted, as it was before stop proof.
 - Stop-proof records of executors that retired long ago. A Host keeps closed admission and proof for its 4096 most recent retired executors; a query about an older one reads as unknown, never as stopped.
 - Delegated approval on a fenced worker turn. With `permissionPromptToolName`, the Claude Agent SDK asks an MCP relay process that the sidecar never sees between the approval and the tool's execution, so admission cannot follow that wait. A worker-dispatch turn that configures one is refused when its options are built.
-- Grace and propagation numbers. They are measured on the macOS ↔ Linux box rig before any is written into a release gate.
+- Grace and propagation numbers. They are measured on the macOS ↔ Linux box rig before any is written into a release gate. Until then the shipped defaults stand unmeasured: a 60 s dispatch lease renewed every 20 s and a 5 s declared Worker grace (`WORKER_FENCE_GRACE_MS`). The rig run (controlled two Workers, network loss, active revocation, Host restart, approval wait) has not been performed; every guarantee above is proven by unit and fake-transport tests only.
 
 ## Alternatives considered
 
