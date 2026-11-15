@@ -338,15 +338,7 @@ async function runToolEnabled(
       // subagents to the ones this member was given. An empty list means the
       // team configured none, so the whole team surface stays (as for MCP).
       ...(resolvedCaps.subagentIds.length > 0
-        ? {
-            capabilityGrants: [
-              {
-                schemaVersion: 1 as const,
-                source: { kind: "agent-team" as const, id: `${teamCtx.teamId}:${teammate.id}` },
-                subagents: { only: [...resolvedCaps.subagentIds] },
-              },
-            ],
-          }
+        ? { subagentIds: [...resolvedCaps.subagentIds] }
         : {}),
       // The team's other repositories, as task copies beside the cwd.
       ...(additionalRoots.length > 0 ? { bundleRoots: additionalRoots } : {}),
@@ -390,7 +382,11 @@ async function runToolEnabled(
     // Apply the resolved step budget as an explicit per-dispatch turn cap. The
     // sidecar dispatcher honors `maxTurns` (an explicit value takes precedence
     // over its default 256-turn budget).
-    if (typeof maxSteps === "number" && maxSteps > 0) sendOptions.maxTurns = maxSteps
+    if (typeof maxSteps === "number" && maxSteps > 0) {
+      sendOptions.maxTurns = maxSteps
+    }
+    const { enforceRunAuthorityOnSendOptions } = await import("@/lib/execution/run-authority")
+    await enforceRunAuthorityOnSendOptions(execution.id, sendOptions)
     // `preferCheap` with no model to move to: the reasoning ladder is the other
     // large cost lever, and dropping it is the only downshift still available
     // when the user has no cheap lane configured. Previously `preferCheap` was
@@ -614,7 +610,8 @@ async function runToolEnabled(
     try {
       if (execution) await finishToolExecutionRun(execution.id, executionFailed)
     } finally {
-      void sessionsDb.deleteSession(session.id).catch(() => undefined)
+      // The dispatch owns this cascade; do not outlive its database scope.
+      await sessionsDb.deleteSession(session.id).catch(() => undefined)
     }
   }
 }
@@ -668,18 +665,21 @@ async function runExternalBacked(
     ...(teammate.config?.tools ? { allowedTools: teammate.config.tools } : {}),
     ...(teammate.config?.sandboxPolicy ? { sandboxPolicy: teammate.config.sandboxPolicy } : {}),
   })
-  // The external execute contract exposes preapproval, not deny or sandbox
-  // enforcement. Never silently erase constraints unsupported by this rail.
-  if (
-    inherited.allowedTools !== undefined ||
-    merged.disallowedTools?.length ||
-    merged.sandboxPolicy ||
-    merged.mcpServers ||
-    teammate.config?.sandboxEnabled ||
-    teamCtx.team.config.sandboxEnabled
-  ) {
-    throw new Error("External teammate cannot enforce the inherited tool, sandbox, or MCP policy")
-  }
+  const { authorityFromPermissionCeiling } = await import("@/lib/execution/acting-authority")
+  const { externalAuthorityOptions } = await import("@/lib/ai/agent/external/policy/run-authority")
+  const inheritedAuthority = await authorityFromPermissionCeiling(
+    inherited,
+    `execution:team:${teamCtx.runId}`
+  )
+  if (inheritedAuthority)
+    externalAuthorityOptions(
+      inheritedAuthority,
+      {},
+      manager.getAgent(agentId)?.config ?? { protocol: "custom" }
+    )
+  // Native tool/MCP policy is translated by the manager, before session creation.
+  if (merged.sandboxPolicy || teammate.config?.sandboxEnabled || teamCtx.team.config.sandboxEnabled)
+    throw new Error("External teammate cannot enforce the inherited sandbox policy")
   if (merged.permissionMode) {
     const protocol = manager.getAgent(agentId)?.config.protocol
     if (
@@ -718,11 +718,17 @@ async function runExternalBacked(
       })
   }
   const capture = onCaptureEvent ? pipeExternalEventsToCapture(onCaptureEvent) : undefined
-  // An always-on Host starts the teammate in its project's runtime
-  // environment (ADR-0224 A8); a refusal stops it before it starts.
-  const { placeDispatchedAgent } = await import("@/lib/sandbox/host-agent-placement")
-  await placeDispatchedAgent(agentId, cwdOverride ?? teamCtx.team.config?.workingDir, manager)
+  const { startToolExecutionRun, finishToolExecutionRun } =
+    await import("@/lib/execution/acting-authority")
+  const entry = await startToolExecutionRun(undefined, {
+    parentRunId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
+    title: "External teammate turn",
+  })
+  let executionFailed = true
   try {
+    // Placement and process creation are both after canonical child admission.
+    const { placeDispatchedAgent } = await import("@/lib/sandbox/host-agent-placement")
+    await placeDispatchedAgent(agentId, cwdOverride ?? teamCtx.team.config?.workingDir, manager)
     signal.throwIfAborted()
     const visible = await visibleTeamTurn(
       teamCtx,
@@ -779,6 +785,7 @@ async function runExternalBacked(
           ...(model ? { model } : {}),
           ...(merged.permissionMode ? { permissionMode: merged.permissionMode } : {}),
           ...(merged.allowedTools ? { allowedTools: merged.allowedTools } : {}),
+          permissionCeiling: Object.keys(inherited).length ? inherited : undefined,
           ...((cwdOverride ?? teamCtx.team.config?.workingDir)
             ? { workingDirectory: cwdOverride ?? teamCtx.team.config?.workingDir }
             : {}),
@@ -804,7 +811,7 @@ async function runExternalBacked(
           },
           signal,
         },
-        { executionRunId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}` }
+        { executionRunId: entry.id }
       ),
       ...(onExecutorStopped ? ([onExecutorStopped] as const) : [])
     )
@@ -816,6 +823,7 @@ async function runExternalBacked(
       throw new Error(result.error || `external agent ${agentId} returned a failure`)
     }
 
+    executionFailed = false
     return {
       text: result.finalResponse ?? "",
       usage: result.tokenUsage
@@ -827,8 +835,12 @@ async function runExternalBacked(
         : undefined,
     }
   } finally {
-    await sessionWrite
-    liveControl.release?.()
+    try {
+      await sessionWrite
+      liveControl.release?.()
+    } finally {
+      await finishToolExecutionRun(entry.id, executionFailed)
+    }
   }
 }
 
@@ -847,9 +859,7 @@ async function runTextOnly(
   signal.throwIfAborted()
   const visible = await visibleTeamTurn(teamCtx, prompt, systemPrompt, "teammate-text")
   const result = await executeAgent(visible.prompt, {
-    executionIdentity: {
-      runId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
-    },
+    parentRunId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
     systemPrompt: visible.systemPrompt,
     ...(modelHint ? { model: modelHint } : {}),
     ...(typeof maxSteps === "number" && maxSteps > 0 ? { maxSteps } : {}),
@@ -1423,6 +1433,8 @@ export async function dispatchTeammate(
         await assertRemoteDispatchAvailable(Boolean(activeDispatch && frozenExecutionSpec))
       }
       if (activeDispatch && frozenExecutionSpec && executionTarget.mode !== "colocate") {
+        // Preserve the versioned remote enforcement surface. Authority adds
+        // inherited caps without replacing limits older workers already enforce.
         const inheritedRemoteCeiling = deriveExternalSessionPermission(
           teamCtx.parentPermissionCeiling ?? {},
           teamPermissionCeiling(teamCtx.team.config)
@@ -1433,12 +1445,28 @@ export async function dispatchTeammate(
             ? { sandboxPolicy: teammate.config.sandboxPolicy }
             : {}),
         })
+        const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
+        const remoteAuthority = await resolveRunAuthority({
+          parentRunId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
+        })
         const remotePolicy = encodeRemoteWorkerPolicy(
           remoteCeiling,
           Boolean(
             requiresSandbox || teammate.config?.sandboxEnabled || teamCtx.team.config.sandboxEnabled
           ),
-          teamCtx.team.config.workingDir
+          teamCtx.team.config.workingDir,
+          remoteAuthority.authority,
+          remoteAuthority.authority?.mcpServers?.only
+            ? Object.fromEntries(
+                (
+                  await Promise.all(
+                    remoteAuthority.authority.mcpServers.only.map((id) =>
+                      import("@/lib/db/mcp-servers").then(({ getMcpServer }) => getMcpServer(id))
+                    )
+                  )
+                ).flatMap((server) => (server ? [[server.name, server.id]] : []))
+              )
+            : {}
         )
         const remoteRuntime = getRemoteWorkerRuntime()
         if (!remoteRuntime) throw new RemoteWorkerWaitingError("no_compatible_capacity")

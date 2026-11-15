@@ -585,12 +585,10 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
     const { launchChildRun } = await import("@/lib/execution/launch-child-run")
     let result: PluginSubagentDispatchResult | undefined
     const launched = await launchChildRun({
-      // Finished parents retain the root's fixed identity. Missing/unreadable
-      // pins start an unparented, nonlocal run; never consult the session's
-      // active run.
-      ...(parentExecutionRunId
-        ? { parentRunId: parentExecutionRunId, missingParent: "unparented" as const }
-        : {}),
+      // Only journaled recovery may survive pruning; unreadable pins refuse.
+      ...(parentExecutionRunId ? { parentRunId: parentExecutionRunId } : {}),
+      ...(p.recovery || p.resumeOfRunId ? { missingParent: "unparented" as const } : {}),
+      ...(p.resumeOfRunId ? { recoveryRunId: p.resumeOfRunId } : {}),
       sessionId: p.parentSessionId,
       title: p.subagentId,
       childId: childRunId,

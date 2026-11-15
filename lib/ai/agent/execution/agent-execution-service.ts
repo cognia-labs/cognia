@@ -229,6 +229,93 @@ export async function executeAgentTurn(
   environment: AgentExecutionEnvironment,
   options?: AgentExecutionTurnOptions
 ): Promise<AgentExecutionServiceResult> {
+  const { startToolExecutionRun, finishToolExecutionRun } =
+    await import("@/lib/execution/acting-authority")
+  const { personalEgressOptionsSource, bindPersonalEgressOptions } =
+    await import("@/lib/execution/personal-egress")
+  const producer = personalEgressOptionsSource(config)
+  const { resolveRunAuthority, persistRunAuthority } = await import("@/lib/execution/run-authority")
+  const suppliedRunId = options?.identity?.runId ?? config.executionIdentity?.runId
+  const entry =
+    config.parentRunId && !suppliedRunId
+      ? await startToolExecutionRun(config.sessionId, {
+          parentRunId: config.parentRunId,
+          title: "Agent turn",
+        })
+      : undefined
+  const runId = entry?.id ?? suppliedRunId
+  let failed = true
+  try {
+    if (runId) {
+      const inherited = await resolveRunAuthority({ runId, parentRunId: config.parentRunId })
+      if (inherited.inheritedAuthority) {
+        const effective = await persistRunAuthority(
+          runId,
+          inherited.authority ?? { schemaVersion: 1 }
+        )
+        if (effective.inheritedAuthority?.maxTurns !== undefined)
+          config = {
+            ...config,
+            maxSteps: Math.min(config.maxSteps ?? Infinity, effective.inheritedAuthority.maxTurns),
+          }
+        if (effective.inheritedAuthority?.permissionMode) {
+          const { deriveExternalSessionPermission } =
+            await import("../external/policy/permission-cascade")
+          const permissionMode =
+            effective.inheritedAuthority.permissionMode === "auto"
+              ? "acceptEdits"
+              : effective.inheritedAuthority.permissionMode
+          config = {
+            ...config,
+            permissionCeiling: deriveExternalSessionPermission(config.permissionCeiling ?? {}, {
+              permissionMode,
+            }),
+          }
+        }
+        if (effective.inheritedAuthority?.tools) {
+          const cap = effective.inheritedAuthority.tools
+          config = {
+            ...config,
+            ...(cap.allow
+              ? {
+                  allowedTools:
+                    config.allowedTools?.filter((tool) => cap.allow!.includes(tool)) ?? cap.allow,
+                }
+              : {}),
+            ...(cap.deny
+              ? { disallowedTools: [...new Set([...(config.disallowedTools ?? []), ...cap.deny])] }
+              : {}),
+          }
+        }
+      }
+      config = {
+        ...config,
+        executionIdentity: {
+          ...config.executionIdentity,
+          runId,
+          ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}),
+        },
+      }
+    }
+    const result = await executeAgentTurnPrepared(
+      prompt,
+      producer ? bindPersonalEgressOptions(config, producer) : config,
+      environment,
+      entry ? { ...options, identity: { ...options?.identity, runId: entry.id } } : options
+    )
+    failed = false
+    return result
+  } finally {
+    if (entry) await finishToolExecutionRun(entry.id, failed)
+  }
+}
+
+async function executeAgentTurnPrepared(
+  prompt: string,
+  config: ExecuteAgentConfig,
+  environment: AgentExecutionEnvironment,
+  options?: AgentExecutionTurnOptions
+): Promise<AgentExecutionServiceResult> {
   const [{ getAgentExecutionFlags }, executor] = await Promise.all([
     import("./feature-flags"),
     import("@/lib/ai/agent/agent-executor"),

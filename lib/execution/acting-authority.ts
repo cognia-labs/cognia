@@ -2,6 +2,7 @@
 import {
   checkActingAuthority,
   meetRunAuthority,
+  inheritableRunAuthority,
   type ActingIdentityV1,
   type ExecutionRun,
   type PrincipalRefV1,
@@ -17,7 +18,6 @@ import {
 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import { getDb } from "@/lib/db/schema"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
-import { canonicalJson } from "@cognia/agent"
 import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"
 import { isTerminalRunStatus } from "@/types/execution/run"
 
@@ -36,6 +36,22 @@ export function runTriggerFromOrigin(origin: { source: string } | undefined): Ru
 /** Origin labels are caller data. Only a host UI admission may supply this symbol. */
 export const LOCAL_PERSON_RUN = Symbol("host-local-person-run")
 export type LocalPersonRun = typeof LOCAL_PERSON_RUN
+
+/** Reserved turn ids remain reader provenance, never a missing claimed parent. */
+export async function authorityParentRunId(
+  context:
+    | { executionRunId?: string; executionRunReserved?: true; executionRunParentId?: string }
+    | undefined
+): Promise<string | undefined> {
+  const id = context?.executionRunId || undefined
+  if (context?.executionRunReserved && (!id || !(await getDb().executionRuns.get(id)))) {
+    const parent = context.executionRunParentId || undefined
+    // A captured coordinator that no longer exists keeps the observed-root
+    // exception every other launch path applies; it is never a refused parent.
+    return parent && (await getDb().executionRuns.get(parent)) ? parent : undefined
+  }
+  return id
+}
 
 /** Host-owned enqueue context. Automation can only narrow personal authority. */
 export interface JobExecutionContext {
@@ -102,6 +118,9 @@ export async function startToolExecutionRun(
   options: {
     runId?: string
     parentRunId?: string
+    authority?: RunAuthorityV1
+    /** Persisted Host ceiling of the recovered journal attempt, not run options. */
+    recoveryAuthority?: RunAuthorityV1
     localAuthorization?: LocalPersonRun
     automation?: JobExecutionContext["automation"]
     /** Host-authorized confirmation, anchored to the run that issued the card. */
@@ -116,8 +135,9 @@ export async function startToolExecutionRun(
   } = {}
 ): Promise<ExecutionRun> {
   const db = getDb()
-  const { appendRunEventInsideTransaction, semanticRunEvent } =
+  const { appendRunEventInsideTransaction, semanticRunEvent, appendRunObservation } =
     await import("@/lib/db/execution-runs")
+  const { resolveRunAuthority } = await import("./run-authority")
   if (getDb() !== db) throw new Error("Tool execution database changed")
   const id = options.runId ?? `execution:tool:${crypto.randomUUID()}`
   const local =
@@ -133,7 +153,23 @@ export async function startToolExecutionRun(
     db.notificationProjectionWork,
     async () => {
       const existing = await db.executionRuns.get(id)
-      if (existing) return existing
+      const resolved = await resolveRunAuthority({
+        ...(existing ? { runId: existing.id } : {}),
+        ...(!existing && options.parentRunId ? { parentRunId: options.parentRunId } : {}),
+        ...(!existing && options.authority ? { requested: options.authority } : {}),
+        ...(!existing && options.recoveryAuthority
+          ? { recoveryAuthority: options.recoveryAuthority }
+          : {}),
+      })
+      if (existing) {
+        if (options.parentRunId && existing.parentRunId !== options.parentRunId)
+          await appendRunObservation(existing.id, {
+            operation: "existing-run-parent",
+            parentRunId: existing.parentRunId,
+            observedParentRunId: options.parentRunId,
+          })
+        return existing
+      }
       const parent = options.parentRunId
         ? await db.executionRuns.get(options.parentRunId)
         : undefined
@@ -156,14 +192,19 @@ export async function startToolExecutionRun(
           ? recordedRunMetadata("requester", {
               runId: id,
               requesters: [confirmation.requester],
-              authority: origin?.authority,
+              authority: inheritableRunAuthority(origin?.authority),
             })
           : recordedRunMetadata("external-event", {
               runId: id,
               ...(originRoot?.actingIdentity?.lane === "service" ||
               (originRoot?.actingIdentity?.trigger !== "requester" &&
                 originRoot?.actingIdentity?.trigger !== "local")
-                ? { parent: originRoot && { ...originRoot, authority: origin?.authority } }
+                ? {
+                    parent: originRoot && {
+                      ...originRoot,
+                      authority: inheritableRunAuthority(origin?.authority),
+                    },
+                  }
                 : {}),
             })
         : recordedRunMetadata(
@@ -185,6 +226,10 @@ export async function startToolExecutionRun(
                 : {}),
             }
           )
+      if (!confirmation) {
+        if (resolved.authority) metadata.authority = resolved.authority
+        if (resolved.actingIdentity) metadata.actingIdentity = resolved.actingIdentity
+      }
       if (!parent && options.automation === "service" && metadata.actingIdentity) {
         metadata.actingIdentity.lane = "service"
         metadata.actingIdentity.actingPrincipal = { kind: "service", ref: id }
@@ -222,6 +267,9 @@ export async function startToolExecutionRun(
         currentRevision: 0,
         startedAt: now,
         updatedAt: now,
+        ...(options.recoveryAuthority
+          ? { recoveryAuthority: inheritableRunAuthority(options.recoveryAuthority) }
+          : {}),
         ...(confirmation && origin
           ? { parentRunId: origin.id }
           : options.parentRunId
@@ -257,6 +305,12 @@ export async function startJobExecutionRun(
   context?: JobExecutionContext,
   options?: { delivery?: boolean }
 ): Promise<ExecutionRun> {
+  const existing = await getDb().executionRuns.get(`execution:job:${jobId}`)
+  if (existing)
+    return startToolExecutionRun(existing.sessionId, {
+      runId: existing.id,
+      parentRunId: context?.executionRunId,
+    })
   const parent =
     context?.executionRunId !== undefined
       ? await resolveExecutingRun(context.sessionId, context.executionRunId, options)
@@ -444,24 +498,46 @@ export function recordedRunMetadata(
         ...(options.eventActors ? { eventActors: options.eventActors } : {}),
       }
   // A child's pool always remains its parent's, including an absent pool.
+  const inherited = inheritableRunAuthority(parent?.authority)
+  const own = options.authority ? { ...options.authority, caps: "explicit-v1" as const } : undefined
   const authority = parent
-    ? parent.authority && options.authority
-      ? meetRunAuthority(parent.authority, options.authority)
-      : parent.authority
-    : options.authority
+    ? inherited && own
+      ? meetRunAuthority(inherited, own)
+      : (inherited ?? (own ? meetRunAuthority({ schemaVersion: 1 }, own) : undefined))
+    : own
   return {
     actingIdentity,
-    ...(authority ? { authority } : {}),
+    ...(authority ? { authority: { ...authority, caps: "explicit-v1" } } : {}),
     ...(parent?.personalMarks?.length ? { personalMarks: [...parent.personalMarks] } : {}),
   }
 }
 
-export function authorityFromPermissionCeiling(
-  ceiling: AgentPermissionCeiling | undefined
-): RunAuthorityV1 | undefined {
+export async function authorityFromPermissionCeiling(
+  ceiling: AgentPermissionCeiling | undefined,
+  observationRunId?: string
+): Promise<RunAuthorityV1 | undefined> {
   if (!ceiling) return undefined
+  // The SDK wire map is keyed by name; persisted authority always names Host ids.
+  const servers = ceiling.mcpServers ? await getDb().mcpServers.toArray() : []
+  const ids = ceiling.mcpServers?.flatMap((entry) => {
+    const server = servers.find((server) => server.name === entry.name || server.id === entry.name)
+    return server ? [server.id] : []
+  })
+  const unmatched = ceiling.mcpServers
+    ?.filter(
+      (entry) => !servers.some((server) => server.name === entry.name || server.id === entry.name)
+    )
+    .map((entry) => entry.name)
+  if (unmatched?.length && observationRunId) {
+    const { appendRunObservation } = await import("@/lib/db/execution-runs")
+    await appendRunObservation(observationRunId, {
+      operation: "mcp_authority_names_unresolved",
+      names: unmatched,
+    })
+  }
   return {
     schemaVersion: 1,
+    caps: "explicit-v1",
     ...(ceiling.permissionMode ? { permissionMode: ceiling.permissionMode } : {}),
     ...(ceiling.allowedTools || ceiling.disallowedTools
       ? {
@@ -471,7 +547,13 @@ export function authorityFromPermissionCeiling(
           },
         }
       : {}),
-    ...(ceiling.mcpServers ? { mcpServers: { only: ceiling.mcpServers.map((s) => s.name) } } : {}),
+    ...(ceiling.mcpServers && (!ceiling.mcpServers.length || ids?.length)
+      ? {
+          mcpServers: {
+            only: ids ?? [],
+          },
+        }
+      : {}),
   }
 }
 
@@ -538,41 +620,20 @@ export async function observeActingAuthority(
   }
 }
 
-/** Persist resolved metadata without replacing the registry dispatch currently reads. */
+/** Persist the enforced launch ceiling; storage failures refuse dispatch. */
 export async function recordRunAuthority(
   sessionId: string,
   authority: RunAuthorityV1,
   runId?: string
-): Promise<void> {
-  try {
-    const db = getDb()
-    const snapshot = await snapshotActingAuthority(sessionId, runId)
-    if (!snapshot || getDb() !== db) return
-    await db.transaction("rw", db.executionRuns, async () => {
-      const run = await db.executionRuns.get(snapshot.runId)
-      if (!run) return
-      const resolved = run.authority ? meetRunAuthority(run.authority, authority) : authority
-      if (!resolved.pools && authority.pools && !run.parentRunId) resolved.pools = authority.pools
-      // A root can record a tighter pool ceiling; a child never splits or resets it.
-      if (resolved.pools?.rootRunId === run.id && authority.pools?.rootRunId === run.id) {
-        resolved.pools = { ...resolved.pools }
-        for (const field of ["tokenBudget", "costUsd", "deadlineMs"] as const) {
-          const before = resolved.pools[field]
-          const next = authority.pools[field]
-          if (next !== undefined)
-            resolved.pools[field] = before === undefined ? next : Math.min(before, next)
-        }
-      }
-      if (canonicalJson(run.authority) === canonicalJson(resolved)) return
-      // Metadata syncs with the next real run update in phase 1; it must not
-      // move updatedAt or reorder runs merely because a ceiling was observed.
-      await db.executionRuns.update(run.id, {
-        authority: resolved,
-      })
-    })
-  } catch {
-    // Observe-only storage must never affect the existing send/dispatch result.
+): Promise<RunAuthorityV1 | undefined> {
+  const db = getDb()
+  const snapshot = await snapshotActingAuthority(sessionId, runId)
+  const { persistRunAuthority, RunAuthorityError } = await import("./run-authority")
+  if (!snapshot || getDb() !== db) {
+    if (runId) throw new RunAuthorityError("authority_unavailable")
+    return
   }
+  return (await persistRunAuthority(snapshot.runId, authority)).authority
 }
 
 /**

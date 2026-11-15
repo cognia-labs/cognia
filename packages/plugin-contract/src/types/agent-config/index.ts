@@ -283,6 +283,12 @@ import type { VerificationBudgetStamp } from "./execution-budget"
 export type { VerificationBudgetStamp, VerificationRuntimeConfig } from "./execution-budget"
 
 export type SendOptions = {
+  /** Host-resolved complete run-tree ceiling; runtime overlays can only narrow it. */
+  runAuthority?: import("../execution/acting-identity").RunAuthorityV1
+  /** Ancestors only; own options retain their existing resolution semantics. */
+  inheritedRunAuthority?: import("../execution/acting-identity").RunAuthorityV1
+  /** Wire MCP name to canonical server id, resolved once by the Host. */
+  runAuthorityMcpServerIds?: Record<string, string>
   /** Host-resolved policy. PII gates remain independent and mandatory. */
   contentSafety?: { injectionProtection: boolean }
   /** Host-stamped active semantic seams for this turn; never forwarded to a model. */
@@ -2408,6 +2414,8 @@ export interface ProjectThreadPrRef {
 
 /** Durable per-thread bookkeeping for the project coordinator (ADR-0204). */
 export interface ProjectThreadState {
+  /** Host-captured coordinator execution that created this thread. */
+  parentExecutionRunId?: string
   coordinatorSessionId: string
   /** The rendered, PII-gated brief the thread was started with. */
   brief: string
@@ -3996,6 +4004,13 @@ export interface FileSharingPolicySettings {
   maxSnapshotTtlSeconds?: number
   /** Longest live access may last, in seconds. */
   maxLiveTtlSeconds?: number
+}
+
+/** Portable ICE configuration shared with non-DOM Hosts. */
+export interface AgentIceServer {
+  urls: string | string[]
+  username?: string
+  credential?: string
 }
 
 export interface AppSettings {
@@ -6222,13 +6237,13 @@ export interface AppSettings {
    * render them separately. Defaults to two public STUN servers when
    * unset (Google + Cloudflare).
    */
-  iceServers?: RTCIceServer[]
+  iceServers?: AgentIceServer[]
   /**
    * Optional TURN relay servers. Empty by default; ICE falls back to
    * cloudflared when STUN-only NAT traversal fails. Self-hosted coturn or
    * paid TURN-as-a-service URLs go here.
    */
-  turnServers?: RTCIceServer[]
+  turnServers?: AgentIceServer[]
   /**
    * Optional automatic ephemeral-TURN provider (ADR-0021). When
    * `kind !== "none"`, the desktop and mobile each mint short-lived TURN

@@ -40,6 +40,17 @@ it("admits only an explicit Host symbol without a run", async () => {
       { source: "github-user" }
     )
   ).toMatchObject({ ok: true })
+  expect(
+    await admitPersonalCredential(
+      {
+        executionRunId: "reserved-turn",
+        executionRunReserved: true,
+        executionRunParentId: "coordinator",
+      },
+      { source: "github-user" }
+    )
+  ).toMatchObject({ ok: false, reason: "missing-identity" })
+  expect(resolve).toHaveBeenLastCalledWith(undefined, "reserved-turn", undefined)
 })
 it.each([
   undefined,

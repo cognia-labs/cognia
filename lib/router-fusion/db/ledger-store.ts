@@ -223,6 +223,7 @@ export interface FusionStoreDeps {
 }
 
 export interface CreateRunInput {
+  parentExecutionRunId?: string
   runId: string
   sessionId: string | null
   surface: RouterFusionSurface
@@ -478,6 +479,7 @@ export class FusionLedgerStore {
       origin,
       title: run.title,
       sessionId: run.sessionId,
+      parentExecutionRunId: run.parentExecutionRunId,
       actorKeyId: run.actorKeyId,
       actorKeyName: run.actorKeyName,
       mode: run.mode,
@@ -665,6 +667,9 @@ export class FusionLedgerStore {
         this.configs.set(input.config.digest, input.config)
         const run: FusionRunRow = {
           runId: input.runId,
+          ...(input.parentExecutionRunId
+            ? { parentExecutionRunId: input.parentExecutionRunId }
+            : {}),
           sessionId: input.sessionId,
           surface: input.surface,
           origin: input.origin,

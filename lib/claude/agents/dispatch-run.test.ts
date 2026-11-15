@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/run-authority", () => ({
+  ...jest.requireActual("@/lib/execution/run-authority"),
+  resolveRunAuthority: jest.fn(async () => ({})),
+}))
 jest.mock("@/lib/execution/acting-authority", () => ({
   startToolExecutionRun: jest.fn(async (_sessionId, options) => ({ id: options.runId })),
   finishToolExecutionRun: jest.fn(async () => undefined),
@@ -242,6 +246,7 @@ it("aborts an admitted background execution on ownership loss without cancelling
 
 beforeEach(() => {
   jest.clearAllMocks()
+  jest.mocked(getExecutionRun).mockReset().mockResolvedValue(undefined)
   __clearAllDispatchContextsForTesting()
   __clearAllDispatchBudgetsForTesting()
   useSubagentRuntimeStore.getState().clearRuntime()
@@ -253,7 +258,7 @@ beforeEach(() => {
 })
 
 describe("startDispatchRun — success + terminal records", () => {
-  it("starts unparented when the pinned recovery parent cannot be read", async () => {
+  it("refuses dispatch when the pinned recovery parent cannot be read", async () => {
     const recovery = await captureBackgroundDispatchRecovery({
       sessionId: "chat-1",
       executionSessionId: "background:original",
@@ -261,7 +266,10 @@ describe("startDispatchRun — success + terminal records", () => {
       target: { id: "coder", prompt: "task" } as never,
       toolsEnabled: false,
     })
-    jest.mocked(getExecutionRun).mockRejectedValueOnce(new Error("parent read failed"))
+    jest.mocked(getExecutionRun).mockImplementation(async (id) => {
+      if (id === "pinned-parent") throw new Error("parent read failed")
+      return undefined
+    })
     await startDispatchRun({
       subagentId: "coder",
       prompt: "recover",
@@ -274,8 +282,8 @@ describe("startDispatchRun — success + terminal records", () => {
     await mockStartBackground.mock.calls[0][2]
     expect(getExecutionRun).toHaveBeenCalledWith("pinned-parent")
     expect(activeToolExecutionRunId).not.toHaveBeenCalled()
-    expect(jest.mocked(startToolExecutionRun).mock.calls[0][1]).not.toHaveProperty("parentRunId")
-    expect(mockDispatch).toHaveBeenCalledTimes(1)
+    expect(startToolExecutionRun).not.toHaveBeenCalled()
+    expect(mockDispatch).not.toHaveBeenCalled()
   })
 
   it("resumes a foreground journal using its saved parent instead of a live lookup", async () => {
@@ -283,7 +291,9 @@ describe("startDispatchRun — success + terminal records", () => {
       runId: "old-foreground",
       parentExecutionRunId: "original-parent",
     } as never)
-    jest.mocked(getExecutionRun).mockResolvedValueOnce({ id: "original-parent" } as never)
+    jest
+      .mocked(getExecutionRun)
+      .mockImplementation(async (id) => (id === "original-parent" ? ({ id } as never) : undefined))
     await startDispatchRun({
       subagentId: "coder",
       prompt: "continue",
@@ -375,7 +385,9 @@ describe("startDispatchRun — success + terminal records", () => {
 
   it("runs a foreground dispatch, records completed, journals the run, and renders the outcome", async () => {
     jest.mocked(activeToolExecutionRunId).mockReturnValueOnce("local-root")
-    jest.mocked(getExecutionRun).mockResolvedValueOnce({ id: "local-root" } as never)
+    jest
+      .mocked(getExecutionRun)
+      .mockImplementation(async (id) => (id === "local-root" ? ({ id } as never) : undefined))
     const handle = await startDispatchRun({
       subagentId: "coder",
       prompt: "build",
@@ -430,7 +442,11 @@ describe("startDispatchRun — success + terminal records", () => {
 
   it("detaches a background run through the background registry and returns the runId notice", async () => {
     jest.mocked(activeToolExecutionRunId).mockReturnValueOnce("background-local-root")
-    jest.mocked(getExecutionRun).mockResolvedValueOnce({ id: "background-local-root" } as never)
+    jest
+      .mocked(getExecutionRun)
+      .mockImplementation(async (id) =>
+        id === "background-local-root" ? ({ id } as never) : undefined
+      )
     const handle = await startDispatchRun({
       subagentId: "coder",
       prompt: "long task",

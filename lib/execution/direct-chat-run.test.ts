@@ -4,8 +4,11 @@ import "fake-indexeddb/auto"
 
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { createExecutionRun, listExecutionRunEvents } from "@/lib/db/execution-runs"
-import { LOCAL_PERSON_RUN } from "./acting-authority"
+import { recordedRunMetadata, LOCAL_PERSON_RUN } from "./acting-authority"
 import {
+  ensureDirectChatExecutionRun,
+  releasePreparedDirectChatExecutionRun,
+  finishUnstartedDirectChatExecutionRun,
   finishDirectChatExecutionRun,
   hasActiveDirectChatExecutionRun,
   projectDirectChatCaptureEvent,
@@ -208,4 +211,146 @@ describe("direct chat execution run", () => {
     expect(events.some((event) => event.type === "milestone.created")).toBe(true)
     expect(JSON.stringify(events)).not.toContain("secret output")
   })
+})
+
+it("admits an ordinary chat row before authority resolution without starting execution", async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  const input: import("./direct-chat-run").StartDirectChatExecutionRunInput = {
+    sessionId: "planned-session",
+    runId: "planned-run",
+    localAuthorization: LOCAL_PERSON_RUN,
+  }
+  const admitted = await ensureDirectChatExecutionRun(input)
+  expect(admitted.status).toBe("queued")
+  expect(hasActiveDirectChatExecutionRun(input.sessionId)).toBe(false)
+  expect(await listExecutionRunEvents(input.runId)).toEqual([])
+  const { enforceRunAuthorityOnSendOptions } = await import("./run-authority")
+  const options = {
+    permissionMode: "default" as const,
+    maxTurns: 20,
+    runAuthority: { schemaVersion: 1 as const, maxTurns: 20 },
+  }
+  await enforceRunAuthorityOnSendOptions(input.runId, options)
+  await startDirectChatExecutionRun({ ...input, workspaceRoot: "/resolved" })
+  expect(hasActiveDirectChatExecutionRun(input.sessionId)).toBe(true)
+  expect((await getDb().executionRuns.get(input.runId))?.authority?.maxTurns).toBe(20)
+  await finishDirectChatExecutionRun(input.sessionId, "completed")
+})
+
+it("inherits a Host-captured coordinator parent before its first option resolution", async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  await createExecutionRun({
+    ...recordedRunMetadata("local", { runId: "coordinator-parent" }),
+    id: "coordinator-parent",
+    sourceId: "parent",
+    kind: "agent-turn",
+    title: "parent",
+    status: "running",
+    currentRevision: 0,
+    startedAt: 1,
+    updatedAt: 1,
+    authority: {
+      schemaVersion: 1,
+      permissionMode: "plan",
+      maxTurns: 2,
+      tools: { allow: ["Read"], deny: ["Bash"] },
+    },
+  })
+  const child = await ensureDirectChatExecutionRun({
+    sessionId: "thread",
+    runId: "thread-turn",
+    parentRunId: "coordinator-parent",
+  })
+  expect(child.parentRunId).toBe("coordinator-parent")
+  expect(child.actingIdentity).toEqual(
+    (await getDb().executionRuns.get("coordinator-parent"))?.actingIdentity
+  )
+  expect(child.authority).toMatchObject({
+    permissionMode: "plan",
+    maxTurns: 2,
+    tools: { allow: ["Read"], deny: ["Bash"] },
+  })
+})
+
+it("cancels a prepared row when options or routing refuse before dispatch", async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  await ensureDirectChatExecutionRun({
+    sessionId: "refused-preparation",
+    runId: "refused-preparation-run",
+  })
+  expect(await finishUnstartedDirectChatExecutionRun("refused-preparation-run")).toBe(true)
+  expect(await finishUnstartedDirectChatExecutionRun("refused-preparation-run")).toBe(false)
+  expect((await getDb().executionRuns.get("refused-preparation-run"))?.status).toBe("cancelled")
+  expect(hasActiveDirectChatExecutionRun("refused-preparation")).toBe(false)
+})
+
+it("settles its own early preparation and releases it when another durable claimant wins", async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  await ensureDirectChatExecutionRun({
+    sessionId: "early",
+    runId: "early-owned",
+    ownsDispatch: false,
+  })
+  await finishUnstartedDirectChatExecutionRun("early-owned")
+  expect((await getDb().executionRuns.get("early-owned"))?.status).toBe("cancelled")
+  const queued = await ensureDirectChatExecutionRun({
+    sessionId: "early",
+    runId: "early-transferred",
+    ownsDispatch: false,
+  })
+  releasePreparedDirectChatExecutionRun(queued.id)
+  await finishUnstartedDirectChatExecutionRun(queued.id)
+  expect(await getDb().executionRuns.get(queued.id)).toEqual(queued)
+})
+
+it("settles only the owning preparation when sends overlap on one session", async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  await ensureDirectChatExecutionRun({ sessionId: "overlap", runId: "prepare-a" })
+  await ensureDirectChatExecutionRun({ sessionId: "overlap", runId: "prepare-b" })
+  await finishUnstartedDirectChatExecutionRun("prepare-a")
+  expect((await getDb().executionRuns.get("prepare-a"))?.status).toBe("cancelled")
+  expect((await getDb().executionRuns.get("prepare-b"))?.status).toBe("queued")
+  await startDirectChatExecutionRun({ sessionId: "overlap", runId: "prepare-b" })
+  await finishUnstartedDirectChatExecutionRun("prepare-a")
+  expect((await getDb().executionRuns.get("prepare-b"))?.status).toBe("running")
+  await finishDirectChatExecutionRun("overlap", "completed")
+})
+
+it("falls back to a root and observes a captured coordinator parent missing on this device", async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  const child = await ensureDirectChatExecutionRun({
+    sessionId: "thread",
+    runId: "missing-parent-thread",
+    parentRunId: "missing",
+  })
+  expect(child.parentRunId).toBeUndefined()
+  expect(child.actingIdentity?.rootRunId).toBe(child.id)
+  expect(JSON.stringify(await listExecutionRunEvents(child.id))).toContain(
+    "coordinator_parent_unavailable"
+  )
+})
+
+it("keeps a legacy coordinator thread with no parent claim top-level with its own options", async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  const child = await ensureDirectChatExecutionRun({
+    sessionId: "legacy-thread",
+    runId: "legacy-thread-run",
+  })
+  const { enforceRunAuthorityOnSendOptions } = await import("./run-authority")
+  const ownOptions = {
+    permissionMode: "bypassPermissions" as const,
+    allowedTools: ["Read", "Bash"],
+    maxTurns: 10,
+  }
+  await enforceRunAuthorityOnSendOptions(child.id, ownOptions)
+  expect(ownOptions.permissionMode).toBe("bypassPermissions")
+  expect(ownOptions.maxTurns).toBe(10)
+  expect((await getDb().executionRuns.get(child.id))?.parentRunId).toBeUndefined()
 })

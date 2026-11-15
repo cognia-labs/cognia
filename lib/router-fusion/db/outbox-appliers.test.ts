@@ -258,6 +258,32 @@ describe("account database outbox appliers", () => {
   })
 
   describe("execution run projection", () => {
+    it("parents a chat fusion projection and its agent descendants to the captured coordinator", async () => {
+      const { recordedRunMetadata, startToolExecutionRun } =
+        await import("@/lib/execution/acting-authority")
+      await createExecutionRun({
+        id: "coordinator",
+        ...recordedRunMetadata("external-event", { runId: "coordinator" }),
+        kind: "agent-turn",
+        sourceId: "coordinator",
+        title: "Coordinator",
+        status: "running",
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+        authority: { schemaVersion: 1, caps: "explicit-v1" as const, tools: { allow: ["Read"] } },
+      })
+      await accountDatabaseAppliers.execution_run_projection(
+        projection("queued", { origin: "local", parentExecutionRunId: "coordinator" }),
+        NO_ARTIFACTS
+      )
+      expect(await getExecutionRun("run-9")).toMatchObject({
+        parentRunId: "coordinator",
+        authority: { tools: { allow: ["Read"] } },
+      })
+      const child = await startToolExecutionRun("delegate", { parentRunId: "run-9" })
+      expect(child.authority?.tools?.allow).toEqual(["Read"])
+    })
     function projection(phase: string, extra: Record<string, unknown> = {}): FusionOutboxRow {
       return {
         ...usageEffect(),

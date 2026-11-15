@@ -208,6 +208,9 @@ describe("runWorkflow run budget", () => {
   })
 
   it("holds a sub-workflow to what its live parent has left and charges the parent", async () => {
+    // A live budget is not a persisted lineage. Admit the real parent as the
+    // production subworkflow launcher does before registering its budget.
+    await runWorkflow({ workflow: chain([]), trigger, runId: "run_parent" })
     const parentLog = { log: jest.fn(async () => undefined) } as unknown as RunLogger
     const parentStop = jest.fn()
     const parent = createRunBudget({

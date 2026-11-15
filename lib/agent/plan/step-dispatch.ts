@@ -102,19 +102,32 @@ async function runStepWork(
       const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
       const cwd = runCtx.executionRoot
       const turn = async (turnSignal: AbortSignal) => {
-        const executionRunId = `execution:plan:${runCtx.plan.id}`
-        const history = await preparePersonalDerivedHistory(
-          undefined,
-          [{ id: step.id, content: stepPrompt(step) }],
-          { runIds: [executionRunId], executionRunId, sessionId: runCtx.plan.sessionId }
-        )
-        return executeAgent(history.messages[0].content, {
-          executionIdentity: { runId: executionRunId },
-          toolsEnabled: true,
-          ...(runCtx.characterId ? { characterId: runCtx.characterId } : {}),
-          ...(cwd ? { cwd } : {}),
-          abortSignal: turnSignal,
+        const { startToolExecutionRun, finishToolExecutionRun } =
+          await import("@/lib/execution/acting-authority")
+        const entry = await startToolExecutionRun(runCtx.plan.sessionId, {
+          parentRunId: `execution:plan:${runCtx.plan.id}`,
+          title: step.title,
         })
+        const executionRunId = entry.id
+        let failed = true
+        try {
+          const history = await preparePersonalDerivedHistory(
+            undefined,
+            [{ id: step.id, content: stepPrompt(step) }],
+            { runIds: [executionRunId], executionRunId, sessionId: runCtx.plan.sessionId }
+          )
+          const result = await executeAgent(history.messages[0].content, {
+            executionIdentity: { runId: executionRunId },
+            toolsEnabled: true,
+            ...(runCtx.characterId ? { characterId: runCtx.characterId } : {}),
+            ...(cwd ? { cwd } : {}),
+            abortSignal: turnSignal,
+          })
+          failed = false
+          return result
+        } finally {
+          await finishToolExecutionRun(entry.id, failed)
+        }
       }
 
       // Every step of a run shares one directory, so `maxConcurrency > 1` puts
@@ -410,6 +423,11 @@ export async function dispatchPlanStepNode(
     throw nonRetryable(`action.plan.step.dispatch: step "${stepId}" not in plan "${runCtx.planId}"`)
   }
 
+  const [{ syncPlanExecutionRun }, { getSession }] = await Promise.all([
+    import("@/lib/execution/agent-state-bridge"),
+    import("@/lib/db/sessions"),
+  ])
+  await syncPlanExecutionRun(runCtx.plan, await getSession(runCtx.plan.sessionId))
   const startedAt = Date.now()
   await runCtx.writer.setStepStatus(step.id, "in_progress", { startedAt })
 

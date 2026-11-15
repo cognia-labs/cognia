@@ -19,7 +19,10 @@ import type { ChatRouteHost } from "./route-chat-turn"
 
 let store: FusionLedgerStore
 jest.mock("./store-provider", () => ({ currentFusionStore: async () => store }))
-jest.mock("../db/outbox-appliers", () => ({ accountDatabaseAppliers: {} }))
+jest.mock("../db/outbox-appliers", () => ({
+  ...jest.requireActual("../db/outbox-appliers"),
+  accountDatabaseAppliers: {},
+}))
 jest.mock("./chat-run-deps", () => ({ windowLeaseOwner: () => "window:test" }))
 jest.mock("../calls/live-settings", () => ({
   liveSettingsReader: (snapshot: unknown) => () => snapshot,
@@ -213,6 +216,46 @@ describe("chatAutoConsidersFusion", () => {
 })
 
 describe("selectChatFusionRun", () => {
+  it("admits a captured coordinator's child before a fusion delegate can execute", async () => {
+    const { getDb } = await import("@/lib/db/schema")
+    const { recordedRunMetadata, startToolExecutionRun } =
+      await import("@/lib/execution/acting-authority")
+    await getDb().executionRuns.put({
+      id: "fusion-coordinator",
+      ...recordedRunMetadata("external-event", { runId: "fusion-coordinator" }),
+      kind: "agent-turn",
+      sourceId: "fusion-coordinator",
+      title: "Coordinator",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      authority: { schemaVersion: 1, caps: "explicit-v1" as const, tools: { allow: ["Read"] } },
+    })
+    const picked = await selectChatFusionRun(
+      makeHost(),
+      selection({ parentExecutionRunId: "fusion-coordinator" })
+    )
+    if (picked.kind !== "fusion") throw new Error("not routed")
+    script = async (id) => {
+      expect(await getDb().executionRuns.get(id)).toMatchObject({
+        parentRunId: "fusion-coordinator",
+        authority: { tools: { allow: ["Read"] } },
+      })
+      const child = await startToolExecutionRun("fusion-delegate", { parentRunId: id })
+      expect(child.authority?.tools?.allow).toEqual(["Read"])
+      return seal(id, "Verified answer")
+    }
+    expect((await start(picked.stamp)).kind).toBe("succeeded")
+    expect((await store.getRun(picked.stamp.runId))?.parentExecutionRunId).toBe(
+      "fusion-coordinator"
+    )
+    expect(
+      (
+        await store.db.fusionOutbox.where("kind").equals("execution_run_projection").toArray()
+      ).every((row) => row.payload.parentExecutionRunId === "fusion-coordinator")
+    ).toBe(true)
+  })
   it("retains the durable delivery identity instead of minting a new run", async () => {
     const picked = await selectChatFusionRun(makeHost(), selection({ runId: "delivery-panel" }))
     expect(picked).toMatchObject({ kind: "fusion", stamp: { runId: "delivery-panel" } })

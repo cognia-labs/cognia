@@ -110,6 +110,28 @@ function usageCosting(inputTokens: number, outputTokens: number): RawUsage {
 }
 
 describe("FusionLedgerStore (fake-indexeddb)", () => {
+  it("freezes coordinator lineage in the fusion row and replayable projection", async () => {
+    const { db, store } = harness()
+    const result = await store.createRun(
+      runInput("thread-fusion", { parentExecutionRunId: "coordinator", driver: "orchestrator" })
+    )
+    expect(result.ok).toBe(true)
+    expect((await store.getRun("thread-fusion"))?.parentExecutionRunId).toBe("coordinator")
+    const effects = await db.fusionOutbox.where("runId").equals("thread-fusion").toArray()
+    expect(effects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "execution_run_projection",
+          payload: expect.objectContaining({ parentExecutionRunId: "coordinator" }),
+        }),
+      ])
+    )
+    expect(
+      await store.createRun(runInput("thread-fusion", { parentExecutionRunId: "other" }))
+    ).toMatchObject({ ok: false, code: "RUN_EXISTS" })
+    expect((await store.getRun("thread-fusion"))?.parentExecutionRunId).toBe("coordinator")
+    await db.delete()
+  })
   it("[ACC:BUD-01] admits exactly one of two concurrent runs that need the same tenant money", async () => {
     const { store } = harness()
     const results = await Promise.all([

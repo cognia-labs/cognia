@@ -296,7 +296,7 @@ describe("defaultAiEnsembleDeps", () => {
     expect(await deps.runAgent({ prompt: "go" })).toEqual({ text: "plain answer" })
     expect(mockExecuteAgent).toHaveBeenCalledWith(
       "go",
-      expect.objectContaining({ executionIdentity: { runId: `execution:workflow:${ctx.runId}` } })
+      expect.objectContaining({ parentRunId: `execution:workflow:${ctx.runId}` })
     )
   })
 

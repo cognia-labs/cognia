@@ -1,5 +1,37 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+
+it("keeps an existing job's stored parent when a retry observes a newer session run", async () => {
+  const original = await startToolExecutionRun("retry-session", {
+    localAuthorization: LOCAL_PERSON_RUN,
+    authority: { schemaVersion: 1, caps: "explicit-v1" as const, maxTurns: 2 },
+  })
+  const existing = await startJobExecutionRun("retry-parent", {
+    sessionId: "retry-session",
+    executionRunId: original.id,
+  })
+  const newer = await startToolExecutionRun("retry-session", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  const retried = await startJobExecutionRun("retry-parent", {
+    sessionId: "retry-session",
+    executionRunId: newer.id,
+  })
+  expect(retried).toEqual(existing)
+  expect(retried.parentRunId).toBe(original.id)
+  expect(retried.authority?.maxTurns).toBe(2)
+  expect(await getDb().executionRunEvents.where("runId").equals(existing.id).toArray()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        seq: 0,
+        payload: expect.objectContaining({
+          operation: "existing-run-parent",
+          observedParentRunId: newer.id,
+        }),
+      }),
+    ])
+  )
+})
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   ...jest.requireActual("@/lib/connectors/tauri/commands"),
@@ -22,6 +54,7 @@ import {
 import type { ExecutionRun } from "@/types/execution/run"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 import {
+  authorityParentRunId,
   authorityFromPermissionCeiling,
   connectorRequester,
   observeActingAuthority,
@@ -42,6 +75,43 @@ import {
   activeToolExecutionRunId,
   isBuiltinToolExecutionRun,
 } from "./acting-authority"
+
+it("uses reserved ids as parents only once their Host row exists", async () => {
+  const context = { executionRunId: "reserved-plugin-parent", executionRunReserved: true as const }
+  expect(await authorityParentRunId(context)).toBeUndefined()
+  expect(await authorityParentRunId({ executionRunId: context.executionRunId })).toBe(
+    context.executionRunId
+  )
+  expect(await authorityParentRunId({ executionRunId: "" })).toBeUndefined()
+  await startToolExecutionRun(undefined, { runId: context.executionRunId })
+  expect(await authorityParentRunId(context)).toBe(context.executionRunId)
+})
+it("uses the Host-known parent while a deferred turn is reserved", async () => {
+  const parent = await startToolExecutionRun(undefined, {
+    authority: { schemaVersion: 1, caps: "explicit-v1", maxTurns: 2 },
+  })
+  const context = {
+    executionRunId: "reserved-child",
+    executionRunReserved: true as const,
+    executionRunParentId: parent.id,
+  }
+  expect(await authorityParentRunId(context)).toBe(parent.id)
+  expect(await authorityParentRunId({ ...context, executionRunId: undefined })).toBe(parent.id)
+  const child = await startToolExecutionRun(undefined, {
+    runId: context.executionRunId,
+    parentRunId: parent.id,
+  })
+  expect(await authorityParentRunId(context)).toBe(child.id)
+})
+it("treats a reservation's missing Host-known parent as no parent", async () => {
+  const context = {
+    executionRunId: "reserved-orphan",
+    executionRunReserved: true as const,
+    executionRunParentId: "deleted-coordinator",
+  }
+  expect(await authorityParentRunId(context)).toBeUndefined()
+  expect(await authorityParentRunId({ ...context, executionRunId: undefined })).toBeUndefined()
+})
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 import { subSessionId } from "@/lib/claude/team-session-id"
@@ -328,6 +398,7 @@ it("records legacy roots and preserves every fixed parent identity field", () =>
     },
     authority: {
       schemaVersion: 1,
+      caps: "explicit-v1" as const,
       permissionMode: "default",
       maxTurns: 4,
       pools: { rootRunId: "run", costUsd: 1 },
@@ -337,6 +408,7 @@ it("records legacy roots and preserves every fixed parent identity field", () =>
     parent,
     authority: {
       schemaVersion: 1,
+      caps: "explicit-v1" as const,
       permissionMode: "bypassPermissions",
       maxTurns: 8,
       pools: { rootRunId: "child", costUsd: 8 },
@@ -345,9 +417,11 @@ it("records legacy roots and preserves every fixed parent identity field", () =>
   expect(child.actingIdentity).toBe(parent.actingIdentity)
   expect(child.authority).toEqual(parent.authority)
   expect(
-    recordedRunMetadata("child", { parent: seed(), authority: { schemaVersion: 1, maxTurns: 2 } })
-      .authority
-  ).toBeUndefined()
+    recordedRunMetadata("child", {
+      parent: seed(),
+      authority: { schemaVersion: 1, caps: "explicit-v1" as const, maxTurns: 2 },
+    }).authority
+  ).toEqual({ schemaVersion: 1, caps: "explicit-v1", maxTurns: 2 })
 })
 
 it.each([
@@ -413,10 +487,11 @@ it("anchors a new child of an older identity even without a structural parent li
   })
 })
 
-it("converts only resolved permission dimensions, retaining empty denials and allow sets", () => {
-  expect(authorityFromPermissionCeiling(undefined)).toBeUndefined()
+it("converts only resolved permission dimensions, retaining empty denials and allow sets", async () => {
+  await getDb().mcpServers.put({ id: "mcp_docs", name: "docs" } as never)
+  expect(await authorityFromPermissionCeiling(undefined)).toBeUndefined()
   expect(
-    authorityFromPermissionCeiling({
+    await authorityFromPermissionCeiling({
       permissionMode: "plan",
       allowedTools: [],
       disallowedTools: ["Bash"],
@@ -424,10 +499,58 @@ it("converts only resolved permission dimensions, retaining empty denials and al
     })
   ).toEqual({
     schemaVersion: 1,
+    caps: "explicit-v1",
     permissionMode: "plan",
     tools: { allow: [], deny: ["Bash"] },
-    mcpServers: { only: ["docs"] },
+    mcpServers: { only: ["mcp_docs"] },
   })
+})
+
+it("observes unmatched MCP names without turning them into an empty cap", async () => {
+  await createExecutionRun(seed())
+  const authority = await authorityFromPermissionCeiling(
+    { mcpServers: [{ name: "missing-github" }] },
+    "run"
+  )
+  expect(authority?.mcpServers).toBeUndefined()
+  expect(await listExecutionRunEvents("run")).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          operation: "mcp_authority_names_unresolved",
+          names: ["missing-github"],
+        }),
+      }),
+    ])
+  )
+  await getDb().mcpServers.put({ id: "mcp-github", name: "github" } as never)
+  expect(
+    (
+      await authorityFromPermissionCeiling(
+        { mcpServers: [{ name: "github" }, { name: "unknown" }] },
+        "run"
+      )
+    )?.mcpServers
+  ).toEqual({ only: ["mcp-github"] })
+})
+
+it("restarts an existing job with its effective caps after the parent was pruned", async () => {
+  const parent = await startToolExecutionRun("session", {
+    runId: "pruned-job-parent",
+    authority: { schemaVersion: 1, caps: "explicit-v1" as const, maxTurns: 2 },
+  })
+  const original = await startJobExecutionRun("retained-job", {
+    sessionId: "session",
+    executionRunId: parent.id,
+  })
+  await getDb().executionRuns.delete(parent.id)
+  expect(
+    await startJobExecutionRun("retained-job", { sessionId: "session", executionRunId: parent.id })
+  ).toEqual(original)
+  expect(original.authority).toMatchObject({ caps: "explicit-v1", maxTurns: 2 })
+  expect(JSON.stringify(await listExecutionRunEvents(original.id))).toContain(
+    "ancestor_unavailable"
+  )
 })
 
 it("uses the inbound sender's existing principal and union enrichment", () => {
@@ -551,7 +674,7 @@ it("observes the live identity root while a child retains its creation snapshot"
       ...recordedRunMetadata("child", { runId: "grandchild", parent: child }),
     })
   )
-  expect(grandchild.actingIdentity).toEqual(child?.actingIdentity)
+  expect(grandchild.actingIdentity).toEqual((await getExecutionRun("run"))?.actingIdentity)
   expect(await snapshotActingAuthority("session", "grandchild")).toEqual({
     runId: "grandchild",
     revision: 2,
@@ -626,11 +749,12 @@ it("observes legacy missing identities and tolerates absent and terminal runs", 
   })
 })
 
-it("persists the resolved ceiling monotonically and leaves old executions operational", async () => {
+it("replaces own preparation caps while retaining monotonically narrowed pools", async () => {
   await createExecutionRun(
     seed({
       authority: {
         schemaVersion: 1,
+        caps: "explicit-v1" as const,
         permissionMode: "plan",
         tools: { deny: ["Bash"] },
         pools: { rootRunId: "run", costUsd: 2 },
@@ -649,8 +773,9 @@ it("persists the resolved ceiling monotonically and leaves old executions operat
   )
   expect((await getExecutionRun("run"))?.authority).toEqual({
     schemaVersion: 1,
-    permissionMode: "plan",
-    tools: { allow: ["Read"], deny: ["Bash"] },
+    caps: "explicit-v1",
+    permissionMode: "bypassPermissions",
+    tools: { allow: ["Read"] },
     maxTurns: 3,
     pools: { rootRunId: "run", costUsd: 2 },
   })
@@ -739,7 +864,7 @@ it("keeps a confirmed external child's narrower authority", async () => {
   const root = seed({
     id: "root",
     status: "completed",
-    authority: { schemaVersion: 1, maxTurns: 10 },
+    authority: { schemaVersion: 1, caps: "explicit-v1" as const, maxTurns: 10 },
     ...recordedRunMetadata("external-event", { runId: "root" }),
   })
   await createExecutionRun(root)
@@ -751,7 +876,7 @@ it("keeps a confirmed external child's narrower authority", async () => {
       ...recordedRunMetadata("child", {
         runId: "child",
         parent: root,
-        authority: { schemaVersion: 1, maxTurns: 2 },
+        authority: { schemaVersion: 1, caps: "explicit-v1" as const, maxTurns: 2 },
       }),
     })
   )
@@ -942,4 +1067,30 @@ it("R2: correlated unknown content never becomes a background egress context", a
     "unresolved-tool-producer"
   )
   expect(toolCallEgressRunId("background")).toBeUndefined()
+})
+
+it("admits an authority-capped child job atomically inside an owning queue transaction", async () => {
+  const parent = await startToolExecutionRun("atomic-parent", {
+    localAuthorization: LOCAL_PERSON_RUN,
+    authority: { schemaVersion: 1, caps: "explicit-v1" as const, maxTurns: 2 },
+  })
+  const db = getDb()
+  await db.transaction(
+    "rw",
+    db.executionRuns,
+    db.executionRunEvents,
+    db.notificationProjectionWork,
+    async () => {
+      const child = await startJobExecutionRun("atomic-child", {
+        sessionId: "atomic-parent",
+        executionRunId: parent.id,
+      })
+      expect(child).toMatchObject({ parentRunId: parent.id, authority: { maxTurns: 2 } })
+      await db.executionRuns.update(child.id, { title: "Queue committed" })
+    }
+  )
+  expect(await db.executionRuns.get("execution:job:atomic-child")).toMatchObject({
+    title: "Queue committed",
+    authority: { maxTurns: 2 },
+  })
 })

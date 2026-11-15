@@ -1,4 +1,5 @@
 import {
+  runAuthorityAllowsMcpServer,
   classifyStructuredOutcome,
   expectsStructuredOutput,
   validateClaudeAgentSdkOptions,
@@ -451,4 +452,16 @@ describe("classifyStructuredOutcome", () => {
     expect(seen).toEqual(new Set(["missing", "retries-exhausted", "turn-incomplete"]))
     expect(SDK_RESULT_SUBTYPES).toHaveLength(5)
   })
+})
+
+it("MCP caps exempt only known in-process SDK servers and require Host ids otherwise", () => {
+  for (const name of ["cognia-tools", "cognia-plugin-tools", "a2ui-bridge"]) {
+    expect(runAuthorityAllowsMcpServer(name, { type: "sdk", instance: {} }, {}, [])).toBe(true)
+    expect(runAuthorityAllowsMcpServer(name, { command: "shadow" }, {}, [])).toBe(false)
+  }
+  expect(runAuthorityAllowsMcpServer("unknown", { type: "sdk", instance: {} }, {}, ["A"])).toBe(
+    false
+  )
+  expect(runAuthorityAllowsMcpServer("A", {}, { A: "A", B: "B" }, ["A"])).toBe(true)
+  expect(runAuthorityAllowsMcpServer("B", {}, { A: "A", B: "B" }, ["A"])).toBe(false)
 })

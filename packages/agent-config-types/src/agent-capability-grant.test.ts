@@ -128,6 +128,10 @@ describe("applyCapabilityIdDelta", () => {
 })
 
 describe("mergeCapabilityGrants", () => {
+  it("keeps HEAD inner-replaces-outer semantics for a run's own turn grants", () => {
+    expect(mergeCapabilityGrants(grant({ maxTurns: 2 }), grant({ maxTurns: 20 })).maxTurns).toBe(20)
+    expect(mergeCapabilityGrants(grant({ maxTurns: 20 }), grant({ maxTurns: 2 })).maxTurns).toBe(2)
+  })
   it("takes inner scalars and the inner source, and concatenates instructions", () => {
     const merged = mergeCapabilityGrants(
       grant({ model: "haiku", effort: "low", maxTurns: 3, instructions: ["outer"] }),
@@ -279,4 +283,20 @@ describe("capPermissionModeByGrant", () => {
     expect(capPermissionModeByGrant("acceptEdits", undefined)).toBe("acceptEdits")
     expect(capPermissionModeByGrant(undefined, {})).toBeUndefined()
   })
+})
+
+it("validates and intersects explicit skill ceilings without treating deltas as ceilings", () => {
+  expect(
+    validateAgentCapabilityGrant(grant({ skills: { only: ["s1"], restrictTo: ["s1"] } })).ok
+  ).toBe(true)
+  expect(
+    mergeCapabilityGrants(
+      grant({ skills: { only: ["s1", "s2"] } }),
+      grant({ skills: { restrictTo: ["s2"], add: ["s3"] } })
+    ).skills
+  ).toEqual({ only: ["s2"], add: ["s3"] })
+  expect(
+    mergeCapabilityGrants(grant({ skills: { add: ["s1"] } }), grant({ skills: { remove: ["s2"] } }))
+      .skills
+  ).toEqual({ add: ["s1"], remove: ["s2"] })
 })

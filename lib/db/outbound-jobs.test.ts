@@ -44,7 +44,7 @@ import { prepareDraftRow } from "./connector-drafts"
 import type { OutboundRequest } from "@/types/connectors/outbound"
 import { planDelivery } from "@/lib/policy/action-review/plan-delivery"
 import { toDeliveryReceiptRow } from "@/lib/policy/action-review/projection"
-import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import { LOCAL_PERSON_RUN, recordedRunMetadata } from "@/lib/execution/acting-authority"
 import { admitPersonalCredential } from "@/lib/execution/personal-credential"
 import { explicitHostPersonalSinkContext } from "@/lib/execution/personal-sink"
 
@@ -1871,4 +1871,49 @@ it("publishes the queue wake only after its exact execution identity commits", a
   } finally {
     unsubscribe()
   }
+})
+
+it("atomically enqueues a delivery child under the real parent's explicit authority", async () => {
+  const authority = {
+    schemaVersion: 1 as const,
+    caps: "explicit-v1" as const,
+    permissionMode: "plan" as const,
+    maxTurns: 2,
+  }
+  await getDb().executionRuns.add({
+    id: "delivery-parent",
+    ...recordedRunMetadata("local", { runId: "delivery-parent" }),
+    authority,
+    kind: "agent-turn",
+    sourceId: "delivery-parent",
+    sessionId: "delivery-session",
+    title: "Parent",
+    status: "running",
+    currentRevision: 0,
+    startedAt: 1,
+    updatedAt: 1,
+  })
+  const job = await enqueueOutbound(
+    { adapterId: "a", conversationKey: "lark:a:c", source: "ai-run", request: makeRequest() },
+    { executionContext: { sessionId: "delivery-session", executionRunId: "delivery-parent" } }
+  )
+  expect(await getDb().outboundQueue.get(job.id)).toMatchObject({ status: "pending" })
+  expect(await getDb().executionRuns.get(`execution:job:outbound:${job.id}`)).toMatchObject({
+    parentRunId: "delivery-parent",
+    authority,
+  })
+  await expect(
+    enqueueOutbound(
+      {
+        adapterId: "a",
+        conversationKey: "missing-parent",
+        source: "ai-run",
+        request: makeRequest(),
+      },
+      { executionContext: { executionRunId: "missing" } }
+    )
+  ).rejects.toThrow("parent unavailable")
+  expect(
+    await getDb().outboundQueue.where("conversationKey").equals("missing-parent").count()
+  ).toBe(0)
 })

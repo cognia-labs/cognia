@@ -23,7 +23,6 @@ jest.mock("@/lib/ai/agent/external/agent-transport", () => ({
   getLiveExternalAgentProcessIds: () => mockLiveExternalProcesses(),
 }))
 jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
   getLiveSidecarSessionIds: () => mockLiveSidecarSessions(),
 }))
 
@@ -316,7 +315,7 @@ describe("the app's durable AgentTeam coordinator", () => {
     }
   )
 
-  it("records an already frozen scheduled run's resolved ceiling", async () => {
+  it("keeps frozen scheduled defaults out of recorded authority", async () => {
     await runtimeDb.createAgentTeamRun({
       id: "run-scheduled",
       teamId: "team-1",
@@ -341,11 +340,7 @@ describe("the app's durable AgentTeam coordinator", () => {
       trigger: "schedule",
       requesters: [],
     })
-    expect(run?.authority).toEqual({
-      schemaVersion: 1,
-      permissionMode: "plan",
-      tools: { allow: ["Read"] },
-    })
+    expect(run?.authority).toBeUndefined()
   })
 
   afterEach(async () => {

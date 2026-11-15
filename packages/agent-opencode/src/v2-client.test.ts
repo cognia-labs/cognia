@@ -15,7 +15,7 @@ import { Service } from "@opencode/client/service"
 import type { AgentFetch, AgentProcessHost } from "@cognia/agent-contracts/host"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { discoverOpenCodeV2InProcess, validateOpenCodeV2Discovery } from "./discovery"
-import { OpenCodeV2ClientAdapter, type OpenCodeV2ClientDeps } from "./v2-client"
+import { permissionRules, OpenCodeV2ClientAdapter, type OpenCodeV2ClientDeps } from "./v2-client"
 import {
   createOpenCodeV2Launcher,
   type OpenCodeV2Placement,
@@ -2028,4 +2028,23 @@ describe("OpenCodeV2ClientAdapter — host ports", () => {
     )
     await adapter.disconnect()
   })
+})
+
+it("intersects native action grants without widening the mode's read-only floor", () => {
+  const rules = permissionRules("plan", [], { allow: ["Read", "Bash"], deny: ["Bash"] })
+  expect(rules).toContainEqual({ action: "read", resource: "*", effect: "allow" })
+  expect(
+    rules.filter((rule) => rule.action === "bash").every((rule) => rule.effect === "deny")
+  ).toBe(true)
+  expect(permissionRules("bypassPermissions", [], { allow: [] }).at(-1)).toEqual({
+    action: "*",
+    resource: "*",
+    effect: "deny",
+  })
+})
+
+it("refuses argument denies instead of converting them to blanket action denials", () => {
+  expect(() => permissionRules("bypassPermissions", [], { deny: ["Bash(rm:*)"] })).toThrow(
+    "tools.deny: Bash(rm:*)"
+  )
 })

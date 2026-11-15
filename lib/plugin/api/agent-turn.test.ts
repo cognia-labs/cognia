@@ -1,3 +1,9 @@
+// Authority storage is exercised with real IndexedDB in run-authority.test.ts.
+jest.mock("@/lib/execution/run-authority", () => ({
+  ...jest.requireActual("@/lib/execution/run-authority"),
+  resolveRunAuthority: jest.fn(async () => ({})),
+  enforceRunAuthorityOnSendOptions: jest.fn(async () => undefined),
+}))
 jest.mock("@/lib/execution/personal-marks", () => ({
   ...jest.requireActual("@/lib/execution/personal-marks"),
   bindPersonalMessageRun: jest.fn(
@@ -463,10 +469,12 @@ describe("runPluginAgentTurn", () => {
     expect(sendOptions).not.toHaveProperty("permissionMode")
   })
 
-  it("applies an explicit bypass only for the call that asked for it", async () => {
+  it("honours a requested bypass without an inherited explicit cap", async () => {
     await runTurn({ ...base, permissionMode: "bypassPermissions" })
     const [, , sendOptions] = runAndCaptureAssistantReply.mock.calls[0] as unknown[]
-    expect(sendOptions).toMatchObject({ permissionMode: "bypassPermissions" })
+    expect(sendOptions).toMatchObject({
+      permissionMode: "bypassPermissions",
+    })
   })
 
   it("resolves under the caller's composition instead of the desktop default", async () => {

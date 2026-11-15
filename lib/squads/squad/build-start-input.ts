@@ -144,6 +144,9 @@ function surfaceInput(
   switch (surface.kind) {
     case "chat":
       return {
+        ...(surface.session?.projectThread?.parentExecutionRunId
+          ? { authorityParentRunId: surface.session.projectThread.parentExecutionRunId }
+          : {}),
         ...(surface.person ? { localAuthorization: LOCAL_PERSON_RUN } : {}),
         origin: "chat",
         triggeredFrom: {

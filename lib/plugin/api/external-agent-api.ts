@@ -205,19 +205,38 @@ async function dispatchPluginExternalAgent(
     import("@/lib/ai/agent/external/config/presets"),
   ])
   const manager = getExternalAgentManager()
-  const executeBound: typeof manager.execute = (agentId, prompt, executionOptions, onStopped) =>
+  const executeBound: typeof manager.execute = async (
+    agentId,
+    prompt,
+    executionOptions,
     onStopped
-      ? manager.execute(
-          agentId,
-          prompt,
-          bindPersonalEgressOptions(executionOptions ?? {}, personalSource),
-          onStopped
-        )
-      : manager.execute(
-          agentId,
-          prompt,
-          bindPersonalEgressOptions(executionOptions ?? {}, personalSource)
-        )
+  ) => {
+    // An invoking Host turn is an ancestor, not the external run itself.
+    const { startToolExecutionRun, finishToolExecutionRun, authorityParentRunId } =
+      await import("@/lib/execution/acting-authority")
+    const parentRunId = await authorityParentRunId(personalSource)
+    const entry =
+      parentRunId || personalSource.executionRunReserved
+        ? await startToolExecutionRun(undefined, {
+            ...(parentRunId ? { parentRunId } : {}),
+            title: "Plugin external agent",
+          })
+        : undefined
+    const bound = bindPersonalEgressOptions(
+      executionOptions ?? {},
+      entry ? { ...personalSource, executionRunId: entry.id } : personalSource
+    )
+    let failed = true
+    try {
+      const result = onStopped
+        ? await manager.execute(agentId, prompt, bound, onStopped)
+        : await manager.execute(agentId, prompt, bound)
+      failed = !result.success
+      return result
+    } finally {
+      if (entry) await finishToolExecutionRun(entry.id, failed)
+    }
+  }
   if (!options.runId) {
     if (options.workspace) throw new Error("A workspace requires a Bot run")
     const { agentId, permissionMode } = await admitPluginExternalRun(

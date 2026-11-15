@@ -9,6 +9,20 @@ import {
 import type { ExternalAgentProtocol } from "@/types/agent/external-agent"
 
 describe("external hard permission ceilings", () => {
+  it("meets a workflow MCP id with a named session ceiling without dropping github", () => {
+    const result = enforceExternalPermissionCeiling(
+      {
+        permissionMode: "default",
+        inheritedRunAuthority: { schemaVersion: 1, mcpServers: { only: ["mcp_x"] } },
+        nativePolicy: { mcpServers: { only: ["github"] } },
+        permissionCeiling: { permissionMode: "default", mcpServers: [{ name: "github" }] },
+      },
+      "pi-rpc",
+      { permissionModes: ["default"] }
+    )
+    expect(result?.inheritedRunAuthority?.mcpServers?.only).toEqual(["mcp_x"])
+    expect(result?.nativePolicy?.mcpServers?.only).toEqual(["github"])
+  })
   it("accepts advertised plan mode but never assumes unknown capabilities support it", () => {
     expect(attestsExternalPermissionMode("acp", { permissionModes: ["plan"] }, "plan")).toBe(true)
     expect(attestsExternalPermissionMode("acp", undefined, "plan")).toBe(false)
@@ -90,7 +104,7 @@ describe("external hard permission ceilings", () => {
           "acp",
           { permissionModes: ["plan"] }
         )
-      ).toThrow("tool, sandbox, or MCP ceiling")
+      ).toThrow("unsupported_authority: acp:")
     }
   )
 
@@ -107,4 +121,36 @@ describe("external hard permission ceilings", () => {
       )
     ).toThrow("cannot enforce")
   })
+})
+
+it("translates an inherited Pi tool ceiling instead of treating it as preapproval", () => {
+  const out = enforceExternalPermissionCeiling(
+    {
+      permissionMode: "bypassPermissions",
+      permissionCeiling: {
+        permissionMode: "plan",
+        allowedTools: ["read"],
+        disallowedTools: ["bash"],
+      },
+    },
+    "pi-rpc",
+    { permissionModes: ["plan"] }
+  )
+  expect(out).toMatchObject({
+    permissionMode: "plan",
+    nativePolicy: { tools: { allow: ["read"], deny: ["bash"] } },
+  })
+})
+
+it("keeps projected-only denies for broker visibility withholding", () => {
+  const deny = ["mcp__cognia-tools__*", "mcp__cognia-plugin-tools__*"]
+  const result = enforceExternalPermissionCeiling(
+    {
+      permissionMode: "plan",
+      permissionCeiling: { permissionMode: "plan", disallowedTools: deny },
+    },
+    "acp",
+    { permissionModes: ["plan"] }
+  )
+  expect(result?.permissionCeiling?.disallowedTools).toEqual(deny)
 })

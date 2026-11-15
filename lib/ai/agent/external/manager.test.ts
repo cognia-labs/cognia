@@ -1,3 +1,9 @@
+// Authority storage is exercised with real IndexedDB in run-authority.test.ts.
+jest.mock("@/lib/execution/run-authority", () => ({
+  ...jest.requireActual("@/lib/execution/run-authority"),
+  resolveRunAuthority: jest.fn(async () => ({})),
+  enforceRunAuthorityOnSendOptions: jest.fn(async () => undefined),
+}))
 const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
   verified: true,
   marks: [] as unknown[],

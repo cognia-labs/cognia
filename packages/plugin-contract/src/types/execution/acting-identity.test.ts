@@ -4,6 +4,7 @@ import {
   absorbRequester,
   checkActingAuthority,
   meetRunAuthority,
+  inheritableRunAuthority,
   mergePersonalMarks,
   preservePersonalMarkMetadata,
   samePerson,
@@ -12,6 +13,22 @@ import {
   type RunAuthorityV1,
   type TenantTokenPurposeV1,
 } from "./acting-identity"
+
+it("inherits explicit 3A caps and only pools from pre-upgrade observations", () => {
+  const legacy: RunAuthorityV1 = {
+    schemaVersion: 1,
+    permissionMode: "plan",
+    tools: { allow: ["Read"] },
+    mcpServers: { only: ["github"] },
+    maxTurns: 2,
+    pools: { rootRunId: "root", costUsd: 1 },
+  }
+  expect(inheritableRunAuthority(legacy)).toEqual({ schemaVersion: 1, pools: legacy.pools })
+  expect(inheritableRunAuthority({ schemaVersion: 1, maxTurns: 2 })).toBeUndefined()
+  const explicit = { ...legacy, caps: "explicit-v1" as const }
+  expect(inheritableRunAuthority(explicit)).toBe(explicit)
+  expect(meetRunAuthority(explicit, { schemaVersion: 1, maxTurns: 10 }).caps).toBe("explicit-v1")
+})
 
 it("merges personal marks by person and source, retaining the earliest read without mutation", () => {
   const person = { kind: "platform" as const, platform: "lark", adapterId: "a", remoteUserId: "u" }

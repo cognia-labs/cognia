@@ -958,6 +958,10 @@ jest.mock("@/stores/chat", () => {
   return {
     useChatStore: Object.assign(<T>(selector: (s: ChatStateLike) => T): T => selector(chatState), {
       getState: () => chatState,
+      setState: (update: (state: ChatStateLike) => Partial<ChatStateLike>) => {
+        const patch = update(chatState)
+        for (const [id, slice] of Object.entries(patch.sessions ?? {})) sliceWrite(id, slice)
+      },
       subscribe: (fn: (s: ChatStateLike) => void) => {
         subscribers.push(fn)
         return () => {
@@ -998,10 +1002,11 @@ jest.mock("@/stores/chat", () => {
 
 // The unified execution broker governs the concurrency cap; stub it so a test
 // can flip the session at/over capacity without standing up the real broker.
-const isAtCapacityMock = jest.fn((_resource: string, _id?: string) => false)
+const isAtCapacityMock = jest.fn((_resource: string, _id?: string, _provider?: string) => false)
 jest.mock("@/lib/execution/broker", () => ({
   getExecutionBroker: () => ({
-    isAtCapacity: (resource: string, id?: string) => isAtCapacityMock(resource, id),
+    isAtCapacity: (resource: string, id?: string, provider?: string) =>
+      isAtCapacityMock(resource, id, provider),
   }),
 }))
 // Chat admission is exercised in lib/execution/chat-lease.test.ts; here it is a
@@ -1027,6 +1032,7 @@ jest.mock("@/lib/execution/chat-lease", () => ({
 // Direct-chat journal persistence is covered by lib/execution/direct-chat-run.test.ts.
 // Keep this hook suite focused on routing and UI state without requiring IndexedDB.
 jest.mock("@/lib/execution/direct-chat-run", () => ({
+  ...jest.requireActual("@/lib/execution/direct-chat-run"),
   activeDirectChatExecutionRunId: jest.fn(() => undefined),
   finishDirectChatExecutionRun: jest.fn().mockResolvedValue(undefined),
   projectDirectChatCaptureEvent: jest.fn().mockResolvedValue(undefined),
@@ -1992,6 +1998,9 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("persists an attached HostState action before rendering optimism and skips direct RPC", async () => {
+    await getDb().executionRuns.clear()
+    await getDb().workSubmissions.clear()
+    await getDb().hostStateChannels.clear()
     enqueueHostStateIntentMock.mockResolvedValueOnce({ id: "action-1", status: "pending" })
     const { result } = renderHook(() => useClaudeChat())
     await flush()
@@ -2009,8 +2018,17 @@ describe("useClaudeChat — actions", () => {
         attachments: [],
       },
     })
+    expect(dispatchUserPromptSubmitMock).toHaveBeenLastCalledWith(
+      expect.any(String),
+      "sess-1",
+      expect.any(Object),
+      { sessionId: "sess-1", localAuthorization: LOCAL_PERSON_RUN, executionRunReserved: true }
+    )
     expect(sendPromptMock).not.toHaveBeenCalled()
     expect(persistMessagesMock).not.toHaveBeenCalled()
+    expect(await getDb().executionRuns.toArray()).toEqual([])
+    const { readKernelRunningSessionIds } = await import("@/lib/chat/auto-archive-schedule")
+    expect((await readKernelRunningSessionIds()).has("sess-1")).toBe(false)
     expect(chatState.sessions["sess-1"]?.messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "u1" })])
     )
@@ -2871,49 +2889,63 @@ describe("useClaudeChat — actions", () => {
       expect(runStandaloneTurnMock).toHaveBeenCalled()
     })
 
-    it("still refuses the same context on a shell whose turns run on a host", async () => {
-      // Desktop and paired shells are unchanged: their executor opens files,
-      // so a managed workspace this device cannot provide stays a refusal.
-      getSessionMock.mockResolvedValue({
-        id: "sess-1",
-        title: "New chat",
-        model: "sonnet",
-        projectId: "project-1",
-        executionContext: unmaterializedManagedContext,
-      })
+    it.each([false, true])(
+      "still checks out a typed turn with local proof (service thread %s)",
+      async (thread) => {
+        // Desktop and paired shells are unchanged: their executor opens files,
+        // so a managed workspace this device cannot provide stays a refusal.
+        if (thread) {
+          const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+          await startToolExecutionRun(undefined, { runId: "checkout-coordinator" })
+          const { getExecutionRun } = await import("@/lib/db/execution-runs")
+          jest.mocked(getExecutionRun).mockImplementation((id) => getDb().executionRuns.get(id))
+        }
+        getSessionMock.mockResolvedValue({
+          id: "sess-1",
+          title: "New chat",
+          model: "sonnet",
+          projectId: "project-1",
+          executionContext: unmaterializedManagedContext,
+          ...(thread ? { projectThread: { parentExecutionRunId: "checkout-coordinator" } } : {}),
+        })
 
-      const { result } = renderHook(() => useClaudeChat())
-      await flush()
-      await act(async () => {
-        await expect(result.current.send("hello")).resolves.toBe(true)
-      })
+        const { result } = renderHook(() => useClaudeChat())
+        await flush()
+        await act(async () => {
+          await expect(result.current.send("hello")).resolves.toBe(true)
+        })
 
-      expect(chatState.messages).toEqual([
-        expect.objectContaining({
-          role: "user",
-          parts: [{ type: "text", text: "hello" }],
-          metadata: expect.objectContaining({
-            turnAdmission: expect.objectContaining({
-              state: "failed",
-              code: "workspaceBundleFailed",
+        expect(chatState.messages).toEqual([
+          expect.objectContaining({
+            role: "user",
+            parts: [{ type: "text", text: "hello" }],
+            metadata: expect.objectContaining({
+              turnAdmission: expect.objectContaining({
+                state: "failed",
+                code: "workspaceBundleFailed",
+              }),
             }),
           }),
-        }),
-      ])
-      expect(ensureSessionExecutionBundleMock).toHaveBeenCalledWith(
-        expect.objectContaining({ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
-      )
-      expect(sendPromptMock).not.toHaveBeenCalled()
-      expect(runStandaloneTurnMock).not.toHaveBeenCalled()
-      expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
-        "sess-1",
-        expect.objectContaining({ code: "workspaceBundleFailed" })
-      )
-      expect(settleChatTurnForSessionMock).toHaveBeenCalledWith(
-        "sess-1",
-        expect.objectContaining({ outcome: "failed", errorCode: "workspace_bundle_unavailable" })
-      )
-    })
+        ])
+        expect(ensureSessionExecutionBundleMock).toHaveBeenCalledWith(
+          expect.objectContaining({ credentialContext: { localAuthorization: LOCAL_PERSON_RUN } })
+        )
+        expect(sendPromptMock).not.toHaveBeenCalled()
+        expect(runStandaloneTurnMock).not.toHaveBeenCalled()
+        expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
+          "sess-1",
+          expect.objectContaining({ code: "workspaceBundleFailed" })
+        )
+        if (thread) {
+          const { getExecutionRun } = await import("@/lib/db/execution-runs")
+          jest.mocked(getExecutionRun).mockResolvedValue(undefined)
+        }
+        expect(settleChatTurnForSessionMock).toHaveBeenCalledWith(
+          "sess-1",
+          expect.objectContaining({ outcome: "failed", errorCode: "workspace_bundle_unavailable" })
+        )
+      }
+    )
 
     it("cancels the checkout when Stop is pressed while it runs, and ends the turn quietly", async () => {
       // A large repository's worktree can take minutes. Stop aborts the signal
@@ -3317,7 +3349,7 @@ describe("useClaudeChat — actions", () => {
       "fix this",
       "sess-1",
       expect.any(Object),
-      { sessionId: "sess-1", localAuthorization: LOCAL_PERSON_RUN }
+      { sessionId: "sess-1", localAuthorization: LOCAL_PERSON_RUN, executionRunReserved: true }
     )
     expect(gateWorkbenchProviderPayloadMock).toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining("private@example.com") })
@@ -3693,14 +3725,21 @@ describe("useClaudeChat — actions", () => {
           await result.current.send("First instruction")
         })
         await flush()
-        expect(executeOnExternalAgentMock).toHaveBeenCalledTimes(2)
+        await waitFor(() => expect(executeOnExternalAgentMock).toHaveBeenCalledTimes(2))
         await started
         const { acquireSessionTurnLease } = await import("@/lib/execution/session-turn-lock")
         expect(await acquireSessionTurnLease("sess-1", true)).toBeNull()
         expect(toastWarning).not.toHaveBeenCalledWith("busy")
       } finally {
         release()
-        await flush()
+        // The continuation owns a real turn lease. Drain its completion before
+        // the next test replaces the mock event handlers and store state.
+        const { acquireSessionTurnLease } = await import("@/lib/execution/session-turn-lock")
+        await waitFor(async () => {
+          const lease = await acquireSessionTurnLease("sess-1", true)
+          expect(lease).not.toBeNull()
+          await lease?.()
+        })
         chatState.steerQueue = undefined
         useAgentRuntimeStore.getState().clearSessionRuntimeRef("sess-1")
       }
@@ -3750,7 +3789,7 @@ describe("useClaudeChat — actions", () => {
           await result.current.send("First instruction")
         })
         await flush()
-        expect(sendPromptMock).toHaveBeenCalledTimes(2)
+        await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(2))
         expect(toastWarning).not.toHaveBeenCalledWith("busy")
       } finally {
         chatState.steerQueue = undefined
@@ -5962,7 +6001,7 @@ describe("useClaudeChat — actions", () => {
       "hello",
       "sess-1",
       expect.any(Object),
-      { sessionId: "sess-1", localAuthorization: LOCAL_PERSON_RUN }
+      { sessionId: "sess-1", localAuthorization: LOCAL_PERSON_RUN, executionRunReserved: true }
     )
     expect(sendPromptMock).toHaveBeenCalled()
   })
@@ -6017,22 +6056,53 @@ describe("useClaudeChat — actions", () => {
     )
   })
 
-  it("send() calls dispatchChatError when sendPrompt throws", async () => {
-    sendPromptMock.mockRejectedValueOnce(new Error("network down"))
-    const { result } = renderHook(() => useClaudeChat())
-    await flush()
-    await act(async () => {
-      await result.current.send("hello")
-    })
-    expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
-      "sess-1",
-      expect.objectContaining({ message: "network down", source: "chat" })
-    )
-    expect(dispatchChatErrorMock).toHaveBeenCalledWith("sess-1", expect.any(Error), {
-      sessionId: "sess-1",
-      executionRunId: expect.any(String),
-    })
-  })
+  it.each([false, true])(
+    "send() dispatches reserved onChatError with known parent=%s",
+    async (thread) => {
+      const { getExecutionRun } = await import("@/lib/db/execution-runs")
+      jest.mocked(getExecutionRun).mockImplementation((id) => getDb().executionRuns.get(id))
+      try {
+        if (thread) {
+          const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+          await startToolExecutionRun(undefined, { runId: "r15-error-coordinator" })
+          getSessionMock.mockResolvedValue({
+            id: "sess-1",
+            model: "sonnet",
+            projectThread: { parentExecutionRunId: "r15-error-coordinator" },
+          })
+        }
+        sendPromptMock.mockImplementationOnce(async () => {
+          // Model a pre-start journal row being pruned while the Host still knows
+          // this thread's coordinator; the error hook must not claim the absent id.
+          const rows = await getDb().executionRuns.where("sessionId").equals("sess-1").toArray()
+          for (const row of rows) {
+            await getDb().executionRunEvents.where("runId").equals(row.id).delete()
+            await getDb().executionRuns.delete(row.id)
+          }
+          throw new Error("network down")
+        })
+        const { result } = renderHook(() => useClaudeChat())
+        await flush()
+        await act(async () => {
+          await result.current.send("hello")
+        })
+        expect(chatState.setSessionDiagnostic).toHaveBeenCalledWith(
+          "sess-1",
+          expect.objectContaining({ message: "network down", source: "chat" })
+        )
+        expect(dispatchChatErrorMock).toHaveBeenCalledWith("sess-1", expect.any(Error), {
+          sessionId: "sess-1",
+          executionRunId: expect.any(String),
+          executionRunReserved: true,
+          ...(thread ? { executionRunParentId: "r15-error-coordinator" } : {}),
+        })
+        const context = dispatchChatErrorMock.mock.calls.at(-1)![2] as { executionRunId: string }
+        expect(await getDb().executionRuns.get(context.executionRunId)).toBeUndefined()
+      } finally {
+        jest.mocked(getExecutionRun).mockResolvedValue(undefined)
+      }
+    }
+  )
 
   it("stop() interrupts the active session", async () => {
     const { result } = renderHook(() => useClaudeChat())
@@ -8561,24 +8631,71 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     expect(sendPromptMock).not.toHaveBeenCalled()
   })
 
-  it("turnComplete + continue dispatches a silent continuation", async () => {
-    goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal())
-    buildGoalJudgeClientMock.mockReturnValue({ complete: jest.fn() })
-    handleTurnCompleteMock.mockResolvedValue({ kind: "continue", userMessage: "go on" })
-    renderHook(() => useClaudeChat())
-    await flush()
-    await driveTurnComplete()
-    expect(handleTurnCompleteMock).toHaveBeenCalledWith(
-      expect.objectContaining({ goalId: "g1", capturedGenerationId: "gen1" })
-    )
-    // The continuation routes back through send → sendPrompt with the text.
-    expect(sendPromptMock).toHaveBeenCalledWith("sess-1", "go on", expect.any(Object), {
-      transcriptRuntime: "prepared",
-    })
-    // Plugin bus: the SDK turn sealed → MESSAGE_RECEIVED + AGENT_COMPLETED.
-    expect(busEmitMock).toHaveBeenCalledWith(BusEvents.MESSAGE_RECEIVED, { sessionId: "sess-1" })
-    expect(busEmitMock).toHaveBeenCalledWith(BusEvents.AGENT_COMPLETED, { sessionId: "sess-1" })
-  })
+  it.each([false, true])(
+    "turnComplete + continue dispatches a silent continuation; thread=%s",
+    async (thread) => {
+      const { getExecutionRun } = await import("@/lib/db/execution-runs")
+      jest.mocked(getExecutionRun).mockImplementation((id) => getDb().executionRuns.get(id))
+      try {
+        if (thread) {
+          const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+          await startToolExecutionRun(undefined, { runId: "r15-goal-coordinator" })
+          getSessionMock.mockResolvedValue({
+            id: "sess-1",
+            model: "sonnet",
+            projectThread: { parentExecutionRunId: "r15-goal-coordinator" },
+          })
+        }
+        goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal())
+        buildGoalJudgeClientMock.mockReturnValue({ complete: jest.fn() })
+        handleTurnCompleteMock.mockResolvedValue({ kind: "continue", userMessage: "go on" })
+        renderHook(() => useClaudeChat())
+        await flush()
+        await driveTurnComplete()
+        expect(handleTurnCompleteMock).toHaveBeenCalledWith(
+          expect.objectContaining({ goalId: "g1", capturedGenerationId: "gen1" })
+        )
+        // The continuation routes back through send → sendPrompt with the text.
+        await waitFor(() =>
+          expect(sendPromptMock).toHaveBeenCalledWith("sess-1", "go on", expect.any(Object), {
+            transcriptRuntime: "prepared",
+          })
+        )
+        expect(dispatchUserPromptSubmitMock).toHaveBeenLastCalledWith(
+          "go on",
+          "sess-1",
+          expect.any(Object),
+          {
+            sessionId: "sess-1",
+            executionRunId: expect.any(String),
+            executionRunReserved: true,
+            ...(thread ? { executionRunParentId: "r15-goal-coordinator" } : {}),
+          }
+        )
+        if (thread) {
+          const context = (
+            dispatchUserPromptSubmitMock.mock.calls.at(-1) as unknown as unknown[]
+          )[3] as {
+            executionRunId: string
+            executionRunReserved: true
+            executionRunParentId: string
+          }
+          expect(await getDb().executionRuns.get(context.executionRunId)).toMatchObject({
+            parentRunId: "r15-goal-coordinator",
+          })
+          const { authorityParentRunId } = await import("@/lib/execution/acting-authority")
+          expect(await authorityParentRunId(context)).toBe(context.executionRunId)
+        }
+        // Plugin bus: the SDK turn sealed → MESSAGE_RECEIVED + AGENT_COMPLETED.
+        expect(busEmitMock).toHaveBeenCalledWith(BusEvents.MESSAGE_RECEIVED, {
+          sessionId: "sess-1",
+        })
+        expect(busEmitMock).toHaveBeenCalledWith(BusEvents.AGENT_COMPLETED, { sessionId: "sess-1" })
+      } finally {
+        jest.mocked(getExecutionRun).mockResolvedValue(undefined)
+      }
+    }
+  )
 
   it("accepts a new message while a settled turn's goal judge is still pending", async () => {
     useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
@@ -8764,9 +8881,20 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       expect.objectContaining({ loopId: "lp1", capturedGenerationId: "lgen1" })
     )
     // gateLoopContinuation has no baseline (lastIterationAt undefined) → send.
-    expect(sendPromptMock).toHaveBeenCalledWith("sess-1", "loop iteration 2", expect.any(Object), {
-      transcriptRuntime: "prepared",
-    })
+    await waitFor(() =>
+      expect(sendPromptMock).toHaveBeenCalledWith(
+        "sess-1",
+        "loop iteration 2",
+        expect.any(Object),
+        { transcriptRuntime: "prepared" }
+      )
+    )
+    expect(dispatchUserPromptSubmitMock).toHaveBeenLastCalledWith(
+      "loop iteration 2",
+      "sess-1",
+      expect.any(Object),
+      { sessionId: "sess-1", executionRunId: expect.any(String), executionRunReserved: true }
+    )
   })
 
   it("turnComplete + loop exit appends the loop card and stops", async () => {
@@ -9361,6 +9489,12 @@ describe("useClaudeChat — Squad dispatch", () => {
     })
 
     expect(startSquadRunMock).toHaveBeenCalledTimes(1)
+    expect(dispatchUserPromptSubmitMock).toHaveBeenLastCalledWith(
+      expect.any(String),
+      "sess-1",
+      expect.any(Object),
+      { sessionId: "sess-1", localAuthorization: LOCAL_PERSON_RUN, executionRunReserved: true }
+    )
     expect(startSquadRunMock.mock.calls[0]![0]).toEqual(
       expect.objectContaining({
         squadId: "squad-1",
@@ -9371,6 +9505,20 @@ describe("useClaudeChat — Squad dispatch", () => {
     )
     // The whole point: no second, thinner executor runs alongside it.
     expect(sendPromptMock).not.toHaveBeenCalled()
+    const { getDb } = await import("@/lib/db/schema")
+    expect(await getDb().executionRuns.where("sessionId").equals("sess-1").count()).toBe(0)
+  })
+
+  it("parents a project-thread Squad to the Host-captured coordinator run", async () => {
+    squadSession({ projectThread: { parentExecutionRunId: "coordinator-run" } })
+    const { result } = renderHook(() => useClaudeChat())
+    await flush()
+    await act(async () => {
+      await result.current.send("continue the project")
+    })
+    expect(startSquadRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ authorityParentRunId: "coordinator-run" })
+    )
   })
 
   it("keeps holding the session until the run settles", async () => {
@@ -12336,7 +12484,14 @@ describe("durable background result admission", () => {
     const { getDb } = await import("@/lib/db/schema")
     receiptRead = jest.spyOn(getDb().workSubmissions, "get").mockResolvedValue(undefined)
     queueRead = jest.spyOn(getDb().mobileOutboundQueue, "get").mockResolvedValue(undefined)
-    squadRead = jest.spyOn(getDb().executionRuns, "get").mockResolvedValue(undefined)
+    const runs = getDb().executionRuns
+    const readRun = runs.get.bind(runs)
+    squadRead = jest.spyOn(runs, "get")
+    squadRead.mockImplementation((id: unknown) =>
+      typeof id === "string" && id.startsWith("execution:team:")
+        ? Promise.resolve(undefined)
+        : readRun(id as string)
+    )
     fusionDeliveryReceiptMock.mockReset().mockResolvedValue(undefined)
   })
   afterEach(() => {
@@ -12961,4 +13116,404 @@ it("lifts the Stop fence when Stop fails before sending its interrupt", async ()
   expect(interruptSessionMock).toHaveBeenCalledTimes(1)
   expect(botStarted).toBe(true)
   unmount()
+})
+
+it("durably accepts a real window background turn and acknowledges replay without redispatch", async () => {
+  const { webcrypto } = await import("node:crypto")
+  Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true })
+  const { getDb } = await import("@/lib/db/schema")
+  const { setActiveRuntimeTargetContext, clearActiveRuntimeTargetContext } =
+    await import("@/lib/runtime/runtime-target-context")
+  const { getExecutionRun } = await import("@/lib/db/execution-runs")
+  jest.mocked(getExecutionRun).mockImplementation((runId) => getDb().executionRuns.get(runId))
+  const actual = jest.requireActual<typeof import("@/lib/work-submission/chat-adapter")>(
+    "@/lib/work-submission/chat-adapter"
+  )
+  acceptChatTurnMock.mockImplementation((input) =>
+    actual.acceptChatTurn(input, { loadKey: async () => new Uint8Array(32).fill(11) })
+  )
+  bindChatTurnContextMock.mockImplementation((input) =>
+    actual.bindChatTurnContext(input, { loadKey: async () => new Uint8Array(32).fill(11) })
+  )
+  const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+    makeUserMessage: jest.Mock
+  }
+  makeUserMessage.mockImplementationOnce((content: string, id: string) => ({
+    id,
+    role: "user",
+    parts: [{ type: "text", text: content }],
+  }))
+  setActiveRuntimeTargetContext("account-1", "target-1")
+  const onAccepted = jest.fn()
+  const { result } = renderHook(() => useClaudeChat())
+  try {
+    await flush()
+    const options = {
+      backgroundDelivery: { id: "r9-durable-background", onAccepted },
+      throwOnError: true,
+    }
+    await act(async () => {
+      await result.current.send("background result", undefined, options)
+    })
+    expect(onAccepted).toHaveBeenCalledTimes(1)
+    expect(sendPromptMock).toHaveBeenCalledTimes(1)
+    expect(await getDb().executionRuns.get("r9-durable-background")).toBeDefined()
+    expect(await getDb().workInputBatches.get("input:r9-durable-background")).toBeDefined()
+    expect(await getDb().workSubmissions.get("work:r9-durable-background")).toMatchObject({
+      dispatchState: "pending",
+    })
+    const { listClaimableWorkSubmissions } = await import("@/lib/db/work-submissions")
+    expect(await listClaimableWorkSubmissions(Date.now() + 120_000)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ runId: "r9-durable-background" })])
+    )
+    await act(async () => {
+      await result.current.send("background result", undefined, options)
+    })
+    expect(onAccepted).toHaveBeenCalledTimes(2)
+    expect(sendPromptMock).toHaveBeenCalledTimes(1)
+    expect(
+      await getDb().workSubmissions.where("runId").equals("r9-durable-background").count()
+    ).toBe(1)
+    expect(await getDb().executionContextBundles.get("context:r9-durable-background")).toBeDefined()
+    const { createStoredChatDispatch } = await import("@/lib/work-submission/stored-chat-dispatch")
+    const row = await getDb().workSubmissions.get("work:r9-durable-background")
+    expect(
+      await createStoredChatDispatch({ loadKey: async () => new Uint8Array(32).fill(11) })(row!)
+    ).toEqual({ status: "dispatched" })
+    expect(sendPromptMock).toHaveBeenCalledTimes(2)
+  } finally {
+    clearActiveRuntimeTargetContext()
+    jest.mocked(getExecutionRun).mockResolvedValue(undefined)
+  }
+})
+
+it.each([false, true])(
+  "leaves the durable queued row byte-for-byte unchanged when the outbox wins the dispatch race (thread=%s)",
+  async (thread) => {
+    const { webcrypto } = await import("node:crypto")
+    Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true })
+    const { getExecutionRun } = await import("@/lib/db/execution-runs")
+    jest.mocked(getExecutionRun).mockImplementation((id) => getDb().executionRuns.get(id))
+    if (thread) {
+      const { recordedRunMetadata } = await import("@/lib/execution/acting-authority")
+      await getDb().executionRuns.put({
+        id: "race-coordinator",
+        ...recordedRunMetadata("external-event", { runId: "race-coordinator" }),
+        kind: "agent-turn",
+        sourceId: "race-coordinator",
+        title: "Coordinator",
+        status: "running",
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+        authority: { schemaVersion: 1, tools: { allow: ["Read"] } },
+      })
+      getSessionMock.mockResolvedValue({
+        id: "sess-1",
+        model: "sonnet",
+        projectThread: { parentExecutionRunId: "race-coordinator" },
+      })
+    }
+    const actual = jest.requireActual<typeof import("@/lib/work-submission/chat-adapter")>(
+      "@/lib/work-submission/chat-adapter"
+    )
+    const { claimWorkSubmission } = await import("@/lib/db/work-submissions")
+    let queued: unknown
+    acceptChatTurnMock.mockImplementation(async (input) => {
+      const receipt = await actual.acceptChatTurn(input, {
+        resolveScope: () => ({ accountId: "account-1", runtimeTargetId: "target-1" }),
+        loadKey: async () => new Uint8Array(32).fill(11),
+      })
+      expect(receipt).not.toBeNull()
+      await claimWorkSubmission(receipt!.submissionId, "outbox", Date.now())
+      queued = await getDb().executionRuns.get(receipt!.runId)
+      return receipt
+    })
+    claimChatTurnForDispatchMock.mockImplementation((runId) =>
+      actual.claimChatTurnForDispatch(runId, Date.now(), {
+        resolveScope: () => ({ accountId: "account-1", runtimeTargetId: "target-1" }),
+      })
+    )
+    const { result } = renderHook(() => useClaudeChat())
+    try {
+      await flush()
+      await act(async () => {
+        await result.current.send("race", undefined, {
+          backgroundDelivery: { id: "r10-race", onAccepted: jest.fn() },
+        })
+      })
+      expect(sendPromptMock).not.toHaveBeenCalled()
+      expect(await getDb().executionRuns.get("r10-race")).toEqual(queued)
+      expect(await getDb().executionRunEvents.where("runId").equals("r10-race").toArray()).toEqual(
+        []
+      )
+    } finally {
+      jest.mocked(getExecutionRun).mockResolvedValue(undefined)
+    }
+  }
+)
+
+it("keeps typed thread credential proof, explicit MCP options and admitted hook marks", async () => {
+  const { recordedRunMetadata, LOCAL_PERSON_RUN } = await import("@/lib/execution/acting-authority")
+  const { getExecutionRun } = await import("@/lib/db/execution-runs")
+  const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+  const { resolveMcpRuntimeCredential } = await import("@/lib/mcp/credential-resolver")
+  const parent = {
+    id: "r10-service",
+    ...recordedRunMetadata("local", { runId: "r10-service" }),
+    kind: "agent-turn" as const,
+    sourceId: "r10-service",
+    title: "Coordinator",
+    status: "running" as const,
+    currentRevision: 0,
+    startedAt: 1,
+    updatedAt: 1,
+  }
+  parent.actingIdentity!.lane = "service"
+  await getDb().executionRuns.put(parent)
+  jest.mocked(getExecutionRun).mockImplementation((id) => getDb().executionRuns.get(id))
+  getSessionMock.mockResolvedValue({
+    id: "sess-1",
+    model: "sonnet",
+    projectThread: { parentExecutionRunId: parent.id },
+  })
+  const loadEntry = jest.fn(async () => ({ accessToken: "typed-token" }))
+  let admittedChild: string | undefined
+  resolveSendOptionsMock.mockImplementation(async (input) => {
+    const context = input as import("@/lib/claude/build-options").BuildOptionsContext
+    if (context.executionIdentity?.runId) {
+      admittedChild = context.executionIdentity.runId
+      expect(await getDb().executionRuns.get(admittedChild!)).toMatchObject({
+        parentRunId: parent.id,
+        actingIdentity: { lane: "service" },
+      })
+      expect(context.personalCredentialContext?.localAuthorization).toBe(LOCAL_PERSON_RUN)
+      await expect(
+        resolveMcpRuntimeCredential(
+          {
+            id: "mcp-personal",
+            name: "personal",
+            transport: "http",
+            config: { url: "https://example.invalid" },
+          } as never,
+          {
+            isDesktop: () => true,
+            credentialContext: context.personalCredentialContext,
+            status: async () => ({ hasTokens: true }) as never,
+            loadEntry,
+          }
+        )
+      ).resolves.toMatchObject({
+        server: { config: { headers: { Authorization: "Bearer typed-token" } } },
+      })
+    }
+    return { model: "sonnet", systemPrompt: "sys" }
+  })
+  dispatchUserPromptSubmitMock.mockImplementationOnce(async (...args: unknown[]) => {
+    const context = args[3] as { sessionId: string; executionRunId: string }
+    expect(context.executionRunId).toBe(admittedChild)
+    expect(context.executionRunId).not.toBe(parent.id)
+    await addPersonalMarksToRun(context, [
+      { person: { kind: "local-person" }, source: "github-user", markedAt: 1 },
+    ])
+    return { action: "proceed" as const }
+  })
+  const { result } = renderHook(() => useClaudeChat())
+  try {
+    await flush()
+    await act(async () => {
+      await result.current.send(
+        "thread turn",
+        {
+          model: "turn-override",
+          systemPrompt: "Turn-specific instructions",
+          mcpServers: { explicit: { type: "http", url: "https://explicit.invalid/mcp" } },
+        },
+        {
+          localAuthorization:
+            LOCAL_PERSON_RUN as import("@/lib/execution/acting-authority").LocalPersonRun,
+          throwOnError: true,
+        }
+      )
+    })
+    expect(loadEntry).toHaveBeenCalled()
+    expect(sendPromptMock.mock.calls.at(-1)?.[2]).toMatchObject({
+      mcpServers: { explicit: { url: "https://explicit.invalid/mcp" } },
+      model: "turn-override",
+      systemPrompt: "Turn-specific instructions",
+    })
+    expect(admittedChild).toBeDefined()
+    expect((await getDb().executionRuns.get(admittedChild!))?.personalMarks).toHaveLength(1)
+    expect(
+      await getDb().executionRunEvents.where("runId").equals(admittedChild!).toArray()
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "personal.marked" })]))
+  } finally {
+    jest.mocked(getExecutionRun).mockResolvedValue(undefined)
+  }
+})
+
+it.each(["hook-block", "resolver-throw", "provider-cap", "feature-throw"])(
+  "retries a thread after %s with durable acceptance and an active journal",
+  async (exit) => {
+    const { recordedRunMetadata } = await import("@/lib/execution/acting-authority")
+    const { getExecutionRun } = await import("@/lib/db/execution-runs")
+    jest.mocked(getExecutionRun).mockImplementation((id) => getDb().executionRuns.get(id))
+    await getDb().executionRuns.put({
+      id: "r11-coordinator",
+      ...recordedRunMetadata("external-event", { runId: "r11-coordinator" }),
+      kind: "agent-turn",
+      sourceId: "r11-coordinator",
+      title: "Coordinator",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      authority: { schemaVersion: 1, caps: "explicit-v1", tools: { allow: ["Read"] } },
+    })
+    getSessionMock.mockResolvedValue({
+      id: "sess-1",
+      model: "sonnet",
+      projectThread: { parentExecutionRunId: "r11-coordinator" },
+    })
+    resolveSendOptionsMock.mockImplementation(async (input) => {
+      if (
+        !(input as import("@/lib/claude/build-options").BuildOptionsContext).deferredExecutionRun &&
+        exit === "resolver-throw"
+      )
+        throw new Error("r11-options-failed")
+      return {
+        provider: "anthropic",
+        model: "sonnet",
+        systemPrompt: "sys",
+        ...(exit === "feature-throw" ? { subagentRuntime: { contextMode: "fork" as const } } : {}),
+      }
+    })
+    if (exit === "hook-block")
+      dispatchUserPromptSubmitMock.mockResolvedValueOnce({
+        action: "block",
+        reason: "r11-hook-blocked",
+      } as never)
+    if (exit === "provider-cap")
+      isAtCapacityMock.mockImplementation((_resource, _id, provider) => Boolean(provider))
+    if (exit === "feature-throw") {
+      useAgentRuntimeStore
+        .getState()
+        .setSessionRuntimeRef("sess-1", { kind: "external", agentId: "ext-1" })
+    }
+    const journal = jest.requireActual<typeof import("@/lib/execution/direct-chat-run")>(
+      "@/lib/execution/direct-chat-run"
+    )
+    const mockedJournal = await import("@/lib/execution/direct-chat-run")
+    jest
+      .mocked(mockedJournal.startDirectChatExecutionRun)
+      .mockImplementation(journal.startDirectChatExecutionRun)
+    const { result } = renderHook(() => useClaudeChat())
+    try {
+      await flush()
+      await act(async () => {
+        await expect(
+          result.current.send("thread preparation", undefined, { throwOnError: true })
+        ).rejects.toThrow(
+          exit === "hook-block"
+            ? "r11-hook-blocked"
+            : exit === "resolver-throw"
+              ? "r11-options-failed"
+              : exit === "feature-throw"
+                ? 'capability "subagents.context-fork" is not supported'
+                : "maximum number of concurrent turns"
+        )
+      })
+      const children = await getDb()
+        .executionRuns.where("parentRunId")
+        .equals("r11-coordinator")
+        .toArray()
+      expect(children).toHaveLength(1)
+      expect(children[0].status).toBe("cancelled")
+      expect(sendPromptMock).not.toHaveBeenCalled()
+      expect(acceptChatTurnMock).not.toHaveBeenCalled()
+      isAtCapacityMock.mockReturnValue(false)
+      useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
+      resolveSendOptionsMock.mockResolvedValue({ model: "sonnet", systemPrompt: "sys" })
+      const actual = jest.requireActual<typeof import("@/lib/work-submission/chat-adapter")>(
+        "@/lib/work-submission/chat-adapter"
+      )
+      const deps = {
+        resolveScope: () => ({ accountId: "account-1", runtimeTargetId: "target-1" }),
+        loadKey: async () => new Uint8Array(32).fill(11),
+      }
+      acceptChatTurnMock.mockImplementation((input) => actual.acceptChatTurn(input, deps))
+      claimChatTurnForDispatchMock.mockImplementation((runId) =>
+        actual.claimChatTurnForDispatch(runId, Date.now(), deps)
+      )
+      const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+        makeUserMessage: jest.Mock
+      }
+      makeUserMessage.mockImplementationOnce((content: string, id: string) => ({
+        id,
+        role: "user",
+        parts: [{ type: "text", text: content }],
+      }))
+      await act(async () => {
+        await result.current.send("thread retry", undefined, { throwOnError: true })
+      })
+      const activeId = journal.activeDirectChatExecutionRunId("sess-1")
+      expect(activeId).toBeDefined()
+      expect(activeId).not.toBe(children[0].id)
+      expect(await getDb().executionRuns.get(activeId!)).toMatchObject({
+        status: "running",
+        parentRunId: "r11-coordinator",
+      })
+      expect(await getDb().workSubmissions.get(`work:${activeId}`)).toBeDefined()
+      expect(await getDb().workInputBatches.get(`input:${activeId}`)).toBeDefined()
+      expect(await getDb().executionRunEvents.where("runId").equals(activeId!).toArray()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "run.started" })])
+      )
+      expect(sendPromptMock).toHaveBeenCalledTimes(1)
+      const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+      const child = await startToolExecutionRun(undefined, { parentRunId: activeId })
+      expect(child).toMatchObject({
+        parentRunId: activeId,
+        actingIdentity: { rootRunId: "r11-coordinator" },
+        authority: { tools: { allow: ["Read"] } },
+      })
+    } finally {
+      await journal.finishDirectChatExecutionRun("sess-1", "cancelled")
+      journal.__resetDirectChatExecutionRunsForTesting()
+      jest.mocked(mockedJournal.startDirectChatExecutionRun).mockResolvedValue(undefined)
+      jest.mocked(getExecutionRun).mockResolvedValue(undefined)
+    }
+  }
+)
+
+it("a Fusion chat turn leaves no undispatched direct-chat row", async () => {
+  resolveSendOptionsMock.mockResolvedValueOnce({
+    provider: "openai",
+    model: "gpt-5",
+    routerFusionRun: {
+      runId: "r9-fusion",
+      decisionId: "d1",
+      actionId: "panel_review",
+      mode: "panel",
+      ruleId: "R1_explicit_mode",
+      requested: "panel",
+      roles: { judge: "openai::gpt-5" },
+      budgetMode: "tracked",
+      capMicrousd: 2000000,
+      acceptanceProfile: "evidence_review",
+    } as NonNullable<SendOptions["routerFusionRun"]>,
+  })
+  const { result } = renderHook(() => useClaudeChat())
+  await flush()
+  await act(async () => {
+    await result.current.send("review together")
+  })
+  expect(runFusionChatTurnMock).toHaveBeenCalledTimes(1)
+  expect(dispatchUserPromptSubmitMock).toHaveBeenLastCalledWith(
+    expect.any(String),
+    "sess-1",
+    expect.any(Object),
+    { sessionId: "sess-1", localAuthorization: LOCAL_PERSON_RUN, executionRunReserved: true }
+  )
+  expect(sendPromptMock).not.toHaveBeenCalled()
+  expect(await getDb().executionRuns.where("sessionId").equals("sess-1").count()).toBe(0)
 })

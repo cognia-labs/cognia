@@ -1151,7 +1151,7 @@ describe("executeAgent", () => {
         expect.objectContaining({
           session: expect.objectContaining({ effort: "high" }),
           // The deny list enters the resolver as a grant, ahead of every clamp.
-          capabilityGrants: [
+          ownOptionGrants: [
             expect.objectContaining({
               source: { kind: "automation" },
               tools: { deny: ["Bash", "Write"] },
@@ -1440,7 +1440,7 @@ describe("executeAgent", () => {
       })
       const ctx = mockResolveSendOptions.mock.calls[0][0]
       expect(ctx.character?.id).toBe("char-1")
-      expect(ctx.capabilityGrants).toEqual([
+      expect(ctx.ownOptionGrants).toEqual([
         {
           schemaVersion: 1,
           source: { kind: "workflow", id: "node-1" },
@@ -1459,7 +1459,8 @@ describe("executeAgent", () => {
       }
       await executeAgent("x", { toolsEnabled: true, maxSteps: 3, capabilityGrants: [extra] })
       const ctx = mockResolveSendOptions.mock.calls[0][0]
-      expect(ctx.capabilityGrants).toEqual([expect.objectContaining({ maxTurns: 3 }), extra])
+      expect(ctx.ownOptionGrants).toEqual([expect.objectContaining({ maxTurns: 3 })])
+      expect(ctx.capabilityGrants).toEqual([extra])
     })
 
     it("sends no grant when the config sets no grant knob", async () => {
@@ -1473,6 +1474,33 @@ describe("executeAgent", () => {
       await expect(
         executeAgent("x", { toolsEnabled: true, characterId: "missing" })
       ).rejects.toThrow(/character "missing" not found/)
+    })
+
+    it("joins ephemeral session deletion before the agent turn settles", async () => {
+      let deletionStarted!: () => void
+      let finishDeletion!: () => void
+      const started = new Promise<void>((resolve) => {
+        deletionStarted = resolve
+      })
+      const deletion = new Promise<void>((resolve) => {
+        finishDeletion = resolve
+      })
+      mockDeleteSession.mockImplementationOnce(async () => {
+        deletionStarted()
+        await deletion
+      })
+      let settled = false
+      const turn = executeAgent("x", { toolsEnabled: true }).finally(() => {
+        settled = true
+      })
+      try {
+        await started
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(settled).toBe(false)
+      } finally {
+        finishDeletion()
+        await turn
+      }
     })
 
     it("reuses an existing persistent session, persists its sdkSessionId, and does not delete it", async () => {
@@ -1563,7 +1591,7 @@ describe("executeAgent", () => {
       expect(sendOpts.appendSystemPrompt).toMatch(/JSON/i)
       // The caller's fragment is a grant instruction the resolver appends.
       const ctx = mockResolveSendOptions.mock.calls[0][0]
-      expect(ctx.capabilityGrants?.[0]?.instructions).toEqual(["EXTRA"])
+      expect(ctx.ownOptionGrants?.[0]?.instructions).toEqual(["EXTRA"])
     })
 
     it("forwards onEvent and a canUseTool-derived permission responder to the runner", async () => {

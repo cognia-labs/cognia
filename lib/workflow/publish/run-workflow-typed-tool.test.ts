@@ -115,6 +115,10 @@ describe("executeRunWorkflowTyped", () => {
     if (r.ok) {
       expect(r.workflowName).toBe("Summarizer")
       expect(typeof r.runId).toBe("string")
+      const { getDb } = await import("@/lib/db/schema")
+      expect(
+        (await getDb().executionRuns.get(`execution:workflow:${r.runId}`))?.parentRunId
+      ).toBeUndefined()
     }
   })
 

@@ -3,6 +3,7 @@ import { compactBoundaryFromInner } from "@/lib/claude/run-and-capture"
 import type { SDKMessage } from "@cognia/agent-config-types"
 import {
   createExecutionRun,
+  appendRunObservation,
   getExecutionRun,
   listExecutionRuns,
   runEventJournal,
@@ -22,11 +23,15 @@ import { isTerminalRunStatus } from "@/types/execution/run"
 
 export interface StartDirectChatExecutionRunInput {
   sessionId: string
+  /** Host-captured owning run, when this conversation is an agent-created child. */
+  parentRunId?: string
   runId: string
   projectId?: string
   workspaceRoot?: string
   startedAt?: number
   localAuthorization?: LocalPersonRun
+  /** False while durable dispatch ownership is still being contested. */
+  ownsDispatch?: boolean
   /**
    * The turn's prompt. Reaches the canonical log only while the `prompts` debug
    * tier is armed — `messages` already stores it verbatim.
@@ -44,6 +49,87 @@ interface ActiveDirectChatRun {
 }
 
 const activeRuns = new Map<string, ActiveDirectChatRun>()
+const preparedRuns = new Map<string, string>()
+
+/** Admit the Host row before option resolution, without opening a stream or journal producer. */
+export async function ensureDirectChatExecutionRun(input: StartDirectChatExecutionRunInput) {
+  let run = await getExecutionRun(input.runId)
+  let created = false
+  const startedAt = input.startedAt ?? Date.now()
+  const parent = input.parentRunId ? await getExecutionRun(input.parentRunId) : undefined
+  if (!run) {
+    try {
+      run = await createExecutionRun({
+        id: input.runId,
+        ...(parent
+          ? {
+              parentRunId: parent.id,
+              ...recordedRunMetadata("child", { runId: input.runId, parent }),
+            }
+          : recordedRunMetadata(
+              input.localAuthorization === LOCAL_PERSON_RUN ? "local" : "external-event",
+              {
+                runId: input.runId,
+                ...(input.localAuthorization === LOCAL_PERSON_RUN
+                  ? {
+                      requesters: [{ kind: "local-person" as const }],
+                      actingPrincipal: { kind: "local-person" as const },
+                      authorizingPrincipal: { kind: "local-person" as const },
+                    }
+                  : {}),
+              }
+            )),
+        kind: "agent-turn",
+        sourceId: input.runId,
+        sessionId: input.sessionId,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+        title: "Chat run",
+        status: "queued",
+        currentRevision: 0,
+        startedAt,
+        updatedAt: startedAt,
+      })
+      created = true
+    } catch (error) {
+      run = await getExecutionRun(input.runId)
+      if (!run) throw error
+    }
+  }
+  if (run.status === "queued" && (created || input.ownsDispatch !== false))
+    preparedRuns.set(run.id, input.sessionId)
+  if (input.parentRunId && !parent && !run.parentRunId) {
+    await appendRunObservation(run.id, {
+      operation: "coordinator_parent_unavailable",
+      parentRunId: input.parentRunId,
+    })
+  }
+  if (run.parentRunId) {
+    const { resolveRunAuthority } = await import("./run-authority")
+    await resolveRunAuthority({ runId: run.id, parentRunId: run.parentRunId })
+  }
+  return run
+}
+
+/** A durable claimant took ownership; this preparer must not settle its row. */
+export function releasePreparedDirectChatExecutionRun(runId: string): void {
+  preparedRuns.delete(runId)
+}
+
+/** Cancel an admitted row when send preparation returned without dispatching it. */
+export async function finishUnstartedDirectChatExecutionRun(runId: string): Promise<boolean> {
+  const sessionId = preparedRuns.get(runId)
+  if (!sessionId) return false
+  preparedRuns.delete(runId)
+  if (activeRuns.get(sessionId)?.runId === runId) return false
+  const run = await getExecutionRun(runId)
+  if (!run || isTerminalRunStatus(run.status) || run.status !== "queued") return false
+  await new AgentRunEventProducer(runId).finish(
+    "cancelled",
+    Date.now(),
+    "Turn stopped during preparation"
+  )
+  return true
+}
 
 /**
  * Open the canonical execution journal for one direct-chat turn.
@@ -58,40 +144,9 @@ export async function startDirectChatExecutionRun(
   const alreadyActive = activeRuns.get(input.sessionId)
   if (alreadyActive?.runId === input.runId) return
 
-  let run = await getExecutionRun(input.runId)
+  const run = await ensureDirectChatExecutionRun(input)
+  preparedRuns.delete(input.runId)
   const startedAt = input.startedAt ?? Date.now()
-  if (!run) {
-    try {
-      run = await createExecutionRun({
-        id: input.runId,
-        ...recordedRunMetadata(
-          input.localAuthorization === LOCAL_PERSON_RUN ? "local" : "external-event",
-          {
-            runId: input.runId,
-            ...(input.localAuthorization === LOCAL_PERSON_RUN
-              ? {
-                  requesters: [{ kind: "local-person" as const }],
-                  actingPrincipal: { kind: "local-person" as const },
-                  authorizingPrincipal: { kind: "local-person" as const },
-                }
-              : {}),
-          }
-        ),
-        kind: "agent-turn",
-        sourceId: input.runId,
-        sessionId: input.sessionId,
-        ...(input.projectId ? { projectId: input.projectId } : {}),
-        title: "Chat run",
-        status: "queued",
-        currentRevision: 0,
-        startedAt,
-        updatedAt: startedAt,
-      })
-    } catch {
-      run = await getExecutionRun(input.runId)
-      if (!run) throw new Error(`Unable to create execution run: ${input.runId}`)
-    }
-  }
   if (isTerminalRunStatus(run.status)) return
 
   const producer = new AgentRunEventProducer(input.runId, undefined, {
@@ -295,5 +350,6 @@ export async function recoverStaleDirectChatExecutionRuns(
 
 export function __resetDirectChatExecutionRunsForTesting(): void {
   activeRuns.clear()
+  preparedRuns.clear()
   __resetChatCanonicalSinkForTesting()
 }

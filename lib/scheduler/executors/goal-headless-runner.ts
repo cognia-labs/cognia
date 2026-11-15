@@ -272,6 +272,9 @@ async function driveGoalLoop(
   // plus a small buffer for parse-error continues.
   const initial = await getGoal(goalId)
   if (!initial) return { status: "stopped", turns: 0, error: `Goal not found: ${goalId}` }
+  // Headless runs cannot depend on the UI's asynchronous projection subscriber.
+  const { syncGoalExecutionRun } = await import("@/lib/execution/agent-state-bridge")
+  await syncGoalExecutionRun(initial, session)
   const hardCap = (initial.config.maxTurns ?? 20) + 5
 
   // The session's own workspace: a scheduled goal's session carries its task's
@@ -331,9 +334,17 @@ async function driveGoalLoop(
     const prompt = nextPrompt ?? goal.safeObjective
     const capturedGenerationId = goal.generationId
 
+    const { startToolExecutionRun, finishToolExecutionRun } =
+      await import("@/lib/execution/acting-authority")
+    let turnRun: Awaited<ReturnType<typeof startToolExecutionRun>> | undefined
     let resolved
     try {
+      turnRun = await startToolExecutionRun(sessionId, {
+        parentRunId: `execution:goal:${goalId}`,
+        title: "Goal turn",
+      })
       resolved = await resolveSendOptions({
+        executionIdentity: { runId: turnRun.id, sessionId },
         session,
         appSettings,
         activeGoal: goal,
@@ -353,6 +364,7 @@ async function driveGoalLoop(
           : {}),
       })
     } catch (err) {
+      if (turnRun) await finishToolExecutionRun(turnRun.id, true)
       return {
         status: goal.status,
         turns,
@@ -376,7 +388,7 @@ async function driveGoalLoop(
         onPermissionRequest,
         ...(permissions.parks ? { pauseTimeoutWhileAwaitingPermission: true } : {}),
         // ADR-0239: an IM-driven goal's requester answers in the conversation.
-        outboundPolicy: { unattended: !input.onPermissionRequest },
+        outboundPolicy: { unattended: !input.onPermissionRequest, executionRunId: turnRun.id },
       })
       captureText = capture.text
       lastResponse = capture.text
@@ -384,6 +396,7 @@ async function driveGoalLoop(
       tokensDelta = (capture.usage?.inputTokens ?? 0) + (capture.usage?.outputTokens ?? 0)
       budgetExceeded = capture.resultSubtype === "error_max_budget_usd"
     } catch (err) {
+      await finishToolExecutionRun(turnRun.id, true)
       if (err instanceof RunAndCaptureError && err.code === "aborted") {
         return { status: "paused", turns, lastResponse, error: "aborted" }
       }
@@ -397,6 +410,7 @@ async function driveGoalLoop(
       }
     }
 
+    await finishToolExecutionRun(turnRun.id)
     turns += 1
 
     // Per-turn delivery — the connector driver posts each turn to the IM

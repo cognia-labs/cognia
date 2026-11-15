@@ -123,6 +123,32 @@ describe("botRunId", () => {
 })
 
 describe("runBotDelivery", () => {
+  it("keeps a Bot cost pool through real Squad admission without refusing remote worker policy", async () => {
+    const { delivery, resolved } = await seed()
+    resolved.policy = { maxRunCostUsd: 2 }
+    const { createSquadRunRecords } = await import("@/lib/squads/squad/squad-run-records")
+    const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
+    const { encodeRemoteWorkerPolicy } = await import("@/lib/squads/workers/remote-worker-policy")
+    const handler = jest.fn(async (ctx: BotExecutorContext) => {
+      await createSquadRunRecords({
+        runId: "r12-pool-squad",
+        teamId: "r12-team",
+        objective: "Remote work",
+        origin: "delegation",
+        startedAt: NOW,
+        launchedByRunId: ctx.runId,
+      })
+      const { authority } = await resolveRunAuthority({
+        parentRunId: "execution:team:r12-pool-squad",
+      })
+      expect(authority?.pools).toEqual({ rootRunId: ctx.runId, costUsd: 2 })
+      expect(() => encodeRemoteWorkerPolicy({}, false, undefined, authority)).not.toThrow()
+      return { output: {} }
+    })
+    const outcome = await runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    expect(outcome.status).toBe("completed")
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
   it("records integration actors separately and persists the folded Bot authority", async () => {
     const { delivery, resolved } = await seed()
     resolved.policy = {
@@ -152,6 +178,7 @@ describe("runBotDelivery", () => {
     })
     expect(run?.authority).toEqual({
       schemaVersion: 1,
+      caps: "explicit-v1",
       permissionMode: "plan",
       permissionProfile: { outbound: "deny" },
       pools: { rootRunId: outcome.runId, costUsd: 2 },

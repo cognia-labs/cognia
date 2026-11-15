@@ -76,6 +76,22 @@ beforeEach(() => {
 })
 
 describe("createPluginAgentSession", () => {
+  it("uses the personal fence for an ambiguous marked invocation instead of an authority refusal", async () => {
+    const session = await createPluginAgentSession({}, "r12-ambiguous-session")
+    await expect(
+      withPluginExecutionContext(
+        "r12-ambiguous-session",
+        { executionRunId: "", personalEgressBlocked: true },
+        () =>
+          withPluginExecutionContext(
+            "r12-ambiguous-session",
+            { executionRunId: "", personalEgressBlocked: true, sessionId: "other" },
+            () => session.send("hello")
+          )
+      )
+    ).rejects.toMatchObject({ name: "PersonalEgressDeniedError", code: "personal-egress-denied" })
+    expect(mockExecute).not.toHaveBeenCalled()
+  })
   it("withholds canonical private history from completion replay and plugin reads, retaining the real owner invocation", async () => {
     await getDb().sessions.put({ id: "s1", title: "Plugin", createdAt: 1, updatedAt: 1 })
     const marked = {
@@ -101,7 +117,11 @@ describe("createPluginAgentSession", () => {
       await session.send("continue", { toolsEnabled: false })
       expect(mockExecute).toHaveBeenLastCalledWith(
         "continue",
-        expect.objectContaining({ executionIdentity: { runId: owner.id } })
+        expect.objectContaining({
+          executionIdentity: expect.objectContaining({
+            runId: expect.not.stringMatching(new RegExp(`^${owner.id}$`)),
+          }),
+        })
       )
       await recordAbsorbedRequester(owner.id, {
         kind: "platform",
@@ -322,4 +342,24 @@ it("preserves Host-only no-run producer fences through the completion authority"
     code: "personal-egress-denied",
   })
   expect(JSON.stringify(config)).not.toContain("personalEgressBlocked")
+})
+
+it("a plugin session owns a child row and leaves the invoking chat caps unchanged", async () => {
+  const owner = await startToolExecutionRun(undefined, {
+    localAuthorization: LOCAL_PERSON_RUN,
+    authority: { schemaVersion: 1, permissionMode: "plan", tools: { deny: ["Bash"] } },
+  })
+  const before = await getDb().executionRuns.get(owner.id)
+  const session = await createPluginAgentSession({}, "plugin-child")
+  await withPluginExecutionContext("plugin-child", { executionRunId: owner.id }, () =>
+    session.send("continue")
+  )
+  const config = mockExecute.mock.calls.at(-1)![1]
+  if (!config) throw new Error("Plugin session did not provide execution options")
+  const child = await getDb().executionRuns.get(config.executionIdentity!.runId!)
+  expect(child?.id).not.toBe(owner.id)
+  expect(child?.parentRunId).toBe(owner.id)
+  expect(config.disallowedTools).toContain("Bash")
+  expect(config.permissionCeiling?.permissionMode).toBe("plan")
+  expect(await getDb().executionRuns.get(owner.id)).toEqual(before)
 })

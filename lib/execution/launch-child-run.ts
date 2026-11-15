@@ -49,11 +49,13 @@ import type { SpanSurface } from "@/types/agent-trace/span"
 import type { ChildRunOutcome, StartedChildEngine } from "@/types/execution/child-run"
 import type { ExecutionRun } from "@/types/execution/run"
 import type { BackgroundAgentKind } from "@/lib/ai/agent/background-agent-manager"
-import { getExecutionRun } from "@/lib/db/execution-runs"
+import { getExecutionRun, appendRunObservation } from "@/lib/db/execution-runs"
 import { loadPort } from "@/lib/modules/ports"
 import { finishToolExecutionRun, startToolExecutionRun } from "./acting-authority"
 import { registerRunStop, type RunStop } from "./run-stops"
 import { CHILD_RUN_LAUNCHER_MARK, holdChildRunOwnership } from "./child-run-ownership"
+import { resolveRunAuthority, RunAuthorityError, type RunAuthorityRefusal } from "./run-authority"
+import type { RunAuthorityV1, ActingIdentityV1 } from "@/types/execution/run"
 
 /** Registers the child in the Job Center, where a person can see and cancel it. */
 export interface ChildRunBackgroundRegistration {
@@ -125,6 +127,9 @@ export type ChildRunTarget =
 export type ChildRunTargetKind = ChildRunTarget["kind"]
 
 export interface LaunchChildRunInput {
+  /** A requested restriction, met with Host-held parent authority. */
+  authority?: RunAuthorityV1
+  actingIdentity?: ActingIdentityV1
   /** The run this one is a child of. */
   parentRunId?: string
   /**
@@ -133,11 +138,12 @@ export interface LaunchChildRunInput {
    */
   delegationRunId?: string
   /**
-   * A named parent without a readable row: refuse (the default), or start the
-   * child unparented, for a caller whose pin may name a run since removed
-   * (`dispatch_agent` recovering a journaled run).
+   * Host journal recovery only: a pruned parent becomes an observed root.
+   * New launches omit this flag and still refuse a missing claimed parent.
    */
   missingParent?: "refuse" | "unparented"
+  /** Host journal id of the previous attempt; its persisted caps survive recovery. */
+  recoveryRunId?: string
   target: ChildRunTarget
   grants?: readonly AgentCapabilityGrantV1[]
   /** The conversation the child belongs to. Defaults to the parent's. */
@@ -161,6 +167,7 @@ export interface LaunchChildRunInput {
 }
 
 export type LaunchChildRunRefusal =
+  | RunAuthorityRefusal
   /** The named parent has no row. A child is never linked to nothing. */
   | "parent_not_found"
   /** A grant sets a field this target's engine does not apply. */
@@ -486,9 +493,38 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
   if (input.signal?.aborted) return { started: false, reason: "cancelled" }
 
   const parentId = input.delegationRunId ?? input.parentRunId
-  const parent = parentId ? await getExecutionRun(parentId).catch(() => undefined) : undefined
-  if (parentId && !parent && input.missingParent !== "unparented") {
-    return { started: false, reason: "parent_not_found", detail: parentId }
+  let resolved: Awaited<ReturnType<typeof resolveRunAuthority>>
+  let parent: ExecutionRun | undefined
+  let recoveryAuthority: RunAuthorityV1 | undefined
+  let missingRecoveryParent = false
+  try {
+    const existing = input.childId
+      ? await getExecutionRun(childJobExecutionRunId(input.childId))
+      : undefined
+    parent = parentId ? await getExecutionRun(parentId) : undefined
+    missingRecoveryParent = Boolean(
+      parentId && !parent && !existing && input.missingParent === "unparented"
+    )
+    if (input.recoveryRunId) {
+      const prior = await getExecutionRun(childJobExecutionRunId(input.recoveryRunId))
+      recoveryAuthority = prior?.authority
+    }
+    resolved = await resolveRunAuthority({
+      ...(existing
+        ? { runId: existing.id }
+        : { parentRunId: missingRecoveryParent ? undefined : parentId }),
+      ...(!existing ? { requested: input.authority } : {}),
+      ...(!existing && recoveryAuthority ? { recoveryAuthority } : {}),
+      actingIdentity: input.actingIdentity,
+    })
+  } catch (error) {
+    return {
+      started: false,
+      reason: error instanceof RunAuthorityError ? error.reason : "authority_unavailable",
+      ...(error instanceof RunAuthorityError && error.reason === "parent_not_found" && parentId
+        ? { detail: parentId }
+        : {}),
+    }
   }
   const sessionId = input.sessionId ?? parent?.sessionId
   const surface = input.surface ?? "chat"
@@ -549,9 +585,18 @@ export async function launchChildRun(input: LaunchChildRunInput): Promise<Launch
     await startToolExecutionRun(sessionId, {
       runId: executionRunId,
       ...(parent ? { parentRunId: parent.id } : {}),
+      ...(resolved.authority ? { authority: resolved.authority } : {}),
+      ...(recoveryAuthority ? { recoveryAuthority } : {}),
       title: input.title,
       launchedBy: CHILD_RUN_LAUNCHER_MARK,
     })
+    if (missingRecoveryParent)
+      await appendRunObservation(executionRunId, {
+        operation: "recovery_parent_unavailable",
+        missingParentRunId: parentId,
+        ...(input.recoveryRunId ? { recoveryRunId: input.recoveryRunId } : {}),
+        retainedAuthority: Boolean(recoveryAuthority),
+      })
   } catch (error) {
     releaseOwnership()
     return { started: false, reason: "journal_failed", detail: errorText(error) }

@@ -35,6 +35,14 @@ function validEnvelope(): HandoffEnvelope {
 }
 
 describe("HandoffEnvelope", () => {
+  it("validates resolved turn options separately from inherited authority policy", () => {
+    const envelope = validEnvelope()
+    envelope.execution.turnOptions = { permissionMode: "plan", allowedTools: ["Read"] }
+    expect(validateHandoffEnvelope(envelope)).toEqual([])
+    expect(envelope.execution.policy).toBeUndefined()
+    envelope.execution.turnOptions = { permissionMode: "invalid" } as never
+    expect(validateHandoffEnvelope(envelope)).toContain("execution.turnOptions is not supported")
+  })
   it("accepts versioned portable restrictions and rejects unknown versions or absolute roots", () => {
     const envelope = validEnvelope()
     envelope.execution.policy = {

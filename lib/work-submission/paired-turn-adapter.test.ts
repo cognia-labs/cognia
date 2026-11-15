@@ -74,6 +74,87 @@ afterEach(() => {
 })
 
 describe("admitPairedChatTurn", () => {
+  it.each([{}, { B: "A" }])("rebuilds a client MCP identity map on the Host: %j", async (map) => {
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    await startToolExecutionRun("coordinator", {
+      runId: "coordinator",
+      authority: { schemaVersion: 1, mcpServers: { only: ["A"] } },
+    })
+    await getDb().sessions.update("session-1", {
+      projectThread: { parentExecutionRunId: "coordinator" } as never,
+    })
+    await getDb().mcpServers.bulkPut(
+      ["A", "B"].map((id) => ({
+        id,
+        name: id,
+        enabled: true,
+        transport: "stdio" as const,
+        config: { command: id },
+        createdAt: 1,
+        updatedAt: 1,
+      }))
+    )
+    const result = await admitPairedChatTurn(
+      request({
+        options: {
+          runAuthorityMcpServerIds: map,
+          mcpServers: {
+            A: { command: "A" },
+            B: { command: "B" },
+            unmapped: { command: "unknown" },
+          },
+          agents: {
+            child: { description: "child", prompt: "work", mcpServers: ["A", "B", "unmapped"] },
+          },
+        },
+      }),
+      deps()
+    )
+    expect(result).toMatchObject({ admitted: true })
+    if (!result.admitted) throw new Error("Expected tracked Host admission")
+    expect(result.options.runAuthorityMcpServerIds).toEqual({ A: "A", B: "B" })
+    expect(Object.keys(result.options.mcpServers!)).toEqual(["A"])
+    expect(result.options.agents?.child.mcpServers).toEqual(["A"])
+  })
+
+  it.each([true, false])(
+    "uses only the Host-held project-thread parent, present=%s",
+    async (present) => {
+      const { ensureDirectChatExecutionRun } = await import("@/lib/execution/direct-chat-run")
+      if (present) {
+        await ensureDirectChatExecutionRun({ sessionId: "coordinator", runId: "coordinator" })
+        await getDb().executionRuns.update("coordinator", {
+          authority: { schemaVersion: 1, caps: "explicit-v1" as const, permissionMode: "plan" },
+        })
+      }
+      await getDb().sessions.update("session-1", {
+        projectThread: { parentExecutionRunId: "coordinator" } as never,
+      })
+      const admitted = await admitPairedChatTurn(
+        request({ parentRunId: "forged-parent", options: { permissionMode: "bypassPermissions" } }),
+        deps()
+      )
+      expect(admitted).toMatchObject({ admitted: true })
+      expect(await getDb().executionRuns.get("paired:request-1")).toMatchObject(
+        present
+          ? { parentRunId: "coordinator", authority: { permissionMode: "plan" } }
+          : { actingIdentity: { trigger: "local" } }
+      )
+      if (present && admitted.admitted) expect(admitted.options.permissionMode).toBe("plan")
+      if (!present)
+        expect(
+          await getDb().executionRunEvents.where("runId").equals("paired:request-1").toArray()
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              payload: expect.objectContaining({ operation: "coordinator_parent_unavailable" }),
+            }),
+          ])
+        )
+    },
+    30_000
+  )
+
   it("writes the user's message and holds an open, leased submission for the persister", async () => {
     await expect(admitPairedChatTurn(request(), deps())).resolves.toMatchObject({
       admitted: true,

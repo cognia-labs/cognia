@@ -1,3 +1,14 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "admitted-child" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
+// Authority storage is exercised with real IndexedDB in run-authority.test.ts.
+jest.mock("@/lib/execution/run-authority", () => ({
+  ...jest.requireActual("@/lib/execution/run-authority"),
+  resolveRunAuthority: jest.fn(async () => ({})),
+  enforceRunAuthorityOnSendOptions: jest.fn(async () => undefined),
+}))
 const mockPii = jest.fn((_text: string) => true)
 jest.mock("@cognia/redact", () => ({ hasNoLeakingPii: (text: string) => mockPii(text) }))
 
@@ -95,6 +106,10 @@ describe("createCreatorTurnRunner", () => {
     expect(sentOptions().allowedTools).toEqual([...CREATOR_AGENT_TOOLS])
     expect(sentOptions().allowedTools).not.toContain("Write")
     expect(sentOptions().allowedTools).not.toContain("Bash")
+    expect(sentOptions().runAuthority).toMatchObject({
+      permissionMode: "plan",
+      tools: { allow: [...CREATOR_AGENT_TOOLS] },
+    })
   })
 
   it("overrides the resolved cwd with the authoring root", async () => {
@@ -151,4 +166,15 @@ describe("createCreatorTurnRunner", () => {
     const cap = mockRun.mock.calls[0][3] as { signal?: AbortSignal }
     expect(cap.signal).toBe(controller.signal)
   })
+})
+
+it("parents the independent reviewer to the admitted authoring run", async () => {
+  const { startToolExecutionRun } = jest.requireMock("@/lib/execution/acting-authority")
+  const runner = createCreatorTurnRunner()
+  await runner(request({ purpose: "plan" }))
+  await runner(request({ purpose: "review" }))
+  expect(startToolExecutionRun).toHaveBeenLastCalledWith(
+    expect.stringMatching(/^creator-review-/),
+    expect.objectContaining({ parentRunId: "admitted-child" })
+  )
 })

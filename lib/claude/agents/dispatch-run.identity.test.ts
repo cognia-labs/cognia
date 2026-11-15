@@ -1,5 +1,9 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+jest.mock("@/lib/connectors/tauri/commands", () => ({
+  ...jest.requireActual("@/lib/connectors/tauri/commands"),
+  connectorsLarkUserAuth: jest.fn(async () => ({ configured: false })),
+}))
 import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { getExecutionRun } from "@/lib/db/execution-runs"
@@ -42,11 +46,13 @@ jest.mock("@/lib/background-tasks/renderer-subagent-registry", () => ({
 }))
 
 const personalChecks = new Map<string, boolean>()
+const personalErrors = new Map<string, unknown>()
 
 beforeEach(async () => {
   jest.clearAllMocks()
   __clearAllDispatchContextsForTesting()
   personalChecks.clear()
+  personalErrors.clear()
   await getDb().delete()
   __resetDbForTesting()
   await getDb().sessions.put({ id: "desktop", title: "Desktop", createdAt: 1, updatedAt: 1 })
@@ -57,7 +63,8 @@ beforeEach(async () => {
         executionRunId: `execution:job:${options?._runId}`,
       })
       personalChecks.set(prompt, true)
-    } catch {
+    } catch (error) {
+      personalErrors.set(prompt, error)
       personalChecks.set(prompt, false)
     }
     return { text: "done", channel: "text", toolsAvailable: false }
@@ -78,6 +85,7 @@ async function interrupt(runId: string) {
   const record = (await getBackgroundTaskRecord(runId))!
   await getDb().backgroundTasks.update(runId, {
     status: "interrupted",
+    interruptedAt: Date.now(),
     ownerLease: { ...record.ownerLease!, expiresAt: 0 },
   })
   return (await getBackgroundTaskRecord(runId))!
@@ -138,6 +146,7 @@ it("keeps a finished local parent's identity on recovery during an automated tur
     parentRunId: "local-root",
     actingIdentity: { trigger: "local", rootRunId: "local-root" },
   })
+  expect(personalErrors.get("original")).toBeUndefined()
   expect(personalChecks.get("original")).toBe(true)
 })
 
@@ -158,6 +167,33 @@ it("keeps the admitted automated parent when a local run starts before dispatch"
   expect(personalChecks.get("original")).toBe(false)
 })
 
+it("re-enters an existing dispatch row with its effective caps after its parent was pruned", async () => {
+  await startToolExecutionRun("desktop", {
+    runId: "r11-pruned-parent",
+    authority: { schemaVersion: 1, maxTurns: 2 },
+  })
+  const original = await admit(false, "r11-pruned-parent")
+  const retained = await getExecutionRun(`execution:job:${original.runId}`)
+  await getDb().executionRuns.delete("r11-pruned-parent")
+  const result = await startDispatchRun({
+    runId: original.runId,
+    subagentId: "reader",
+    prompt: "re-entry",
+    toolsEnabled: false,
+    background: false,
+    parentSessionId: "desktop",
+    executionRunId: "r11-pruned-parent",
+    caller: await resolveCaller("desktop"),
+  })
+  expect(result.error).toBeUndefined()
+  expect(jest.mocked(dispatchSubagent).mock.calls.some((call) => call[1] === "re-entry")).toBe(true)
+  expect((await getExecutionRun(retained!.id))?.authority).toEqual(retained!.authority)
+  expect(retained?.authority).toMatchObject({ caps: "explicit-v1", maxTurns: 2 })
+  expect(
+    JSON.stringify(await getDb().executionRunEvents.where("runId").equals(retained!.id).toArray())
+  ).toContain("ancestor_unavailable")
+})
+
 it("allows a normal background child of a local turn", async () => {
   await startToolExecutionRun("desktop", {
     runId: "local-root",
@@ -168,6 +204,7 @@ it("allows a normal background child of a local turn", async () => {
     parentRunId: "local-root",
     actingIdentity: { trigger: "local", authorizingPrincipal: { kind: "local-person" } },
   })
+  expect(personalErrors.get("original")).toBeUndefined()
   expect(personalChecks.get("original")).toBe(true)
 })
 
@@ -214,6 +251,7 @@ it.each(["missing-pin", "missing-run"])(
     if (!result.ok) throw new Error(result.message)
     await settleBackground()
     const child = await getExecutionRun(`execution:job:${result.runId}`)
+    expect(child).toBeDefined()
     expect(child?.parentRunId).toBeUndefined()
     expect(child?.actingIdentity?.trigger).toBe("external-event")
     expect(personalChecks.get("original")).toBe(false)
@@ -317,7 +355,7 @@ it("resumes a background task with its pinned parent while a new local turn is a
   await startToolExecutionRun("desktop", { runId: "old-root" })
   const original = await admit()
   await finishToolExecutionRun("old-root")
-  await getDb().backgroundTasks.update(original.runId, { status: "done" })
+  await getDb().backgroundTasks.update(original.runId, { status: "done", settledAt: Date.now() })
   await startToolExecutionRun("desktop", {
     runId: "new-local",
     localAuthorization: LOCAL_PERSON_RUN,
@@ -334,3 +372,49 @@ it("resumes a background task with its pinned parent while a new local turn is a
   const checks = [...personalChecks.values()]
   expect(checks).toEqual([false, false])
 })
+
+it.each(["redispatch", "resume"] as const)(
+  "%s starts unparented with the journaled run's effective caps after parent pruning",
+  async (path) => {
+    await startToolExecutionRun("desktop", {
+      runId: "pruned-parent",
+      authority: {
+        schemaVersion: 1,
+        permissionMode: "plan",
+        tools: { allow: ["Read"] },
+        maxTurns: 2,
+      },
+    })
+    const original = await admit(true, "pruned-parent")
+    const prior = (await getExecutionRun(`execution:job:${original.runId}`))!
+    await getDb().executionRuns.delete("pruned-parent")
+    if (path === "redispatch") {
+      const outcome = await redispatchBackgroundRun(await interrupt(original.runId), {
+        kind: "auto",
+      })
+      expect(outcome.ok).toBe(true)
+      await settleBackground()
+    } else {
+      await getDb().backgroundTasks.update(original.runId, {
+        status: "done",
+        settledAt: Date.now(),
+      })
+      await runDispatchAgentTool({
+        sessionId: "desktop",
+        args: { resume: original.runId, prompt: "continue" },
+      })
+    }
+    const journal = (await getBackgroundTaskRecord(original.runId))!
+    const next = await getExecutionRun(`execution:job:${journal.resumedByRunId}`)
+    expect(next).toBeDefined()
+    expect(next?.parentRunId).toBeUndefined()
+    expect(next?.authority).toEqual(prior.authority)
+    const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
+    expect((await resolveRunAuthority({ runId: next!.id })).inheritedAuthority).toEqual(
+      prior.authority
+    )
+    expect(
+      JSON.stringify(await getDb().executionRunEvents.where("runId").equals(next!.id).toArray())
+    ).toContain("recovery_parent_unavailable")
+  }
+)

@@ -1,5 +1,6 @@
 import { invokeEgressMethod } from "@/lib/plugin/security/permission-guard"
 import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
+import { copyPersonalOperation } from "@/lib/execution/personal-operation"
 import { personalSinkContextForRun } from "@/lib/execution/personal-sink"
 /**
  * Host-governed workflow authoring and execution façade for plugins.
@@ -244,14 +245,27 @@ export function createWorkflowAuthorAPI(pluginId?: string): PluginWorkflowAuthor
         args,
         pluginId ?? "host-workflow"
       ) as ReturnType<typeof runWorkflow>,
-    executeRunWorkflowTyped: (...args) =>
-      invokeEgressMethod(
-        (pluginId ? pluginExecutionContext(pluginId) : undefined) ?? {},
-        executeRunWorkflowTyped as (...args: unknown[]) => unknown,
+    executeRunWorkflowTyped: async (args) => {
+      const context = (pluginId ? pluginExecutionContext(pluginId) : undefined) ?? {}
+      const execute = () => executeRunWorkflowTyped(args, context)
+      if (context.executionRunReserved && context.executionRunId) {
+        const { getExecutionRun } = await import("@/lib/db/execution-runs")
+        if (!(await getExecutionRun(context.executionRunId))) {
+          const { runPersonalEgressOperation } = await import("@/lib/execution/personal-egress")
+          // A proven reservation has no row to read yet. Keep every explicit
+          // privacy dependency; only the absent reservation is not a producer.
+          const gateContext = copyPersonalOperation(context, { ...context, executionRunId: "" })
+          return runPersonalEgressOperation(gateContext, execute)
+        }
+      }
+      return invokeEgressMethod(
+        context,
+        execute,
         {},
-        args,
+        [],
         pluginId ?? "host-workflow"
-      ) as ReturnType<typeof executeRunWorkflowTyped>,
+      ) as ReturnType<typeof executeRunWorkflowTyped>
+    },
     getRunnerToolDefinition: () => ({
       name: WORKFLOW_RUNNER_TOOL_NAME,
       definition: WORKFLOW_RUNNER_TOOL_DEFINITION,

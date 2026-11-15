@@ -547,7 +547,7 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
       composition.selection,
       resolved.policy
     )
-    // Record the already folded policy. The executor still consumes its existing policy inputs.
+    // Freeze and await the policy ceiling before any executor can start children.
     const recordedAuthority: RunAuthorityV1 = {
       schemaVersion: 1,
       permissionMode: executionComposition.authority,
@@ -558,7 +558,11 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
         ? { pools: { rootRunId: runId, costUsd: resolved.policy.maxRunCostUsd } }
         : {}),
     }
-    void recordRunAuthority("", recordedAuthority, runId)
+    const effectiveAuthority = await recordRunAuthority("", recordedAuthority, runId)
+    if (effectiveAuthority?.permissionMode)
+      executionComposition.authority = effectiveAuthority.permissionMode
+    if (effectiveAuthority?.permissionProfile)
+      resolved.policy.permissionProfile = effectiveAuthority.permissionProfile
 
     if (
       executionComposition.autonomy === "observe" ||

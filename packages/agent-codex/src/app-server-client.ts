@@ -1081,7 +1081,10 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
   async createSession(options?: SessionCreateOptions): Promise<ExternalAgentSession> {
     if (!this.isConnected() || !this.peer) throw new Error("Not connected to Codex app-server")
 
-    const metadata = this.buildSessionMetadata(options)
+    const metadata: Record<string, unknown> = {
+      ...this.buildSessionMetadata(options),
+      ...(options?.nativePolicy ? { nativePolicy: options.nativePolicy } : {}),
+    }
     const params: Record<string, unknown> = {
       approvalsReviewer: "user",
       approvalPolicy: this.approvalPolicyFor(
@@ -1130,6 +1133,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
         mcp_servers: disabled,
       }
     } else if (config) params.config = config
+    await this.restrictNativeMcpConfig(params, options?.nativePolicy)
     const serviceTier = readString(metadata.serviceTier)
     if (serviceTier && this.emit0151Param("serviceTier")) params.serviceTier = serviceTier
     const threadSource = readString(metadata.threadSource)
@@ -1258,6 +1262,45 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
    * Omitting sandbox inherits config.toml, which may grant full access before
    * any approval callback reaches Cognia. Only explicit bypass may do that.
    */
+  private async restrictNativeMcpConfig(
+    params: Record<string, unknown>,
+    policy: SessionCreateOptions["nativePolicy"]
+  ): Promise<void> {
+    if (policy?.tools || policy?.subagents) {
+      const config = readObject(params.config) ?? {}
+      params.config = {
+        ...config,
+        features: {
+          ...(readObject(config.features) ?? {}),
+          ...(policy.tools ? { shell_tool: false, unified_exec: false } : {}),
+          ...(policy.subagents ? { multi_agent: false, multi_agent_v2: false } : {}),
+        },
+      }
+    }
+    const only = policy?.mcpServers?.only
+    if (!only) return
+    if (!this.peer) throw new Error("Codex mcpServers.only: disconnected")
+    const servers = await this.readMcpServers()
+    const config = readObject(params.config) ?? {}
+    const supplied = readObject(config.mcp_servers) ?? {}
+    const names = new Set([
+      ...Object.keys(supplied),
+      ...servers.flatMap((server) => (typeof server.name === "string" ? [server.name] : [])),
+    ])
+    params.config = {
+      ...config,
+      mcp_servers: Object.fromEntries(
+        [...names].map((name) => [
+          name,
+          {
+            ...(readObject(supplied[name]) ?? {}),
+            ...(!only.includes(name) ? { enabled: false } : {}),
+          },
+        ])
+      ),
+    }
+  }
+
   private sandboxModeFor(
     metadata: Record<string, unknown> | undefined,
     permissionMode?: AcpPermissionMode
@@ -1508,7 +1551,10 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
       Boolean(previousFence) !== Boolean(options?.metadata?.personalEgressFenced)
     )
       throw new Error("Codex personal egress identity changed; create a new session")
-    const metadata = this.buildSessionMetadata(options)
+    const metadata: Record<string, unknown> = {
+      ...this.buildSessionMetadata(options),
+      ...(options?.nativePolicy ? { nativePolicy: options.nativePolicy } : {}),
+    }
     const params: Record<string, unknown> = {
       threadId: sessionId,
       approvalsReviewer: "user",
@@ -1546,6 +1592,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
         ),
       }
     } else if (config) params.config = config
+    await this.restrictNativeMcpConfig(params, options?.nativePolicy)
     const serviceTier = readString(metadata.serviceTier)
     if (serviceTier && this.emit0151Param("serviceTier")) params.serviceTier = serviceTier
     // SDK `include_turns`: `false` means metadata-only resume — the thread
@@ -1658,6 +1705,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
         ),
       }
     } else if (config) params.config = config
+    await this.restrictNativeMcpConfig(params, options?.nativePolicy)
     const serviceTier = readString(metadata.serviceTier)
     if (serviceTier && this.emit0151Param("serviceTier")) params.serviceTier = serviceTier
     const threadSource = readString(metadata.threadSource)

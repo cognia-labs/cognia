@@ -1,4 +1,5 @@
 import { syncWorkflowExecutionRun } from "@/lib/execution/workflow-bridge"
+import { RunAuthorityError } from "@/lib/execution/run-authority"
 /**
  * Workflow orchestrator. Top-level entry point for executing a workflow.
  *
@@ -230,7 +231,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   const startedAt = Date.now()
   // Workspace isolation (Dexie v86): a run belongs to the active workspace at
   // trigger time. Shared workflow definitions, per-workspace run history.
-  const projectId = await resolveScopeProjectId()
+  const activeProjectId = await resolveScopeProjectId()
+  const projectId = existingRow ? existingRow.projectId : activeProjectId
   let runRow: WorkflowRunRow = {
     id: runId,
     workflowId: workflow.id,
@@ -313,7 +315,23 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     return { runId, status: blockedAdmission.status, error: blockedAdmission.error }
   }
   // Canonical authority must exist before a node can perform opaque egress.
-  await syncWorkflowExecutionRun(runRow, [], [])
+  try {
+    await syncWorkflowExecutionRun(runRow, [], [])
+  } catch (error) {
+    if (!(error instanceof RunAuthorityError)) throw error
+    const detail = { code: error.reason, message: error.message }
+    runRow = { ...runRow, status: "failed", completedAt: Date.now(), error: detail }
+    await getDb().workflowRuns.put(runRow)
+    await logger.runStarted({ trigger })
+    await logger.runFailed(detail)
+    await persistMirror({ runId, workflowId: workflow.id, status: "failed" })
+    await ackRunCompleted(runId)
+    await releaseRunResources(runId)
+    getPluginEventHooks().dispatchWorkflowError(workflow.id, error)
+    getPluginEventHooks().dispatchWorkflowComplete(workflow.id, false)
+    emitCompletionFanout("failed", { error: detail })
+    return { runId, status: "failed", error: detail }
+  }
   // Register before any asynchronous startup work. A cancellation between the
   // admission commit and registration is caught by the durable re-read below.
   const ac = new AbortController()

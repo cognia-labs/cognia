@@ -175,7 +175,7 @@ export async function defaultAiEnsembleDeps(ctx: StepExecutionContext): Promise<
   return {
     runAgent: async (input) => {
       const base = {
-        executionIdentity: { runId: `execution:workflow:${ctx.runId}` },
+        parentRunId: `execution:workflow:${ctx.runId}`,
         systemPrompt: input.systemPrompt,
         model: input.model,
         characterId: input.characterId,

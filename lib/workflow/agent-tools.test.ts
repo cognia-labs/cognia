@@ -8,7 +8,7 @@ import {
 
 const mockExecuteRunWorkflowTyped = jest.fn()
 jest.mock("./publish/run-workflow-typed-tool", () => ({
-  executeRunWorkflowTyped: (args: Record<string, unknown>) => mockExecuteRunWorkflowTyped(args),
+  executeRunWorkflowTyped: (...args: unknown[]) => mockExecuteRunWorkflowTyped(...args),
 }))
 
 function ctx(partial: Partial<ToolSurfaceContext> = {}): ToolSurfaceContext {
@@ -68,8 +68,12 @@ describe("toolFamily", () => {
     mockExecuteRunWorkflowTyped.mockResolvedValue({ ok: true, runId: "r1" })
     const result = await toolFamily.run(WORKFLOW_RUNNER_TOOL_NAME, { name: "X", input: { a: 1 } }, {
       sessionId: "s1",
+      executionRunId: "host-caller",
     } as never)
-    expect(mockExecuteRunWorkflowTyped).toHaveBeenCalledWith({ name: "X", input: { a: 1 } })
+    expect(mockExecuteRunWorkflowTyped).toHaveBeenCalledWith(
+      { name: "X", input: { a: 1 } },
+      { executionRunId: "host-caller" }
+    )
     expect(result).toEqual({ ok: true, runId: "r1" })
   })
 

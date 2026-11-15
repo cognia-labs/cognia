@@ -5,7 +5,29 @@ import {
   elicitationFormSchemaSafetyError,
   AGENT_MODEL_ROLE_SLOT_LIMIT,
   normalizeAgentModelRoleOverrides,
+  assertNativeToolDeniesExpressible,
+  UnsupportedNativeAuthorityError,
 } from "./external-agent"
+
+it.each(["pi-rpc", "opencode", "opencode-v2"] as const)(
+  "%s preserves a typed, exact unsupported rule",
+  (protocol) => {
+    expect(() => assertNativeToolDeniesExpressible(protocol, { deny: ["Bash(rm:*)"] })).toThrow(
+      UnsupportedNativeAuthorityError
+    )
+    expect(() => assertNativeToolDeniesExpressible(protocol, { deny: ["Bash"] })).not.toThrow()
+    try {
+      assertNativeToolDeniesExpressible(protocol, { deny: ["Bash(rm:*)"] })
+    } catch (error) {
+      expect(error).toMatchObject({
+        reason: "unsupported_authority",
+        protocol,
+        field: "tools.deny",
+        pattern: "Bash(rm:*)",
+      })
+    }
+  }
+)
 
 describe("shared elicitation form safety", () => {
   it("rejects sensitive fields and malformed required lists before rendering or prompting", () => {
@@ -208,5 +230,22 @@ describe("normalizeAgentModelRoleOverrides", () => {
       ])
     )
     expect(() => normalizeAgentModelRoleOverrides({ version: 1, slots })).toThrow(/Too many/)
+  })
+})
+
+it("preserves adapter error details with erasable constructor syntax", async () => {
+  const { ExternalAgentAdapterContractError, ExternalAgentUnsupportedOperationError } =
+    await import("./adapter")
+  expect(new ExternalAgentAdapterContractError("acp", ["connect"])).toMatchObject({
+    protocol: "acp",
+    missing: ["connect"],
+    code: "adapter_contract_violation",
+    name: "ExternalAgentAdapterContractError",
+  })
+  expect(new ExternalAgentUnsupportedOperationError("acp", "compact")).toMatchObject({
+    protocol: "acp",
+    operation: "compact",
+    code: "operation_unsupported",
+    name: "ExternalAgentUnsupportedOperationError",
   })
 })

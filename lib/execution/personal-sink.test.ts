@@ -19,6 +19,23 @@ beforeEach(fixture.restore)
 afterAll(fixture.dispose)
 const mark = { person: { kind: "local-person" as const }, source: "google-docs", markedAt: 10 }
 
+it("reads uncommitted Host taint while preserving the surrounding write transaction", async () => {
+  const root = await startToolExecutionRun("atomic-taint", { localAuthorization: LOCAL_PERSON_RUN })
+  const db = getDb()
+  await db.transaction("rw", db.executionRuns, async () => {
+    await db.executionRuns.update(root.id, { personalMarks: [mark] })
+    expect(await readRunPersonalTaint({ executionRunId: root.id })).toEqual({
+      verified: true,
+      marks: [mark],
+    })
+    await db.executionRuns.update(root.id, { title: "Committed with taint" })
+  })
+  expect(await db.executionRuns.get(root.id)).toMatchObject({
+    title: "Committed with taint",
+    personalMarks: [mark],
+  })
+})
+
 it("does not accept a serialized disclosure claim as a Host send capability", async () => {
   const run = await startToolExecutionRun("forged-disclosure", {
     localAuthorization: LOCAL_PERSON_RUN,

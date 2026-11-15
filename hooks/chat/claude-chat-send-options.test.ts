@@ -19,6 +19,12 @@ import { sessionControl, mcpRuntimeConfigurationMatches } from "@/lib/claude/ipc
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { getSettings } from "@/lib/db/settings"
 import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import { getExecutionRun } from "@/lib/db/execution-runs"
+
+jest.mock("@/lib/db/execution-runs", () => ({
+  ...jest.requireActual("@/lib/db/execution-runs"),
+  getExecutionRun: jest.fn(async () => undefined),
+}))
 
 jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
@@ -1004,6 +1010,44 @@ describe("Claude chat send-option seam", () => {
     )
   })
 
+  it("carries a reserved turn identity through deferred resolution without creating its row", async () => {
+    await buildSendOptions(
+      { id: "s1" } as never,
+      "hello",
+      undefined,
+      { runId: "uncreated", turnId: "t", attemptId: "a" },
+      undefined,
+      { deferExecutionRun: true, localAuthorization: LOCAL_PERSON_RUN }
+    )
+    expect(resolveSendOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        deferredExecutionRun: {},
+        executionIdentity: { sessionId: "s1", runId: "uncreated", turnId: "t", attemptId: "a" },
+        personalCredentialContext: { localAuthorization: LOCAL_PERSON_RUN, externalEngine: false },
+      })
+    )
+  })
+
+  it("keeps a typed thread's local credential proof alongside its admitted execution identity", async () => {
+    await buildSendOptions(
+      {
+        id: "typed-thread",
+        projectThread: { parentExecutionRunId: "service-coordinator" },
+      } as never,
+      "hello",
+      undefined,
+      { runId: "admitted-child", turnId: "t", attemptId: "a" },
+      undefined,
+      { executionRunId: "admitted-child", localAuthorization: LOCAL_PERSON_RUN }
+    )
+    expect(resolveSendOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        executionIdentity: expect.objectContaining({ runId: "admitted-child" }),
+        personalCredentialContext: { localAuthorization: LOCAL_PERSON_RUN, externalEngine: false },
+      })
+    )
+  })
+
   it("forwards only the Host proof or this exact upcoming run to credential resolution", async () => {
     await buildSendOptions({ id: "s1" } as never, "hello", undefined, {
       runId: "upcoming",
@@ -1031,6 +1075,7 @@ describe("Claude chat send-option seam", () => {
   })
 
   it("uses the accepted run instead of a competing Host proof", async () => {
+    jest.mocked(getExecutionRun).mockResolvedValueOnce({ id: "accepted" } as never)
     await buildSendOptions({ id: "s1" } as never, "hi", undefined, undefined, undefined, {
       executionRunId: "accepted",
       localAuthorization: LOCAL_PERSON_RUN,
@@ -1038,6 +1083,9 @@ describe("Claude chat send-option seam", () => {
     expect(
       jest.mocked(resolveSendOptions).mock.calls.at(-1)?.[0]?.personalCredentialContext
     ).toMatchObject({ sessionId: "s1", executionRunId: "accepted" })
+    expect(jest.mocked(resolveSendOptions).mock.calls.at(-1)?.[0]?.executionIdentity).toMatchObject(
+      { sessionId: "s1", runId: "accepted" }
+    )
     expect(
       jest.mocked(resolveSendOptions).mock.calls.at(-1)?.[0]?.personalCredentialContext
     ).not.toHaveProperty("localAuthorization")

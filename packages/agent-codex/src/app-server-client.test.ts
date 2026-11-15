@@ -709,6 +709,44 @@ describe("CodexAppServerAdapter", () => {
   })
 
   describe("createSession", () => {
+    it("disables native shell and native agent discovery in the inherited thread config", async () => {
+      const adapter = await connectedAdapter()
+      await adapter.createSession({
+        nativePolicy: { tools: { deny: ["Bash"] }, subagents: { only: [] } },
+      })
+      expect(lastWritten((m) => m.method === "thread/start")!.params).toMatchObject({
+        config: {
+          features: {
+            shell_tool: false,
+            unified_exec: false,
+            multi_agent: false,
+            multi_agent_v2: false,
+          },
+        },
+      })
+      await adapter.disconnect()
+    })
+    it("disables ambient MCP outside the inherited only-set before thread start", async () => {
+      const adapter = await connectedAdapter()
+      await adapter.createSession({
+        nativePolicy: { mcpServers: { only: ["safe"] } },
+        mcpServers: [{ name: "safe", command: "safe", args: [], env: [] }],
+      })
+      expect(lastWritten((m) => m.method === "thread/start")!.params).toMatchObject({
+        config: { mcp_servers: { fs: { enabled: false }, safe: { command: "safe" } } },
+      })
+      await adapter.disconnect()
+    })
+    it("refuses an unreadable ambient inventory before thread start", async () => {
+      const adapter = await connectedAdapter()
+      responders["mcpServerStatus/list"] = () => ({})
+      const before = writes.filter((m) => JSON.parse(m).method === "thread/start").length
+      await expect(
+        adapter.createSession({ nativePolicy: { mcpServers: { only: [] } } })
+      ).rejects.toThrow("Invalid MCP inventory")
+      expect(writes.filter((m) => JSON.parse(m).method === "thread/start")).toHaveLength(before)
+      await adapter.disconnect()
+    })
     it.each(["plan", "dontAsk", "default", "acceptEdits"] as const)(
       "H2: marking preserves %s sandbox and approval ceilings",
       async (permissionMode) => {

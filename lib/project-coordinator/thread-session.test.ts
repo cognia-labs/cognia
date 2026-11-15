@@ -203,3 +203,18 @@ describe("createThreadSession", () => {
     ).rejects.toMatchObject({ reason: "workspace-missing" })
   })
 })
+
+it("persists the Host-captured coordinator parent on the child conversation", async () => {
+  const { deps } = setup()
+  const thread = await createThreadSession(
+    {
+      projectId: "p1",
+      coordinatorSessionId: "coord",
+      brief,
+      proposedBy: "coordinator",
+      parentExecutionRunId: "host-coordinator-run",
+    },
+    deps
+  )
+  expect(thread.projectThread?.parentExecutionRunId).toBe("host-coordinator-run")
+})

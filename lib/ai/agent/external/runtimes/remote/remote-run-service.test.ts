@@ -1733,6 +1733,7 @@ it("Q3 remote correlation mints a real Host run and retains source-session marks
       updatedAt: 1,
     } as never)
     const turn = await beginRemotePersonalRun("q3-remote")
+    expect(await getDb().executionRuns.where("sessionId").equals("q3-remote").count()).toBe(1)
     expect(await personalEgressFenced(turn.context)).toBe(false)
     await getDb().messages.put({
       id: "q3-secret",

@@ -25,6 +25,8 @@ import { projectAccess, type ProjectAccess } from "./project-access"
  */
 
 export interface CreateThreadInput {
+  /** Supplied by Host tool context, never parsed from the model brief. */
+  parentExecutionRunId?: string
   projectId: string
   coordinatorSessionId: string
   brief: SpawnedTaskBrief
@@ -110,6 +112,7 @@ export async function createThreadSession(
   const model = config.model.threads
 
   const projectThread: ProjectThreadState = {
+    ...(input.parentExecutionRunId ? { parentExecutionRunId: input.parentExecutionRunId } : {}),
     coordinatorSessionId: coordinator.id,
     brief: prompt,
     ...(root && input.rootId ? { rootId: root.id } : {}),

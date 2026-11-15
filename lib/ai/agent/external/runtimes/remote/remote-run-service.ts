@@ -293,8 +293,12 @@ export async function beginRemotePersonalRun(
     parentRunId: parent?.id,
     title: "Remote external turn",
   })
+  const { bindExternalRunAuthority } = await import("../../policy/run-authority")
   return {
-    context: { personalSources: [{ executionRunId: run.id }, { sessionId, sessionDerived: true }] },
+    context: bindExternalRunAuthority(
+      { personalSources: [{ executionRunId: run.id }, { sessionId, sessionDerived: true }] },
+      run.id
+    ),
     finish: () => finishToolExecutionRun(run.id),
   }
 }

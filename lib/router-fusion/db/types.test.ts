@@ -12,6 +12,7 @@ import type {
   FusionOutboxRow,
   FusionReservationRow,
   FusionReservationState,
+  FusionRunRow,
 } from "./types"
 
 /** Compile-time: `A` and `B` name exactly the same set of values. */
@@ -19,6 +20,11 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 const same = <A, B>(proof: Same<A, B>) => proof
 
 describe("fusion row types", () => {
+  it("retains optional coordinator lineage without requiring it on legacy fusion rows", () => {
+    expect(same<FusionRunRow["parentExecutionRunId"], string | undefined>(true)).toBe(true)
+    const legacy: Pick<FusionRunRow, "runId" | "parentExecutionRunId"> = { runId: "legacy" }
+    expect(legacy.parentExecutionRunId).toBeUndefined()
+  })
   it("requires a due time and admits inspectable dead letters", () => {
     expect(same<FusionOutboxRow["nextAttemptAt"], number>(true)).toBe(true)
     expect(

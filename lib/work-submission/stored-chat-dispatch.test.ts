@@ -14,8 +14,14 @@ const mockSendPrompt = jest.fn(async (..._args: unknown[]) => undefined)
 
 jest.mock("@/lib/claude/ipc", () => ({
   sendPrompt: (...args: unknown[]) => mockSendPrompt(...args),
-  TranscriptRuntimeRecoveryError:
-    jest.requireActual("@/lib/claude/ipc").TranscriptRuntimeRecoveryError,
+  // The transport's real module re-enters this mock through the plugin bridge.
+  // Keep its typed error at the mocked transport boundary without loading IPC.
+  TranscriptRuntimeRecoveryError: class extends Error {
+    constructor(readonly code: string) {
+      super(code)
+      this.name = "TranscriptRuntimeRecoveryError"
+    }
+  },
 }))
 const mockAbortRouterFusionSend = jest.fn(async (..._args: unknown[]) => undefined)
 jest.mock("@/lib/router-fusion/gate/chat-send", () => ({

@@ -49,7 +49,7 @@ describe("capability-resolver", () => {
       expect(out.nativeAnthropicToolIds).toEqual([])
     })
 
-    it("applies add overlay as union with team default", () => {
+    it("extends the team defaults with an add overlay", () => {
       const team = makeTeam({ capabilities: { skillIds: ["s1", "s2"] } })
       const teammate = makeTeammate({ capabilities: { skillIds: { add: ["s3"] } } })
       expect(resolveTeammateCapabilities(team, teammate).skillIds).toEqual(["s1", "s2", "s3"])
@@ -66,11 +66,11 @@ describe("capability-resolver", () => {
       const teammate = makeTeammate({
         capabilities: { skillIds: { remove: ["s1"], add: ["s3"] } },
       })
-      // s1 removed, s2 retained, s3 appended.
+      // s1 is removed; s3 extends the default pool.
       expect(resolveTeammateCapabilities(team, teammate).skillIds).toEqual(["s2", "s3"])
     })
 
-    it("`replace` short-circuits and ignores team default + add/remove", () => {
+    it("replaces the team defaults with a replace overlay", () => {
       const team = makeTeam({ capabilities: { skillIds: ["s1", "s2"] } })
       const teammate = makeTeammate({
         capabilities: {

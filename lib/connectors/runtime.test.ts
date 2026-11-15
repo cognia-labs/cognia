@@ -54,7 +54,7 @@ import {
   incompleteRunStop,
   type RunAndCaptureFn,
 } from "./runtime"
-import { hasNoLeakingPii } from "@cognia/redact"
+import { hasNoLeakingPii, redactText } from "@cognia/redact"
 import { notifyConversationOverIM } from "@/lib/notifications/conversation-notify"
 import { registerRunningAdapter, __resetLifecycleForTesting } from "./lifecycle"
 import { getBus, __resetBusForTesting } from "./bus"
@@ -2212,7 +2212,7 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
         },
       ],
     })
-    expect(run?.authority?.schemaVersion).toBe(1)
+    expect(run?.authority).toEqual({ schemaVersion: 1, caps: "explicit-v1" })
     const events = await getDb().executionRunEvents.where("runId").equals(run!.id).toArray()
     expect(events.map((item) => item.type)).toEqual(
       expect.arrayContaining(["run.started", "tool.started", "run.completed"])
@@ -2417,7 +2417,18 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
       inputSchema: z.object({}),
       execute: tool,
     })
-    const { sendPrompt } = await import("@/lib/claude/ipc")
+    const { sendPrompt, closeSession } = await import("@/lib/claude/ipc")
+    const nativeListeners = new Set<(event: unknown) => void>()
+    const transportSubscribe = jest
+      .spyOn(transport, "subscribe")
+      .mockImplementation((_name, handler) => {
+        const listener = handler as (event: unknown) => void
+        nativeListeners.add(listener)
+        return () => {
+          nativeListeners.delete(listener)
+        }
+      })
+    let nativeTurnId: string | undefined
     const { handlePluginToolExec, __setPluginToolResolverForTesting } =
       await import("@/lib/claude/plugin-tool-ipc")
     __setPluginToolResolverForTesting({ getTool: () => undefined })
@@ -2429,6 +2440,7 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
       async (sessionId, prompt, options) => {
         dispatched = true
         providerRunId = options.execution.identity.runId
+        nativeTurnId = options.turnId
         await sendPrompt(sessionId, prompt, options, { transcriptRuntime: "host-owned" })
         const attemptId = `${origin!.id}:attempt:tool-recovery-attempt`
         attemptAdmission = await admitPersonalCredential(
@@ -2481,11 +2493,86 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
       )
       expect(toolResponse).toMatchObject({ result: { status: "ok", data: { ok: false } } })
     } finally {
+      // Finish the native lifecycle while its transport is still installed.
+      // Otherwise its live egress fence survives this test's database restore.
+      await closeSession(session!.id)
+      for (const listener of [...nativeListeners])
+        listener({ type: "session_ended", sessionId: session!.id, turnId: nativeTurnId })
+      expect(nativeListeners.size).toBe(0)
+      transportSubscribe.mockRestore()
       transportCall.mockRestore()
       __setPluginToolResolverForTesting(null)
       getSharedBuiltInSkillRegistry().unregister("recovery.identity")
     }
   })
+
+  it.each([false, true])(
+    "resolves a pruned recovery origin without journaling it (native drift=%s)",
+    async (drift) => {
+      const event = makeEvent({
+        conversationKey: "telegram:adapter_1:pruned-correlation",
+        messageId: "same-message",
+      })
+      await callHandler(makeEvent({ ...event, messageId: "pruned-seed" }), "manual-store")
+      const session = await getDb().sessions.toCollection().first()
+      await getDb().sessions.update(session!.id, { sdkSessionId: "pruned-sdk" })
+      await callHandler(event, "ai-run")
+      const origin = await getDb().executionRuns.where("kind").equals("agent-turn").first()
+      const anchor = (
+        await getDb().executionRunEvents.where("runId").equals(origin!.id).toArray()
+      ).find((row) => row.type === "run.started")!.payload.recoveryAnchor as Record<string, unknown>
+      const originEvents = await getDb()
+        .executionRunEvents.where("runId")
+        .equals(origin!.id)
+        .toArray()
+      await getDb().executionRuns.delete(origin!.id)
+      if (drift)
+        await getDb().sessions.update(origin!.sessionId!, { sdkSessionId: "different-sdk" })
+      await callHandler(
+        makeEvent({
+          ...event,
+          channelData: {
+            recoveryIntent: "continue_safely",
+            dispatchIntent: "steer-replay",
+            recoveryAnchor: { ...anchor, attemptId: "pruned-attempt" },
+          },
+        }),
+        "ai-run"
+      )
+      expect(DEFAULT_RUN_AND_CAPTURE).toHaveBeenCalledTimes(drift ? 1 : 2)
+      expect(await getDb().executionRuns.get(`${origin!.id}:attempt:pruned-attempt`)).toMatchObject(
+        {
+          status: drift ? "recovery_required" : "completed",
+        }
+      )
+      expect(await getDb().executionRuns.get(origin!.id)).toBeUndefined()
+      expect(await getDb().executionRunEvents.where("runId").equals(origin!.id).toArray()).toEqual(
+        originEvents
+      )
+      expect(
+        (await getDb().executionRuns.get(`${origin!.id}:attempt:pruned-attempt`))?.parentRunId
+      ).toBeUndefined()
+      expect(
+        await getDb()
+          .executionRunEvents.where("runId")
+          .equals(`${origin!.id}:attempt:pruned-attempt`)
+          .toArray()
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "authority.observed",
+            seq: 0,
+            payload: expect.objectContaining({
+              operation: "recovery_parent_unavailable",
+              // UUIDs can contain numeric runs recognized as PII. Observations
+              // retain the exact redacted id, never the unredacted payload.
+              parentRunId: redactText(origin!.id).redacted,
+            }),
+          }),
+        ])
+      )
+    }
+  )
 
   it("continues a terminal run in a linked immutable journal run", async () => {
     const conversationKey = "telegram:adapter_1:chat_resume_existing_run"

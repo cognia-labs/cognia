@@ -52,6 +52,8 @@ export interface FusionRunError {
 }
 
 export interface FusionRunRow {
+  /** Host-captured project-thread coordinator; independent of the fusion ledger. */
+  parentExecutionRunId?: string
   runId: string
   sessionId: string | null
   surface: RouterFusionSurface

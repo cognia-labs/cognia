@@ -1,3 +1,14 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "admitted-child" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
+// Authority storage is exercised with real IndexedDB in run-authority.test.ts.
+jest.mock("@/lib/execution/run-authority", () => ({
+  ...jest.requireActual("@/lib/execution/run-authority"),
+  resolveRunAuthority: jest.fn(async () => ({})),
+  enforceRunAuthorityOnSendOptions: jest.fn(async () => undefined),
+}))
 import { addAgentUsage, agentTurnCapabilityGrant, runAgentTurn } from "./agent-turn"
 import type { StepExecutionContext } from "@/types/workflow/visual"
 
@@ -105,7 +116,8 @@ describe("runAgentTurn", () => {
     expect(mockRunCompletionRail).toHaveBeenCalledWith(
       "read library",
       expect.objectContaining({
-        executionIdentity: { runId: "execution:workflow:run1", sessionId: "run1" },
+        executionIdentity: { runId: "admitted-child", sessionId: "run1" },
+        parentRunId: "execution:workflow:run1",
         knowledgeAccess: {
           entrypoint: "http",
           triggeredBy: { initiator: { authenticated: true, principalId: "verified-subject" } },
@@ -238,6 +250,7 @@ describe("runAgentTurn", () => {
         systemPrompt: "be brief",
         allowedTools: ["Bash"],
         maxSteps: 5,
+        capabilityGrants: [expect.objectContaining({ tools: { restrictTo: ["Bash"] } })],
         temperature: 0.2,
         cwd: "C:/repo",
         toolsEnabled: true,
@@ -547,6 +560,12 @@ describe("runAgentTurn", () => {
 
 describe("agentTurnCapabilityGrant", () => {
   const source = { workflowId: "wf", stepId: "s" }
+
+  it("keeps own maxSteps and an empty tool list out of descendant caps", () => {
+    expect(
+      agentTurnCapabilityGrant({ maxTurns: 5, allowedTools: [] }, undefined, source)
+    ).toBeUndefined()
+  })
 
   it("is undefined when nothing is injected", () => {
     expect(

@@ -1,5 +1,6 @@
 import { personChatCapability } from "@/lib/headless/person-chat"
 import { archiveSessionScratchWorkspace } from "@/lib/task-workspace/managed-workspace"
+import { WorkSubmissionRejectedError } from "@/lib/work-submission/service"
 import {
   canonicalHostStateJson,
   hostStateDigest,
@@ -328,6 +329,8 @@ export function createAgentRpcHostStateDispatcher(
         const receipt = await workSubmissionAdapter
           .acceptHostStateChatTurn(action)
           .catch((error) => {
+            if (error instanceof WorkSubmissionRejectedError)
+              throw new HostStateDispatchAbandonedError(error.code)
             console.error("acceptHostStateChatTurn failed", error)
             return null
           })
@@ -397,6 +400,8 @@ export function createAgentRpcHostStateDispatcher(
             ])
             const session = await getSession(sessionId)
             if (!session) throw new Error("host_state_session_not_found")
+            if (!receipt && session.projectThread?.parentExecutionRunId)
+              throw new HostStateDispatchAbandonedError("host_state_thread_acceptance_unavailable")
             // Only the built-in rail is dispatched here. The chat controller
             // checks the same thing (`hostStateEligible`) before it enqueues;
             // an attached client that skipped the controller must be refused

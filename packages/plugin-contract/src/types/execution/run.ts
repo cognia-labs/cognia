@@ -404,8 +404,10 @@ export interface ExecutionRun {
   actingIdentity?: ActingIdentityV1
   /** Unindexed, run-scoped personal-data provenance (ADR-0243 phase 2A-1). */
   personalMarks?: PersonalMarkV1[]
-  /** ADR-0243 phase 1: recorded only; existing runtime ceilings remain authoritative. */
+  /** Explicit `caps: "explicit-v1"` ceilings bind descendants; unmarked records inherit only pools. */
   authority?: RunAuthorityV1
+  /** Host-retained inherited ceiling for an unparented journal recovery. Unindexed. */
+  recoveryAuthority?: RunAuthorityV1
   /** Verified owning Host for ADR-0233 acceptance projections and canonical deletion. */
   managedDesktopHostId?: string
   /** Independent deliverable obligation within a delegation. Absent means this run's id. */

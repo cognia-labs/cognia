@@ -1,3 +1,11 @@
+jest.mock("@/lib/execution/agent-state-bridge", () => ({
+  syncGoalExecutionRun: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "admitted-child" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
 import type { GoalPermissionResponder, RunGoalLoopInput } from "./goal-headless-runner"
 import type { Project } from "@/types"
 

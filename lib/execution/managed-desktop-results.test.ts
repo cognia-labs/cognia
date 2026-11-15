@@ -87,6 +87,7 @@ test.each([
       },
       authority: {
         schemaVersion: 1,
+        caps: "explicit-v1",
         permissionMode: "plan",
         pools: { rootRunId: "parent", costUsd: 1 },
       },

@@ -1915,3 +1915,44 @@ describe("OpenCodeClientAdapter — host ports", () => {
     expect(new OpenCodeClientAdapter(deps()).semantics).toBe(OPENCODE_SERVER_EXECUTION_SEMANTICS)
   })
 })
+
+it("sends an exhaustive native tool map for an inherited restriction", async () => {
+  const client = makeFakeClient()
+  client.tool.ids.mockResolvedValue({ data: ["read", "bash", "edit"] })
+  mockCreateOpencodeClient.mockReturnValue(client)
+  const adapter = new OpenCodeClientAdapter(deps())
+  await adapter.connect(buildConfig())
+  const session = await adapter.createSession()
+  await collect(
+    adapter.prompt(session.id, textMessage("inspect"), {
+      nativePolicy: { tools: { allow: ["Read", "Bash"], deny: ["Bash"] } },
+    })
+  )
+  expect(client.session.promptAsync).toHaveBeenCalledWith(
+    expect.objectContaining({
+      body: expect.objectContaining({ tools: { read: true, bash: false, edit: false } }),
+    })
+  )
+  await adapter.disconnect()
+})
+
+it("refuses argument denies before sending an over-narrowed native tool map", async () => {
+  const client = makeFakeClient()
+  mockCreateOpencodeClient.mockReturnValue(client)
+  const adapter = new OpenCodeClientAdapter(deps())
+  await adapter.connect(buildConfig())
+  const session = await adapter.createSession()
+  await expect(
+    collect(
+      adapter.prompt(session.id, textMessage("inspect"), {
+        nativePolicy: { tools: { deny: ["Bash(rm:*)"] } },
+      })
+    )
+  ).rejects.toMatchObject({
+    reason: "unsupported_authority",
+    field: "tools.deny",
+    pattern: "Bash(rm:*)",
+  })
+  expect(client.session.promptAsync).not.toHaveBeenCalled()
+  await adapter.disconnect()
+})

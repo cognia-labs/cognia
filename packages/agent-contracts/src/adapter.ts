@@ -116,6 +116,9 @@ export interface ExternalAgentListedSession {
  * @see https://agentclientprotocol.com/protocol/session-setup
  */
 export interface SessionCreateOptions {
+  /** Host-translated hard native policy, never an approval allow-list. */
+  nativePolicy?: import("./external-agent").ExternalAgentNativePolicy
+
   /** Working directory for the session (absolute path, required by ACP) */
   cwd?: string
   /** Additional absolute workspace roots (ACP `additionalDirectories`). */
@@ -588,11 +591,12 @@ export function missingAdapterCoreMethods(candidate: object): string[] {
  */
 export class ExternalAgentAdapterContractError extends Error {
   readonly code = "adapter_contract_violation" as const
-  constructor(
-    readonly protocol: string,
-    readonly missing: readonly string[]
-  ) {
+  readonly protocol: string
+  readonly missing: readonly string[]
+  constructor(protocol: string, missing: readonly string[]) {
     super(`External-agent adapter "${protocol}" does not implement: ${missing.join(", ")}`)
+    this.protocol = protocol
+    this.missing = missing
     this.name = "ExternalAgentAdapterContractError"
   }
 }
@@ -603,11 +607,12 @@ export class ExternalAgentAdapterContractError extends Error {
  */
 export class ExternalAgentUnsupportedOperationError extends Error {
   readonly code = "operation_unsupported" as const
-  constructor(
-    readonly protocol: string,
-    readonly operation: string
-  ) {
+  readonly protocol: string
+  readonly operation: string
+  constructor(protocol: string, operation: string) {
     super(`External-agent adapter "${protocol}" does not support ${operation}`)
+    this.protocol = protocol
+    this.operation = operation
     this.name = "ExternalAgentUnsupportedOperationError"
   }
 }

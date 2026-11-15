@@ -1,3 +1,5 @@
+import type { RunAuthorityV1 } from "@/types/execution/run"
+import { RunAuthorityError } from "@/lib/execution/run-authority"
 /** Portable execution ceilings shared by dispatcher and receiver. No credentials or host paths. */
 import type { HandoffPolicyV1 } from "@cognia/agent/handoff-envelope"
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
@@ -10,8 +12,39 @@ export const REMOTE_WORKER_POLICY_CAPABILITY = "worker-policy-v1"
 export function encodeRemoteWorkerPolicy(
   ceiling: AgentPermissionCeiling,
   sandboxRequired: boolean,
-  workspaceRoot?: string
+  workspaceRoot?: string,
+  authority?: RunAuthorityV1,
+  runAuthorityMcpServerIds: Readonly<Record<string, string>> = {}
 ): HandoffPolicyV1 | undefined {
+  // worker-policy-v1 has no receiver for these dimensions. Refuse before placement.
+  const unsupported = (["skills", "subagents", "maxTurns", "permissionProfile"] as const).filter(
+    (field) => authority?.[field] !== undefined
+  )
+  if (unsupported.length)
+    throw new RunAuthorityError(
+      "unsupported_authority",
+      `remote Squad worker: ${unsupported.join(", ")}`
+    )
+  if (authority?.permissionMode === "auto")
+    throw new RunAuthorityError("unsupported_authority", "remote Squad worker: permissionMode.auto")
+  ceiling = deriveExternalSessionPermission(
+    {
+      ...(authority?.permissionMode ? { permissionMode: authority.permissionMode } : {}),
+      ...(authority?.tools?.allow ? { allowedTools: authority.tools.allow } : {}),
+      ...(authority?.tools?.deny ? { disallowedTools: authority.tools.deny } : {}),
+      ...(authority?.mcpServers?.only
+        ? {
+            mcpServers: authority.mcpServers.only.map((id) => ({
+              name:
+                Object.entries(runAuthorityMcpServerIds).find(
+                  ([, serverId]) => serverId === id
+                )?.[0] ?? id,
+            })),
+          }
+        : {}),
+    },
+    ceiling
+  )
   if (!Object.keys(ceiling).length && !sandboxRequired) return undefined
   const portableRoots = (roots: string[] | undefined): string[] | undefined =>
     roots?.map((root) => {
@@ -33,7 +66,9 @@ export function encodeRemoteWorkerPolicy(
     ...(ceiling.permissionMode ? { permissionMode: ceiling.permissionMode } : {}),
     ...(ceiling.allowedTools ? { allowedTools: [...ceiling.allowedTools] } : {}),
     ...(ceiling.disallowedTools ? { disallowedTools: [...ceiling.disallowedTools] } : {}),
-    ...(ceiling.mcpServers ? { mcpServerNames: ceiling.mcpServers.map(({ name }) => name) } : {}),
+    ...(ceiling.mcpServers
+      ? { mcpServerNames: ceiling.mcpServers.map(({ name }: { name: string }) => name) }
+      : {}),
     sandboxRequired: sandboxRequired || !!policy,
     ...(policy
       ? {
@@ -61,7 +96,7 @@ export function decodeRemoteWorkerPolicy(
     ...(policy.allowedTools ? { allowedTools: [...policy.allowedTools] } : {}),
     ...(policy.disallowedTools ? { disallowedTools: [...policy.disallowedTools] } : {}),
     ...(policy.mcpServerNames
-      ? { mcpServers: policy.mcpServerNames.map((name) => ({ name })) }
+      ? { mcpServers: policy.mcpServerNames.map((name: string) => ({ name })) }
       : {}),
     ...(policy.sandboxPolicy
       ? {

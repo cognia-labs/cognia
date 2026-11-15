@@ -1,3 +1,4 @@
+import { externalAuthorityStepGuard } from "./policy/run-authority"
 import { bindPersonalOperationSources } from "@/lib/execution/personal-operation"
 import {
   personalEgressOptionsSource,
@@ -3509,6 +3510,7 @@ export class ExternalAgentManager {
       instructionEnvelope: options?.instructionEnvelope,
       permissionMode: this.resolveEffectivePermissionMode(instance, options?.permissionMode),
       allowedTools: options?.allowedTools,
+      nativePolicy: options?.nativePolicy,
       timeout: options?.timeout,
       mcpServers,
       additionalDirectories,
@@ -3596,6 +3598,17 @@ export class ExternalAgentManager {
     ) {
       session = undefined
       preferredSessionId = undefined
+    }
+    // Re-enter the existing, visibility-checked resume route to apply Codex's
+    // per-thread policy. A cached native session never silently keeps its old MCP floor.
+    if (
+      session &&
+      options?.nativePolicy &&
+      ["codex-app-server", "codex-siwc-app-server"].includes(instance.config.protocol) &&
+      JSON.stringify(session.metadata?.nativePolicy) !== JSON.stringify(options.nativePolicy)
+    ) {
+      preferredSessionId = session.id
+      session = undefined
     }
     const prepare = protocolAdapterRegistry.runtimePolicy(
       instance.config.protocol
@@ -4250,6 +4263,15 @@ export class ExternalAgentManager {
     // Resumes retain the sources already consumed by that native session;
     // new content callers add their exact Host run at the dispatch boundary.
     const personalContext = this.executionPersonalSource(agentId, options)
+    const { enforceExternalRunAuthority } = await import("./policy/run-authority")
+    const authorityOptions = await enforceExternalRunAuthority(
+      personalEgressOptionsSource(options),
+      options,
+      this.instances.get(agentId)?.config
+    )
+    if (authorityOptions && authorityOptions !== options) {
+      options = bindPersonalEgressOptions(authorityOptions, personalContext)
+    }
     let releasePersonal = () => {}
     try {
       const fenced = await personalEgressFenced(personalContext)
@@ -4352,6 +4374,9 @@ export class ExternalAgentManager {
 
     const session = await this.resolveExecutionSession(adapter, instance, options)
 
+    const authoritySteps = externalAuthorityStepGuard(options, (reason) =>
+      this.cancelSessionQuietly(agentId, session.id, reason)
+    )
     const canonicalRunId = options?.traceContext?.traceId ?? session.id
     const canonicalEnvelope = createEnvelopeSequencer({
       sessionId: session.id,
@@ -4449,6 +4474,7 @@ export class ExternalAgentManager {
         }
 
         const event = nextResult.value
+        await authoritySteps.observe(event)
         await appendCanonicalEnvelopes(canonicalRunId, [
           redactAgentEventEnvelope(
             canonicalEnvelope(canonicalEventFromExternalEvent(event as unknown as { type: string }))
@@ -4482,6 +4508,14 @@ export class ExternalAgentManager {
           void traceBridge.onEvent(hookEvent)
         }
         if (event.type === "permission_request") {
+          if (options?.inheritedRunAuthority?.permissionProfile && options.onPermissionRequest) {
+            await this.respondToPermission(
+              agentId,
+              session.id,
+              await options.onPermissionRequest(event.request)
+            )
+            continue
+          }
           const blocked = await gateExternalAgentPermission(
             hookCtx,
             event,
@@ -4512,6 +4546,17 @@ export class ExternalAgentManager {
         yield event
       }
 
+      if (authoritySteps.reason) {
+        streamSuccess = false
+        streamError = authoritySteps.reason
+        yield {
+          type: "error",
+          sessionId: session.id,
+          timestamp: new Date(),
+          error: streamError,
+          recoverable: false,
+        }
+      }
       await traceBridge.onComplete({
         success: streamSuccess,
         finalResponse: "",
@@ -4717,6 +4762,15 @@ export class ExternalAgentManager {
     // Resumes retain the sources already consumed by that native session;
     // new content callers add their exact Host run at the dispatch boundary.
     const personalContext = this.executionPersonalSource(agentId, options)
+    const { enforceExternalRunAuthority } = await import("./policy/run-authority")
+    const authorityOptions = await enforceExternalRunAuthority(
+      personalEgressOptionsSource(options),
+      options,
+      this.instances.get(agentId)?.config
+    )
+    if (authorityOptions && authorityOptions !== options) {
+      options = bindPersonalEgressOptions(authorityOptions, personalContext)
+    }
     let releasePersonal = () => {}
     try {
       const fenced = await personalEgressFenced(personalContext)
@@ -4858,6 +4912,9 @@ export class ExternalAgentManager {
       timestamp: new Date(),
     }
 
+    const authoritySteps = externalAuthorityStepGuard(options, (reason) =>
+      this.cancelSessionQuietly(agentId, session.id, reason)
+    )
     const retryConfig = this.resolveRetryConfig(instance)
     const executionTimeoutMs = this.resolveExecutionTimeoutMs(instance, options)
     // Codex owns response retries inside its native turn. A timeout or failed
@@ -4941,6 +4998,12 @@ export class ExternalAgentManager {
                 }
               : {}),
             onEvent: (event) => {
+              void authoritySteps.observe(event)?.catch((error) => {
+                externalAgentManagerLogger.warn("Authority cancellation failed", {
+                  agentId,
+                  error: this.normalizeErrorMessage(error),
+                })
+              })
               // Adapters can synthesize failed/cancelled terminal frames on
               // transport loss, before interruption is acknowledged. Positive
               // completion proves only the turn ended. Host children require
@@ -4976,6 +5039,7 @@ export class ExternalAgentManager {
               // forwarded as a synthetic `hook_fire` event so the chat shows an
               // inline hook-notice row.
               if (event.type === "permission_request") {
+                if (options?.inheritedRunAuthority?.permissionProfile) return
                 void gateExternalAgentPermission(
                   hookCtx,
                   event,
@@ -5022,6 +5086,7 @@ export class ExternalAgentManager {
           if (
             !attemptResult.success &&
             attempt < maxExecutionRetries &&
+            !authoritySteps.reason &&
             !sawExecutionActivity &&
             !attemptResult.toolCalls?.length &&
             !attemptResult.messages?.some((message) => message.role === "assistant") &&
@@ -5050,12 +5115,15 @@ export class ExternalAgentManager {
             continue
           }
 
-          result = attemptResult
+          result = authoritySteps.reason
+            ? { ...attemptResult, success: false, error: authoritySteps.reason }
+            : attemptResult
           break
         } catch (error) {
           lastError = error
           const shouldRetry =
             attempt < maxExecutionRetries &&
+            !authoritySteps.reason &&
             !sawExecutionActivity &&
             this.isRetryableError(error, retryConfig.retryOnErrors) &&
             !(options?.signal?.aborted ?? false)

@@ -42,6 +42,16 @@ describe("buildSquadStartInput", () => {
     })
   })
 
+  it("inherits the coordinator parent captured on a chat thread", () => {
+    const thread = {
+      ...session,
+      projectThread: { parentExecutionRunId: "coordinator" },
+    } as ChatSession
+    const input = build({ kind: "chat", person: true, session: thread })
+    expect(input.authorityParentRunId).toBe("coordinator")
+    expect(input.parentRunId).toBeUndefined()
+  })
+
   it("names a conversation it could not load by id, without starting in it", () => {
     const input = build({ kind: "chat", person: false, sessionId: "chat-9" })
     expect(input.triggeredFrom).toEqual({ source: "chat", sessionId: "chat-9" })

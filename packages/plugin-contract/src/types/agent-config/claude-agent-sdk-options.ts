@@ -26,6 +26,26 @@
 
 import type { AgentEffortLevel } from "./agent-modes"
 
+/** Only these Host-built SDK servers bypass registry-id MCP caps. */
+export function runAuthorityAllowsMcpServer(
+  name: string,
+  config: unknown,
+  serverIds: Readonly<Record<string, string>> | undefined,
+  only: readonly string[]
+): boolean {
+  if (
+    ["cognia-tools", "cognia-plugin-tools", "a2ui-bridge"].includes(name) &&
+    config !== null &&
+    typeof config === "object" &&
+    "type" in config &&
+    config.type === "sdk" &&
+    "instance" in config
+  )
+    return true
+  const id = serverIds && Object.hasOwn(serverIds, name) ? serverIds[name] : undefined
+  return id !== undefined && only.includes(id)
+}
+
 /**
  * Sandbox settings, layered ON TOP of the sidecar's own workspace confinement
  * (`builtin-tools/confinement.mjs`) rather than replacing it. Two independent

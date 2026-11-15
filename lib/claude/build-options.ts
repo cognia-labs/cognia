@@ -217,6 +217,7 @@ import {
   applyCapabilityIdDelta,
   capPermissionModeByGrant,
   filterSubagentsByGrant,
+  subagentKeyMatches,
   foldCapabilityGrants,
   type AgentCapabilityGrantV1,
 } from "@cognia/agent-config-types/agent-capability-grant"
@@ -474,6 +475,8 @@ async function resolveSummaryProviderForCompaction(args: {
 }
 
 export interface BuildOptionsContext {
+  /** Launch knobs affect this run only, never descendant authority. */
+  ownOptionGrants?: readonly AgentCapabilityGrantV1[]
   /** Host proof before the turn exists; never a serialized origin label. */
   personalCredentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   /** Partition-only ticket route; skips all Host credential and workspace resolution. */
@@ -817,6 +820,8 @@ export interface BuildOptionsContext {
    * this instead of patching `SendOptions` after the resolver returns.
    */
   capabilityGrants?: readonly AgentCapabilityGrantV1[]
+  /** This run's selected subagents; configuration does not cap descendants. */
+  subagentIds?: readonly string[]
   /**
    * Pre-resolved MCP server list, injected by desktop-independent callers
    * (the standalone agent CLI) that cannot reach Dexie. When provided —
@@ -894,6 +899,8 @@ export interface BuildOptionsContext {
   turnId?: string
   /** Final per-run identity supplied by durable execution owners before minting. */
   executionIdentity?: Partial<AgentExecutionIdentity>
+  /** Host chat routing preflight: resolve options without admitting a local run. */
+  deferredExecutionRun?: { parentRunId?: string }
   /**
    * Pre-minted parent trace. When set (and `emitTrace`), `resolveSendOptions`
    * does NOT mint a new root span; it stamps these ids onto `SendOptions`
@@ -1329,9 +1336,56 @@ export function resolvedSessionAsideRuntime(options: SendOptions): AgentRuntimeR
 }
 
 export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<SendOptions> {
+  if (ctx.executionIdentity?.runId === "") {
+    ctx = { ...ctx, executionIdentity: { ...ctx.executionIdentity, runId: undefined } }
+  }
   // This is a Host dispatch reference, never an identity supplied by messages.
   const historySessionId = ctx.session?.id
-  const historyRunId = ctx.personalCredentialContext?.executionRunId ?? ctx.executionIdentity?.runId
+  const turnRunId =
+    ctx.executionIdentity?.runId || ctx.personalCredentialContext?.executionRunId || undefined
+  const { resolveRunAuthority, enforceRunAuthorityOnSendOptions, setRunAuthorityMcpServerIds } =
+    await import("@/lib/execution/run-authority")
+  const deferredParentId = ctx.deferredExecutionRun?.parentRunId
+  const deferredParent = deferredParentId
+    ? await (await import("@/lib/db/execution-runs")).getExecutionRun(deferredParentId)
+    : undefined
+  // Privacy readers and egress belong to this turn even before acceptance.
+  // An absent row is unverified; borrowing its parent's id would bypass that fence.
+  const historyRunId = turnRunId
+  const inheritedAuthority = ctx.deferredExecutionRun
+    ? deferredParent
+      ? (await resolveRunAuthority({ parentRunId: deferredParent.id })).authority
+      : undefined
+    : historyRunId
+      ? (await resolveRunAuthority({ runId: historyRunId })).inheritedAuthority
+      : undefined
+  const authorityGrant: AgentCapabilityGrantV1 | undefined = inheritedAuthority
+    ? {
+        schemaVersion: 1,
+        source: { kind: "subagent", id: historyRunId },
+        permissionMode: inheritedAuthority.permissionMode,
+        tools: {
+          restrictTo: inheritedAuthority.tools?.allow,
+          deny: inheritedAuthority.tools?.deny,
+        },
+        mcpServers: inheritedAuthority.mcpServers,
+        subagents: inheritedAuthority.subagents,
+        maxTurns: inheritedAuthority.maxTurns,
+        permissionProfile: inheritedAuthority.permissionProfile,
+      }
+    : undefined
+  const permittedSkill = (id: string) =>
+    [inheritedAuthority?.skills?.only, grant?.skills?.only, grant?.skills?.restrictTo].every(
+      (only) =>
+        !only ||
+        only.includes(id) ||
+        only.some(
+          (allowed) =>
+            resolveBuiltinSkillIdentity(allowed)?.bundleId ===
+              resolveBuiltinSkillIdentity(id)?.bundleId &&
+            resolveBuiltinSkillIdentity(id) !== undefined
+        )
+    )
   const { personalEgressFenced } = await import("@/lib/execution/personal-egress")
   let personalContextReadersDigest: string | undefined
   const historyText = async (
@@ -1596,7 +1650,9 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // at the stage of the profile field it extends.
   // Keep the pre-routing authority even when fallback drops the original persona.
   const readOnlyAside = Boolean(asideBinding && requiresReadOnlyAside)
+  const readOnlyAsideCap = readOnlyAside && session?.asideWriteAccess !== true
   const asideGrants: AgentCapabilityGrantV1[] = []
+  const asideOptionGrants: AgentCapabilityGrantV1[] = []
   // A conversation the user started from the Browser Companion's agent mode
   // acts in that browser (ADR-0228 §6). The browser-companion module's
   // contribution says so to the model; the browser tools themselves are
@@ -1605,7 +1661,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const extensionBinding = session?.id ? extensionBindingFor(session.id) : null
   if (asideBinding) {
     if (asideParentPermission) {
-      asideGrants.push({
+      asideOptionGrants.push({
         schemaVersion: 1,
         source: { kind: "subagent", id: session!.id },
         permissionMode: asideParentPermission.permissionMode,
@@ -1615,7 +1671,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         },
       })
     }
-    asideGrants.push({
+    ;(readOnlyAsideCap ? asideGrants : asideOptionGrants).push({
       schemaVersion: 1,
       source: { kind: "subagent", id: session!.id },
       ...(readOnlyAside
@@ -1657,10 +1713,13 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       )
     }
   }
+  const localGrants = [...(ctx.capabilityGrants ?? []), ...contributed.grants, ...asideGrants]
+  const localGrant = foldCapabilityGrants(localGrants)
   const grant = foldCapabilityGrants([
-    ...(ctx.capabilityGrants ?? []),
-    ...contributed.grants,
-    ...asideGrants,
+    ...(authorityGrant ? [authorityGrant] : []),
+    ...(ctx.ownOptionGrants ?? []),
+    ...asideOptionGrants,
+    ...localGrants,
   ])
   if (grant?.maxTurns !== undefined) opts.maxTurns = grant.maxTurns
   if (grant?.maxBudgetUsd !== undefined) opts.maxBudgetUsd = grant.maxBudgetUsd
@@ -1672,7 +1731,9 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   let skills: Skill[] = []
   // A grant's skills join the character's own set (same invocation policy,
   // same budget); its removals join the session's disables.
-  const characterSkillIds = applyCapabilityIdDelta(character?.skillIds ?? [], grant?.skills)
+  const characterSkillIds = applyCapabilityIdDelta(character?.skillIds ?? [], grant?.skills).filter(
+    permittedSkill
+  )
   const ephemeralIds = ctx.ephemeralSkillIds ?? []
   const explicitBuiltInSkillIds = ephemeralIds.filter((id) => resolveBuiltinSkillIdentity(id))
   if (characterSkillIds.length || ephemeralIds.length) {
@@ -1711,6 +1772,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // Product built-ins are delivered exclusively by resolveSkillDelivery below.
   // Keeping them in this legacy list would bypass descriptor triggers and
   // duplicate request-scoped/injected bodies.
+  skills = skills.filter((skill) => permittedSkill(skill.id))
   const enabledBuiltInSkillIds = new Set(
     skills.flatMap((skill) => {
       const identity =
@@ -2109,6 +2171,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
             ...(ctx.backgroundDeliveryId ? { runId: ctx.backgroundDeliveryId } : {}),
             requested: explicitRunMode ? (requestedRunMode as "cascade" | "panel") : "auto",
             sessionId: session!.id,
+            parentExecutionRunId:
+              ctx.deferredExecutionRun?.parentRunId ?? session?.projectThread?.parentExecutionRunId,
             promptText: promptText ?? "",
             hasImages,
             workspaceId: capabilityScope.projectId,
@@ -2603,9 +2667,11 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
           remove: grant?.skills?.remove,
         }
       )
-      const resolvedPlugin = await resolveSkillsForCharacter(pluginSkillIds, capabilityScope, [
-        ...explicitSkillIds,
-      ])
+      const resolvedPlugin = await resolveSkillsForCharacter(
+        pluginSkillIds.filter(permittedSkill),
+        capabilityScope,
+        [...explicitSkillIds]
+      )
       // Anthropic-managed ("container") skills cannot be delivered through the
       // Claude Agent SDK: no `query()` option attaches uploaded skill_ids
       // (verified against sdk 0.3.x — see `skills-bridge.ts`). Rather than
@@ -3299,6 +3365,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         },
       })
       chosen = chosen.filter((server) => Object.hasOwn(opts.mcpServers ?? {}, server.name))
+      setRunAuthorityMcpServerIds(opts, chosen)
 
       // `declared_by` locators for hook tool_provenance — same keys as the
       // wire map above. File-loaded rows carry `declaredBy` from the loader;
@@ -3952,7 +4019,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   if (session?.id && (sandboxEnabled || computerUseAllowedForChat)) {
     const bindInput = {
       sessionId: session.id,
-      executionRunId: historyRunId,
+      executionRunId: turnRunId,
       // A character-scoped managed desktop delegation (ADR-0233 A5) names the
       // character, so the Host can match calls from any of its sessions.
       characterId: character?.id,
@@ -4684,12 +4751,20 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
 
   // --- Capability-grant subagent restriction ------------------------------
   // A grant's `subagents.only` keeps just the named entries of the map every
-  // branch above registered (a teammate's `subagentIds`, for instance). Runs
+  // branch above registered. Runs
   // before `@agent` routing so a turn cannot be routed to a filtered agent.
   if (grant?.subagents?.only) {
     const kept = filterSubagentsByGrant(opts.agents, grant)
     if (kept) opts.agents = kept
     else delete opts.agents
+  }
+  if (ctx.subagentIds && opts.agents) {
+    opts.agents = Object.fromEntries(
+      Object.entries(opts.agents).filter(([key]) =>
+        ctx.subagentIds!.some((id) => subagentKeyMatches(key, id))
+      )
+    )
+    if (!Object.keys(opts.agents).length) delete opts.agents
   }
 
   // --- @agent single-turn routing ------------------------------------------
@@ -4793,7 +4868,16 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         appendSystemPrompt: opts.appendSystemPrompt,
         allowedTools: opts.allowedTools,
       },
-      { sessionId: session.id, executionRunId: historyRunId }
+      {
+        sessionId: session.id,
+        executionRunId: turnRunId,
+        ...(ctx.deferredExecutionRun
+          ? {
+              executionRunReserved: true as const,
+              ...(deferredParent ? { executionRunParentId: deferredParent.id } : {}),
+            }
+          : {}),
+      }
     )
     if (patched.model) opts.model = patched.model
     if (patched.systemPrompt !== undefined) opts.systemPrompt = patched.systemPrompt
@@ -5014,6 +5098,11 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     ...(identityReplacedBase ? ["digital-twin"] : []),
     ...(ctx.activeGoal?.status === "active" || ctx.activeLoop === true ? ["goal-loop"] : []),
   ]
+  if (grant?.skills?.only ?? grant?.skills?.restrictTo ?? inheritedAuthority?.skills?.only) {
+    for (const entry of BUILT_IN_SKILL_CATALOG) {
+      if (!permittedSkill(entry.id)) skillStates[entry.id] = "disabled"
+    }
+  }
   const skillDelivery = resolveSkillDelivery({
     surfaces,
     intents: ctx.skillIntents,
@@ -5814,37 +5903,64 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     throw new Error(
       "Active stream or turn interceptors require an AI SDK runtime; the native Claude SDK exposes no model-step gate"
     )
-  // ADR-0243 phase 1: persist the resolved ceiling without changing what dispatch reads.
-  if (session?.id) {
-    void import("@/lib/execution/acting-authority")
-      .then(({ recordRunAuthority }) =>
-        recordRunAuthority(
-          session.id,
-          {
-            schemaVersion: 1,
-            ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
-            ...(opts.allowedTools || opts.disallowedTools
-              ? {
-                  tools: {
-                    ...(opts.allowedTools ? { allow: opts.allowedTools } : {}),
-                    ...(opts.disallowedTools ? { deny: opts.disallowedTools } : {}),
-                  },
-                }
+  // Only policy inputs constrain descendants; profile defaults and selections do not.
+  opts.runAuthority = {
+    schemaVersion: 1,
+    caps: "explicit-v1",
+    ...(localGrant?.permissionMode || readOnlyAsideCap
+      ? {
+          permissionMode: localGrant?.permissionMode ?? "plan",
+        }
+      : {}),
+    ...(localGrant?.tools?.restrictTo || localGrant?.tools?.deny
+      ? {
+          tools: {
+            ...(localGrant?.tools?.restrictTo !== undefined
+              ? { allow: localGrant.tools.restrictTo }
               : {}),
-            ...(opts.mcpServers ? { mcpServers: { only: Object.keys(opts.mcpServers) } } : {}),
-            ...(opts.agents ? { subagents: { only: Object.keys(opts.agents) } } : {}),
-            ...(characterSkillIds.length || ephemeralIds.length
-              ? {
-                  skills: { only: [...skills.map((skill) => skill.id), ...enabledBuiltInSkillIds] },
-                }
-              : {}),
-            ...(opts.permissionProfile ? { permissionProfile: opts.permissionProfile } : {}),
-            ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
+            deny: [...new Set([...(localGrant?.tools?.deny ?? [])])],
           },
-          ctx.executionIdentity?.runId
-        )
-      )
-      .catch(() => undefined)
+        }
+      : {}),
+    ...(localGrant?.mcpServers?.only ? { mcpServers: { only: localGrant.mcpServers.only } } : {}),
+    ...((localGrant?.skills?.only ?? localGrant?.skills?.restrictTo)
+      ? { skills: { only: localGrant?.skills?.only ?? localGrant?.skills?.restrictTo } }
+      : {}),
+    ...(localGrant?.subagents?.only ? { subagents: { only: localGrant.subagents.only } } : {}),
+    ...(localGrant?.maxTurns !== undefined ? { maxTurns: localGrant.maxTurns } : {}),
+    ...(localGrant?.permissionProfile ? { permissionProfile: localGrant.permissionProfile } : {}),
+  }
+  const { meetRunAuthority } =
+    await import("@cognia/plugin-contract/types/execution/acting-identity")
+  // ctx.permissionCeiling is the parent's resolved surface, already applied
+  // above with HEAD semantics. Only persisted authority constrains descendants.
+  if (readOnlyAsideCap)
+    opts.runAuthority = meetRunAuthority(opts.runAuthority, {
+      schemaVersion: 1,
+      permissionMode: "plan",
+    })
+  if (localGrant?.skills?.restrictTo)
+    opts.runAuthority = meetRunAuthority(opts.runAuthority, {
+      schemaVersion: 1,
+      skills: { only: localGrant.skills.restrictTo },
+    })
+  if (opts.runAuthority.skills?.only)
+    opts.runAuthority.skills.only = [
+      ...new Set(
+        opts.runAuthority.skills.only.map((id) => resolveBuiltinSkillIdentity(id)?.bundleId ?? id)
+      ),
+    ]
+  // Re-read ancestor authority after all transforms; persist before dispatch.
+  if (historyRunId && !ctx.deferredExecutionRun) {
+    await enforceRunAuthorityOnSendOptions(historyRunId, opts, [
+      ...skills.map((skill) => skill.id),
+      ...enabledBuiltInSkillIds,
+      ...pluginUsageIds,
+    ])
+  } else if (ctx.deferredExecutionRun && inheritedAuthority) {
+    const { applyRunAuthorityToSendOptions } = await import("@/lib/execution/run-authority")
+    opts.inheritedRunAuthority = inheritedAuthority
+    applyRunAuthorityToSendOptions(opts, inheritedAuthority)
   }
   return opts
 }

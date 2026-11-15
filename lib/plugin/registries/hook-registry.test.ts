@@ -231,3 +231,21 @@ it("R11 synchronous stream notification returns void and skips cold delivery", a
     restore()
   }
 })
+
+it("delivers an asynchronous chat-error notification from a cold reserved context", async () => {
+  const { bindPluginCallbacks } = await import("@/lib/plugin/core/invocation-identity")
+  const { configurePersonalDispatchFence } = await import("@/lib/execution/personal-operation")
+  const restore = configurePersonalDispatchFence(() => undefined)
+  const guest = jest.fn(async () => undefined)
+  try {
+    registerPluginHookContribution("r15-chat-error", { onChatError: guest })
+    const callback = bindPluginCallbacks("r15-chat-error", guest, () => ({
+      executionRunId: "r15-reserved",
+      executionRunReserved: true,
+    }))
+    await callback()
+    expect(guest).toHaveBeenCalledTimes(1)
+  } finally {
+    restore()
+  }
+})

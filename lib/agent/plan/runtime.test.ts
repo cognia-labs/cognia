@@ -1200,26 +1200,34 @@ describe("continueInSessionPlan (retry / skip / complete / resume)", () => {
   )
 
   it("retry re-runs the failed step as attempt 2 and hands back its turn", async () => {
-    const { rt, plan, failedStepId } = await halted()
-    const out = await rt.continueInSessionPlan(plan.id, "retry")
-    expect(out).toMatchObject({ kind: "continue", stepId: failedStepId })
-    if (out.kind !== "continue") throw new Error("expected continue")
-    expect(out.userMessage).toContain("Step 1 of 2")
+    // listPlanEvents orders by timestamp; use distinct instants for the two
+    // events instead of depending on random primary-key order within one ms.
+    let now = Date.now()
+    const clock = jest.spyOn(Date, "now").mockImplementation(() => ++now)
+    try {
+      const { rt, plan, failedStepId } = await halted()
+      const out = await rt.continueInSessionPlan(plan.id, "retry")
+      expect(out).toMatchObject({ kind: "continue", stepId: failedStepId })
+      if (out.kind !== "continue") throw new Error("expected continue")
+      expect(out.userMessage).toContain("Step 1 of 2")
 
-    const row = await rt.getPlan(plan.id)
-    expect(row?.status).toBe("executing")
-    expect(row?.generationId).toBe(out.generationId)
-    expect(row).not.toHaveProperty("stepHalt")
-    const step = row?.steps.find((s) => s.id === failedStepId)
-    expect(step?.status).toBe("in_progress")
-    expect(step?.attempts).toBe(2)
-    expect(step?.error).toBeUndefined()
-    expect(row?.turnDispatch?.stepId).toBe(failedStepId)
+      const row = await rt.getPlan(plan.id)
+      expect(row?.status).toBe("executing")
+      expect(row?.generationId).toBe(out.generationId)
+      expect(row).not.toHaveProperty("stepHalt")
+      const step = row?.steps.find((s) => s.id === failedStepId)
+      expect(step?.status).toBe("in_progress")
+      expect(step?.attempts).toBe(2)
+      expect(step?.error).toBeUndefined()
+      expect(row?.turnDispatch?.stepId).toBe(failedStepId)
 
-    const kinds = (await listPlanEvents(plan.id, 0)).map((e) => e.kind).reverse()
-    expect(kinds.slice(-2)).toEqual(["resumed", "step_started"])
-    const restarted = (await listPlanEvents(plan.id)).find((e) => e.kind === "step_started")
-    expect(restarted?.payload).toMatchObject({ attempt: 2 })
+      const kinds = (await listPlanEvents(plan.id, 0)).map((e) => e.kind).reverse()
+      expect(kinds.slice(-2)).toEqual(["resumed", "step_started"])
+      const restarted = (await listPlanEvents(plan.id)).find((e) => e.kind === "step_started")
+      expect(restarted?.payload).toMatchObject({ attempt: 2 })
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   it("skip takes the step out of the chain and starts the next one", async () => {

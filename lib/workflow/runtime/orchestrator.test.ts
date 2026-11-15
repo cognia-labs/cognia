@@ -141,6 +141,13 @@ describe("runWorkflow — end-to-end happy paths", () => {
 
   it("preserves an inherited trace and parent lineage", async () => {
     const workflow = buildWorkflow([], [])
+    await runWorkflow({ workflow, trigger, runId: "run_root" })
+    await runWorkflow({
+      workflow,
+      trigger,
+      runId: "run_parent",
+      lineage: { rootRunId: "run_root", parentRunId: "run_root" },
+    })
     const result = await runWorkflow({
       workflow,
       trigger,
@@ -161,6 +168,63 @@ describe("runWorkflow — end-to-end happy paths", () => {
         parentStepId: "step_child",
       },
     })
+  })
+  it("keeps HEAD workspace attribution and starts cross-project children as observed roots", async () => {
+    const workflow = buildWorkflow([], [])
+    jest.mocked(projectScope.resolveScopeProjectId).mockResolvedValueOnce("project-a")
+    await runWorkflow({ workflow, trigger, runId: "workspace-parent" })
+    await getDb().executionRuns.update("execution:workflow:workspace-parent", {
+      authority: { schemaVersion: 1, caps: "explicit-v1", maxTurns: 2 },
+    })
+    jest.mocked(projectScope.resolveScopeProjectId).mockResolvedValueOnce("project-b")
+    const result = await runWorkflow({
+      workflow,
+      trigger,
+      runId: "workspace-child",
+      lineage: { rootRunId: "workspace-parent", parentRunId: "workspace-parent" },
+    })
+    expect(result.status).toBe("succeeded")
+    expect(await getDb().workflowRuns.get(result.runId)).toMatchObject({ projectId: "project-b" })
+    expect(await getDb().executionRuns.get(`execution:workflow:${result.runId}`)).toMatchObject({
+      projectId: "project-b",
+    })
+    const run = await getDb().executionRuns.get(`execution:workflow:${result.runId}`)
+    expect(run?.parentRunId).toBeUndefined()
+    expect(run?.authority).toEqual({ schemaVersion: 1, caps: "explicit-v1", maxTurns: 2 })
+    expect(run?.actingIdentity?.rootRunId).toBe(run?.id)
+  })
+
+  it("settles an existing contradictory lineage once, without executing or retrying nodes", async () => {
+    const workflow = buildWorkflow([], [])
+    await runWorkflow({ workflow, trigger, runId: "claimed-parent" })
+    await getDb().executionRuns.update("execution:workflow:claimed-parent", {
+      sourceId: "contradiction",
+    })
+    const input = {
+      workflow,
+      trigger,
+      runId: "invalid-lineage",
+      lineage: { rootRunId: "claimed-parent", parentRunId: "claimed-parent" },
+    }
+    const result = await runWorkflow(input)
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "identity_mismatch", message: expect.stringContaining("identity_mismatch") },
+    })
+    expect(await getDb().workflowRuns.get(result.runId)).toMatchObject({
+      status: "failed",
+      completedAt: expect.any(Number),
+      error: result.error,
+    })
+    expect(await getDb().executionRuns.get(`execution:workflow:${result.runId}`)).toBeUndefined()
+    expect(
+      (await listRunEvents(result.runId)).filter((event) => event.type === "run_failed")
+    ).toHaveLength(1)
+    expect(await runWorkflow(input)).toMatchObject({ status: "failed", error: result.error })
+    expect(
+      (await listRunEvents(result.runId)).filter((event) => event.type === "run_failed")
+    ).toHaveLength(1)
+    expect(mockHooksManager.dispatchWorkflowNodeStart).not.toHaveBeenCalled()
   })
   it("persists formal dependency and original trigger provenance", async () => {
     const executionBinding: WorkflowExecutionBinding = {

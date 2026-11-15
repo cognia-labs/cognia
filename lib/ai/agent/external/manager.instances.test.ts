@@ -18,6 +18,7 @@ jest.mock("@/lib/ai/agent/recovery/canonical-log", () => ({
 }))
 
 import { ExternalAgentManager } from "./manager"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { protocolAdapterRegistry } from "./protocol-adapter"
 import { ExternalAgentLifecycleError } from "@/types/agent/external-agent-lifecycle"
 import type {
@@ -229,5 +230,63 @@ describe("configured auto-approval", () => {
         (event) => (event as Extract<ExternalAgentEvent, { type: "permission_request" }>).request.id
       )
     expect(prompted).toEqual(["p2"])
+  })
+})
+
+// The production manager, with only its process adapter replaced.
+describe("uncapped Host launch invariance", () => {
+  const fixture = createDbTestFixture({ seeded: false })
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+  it("preserves own mode, preapprovals, MCP, skill and turn options at native dispatch", async () => {
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+    const parent = await startToolExecutionRun(undefined)
+    const child = await startToolExecutionRun(undefined, { parentRunId: parent.id })
+    const manager = freshManager()
+    manager.setLaunchPreparer(async (input) => input)
+    const sends: Record<string, unknown>[] = []
+    Object.assign(adapter, {
+      execute: async (_session: string, _prompt: string, options: Record<string, unknown>) => {
+        sends.push(options)
+        return {
+          success: true,
+          sessionId: "s_1",
+          finalResponse: "ok",
+          messages: [],
+          toolCalls: [],
+          steps: [],
+          duration: 1,
+        }
+      },
+    })
+    await manager.addAgent(config())
+    const own = {
+      permissionMode: "default" as const,
+      allowedTools: ["Read", "Bash"],
+      maxSteps: 40,
+      context: { custom: { mcpServers: [{ name: "github", command: "github" }] } },
+    }
+    await manager.execute("agent-1", "go", own)
+    await manager.execute(
+      "agent-1",
+      "go",
+      bindPersonalEgressOptions(own, { executionRunId: child.id })
+    )
+    const fields = [
+      "permissionMode",
+      "allowedTools",
+      "permissionCeiling",
+      "nativePolicy",
+      "maxSteps",
+      "context",
+    ]
+    const projection = (options: Record<string, unknown>) =>
+      Object.fromEntries(fields.map((field) => [field, options[field]]))
+    expect(sends).toHaveLength(2)
+    expect(projection(sends[1])).toEqual(projection(sends[0]))
+    expect(sends[1].nativePolicy).toBeUndefined()
+    expect(sends[1].maxSteps).toBe(40)
   })
 })

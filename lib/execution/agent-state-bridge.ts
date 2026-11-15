@@ -326,9 +326,15 @@ export async function syncGoalExecutionRun(
 
 export async function syncPlanExecutionRun(
   plan: AgentPlan,
-  session: ChatSession,
+  session: ChatSession | undefined,
   isCurrent = currentDatabaseGuard()
 ): Promise<void> {
+  session ??= {
+    id: plan.sessionId,
+    title: plan.title,
+    createdAt: plan.createdAt,
+    updatedAt: plan.updatedAt,
+  }
   const runId = await ensureRun(
     {
       kind: "plan",

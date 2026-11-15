@@ -74,6 +74,7 @@ export interface PairedTurnAdapterDeps extends WorkSubmissionServiceDeps {
         | "externalAgentSession"
         | "externalAgentGatewaySessions"
         | "activeBranchByGroup"
+        | "projectThread"
       >
     | undefined
   >
@@ -175,6 +176,7 @@ export async function admitPairedChatTurn(
     const authorityModule = await import("@/lib/execution/acting-authority")
     await acceptWorkSubmission(
       {
+        parentRunId: session.projectThread?.parentExecutionRunId,
         ...(payload.pairedReader === "owner"
           ? { localAuthorization: authorityModule.LOCAL_PERSON_RUN }
           : {}),
@@ -227,6 +229,7 @@ export async function admitPairedChatTurn(
       "history",
       "runtimeHistory",
       "pairedReader",
+      "runAuthorityMcpServerIds",
     ]) {
       delete (options as Record<string, unknown>)[key]
     }
@@ -294,6 +297,8 @@ export async function admitPairedChatTurn(
         currentMessageId: messageId,
       })
     })
+    const { enforceRunAuthorityOnSendOptions } = await import("@/lib/execution/run-authority")
+    await enforceRunAuthorityOnSendOptions(runId, prepared)
     await markWorkSubmissionStarted(submissionId, now)
     return { admitted: true, submissionId, options: prepared }
   } catch (error) {

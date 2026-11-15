@@ -608,7 +608,18 @@ export async function runPluginAgentTurn(
           releaseTranscript = registerCaptureResponder(sessionId, sendOptions.turnId, false, true)
           if (booking) claimTurnUsage(sessionId, sendOptions.turnId)
         }
-        if (request.permissionMode) sendOptions.permissionMode = request.permissionMode
+        if (request.permissionMode) {
+          const { narrowAuthority } =
+            await import("@cognia/plugin-contract/types/agent-config/agent-composition")
+          const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
+          const ceiling = (await resolveRunAuthority({ runId: entry.id })).inheritedAuthority
+            ?.permissionMode
+          sendOptions.permissionMode = ceiling
+            ? narrowAuthority(ceiling, request.permissionMode)
+            : request.permissionMode
+        }
+        const { enforceRunAuthorityOnSendOptions } = await import("@/lib/execution/run-authority")
+        await enforceRunAuthorityOnSendOptions(entry.id, sendOptions)
         result = await runner.runAndCaptureAssistantReply(sessionId, prompt, sendOptions, {
           currentMessageId: userMessageId,
           onSdkEvent: (event) => {

@@ -11,6 +11,7 @@ import type { UIMessage } from "ai"
 
 import {
   createExecutionRun,
+  appendRunObservation,
   getExecutionRun,
   runEventJournal,
   semanticRunEvent,
@@ -88,6 +89,7 @@ export function usageRowFromOutbox(row: FusionOutboxRow): SessionUsageRow | null
 }
 
 interface ProjectionPayload {
+  parentExecutionRunId?: string
   runId: string
   phase: "queued" | "running" | "waiting" | "terminal"
   origin: ExecutionRunOrigin
@@ -146,6 +148,25 @@ export function projectedExecutionRun(p: ProjectionPayload) {
       ? { originActor: { keyId: p.actorKeyId, keyName: p.actorKeyName ?? "" } }
       : {}),
   }
+}
+
+/** Project a chat's Host-held coordinator before execution or outbox replay. */
+export async function ensureChatFusionExecutionRun(p: ProjectionPayload): Promise<void> {
+  if (await getExecutionRun(p.runId)) return
+  const session = p.origin === "local" && p.sessionId ? await getSession(p.sessionId) : undefined
+  const capturedParent = p.parentExecutionRunId ?? session?.projectThread?.parentExecutionRunId
+  const parent = capturedParent ? await getExecutionRun(capturedParent) : undefined
+  await createExecutionRun({
+    ...projectedExecutionRun(p),
+    ...(parent
+      ? { ...recordedRunMetadata("child", { runId: p.runId, parent }), parentRunId: parent.id }
+      : {}),
+  })
+  if (capturedParent && !parent)
+    await appendRunObservation(p.runId, {
+      operation: "coordinator_parent_unavailable",
+      parentRunId: capturedParent,
+    })
 }
 
 /**
@@ -225,7 +246,7 @@ export const accountDatabaseAppliers: OutboxAppliers = {
     // finds the row and only re-appends the event, which the journal dedupes on
     // `sourceEventId`.
     const existing = await getExecutionRun(p.runId)
-    if (!existing) await createExecutionRun(projectedExecutionRun(p))
+    if (!existing) await ensureChatFusionExecutionRun(p)
     // A sealed run's history is final (`appendInsideTransaction` refuses every
     // event past a terminal status). Two effects written in the same
     // millisecond can be drained out of order, so an earlier phase arriving

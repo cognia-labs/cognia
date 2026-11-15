@@ -1,3 +1,4 @@
+import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { executeAgent } from "@/lib/ai/agent/agent-executor"
 import { __resetBackgroundAgentManagerForTesting } from "@/lib/ai/agent/background-agent-manager"
 import { runPluginAgent, runPluginAgentStreamed } from "./run"
@@ -116,6 +117,22 @@ beforeEach(() => {
 })
 
 describe("runPluginAgent", () => {
+  it("uses the personal fence for an ambiguous marked invocation instead of an authority refusal", async () => {
+    await expect(
+      withPluginExecutionContext(
+        "r12-ambiguous",
+        { executionRunId: "", personalEgressBlocked: true },
+        () =>
+          withPluginExecutionContext(
+            "r12-ambiguous",
+            { executionRunId: "", personalEgressBlocked: true, sessionId: "other" },
+            () => runPluginAgent("hello", {}, { pluginId: "r12-ambiguous" })
+          )
+      )
+    ).rejects.toMatchObject({ name: "PersonalEgressDeniedError", code: "personal-egress-denied" })
+    expect(mockLaunchChildRun).not.toHaveBeenCalled()
+    expect(mockExecute).not.toHaveBeenCalled()
+  })
   it("maps options onto ExecuteAgentConfig and returns result + agentId", async () => {
     const res = await runPluginAgent("hi", {
       system: "S",
@@ -669,4 +686,39 @@ describe("robustness (Package F)", () => {
     await expect(run.result).rejects.toThrow("down")
     expect(mockExecute).toHaveBeenCalledTimes(1)
   })
+})
+
+it.each([false, true])(
+  "captures the Host invocation before the first await (streamed=%s)",
+  async (streamed) => {
+    const run = withPluginExecutionContext(
+      "authority-test",
+      { executionRunId: "host-parent", sessionId: "host-session" },
+      () =>
+        streamed
+          ? runPluginAgentStreamed("task", {}, { pluginId: "authority-test" })
+          : runPluginAgent("task", {}, { pluginId: "authority-test" })
+    )
+    await (streamed ? (run as ReturnType<typeof runPluginAgentStreamed>).result : run)
+    expect(mockLaunchChildRun).toHaveBeenCalledWith(
+      expect.objectContaining({ parentRunId: "host-parent", sessionId: "host-session" })
+    )
+  }
+)
+
+it.each([false, true])("retains the Host parent after an await (streamed=%s)", async (streamed) => {
+  await withPluginExecutionContext(
+    "async-authority",
+    { executionRunId: "restricted-child" },
+    async () => {
+      await Promise.resolve()
+      const run = streamed
+        ? runPluginAgentStreamed("task", {}, { pluginId: "async-authority" })
+        : runPluginAgent("task", {}, { pluginId: "async-authority" })
+      await (streamed ? (run as ReturnType<typeof runPluginAgentStreamed>).result : run)
+    }
+  )
+  expect(mockLaunchChildRun).toHaveBeenCalledWith(
+    expect.objectContaining({ parentRunId: "restricted-child" })
+  )
 })

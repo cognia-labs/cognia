@@ -1988,6 +1988,27 @@ describe("the room as other writers see it (ADR-0252 §4)", () => {
     expect(started.at(-1)?.automated).toBe(false)
   })
 
+  it("passes all Host-held automatic source runs to member admission", async () => {
+    jest.mocked(personalMarks.bindPersonalMessageRun).mockImplementationOnce(() => undefined)
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    const start = jest.fn(async () => "member-run")
+    w.deps.execution.startMemberRun = start
+    w.replyWith("a", "answer")
+    await w.runner.send("background update", {
+      sessionId: ROOM,
+      targetMemberIds: ["a"],
+      automatedTurn: {
+        producer: "background-result",
+        messageId: "multi-source",
+        personalRunIds: ["first", "second"],
+      },
+    })
+    expect(start).toHaveBeenCalledWith(expect.any(String), {
+      automated: true,
+      sourceRunIds: ["first", "second"],
+    })
+  })
+
   it("refuses an automated turn while the room is busy rather than queueing it as a steer", async () => {
     const w = createWorld()
     w.status.set(ROOM, "streaming")

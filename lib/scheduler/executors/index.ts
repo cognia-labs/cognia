@@ -772,7 +772,10 @@ async function runChatPrompt(
 
   let resolved: SendOptions
   try {
+    const { getExecutionRun } = await import("@/lib/db/execution-runs")
+    const scheduledRun = await getExecutionRun(execution.id)
     resolved = await resolveSendOptions({
+      ...(scheduledRun ? { executionIdentity: { runId: scheduledRun.id, sessionId } } : {}),
       // `resolveSendOptions` scopes skills, MCP servers, memory and RAG by
       // `session.projectId` first, so the session it reads must carry the
       // owning workspace, not the UI-active one `createSession` stamped.

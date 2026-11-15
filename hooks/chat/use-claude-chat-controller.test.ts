@@ -18,6 +18,7 @@ import {
   useClaudeChat,
   userPromptText,
   rewriteUserPromptText,
+  applyChatCommandOverrides,
   externalTurnPrompt,
   externalAsideTurnContent,
   redirectSendToBundleAliases,
@@ -26,6 +27,7 @@ import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { getExecutionRun } from "@/lib/db/execution-runs"
+import { applyRunAuthorityToSendOptions } from "@/lib/execution/run-authority"
 import {
   guardBuiltinSessionHostSend,
   registerSessionHostPromptHandler,
@@ -298,6 +300,24 @@ jest.mock("@/lib/db/execution-runs", () => ({
 }))
 
 describe("Claude chat controller seam", () => {
+  it.each([false, true])(
+    "keeps slash command additions within ancestors only (restricted=%s)",
+    (restricted) => {
+      const options = applyChatCommandOverrides(
+        {
+          allowedTools: ["A", "B"],
+          runAuthority: { schemaVersion: 1, tools: { allow: ["A", "B"] } },
+        },
+        { allowedTools: ["C"] }
+      )
+      expect(options.runAuthority?.tools?.allow).toEqual(["A", "B"])
+      applyRunAuthorityToSendOptions(
+        options,
+        restricted ? { schemaVersion: 1, tools: { allow: ["A", "B"] } } : { schemaVersion: 1 }
+      )
+      expect(options.allowedTools).toEqual(restricted ? ["A", "B"] : ["A", "B", "C"])
+    }
+  )
   it("rebuilds an external session when another reader joins, including legacy persisted links", () => {
     expect(externalSessionVisibilityMatches(undefined, "owner-only", ["private"])).toBe(false)
     expect(externalSessionVisibilityMatches({}, "owner-only", ["private"])).toBe(false)
@@ -328,6 +348,7 @@ describe("Claude chat controller seam", () => {
     await expect(chatHookCredentialContext("session", "run", LOCAL_PERSON_RUN)).resolves.toEqual({
       sessionId: "session",
       localAuthorization: LOCAL_PERSON_RUN,
+      executionRunReserved: true,
     })
     jest.mocked(getExecutionRun).mockResolvedValueOnce({ id: "run" } as never)
     await expect(chatHookCredentialContext("session", "run", LOCAL_PERSON_RUN)).resolves.toEqual({
@@ -338,10 +359,12 @@ describe("Claude chat controller seam", () => {
     await expect(chatHookCredentialContext("session", "run", LOCAL_PERSON_RUN)).resolves.toEqual({
       sessionId: "session",
       executionRunId: "run",
+      executionRunReserved: true,
     })
     await expect(chatHookCredentialContext("session", "run")).resolves.toEqual({
       sessionId: "session",
       executionRunId: "run",
+      executionRunReserved: true,
     })
   })
   it("requires a positive host gesture and refuses automation even if it carries a gesture", () => {
@@ -366,6 +389,18 @@ describe("Claude chat controller seam", () => {
     expect(
       localChatRunAuthorization({ localAuthorization: LOCAL_PERSON_RUN, backgroundDelivery: {} })
     ).toBeUndefined()
+  })
+
+  it("keeps a typed turn's admitted Host proof for hooks before any branch writes its row", async () => {
+    jest.mocked(getExecutionRun).mockResolvedValueOnce(undefined)
+    await expect(
+      chatHookCredentialContext("thread", "not-created", LOCAL_PERSON_RUN, "parent")
+    ).resolves.toEqual({
+      sessionId: "thread",
+      localAuthorization: LOCAL_PERSON_RUN,
+      executionRunReserved: true,
+      executionRunParentId: "parent",
+    })
   })
   it("exports the public hook implementation", () => {
     expect(typeof useClaudeChat).toBe("function")

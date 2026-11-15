@@ -53,6 +53,24 @@ test("explicit execution identity wins over every fallback", () => {
   assert.equal(params!.hostRef, "companion")
 })
 
+test("empty run identities fall back to their own session, never a shared empty event run", () => {
+  const runIds = ["paired-session", "host-state-session"].map(
+    (sessionId) =>
+      envelopeEmitterParams({
+        sessionId,
+        sendOptions: {
+          execution: {
+            runtimeAdapter: "claude-agent-sdk",
+            identity: { runId: "" },
+          },
+        },
+        turnRef: {},
+        emit: () => {},
+      })!.runId
+  )
+  assert.deepEqual(runIds, ["paired-session", "host-state-session"])
+})
+
 test("the structured-output expectation is derived from the send, not defaulted on", () => {
   // If this ever silently returns true, every ordinary turn of a spec-carrying
   // session settles as `structured_output_missing`.

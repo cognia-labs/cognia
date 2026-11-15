@@ -263,8 +263,15 @@ describe("execution run journal", () => {
       authority: { schemaVersion: 1, permissionMode: "plan", maxTurns: 8 },
     })
     expect(child.actingIdentity).toEqual(parent.actingIdentity)
-    expect(child.authority).toEqual({ ...parent.authority, permissionMode: "plan" })
-    expect(await getExecutionRun("parent")).toEqual(parent)
+    expect(child.authority).toEqual({
+      ...parent.authority,
+      caps: "explicit-v1",
+      permissionMode: "plan",
+    })
+    expect(await getExecutionRun("parent")).toEqual({
+      ...parent,
+      authority: { ...parent.authority, caps: "explicit-v1" },
+    })
   })
 
   it("does not replace an established fixed identity or lower revision when adopting a run", async () => {
@@ -299,6 +306,11 @@ describe("execution run journal", () => {
       actingIdentity: identity,
       authority: { schemaVersion: 1, permissionMode: "default" },
     })
+    await expect(adoptExecutionRun("adopt-child", base.id)).rejects.toMatchObject({
+      reason: "unsupported_authority",
+    })
+    expect((await getExecutionRun("adopt-child"))?.parentRunId).toBeUndefined()
+    await getDb().executionRuns.update("adopt-child", { status: "queued" })
     expect(await adoptExecutionRun("adopt-child", base.id)).toBe(true)
     expect((await getExecutionRun("adopt-child"))?.actingIdentity).toEqual(identity)
     expect((await getExecutionRun("adopt-child"))?.authority?.permissionMode).toBe("plan")
@@ -1073,4 +1085,62 @@ describe("tenant service-data observation throttle", () => {
       clock.mockRestore()
     }
   })
+})
+
+it("refuses prospective adoption into a run's own descendant without mutating either row", async () => {
+  const root = {
+    id: "cycle-root",
+    kind: "agent-turn" as const,
+    sourceId: "root",
+    title: "root",
+    status: "queued" as const,
+    currentRevision: 0,
+    startedAt: 1,
+    updatedAt: 1,
+  }
+  await createExecutionRun(root)
+  await createExecutionRun({ ...root, id: "cycle-child", parentRunId: root.id })
+  await expect(adoptExecutionRun(root.id, "cycle-child")).rejects.toMatchObject({
+    reason: "authority_unavailable",
+    message: expect.stringContaining("prospective adoption cycle"),
+  })
+  expect((await getExecutionRun(root.id))?.parentRunId).toBeUndefined()
+  expect((await getExecutionRun("cycle-child"))?.parentRunId).toBe(root.id)
+})
+
+it("does not promote an adopted pre-upgrade row's observed surface into explicit caps", async () => {
+  const base: ExecutionRun = {
+    id: "legacy-adoption-parent",
+    kind: "agent-turn",
+    sourceId: "parent",
+    title: "parent",
+    status: "queued",
+    currentRevision: 0,
+    startedAt: 1,
+    updatedAt: 1,
+  }
+  await createExecutionRun(base)
+  await getDb().executionRuns.put({
+    ...base,
+    id: "legacy-adoption-child",
+    sourceId: "child",
+    authority: {
+      schemaVersion: 1,
+      permissionMode: "plan",
+      maxTurns: 1,
+      mcpServers: { only: ["old-name"] },
+    },
+  })
+  await adoptExecutionRun("legacy-adoption-child", base.id)
+  expect(await listExecutionRunEvents("legacy-adoption-child")).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({ operation: "legacy_authority_observed" }),
+      }),
+    ])
+  )
+  const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
+  expect(
+    (await resolveRunAuthority({ parentRunId: "legacy-adoption-child" })).authority
+  ).toBeUndefined()
 })

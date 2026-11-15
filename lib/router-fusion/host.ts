@@ -128,10 +128,7 @@ export {
   pruneFusionDatabase,
   type FusionRetentionReport,
 } from "./db/retention"
-export {
-  collectRoutingSamplesBeforeRetention,
-  type RetentionSampleSource,
-} from "./eval/sample-collector"
+export { collectRoutingSamplesBeforeRetention, type RetentionSampleSource } from "./db/retention"
 export { chatRunDeps, windowLeaseOwner } from "./chat/chat-run-deps"
 export {
   abortRouterFusionChatTurn,

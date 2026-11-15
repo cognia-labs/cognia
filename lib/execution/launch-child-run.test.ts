@@ -454,21 +454,19 @@ describe("launchChildRun: a caller's own agent engine", () => {
     await expect(thrown.outcome).resolves.toEqual({ status: "failed", error: "dispatch crashed" })
   })
 
-  it("starts unparented when asked to, for a pin whose row is gone", async () => {
-    const launched = started(
+  it("observes a missing pinned parent only for Host journal recovery", async () => {
+    const run = jest.fn(async () => ({ status: "completed" as const }))
+    const result = started(
       await launchChildRun({
         parentRunId: "execution:tool:gone",
         missingParent: "unparented",
-        target: {
-          kind: "agent",
-          label: "coder",
-          engine: { run: async () => ({ status: "completed" as const }) },
-        },
+        target: { kind: "agent", label: "coder", engine: { run } },
         title: "coder",
       })
     )
-    await launched.outcome
-    expect((await getExecutionRun(launched.executionRunId))?.parentRunId).toBeUndefined()
+    await result.outcome
+    expect(run).toHaveBeenCalledTimes(1)
+    expect((await getExecutionRun(result.executionRunId))?.parentRunId).toBeUndefined()
   })
 })
 

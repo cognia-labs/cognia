@@ -61,11 +61,13 @@ export interface CreatorTurnRunnerOptions {
    * generator keeps its own context; `review` always mints a fresh one
    * regardless of what is passed here.
    */
+  parentRunId?: string
   authoringSessionId?: string
 }
 
 export function createCreatorTurnRunner(options: CreatorTurnRunnerOptions = {}): CreatorTurnRunner {
   const authoringSessionId = options.authoringSessionId ?? mintSessionId("plan")
+  let authoringRunId: string | undefined
 
   return async (request) => {
     if (!hasNoLeakingPii(request.prompt)) {
@@ -76,28 +78,46 @@ export function createCreatorTurnRunner(options: CreatorTurnRunnerOptions = {}):
     // is no way for a caller to accidentally hand it the generator's session.
     const sessionId = request.purpose === "review" ? mintSessionId("review") : authoringSessionId
 
-    const sendOptions = await resolveSendOptions({
-      session: { id: sessionId, workingDirectory: request.cwd } as unknown as ChatSession,
-      appSettings: useSettingsStore.getState().settings,
+    const { startToolExecutionRun, finishToolExecutionRun } =
+      await import("@/lib/execution/acting-authority")
+    const { enforceRunAuthorityOnSendOptions } = await import("@/lib/execution/run-authority")
+    const entry = await startToolExecutionRun(sessionId, {
+      parentRunId: options.parentRunId ?? authoringRunId,
+      title: "Creator turn",
     })
+    // Later planning/review turns keep the first authoring turn's ceiling,
+    // even though the reviewer deliberately uses a different native session.
+    if (request.purpose !== "review" && !authoringRunId) authoringRunId = entry.id
+    let failed = true
+    try {
+      const sendOptions = await resolveSendOptions({
+        executionIdentity: { runId: entry.id, sessionId },
+        session: { id: sessionId, workingDirectory: request.cwd } as unknown as ChatSession,
+        appSettings: useSettingsStore.getState().settings,
+      })
 
-    const result = await runAndCaptureAssistantReply(
-      sessionId,
-      request.prompt,
-      {
+      const finalOptions = {
         ...sendOptions,
         cwd: request.cwd,
-        // Re-asserted after the spread so a resolved default can never widen
-        // a Creator turn past read-only.
         permissionMode: CREATOR_AGENT_AUTHORITY,
         allowedTools: [...CREATOR_AGENT_TOOLS],
-      },
-      {
+        runAuthority: {
+          ...sendOptions.runAuthority,
+          schemaVersion: 1 as const,
+          permissionMode: CREATOR_AGENT_AUTHORITY,
+          tools: { ...sendOptions.runAuthority?.tools, allow: [...CREATOR_AGENT_TOOLS] },
+        },
+      }
+      await enforceRunAuthorityOnSendOptions(entry.id, finalOptions)
+      const result = await runAndCaptureAssistantReply(sessionId, request.prompt, finalOptions, {
         signal: options.signal,
         execution: { kind: "subagent", label: request.label },
-      }
-    )
+      })
 
-    return result.text
+      failed = false
+      return result.text
+    } finally {
+      await finishToolExecutionRun(entry.id, failed)
+    }
   }
 }

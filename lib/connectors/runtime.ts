@@ -110,7 +110,6 @@ import { inferBuiltInSkillIntents } from "@/lib/skills/intent-resolver"
 import { generateEmbedding } from "@cognia/provider-embedding/embedding"
 import { readResolvedPrincipal } from "@/lib/execution/resolved-principal"
 import {
-  authorityFromPermissionCeiling,
   bindToolCallRun,
   connectorRequester,
   recordedRunMetadata,
@@ -157,6 +156,7 @@ import { attributeConnectorDecision } from "./hitl/permission-attribution"
 import { holdWorkflowDispatchForApproval } from "./hitl/workflow-run-approval"
 import {
   createExecutionRun,
+  appendRunObservation,
   putExecutionRunBinding,
   runEventJournal,
   semanticRunEvent,
@@ -1610,7 +1610,14 @@ async function resolveInboundSendOptions(params: {
     emitTrace,
     traceSurface: "connector",
     turnId: executionIdentity?.turnId,
-    executionIdentity,
+    executionIdentity: executionIdentity
+      ? {
+          ...executionIdentity,
+          // Native recovery correlation may name an earlier (even pruned) attempt.
+          // Authority resolution always consumes the admitted Host journal row.
+          runId: personalExecutionRunId ?? executionIdentity.runId,
+        }
+      : undefined,
     personalCredentialContext: {
       sessionId: session.id,
       executionRunId: personalExecutionRunId ?? executionIdentity?.runId,
@@ -2453,11 +2460,10 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               : undefined
           await createExecutionRun({
             id: executionRunId,
-            ...recordedRunMetadata(recoveryParentRunId ? "child" : "requester", {
+            ...recordedRunMetadata(recoveryParent ? "child" : "requester", {
               runId: executionRunId,
               parent: verifiedRecoveryParent,
               requesters: [connectorRequester(event)],
-              authority: authorityFromPermissionCeiling(permissionCeiling),
             }),
             ...(verifiedRecoveryParent ? { parentRunId: verifiedRecoveryParent.id } : {}),
             kind: "agent-turn",
@@ -2477,6 +2483,11 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             updatedAt: Date.now(),
           })
           preparingRunId = executionRunId
+          if (recoveryParentRunId && !recoveryParent)
+            await appendRunObservation(executionRunId, {
+              operation: "recovery_parent_unavailable",
+              parentRunId: recoveryParentRunId,
+            })
           await routeContext.bindExecutionRun(executionRunId)
 
           // Resolve the send options (character + twin + memory context) through
@@ -2545,7 +2556,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
                 "recovery_gateway_ticket_remint_failed"
               )
               await runEventJournal.append(
-                recoveryParentRunId ?? executionRunId,
+                recoveryParent?.id ?? executionRunId,
                 semanticRunEvent("run.recovery_required", {
                   reason: "gateway-ticket-remint-failed",
                 })
@@ -2576,7 +2587,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
                 { error: validation.mismatches.join(",") }
               )
               await runEventJournal.append(
-                recoveryParentRunId ?? executionRunId,
+                recoveryParent?.id ?? executionRunId,
                 semanticRunEvent("run.recovery_required", {
                   reason: "execution-drift",
                   detail: validation.mismatches,

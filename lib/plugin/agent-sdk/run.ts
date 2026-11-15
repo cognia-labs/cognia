@@ -1,4 +1,6 @@
+import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
+import { personalOperationSources } from "@/lib/execution/personal-operation"
 /**
  * Plugin Agent SDK runtime — `runPluginAgent` (one-shot) and
  * `runPluginAgentStreamed` (async-iterable). Both adapt the typed
@@ -277,13 +279,14 @@ function executeWithRobustness(
 /**
  * Run `body` as a child run (ADR-0252 §3): `launchChildRun` writes, settles
  * and traces the run's `execution:job:<agentId>` row; `body` is its engine and
- * keeps its own result and thrown error. A plugin run has no parent run or
- * conversation, so the row stands alone. A stop before the run started (the
+ * keeps its own result and thrown error. A Host invocation supplies the parent;
+ * a genuinely background invocation stands alone. A stop before the run started (the
  * caller's signal, or a cancel from the Job Center) starts nothing.
  */
 async function runAsChildRun<T>(
   agentId: string,
   meta: RunPluginAgentMeta,
+  hostParent: ReturnType<typeof pluginExecutionContext>,
   signal: AbortSignal,
   body: (
     runSignal: AbortSignal,
@@ -293,10 +296,18 @@ async function runAsChildRun<T>(
   onLaunched?: (executionRunId: string) => void
 ): Promise<T> {
   const { launchChildRun } = await import("@/lib/execution/launch-child-run")
+  const { authorityParentRunId } = await import("@/lib/execution/acting-authority")
+  const parentRunId = await authorityParentRunId(hostParent)
+  if (hostParent && !hostParent.executionRunId && personalOperationSources(hostParent)?.length) {
+    const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+    await assertPersonalEgress(hostParent)
+  }
   let value: { result: T } | undefined
   let thrown: { error: unknown } | undefined
   const label = meta.label ?? agentId
   const launched = await launchChildRun({
+    ...(parentRunId ? { parentRunId } : {}),
+    ...(hostParent?.sessionId ? { sessionId: hostParent.sessionId } : {}),
     title: label,
     childId: agentId,
     surface: "plugin",
@@ -347,6 +358,8 @@ export async function runPluginAgent(
   options: PluginAgentRunOptions = {},
   meta: RunPluginAgentMeta = {}
 ): Promise<PluginAgentRunResult> {
+  // Retain the Host invocation across its entire async callback.
+  const hostParent = meta.pluginId ? pluginExecutionContext(meta.pluginId) : undefined
   const manager = getBackgroundAgentManager()
   const agentId = newAgentId(meta)
   const managedSignal = manager.registerAgent(agentId, {
@@ -363,6 +376,7 @@ export async function runPluginAgent(
     const withId = await runAsChildRun(
       agentId,
       meta,
+      hostParent,
       signal,
       async (runSignal, executionIdentity) => {
         await runInputGuardrails(prompt, options.guardrails, runSignal)
@@ -405,6 +419,8 @@ export function runPluginAgentStreamed(
   options: PluginAgentRunOptions = {},
   meta: RunPluginAgentMeta = {}
 ): PluginAgentRun {
+  // Retain the Host invocation across its entire async callback.
+  const hostParent = meta.pluginId ? pluginExecutionContext(meta.pluginId) : undefined
   const manager = getBackgroundAgentManager()
   const agentId = newAgentId(meta)
   const managedSignal = manager.registerAgent(agentId, {
@@ -439,6 +455,7 @@ export function runPluginAgentStreamed(
       const withId = await runAsChildRun(
         agentId,
         meta,
+        hostParent,
         signal,
         async (runSignal, executionIdentity) => {
           await runInputGuardrails(prompt, options.guardrails, runSignal)

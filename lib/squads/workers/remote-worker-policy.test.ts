@@ -135,3 +135,59 @@ it("does not restore broad host writes after narrowing them to an incoming read 
     ).sandboxPolicy?.writableRoots
   ).toEqual(["/worker/docs"])
 })
+
+it.each([
+  { skills: { only: [] } },
+  { subagents: { only: [] } },
+  { maxTurns: 2 },
+  { permissionProfile: { outbound: "deny" as const } },
+])("refuses an inherited field the worker contract cannot enforce before dispatch: %j", (field) => {
+  expect(() =>
+    encodeRemoteWorkerPolicy({}, false, undefined, { schemaVersion: 1, ...field })
+  ).toThrow("unsupported_authority: remote Squad worker:")
+})
+it("leaves Host-enforced pools out of the worker's capability requirements", () => {
+  expect(
+    encodeRemoteWorkerPolicy({}, false, undefined, {
+      schemaVersion: 1,
+      caps: "explicit-v1",
+      pools: { rootRunId: "bot-root", costUsd: 2 },
+    })
+  ).toBeUndefined()
+})
+it("meets the inherited mode, tools and MCP list into the actual worker wire policy", () => {
+  expect(
+    encodeRemoteWorkerPolicy(
+      {
+        permissionMode: "bypassPermissions",
+        allowedTools: ["Read", "Bash"],
+        mcpServers: [{ name: "safe" }, { name: "unsafe" }],
+      },
+      false,
+      undefined,
+      {
+        schemaVersion: 1,
+        permissionMode: "plan",
+        tools: { allow: ["Read"], deny: ["Bash"] },
+        mcpServers: { only: ["safe"] },
+      }
+    )
+  ).toMatchObject({
+    permissionMode: "plan",
+    allowedTools: ["Read"],
+    disallowedTools: ["Bash"],
+    mcpServerNames: ["safe"],
+  })
+})
+
+it("translates canonical MCP cap ids to worker names", () => {
+  expect(
+    encodeRemoteWorkerPolicy(
+      {},
+      false,
+      undefined,
+      { schemaVersion: 1, mcpServers: { only: ["server-id"] } },
+      { github: "server-id" }
+    )?.mcpServerNames
+  ).toEqual(["github"])
+})

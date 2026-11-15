@@ -311,6 +311,7 @@ export function createBestOfNExecution(): BestOfNExecution {
               declared.kind === "external"
                 ? null
                 : await resolveSendOptions({
+                    executionIdentity: { runId: candidateRunId, sessionId: session.id },
                     session,
                     character,
                     appSettings: await getSettings(),

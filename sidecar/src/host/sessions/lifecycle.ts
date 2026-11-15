@@ -111,7 +111,7 @@ export function envelopeEmitterParams({
   if (!execution) return null
   return {
     sessionId,
-    runId: execution.identity?.runId ?? sessionId,
+    runId: execution.identity?.runId || sessionId,
     attemptId: execution.identity?.attemptId ?? "a1",
     parentRunId: execution.identity?.parentRunId,
     hostRef: execution.hostRef ?? "desktop-sidecar",

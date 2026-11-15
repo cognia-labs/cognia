@@ -35,7 +35,11 @@ import {
 
 import type { ResolvedCliSessionContext } from "../session-context"
 import { commandIsAutoApprovable, shellCommandOf } from "../command-approval"
-import { resolvePermissionDetailed, resolveBashPermission } from "@/lib/claude/permissions/ruleset"
+import {
+  resolvePermissionDetailed,
+  resolveBashPermission,
+  matchGlob,
+} from "@/lib/claude/permissions/ruleset"
 import { normalizeToolId } from "@/lib/policy/risk/outbound-tools"
 import { commandHasGhWrite } from "@/lib/policy/action-review/gh-targets"
 
@@ -75,6 +79,11 @@ export function namespacedHostTool(name: string): string {
 
 export { BUILTIN_SERVER_NAME }
 
+/** Hard visibility restrictions may use the same tool-name globs as permissions. */
+function listed(rules: readonly string[], name: string, full: string): boolean {
+  return rules.some((rule) => matchGlob(rule, name) || matchGlob(rule, full))
+}
+
 /**
  * Bare names of the built-in tools this session may advertise.
  *
@@ -85,17 +94,20 @@ export { BUILTIN_SERVER_NAME }
 export function visibleBuiltinTools(options: SendOptions): string[] {
   if (options.toolSurface === "none") return []
   const enabled = (options.builtinTools ?? {}) as Record<string, unknown>
-  const allowed = options.allowedTools?.length ? new Set(options.allowedTools) : null
-  const disallowed = new Set(options.disallowedTools ?? [])
+  const allowed = options.allowedTools?.length ? options.allowedTools : undefined
+  const disallowed = options.disallowedTools ?? []
   const planMode = options.permissionMode === "plan"
   const out: string[] = []
   for (const [category, names] of TOOLS_BY_CATEGORY) {
     if (enabled[category] !== true) continue
     for (const name of names) {
       const full = namespaced(name)
-      if (disallowed.has(full) || disallowed.has(name)) continue
+      if (disallowed.includes(name) || disallowed.includes(full)) continue
+      const inherited = options.inheritedRunAuthority?.tools
+      if (inherited?.deny && listed(inherited.deny, name, full)) continue
+      if (inherited?.allow && !listed(inherited.allow, name, full)) continue
       // A non-empty allowlist is exhaustive — anything unlisted is out.
-      if (allowed && !allowed.has(full) && !allowed.has(name)) continue
+      if (allowed && !allowed.includes(name) && !allowed.includes(full)) continue
       // Plan mode is read-only: a mutating tool must not even be discoverable,
       // or the model wastes a turn calling something that will be refused.
       if (planMode && !READ_ONLY_BUILTIN_TOOLS.has(name)) continue
@@ -108,14 +120,17 @@ export function visibleBuiltinTools(options: SendOptions): string[] {
 /** Bare names of the host/plugin tools this session may advertise. */
 export function visibleHostTools(options: SendOptions): string[] {
   if (options.toolSurface === "none") return []
-  const disallowed = new Set(options.disallowedTools ?? [])
-  const allowed = options.allowedTools?.length ? new Set(options.allowedTools) : null
+  const disallowed = options.disallowedTools ?? []
+  const allowed = options.allowedTools?.length ? options.allowedTools : undefined
   const planMode = options.permissionMode === "plan"
   const out: string[] = []
   for (const entry of options.pluginTools ?? []) {
     const full = namespacedHostTool(entry.name)
-    if (disallowed.has(full) || disallowed.has(entry.name)) continue
-    if (allowed && !allowed.has(full) && !allowed.has(entry.name)) continue
+    if (disallowed.includes(entry.name) || disallowed.includes(full)) continue
+    const inherited = options.inheritedRunAuthority?.tools
+    if (inherited?.deny && listed(inherited.deny, entry.name, full)) continue
+    if (inherited?.allow && !listed(inherited.allow, entry.name, full)) continue
+    if (allowed && !allowed.includes(entry.name) && !allowed.includes(full)) continue
     if (planMode && !PLAN_ALLOWED_HOST_TOOLS.has(entry.name)) continue
     out.push(entry.name)
   }

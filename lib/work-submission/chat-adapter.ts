@@ -65,6 +65,10 @@ export interface ChatTurnScope {
 }
 
 export interface AcceptChatTurnInput extends ChatTurnIdentity {
+  /** Parent captured from Host-held thread metadata, never a client claim. */
+  parentRunId?: string
+  /** Host admitted this direct thread's identity before resolving credentials. */
+  adoptPreparedRun?: boolean
   localAuthorization?: import("@/lib/execution/acting-authority").LocalPersonRun
   /** Exactly what the model will receive, captured at the content freeze point. */
   content: unknown
@@ -126,6 +130,8 @@ export async function acceptChatTurn(
   try {
     return await acceptWorkSubmission(
       {
+        parentRunId: input.parentRunId,
+        adoptPreparedRun: input.adoptPreparedRun,
         localAuthorization: input.localAuthorization,
         intent: {
           contractVersion: 1,

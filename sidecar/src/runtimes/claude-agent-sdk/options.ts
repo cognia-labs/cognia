@@ -13,6 +13,11 @@ import { enforceAnthropicToolSurface, normalizeClaudeToolNames } from "./tool-su
 import type { OptionsContext } from "./runtime-types.ts"
 
 import { randomUUID } from "node:crypto"
+import { realpathSync } from "node:fs"
+import { narrowAuthority } from "@cognia/agent-config-types/agent-composition"
+import { subagentKeyMatches } from "@cognia/agent-config-types/agent-capability-grant"
+import { runAuthorityAllowsMcpServer } from "@cognia/agent-config-types/claude-agent-sdk-options"
+import type { SendOptions } from "../../shared/wire/inbound.ts"
 
 import { buildSubprocessEnv } from "./subprocess-env.ts"
 
@@ -40,6 +45,156 @@ import {
 } from "./sdk-options.ts"
 import { sessionStoreFromSendOptions } from "./session-store.ts"
 import { createWorkerToolAdmission, FenceDeniedError } from "../../policy/fence/admission.ts"
+
+/** Native loading canonicalizes paths; the permission decision still uses the id. */
+function sameNativeReference(reference: string, loaded: string): boolean {
+  if (reference === loaded) return true
+  try {
+    return realpathSync(reference) === loaded
+  } catch {
+    return false
+  }
+}
+
+/** Permission-rule patterns authorize their base tool or MCP server namespace. */
+function authorityToolMatches(pattern: string, candidate: string): boolean {
+  const base = pattern.split("(", 1)[0]!
+  return (
+    base === candidate ||
+    (base.endsWith("__*") && candidate.startsWith(base.slice(0, -1))) ||
+    (base.startsWith("mcp__") && !base.slice(5).includes("__") && candidate.startsWith(`${base}__`))
+  )
+}
+
+/** Pattern denies remain SDK argument rules, never blanket base-tool denials. */
+function authorityToolDenied(pattern: string, candidate: string): boolean {
+  return !pattern.includes("(") && authorityToolMatches(pattern, candidate)
+}
+
+/** Runs after SDK overlays so native subagents cannot reopen parent authority. */
+export function enforceNativeRunAuthority(options: Options, sendOptions: SendOptions): Options {
+  const authority = sendOptions.inheritedRunAuthority
+  const childAuthority = sendOptions.runAuthority
+  const hasCaps = (value: typeof authority) =>
+    value && Object.keys(value).some((key) => !["schemaVersion", "caps", "pools"].includes(key))
+  if (!hasCaps(authority) && !hasCaps(childAuthority)) return options
+  const inherited = authority ?? { schemaVersion: 1 }
+  const allow = normalizeClaudeToolNames(inherited.tools?.allow)
+  const deny = normalizeClaudeToolNames(inherited.tools?.deny) ?? []
+  if (allow)
+    options.tools = (Array.isArray(options.tools) ? options.tools : BUILTIN_TOOL_NAMES).filter(
+      (name) =>
+        allow.some((pattern) => authorityToolMatches(pattern, name)) &&
+        !deny.some((pattern) => authorityToolDenied(pattern, name))
+    )
+  if (deny.length)
+    options.disallowedTools = [...new Set([...(options.disallowedTools ?? []), ...deny])]
+  if (inherited.maxTurns !== undefined)
+    options.maxTurns = Math.min(options.maxTurns ?? Infinity, inherited.maxTurns)
+  const mode = inherited.permissionMode
+    ? narrowAuthority(inherited.permissionMode, sendOptions.permissionMode ?? "default")
+    : undefined
+  if (mode) options.permissionMode = mode
+  const servers = inherited.mcpServers?.only
+  if (servers) {
+    options.mcpServers = Object.fromEntries(
+      Object.entries(options.mcpServers ?? {}).filter(([name, config]) =>
+        runAuthorityAllowsMcpServer(name, config, sendOptions.runAuthorityMcpServerIds, servers)
+      )
+    )
+    options.strictMcpConfig = true
+  }
+  if (inherited.skills?.only) {
+    options.settingSources = []
+    const nativeTrusted =
+      Boolean(sendOptions.trustedWorkspaceRoots?.length) &&
+      (!sendOptions.cwd || sendOptions.trustedWorkspaceRoots!.includes(sendOptions.cwd)) &&
+      (sendOptions.additionalDirectories ?? []).every((root) =>
+        sendOptions.trustedWorkspaceRoots!.includes(root)
+      )
+    options.skills = !nativeTrusted
+      ? []
+      : Array.isArray(options.skills)
+        ? options.skills.filter((id) => inherited.skills!.only!.includes(id))
+        : [...inherited.skills.only]
+    options.plugins = options.plugins?.filter((plugin) =>
+      (sendOptions.runtimeExtensions ?? []).some(
+        (ref) =>
+          nativeTrusted &&
+          ref.id !== undefined &&
+          inherited.skills!.only!.includes(ref.id) &&
+          sameNativeReference(ref.path, plugin.path)
+      )
+    )
+  }
+  const effective = childAuthority ?? inherited
+  const childServers = effective.mcpServers?.only
+  if (options.agents)
+    options.agents = Object.fromEntries(
+      Object.entries(options.agents)
+        .filter(
+          ([name]) =>
+            !effective.subagents?.only ||
+            effective.subagents.only.some((id: string) => subagentKeyMatches(name, id))
+        )
+        .map(([name, definition]) => {
+          const subMode = effective.permissionMode
+            ? narrowAuthority(effective.permissionMode, definition.permissionMode ?? "default")
+            : definition.permissionMode
+          const childAllow = normalizeClaudeToolNames(effective.tools?.allow)
+          const subDenied = [
+            ...new Set([
+              ...(definition.disallowedTools ?? []),
+              ...(normalizeClaudeToolNames(effective.tools?.deny) ?? []),
+            ]),
+          ]
+          const subTools = (definition.tools ?? childAllow)?.filter(
+            (tool) =>
+              (!childAllow || childAllow.some((pattern) => authorityToolMatches(pattern, tool))) &&
+              !subDenied.some((pattern) => authorityToolDenied(pattern, tool))
+          )
+          const subTurns = [effective.maxTurns, definition.maxTurns].filter(
+            (turns): turns is number => turns !== undefined
+          )
+          return [
+            name,
+            {
+              ...definition,
+              ...(subTools ? { tools: subTools } : {}),
+              ...(subDenied.length ? { disallowedTools: subDenied } : {}),
+              ...(subMode ? { permissionMode: subMode } : {}),
+              ...(subTurns.length ? { maxTurns: Math.min(...subTurns) } : {}),
+              ...(effective.skills?.only
+                ? {
+                    skills: (definition.skills ?? []).filter((id) =>
+                      effective.skills!.only!.includes(id)
+                    ),
+                  }
+                : {}),
+              ...(childServers
+                ? {
+                    mcpServers: (
+                      definition.mcpServers ?? Object.keys(options.mcpServers ?? {})
+                    ).flatMap((entry) =>
+                      typeof entry === "string" &&
+                      runAuthorityAllowsMcpServer(
+                        entry,
+                        options.mcpServers?.[entry],
+                        sendOptions.runAuthorityMcpServerIds,
+                        childServers
+                      ) &&
+                      options.mcpServers?.[entry]
+                        ? [entry]
+                        : []
+                    ),
+                  }
+                : {}),
+            },
+          ]
+        })
+    )
+  return options
+}
 
 export function buildAnthropicOptions({
   sendOptions,
@@ -324,7 +479,20 @@ export function buildAnthropicOptions({
   // precedence (nested > flat > SDK default) holds, and BEFORE the strip pass so
   // an explicit `undefined` in the block still means "use the SDK default".
   const hostCanUseTool = options.canUseTool as ReturnType<typeof createAnthropicCanUseTool>
-  const sdkOverlay = applyClaudeAgentSdkOptions(options, sendOptions.claudeAgentSdk, {
+  const trustedRoots = intersectTrustedWorkspaceRoots(sendOptions.trustedWorkspaceRoots, [
+    sendOptions.cwd,
+    ...(sendOptions.additionalDirectories ?? []),
+  ])
+  const withholdNativeContent =
+    Boolean(sendOptions.inheritedRunAuthority?.skills?.only) &&
+    (trustedRoots.length === 0 ||
+      [sendOptions.cwd, ...(sendOptions.additionalDirectories ?? [])].some(
+        (root) => !root || !trustedRoots.includes(root)
+      ))
+  const nestedSdk = withholdNativeContent
+    ? { ...sendOptions.claudeAgentSdk, version: 1 as const, skills: [] }
+    : sendOptions.claudeAgentSdk
+  const sdkOverlay = applyClaudeAgentSdkOptions(options, nestedSdk, {
     resume: resumeId,
     forkSession: isFork,
     permissionMode: sendOptions.permissionMode,
@@ -339,7 +507,7 @@ export function buildAnthropicOptions({
     cwd: sendOptions.cwd,
     activeWorkspaceRoots: [sendOptions.cwd, ...(sendOptions.additionalDirectories ?? [])],
   })
-  if (sendOptions.runtimeExtensions?.length) {
+  if (!withholdNativeContent && sendOptions.runtimeExtensions?.length) {
     const plugins = new Map((options.plugins ?? []).map((plugin) => [plugin.path, plugin]))
     for (const plugin of resolveClaudeRuntimeExtensions(sendOptions, sendOptions.runtimeExtensions))
       plugins.set(plugin.path, plugin)
@@ -406,9 +574,12 @@ export function buildAnthropicOptions({
     )
   }
   options = enforceAnthropicToolSurface(options, sendOptions)
+  options = enforceNativeRunAuthority(options, sendOptions)
   // Mandatory hook remains outside overlays and covers SDK-preallowed tools.
   const inFlight = new Map<string, () => void>()
   const personalHook: HookCallback = async (input, toolUseId, hookContext) => {
+    const authorityDecision = await runAuthorityHook(input, toolUseId, hookContext)
+    if ("hookSpecificOutput" in authorityDecision) return authorityDecision
     const name = "tool_name" in input ? input.tool_name : ""
     if (personalToolDenied(name, sendOptions, BUILTIN_TOOL_NAMES))
       return {
@@ -440,6 +611,31 @@ export function buildAnthropicOptions({
       })
       if (hookContext.signal.aborted) abort()
     }
+    return {}
+  }
+  const runAuthorityHook: HookCallback = async (input) => {
+    const authority = sendOptions.inheritedRunAuthority
+    if (!authority || !("tool_name" in input)) return {}
+    const name = input.tool_name
+    const { server, bare } = splitToolName(name)
+    const candidates = [name, ...toolNameCandidates(bare, server ?? "cognia")]
+    const matches = (pattern: string) =>
+      candidates.some((candidate) => authorityToolMatches(pattern, candidate))
+    const allow = normalizeClaudeToolNames(authority.tools?.allow)
+    const deny = normalizeClaudeToolNames(authority.tools?.deny)
+    if (
+      (allow !== undefined && !allow.some(matches)) ||
+      deny?.some((pattern) =>
+        candidates.some((candidate) => authorityToolDenied(pattern, candidate))
+      )
+    )
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "Tool withheld by run authority",
+        },
+      }
     return {}
   }
   const finishPersonalTool: HookCallback = async (input, toolUseId) => {

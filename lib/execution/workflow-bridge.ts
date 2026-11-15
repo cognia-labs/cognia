@@ -5,6 +5,7 @@ import {
   getExecutionRun,
   putExecutionRunBinding,
   runEventJournal,
+  appendRunObservation,
   semanticRunEvent,
 } from "@/lib/db/execution-runs"
 import { listForWorkflow } from "@/lib/db/workflow-fanout-subscriptions"
@@ -21,8 +22,8 @@ import {
 } from "@/types/execution/run"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { startAgentStateExecutionBridge } from "./agent-state-bridge"
+import { RunAuthorityError } from "./run-authority"
 import {
-  authorityFromPermissionCeiling,
   recordedRunMetadata,
   requestersFromRunOrigin,
   runTriggerFromOrigin,
@@ -30,7 +31,8 @@ import {
 } from "./acting-authority"
 
 function recordedWorkflowTrigger(row: WorkflowRunRow): RunTriggerV1 {
-  if (row.lineage?.retryOfRunId || row.lineage?.parentRunId) return "child"
+  if (row.lineage?.retryOfRunId || row.lineage?.parentRunId || row.lineage?.authorityParentRunId)
+    return "child"
   if (row.triggerKind === "trigger.cron") return "schedule"
   if (row.triggerKind === "trigger.connector.inbound") return "requester"
   if (["trigger.manual", "trigger.team", "trigger.chat.message"].includes(row.triggerKind)) {
@@ -112,34 +114,82 @@ export async function syncWorkflowExecutionRun(
 ): Promise<void> {
   const runId = workflowExecutionRunId(sourceRun.id)
   let run = await getExecutionRun(runId)
-  if (!run) {
-    const trigger = recordedWorkflowTrigger(sourceRun)
-    const parentSourceId = sourceRun.lineage?.retryOfRunId ?? sourceRun.lineage?.parentRunId
-    const parentSource = parentSourceId ? await getDb().workflowRuns.get(parentSourceId) : undefined
-    const candidateParent = parentSourceId
-      ? await getExecutionRun(workflowExecutionRunId(parentSourceId))
+  const claimedLineage = Boolean(
+    sourceRun.lineage?.authorityParentRunId ||
+    sourceRun.lineage?.parentRunId ||
+    sourceRun.lineage?.retryOfRunId ||
+    sourceRun.lineage?.rootRunId
+  )
+  const recordedTrigger = recordedWorkflowTrigger(sourceRun)
+  const trigger =
+    recordedTrigger === "child" && !claimedLineage ? "external-event" : recordedTrigger
+  if (
+    !run &&
+    sourceRun.lineage &&
+    [
+      sourceRun.lineage.rootRunId,
+      sourceRun.lineage.authorityParentRunId,
+      sourceRun.lineage.parentRunId,
+      sourceRun.lineage.retryOfRunId,
+    ].some((id) => id !== undefined && !id.trim())
+  )
+    throw new RunAuthorityError("identity_mismatch", "workflow lineage contains an empty run id")
+  const parentSourceId = sourceRun.lineage?.retryOfRunId ?? sourceRun.lineage?.parentRunId
+  const parentSource = parentSourceId ? await getDb().workflowRuns.get(parentSourceId) : undefined
+  const candidateParent = parentSourceId
+    ? await getExecutionRun(workflowExecutionRunId(parentSourceId))
+    : undefined
+  const prunedRetry = Boolean(sourceRun.lineage?.retryOfRunId && !parentSource && !candidateParent)
+  // Lineage is routing data, not permission to inherit another workflow's
+  // identity. Use the same verified parent for both metadata and the link.
+  const verifiedParent =
+    parentSource &&
+    candidateParent?.sourceId === parentSource.id &&
+    candidateParent.kind === executionKindForWorkflowRun(parentSource) &&
+    candidateParent.sessionId === parentSource.triggeredBy?.sessionId &&
+    candidateParent.projectId === parentSource.projectId &&
+    (!sourceRun.lineage?.rootRunId ||
+      sourceRun.lineage.rootRunId === (parentSource.lineage?.rootRunId ?? parentSource.id) ||
+      // Legacy Host retries start a fresh workflow lineage. Their execution
+      // identity and caps still inherit the verified canonical parent below.
+      (sourceRun.lineage.retryOfRunId !== undefined &&
+        sourceRun.lineage.rootRunId === sourceRun.id)) &&
+    (!sourceRun.lineage?.retryOfRunId || parentSource.workflowId === sourceRun.workflowId)
+      ? candidateParent
       : undefined
-    // Lineage is routing data, not permission to inherit another workflow's
-    // identity. Use the same verified parent for both metadata and the link.
-    const parent =
-      parentSource &&
-      candidateParent?.sourceId === parentSource.id &&
-      candidateParent.kind === executionKindForWorkflowRun(parentSource) &&
-      candidateParent.sessionId === parentSource.triggeredBy?.sessionId &&
-      candidateParent.projectId === parentSource.projectId &&
-      parentSource.projectId === sourceRun.projectId &&
-      (!sourceRun.lineage?.retryOfRunId || parentSource.workflowId === sourceRun.workflowId)
-        ? candidateParent
-        : undefined
+  if (!run && parentSource && candidateParent && (!verifiedParent || candidateParent.id === runId))
+    throw new RunAuthorityError("identity_mismatch", `invalid workflow lineage ${parentSourceId}`)
+  // Cross-project workflows and unverifiable legacy lineage retain HEAD's root
+  // admission. A known contradictory claim is the only lineage refusal above.
+  const callerParentId = sourceRun.lineage?.authorityParentRunId
+  const callerParent = callerParentId ? await getExecutionRun(callerParentId) : undefined
+  if (!run && callerParentId && !callerParent)
+    throw new RunAuthorityError("parent_not_found", `workflow caller ${callerParentId}`)
+  const parent =
+    callerParent ?? (parentSource?.projectId === sourceRun.projectId ? verifiedParent : undefined)
+  // Workspace isolation keeps its own identity root; an explicit inherited
+  // ceiling still binds the nested workflow and every node it launches.
+  const crossProjectAuthority =
+    !parent && verifiedParent?.authority?.caps === "explicit-v1"
+      ? verifiedParent.authority
+      : undefined
+  if (run && (run.parentRunId !== parent?.id || (parentSourceId && !parentSource)))
+    await appendRunObservation(run.id, {
+      operation: "workflow-lineage-observed",
+      parentRunId: run.parentRunId,
+      observedParentRunId: parentSourceId,
+      parentSourceMissing: !parentSource,
+    })
+  if (!run) {
     try {
       await createExecutionRun({
         id: runId,
         ...recordedRunMetadata(trigger, {
           runId,
-          authority: authorityFromPermissionCeiling(sourceRun.securityContext?.permissionCeiling),
           requesters: trigger === "requester" ? workflowRequesters(sourceRun) : [],
           ...(trigger === "external-event" ? { eventActors: workflowEventActors(sourceRun) } : {}),
           parent,
+          ...(crossProjectAuthority ? { authority: crossProjectAuthority } : {}),
         }),
         kind: executionKindForWorkflowRun(sourceRun),
         // A retry is a REPLACEMENT, not a stranger: `lineage.retryOfRunId` is
@@ -185,6 +235,21 @@ export async function syncWorkflowExecutionRun(
       if (!(error instanceof Error && error.name === "ConstraintError")) throw error
     }
     run = await getExecutionRun(runId)
+    if (
+      run &&
+      !parent &&
+      (parentSourceId ||
+        (sourceRun.lineage?.rootRunId && sourceRun.lineage.rootRunId !== sourceRun.id))
+    )
+      await appendRunObservation(run.id, {
+        operation: "workflow-lineage-observed",
+        observedParentRunId: parentSourceId,
+        parentSourceMissing: !parentSource,
+        parentExecutionMissing: !candidateParent,
+        projectMismatch: Boolean(parentSource && parentSource.projectId !== sourceRun.projectId),
+        inheritedAuthorityUnavailable: !crossProjectAuthority,
+        ...(prunedRetry ? { ownNodeCapsReapplied: true } : {}),
+      })
   }
   if (!run) throw new Error(`Failed to create execution run ${runId}`)
 

@@ -35,6 +35,54 @@ const seed: SquadRunSeed = {
 }
 
 describe("createSquadRunRecords", () => {
+  it("starts fresh Squad runs from sibling coordinator threads without replacement detection", async () => {
+    const { recordedRunMetadata } = await import("@/lib/execution/acting-authority")
+    await getDb().executionRuns.put({
+      id: "coordinator",
+      ...recordedRunMetadata("external-event", { runId: "coordinator" }),
+      kind: "agent-turn",
+      sourceId: "coordinator",
+      title: "Coordinator",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      authority: { schemaVersion: 1, caps: "explicit-v1", tools: { allow: ["Read"] } },
+    })
+    for (const [index, sessionId] of ["thread-a", "thread-a", "thread-b"].entries()) {
+      const result = await createSquadRunRecords({
+        ...seed,
+        runId: `fresh-${index}`,
+        sessionId,
+        ...(index === 0
+          ? { launchedByRunId: "coordinator" }
+          : { authorityParentRunId: "coordinator" }),
+      })
+      expect(result.created).toBe(true)
+      expect(result.executionRun.parentRunId).toBe("coordinator")
+      expect(result.executionRun.authority?.tools?.allow).toEqual(["Read"])
+      await getDb().agentTeamRuns.update(result.runId, { status: "completed" })
+    }
+    expect(await getDb().agentTeamRuns.count()).toBe(3)
+  })
+
+  it("observes a missing captured coordinator and starts a root Squad", async () => {
+    const result = await createSquadRunRecords({ ...seed, authorityParentRunId: "pruned" })
+    expect(result.created).toBe(true)
+    expect(result.executionRun.parentRunId).toBeUndefined()
+    expect(
+      await getDb().executionRunEvents.where("runId").equals(result.executionRunId).toArray()
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            operation: "coordinator_parent_unavailable",
+            parentRunId: "pruned",
+          }),
+        }),
+      ])
+    )
+  })
   it.each(["ui", "interactive"])(
     "refuses caller-supplied plugin runTeam origin %s",
     async (origin) => {
@@ -557,16 +605,19 @@ describe("createSquadRunRecords", () => {
   })
 
   it("links a replacement to the run it replaces", async () => {
+    await createSquadRunRecords({ ...seed, runId: "old" })
+    await getDb().agentTeamRuns.update("old", { status: "completed" })
+    await getDb().executionRuns.update("execution:team:old", { status: "completed" })
     const result = await createSquadRunRecords({ ...seed, parentRunId: "execution:team:old" })
     expect(result.executionRun.parentRunId).toBe("execution:team:old")
     expect(result.executionRun.actingIdentity).toMatchObject({
       lane: "legacy",
-      trigger: "child",
+      trigger: "external-event",
       requesters: [],
     })
   })
 
-  it("copies the parent's fixed identity and meets a child's resolved ceiling", async () => {
+  it("copies the parent's fixed identity and explicit caps without recording a resolved ceiling", async () => {
     const actingIdentity = {
       schemaVersion: 1 as const,
       rootRunId: "execution:team:old",
@@ -594,6 +645,7 @@ describe("createSquadRunRecords", () => {
       actingIdentity,
       authority: {
         schemaVersion: 1,
+        caps: "explicit-v1",
         permissionMode: "default",
         tools: { allow: ["Read", "Write"], deny: ["Bash"] },
         maxTurns: 8,
@@ -618,8 +670,9 @@ describe("createSquadRunRecords", () => {
     expect(result.executionRun.actingIdentity).toEqual(actingIdentity)
     expect(result.executionRun.authority).toEqual({
       schemaVersion: 1,
-      permissionMode: "plan",
-      tools: { allow: ["Read"], deny: ["Bash", "Write"] },
+      caps: "explicit-v1",
+      permissionMode: "default",
+      tools: { allow: ["Read", "Write"], deny: ["Bash"] },
       maxTurns: 8,
       pools,
     })

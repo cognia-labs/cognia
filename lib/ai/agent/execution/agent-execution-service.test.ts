@@ -1,3 +1,9 @@
+// Authority storage is exercised with real IndexedDB in run-authority.test.ts.
+jest.mock("@/lib/execution/run-authority", () => ({
+  ...jest.requireActual("@/lib/execution/run-authority"),
+  resolveRunAuthority: jest.fn(async () => ({})),
+  enforceRunAuthorityOnSendOptions: jest.fn(async () => undefined),
+}))
 // AgentExecutionService (ADR-0090 Phase 6): rail routing, fail-before-spend,
 // explicit-only completion fallback with degradedReason.
 

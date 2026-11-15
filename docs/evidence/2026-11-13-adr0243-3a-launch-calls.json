@@ -1,0 +1,957 @@
+[
+  {
+    "file": "cli/src/agent/configured-plugin-tool-handle.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "cli/src/agent/external-agent-session.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "cli/src/agent/session-runner.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "cli/src/agent/subagent-runner.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "cli/src/api/invoke.ts",
+    "call": "execute",
+    "count": 3
+  },
+  {
+    "file": "cli/src/api/transport.ts",
+    "call": "execute",
+    "count": 3
+  },
+  {
+    "file": "cli/src/provider/capabilities.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "cli/src/provider/local.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "cli/src/provider/models.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "cli/src/provider/probe.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "cli/src/provider/usage.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "cli/src/tui/components/App.tsx",
+    "call": "dispatchSubagent",
+    "count": 1
+  },
+  {
+    "file": "cli/src/tui/runtime/agents-controller.ts",
+    "call": "dispatchSubagent",
+    "count": 1
+  },
+  {
+    "file": "cli/src/tui/runtime/agents-controller.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "cli/src/tui/runtime/workflow-controller.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "components/agent/external-agent/manager.tsx",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "components/agent/external-agent/session-panel.tsx",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "components/browser/browser-cdp-controls.tsx",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "components/canvas/canvas-side-panels.tsx",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "components/creator/creator-workbench.tsx",
+    "call": "createCreatorTurnRunner",
+    "count": 1
+  },
+  {
+    "file": "components/settings/project-environment-manager.tsx",
+    "call": "execute",
+    "count": 3
+  },
+  {
+    "file": "hooks/agent/use-external-agent.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "hooks/agent/use-external-agent.ts",
+    "call": "executeStreaming",
+    "count": 1
+  },
+  {
+    "file": "hooks/canvas/use-canvas-actions.ts",
+    "call": "execute",
+    "count": 3
+  },
+  {
+    "file": "hooks/chat/use-claude-chat-controller.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "hooks/chat/use-claude-chat-controller.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "hooks/chat/use-conversation-summary-draft.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "hooks/chat/use-selection-action-run.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "hooks/chat/use-template-assist.ts",
+    "call": "execute",
+    "count": 3
+  },
+  {
+    "file": "hooks/eval/use-eval-execution.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "lib/a2ui/ai-generate.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/agent/composition/verified-fresh-agent.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/agent/plan/step-dispatch.ts",
+    "call": "dispatchTeammate",
+    "count": 1
+  },
+  {
+    "file": "lib/agent/plan/step-dispatch.ts",
+    "call": "executeAgent",
+    "count": 1
+  },
+  {
+    "file": "lib/agent/plan/step-dispatch.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/agent/agent-executor.ts",
+    "call": "executeAgentTurn",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/agent/agent-executor.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/agent/execution/agent-execution-service.ts",
+    "call": "executeAgentTurn",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/agent/execution/agent-execution-service.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/agent/external/manager.ts",
+    "call": "execute",
+    "count": 5
+  },
+  {
+    "file": "lib/ai/agent/external/manager.ts",
+    "call": "executeStreaming",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/agent/external/runtimes/remote/remote-run-service.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/agent/external/runtimes/remote/remote-run-service.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/agent/external/session/renderer-tool-host.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/eval/orchestrator.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/eval/targets/chat.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/eval/team-execution.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/headless-turn-llm-client.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/host-llm-client.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/ai/tools/tool-utils.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "lib/background-tasks/redispatch.ts",
+    "call": "startDispatchRun",
+    "count": 1
+  },
+  {
+    "file": "lib/best-of-n/core.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/best-of-n/external.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/best-of-n/runtime.ts",
+    "call": "launchChildRun",
+    "count": 1
+  },
+  {
+    "file": "lib/best-of-n/runtime.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/bot/runtime/executors/agent-turn.ts",
+    "call": "runPluginAgentTurn",
+    "count": 1
+  },
+  {
+    "file": "lib/bot/runtime/executors/squad.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/bot/runtime/executors/workflow.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/bot/runtime/executors/workflow.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/bot/runtime/run.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/chat/attachments/media-extraction.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/chat/dispatch-to-codex-app.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/chat/image-edit/ai-service.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "lib/chat/room/production-deps.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/claude/agents/dispatch-agent-handler.ts",
+    "call": "startDispatchRun",
+    "count": 2
+  },
+  {
+    "file": "lib/claude/agents/dispatch-run.ts",
+    "call": "dispatchSubagent",
+    "count": 1
+  },
+  {
+    "file": "lib/claude/agents/dispatch-run.ts",
+    "call": "launchChildRun",
+    "count": 1
+  },
+  {
+    "file": "lib/claude/plugin-tool-dispatch-bridge.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/claude/plugin-tool-ipc.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/claude/run-and-capture.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/claude/unattended-park.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/cli-bridge/handlers/agent-team.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/companion/agent-team-write-handlers.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/connectors/adapters/qq-official/management.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/connectors/adapters/qq-official/room-members.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/connectors/ai-loop/safe-send-prompt.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/connectors/bus.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/connectors/commands/handoff.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/connectors/follow-up-control.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/connectors/management.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/connectors/runtime.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/connectors/team-dispatch.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/creator/agent-turn-runner.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/creator/agent-turn-runner.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/db/outbound-jobs.ts",
+    "call": "startJobExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/acting-authority.ts",
+    "call": "startToolExecutionRun",
+    "count": 2
+  },
+  {
+    "file": "lib/execution/agent-state-bridge.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/agent-team-bridge.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/best-of-n-bridge.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/control-handlers.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/delegation.ts",
+    "call": "adoptExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/delegation.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/direct-chat-run.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/launch-child-run.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/launch-child-run.ts",
+    "call": "executeAgent",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/launch-child-run.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/personal-egress.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/run-control.ts",
+    "call": "adoptExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/security-scan-bridge.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/squad-start-dispatch.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/execution/workflow-bridge.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/external-bridge/handlers/orchestration.ts",
+    "call": "dispatchSubagentAsChildRun",
+    "count": 1
+  },
+  {
+    "file": "lib/external-bridge/handlers/orchestration.ts",
+    "call": "executeAgent",
+    "count": 1
+  },
+  {
+    "file": "lib/external-bridge/handlers/orchestration.ts",
+    "call": "launchChildRun",
+    "count": 1
+  },
+  {
+    "file": "lib/fleet/acp-fleet-projection.ts",
+    "call": "executeStreaming",
+    "count": 1
+  },
+  {
+    "file": "lib/glance/plugin-actions.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/goal/verification.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/harness/runtime/driver.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/harness/runtime/probe-runner.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/headless/person-agent/runner.ts",
+    "call": "executeStreaming",
+    "count": 1
+  },
+  {
+    "file": "lib/integrations/action-runner.ts",
+    "call": "startJobExecutionRun",
+    "count": 2
+  },
+  {
+    "file": "lib/integrations/github-issue-loop.ts",
+    "call": "executeAgent",
+    "count": 1
+  },
+  {
+    "file": "lib/issues/github-writeback.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "lib/issues/run/agent-team-adapter.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/issues/run/github-loop-adapter.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/issues/sync/providers/github.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/agent-sdk/dispatch.ts",
+    "call": "dispatchSubagent",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/agent-sdk/dispatch.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/agent-sdk/dispatch.ts",
+    "call": "executeAgentTurnFromRenderer",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/agent-sdk/dispatch.ts",
+    "call": "launchChildRun",
+    "count": 2
+  },
+  {
+    "file": "lib/plugin/agent-sdk/run.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/agent-sdk/run.ts",
+    "call": "executeAgentTurnFromRenderer",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/agent-sdk/run.ts",
+    "call": "launchChildRun",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/agent-sdk/session.ts",
+    "call": "executeAgentTurnFromRenderer",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/api/agent-turn.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/api/agent-turn.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/api/external-agent-api.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "lib/plugin/api/external-agent-api.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/api/team-api.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/api/workflow-author-api.ts",
+    "call": "executeRunWorkflowTyped",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/bridge/tools-bridge.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/core/context.ts",
+    "call": "dispatchSubagentAsChildRun",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/core/context.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/core/context.ts",
+    "call": "runPluginAgent",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/core/context.ts",
+    "call": "runPluginAgentStreamed",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/core/context.ts",
+    "call": "runPluginAgentTurn",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/core/invoke-plugin-tool.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/ide/broker-runtime.ts",
+    "call": "dispatchSubagentAsChildRun",
+    "count": 1
+  },
+  {
+    "file": "lib/plugin/launcher/launchPluginJs.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/reply-copilot/load-context.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/router-fusion/agents/agent-fusion-run.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "lib/router-fusion/db/outbox-appliers.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/router-fusion/verify/code-acceptance-host.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "lib/sandbox/lume-adapter.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/sandbox/session-runtime.ts",
+    "call": "execute",
+    "count": 3
+  },
+  {
+    "file": "lib/scheduler/executors/goal-executor.ts",
+    "call": "runGoalLoopHeadless",
+    "count": 1
+  },
+  {
+    "file": "lib/scheduler/executors/goal-headless-runner.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/scheduler/executors/workflow-executor.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/scheduler/sources/workflow-source.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/skills/built-in/dispatcher.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/skills/built-in/lark/_helpers.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/slash-commands/actions/lark.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/agent-team-runtime-deps.ts",
+    "call": "executeAgent",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/delegation-orchestrator.ts",
+    "call": "launchChildRun",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/durable/durable-runtime.ts",
+    "call": "createExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/durable/team-recovery.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/ports/squad-launch.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/room-handoff/decide.ts",
+    "call": "launchChildRun",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/slash-command.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/squad/run-squad-to-end.ts",
+    "call": "startSquadRun",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/teammate/dispatch-teammate.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/teammate/dispatch-teammate.ts",
+    "call": "executeAgent",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/teammate/dispatch-teammate.ts",
+    "call": "runAndCaptureAssistantReply",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/teammate/dispatch-teammate.ts",
+    "call": "startToolExecutionRun",
+    "count": 2
+  },
+  {
+    "file": "lib/squads/teammate/structured-dispatch.ts",
+    "call": "dispatchTeammate",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/workflow-nodes/index.ts",
+    "call": "dispatchTeammate",
+    "count": 2
+  },
+  {
+    "file": "lib/squads/workflow-nodes/index.ts",
+    "call": "executeAgent",
+    "count": 1
+  },
+  {
+    "file": "lib/squads/workflow-nodes/index.ts",
+    "call": "startToolExecutionRun",
+    "count": 1
+  },
+  {
+    "file": "lib/tauri/transport-companion.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/terminal/startup-commands.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/voice/live/tool-runtime.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/agent-tools.ts",
+    "call": "executeRunWorkflowTyped",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/api/workflow-api-service.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/apps/app-execution.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/nodes/actions/agent-turn.ts",
+    "call": "executeAgentTurn",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/nodes/ai/ai-ensemble.ts",
+    "call": "executeAgent",
+    "count": 2
+  },
+  {
+    "file": "lib/workflow/nodes/ai/ai-ensemble.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/nodes/ai/executors.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "lib/workflow/nodes/data/flow.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/publish/run-workflow-typed-tool.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/runtime/execution-authority.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 2
+  },
+  {
+    "file": "lib/workflow/runtime/start-from-im.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/runtime/start-from-remote.ts",
+    "call": "executeDeployedWorkflow",
+    "count": 1
+  },
+  {
+    "file": "lib/workflow/runtime/step-executor.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "packages/agent-orchestration/src/coordinator.ts",
+    "call": "execute",
+    "count": 3
+  },
+  {
+    "file": "packages/agent-runtime-kit/src/base-adapter.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "packages/agent-runtime-kit/src/plugin-compat.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "packages/plugin-contract/src/lib/plugin/registries/quick-action-registry.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "packages/router-fusion/src/workflows/delegate.ts",
+    "call": "execute",
+    "count": 1
+  },
+  {
+    "file": "packages/router-fusion/src/workflows/panel.ts",
+    "call": "execute",
+    "count": 2
+  },
+  {
+    "file": "sidecar/src/runtimes/ai-sdk/index.ts",
+    "call": "execute",
+    "count": 3
+  }
+]

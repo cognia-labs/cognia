@@ -81,14 +81,16 @@ export function createProductionRoomDeps(opts: ProductionRoomDepsOptions = {}): 
       },
     },
     execution: {
-      // Automation never inherits a person's gesture (ADR-0249 §6).
-      startMemberRun: async (sessionId, { automated }) =>
-        (
-          await startToolExecutionRun(
-            sessionId,
-            automated ? { automation: "service" } : { localAuthorization: LOCAL_PERSON_RUN }
-          )
-        ).id,
+      // Privacy provenance never establishes run ancestry. Members remain roots.
+      startMemberRun: async (sessionId, { automated }) => {
+        return (
+          await startToolExecutionRun(sessionId, {
+            ...(automated
+              ? { automation: "service" as const }
+              : { localAuthorization: LOCAL_PERSON_RUN }),
+          })
+        ).id
+      },
       finishMemberRun: finishToolExecutionRun,
       isAtCapacity: (kind, sessionId) => getExecutionBroker().isAtCapacity(kind, sessionId),
       runWithExecutionLease: (request, run) => runWithExecutionLease(request as never, run),

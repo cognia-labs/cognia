@@ -203,6 +203,9 @@ import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
 import { ensureExecutionPortLease } from "@/lib/task-workspace/execution-port-lease"
 import {
   finishDirectChatExecutionRun,
+  finishUnstartedDirectChatExecutionRun,
+  releasePreparedDirectChatExecutionRun,
+  ensureDirectChatExecutionRun,
   projectDirectChatCaptureEvent,
   startDirectChatExecutionRun,
 } from "@/lib/execution/direct-chat-run"
@@ -474,6 +477,24 @@ export function rewriteUserPromptText(
   )
 }
 
+/** Command tool patterns are SDK pre-approvals; dispatch rechecks ancestor caps. */
+export function applyChatCommandOverrides(
+  options: SendOptions,
+  pending: NonNullable<ReturnType<typeof selectComposerPendingCommandOverrides>>
+): SendOptions {
+  const next: SendOptions = {
+    ...options,
+    model: pending.model ?? options.model,
+    allowedTools: pending.allowedTools
+      ? Array.from(new Set([...(options.allowedTools ?? []), ...pending.allowedTools]))
+      : options.allowedTools,
+    additionalDirectories: pending.paths
+      ? Array.from(new Set([...(options.additionalDirectories ?? []), ...pending.paths]))
+      : options.additionalDirectories,
+  }
+  return next
+}
+
 /**
  * What an external agent (Codex, ACP, a paired host's agent) is sent for a turn.
  *
@@ -596,19 +617,31 @@ export function localChatRunAuthorization(options?: {
     : undefined
 }
 
-/** A retry of an existing run keeps its authority even after a person clicks. */
+/** New hook launches use a Host-known parent, never an unadmitted turn id. */
 export async function chatHookCredentialContext(
   sessionId: string,
   executionRunId: string,
-  localAuthorization?: LocalPersonRun
+  localAuthorization?: LocalPersonRun,
+  parentExecutionRunId?: string
 ): Promise<PersonalCredentialContext> {
-  if (localAuthorization === LOCAL_PERSON_RUN) {
-    try {
-      const { getExecutionRun } = await import("@/lib/db/execution-runs")
-      if (!(await getExecutionRun(executionRunId))) return { sessionId, localAuthorization }
-    } catch {
-      // A failed journal read cannot prove that this is a new local action.
+  const reservation = {
+    executionRunReserved: true as const,
+    ...(parentExecutionRunId ? { executionRunParentId: parentExecutionRunId } : {}),
+  }
+  if (localAuthorization !== LOCAL_PERSON_RUN) {
+    // Automated/error hooks cannot mint local proof. The launch resolver checks
+    // whether this reserved identity has since been admitted before parenting.
+    return { sessionId, executionRunId, ...reservation }
+  }
+  try {
+    const { getExecutionRun } = await import("@/lib/db/execution-runs")
+    if (!(await getExecutionRun(executionRunId))) {
+      return { sessionId, localAuthorization, ...reservation }
     }
+  } catch {
+    // A failed journal read cannot prove that this is a new action, so no
+    // local proof; the launch resolver re-reads the reservation before parenting.
+    return { sessionId, executionRunId, ...reservation }
   }
   return { sessionId, executionRunId }
 }
@@ -1735,6 +1768,8 @@ export function useClaudeChat() {
       opts?: SendOptions,
       callOptions?: {
         localAuthorization?: LocalPersonRun
+        /** Host-only preparation ownership, captured by invokeOwnedSend. */
+        onExecutionRunPrepared?: (runId: string) => void
         /** Skip the optimistic user-message append. Used by `regenerate` so we
          *  don't duplicate the user turn when re-issuing the SDK request. */
         sharedRequest?: { messageId: string; queueItemId: string; takeover?: boolean }
@@ -2773,71 +2808,110 @@ export function useClaudeChat() {
           standalone: isStandaloneChatMode(),
         }) &&
         (await hostStateSessionIntentAvailable(sessionId).catch(() => false))
+      // The Host may accept this turn after the final content is built.
+      // Keep its local journal absent until that routing decision is final.
+      callOptions?.onExecutionRunPrepared?.(executionRunId)
+      let threadRunPrepared = false
+      const prepareLocalRun = async (ownsDispatch = true) => {
+        await ensureDirectChatExecutionRun({
+          ownsDispatch,
+          ...(session?.projectThread?.parentExecutionRunId
+            ? { parentRunId: session.projectThread.parentExecutionRunId }
+            : {}),
+          ...(localAuthorization ? { localAuthorization } : {}),
+          sessionId,
+          runId: executionRunId,
+          ...(session?.projectId ? { projectId: session.projectId } : {}),
+        })
+      }
+      const resolveTurnSendOptions = (deferred = true) =>
+        buildSendOptions(
+          session,
+          userMessageText,
+          (spec) => {
+            const existingHandle = getExecutionHandle(sessionId)
+            if (existingHandle) {
+              executionHandlesRef.current.set(sessionId, existingHandle)
+              return
+            }
+            const handle = createAgentExecutionHandle(sessionId, spec)
+            executionHandlesRef.current.set(sessionId, handle)
+            executionHandleDirectory.register(handle)
+          },
+          {
+            runId: executionRunId,
+            turnId: frozenTurnId,
+            attemptId: frozenAttemptId,
+            ...(callOptions?.backgroundDelivery
+              ? { backgroundDeliveryId: callOptions.backgroundDelivery.id }
+              : {}),
+          },
+          routingAttachmentKinds?.length ? { attachmentKinds: routingAttachmentKinds } : undefined,
+          // This controller creates the Router + Fusion run before dispatch.
+          // An addressed turn runs exactly where it was addressed, so it is
+          // never turned into a cascade or panel run.
+          // Typed here, so the approval dialog for a schedule write is here too.
+          // Only a turn a person typed (or regenerated) counts: goal/loop
+          // continuations, plan steps and peer triggers re-send with
+          // `skipUserAppend`, and a shared-queue drain is a collaborator's
+          // request, not this user's.
+          {
+            ...(!deferred || turnRoute || isSessionAside || continuationSource
+              ? {}
+              : { routerFusionSurface: "chat" as const }),
+            ...(hostStateForeseen ? { hostState: true } : {}),
+            ...(deferred ? { deferExecutionRun: true } : { executionRunId }),
+            localAuthorization: localChatRunAuthorization(callOptions),
+            interactive:
+              !callOptions?.sharedRequest &&
+              (!callOptions?.skipUserAppend || Boolean(callOptions?.regenerateBranch)),
+          },
+          isSessionAside
+            ? { runtimeRef: turnLane }
+            : routeLane
+              ? routeLane.member
+                ? (() => {
+                    // Answered AS the member: its persona, and its own model
+                    // when it has one — for this turn only.
+                    const character = routeCharacter(routeLane.member)
+                    return {
+                      runtimeRef: routeLane.runtimeRef,
+                      character,
+                      clearSessionModel: Boolean(character.model),
+                    }
+                  })()
+                : { runtimeRef: routeLane.runtimeRef }
+              : continuationSource
+                ? { runtimeRef: turnLane }
+                : undefined
+        )
       let sendOptions: SendOptions
       try {
-        sendOptions =
-          (isSessionAside ? undefined : opts) ??
-          (await buildSendOptions(
-            session,
-            userMessageText,
-            (spec) => {
-              const existingHandle = getExecutionHandle(sessionId)
-              if (existingHandle) {
-                executionHandlesRef.current.set(sessionId, existingHandle)
-                return
-              }
-              const handle = createAgentExecutionHandle(sessionId, spec)
-              executionHandlesRef.current.set(sessionId, handle)
-              executionHandleDirectory.register(handle)
-            },
-            {
-              runId: executionRunId,
-              turnId: frozenTurnId,
-              attemptId: frozenAttemptId,
-              ...(callOptions?.backgroundDelivery
-                ? { backgroundDeliveryId: callOptions.backgroundDelivery.id }
-                : {}),
-            },
-            routingAttachmentKinds?.length
-              ? { attachmentKinds: routingAttachmentKinds }
-              : undefined,
-            // This controller creates the Router + Fusion run before dispatch.
-            // An addressed turn runs exactly where it was addressed, so it is
-            // never turned into a cascade or panel run.
-            // Typed here, so the approval dialog for a schedule write is here too.
-            // Only a turn a person typed (or regenerated) counts: goal/loop
-            // continuations, plan steps and peer triggers re-send with
-            // `skipUserAppend`, and a shared-queue drain is a collaborator's
-            // request, not this user's.
-            {
-              ...(turnRoute || isSessionAside || continuationSource
-                ? {}
-                : { routerFusionSurface: "chat" as const }),
-              ...(hostStateForeseen ? { hostState: true } : {}),
-              localAuthorization: localChatRunAuthorization(callOptions),
-              interactive:
-                !callOptions?.sharedRequest &&
-                (!callOptions?.skipUserAppend || Boolean(callOptions?.regenerateBranch)),
-            },
-            isSessionAside
-              ? { runtimeRef: turnLane }
-              : routeLane
-                ? routeLane.member
-                  ? (() => {
-                      // Answered AS the member: its persona, and its own model
-                      // when it has one — for this turn only.
-                      const character = routeCharacter(routeLane.member)
-                      return {
-                        runtimeRef: routeLane.runtimeRef,
-                        character,
-                        clearSessionModel: Boolean(character.model),
-                      }
-                    })()
-                  : { runtimeRef: routeLane.runtimeRef }
-                : continuationSource
-                  ? { runtimeRef: turnLane }
-                  : undefined
-          ))
+        sendOptions = (isSessionAside ? undefined : opts) ?? (await resolveTurnSendOptions())
+        // Routing has selected a direct local turn. Admit its own identity before
+        // credentials and hooks; Squad/Fusion/Host turns retain their own journals.
+        const earlySquad = resolveTurnSquad({
+          turnOverride:
+            isSessionAside || turnRoute
+              ? {
+                  ...(callOptions?.compositionOverride ?? compositionForSession(sessionId)),
+                  orchestration: "direct" as const,
+                }
+              : (callOptions?.compositionOverride ?? null),
+          session,
+        })
+        if (
+          session?.projectThread?.parentExecutionRunId &&
+          !earlySquad.squadId &&
+          !sendOptions.routerFusionRun &&
+          !hostStateForeseen
+        ) {
+          await prepareLocalRun(false)
+          threadRunPrepared = true
+          const admittedOptions = await resolveTurnSendOptions(false)
+          // Caller options retain their credential-bearing MCP map as on HEAD.
+          sendOptions = opts && !isSessionAside ? opts : admittedOptions
+        }
         // A recorded workspace on the session's Host wins; without one the
         // resolver's cwd stands.
         if (turnLane.kind === "builtin" && session?.hostBinding?.workspaceRoot) {
@@ -2963,16 +3037,7 @@ export function useClaudeChat() {
       // turn doesn't inherit them. Same per-conversation keying as above.
       const pending = selectComposerPendingCommandOverrides(useChatStore.getState(), sessionId)
       if (pending) {
-        sendOptions = {
-          ...sendOptions,
-          model: pending.model ?? sendOptions.model,
-          allowedTools: pending.allowedTools
-            ? Array.from(new Set([...(sendOptions.allowedTools ?? []), ...pending.allowedTools]))
-            : sendOptions.allowedTools,
-          additionalDirectories: pending.paths
-            ? Array.from(new Set([...(sendOptions.additionalDirectories ?? []), ...pending.paths]))
-            : sendOptions.additionalDirectories,
-        }
+        sendOptions = applyChatCommandOverrides(sendOptions, pending)
         useChatStore.getState().setPendingCommandOverrides(null, sessionId)
       }
 
@@ -3043,7 +3108,8 @@ export function useClaudeChat() {
       const hookExecution = await chatHookCredentialContext(
         sessionId,
         executionRunId,
-        localAuthorization
+        localAuthorization,
+        session?.projectThread?.parentExecutionRunId
       )
       const promptText = userPromptText(turnContent, turnManifest?.length ?? 0)
       const promptDecision = await dispatchPluginUserPromptSubmit(
@@ -4295,6 +4361,8 @@ export function useClaudeChat() {
         routedExternalAgentId || participantBinding
           ? null
           : await acceptChatTurn({
+              parentRunId: session?.projectThread?.parentExecutionRunId,
+              adoptPreparedRun: threadRunPrepared,
               ...(localAuthorization ? { localAuthorization } : {}),
               sessionId,
               runId: executionRunId,
@@ -4321,6 +4389,8 @@ export function useClaudeChat() {
               return null
             })
       if (durableReceipt) callOptions?.backgroundDelivery?.onAccepted()
+      // Durable acceptance owns the insert. Legacy/external turns create their
+      // row here, after Squad/Fusion/HostState have taken their own branches.
       if (callOptions?.branchTag?.edit) {
         // The replacement must exist before observers see an edit. Legacy and
         // external-agent turns do not have acceptChatTurn's transcript writer.
@@ -4448,7 +4518,10 @@ export function useClaudeChat() {
       }
       if (durableReceipt) {
         dispatchClaim = await claimChatTurnForDispatch(executionRunId)
-        if (dispatchClaim === "owned_elsewhere") return true
+        if (dispatchClaim === "owned_elsewhere") {
+          releasePreparedDirectChatExecutionRun(executionRunId)
+          return true
+        }
         if (dispatchClaim === "claimed") {
           stopAssemblyHeartbeat = startWorkSubmissionLeaseHeartbeat(
             chatSubmissionId(executionRunId),
@@ -4463,6 +4536,7 @@ export function useClaudeChat() {
           )
         }
       }
+      await prepareLocalRun()
       // The checkout is the one step before the turn lease that can run for
       // minutes on a large repository. Stop has already settled the turn as
       // cancelled by the time an aborted checkout returns, so that return ends
@@ -4588,6 +4662,12 @@ export function useClaudeChat() {
             ? { workspaceRoot: boundWorkspaceRoot ?? sendOptions.cwd }
             : {}),
         })
+        const { enforceRunAuthorityOnSendOptions } = await import("@/lib/execution/run-authority")
+        await enforceRunAuthorityOnSendOptions(
+          executionRunId,
+          sendOptions,
+          sendOptions.runAuthority?.skills?.only
+        )
       } catch (error) {
         return await refuseTurn({
           errorCode: "execution_run_start_failed",
@@ -5394,7 +5474,13 @@ export function useClaudeChat() {
               detail: `${diagnostic.code}: ${message}`,
             })
           }
-          if (error) dispatchPluginChatError(sessionId, error, { sessionId, executionRunId })
+          if (error)
+            void chatHookCredentialContext(
+              sessionId,
+              executionRunId,
+              undefined,
+              session?.projectThread?.parentExecutionRunId
+            ).then((context) => dispatchPluginChatError(sessionId, error, context))
         }
 
         const gatewayController = !hostSelection ? new AbortController() : undefined
@@ -6932,7 +7018,12 @@ export function useClaudeChat() {
             })
         )
         // Notify plugins; fire-and-forget — host already surfaced the error.
-        dispatchPluginChatError(sessionId, error, { sessionId, executionRunId })
+        void chatHookCredentialContext(
+          sessionId,
+          executionRunId,
+          undefined,
+          session?.projectThread?.parentExecutionRunId
+        ).then((context) => dispatchPluginChatError(sessionId, error, context))
         // Local pre-sidecar failure — close the agent-trace span we just
         // opened so it doesn't dangle (no result event will ever land).
         if (sendOptions.spanId) {
@@ -6988,6 +7079,7 @@ export function useClaudeChat() {
       // a join checks for a Stop pressed in another window. Callers pin the
       // target session first: the active session may change during the await.
       entry.pendingDispatches++
+      const preparedRunIds = new Set<string>()
       try {
         const sessionId = args[2]?.sessionId
         // Re-check synchronously after the cross-window probe resumes: a Stop
@@ -7002,13 +7094,33 @@ export function useClaudeChat() {
           toast.warning(tCaptureBusy("busy"))
           throw new Error("session_turn_busy")
         }
-        return await sendUnexcluded(...args)
+        return await sendUnexcluded(args[0], args[1], {
+          ...args[2],
+          onExecutionRunPrepared: (runId) => preparedRunIds.add(runId),
+        })
       } finally {
-        entry.pendingDispatches--
-        entry.settle()
+        try {
+          for (const runId of preparedRunIds) {
+            if (!(await finishUnstartedDirectChatExecutionRun(runId))) continue
+            const sessionId = args[2]?.sessionId
+            if (!sessionId) continue
+            store.setState((state) => {
+              const slice = state.sessions[sessionId]
+              if (!slice || runIdForTurn(sessionId, slice.runId) !== runId) return state
+              // Preparation consumed this identity without ever entering streaming.
+              // A retry needs a fresh row; terminal journals cannot be reopened.
+              return {
+                sessions: { ...state.sessions, [sessionId]: { ...slice, runId: slice.runId + 1 } },
+              }
+            })
+          }
+        } finally {
+          entry.pendingDispatches--
+          entry.settle()
+        }
       }
     },
-    [sendUnexcluded, tCaptureBusy]
+    [sendUnexcluded, store, tCaptureBusy]
   )
 
   const send = useCallback(

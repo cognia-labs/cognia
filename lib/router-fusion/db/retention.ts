@@ -45,6 +45,18 @@
 
 import { isActiveReservation, isTerminalRunStatus } from "@cognia/router-fusion"
 
+export type { RetentionSampleSource } from "../eval/sample-collector"
+
+/** Load the experiment read model only on the maintenance tick, never on a routed turn. */
+export async function collectRoutingSamplesBeforeRetention(
+  ...args: Parameters<
+    typeof import("../eval/sample-collector").collectRoutingSamplesBeforeRetention
+  >
+): ReturnType<typeof import("../eval/sample-collector").collectRoutingSamplesBeforeRetention> {
+  const collector = await import("../eval/sample-collector")
+  return collector.collectRoutingSamplesBeforeRetention(...args)
+}
+
 import { routerFusionTablePolicy } from "@/lib/data-governance/router-fusion-catalog"
 
 import type { FusionDB } from "./fusion-db"

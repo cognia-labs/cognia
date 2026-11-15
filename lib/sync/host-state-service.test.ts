@@ -4324,6 +4324,50 @@ describe("HostStateService", () => {
 })
 
 describe("HostState Agent RPC dispatcher", () => {
+  it("refuses a real backlog rejection for a capped coordinator thread before option assembly", async () => {
+    const actual = jest.requireActual<typeof import("@/lib/work-submission/host-adapter")>(
+      "@/lib/work-submission/host-adapter"
+    )
+    const { MAX_OPEN_WORK_SUBMISSIONS } = await import("@/lib/work-submission/service")
+    await getDb().sessions.put({
+      id: "session-1",
+      projectThread: { parentExecutionRunId: "capped-coordinator" },
+    } as never)
+    await getDb().executionRuns.put({
+      id: "capped-coordinator",
+      kind: "agent-turn",
+      sourceId: "capped-coordinator",
+      title: "Coordinator",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      authority: { schemaVersion: 1, tools: { allow: ["Read"] } },
+    })
+    await getDb().workSubmissions.bulkAdd(
+      Array.from({ length: MAX_OPEN_WORK_SUBMISSIONS }, (_, index) => ({
+        id: `backlog-${index}`,
+        accountId: scope.accountId,
+        dispatchState: "pending",
+      })) as never
+    )
+    acceptHostStateChatTurnMock.mockImplementationOnce((input) =>
+      actual.acceptHostStateChatTurn(input)
+    )
+    const sendMessage = jest.fn()
+    await expect(
+      createAgentRpcHostStateDispatcher({ sendMessage })(
+        action({
+          kind: "message.enqueue",
+          messageId: "blocked",
+          text: "Read only",
+          attachments: [],
+        })
+      )
+    ).rejects.toMatchObject({ name: "HostStateDispatchAbandonedError", code: "backlog_full" })
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(buildSendOptionsMock).not.toHaveBeenCalled()
+  })
   it("carries the accepted run through the real send builder and OAuth server map", async () => {
     const { resolveSendOptions } = await import("@/lib/claude/build-options")
     const { buildRunMcpServerMap } = await import("@/lib/mcp/run-server-map")

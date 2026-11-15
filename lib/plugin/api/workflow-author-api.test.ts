@@ -430,6 +430,7 @@ describe("createWorkflowAuthorAPI", () => {
     const api = createWorkflowAuthorAPI()
     expect(await api.runWorkflow({ workflowId: "wf-1" } as never)).toBe(runResult)
     expect(await api.executeRunWorkflowTyped({ name: "Workflow" })).toBe(typedResult)
+    expect(executeRunWorkflowTyped).toHaveBeenLastCalledWith({ name: "Workflow" }, {})
     expect(api.getRunnerToolDefinition()).toEqual({
       name: WORKFLOW_RUNNER_TOOL_NAME,
       definition: WORKFLOW_RUNNER_TOOL_DEFINITION,
@@ -577,4 +578,27 @@ it("S2 workflow author callback refuses a marked producer before starting a new 
   await expect(
     withPluginExecutionContext("s2-workflow", {}, () => api.runWorkflow({} as never))
   ).resolves.toMatchObject({ status: "succeeded" })
+})
+
+it("passes the Host invocation run to the typed workflow runner", async () => {
+  const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+  const { createDbTestFixture } = await import("@/lib/db/test-fixture")
+  const fixture = createDbTestFixture()
+  await fixture.initialize()
+  const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+  await startToolExecutionRun(undefined, { runId: "calling-run" })
+  try {
+    await withPluginExecutionContext("workflow-parent", { executionRunId: "calling-run" }, () =>
+      createWorkflowAuthorAPI("workflow-parent").executeRunWorkflowTyped({
+        name: "Workflow",
+        executionRunId: "forged",
+      })
+    )
+    expect(executeRunWorkflowTyped).toHaveBeenLastCalledWith(
+      { name: "Workflow", executionRunId: "forged" },
+      { executionRunId: "calling-run" }
+    )
+  } finally {
+    await fixture.dispose()
+  }
 })

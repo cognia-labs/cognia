@@ -19,6 +19,10 @@ export type PersonalCredentialSource =
 export interface PersonalCredentialContext {
   sessionId?: string
   executionRunId?: string
+  /** Host-reserved reader/mark identity; not a parent until its row is admitted. */
+  executionRunReserved?: true
+  /** Host-known authority parent while the reserved turn has no row. */
+  executionRunParentId?: string
   /** Host content carries explicit marks even when no durable run exists. */
   personalEgressBlocked?: true
   /** Host UI entries only. Never populate from plugin/tool/IPC arguments. */

@@ -164,7 +164,11 @@ export default function cogniaPiExtension(pi: PiExtensionApi): void {
   const env = process.env
   const policy = readPolicy(env.COGNIA_TOOLHOST_PI_POLICY)
   const servers = readMcpServers(env.COGNIA_TOOLHOST_PI_MCP_SERVERS)
-  const projection = createMcpProjection(pi, servers)
+  const projection = createMcpProjection(
+    pi,
+    servers,
+    readMcpToolPolicy(env.COGNIA_TOOLHOST_PI_MCP_TOOL_POLICY)
+  )
   // Only the host's gateway-task projector supplies this configuration.
   const childModels = decodePiSubagentRouting(env[PI_SUBAGENT_MODELS_ENV])
   let requiredChildren: { dispose(): void } | undefined
@@ -574,7 +578,44 @@ export function piMcpResult(value: unknown): PiToolResult {
 }
 
 /** Official MCP clients live for exactly one Pi session, never during probes. */
-export function createMcpProjection(pi: PiExtensionApi, servers: McpServerConfig[]) {
+interface McpToolPolicy {
+  allow?: string[]
+  deny?: string[]
+}
+
+function readMcpToolPolicy(raw: string | undefined): McpToolPolicy | undefined {
+  if (raw === undefined) return undefined
+  const value = JSON.parse(raw)
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    ["allow", "deny"].some(
+      (key) =>
+        value[key] !== undefined &&
+        (!Array.isArray(value[key]) || value[key].some((rule: unknown) => typeof rule !== "string"))
+    )
+  )
+    throw new Error("Invalid inherited MCP tool policy")
+  return value
+}
+
+export function createMcpProjection(
+  pi: PiExtensionApi,
+  servers: McpServerConfig[],
+  policy?: McpToolPolicy
+) {
+  const matches = (rule: string, name: string) =>
+    new RegExp(
+      `^${rule
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+        .replace(/\*/g, ".*")
+        .replace(/\?/g, ".")}$`
+    ).test(name)
+  const permitted = (name: string) =>
+    (policy?.allow === undefined ||
+      policy.allow.some((rule) => !rule.includes("(") && matches(rule, name))) &&
+    !policy?.deny?.some((rule) => matches(rule.split("(")[0], name))
   const validator = new AjvJsonSchemaValidator()
   const credentials = servers.flatMap((server) =>
     [...(server.headers ?? []), ...(server.env ?? [])]
@@ -639,7 +680,7 @@ export function createMcpProjection(pi: PiExtensionApi, servers: McpServerConfig
             const name = sanitizePiToolName(`mcp__${server}__${tool.name}`)
             if (!/^[a-zA-Z0-9_.:-]+$/.test(tool.name) || next.has(name))
               throw new Error(`Invalid or duplicate MCP tool name: ${server}/${tool.name}`)
-            next.set(name, { server, client, tool })
+            if (permitted(`mcp__${server}__${tool.name}`)) next.set(name, { server, client, tool })
           }
           cursor = page.nextCursor
           if (cursor && seen.has(cursor))

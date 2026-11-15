@@ -100,7 +100,7 @@ export interface AgentCapabilityGrantV1 {
   /** Prompt fragments appended after the agent's own prompt. Never replace it. */
   instructions?: string[]
   /** Host and plugin skill ids. Added skills contribute their declared tools. */
-  skills?: CapabilityIdDelta
+  skills?: CapabilityIdDelta & { only?: string[]; restrictTo?: string[] }
   /**
    * MCP servers, by id, drawn from the servers enabled in the run's workspace.
    * `only` intersects the profile's subset; `add` / `remove` then adjust it.
@@ -195,7 +195,7 @@ export function validateAgentCapabilityGrant(v: unknown): ValidationResult<Agent
     errors.push("maxBudgetUsd must be a finite positive number")
   }
   checkIdList(v.instructions, "instructions", errors)
-  checkDelta(v.skills, "skills", ["add", "remove"], errors)
+  checkDelta(v.skills, "skills", ["add", "remove", "only", "restrictTo"], errors)
   checkDelta(v.mcpServers, "mcpServers", ["add", "remove", "only"], errors)
   checkDelta(v.tools, "tools", ["add", "deny", "restrictTo"], errors)
   checkDelta(v.knowledgeBases, "knowledgeBases", ["add"], errors)
@@ -298,7 +298,11 @@ export function mergeCapabilityGrants(
   if (instructions.length > 0) merged.instructions = instructions
 
   const skills = mergeDelta(outer.skills, inner.skills)
-  if (skills && (skills.add || skills.remove)) merged.skills = skills
+  const skillOnly = intersectOptional(
+    intersectOptional(outer.skills?.only, outer.skills?.restrictTo),
+    intersectOptional(inner.skills?.only, inner.skills?.restrictTo)
+  )
+  if (skills || skillOnly) merged.skills = { ...skills, ...(skillOnly ? { only: skillOnly } : {}) }
 
   const mcpDelta = mergeDelta(outer.mcpServers, inner.mcpServers)
   const only = intersectOptional(outer.mcpServers?.only, inner.mcpServers?.only)

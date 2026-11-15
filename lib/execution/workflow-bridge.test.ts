@@ -14,8 +14,10 @@ import {
   executionKindForWorkflowRun,
   startWorkflowExecutionBridge,
   syncWorkflowExecutionRun,
+  workflowExecutionRunId,
 } from "./workflow-bridge"
 import type { WorkflowRunRow } from "@/types/workflow/visual"
+import { RunAuthorityError } from "./run-authority"
 
 function workflowRun(overrides: Partial<WorkflowRunRow> = {}): WorkflowRunRow {
   return {
@@ -62,6 +64,28 @@ function workflowRun(overrides: Partial<WorkflowRunRow> = {}): WorkflowRunRow {
 }
 
 describe("workflow execution bridge", () => {
+  it("does not record an IM connector ceiling as descendant authority", async () => {
+    await getDb().mcpServers.put({ id: "mcp_x", name: "github", enabled: true } as never)
+    await syncWorkflowExecutionRun(
+      workflowRun({
+        securityContext: {
+          permissionCeiling: { mcpServers: [{ name: "github" }] },
+        } as never,
+      }),
+      [],
+      []
+    )
+    const parentId = workflowExecutionRunId("wf-run-1")
+    const child = await startToolExecutionRun("child-session", { parentRunId: parentId })
+    expect(child.authority).toBeUndefined()
+    const { enforceRunAuthorityOnSendOptions } = await import("./run-authority")
+    const options = {
+      mcpServers: { github: { command: "github" }, other: { command: "other" } },
+      runAuthorityMcpServerIds: { github: "mcp_x", other: "mcp_y" },
+    }
+    await enforceRunAuthorityOnSendOptions(child.id, options)
+    expect(Object.keys(options.mcpServers ?? {})).toEqual(["github", "other"])
+  })
   it("does not infer local authority from a manual trigger or a UI origin supplied by a plugin", async () => {
     await syncWorkflowExecutionRun(
       workflowRun({ triggerKind: "trigger.manual", triggeredBy: { source: "ui" } }),
@@ -247,7 +271,8 @@ describe("workflow execution bridge", () => {
     }
   )
 
-  it("records a scheduled workflow's resolved ceiling without inventing its authorizer", async () => {
+  it("keeps a scheduled workflow's resolved ceiling out of descendant authority", async () => {
+    await getDb().mcpServers.put({ id: "mcp_docs", name: "docs" } as never)
     const row = workflowRun({
       triggerKind: "trigger.cron",
       triggeredBy: { source: "schedule" },
@@ -270,12 +295,7 @@ describe("workflow execution bridge", () => {
       requesters: [],
     })
     expect(run?.actingIdentity?.authorizingPrincipal).toBeUndefined()
-    expect(run?.authority).toEqual({
-      schemaVersion: 1,
-      permissionMode: "plan",
-      tools: { allow: ["Read"], deny: ["Bash"] },
-      mcpServers: { only: ["docs"] },
-    })
+    expect(run?.authority).toBeUndefined()
   })
   beforeEach(async () => {
     __resetWorkflowExecutionBridgeForTesting()
@@ -382,36 +402,76 @@ describe("workflow execution bridge", () => {
     expect(executionKindForWorkflowRun({ triggerKind } as WorkflowRunRow)).toBe(expectedKind)
   })
 
-  it("links a retry to the run it replaced, from the lineage the row already carries", async () => {
-    // A retry is a replacement, not a stranger. Deriving the link here — rather
-    // than coordinating with whoever pressed the button — is what makes a retry
-    // driven from the desktop history view join the same chain as one driven
-    // through the run-control gate.
-    await getDb().workflowRuns.put(workflowRun())
-    await syncWorkflowExecutionRun(workflowRun(), [], [])
-    await syncWorkflowExecutionRun(
-      workflowRun({
-        id: "wf-run-2",
-        lineage: {
-          rootRunId: "wf-run-1",
-          retryOfRunId: "wf-run-1",
-          retryMode: "current-deployment",
-        },
-      }),
-      [],
-      []
-    )
+  it.each(["wf-run-1", "wf-run-2"])(
+    "links a retry with workflow root %s to its verified execution parent",
+    async (rootRunId) => {
+      // A retry is a replacement, not a stranger. Deriving the link here — rather
+      // than coordinating with whoever pressed the button — is what makes a retry
+      // driven from the desktop history view join the same chain as one driven
+      // through the run-control gate.
+      await getDb().workflowRuns.put(workflowRun())
+      await syncWorkflowExecutionRun(workflowRun(), [], [])
+      const authority = { schemaVersion: 1 as const, caps: "explicit-v1" as const, maxTurns: 2 }
+      await getDb().executionRuns.update("execution:workflow:wf-run-1", { authority })
+      await syncWorkflowExecutionRun(
+        workflowRun({
+          id: "wf-run-2",
+          lineage: {
+            rootRunId,
+            retryOfRunId: "wf-run-1",
+            retryMode: "current-deployment",
+          },
+        }),
+        [],
+        []
+      )
 
-    expect((await getDb().executionRuns.get("execution:workflow:wf-run-2"))?.parentRunId).toBe(
-      "execution:workflow:wf-run-1"
-    )
-    // A first run is a root, and must not gain a parent it never had.
-    expect(
-      (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.parentRunId
-    ).toBeUndefined()
+      expect((await getDb().executionRuns.get("execution:workflow:wf-run-2"))?.parentRunId).toBe(
+        "execution:workflow:wf-run-1"
+      )
+      expect(
+        (await getDb().executionRuns.get("execution:workflow:wf-run-2"))?.actingIdentity?.rootRunId
+      ).toBe("execution:workflow:wf-run-1")
+      expect((await getDb().executionRuns.get("execution:workflow:wf-run-2"))?.authority).toEqual(
+        authority
+      )
+      // A first run is a root, and must not gain a parent it never had.
+      expect(
+        (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.parentRunId
+      ).toBeUndefined()
+    }
+  )
+
+  it("recreates a legacy workflow execution without claimed lineage", async () => {
+    const source = workflowRun()
+    await syncWorkflowExecutionRun(source, [], [])
+    await getDb().executionRuns.delete(workflowExecutionRunId(source.id))
+    await syncWorkflowExecutionRun(source, [], [])
+    expect(await getDb().executionRuns.get(workflowExecutionRunId(source.id))).toBeDefined()
   })
 
-  it.each(["workflow", "project", "session", "source", "kind", "missing-source"] as const)(
+  it("retains a canonical parent when its workflow source disappears mid-run", async () => {
+    const parent = workflowRun({ id: "deleted-parent" })
+    await getDb().workflowRuns.put(parent)
+    await syncWorkflowExecutionRun(parent, [], [])
+    const child = workflowRun({ lineage: { rootRunId: parent.id, parentRunId: parent.id } })
+    await syncWorkflowExecutionRun(child, [], [])
+    await getDb().workflowRuns.delete(parent.id)
+    await syncWorkflowExecutionRun(child, [], [])
+    const id = workflowExecutionRunId(child.id)
+    expect((await getDb().executionRuns.get(id))?.parentRunId).toBe(
+      workflowExecutionRunId(parent.id)
+    )
+    expect(
+      await getDb()
+        .executionRunEvents.where("runId")
+        .equals(id)
+        .filter((event) => event.seq === 0)
+        .count()
+    ).toBeGreaterThan(0)
+  })
+
+  it.each(["workflow", "project", "session", "source", "kind", "root"] as const)(
     "round 4: rejects a mismatched %s retry anchor through createExecutionRun",
     async (mismatch) => {
       const local = await startToolExecutionRun("session-1", {
@@ -422,7 +482,7 @@ describe("workflow execution bridge", () => {
         workflowId: mismatch === "workflow" ? "other-workflow" : "wf-1",
         projectId: mismatch === "project" ? "other-project" : undefined,
       })
-      if (mismatch !== "missing-source") await getDb().workflowRuns.put(foreign)
+      await getDb().workflowRuns.put(foreign)
       await getDb().executionRuns.put({
         ...local,
         id: "execution:workflow:foreign",
@@ -431,25 +491,167 @@ describe("workflow execution bridge", () => {
         sourceId: mismatch === "source" ? "different-source" : foreign.id,
         actingIdentity: { ...local.actingIdentity!, rootRunId: "execution:workflow:foreign" },
       })
+      await expect(
+        syncWorkflowExecutionRun(
+          workflowRun({
+            lineage: {
+              rootRunId: mismatch === "root" ? "another-root" : foreign.id,
+              retryOfRunId: foreign.id,
+              retryMode: "current-deployment",
+            },
+          }),
+          [],
+          []
+        )
+      ).rejects.toBeInstanceOf(RunAuthorityError)
+      expect(await getDb().executionRuns.get("execution:workflow:wf-run-1")).toBeUndefined()
+    }
+  )
+
+  it.each(["both-missing", "source-missing", "execution-missing", "other-project"])(
+    "starts an observed root for non-contradicting lineage verification misses: %s",
+    async (missing) => {
+      const parent = workflowRun({ id: "parent", projectId: "project-a" })
+      if (missing !== "both-missing") {
+        await getDb().workflowRuns.put(parent)
+        await syncWorkflowExecutionRun(parent, [], [])
+        await getDb().executionRuns.update(workflowExecutionRunId(parent.id), {
+          authority: { schemaVersion: 1, caps: "explicit-v1", maxTurns: 2 },
+        })
+        if (missing === "source-missing") await getDb().workflowRuns.delete(parent.id)
+        if (missing === "execution-missing")
+          await getDb().executionRuns.delete(workflowExecutionRunId(parent.id))
+      }
       await syncWorkflowExecutionRun(
         workflowRun({
-          lineage: {
-            rootRunId: foreign.id,
-            retryOfRunId: foreign.id,
-            retryMode: "current-deployment",
-          },
+          projectId: missing === "other-project" ? "project-b" : "project-a",
+          lineage: { rootRunId: parent.id, parentRunId: parent.id },
         }),
         [],
         []
       )
       const run = await getDb().executionRuns.get("execution:workflow:wf-run-1")
       expect(run?.parentRunId).toBeUndefined()
-      const { admitPersonalCredential } = await import("./personal-credential")
-      expect(
-        await admitPersonalCredential({ executionRunId: run!.id }, { source: "github-user" })
-      ).toMatchObject({ ok: false })
+      expect(run?.actingIdentity?.rootRunId).toBe(run?.id)
+      expect(run?.authority).toEqual(
+        missing === "other-project"
+          ? { schemaVersion: 1, caps: "explicit-v1", maxTurns: 2 }
+          : undefined
+      )
+      expect(await getDb().executionRunEvents.where("runId").equals(run!.id).toArray()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            payload: expect.objectContaining({
+              operation: "workflow-lineage-observed",
+              inheritedAuthorityUnavailable: missing !== "other-project",
+            }),
+          }),
+        ])
+      )
     }
   )
+
+  it("does not infer a parent or its caps from unclaimed same-session workflow history", async () => {
+    const parent = workflowRun({ id: "parent" })
+    await getDb().workflowRuns.put(parent)
+    await syncWorkflowExecutionRun(parent, [], [])
+    await getDb().executionRuns.update(workflowExecutionRunId(parent.id), {
+      authority: { schemaVersion: 1, caps: "explicit-v1", maxTurns: 2 },
+    })
+    await syncWorkflowExecutionRun(workflowRun(), [], [])
+    const run = await getDb().executionRuns.get("execution:workflow:wf-run-1")
+    expect(run?.parentRunId).toBeUndefined()
+    expect(run?.authority).toBeUndefined()
+  })
+  it.each([
+    { rootRunId: "" },
+    { rootRunId: "wf-run-1", parentRunId: "" },
+    { rootRunId: "wf-run-1", retryOfRunId: "" },
+  ])("refuses empty claimed lineage ids: %j", async (lineage) => {
+    await expect(syncWorkflowExecutionRun(workflowRun({ lineage }), [], [])).rejects.toMatchObject({
+      name: "RunAuthorityError",
+      reason: "identity_mismatch",
+    })
+    expect(await getDb().executionRuns.count()).toBe(0)
+  })
+
+  it("recreates an uncapped retry after both seed rows were pruned and observes the missing seed", async () => {
+    await syncWorkflowExecutionRun(
+      workflowRun({
+        lineage: { rootRunId: "pruned", retryOfRunId: "pruned", retryMode: "current-deployment" },
+      }),
+      [],
+      []
+    )
+    const run = await getDb().executionRuns.get("execution:workflow:wf-run-1")
+    expect(run?.parentRunId).toBeUndefined()
+    expect(run?.authority).toBeUndefined()
+    expect(await getDb().executionRunEvents.where("runId").equals(run!.id).toArray()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            operation: "workflow-lineage-observed",
+            parentSourceMissing: true,
+          }),
+        }),
+      ])
+    )
+  })
+
+  it.each([false, true])(
+    "pruned retries become observed roots regardless of their own ceiling, capped=%s",
+    async (capped) => {
+      const source = workflowRun({
+        lineage: { rootRunId: "pruned", retryOfRunId: "pruned", retryMode: "current-deployment" },
+        securityContext: {
+          piiEgressRequired: false,
+          sourceTriggerKind: "trigger.manual",
+          permissionCeiling: capped ? { permissionMode: "plan" } : {},
+        },
+      })
+      await syncWorkflowExecutionRun(source, [], [])
+      expect(
+        (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.parentRunId
+      ).toBeUndefined()
+      expect(
+        await getDb()
+          .executionRunEvents.where("runId")
+          .equals("execution:workflow:wf-run-1")
+          .toArray()
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            payload: expect.objectContaining({
+              inheritedAuthorityUnavailable: true,
+              ownNodeCapsReapplied: true,
+            }),
+          }),
+        ])
+      )
+    }
+  )
+
+  it("inherits the authority of a valid claimed parent", async () => {
+    const parent = workflowRun({ id: "parent" })
+    await getDb().workflowRuns.put(parent)
+    await syncWorkflowExecutionRun(parent, [], [])
+    const authority = {
+      schemaVersion: 1 as const,
+      caps: "explicit-v1" as const,
+      permissionMode: "default" as const,
+      maxTurns: 3,
+    }
+    await getDb().executionRuns.update("execution:workflow:parent", { authority })
+    await syncWorkflowExecutionRun(
+      workflowRun({ lineage: { rootRunId: "parent", parentRunId: "parent" } }),
+      [],
+      []
+    )
+    expect(await getDb().executionRuns.get("execution:workflow:wf-run-1")).toMatchObject({
+      parentRunId: "execution:workflow:parent",
+      authority,
+    })
+  })
 
   it("projects UI-triggered runs without fanout subscriptions", async () => {
     const row = workflowRun({
@@ -465,4 +667,16 @@ describe("workflow execution bridge", () => {
       expect(await getDb().executionRuns.get("execution:workflow:wf-run-ui")).toBeDefined()
     })
   })
+})
+
+it("refuses a new typed workflow with a missing Host calling run", async () => {
+  const { getDb } = await import("@/lib/db/schema")
+  const source = workflowRun({
+    id: "typed-missing-caller",
+    lineage: { rootRunId: "typed-missing-caller", authorityParentRunId: "missing-host-caller" },
+  })
+  await expect(syncWorkflowExecutionRun(source, [], [])).rejects.toMatchObject({
+    reason: "parent_not_found",
+  })
+  expect(await getDb().executionRuns.get("execution:workflow:typed-missing-caller")).toBeUndefined()
 })

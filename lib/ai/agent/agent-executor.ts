@@ -104,6 +104,8 @@ export interface AgentTool {
 }
 
 export interface ExecuteAgentConfig {
+  /** Host-owned structural parent for workflow and other nested agent turns. */
+  parentRunId?: string
   /** Host-held producer identity; never copy this from plugin/tool payloads. */
   executionIdentity?: { runId: string; sessionId?: string; attemptId?: string }
   /** Explicit personal marks on completion content without a durable run. */
@@ -634,6 +636,7 @@ async function runToolEnabledStandalone(
     // stays a chat-surface feature and is not recalled here.
     const boundContext = await buildAgentBoundContext(prompt, character, capabilityGrants)
     const sendOptions = await buildOpts.resolveSendOptions({
+      ...(config.executionIdentity ? { executionIdentity: config.executionIdentity } : {}),
       session: sessionRow,
       character,
       appSettings: appSettings ?? null,
@@ -642,7 +645,10 @@ async function runToolEnabledStandalone(
       ...(config.dispatchContext ? { dispatchContext: config.dispatchContext } : {}),
       ...(config.isDispatchedSubagent ? { isDispatchedSubagent: true } : {}),
       ...(config.permissionCeiling ? { permissionCeiling: config.permissionCeiling } : {}),
-      ...(capabilityGrants ? { capabilityGrants } : {}),
+      ...(config.capabilityGrants ? { capabilityGrants: config.capabilityGrants } : {}),
+      ...(executeAgentConfigGrant(config, Boolean(characterId))
+        ? { ownOptionGrants: [executeAgentConfigGrant(config, Boolean(characterId))!] }
+        : {}),
       ...(config.additionalDirectories?.length
         ? { bundleRoots: config.additionalDirectories }
         : {}),
@@ -883,7 +889,8 @@ async function runToolEnabledStandalone(
       void import("@/lib/claude/ipc")
         .then(({ closeSession }) => closeSession(session.id))
         .catch(() => undefined)
-      void sessionsDb.deleteSession(session.id).catch(() => undefined)
+      // Join the cascade before callers can close or replace the turn database.
+      await sessionsDb.deleteSession(session.id).catch(() => undefined)
     }
   }
 }

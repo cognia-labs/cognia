@@ -1120,6 +1120,8 @@ export type WorkflowEgressSink = "model" | "connector" | "remote-tool" | "local-
 /** Immutable relationship metadata shared by nested and retried runs. */
 export interface WorkflowRunLineage {
   rootRunId: string
+  /** Host calling execution run for an agent-tool launch, never workflow input. */
+  authorityParentRunId?: string
   parentRunId?: string
   parentStepId?: string
   retryOfRunId?: string

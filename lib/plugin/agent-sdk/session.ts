@@ -56,6 +56,12 @@ function buildSession(
     options: PluginSessionSendOptions = {}
   ): Promise<PluginSessionSendResult> => {
     const host = pluginId ? pluginExecutionContext(pluginId) : undefined
+    const { authorityParentRunId } = await import("@/lib/execution/acting-authority")
+    const parentRunId = await authorityParentRunId(host)
+    if (host && !host.executionRunId && personalOperationSources(host)?.length) {
+      const { assertPersonalEgress } = await import("@/lib/execution/personal-egress")
+      await assertPersonalEgress(host)
+    }
     if (typeof prompt !== "string" || !prompt) {
       throw new Error("session.send requires a non-empty prompt")
     }
@@ -89,7 +95,7 @@ function buildSession(
       prompt,
       bindCompletion({
         sessionId: id,
-        ...(host?.executionRunId ? { executionIdentity: { runId: host.executionRunId } } : {}),
+        ...(parentRunId ? { parentRunId } : {}),
         toolsEnabled: options.toolsEnabled ?? true,
         ...(base.characterId ? { characterId: base.characterId } : {}),
         ...(base.cwd ? { cwd: base.cwd } : {}),

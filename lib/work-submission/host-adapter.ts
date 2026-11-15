@@ -131,11 +131,15 @@ export async function acceptHostStateChatTurn(
   const sessionId = action.sessionId
   if (!sessionId) return null
 
+  let parentRunId: string | undefined
   try {
+    const session = await (await import("@/lib/db/sessions")).getSession(sessionId)
+    parentRunId = session?.projectThread?.parentExecutionRunId
     const attachments = await frozenHostStateAttachments(sessionId, action.action.attachments)
     return await acceptWorkSubmission(
       {
         localAuthorization: LOCAL_PERSON_RUN,
+        parentRunId,
         intent: {
           contractVersion: 1,
           // Same shape the renderer uses, so the two arrival paths collapse.
@@ -165,7 +169,7 @@ export async function acceptHostStateChatTurn(
     )
   } catch (error) {
     deps.onError?.(error)
-    if (error instanceof WorkSubmissionRejectedError) return null
+    if (error instanceof WorkSubmissionRejectedError && !parentRunId) return null
     throw error
   }
 }

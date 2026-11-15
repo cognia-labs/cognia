@@ -46,7 +46,11 @@ import {
 import { hostStateDigest } from "@cognia/agent-config-types/host-state"
 import type { SendOptions } from "@cognia/agent-config-types"
 
-import { appendRunEventInsideTransaction, semanticRunEvent } from "@/lib/db/execution-runs"
+import {
+  appendRunObservation,
+  appendRunEventInsideTransaction,
+  semanticRunEvent,
+} from "@/lib/db/execution-runs"
 import { getDb, withDbReopenRetry } from "@/lib/db/schema"
 import {
   recordedRunMetadata,
@@ -108,6 +112,10 @@ export interface FrozenExecutionContext {
 }
 
 export interface AcceptWorkSubmissionInput {
+  /** Host-captured provenance; never accepted from a client intent. */
+  parentRunId?: string
+  /** Host-only direct-thread preparation; arbitrary id collisions still refuse. */
+  adoptPreparedRun?: boolean
   localAuthorization?: LocalPersonRun
   intent: WorkSubmissionIntentV1
   runId: string
@@ -249,6 +257,7 @@ export async function acceptWorkSubmission(
     expiresAt: now + WORK_SUBMISSION_PAYLOAD_TTL_MS,
   }
 
+  const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
   const committed = await withDbReopenRetry(() => {
     const db = getDb()
     return db.transaction(
@@ -288,41 +297,74 @@ export async function acceptWorkSubmission(
         await input.writeTranscript?.()
         await db.workSubmissions.add(submission)
         await db.workInputBatches.add(batch)
-        await db.executionRuns.add({
-          id: input.runId,
-          ...recordedRunMetadata(
-            intent.source.kind === "connector"
-              ? "requester"
-              : ["agent-executor", "workflow-agent-turn", "team", "plugin"].includes(
-                    intent.source.kind
-                  )
+        const parent = input.parentRunId ? await db.executionRuns.get(input.parentRunId) : undefined
+        const inherited = parent ? await resolveRunAuthority({ parentRunId: parent.id }) : undefined
+        const prepared = input.adoptPreparedRun
+          ? await db.executionRuns.get(input.runId)
+          : undefined
+        if (
+          prepared &&
+          (intent.source.kind !== "chat" ||
+            !input.parentRunId ||
+            prepared.kind !== "agent-turn" ||
+            prepared.sourceId !== input.runId ||
+            prepared.sessionId !== intent.scope.sessionId ||
+            prepared.status !== "queued" ||
+            prepared.parentRunId !== parent?.id ||
+            (await db.workSubmissions.where("runId").equals(input.runId).count()) !== 1)
+        )
+          throw new WorkSubmissionRejectedError("invalid_intent", ["invalid prepared thread run"])
+        if (!prepared)
+          await db.executionRuns.add({
+            id: input.runId,
+            ...recordedRunMetadata(
+              parent
                 ? "child"
-                : input.localAuthorization === LOCAL_PERSON_RUN
-                  ? "local"
-                  : "external-event",
-            {
-              runId: input.runId,
-              ...(input.localAuthorization === LOCAL_PERSON_RUN
-                ? { authorizingPrincipal: { kind: "local-person" as const, accountId } }
-                : {}),
-              ...(input.localAuthorization === LOCAL_PERSON_RUN
-                ? {
-                    requesters: [{ kind: "local-person", accountId }],
-                    actingPrincipal: { kind: "local-person", accountId },
-                  }
-                : {}),
-            }
-          ),
-          kind: "agent-turn",
-          sourceId: input.submissionId,
-          ...(intent.scope.sessionId ? { sessionId: intent.scope.sessionId } : {}),
-          ...(intent.scope.projectId ? { projectId: intent.scope.projectId } : {}),
-          title: input.runTitle ?? "Chat run",
-          status: blocked ? "waiting" : "queued",
-          currentRevision: 0,
-          startedAt: now,
-          updatedAt: now,
-        })
+                : intent.source.kind === "connector"
+                  ? "requester"
+                  : ["agent-executor", "workflow-agent-turn", "team", "plugin"].includes(
+                        intent.source.kind
+                      )
+                    ? "child"
+                    : input.localAuthorization === LOCAL_PERSON_RUN
+                      ? "local"
+                      : "external-event",
+              {
+                runId: input.runId,
+                parent,
+                ...(input.localAuthorization === LOCAL_PERSON_RUN
+                  ? { authorizingPrincipal: { kind: "local-person" as const, accountId } }
+                  : {}),
+                ...(input.localAuthorization === LOCAL_PERSON_RUN
+                  ? {
+                      requesters: [{ kind: "local-person", accountId }],
+                      actingPrincipal: { kind: "local-person", accountId },
+                    }
+                  : {}),
+              }
+            ),
+            ...(parent
+              ? {
+                  parentRunId: parent.id,
+                  actingIdentity: inherited?.actingIdentity,
+                  authority: inherited?.authority,
+                }
+              : {}),
+            kind: "agent-turn",
+            sourceId: input.submissionId,
+            ...(intent.scope.sessionId ? { sessionId: intent.scope.sessionId } : {}),
+            ...(intent.scope.projectId ? { projectId: intent.scope.projectId } : {}),
+            title: input.runTitle ?? "Chat run",
+            status: blocked ? "waiting" : "queued",
+            currentRevision: 0,
+            startedAt: now,
+            updatedAt: now,
+          })
+        if (input.parentRunId && !parent)
+          await appendRunObservation(input.runId, {
+            operation: "coordinator_parent_unavailable",
+            parentRunId: input.parentRunId,
+          })
         // Only the blocked case journals an event here. Accepted-but-not-yet-
         // dispatched work is exactly what `queued` means, and `run.started`
         // would project the run to `running` (see `lib/execution/run-reducer`)

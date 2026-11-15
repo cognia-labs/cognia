@@ -46,7 +46,20 @@ export function isHandoffPolicyV1(value: unknown): value is HandoffPolicyV1 {
 
 export type HandoffRuntimeAdapterId = "claude-agent-sdk" | "ai-sdk" | "external"
 
+export const handoffTurnOptionsSchema = v.strictObject({
+  permissionMode: handoffPolicyV1Schema.entries.permissionMode,
+  allowedTools: v.optional(strings),
+  disallowedTools: v.optional(strings),
+})
+export type HandoffTurnOptions = v.InferOutput<typeof handoffTurnOptionsSchema>
+
 export interface HandoffExecutionBinding {
+  /**
+   * Reserved turn defaults; never a descendant authority cap. Dormant: no
+   * production sender emits this field today. HEAD-enforced remote limits
+   * remain in `policy` (ADR-0243 M2); keep this only as a receiver seam.
+   */
+  turnOptions?: HandoffTurnOptions
   policy?: HandoffPolicyV1
   mode: "native" | "orchestrated"
   executionFingerprint?: string
@@ -140,6 +153,11 @@ export function validateHandoffEnvelope(value: unknown): string[] {
   if (!execution || typeof execution !== "object") {
     errors.push("execution is required")
   } else {
+    if (
+      execution.turnOptions !== undefined &&
+      !v.safeParse(handoffTurnOptionsSchema, execution.turnOptions).success
+    )
+      errors.push("execution.turnOptions is not supported")
     if (execution.policy !== undefined && !isHandoffPolicyV1(execution.policy))
       errors.push("execution.policy is not a supported portable policy")
     if (execution.mode !== "native" && execution.mode !== "orchestrated") {

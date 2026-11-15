@@ -1,3 +1,9 @@
+// Authority storage is exercised with real IndexedDB in run-authority.test.ts.
+jest.mock("@/lib/execution/run-authority", () => ({
+  ...jest.requireActual("@/lib/execution/run-authority"),
+  resolveRunAuthority: jest.fn(async () => ({})),
+  enforceRunAuthorityOnSendOptions: jest.fn(async () => undefined),
+}))
 const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
   verified: true,
   marks: [] as unknown[],
@@ -36,7 +42,7 @@ jest.mock("@/lib/execution/acting-authority", () => ({
   recordRunAuthority: jest.fn(async () => undefined),
 }))
 import * as dispatchContextRegistry from "@/lib/claude/agents/dispatch-context-registry"
-import { recordRunAuthority } from "@/lib/execution/acting-authority"
+import { enforceRunAuthorityOnSendOptions } from "@/lib/execution/run-authority"
 // Mock every database / store / agent-mode dependency so build-options can be
 // exercised as a pure function. We never want to touch Dexie or Zustand here.
 
@@ -7244,13 +7250,14 @@ describe("desktop-independent DI seams (standalone CLI)", () => {
       await resolveSendOptions({
         character: makeChar({ id: "c1", allowedTools: ["Read", "Bash"] }),
         session: makeSession({ id: "sess-rec", characterId: "c1" }),
+        executionIdentity: { runId: "exact-run" },
         permissionCeiling: { allowedTools: ["Read"] },
       })
       await Promise.resolve()
-      expect(recordRunAuthority).toHaveBeenCalledWith(
-        "sess-rec",
-        expect.objectContaining({ schemaVersion: 1, tools: { allow: ["Read"] } }),
-        undefined
+      expect(enforceRunAuthorityOnSendOptions).toHaveBeenCalledWith(
+        "exact-run",
+        expect.objectContaining({ allowedTools: ["Read"] }),
+        expect.any(Array)
       )
       expect(getResolvedPermissionCeiling("sess-rec")).toEqual({
         allowedTools: ["Read"],
@@ -9618,6 +9625,37 @@ it("keeps the automatic delivery key renderer-only on ordinary sends", async () 
 })
 
 describe("portable runtime feature projection", () => {
+  it("records no skill or MCP cap for an ordinary turn's discovered surface", async () => {
+    const opts = await resolveSendOptions({
+      character: makeChar({ providerId: "anthropic", skillIds: [] }),
+      session: makeSession({
+        id: "ordinary",
+        runtimeExtensions: [{ kind: "directory", path: "/native" }],
+      }),
+      preloadedMcpServers: [],
+    })
+    expect(opts.runAuthority?.skills).toBeUndefined()
+    expect(opts.runAuthority?.mcpServers).toBeUndefined()
+    expect(opts.runAuthority?.tools).toBeUndefined()
+    expect(opts.runtimeExtensions).toEqual([{ kind: "directory", path: "/native" }])
+  })
+
+  it("records grant caps without promoting character pre-approvals or MCP selection", async () => {
+    const opts = await resolveSendOptions({
+      character: makeChar({ providerId: "anthropic", allowedTools: ["Read"], mcpServerIds: [] }),
+      capabilityGrants: [
+        { schemaVersion: 1, source: { kind: "plugin" }, maxTurns: 3, subagents: { only: [] } },
+      ],
+    })
+    expect(opts.runAuthority).toMatchObject({
+      subagents: { only: [] },
+      maxTurns: 3,
+    })
+    expect(opts.runAuthority?.skills).toBeUndefined()
+    expect(opts.runAuthority?.tools).toBeUndefined()
+    expect(opts.runAuthority?.mcpServers).toBeUndefined()
+  })
+
   it("forwards explicit subagent context mode and conversation extension refs", async () => {
     const opts = await resolveSendOptions({
       character: makeChar({ id: "c1", providerId: "anthropic" }),

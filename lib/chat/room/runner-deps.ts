@@ -82,7 +82,10 @@ export interface RoomRunnerExecution {
    * The member turn's run. `automated`: the room's turn is an automated one
    * (`RoomSendOptions.automatedTurn`), so the run carries no person's authority.
    */
-  startMemberRun?: (sessionId: string, options: { automated: boolean }) => Promise<string>
+  startMemberRun?: (
+    sessionId: string,
+    options: { automated: boolean; sourceRunIds?: readonly string[] }
+  ) => Promise<string>
   finishMemberRun?: (runId: string, failed: boolean) => Promise<void>
   isAtCapacity: (kind: "ai-turn", sessionId: string) => boolean
   runWithExecutionLease: <T>(

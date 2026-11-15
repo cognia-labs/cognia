@@ -425,3 +425,16 @@ describe("toolFamily", () => {
     }
   })
 })
+
+it("captures the parent from Host tool context rather than the model's thread brief", async () => {
+  const d = deps()
+  await runProjectCoordinatorBuiltinTool(
+    T.spawnThread,
+    { ...brief, parentExecutionRunId: "forged" },
+    d,
+    { sessionId: coordinator.id, executionRunId: "consumer" }
+  )
+  expect(d.createThread).toHaveBeenCalledWith(
+    expect.objectContaining({ parentExecutionRunId: "consumer" })
+  )
+})

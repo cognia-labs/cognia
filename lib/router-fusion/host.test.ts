@@ -9,6 +9,12 @@ import * as host from "./host"
 import { accountDatabaseAppliers } from "./db/outbox-appliers"
 
 describe("router-fusion host surface", () => {
+  it("exposes retention sampling through the maintenance-only lazy loader", async () => {
+    const retention = await import("./db/retention")
+    expect(host.collectRoutingSamplesBeforeRetention).toBe(
+      retention.collectRoutingSamplesBeforeRetention
+    )
+  })
   it("exposes the chat routing and run lifecycle the send path loads", () => {
     for (const name of [
       "selectChatDeployment",

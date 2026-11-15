@@ -77,6 +77,33 @@ describe("acceptWorkSubmission", () => {
     __resetDbForTesting()
   })
 
+  it("inherits a Host-captured parent atomically without recording requester defaults", async () => {
+    const { recordedRunMetadata } = await import("@/lib/execution/acting-authority")
+    const parent = {
+      id: "host-parent",
+      kind: "agent-turn" as const,
+      sourceId: "host-parent",
+      title: "Host parent",
+      status: "running" as const,
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      ...recordedRunMetadata("local", { runId: "host-parent" }),
+      authority: { schemaVersion: 1 as const, caps: "explicit-v1" as const, maxTurns: 2 },
+    }
+    await getDb().executionRuns.put(parent)
+    await acceptWorkSubmission(
+      acceptInput({ parentRunId: parent.id, localAuthorization: LOCAL_PERSON_RUN }),
+      deps
+    )
+    expect(await getDb().executionRuns.get("run-1")).toMatchObject({
+      parentRunId: parent.id,
+      actingIdentity: parent.actingIdentity,
+      authority: parent.authority,
+    })
+    expect(await listExecutionRunEvents("run-1")).toEqual([])
+  })
+
   it("commits the submission, frozen input, run, and opening event together", async () => {
     const receipt = await acceptWorkSubmission(
       acceptInput({ localAuthorization: LOCAL_PERSON_RUN }),

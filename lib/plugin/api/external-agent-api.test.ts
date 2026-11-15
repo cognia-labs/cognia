@@ -1,4 +1,5 @@
 import { runPluginExternalAgent } from "./external-agent-api"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { pluginHasApiPermission } from "./permission-api"
 import { assertOwnedBotWorkspace } from "../workspace/bot-run"
 import type { PluginWorkspaceHandle } from "../workspace/acquire"
@@ -1216,4 +1217,112 @@ it("public external context cannot manufacture a Host provenance binding", async
   expect(
     personalEgressOptionsSource({ context: { custom: { chatSessionId: "clean" } } })
   ).toBeUndefined()
+})
+
+// Real Host storage and authority; only the external process boundary is replaced.
+describe("Host external child authority", () => {
+  const fixture = createDbTestFixture({ seeded: false })
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+  ])(
+    "launches during deferred preparation; reserved row admitted=%s",
+    async (admitted, knownParent) => {
+      const { getDb } = await import("@/lib/db/schema")
+      const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+      const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+      const { personalEgressOptionsSource } = await import("@/lib/execution/personal-egress")
+      const { enforceExternalRunAuthority } =
+        await import("@/lib/ai/agent/external/policy/run-authority")
+      const id = "reserved-external-parent"
+      if (knownParent)
+        await startToolExecutionRun(undefined, {
+          runId: "known-hook-parent",
+          authority: { schemaVersion: 1, permissionMode: "plan" },
+        })
+      if (admitted)
+        await startToolExecutionRun(undefined, {
+          runId: id,
+          authority: { schemaVersion: 1, permissionMode: "plan" },
+        })
+      mockStoreAgents.set("cfg", { id: "cfg", enabled: true, defaultPermissionMode: "acceptEdits" })
+      let checked = false
+      mockManager.execute.mockImplementationOnce(async (_id, _prompt, options) => {
+        const source = personalEgressOptionsSource(options)
+        const row = await getDb().executionRuns.get(source!.executionRunId!)
+        expect(row?.parentRunId).toBe(admitted ? id : knownParent ? "known-hook-parent" : undefined)
+        const effective = await enforceExternalRunAuthority(source, options, { protocol: "acp" })
+        expect(effective?.permissionMode).toBe(admitted || knownParent ? "plan" : "acceptEdits")
+        checked = true
+        return { success: true, finalResponse: "ok" }
+      })
+      const result = await withPluginExecutionContext(
+        "plugin",
+        {
+          executionRunId: id,
+          executionRunReserved: true,
+          ...(knownParent ? { executionRunParentId: "known-hook-parent" } : {}),
+        },
+        () => runPluginExternalAgent("plugin", "cfg", "go", { permissionMode: "acceptEdits" })
+      )
+      expect(result.success).toBe(true)
+      expect(checked).toBe(true)
+    }
+  )
+  it("keeps background and uncapped Host-child launch options equal to HEAD", async () => {
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+    const { personalEgressOptionsSource } = await import("@/lib/execution/personal-egress")
+    const { enforceExternalRunAuthority } =
+      await import("@/lib/ai/agent/external/policy/run-authority")
+    mockStoreAgents.set("cfg", { id: "cfg", enabled: true, defaultPermissionMode: "acceptEdits" })
+    const received: unknown[] = []
+    mockManager.execute.mockImplementation(async (_id, _prompt, options) => {
+      received.push(
+        await enforceExternalRunAuthority(personalEgressOptionsSource(options), options, {
+          protocol: "acp",
+        })
+      )
+      return { success: true, finalResponse: "ok" }
+    })
+    const own = { permissionMode: "acceptEdits" as const, maxSteps: 40, allowedTools: ["Read"] }
+    await runPluginExternalAgent("plugin", "cfg", "go", own)
+    const parent = await startToolExecutionRun(undefined)
+    await withPluginExecutionContext("plugin", { executionRunId: parent.id }, () =>
+      runPluginExternalAgent("plugin", "cfg", "go", own)
+    )
+    expect(received).toEqual([own, own])
+  })
+
+  it("inherits the invoking turn's own grant cap through a distinct child row", async () => {
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const { getDb } = await import("@/lib/db/schema")
+    const { withPluginExecutionContext } = await import("@/lib/plugin/core/invocation-identity")
+    const { personalEgressOptionsSource } = await import("@/lib/execution/personal-egress")
+    const { enforceExternalRunAuthority } =
+      await import("@/lib/ai/agent/external/policy/run-authority")
+    const parent = await startToolExecutionRun(undefined, {
+      authority: { schemaVersion: 1, permissionMode: "plan" },
+    })
+    mockStoreAgents.set("cfg", { id: "cfg", enabled: true, defaultPermissionMode: "acceptEdits" })
+    let childId: string | undefined
+    mockManager.execute.mockImplementationOnce(async (_id, _prompt, options) => {
+      const context = personalEgressOptionsSource(options)
+      childId = context?.executionRunId
+      expect(childId).not.toBe(parent.id)
+      expect((await getDb().executionRuns.get(childId!))?.parentRunId).toBe(parent.id)
+      const effective = await enforceExternalRunAuthority(context, options, { protocol: "acp" })
+      expect(effective?.permissionMode).toBe("plan")
+      return { success: true, finalResponse: "ok" }
+    })
+    await withPluginExecutionContext("plugin", { executionRunId: parent.id }, () =>
+      runPluginExternalAgent("plugin", "cfg", "go", { permissionMode: "acceptEdits" })
+    )
+    expect((await getDb().executionRuns.get(parent.id))?.authority).toEqual(parent.authority)
+    expect((await getDb().executionRuns.get(childId!))?.status).toBe("completed")
+  })
 })

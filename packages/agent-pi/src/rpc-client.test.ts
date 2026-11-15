@@ -1116,6 +1116,18 @@ describe("PiRpcClientAdapter — sessions", () => {
       await adapter.disconnect()
     }
   )
+  it("carries inherited tool caps into the MCP projection independently of native preapprovals", async () => {
+    const host = createFakeHost()
+    const adapter = await connected(host)
+    await adapter.createSession({
+      nativePolicy: { tools: { allow: ["Read"] } },
+      mcpServers: [{ name: "cognia-tools", command: "node", args: [] }],
+    })
+    expect(JSON.parse(host.spawns.at(-1)!.env!.COGNIA_TOOLHOST_PI_MCP_TOOL_POLICY)).toEqual({
+      allow: ["Read"],
+    })
+    await adapter.disconnect()
+  })
   it("projects scoped MCP servers and extra roots independently for each session, fork and resume", async () => {
     const host = createFakeHost()
     const adapter = await connected(host)
@@ -3281,6 +3293,48 @@ describe("PiRpcClientAdapter — plugin Pi packages", () => {
   }
 
   const sessionSpawn = (host: FakeHost) => host.spawns.find((s) => s.args.includes("--session-id"))
+
+  it("refuses argument denies before spawning or loading session packages", async () => {
+    const host = createFakeHost()
+    const resolver = jest.fn(async () => [LATEX])
+    const adapter = await connectWithPackages(host, resolver)
+    const spawnCount = host.spawns.length
+    await expect(
+      adapter.createSession({ nativePolicy: { tools: { deny: ["Bash(rm:*)"] } } })
+    ).rejects.toMatchObject({
+      reason: "unsupported_authority",
+      field: "tools.deny",
+      pattern: "Bash(rm:*)",
+    })
+    expect(host.spawns).toHaveLength(spawnCount)
+    expect(resolver).not.toHaveBeenCalled()
+    await adapter.disconnect()
+  })
+
+  it("withholds excluded native tools and ambient discovery before an inherited launch", async () => {
+    const host = createFakeHost()
+    const resolver = jest.fn(async () => [LATEX])
+    const adapter = await connectWithPackages(host, resolver)
+    await adapter.createSession({
+      permissionMode: "bypassPermissions",
+      nativePolicy: {
+        tools: { allow: ["Read"], deny: ["Bash"] },
+        mcpServers: { only: [] },
+        skills: { only: [] },
+        subagents: { only: [] },
+      },
+    })
+    const args = sessionSpawn(host)!.args
+    expect(args).toEqual(
+      expect.arrayContaining(["--no-extensions", "--no-skills", "--exclude-tools"])
+    )
+    expect(args[args.indexOf("--exclude-tools") + 1].split(",")).toEqual(
+      expect.arrayContaining(["bash", "edit", "write"])
+    )
+    expect(args).not.toContain(LATEX.extensions[0])
+    expect(resolver).not.toHaveBeenCalled()
+    await adapter.disconnect()
+  })
 
   it("loads each package extension before Cognia's own, with env, roots and tools", async () => {
     const host = createFakeHost()

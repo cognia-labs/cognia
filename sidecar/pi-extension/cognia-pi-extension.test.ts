@@ -714,3 +714,35 @@ test("projected tools delegate authorization to their broker rather than native 
     undefined
   )
 })
+
+test("inherited Read allow hides every Cognia MCP projection while explicit projected allows stay narrow", async (t) => {
+  const program = `
+    import { Server } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/index.js"))};
+    import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};
+    import { ListToolsRequestSchema } from ${JSON.stringify(import.meta.resolve("@modelcontextprotocol/sdk/types.js"))};
+    const server = new Server({name:'fixture',version:'1'}, {capabilities:{tools:{}}});
+    server.setRequestHandler(ListToolsRequestSchema,()=>({tools:[{name:'echo',inputSchema:{type:'object'}}]}));
+    await server.connect(new StdioServerTransport());`
+  for (const allow of [["Read"], ["mcp__cognia-tools__echo"], []]) {
+    const f = fakePi()
+    const projection = createMcpProjection(
+      f.pi,
+      [
+        {
+          name: "cognia-tools",
+          command: process.execPath,
+          args: ["--input-type=module", "-e", program],
+          env: [],
+        },
+      ],
+      { allow }
+    )
+    t.after(() => projection.close())
+    await projection.start({ ...f.ctx, cwd: process.cwd() })
+    assert.deepEqual(
+      [...f.tools.keys()],
+      allow.includes("mcp__cognia-tools__echo") ? ["mcp__cognia-tools__echo"] : []
+    )
+    await projection.close()
+  }
+})

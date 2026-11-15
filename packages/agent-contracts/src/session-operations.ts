@@ -27,6 +27,8 @@ export interface AgentSubagentContextPolicy {
 }
 
 export interface AgentLocalExtensionRef {
+  /** Stable skill/plugin identity for inherited authority filtering. */
+  id?: string
   kind: "directory"
   path: string
   discoverMcp?: boolean

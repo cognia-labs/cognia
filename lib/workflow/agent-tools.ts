@@ -54,13 +54,13 @@ export function workflowRunnerOffered(ctx: ToolSurfaceContext): boolean {
 export const toolFamily: ModuleToolFamily = {
   surface: (ctx) =>
     workflowRunnerOffered(ctx) ? { tools: [buildWorkflowRunnerToolEntry()] } : null,
-  async run(name, args) {
+  async run(name, args, call) {
     if (name !== WORKFLOW_RUNNER_TOOL_NAME)
       return {
         ok: false,
         error: { code: "unknown-tool", message: `unknown workflow tool: ${name}` },
       }
     const { executeRunWorkflowTyped } = await import("./publish/run-workflow-typed-tool")
-    return executeRunWorkflowTyped(args)
+    return executeRunWorkflowTyped(args, { executionRunId: call.executionRunId })
   },
 }

@@ -651,25 +651,37 @@ export async function reconcileTeamRun(ctx: StepExecutionContext): Promise<StepE
       ? {
           judge: async (candidates) => {
             const { executeAgent } = await import("@/lib/ai/agent/agent-executor")
-            const prompt = candidates
-              .map(
-                (candidate) => `key=${candidate.key}\n${(candidate.output ?? "").slice(0, 2000)}`
+            const { startToolExecutionRun, finishToolExecutionRun } =
+              await import("@/lib/execution/acting-authority")
+            const entry = await startToolExecutionRun(undefined, {
+              parentRunId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
+              title: "Squad reconcile judge",
+            })
+            let failed = true
+            try {
+              const prompt = candidates
+                .map(
+                  (candidate) => `key=${candidate.key}\n${(candidate.output ?? "").slice(0, 2000)}`
+                )
+                .join("\n\n")
+              const { visibleTeamDerivedText } = await import("../team-run-context")
+              const visiblePrompt = await visibleTeamDerivedText(
+                teamCtx,
+                `Pick the best candidate key only.\n\n${prompt}`,
+                "team-reconcile-judge"
               )
-              .join("\n\n")
-            const { visibleTeamDerivedText } = await import("../team-run-context")
-            const visiblePrompt = await visibleTeamDerivedText(
-              teamCtx,
-              `Pick the best candidate key only.\n\n${prompt}`,
-              "team-reconcile-judge"
-            )
-            const text = (
-              await executeAgent(visiblePrompt, {
-                executionIdentity: {
-                  runId: teamCtx.personalExecutionRunId ?? `execution:team:${teamCtx.runId}`,
-                },
-              })
-            ).text
-            return candidates.find((candidate) => text?.includes(candidate.key))?.key ?? null
+              const text = (
+                await executeAgent(visiblePrompt, {
+                  executionIdentity: {
+                    runId: entry.id,
+                  },
+                })
+              ).text
+              failed = false
+              return candidates.find((candidate) => text?.includes(candidate.key))?.key ?? null
+            } finally {
+              await finishToolExecutionRun(entry.id, failed)
+            }
           },
         }
       : {}),

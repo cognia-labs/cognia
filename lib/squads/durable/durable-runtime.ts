@@ -1,6 +1,5 @@
 import {
   recordedRunMetadata,
-  authorityFromPermissionCeiling,
   requestersFromRunOrigin,
   runTriggerFromOrigin,
 } from "@/lib/execution/acting-authority"
@@ -71,7 +70,6 @@ export const executionRunTeamJournal: TeamRunJournal = {
         id: executionRunId,
         ...recordedRunMetadata(runTriggerFromOrigin(constraints?.triggeredFrom), {
           runId: executionRunId,
-          authority: authorityFromPermissionCeiling(constraints?.permissionCeiling),
           requesters: requestersFromRunOrigin(constraints?.triggeredFrom),
         }),
         kind: "team",

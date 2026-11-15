@@ -106,6 +106,59 @@ describe("acceptHostStateChatTurn", () => {
     __resetDbForTesting()
   }, 30_000)
 
+  it.each([true, false])(
+    "captures the Host thread parent (retained: %s), ignoring client provenance",
+    async (retained) => {
+      const { recordedRunMetadata } = await import("@/lib/execution/acting-authority")
+      const parent = {
+        id: "coordinator",
+        kind: "agent-turn" as const,
+        sourceId: "coordinator",
+        title: "Coordinator",
+        status: "running" as const,
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+        ...recordedRunMetadata("local", { runId: "coordinator" }),
+        authority: {
+          schemaVersion: 1 as const,
+          caps: "explicit-v1" as const,
+          permissionMode: "plan" as const,
+          tools: { allow: ["Read"] },
+        },
+      }
+      if (retained) await getDb().executionRuns.put(parent)
+      await getDb().sessions.put({
+        id: "session-1",
+        title: "Thread",
+        createdAt: 1,
+        updatedAt: 1,
+        projectThread: { parentExecutionRunId: parent.id },
+      } as import("@cognia/agent-config-types").ChatSession)
+      const incoming = Object.assign(action(), { parentExecutionRunId: "forged-client-parent" })
+      const receipt = await acceptHostStateChatTurn(incoming, deps())
+      expect(receipt?.runId).toBe("hoststate:action-1")
+      const run = await getDb().executionRuns.get(receipt!.runId)
+      expect(run?.parentRunId).toBe(retained ? parent.id : undefined)
+      expect(run?.authority).toEqual(retained ? parent.authority : undefined)
+      if (!retained) {
+        const events = await getDb()
+          .executionRunEvents.where("runId")
+          .equals(receipt!.runId)
+          .toArray()
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              seq: 0,
+              type: "authority.observed",
+              payload: expect.objectContaining({ operation: "coordinator_parent_unavailable" }),
+            }),
+          ])
+        )
+      }
+    }
+  )
+
   it("accepts an enqueued message from an attached client", async () => {
     const receipt = await acceptHostStateChatTurn(action(), deps())
 
@@ -191,6 +244,28 @@ describe("acceptHostStateChatTurn", () => {
     expect(receipt).toBeNull()
     expect(onError).toHaveBeenCalled()
   }, 30_000)
+
+  it("refuses a rejected project-thread acceptance before an uncapped fallback can dispatch", async () => {
+    await getDb().sessions.put({
+      id: "session-1",
+      projectThread: { parentExecutionRunId: "coordinator" },
+    } as never)
+    await getDb().executionRuns.put({
+      id: "coordinator",
+      kind: "agent-turn",
+      sourceId: "coordinator",
+      title: "Coordinator",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      authority: { schemaVersion: 1, caps: "explicit-v1" as const, tools: { allow: ["Read"] } },
+    })
+    await expect(
+      acceptHostStateChatTurn(action(undefined, { accountId: "" }), deps())
+    ).rejects.toMatchObject({ name: "WorkSubmissionRejectedError", code: "invalid_intent" })
+    expect(await getDb().executionRuns.get(hostStateRunId("action-1"))).toBeUndefined()
+  })
 
   it("propagates an unexpected failure instead of silently continuing", async () => {
     const onError = jest.fn()

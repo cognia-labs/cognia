@@ -1,3 +1,7 @@
+import { isCogniaProjectedTool } from "./tool-preapproval"
+import { externalAuthorityOptions } from "./run-authority"
+import { meetRunAuthority } from "@cognia/plugin-contract/types/execution/acting-identity"
+import { RunAuthorityError } from "@/lib/execution/run-authority"
 import type {
   AcpCapabilities,
   AcpPermissionMode,
@@ -15,6 +19,7 @@ import { adaptPermissionMode, PROTOCOL_PERMISSION_MODE_SUPPORT } from "./permiss
 /** A hard policy is distinct from the manager's best-effort mode override. */
 export interface PermissionBoundExternalExecutionOptions extends ExternalAgentExecutionOptions {
   permissionCeiling?: AgentPermissionCeiling
+  inheritedRunAuthority?: import("@/types/execution/run").RunAuthorityV1
 }
 
 export function hasUnsupportedExternalPermissionDimensions(
@@ -89,10 +94,55 @@ export function enforceExternalPermissionCeiling(
   configuredMode?: AcpPermissionMode,
   profile?: ExternalAgentCapabilityProfileV1
 ): PermissionBoundExternalExecutionOptions | undefined {
-  const ceiling = options?.permissionCeiling
+  let ceiling = options?.permissionCeiling
   if (!ceiling) return options
-  if (hasUnsupportedExternalPermissionDimensions(ceiling)) {
-    throw new Error("External agent cannot enforce the inherited tool, sandbox, or MCP ceiling")
+  if (ceiling.sandboxPolicy)
+    throw new RunAuthorityError("unsupported_authority", `${protocol}: sandboxPolicy`)
+  if (
+    ceiling.allowedTools !== undefined ||
+    ceiling.disallowedTools?.length ||
+    ceiling.mcpServers !== undefined
+  ) {
+    // The inherited authority is in Host ids; its already translated native
+    // policy supplies the name mapping for this engine. Meet in ids, then
+    // translate the result once at the engine edge.
+    const inheritedIds = options?.inheritedRunAuthority?.mcpServers?.only ?? []
+    const nativeNames = options?.nativePolicy?.mcpServers?.only ?? []
+    const serverNamesById = Object.fromEntries(
+      inheritedIds.flatMap((id, index) => (nativeNames[index] ? [[id, nativeNames[index]]] : []))
+    )
+    const serverIdsByName = Object.fromEntries(
+      Object.entries(serverNamesById).map(([id, name]) => [name, id])
+    )
+    const authority = {
+      schemaVersion: 1 as const,
+      ...(ceiling.permissionMode ? { permissionMode: ceiling.permissionMode } : {}),
+      tools: { allow: ceiling.allowedTools, deny: ceiling.disallowedTools },
+      ...(ceiling.mcpServers
+        ? {
+            mcpServers: {
+              only: ceiling.mcpServers.map((server) => serverIdsByName[server.name] ?? server.name),
+            },
+          }
+        : {}),
+    }
+    options = externalAuthorityOptions(
+      options?.inheritedRunAuthority
+        ? meetRunAuthority(options.inheritedRunAuthority, authority)
+        : authority,
+      {
+        ...options,
+        permissionCeiling: ceiling.permissionMode
+          ? { permissionMode: ceiling.permissionMode }
+          : undefined,
+      },
+      { protocol },
+      serverNamesById
+    )
+    const projectedDenies = ceiling.disallowedTools?.filter((name) => isCogniaProjectedTool(name))
+    if (projectedDenies?.length)
+      options.permissionCeiling = { ...options.permissionCeiling, disallowedTools: projectedDenies }
+    ceiling = options.permissionCeiling ?? {}
   }
   const merged = deriveExternalSessionPermission(ceiling, {
     permissionMode: options?.permissionMode ?? configuredMode,

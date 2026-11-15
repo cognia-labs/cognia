@@ -54,7 +54,10 @@ import type {
   ExternalAgentSession,
   ExternalAgentTokenUsage,
 } from "@cognia/agent-contracts/external-agent"
-import { catalogModelCapabilities } from "@cognia/agent-contracts/external-agent"
+import {
+  catalogModelCapabilities,
+  assertNativeToolDeniesExpressible,
+} from "@cognia/agent-contracts/external-agent"
 
 import {
   createExternalAgentUiState,
@@ -872,6 +875,7 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     extra: { forkFrom?: string; resumed?: boolean } = {}
   ): Promise<ExternalAgentSession> {
     if (!this._config) throw new Error("Pi adapter is not connected")
+    assertNativeToolDeniesExpressible("pi-rpc", options.nativePolicy?.tools)
     // Checked per session rather than at connect: an operator flipping the
     // switch should stop the next session, not require a restart.
     if (this.isDisabled()) throw new PiDisabledError()
@@ -884,7 +888,13 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     // cannot load must fail the start without first evicting an idle session.
     // No references → not even an `await`, so an agent that never opted in
     // takes exactly the pre-ADR-0210 path.
-    const packageRefs = piPackageRefsFromMetadata(this._config.metadata)
+    const restrictDiscovery = Boolean(
+      options.nativePolicy?.tools ||
+      options.nativePolicy?.skills ||
+      options.nativePolicy?.subagents ||
+      options.nativePolicy?.mcpServers
+    )
+    const packageRefs = restrictDiscovery ? [] : piPackageRefsFromMetadata(this._config.metadata)
     let packages =
       packageRefs.length > 0
         ? await this.resolveSessionPackages(packageRefs, options.cwd ?? this._config.process?.cwd)
@@ -892,7 +902,7 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
 
     const managed = this._config.metadata?.cogniaPiSubagents as
       { family: string; version: string; extensions: string[]; packageDir: string } | undefined
-    if (managed && this._config.metadata?.cogniaGatewayTask) {
+    if (managed && !restrictDiscovery && this._config.metadata?.cogniaGatewayTask) {
       if (
         !(
           (managed.family === "nico" && managed.version === "0.80.0") ||
@@ -1049,6 +1059,7 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
             // Cognia-owned key, so nothing a package declares can shadow one.
             ...packages.env,
             COGNIA_TOOLHOST_PI_MCP_SERVERS: JSON.stringify(mcpServers),
+            COGNIA_TOOLHOST_PI_MCP_TOOL_POLICY: JSON.stringify(options.nativePolicy?.tools ?? {}),
             COGNIA_TOOLHOST_PI_ADDITIONAL_DIRECTORIES: JSON.stringify(additionalDirectories),
             ...(packages.readableRoots.length > 0
               ? { [PI_PACKAGE_ROOTS_ENV]: JSON.stringify(packages.readableRoots) }
@@ -1169,18 +1180,49 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     if (extra.forkFrom) args.push("--fork", extra.forkFrom)
     args.push("--session-id", piSessionId)
 
-    args.push(...extensionPolicyArgs(this.extensionPolicy()))
+    args.push(
+      ...extensionPolicyArgs(
+        options.nativePolicy?.tools ||
+          options.nativePolicy?.skills ||
+          options.nativePolicy?.subagents ||
+          options.nativePolicy?.mcpServers
+          ? "isolated"
+          : this.extensionPolicy()
+      )
+    )
 
     // `assertExtensionReady` guarantees interception is available by the time
     // we get here, so this is now always the "intercepted" floor. The
     // `interceptionAvailable: false` branch stays reachable and tested as
     // defence in depth — it is the process-level floor that would carry the
     // whole restriction if that guarantee were ever weakened.
-    const floor = processToolFloor(options.permissionMode, options.allowedTools, {
+    let floor = processToolFloor(options.permissionMode, options.allowedTools, {
       interceptionAvailable: true,
       extensionTools: packages.tools,
     })
-    if (options.mcpServers?.length && (floor.length > 0 || options.permissionMode === "dontAsk")) {
+    if (options.nativePolicy?.tools) {
+      const policy = options.nativePolicy.tools
+      const available = floor.length ? floor : [...PI_BUILTIN_TOOL_NAMES, ...packages.tools]
+      const nativeName = (name: string) =>
+        ({ Read: "read", Bash: "bash", Write: "write", Edit: "edit", Glob: "find", Grep: "grep" })[
+          name
+        ] ?? name
+      floor = available.filter(
+        (name) =>
+          (policy.allow === undefined ||
+            policy.allow.some(
+              (rule) => !rule.includes("(") && this.matchToolPattern(nativeName(rule), name)
+            )) &&
+          !policy.deny?.some((rule) => this.matchToolPattern(nativeName(rule), name))
+      )
+      const excluded = [...PI_BUILTIN_TOOL_NAMES, ...packages.tools].filter(
+        (name) => !floor.includes(name)
+      )
+      if (excluded.length) args.push("--exclude-tools", excluded.join(","))
+    } else if (
+      options.mcpServers?.length &&
+      (floor.length > 0 || options.permissionMode === "dontAsk")
+    ) {
       // Latest Pi applies --tools to dynamically registered extension tools
       // too. Exclude refused native tools without hiding the MCP projection.
       const excluded = [...PI_BUILTIN_TOOL_NAMES].filter((name) => !floor.includes(name))
@@ -1408,6 +1450,7 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
         "context",
         "permissionMode",
         "allowedTools",
+        "nativePolicy",
       ] as const) {
         if (options[key] !== undefined) Object.assign(nextOptions, { [key]: options[key] })
       }

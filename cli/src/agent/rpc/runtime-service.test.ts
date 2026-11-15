@@ -3,11 +3,30 @@ import os from "node:os"
 import path from "node:path"
 import { PassThrough } from "node:stream"
 
+jest.mock("@/lib/claude/plugin-tool-dispatch-bridge", () => ({
+  abortPluginToolCallsForSession: (...args: unknown[]) =>
+    jest
+      .requireActual("@/lib/claude/plugin-tool-dispatch-bridge")
+      .abortPluginToolCallsForSession(...args),
+  subscribePluginToolDispatchBridge: (...args: unknown[]) =>
+    jest
+      .requireActual("@/lib/claude/plugin-tool-dispatch-bridge")
+      .subscribePluginToolDispatchBridge(...args),
+}))
+
 jest.mock("@/lib/claude/ipc", () => ({
   ...jest.requireActual("@/lib/claude/ipc"),
   sessionControl: jest.fn(jest.requireActual("@/lib/claude/ipc").sessionControl),
   steerSession: jest.fn(async () => ({ accepted: true })),
 }))
+
+jest.mock("@/lib/squads/workers/remote-worker-policy", () => ({
+  ...jest.requireActual("@/lib/squads/workers/remote-worker-policy"),
+  resolveRemoteWorkerOptions: jest.fn(
+    jest.requireActual("@/lib/squads/workers/remote-worker-policy").resolveRemoteWorkerOptions
+  ),
+}))
+import { resolveRemoteWorkerOptions } from "@/lib/squads/workers/remote-worker-policy"
 
 const mockCreateRecordingProxy = jest.fn()
 jest.mock("../../eval/replay/recording-proxy", () => ({
@@ -1114,6 +1133,55 @@ describe("createAgentRuntimeService", () => {
     finish({ cwd: home, capture })
     await expect(creating).rejects.toThrow("service is closing")
     expect(capture.close).toHaveBeenCalledTimes(1)
+  })
+
+  it("honors the dormant turnOptions receiver without manufacturing an authority policy", async () => {
+    const handoff = {
+      envelopeVersion: 1 as const,
+      identity: { parentRunId: "parent", childRunId: "child", depth: 1, parentChain: ["parent"] },
+      task: { prompt: "Inspect" },
+      execution: {
+        mode: "orchestrated" as const,
+        turnOptions: { permissionMode: "plan" as const, allowedTools: ["Read"] },
+      },
+      createdAt: new Date().toISOString(),
+    }
+    const runTurn = emittingTurn(0, "defaults-session")
+    const service = createAgentRuntimeService({
+      config: { ...DEFAULT_RESOLVED_CONFIG, cwd: home },
+      home,
+      mintSessionId: () => "defaults-session",
+      runTurn,
+      workerDispatch: {
+        manifest: { hardCapabilities: ["worker-policy-v1"] } as never,
+        resolveHandoffWorkspace: async () => home,
+      },
+    })
+    try {
+      await service.handle(
+        "session/create",
+        { commandId: "create-defaults", handoff },
+        context as never
+      )
+      await service.handle(
+        "turn/run",
+        { sessionId: "defaults-session", commandId: "run-defaults", input: "Inspect" },
+        context as never
+      )
+      const resolve = runTurn.mock.calls[0][0].resolveOptions!
+      jest.mocked(resolveRemoteWorkerOptions).mockResolvedValueOnce({})
+      await resolve({ permissionCeiling: { permissionMode: "acceptEdits" } } as never)
+      expect(resolveRemoteWorkerOptions).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          permissionCeiling: { permissionMode: "plan", allowedTools: ["Read"] },
+        }),
+        { policyVersion: 1, sandboxRequired: false },
+        home
+      )
+      expect(handoff.execution).not.toHaveProperty("policy")
+    } finally {
+      await service.close()
+    }
   })
 
   it("restores remote restrictions after restart and clamps live permission changes", async () => {

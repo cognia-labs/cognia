@@ -34,6 +34,22 @@ const sourceRun: AgentTeamRunRecord = {
 }
 
 describe("AgentTeam ExecutionRun bridge", () => {
+  it("does not turn frozen team execution defaults into authority during reconstruction", async () => {
+    await ensureAgentTeamExecutionRun({
+      ...sourceRun,
+      executionConstraints: {
+        ...sourceRun.executionConstraints!,
+        permissionCeiling: {
+          permissionMode: "plan",
+          allowedTools: ["Read"],
+          disallowedTools: ["Write"],
+        },
+      },
+    })
+    expect(
+      (await getDb().executionRuns.get(agentTeamExecutionRunId(sourceRun.id)))?.authority
+    ).toBeUndefined()
+  })
   it("records an automatic team with no origin as external-event", async () => {
     await ensureAgentTeamExecutionRun({ ...sourceRun, executionConstraints: undefined })
     expect(

@@ -2,6 +2,12 @@ import { dexieTeamRunStore } from "@/lib/db/agent-team-runtime"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { createSquadRunRecords } from "../squad/squad-run-records"
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "judge-child" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
+import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
 import { contractChild, contractRun } from "@cognia/agent-orchestration/store-contract"
 /**
  * Unit tests for the team node implementations installed into the workflow
@@ -352,7 +358,7 @@ describe("resolveTeamKnowledgeBaseIds", () => {
     }))
   })
 
-  it("matches dispatch's first effective backing character after per-member overlays", async () => {
+  it("uses dispatch's effective backing characters after team overlays", async () => {
     await expect(resolveTeamKnowledgeBaseIds("team-1")).resolves.toEqual([
       "kb-base",
       "shared",
@@ -708,6 +714,11 @@ it("runs reconciliation judging under the Squad Host run", async () => {
   })
   await reconcileTeamRun(ctx({ mode: "select", selectStrategy: "judge" }))
   expect(executeAgent).toHaveBeenCalledWith(expect.any(String), {
-    executionIdentity: { runId: "execution:team:owner" },
+    executionIdentity: { runId: "judge-child" },
   })
+  expect(startToolExecutionRun).toHaveBeenCalledWith(undefined, {
+    parentRunId: "execution:team:owner",
+    title: "Squad reconcile judge",
+  })
+  expect(finishToolExecutionRun).toHaveBeenCalledWith("judge-child", false)
 })

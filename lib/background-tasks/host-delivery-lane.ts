@@ -127,6 +127,7 @@ export async function runHostAutomatedTurn(
   const receipt = await deps
     .accept({
       sessionId,
+      parentRunId: session.projectThread?.parentExecutionRunId,
       runId,
       messageId: row.id,
       content: text,

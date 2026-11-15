@@ -408,6 +408,7 @@ async function runCoordinatorTool(
       const admission = await deps.checkCreation(projectId, coordinator.id)
       if (admission.kind === "refuse") return fail(refusalText(admission.reason))
       const thread = await deps.createThread({
+        ...(context.executionRunId ? { parentExecutionRunId: context.executionRunId } : {}),
         projectId,
         coordinatorSessionId: coordinator.id,
         brief: parsed.brief,

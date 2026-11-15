@@ -67,7 +67,10 @@ import type {
   AcpAvailableCommand,
   AcpPlanEntry,
 } from "@cognia/agent-contracts/external-agent"
-import { catalogModelCapabilities } from "@cognia/agent-contracts/external-agent"
+import {
+  catalogModelCapabilities,
+  assertNativeToolDeniesExpressible,
+} from "@cognia/agent-contracts/external-agent"
 
 // ============================================================================
 // Logging helper
@@ -989,16 +992,47 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
     ]
     for (const filePart of buildOpenCodeFileParts(message.content)) parts.push(filePart)
 
+    let nativeTools: Record<string, boolean> | undefined
+    if (options?.nativePolicy?.tools) {
+      assertNativeToolDeniesExpressible("opencode", options.nativePolicy.tools)
+      // Read the engine's complete inventory rather than trusting cached UI discovery.
+      const ids = unwrap<string[]>(await this.getSdkClient(sessionId).tool.ids())
+      if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string"))
+        throw new Error("OpenCode tools.native: unreadable tool inventory")
+      const policy = options.nativePolicy.tools
+      const nativeName = (name: string) =>
+        ({ Read: "read", Bash: "bash", Write: "write", Edit: "edit", Glob: "glob", Grep: "grep" })[
+          name
+        ] ?? name
+      const matches = (rule: string, name: string) => {
+        const pattern = nativeName(rule)
+          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replace(/\*/g, ".*")
+          .replace(/\?/g, ".")
+        return new RegExp(`^${pattern}$`).test(name)
+      }
+      nativeTools = Object.fromEntries(
+        ids.map((name) => [
+          name,
+          (policy.allow === undefined ||
+            policy.allow.some((rule) => !rule.includes("(") && matches(rule, name))) &&
+            !policy.deny?.some((rule) => matches(rule, name)),
+        ])
+      )
+    }
+
     const promptBody: {
       parts: Array<OcTextPartInput | OcFilePartInput>
       system?: string
       model?: { providerID: string; modelID: string }
       agent?: string
+      tools?: Record<string, boolean>
     } = {
       parts,
       ...(systemPrompt ? { system: systemPrompt } : {}),
       ...(model ? { model } : {}),
       ...(agent ? { agent } : {}),
+      ...(nativeTools ? { tools: nativeTools } : {}),
     }
 
     if (!this.outboundGate(promptBody)) {

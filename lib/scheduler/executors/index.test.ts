@@ -85,6 +85,11 @@ const createSessionMock = jest.fn(async (input: unknown) => ({
   ...((input as Record<string, unknown>) ?? {}),
 }))
 const getSessionMock = jest.fn(async (_id: string) => undefined as unknown)
+jest.mock("@/lib/db/execution-runs", () => ({
+  ...jest.requireActual("@/lib/db/execution-runs"),
+  getExecutionRun: jest.fn(async () => undefined),
+}))
+import { getExecutionRun } from "@/lib/db/execution-runs"
 jest.mock("@/lib/db/sessions", () => ({
   createSession: (input: unknown) => createSessionMock(input),
   getSession: (id: string) => getSessionMock(id),
@@ -307,6 +312,7 @@ import type { Project } from "@/types"
 import type { SendOptions } from "@cognia/agent-config-types"
 
 beforeEach(() => {
+  jest.mocked(getExecutionRun).mockReset().mockResolvedValue(undefined)
   hostState.tauri = true
   hostState.platform = undefined
   isWorkspaceTrustedMock.mockReset().mockResolvedValue(true)
@@ -726,6 +732,23 @@ describe("executeChatTask", () => {
     )
     expect(createSessionMock).not.toHaveBeenCalled()
     expect(r.success).toBe(true)
+  })
+  it.each([false, true])("passes only an existing Host execution identity (%s)", async (exists) => {
+    if (exists) jest.mocked(getExecutionRun).mockResolvedValue({ id: "exec-1" } as never)
+    emitTerminalResult()
+    const result = await executeChatTask(
+      makeTask({ payload: { prompt: "Run the task" } }),
+      makeExecution(),
+      makeSignal()
+    )
+    expect(result.success).toBe(true)
+    expect(getExecutionRun).toHaveBeenCalledWith("exec-1")
+    const context = resolveSendOptionsMock.mock.calls[0][0] as {
+      executionIdentity?: { runId: string; sessionId: string }
+    }
+    expect(context.executionIdentity).toEqual(
+      exists ? { runId: "exec-1", sessionId: "session-created" } : undefined
+    )
   })
   it("returns an error when sessionId is set but session is missing", async () => {
     getSessionMock.mockResolvedValueOnce(undefined)

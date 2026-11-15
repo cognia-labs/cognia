@@ -340,7 +340,7 @@ export class RoomRunner {
     { label: string | null; timer: ReturnType<typeof setTimeout> | null }
   >()
   /** Rooms whose current turn is automated: its member runs carry no person's authority. */
-  private readonly automatedTurns = new Set<string>()
+  private readonly automatedTurns = new Map<string, readonly string[]>()
   /** Rooms whose reserved turn reached its members, so its end is a turn boundary. */
   private readonly ranTurns = new Set<string>()
   private readonly turnSettledListeners = new Set<(roomId: string) => void>()
@@ -798,7 +798,7 @@ export class RoomRunner {
     // status to idle, so the reverse order would strand the run status.
     sinks.status.setError(sessionId, null)
     sinks.status.set(sessionId, "streaming")
-    if (automated) this.automatedTurns.add(sessionId)
+    if (automated) this.automatedTurns.set(sessionId, automated.personalRunIds ?? [])
     opts.onAccepted?.()
 
     const turnId = deps.newTurnId()
@@ -1649,6 +1649,9 @@ export class RoomRunner {
     try {
       executionRunId = await deps.execution.startMemberRun?.(sub, {
         automated: this.automatedTurns.has(sessionId),
+        ...(this.automatedTurns.has(sessionId)
+          ? { sourceRunIds: this.automatedTurns.get(sessionId) }
+          : {}),
       })
       const history = await deps.ai.preparePersonalHistory(
         sub,

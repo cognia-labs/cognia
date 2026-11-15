@@ -85,6 +85,8 @@ export interface StartSquadRunInput {
   ultracode?: boolean
   /** The settled run this one replaces (a `retry`). */
   parentRunId?: string
+  /** Host-captured coordinator lineage; never a replacement request. */
+  authorityParentRunId?: string
   /**
    * The run that launched this one as its child (`launchChildRun`, ADR-0252
    * §3): written as the row's parent, with the parent's acting identity. No
@@ -451,6 +453,7 @@ export async function startSquadRun(
         : input.launchedByRunId
           ? { launchedByRunId: input.launchedByRunId }
           : {}),
+      ...(input.authorityParentRunId ? { authorityParentRunId: input.authorityParentRunId } : {}),
       startedAt: now(),
     })
     executionRunId = records.executionRunId

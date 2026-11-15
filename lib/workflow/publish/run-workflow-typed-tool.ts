@@ -14,6 +14,8 @@
  * never throws — so the model can read the reason and self-correct.
  */
 
+import { authorityParentRunId } from "@/lib/execution/acting-authority"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import { resolveWorkflowByNameOrId } from "@/lib/workflow/library/lookup"
 import { validateAgainstJsonSchema } from "@/lib/workflow/nodes/ai/schema-validate"
 import {
@@ -30,7 +32,11 @@ function summariesToBullets(candidates: Array<{ name: string; description?: stri
 }
 
 export async function executeRunWorkflowTyped(
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  context?: Pick<
+    PersonalCredentialContext,
+    "executionRunId" | "executionRunReserved" | "executionRunParentId"
+  >
 ): Promise<RunWorkflowTypedResult> {
   try {
     const name = String(args.name ?? "").trim()
@@ -61,10 +67,12 @@ export async function executeRunWorkflowTyped(
     if (!lookup.ok) throw new Error("unreachable")
 
     const input = (args.input as Record<string, unknown> | undefined) ?? {}
+    const parentRunId = await authorityParentRunId(context)
     const execution = await executeDeployedWorkflow({
       workflowId: lookup.workflowId,
       entrypoint: "agent-tool",
       caller: "wf_run_workflow_typed",
+      ...(parentRunId ? { authorityParentRunId: parentRunId } : {}),
       ...(typeof args.idempotencyKey === "string" && args.idempotencyKey.trim()
         ? { idempotencyKey: args.idempotencyKey.trim() }
         : {}),

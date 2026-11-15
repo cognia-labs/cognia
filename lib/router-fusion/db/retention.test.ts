@@ -14,6 +14,7 @@ import {
   IDEMPOTENCY_TTL_MS,
   RUN_TRAIL_RETENTION_MS,
   pruneFusionDatabase,
+  collectRoutingSamplesBeforeRetention,
 } from "./retention"
 import type {
   FusionAttemptState,
@@ -32,6 +33,23 @@ let dbCounter = 0
 function freshDb(): FusionDB {
   return new FusionDB(`fusion-retention-test-${++dbCounter}`)
 }
+
+it("runs sample maintenance lazily through the real collector before retention", async () => {
+  const db = freshDb()
+  const artifactStore = jest.fn()
+  try {
+    expect(
+      await collectRoutingSamplesBeforeRetention(
+        { db, artifactStore },
+        NOW,
+        ARTIFACT_CONTENT_TTL_MS
+      )
+    ).toEqual({ scanned: 0, collected: 0, skipped: [] })
+    expect(artifactStore).not.toHaveBeenCalled()
+  } finally {
+    await db.delete()
+  }
+})
 
 function run(runId: string, overrides: Partial<FusionRunRow> = {}): FusionRunRow {
   return {

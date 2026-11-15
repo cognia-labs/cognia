@@ -154,3 +154,12 @@ it("accepts model-specific retry context without requiring it from older callers
     })
   ).resolves.toEqual({})
 })
+
+it("accepts the complete Host source claim at member admission", async () => {
+  await expect(
+    makeFakeDeps().execution.startMemberRun!("member", {
+      automated: true,
+      sourceRunIds: ["first", "second"],
+    })
+  ).resolves.toBe("run:member")
+})

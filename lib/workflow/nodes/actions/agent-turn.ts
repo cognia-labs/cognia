@@ -102,15 +102,24 @@ export function agentTurnCapabilityGrant(
   const mcp = nonEmptyIds(params.mcpServerIds)
   const knowledge = nonEmptyIds(params.knowledgeBaseIds)
   const deny = nonEmptyIds(params.disallowedTools)
+  const allow = params.allowedTools?.length ? [...params.allowedTools] : undefined
   const text = instructions?.trim()
-  if (!skills && !mcp && !knowledge && !deny && !text && !params.permissionCap) return undefined
+  if (!skills && !mcp && !knowledge && !deny && !text && !params.permissionCap && !allow)
+    return undefined
   return {
     schemaVersion: AGENT_CAPABILITY_GRANT_SCHEMA_VERSION,
     source: { kind: "workflow", id: `${source.workflowId}:${source.stepId}` },
     ...(skills ? { skills: { add: skills } } : {}),
     ...(mcp ? { mcpServers: { add: mcp } } : {}),
     ...(knowledge ? { knowledgeBases: { add: knowledge } } : {}),
-    ...(deny ? { tools: { deny } } : {}),
+    ...(deny || allow
+      ? {
+          tools: {
+            ...(deny ? { deny } : {}),
+            ...(allow ? { restrictTo: allow } : {}),
+          },
+        }
+      : {}),
     ...(text ? { instructions: [text] } : {}),
     ...(params.permissionCap ? { permissionMode: params.permissionCap } : {}),
   }
@@ -184,12 +193,12 @@ export async function runAgentTurn(ctx: StepExecutionContext): Promise<StepExecu
       try {
         return await executeAgentTurn(
           turnPrompt,
-          cfg ?? {},
+          { ...cfg, parentRunId: `execution:workflow:${ctx.runId}` },
           { isTauri: isTauri(), isHeadlessHost: isHeadlessHost() },
           {
             surface: "workflow-agent-turn",
             ...(params.requireTools !== undefined ? { requireTools: params.requireTools } : {}),
-            identity: { sessionId: ctx.runId, runId: `execution:workflow:${ctx.runId}` },
+            identity: { sessionId: ctx.runId },
           }
         )
       } catch (err) {

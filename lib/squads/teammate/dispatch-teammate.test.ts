@@ -1,3 +1,9 @@
+// Authority storage is exercised with real IndexedDB in run-authority.test.ts.
+jest.mock("@/lib/execution/run-authority", () => ({
+  ...jest.requireActual("@/lib/execution/run-authority"),
+  resolveRunAuthority: jest.fn(async () => ({})),
+  enforceRunAuthorityOnSendOptions: jest.fn(async () => undefined),
+}))
 jest.mock("@/lib/execution/personal-visibility", () => ({
   preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
     messages,
@@ -626,9 +632,7 @@ describe("dispatchTeammate — text-only fallback", () => {
       const result = await dispatchTeammate(ctx, { taskId: "t1", prompt: "new task" })
       expect(result.text).toBe("[Withheld: personal content of Host owner]")
       expect(executeAgentMock.mock.calls[0][0]).toBe("new task")
-      expect(executeAgentMock.mock.calls[0][1].executionIdentity).toEqual({
-        runId: `execution:team:${ctx.runId}`,
-      })
+      expect(executeAgentMock.mock.calls[0][1].parentRunId).toEqual(`execution:team:${ctx.runId}`)
       expect(prepare).toHaveBeenLastCalledWith(
         undefined,
         expect.any(Array),
@@ -1674,7 +1678,14 @@ describe("dispatchTeammate — remote durable worker", () => {
     }
   )
 
-  it("claims a child lease, dispatches by stable repository ref, and captures events once", async () => {
+  it("claims a child lease, dispatches with a Host cost pool by stable repository ref, and captures events once", async () => {
+    const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
+    const poolAuthority = {
+      schemaVersion: 1 as const,
+      caps: "explicit-v1" as const,
+      pools: { rootRunId: "bot-root", costUsd: 2 },
+    }
+    jest.mocked(resolveRunAuthority).mockResolvedValue({ authority: poolAuthority })
     process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH = "true"
     const complete = jest.fn(async () => undefined)
     const attachControl = jest.fn(async () => undefined)
@@ -1757,9 +1768,10 @@ describe("dispatchTeammate — remote durable worker", () => {
         },
       }
     })
-    const { ctx, pool } = makeCtx(
+    const { ctx: baseCtx, pool } = makeCtx(
       makeTeammate({
         config: {
+          tools: ["Read"],
           execution: {
             mode: "pinned",
             deploymentRef: "anthropic",
@@ -1770,8 +1782,13 @@ describe("dispatchTeammate — remote durable worker", () => {
       {
         repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
         defaultPermissionMode: "plan",
+        workingDir: "/repo",
+        allowedTools: ["Read", "Grep"],
+        disallowedTools: ["Bash"],
+        sandboxPolicy: { network: "off", writableRoots: ["/repo/src"] },
       }
     )
+    const ctx = { ...baseCtx, parentPermissionCeiling: { mcpServers: [{ name: "github" }] } }
     ;(ctx.team as AgentTeam).projectId = "project1"
 
     try {
@@ -1791,7 +1808,7 @@ describe("dispatchTeammate — remote durable worker", () => {
             execution: expect.objectContaining({
               hostRef: "device:worker-a",
               executionFingerprint: expect.any(String),
-              policy: expect.objectContaining({ policyVersion: 1, permissionMode: "plan" }),
+              // Team defaults remain in the worker-policy-v1 enforcement surface.
             }),
             task: expect.objectContaining({
               prompt: expect.not.stringContaining("alice@example.com"),
@@ -1800,6 +1817,14 @@ describe("dispatchTeammate — remote durable worker", () => {
           }),
         })
       )
+      expect(remoteRunMock.mock.calls[0]![0].handoff.execution.policy).toMatchObject({
+        permissionMode: "plan",
+        allowedTools: ["Read"],
+        disallowedTools: ["Bash"],
+        mcpServerNames: ["github"],
+        sandboxRequired: true,
+        sandboxPolicy: { network: "off", writableRoots: ["src"] },
+      })
       expect(claimDispatchLeaseMock).toHaveBeenCalledWith(
         expect.objectContaining({
           hostRef: "device:worker-a",
@@ -1855,7 +1880,26 @@ describe("dispatchTeammate — remote durable worker", () => {
         ).resolves.toMatchObject({ text: "remote answer" })
         expect(recordRemoteDisposal).not.toHaveBeenCalled()
       }
+      remoteWorkersMock.mockReturnValue(
+        (remoteWorkersMock() as Array<{ manifest: { hardCapabilities: string[] } }>).map(
+          (worker) => ({
+            ...worker,
+            manifest: {
+              ...worker.manifest,
+              hardCapabilities: worker.manifest.hardCapabilities.filter(
+                (cap: string) => cap !== "worker-policy-v1"
+              ),
+            },
+          })
+        )
+      )
+      remoteRunMock.mockClear()
+      await expect(
+        dispatchTeammate(ctx, { taskId: "task-1", prompt: "policy must be supported" })
+      ).rejects.toThrow()
+      expect(remoteRunMock).not.toHaveBeenCalled()
     } finally {
+      jest.mocked(resolveRunAuthority).mockResolvedValue({})
       delete process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH
     }
   })
@@ -2057,9 +2101,12 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
     expect(runAndCaptureMock).toHaveBeenCalledWith(
       "sess1",
       "edit",
-      expect.objectContaining({ maxTurns: 9 }),
+      expect.objectContaining({
+        maxTurns: 9,
+      }),
       expect.objectContaining({ execution: expect.objectContaining({ kind: "team" }) })
     )
+    expect(runAndCaptureMock.mock.calls[0][2]?.runAuthority?.maxTurns).toBeUndefined()
   })
 
   it("creates a team session and drives runAndCapture on desktop", async () => {
@@ -2109,7 +2156,39 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
     expect(executeAgentMock).not.toHaveBeenCalled()
   })
 
-  it("narrows the team subagents to the teammate's resolved subagentIds", async () => {
+  it("joins ephemeral teammate deletion before returning its result", async () => {
+    isTauriMock.mockReturnValue(true)
+    createSessionMock.mockResolvedValue({ id: "sess1" })
+    getSessionMock.mockResolvedValue({ id: "sess1", kind: "team" })
+    runAndCaptureMock.mockResolvedValue({ text: "tool result", messageId: "m1" })
+    const { ctx } = makeCtx(makeTeammate(), { workingDir: "/repo" })
+    let started!: () => void
+    let finish!: () => void
+    const deleting = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const deletion = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    deleteSessionMock.mockImplementationOnce(async () => {
+      started()
+      await deletion
+    })
+    let settled = false
+    const turn = dispatchTeammate(ctx, { taskId: "t1", prompt: "edit code" }).finally(() => {
+      settled = true
+    })
+    try {
+      await deleting
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(settled).toBe(false)
+    } finally {
+      finish()
+      await turn
+    }
+  })
+
+  it("extends team subagent defaults with the teammate overlay", async () => {
     isTauriMock.mockReturnValue(true)
     createSessionMock.mockResolvedValue({ id: "sess1" })
     getSessionMock.mockResolvedValue({ id: "sess1", kind: "team" })
@@ -2124,13 +2203,7 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
     await dispatchTeammate(ctx, { taskId: "t1", prompt: "edit" })
 
     expect(resolveSendOptionsMock.mock.calls[0][0]).toMatchObject({
-      capabilityGrants: [
-        {
-          schemaVersion: 1,
-          source: { kind: "agent-team", id: "team1:tm1" },
-          subagents: { only: ["workflow-designer", "acme:reviewer"] },
-        },
-      ],
+      subagentIds: ["workflow-designer", "acme:reviewer"],
     })
   })
 
@@ -2999,7 +3072,7 @@ describe("dispatchTeammate — team permission ceiling", () => {
       }
       if (constraint === "unsupported-mode") externalProtocolMock = "http"
       await expect(dispatchTeammate(constrained, { taskId: "t1", prompt: "work" })).rejects.toThrow(
-        "cannot enforce"
+        constraint === "allow-list" ? "unsupported_authority" : "cannot enforce"
       )
       expect(externalExecuteMock).not.toHaveBeenCalled()
     }
@@ -3013,7 +3086,7 @@ describe("dispatchTeammate — team permission ceiling", () => {
       parentPermissionCeiling: { permissionMode: "plan" as const, disallowedTools: ["Write"] },
     }
     await expect(dispatchTeammate(constrained, { taskId: "t1", prompt: "work" })).rejects.toThrow(
-      "cannot enforce"
+      "unsupported_authority"
     )
     expect(externalExecuteMock).not.toHaveBeenCalled()
   })
@@ -3076,6 +3149,28 @@ describe("dispatchTeammate — team permission ceiling", () => {
 
     expect(resolveSendOptionsMock.mock.calls[0][0]).not.toHaveProperty("permissionCeiling")
   })
+
+  it.each(["codex-app-server", "acp", "aider-cli", "pi-rpc", "opencode"] as const)(
+    "keeps config.tools as own preapprovals for %s",
+    async (protocol) => {
+      isTauriMock.mockReturnValue(true)
+      resolveExternalMock.mockResolvedValue("agent-1")
+      externalProtocolMock = protocol
+      externalExecuteMock.mockResolvedValue({ success: true, finalResponse: "out" })
+      const { ctx } = makeCtx(
+        makeTeammate({ config: { runtime: "claude-code", tools: ["Read", "Bash"] } })
+      )
+      await dispatchTeammate(ctx, { taskId: "t1", prompt: "go" })
+      const options = externalExecuteMock.mock.calls[0][2]!
+      expect(options.allowedTools).toEqual(["Read", "Bash"])
+      expect(options.permissionCeiling?.allowedTools).toBeUndefined()
+      const { enforceExternalPermissionCeiling } =
+        await import("@/lib/ai/agent/external/policy/permission-ceiling")
+      expect(
+        enforceExternalPermissionCeiling(options, protocol, undefined)?.nativePolicy?.tools
+      ).toBeUndefined()
+    }
+  )
 
   it("clamps the external path: team mode ceiling caps the teammate", async () => {
     isTauriMock.mockReturnValue(true)
@@ -3803,3 +3898,20 @@ it("delivers agent steps independently of progress-panel rendering", async () =>
     hookFns.hasAnyHook.mockReturnValue(false)
   }
 })
+
+it.each(["codex", "claude-code"])(
+  "%s teammate pre-approvals do not create native tool caps",
+  async (runtime) => {
+    isTauriMock.mockReturnValue(true)
+    resolveExternalMock.mockResolvedValue("agent-1")
+    externalExecuteMock.mockResolvedValue({ success: true, finalResponse: "ok" })
+    const { ctx } = makeCtx(
+      makeTeammate({ config: { runtime: runtime as "codex", tools: ["Bash(git add:*)"] } })
+    )
+    await dispatchTeammate(ctx, { taskId: "t1", prompt: "go" })
+    const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+    const admission = jest.mocked(startToolExecutionRun).mock.calls.at(-1)![1]
+    expect(admission?.authority?.tools?.allow).toBeUndefined()
+    expect(externalExecuteMock).toHaveBeenCalled()
+  }
+)

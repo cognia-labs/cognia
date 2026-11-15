@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/agent-state-bridge", () => ({
+  syncPlanExecutionRun: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn(async () => undefined) }))
 jest.mock("@/lib/execution/personal-visibility", () => ({
   preparePersonalDerivedHistory: jest.fn(async (_sessionId: unknown, messages: unknown[]) => ({
     messages,
@@ -15,6 +19,12 @@ import type { PlanRunContext } from "./plan-run-context"
 import { PLAN_APPROVAL_SCOPE, dispatchPlanStepNode, planApprovalKey } from "./step-dispatch"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
 import { ExecutionBroker, __resetExecutionBrokerForTesting } from "@/lib/execution/broker"
+
+jest.mock("@/lib/execution/acting-authority", () => ({
+  startToolExecutionRun: jest.fn(async () => ({ id: `plan-step:${crypto.randomUUID()}` })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
+import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
 
 const executeAgentMock = jest.fn()
 jest.mock("@/lib/ai/agent/agent-executor", () => ({
@@ -200,7 +210,7 @@ describe("dispatchPlanStepNode — agent_turn", () => {
       expect.objectContaining({
         toolsEnabled: true,
         characterId: "char_1",
-        executionIdentity: { runId: "execution:plan:p1" },
+        executionIdentity: { runId: expect.stringMatching(/^plan-step:/) },
       })
     )
     expect(calls.map((c) => c.status)).toEqual(["in_progress", "completed"])
@@ -208,7 +218,11 @@ describe("dispatchPlanStepNode — agent_turn", () => {
     expect(preparePersonalDerivedHistory).toHaveBeenCalledWith(
       undefined,
       [{ id: "s1", content: "go" }],
-      { runIds: ["execution:plan:p1"], executionRunId: "execution:plan:p1", sessionId: "ses" }
+      {
+        runIds: [expect.stringMatching(/^plan-step:/)],
+        executionRunId: expect.stringMatching(/^plan-step:/),
+        sessionId: "ses",
+      }
     )
   })
 
@@ -854,4 +868,20 @@ describe("dispatchPlanStepNode — the directory a step runs in", () => {
     const res = await dispatchPlanStepNode(second.ctx, "s1", signal)
     expect(res.output).toMatchObject({ text: "second" })
   })
+})
+
+it("admits and settles independent child runs for consecutive plan steps", async () => {
+  executeAgentMock.mockResolvedValue({ text: "ok", channel: "sidecar" })
+  const { ctx } = makeCtx(step())
+  await dispatchPlanStepNode(ctx, "s1", signal)
+  await dispatchPlanStepNode(ctx, "s1", signal)
+  const ids = executeAgentMock.mock.calls.map((call) => call[1].executionIdentity.runId)
+  expect(new Set(ids).size).toBe(2)
+  expect(ids).not.toContain("execution:plan:p1")
+  expect(startToolExecutionRun).toHaveBeenCalledWith(
+    "ses",
+    expect.objectContaining({ parentRunId: "execution:plan:p1" })
+  )
+  expect(finishToolExecutionRun).toHaveBeenCalledWith(ids[0], false)
+  expect(finishToolExecutionRun).toHaveBeenCalledWith(ids[1], false)
 })

@@ -84,6 +84,8 @@ export interface ExecuteDeployedWorkflowInput {
   signal?: AbortSignal
   triggeredBy?: WorkflowTriggeredFrom
   traceId?: string
+  /** Host tool-call run; distinct from workflow-to-workflow lineage. */
+  authorityParentRunId?: string
   lineage?: WorkflowRunLineage
   securityContext?: WorkflowRunSecurityContext
   retry?: {
@@ -324,6 +326,7 @@ export async function executeDeployedWorkflow(
   const traceId = input.traceId ?? generateTraceId()
   const lineage: WorkflowRunLineage = input.lineage ?? {
     rootRunId: proposedRunId,
+    ...(input.authorityParentRunId ? { authorityParentRunId: input.authorityParentRunId } : {}),
     ...(input.retry
       ? { retryOfRunId: input.retry.retryOfRunId, retryMode: input.retry.retryMode }
       : {}),
@@ -568,6 +571,7 @@ async function executeLegacyPublishedWorkflow(
   const traceId = input.traceId ?? generateTraceId()
   const lineage: WorkflowRunLineage = input.lineage ?? {
     rootRunId: runId,
+    ...(input.authorityParentRunId ? { authorityParentRunId: input.authorityParentRunId } : {}),
     ...(input.retry
       ? { retryOfRunId: input.retry.retryOfRunId, retryMode: input.retry.retryMode }
       : {}),

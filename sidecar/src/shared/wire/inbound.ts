@@ -30,6 +30,9 @@ export interface SendOptions {
    * fence instead of this child's own session id.
    */
   workerToolAdmissionSessionId?: string
+  runAuthority?: NonNullable<import("@cognia/agent-config-types").SendOptions["runAuthority"]>
+  inheritedRunAuthority?: SendOptions["runAuthority"]
+  runAuthorityMcpServerIds?: Record<string, string>
   personalEgressFenced?: boolean
   personalEgressReadTools?: string[]
   personalEgressState?: { fenced: boolean }

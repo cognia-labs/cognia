@@ -1,4 +1,4 @@
-/** ADR-0243 phase 1: recorded identity and authority, not an enforcement surface. */
+/** ADR-0243 identity records and explicitly marked phase-3A run-tree caps. */
 import type {
   AgentPermissionMode,
   UnattendedPermissionProfileV1,
@@ -99,6 +99,8 @@ export function preservePersonalMarkMetadata(
 
 export interface RunAuthorityV1 {
   schemaVersion: 1
+  /** Host explicit-cap record (3A). Unmarked phase-1 surfaces are observations only. */
+  caps?: "explicit-v1"
   permissionMode?: AgentPermissionMode
   tools?: { allow?: string[]; deny?: string[] }
   skills?: { only?: string[] }
@@ -107,6 +109,14 @@ export interface RunAuthorityV1 {
   permissionProfile?: UnattendedPermissionProfileV1
   maxTurns?: number
   pools?: { rootRunId: string; tokenBudget?: number; costUsd?: number; deadlineMs?: number }
+}
+
+/** Phase-1 pools were ceilings; its other fields were resolved surfaces. */
+export function inheritableRunAuthority(
+  authority: RunAuthorityV1 | undefined
+): RunAuthorityV1 | undefined {
+  if (authority?.caps === "explicit-v1") return authority
+  return authority?.pools ? { schemaVersion: 1, pools: authority.pools } : undefined
 }
 
 function intersect(a: string[] | undefined, b: string[] | undefined): string[] | undefined {
@@ -124,6 +134,7 @@ function union(a: string[] | undefined, b: string[] | undefined): string[] | und
 /** Every execution bound narrows. Pools belong to the parent and are never split or reset. */
 export function meetRunAuthority(parent: RunAuthorityV1, child: RunAuthorityV1): RunAuthorityV1 {
   const result: RunAuthorityV1 = { schemaVersion: 1 }
+  if (parent.caps || child.caps) result.caps = "explicit-v1"
   const mode = parent.permissionMode ?? child.permissionMode
   if (mode) result.permissionMode = narrowAuthority(mode, child.permissionMode)
   if (parent.tools || child.tools) {

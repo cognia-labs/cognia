@@ -28,7 +28,10 @@ import type {
   ExternalAgentMessage,
   ExternalAgentSession,
 } from "@cognia/agent-contracts/external-agent"
-import { catalogModelCapabilities } from "@cognia/agent-contracts/external-agent"
+import {
+  catalogModelCapabilities,
+  assertNativeToolDeniesExpressible,
+} from "@cognia/agent-contracts/external-agent"
 import { validateAcpElicitationResponse } from "@cognia/agent-runtime-kit/elicitation"
 import { OpenCodeV2EventMapper, mapOpenCodeV2Messages } from "./v2-events"
 import {
@@ -75,39 +78,74 @@ function modelRef(value: string): ModelRef {
   return { providerID: value.slice(0, slash), id, ...(variant ? { variant } : {}) }
 }
 
-function permissionRules(
+export function permissionRules(
   mode: AcpPermissionMode,
-  mountedServers: string[] = []
+  mountedServers: string[] = [],
+  tools?: NonNullable<ExternalAgentExecutionOptions["nativePolicy"]>["tools"]
 ): PermissionRuleset {
   // Cognia's broker owns grants, confinement and approvals for its own tools.
   // Keep native policy intact while avoiding a second denial/approval gate.
   const projected: PermissionRuleset = mountedServers
     .filter((name) => ["cognia-tools", "cognia-plugin-tools"].includes(name))
     .map((name) => ({ action: `${name}_*`, resource: "*", effect: "allow" }))
-  switch (mode) {
-    case "default":
-      return [{ action: "*", resource: "*", effect: "ask" }, ...projected]
-    case "bypassPermissions":
-      return [{ action: "*", resource: "*", effect: "allow" }, ...projected]
-    case "acceptEdits":
-      return [
-        { action: "*", resource: "*", effect: "ask" },
-        { action: "read", resource: "*", effect: "allow" },
-        { action: "edit", resource: "*", effect: "allow" },
-        ...projected,
-      ]
-    case "plan":
-      return [
-        { action: "*", resource: "*", effect: "deny" },
-        { action: "read", resource: "*", effect: "allow" },
-        { action: "glob", resource: "*", effect: "allow" },
-        { action: "grep", resource: "*", effect: "allow" },
-        { action: "list", resource: "*", effect: "allow" },
-        ...projected,
-      ]
-    default:
-      throw new Error(`OpenCode does not support permission mode: ${mode}`)
+  const base: PermissionRuleset = (() => {
+    switch (mode) {
+      case "default":
+        return [{ action: "*", resource: "*", effect: "ask" }, ...projected]
+      case "bypassPermissions":
+        return [{ action: "*", resource: "*", effect: "allow" }, ...projected]
+      case "acceptEdits":
+        return [
+          { action: "*", resource: "*", effect: "ask" },
+          { action: "read", resource: "*", effect: "allow" },
+          { action: "edit", resource: "*", effect: "allow" },
+          ...projected,
+        ]
+      case "plan":
+        return [
+          { action: "*", resource: "*", effect: "deny" },
+          { action: "read", resource: "*", effect: "allow" },
+          { action: "glob", resource: "*", effect: "allow" },
+          { action: "grep", resource: "*", effect: "allow" },
+          { action: "list", resource: "*", effect: "allow" },
+          ...projected,
+        ]
+      default:
+        throw new Error(`OpenCode does not support permission mode: ${mode}`)
+    }
+  })()
+  if (!tools) return base
+  assertNativeToolDeniesExpressible("opencode-v2", tools)
+  // Preserve the mode's floor while intersecting the native action surface.
+  const nativeName = (name: string) =>
+    name.startsWith("mcp__")
+      ? name.slice(5).replace("__", "_")
+      : ({
+          Read: "read",
+          Bash: "bash",
+          Edit: "edit",
+          Write: "write",
+          Glob: "glob",
+          Grep: "grep",
+          Task: "task",
+        }[name] ?? name)
+  const effect = (action: string): "ask" | "deny" | "allow" => {
+    if (mode === "plan") return ["read", "glob", "grep", "list"].includes(action) ? "allow" : "deny"
+    if (mode === "bypassPermissions") return "allow"
+    if (mode === "acceptEdits" && ["read", "edit"].includes(action)) return "allow"
+    return "ask"
   }
+  const allow = tools.allow
+    ?.filter((rule) => !rule.includes("("))
+    .map(nativeName)
+    .map((action) => ({ action, resource: "*", effect: effect(action) }))
+  return [
+    ...base,
+    ...(allow ? [{ action: "*", resource: "*", effect: "deny" as const }, ...allow] : []),
+    ...(tools.deny ?? [])
+      .map(nativeName)
+      .map((action) => ({ action, resource: "*", effect: "deny" as const })),
+  ]
 }
 
 function assertSafe(value: unknown, gate: AgentOutboundGate): void {
@@ -682,6 +720,7 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
   }
 
   private validateSessionOptions(options?: SessionCreateOptions): void {
+    assertNativeToolDeniesExpressible("opencode-v2", options?.nativePolicy?.tools)
     if (options?.additionalDirectories?.length && !this.sessionMcpServers(options).length)
       throw new Error(
         "OpenCode V2 accepts one session location; additional workspace roots are unsupported"
@@ -715,7 +754,8 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
         ...(string(options?.metadata?.agent) ? { agent: string(options?.metadata?.agent) } : {}),
         permissions: permissionRules(
           mode,
-          this.sessionMcpServers(options).map((server) => server.name)
+          this.sessionMcpServers(options).map((server) => server.name),
+          options?.nativePolicy?.tools
         ),
       })
     } catch (error) {
@@ -730,7 +770,11 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
       )
     }
     try {
-      const session = await this.remember(info, { ...options, permissionMode: mode })
+      const session = await this.remember(info, {
+        ...options,
+        metadata: { ...options?.metadata, nativePolicy: options?.nativePolicy },
+        permissionMode: mode,
+      })
       await this.applyInstructions(info.id, options)
       this.connection.signal.throwIfAborted()
       return session
@@ -952,7 +996,14 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
     message: ExternalAgentMessage,
     options?: ExternalAgentExecutionOptions
   ): AsyncIterable<ExternalAgentEvent> {
-    this.requireSession(sessionId)
+    const session = this.requireSession(sessionId)
+    if (options?.nativePolicy) {
+      session.metadata = { ...session.metadata, nativePolicy: options.nativePolicy }
+      await this.setSessionMode(
+        sessionId,
+        options.permissionMode ?? session.permissionMode ?? "default"
+      )
+    }
     if (options?.systemPrompt !== undefined || options?.instructionEnvelope || options?.context)
       await this.applyInstructions(sessionId, options)
     if (!promptInputPassesGate(message, this.outboundGate))
@@ -1376,10 +1427,20 @@ export class OpenCodeV2ClientAdapter extends BaseProtocolAdapter {
   }
 
   async setSessionMode(sessionId: string, mode: AcpPermissionMode): Promise<void> {
-    this.requireSession(sessionId)
+    const session = this.requireSession(sessionId)
     await this.getSdkClient(sessionId).session.update({
       sessionID: sessionId,
-      permissions: permissionRules(mode, this.mountedMcp.get(sessionId)),
+      permissions: permissionRules(
+        mode,
+        this.mountedMcp.get(sessionId),
+        session.metadata?.nativePolicy
+          ? (
+              session.metadata.nativePolicy as NonNullable<
+                ExternalAgentExecutionOptions["nativePolicy"]
+              >
+            ).tools
+          : undefined
+      ),
     })
     this.updateSession(sessionId, { permissionMode: mode })
   }

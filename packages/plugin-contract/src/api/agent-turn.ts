@@ -18,6 +18,7 @@ export interface PluginAgentTurnRequest {
   sessionId?: string
   timeoutMs?: number
   signal?: AbortSignal
+  /** Requested mode, honoured up to the inherited explicit authority cap. */
   permissionMode?: SendOptions["permissionMode"]
   /**
    * Composition this turn runs under (preset, authority, tool presentation…).
@@ -54,9 +55,9 @@ export interface PluginAgentTurnResult {
    * `completed` when the turn ended on its own terms. `needs_approval` when
    * at least one tool asked for a permission this unattended turn could not
    * grant: the request was denied immediately, the model was told, and
-   * `needsApproval` lists what a human still has to decide. A turn run with
-   * `permissionMode: "bypassPermissions"` never asks, so it is always
-   * `completed`.
+   * `needsApproval` lists what a human still has to decide. A requested
+   * `bypassPermissions` mode remains subject to the Host's authority ceiling
+   * and unattended permission profile.
    */
   status: "completed" | "needs_approval"
   /** Present, and non-empty, exactly when `status` is `needs_approval`. */

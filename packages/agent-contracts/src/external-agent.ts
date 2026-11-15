@@ -2883,7 +2883,41 @@ export interface ExternalAgentResult {
 /**
  * Execution options
  */
+/** Host-translated hard native policy. Separate from pre-approved tools. */
+export interface ExternalAgentNativePolicy {
+  tools?: { allow?: string[]; deny?: string[] }
+  mcpServers?: { only: string[] }
+  skills?: { only: string[] }
+  subagents?: { only: string[] }
+}
+
+/** A native adapter must refuse a rule it cannot express without changing its scope. */
+export class UnsupportedNativeAuthorityError extends Error {
+  readonly reason = "unsupported_authority"
+  readonly field = "tools.deny"
+  readonly protocol: ExternalAgentProtocol
+  readonly pattern: string
+  constructor(protocol: ExternalAgentProtocol, pattern: string) {
+    super(`${protocol}: tools.deny: ${pattern} (native argument rules unavailable)`)
+    this.name = "UnsupportedNativeAuthorityError"
+    this.protocol = protocol
+    this.pattern = pattern
+  }
+}
+
+/** Pi and OpenCode expose tool switches, not Claude argument-deny rules. */
+export function assertNativeToolDeniesExpressible(
+  protocol: ExternalAgentProtocol,
+  tools: ExternalAgentNativePolicy["tools"]
+): void {
+  const pattern = tools?.deny?.find((rule) => rule.includes("("))
+  if (pattern) throw new UnsupportedNativeAuthorityError(protocol, pattern)
+}
+
 export interface ExternalAgentExecutionOptions {
+  /** Enforced by the shipped adapter before native execution, including resumes. */
+  nativePolicy?: ExternalAgentNativePolicy
+
   /** Host-derived personal-content network ceiling; never an approval grant. */
   personalEgressFenced?: boolean
   /** Host-resolved prompt/context protection; independent of the outbound PII gate. */

@@ -1304,6 +1304,7 @@ describe("ExecutionAuthority", () => {
         onPersisted: persisted,
       })
 
+      expect(retried.result.error).toBeUndefined()
       expect(retried.result.status).toBe("succeeded")
       expect(retried.executionBinding).toMatchObject({
         deploymentId: `legacy:${workflow.id}`,
@@ -1404,3 +1405,46 @@ describe("ExecutionAuthority", () => {
     ).rejects.toMatchObject({ code: "failed-step-missing" })
   })
 })
+
+it.each(["1", "0"])(
+  "retains the Host caller through deployed workflow admission (control plane %s)",
+  async (enabled) => {
+    const old = process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS
+    process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS = enabled
+    try {
+      const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
+      const parent = await startToolExecutionRun(undefined, {
+        authority: { schemaVersion: 1, caps: "explicit-v1", maxTurns: 2 },
+      })
+      const workflow = await createWorkflow({
+        name: "Host tool child",
+        nodes: [
+          {
+            id: "manual",
+            type: "trigger.manual",
+            typeVersion: 1,
+            position: { x: 0, y: 0 },
+            data: { label: "Manual", params: {} },
+          },
+        ],
+      })
+      await publishWorkflow(workflow.id, 10)
+      const result = await executeDeployedWorkflow({
+        workflowId: workflow.id,
+        entrypoint: "agent-tool",
+        caller: "wf_run_workflow_typed",
+        authorityParentRunId: parent.id,
+        triggerKind: "trigger.manual",
+        payload: { input: {} },
+      })
+      expect(result.result.status).toBe("succeeded")
+      expect(await getDb().executionRuns.get(`execution:workflow:${result.runId}`)).toMatchObject({
+        parentRunId: parent.id,
+        authority: parent.authority,
+      })
+    } finally {
+      if (old === undefined) delete process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS
+      else process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS = old
+    }
+  }
+)

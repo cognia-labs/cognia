@@ -268,104 +268,100 @@ export async function enqueueOutboundMany(
     // Bind before the queue row becomes visible to any runner or wake.
     tables.push(db.executionRuns, db.executionRunEvents, db.notificationProjectionWork)
     let abortTransaction: (() => void) | undefined
+    // One native async scope lets Dexie track the authority admission's awaits;
+    // nested async callbacks in a promise chain can outlive the queue transaction.
     const rows = await db
-      .transaction("rw", tables, () => {
+      .transaction("rw", tables, async () => {
         const transaction = Dexie.currentTransaction!
         abortTransaction = () => transaction.abort()
         options.signal?.addEventListener("abort", abortTransaction, { once: true })
         options.signal?.throwIfAborted()
-        return Dexie.Promise.all(
+        const newestRows = await Dexie.Promise.all(
           conversationKeys.map((conversationKey) =>
             db.outboundQueue
               .where("[conversationKey+orderSeq]")
               .between([conversationKey, -Infinity], [conversationKey, Infinity])
               .last()
           )
-        ).then((newestRows) => {
-          options.signal?.throwIfAborted()
-          const nextSequence = new Map(
-            conversationKeys.map((conversationKey, index) => [
-              conversationKey,
-              newestRows[index]?.orderSeq ?? 0,
-            ])
-          )
-          const created = inputs.map((input) => {
-            const orderSeq = (nextSequence.get(input.conversationKey) ?? 0) + 1
-            nextSequence.set(input.conversationKey, orderSeq)
-            return {
-              id: newId(),
-              adapterId: input.adapterId,
-              projectId: projectByConversation.get(input.conversationKey) ?? fallbackProjectId,
-              conversationKey: input.conversationKey,
-              request: input.request,
-              status: "pending" as const,
-              attempts: 0,
-              createdAt: now,
-              updatedAt: now,
-              orderSeq,
-              nextAttemptAt: input.nextAttemptAt ?? now,
-              idempotencyKey: input.request.metadata.idempotencyKey,
-              source: input.source,
-              ...(input.personalSourceContext
-                ? { personalSourceContext: structuredClone(input.personalSourceContext) }
-                : {}),
-              ...(input.personalNarrowing
-                ? { personalNarrowing: structuredClone(input.personalNarrowing) }
-                : {}),
-              ...(input.personalDeliveryNotice
-                ? { personalDeliveryNotice: structuredClone(input.personalDeliveryNotice) }
-                : {}),
-              ...(input.source === "workflow" && input.sourceWorkflow
-                ? { sourceWorkflow: input.sourceWorkflow }
-                : {}),
-              ...(input.authorizedBy ? { authorizedBy: input.authorizedBy } : {}),
-              ...(input.authorizationProvenance
-                ? { authorizationProvenance: input.authorizationProvenance }
-                : {}),
-            } satisfies OutboundJobRow
-          })
-          return db.outboundQueue.bulkAdd(created).then(async () => {
-            options.signal?.throwIfAborted()
-            const messages = inputs.flatMap((input, index) =>
-              input.localMessage
-                ? [
-                    {
-                      ...input.localMessage,
-                      metadata: {
-                        ...input.localMessage.metadata,
-                        outboundJobId: created[index].id,
-                        personalMarkVersion: 1,
-                      },
-                    },
-                  ]
-                : []
-            )
-            if (messages.length) await db.messages.bulkPut(messages)
-            // The whole batch commits together, so no receipt of it may be
-            // trimmed by a later one's write.
-            const batchReceipts = new Set(inputs.flatMap((input) => input.receipt?.id ?? []))
-            for (const input of inputs) {
-              if (input.receipt)
-                await recordActionReviewReceiptInsideTransaction(
-                  db,
-                  input.receipt,
-                  undefined,
-                  batchReceipts
-                )
-            }
-            for (const row of created) {
-              await startJobExecutionRun(`outbound:${row.id}`, options.executionContext, {
-                delivery: true,
-              })
-            }
-            await consumePersonalDisclosureForEnqueue(
-              db,
-              options.personalDisclosureContext,
-              created
-            )
-            return created
-          })
+        )
+        options.signal?.throwIfAborted()
+        const nextSequence = new Map(
+          conversationKeys.map((conversationKey, index) => [
+            conversationKey,
+            newestRows[index]?.orderSeq ?? 0,
+          ])
+        )
+        const created = inputs.map((input) => {
+          const orderSeq = (nextSequence.get(input.conversationKey) ?? 0) + 1
+          nextSequence.set(input.conversationKey, orderSeq)
+          return {
+            id: newId(),
+            adapterId: input.adapterId,
+            projectId: projectByConversation.get(input.conversationKey) ?? fallbackProjectId,
+            conversationKey: input.conversationKey,
+            request: input.request,
+            status: "pending" as const,
+            attempts: 0,
+            createdAt: now,
+            updatedAt: now,
+            orderSeq,
+            nextAttemptAt: input.nextAttemptAt ?? now,
+            idempotencyKey: input.request.metadata.idempotencyKey,
+            source: input.source,
+            ...(input.personalSourceContext
+              ? { personalSourceContext: structuredClone(input.personalSourceContext) }
+              : {}),
+            ...(input.personalNarrowing
+              ? { personalNarrowing: structuredClone(input.personalNarrowing) }
+              : {}),
+            ...(input.personalDeliveryNotice
+              ? { personalDeliveryNotice: structuredClone(input.personalDeliveryNotice) }
+              : {}),
+            ...(input.source === "workflow" && input.sourceWorkflow
+              ? { sourceWorkflow: input.sourceWorkflow }
+              : {}),
+            ...(input.authorizedBy ? { authorizedBy: input.authorizedBy } : {}),
+            ...(input.authorizationProvenance
+              ? { authorizationProvenance: input.authorizationProvenance }
+              : {}),
+          } satisfies OutboundJobRow
         })
+        await db.outboundQueue.bulkAdd(created)
+        options.signal?.throwIfAborted()
+        const messages = inputs.flatMap((input, index) =>
+          input.localMessage
+            ? [
+                {
+                  ...input.localMessage,
+                  metadata: {
+                    ...input.localMessage.metadata,
+                    outboundJobId: created[index].id,
+                    personalMarkVersion: 1,
+                  },
+                },
+              ]
+            : []
+        )
+        if (messages.length) await db.messages.bulkPut(messages)
+        // The whole batch commits together, so no receipt of it may be
+        // trimmed by a later one's write.
+        const batchReceipts = new Set(inputs.flatMap((input) => input.receipt?.id ?? []))
+        for (const input of inputs) {
+          if (input.receipt)
+            await recordActionReviewReceiptInsideTransaction(
+              db,
+              input.receipt,
+              undefined,
+              batchReceipts
+            )
+        }
+        for (const row of created) {
+          await startJobExecutionRun(`outbound:${row.id}`, options.executionContext, {
+            delivery: true,
+          })
+        }
+        await consumePersonalDisclosureForEnqueue(db, options.personalDisclosureContext, created)
+        return created
       })
       .catch((error) => {
         // An abort during IndexedDB request construction may surface as

@@ -15,7 +15,6 @@ import type { RunEventType, RunUsageSnapshot } from "@/types/execution/run"
 import { ensureConnectorRunBinding } from "./agent-state-bridge"
 import { bestOfNExecutionRunId } from "./best-of-n-bridge"
 import {
-  authorityFromPermissionCeiling,
   recordedRunMetadata,
   requestersFromRunOrigin,
   runTriggerFromOrigin,
@@ -74,7 +73,6 @@ export async function ensureTeamExecutionRun(seed: TeamExecutionRunSeed): Promis
         id: runId,
         ...recordedRunMetadata(runTriggerFromOrigin(seed.executionConstraints?.triggeredFrom), {
           runId: runId,
-          authority: authorityFromPermissionCeiling(seed.executionConstraints?.permissionCeiling),
           requesters: requestersFromRunOrigin(seed.executionConstraints?.triggeredFrom),
         }),
         kind: "team",

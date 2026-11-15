@@ -63,6 +63,33 @@ describe("identity helpers", () => {
 })
 
 describe("acceptChatTurn", () => {
+  it("atomically accepts an admitted thread child without losing hook marks or colliding with its row", async () => {
+    const { ensureDirectChatExecutionRun } = await import("@/lib/execution/direct-chat-run")
+    await ensureDirectChatExecutionRun({ sessionId: "coordinator", runId: "coordinator" })
+    await getDb().executionRuns.update("coordinator", {
+      authority: { schemaVersion: 1, caps: "explicit-v1" as const, tools: { allow: ["Read"] } },
+    })
+    await ensureDirectChatExecutionRun({
+      sessionId: turn.sessionId,
+      runId: turn.runId,
+      parentRunId: "coordinator",
+      ownsDispatch: false,
+    })
+    const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+    await addPersonalMarksToRun({ executionRunId: turn.runId, sessionId: turn.sessionId }, [
+      { person: { kind: "local-person" }, source: "github-user", markedAt: 1 },
+    ])
+    const before = await getDb().executionRuns.get(turn.runId)
+    const receipt = await acceptChatTurn(
+      { ...turn, parentRunId: "coordinator", adoptPreparedRun: true },
+      deps()
+    )
+    expect(receipt?.state).toBe("accepted")
+    expect(await getDb().executionRuns.get(turn.runId)).toEqual(before)
+    expect(await getDb().workInputBatches.get(`input:${turn.runId}`)).toBeDefined()
+    expect(await claimChatTurnForDispatch(turn.runId, NOW, deps())).toBe("claimed")
+    expect(await getDb().workSubmissions.where("runId").equals(turn.runId).count()).toBe(1)
+  })
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
@@ -82,6 +109,45 @@ describe("acceptChatTurn", () => {
       availabilityPolicy: "wait",
     })
   }, 30_000)
+
+  it.each([true, false])(
+    "inherits the Host-captured thread parent, present=%s",
+    async (present) => {
+      const { ensureDirectChatExecutionRun } = await import("@/lib/execution/direct-chat-run")
+      if (present) {
+        await ensureDirectChatExecutionRun({ sessionId: "coordinator", runId: "coordinator" })
+        await getDb().executionRuns.update("coordinator", {
+          authority: {
+            schemaVersion: 1,
+            caps: "explicit-v1" as const,
+            permissionMode: "plan",
+            maxTurns: 2,
+          },
+        })
+      }
+      await acceptChatTurn({ ...turn, parentRunId: "coordinator" }, deps())
+      const run = await getDb().executionRuns.get(turn.runId)
+      expect(run?.parentRunId).toBe(present ? "coordinator" : undefined)
+      if (present)
+        expect(run?.authority).toEqual({
+          schemaVersion: 1,
+          caps: "explicit-v1",
+          permissionMode: "plan",
+          maxTurns: 2,
+        })
+      else
+        expect(
+          await getDb().executionRunEvents.where("runId").equals(turn.runId).toArray()
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              payload: expect.objectContaining({ operation: "coordinator_parent_unavailable" }),
+            }),
+          ])
+        )
+    },
+    30_000
+  )
 
   it("carries the session's issue onto the submission row (spec 2026-09-06 D9)", async () => {
     await acceptChatTurn({ ...turn, workItemRef: { kind: "issue", id: "iss_1" } }, deps())

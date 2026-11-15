@@ -95,6 +95,13 @@ const start = (h: Harness, extra: Record<string, unknown> = {}) =>
   )
 
 describe("startSquadRun: fast failures", () => {
+  it("carries a chat coordinator separately from a replacement request", async () => {
+    const h = harness()
+    expect(await start(h, { authorityParentRunId: "coordinator" })).toMatchObject({ started: true })
+    expect(h.seeds[0]).toMatchObject({ authorityParentRunId: "coordinator" })
+    expect(h.seeds[0]?.parentRunId).toBeUndefined()
+    expect(h.seeds[0]?.launchedByRunId).toBeUndefined()
+  })
   it("does not create or dispatch a replacement when stopping its parent is unconfirmed", async () => {
     const h = harness({ liveRunId: "parent" })
     const park = jest.fn(async () => undefined)

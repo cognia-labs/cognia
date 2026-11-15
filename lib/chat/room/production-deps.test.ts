@@ -1,8 +1,11 @@
+/** @jest-environment jsdom */
 /**
  * The production deps are the one path no runner test exercises (every test
  * hands in fakes), so this pins that each seam reaches the module the hook
  * always imported, and that the two lazy imports are guarded.
  */
+import "fake-indexeddb/auto"
+import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 
 const ipc = {
   sendPrompt: jest.fn(async () => undefined),
@@ -169,6 +172,40 @@ it("routes admission through the broker, the lease helper and the slot key", asy
   expect(jest.requireMock("@/lib/execution/chat-lease").releaseChatLease).toHaveBeenCalledWith(
     "room-1"
   )
+})
+
+describe("Host source authority binding (real Dexie)", () => {
+  beforeEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+  })
+  const realStart = (...args: Parameters<typeof startToolExecutionRun>) =>
+    jest.requireActual("@/lib/execution/acting-authority").startToolExecutionRun(...args)
+
+  it.each([["source"], ["source-1", "source-2"], ["missing"], [""]])(
+    "does not infer ancestry from privacy source ids %j",
+    async (...sources) => {
+      jest.mocked(startToolExecutionRun).mockImplementationOnce(realStart)
+      const id = await createProductionRoomDeps().execution.startMemberRun!("member", {
+        automated: true,
+        sourceRunIds: sources,
+      })
+      const row = await getDb().executionRuns.get(id)
+      expect(row?.parentRunId).toBeUndefined()
+      expect(row?.authority).toBeUndefined()
+      expect(row?.actingIdentity?.lane).toBe("service")
+    }
+  )
+  it("keeps automation with no source claim top-level", async () => {
+    jest.mocked(startToolExecutionRun).mockImplementationOnce(realStart)
+    const id = await createProductionRoomDeps().execution.startMemberRun!("member", {
+      automated: true,
+    })
+    expect(await getDb().executionRuns.get(id)).toMatchObject({
+      actingIdentity: { lane: "service" },
+    })
+    expect((await getDb().executionRuns.get(id))?.parentRunId).toBeUndefined()
+  })
 })
 
 it("loads the provider attempt options and the subagent bridge lazily", async () => {

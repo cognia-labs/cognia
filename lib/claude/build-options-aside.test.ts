@@ -625,6 +625,8 @@ it("keeps an unlocked aside below the parent's actual resolved permission ceilin
   recordResolvedPermissionCeiling(parent.id, { permissionMode: "plan" })
   const opts = await resolve(aside({ asideWriteAccess: true }))
   expect(opts.permissionMode).toBe("plan")
+  expect(opts.runAuthority?.permissionMode).toBeUndefined()
+  expect(opts.runAuthority?.tools).toBeUndefined()
   expect(opts.claudeAgentSdk?.tools).not.toContain("Write")
   expect(
     (opts.pluginTools ?? []).every((tool) => ["web_search", "web_fetch"].includes(tool.name))

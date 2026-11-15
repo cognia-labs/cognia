@@ -5,7 +5,6 @@ import {
   teamRunOutcome,
 } from "@cognia/agent-orchestration/rules"
 import {
-  authorityFromPermissionCeiling,
   recordedRunMetadata,
   requestersFromRunOrigin,
   runTriggerFromOrigin,
@@ -27,7 +26,7 @@ import {
  * live runs.
  */
 
-import { appendRunEventInsideTransaction } from "@/lib/db/execution-runs"
+import { appendRunEventInsideTransaction, appendRunObservation } from "@/lib/db/execution-runs"
 import { getDb } from "@/lib/db/schema"
 import { dexieTeamRunStore } from "@/lib/db/agent-team-runtime"
 import { agentTeamExecutionRunId, teamIdForExecutionRun } from "@/lib/execution/agent-team-bridge"
@@ -49,6 +48,8 @@ export interface SquadRunSeed {
   executionConstraints?: AgentTeamRunRecord["executionConstraints"]
   /** Previous run this one replaces (a `retry`). Linked by the control plane too. */
   parentRunId?: string
+  /** Captured project coordinator, independent of retry/replacement semantics. */
+  authorityParentRunId?: string
   /**
    * The run that launched this one as its child (ADR-0252 §3). Becomes the
    * row's parent, without replacing anything. Ignored beside `parentRunId`.
@@ -82,6 +83,7 @@ export class SquadRunConflictError extends Error {
  * caller treats a throw as "the run does not exist" and starts nothing.
  */
 export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRunRecords> {
+  const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
   const db = getDb()
   const executionRunId = agentTeamExecutionRunId(seed.runId)
   const pending = db.transaction(
@@ -213,7 +215,10 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
       }
       let executionRun = existingExecution
       if (!executionRun) {
-        const parentRunId = seed.parentRunId ?? seed.launchedByRunId
+        const coordinator = seed.authorityParentRunId
+          ? await db.executionRuns.get(seed.authorityParentRunId)
+          : undefined
+        const parentRunId = seed.parentRunId ?? seed.launchedByRunId ?? coordinator?.id
         executionRun = {
           id: executionRunId,
           ...recordedRunMetadata(
@@ -231,9 +236,6 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
                 : {}),
               parent: parentRunId ? await db.executionRuns.get(parentRunId) : undefined,
               requesters: requestersFromRunOrigin(seed.executionConstraints?.triggeredFrom),
-              authority: authorityFromPermissionCeiling(
-                seed.executionConstraints?.permissionCeiling
-              ),
             }
           ),
           kind: "team",
@@ -247,7 +249,21 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
           startedAt: seed.startedAt,
           updatedAt: seed.startedAt,
         }
+        const inherited = await resolveRunAuthority({
+          parentRunId,
+          requested: executionRun.authority,
+        })
+        executionRun = {
+          ...executionRun,
+          ...(inherited.authority ? { authority: inherited.authority } : {}),
+          ...(inherited.actingIdentity ? { actingIdentity: inherited.actingIdentity } : {}),
+        }
         await db.executionRuns.add(executionRun)
+        if (seed.authorityParentRunId && !coordinator && !parentRunId)
+          await appendRunObservation(executionRunId, {
+            operation: "coordinator_parent_unavailable",
+            parentRunId: seed.authorityParentRunId,
+          })
         await appendRunEventInsideTransaction(db, executionRunId, {
           id: `execution-event:${seed.runId}:started`,
           ts: seed.startedAt,

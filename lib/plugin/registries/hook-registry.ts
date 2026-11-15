@@ -36,6 +36,8 @@ import {
 import { createOverlayRegistry } from "./createOverlayRegistry"
 
 // Contract-defined synchronous notification hooks return no value on a cold cache.
+// onChatError is delivered through async executeHook, which awaits the content
+// fence; it must remain callable before a turn has an admitted row.
 const synchronousNotifications: readonly (keyof PluginHooksAll)[] = [
   "onConfigChange",
   "onA2UISurfaceCreate",
@@ -98,7 +100,6 @@ const synchronousNotifications: readonly (keyof PluginHooksAll)[] = [
   "onStreamStart",
   "onStreamChunk",
   "onStreamEnd",
-  "onChatError",
   "onTokenUsage",
   "onDocumentsIndexed",
   "onVectorSearch",

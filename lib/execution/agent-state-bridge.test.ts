@@ -518,3 +518,11 @@ describe("agent state execution bridge", () => {
     ).toMatchObject({ trigger: "external-event", requesters: [] })
   })
 })
+
+it("syncs a headless plan without a session row or liveQuery subscription", async () => {
+  const source = plan({ id: "headless-no-session" })
+  await syncPlanExecutionRun(source, undefined)
+  expect(
+    await getDb().executionRuns.get(agentStateExecutionRunId("plan", source.id))
+  ).toMatchObject({ kind: "plan", sourceId: source.id, sessionId: source.sessionId })
+})

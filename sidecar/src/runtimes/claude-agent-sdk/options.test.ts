@@ -4,7 +4,7 @@ import { captureClaudeRuntime } from "../../../test-support/claude-runtime.ts"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { buildAnthropicOptions } from "./options.ts"
+import { buildAnthropicOptions, enforceNativeRunAuthority } from "./options.ts"
 import { buildToolSurface } from "./tool-surface.ts"
 import type { ToolPresentationOptions } from "../../tools/middleware/presentation.ts"
 import type { SendOptions } from "../../shared/wire/inbound.ts"
@@ -15,6 +15,220 @@ import { createToolSessionContext } from "../../tools/session.ts"
 import { createCallLedgerGate } from "../common/call-ledger-gate.ts"
 import { createDoomLoopGuard } from "../../policy/doom-loop.ts"
 import { createStderrLogSink } from "../../mcp/client/log.ts"
+
+test("bare subagent caps keep plugin-qualified reviewers", () => {
+  const options = enforceNativeRunAuthority(
+    {
+      agents: {
+        "p:reviewer": { description: "review", prompt: "review" },
+        "p:writer": { description: "write", prompt: "write" },
+      },
+    },
+    { inheritedRunAuthority: { schemaVersion: 1, subagents: { only: ["reviewer"] } } }
+  )
+  assert.deepEqual(Object.keys(options.agents!), ["p:reviewer"])
+})
+
+test("MCP caps filter registry servers while retaining every in-process Host server", () => {
+  const builtins = {
+    "cognia-tools": { type: "sdk" as const, name: "cognia-tools", instance: {} },
+    "cognia-plugin-tools": { type: "sdk" as const, name: "cognia-plugin-tools", instance: {} },
+    "a2ui-bridge": { type: "sdk" as const, name: "a2ui-bridge", instance: {} },
+  }
+  const options = enforceNativeRunAuthority(
+    {
+      mcpServers: {
+        ...builtins,
+        github: { command: "github" },
+        private: { command: "private" },
+        unmapped: { command: "unmapped" },
+        other: { type: "sdk", name: "other", instance: {} },
+      } as never,
+    },
+    {
+      inheritedRunAuthority: { schemaVersion: 1, mcpServers: { only: ["github-id"] } },
+      runAuthorityMcpServerIds: { github: "github-id", private: "private-id" },
+    }
+  )
+  assert.deepEqual(Object.keys(options.mcpServers!), [...Object.keys(builtins), "github"])
+  assert.equal(options.strictMcpConfig, true)
+  for (const [name, server] of Object.entries(builtins))
+    assert.equal(options.mcpServers![name], server)
+})
+
+test("MCP caps withhold unmapped SDK subagent servers and shadowed Host names", () => {
+  const options = enforceNativeRunAuthority(
+    {
+      mcpServers: {
+        "cognia-tools": { command: "shadow" },
+        "a2ui-bridge": { type: "sdk", name: "a2ui-bridge", instance: {} },
+        unmapped: { command: "unknown" },
+      } as never,
+      agents: {
+        child: {
+          description: "child",
+          prompt: "work",
+          mcpServers: ["cognia-tools", "a2ui-bridge", "unmapped"],
+        },
+      },
+    },
+    {
+      inheritedRunAuthority: { schemaVersion: 1, mcpServers: { only: ["A"] } },
+      runAuthorityMcpServerIds: {},
+    }
+  )
+  assert.deepEqual(Object.keys(options.mcpServers!), ["a2ui-bridge"])
+  assert.deepEqual(options.agents?.child?.mcpServers, ["a2ui-bridge"])
+})
+
+test("inherited allow only intersects the run's existing native surface", () => {
+  for (const ownTools of [[], ["Read"], ["WebSearch"]]) {
+    const options = enforceNativeRunAuthority(
+      { tools: ownTools },
+      { inheritedRunAuthority: { schemaVersion: 1, tools: { allow: ["Read", "Grep"] } } }
+    )
+    assert.deepEqual(
+      options.tools,
+      ownTools.filter((name) => ["Read", "Grep"].includes(name))
+    )
+  }
+})
+
+test("SDK overlays and a grant's empty finalized surface survive the final ancestor clamp", (t) => {
+  const cases: Array<{ own: Partial<SendOptions>; tools: string[] }> = [
+    {
+      own: { toolSurface: "none", runAuthority: { schemaVersion: 1, tools: { allow: [] } } },
+      tools: [],
+    },
+    { own: { claudeAgentSdk: { version: 1, tools: ["Read"] } }, tools: ["Read"] },
+  ]
+  for (const [index, { own, tools }] of cases.entries()) {
+    const sendOptions: SendOptions = {
+      ...own,
+      inheritedRunAuthority: { schemaVersion: 1, tools: { allow: ["Read", "Grep"] } },
+    }
+    const sessionId = `narrow-own-surface-${index}`
+    const log = () => {}
+    const emit = () => {}
+    const toolSession = createToolSessionContext({ sendOptions, sessionId, log })
+    t.after(() => toolSession.dispose())
+    const options = buildAnthropicOptions({
+      sendOptions,
+      sessionId,
+      log,
+      emit,
+      toolSession,
+      surface: buildToolSurface({
+        sendOptions,
+        sessionId,
+        log,
+        emit,
+        toolSession,
+        pendingPluginToolCalls: new Map(),
+      }),
+      mcpStderrSink: createStderrLogSink({ sessionId, emit, source: "stderr" }),
+      ledgerGate: createCallLedgerGate({ ledger: null, sessionId, emit }),
+      sdkFallbackModel: undefined,
+      sdkMaxBudgetUsd: undefined,
+      pendingApprovals: new Map(),
+      pendingPluginHookCalls: new Map(),
+      doomGuard: createDoomLoopGuard(),
+      interruptForLedger() {},
+    })
+    assert.deepEqual(options.tools, tools)
+  }
+})
+
+test("native subagents meet the whole parent authority after SDK overlays", () => {
+  const options = enforceNativeRunAuthority(
+    {
+      skills: "all",
+      permissionMode: "bypassPermissions",
+      maxTurns: 30,
+      mcpServers: { safe: { command: "safe" }, unsafe: { command: "unsafe" } },
+      agents: {
+        reader: {
+          description: "read",
+          prompt: "read",
+          tools: ["Read", "Bash"],
+          maxTurns: 20,
+          permissionMode: "bypassPermissions",
+          skills: ["read", "write"],
+          mcpServers: ["safe", "unsafe", { safe: { command: "override" } }],
+        },
+        writer: { description: "write", prompt: "write" },
+      },
+    },
+    {
+      trustedWorkspaceRoots: ["/trusted"],
+      inheritedRunAuthority: {
+        schemaVersion: 1,
+        permissionMode: "plan",
+        maxTurns: 2,
+        tools: { allow: ["Read"], deny: ["Bash"] },
+        mcpServers: { only: ["safe"] },
+        skills: { only: ["read"] },
+        subagents: { only: ["reader"] },
+      },
+      runAuthorityMcpServerIds: { safe: "safe", unsafe: "unsafe" },
+    }
+  )
+  assert.equal(options.permissionMode, "plan")
+  assert.deepEqual(options.tools, ["Read"])
+  assert.equal(options.maxTurns, 2)
+  assert.deepEqual(Object.keys(options.agents!), ["reader"])
+  assert.deepEqual(options.agents!.reader!.tools, ["Read"])
+  assert.deepEqual(options.agents!.reader!.skills, ["read"])
+  assert.deepEqual(options.agents!.reader!.mcpServers, ["safe"])
+  assert.equal(options.agents!.reader!.maxTurns, 2)
+  assert.equal(options.agents!.reader!.permissionMode, "plan")
+  assert.deepEqual(Object.keys(options.mcpServers!), ["safe"])
+  assert.deepEqual(options.settingSources, [])
+  assert.deepEqual(options.skills, ["read"])
+})
+
+test("unrestricted native content survives and missing child mode uses default", () => {
+  const options = enforceNativeRunAuthority(
+    {
+      skills: "all",
+      plugins: [{ type: "local", path: "/native-plugin" }],
+      settingSources: ["project"],
+    },
+    {
+      inheritedRunAuthority: {
+        schemaVersion: 1,
+        permissionMode: "bypassPermissions",
+        mcpServers: { only: [] },
+      },
+    }
+  )
+  assert.equal(options.permissionMode, "default")
+  assert.equal(options.skills, "all")
+  assert.deepEqual(options.plugins, [{ type: "local", path: "/native-plugin" }])
+  assert.deepEqual(options.settingSources, ["project"])
+})
+
+test("explicit skill cap keeps named native skills and plugins", () => {
+  const options = enforceNativeRunAuthority(
+    {
+      skills: "all",
+      plugins: [
+        { type: "local", path: "/keep" },
+        { type: "local", path: "/drop" },
+      ],
+    },
+    {
+      trustedWorkspaceRoots: ["/trusted"],
+      inheritedRunAuthority: { schemaVersion: 1, skills: { only: ["read", "plugin-keep"] } },
+      runtimeExtensions: [
+        { kind: "directory" as const, path: "/keep", id: "plugin-keep" },
+        { kind: "directory" as const, path: "/drop", id: "plugin-drop" },
+      ],
+    }
+  )
+  assert.deepEqual(options.skills, ["read", "plugin-keep"])
+  assert.deepEqual(options.plugins, [{ type: "local", path: "/keep" }])
+})
 
 test("portable extensions restore through the same trusted content boundary and expose neutral live control", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-extension-restore-"))
@@ -646,4 +860,110 @@ test("a configured PreToolUse allow is re-admitted after the hook finishes", asy
     session.closeInput()
     finish()
   }
+})
+
+test("own authority leaves native own options intact and only caps native children", () => {
+  const own = {
+    permissionMode: "bypassPermissions" as const,
+    skills: "all" as const,
+    settingSources: ["project" as const],
+    plugins: [{ type: "local" as const, path: "/plugin" }],
+    maxTurns: 10,
+  }
+  assert.deepEqual(
+    enforceNativeRunAuthority(structuredClone(own), {
+      runAuthority: { schemaVersion: 1, permissionMode: "plan", skills: { only: [] }, maxTurns: 1 },
+    }),
+    own
+  )
+})
+
+test("permission-rule patterns retain the base native tool and MCP server", () => {
+  const options = enforceNativeRunAuthority(
+    {
+      agents: { child: { description: "c", prompt: "c", tools: ["Bash", "mcp__github__issues"] } },
+    },
+    {
+      inheritedRunAuthority: {
+        schemaVersion: 1,
+        tools: { allow: ["Bash(git add:*)", "mcp__github"] },
+      },
+    }
+  )
+  assert.ok(Array.isArray(options.tools) && options.tools.includes("Bash"))
+  assert.deepEqual(options.agents!.child!.tools, ["Bash", "mcp__github__issues"])
+})
+
+test("the mandatory tool hook honours permission patterns and MCP namespace caps", async () => {
+  const { options, session } = captureClaudeRuntime(
+    {
+      toolSurface: "full",
+      inheritedRunAuthority: {
+        schemaVersion: 1,
+        tools: { allow: ["Bash(git add:*)", "mcp__github"] },
+      },
+    },
+    () => ({ async *[Symbol.asyncIterator]() {}, interrupt() {}, close() {} })
+  )
+  const hook = options.hooks?.PreToolUse?.[0]?.hooks[0]
+  assert.ok(hook)
+  try {
+    for (const name of ["Bash", "mcp__github__list", "Write"]) {
+      const controller = new AbortController()
+      const result: unknown = await hook(
+        {
+          hook_event_name: "PreToolUse",
+          session_id: "test-session",
+          transcript_path: "",
+          cwd: ".",
+          tool_name: name,
+          tool_input: {},
+          tool_use_id: name,
+        },
+        name,
+        { signal: controller.signal }
+      )
+      const decision: string | undefined = (
+        result as { hookSpecificOutput?: { permissionDecision?: string } }
+      ).hookSpecificOutput?.permissionDecision
+      assert.equal(decision === "deny", name === "Write")
+      controller.abort()
+    }
+  } finally {
+    session.closeInput()
+  }
+})
+
+test("argument-pattern denies retain Bash and uncapped native agents are unchanged", () => {
+  const definition = { description: "shell", prompt: "shell", tools: ["Bash", "Read"] }
+  const untouched = { agents: { shell: definition } }
+  assert.equal(
+    enforceNativeRunAuthority(untouched, {
+      runAuthority: { schemaVersion: 1, caps: "explicit-v1" },
+    }),
+    untouched
+  )
+  assert.equal(untouched.agents.shell, definition)
+  const bounded = enforceNativeRunAuthority(
+    { agents: { shell: definition } },
+    { inheritedRunAuthority: { schemaVersion: 1, tools: { deny: ["Bash(rm:*)"] } } }
+  )
+  assert.deepEqual(bounded.agents!.shell!.tools, ["Bash", "Read"])
+  assert.deepEqual(bounded.disallowedTools, ["Bash(rm:*)"])
+})
+
+test("inherited skill caps withhold untrusted native content before SDK validation", () => {
+  const { options } = captureClaudeRuntime(
+    {
+      cwd: "/untrusted",
+      inheritedRunAuthority: { schemaVersion: 1, skills: { only: ["keep"] } },
+      claudeAgentSdk: {
+        version: 1,
+        skills: "all",
+      },
+    },
+    () => ({ async *[Symbol.asyncIterator]() {}, interrupt() {}, close() {} })
+  )
+  assert.deepEqual(options.skills, [])
+  assert.deepEqual(options.plugins ?? [], [])
 })

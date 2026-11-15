@@ -37,10 +37,51 @@ const options = (o: Partial<SendOptions> = {}): SendOptions =>
   }) as SendOptions
 
 describe("visibleBuiltinTools", () => {
+  it("withholds every broker tool for an explicit empty inherited allow-list", () => {
+    const sealed = options({
+      allowedTools: [],
+      inheritedRunAuthority: { schemaVersion: 1, caps: "explicit-v1", tools: { allow: [] } },
+      pluginTools: [{ name: "ask_user" }],
+    } as never)
+    expect(visibleBuiltinTools(sealed)).toEqual([])
+    expect(visibleHostTools(sealed)).toEqual([])
+  })
   it("withholds native and relay tools for a sealed empty surface", () => {
     const sealed = options({ toolSurface: "none", pluginTools: [{ name: "ask_user" }] } as never)
     expect(visibleBuiltinTools(sealed)).toEqual([])
     expect(visibleHostTools(sealed)).toEqual([])
+  })
+  it("withholds projected tools matched by an inherited namespace deny", () => {
+    expect(
+      visibleBuiltinTools(
+        options({
+          inheritedRunAuthority: { schemaVersion: 1, tools: { deny: ["mcp__cognia-tools__*"] } },
+        })
+      )
+    ).toEqual([])
+    expect(
+      visibleHostTools(
+        options({
+          pluginTools: [{ name: "ask_user" }],
+          inheritedRunAuthority: {
+            schemaVersion: 1,
+            tools: { deny: ["mcp__cognia-plugin-tools__*"] },
+          },
+        } as never)
+      )
+    ).toEqual([])
+  })
+  it("preserves the session's own empty allowlist and exact deny matching", () => {
+    const own = options({
+      allowedTools: [],
+      disallowedTools: ["mcp__cognia-tools__*"],
+      pluginTools: [{ name: "ask_user" }],
+    } as never)
+    expect(visibleBuiltinTools(own)).toContain("git_status")
+    expect(visibleHostTools(own)).toEqual(["ask_user"])
+    expect(visibleHostTools({ ...own, disallowedTools: ["mcp__cognia-plugin-tools__*"] })).toEqual([
+      "ask_user",
+    ])
   })
   it("exposes only the enabled categories", () => {
     const gitOnly = visibleBuiltinTools(options({ builtinTools: { git: true } } as never))

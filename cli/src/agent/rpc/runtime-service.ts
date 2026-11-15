@@ -2186,15 +2186,27 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
       session.workspaceCaptureLease = undefined
       try {
         assertAdmission(session)
+        // Dormant receiver seam: no production sender emits turnOptions today.
+        // Existing remote limits still arrive through execution.policy (M2).
         const turnParams: UnifiedTurnParams = {
           config: session.config,
           prompt,
-          ...(session.workerHandoff?.execution.policy
+          ...(session.workerHandoff?.execution.policy ||
+          session.workerHandoff?.execution.turnOptions
             ? {
                 resolveOptions: (ctx: import("@/lib/claude/build-options").BuildOptionsContext) =>
                   resolveRemoteWorkerOptions(
-                    ctx,
-                    session.workerHandoff!.execution.policy!,
+                    {
+                      ...ctx,
+                      permissionCeiling: deriveExternalSessionPermission(
+                        session.workerHandoff?.execution.turnOptions ?? {},
+                        ctx.permissionCeiling
+                      ),
+                    },
+                    session.workerHandoff!.execution.policy ?? {
+                      policyVersion: 1,
+                      sandboxRequired: false,
+                    },
                     session.config.cwd
                   ),
               }

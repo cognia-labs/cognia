@@ -37,7 +37,7 @@ import type { RouterFusionSettings } from "@cognia/router-fusion/settings/settin
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 
 import { liveSettingsReader } from "../calls/live-settings"
-import { accountDatabaseAppliers } from "../db/outbox-appliers"
+import { accountDatabaseAppliers, ensureChatFusionExecutionRun } from "../db/outbox-appliers"
 import { encodeRunInput } from "../db/run-input"
 import { fusionRunSummaryOf } from "../db/run-summary"
 import { answerMessage, type TranscriptMessage } from "../db/session-transcript"
@@ -75,6 +75,8 @@ export function chatAutoConsidersFusion(
 }
 
 export interface ChatFusionSelectionInput {
+  /** Captured by the Host from the project thread, never from a model request. */
+  parentExecutionRunId?: string
   /** Stable identity supplied by durable automatic delivery; ordinary turns mint one. */
   runId?: string
   requested: ChatFusionRequest
@@ -95,6 +97,7 @@ export type ChatFusionSelection =
   | { kind: "refused"; code: string; reasons: string[]; decision: RouteDecision | null }
 
 interface PreparedFusionRun {
+  parentExecutionRunId?: string
   stamp: RouterFusionRunStamp
   route: Extract<RunRoute, { kind: "selected" }>
   sessionId: string
@@ -185,7 +188,13 @@ export async function selectChatFusionRun(
     capMicrousd: route.capMicrousd,
     acceptanceProfile: route.acceptanceProfile,
   }
-  remember({ stamp, route, sessionId: input.sessionId, budgetMode: host.settings.budgetMode })
+  remember({
+    stamp,
+    route,
+    sessionId: input.sessionId,
+    budgetMode: host.settings.budgetMode,
+    parentExecutionRunId: input.parentExecutionRunId,
+  })
   return { kind: "fusion", stamp }
 }
 
@@ -253,6 +262,7 @@ export async function startChatFusionTurn(
   )
   const created = await store.createRun({
     runId,
+    parentExecutionRunId: route.parentExecutionRunId,
     inputArtifactId: inputArtifact.artifactId,
     sessionId: input.sessionId,
     surface: "chat",
@@ -289,6 +299,20 @@ export async function startChatFusionTurn(
     }
   }
   input.onAccepted?.()
+  // The authority row must exist before any delegate can launch an agent child.
+  await ensureChatFusionExecutionRun({
+    runId,
+    phase: "queued",
+    origin: "local",
+    sessionId: input.sessionId,
+    parentExecutionRunId: route.parentExecutionRunId,
+    title: null,
+    actorKeyId: null,
+    actorKeyName: null,
+    mode: input.stamp.mode,
+    actionId: input.stamp.actionId,
+    createdAt: Date.now(),
+  })
   await store.db.fusionArtifacts.update(inputArtifact.artifactId, { runId })
 
   active.set(input.sessionId, runId)

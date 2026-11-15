@@ -20,6 +20,7 @@ import { redactText } from "@cognia/redact"
 import { touchNotificationProjectionInTransaction } from "./notification-projection-work"
 import { cachedNotificationScopeKey } from "@/lib/notifications/scope"
 import { recordedRunMetadata } from "@/lib/execution/acting-authority"
+import { inheritableRunAuthority } from "@/types/execution/run"
 
 export type AppendRunEventInput = Omit<RunEvent, "id" | "runId" | "seq" | "projectId"> & {
   id?: string
@@ -64,14 +65,23 @@ function withExecutionDatabaseRetry<T>(
 
 export async function createExecutionRun(run: ExecutionRun): Promise<ExecutionRun> {
   return withExecutionDatabaseRetry(async (db) => {
-    let recorded = run
-    if (run.parentRunId && run.actingIdentity) {
-      const parent = await db.executionRuns.get(run.parentRunId).catch(() => undefined)
-      if (parent)
-        recorded = {
-          ...run,
-          ...recordedRunMetadata("child", { runId: run.id, parent, authority: run.authority }),
-        }
+    let recorded = run.authority
+      ? { ...run, authority: { ...run.authority, caps: "explicit-v1" as const } }
+      : run
+    if (run.parentRunId) {
+      const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
+      const inherited = await resolveRunAuthority({
+        parentRunId: run.parentRunId,
+        requested: run.authority,
+        actingIdentity: run.actingIdentity,
+      })
+      const parent = await db.executionRuns.get(run.parentRunId)
+      recorded = {
+        ...run,
+        ...recordedRunMetadata("child", { runId: run.id, parent, authority: run.authority }),
+        ...(inherited.authority ? { authority: inherited.authority } : {}),
+        ...(inherited.actingIdentity ? { actingIdentity: inherited.actingIdentity } : {}),
+      }
     }
     await db.executionRuns.add(recorded)
     return recorded
@@ -425,20 +435,53 @@ export async function listChildExecutionRuns(
  */
 export async function adoptExecutionRun(runId: string, parentRunId: string): Promise<boolean> {
   if (runId === parentRunId) return false
+  const { resolveRunAuthority, RunAuthorityError } = await import("@/lib/execution/run-authority")
+  const { canonicalJson } = await import("@cognia/agent")
   return withExecutionDatabaseRetry((db) =>
-    db.transaction("rw", db.executionRuns, async () => {
+    db.transaction("rw", db.executionRuns, db.executionRunEvents, async () => {
       const run = await db.executionRuns.get(runId)
       if (!run || run.parentRunId === parentRunId) return false
-      const parent = await db.executionRuns.get(parentRunId).catch(() => undefined)
+      const resolved = await resolveRunAuthority({
+        parentRunId,
+        forbiddenAncestorRunId: runId,
+        requested: inheritableRunAuthority(run.authority),
+        actingIdentity: run.actingIdentity,
+      })
+      // A running engine cannot retroactively acquire a stricter policy by
+      // changing its journal row. Its owner must stop/relaunch it first.
+      if (
+        run.status === "running" &&
+        canonicalJson({ schemaVersion: 1, ...resolved.authority, caps: undefined }) !==
+          canonicalJson({
+            schemaVersion: 1,
+            ...inheritableRunAuthority(run.authority),
+            caps: undefined,
+          })
+      )
+        throw new RunAuthorityError("unsupported_authority", "running adoption requires relaunch")
+      const parent = await db.executionRuns.get(parentRunId)
       const inherited = parent
-        ? recordedRunMetadata("child", { runId: run.id, parent, authority: run.authority })
+        ? recordedRunMetadata("child", {
+            runId: run.id,
+            parent,
+            authority: inheritableRunAuthority(run.authority),
+          })
         : undefined
+      if (run.authority && run.authority.caps !== "explicit-v1")
+        await appendRunObservation(
+          run.id,
+          {
+            operation: "legacy_authority_observed",
+            inheritedFields: run.authority.pools ? ["pools"] : [],
+          },
+          { throttleMs: Number.MAX_SAFE_INTEGER }
+        )
       await db.executionRuns.update(runId, {
         parentRunId,
         // Adoption happens after creation: never replace an established fixed
         // identity or discard requesters/revisions already absorbed by this run.
         ...(!run.actingIdentity && parent?.actingIdentity ? inherited : {}),
-        ...(parent?.authority ? { authority: inherited?.authority } : {}),
+        ...(resolved.authority ? { authority: resolved.authority } : {}),
       })
       return true
     })

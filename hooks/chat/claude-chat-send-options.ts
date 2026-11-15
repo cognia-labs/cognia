@@ -51,6 +51,7 @@ import type { RuntimeSessionStatus } from "@cognia/agent-config-types"
 import { renderBranchSeed } from "@/lib/chat/branch-session"
 import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/session-models"
 import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
 import {
   LOCAL_PERSON_RUN,
   recordAbsorbedRequester,
@@ -487,6 +488,8 @@ export async function buildSendOptions(
   dispatch?: {
     /** Accepted Host run; never inferred from the session or client labels. */
     executionRunId?: string
+    /** Route first; the controller admits a row only for a local turn. */
+    deferExecutionRun?: boolean
     localAuthorization?: import("@/lib/execution/acting-authority").LocalPersonRun
     routerFusionSurface?: "chat"
     /**
@@ -763,18 +766,36 @@ export async function buildSendOptions(
       ? referencedMemoryPath.slice(primaryRoot.length).replace(/^\/+/, "") || undefined
       : undefined
 
+  const turnRunId = turnIdentity?.runId || dispatch?.executionRunId || undefined
+  let credentialContext: PersonalCredentialContext = turnRunId
+    ? { ...(session ? { sessionId: session.id } : {}), executionRunId: turnRunId }
+    : dispatch?.localAuthorization
+      ? { localAuthorization: dispatch.localAuthorization }
+      : session
+        ? { sessionId: session.id, executionRunId: "" }
+        : {}
+  if (turnRunId && dispatch?.localAuthorization === LOCAL_PERSON_RUN) {
+    if (session?.projectThread?.parentExecutionRunId) {
+      // Typed threads retain direct-person credentials while their authority
+      // and reader identity remain those of the admitted child row.
+      credentialContext = { localAuthorization: dispatch.localAuthorization }
+    } else {
+      try {
+        const { getExecutionRun } = await import("@/lib/db/execution-runs")
+        if (!(await getExecutionRun(turnRunId))) {
+          credentialContext = { localAuthorization: dispatch.localAuthorization }
+        }
+      } catch {
+        // A failed read cannot prove that the row has not been admitted already.
+      }
+    }
+  }
   return resolveSendOptions({
     // Only a turn typed in this chat pane can answer a built-in skill's
     // approval dialog; see `dispatch.interactive`.
     interactiveChat: dispatch?.interactive === true,
     personalCredentialContext: {
-      ...(dispatch?.executionRunId !== undefined && session
-        ? { sessionId: session.id, executionRunId: dispatch.executionRunId }
-        : dispatch?.localAuthorization
-          ? { localAuthorization: dispatch.localAuthorization }
-          : session
-            ? { sessionId: session.id, executionRunId: turnIdentity?.runId ?? "" }
-            : {}),
+      ...credentialContext,
       externalEngine: Boolean(externalRuntimeId),
     },
     postCompaction,
@@ -848,14 +869,25 @@ export async function buildSendOptions(
     traceSurface: "chat",
     turnId: turnIdentity?.turnId,
     backgroundDeliveryId: turnIdentity?.backgroundDeliveryId,
-    executionIdentity: turnIdentity
+    ...(dispatch?.deferExecutionRun
       ? {
-          sessionId: session?.id ?? "",
-          runId: turnIdentity.runId,
-          turnId: turnIdentity.turnId,
-          attemptId: turnIdentity.attemptId,
+          deferredExecutionRun: {
+            ...(session?.projectThread?.parentExecutionRunId
+              ? { parentRunId: session.projectThread.parentExecutionRunId }
+              : {}),
+          },
         }
-      : undefined,
+      : {}),
+    executionIdentity:
+      turnRunId !== undefined
+        ? {
+            sessionId: session?.id ?? "",
+            runId: turnRunId,
+            ...(turnIdentity
+              ? { turnId: turnIdentity.turnId, attemptId: turnIdentity.attemptId }
+              : {}),
+          }
+        : undefined,
     onResolvedExecutionSpec,
     // The lane this turn will actually take, so the frozen execution spec and
     // the agent trace stop naming a sidecar runtime for a turn dispatched to an
