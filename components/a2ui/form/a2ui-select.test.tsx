@@ -19,7 +19,6 @@ const mockDataCtx = {
     Array.isArray(value) ? value : d,
 }
 jest.mock("../a2ui-context", () => ({
-  useA2UIContext: () => ({ ...mockDataCtx }),
   useA2UIData: () => mockDataCtx,
   useA2UIActions: () => ({
     surfaceId: "test-surface",

@@ -7,10 +7,8 @@
  * in cognia-next means mapping that `event_key` to an action — a prompt or a
  * slash-command line — that the assistant turn should run.
  *
- * Schema-wise this is now a wrapper around the cross-adapter
- * `IMQuickCommand` type (`triggerKey` replaces the legacy `eventKey`). Old
- * persisted rows that still carry `eventKey` are upgraded at read time by
- * `normalizeQuickCommandList`, so no Dexie migration is required.
+ * The command rows are the cross-adapter `IMQuickCommand` type; Feishu's
+ * `event_key` is the row's `triggerKey`.
  */
 
 import {
@@ -19,12 +17,6 @@ import {
 } from "@/lib/connectors/quick-commands"
 
 export type LarkQuickCommandActionType = "prompt" | "slash"
-
-/**
- * @deprecated Use `IMQuickCommand` directly. Kept as a structural alias
- * for v53-era callers that still type their settings shapes locally.
- */
-export type LarkQuickCommand = IMQuickCommand
 
 /**
  * First-match lookup of the Feishu `event_key` against the configured

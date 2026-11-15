@@ -5,7 +5,7 @@
 import { createTwinJob } from "@/lib/db/twin-jobs"
 import type { TwinJob } from "@/types/twin"
 
-export type { LlmClient, LlmClientCallOptions, AnthropicLlmConfig } from "./llm"
+export type { LlmClient, LlmClientCallOptions } from "./llm"
 export { createAnthropicLlmClient, extractJson } from "./llm"
 
 export type { OrchestratorInput, OrchestratorOutput } from "./orchestrator"

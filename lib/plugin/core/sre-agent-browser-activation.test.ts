@@ -59,7 +59,8 @@ jest.mock("@/lib/native/utils", () => {
   const actual = jest.requireActual("@/lib/native/utils")
   return { ...actual, canUseTauriInvoke: jest.fn(() => false), isTauri: jest.fn(() => false) }
 })
-jest.mock("@/lib/chat/slash-command-registry", () => ({
+jest.mock("@/lib/slash-commands/registry", () => ({
+  ...jest.requireActual("@/lib/slash-commands/registry"),
   getSlashCommand: jest.fn(),
   registerSlashCommand: jest.fn(),
   unregisterSlashCommand: jest.fn(),

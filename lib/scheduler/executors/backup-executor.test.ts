@@ -495,8 +495,5 @@ describe("destination helpers", () => {
     expect(__TESTING__.wantsLocal("local")).toBe(true)
     expect(__TESTING__.wantsLocal("all")).toBe(true)
     expect(__TESTING__.wantsLocal("webdav")).toBe(false)
-    expect(__TESTING__.wantsWebdav("webdav")).toBe(true)
-    expect(__TESTING__.wantsWebdav("all")).toBe(true)
-    expect(__TESTING__.wantsWebdav("local")).toBe(false)
   })
 })

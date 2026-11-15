@@ -293,7 +293,7 @@ import {
 
 | 前缀 | 触发           | Popover 内容       | 接入                                 |
 | ---- | -------------- | ------------------ | ------------------------------------ |
-| `/`  | 在行首或空格后 | slash 命令列表     | `lib/chat/slash-command-registry.ts` |
+| `/`  | 在行首或空格后 | slash 命令列表     | `lib/slash-commands/registry.ts` |
 | `@`  | 任意位置       | 角色 / 团队成员    | `useCharacter()` data hook           |
 | `!`  | 在行首         | 技能（skills）列表 | `useSkills()`                        |
 | `#`  | 任意位置       | 知识引用 / 文档    | `lib/search/`                        |
@@ -385,7 +385,7 @@ composer 外层声明了 `@container/composer`。低于 `@sm` 时文本域独占
 | 新消息 part 类型        | `lib/claude/parts-extensions.ts` 定义 + `components/chat/message-parts/<x>-part.tsx` |
 | 加 Composer 工具按钮    | `components/chat/composer.tsx` 的水平 toolbar 区                                     |
 | 加 BottomToolbar 元数据 | `components/chat/composer/bottom-toolbar.tsx`                                        |
-| 新 slash 命令           | `lib/chat/slash-command-registry.ts` 加注册                                          |
+| 新 slash 命令           | `lib/slash-commands/registry.ts` 加注册                                          |
 | 改 Markdown 渲染行为    | `components/chat/markdown-renderer.tsx` + Streamdown 插件配置                        |
 | 改 ChatHeader 项        | `components/chat/chat-header.tsx`                                                    |
 | 改桌面命令面板入口      | `components/desktop/command-palette.tsx`                                             |

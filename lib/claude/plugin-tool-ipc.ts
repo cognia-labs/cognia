@@ -192,21 +192,7 @@ export function __setSkillToolDepsForTesting(
 
 async function resolveSkillToolDeps(): Promise<SkillToolRunDeps> {
   if (skillToolDepsOverride) return skillToolDepsOverride()
-  return {
-    loadCustomSkill: async (key: string) => {
-      try {
-        const { getSkill, listSkills } = await import("@/lib/db/skills")
-        const byId = await getSkill(key)
-        if (byId) return { id: byId.id, name: byId.name, content: byId.content }
-        const all = await listSkills()
-        const hit = all.find((s) => s.id === key || s.name === key)
-        return hit ? { id: hit.id, name: hit.name, content: hit.content } : undefined
-      } catch {
-        // No Dexie (CLI host) — built-in catalog resolution already tried.
-        return undefined
-      }
-    },
-  }
+  return {}
 }
 
 export async function resolveWebToolDeps(): Promise<WebToolRunDeps> {

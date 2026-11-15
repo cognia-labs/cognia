@@ -30,7 +30,8 @@ import type {
   ConnectorCallbackActionType,
   ConnectorCallbackEvent,
 } from "@/types/connectors/interaction"
-import { resolveQuickCommand, type LarkQuickCommand } from "./quick-commands"
+import { resolveQuickCommand } from "./quick-commands"
+import type { IMQuickCommand } from "@/lib/connectors/quick-commands"
 
 // ---------------------------------------------------------------------------
 // Lark event envelope types
@@ -836,7 +837,7 @@ export type LarkBotMenuOutcome =
     }
   | {
       kind: "link"
-      command: LarkQuickCommand
+      command: IMQuickCommand
       builtIn: boolean
       openId: string
       eventKey: string
@@ -868,7 +869,7 @@ export function parseLarkBotMenuEvent(
   adapterId: string,
   selfBotOpenId: string,
   envelope: LarkEventEnvelope,
-  quickCommands: LarkQuickCommand[] | undefined,
+  quickCommands: IMQuickCommand[] | undefined,
   options: { replyInThread?: boolean } = {}
 ): LarkBotMenuOutcome | null {
   if (envelope.header?.event_type !== "application.bot.menu_v6") return null

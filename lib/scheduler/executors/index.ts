@@ -153,13 +153,6 @@ const log = loggers.scheduler
 // Public payload aliases
 // =============================================================================
 
-/**
- * @deprecated Re-exported for back-compat with callers that imported
- * `ChatTaskPayload` from this module. Prefer importing `ChatLikeTaskPayload`
- * (or the type-narrow variants `AgentTaskPayload` / `SkillTaskPayload`) from
- * `@/types/scheduler`.
- */
-export type ChatTaskPayload = ChatLikeTaskPayload
 export type { AgentTaskPayload, SkillTaskPayload, ExternalAgentTaskPayload }
 
 // =============================================================================

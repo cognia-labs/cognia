@@ -6,7 +6,6 @@ import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
 
 const setBuiltinToolEnabled = jest.fn()
 const setWebToolsEnabled = jest.fn()
-const setWebToolsNativeOnAnthropic = jest.fn()
 const setWebToolsPreferCognia = jest.fn()
 const setWebToolsPreferCogniaSearch = jest.fn()
 const setWebToolsPreferCogniaFetch = jest.fn()
@@ -58,7 +57,6 @@ const settingsState = {
   },
   setBuiltinToolEnabled,
   setWebToolsEnabled,
-  setWebToolsNativeOnAnthropic,
   setWebToolsPreferCognia,
   setWebToolsPreferCogniaSearch,
   setWebToolsPreferCogniaFetch,
@@ -83,7 +81,6 @@ describe("ToolSettingsSection", () => {
   beforeEach(() => {
     setBuiltinToolEnabled.mockClear()
     setWebToolsEnabled.mockClear()
-    setWebToolsNativeOnAnthropic.mockClear()
     setWebToolsPreferCognia.mockClear()
     setWebToolsPreferCogniaSearch.mockClear()
     setWebToolsPreferCogniaFetch.mockClear()
@@ -216,7 +213,6 @@ describe("ToolSettingsSection", () => {
     fireEvent.click(screen.getByLabelText("toggleAriaLabel:webPreferCogniaFetchTitle"))
     expect(setWebToolsPreferCogniaFetch).toHaveBeenCalledWith(true)
     expect(setWebToolsPreferCognia).not.toHaveBeenCalled()
-    expect(setWebToolsNativeOnAnthropic).not.toHaveBeenCalled()
   })
 
   it("shows inherited legacy preference for both operations", () => {

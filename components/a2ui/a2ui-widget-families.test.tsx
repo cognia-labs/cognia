@@ -21,7 +21,6 @@ jest.mock("./a2ui-context", () => ({
     resolveBoolean: (v: boolean | { path: string }) => (typeof v === "boolean" ? v : false),
     resolveArray: <T,>(v: T[] | { path: string }, d: T[] = []) => (Array.isArray(v) ? v : d),
   }),
-  useA2UIContext: () => ({ dataModel: tableDataModel }),
   useA2UIActions: () => ({}),
 }))
 

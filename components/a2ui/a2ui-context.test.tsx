@@ -6,12 +6,18 @@ import React from "react"
 import { render, screen } from "@testing-library/react"
 import {
   A2UIProvider,
-  useA2UIContext,
+  useA2UIActions,
+  useA2UIData,
   useA2UIComponent,
   useA2UIBinding,
   useA2UIVisibility,
   useA2UIDisabled,
 } from "./a2ui-context"
+
+// Both halves of the provider's value, as one object for the assertions below.
+function useA2UIBoth() {
+  return { ...useA2UIActions(), ...useA2UIData() }
+}
 
 // Mock the store
 const mockEmitAction = jest.fn()
@@ -144,7 +150,7 @@ describe("A2UIProvider", () => {
 
   it("should provide context to children", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       return <div data-testid="surfaceId">{context.surfaceId}</div>
     }
 
@@ -159,7 +165,7 @@ describe("A2UIProvider", () => {
 
   it("should provide surface state", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       return (
         <div>
           <div data-testid="surface-type">{context.surface?.type}</div>
@@ -180,7 +186,7 @@ describe("A2UIProvider", () => {
 
   it("should provide dataModel", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       return <div data-testid="data">{JSON.stringify(context.dataModel)}</div>
     }
 
@@ -196,7 +202,7 @@ describe("A2UIProvider", () => {
 
   it("should call emitAction with correct parameters", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       return (
         <button
           data-testid="action-btn"
@@ -220,7 +226,7 @@ describe("A2UIProvider", () => {
 
   it("should call setDataValue with correct parameters", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       return (
         <button data-testid="set-btn" onClick={() => context.setDataValue("/user/name", "Jane")}>
           Set
@@ -241,7 +247,7 @@ describe("A2UIProvider", () => {
 
   it("should not emit actions when readOnly", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       return (
         <button
           data-testid="action-btn"
@@ -265,7 +271,7 @@ describe("A2UIProvider", () => {
 
   it("should not mutate data when readOnly", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       return (
         <button data-testid="set-btn" onClick={() => context.setDataValue("/user/name", "Jane")}>
           Set
@@ -286,7 +292,7 @@ describe("A2UIProvider", () => {
 
   it("should resolve string values", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       const resolved = context.resolveString({ path: "/user/name" }, "default")
       return <div data-testid="resolved">{resolved}</div>
     }
@@ -302,7 +308,7 @@ describe("A2UIProvider", () => {
 
   it("should get component by id", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       const component = context.getComponent("child1")
       return <div data-testid="component-type">{component?.component}</div>
     }
@@ -318,7 +324,7 @@ describe("A2UIProvider", () => {
 
   it("should render child component", () => {
     const TestChild = () => {
-      const context = useA2UIContext()
+      const context = useA2UIBoth()
       return <div data-testid="child-container">{context.renderChild("child1")}</div>
     }
 
@@ -332,17 +338,17 @@ describe("A2UIProvider", () => {
   })
 })
 
-describe("useA2UIContext", () => {
+describe("useA2UIData outside a provider", () => {
   it("should throw error when used outside provider", () => {
     const consoleError = jest.spyOn(console, "error").mockImplementation(() => {})
 
     const TestComponent = () => {
-      useA2UIContext()
+      useA2UIData()
       return null
     }
 
     expect(() => render(<TestComponent />)).toThrow(
-      "useA2UIContext must be used within an A2UIProvider"
+      "useA2UIData must be used within an A2UIProvider"
     )
 
     consoleError.mockRestore()

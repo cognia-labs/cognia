@@ -21,7 +21,6 @@ jest.mock("@/lib/wiki/rebuild-runner", () => {
   return {
     runWikiRebuild: (...args: unknown[]) => mockRunWikiRebuild(...args),
     HostFilesystemError,
-    WebModeError: HostFilesystemError,
     NoApiKeyError,
   }
 })

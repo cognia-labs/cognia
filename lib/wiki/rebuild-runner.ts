@@ -35,9 +35,6 @@ export class HostFilesystemError extends Error {
   }
 }
 
-/** @deprecated Renamed to {@link HostFilesystemError}; kept for existing callers. */
-export const WebModeError = HostFilesystemError
-
 /** Thrown when no LLM API key is configured. */
 export class NoApiKeyError extends Error {
   constructor() {

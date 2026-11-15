@@ -31,7 +31,6 @@ const mockDataCtx = {
   resolveArray: jest.fn((value: unknown, d: unknown[] = []) => (Array.isArray(value) ? value : d)),
 }
 jest.mock("../a2ui-context", () => ({
-  useA2UIContext: jest.fn(() => ({ ...mockDataCtx, getBindingPath: jest.fn(() => null) })),
   useA2UIData: jest.fn(() => mockDataCtx),
   useA2UIActions: jest.fn(() => ({
     surfaceId: "test-surface",
@@ -99,13 +98,6 @@ describe("A2UIDialog", () => {
     })
 
     it("should render dialog when open is true", () => {
-      const mockUseA2UIContext = jest.requireMock("../a2ui-context").useA2UIContext
-      mockUseA2UIContext.mockReturnValue({
-        resolveString: jest.fn((value) => (typeof value === "string" ? value : "")),
-        resolveBoolean: jest.fn(() => true),
-        getBindingPath: jest.fn(() => null),
-      })
-
       render(
         <A2UIDialog
           {...defaultProps}
@@ -118,13 +110,6 @@ describe("A2UIDialog", () => {
     })
 
     it("should render title when provided", () => {
-      const mockUseA2UIContext = jest.requireMock("../a2ui-context").useA2UIContext
-      mockUseA2UIContext.mockReturnValue({
-        resolveString: jest.fn((value) => value),
-        resolveBoolean: jest.fn(() => true),
-        getBindingPath: jest.fn(() => null),
-      })
-
       render(
         <A2UIDialog
           {...defaultProps}
@@ -137,13 +122,6 @@ describe("A2UIDialog", () => {
     })
 
     it("should render description when provided", () => {
-      const mockUseA2UIContext = jest.requireMock("../a2ui-context").useA2UIContext
-      mockUseA2UIContext.mockReturnValue({
-        resolveString: jest.fn((value) => value),
-        resolveBoolean: jest.fn(() => true),
-        getBindingPath: jest.fn(() => null),
-      })
-
       render(
         <A2UIDialog
           {...defaultProps}
@@ -162,13 +140,6 @@ describe("A2UIDialog", () => {
 
   describe("children rendering", () => {
     it("should render children when provided", () => {
-      const mockUseA2UIContext = jest.requireMock("../a2ui-context").useA2UIContext
-      mockUseA2UIContext.mockReturnValue({
-        resolveString: jest.fn((value) => value),
-        resolveBoolean: jest.fn(() => true),
-        getBindingPath: jest.fn(() => null),
-      })
-
       render(
         <A2UIDialog
           {...defaultProps}
@@ -187,13 +158,6 @@ describe("A2UIDialog", () => {
 
   describe("actions rendering", () => {
     it("should render actions when provided", () => {
-      const mockUseA2UIContext = jest.requireMock("../a2ui-context").useA2UIContext
-      mockUseA2UIContext.mockReturnValue({
-        resolveString: jest.fn((value) => value),
-        resolveBoolean: jest.fn(() => true),
-        getBindingPath: jest.fn(() => null),
-      })
-
       render(
         <A2UIDialog
           {...defaultProps}
@@ -214,13 +178,6 @@ describe("A2UIDialog", () => {
   describe("focus trap integration", () => {
     it("should call focusFirst when dialog opens", async () => {
       jest.useFakeTimers()
-      const mockUseA2UIContext = jest.requireMock("../a2ui-context").useA2UIContext
-      mockUseA2UIContext.mockReturnValue({
-        resolveString: jest.fn((value) => value),
-        resolveBoolean: jest.fn(() => true),
-        getBindingPath: jest.fn(() => null),
-      })
-
       render(
         <A2UIDialog
           {...defaultProps}

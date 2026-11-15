@@ -24,7 +24,7 @@ import {
 import type { ModelPricing } from "@cognia/provider-types/provider"
 import {
   DEFAULT_CACHE_READ_MULT,
-  DEFAULT_CACHE_WRITE_MULT,
+  DEFAULT_CACHE_WRITE_5M_MULT,
   costFromTokensUsd,
   resolveModelPricingUsd,
 } from "@/lib/usage/pricing"
@@ -58,7 +58,7 @@ export type PricingResolver = (
  * cache rate; the SDK figure (when present) already bakes real rates in.
  */
 export const CACHE_READ_MULT = DEFAULT_CACHE_READ_MULT
-export const CACHE_WRITE_MULT = DEFAULT_CACHE_WRITE_MULT
+export const CACHE_WRITE_MULT = DEFAULT_CACHE_WRITE_5M_MULT
 
 const DAY_MS = 86_400_000
 

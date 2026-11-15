@@ -274,19 +274,6 @@ export function formatDuration(ms: number): string {
 }
 
 // ============================================================================
-// File Export Utilities
-// ============================================================================
-
-/**
- * Browser-side file download helper.
- *
- * @deprecated Import from `@/lib/files/download` instead. This re-export is
- * kept temporarily so existing call sites continue to compile during the
- * migration. New code should import the canonical location.
- */
-export { downloadFile } from "@/lib/files/download"
-
-// ============================================================================
 // Session Replay Utilities
 // ============================================================================
 

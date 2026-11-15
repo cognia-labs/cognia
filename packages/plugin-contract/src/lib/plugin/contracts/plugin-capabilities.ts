@@ -344,7 +344,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     support: "supported",
     manifestFields: ["commands"],
     runtimeBinding: "PluginRegistry commands + slash command registry",
-    hostBindings: ["lib/plugin/core/manager.ts", "lib/chat/slash-command-registry.ts"],
+    hostBindings: ["lib/plugin/core/manager.ts", "lib/slash-commands/registry.ts"],
     typescriptSdk: [
       "packages/plugin-sdk/src/manifest/index.ts",
       "packages/plugin-sdk/src/index.ts",

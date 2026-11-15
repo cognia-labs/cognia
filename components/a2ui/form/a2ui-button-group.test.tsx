@@ -4,14 +4,6 @@ import { A2UIButtonGroup, type A2UIButtonGroupComponent } from "./a2ui-button-gr
 import type { A2UIComponentProps } from "@/types/a2ui/schema"
 
 jest.mock("../a2ui-context", () => ({
-  useA2UIContext: () => ({
-    surfaceId: "test",
-    dataModel: {},
-    catalog: undefined,
-    emitAction: jest.fn(),
-    setDataValue: jest.fn(),
-    renderChild: jest.fn((id: string) => <span data-testid={id}>{id}</span>),
-  }),
   useA2UIData: () => ({
     resolveString: (v: unknown) => (typeof v === "string" ? v : ""),
     resolveNumber: (v: unknown) => (typeof v === "number" ? v : 0),

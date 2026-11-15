@@ -15,7 +15,7 @@ import {
   listTwinJobsByTwin,
   pauseJob,
   resumeJob,
-  retryFailedJob,
+  retryDeadLetterJob,
 } from "@/lib/db/twin-jobs"
 import { listTwinSourcesByTwinAndStatus } from "@/lib/db/twin-sources"
 import { enqueueIngestJob } from "@/lib/twin/ingest"
@@ -106,7 +106,7 @@ const JobRow = memo(function JobRow({ job }: { job: TwinJob }) {
     setRetrying(true)
     setRetryError(null)
     try {
-      await retryFailedJob(job.id)
+      await retryDeadLetterJob(job.id)
     } catch (err) {
       setRetryError(err instanceof Error ? err.message : String(err))
     } finally {

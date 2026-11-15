@@ -66,7 +66,7 @@ import { bootstrapFeishuRegistry } from "@/lib/connectors/adapters/lark/principa
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { getBus } from "@/lib/connectors/bus"
 import type { LarkEventEnvelope } from "./parse"
-import type { LarkQuickCommand } from "./quick-commands"
+import type { IMQuickCommand } from "@/lib/connectors/quick-commands"
 import { normalizeQuickCommandList } from "@/lib/connectors/quick-commands"
 import { gateInboundEvent } from "@/lib/connectors/at-gate"
 import {
@@ -123,7 +123,7 @@ export interface LarkAdapterOptions {
    * at the adapter-registry boundary via `normalizeQuickCommandList`; the
    * factory itself re-normalises as defense-in-depth.
    */
-  quickCommands?: LarkQuickCommand[]
+  quickCommands?: IMQuickCommand[]
   /**
    * When true and a user access token is connected (via the OAuth flow in
    * `oauth-handler.ts`), outbound `send()` acts on behalf of the authorised

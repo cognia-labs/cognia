@@ -264,12 +264,6 @@ export async function retryDeadLetterJob(id: string): Promise<void> {
   })
 }
 
-/**
- * @deprecated Use `retryDeadLetterJob` — same behaviour, the name
- * matches both the dead-letter and transient-failure retry paths.
- */
-export const retryFailedJob = retryDeadLetterJob
-
 export async function deleteTwinJob(id: string): Promise<void> {
   await getDb().twinJobs.delete(id)
 }

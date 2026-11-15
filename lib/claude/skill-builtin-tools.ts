@@ -129,10 +129,6 @@ export interface ResolvedSkill {
 }
 
 export interface SkillToolRunDeps {
-  /** @deprecated Legacy resolver retained for source compatibility; scoped loading ignores it. */
-  getCatalogSkill?: (id: string) => ResolvedSkill | undefined
-  /** @deprecated Legacy resolver retained for source compatibility; scoped loading ignores it. */
-  loadCustomSkill?: (idOrName: string) => Promise<ResolvedSkill | undefined>
   listSkillResources?: import("@/lib/skills/runtime-loader").RuntimeLoaderDeps["listResources"]
   recordSkillUsage?: import("@/lib/skills/runtime-loader").RuntimeLoaderDeps["recordUsage"]
 }

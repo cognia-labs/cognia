@@ -1,11 +1,7 @@
-import {
-  __setOpencodeReaderForTesting,
-  opencodeDataDirs,
-  readOpencodeSessions,
-} from "./opencode-db"
+import { setOpencodeReader, opencodeDataDirs, readOpencodeSessions } from "./opencode-db"
 
 describe("opencode-db reader", () => {
-  afterEach(() => __setOpencodeReaderForTesting(null))
+  afterEach(() => setOpencodeReader(null))
 
   it("returns [] off-desktop when no reader is injected", async () => {
     // jsdom / node test env is not Tauri, so the invoke path is never reached.
@@ -13,7 +9,7 @@ describe("opencode-db reader", () => {
   })
 
   it("delegates to an injected reader", async () => {
-    __setOpencodeReaderForTesting(async (home) => [
+    setOpencodeReader(async (home) => [
       { id: home, title: "t", createdAt: 0, updatedAt: 0, messages: [] },
     ])
     const out = await readOpencodeSessions("/x")

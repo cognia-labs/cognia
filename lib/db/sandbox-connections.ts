@@ -43,12 +43,6 @@ export type {
   SandboxProviderConfig,
 }
 
-/**
- * @deprecated Pre-Epic-5 alias — `SandboxProvider` was Docker-only. Use
- * {@link SandboxConnectionProvider}.
- */
-export type SandboxProvider = SandboxConnectionProvider
-
 /** Newest-first by `createdAt`, migrated on read. */
 export async function listSandboxConnections(): Promise<SandboxConnectionRow[]> {
   const rows = await getDb().sandboxConnections.toArray()

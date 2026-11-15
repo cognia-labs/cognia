@@ -1,7 +1,7 @@
-import { resolveQuickCommand, type LarkQuickCommand } from "./quick-commands"
-import { normalizeQuickCommandList } from "@/lib/connectors/quick-commands"
+import { resolveQuickCommand } from "./quick-commands"
+import type { IMQuickCommand } from "@/lib/connectors/quick-commands"
 
-const cmds: LarkQuickCommand[] = [
+const cmds: IMQuickCommand[] = [
   { triggerKey: "agenda", label: "今日日程", action: { type: "slash", value: "/agenda today" } },
   { triggerKey: "summary", action: { type: "prompt", value: "Summarize my unread." } },
 ]
@@ -19,15 +19,5 @@ describe("resolveQuickCommand", () => {
   it("returns undefined for empty/absent command lists", () => {
     expect(resolveQuickCommand(undefined, "agenda")).toBeUndefined()
     expect(resolveQuickCommand([], "agenda")).toBeUndefined()
-  })
-
-  it("matches legacy persisted rows once they are normalised", () => {
-    // Legacy Lark adapter rows pre-dated the cross-adapter rename. The
-    // createLarkAdapter factory normalises on read so the lookup path
-    // sees `triggerKey` regardless of which shape Dexie holds.
-    const legacy = normalizeQuickCommandList([
-      { eventKey: "agenda", action: { type: "slash", value: "/agenda today" } },
-    ])
-    expect(resolveQuickCommand(legacy, "agenda")?.action.value).toBe("/agenda today")
   })
 })

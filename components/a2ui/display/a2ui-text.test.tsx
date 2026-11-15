@@ -21,7 +21,6 @@ const mockDataContext = {
 }
 
 jest.mock("../a2ui-context", () => ({
-  useA2UIContext: () => ({ ...mockDataContext }),
   useA2UIData: () => mockDataContext,
   useA2UIActions: () => ({
     surfaceId: "test-surface",

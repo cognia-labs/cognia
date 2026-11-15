@@ -33,11 +33,6 @@ export interface A2UIDataContextValue {
 }
 
 /**
- * Combined context value (backward-compatible)
- */
-export interface A2UIContextValue extends A2UIActionsContextValue, A2UIDataContextValue {}
-
-/**
  * Props for A2UI Provider
  */
 export interface A2UIProviderProps {

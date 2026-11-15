@@ -13,7 +13,7 @@ const formGroup = (over: Partial<A2UIFormGroupComponent> = {}): A2UIFormGroupCom
 })
 
 // `A2UIFormGroup` renders children through `A2UIChildRenderer`, which calls
-// `useA2UIContext()` and needs an `A2UIProvider`. With no seeded surface the
+// `useA2UIActions()` / `useA2UIData()` and needs an `A2UIProvider`. With no seeded surface the
 // child ids resolve to nothing, so these stories exercise the group chrome
 // (legend / description / layout) — see the prompt's container guidance.
 const withA2UI: Decorator = (Story) => (

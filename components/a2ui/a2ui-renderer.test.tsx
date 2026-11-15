@@ -37,7 +37,6 @@ const mockContextValue = {
 }
 
 jest.mock("@/hooks/a2ui/use-a2ui-context", () => ({
-  useA2UIContext: jest.fn(() => mockContextValue),
   // The renderer now reads via the split hooks; both expose the same mock
   // fixture so existing assertions keep working.
   useA2UIActions: jest.fn(() => mockContextValue),

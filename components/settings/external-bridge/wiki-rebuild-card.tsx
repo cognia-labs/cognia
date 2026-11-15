@@ -41,7 +41,7 @@ import { getWikiManifest } from "@/lib/db/wiki-manifest"
 import { isTauri } from "@/lib/tauri"
 import {
   runWikiRebuild,
-  WebModeError,
+  HostFilesystemError,
   NoApiKeyError,
   type RunRebuildOptions,
 } from "@/lib/wiki/rebuild-runner"
@@ -135,7 +135,7 @@ export function WikiRebuildCard() {
       const summary = parts.length > 0 ? parts.join(", ") : t("summaryNoChanges")
       toast.success(t("toastRebuilt", { summary, duration: formatDuration(result.durationMs) }))
     } catch (err) {
-      if (err instanceof WebModeError) {
+      if (err instanceof HostFilesystemError) {
         toast.error(t("webModeWarning"))
       } else if (err instanceof NoApiKeyError) {
         toast.error(t("noApiKeyError"))

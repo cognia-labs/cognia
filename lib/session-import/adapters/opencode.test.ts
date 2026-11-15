@@ -1,5 +1,5 @@
 import { opencodeSessionSource, opencodeToConversation, parseOpencodeExport } from "./opencode"
-import { __setOpencodeReaderForTesting, type OpencodeSession } from "./opencode-db"
+import { setOpencodeReader, type OpencodeSession } from "./opencode-db"
 import type { SessionScanInput } from "../types"
 
 const SESSION: OpencodeSession = {
@@ -313,10 +313,10 @@ describe("opencodeSessionSource", () => {
     readTextFile: async () => "",
   }
 
-  afterEach(() => __setOpencodeReaderForTesting(null))
+  afterEach(() => setOpencodeReader(null))
 
   it("lists via the injected SQLite reader and parses one", async () => {
-    __setOpencodeReaderForTesting(async () => [SESSION])
+    setOpencodeReader(async () => [SESSION])
     const input: SessionScanInput = { fs, home: "/home/u" }
     const list = await opencodeSessionSource.listSessions(input)
     expect(list).toHaveLength(1)
@@ -398,7 +398,7 @@ describe("opencodeSessionSource", () => {
 
   it("reads the DB once per scan input (parse of N sessions is not N reads)", async () => {
     let reads = 0
-    __setOpencodeReaderForTesting(async () => {
+    setOpencodeReader(async () => {
       reads += 1
       return [SESSION, { ...SESSION, id: "oc-b" }]
     })
@@ -416,7 +416,7 @@ describe("opencodeSessionSource", () => {
     // names OpenCode's DB as the example — but the reader swallowed the error
     // and returned [], so a locked or corrupt database was indistinguishable
     // from "you have no OpenCode sessions".
-    __setOpencodeReaderForTesting(async () => {
+    setOpencodeReader(async () => {
       throw new Error("database is locked")
     })
     await expect(opencodeSessionSource.listSessions({ fs, home: "/home/u" })).rejects.toThrow(
@@ -426,7 +426,7 @@ describe("opencodeSessionSource", () => {
 
   it("a failed read is not cached, so the next scan retries", async () => {
     let attempt = 0
-    __setOpencodeReaderForTesting(async () => {
+    setOpencodeReader(async () => {
       attempt += 1
       if (attempt === 1) throw new Error("database is locked")
       return [SESSION]
@@ -446,7 +446,7 @@ describe("opencodeSessionSource", () => {
       parentId: "oc-1",
       messages: [{ role: "user", createdAt: 1, parts: [{ type: "text", text: "sub task" }] }],
     }
-    __setOpencodeReaderForTesting(async () => [SESSION, child])
+    setOpencodeReader(async () => [SESSION, child])
     const input: SessionScanInput = { fs, home: "/home/u" }
     const list = await opencodeSessionSource.listSessions(input)
     expect(list.map((s) => s.ref.originalSessionId)).toEqual(["oc-1"])
@@ -466,7 +466,7 @@ describe("opencodeSessionSource", () => {
       id: "oc-grandchild",
       parentId: "oc-child",
     }
-    __setOpencodeReaderForTesting(async () => [SESSION, child, grandchild])
+    setOpencodeReader(async () => [SESSION, child, grandchild])
     const input: SessionScanInput = { fs, home: "/home/u" }
 
     const list = await opencodeSessionSource.listSessions(input)
@@ -492,7 +492,7 @@ describe("opencodeSessionSource", () => {
       parentId: "oc-1",
       updatedAt: 200,
     }
-    __setOpencodeReaderForTesting(async () => [parent, child])
+    setOpencodeReader(async () => [parent, child])
 
     const list = await opencodeSessionSource.listSessions({ fs, home: "/home/u" })
 
@@ -502,7 +502,7 @@ describe("opencodeSessionSource", () => {
 
   it("changes the parent watch revision when child content changes", async () => {
     let childText = "first"
-    __setOpencodeReaderForTesting(async () => [
+    setOpencodeReader(async () => [
       SESSION,
       {
         ...SESSION,
@@ -527,7 +527,7 @@ describe("opencodeSessionSource", () => {
       id: "oc-orphan",
       parentId: "oc-gone",
     }
-    __setOpencodeReaderForTesting(async () => [orphan])
+    setOpencodeReader(async () => [orphan])
     const list = await opencodeSessionSource.listSessions({ fs, home: "/home/u" })
     expect(list.map((s) => s.ref.originalSessionId)).toEqual(["oc-orphan"])
   })
@@ -560,7 +560,7 @@ describe("opencodeSessionSource", () => {
   })
 
   it("preserves first-match conversations and last-match structured state for duplicate IDs", async () => {
-    __setOpencodeReaderForTesting(async () => [
+    setOpencodeReader(async () => [
       { ...SESSION, title: "first conversation", jobs: [{ id: "first-job", status: "pending" }] },
       { ...SESSION, title: "last conversation", jobs: [{ id: "last-job", status: "failed" }] },
     ])
@@ -578,7 +578,7 @@ describe("opencodeSessionSource", () => {
 
   it("preserves duplicate child order and skips cyclic descendants", async () => {
     const child = { ...SESSION, id: "child", parentId: SESSION.id }
-    __setOpencodeReaderForTesting(async () => [
+    setOpencodeReader(async () => [
       { ...SESSION, parentId: "child" },
       { ...child, title: "first child" },
       { ...child, title: "second child" },
@@ -597,7 +597,7 @@ describe("opencodeSessionSource", () => {
   })
 
   it("keeps children of an empty parent available when that parent is explicitly selected", async () => {
-    __setOpencodeReaderForTesting(async () => [
+    setOpencodeReader(async () => [
       { ...SESSION, messages: [] },
       { ...SESSION, id: "child", parentId: SESSION.id },
     ])
@@ -617,7 +617,7 @@ describe("opencodeSessionSource", () => {
       SESSION,
       ...(includeChild ? [{ ...SESSION, id: "child", parentId: SESSION.id }] : []),
     ])
-    __setOpencodeReaderForTesting(reader)
+    setOpencodeReader(reader)
     const input: SessionScanInput = { fs, home: "/home/u" }
     const ref = { sourceId: "opencode", originalSessionId: SESSION.id, locator: SESSION.id }
     expect((await opencodeSessionSource.parseGraph!(ref, input)).nodes).toHaveLength(2)
@@ -632,7 +632,7 @@ describe("opencodeSessionSource", () => {
       .fn()
       .mockRejectedValueOnce(new Error("database is locked"))
       .mockResolvedValue([SESSION])
-    __setOpencodeReaderForTesting(reader)
+    setOpencodeReader(reader)
     const input: SessionScanInput = { fs, home: "/home/u" }
     const ref = { sourceId: "opencode", originalSessionId: SESSION.id, locator: SESSION.id }
     await expect(opencodeSessionSource.parseGraph!(ref, input)).rejects.toThrow(
@@ -666,7 +666,7 @@ describe("opencodeSessionSource", () => {
         },
       ],
     }
-    __setOpencodeReaderForTesting(async () => [rich])
+    setOpencodeReader(async () => [rich])
     const input: SessionScanInput = { fs, home: "/home/u" }
     const graph = await opencodeSessionSource.parseGraph!(
       (await opencodeSessionSource.listSessions(input))[0].ref,

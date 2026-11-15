@@ -8,17 +8,12 @@
  *
  * Use useA2UIActions() when you only need stable actions (avoids data re-renders).
  * Use useA2UIData() when you only need data/resolvers.
- * Use useA2UIContext() for backward compatibility (merges both).
  */
 
 import { createContext, useContext, useCallback, useMemo } from "react"
 import type { A2UIComponent } from "@/types/a2ui/schema"
 import { getValueByPath } from "@cognia/a2ui-core/data-model"
-import type {
-  A2UIActionsContextValue,
-  A2UIDataContextValue,
-  A2UIContextValue,
-} from "@/types/a2ui/context"
+import type { A2UIActionsContextValue, A2UIDataContextValue } from "@/types/a2ui/context"
 
 // ---------------------------------------------------------------------------
 // React Context objects (consumed by hooks below, provided by A2UIProvider)
@@ -51,21 +46,6 @@ export function useA2UIData(): A2UIDataContextValue {
     throw new Error("useA2UIData must be used within an A2UIProvider")
   }
   return context
-}
-
-/**
- * Hook to access full A2UI context (backward-compatible, merges both contexts)
- *
- * @deprecated Prefer useA2UIActions() + useA2UIData() for better performance.
- * useA2UIContext() re-renders on both action and data changes.
- */
-export function useA2UIContext(): A2UIContextValue {
-  const actions = useContext(A2UIActionsCtx)
-  const data = useContext(A2UIDataCtx)
-  if (!actions || !data) {
-    throw new Error("useA2UIContext must be used within an A2UIProvider")
-  }
-  return useMemo(() => ({ ...actions, ...data }), [actions, data])
 }
 
 /**

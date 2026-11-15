@@ -20,7 +20,6 @@ const mockDataCtx = {
   resolveArray: jest.fn((value: unknown, d: unknown[] = []) => (Array.isArray(value) ? value : d)),
 }
 jest.mock("../a2ui-context", () => ({
-  useA2UIContext: jest.fn(() => ({ ...mockDataCtx })),
   useA2UIData: jest.fn(() => mockDataCtx),
   useA2UIActions: jest.fn(() => ({
     surfaceId: "test-surface",
@@ -166,12 +165,6 @@ describe("A2UIDatePicker", () => {
 
   describe("disabled state", () => {
     it("should disable button when disabled is true", () => {
-      const mockUseA2UIContext = jest.requireMock("../a2ui-context").useA2UIContext
-      mockUseA2UIContext.mockReturnValue({
-        resolveString: jest.fn(() => ""),
-        resolveBoolean: jest.fn(() => true),
-      })
-
       render(
         <A2UIDatePicker
           {...defaultProps}

@@ -6,7 +6,7 @@ import {
   unpackLarkTransportEvent,
 } from "./parse"
 import type { LarkEventEnvelope } from "./parse"
-import type { LarkQuickCommand } from "./quick-commands"
+import type { IMQuickCommand } from "@/lib/connectors/quick-commands"
 import { deliveryTargetFromEvent } from "@/types/connectors/event"
 
 import dmTextFixture from "./fixtures/dm-text.json"
@@ -648,7 +648,7 @@ describe("parseLarkEventEnvelope", () => {
 })
 
 describe("parseLarkBotMenuEvent — application.bot.menu_v6", () => {
-  const QUICK_COMMANDS: LarkQuickCommand[] = [
+  const QUICK_COMMANDS: IMQuickCommand[] = [
     { triggerKey: "agenda", label: "今日日程", action: { type: "slash", value: "/agenda today" } },
   ]
 

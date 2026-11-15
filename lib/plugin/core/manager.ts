@@ -6613,7 +6613,7 @@ export class PluginManager {
 
     try {
       const { getSlashCommand, registerSlashCommand } =
-        await import("@/lib/chat/slash-command-registry")
+        await import("@/lib/slash-commands/registry")
       if (getSlashCommand(namespacedId)) {
         loggers.manager.warn(
           `[plugin:${pluginId}] slash command conflict "${commandName}" - keeping existing registration`
@@ -6723,7 +6723,7 @@ export class PluginManager {
     }
 
     try {
-      const { unregisterSlashCommand } = await import("@/lib/chat/slash-command-registry")
+      const { unregisterSlashCommand } = await import("@/lib/slash-commands/registry")
       for (const command of commands) {
         unregisterSlashCommand(command)
       }

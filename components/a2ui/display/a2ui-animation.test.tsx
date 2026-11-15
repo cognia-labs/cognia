@@ -21,12 +21,7 @@ jest.mock("motion/react", () => ({
 }))
 
 // Mock the A2UI context
-jest.mock("../a2ui-context", () => ({
-  useA2UIContext: () => ({
-    dataModel: {},
-    resolveString: (value: string | { path: string }) => (typeof value === "string" ? value : ""),
-  }),
-}))
+jest.mock("../a2ui-context", () => ({}))
 
 describe("A2UIAnimation", () => {
   const mockOnAction = jest.fn()

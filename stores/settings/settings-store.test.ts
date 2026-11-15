@@ -933,42 +933,6 @@ describe("setWebToolsEnabled", () => {
   })
 })
 
-// ---- setWebToolsNativeOnAnthropic ----
-
-describe("setWebToolsNativeOnAnthropic", () => {
-  beforeEach(() => {
-    useSettingsStore.setState({ settings: baseSettings(), loaded: true })
-  })
-
-  it("persists the flag while keeping web tools enabled", async () => {
-    dbSettings.saveSettings.mockImplementation(async (patch) => baseSettings(patch))
-    await act(async () => {
-      await useSettingsStore.getState().setWebToolsNativeOnAnthropic(true)
-    })
-    expect(dbSettings.saveSettings).toHaveBeenCalledWith({
-      webTools: { enabled: true, nativeOnAnthropic: true },
-    })
-    expect(useSettingsStore.getState().settings?.webTools?.nativeOnAnthropic).toBe(true)
-  })
-
-  it("preserves every sibling routing and reader flag", async () => {
-    const webTools = {
-      enabled: false,
-      preferCognia: true,
-      preferCogniaSearch: false,
-      preferCogniaFetch: true,
-      allowPrivateHosts: true,
-      alwaysDistill: true,
-    }
-    useSettingsStore.setState({ settings: baseSettings({ webTools }) })
-    dbSettings.saveSettings.mockImplementation(async (patch) => baseSettings(patch))
-    await useSettingsStore.getState().setWebToolsNativeOnAnthropic(true)
-    expect(dbSettings.saveSettings).toHaveBeenCalledWith({
-      webTools: { ...webTools, nativeOnAnthropic: true },
-    })
-  })
-})
-
 describe("independent reader policy actions", () => {
   beforeEach(() => {
     useSettingsStore.setState({

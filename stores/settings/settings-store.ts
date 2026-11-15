@@ -214,8 +214,6 @@ interface SettingsState {
    */
   setBuiltinToolEnabled: (category: keyof BuiltinToolsConfig, enabled: boolean) => Promise<void>
   setWebToolsEnabled: (enabled: boolean) => Promise<void>
-  /** @deprecated Native is the default now — see `lib/chat/web-access.ts`. */
-  setWebToolsNativeOnAnthropic: (nativeOnAnthropic: boolean) => Promise<void>
   /** Use Cognia's multi-provider web tools even where the runtime has natives. */
   setWebToolsPreferCognia: (preferCognia: boolean) => Promise<void>
   setWebToolsPreferCogniaSearch: (preferCogniaSearch: boolean) => Promise<void>
@@ -1099,14 +1097,6 @@ export const useSettingsStore = create<SettingsState>((rawSet, get) => {
     setCliBridgeAutoSync: async (enabled) => {
       const current = get().settings?.cliBridge
       const next = await saveSettings({ cliBridge: { ...current, autoSync: enabled } })
-      set({ settings: next })
-    },
-
-    setWebToolsNativeOnAnthropic: async (nativeOnAnthropic) => {
-      const current = get().settings?.webTools
-      const next = await saveSettings({
-        webTools: { ...current, enabled: current?.enabled ?? true, nativeOnAnthropic },
-      })
       set({ settings: next })
     },
 

@@ -79,7 +79,8 @@ jest.mock("@/lib/native/utils", () => {
   }
 })
 
-jest.mock("@/lib/chat/slash-command-registry", () => ({
+jest.mock("@/lib/slash-commands/registry", () => ({
+  ...jest.requireActual("@/lib/slash-commands/registry"),
   getSlashCommand: jest.fn(),
   registerSlashCommand: jest.fn(),
   unregisterSlashCommand: jest.fn(),

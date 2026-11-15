@@ -45,7 +45,6 @@ import {
   HostFilesystemError,
   NoApiKeyError,
   runWikiRebuild,
-  WebModeError,
 } from "./rebuild-runner"
 
 type FsArg = { walk: () => Promise<string[]>; readFile: (p: string) => Promise<string> }
@@ -61,12 +60,11 @@ beforeEach(() => {
 })
 
 describe("runWikiRebuild host neutrality", () => {
-  it("exposes the host check and keeps the legacy WebModeError alias", () => {
+  it("exposes the host check", () => {
     platformValue = "web"
     expect(canRunWikiRebuildOnHost()).toBe(false)
     platformValue = "headless"
     expect(canRunWikiRebuildOnHost()).toBe(true)
-    expect(WebModeError).toBe(HostFilesystemError)
   })
 
   it("throws HostFilesystemError on a plain browser", async () => {

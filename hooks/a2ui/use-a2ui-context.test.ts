@@ -12,7 +12,6 @@ import {
   A2UIDataCtx,
   useA2UIActions,
   useA2UIData,
-  useA2UIContext,
   useA2UIComponent,
   useA2UIBinding,
   useA2UIVisibility,
@@ -67,7 +66,6 @@ describe("A2UI context hooks", () => {
     try {
       expect(() => renderHook(() => useA2UIActions())).toThrow(/A2UIProvider/)
       expect(() => renderHook(() => useA2UIData())).toThrow(/A2UIProvider/)
-      expect(() => renderHook(() => useA2UIContext())).toThrow(/A2UIProvider/)
     } finally {
       console.error = original
     }
@@ -84,14 +82,6 @@ describe("A2UI context hooks", () => {
     const data = makeData({ a: 1 })
     const { result } = renderHook(() => useA2UIData(), { wrapper: wrap(makeActions(), data) })
     expect(result.current.dataModel).toBe(data.dataModel)
-  })
-
-  it("useA2UIContext merges both contexts (backward-compatible)", () => {
-    const actions = makeActions()
-    const data = makeData({ foo: "bar" })
-    const { result } = renderHook(() => useA2UIContext(), { wrapper: wrap(actions, data) })
-    expect(result.current.surfaceId).toBe("sx")
-    expect(result.current.dataModel).toEqual({ foo: "bar" })
   })
 
   it("useA2UIComponent looks the component up via the actions context", () => {

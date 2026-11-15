@@ -11,7 +11,7 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { WikiRebuildCard } from "./wiki-rebuild-card"
 import { isTauri } from "@/lib/tauri"
-import { runWikiRebuild, WebModeError, NoApiKeyError } from "@/lib/wiki/rebuild-runner"
+import { runWikiRebuild, HostFilesystemError, NoApiKeyError } from "@/lib/wiki/rebuild-runner"
 import { syncWikiCronToScheduler } from "@/lib/wiki/schedule/cron-bridge"
 import { getWikiManifest } from "@/lib/db/wiki-manifest"
 import { getSettings, saveSettings } from "@/lib/db/settings"
@@ -23,9 +23,9 @@ jest.mock("@/lib/wiki/rebuild-runner", () => {
   // Local error classes so `instanceof` checks in the component resolve against
   // the same constructors we throw from tests — without importing the real
   // orchestrator (which drags in server-only deps).
-  class WebModeError extends Error {}
+  class HostFilesystemError extends Error {}
   class NoApiKeyError extends Error {}
-  return { WebModeError, NoApiKeyError, runWikiRebuild: jest.fn() }
+  return { HostFilesystemError, NoApiKeyError, runWikiRebuild: jest.fn() }
 })
 
 jest.mock("@/lib/wiki/schedule/cron-bridge", () => ({ syncWikiCronToScheduler: jest.fn() }))
@@ -125,9 +125,9 @@ describe("WikiRebuildCard — rebuild flow", () => {
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining("no changes"))
   })
 
-  it("maps WebModeError to the desktop-only warning toast", async () => {
+  it("maps HostFilesystemError to the desktop-only warning toast", async () => {
     const user = userEvent.setup()
-    mockRun.mockRejectedValue(new WebModeError())
+    mockRun.mockRejectedValue(new HostFilesystemError())
     render(<WikiRebuildCard />)
     await user.click(await screen.findByRole("button", { name: /Rebuild the Cognia wiki/i }))
     await user.click(

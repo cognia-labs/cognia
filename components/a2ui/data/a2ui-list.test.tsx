@@ -31,7 +31,6 @@ const mockDataCtx = {
 }
 const mockActionsRenderChild = jest.fn((_id: string): React.ReactNode => null)
 jest.mock("@/hooks/a2ui", () => ({
-  useA2UIContext: () => ({ ...mockDataCtx }),
   useA2UIData: () => mockDataCtx,
   useA2UIActions: () => ({
     surfaceId: "test-surface",

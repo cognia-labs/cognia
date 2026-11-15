@@ -49,16 +49,6 @@ export const DEFAULT_CACHE_WRITE_5M_MULT = 1.25
 export const DEFAULT_CACHE_WRITE_1H_MULT = 2
 
 /**
- * Back-compat alias for the 5-minute write multiplier. Anthropic's default
- * cache TTL is 5 minutes, so an un-split `cacheCreationInputTokens` count is
- * priced at this rate.
- * @deprecated Prefer {@link DEFAULT_CACHE_WRITE_5M_MULT} /
- * {@link DEFAULT_CACHE_WRITE_1H_MULT} — collapsing the two under-bills 1-hour
- * cache writes by 37.5% of the correct figure.
- */
-export const DEFAULT_CACHE_WRITE_MULT = DEFAULT_CACHE_WRITE_5M_MULT
-
-/**
  * Ratio between the 1-hour and 5-minute cache-write rates (2 / 1.25). Used to
  * derive a 1-hour rate when the catalog knows only a single explicit
  * cache-creation rate and no base input rate to scale from.

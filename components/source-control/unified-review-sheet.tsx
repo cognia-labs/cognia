@@ -66,8 +66,6 @@ export function UnifiedReviewSheet({
   onOpenChange(open: boolean): void
   rootDir: string
   repositoryRoots: string[]
-  /** @deprecated Each root's branch is resolved per repository now. */
-  branch?: string | null
   stagedCount: number
   committing: boolean
   actions: CommitActions

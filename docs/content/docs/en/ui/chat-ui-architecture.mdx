@@ -308,7 +308,7 @@ import {
 
 | Prefix | Trigger condition            | Popover content                  | Hooked to                            |
 | ------ | ---------------------------- | -------------------------------- | ------------------------------------ |
-| `/`    | At line start or after space | Slash command list               | `lib/chat/slash-command-registry.ts` |
+| `/`    | At line start or after space | Slash command list               | `lib/slash-commands/registry.ts` |
 | `@`    | Any position                 | Characters / team members        | `useCharacter()` data hook           |
 | `!`    | At line start                | Skills list                      | `useSkills()`                        |
 | `#`    | Any position                 | Knowledge references / documents | `lib/search/`                        |
@@ -400,7 +400,7 @@ All copy goes through `useTranslations(...)`:
 | New message part type                  | Define in `lib/claude/parts-extensions.ts` + `components/chat/message-parts/<x>-part.tsx` |
 | Add Composer toolbar button            | Horizontal toolbar area in `components/chat/composer.tsx`                                 |
 | Add BottomToolbar metadata             | `components/chat/composer/bottom-toolbar.tsx`                                             |
-| New slash command                      | Add registration in `lib/chat/slash-command-registry.ts`                                  |
+| New slash command                      | Add registration in `lib/slash-commands/registry.ts`                                  |
 | Change Markdown rendering behavior     | `components/chat/markdown-renderer.tsx` + Streamdown plugin config                        |
 | Change ChatHeader items                | `components/chat/chat-header.tsx`                                                         |
 | Change desktop command palette entries | `components/desktop/command-palette.tsx`                                                  |

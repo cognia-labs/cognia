@@ -20,7 +20,6 @@
     "components/plugins/test-utils/register-mock-extension.ts",
     "components/providers/initializers/audit-retention-initializer.tsx",
     "components/providers/initializers/automation-policy-initializer.tsx",
-    "components/providers/logger-provider.tsx",
     "components/providers/subscription-usage-provider.tsx",
     "components/scheduler/payload-editors/additional-directories-list.tsx",
     "components/scheduler/payload-editors/builtin-tools-toggles.tsx",

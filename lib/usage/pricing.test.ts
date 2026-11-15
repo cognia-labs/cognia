@@ -1,6 +1,5 @@
 import {
   DEFAULT_CACHE_READ_MULT,
-  DEFAULT_CACHE_WRITE_MULT,
   DEFAULT_CACHE_WRITE_5M_MULT,
   DEFAULT_CACHE_WRITE_1H_MULT,
   costFromTokensUsd,
@@ -234,7 +233,7 @@ describe("costFromTokensUsd", () => {
         { cacheReadInputTokens: 1_000_000, cacheCreationInputTokens: 1_000_000 },
         pricing
       )
-    ).toBeCloseTo(3 * DEFAULT_CACHE_READ_MULT + 3 * DEFAULT_CACHE_WRITE_MULT, 6)
+    ).toBeCloseTo(3 * DEFAULT_CACHE_READ_MULT + 3 * DEFAULT_CACHE_WRITE_5M_MULT, 6)
   })
 
   it("returns 0 when all rates are zero", () => {
@@ -289,10 +288,6 @@ describe("costFromTokensUsd", () => {
         5 * (DEFAULT_CACHE_WRITE_1H_MULT / DEFAULT_CACHE_WRITE_5M_MULT),
         6
       )
-    })
-
-    it("keeps the legacy alias pointing at the 5-minute multiplier", () => {
-      expect(DEFAULT_CACHE_WRITE_MULT).toBe(DEFAULT_CACHE_WRITE_5M_MULT)
     })
   })
 

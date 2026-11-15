@@ -25,7 +25,6 @@ export {
   formatBytes,
   formatTokens,
   formatDuration,
-  downloadFile,
   parseReplayEvent,
 } from "./utils"
 

@@ -125,11 +125,6 @@ function wantsLocal(destination: BackupDestination | undefined): boolean {
   return destination === undefined || destination === "local" || destination === "all"
 }
 
-/** @deprecated kept for `__TESTING__` compatibility; use `remoteLegsFor`. */
-function wantsWebdav(destination: BackupDestination | undefined): boolean {
-  return remoteLegsFor(destination).includes("webdav")
-}
-
 function isSupportedDestination(destination: BackupDestination | undefined): boolean {
   if (isDeprecatedBackupDestination(destination)) return false
   return wantsLocal(destination) || remoteLegsFor(destination).length > 0
@@ -404,5 +399,4 @@ export const __TESTING__ = {
   payloadToBuildOptions,
   isSupportedDestination,
   wantsLocal,
-  wantsWebdav,
 }

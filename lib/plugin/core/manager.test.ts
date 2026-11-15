@@ -171,7 +171,8 @@ jest.mock("@/lib/native/utils", () => ({
   isTauri: jest.fn(() => false),
 }))
 
-jest.mock("@/lib/chat/slash-command-registry", () => ({
+jest.mock("@/lib/slash-commands/registry", () => ({
+  ...jest.requireActual("@/lib/slash-commands/registry"),
   getSlashCommand: jest.fn(),
   registerSlashCommand: jest.fn(),
   unregisterSlashCommand: jest.fn(),
@@ -260,7 +261,7 @@ import {
   getSlashCommand,
   registerSlashCommand,
   unregisterSlashCommand,
-} from "@/lib/chat/slash-command-registry"
+} from "@/lib/slash-commands/registry"
 import { __resetRegistryForTesting } from "@/lib/plugin/resilience/breaker-registry"
 import { MODULE_BRIDGE_CAPABILITIES } from "@/lib/plugin/contracts/module-bridge-map"
 import {

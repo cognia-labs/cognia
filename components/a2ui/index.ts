@@ -8,7 +8,6 @@ export {
   A2UIProvider,
   useA2UIActions,
   useA2UIData,
-  useA2UIContext,
   useA2UIComponent,
   useA2UIBinding,
   useA2UIVisibility,

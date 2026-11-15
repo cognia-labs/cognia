@@ -58,9 +58,6 @@ export function setOpencodeReader(fn: OpencodeReader | null): void {
   reader = fn
 }
 
-/** @deprecated Test alias for {@link setOpencodeReader}. */
-export const __setOpencodeReaderForTesting = setOpencodeReader
-
 /**
  * Read every OpenCode session from the SQLite store.
  *

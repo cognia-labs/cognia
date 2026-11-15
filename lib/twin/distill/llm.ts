@@ -206,9 +206,6 @@ export interface LlmConfig {
   defaultTemperature?: number
 }
 
-/** @deprecated Kept for back-compat with existing call sites. Use {@link LlmConfig}. */
-export type AnthropicLlmConfig = LlmConfig
-
 function buildProviderSettings(
   config: LlmConfig,
   sdk: string,

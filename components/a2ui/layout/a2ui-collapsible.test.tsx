@@ -4,14 +4,6 @@ import { A2UICollapsible, type A2UICollapsibleComponent } from "./a2ui-collapsib
 import type { A2UIComponentProps } from "@/types/a2ui/schema"
 
 jest.mock("../a2ui-context", () => ({
-  useA2UIContext: () => ({
-    surfaceId: "t",
-    dataModel: {},
-    catalog: undefined,
-    emitAction: jest.fn(),
-    setDataValue: jest.fn(),
-    renderChild: jest.fn((id: string) => <span data-testid={id}>{id}</span>),
-  }),
   useA2UIData: () => ({
     resolveString: (v: unknown) => (typeof v === "string" ? v : ""),
     resolveNumber: (v: unknown) => (typeof v === "number" ? v : 0),

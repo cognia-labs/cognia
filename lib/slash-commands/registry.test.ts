@@ -16,8 +16,6 @@ import {
   getSlashCommandsVersion,
   __resetSlashCommandsForTesting,
 } from "./registry"
-import * as canonical from "./registry"
-import * as reExport from "@/lib/chat/slash-command-registry"
 import {
   getPluginPointDiagnostics,
   __resetDiagnosticsStoreForTesting,
@@ -290,17 +288,6 @@ describe("slash-command registry (lib/slash-commands/registry)", () => {
       expect(getSlashCommand("status")?.category).toBe("diagnostics")
       expect(getSlashCommand("clear")?.category).toBe("chat")
     })
-  })
-})
-
-describe("re-export from lib/chat/slash-command-registry", () => {
-  it("uses the same registry instance as the canonical path", async () => {
-    // Importing both side-by-side proves they target the same Map.
-    // canonical is the statically imported module
-    __resetSlashCommandsForTesting()
-    canonical.registerSlashCommand({ id: "shared", name: "Shared", handler: () => ({}) })
-    expect(reExport.getSlashCommand("shared")?.id).toBe("shared")
-    __resetSlashCommandsForTesting()
   })
 })
 

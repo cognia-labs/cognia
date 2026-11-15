@@ -1,9 +1,4 @@
-import {
-  isIMQuickCommand,
-  isLegacyEventKeyRow,
-  normalizeQuickCommand,
-  normalizeQuickCommandList,
-} from "./types"
+import { isIMQuickCommand, normalizeQuickCommand, normalizeQuickCommandList } from "./types"
 
 describe("normalizeQuickCommand", () => {
   it("passes through a canonical IMQuickCommand row", () => {
@@ -13,27 +8,6 @@ describe("normalizeQuickCommand", () => {
       action: { type: "prompt" as const, value: "do x" },
     }
     expect(normalizeQuickCommand(row)).toEqual(row)
-  })
-
-  it("upgrades a legacy eventKey row to triggerKey", () => {
-    const legacy = {
-      eventKey: "menu.legacy",
-      action: { type: "slash" as const, value: "/legacy" },
-    }
-    expect(normalizeQuickCommand(legacy)).toEqual({
-      triggerKey: "menu.legacy",
-      label: undefined,
-      action: { type: "slash", value: "/legacy" },
-    })
-  })
-
-  it("preserves the label on legacy rows", () => {
-    const legacy = {
-      eventKey: "menu.legacy",
-      label: "L",
-      action: { type: "prompt" as const, value: "v" },
-    }
-    expect(normalizeQuickCommand(legacy)?.label).toBe("L")
   })
 
   it("returns null for malformed rows", () => {
@@ -48,33 +22,14 @@ describe("normalizeQuickCommand", () => {
       })
     ).toBeNull()
     expect(normalizeQuickCommand({ eventKey: "x" })).toBeNull()
-  })
-
-  it("does NOT treat a row carrying both fields as legacy", () => {
-    const both = {
-      triggerKey: "new",
-      eventKey: "old",
-      action: { type: "prompt" as const, value: "v" },
-    }
-    const out = normalizeQuickCommand(both)
-    expect(out?.triggerKey).toBe("new")
+    expect(
+      normalizeQuickCommand({ eventKey: "menu.x", action: { type: "slash", value: "/x" } })
+    ).toBeNull()
   })
 })
 
-describe("isLegacyEventKeyRow / isIMQuickCommand", () => {
-  it("legacy detector is true only when triggerKey is absent", () => {
-    expect(isLegacyEventKeyRow({ eventKey: "x", action: { type: "prompt", value: "" } })).toBe(true)
-    expect(
-      isLegacyEventKeyRow({
-        eventKey: "x",
-        triggerKey: "x",
-        action: { type: "prompt", value: "" },
-      })
-    ).toBe(false)
-    expect(isLegacyEventKeyRow({})).toBe(false)
-  })
-
-  it("canonical detector validates action shape", () => {
+describe("isIMQuickCommand", () => {
+  it("validates the action shape validates action shape", () => {
     expect(
       isIMQuickCommand({
         triggerKey: "x",
@@ -95,7 +50,7 @@ describe("normalizeQuickCommandList", () => {
       "bogus",
       { triggerKey: "c" },
     ])
-    expect(out.map((c) => c.triggerKey)).toEqual(["a", "b"])
+    expect(out.map((c) => c.triggerKey)).toEqual(["a"])
   })
 
   it("returns an empty list for non-array input", () => {

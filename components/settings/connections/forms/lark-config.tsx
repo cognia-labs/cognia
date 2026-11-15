@@ -67,7 +67,7 @@ import { CredentialInput } from "./_shared/credential-input"
 import { QuietHoursAndMute, type QuietHoursValue } from "./quiet-hours-and-mute"
 import { LarkWhitelistEditor } from "./lark/lark-whitelist-editor"
 import { LarkQuickCommandsEditor } from "./lark/lark-quick-commands-editor"
-import type { LarkQuickCommand } from "@/lib/connectors/adapters/lark/quick-commands"
+import type { IMQuickCommand } from "@/lib/connectors/quick-commands"
 import {
   normalizeLarkCardPresentation,
   validateLarkCardPresentation,
@@ -93,7 +93,7 @@ interface LarkPersistedSettings {
   /** Cached at adapter start by `buildLarkAdapter`; refreshed via the UI affordance. */
   selfBotOpenId?: string
   /** Bot-menu (快捷指令) `event_key` → action mappings. */
-  quickCommands?: LarkQuickCommand[]
+  quickCommands?: IMQuickCommand[]
   /** Opt-in: send replies as the connected user (user_access_token) not the bot. */
   sendAsUser?: boolean
   /** Stamped by the OAuth handler after a successful user-token exchange. */
@@ -208,7 +208,7 @@ export function LarkConfigDialog({ open, onOpenChange, row, onCreated }: LarkCon
   )
   const [muted, setMuted] = useState<boolean>(row?.muted ?? false)
   const [quietHours, setQuietHours] = useState<QuietHoursValue | null>(row?.quietHours ?? null)
-  const [quickCommands, setQuickCommands] = useState<LarkQuickCommand[]>(
+  const [quickCommands, setQuickCommands] = useState<IMQuickCommand[]>(
     persistedSettings.quickCommands ?? []
   )
 
