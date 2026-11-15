@@ -7,6 +7,9 @@ import type { ExecutionRun, RunControlCommand } from "@/types/execution/run"
 import {
   createRunInterrupt,
   executeRunControlCommand,
+  executeRunControlCommandUnlocked,
+  resolveRunInterruptFromSource,
+  expireRunInterruptFromSource,
   recoverPendingRunInterrupts,
   registerRunControlHandler,
   RUNTIME_STOP_ACTOR,
@@ -763,5 +766,315 @@ describe("execution run retry", () => {
 
     expect(result).toMatchObject({ accepted: false, reason: "source_rejected" })
     expect((await getDb().executionRuns.get("run-settled"))?.retry).toBeUndefined()
+  })
+})
+
+describe("WP4 interrupt authority", () => {
+  beforeEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+    await createExecutionRun({
+      id: "wp4",
+      kind: "agent-turn",
+      sourceId: "turn",
+      title: "Agent",
+      status: "running",
+      initiator: { remoteUserId: "owner" },
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    })
+  })
+  const command = (key: string): RunControlCommand => ({
+    runId: "wp4",
+    action: "approve",
+    interruptId: "wp4-int",
+    expectedRevision: 1,
+    idempotencyKey: key,
+    actor: { remoteUserId: "owner" },
+  })
+  const arm = async (type: "tool_approval" | "bot_approval" = "bot_approval") =>
+    createRunInterrupt({
+      id: "wp4-int",
+      runId: "wp4",
+      type,
+      title: "Allow",
+      status: "pending",
+      createdAt: 1,
+      expiresAt: Date.now() + 60_000,
+    })
+  const deferred = () => {
+    let resolve!: () => void
+    const promise = new Promise<void>((r) => {
+      resolve = r
+    })
+    return { promise, resolve }
+  }
+  const resolutions = async () =>
+    (await getDb().executionRunEvents.toArray()).filter(
+      (e) => e.type === "interrupt.resolved" || e.type === "interrupt.expired"
+    )
+
+  it("binds every session-backed tool approval at the shared creation seam", async () => {
+    await getDb().executionRuns.update("wp4", { sessionId: "child-session" })
+    await getDb().agentTeamChildRuns.add({
+      id: "child",
+      runId: "team",
+      teamId: "team",
+      teammateId: "mate",
+      taskId: "task",
+      repositoryId: "repo",
+      status: "running",
+      attempt: 1,
+      sessionId: "child-session",
+      dispatchEpoch: 7,
+      createdAt: 1,
+      updatedAt: 1,
+      resourceUsage: {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        wallTimeMs: 0,
+        toolTimeMs: 0,
+        attempts: 1,
+        failures: 0,
+      },
+    })
+    expect(await arm("tool_approval")).toMatchObject({ childRunId: "child", dispatchEpoch: 7 })
+    expect(await getDb().executionRunInterrupts.get("wp4-int")).toMatchObject({
+      childRunId: "child",
+      dispatchEpoch: 7,
+    })
+  })
+
+  it.each(["missing", "moved"])("refuses a %s child as stale before its handler", async (state) => {
+    await arm()
+    if (state === "moved")
+      await getDb().agentTeamChildRuns.add({
+        id: "gone",
+        runId: "team",
+        teamId: "team",
+        taskId: "task",
+        teammateId: "mate",
+        repositoryId: "repo",
+        status: "running",
+        attempt: 2,
+        dispatchEpoch: 2,
+        createdAt: 1,
+        updatedAt: 2,
+        resourceUsage: {
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          wallTimeMs: 0,
+          toolTimeMs: 0,
+          attempts: 2,
+          failures: 0,
+        },
+      })
+    await getDb().executionRunInterrupts.update("wp4-int", { childRunId: "gone", dispatchEpoch: 1 })
+    const handler = jest.fn(async () => undefined)
+    const off = registerRunControlHandler("agent-turn", handler)
+    try {
+      expect(await executeRunControlCommand(command("stale"))).toMatchObject({
+        accepted: false,
+        reason: "interrupt_stale",
+      })
+      expect(handler).not.toHaveBeenCalled()
+      expect(await getDb().executionRunInterrupts.get("wp4-int")).toMatchObject({
+        status: "expired",
+      })
+      expect(await resolutions()).toHaveLength(1)
+    } finally {
+      off()
+    }
+  })
+
+  it("admits one persisted decision across process-local locks and expiry", async () => {
+    await arm()
+    const entered = deferred(),
+      finish = deferred()
+    const handler = jest.fn(async () => {
+      entered.resolve()
+      await finish.promise
+    })
+    const off = registerRunControlHandler("agent-turn", handler)
+    try {
+      const first = executeRunControlCommandUnlocked(command("first"))
+      await entered.promise
+      expect(await executeRunControlCommandUnlocked(command("second"))).toMatchObject({
+        accepted: false,
+        reason: "interrupt_resolved",
+      })
+      await resolveRunInterruptFromSource("wp4", "wp4-int", "deny")
+      await expireRunInterruptFromSource("wp4", "wp4-int")
+      expect(await getDb().executionRunInterrupts.get("wp4-int")).toMatchObject({
+        status: "pending",
+      })
+      finish.resolve()
+      expect(await first).toMatchObject({ accepted: true })
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(await resolutions()).toHaveLength(1)
+    } finally {
+      finish.resolve()
+      off()
+    }
+  })
+
+  it("projects the waiter's IM winner over an in-flight desktop claim", async () => {
+    await arm("tool_approval")
+    const entered = deferred(),
+      finish = deferred()
+    let effects = 0
+    const { awaitApproval, resolveApproval } = await import("@/lib/claude/hitl/approval-registry")
+    const waiter = awaitApproval("wp4-session", "wp4-request").then((decision) => {
+      effects += 1
+      return decision
+    })
+    const off = registerRunControlHandler("agent-turn", async () => {
+      entered.resolve()
+      await finish.promise
+      if (!resolveApproval("wp4-session", "wp4-request", { decision: "allow" }))
+        throw new Error("waiter already resolved")
+    })
+    try {
+      const desktop = executeRunControlCommandUnlocked(command("desktop"))
+      await entered.promise
+      expect(resolveApproval("wp4-session", "wp4-request", { decision: "deny" })).toBe(true)
+      await waiter
+      await resolveRunInterruptFromSource("wp4", "wp4-int", "deny")
+      finish.resolve()
+      expect(await desktop).toMatchObject({ accepted: false, reason: "interrupt_resolved" })
+      expect(effects).toBe(1)
+      expect(await getDb().executionRunInterrupts.get("wp4-int")).toMatchObject({
+        status: "denied",
+      })
+      expect(await resolutions()).toHaveLength(1)
+    } finally {
+      finish.resolve()
+      off()
+    }
+  })
+
+  it("releases a failed handler's claim so a later answer can succeed", async () => {
+    await arm()
+    const handler = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("refused"))
+      .mockResolvedValue(undefined)
+    const off = registerRunControlHandler("agent-turn", handler)
+    try {
+      expect(await executeRunControlCommand(command("fail"))).toMatchObject({ accepted: false })
+      expect((await getDb().executionRunInterrupts.get("wp4-int"))?.decidingClaim).toBeUndefined()
+      const revision = (await getDb().executionRuns.get("wp4"))!.currentRevision
+      expect(
+        await executeRunControlCommand({ ...command("retry"), expectedRevision: revision })
+      ).toMatchObject({ accepted: true })
+      expect(await resolutions()).toHaveLength(1)
+    } finally {
+      off()
+    }
+  })
+
+  it("lets expiry win before a decision without running its handler", async () => {
+    await arm()
+    const handler = jest.fn(async () => undefined)
+    const off = registerRunControlHandler("agent-turn", handler)
+    try {
+      await expireRunInterruptFromSource("wp4", "wp4-int")
+      const revision = (await getDb().executionRuns.get("wp4"))!.currentRevision
+      expect(
+        await executeRunControlCommand({ ...command("late"), expectedRevision: revision })
+      ).toMatchObject({ accepted: false, reason: "interrupt_resolved" })
+      expect(handler).not.toHaveBeenCalled()
+      expect(await resolutions()).toHaveLength(1)
+    } finally {
+      off()
+    }
+  })
+
+  it("renews a slow live handler beyond five minutes and refuses takeover", async () => {
+    await arm()
+    await getDb().executionRunInterrupts.update("wp4-int", { expiresAt: Date.now() + 3_600_000 })
+    const entered = deferred(),
+      finish = deferred()
+    const off = registerRunControlHandler("agent-turn", async () => {
+      entered.resolve()
+      await finish.promise
+    })
+    jest.useFakeTimers({ doNotFake: ["nextTick", "setImmediate", "queueMicrotask"] })
+    let first: ReturnType<typeof executeRunControlCommandUnlocked> | undefined
+    try {
+      first = executeRunControlCommandUnlocked(command("slow"))
+      await entered.promise
+      const original = (await getDb().executionRunInterrupts.get("wp4-int"))!.decidingClaim!
+      expect(original.ownerId).toEqual(expect.any(String))
+      await jest.advanceTimersByTimeAsync(6 * 60_000)
+      const live = (await getDb().executionRunInterrupts.get("wp4-int"))!.decidingClaim!
+      expect(live.renewedAt! - original.at).toBeGreaterThanOrEqual(5 * 60_000)
+      await recoverPendingRunInterrupts()
+      expect((await getDb().executionRunInterrupts.get("wp4-int"))?.decidingClaim?.token).toBe(
+        original.token
+      )
+      const revision = (await getDb().executionRuns.get("wp4"))!.currentRevision
+      expect(
+        await executeRunControlCommandUnlocked({
+          ...command("takeover"),
+          expectedRevision: revision,
+        })
+      ).toMatchObject({ accepted: false, reason: "interrupt_resolved" })
+      finish.resolve()
+      expect(await first).toMatchObject({ accepted: true })
+    } finally {
+      finish.resolve()
+      await first
+      jest.useRealTimers()
+      off()
+    }
+  })
+
+  it("lets a second decider replace a dead owner's expired heartbeat", async () => {
+    await arm()
+    const now = Date.now()
+    await getDb().executionRunInterrupts.update("wp4-int", {
+      decidingClaim: {
+        token: "dead",
+        ownerId: "dead-process",
+        action: "deny",
+        at: now - 600_000,
+        renewedAt: now - 181_000,
+      },
+    })
+    const handler = jest.fn(async () => undefined)
+    const off = registerRunControlHandler("agent-turn", handler)
+    try {
+      expect(await executeRunControlCommandUnlocked(command("new-owner"))).toMatchObject({
+        accepted: true,
+      })
+      expect(handler).toHaveBeenCalledTimes(1)
+    } finally {
+      off()
+    }
+  })
+
+  it("releases only abandoned claims at startup", async () => {
+    await arm()
+    const now = Date.now()
+    await getDb().executionRunInterrupts.update("wp4-int", {
+      decidingClaim: {
+        token: "crashed",
+        ownerId: "dead-process",
+        action: "approve",
+        at: now - 600_000,
+        renewedAt: now - 181_000,
+      },
+    })
+    await recoverPendingRunInterrupts(now)
+    expect((await getDb().executionRunInterrupts.get("wp4-int"))?.decidingClaim).toBeUndefined()
+    await getDb().executionRunInterrupts.update("wp4-int", {
+      decidingClaim: { token: "live", action: "approve", at: now },
+    })
+    await recoverPendingRunInterrupts(now)
+    expect((await getDb().executionRunInterrupts.get("wp4-int"))?.decidingClaim?.token).toBe("live")
   })
 })

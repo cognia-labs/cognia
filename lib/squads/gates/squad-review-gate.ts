@@ -21,8 +21,8 @@
  * opened, the interrupt id is deterministic per gate instance so a re-armed
  * lifecycle finds the same row, and a decision that already landed while the
  * process was down is returned at once, so a run resumes exactly once after
- * settlement. Expiry denies (the control plane's `recoverPendingRunInterrupts`
- * owns the deadline), except `team_recovery`, whose TTL is a week because
+ * settlement. Expiry denies (the live wait owns its deadline; startup recovery
+ * covers waits whose process is gone), except `team_recovery`, whose TTL is a week because
  * expiring it would decide for the person.
  *
  * Free text never enters a run event. Plan feedback is redacted with
@@ -36,15 +36,16 @@ import type {
   ActionReviewChannel,
   ActionReviewDecision,
   ActionReviewRequest,
+  ActionReviewReceipt,
 } from "@cognia/agent-config-types/action-review"
 import { ACTION_REVIEW_CONTRACT_VERSION } from "@cognia/agent-config-types/action-review"
 
 import { getDb } from "@/lib/db/schema"
+import type { RunControlHandlerOutcome } from "@/lib/execution/run-control"
 import { appendAgentTeamTrajectory, markAgentTeamCheckpoint } from "@/lib/db/agent-team-runtime"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import {
   actionReviewInterruptId,
-  projectActionReviewOpened,
   projectActionReviewSettled,
 } from "@/lib/policy/action-review/projection"
 import { getActionReviewChannelAdapter } from "@/lib/policy/action-review/registry"
@@ -74,6 +75,9 @@ export interface OpenSquadReviewInput {
   runId: string
   teamId: string
   projectId?: string
+  /** When this gate belongs to one child, bind to its current attempt. */
+  childRunId?: string
+  dispatchEpoch?: number
   kind: SquadReviewKind
   /**
    * Distinguishes repeated gates of one kind in one run: the plan revision, a
@@ -206,7 +210,8 @@ function defaultSubscribe(
 }
 
 function outcomeFromRow(row: ExecutionRunInterrupt, kind: SquadReviewKind): SquadReviewOutcome {
-  if (row.decision) return row.decision
+  if (row.status !== "expired" && row.decision)
+    return { ...row.decision, outcome: row.status === "approved" ? "approve" : "deny" }
   // A row settled without a typed payload (expired, denied without a body,
   // resolved from a source that predates the payload). The outcome is what
   // the status says. `approve` without a payload is only legal for the two
@@ -269,15 +274,36 @@ export async function armSquadReview(
   }
   if (!existing) {
     await (deps.checkpoint ?? defaultCheckpoint)(input).catch(() => undefined)
-    const projected = await projectActionReviewOpened(request, now())
-    if (!projected) {
-      // No execution run to park on. That is a programming error under
-      // ADR-0169 (records exist before dispatch), and a silent auto-approve
-      // would be the worst possible reading of it.
-      throw new Error(`squad_review_unprojectable:${input.kind}`)
+    let childRunId = input.childRunId
+    let dispatchEpoch = input.dispatchEpoch
+    if (!childRunId && typeof input.subject?.childRunId === "string")
+      childRunId = input.subject.childRunId
+    const children = await getDb().agentTeamChildRuns.where("runId").equals(input.runId).toArray()
+    const child = childRunId
+      ? children.find((row) => row.id === childRunId)
+      : input.kind === "teammate_repair"
+        ? children
+            .filter((row) => row.teammateId === input.subject?.teammateId)
+            .sort(
+              (a, b) => b.createdAt - a.createdAt || (b.dispatchEpoch ?? 0) - (a.dispatchEpoch ?? 0)
+            )[0]
+        : undefined
+    if (child) {
+      childRunId = child.id
+      dispatchEpoch ??= child.dispatchEpoch ?? 0
     }
-    await getDb().executionRunInterrupts.update(interruptId, {
+    const { createRunInterrupt } = await import("@/lib/execution/run-control")
+    await createRunInterrupt({
+      id: interruptId,
+      runId: request.origin.runId!,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      type: squadReviewInterruptType(input.kind),
+      status: "pending",
+      title: request.subject.ref,
+      createdAt: request.requestedAt!,
+      expiresAt: request.expiresAt!,
       reviewKind: input.kind,
+      ...(childRunId ? { childRunId, dispatchEpoch } : {}),
       ...(input.subject ? { subject: input.subject } : {}),
     })
   }
@@ -298,6 +324,9 @@ export async function openSquadReview(
 
   return new Promise<SquadReviewOutcome>((resolve, reject) => {
     let settled = false
+    let delegateOutcome: SquadReviewOutcome | undefined
+    let reconciling = false
+    let deadline: ReturnType<typeof setTimeout> | undefined
     let unsubscribe: () => void = () => {}
     const finish = (value: SquadReviewOutcome) => {
       if (settled) return
@@ -322,30 +351,75 @@ export async function openSquadReview(
       if (!row || row.status === "pending") return
       finish(outcomeFromRow(row, input.kind))
     }
-    const stopLive = (deps.subscribe ?? subscribeOverride ?? defaultSubscribe)(interruptId, onRow)
+    const reconcile = async () => {
+      if (settled || reconciling) return
+      reconciling = true
+      try {
+        const row = await getDb().executionRunInterrupts.get(interruptId)
+        if (!row || settled) return
+        if (row.status !== "pending") {
+          onRow(row)
+          return
+        }
+        const now = (deps.now ?? Date.now)()
+        if (row.expiresAt <= now) {
+          const { finishExecutionRunInterrupt } = await import("@/lib/db/execution-runs")
+          if (
+            await finishExecutionRunInterrupt(row.runId, interruptId, "expired", now, {
+              expireAtDeadline: true,
+            })
+          ) {
+            const { endSquadReviewSpan } = await import("../squad/squad-telemetry")
+            endSquadReviewSpan({ interruptId, outcome: "expired", source: "expiry" })
+          }
+        } else {
+          if (deadline === undefined)
+            deadline = setTimeout(
+              () => {
+                deadline = undefined
+                void reconcile().catch(() => undefined)
+              },
+              Math.min(2_147_483_647, row.expiresAt - now)
+            )
+          // Keep the IM answer while another owner decides. The same CAS
+          // retries after release, or reclaims only an abandoned heartbeat.
+          if (delegateOutcome)
+            await settleSquadReview(
+              { runId: input.runId, kind: input.kind, instance: input.instance },
+              delegateOutcome,
+              { authority: "human", actorKind: "connector-user" },
+              deps
+            )
+        }
+        onRow(await getDb().executionRunInterrupts.get(interruptId))
+      } finally {
+        reconciling = false
+      }
+    }
+    const stopLive = (deps.subscribe ?? subscribeOverride ?? defaultSubscribe)(
+      interruptId,
+      (row) => {
+        onRow(row)
+        if (row?.status === "pending") void reconcile().catch(() => undefined)
+      }
+    )
     const poll = setInterval(() => {
-      void getDb()
-        .executionRunInterrupts.get(interruptId)
-        .then(onRow)
-        .catch(() => undefined)
+      void reconcile().catch(() => undefined)
     }, pollIntervalMs)
     unsubscribe = () => {
       clearInterval(poll)
+      if (deadline !== undefined) clearTimeout(deadline)
       stopLive()
     }
+    void reconcile().catch(() => undefined)
 
     if (input.delegate) {
       void input
         .delegate()
         .then(async (outcome) => {
           if (settled) return
-          await settleSquadReview(
-            { runId: input.runId, kind: input.kind, instance: input.instance },
-            outcome,
-            { authority: "human", actorKind: "connector-user" },
-            deps
-          ).catch(() => undefined)
-          finish(outcome)
+          delegateOutcome = outcome
+          await reconcile()
         })
         .catch(() => {
           // A delegate that failed is not a decision. The interrupt stays.
@@ -379,13 +453,41 @@ export async function settleSquadReview(
   outcome: SquadReviewOutcome,
   source: SettleSquadReviewSource,
   deps: SquadReviewDeps = {}
-): Promise<void> {
+): Promise<boolean> {
   const now = deps.now ?? Date.now
   const interruptId = squadReviewInterruptIdFor(target.runId, target.kind, target.instance)
   const row = await getDb().executionRunInterrupts.get(interruptId)
-  if (!row || row.status !== "pending") return
-  const decision = sanitizeDecision(outcome, deps.redact ?? defaultRedact)
-  await getDb().executionRunInterrupts.update(interruptId, { decision })
+  if (!row || row.status !== "pending") return false
+  const {
+    claimExecutionRunInterrupt,
+    finishExecutionRunInterrupt,
+    releaseExecutionRunInterruptClaim,
+  } = await import("@/lib/db/execution-runs")
+  const token = crypto.randomUUID()
+  const claim = await claimExecutionRunInterrupt(row.runId, interruptId, {
+    token,
+    action: outcome.outcome,
+    actorId: source.actorId,
+    at: now(),
+  })
+  if ("reason" in claim) return false
+  try {
+    if (
+      !(await finishExecutionRunInterrupt(row.runId, interruptId, outcome.outcome, now(), {
+        token,
+        checkBinding: true,
+        decision: sanitizeDecision(outcome, deps.redact ?? defaultRedact),
+        actor: {
+          ...(source.actorId ? { platformIdentityId: source.actorId } : {}),
+          ...(source.actorLabel ? { displayName: source.actorLabel } : {}),
+        },
+      }))
+    )
+      return false
+  } catch (error) {
+    await releaseExecutionRunInterruptClaim(interruptId, token)
+    throw error
+  }
   const request = buildRequest(
     {
       runId: target.runId,
@@ -410,6 +512,7 @@ export async function settleSquadReview(
     },
     decidedAt: now(),
   })
+  return true
 }
 
 async function teamIdForRun(runId: string): Promise<string | undefined> {
@@ -441,14 +544,14 @@ export function sanitizeDecision(
 /**
  * The control plane's half: called by the `team` run-control handler on
  * `approve` / `deny`, after `run-control.ts` validated the command against
- * the interrupt. Persists the typed decision so a waiter (live, or re-armed
- * after a restart) reads it, records the receipt, and leaves a note in the
- * conversation the run belongs to.
+ * the interrupt. Returns the redacted decision for the final resolution CAS,
+ * prepares its receipt for that same transaction. Observations and the
+ * conversation note run only after the final CAS succeeds.
  */
 export async function settleSquadReviewFromControl(
   command: RunControlCommand,
   deps: SquadReviewDeps = {}
-): Promise<void> {
+): Promise<RunControlHandlerOutcome> {
   if (!command.interruptId) throw new Error("interrupt_not_found")
   const row = await getDb().executionRunInterrupts.get(command.interruptId)
   if (!row || row.runId !== command.runId) throw new Error("interrupt_not_found")
@@ -459,21 +562,11 @@ export async function settleSquadReviewFromControl(
     outcome: command.action === "approve" ? "approve" : "deny",
   }
   const decision = sanitizeDecision(outcome, deps.redact ?? defaultRedact)
-  // The control gate flips `status` and journals `interrupt.resolved` AFTER
-  // the handler returns. Writing the decision first means a waiter that wakes
-  // on the status flip always finds the payload beside it.
-  await getDb().executionRunInterrupts.update(row.id, { decision })
-  const { endSquadReviewSpan } = await import("../squad/squad-telemetry")
-  endSquadReviewSpan({
-    interruptId: row.id,
-    outcome: outcome.outcome,
-    source: command.actor.remoteUserId ? "device" : "cockpit",
-  })
-
+  // Only the final claim CAS may persist the typed decision alongside status.
   const requestId = squadReviewRequestIdFromInterrupt(row)
+  let receipt: ActionReviewReceipt | undefined
   if (requestId) {
-    const { recordActionReviewReceipt, ACTION_REVIEW_RETENTION_DAYS } =
-      await import("@/lib/db/action-review-receipts")
+    const { ACTION_REVIEW_RETENTION_DAYS } = await import("@/lib/db/action-review-receipts")
     const now = (deps.now ?? Date.now)()
     const request = buildRequest(
       {
@@ -485,7 +578,7 @@ export async function settleSquadReviewFromControl(
       },
       row.createdAt
     )
-    await recordActionReviewReceipt({
+    receipt = {
       contractVersion: ACTION_REVIEW_CONTRACT_VERSION,
       id: request.requestId,
       request,
@@ -506,19 +599,37 @@ export async function settleSquadReviewFromControl(
         decidedAt: now,
       },
       expiresAt: now + ACTION_REVIEW_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-    }).catch(() => undefined)
-
-    // The note in the conversation. Best-effort, like every record of an answer.
-    void import("./record-gate-answer")
-      .then(({ recordSquadGateAnswer }) =>
-        recordSquadGateAnswer({
-          runId: requestId.runId,
-          gateType: kind,
-          decision: command.action === "approve" ? "approved" : "rejected",
-          title: row.title,
-        })
-      )
-      .catch(() => undefined)
+    }
+  }
+  return {
+    interruptDecision: decision,
+    ...(receipt ? { interruptReceipt: receipt } : {}),
+    onInterruptResolved: async () => {
+      const { endSquadReviewSpan } = await import("../squad/squad-telemetry")
+      endSquadReviewSpan({
+        interruptId: row.id,
+        outcome: outcome.outcome,
+        source: command.actor.remoteUserId ? "device" : "cockpit",
+      })
+      if (receipt) {
+        const { recordActionReviewReceiptGovernance } =
+          await import("@/lib/db/action-review-receipts")
+        await recordActionReviewReceiptGovernance(receipt)
+      }
+      if (requestId) {
+        // The note in the conversation. Best-effort, like every record of an answer.
+        void import("./record-gate-answer")
+          .then(({ recordSquadGateAnswer }) =>
+            recordSquadGateAnswer({
+              runId: requestId.runId,
+              gateType: kind,
+              decision: command.action === "approve" ? "approved" : "rejected",
+              title: row.title,
+            })
+          )
+          .catch(() => undefined)
+      }
+    },
   }
 }
 

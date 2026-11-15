@@ -276,7 +276,7 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
    * durable record from the moment it was journalled. A team row without one
    * is backfilled history and refuses controls as `source_rejected`.
    */
-  const team: RunControlHandler = async (command) => {
+  const team: RunControlHandler = async (command, context) => {
     if (command.action === "open_details") return
     const run = await getExecutionRun(command.runId)
     if (!run) throw new Error("Execution run not found")
@@ -295,7 +295,6 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
       // control gate has already validated the interrupt; here the decision
       // reaches the waiting lifecycle (or its persisted slot, after a restart).
       const { settleSquadReviewFromControl } = await import("@/lib/squads/gates/squad-review-gate")
-      await settleSquadReviewFromControl(command)
       // A recovery decision has no lifecycle waiting on it: the run is parked
       // and its process may be long gone. The decision is applied here, and a
       // choice that could not be carried out rejects the command so the
@@ -306,13 +305,19 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
         : undefined
       if (row?.type === "team_recovery") {
         const { applyTeamRecoveryFromControl } = await import("@/lib/squads/durable/team-recovery")
-        const applied = await applyTeamRecoveryFromControl(command)
+        const applied = await applyTeamRecoveryFromControl(command, {
+          claimToken: context?.interruptClaimToken,
+        })
         if (!applied.applied) throw new Error(applied.reason ?? "source_rejected")
-        return applied.replacementExecutionRunId
-          ? { retryRunId: applied.replacementExecutionRunId }
-          : undefined
+        const settlement = await settleSquadReviewFromControl(command)
+        return {
+          ...settlement,
+          ...(applied.replacementExecutionRunId
+            ? { retryRunId: applied.replacementExecutionRunId }
+            : {}),
+        }
       }
-      return
+      return settleSquadReviewFromControl(command)
     }
 
     const action =

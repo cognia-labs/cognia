@@ -6,7 +6,23 @@ import type { ExecutionRun, RunEvent } from "@/types/execution/run"
 import { reduceRunEvents } from "@/lib/execution/run-reducer"
 
 import { __resetDbForTesting, getDb } from "./schema"
+import * as receipts from "./action-review-receipts"
+
+// Pass-through, so a test can fail the in-transaction receipt write once.
+jest.mock("./action-review-receipts", () => {
+  const actual = jest.requireActual("./action-review-receipts")
+  return {
+    ...actual,
+    recordActionReviewReceiptInsideTransaction: jest.fn(
+      actual.recordActionReviewReceiptInsideTransaction
+    ),
+    recordActionReviewReceipt: jest.fn(actual.recordActionReviewReceipt),
+  }
+})
 import {
+  claimExecutionRunInterrupt,
+  finishExecutionRunInterrupt,
+  releaseExecutionRunInterruptClaim,
   appendRunEventsInsideTransaction,
   appendRunObservation,
   adoptExecutionRun,
@@ -34,6 +50,100 @@ describe("execution run journal", () => {
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  it("claims a pending decision atomically and resolves only the owning token", async () => {
+    await createExecutionRun({
+      id: "claim",
+      kind: "bot",
+      sourceId: "bot",
+      title: "Bot",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    })
+    await getDb().executionRunInterrupts.add({
+      id: "claim-int",
+      runId: "claim",
+      type: "bot_approval",
+      status: "pending",
+      title: "Approve",
+      createdAt: 1,
+      expiresAt: 100,
+    })
+    const [one, two] = await Promise.all(
+      ["one", "two"].map((token) =>
+        claimExecutionRunInterrupt("claim", "claim-int", { token, action: "approve", at: 2 })
+      )
+    )
+    const winner = "interrupt" in one ? one : two
+    expect("interrupt" in winner).toBe(true)
+    expect([one, two].filter((result) => "interrupt" in result)).toHaveLength(1)
+    const row = (await getDb().executionRunInterrupts.get("claim-int"))!
+    expect(row.status).toBe("pending")
+    expect(await finishExecutionRunInterrupt("claim", row.id, "deny", 3, { token: "wrong" })).toBe(
+      false
+    )
+    await releaseExecutionRunInterruptClaim(row.id, "wrong")
+    expect((await getDb().executionRunInterrupts.get(row.id))?.decidingClaim).toEqual(
+      row.decidingClaim
+    )
+    expect(
+      await finishExecutionRunInterrupt("claim", row.id, "approve", 3, {
+        token: row.decidingClaim!.token,
+      })
+    ).toBe(true)
+    expect(
+      await finishExecutionRunInterrupt("claim", row.id, "deny", 4, { sourceWinner: true })
+    ).toBe(false)
+    expect((await listExecutionRunEvents("claim")).map((event) => event.type)).toEqual([
+      "interrupt.resolved",
+    ])
+  })
+
+  it("resolves a claimed decision whose effect ran even when its receipt write fails", async () => {
+    await createExecutionRun({
+      id: "receipt",
+      kind: "team",
+      sourceId: "team",
+      title: "Team",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    })
+    await getDb().executionRunInterrupts.add({
+      id: "receipt-int",
+      runId: "receipt",
+      type: "team_recovery",
+      status: "pending",
+      title: "Recover",
+      createdAt: 1,
+      expiresAt: 100,
+    })
+    const claimed = await claimExecutionRunInterrupt("receipt", "receipt-int", {
+      token: "owner",
+      action: "approve",
+      at: 2,
+    })
+    expect("interrupt" in claimed).toBe(true)
+    const receipt = { id: "receipt-row" } as never
+    jest
+      .mocked(receipts.recordActionReviewReceiptInsideTransaction)
+      .mockRejectedValueOnce(new Error("receipt store failed"))
+    jest.mocked(receipts.recordActionReviewReceipt).mockResolvedValueOnce(undefined)
+    await expect(
+      finishExecutionRunInterrupt("receipt", "receipt-int", "approve", 3, {
+        token: "owner",
+        receipt,
+      })
+    ).resolves.toBe(true)
+    const row = (await getDb().executionRunInterrupts.get("receipt-int"))!
+    expect(row.status).toBe("approved")
+    expect(row.decidingClaim).toBeUndefined()
+    // The receipt is retried on its own, after the resolution committed.
+    expect(receipts.recordActionReviewReceipt).toHaveBeenCalledWith(receipt)
   })
 
   it("records personal marks as private observations without changing terminal projections", async () => {

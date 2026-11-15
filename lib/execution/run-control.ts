@@ -1,7 +1,14 @@
+import type { ActionReviewReceipt } from "@cognia/agent-config-types/action-review"
+import { isTerminalTeamStatus } from "@cognia/agent-orchestration/rules"
 import { getDb } from "@/lib/db/schema"
 import {
   adoptExecutionRun,
   appendRunEventInsideTransaction,
+  claimExecutionRunInterrupt,
+  INTERRUPT_CLAIM_MAX_AGE_MS,
+  renewExecutionRunInterruptClaim,
+  finishExecutionRunInterrupt,
+  releaseExecutionRunInterruptClaim,
   getExecutionRun,
   listExecutionRunEvents,
   runEventJournal,
@@ -24,16 +31,21 @@ import type {
 /**
  * What a handler can tell the control gate about what it did.
  *
- * `void` keeps every existing handler valid. The one thing a handler needs to
- * report is a steering RECEIPT id — never the steering text, which must not
- * enter the journal (see {@link RunControlCommand.steerMessage}).
+ * `void` keeps existing handlers valid. Steering returns RECEIPT ids, never
+ * text. Squad reviews return a redacted typed decision for the resolution CAS
+ * so no provisional approval can survive a concurrent expiry.
  */
 export interface RunControlHandlerOutcome {
   steerReceiptIds?: readonly string[]
+  interruptDecision?: ExecutionRunInterrupt["decision"]
+  interruptReceipt?: ActionReviewReceipt
+  /** Decision observations only; invoked after the resolution CAS commits. */
+  onInterruptResolved?: () => Promise<void>
 }
 
 export type RunControlHandler = (
-  command: RunControlCommand
+  command: RunControlCommand,
+  context?: { interruptClaimToken?: string }
 ) => Promise<void | RunControlHandlerOutcome>
 
 /**
@@ -57,6 +69,8 @@ export interface RunControlResult {
     | "interrupt_not_found"
     | "interrupt_expired"
     | "interrupt_resolved"
+    /** The child attempt moved (or disappeared); the old question is expired. */
+    | "interrupt_stale"
     | "source_rejected"
     /**
      * The action exists in the vocabulary but this run kind has no way to
@@ -94,6 +108,10 @@ export interface RunControlResult {
   degradedReason?: SteerDegradedReason
   /** Durable receipts a successful steer produced, for correlation. */
   steerReceiptIds?: readonly string[]
+  interruptDecision?: ExecutionRunInterrupt["decision"]
+  interruptReceipt?: ActionReviewReceipt
+  /** Decision observations only; invoked after the resolution CAS commits. */
+  onInterruptResolved?: () => Promise<void>
 }
 
 const handlers = new Map<ExecutionRunKind, RunControlHandler>()
@@ -257,6 +275,24 @@ export async function createRunInterrupt(
   interrupt: ExecutionRunInterrupt
 ): Promise<ExecutionRunInterrupt> {
   const db = getDb()
+  // All permission producers (chat Action Review, IM, ask_user and unattended
+  // parking) converge here. A child's native session is attached before it
+  // runs; capture its attempt now rather than asking the caller to infer it.
+  if (!interrupt.childRunId) {
+    const run = await getExecutionRun(interrupt.runId)
+    if (run?.sessionId) {
+      // A session can outlive one child row; bind to the live, newest one.
+      const child = (await db.agentTeamChildRuns.where("sessionId").equals(run.sessionId).toArray())
+        .sort(
+          (a, b) =>
+            Number(isTerminalTeamStatus(a.status)) - Number(isTerminalTeamStatus(b.status)) ||
+            b.updatedAt - a.updatedAt
+        )
+        .at(0)
+      if (child)
+        interrupt = { ...interrupt, childRunId: child.id, dispatchEpoch: child.dispatchEpoch ?? 0 }
+    }
+  }
   await db.transaction(
     "rw",
     db.executionRunInterrupts,
@@ -269,7 +305,8 @@ export async function createRunInterrupt(
     db.notificationProjectionWork,
     async () => {
       await db.executionRunInterrupts.add(interrupt)
-      await runEventJournal.append(
+      await appendRunEventInsideTransaction(
+        db,
         interrupt.runId,
         semanticRunEvent(
           "interrupt.requested",
@@ -300,21 +337,10 @@ export async function resolveRunInterruptFromSource(
   actor?: ExecutionRunInitiator,
   now: number = Date.now()
 ): Promise<void> {
-  const interrupt = await getDb().executionRunInterrupts.get(interruptId)
-  if (!interrupt || interrupt.runId !== runId || interrupt.status !== "pending") return
-  await getDb().executionRunInterrupts.update(interruptId, {
-    status: resolution === "approve" ? "approved" : "denied",
-    resolvedAt: now,
-    ...(actor ? { resolvedBy: actor } : {}),
+  await finishExecutionRunInterrupt(runId, interruptId, resolution, now, {
+    actor,
+    sourceWinner: true,
   })
-  await runEventJournal.append(
-    runId,
-    semanticRunEvent(
-      "interrupt.resolved",
-      { interruptId, resolution },
-      { ts: now, sourceEventId: `interrupt:${interruptId}:resolved` }
-    )
-  )
 }
 
 export async function expireRunInterruptFromSource(
@@ -322,22 +348,18 @@ export async function expireRunInterruptFromSource(
   interruptId: string,
   now: number = Date.now()
 ): Promise<void> {
-  const interrupt = await getDb().executionRunInterrupts.get(interruptId)
-  if (!interrupt || interrupt.runId !== runId || interrupt.status !== "pending") return
-  await getDb().executionRunInterrupts.update(interruptId, { status: "expired", resolvedAt: now })
-  if (interrupt.reviewKind) {
-    const { endSquadReviewSpan } = await import("@/lib/squads/squad/squad-telemetry")
-    endSquadReviewSpan({ interruptId, outcome: "expired", source: "expiry" })
+  if (await finishExecutionRunInterrupt(runId, interruptId, "expired", now)) {
+    const interrupt = await getDb().executionRunInterrupts.get(interruptId)
+    if (interrupt?.reviewKind) {
+      const { endSquadReviewSpan } = await import("@/lib/squads/squad/squad-telemetry")
+      endSquadReviewSpan({ interruptId, outcome: "expired", source: "expiry" })
+    }
   }
-  await runEventJournal.append(
-    runId,
-    semanticRunEvent(
-      "interrupt.expired",
-      { interruptId },
-      { ts: now, sourceEventId: `interrupt:${interruptId}:expired` }
-    )
-  )
 }
+
+/** Live handlers renew well before this bounded abandonment deadline. */
+export { INTERRUPT_CLAIM_MAX_AGE_MS } from "@/lib/db/execution-runs"
+export const INTERRUPT_CLAIM_RENEW_INTERVAL_MS = 30_000
 
 /**
  * Reconcile durable approvals after startup without replaying privileged work.
@@ -352,6 +374,17 @@ export async function expireRunInterruptFromSource(
 export async function recoverPendingRunInterrupts(now: number = Date.now()): Promise<void> {
   const pending = await getDb().executionRunInterrupts.where("status").equals("pending").toArray()
   for (const interrupt of pending) {
+    if (
+      interrupt.decidingClaim &&
+      (interrupt.decidingClaim.renewedAt ?? interrupt.decidingClaim.at) <=
+        now - INTERRUPT_CLAIM_MAX_AGE_MS
+    ) {
+      await releaseExecutionRunInterruptClaim(
+        interrupt.id,
+        interrupt.decidingClaim.token,
+        now - INTERRUPT_CLAIM_MAX_AGE_MS
+      )
+    }
     if (interrupt.expiresAt <= now) {
       if (interrupt.type === "human_handoff") {
         const { markOverdueHandoffs } = await import("./delegation-handoff")
@@ -392,14 +425,22 @@ async function reject(
   reason: NonNullable<RunControlResult["reason"]>,
   currentRevision: number
 ): Promise<RunControlResult> {
-  await runEventJournal.append(
-    command.runId,
-    semanticRunEvent(
-      "control.rejected",
-      { action: command.action, reason, actorId: actorId(command.actor) },
-      { sourceEventId: `control:${command.idempotencyKey}` }
+  await runEventJournal
+    .append(
+      command.runId,
+      semanticRunEvent(
+        "control.rejected",
+        { action: command.action, reason, actorId: actorId(command.actor) },
+        { sourceEventId: `control:${command.idempotencyKey}` }
+      )
     )
-  )
+    .catch(async (error: unknown) => {
+      // A superseded handler can discover the loss after another path stopped
+      // the run. Preserve that sealed journal and still report the CAS refusal.
+      const latest = await getExecutionRun(command.runId)
+      if (!latest || !TERMINAL_STATUSES.has(latest.status)) throw error
+      currentRevision = latest.currentRevision
+    })
   return { accepted: false, reason, currentRevision }
 }
 
@@ -492,7 +533,20 @@ async function stampRetry(
   })
 }
 
-async function executeRunControlCommandUnlocked(
+async function rearmStaleTeamRecovery(
+  run: ExecutionRun,
+  interrupt: ExecutionRunInterrupt,
+  now: number
+): Promise<void> {
+  if (interrupt.type !== "team_recovery") return
+  const { parkActiveSquadRun } = await import("@/lib/squads/squad/squad-run-records")
+  await parkActiveSquadRun(run.sourceId, "recover_needs_input", now)
+  const { ensureTeamRecoveryInterrupt } = await import("@/lib/squads/durable/team-recovery")
+  await ensureTeamRecoveryInterrupt(run.sourceId)
+}
+
+/** @internal Cross-process test seam; production keeps the per-run control lock. */
+export async function executeRunControlCommandUnlocked(
   command: RunControlCommand,
   options: { operatorIds?: readonly string[]; now?: number } = {}
 ): Promise<RunControlResult> {
@@ -545,6 +599,7 @@ async function executeRunControlCommandUnlocked(
   }
 
   let interrupt: ExecutionRunInterrupt | undefined
+  let claimToken: string | undefined
   if (command.action === "approve" || command.action === "deny") {
     if (!command.interruptId) return reject(command, "interrupt_not_found", run.currentRevision)
     interrupt = await getDb().executionRunInterrupts.get(command.interruptId)
@@ -565,26 +620,6 @@ async function executeRunControlCommandUnlocked(
     if (!validation.ok) {
       return reject(command, "invalid_command", run.currentRevision)
     }
-    const now = options.now ?? Date.now()
-    if (interrupt.expiresAt <= now) {
-      await getDb().executionRunInterrupts.update(interrupt.id, {
-        status: "expired",
-        resolvedAt: now,
-      })
-      await runEventJournal.append(
-        run.id,
-        semanticRunEvent(
-          "interrupt.expired",
-          { interruptId: interrupt.id },
-          { ts: now, sourceEventId: `interrupt:${interrupt.id}:expired` }
-        )
-      )
-      return reject(
-        command,
-        "interrupt_expired",
-        (await getExecutionRun(run.id))?.currentRevision ?? run.currentRevision
-      )
-    }
   }
 
   // A Router + Fusion approval is answered by the fusion handler whatever
@@ -592,16 +627,72 @@ async function executeRunControlCommandUnlocked(
   // workflow or team run that owns the step (ADR-0188 B4), and that kind's
   // own handler knows nothing about fusion digests.
   const handler = handlers.get(interrupt?.type === "fusion_approval" ? "fusion" : run.kind)
-  if (!handler) return reject(command, "unsupported", run.currentRevision)
+  if (interrupt) {
+    const claimed = await claimExecutionRunInterrupt(run.id, interrupt.id, {
+      token: crypto.randomUUID(),
+      action: command.action as "approve" | "deny",
+      actorId: actorId(command.actor),
+      at: options.now ?? Date.now(),
+    })
+    if ("reason" in claimed) {
+      if (claimed.reason === "interrupt_stale")
+        await rearmStaleTeamRecovery(run, interrupt, options.now ?? Date.now())
+      return reject(command, claimed.reason, run.currentRevision)
+    }
+    interrupt = claimed.interrupt
+    claimToken = interrupt.decidingClaim!.token
+    // Re-read immediately before calling the handler, after the claim commit.
+    if (interrupt.childRunId && interrupt.dispatchEpoch !== undefined) {
+      const child = await getDb().agentTeamChildRuns.get(interrupt.childRunId)
+      if (!child || (child.dispatchEpoch ?? 0) !== interrupt.dispatchEpoch) {
+        await finishExecutionRunInterrupt(
+          run.id,
+          interrupt.id,
+          "expired",
+          options.now ?? Date.now(),
+          { token: claimToken }
+        )
+        await rearmStaleTeamRecovery(run, interrupt, options.now ?? Date.now())
+        return reject(command, "interrupt_stale", run.currentRevision)
+      }
+    }
+  }
+  if (!handler) {
+    if (interrupt && claimToken) await releaseExecutionRunInterruptClaim(interrupt.id, claimToken)
+    return reject(command, "unsupported", run.currentRevision)
+  }
   let outcome: void | RunControlHandlerOutcome
+  const heartbeat =
+    interrupt && claimToken
+      ? setInterval(() => {
+          void renewExecutionRunInterruptClaim(interrupt!.id, claimToken!).catch(() => undefined)
+        }, INTERRUPT_CLAIM_RENEW_INTERVAL_MS)
+      : undefined
   try {
-    outcome = await handler(command)
+    outcome = await handler(command, { interruptClaimToken: claimToken })
     // Stopping a run stops the tree under it. A child that refuses does not
     // undo the stop the person asked for.
     if (command.action === "stop") {
       await stopLiveDescendants(run.id, command.idempotencyKey, command.actor).catch(() => 0)
     }
   } catch (error) {
+    if (interrupt && claimToken) {
+      if (error instanceof Error && error.message === "interrupt_stale") {
+        await finishExecutionRunInterrupt(
+          run.id,
+          interrupt.id,
+          "expired",
+          options.now ?? Date.now(),
+          { token: claimToken }
+        )
+        await rearmStaleTeamRecovery(run, interrupt, options.now ?? Date.now())
+        return reject(command, "interrupt_stale", run.currentRevision)
+      }
+      const latest = await getDb().executionRunInterrupts.get(interrupt.id)
+      const lostClaim = latest?.status !== "pending" || latest.decidingClaim?.token !== claimToken
+      await releaseExecutionRunInterruptClaim(interrupt.id, claimToken)
+      if (lostClaim) return reject(command, "interrupt_resolved", run.currentRevision)
+    }
     // A handler that refuses because the KIND cannot do this action says so,
     // instead of every throw collapsing into a generic engine refusal the user
     // has no way to act on.
@@ -623,37 +714,26 @@ async function executeRunControlCommandUnlocked(
       return { ...(await reject(command, "steer_degraded", run.currentRevision)), degradedReason }
     }
     return reject(command, handlerRefusalReason(error), run.currentRevision)
+  } finally {
+    if (heartbeat !== undefined) clearInterval(heartbeat)
   }
 
   const now = options.now ?? Date.now()
   if (interrupt) {
-    // A waiting lifecycle must see the decision and its projected resolution
-    // together, or its next review can be erased by this older resolution.
-    const db = getDb()
-    const resolvedInterrupt = interrupt
-    await db.transaction(
-      "rw",
-      db.executionRunInterrupts,
-      db.executionRuns,
-      db.executionRunEvents,
-      db.notificationProjectionWork,
-      async () => {
-        await db.executionRunInterrupts.update(resolvedInterrupt.id, {
-          status: command.action === "approve" ? "approved" : "denied",
-          resolvedAt: now,
-          resolvedBy: command.actor,
-        })
-        await appendRunEventInsideTransaction(
-          db,
-          run.id,
-          semanticRunEvent(
-            "interrupt.resolved",
-            { interruptId: resolvedInterrupt.id, resolution: command.action },
-            { ts: now, sourceEventId: `interrupt:${resolvedInterrupt.id}:resolved` }
-          )
-        )
+    const resolved = await finishExecutionRunInterrupt(
+      run.id,
+      interrupt.id,
+      command.action as "approve" | "deny",
+      now,
+      {
+        token: claimToken,
+        actor: command.actor,
+        decision: outcome?.interruptDecision,
+        receipt: outcome?.interruptReceipt,
       }
     )
+    if (!resolved) return reject(command, "interrupt_resolved", run.currentRevision)
+    if (outcome?.onInterruptResolved) await outcome.onInterruptResolved().catch(() => undefined)
   }
   const steerReceiptIds = outcome?.steerReceiptIds ?? []
   let accepted: Awaited<ReturnType<typeof runEventJournal.append>>
@@ -674,12 +754,13 @@ async function executeRunControlCommandUnlocked(
       )
     )
   } catch (error) {
-    // A stop handler with no live lifecycle to abort settles the journal
+    // A stop or recovery-decision handler can settle the journal
     // itself (a Squad run after a restart journals `run.cancelled` directly),
     // and a settled journal refuses further events. The stop did exactly what
     // was asked: answer accepted at the revision the journal reached, rather
     // than throwing a "terminal" error at the person who pressed Stop.
-    const latest = command.action === "stop" ? await getExecutionRun(run.id) : undefined
+    const latest =
+      command.action === "stop" || interrupt ? await getExecutionRun(run.id) : undefined
     if (!latest || !TERMINAL_STATUSES.has(latest.status)) throw error
     return {
       accepted: true,

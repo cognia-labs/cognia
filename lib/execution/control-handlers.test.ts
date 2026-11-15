@@ -15,8 +15,10 @@ import {
   createExecutionRun,
   getExecutionRun,
   listExecutionRunEvents,
+  runEventJournal,
+  semanticRunEvent,
 } from "@/lib/db/execution-runs"
-import { executeRunControlCommand } from "./run-control"
+import { createRunInterrupt, executeRunControlCommand } from "./run-control"
 import { registerRunRetryHandler } from "./run-retry-registry"
 
 import { __resetRunStopsForTesting, registerRunStop } from "./run-stops"
@@ -41,6 +43,13 @@ const mockSettleSquadReview = jest.fn(async (_command: unknown) => undefined)
 jest.mock("@/lib/squads/gates/squad-review-gate", () => ({
   settleSquadReviewFromControl: (...args: unknown[]) =>
     mockSettleSquadReview(...(args as [unknown])),
+}))
+
+const mockApplyTeamRecovery = jest.fn()
+const mockEnsureTeamRecovery = jest.fn()
+jest.mock("@/lib/squads/durable/team-recovery", () => ({
+  applyTeamRecoveryFromControl: (...args: unknown[]) => mockApplyTeamRecovery(...args),
+  ensureTeamRecoveryInterrupt: (...args: unknown[]) => mockEnsureTeamRecovery(...args),
 }))
 
 const mockStartSquadRun = jest.fn(
@@ -592,6 +601,89 @@ describe("team run control", () => {
       handlers.dispose()
     }
   )
+
+  it.each(["terminate", "deny", "restart_run"] as const)(
+    "resolves and accepts recovery %s after its handler seals the journal",
+    async (choice) => {
+      const handlers = installExecutionRunControlHandlers()
+      const sourceId = `recovery-${choice}`
+      const runId = `execution:team:${sourceId}`
+      mockGetAgentTeamRun.mockResolvedValue({ id: sourceId, status: "needs_input" })
+      await seedTeamRun(sourceId)
+      const interruptId = `interrupt:${choice}`
+      await createRunInterrupt({
+        id: interruptId,
+        runId,
+        type: "team_recovery",
+        reviewKind: "team_recovery",
+        title: "Recover",
+        status: "pending",
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+        subject: { choices: ["terminate", "restart_run"] },
+      })
+      mockApplyTeamRecovery.mockImplementationOnce(async () => {
+        await runEventJournal.append(runId, semanticRunEvent("run.cancelled", {}))
+        return { applied: true, choice: choice === "deny" ? "terminate" : choice }
+      })
+      const action = choice === "deny" ? "deny" : "approve"
+      const result = await executeRunControlCommand({
+        ...command(sourceId, "stop"),
+        action,
+        interruptId,
+        expectedRevision: (await getExecutionRun(runId))!.currentRevision,
+        reviewDecision: { kind: "team_recovery", choice: choice === "deny" ? "terminate" : choice },
+      })
+      expect(result.accepted).toBe(true)
+      const row = await getDb().executionRunInterrupts.get(interruptId)
+      expect(row?.status).toBe(action === "deny" ? "denied" : "approved")
+      expect(row?.decidingClaim).toBeUndefined()
+      expect((await getExecutionRun(runId))?.status).toBe("cancelled")
+      expect((await listExecutionRunEvents(runId)).at(-1)?.type).toBe("run.cancelled")
+      handlers.dispose()
+    }
+  )
+
+  it("expires a stale recovery without settling its review and raises a fresh question", async () => {
+    const handlers = installExecutionRunControlHandlers()
+    mockGetAgentTeamRun.mockResolvedValue({ id: "stale-recovery", status: "needs_input" })
+    mockApplyTeamRecovery.mockResolvedValue({
+      applied: false,
+      choice: "retry_same_host",
+      reason: "interrupt_stale",
+    })
+    await seedTeamRun("stale-recovery")
+    const runId = "execution:team:stale-recovery"
+    await createRunInterrupt({
+      id: "recovery-question",
+      runId,
+      type: "team_recovery",
+      reviewKind: "team_recovery",
+      status: "pending",
+      title: "Recovery",
+      createdAt: 1,
+      expiresAt: Date.now() + 60_000,
+    })
+    try {
+      const result = await executeRunControlCommand({
+        runId,
+        action: "approve",
+        interruptId: "recovery-question",
+        reviewDecision: { kind: "team_recovery", choice: "retry_same_host" },
+        actor: { remoteUserId: "operator-1" },
+        expectedRevision: 1,
+        idempotencyKey: "stale-recovery",
+      })
+      expect(result).toMatchObject({ accepted: false, reason: "interrupt_stale" })
+      expect(mockSettleSquadReview).not.toHaveBeenCalled()
+      expect((await getDb().executionRunInterrupts.get("recovery-question"))?.status).toBe(
+        "expired"
+      )
+      expect(mockEnsureTeamRecovery).toHaveBeenCalledWith("stale-recovery")
+    } finally {
+      handlers.dispose()
+    }
+  })
 
   it("reports a resume that needs a recovery decision as an engine refusal", async () => {
     const handlers = installExecutionRunControlHandlers()

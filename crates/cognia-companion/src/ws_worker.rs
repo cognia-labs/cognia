@@ -73,6 +73,7 @@ struct WorkerConnection {
     connection_id: String,
     tenant_id: String,
     host_ref: String,
+    authorization: Arc<WorkerAuthorization>,
     manifest: Value,
     last_seen_at: u64,
     used_slots: u32,
@@ -81,6 +82,174 @@ struct WorkerConnection {
     sender: mpsc::Sender<QueuedWorkerMessage>,
     queue_bytes: std::sync::Arc<Semaphore>,
     shutdown: watch::Sender<bool>,
+}
+
+/// SQL is consulted only after an in-process auth mutation, or the 1 s tick
+/// (which also catches writes from other processes). Revocation is latched for
+/// this connection: restoring a grant requires a new authenticated socket.
+struct WorkerAuthorization {
+    tenant_id: String,
+    device_id: String,
+    generation: u64,
+    cached: Mutex<(u64, Option<(&'static str, &'static str)>)>,
+}
+
+impl WorkerAuthorization {
+    fn new(tenant_id: &str, device_id: &str) -> Self {
+        Self {
+            tenant_id: tenant_id.to_string(),
+            device_id: device_id.to_string(),
+            generation: super::security_store::worker_revocation(tenant_id, device_id).generation,
+            cached: Mutex::new((0, None)),
+        }
+    }
+
+    fn check(&self, force: bool) -> Result<(), (&'static str, &'static str)> {
+        let mut cached = self.cached.lock();
+        if let Some(reason) = cached.1 {
+            return Err(reason);
+        }
+        let revision = super::security_store::worker_authorization_revision();
+        if !force && cached.0 == revision {
+            return Ok(());
+        }
+        let revoked = super::security_store::worker_revocation(&self.tenant_id, &self.device_id);
+        if revoked.generation > self.generation {
+            let reason = match revoked.reason {
+                Some("device_suspended") => ("device_suspended", "this device is suspended"),
+                Some("device_quarantined") => {
+                    ("device_quarantined", "this device must be claimed again")
+                }
+                Some("device_revoked") => ("device_revoked", "this device has been revoked"),
+                _ => ("grant_revoked", "agent.worker capability revoked"),
+            };
+            cached.1 = Some(reason);
+            return Err(reason);
+        }
+        let store = super::security_store::security_store();
+        let authorized = store.as_ref().is_some_and(|store| {
+            store
+                .has_capability(&self.tenant_id, &self.device_id, "agent.worker")
+                .unwrap_or(false)
+        });
+        // Record the revision BEFORE the SQL read. If another writer commits
+        // during the read, the next frame must check again, never bless it.
+        cached.0 = revision;
+        if authorized {
+            return Ok(());
+        }
+        let reason = match store.and_then(|store| {
+            store
+                .device_state(&self.tenant_id, &self.device_id)
+                .ok()
+                .flatten()
+        }) {
+            Some(super::security_store::DeviceLifecycleState::Suspended) => {
+                ("device_suspended", "this device is suspended")
+            }
+            Some(super::security_store::DeviceLifecycleState::Quarantined) => {
+                ("device_quarantined", "this device must be claimed again")
+            }
+            Some(super::security_store::DeviceLifecycleState::Active) => {
+                ("grant_revoked", "agent.worker capability revoked")
+            }
+            _ => ("device_revoked", "this device has been revoked"),
+        };
+        cached.1 = Some(reason);
+        Err(reason)
+    }
+}
+
+#[derive(Debug)]
+struct WorkerWriteFailure {
+    reason: &'static str,
+    message: &'static str,
+    /// A pending transport may contain RPC bytes: drop it without flushing Close.
+    drop_transport: bool,
+}
+
+impl WorkerWriteFailure {
+    fn socket_closed() -> Self {
+        Self {
+            reason: "socket_closed",
+            message: "worker socket closed",
+            drop_transport: true,
+        }
+    }
+}
+
+/// Poll the store only while a write is stalled, including external-process
+/// revocation. The outer socket loop cannot run its normal authorization tick.
+async fn monitor_worker_write(
+    work: impl std::future::Future<Output = Result<(), WorkerWriteFailure>>,
+    authorization: &WorkerAuthorization,
+) -> Result<(), WorkerWriteFailure> {
+    tokio::pin!(work);
+    let mut revocation = interval(Duration::from_millis(250));
+    revocation.tick().await;
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut work => return result,
+            _ = revocation.tick() => {
+                if let Err((reason, message)) = authorization.check(true) {
+                    return Err(WorkerWriteFailure { reason, message, drop_transport: true });
+                }
+            }
+        }
+    }
+}
+
+/// Serialize each synchronous sink operation with revocation commits. Never
+/// hold the process gate across an await. A stalled write is abandoned on revoke.
+async fn write_worker_message<S>(
+    sink: &mut S,
+    authorization: &WorkerAuthorization,
+    message: Message,
+) -> Result<(), WorkerWriteFailure>
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    use std::{pin::Pin, task::Poll};
+    let mut message = Some(message);
+    let mut stalled = false;
+    let ready = futures_util::future::poll_fn(|cx| {
+        let _gate = super::security_store::worker_authorization_read_guard();
+        if let Err((reason, message)) = authorization.check(false) {
+            return Poll::Ready(Err(WorkerWriteFailure {
+                reason,
+                message,
+                drop_transport: stalled,
+            }));
+        }
+        match Pin::new(&mut *sink).poll_ready(cx) {
+            Poll::Pending => {
+                stalled = true;
+                Poll::Pending
+            }
+            Poll::Ready(Err(_)) => Poll::Ready(Err(WorkerWriteFailure::socket_closed())),
+            Poll::Ready(Ok(())) => Poll::Ready(
+                Pin::new(&mut *sink)
+                    .start_send(message.take().unwrap())
+                    .map_err(|_| WorkerWriteFailure::socket_closed()),
+            ),
+        }
+    });
+    monitor_worker_write(ready, authorization).await?;
+    let flush = futures_util::future::poll_fn(|cx| {
+        let _gate = super::security_store::worker_authorization_read_guard();
+        if let Err((reason, message)) = authorization.check(false) {
+            return Poll::Ready(Err(WorkerWriteFailure {
+                reason,
+                message,
+                drop_transport: true,
+            }));
+        }
+        Pin::new(&mut *sink)
+            .poll_flush(cx)
+            .map_err(|_| WorkerWriteFailure::socket_closed())
+    });
+    monitor_worker_write(flush, authorization).await
 }
 
 struct QueuedWorkerMessage {
@@ -132,7 +301,19 @@ pub async fn ws_worker_handler(
                 );
             }
         };
-    if !worker_authorized(&binding.tenant_id, &binding.device_id) {
+    let worker_authorization = {
+        let _gate = super::security_store::worker_authorization_read_guard();
+        let authorization = Arc::new(WorkerAuthorization::new(
+            &binding.tenant_id,
+            &binding.device_id,
+        ));
+        if authorization.check(false).is_ok() {
+            Some(authorization)
+        } else {
+            None
+        }
+    };
+    let Some(worker_authorization) = worker_authorization else {
         return super::api::public_error_response(
             StatusCode::FORBIDDEN,
             "worker_access_forbidden",
@@ -140,11 +321,17 @@ pub async fn ws_worker_handler(
             false,
             serde_json::json!({}),
         );
-    }
+    };
     ws.max_message_size(MAX_WORKER_FRAME_BYTES)
         .max_frame_size(MAX_WORKER_FRAME_BYTES)
         .on_upgrade(move |socket| {
-            handle_worker_socket(socket, binding.tenant_id, binding.device_id, state)
+            handle_worker_socket(
+                socket,
+                binding.tenant_id,
+                binding.device_id,
+                state,
+                worker_authorization,
+            )
         })
         .into_response()
 }
@@ -155,7 +342,7 @@ pub(crate) fn send_to_worker(
     frame: String,
 ) -> Result<(), String> {
     validate_agent_rpc_frame(&frame)?;
-    let (sender, queue_bytes) = WORKERS
+    let (sender, queue_bytes, authorization) = WORKERS
         .read()
         .get(connection_id)
         .filter(|worker| worker.tenant_id == tenant_id)
@@ -163,9 +350,13 @@ pub(crate) fn send_to_worker(
             (
                 worker.sender.clone(),
                 std::sync::Arc::clone(&worker.queue_bytes),
+                Arc::clone(&worker.authorization),
             )
         })
         .ok_or_else(|| format!("worker connection is unavailable: {connection_id}"))?;
+    authorization
+        .check(false)
+        .map_err(|(reason, _)| reason.to_string())?;
     let byte_permit = reserve_queue_bytes(queue_bytes, frame.len())?;
     sender
         .try_send(QueuedWorkerMessage {
@@ -567,6 +758,7 @@ async fn handle_worker_socket(
     tenant_id: String,
     device_id: String,
     state: super::SharedState,
+    worker_authorization: Arc<WorkerAuthorization>,
 ) {
     let hello = match tokio::time::timeout(HELLO_TIMEOUT, receive_worker_hello(&mut socket)).await {
         Ok(Ok(hello)) => hello,
@@ -584,6 +776,10 @@ async fn handle_worker_socket(
             return;
         }
     };
+    if let Err((_, reason)) = worker_authorization.check(false) {
+        close_revoked_worker(&mut socket, reason).await;
+        return;
+    }
     let WorkerHello::WorkerHello { manifest, .. } = hello;
     let connection_id = uuid::Uuid::new_v4().to_string();
     let host_ref = derive_host_ref(&tenant_id, &device_id);
@@ -593,6 +789,7 @@ async fn handle_worker_socket(
         connection_id: connection_id.clone(),
         tenant_id: tenant_id.clone(),
         host_ref: host_ref.clone(),
+        authorization: Arc::clone(&worker_authorization),
         manifest: manifest.clone(),
         last_seen_at: unix_time_millis(),
         used_slots: 0,
@@ -645,10 +842,16 @@ async fn handle_worker_socket(
 
     loop {
         tokio::select! {
-            outgoing = outgoing.recv() => {
-                match outgoing {
+            next_outgoing = outgoing.recv() => {
+                match next_outgoing {
                     Some(queued) => {
-                        if socket.send(queued.message).await.is_err() {
+                        if let Err(failure) = write_worker_message(&mut socket, &worker_authorization, queued.message).await {
+                            detach_reason = failure.reason;
+                            if !failure.drop_transport {
+                                outgoing.close();
+                                while outgoing.try_recv().is_ok() {}
+                                close_revoked_worker(&mut socket, failure.message).await;
+                            }
                             break;
                         }
                     }
@@ -694,7 +897,11 @@ async fn handle_worker_socket(
                     Some(Ok(Message::Ping(bytes))) => {
                         last_activity = Instant::now();
                         touch_worker(&connection_id);
-                        if socket.send(Message::Pong(bytes)).await.is_err() { break; }
+                        if let Err(failure) = write_worker_message(&mut socket, &worker_authorization, Message::Pong(bytes)).await {
+                            detach_reason = failure.reason;
+                            if !failure.drop_transport { close_revoked_worker(&mut socket, failure.message).await; }
+                            break;
+                        }
                     }
                     Some(Ok(Message::Pong(_))) => {
                         last_activity = Instant::now();
@@ -713,30 +920,18 @@ async fn handle_worker_socket(
                     detach_reason = "idle_timeout";
                     break;
                 }
-                if socket.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
+                if let Err(failure) = write_worker_message(&mut socket, &worker_authorization, Message::Ping(Vec::new().into())).await {
+                    detach_reason = failure.reason;
+                    if !failure.drop_transport { close_revoked_worker(&mut socket, failure.message).await; }
+                    break;
+                }
             }
             _ = authorization.tick() => {
-                if !worker_authorized(&tenant_id, &device_id) {
-                    // Distinguish "the capability was taken away" from "the
-                    // whole device was suspended or revoked": the worker's
-                    // operator does different things about each, and both
-                    // arrive here as the same `false`.
-                    let (reason, message) = match super::security_store::security_store()
-                        .and_then(|store| store.device_state(&tenant_id, &device_id).ok().flatten())
-                    {
-                        Some(super::security_store::DeviceLifecycleState::Suspended) => {
-                            ("device_suspended", "this device is suspended")
-                        }
-                        Some(super::security_store::DeviceLifecycleState::Quarantined) => {
-                            ("device_quarantined", "this device must be claimed again")
-                        }
-                        Some(super::security_store::DeviceLifecycleState::Active) => {
-                            ("grant_revoked", "agent.worker capability revoked")
-                        }
-                        _ => ("device_revoked", "this device has been revoked"),
-                    };
+                if let Err((reason, message)) = worker_authorization.check(true) {
                     detach_reason = reason;
-                    close_with(&mut socket, CLOSE_POLICY_VIOLATION, message).await;
+                    outgoing.close();
+                    while outgoing.try_recv().is_ok() {}
+                    close_revoked_worker(&mut socket, message).await;
                     break;
                 }
             }
@@ -750,21 +945,49 @@ async fn handle_worker_socket(
         }
     }
 
+    // In particular, never flush a stalled RPC write after authorization loss.
+    drop(socket);
+    outgoing.close();
+    while outgoing.try_recv().is_ok() {}
+    detach_worker_connection(connection_id, &tenant_id, host_ref, detach_reason, || {
+        publish_fleet_update(&state, &tenant_id)
+    })
+    .await;
+}
+
+/// The one socket cleanup path, also exercised by revocation/regrant tests.
+async fn detach_worker_connection(
+    connection_id: String,
+    tenant_id: &str,
+    host_ref: String,
+    reason: &str,
+    publish: impl FnOnce(),
+) {
     if remove_worker(&connection_id) {
-        publish_fleet_update(&state, &tenant_id);
-        if let BrainDelivery::Failed(reason) = deliver_to_brain(
-            &tenant_id,
+        publish();
+        if let BrainDelivery::Failed(error) = deliver_to_brain(
+            tenant_id,
             WorkerBrainEvent::WorkerDetach {
                 connection_id,
                 host_ref,
-                reason: detach_reason.to_string(),
+                reason: reason.to_string(),
             },
         )
         .await
         {
-            log::warn!("companion-api ws-worker: worker detach was not delivered: {reason}");
+            log::warn!("companion-api ws-worker: worker detach was not delivered: {error}");
         }
     }
+}
+
+// Normal revocation may flush WebSocket control frames (Close and a previously
+// auto-queued Pong), never Agent RPC data. Bound even this best-effort notice.
+async fn close_revoked_worker(socket: &mut WebSocket, message: &str) {
+    let _ = tokio::time::timeout(
+        Duration::from_millis(250),
+        close_with(socket, CLOSE_POLICY_VIOLATION, message),
+    )
+    .await;
 }
 
 fn publish_fleet_update(state: &super::SharedState, tenant_id: &str) {
@@ -1041,16 +1264,6 @@ fn validate_agent_rpc_frame(frame: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn worker_authorized(tenant_id: &str, device_id: &str) -> bool {
-    super::security_store::security_store()
-        .and_then(|store| {
-            store
-                .has_capability(tenant_id, device_id, "agent.worker")
-                .ok()
-        })
-        .unwrap_or(false)
-}
-
 async fn close_with(socket: &mut WebSocket, code: u16, reason: &str) {
     let _ = socket
         .send(Message::Close(Some(CloseFrame {
@@ -1129,6 +1342,7 @@ mod tests {
             connection_id: connection_id.to_string(),
             tenant_id: tenant_id.to_string(),
             host_ref: host_ref.to_string(),
+            authorization: Arc::new(WorkerAuthorization::new(tenant_id, "placement-projection")),
             manifest: serde_json::json!({
                 "runtime": "cognia-agent",
                 "maxActiveTurns": 2,
@@ -1314,6 +1528,7 @@ mod tests {
 
     #[test]
     fn a_desktop_brain_takes_priority_over_the_socket_brain_for_its_own_tenant() {
+        let _guard = super::super::security_store::test_guard();
         // The two brains are mutually exclusive by design — delivering to both
         // would give one worker connection two Agent RPC clients.
         let tenant_id = "tenant-routing";
@@ -1326,6 +1541,327 @@ mod tests {
 
         DESKTOP_SINK.write().take();
         assert!(desktop_sink_for(tenant_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn revoke_regrant_retires_old_socket_and_notifies_the_brain() {
+        let _guard = super::super::security_store::test_guard();
+        let store = super::super::security_store::SecurityStore::in_memory().unwrap();
+        super::super::security_store::install_security_store(Some(Arc::clone(&store)));
+        let tenant = "tenant-regrant";
+        let device = "worker-regrant";
+        let connection_id = "connection-regrant";
+        let host_ref = derive_host_ref(tenant, device);
+        store
+            .ensure_service_principal(tenant, device, device, &["agent.worker"], 1)
+            .unwrap();
+        let authorization = Arc::new(WorkerAuthorization::new(tenant, device));
+        assert!(authorization.check(false).is_ok());
+        let (sender, mut receiver) = mpsc::channel(4);
+        let (shutdown, _) = watch::channel(false);
+        WORKERS.write().insert(
+            connection_id.to_string(),
+            WorkerConnection {
+                connection_id: connection_id.to_string(),
+                tenant_id: tenant.to_string(),
+                host_ref: host_ref.clone(),
+                authorization: Arc::clone(&authorization),
+                manifest: serde_json::json!({}),
+                last_seen_at: 1,
+                used_slots: 0,
+                placement_ready: None,
+                placement_reason: None,
+                sender,
+                queue_bytes: Arc::new(Semaphore::new(MAX_WORKER_QUEUE_BYTES)),
+                shutdown,
+            },
+        );
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        DESKTOP_SINK
+            .write()
+            .replace(Arc::new(DesktopWorkerSink::new(
+                tenant.to_string(),
+                Box::new(move |envelope| {
+                    captured.lock().push(envelope.event);
+                    Ok(())
+                }),
+            )));
+        send_to_worker(tenant, connection_id, "queued-before-revoke".to_string()).unwrap();
+        // No socket check occurs between these two committed edits.
+        store
+            .replace_device_capabilities(tenant, "owner", device, &[], 2)
+            .unwrap();
+        store
+            .replace_device_capabilities(tenant, "owner", device, &["agent.worker".to_string()], 3)
+            .unwrap();
+        assert!(store
+            .has_capability(tenant, device, "agent.worker")
+            .unwrap());
+        let reason = authorization.check(true).unwrap_err().0;
+        assert_eq!(reason, "grant_revoked");
+        assert!(send_to_worker(tenant, connection_id, "new".to_string()).is_err());
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let output = Arc::clone(&written);
+        let mut sink = Box::pin(futures_util::sink::unfold((), move |(), message| {
+            output.lock().push(message);
+            async { Ok::<_, std::convert::Infallible>(()) }
+        }));
+        let queued = receiver.recv().await.unwrap();
+        assert_eq!(
+            write_worker_message(&mut sink, &authorization, queued.message)
+                .await
+                .unwrap_err()
+                .reason,
+            "grant_revoked"
+        );
+        assert!(written.lock().is_empty());
+        receiver.close();
+        while receiver.try_recv().is_ok() {}
+        let published = std::sync::atomic::AtomicBool::new(false);
+        detach_worker_connection(connection_id.to_string(), tenant, host_ref, reason, || {
+            published.store(true, Ordering::SeqCst);
+        })
+        .await;
+        assert!(published.load(Ordering::SeqCst));
+        assert!(!WORKERS.read().contains_key(connection_id));
+        assert!(events.lock().iter().any(|event| matches!(event,
+            WorkerBrainEvent::WorkerDetach { connection_id: id, reason, .. }
+            if id == connection_id && reason == "grant_revoked")));
+        // Only a fresh authenticated connection can use the restored grant.
+        assert!(WorkerAuthorization::new(tenant, device)
+            .check(false)
+            .is_ok());
+        DESKTOP_SINK.write().take();
+        super::super::security_store::install_security_store(None);
+    }
+
+    #[tokio::test]
+    async fn retaining_worker_capability_does_not_retire_the_connection() {
+        let _guard = super::super::security_store::test_guard();
+        let store = super::super::security_store::SecurityStore::in_memory().unwrap();
+        super::super::security_store::install_security_store(Some(Arc::clone(&store)));
+        store
+            .ensure_service_principal("tenant-retain", "worker", "Worker", &["agent.worker"], 1)
+            .unwrap();
+        let authorization = WorkerAuthorization::new("tenant-retain", "worker");
+        assert!(authorization.check(false).is_ok());
+        store
+            .replace_device_capabilities(
+                "tenant-retain",
+                "owner",
+                "worker",
+                &["agent.worker".to_string()],
+                2,
+            )
+            .unwrap();
+        assert!(authorization.check(false).is_ok());
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let output = Arc::clone(&written);
+        let mut sink = Box::pin(futures_util::sink::unfold((), move |(), message| {
+            output.lock().push(message);
+            async { Ok::<_, std::convert::Infallible>(()) }
+        }));
+        write_worker_message(
+            &mut sink,
+            &authorization,
+            Message::Text("authorized-rpc".into()),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(written.lock().as_slice(), [Message::Text(_)]));
+        super::super::security_store::install_security_store(None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revocation_refuses_new_frames_and_drops_queued_frames_within_one_second() {
+        let _guard = super::super::security_store::test_guard();
+        let store = super::super::security_store::SecurityStore::in_memory().unwrap();
+        super::super::security_store::install_security_store(Some(Arc::clone(&store)));
+        let tenant = "tenant-worker-revocation";
+        let device = "worker-revocation";
+        store
+            .ensure_service_principal(tenant, device, device, &["agent.worker"], 1)
+            .unwrap();
+        let authorization = Arc::new(WorkerAuthorization::new(tenant, device));
+        let (sender, mut receiver) = mpsc::channel(4);
+        let (shutdown, _) = watch::channel(false);
+        let connection_id = "connection-worker-revocation";
+        WORKERS.write().insert(
+            connection_id.to_string(),
+            WorkerConnection {
+                connection_id: connection_id.to_string(),
+                tenant_id: tenant.to_string(),
+                host_ref: derive_host_ref(tenant, device),
+                authorization: Arc::clone(&authorization),
+                manifest: serde_json::json!({}),
+                last_seen_at: 1,
+                used_slots: 0,
+                placement_ready: None,
+                placement_reason: None,
+                sender,
+                queue_bytes: Arc::new(Semaphore::new(MAX_WORKER_QUEUE_BYTES)),
+                shutdown,
+            },
+        );
+        // Prime a cached allow and enqueue while the grant still exists.
+        send_to_worker(tenant, connection_id, "queued".to_string()).unwrap();
+        store
+            .replace_device_capabilities(tenant, "owner", device, &[], 2)
+            .unwrap();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let output = Arc::clone(&written);
+        let mut sink = Box::pin(futures_util::sink::unfold((), move |(), message| {
+            output.lock().push(message);
+            async { Ok::<_, std::convert::Infallible>(()) }
+        }));
+        // The socket uses this very write seam. Even a queued frame is refused
+        // immediately, before the authorization interval's next tick.
+        let queued = receiver.recv().await.unwrap();
+        let refused = write_worker_message(&mut sink, &authorization, queued.message)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.reason, "grant_revoked");
+        assert!(!refused.drop_transport); // No stalled RPC: the loop may send policy Close.
+        assert!(
+            write_worker_message(&mut sink, &authorization, Message::Pong(Vec::new().into()))
+                .await
+                .is_err()
+        );
+        for _ in 0..10 {
+            assert!(send_to_worker(tenant, connection_id, "new".to_string()).is_err());
+            assert!(write_worker_message(
+                &mut sink,
+                &authorization,
+                Message::Text("queued-tail".into())
+            )
+            .await
+            .is_err());
+            tokio::time::advance(Duration::from_millis(100)).await;
+        }
+        // A normal policy Close may flush tungstenite's already-queued Pong;
+        // Agent RPC text must never be admitted after revocation.
+        assert!(!written
+            .lock()
+            .iter()
+            .any(|message| matches!(message, Message::Text(_))));
+        assert!(written.lock().is_empty()); // This sink has no auto-queued control frames.
+        assert!(receiver.try_recv().is_err());
+        WORKERS.write().remove(connection_id);
+        super::super::security_store::install_security_store(None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revocation_drops_backpressured_transport_without_flushing_rpc_within_one_second() {
+        use std::{
+            pin::Pin,
+            task::{Context, Poll},
+        };
+
+        struct BlockedSink {
+            block_ready: bool,
+            buffered: Vec<Message>,
+            peer_reading: Arc<std::sync::atomic::AtomicBool>,
+            written: Arc<Mutex<Vec<Message>>>,
+            dropped: Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl futures_util::Sink<Message> for BlockedSink {
+            type Error = std::convert::Infallible;
+            fn poll_ready(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<Result<(), Self::Error>> {
+                if self.block_ready && !self.peer_reading.load(Ordering::SeqCst) {
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Ok(()))
+                }
+            }
+            fn start_send(mut self: Pin<&mut Self>, message: Message) -> Result<(), Self::Error> {
+                self.buffered.push(message);
+                Ok(())
+            }
+            fn poll_flush(
+                mut self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<Result<(), Self::Error>> {
+                if !self.peer_reading.load(Ordering::SeqCst) {
+                    return Poll::Pending;
+                }
+                let buffered = std::mem::take(&mut self.buffered);
+                self.written.lock().extend(buffered);
+                Poll::Ready(Ok(()))
+            }
+            fn poll_close(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<Result<(), Self::Error>> {
+                panic!("revocation must drop a stalled transport without flushing Close")
+            }
+        }
+        impl Drop for BlockedSink {
+            fn drop(&mut self) {
+                self.dropped.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let _guard = super::super::security_store::test_guard();
+        let store = super::super::security_store::SecurityStore::in_memory().unwrap();
+        super::super::security_store::install_security_store(Some(Arc::clone(&store)));
+        for (block_ready, resumes_after_revoke) in
+            [(true, false), (false, false), (true, true), (false, true)]
+        {
+            store
+                .ensure_service_principal(
+                    "tenant-stall",
+                    "worker-stall",
+                    "Worker",
+                    &["agent.worker"],
+                    1,
+                )
+                .unwrap();
+            let authorization = WorkerAuthorization::new("tenant-stall", "worker-stall");
+            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let detached = Arc::clone(&dropped);
+            let peer_reading = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let written = Arc::new(Mutex::new(Vec::new()));
+            let write = async {
+                let mut sink = BlockedSink {
+                    block_ready,
+                    buffered: Vec::new(),
+                    peer_reading: Arc::clone(&peer_reading),
+                    written: Arc::clone(&written),
+                    dropped: detached,
+                };
+                let failure =
+                    write_worker_message(&mut sink, &authorization, Message::Text("rpc".into()))
+                        .await
+                        .unwrap_err();
+                assert!(failure.drop_transport);
+                assert_eq!(failure.reason, "grant_revoked");
+                // Both readiness and flush backpressure must discard the sink.
+                drop(sink);
+            };
+            tokio::pin!(write);
+            assert!(futures_util::poll!(&mut write).is_pending());
+            store
+                .replace_device_capabilities("tenant-stall", "owner", "worker-stall", &[], 2)
+                .unwrap();
+            let revoked_at = Instant::now();
+            peer_reading.store(resumes_after_revoke, Ordering::SeqCst);
+            tokio::time::advance(Duration::from_millis(251)).await;
+            tokio::time::timeout(Duration::from_millis(749), &mut write)
+                .await
+                .unwrap();
+            assert!(dropped.load(Ordering::SeqCst));
+            assert!(!written
+                .lock()
+                .iter()
+                .any(|frame| matches!(frame, Message::Text(_))));
+            assert!(revoked_at.elapsed() < Duration::from_secs(1));
+            assert!(authorization.check(false).is_err());
+        }
+        super::super::security_store::install_security_store(None);
     }
 
     #[test]

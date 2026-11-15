@@ -105,6 +105,41 @@ describe("team recovery", () => {
     disableDbRuntime?.()
   })
 
+  it.each(["retry_same_host", "retry_host", "restart_run", "terminate"] as const)(
+    "refuses a recovery whose uncertain child moved before %s",
+    async (choice) => {
+      await seedParkedRun()
+      let epoch = 4
+      const h = harness({
+        listChildren: async () => [
+          { id: "c1", status: "needs_input", dispatchEpoch: epoch },
+          { id: "c2", status: "needs_input", dispatchEpoch: 3 },
+        ],
+      })
+      await ensureTeamRecoveryInterrupt(RUN, h.deps)
+      const subject = h.armed[0]!.subject
+      expect(subject.uncertainChildEpochs).toEqual({ c1: 4, c2: 3 })
+      epoch = 5
+      const replacement = jest.fn(async () => ({ started: true, executionRunId: "replacement" }))
+      const result = await applyTeamRecoveryDecision(
+        RUN,
+        { subject },
+        "approve",
+        {
+          kind: "team_recovery",
+          choice,
+          ...(choice === "retry_host" ? { hostRef: "host-b" } : {}),
+        },
+        { ...h.deps, startReplacement: replacement }
+      )
+      expect(result).toMatchObject({ applied: false, reason: "interrupt_stale" })
+      expect(h.retried).toEqual([])
+      expect(h.controlled).toEqual([])
+      expect(replacement).not.toHaveBeenCalled()
+      expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("needs_input")
+    }
+  )
+
   describe("ensureTeamRecoveryInterrupt", () => {
     it("raises a first recovery with every choice and the uncertain children", async () => {
       await seedParkedRun()
@@ -118,6 +153,7 @@ describe("team recovery", () => {
             reason: "uncertain_side_effect",
             choices: [...ALL_RECOVERY_CHOICES],
             uncertainChildIds: ["c1", "c2"],
+            uncertainChildEpochs: { c1: 0, c2: 0 },
             hostRef: "host-a",
           },
         },
@@ -577,6 +613,44 @@ describe("team recovery", () => {
   })
 
   describe("applyTeamRecoveryFromControl", () => {
+    it("stops before the next retry or resume when the original claim was taken over", async () => {
+      await seedParkedRun()
+      await seedInterrupt("claimed-recovery", "pending", {
+        choices: [...ALL_RECOVERY_CHOICES],
+        uncertainChildIds: ["c1", "c2"],
+      })
+      await getDb().executionRunInterrupts.update("claimed-recovery", {
+        decidingClaim: { token: "original", action: "approve", at: Date.now() },
+      })
+      const retried: string[] = []
+      const h = harness({
+        claimToken: "original",
+        retryChild: async (id) => {
+          retried.push(id)
+          await getDb().executionRunInterrupts.update("claimed-recovery", {
+            decidingClaim: { token: "replacement", action: "deny", at: Date.now() },
+          })
+        },
+      })
+      await expect(
+        applyTeamRecoveryFromControl(
+          {
+            runId: EXECUTION,
+            action: "approve",
+            interruptId: "claimed-recovery",
+            idempotencyKey: "old-owner",
+            expectedRevision: 1,
+            actor: {},
+            reviewDecision: { kind: "team_recovery", choice: "retry_same_host" },
+          },
+          h.deps
+        )
+      ).rejects.toThrow("interrupt_resolved")
+      expect(retried).toEqual(["c1"])
+      expect(h.controlled).toEqual([])
+      expect((await getDb().agentTeamRuns.get(RUN))?.status).toBe("needs_input")
+    })
+
     it("reads the interrupt behind the command and applies its stored decision", async () => {
       await seedParkedRun()
       await seedInterrupt("int-ctl", "pending", {

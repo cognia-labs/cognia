@@ -9,6 +9,7 @@ import type { ExecutionRunInterrupt, RunControlCommand } from "@/types/execution
 import { createSquadRunRecords } from "../squad/squad-run-records"
 import {
   armSquadReview,
+  __setSquadReviewTestHooksForTesting,
   listPendingSquadReviews,
   openSquadReview,
   sanitizeDecision,
@@ -74,16 +75,56 @@ describe("squad review gate", () => {
     // unit under test, so the handler is the gate's own control half.
     unregister = registerRunControlHandler("team", async (command) => {
       if (command.action === "approve" || command.action === "deny") {
-        await settleSquadReviewFromControl(command, deps)
+        return settleSquadReviewFromControl(command, deps)
       }
     })
   })
 
   afterEach(async () => {
+    __setSquadReviewTestHooksForTesting(null)
     unregister?.()
     await getDb().delete()
     __resetDbForTesting()
     disableDbRuntime?.()
+  })
+
+  it("binds a teammate repair gate to its child attempt at creation", async () => {
+    await getDb().agentTeamChildRuns.add({
+      id: "repair-child",
+      runId: RUN,
+      teamId: "team-1",
+      teammateId: "mate",
+      taskId: "task",
+      repositoryId: "repo",
+      status: "needs_input",
+      attempt: 1,
+      dispatchEpoch: 3,
+      createdAt: 1,
+      updatedAt: 1,
+      resourceUsage: {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        wallTimeMs: 0,
+        toolTimeMs: 0,
+        attempts: 1,
+        failures: 0,
+      },
+    })
+    const armed = await armSquadReview(
+      {
+        runId: RUN,
+        teamId: "team-1",
+        kind: "teammate_repair",
+        instance: "mate",
+        subject: { teammateId: "mate" },
+      },
+      deps
+    )
+    expect(await getDb().executionRunInterrupts.get(armed.interruptId)).toMatchObject({
+      childRunId: "repair-child",
+      dispatchEpoch: 3,
+    })
   })
 
   it("opens one durable interrupt with the review kind and subject, parking the run", async () => {
@@ -286,6 +327,214 @@ describe("squad review gate", () => {
     await expect(second).resolves.toMatchObject({ outcome: "approve" })
   })
 
+  it("retries the delegate's retained answer after the desktop handler fails", async () => {
+    __setSquadReviewTestHooksForTesting({ pollIntervalMs: 10 })
+    const input = {
+      runId: RUN,
+      teamId: "team-1",
+      kind: "plan" as const,
+      instance: "retry-delegate",
+    }
+    const { interruptId } = await armSquadReview(input, deps)
+    let entered!: () => void, fail!: () => void
+    const inHandler = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const finishHandler = new Promise<void>((resolve) => {
+      fail = resolve
+    })
+    unregister?.()
+    unregister = registerRunControlHandler("team", async () => {
+      entered()
+      await finishHandler
+      throw new Error("desktop handler failed")
+    })
+    const run = await getDb().executionRuns.get(EXECUTION)
+    const desktop = executeRunControlCommand(
+      controlCommand(interruptId, "deny", undefined, run!.currentRevision),
+      {
+        operatorIds: [...localConsoleOperatorIds()],
+      }
+    )
+    await inHandler
+    let answered!: () => void
+    const delegated = new Promise<void>((resolve) => {
+      answered = resolve
+    })
+    const delegate = jest.fn(async () => {
+      answered()
+      return { kind: "plan" as const, outcome: "approve" as const }
+    })
+    const pending = openSquadReview({ ...input, delegate }, deps)
+    await delegated
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    fail()
+    expect((await desktop).accepted).toBe(false)
+    const result = await Promise.race([
+      pending,
+      new Promise((resolve) => setTimeout(() => resolve("still pending"), 150)),
+    ])
+    try {
+      expect(result).toEqual({ kind: "plan", outcome: "approve" })
+      expect(delegate).toHaveBeenCalledTimes(1)
+      expect(
+        (await getDb().executionRunEvents.where("runId").equals(EXECUTION).toArray()).filter(
+          (row) => row.type === "interrupt.resolved"
+        )
+      ).toHaveLength(1)
+    } finally {
+      await getDb().executionRunInterrupts.update(interruptId, { status: "approved" })
+      await notify(interruptId)
+      await pending
+    }
+  })
+
+  it("expires a retained delegate answer at its deadline even while the competitor holds a claim", async () => {
+    __setSquadReviewTestHooksForTesting({ pollIntervalMs: 10 })
+    const input = {
+      runId: RUN,
+      teamId: "team-1",
+      kind: "plan" as const,
+      instance: "delegate-deadline",
+    }
+    const { interruptId } = await armSquadReview(input, deps)
+    const { claimExecutionRunInterrupt } = await import("@/lib/db/execution-runs")
+    await claimExecutionRunInterrupt(EXECUTION, interruptId, {
+      token: "desktop",
+      action: "deny",
+      at: Date.now(),
+    })
+    let now = Date.now()
+    await getDb().executionRunInterrupts.update(interruptId, { expiresAt: now + 10 })
+    const pending = openSquadReview(
+      { ...input, delegate: async () => ({ kind: "plan", outcome: "approve" }) },
+      { ...deps, now: () => now }
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    now += 11
+    const result = await Promise.race([
+      pending,
+      new Promise((resolve) => setTimeout(() => resolve("still pending"), 150)),
+    ])
+    try {
+      expect(result).toMatchObject({ kind: "plan", outcome: "deny" })
+      expect(await getDb().executionRunInterrupts.get(interruptId)).toMatchObject({
+        status: "expired",
+      })
+      expect((await getDb().executionRunInterrupts.get(interruptId))?.decidingClaim).toBeUndefined()
+    } finally {
+      await getDb().executionRunInterrupts.update(interruptId, { status: "expired" })
+      await notify(interruptId)
+      await pending
+    }
+  })
+
+  it("waits for the persisted deny when an approving delegate loses the claim", async () => {
+    const input = { runId: RUN, teamId: "team-1", kind: "plan" as const, instance: "race" }
+    const { interruptId } = await armSquadReview(input, deps)
+    const { claimExecutionRunInterrupt, finishExecutionRunInterrupt } =
+      await import("@/lib/db/execution-runs")
+    await claimExecutionRunInterrupt(EXECUTION, interruptId, {
+      token: "desktop",
+      action: "deny",
+      at: Date.now(),
+    })
+    let resumed = false
+    const pending = openSquadReview(
+      { ...input, delegate: async () => ({ kind: "plan", outcome: "approve" }) },
+      deps
+    ).then((outcome) => {
+      resumed = true
+      return outcome
+    })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(resumed).toBe(false)
+    await finishExecutionRunInterrupt(EXECUTION, interruptId, "deny", Date.now(), {
+      token: "desktop",
+      decision: { kind: "plan", outcome: "deny" },
+    })
+    await notify(interruptId)
+    await expect(pending).resolves.toEqual({ kind: "plan", outcome: "deny" })
+  })
+
+  it("never resumes a repair with approval when revocation expires its control claim", async () => {
+    await getDb().agentTeamChildRuns.add({
+      id: "revoked-child",
+      runId: RUN,
+      teamId: "team-1",
+      teammateId: "revoked-mate",
+      taskId: "task",
+      repositoryId: "repo",
+      status: "needs_input",
+      attempt: 1,
+      dispatchEpoch: 2,
+      createdAt: 1,
+      updatedAt: 1,
+      resourceUsage: {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        wallTimeMs: 0,
+        toolTimeMs: 0,
+        attempts: 1,
+        failures: 0,
+      },
+    })
+    const input = {
+      runId: RUN,
+      teamId: "team-1",
+      kind: "teammate_repair" as const,
+      instance: "revoke",
+      subject: { teammateId: "revoked-mate" },
+    }
+    const { interruptId } = await armSquadReview(input, deps)
+    const pending = openSquadReview(input, deps)
+    const { finishExecutionRunInterrupt } = await import("@/lib/db/execution-runs")
+    let originalToken: string | undefined
+    unregister?.()
+    unregister = registerRunControlHandler("team", async (command) => {
+      const settlement = await settleSquadReviewFromControl(command, deps)
+      expect(await getDb().actionReviewReceipts.count()).toBe(0)
+      const claimed = await getDb().executionRunInterrupts.get(interruptId)
+      originalToken = claimed!.decidingClaim!.token
+      expect(claimed?.decision).toBeUndefined()
+      // Also cover a provisional payload left by an older process.
+      await getDb().executionRunInterrupts.update(interruptId, {
+        decision: { kind: "teammate_repair", action: "rejoin", outcome: "approve" },
+      })
+      await finishExecutionRunInterrupt(EXECUTION, interruptId, "expired", Date.now(), {
+        revokeChild: { id: "revoked-child", epoch: 2 },
+      })
+      return settlement
+    })
+    const run = await getDb().executionRuns.get(EXECUTION)
+    const result = await executeRunControlCommand(
+      controlCommand(
+        interruptId,
+        "approve",
+        {
+          kind: "teammate_repair",
+          action: "rejoin",
+        },
+        run!.currentRevision
+      ),
+      { operatorIds: [...localConsoleOperatorIds()] }
+    )
+    expect(result).toMatchObject({ accepted: false, reason: "interrupt_resolved" })
+    await notify(interruptId)
+    expect(await pending).toMatchObject({ kind: "teammate_repair", outcome: "deny" })
+    expect(await getDb().executionRunInterrupts.get(interruptId)).toMatchObject({
+      status: "expired",
+    })
+    expect((await getDb().executionRunInterrupts.get(interruptId))?.decision).toBeUndefined()
+    expect(await getDb().actionReviewReceipts.count()).toBe(0)
+    expect(
+      await finishExecutionRunInterrupt(EXECUTION, interruptId, "approve", Date.now(), {
+        token: originalToken,
+      })
+    ).toBe(false)
+  })
+
   it("lets a delegate answer first and settles the interrupt with its decision", async () => {
     const outcome = await openSquadReview(
       {
@@ -368,6 +617,7 @@ describe("squad review gate", () => {
   })
 
   it("settles from a source without a control command and writes the receipt once", async () => {
+    unregister?.() // Source settlement also works before control handlers are installed.
     void openSquadReview(
       { runId: RUN, teamId: "team-1", kind: "replan", instance: "after-t1" },
       deps

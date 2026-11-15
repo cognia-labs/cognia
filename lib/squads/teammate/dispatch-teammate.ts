@@ -2025,6 +2025,12 @@ export async function dispatchTeammate(
       // `agentsWorkflows` surface is off, so the channels below are untouched.
       await activeDispatch?.startLocalExecution()
       combinedSignal.throwIfAborted()
+      // The member-fusion adapter intentionally carries only its parent run.
+      // Bind its approval surface here, where the actual child attempt is owned.
+      const fusionBinding =
+        activeDispatch && teammate.config?.fusionAction === "delegate"
+          ? { childRunId: activeDispatch.childRunId, dispatchEpoch: activeDispatch.dispatchEpoch }
+          : undefined
       const memberFusion = await runMemberFusionTurn({
         runId: teamCtx.runId,
         teammate,
@@ -2035,6 +2041,78 @@ export async function dispatchTeammate(
         ...(executionRoot ? { workingDir: executionRoot } : {}),
         signal: combinedSignal,
         ...(onTurnCapture ? { onCapture: onTurnCapture } : {}),
+        ...(fusionBinding
+          ? {
+              loadHost: async () => {
+                const { loadRouterFusionHost } =
+                  await import("@/lib/router-fusion/gate/load-engine")
+                const host = await loadRouterFusionHost()
+                return {
+                  ...host,
+                  runAgentsWorkflowsFusion: (input) =>
+                    host.runAgentsWorkflowsFusion(input, {
+                      approvals: {
+                        async raise(approval) {
+                          const [
+                            { createRunInterrupt },
+                            { getExecutionRun },
+                            { fusionApprovalInterrupt },
+                          ] = await Promise.all([
+                            import("@/lib/execution/run-control"),
+                            import("@/lib/db/execution-runs"),
+                            import("@/lib/router-fusion/db/outbox-appliers"),
+                          ])
+                          const parent = await getExecutionRun(approval.parentExecutionRunId)
+                          if (
+                            !parent ||
+                            ["completed", "failed", "cancelled"].includes(parent.status)
+                          )
+                            return false
+                          try {
+                            await createRunInterrupt({
+                              ...fusionApprovalInterrupt({
+                                executionRunId: approval.parentExecutionRunId,
+                                fusionRunId: approval.fusionRunId,
+                                approvalId: approval.approval.approvalId,
+                                kind: approval.approval.kind,
+                                requestDigest: approval.approval.requestDigest,
+                                revision: approval.approval.revision,
+                                logicalStepId: approval.approval.logicalStepId,
+                                summary: { ...approval.approval.summary },
+                                expiresAt: approval.expiresAt,
+                                createdAt: Date.now(),
+                                projectId: approval.projectId,
+                              }),
+                              ...fusionBinding,
+                            })
+                          } catch (error) {
+                            const { getDb } = await import("@/lib/db/schema")
+                            const row = await getDb().executionRunInterrupts.get(
+                              approval.approval.approvalId
+                            )
+                            if (
+                              row?.runId !== approval.parentExecutionRunId ||
+                              row.childRunId !== fusionBinding.childRunId ||
+                              row.dispatchEpoch !== fusionBinding.dispatchEpoch
+                            )
+                              throw error
+                          }
+                          return true
+                        },
+                        async withdraw(approval) {
+                          const { expireRunInterruptFromSource } =
+                            await import("@/lib/execution/run-control")
+                          await expireRunInterruptFromSource(
+                            approval.parentExecutionRunId,
+                            approval.approvalId
+                          )
+                        },
+                      },
+                    }),
+                }
+              },
+            }
+          : {}),
       })
       if (memberFusion) {
         // An answered Fusion outcome is a terminal result. A rejection has

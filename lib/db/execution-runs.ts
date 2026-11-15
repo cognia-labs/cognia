@@ -1,9 +1,14 @@
 import Dexie from "dexie"
+import { loggers } from "@cognia/logging"
+import type { ActionReviewReceipt } from "@cognia/agent-config-types/action-review"
+import { recordActionReviewReceiptInsideTransaction } from "./action-review-receipts"
 import { reduceRunEvents } from "@/lib/execution/run-reducer"
 import type {
   ExecutionRun,
   ExecutionRunBinding,
   ExecutionRunKind,
+  ExecutionRunInterrupt,
+  ExecutionRunInitiator,
   ExecutionRunStatus,
   RunEvent,
   RunEventType,
@@ -75,6 +80,246 @@ export async function createExecutionRun(run: ExecutionRun): Promise<ExecutionRu
 
 export async function getExecutionRun(runId: string): Promise<ExecutionRun | undefined> {
   return getDb().executionRuns.get(runId)
+}
+
+/** Waiter/engine decisions are authoritative; these rows only project them. */
+export function isWaiterBackedInterrupt(row: ExecutionRunInterrupt): boolean {
+  return row.type === "tool_approval" || row.type === "ask_user" || row.type === "workflow_approval"
+}
+
+export const INTERRUPT_CLAIM_MAX_AGE_MS = 3 * 60_000
+const interruptClaimOwnerId = crypto.randomUUID()
+
+function interruptDecisionTables(
+  db: ReturnType<typeof getDb>,
+  includeChild = false,
+  includeReceipt = false
+) {
+  return [
+    db.executionRunInterrupts,
+    db.executionRuns,
+    db.executionRunEvents,
+    db.notificationProjectionWork,
+    ...(includeChild ? [db.agentTeamChildRuns] : []),
+    ...(includeReceipt ? [db.actionReviewReceipts] : []),
+  ]
+}
+
+/**
+ * Caller owns the transaction, including the journal and its notification outbox.
+ * A successful handler may already have sealed the journal (e.g. recovery Stop).
+ * Still settle the row's CAS, but skip the event on that sealed journal: appending
+ * it must neither roll back the decision nor re-project a terminal run as live.
+ */
+async function finishInterruptInsideTransaction(
+  db: ReturnType<typeof getDb>,
+  row: ExecutionRunInterrupt,
+  resolution: "approve" | "deny" | "expired",
+  now: number,
+  actor?: ExecutionRunInitiator
+): Promise<void> {
+  await db.executionRunInterrupts.update(row.id, {
+    status: resolution === "expired" ? "expired" : resolution === "approve" ? "approved" : "denied",
+    decidingClaim: undefined,
+    resolvedAt: now,
+    ...(resolution === "expired" ? { decision: undefined } : {}),
+    ...(actor ? { resolvedBy: actor } : {}),
+  })
+  const run = await db.executionRuns.get(row.runId)
+  if (run && ["completed", "failed", "cancelled"].includes(run.status)) return
+  await appendRunEventInsideTransaction(
+    db,
+    row.runId,
+    semanticRunEvent(
+      resolution === "expired" ? "interrupt.expired" : "interrupt.resolved",
+      { interruptId: row.id, ...(resolution === "expired" ? {} : { resolution }) },
+      {
+        ts: now,
+        sourceEventId: `interrupt:${row.id}:${resolution === "expired" ? "expired" : "resolved"}`,
+      }
+    )
+  )
+}
+
+export type InterruptClaimRefusal =
+  "interrupt_not_found" | "interrupt_resolved" | "interrupt_expired" | "interrupt_stale"
+
+/** Cross-process CAS: reserve before running any persisted decision's effect. */
+export async function claimExecutionRunInterrupt(
+  runId: string,
+  interruptId: string,
+  claim: NonNullable<ExecutionRunInterrupt["decidingClaim"]>
+): Promise<{ interrupt: ExecutionRunInterrupt } | { reason: InterruptClaimRefusal }> {
+  const db = getDb()
+  return db.transaction("rw", interruptDecisionTables(db, true), async () => {
+    const row = await db.executionRunInterrupts.get(interruptId)
+    if (!row || row.runId !== runId) return { reason: "interrupt_not_found" as const }
+    if (
+      row.status !== "pending" ||
+      (row.decidingClaim &&
+        (row.decidingClaim.renewedAt ?? row.decidingClaim.at) >
+          claim.at - INTERRUPT_CLAIM_MAX_AGE_MS)
+    )
+      return { reason: "interrupt_resolved" as const }
+    const child =
+      row.childRunId && row.dispatchEpoch !== undefined
+        ? await db.agentTeamChildRuns.get(row.childRunId)
+        : undefined
+    const stale =
+      row.childRunId !== undefined &&
+      row.dispatchEpoch !== undefined &&
+      (!child || (child.dispatchEpoch ?? 0) !== row.dispatchEpoch)
+    if (stale || row.expiresAt <= claim.at) {
+      await finishInterruptInsideTransaction(db, row, "expired", claim.at)
+      return { reason: stale ? ("interrupt_stale" as const) : ("interrupt_expired" as const) }
+    }
+    const ownedClaim = { ...claim, ownerId: interruptClaimOwnerId, renewedAt: claim.at }
+    await db.executionRunInterrupts.update(row.id, { decidingClaim: ownedClaim })
+    return { interrupt: { ...row, decidingClaim: ownedClaim } }
+  })
+}
+
+/** A failed handler releases only its own claim, never another decider's. */
+export async function releaseExecutionRunInterruptClaim(
+  interruptId: string,
+  token: string,
+  staleBefore?: number
+): Promise<void> {
+  const db = getDb()
+  await db.transaction("rw", db.executionRunInterrupts, async () => {
+    const row = await db.executionRunInterrupts.get(interruptId)
+    if (
+      row?.status === "pending" &&
+      row.decidingClaim?.token === token &&
+      (staleBefore === undefined ||
+        (row.decidingClaim.renewedAt ?? row.decidingClaim.at) <= staleBefore)
+    )
+      await db.executionRunInterrupts.update(interruptId, { decidingClaim: undefined })
+  })
+}
+
+/** Heartbeat CAS: a superseded owner cannot renew another decision's claim. */
+export async function renewExecutionRunInterruptClaim(
+  interruptId: string,
+  token: string
+): Promise<void> {
+  const db = getDb()
+  await db.transaction("rw", db.executionRunInterrupts, async () => {
+    const row = await db.executionRunInterrupts.get(interruptId)
+    if (
+      row?.status === "pending" &&
+      row.decidingClaim?.token === token &&
+      row.decidingClaim.ownerId === interruptClaimOwnerId
+    )
+      await db.executionRunInterrupts.update(interruptId, {
+        decidingClaim: { ...row.decidingClaim, renewedAt: Date.now() },
+      })
+  })
+}
+
+/**
+ * Resolve and journal exactly once. Ordinary expiry cannot steal a live claim;
+ * a waiting Squad gate may enforce its deadline, and revocation invalidates it.
+ */
+export async function finishExecutionRunInterrupt(
+  runId: string,
+  interruptId: string,
+  resolution: "approve" | "deny" | "expired",
+  now: number,
+  options: {
+    token?: string
+    actor?: ExecutionRunInitiator
+    sourceWinner?: boolean
+    decision?: ExecutionRunInterrupt["decision"]
+    receipt?: ActionReviewReceipt
+    /** A waiting Squad lifecycle owns its deadline, even over a pending claim. */
+    expireAtDeadline?: boolean
+    checkBinding?: boolean
+    revokeChild?: { id: string; epoch: number }
+  } = {}
+): Promise<boolean> {
+  const db = getDb()
+  let receiptFailed = false
+  const settle = (withReceipt: boolean) =>
+    db.transaction(
+      "rw",
+      interruptDecisionTables(
+        db,
+        options.revokeChild !== undefined || options.checkBinding === true,
+        withReceipt && options.receipt !== undefined
+      ),
+      async () => {
+        const row = await db.executionRunInterrupts.get(interruptId)
+        if (!row || row.runId !== runId || row.status !== "pending") return false
+        if (options.revokeChild) {
+          const child = await db.agentTeamChildRuns.get(options.revokeChild.id)
+          const recoveryEpochs =
+            row.type === "team_recovery"
+              ? (row.subject?.uncertainChildEpochs as Record<string, number> | undefined)
+              : undefined
+          const bound =
+            (row.childRunId === child?.id && row.dispatchEpoch === options.revokeChild.epoch) ||
+            recoveryEpochs?.[options.revokeChild.id] === options.revokeChild.epoch
+          if (!child || (child.dispatchEpoch ?? 0) !== options.revokeChild.epoch || !bound)
+            return false
+        } else if (options.expireAtDeadline && resolution === "expired") {
+          if (row.expiresAt > now) return false
+        } else if (options.token) {
+          if (row.decidingClaim?.token !== options.token) return false
+        } else if (row.decidingClaim && !(options.sourceWinner && isWaiterBackedInterrupt(row))) {
+          return false
+        }
+        if (options.checkBinding && row.childRunId && row.dispatchEpoch !== undefined) {
+          const child = await db.agentTeamChildRuns.get(row.childRunId)
+          if (!child || (child.dispatchEpoch ?? 0) !== row.dispatchEpoch) {
+            await finishInterruptInsideTransaction(db, row, "expired", now)
+            return false
+          }
+        }
+        // A source for a persisted decision has no waiter winner to project after
+        // the deadline. A claimed handler, however, was admitted before expiry.
+        if (
+          !options.token &&
+          !isWaiterBackedInterrupt(row) &&
+          resolution !== "expired" &&
+          row.expiresAt <= now
+        ) {
+          await finishInterruptInsideTransaction(db, row, "expired", now)
+          return false
+        }
+        if (options.decision)
+          await db.executionRunInterrupts.update(row.id, { decision: options.decision })
+        await finishInterruptInsideTransaction(db, row, resolution, now, options.actor)
+        if (withReceipt && options.receipt) {
+          try {
+            await recordActionReviewReceiptInsideTransaction(db, options.receipt)
+          } catch (error) {
+            receiptFailed = true
+            throw error
+          }
+        }
+        return true
+      }
+    )
+  try {
+    return await settle(true)
+  } catch (error) {
+    if (!receiptFailed || !options.receipt) throw error
+    // The decision's effect may already have run (a recovery stop, a
+    // replacement): an audit write must never roll back its resolution.
+    // Settle without the receipt, then record it on its own.
+    const settled = await settle(false)
+    if (settled) {
+      const { recordActionReviewReceipt } = await import("./action-review-receipts")
+      await recordActionReviewReceipt(options.receipt).catch((receiptError: unknown) =>
+        loggers.store.warn("Interrupt resolved but its approval receipt was not recorded", {
+          interruptId,
+          error: receiptError instanceof Error ? receiptError.message : String(receiptError),
+        })
+      )
+    }
+    return settled
+  }
 }
 
 /** Job owners include these tables in the same transaction as every terminal write. */

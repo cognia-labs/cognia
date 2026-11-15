@@ -6,7 +6,9 @@ import type { ProjectEnvironmentVersion } from "@/types/project-environment"
 import { createLocalTauriExecutionEnvironment } from "@/lib/ai/agent/execution/local-tauri-environment"
 import { createDurableTeamCoordinator } from "./durable-runtime"
 import { beginDurableDispatch } from "./durable-dispatch"
-import { WorkerRpcPool } from "../workers/worker-rpc-pool"
+import { createExecutionRun } from "@/lib/db/execution-runs"
+import { createRunInterrupt } from "@/lib/execution/run-control"
+import { WorkerDetachedError, WorkerRpcPool } from "../workers/worker-rpc-pool"
 import { childStopProof } from "@cognia/agent-orchestration/replay"
 import { createDecisionLedger } from "@cognia/agent-orchestration/decision-ledger"
 import * as runtimeDb from "@/lib/db/agent-team-runtime"
@@ -86,6 +88,126 @@ describe("durable dispatch bridge", () => {
     if (start) await dispatch.startLocalExecution()
     return { coordinator, input, dispatch }
   }
+
+  it.each([
+    "grant_revoked",
+    "device_revoked",
+    "device_suspended",
+    "device_quarantined",
+    "socket_closed",
+  ])("invalidates only this attempt's pending interrupts on detach: %s", async (reason) => {
+    const { dispatch } = await openDispatch(`interrupt-${reason}`, "read", false)
+    const child = await dispatch.claimRemoteLease({
+      childRunId: dispatch.childRunId,
+      leaseId: "connection-lease",
+      hostRef: "device:a",
+      now: Date.now(),
+    })
+    expect(child).toBeDefined()
+    const runId = `execution:interrupt-${reason}`
+    await createExecutionRun({
+      id: runId,
+      kind: "team",
+      sourceId: `interrupt-${reason}`,
+      title: "Team",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    })
+    for (const [id, epoch, status] of [
+      ["current", dispatch.dispatchEpoch, "pending"],
+      ["old", dispatch.dispatchEpoch - 1, "pending"],
+      ["settled", dispatch.dispatchEpoch, "approved"],
+    ] as const)
+      await createRunInterrupt({
+        id,
+        runId,
+        type: "tool_approval",
+        status,
+        childRunId: dispatch.childRunId,
+        dispatchEpoch: epoch,
+        title: "Allow",
+        createdAt: 1,
+        expiresAt: Date.now() + 60_000,
+      })
+    await createRunInterrupt({
+      id: "multi-recovery",
+      runId,
+      type: "team_recovery",
+      status: "pending",
+      title: "Recover",
+      subject: {
+        uncertainChildIds: [dispatch.childRunId, "sibling"],
+        uncertainChildEpochs: { [dispatch.childRunId]: dispatch.dispatchEpoch, sibling: 1 },
+      },
+      createdAt: 1,
+      expiresAt: Date.now() + 60_000,
+    })
+    await dispatch.recordRemoteControlLoss(new WorkerDetachedError("connection", reason))
+    expect((await getDb().executionRunInterrupts.get("current"))?.status).toBe(
+      reason === "socket_closed" ? "pending" : "expired"
+    )
+    expect((await getDb().executionRunInterrupts.get("multi-recovery"))?.status).toBe(
+      reason === "socket_closed" ? "pending" : "expired"
+    )
+    expect((await getDb().executionRunInterrupts.get("old"))?.status).toBe("pending")
+    expect((await getDb().executionRunInterrupts.get("settled"))?.status).toBe("approved")
+    const events = await getDb().executionRunEvents.where("runId").equals(runId).toArray()
+    expect(events.filter((event) => event.type === "interrupt.expired")).toHaveLength(
+      reason === "socket_closed" ? 0 : 2
+    )
+    expect((await getDb().agentTeamChildRuns.get(dispatch.childRunId))?.stop).toMatchObject({
+      state: "unconfirmed",
+      epoch: dispatch.dispatchEpoch,
+    })
+  })
+
+  it("records control loss even when the interrupt expiry journal fails", async () => {
+    const { dispatch } = await openDispatch("expiry-journal-failure", "read", false)
+    await dispatch.claimRemoteLease({
+      childRunId: dispatch.childRunId,
+      leaseId: "lease",
+      hostRef: "device:a",
+      now: Date.now(),
+    })
+    await createExecutionRun({
+      id: "expiry-run",
+      kind: "team",
+      sourceId: "expiry-journal-failure",
+      title: "Team",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    })
+    await createRunInterrupt({
+      id: "expiry-int",
+      runId: "expiry-run",
+      type: "tool_approval",
+      status: "pending",
+      childRunId: dispatch.childRunId,
+      dispatchEpoch: dispatch.dispatchEpoch,
+      title: "Allow",
+      createdAt: 1,
+      expiresAt: Date.now() + 60_000,
+    })
+    const failExpiry = (_key: unknown, event: { type: string }) => {
+      if (event.type === "interrupt.expired") throw new Error("expiry journal failed")
+    }
+    getDb().executionRunEvents.hook("creating", failExpiry)
+    try {
+      await expect(
+        dispatch.recordRemoteControlLoss(new WorkerDetachedError("connection", "grant_revoked"))
+      ).rejects.toThrow("expiry journal failed")
+      expect((await getDb().agentTeamChildRuns.get(dispatch.childRunId))?.stop).toMatchObject({
+        state: "unconfirmed",
+        epoch: dispatch.dispatchEpoch,
+      })
+    } finally {
+      getDb().executionRunEvents.hook("creating").unsubscribe(failExpiry)
+    }
+  })
 
   // These fixtures execute entirely in-process: their own promise is the
   // executor, without the production capture/transport/timeout wrappers.

@@ -917,26 +917,63 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       throw new Error("Dispatch no longer owns this child projection")
     },
     async recordRemoteControlLoss(error: unknown): Promise<void> {
-      // Loss of authority starts the stop path, but never supplies its proof.
-      // Keep pause/terminate's state transition with the coordinator.
-      for (const state of ["requested", "unconfirmed"] as const) {
-        for (;;) {
+      try {
+        // Loss of authority starts the stop path, but never supplies its proof.
+        // Keep pause/terminate's state transition with the coordinator.
+        for (const state of ["requested", "unconfirmed"] as const) {
+          for (;;) {
+            const child = await ownedChild()
+            if (
+              !hasRemoteDispatch(child) ||
+              (child.stop?.state === "confirmed" && child.stop.proof?.epoch === dispatchEpoch)
+            )
+              return
+            if (state === "requested" && child.stop?.state === "unconfirmed") break
+            const at = now()
+            if (
+              await store.updateChildIfCurrent(childRunId, child, {
+                stop: { state, epoch: dispatchEpoch, requestedAt: child.stop?.requestedAt ?? at },
+                error: redactText(error instanceof Error ? error.message : String(error)).redacted,
+                updatedAt: at,
+              })
+            )
+              break
+          }
+        }
+      } finally {
+        // WP3 owns detach handling. Revocation invalidates authority for this
+        // attempt, including questions already claimed by another surface.
+        const reason =
+          error instanceof Error && error.name === "WorkerDetachedError"
+            ? (error as Error & { reason?: string }).reason
+            : undefined
+        if (
+          reason &&
+          ["grant_revoked", "device_revoked", "device_suspended", "device_quarantined"].includes(
+            reason
+          )
+        ) {
           const child = await ownedChild()
-          if (
-            !hasRemoteDispatch(child) ||
-            (child.stop?.state === "confirmed" && child.stop.proof?.epoch === dispatchEpoch)
-          )
-            return
-          if (state === "requested" && child.stop?.state === "unconfirmed") break
-          const at = now()
-          if (
-            await store.updateChildIfCurrent(childRunId, child, {
-              stop: { state, epoch: dispatchEpoch, requestedAt: child.stop?.requestedAt ?? at },
-              error: redactText(error instanceof Error ? error.message : String(error)).redacted,
-              updatedAt: at,
-            })
-          )
-            break
+          if (hasRemoteDispatch(child)) {
+            const { getDb } = await import("@/lib/db/schema")
+            const { finishExecutionRunInterrupt } = await import("@/lib/db/execution-runs")
+            const pending = await getDb()
+              .executionRunInterrupts.where("status")
+              .equals("pending")
+              .filter(
+                (row) =>
+                  (row.childRunId === childRunId && row.dispatchEpoch === dispatchEpoch) ||
+                  (row.type === "team_recovery" &&
+                    (row.subject?.uncertainChildEpochs as Record<string, number> | undefined)?.[
+                      childRunId
+                    ] === dispatchEpoch)
+              )
+              .toArray()
+            for (const row of pending)
+              await finishExecutionRunInterrupt(row.runId, row.id, "expired", now(), {
+                revokeChild: { id: childRunId, epoch: dispatchEpoch },
+              })
+          }
         }
       }
     },

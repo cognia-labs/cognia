@@ -57,6 +57,9 @@ A durable Agent Team child can run on another device (ADR-0113). The brain claim
 
 ## Not done
 
+- Worker revocation history across processes. The per-device revocation generation is in-process. A revoke followed by a regrant written by another process within one 1 s authorization tick is not observed: that tick reads only the current SQL state.
+- Interrupt claim takeover after a process freeze. Owners renew every 30 seconds; a heartbeat older than three minutes can be reclaimed. A process frozen beyond that bound can resume and apply one effect after takeover, between its last ownership check and that effect. Child-bound decisions still re-check dispatch epochs and refuse stale attempts; this is not a general transaction over external effects.
+- WebSocket control frames after Worker revocation. A normal revocation sends a policy Close so the operator sees why the device was disconnected; tungstenite may also flush a Pong queued before revocation. No Agent RPC text frame is admitted after revocation. If an RPC write is stalled, the transport and queue are dropped without sending Close or flushing buffered RPC data.
 - Tool-level idempotency keys. Arbitrary tool side effects cannot be deduplicated generically, so they are not a basis for recovery here.
 - Forced takeover of an unconfirmed child.
 - Processes that leave their process group (`setsid`, a double fork) fall outside the proof in decision 3. Only a sandboxed workspace (ADR-0182/0183) contains them, just as file-tool limits do not contain a shell (ADR-0245).

@@ -382,6 +382,18 @@ jest.mock("@/lib/router-fusion/gate/load-engine", () => ({
   __resetRouterFusionHostForTesting: () => {},
 }))
 
+jest.mock("@/lib/router-fusion/routing/delegate-capabilities", () => ({
+  delegateProjectRoot: async () => "/repo",
+}))
+jest.mock("@/lib/execution/run-control", () => ({
+  ...jest.requireActual("@/lib/execution/run-control"),
+  createRunInterrupt: jest.fn(),
+}))
+jest.mock("@/lib/db/execution-runs", () => ({
+  ...jest.requireActual("@/lib/db/execution-runs"),
+  getExecutionRun: jest.fn(),
+}))
+
 // ── Fixtures ────────────────────────────────────────────────────────────────
 function makeTeammate(overrides: Partial<AgentTeammate> = {}): AgentTeammate {
   return {
@@ -3678,6 +3690,48 @@ describe("dispatchTeammate — Router + Fusion member action", () => {
     expect(governor.children()).toEqual([
       expect.objectContaining({ childRunId: "run1:tm1:t1", usedTokens: 120, attempts: 1 }),
     ])
+  })
+
+  it("binds a delegate member's Fusion approval to the dispatch that raised it", async () => {
+    mockCurrentDispatch()
+    const { createRunInterrupt } = await import("@/lib/execution/run-control")
+    const { getExecutionRun } = await import("@/lib/db/execution-runs")
+    ;(getExecutionRun as jest.Mock).mockResolvedValue({
+      id: "execution:team:run1",
+      status: "running",
+    })
+    ;(createRunInterrupt as jest.Mock).mockResolvedValue(undefined)
+    const dispatch = await beginDurableDispatchMock()
+    beginDurableDispatchMock.mockResolvedValue({ ...dispatch, dispatchEpoch: 7 })
+    isTauriMock.mockReturnValue(true)
+    fusionSettings = { routerFusion: { enabled: true, surfaces: { agentsWorkflows: true } } }
+    runAgentsWorkflowsFusionMock.mockImplementationOnce(async (_input, deps) => {
+      await deps.approvals.raise({
+        parentExecutionRunId: "execution:team:run1",
+        fusionRunId: "fusion-child",
+        approval: {
+          approvalId: "fusion-approval",
+          kind: "scope_expansion",
+          requestDigest: "digest",
+          revision: "r1",
+          logicalStepId: "step",
+          summary: {},
+        },
+        projectId: null,
+        expiresAt: Date.now() + 60_000,
+      })
+      return answered
+    })
+    const { ctx } = makeCtx(makeTeammate({ config: { fusionAction: "delegate" } }))
+    ctx.team.projectId = "project1"
+    await dispatchTeammate(ctx, { taskId: "t1", prompt: "do it" })
+    expect(createRunInterrupt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "fusion_approval",
+        childRunId: "current-child",
+        dispatchEpoch: 7,
+      })
+    )
   })
 
   it("[ACC:OFF-AGENTS] leaves the member on its ordinary channel while the surface is off", async () => {

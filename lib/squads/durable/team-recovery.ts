@@ -76,11 +76,15 @@ export interface TeamRecoverySubject extends Record<string, unknown> {
   reason: string
   choices: TeamRecoveryChoice[]
   uncertainChildIds: string[]
+  /** Immutable attempt snapshot; absent only on legacy interrupts. */
+  uncertainChildEpochs?: Record<string, number>
   /** The host the uncertain children ran on, when they agree on one. */
   hostRef?: string
 }
 
 export interface TeamRecoveryDeps {
+  /** Immutable control claim, re-checked before each asynchronous effect. */
+  claimToken?: string
   now?: () => number
   arm?: (input: {
     runId: string
@@ -98,7 +102,9 @@ export interface TeamRecoveryDeps {
     objective: string
     executionConstraints?: AgentTeamRunRecord["executionConstraints"]
   }) => Promise<{ started: boolean; executionRunId?: string; reason?: string }>
-  listChildren?: (runId: string) => Promise<Array<{ id: string; status: string; hostRef?: string }>>
+  listChildren?: (
+    runId: string
+  ) => Promise<Array<{ id: string; status: string; hostRef?: string; dispatchEpoch?: number }>>
   assessReplay?: (runId: string) => Promise<{ safe: boolean; uncertainChildIds: string[] }>
 }
 
@@ -111,6 +117,7 @@ export type TeamRecoveryApplyRefusal =
   | "restart_refused"
   | "control_refused"
   | "stop_unconfirmed"
+  | "interrupt_stale"
 
 export interface TeamRecoveryApplyResult {
   applied: boolean
@@ -135,6 +142,12 @@ async function defaultArm(input: {
     kind: "team_recovery",
     instance: input.instance,
     subject: input.subject,
+    ...(input.subject.uncertainChildIds.length === 1
+      ? {
+          childRunId: input.subject.uncertainChildIds[0],
+          dispatchEpoch: input.subject.uncertainChildEpochs?.[input.subject.uncertainChildIds[0]!],
+        }
+      : {}),
   })
   return { interruptId: armed.interruptId, pending: armed.settled === undefined }
 }
@@ -239,6 +252,12 @@ export async function ensureTeamRecoveryInterrupt(
         ? ["terminate"]
         : [...(legacy ? LEGACY_RECOVERY_CHOICES : ALL_RECOVERY_CHOICES)],
     uncertainChildIds: replay.uncertainChildIds,
+    uncertainChildEpochs: Object.fromEntries(
+      replay.uncertainChildIds.map((id) => [
+        id,
+        children.find((child) => child.id === id)?.dispatchEpoch ?? 0,
+      ])
+    ),
     ...(hosts.size === 1 ? { hostRef: [...hosts][0]! } : {}),
   }
   const instance = `r${existing.length + 1}`
@@ -282,12 +301,12 @@ export async function armPendingTeamRecoveries(
 
 /**
  * Apply an answered recovery. Called by the team control handler after the
- * gate persisted the decision. Throws nothing: the result says what happened,
- * and the handler decides whether that is a rejection.
+ * gate claimed the decision. The result says what happened; loss of the
+ * immutable control claim throws before the next effect can run.
  */
 export async function applyTeamRecoveryDecision(
   runId: string,
-  interrupt: Pick<ExecutionRunInterrupt, "subject">,
+  interrupt: Pick<ExecutionRunInterrupt, "subject"> & Partial<Pick<ExecutionRunInterrupt, "id">>,
   outcome: "approve" | "deny",
   decision: SquadReviewDecision | undefined,
   deps: TeamRecoveryDeps = {}
@@ -305,7 +324,7 @@ export async function applyTeamRecoveryDecision(
 
 async function applyTeamRecoveryDecisionInner(
   runId: string,
-  interrupt: Pick<ExecutionRunInterrupt, "subject">,
+  interrupt: Pick<ExecutionRunInterrupt, "subject"> & Partial<Pick<ExecutionRunInterrupt, "id">>,
   outcome: "approve" | "deny",
   decision: SquadReviewDecision | undefined,
   deps: TeamRecoveryDeps = {}
@@ -319,8 +338,34 @@ async function applyTeamRecoveryDecisionInner(
   const run = await getAgentTeamRun(runId)
   if (!run) return { applied: false, choice, reason: "run_not_found" }
   const control = deps.control ?? defaultControl
-  const parkRecovery = (reason: string) =>
-    parkActiveSquadRun(runId, reason, (deps.now ?? Date.now)())
+  const assertClaimCurrent = async () => {
+    if (deps.claimToken && interrupt.id) {
+      const row = await getDb().executionRunInterrupts.get(interrupt.id)
+      if (row?.status !== "pending" || row.decidingClaim?.token !== deps.claimToken)
+        throw new Error("interrupt_resolved")
+    }
+  }
+  const parkRecovery = async (reason: string) => {
+    await assertClaimCurrent()
+    await parkActiveSquadRun(runId, reason, (deps.now ?? Date.now)())
+  }
+
+  const epochs = (interrupt.subject as Partial<TeamRecoverySubject> | undefined)
+    ?.uncertainChildEpochs
+  const epochsCurrent = async () => {
+    const children = epochs ? await (deps.listChildren ?? defaultListChildren)(runId) : []
+    await assertClaimCurrent()
+    if (!epochs) return true // Legacy questions retain their previous behavior.
+    return Object.entries(epochs).every(([id, epoch]) => {
+      const child = children.find((row) => row.id === id)
+      return child !== undefined && (child.dispatchEpoch ?? 0) === epoch
+    })
+  }
+  const stale = async (): Promise<TeamRecoveryApplyResult> => {
+    await parkRecovery("recover_needs_input")
+    return { applied: false, choice, reason: "interrupt_stale" }
+  }
+  if (!(await epochsCurrent())) return stale()
 
   if (choice === "terminate") {
     const result = await control(runId, "stop")
@@ -348,6 +393,7 @@ async function applyTeamRecoveryDecisionInner(
       await parkRecovery("stop_unconfirmed")
       return { applied: false, choice, reason: "stop_unconfirmed" }
     }
+    if (!(await epochsCurrent())) return stale()
     try {
       const stopped = await control(runId, "stop")
       if (!stopped.ok && stopped.reason !== "already_terminal") throw new Error("stop_unconfirmed")
@@ -360,6 +406,7 @@ async function applyTeamRecoveryDecisionInner(
     const parentExecution = await getExecutionRun(agentTeamExecutionRunId(runId)).catch(
       () => undefined
     )
+    if (!(await epochsCurrent())) return stale()
     const started = await (deps.startReplacement ?? defaultStartReplacement)({
       teamId: run.teamId,
       parentExecutionRunId: agentTeamExecutionRunId(runId),
@@ -403,6 +450,7 @@ async function applyTeamRecoveryDecisionInner(
     choice === "retry_host" && decision?.kind === "team_recovery" ? decision.hostRef : undefined
   const retry = deps.retryChild ?? defaultRetryChild
   for (const childId of uncertain) {
+    if (!(await epochsCurrent())) return stale()
     try {
       await retry(childId, hostRef)
     } catch {
@@ -411,13 +459,14 @@ async function applyTeamRecoveryDecisionInner(
       return { applied: false, choice, reason: "cross_host_unsafe" }
     }
   }
+  if (!(await epochsCurrent())) return stale()
   const resumed = await control(runId, "resume")
   return resumed.ok
     ? { applied: true, choice }
     : { applied: false, choice, reason: "control_refused" }
 }
 
-/** The handler-side entry: read the settled interrupt and apply it. */
+/** The handler-side entry: read the claimed interrupt and apply it. */
 export async function applyTeamRecoveryFromControl(
   command: RunControlCommand,
   deps: TeamRecoveryDeps = {}

@@ -330,6 +330,100 @@ pub struct OperationSummary {
     pub updated_at: i64,
 }
 
+// A cheap invalidation hint for Worker sockets in this process. SQL remains
+// authoritative; a periodic forced check also observes other store processes.
+static WORKER_AUTHORIZATION_REVISION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+// Serializes revocation commits with the synchronous admission of socket writes.
+static WORKER_AUTHORIZATION_GATE: parking_lot::RwLock<()> = parking_lot::RwLock::new(());
+
+pub fn worker_authorization_read_guard() -> parking_lot::RwLockReadGuard<'static, ()> {
+    WORKER_AUTHORIZATION_GATE.read()
+}
+
+pub fn worker_authorization_revision() -> u64 {
+    WORKER_AUTHORIZATION_REVISION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn invalidate_worker_authorization() {
+    WORKER_AUTHORIZATION_REVISION.fetch_add(1, std::sync::atomic::Ordering::Release);
+}
+
+/// Process-local history: regranting never erases a connection's revocation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkerRevocation {
+    pub generation: u64,
+    pub reason: Option<&'static str>,
+}
+
+static WORKER_REVOCATIONS: Lazy<
+    Mutex<std::collections::HashMap<(String, String), WorkerRevocation>>,
+> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+
+pub fn worker_revocation(tenant_id: &str, device_id: &str) -> WorkerRevocation {
+    *WORKER_REVOCATIONS
+        .lock()
+        .entry((tenant_id.to_string(), device_id.to_string()))
+        .or_default()
+}
+
+/// Caller holds the write gate, after the revoking commit and before revision publication.
+fn record_worker_revocation(tenant_id: &str, device_id: &str, reason: &'static str) {
+    let mut revocations = WORKER_REVOCATIONS.lock();
+    let revoked = revocations
+        .entry((tenant_id.to_string(), device_id.to_string()))
+        .or_default();
+    revoked.generation += 1;
+    revoked.reason = Some(reason);
+}
+
+// Identity edits can remove effective capability without editing a grant.
+// Snapshot those workers only on this management path, never per socket frame.
+fn authorized_workers(conn: &Connection) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    let sql = format!(
+        "SELECT g.tenant_id, g.device_id FROM capability_grants g
+         JOIN devices d ON d.tenant_id = g.tenant_id AND d.id = g.device_id
+         LEFT JOIN host_bindings h ON h.tenant_id = g.tenant_id
+         WHERE g.capability = 'agent.worker' AND g.revoked_at IS NULL
+           AND d.status = 'active' AND {OWNER_PREDICATE_SQL}"
+    );
+    let mut query = conn.prepare(&sql)?;
+    let workers = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    workers.collect()
+}
+
+fn record_lost_worker_authorizations(conn: &Connection, before: Vec<(String, String)>) {
+    for (tenant, device) in before {
+        // A failed post-commit read cannot preserve a cached allow.
+        let remaining: i64 = conn
+            .query_row(
+                CAPABILITY_DECISION_SQL.as_str(),
+                params![tenant, device, "agent.worker"],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if remaining == 0 {
+            let state: Option<String> = conn
+                .query_row(
+                    "SELECT status FROM devices WHERE tenant_id = ?1 AND id = ?2",
+                    params![tenant, device],
+                    |row| row.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten();
+            let reason = match state.as_deref() {
+                Some("active") => "grant_revoked",
+                Some("suspended") => "device_suspended",
+                Some("quarantined") => "device_quarantined",
+                _ => "device_revoked",
+            };
+            record_worker_revocation(&tenant, &device, reason);
+        }
+    }
+}
+
 pub struct SecurityStore {
     conn: Arc<Mutex<Connection>>,
 }
@@ -338,7 +432,23 @@ static INSTALLED_STORE: once_cell::sync::Lazy<parking_lot::RwLock<Option<Arc<Sec
     once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(None));
 
 pub fn install_security_store(store: Option<Arc<SecurityStore>>) {
+    let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
+    let previous = INSTALLED_STORE.read().clone();
+    if let Some(previous) =
+        previous.filter(|old| !store.as_ref().is_some_and(|new| Arc::ptr_eq(old, new)))
+    {
+        let workers = authorized_workers(&previous.conn.lock())
+            .unwrap_or_else(|_| WORKER_REVOCATIONS.lock().keys().cloned().collect());
+        if let Some(next) = &store {
+            record_lost_worker_authorizations(&next.conn.lock(), workers);
+        } else {
+            for (tenant, device) in workers {
+                record_worker_revocation(&tenant, &device, "device_revoked");
+            }
+        }
+    }
     *INSTALLED_STORE.write() = store;
+    invalidate_worker_authorization();
 }
 
 pub fn security_store() -> Option<Arc<SecurityStore>> {
@@ -497,6 +607,7 @@ impl SecurityStore {
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Arc<Self>, SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let path = path.as_ref();
         let mut conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -505,14 +616,18 @@ impl SecurityStore {
         conn.execute_batch(SCHEMA_SQL)?;
         let now = unix_time_secs();
         apply_schema_migrations(&mut conn, now, Some(path))?;
+        let workers_before = authorized_workers(&conn)?;
         confine_browser_device_grants(&mut conn, now)?;
+        record_lost_worker_authorizations(&conn, workers_before);
         reconcile_interrupted_operations(&mut conn, now)?;
+        invalidate_worker_authorization();
         Ok(Arc::new(Self {
             conn: Arc::new(Mutex::new(conn)),
         }))
     }
 
     pub fn in_memory() -> Result<Arc<Self>, SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA_SQL)?;
@@ -522,7 +637,10 @@ impl SecurityStore {
         // data on someone's disk.
         let now = unix_time_secs();
         apply_schema_migrations(&mut conn, now, None)?;
+        let workers_before = authorized_workers(&conn)?;
         confine_browser_device_grants(&mut conn, now)?;
+        record_lost_worker_authorizations(&conn, workers_before);
+        invalidate_worker_authorization();
         Ok(Arc::new(Self {
             conn: Arc::new(Mutex::new(conn)),
         }))
@@ -682,6 +800,7 @@ impl SecurityStore {
         public_key_thumbprint: &str,
         now: i64,
     ) -> Result<(), SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -757,6 +876,7 @@ impl SecurityStore {
             now,
         )?;
         tx.commit()?;
+        invalidate_worker_authorization();
         Ok(())
     }
 
@@ -810,6 +930,7 @@ impl SecurityStore {
         device: EnrolledDevice<'_>,
         extra: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), SecurityStoreError>,
     ) -> Result<(), SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let EnrolledDevice {
             tenant_id,
             enrollment,
@@ -898,6 +1019,7 @@ impl SecurityStore {
             now,
         )?;
         tx.commit()?;
+        invalidate_worker_authorization();
         Ok(())
     }
 
@@ -1052,6 +1174,7 @@ impl SecurityStore {
         partition_writes: bool,
         now: i64,
     ) -> Result<(), SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         if !matches!(role, "owner" | "member") {
             return Err(SecurityStoreError::DeviceUnavailable);
         }
@@ -1120,6 +1243,7 @@ impl SecurityStore {
             now,
         )?;
         tx.commit()?;
+        invalidate_worker_authorization();
         Ok(())
     }
 
@@ -1142,6 +1266,7 @@ impl SecurityStore {
         user_id: Option<&str>,
         now: i64,
     ) -> Result<(), SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // A local attribution edit is not a new OIDC proof. Clearing or
@@ -1177,7 +1302,18 @@ impl SecurityStore {
         if changed == 0 {
             return Err(SecurityStoreError::DeviceUnavailable);
         }
+        let status: String = tx.query_row(
+            "SELECT status FROM devices WHERE tenant_id = ?1 AND id = ?2",
+            params![tenant_id, device_id],
+            |row| row.get(0),
+        )?;
         tx.commit()?;
+        match status.as_str() {
+            "quarantined" => record_worker_revocation(tenant_id, device_id, "device_quarantined"),
+            "revoked" => record_worker_revocation(tenant_id, device_id, "device_revoked"),
+            _ => {}
+        }
+        invalidate_worker_authorization();
         Ok(())
     }
 
@@ -1198,13 +1334,18 @@ impl SecurityStore {
         user_id: &str,
         now: i64,
     ) -> Result<usize, SecurityStoreError> {
-        let adopted = self.conn.lock().execute(
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
+        let conn = self.conn.lock();
+        let workers_before = authorized_workers(&conn)?;
+        let adopted = conn.execute(
             "UPDATE devices SET user_id = ?2,
                     status = CASE WHEN status = 'quarantined' THEN 'active' ELSE status END,
                     updated_at = ?3
              WHERE tenant_id = ?1 AND user_id IS NULL",
             params![tenant_id, user_id, now],
         )?;
+        record_lost_worker_authorizations(&conn, workers_before);
+        invalidate_worker_authorization();
         Ok(adopted)
     }
 
@@ -1500,6 +1641,7 @@ impl SecurityStore {
         capabilities: &[String],
         now: i64,
     ) -> Result<Vec<String>, SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut normalized = capabilities.to_vec();
         normalized.sort();
         normalized.dedup();
@@ -1573,6 +1715,13 @@ impl SecurityStore {
             now,
         )?;
         tx.commit()?;
+        if !normalized
+            .iter()
+            .any(|capability| capability == "agent.worker")
+        {
+            record_worker_revocation(tenant_id, device_id, "grant_revoked");
+        }
+        invalidate_worker_authorization();
         Ok(normalized)
     }
 
@@ -1650,6 +1799,7 @@ impl SecurityStore {
         capabilities: &[&str],
         now: i64,
     ) -> Result<(), SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // The upsert below re-roles, reactivates and re-grants whatever row
@@ -1694,6 +1844,10 @@ impl SecurityStore {
             )?;
         }
         tx.commit()?;
+        if !capabilities.contains(&"agent.worker") {
+            record_worker_revocation(tenant_id, device_id, "grant_revoked");
+        }
+        invalidate_worker_authorization();
         Ok(())
     }
 
@@ -2488,6 +2642,7 @@ impl SecurityStore {
         verifier_digest: Option<&str>,
         now: i64,
     ) -> Result<HostBinding, SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -2515,6 +2670,7 @@ impl SecurityStore {
                         params![presented, now, local_account_namespace],
                     )?;
                     tx.commit()?;
+                    invalidate_worker_authorization();
                     return Ok(HostBinding {
                         verifier_digest: Some(presented.to_string()),
                         ..binding
@@ -2523,6 +2679,7 @@ impl SecurityStore {
                 _ => {}
             }
             tx.commit()?;
+            invalidate_worker_authorization();
             return Ok(binding);
         }
 
@@ -2597,6 +2754,7 @@ impl SecurityStore {
                 }
             };
         tx.commit()?;
+        invalidate_worker_authorization();
         Ok(binding)
     }
 
@@ -2639,7 +2797,10 @@ impl SecurityStore {
         canonical_org_id: Option<&str>,
         now: i64,
     ) -> Result<(), SecurityStoreError> {
-        let changed = self.conn.lock().execute(
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
+        let conn = self.conn.lock();
+        let workers_before = authorized_workers(&conn)?;
+        let changed = conn.execute(
             "UPDATE host_bindings SET user_id = ?1, org_id = ?2,
                  canonical_user_id = ?3, canonical_org_id = ?4, updated_at = ?5
              WHERE local_account_namespace = ?6",
@@ -2655,6 +2816,8 @@ impl SecurityStore {
         if changed == 0 {
             return Err(SecurityStoreError::HostBindingMismatch);
         }
+        record_lost_worker_authorizations(&conn, workers_before);
+        invalidate_worker_authorization();
         Ok(())
     }
 
@@ -2667,12 +2830,15 @@ impl SecurityStore {
         local_account_namespace: &str,
         now: i64,
     ) -> Result<(), SecurityStoreError> {
-        self.conn.lock().execute(
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
+        let conn = self.conn.lock();
+        conn.execute(
             "UPDATE host_bindings SET user_id = NULL, org_id = NULL,
                  canonical_user_id = NULL, canonical_org_id = NULL, updated_at = ?1
              WHERE local_account_namespace = ?2",
             params![now, local_account_namespace],
         )?;
+        invalidate_worker_authorization();
         Ok(())
     }
 
@@ -2799,6 +2965,7 @@ impl SecurityStore {
         trust_root_override: bool,
         now: i64,
     ) -> Result<bool, SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current: Option<String> = tx
@@ -2854,6 +3021,8 @@ impl SecurityStore {
         )?;
         insert_audit(&tx, tenant_id, actor_id, "device.suspended", device_id, now)?;
         tx.commit()?;
+        record_worker_revocation(tenant_id, device_id, "device_suspended");
+        invalidate_worker_authorization();
         Ok(true)
     }
 
@@ -2866,6 +3035,7 @@ impl SecurityStore {
         device_id: &str,
         now: i64,
     ) -> Result<bool, SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current: Option<String> = tx
@@ -2894,6 +3064,7 @@ impl SecurityStore {
         )?;
         insert_audit(&tx, tenant_id, actor_id, "device.resumed", device_id, now)?;
         tx.commit()?;
+        invalidate_worker_authorization();
         Ok(true)
     }
 
@@ -2905,6 +3076,7 @@ impl SecurityStore {
         trust_root_override: bool,
         now: i64,
     ) -> Result<(), SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // A suspended device must still be revocable — suspension is not a
@@ -2961,6 +3133,8 @@ impl SecurityStore {
         )?;
         insert_audit(&tx, tenant_id, actor_id, "device.revoked", device_id, now)?;
         tx.commit()?;
+        record_worker_revocation(tenant_id, device_id, "device_revoked");
+        invalidate_worker_authorization();
         Ok(())
     }
 
@@ -2984,6 +3158,7 @@ impl SecurityStore {
         device_id: &str,
         now: i64,
     ) -> Result<(), SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let row: Option<(String, String)> = tx
@@ -3035,6 +3210,8 @@ impl SecurityStore {
         )?;
         insert_audit(&tx, tenant_id, actor_id, "device.forgotten", device_id, now)?;
         tx.commit()?;
+        record_worker_revocation(tenant_id, device_id, "device_revoked");
+        invalidate_worker_authorization();
         Ok(())
     }
 
@@ -5071,6 +5248,237 @@ CREATE TABLE devices (
                 "missing {expected} on {table}: {names:?}"
             );
         }
+    }
+
+    #[test]
+    fn worker_authorization_signal_covers_every_revoking_path() {
+        let _guard = test_guard();
+        let store = SecurityStore::in_memory().unwrap();
+        let binding = store.bind_host_account("worker-signal", None, 1).unwrap();
+        let tenant = &binding.tenant_id;
+        store
+            .bind_host_person("worker-signal", ADA, None, None, None, 1)
+            .unwrap();
+        let provision = |id: &str| {
+            store
+                .ensure_service_principal(tenant, id, id, &["agent.worker"], 2)
+                .unwrap();
+        };
+        let changed = |before| assert!(worker_authorization_revision() > before);
+
+        provision("grant");
+        let before = worker_authorization_revision();
+        store
+            .replace_device_capabilities(tenant, "owner", "grant", &[], 3)
+            .unwrap();
+        changed(before);
+        assert!(!store
+            .has_capability(tenant, "grant", "agent.worker")
+            .unwrap());
+
+        provision("suspend");
+        let before = worker_authorization_revision();
+        store
+            .suspend_device(tenant, "owner", "suspend", false, 3)
+            .unwrap();
+        changed(before);
+        let before = worker_authorization_revision();
+        store.resume_device(tenant, "owner", "suspend", 4).unwrap();
+        changed(before);
+
+        provision("revoke");
+        let before = worker_authorization_revision();
+        store
+            .revoke_device(tenant, "owner", "revoke", false, 3)
+            .unwrap();
+        changed(before);
+
+        provision("quarantine");
+        let before = worker_authorization_revision();
+        store
+            .assign_device_user(tenant, "quarantine", Some(BOB), 3)
+            .unwrap();
+        changed(before);
+        assert_eq!(
+            store.device_state(tenant, "quarantine").unwrap(),
+            Some(DeviceLifecycleState::Quarantined)
+        );
+
+        provision("service");
+        let before = worker_authorization_revision();
+        store
+            .ensure_service_principal(tenant, "service", "service", &[], 3)
+            .unwrap();
+        changed(before);
+
+        // Changing a host's person also removes effective capability without
+        // touching capability_grants; it must invalidate the same cache.
+        provision("person");
+        store
+            .assign_device_user(tenant, "person", Some(ADA), 3)
+            .unwrap();
+        let before = worker_authorization_revision();
+        store
+            .bind_host_person("worker-signal", BOB, None, None, None, 4)
+            .unwrap();
+        changed(before);
+        assert!(!store
+            .has_capability(tenant, "person", "agent.worker")
+            .unwrap());
+        let before = worker_authorization_revision();
+        store.clear_host_person("worker-signal", 5).unwrap();
+        changed(before);
+        let before = worker_authorization_revision();
+        store.adopt_unowned_devices(tenant, ADA, 6).unwrap();
+        changed(before);
+    }
+
+    #[test]
+    fn worker_revocation_generation_remembers_removals_but_not_preserved_grants() {
+        let _guard = test_guard();
+        let store = SecurityStore::in_memory().unwrap();
+        let binding = store
+            .bind_host_account("worker-generation", None, 1)
+            .unwrap();
+        let tenant = &binding.tenant_id;
+        store
+            .bind_host_person("worker-generation", ADA, None, None, None, 1)
+            .unwrap();
+        let provision = |id: &str| {
+            store
+                .ensure_service_principal(tenant, id, id, &["agent.worker"], 1)
+                .unwrap();
+            worker_revocation(tenant, id)
+        };
+        let changed = |id: &str, before: WorkerRevocation, reason| {
+            let after = worker_revocation(tenant, id);
+            assert!(after.generation > before.generation, "{id}");
+            assert_eq!(after.reason, Some(reason));
+        };
+        let before = provision("grant");
+        store
+            .replace_device_capabilities(tenant, "owner", "grant", &["agent.worker".to_string()], 2)
+            .unwrap();
+        assert_eq!(worker_revocation(tenant, "grant"), before);
+        store
+            .replace_device_capabilities(tenant, "owner", "grant", &[], 3)
+            .unwrap();
+        store
+            .replace_device_capabilities(tenant, "owner", "grant", &["agent.worker".to_string()], 4)
+            .unwrap();
+        changed("grant", before, "grant_revoked");
+        let before = provision("suspend");
+        store
+            .suspend_device(tenant, "owner", "suspend", false, 2)
+            .unwrap();
+        store.resume_device(tenant, "owner", "suspend", 3).unwrap();
+        changed("suspend", before, "device_suspended");
+        let before = provision("revoke");
+        store
+            .revoke_device(tenant, "owner", "revoke", false, 2)
+            .unwrap();
+        changed("revoke", before, "device_revoked");
+        let before = provision("quarantine");
+        store
+            .assign_device_user(tenant, "quarantine", Some(BOB), 2)
+            .unwrap();
+        store
+            .assign_device_user(tenant, "quarantine", Some(ADA), 3)
+            .unwrap();
+        changed("quarantine", before, "device_quarantined");
+        let before = provision("service");
+        store
+            .ensure_service_principal(tenant, "service", "Service", &[], 2)
+            .unwrap();
+        changed("service", before, "grant_revoked");
+        provision("person");
+        store
+            .assign_device_user(tenant, "person", Some(ADA), 2)
+            .unwrap();
+        let before = worker_revocation(tenant, "person");
+        store
+            .bind_host_person("worker-generation", BOB, None, None, None, 3)
+            .unwrap();
+        store
+            .bind_host_person("worker-generation", ADA, None, None, None, 4)
+            .unwrap();
+        changed("person", before, "grant_revoked");
+        let before = provision("adopt");
+        store.adopt_unowned_devices(tenant, BOB, 3).unwrap();
+        changed("adopt", before, "grant_revoked");
+    }
+
+    #[test]
+    fn worker_revocation_generation_tracks_store_loss_but_preserves_retained_authority() {
+        let _guard = test_guard();
+        let store = SecurityStore::in_memory().unwrap();
+        store
+            .ensure_service_principal(
+                "tenant-store-generation",
+                "worker",
+                "Worker",
+                &["agent.worker"],
+                1,
+            )
+            .unwrap();
+        install_security_store(Some(Arc::clone(&store)));
+        let before = worker_revocation("tenant-store-generation", "worker");
+        // A new handle to the same grants is not a revocation.
+        let reloaded = Arc::new(SecurityStore {
+            conn: Arc::clone(&store.conn),
+        });
+        install_security_store(Some(reloaded));
+        assert_eq!(
+            worker_revocation("tenant-store-generation", "worker"),
+            before
+        );
+        install_security_store(None);
+        let after = worker_revocation("tenant-store-generation", "worker");
+        assert!(after.generation > before.generation);
+        assert_eq!(after.reason, Some("device_revoked"));
+        install_security_store(Some(store));
+        assert_eq!(
+            worker_revocation("tenant-store-generation", "worker"),
+            after
+        );
+        install_security_store(None);
+    }
+
+    #[test]
+    fn worker_authorization_read_gate_excludes_revocation_commit() {
+        let store = SecurityStore::in_memory().unwrap();
+        store
+            .ensure_service_principal("gate-tenant", "worker", "Worker", &["agent.worker"], 1)
+            .unwrap();
+        let gate = worker_authorization_read_guard();
+        let revision = worker_authorization_revision();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let writer_store = Arc::clone(&store);
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            writer_store
+                .replace_device_capabilities("gate-tenant", "owner", "worker", &[], 2)
+                .unwrap();
+            done_tx.send(()).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(done_rx
+            .recv_timeout(std::time::Duration::from_millis(20))
+            .is_err());
+        assert_eq!(worker_authorization_revision(), revision);
+        assert!(store
+            .has_capability("gate-tenant", "worker", "agent.worker")
+            .unwrap());
+        drop(gate);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        writer.join().unwrap();
+        assert!(worker_authorization_revision() > revision);
+        assert!(!store
+            .has_capability("gate-tenant", "worker", "agent.worker")
+            .unwrap());
     }
 
     fn register(store: &SecurityStore, tenant: &str, device: &str, now: i64) {

@@ -604,6 +604,10 @@ export type ExecutionRunInterruptStatus = "pending" | "approved" | "denied" | "e
 export interface ExecutionRunInterrupt {
   id: string
   runId: string
+  /** Squad child this question belongs to; absent for a run-level question. */
+  childRunId?: string
+  /** Immutable attempt binding (ADR-0244). A moved or missing child expires it. */
+  dispatchEpoch?: number
   projectId?: string
   type:
     | "tool_approval"
@@ -658,6 +662,26 @@ export interface ExecutionRunInterrupt {
      */
     | "fusion_approval"
   status: ExecutionRunInterruptStatus
+  /**
+   * Persisted decisions are claimed atomically while status remains pending.
+   * tool_approval (permission registry, IM awaitApproval and outbound chat),
+   * ask_user and workflow_approval have an engine/waiter winner: their source
+   * resolution projects that winner and may supersede a claim. Squad reviews
+   * (including plan_approval), team_recovery, bot_approval, delegation_approval,
+   * human_handoff and fusion_approval use the durable claim as authority.
+   * Owners renew every 30 s. Startup and competing deciders may reclaim a
+   * heartbeat older than 3 min; attempt bindings are checked before acting.
+   */
+  decidingClaim?: {
+    token: string
+    action: "approve" | "deny"
+    actorId?: string
+    at: number
+    /** Per-process owner; absent on claims written before heartbeat support. */
+    ownerId?: string
+    /** Last owner heartbeat; legacy claims fall back to `at`. */
+    renewedAt?: number
+  }
   title: string
   toolName?: string
   requestDigest?: string
