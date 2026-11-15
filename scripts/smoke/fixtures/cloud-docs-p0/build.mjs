@@ -49,7 +49,6 @@ export function docsProviderPrefixes(){return ['p0:']} export function getDocsPr
     "@/lib/chat/smart-snapshot-command": `export function registerSmartSnapshotComposer(){return ()=>{}}`,
     "@/lib/tauri/pet-window": `export async function showMainWindow(){}`,
     "@/components/mobile/chat/composer-attachment": `export async function attachmentToFiles(){return []}`,
-    "@/stores/system": `export const useProxyStore={getState:()=>({config:{mode:'off'}})};export function getActiveProxyUrl(){return null}export function getNetworkProxy(){return {bypass:[]}}`,
     "@/lib/tauri": `export function isTauri(){return !!window.__TAURI_INTERNALS__}`,
   }
 }

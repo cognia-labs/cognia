@@ -358,6 +358,10 @@ struct Inner {
     /// disable the sidecar and drop the app into safe mode after four ordinary
     /// "restart sidecar" clicks. Only unexpected deaths count.
     intentional_stop: bool,
+    /// The proxy policy revision the live child was spawned with, registered
+    /// in `cognia_net::proxy_config::application` for as long as the child
+    /// lives. Set and cleared together with `child`.
+    proxy_owner: Option<cognia_net::proxy_config::application::OwnerRegistration>,
 }
 
 impl SidecarState {
@@ -502,6 +506,26 @@ impl SidecarState {
 
     pub fn cancel_active_run(&self, token: ActiveRunToken) {
         self.release_active_run_matching(&token.session_id, |hold| hold.token_id == token.token_id);
+    }
+
+    /// Whether stopping process `generation` now would cut work off: a send
+    /// that was admitted but not yet written (it would race the stop and the
+    /// old process's `sidecar_exited` would fail it in the renderer), or a run
+    /// on this process whose turn — or the background processes it left —
+    /// has not settled. `wake_held` is exactly that: taken when the run is
+    /// admitted, released on `turn_settled`/`session_ended` once no background
+    /// process is running. An executor session that is merely open between
+    /// turns is idle, the same state every other configuration restart stops.
+    fn has_unsettled_work(&self, generation: u64) -> bool {
+        self.active_runs
+            .lock()
+            .by_session
+            .values()
+            .flatten()
+            .any(|hold| match hold.generation {
+                None => true,
+                Some(bound) => bound == generation && hold.wake_held,
+            })
     }
 
     /// Host-owned executors survive renderer reloads, including background
@@ -656,6 +680,7 @@ impl SidecarState {
         self.stdin.lock().await.take();
         let mut guard = self.inner.lock().await;
         guard.child = None;
+        guard.proxy_owner = None;
         guard.ready = false;
         guard.backoff.note_failure(now);
         !std::mem::take(&mut guard.intentional_stop)
@@ -799,6 +824,9 @@ async fn spawn_with_runtime(
         }
     };
     let mut bun = bun;
+    // Read together with the config baked into the child's environment below,
+    // so the registration names the policy this process actually carries.
+    let mut proxy_revision: u64;
     let mut startup_guard = StartupProcessGuard(None);
     let (child, stdout, stderr, stdin, mut startup_lines) = loop {
         if state.stop_epoch.load(std::sync::atomic::Ordering::SeqCst) != stop_epoch {
@@ -833,8 +861,10 @@ async fn spawn_with_runtime(
         // proxy as the rest of the app. The interceptor at
         // `sidecar/src/platform/net/fetch-interceptor.ts` reads HTTPS_PROXY at boot
         // and wraps the global undici dispatcher.
-        let proxy_cfg = cognia_net::proxy_config::current().map_err(|error| error.to_string())?;
+        let (proxy_cfg, revision) = cognia_net::proxy_config::current_with_revision();
+        let proxy_cfg = proxy_cfg.map_err(|error| error.to_string())?;
         apply_managed_proxy_env(&mut cmd, &proxy_cfg)?;
+        proxy_revision = revision;
 
         // Code tool presentation (ADR-0117 Phase 4). The sidecar itself runs
         // unconfined — it needs egress to reach the model — so it cannot confine
@@ -952,6 +982,10 @@ async fn spawn_with_runtime(
         let mut guard = state.inner.lock().await;
         *stdin_slot = Some(stdin);
         guard.child = Some(child);
+        guard.proxy_owner = Some(cognia_net::proxy_config::application::register(
+            cognia_net::proxy_config::application::OwnerKind::AgentRuntime,
+            proxy_revision,
+        ));
         guard.ready = false;
     }
     // ADR-0028 Phase 14 — surface the spawn so Diagnostics can show
@@ -1219,9 +1253,17 @@ async fn shutdown_sidecar_locked(state: &SidecarState) -> Result<(), String> {
     // tears down active sessions). stdin lives behind its own lock; take it
     // before touching `inner` (stdin→inner order, never nested).
     state.stdin.lock().await.take();
+    reap_sidecar_child(state).await
+}
+
+/// Take the child out of `inner` and wait for it to exit, escalating to a
+/// process-group kill. The caller has already latched the intentional stop and
+/// closed stdin.
+async fn reap_sidecar_child(state: &SidecarState) -> Result<(), String> {
     let child = {
         let mut guard = state.inner.lock().await;
         guard.ready = false;
+        guard.proxy_owner = None;
         guard.child.take()
     };
     let Some(mut child) = child else {
@@ -1260,6 +1302,82 @@ pub async fn kill_sidecar(state: SidecarState) {
 /// child with a fresh, already-committed environment.
 pub async fn restart_sidecar_for_config(state: SidecarState) -> Result<(), String> {
     shutdown_sidecar(state).await
+}
+
+/// What [`retire_idle_sidecar_for_proxy`] did with the live sidecar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyReplacement {
+    /// No sidecar is running; the next one spawns with the current policy.
+    NotRunning,
+    /// The live sidecar already carries the current policy, or the current
+    /// policy is Blocked and a replacement could not start anyway.
+    Kept,
+    /// A turn (or the background processes it left) is still running on the
+    /// live process, or a send is on its way to it. It keeps the policy it
+    /// started with and reports `restart-pending` until it is replaced.
+    Busy,
+    /// The idle sidecar was stopped; the next request spawns it on the
+    /// current policy.
+    Stopped,
+}
+
+/// Offer a newly published proxy policy to the live sidecar.
+///
+/// The proxy reaches the sidecar only through its environment, so a policy
+/// change is invisible to a process that is already running. Replacing it is
+/// safe only while nothing is in flight ([`SidecarState::has_unsettled_work`]):
+/// stopping a busy process would fail the user's turn just because they saved
+/// a setting, so a busy sidecar is kept and reported as `restart-pending` (the
+/// settings page offers an explicit restart).
+///
+/// The check and the cut-off are one step under the `stdin` lock, which every
+/// run is delivered under: an admitted-but-undelivered send already counts as
+/// busy, and the pipe is closed before the lock is released, so nothing
+/// admitted afterwards can be written to the retired process — a send that
+/// spawns waits on the spawn lock held here and reaches the replacement, a
+/// direct write finds the sidecar not running. The intentional stop is latched
+/// first, so the exit the closed pipe causes is not charged as a crash.
+///
+/// Called once, right after the policy is published, never from the send
+/// path: a stop emitted mid-send would reach the renderer as `sidecar_exited`
+/// and fail the very turn that triggered it. A sidecar found busy is not
+/// retried when it settles either — the next queued message may be in flight
+/// at exactly that moment — so it stays `restart-pending` until it is
+/// restarted or replaced for another reason.
+pub async fn retire_idle_sidecar_for_proxy(
+    state: SidecarState,
+) -> Result<ProxyReplacement, String> {
+    let _spawn_guard = state.spawn_lock.lock().await;
+    {
+        let inner = state.inner.lock().await;
+        if inner.child.is_none() {
+            return Ok(ProxyReplacement::NotRunning);
+        }
+        let due = inner
+            .proxy_owner
+            .as_ref()
+            .is_some_and(|owner| owner.replacement_would_apply());
+        if !due {
+            return Ok(ProxyReplacement::Kept);
+        }
+    }
+    {
+        let mut stdin = state.stdin.lock().await;
+        // stdin → inner is the order spawn publishes in. The child may have
+        // exited on its own since the check above; stopping nothing would
+        // latch `intentional_stop` and hide the next real crash.
+        if state.inner.lock().await.child.is_none() {
+            return Ok(ProxyReplacement::NotRunning);
+        }
+        if state.has_unsettled_work(state.current_epoch()) {
+            return Ok(ProxyReplacement::Busy);
+        }
+        state.note_intentional_stop().await;
+        stdin.take();
+    }
+    log::info!("sidecar: stopping the idle process so the next request carries the new proxy policy");
+    reap_sidecar_child(&state).await?;
+    Ok(ProxyReplacement::Stopped)
 }
 #[cfg(test)]
 mod tests {
@@ -2099,6 +2217,178 @@ mod tests {
         assert!(state.inner.lock().await.child.is_none());
         let still_alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
         assert!(!still_alive, "sidecar process {pid} must be reaped");
+    }
+
+    /// A live stand-in child published the way spawn publishes one, on a new
+    /// generation, with `owner` as its proxy registration.
+    #[cfg(unix)]
+    async fn publish_stand_in(
+        state: &SidecarState,
+        owner: cognia_net::proxy_config::application::OwnerRegistration,
+    ) {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("exec sleep 30")
+            .stdin(Stdio::piped())
+            .kill_on_drop(true);
+        cognia_exec_sandbox::proc_group::apply_process_group(&mut command);
+        let mut child = command.spawn().expect("spawn test sidecar");
+        *state.stdin.lock().await = child.stdin.take();
+        state.next_epoch();
+        let mut inner = state.inner.lock().await;
+        inner.child = Some(child);
+        inner.proxy_owner = Some(owner);
+    }
+
+    /// Settle every turn on `generation` with no background process left,
+    /// as the sidecar reports it.
+    fn settle_turns(state: &SidecarState, generation: u64, session: &str) {
+        handle_active_run_event(
+            state,
+            generation,
+            &serde_json::json!({
+                "type": "turn_settled",
+                "sessionId": session,
+                "backgroundProcessesRunning": false,
+            }),
+        );
+    }
+
+    /// A registration whose revision cannot be the published one, under a
+    /// usable (Ready) policy: the shape a sidecar is in after the user saved a
+    /// different proxy.
+    fn stale_proxy_owner() -> cognia_net::proxy_config::application::OwnerRegistration {
+        cognia_net::proxy_config::apply_current(Default::default()).unwrap();
+        cognia_net::proxy_config::application::register(
+            cognia_net::proxy_config::application::OwnerKind::AgentRuntime,
+            u64::MAX,
+        )
+    }
+
+    #[tokio::test]
+    async fn proxy_retirement_without_a_sidecar_does_nothing() {
+        let state = SidecarState::new();
+        assert_eq!(
+            retire_idle_sidecar_for_proxy(state).await.unwrap(),
+            ProxyReplacement::NotRunning
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    // The power test lock must cover the whole test: the run holds it takes
+    // are process-global. Nothing awaited here takes that lock.
+    #[allow(clippy::await_holding_lock)]
+    async fn a_running_turn_keeps_its_old_proxy_and_an_open_idle_session_does_not() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        publish_stand_in(&state, stale_proxy_owner()).await;
+        let run = state.begin_pending_run("chat", None);
+        state
+            .write_pending_run_command(&serde_json::json!({ "type": "send" }), &run)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            retire_idle_sidecar_for_proxy(state.clone()).await.unwrap(),
+            ProxyReplacement::Busy
+        );
+        assert!(state.inner.lock().await.child.is_some(), "a running turn is not cut off");
+
+        // The turn settles; the session stays open (its hold remains until
+        // disposal) but nothing is in flight any more.
+        settle_turns(&state, state.current_epoch(), "chat");
+        assert_eq!(state.live_session_ids(), vec!["chat".to_string()]);
+        assert_eq!(
+            retire_idle_sidecar_for_proxy(state.clone()).await.unwrap(),
+            ProxyReplacement::Stopped
+        );
+        let inner = state.inner.lock().await;
+        assert!(inner.child.is_none());
+        assert!(inner.proxy_owner.is_none(), "the stopped owner leaves the ledger");
+        assert!(inner.intentional_stop, "the retirement is not charged as a crash");
+        drop(inner);
+        state.cancel_active_run(run);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    // The power test lock must cover the whole test: the run holds it takes
+    // are process-global. Nothing awaited here takes that lock.
+    #[allow(clippy::await_holding_lock)]
+    async fn a_send_on_its_way_keeps_the_sidecar() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        publish_stand_in(&state, stale_proxy_owner()).await;
+        // Admitted but not yet written: stopping now would race it and fail
+        // it through the old process's `sidecar_exited`.
+        let waiting = state.begin_pending_run("chat", None);
+        assert_eq!(
+            retire_idle_sidecar_for_proxy(state.clone()).await.unwrap(),
+            ProxyReplacement::Busy
+        );
+        state
+            .write_pending_run_command(&serde_json::json!({ "type": "send" }), &waiting)
+            .await
+            .unwrap();
+        state.cancel_active_run(waiting);
+        assert_eq!(
+            retire_idle_sidecar_for_proxy(state.clone()).await.unwrap(),
+            ProxyReplacement::Stopped
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    // The power test lock must cover the whole test: the run holds it takes
+    // are process-global. Nothing awaited here takes that lock.
+    #[allow(clippy::await_holding_lock)]
+    async fn nothing_reaches_a_retired_process() {
+        let _guard = cognia_power::ASSERTION_TEST_LOCK.lock();
+        let state = SidecarState::new();
+        publish_stand_in(&state, stale_proxy_owner()).await;
+        assert_eq!(
+            retire_idle_sidecar_for_proxy(state.clone()).await.unwrap(),
+            ProxyReplacement::Stopped
+        );
+        // A run admitted after the stop cannot be written to the old pipe; it
+        // waits for a replacement instead.
+        let late = state.begin_pending_run("chat", None);
+        assert!(state
+            .write_pending_run_command(&serde_json::json!({ "type": "send" }), &late)
+            .await
+            .is_err());
+        state.cancel_active_run(late);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_sidecar_on_the_current_policy_is_kept() {
+        let state = SidecarState::new();
+        cognia_net::proxy_config::apply_current(Default::default()).unwrap();
+        publish_stand_in(
+            &state,
+            cognia_net::proxy_config::application::register(
+                cognia_net::proxy_config::application::OwnerKind::AgentRuntime,
+                cognia_net::proxy_config::policy_revision(),
+            ),
+        )
+        .await;
+        // Another test in this crate may publish between the two reads; only
+        // a policy that is unchanged since registration must keep the process.
+        let outcome = retire_idle_sidecar_for_proxy(state.clone()).await.unwrap();
+        let unchanged = state
+            .inner
+            .lock()
+            .await
+            .proxy_owner
+            .as_ref()
+            .is_some_and(|owner| !owner.is_stale());
+        if unchanged {
+            assert_eq!(outcome, ProxyReplacement::Kept);
+        }
+        shutdown_sidecar(state).await.unwrap();
     }
 
     #[tokio::test]

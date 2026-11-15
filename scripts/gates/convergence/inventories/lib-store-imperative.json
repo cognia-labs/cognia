@@ -6,8 +6,8 @@
     "date": "2026-11-01"
   },
   "metrics": {
-    "static": 286,
-    "all": 402
+    "static": 285,
+    "all": 401
   },
   "members": [
     {
@@ -2161,17 +2161,6 @@
       "stores": [
         "stores/chat/index.ts",
         "stores/ui/index.ts"
-      ]
-    },
-    {
-      "key": "lib/network/proxy-fetch.ts",
-      "owner": "lib/network",
-      "note": "",
-      "imports": [
-        "static"
-      ],
-      "stores": [
-        "stores/system/index.ts"
       ]
     },
     {

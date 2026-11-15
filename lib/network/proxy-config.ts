@@ -37,8 +37,8 @@ const HOST_CHARSET = /^[A-Za-z0-9._\-:[\]]+$/
  * dialled, so an embedded NUL or CR cannot make the two disagree.
  *
  * Returns the trimmed host on success. IPv6 is accepted bare or bracketed and
- * normalized to bare — [`formatProxyAuthority`] adds the brackets back where
- * a URL needs them.
+ * normalized to bare — the native `proxy_config::authority` adds the brackets
+ * back where a URL needs them.
  */
 export function validateProxyHost(raw: string): ProxyHostValidation {
   const host = raw.trim()
@@ -74,18 +74,6 @@ export function validateProxyPort(port: number): boolean {
 }
 
 /**
- * `host:port` for a URL, TCP dial, or CONNECT line.
- *
- * IPv6 literals must be bracketed or the last group is read as the port:
- * `::1:8080` is not a parse of `::1` port 8080, it is a different (invalid)
- * address. Mirrors `proxy_config::authority` on the Rust side.
- */
-export function formatProxyAuthority(host: string, port: number): string {
-  const bare = stripBrackets(host.trim())
-  return isIpv6(bare) ? `[${bare}]:${port}` : `${bare}:${port}`
-}
-
-/**
  * Strip the brackets `URL.hostname` keeps on an IPv6 literal.
  *
  * `new URL("http://[::1]/").hostname` is `"[::1]"`, so comparing it against a
@@ -110,19 +98,6 @@ export function isProxyActive(cfg?: NetworkProxySettings | null): cfg is Network
   if (!cfg) return false
   if (cfg.mode === "off") return false
   return validateProxyHost(cfg.host).ok && validateProxyPort(cfg.port)
-}
-
-/**
- * Build a public proxy endpoint URL without credentials.
- *
- * Returns `null` when the config isn't actionable (off, missing host, or
- * port = 0). Credentials live in the native keyring and must never be
- * reconstructed in the renderer.
- */
-export function buildProxyUrl(cfg?: NetworkProxySettings | null): string | null {
-  if (!isProxyActive(cfg)) return null
-  const scheme = cfg.protocol === "socks5" ? "socks5" : cfg.protocol
-  return `${scheme}://${formatProxyAuthority(cfg.host, cfg.port)}`
 }
 
 type ParsedIp = { bits: 32 | 128; bytes: number[] }
@@ -239,29 +214,4 @@ export function redactProxyUrl(value: string): string {
   } catch {
     return "<invalid-proxy-url>"
   }
-}
-
-/**
- * Env-var map suitable for spawning a child process (Node sidecar, MCP
- * server) so its outbound HTTP picks up the same proxy. Reads every common
- * casing because libraries are inconsistent.
- *
- * Returns `{}` when no proxy is active so the caller can spread it without
- * conditionals.
- */
-export function proxyEnvVars(cfg?: NetworkProxySettings | null): Record<string, string> {
-  const url = buildProxyUrl(cfg)
-  if (!url) return {}
-  const env: Record<string, string> = {
-    HTTP_PROXY: url,
-    HTTPS_PROXY: url,
-    http_proxy: url,
-    https_proxy: url,
-  }
-  if (cfg && cfg.bypass.length > 0) {
-    const noProxy = cfg.bypass.join(",")
-    env.NO_PROXY = noProxy
-    env.no_proxy = noProxy
-  }
-  return env
 }

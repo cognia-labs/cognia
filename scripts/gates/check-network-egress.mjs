@@ -58,6 +58,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { execSync } from "node:child_process"
+import ts from "typescript"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, "../..")
@@ -90,6 +91,10 @@ export const REASONS = new Set([
   // The managed transport's own implementation — the one place a bare call
   // is the point.
   "transport-impl",
+  // Dials only addresses this code resolved and checked as public
+  // (`resolve_to_addrs` over `egress::is_forbidden_dest_ip`). A forward proxy
+  // would re-resolve the hostname on its side and void the check.
+  "pinned-public",
   // Raw TCP to an endpoint the user named and confirmed (an SSH forward's
   // destination, a remote desktop server pinned to one address). The protocol
   // is not HTTP, and re-routing would defeat the confirmation.
@@ -208,33 +213,135 @@ export function blankNonCode(source) {
 }
 
 /**
- * Blank an inline `#[cfg(test)] mod … { … }` body.
+ * The Rust counterpart of `blankNonCode`.
  *
- * Rust keeps its unit tests in the source file, and those tests build bare
- * `reqwest::Client::new()` clients by design. Without this they would each
- * need an allowlist entry that says nothing.
+ * `blankNonCode` reads `'` as a string delimiter, which is right for
+ * TypeScript and wrong for Rust: `MutexGuard<'static, ()>` opens a lifetime,
+ * not a literal. Read as a string, it blanked everything up to the next
+ * apostrophe — often in a comment hundreds of lines later — which hid real
+ * egress calls in that span and threw off the brace count that finds the end
+ * of a test module. Here `'` starts a char literal only when one closes
+ * (`'x'`, `'\n'`, `'\u{1F600}'`); otherwise it is a lifetime or label and
+ * stays code. Raw strings (`r#"…"#`, `br"…"`) and nested block comments are
+ * Rust syntax too.
  */
-export function blankRustTestModules(code) {
-  const out = code.split("")
-  const pattern = /#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+[\w]+\s*\{/g
-  let match
-  while ((match = pattern.exec(code)) !== null) {
-    const open = code.indexOf("{", match.index + match[0].length - 1)
-    let depth = 0
-    let end = code.length
-    for (let i = open; i < code.length; i += 1) {
-      if (code[i] === "{") depth += 1
-      else if (code[i] === "}") {
-        depth -= 1
-        if (depth === 0) {
-          end = i
-          break
-        }
+export function blankRustNonCode(source) {
+  const out = source.split("")
+  const blank = (from, to) => {
+    for (let i = from; i < to && i < out.length; i += 1) {
+      if (out[i] !== "\n") out[i] = " "
+    }
+  }
+  let index = 0
+  while (index < source.length) {
+    const char = source[index]
+    const next = source[index + 1]
+    if (char === "/" && next === "/") {
+      const end = source.indexOf("\n", index)
+      const stop = end === -1 ? source.length : end
+      blank(index, stop)
+      index = stop
+      continue
+    }
+    if (char === "/" && next === "*") {
+      let depth = 1
+      let cursor = index + 2
+      while (cursor < source.length && depth > 0) {
+        if (source[cursor] === "/" && source[cursor + 1] === "*") {
+          depth += 1
+          cursor += 2
+        } else if (source[cursor] === "*" && source[cursor + 1] === "/") {
+          depth -= 1
+          cursor += 2
+        } else cursor += 1
+      }
+      blank(index, cursor)
+      index = cursor
+      continue
+    }
+    const identifierBefore = index > 0 && /[\w$]/.test(source[index - 1])
+    const raw = identifierBefore ? null : /^b?r(#*)"/.exec(source.slice(index, index + 260))
+    if (raw) {
+      const open = index + raw[0].length
+      const closing = `"${raw[1]}`
+      const end = source.indexOf(closing, open)
+      const stop = end === -1 ? source.length : end
+      blank(open, stop)
+      index = stop + closing.length
+      continue
+    }
+    if (char === '"') {
+      let cursor = index + 1
+      while (cursor < source.length && source[cursor] !== '"') {
+        cursor += source[cursor] === "\\" ? 2 : 1
+      }
+      blank(index + 1, cursor)
+      index = cursor + 1
+      continue
+    }
+    if (char === "'") {
+      const literal = /^'(?:\\(?:u\{[0-9a-fA-F]{1,6}\}|x[0-9a-fA-F]{2}|.)|[^\\'\n]{1,2})'/u.exec(
+        source.slice(index, index + 14)
+      )
+      // `[^\\'\n]{1,2}` admits a surrogate pair; a two-character run that is
+      // not one is a lifetime followed by a quote, so check it is one code point.
+      const body = literal?.[0].slice(1, -1)
+      if (body !== undefined && (body.startsWith("\\") || [...body].length === 1)) {
+        blank(index + 1, index + literal[0].length - 1)
+        index += literal[0].length
+        continue
       }
     }
+    index += 1
+  }
+  return out.join("")
+}
+
+/**
+ * Blank every `#[cfg(test)]` item: an inline `mod … { … }`, a test-only `fn`
+ * or `impl`, or a `mod tests;` / `use` declaration.
+ *
+ * Rust keeps its unit tests in the source file, and those tests build bare
+ * `reqwest::Client::new()` / `.no_proxy()` clients by design. Without this they
+ * would each need an allowlist entry that says nothing. Other attributes may
+ * sit between `#[cfg(test)]` and the item (`#[allow(…)]`, `#[path = …]`).
+ * Run it on `blankRustNonCode` output so braces in strings do not count.
+ */
+export function blankRustTestItems(code) {
+  const out = code.split("")
+  const pattern = /#\[cfg\(test\)\]/g
+  let match
+  while ((match = pattern.exec(code)) !== null) {
+    let depth = 0
+    let end = -1
+    for (let i = match.index + match[0].length; i < code.length; i += 1) {
+      const char = code[i]
+      if (char === "(" || char === "[") depth += 1
+      else if (char === ")" || char === "]") depth -= 1
+      else if (depth === 0 && char === ";") {
+        end = i
+        break
+      } else if (depth === 0 && char === "{") {
+        let braces = 0
+        for (let j = i; j < code.length; j += 1) {
+          if (code[j] === "{") braces += 1
+          else if (code[j] === "}") {
+            braces -= 1
+            if (braces === 0) {
+              end = j
+              break
+            }
+          }
+        }
+        if (end === -1) end = code.length - 1
+        break
+      }
+    }
+    if (end === -1) continue
     for (let i = match.index; i <= end && i < out.length; i += 1) {
       if (out[i] !== "\n") out[i] = " "
     }
+    pattern.lastIndex = end + 1
   }
   return out.join("")
 }
@@ -325,6 +432,108 @@ export function findFetchCalls(code) {
   return findings
 }
 
+/**
+ * Does the `fetch` identifier at `index` name a local binding rather than the
+ * global?
+ *
+ * Injected transports are the house style — `fetch: PlatformFetch` in a deps
+ * bag, `const fetch: PlatformFetch = …` around a managed client — and inside
+ * them `await fetch(url)` reads exactly like the global call. The regex cannot
+ * tell them apart; the binding can. This walks the enclosing scopes (function
+ * parameters, block and file declarations, imports, loop and catch bindings)
+ * and returns true when one of them declares `fetch`.
+ *
+ * A binding that is just the global under another name
+ * (`const fetch = globalThis.fetch`, `fetch = window.fetch` as a default) is
+ * not a shadow: that is the unmanaged call with one more line in front of it.
+ *
+ * @param {import("typescript").SourceFile} sourceFile parsed original source
+ * @param {number} index offset of the `fetch` identifier
+ */
+export function isShadowedFetch(sourceFile, index) {
+  const node = identifierAt(sourceFile, index)
+  if (!node) return false
+  const aliasesGlobal = (initializer) =>
+    initializer !== undefined &&
+    /^(?:\(?\s*)?(?:(?:globalThis|window|self)\s*\.\s*)?fetch\b/.test(
+      initializer.getText(sourceFile).trim()
+    )
+  const declares = (name, initializer) => bindsFetch(name) && !aliasesGlobal(initializer)
+  const declaresInStatements = (statements) =>
+    statements.some((statement) => {
+      if (ts.isVariableStatement(statement)) {
+        return statement.declarationList.declarations.some((d) => declares(d.name, d.initializer))
+      }
+      if (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) {
+        return statement.name?.text === "fetch"
+      }
+      if (ts.isImportDeclaration(statement)) {
+        const clause = statement.importClause
+        if (!clause) return false
+        if (clause.name?.text === "fetch") return true
+        const bindings = clause.namedBindings
+        if (bindings && ts.isNamespaceImport(bindings)) return bindings.name.text === "fetch"
+        return Boolean(bindings?.elements.some((element) => element.name.text === "fetch"))
+      }
+      return false
+    })
+  for (let scope = node.parent; scope; scope = scope.parent) {
+    if (ts.isFunctionLike(scope)) {
+      if (scope.parameters.some((p) => declares(p.name, p.initializer))) return true
+      if (ts.isFunctionExpression(scope) && scope.name?.text === "fetch") return true
+    }
+    if (ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope)) {
+      if (declaresInStatements(scope.statements)) return true
+    }
+    if (ts.isCaseClause(scope) || ts.isDefaultClause(scope)) {
+      if (declaresInStatements(scope.statements)) return true
+    }
+    if (
+      (ts.isForStatement(scope) || ts.isForOfStatement(scope) || ts.isForInStatement(scope)) &&
+      scope.initializer &&
+      ts.isVariableDeclarationList(scope.initializer) &&
+      scope.initializer.declarations.some((d) => declares(d.name, d.initializer))
+    ) {
+      return true
+    }
+    if (ts.isCatchClause(scope) && scope.variableDeclaration) {
+      if (bindsFetch(scope.variableDeclaration.name)) return true
+    }
+  }
+  return false
+}
+
+function bindsFetch(name) {
+  if (ts.isIdentifier(name)) return name.text === "fetch"
+  return name.elements.some(
+    (element) => !ts.isOmittedExpression(element) && bindsFetch(element.name)
+  )
+}
+
+function identifierAt(sourceFile, index) {
+  let found
+  const visit = (node) => {
+    if (found || index < node.pos || index >= node.end) return
+    if (ts.isIdentifier(node) && node.getStart(sourceFile) === index) {
+      found = node
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return found
+}
+
+function scriptKindOf(file) {
+  if (file.endsWith(".tsx")) return ts.ScriptKind.TSX
+  return ts.ScriptKind.TS
+}
+
+/** Parse `source` once, only for files that have a candidate to resolve. */
+export function parseTypeScript(file, source) {
+  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKindOf(file))
+}
+
 export function findConstructorCalls(code) {
   const findings = []
   for (const [kind, pattern] of [
@@ -360,13 +569,19 @@ export function collectFindings(
 ) {
   const findings = []
   for (const file of listFiles(TS_ROOTS, [".ts", ".tsx", ".mts", ".cts"])) {
-    const code = blankNonCode(readFile(file))
+    const source = readFile(file)
+    const code = blankNonCode(source)
+    let parsed
     for (const hit of [...findFetchCalls(code), ...findConstructorCalls(code)]) {
+      if (hit.kind === "fetch" && code.startsWith("fetch", hit.index)) {
+        parsed ??= parseTypeScript(file, source)
+        if (isShadowedFetch(parsed, hit.index)) continue
+      }
       findings.push({ file, line: lineAt(code, hit.index), kind: hit.kind })
     }
   }
   for (const file of listFiles(RUST_ROOTS, [".rs"])) {
-    const code = blankRustTestModules(blankNonCode(readFile(file)))
+    const code = blankRustTestItems(blankRustNonCode(readFile(file)))
     for (const hit of findRustEgress(code)) {
       findings.push({ file, line: lineAt(code, hit.index), kind: hit.kind })
     }

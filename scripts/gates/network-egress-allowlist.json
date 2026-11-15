@@ -64,7 +64,7 @@
       "file": "lib/artifacts/react-runtime-loader.ts",
       "kind": "fetch",
       "reason": "resource-read",
-      "note": "Reads the manifest of the bundled artifact runtime under public/artifact-runtime/. Same-origin static asset, resolved against location.href \u2014 never a network origin, and the packaged shell's connect-src would refuse one."
+      "note": "Reads the manifest of the bundled artifact runtime under public/artifact-runtime/. Same-origin static asset, resolved against location.href — never a network origin, and the packaged shell's connect-src would refuse one."
     },
     {
       "file": "lib/browser/remote-stream.ts",
@@ -112,7 +112,7 @@
       "file": "lib/network/platform-fetch.ts",
       "kind": "fetch",
       "reason": "transport-impl",
-      "note": "The browser arm of the platform transport itself \u2014 this is the call the other paths route around."
+      "note": "The browser arm of the platform transport itself — this is the call the other paths route around."
     },
     {
       "file": "lib/network/platform-streaming-fetch.ts",
@@ -136,7 +136,7 @@
       "file": "lib/plugin/bridge/plugin-file-path.ts",
       "kind": "fetch",
       "reason": "resource-read",
-      "note": "Reads a browser built-in's own text asset (e.g. an icon-theme JSON) from its /plugins/<id>/ public mirror. Always a root-relative, same-origin static file from the export (out/) \u2014 never a network origin \u2014 and the URL is built by publicBuiltinAssetUrl from the caller's plugin id and a traversal-checked path."
+      "note": "Reads a browser built-in's own text asset (e.g. an icon-theme JSON) from its /plugins/<id>/ public mirror. Always a root-relative, same-origin static file from the export (out/) — never a network origin — and the URL is built by publicBuiltinAssetUrl from the caller's plugin id and a traversal-checked path."
     },
     {
       "file": "lib/plugin/core/context.ts",
@@ -265,12 +265,6 @@
       "note": "Dials the local Cognia ACP endpoint. Non-loopback hosts are refused unless the user sets COGNIA_ACP_URL explicitly."
     },
     {
-      "file": "crates/cognia-codeserver/src/agent_channel.rs",
-      "kind": "tcp-connect",
-      "reason": "test",
-      "note": "Both hits are in the inline test module (test clients of the 127.0.0.1 agent channel); the module's cfg shape is not one blankRustTestModules recognises."
-    },
-    {
       "file": "crates/cognia-connectors/src/lark_ws.rs",
       "kind": "tcp-connect",
       "reason": "transport-impl",
@@ -343,12 +337,6 @@
       "note": "Relays a container service's published port on 127.0.0.1."
     },
     {
-      "file": "crates/cognia-sandbox-pool/src/git_proxy.rs",
-      "kind": "tcp-connect",
-      "reason": "test",
-      "note": "Inline test that the git proxy's 127.0.0.1 listener stops when dropped."
-    },
-    {
       "file": "crates/cognia-sandboxd/src/egress.rs",
       "kind": "tcp-connect",
       "reason": "loopback",
@@ -371,6 +359,78 @@
       "kind": "websocket",
       "reason": "loopback",
       "note": "ADR-0234: opens the Host's one-shot remote desktop bridge on ws://127.0.0.1:<port>/rd/<ticket> to relay bytes to a third-party viewer's MessagePort. A proxy must never carry the loopback ticket."
+    },
+    {
+      "file": "components/mobile/discover/twin-sources-panel.tsx",
+      "kind": "fetch",
+      "reason": "capacitor",
+      "note": "Reads the Capacitor camera result's local photo URI (a WebView-served file path) to base64 it before queueing the twin source on the Host. Never a network origin."
+    },
+    {
+      "file": "crates/cognia-cli/src/commands/host.rs",
+      "kind": "tcp-connect",
+      "reason": "loopback",
+      "note": "connect_loopback dials the Headless event stream only on resolved addresses whose IP is loopback; every other address is skipped."
+    },
+    {
+      "file": "crates/cognia-gateway/src/client_connections.rs",
+      "kind": "no-proxy",
+      "reason": "loopback",
+      "note": "verify_models probes the gateway's own listener, and only after checking the origin equals http://127.0.0.1:<bound port>. A user proxy must not see the client key it sends."
+    },
+    {
+      "file": "crates/cognia-gateway/src/task_lease.rs",
+      "kind": "no-proxy",
+      "reason": "pinned-public",
+      "note": "validate_public_upstreams pins every remote-task upstream to DNS answers it checked are public (resolve_to_addrs, HTTPS only, no redirects). Behind a mandatory forward proxy remote tasks therefore fail closed rather than dial unchecked addresses; a proxied variant needs a checked-IP tunnel that can stream, which pinned_http does not provide yet."
+    },
+    {
+      "file": "crates/cognia-local-browser/src/client.rs",
+      "kind": "no-proxy",
+      "reason": "loopback",
+      "note": "RuntimeClient talks only to the workspace runtime child process on 127.0.0.1; a proxy would see its bearer secret."
+    },
+    {
+      "file": "crates/cognia-net/src/proxy_config/mod.rs",
+      "kind": "no-proxy",
+      "reason": "transport-impl",
+      "note": "ProxyConfig::apply_reqwest_policy: the policy's own Direct arm. This is the one place an explicit opt-out is the point."
+    },
+    {
+      "file": "crates/cognia-server/src/org_admin.rs",
+      "kind": "no-proxy",
+      "reason": "loopback",
+      "note": "The org-admin CLI calls the local server's /internal API on https://127.0.0.1:<port> with a service JWT; never re-routed."
+    },
+    {
+      "file": "lib/ai/media/video-jobs/host.ts",
+      "kind": "fetch",
+      "reason": "server-side",
+      "note": "The default VideoJobHost is the CLI's (Node, process proxy environment). The renderer installs renderer-host.ts with the platform transport at boot."
+    },
+    {
+      "file": "lib/capacitor/camera.ts",
+      "kind": "fetch",
+      "reason": "resource-read",
+      "note": "Reads the captured photo's Capacitor webPath (a local file served by the WebView) to convert it to base64/data URL."
+    },
+    {
+      "file": "lib/remote-desktop/native-stream.ts",
+      "kind": "websocket",
+      "reason": "companion-pinned",
+      "note": "The default socket factory for the remote desktop stream URL, which is either the local Host's loopback bridge or the paired Host's ws-lan/ws-tunnel URL handed out by the companion transport. Injectable via deps.socket."
+    },
+    {
+      "file": "lib/slash-commands/actions/video.ts",
+      "kind": "fetch",
+      "reason": "resource-read",
+      "note": "readStaged reads the staged composer image's blob:/data: URL to use it as the start frame."
+    },
+    {
+      "file": "packages/provider-types/src/keyless-credentials.ts",
+      "kind": "fetch",
+      "reason": "transport-impl",
+      "note": "withKeylessFetch's fallback when the caller passes no fetch: the same global the SDK would use by default. Callers on the desktop renderer pass the platform transport; the sidecar's global is the proxy-aware interceptor."
     }
   ]
 }

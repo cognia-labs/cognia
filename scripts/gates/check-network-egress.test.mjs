@@ -4,15 +4,18 @@ import { test } from "node:test"
 import {
   REASONS,
   blankNonCode,
-  blankRustTestModules,
+  blankRustNonCode,
+  blankRustTestItems,
   diffAgainstAllowlist,
   findConstructorCalls,
   findFetchCalls,
   findRustEgress,
   firstTopLevelArgument,
   isScaffolding,
+  isShadowedFetch,
   isTypedParameter,
   keyOf,
+  parseTypeScript,
   selectScannableFiles,
   validateAllowlist,
 } from "./check-network-egress.mjs"
@@ -118,7 +121,7 @@ test("blankNonCode leaves a template literal's interpolation out of reach", () =
   assert.deepEqual(findFetchCalls(blankNonCode(source)), [])
 })
 
-test("blankRustTestModules removes inline test scaffolding", () => {
+test("blankRustTestItems removes inline test scaffolding", () => {
   const source = [
     "fn real() { let c = reqwest::Client::new(); }",
     "#[cfg(test)]",
@@ -126,7 +129,77 @@ test("blankRustTestModules removes inline test scaffolding", () => {
     "    fn t() { let c = reqwest::Client::new(); }",
     "}",
   ].join("\n")
-  assert.equal(findRustEgress(blankRustTestModules(source)).length, 1)
+  assert.equal(findRustEgress(blankRustTestItems(blankRustNonCode(source))).length, 1)
+})
+
+test("blankRustTestItems covers test-only fns, extra attributes and out-of-line modules", () => {
+  const source = [
+    "#[cfg(test)]",
+    "#[allow(dead_code)]",
+    "pub(super) fn with_test_base_url() -> Client { Client::builder().no_proxy().build() }",
+    "#[cfg(test)]",
+    "mod tests;",
+    "fn real() { builder.no_proxy(); }",
+  ].join("\n")
+  const hits = findRustEgress(blankRustTestItems(blankRustNonCode(source)))
+  assert.equal(hits.length, 1)
+  assert.equal(blankRustNonCode(source).split("\n").length, 6)
+})
+
+test("blankRustNonCode keeps code after a lifetime visible", () => {
+  // `'static` used to open a "string" that ran to the next apostrophe, hiding
+  // every call in between and breaking the test-module brace count.
+  const source = [
+    "fn guard() -> MutexGuard<'static, ()> { todo!() }",
+    "fn leak() { let c = reqwest::Client::new(); }",
+    "// the developer's proxy",
+  ].join("\n")
+  assert.equal(findRustEgress(blankRustNonCode(source)).length, 1)
+  assert.equal(findRustEgress(blankNonCode(source)).length, 0, "the TS blanker is the bug")
+})
+
+test("blankRustNonCode blanks char, byte and raw string literals", () => {
+  const source = [
+    "let open = '{'; let quote = '\\''; let smile = '\\u{1F600}';",
+    'let raw = r#"reqwest::Client::new() " still raw"#;',
+    'let bytes = br"no_proxy()"; let s = "\\"no_proxy()";',
+    "#[cfg(test)]",
+    "mod tests { fn t() { Client::new(); } }",
+    "fn real() { b.no_proxy(); }",
+  ].join("\n")
+  const code = blankRustTestItems(blankRustNonCode(source))
+  assert.deepEqual(
+    findRustEgress(code).map((hit) => hit.kind),
+    ["no-proxy"]
+  )
+})
+
+/** Fetch findings in `source` that resolve to the global. */
+function globalFetches(source, file = "x.ts") {
+  const parsed = parseTypeScript(file, source)
+  return findFetchCalls(blankNonCode(source)).filter((hit) => !isShadowedFetch(parsed, hit.index))
+}
+
+test("a fetch parameter, destructured dep or local transport is not the global", () => {
+  assert.equal(globalFetches("function a(fetch: F) { return fetch(url) }").length, 0)
+  assert.equal(globalFetches("const a = ({ fetch }: Deps) => fetch(url)").length, 0)
+  assert.equal(
+    globalFetches("async function a() { const fetch: F = make(); await fetch(url, { a }) }").length,
+    0
+  )
+  assert.equal(globalFetches('import { fetch } from "undici"\nfetch(url)').length, 0)
+  assert.equal(globalFetches("for (const fetch of fetchers) fetch(url)").length, 0)
+})
+
+test("a shadow in another scope does not hide the global call", () => {
+  const source = "function a(fetch: F) { return fetch(x) }\nfunction b() { return fetch(y) }"
+  assert.equal(globalFetches(source).length, 1)
+})
+
+test("an alias of the global is still the global", () => {
+  assert.equal(globalFetches("const fetch = globalThis.fetch\nfetch(url)").length, 1)
+  assert.equal(globalFetches("function a(fetch = window.fetch) { fetch(url) }").length, 1)
+  assert.equal(globalFetches("function a() { return globalThis.fetch(url) }", "x.tsx").length, 1)
 })
 
 test("isScaffolding excludes tests, stories, mocks and integration dirs", () => {

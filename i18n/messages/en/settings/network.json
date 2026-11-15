@@ -1,4 +1,30 @@
 {
+  "application": {
+    "description": "Native requests use a new policy on their next connection. A process that was already running keeps the policy it started with until it restarts.",
+    "loading": "Checking where the proxy policy is in effect…",
+    "owner": {
+      "agentRuntime": "Agent runtime"
+    },
+    "ownerState": {
+      "current": "Uses the current policy",
+      "notRunning": "Not running — starts on the current policy",
+      "pending": "Still on the previous policy"
+    },
+    "pendingHint": "It was running a turn when the policy changed, so it was not restarted. It switches to the current policy the next time it starts.",
+    "policy": {
+      "blocked": "Blocked — new requests are refused",
+      "ready": "In effect for new connections",
+      "uninitialized": "Not initialized — new requests are refused"
+    },
+    "restart": "Restart now",
+    "restartCancel": "Cancel",
+    "restartConfirm": "Restart",
+    "restartDescription": "Agent turns that are running now are stopped and can be retried. The next turn starts on the current proxy policy.",
+    "restartFailed": "Couldn't restart the agent runtime.",
+    "restartTitle": "Restart the agent runtime?",
+    "title": "Where the policy is in effect",
+    "unavailable": "Couldn't read the native proxy state."
+  },
   "candidates": {
     "clash": "Clash / Mihomo",
     "http": "HTTP proxy",

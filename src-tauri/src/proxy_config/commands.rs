@@ -1,14 +1,19 @@
 //! Tauri commands exposing proxy configuration to the frontend.
 //!
 //! - `proxy_apply` — resolve keyring credentials and atomically publish policy.
-//!   subsequent reqwest builders pick it up. Idempotent.
+//!   subsequent reqwest builders pick it up. Idempotent: an identical policy
+//!   keeps its revision. In the background, an idle agent sidecar is then
+//!   stopped so its next start carries the new policy; one with a turn in
+//!   flight keeps the old one and is reported as `restart-pending` by
+//!   `proxy_get_active` until it is restarted.
 //! - `proxy_detect` — port-probe + Clash API; returns the candidate list
 //!   the Detection tab renders.
 //! - `proxy_identify_clash` — single cheap probe of Clash/Mihomo's default
 //!   controller; powers the Detection tab's quick status line on mount.
 //! - `proxy_test` — issue a one-off request through the *current* config
 //!   and report status + latency.
-//! - `proxy_get_active` — debug aid; returns the live config snapshot.
+//! - `proxy_get_active` — sanitized runtime state: route, revision, capability
+//!   versions, and which process owners still carry an older revision.
 //! - `network_interface_counters` / `network_latency_probe` — the status
 //!   bar's live network readout (`cognia_net::net_meter`): cumulative
 //!   interface byte counters, and a connection-reusing round-trip probe that
@@ -64,7 +69,26 @@ fn default_proxy_websockets() -> bool {
 /// policy. Any failure places the process in Blocked rather than retaining a
 /// stale or direct configuration.
 #[tauri::command]
-pub async fn proxy_apply(input: ProxyApplyInput) -> Result<(), ProxyError> {
+pub async fn proxy_apply(
+    input: ProxyApplyInput,
+    sidecar: tauri::State<'_, crate::claude::sidecar::SidecarState>,
+) -> Result<(), ProxyError> {
+    publish_applied_policy(input).await?;
+    // Offer the new policy to the sidecar without holding the apply up: the
+    // retirement waits on the sidecar's spawn lock, which a starting sidecar
+    // holds through its readiness wait. The task ends on its own; whether the
+    // sidecar was replaced shows in `proxy_get_active`, not as an apply error.
+    let sidecar = sidecar.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        match crate::claude::sidecar::retire_idle_sidecar_for_proxy(sidecar).await {
+            Ok(outcome) => log::debug!("proxy apply: sidecar {outcome:?}"),
+            Err(error) => log::warn!("proxy apply: idle sidecar could not be stopped: {error}"),
+        }
+    });
+    Ok(())
+}
+
+async fn publish_applied_policy(input: ProxyApplyInput) -> Result<(), ProxyError> {
     // Preserve apply order while credential lookup yields to the worker pool.
     static APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _apply_guard = APPLY_LOCK.lock().await;
@@ -131,6 +155,9 @@ pub struct ProxyActiveStatus {
     runtime: ProxyRuntimeStatus,
     download_policy_version: u8,
     request_admission_version: u8,
+    /// Long-lived process owners and whether each carries the published
+    /// revision. Absent from older Hosts: a client reads that as unknown.
+    applications: Vec<cognia_net::proxy_config::application::OwnerApplication>,
 }
 
 impl std::ops::Deref for ProxyActiveStatus {
@@ -146,6 +173,7 @@ pub async fn proxy_get_active() -> Result<ProxyActiveStatus, String> {
         runtime: runtime_status(),
         download_policy_version: 2,
         request_admission_version: 1,
+        applications: cognia_net::proxy_config::application::applications(),
     })
 }
 
@@ -723,6 +751,8 @@ mod tests {
         assert_eq!(status["requestAdmissionVersion"], 1);
         assert!(status.get("state").is_some());
         assert!(status.get("credentialConfigured").is_some());
+        assert!(status["revision"].as_str().is_some_and(|label| !label.is_empty()));
+        assert!(status["applications"].is_array());
     }
 
     #[tokio::test]
@@ -745,7 +775,7 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_apply_and_get_roundtrip_is_sanitized() {
-        proxy_apply(ProxyApplyInput {
+        publish_applied_policy(ProxyApplyInput {
             mode: ProxyMode::Manual,
             protocol: ProxyProtocol::Http,
             host: "10.0.0.1".to_string(),
@@ -767,7 +797,7 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_apply_off_does_not_require_a_stale_username_password() {
-        proxy_apply(ProxyApplyInput {
+        publish_applied_policy(ProxyApplyInput {
             mode: ProxyMode::Off,
             protocol: ProxyProtocol::Http,
             host: "proxy.example".into(),
@@ -783,7 +813,7 @@ mod tests {
 
     #[tokio::test]
     async fn authenticated_proxy_rejects_missing_credentials_after_worker_lookup() {
-        let error = proxy_apply(ProxyApplyInput {
+        let error = publish_applied_policy(ProxyApplyInput {
             mode: ProxyMode::Manual,
             protocol: ProxyProtocol::Http,
             host: "proxy.example".into(),

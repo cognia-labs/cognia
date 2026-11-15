@@ -30,6 +30,11 @@ jest.mock("@/stores/network-proxy", () => ({
   updateProxyPassword: jest.fn().mockResolvedValue(true),
 }))
 
+// The panel has its own suite; here it only has to be mounted.
+jest.mock("@/components/settings/network/proxy-application-status", () => ({
+  ProxyApplicationStatus: () => <div data-testid="proxy-application-status-mounted" />,
+}))
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const networkProxyModule = require("@/stores/network-proxy") as {
   applyProxyToRust: jest.Mock
@@ -54,6 +59,11 @@ beforeEach(() => {
 })
 
 describe("NetworkGeneralTab", () => {
+  it("shows where the applied policy is in effect above the form", () => {
+    render(<NetworkGeneralTab />)
+    expect(screen.getByTestId("proxy-application-status-mounted")).toBeInTheDocument()
+  })
+
   it("renders the mode radio with three options", () => {
     render(<NetworkGeneralTab />)
     expect(screen.getByText("mode.off")).toBeInTheDocument()

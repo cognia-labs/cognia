@@ -125,16 +125,51 @@ deny policy take precedence for the same reason. The sandbox's own filtering pro
 the Host proxy rather than dialling out itself, while keeping its SSRF pin: an allowlisted name that
 resolves to loopback, link-local, RFC1918 or `169.254.169.254` is refused before any byte flows.
 
+## When a change takes effect
+
+Every published policy has a **revision**. Re-applying an identical policy keeps it (the renderer
+pushes on every settings save); any real change advances it, including a new keyring password,
+although the revision itself carries nothing about the credential. `proxy_get_active` reports it as
+an opaque `<host epoch>-<n>` label, so a revision from before a Host restart never equals one after
+it.
+
+Native clients read the live policy per connection, so they follow a change on their next
+connection; an SSE stream or WebSocket that is already open keeps the route it was opened on. A
+process cannot follow a change at all: the policy is in its environment from the moment it was
+spawned. Such an owner registers the revision it started on
+(`proxy_config::application::register`) for as long as its child lives, and `proxy_get_active`
+lists each one as `current` or `restart-pending`. The agent sidecar is the one registered owner.
+
+After `proxy_apply` publishes, it offers the new policy to the sidecar in the background: if no
+turn is in flight on the live process (a session that is merely open between turns does not count)
+it is stopped, and the next request starts it on the current policy; if a turn is
+running, it is kept rather than cut off, and Settings → Network → General shows it as still on the
+previous policy with an explicit restart. The idle check and the generation fence run under the
+lock a pending run is activated under, and a send that is admitted but not yet delivered counts as
+busy, so no send reaches the process being stopped. A busy sidecar is not retried when its turn
+settles: the next queued message may be in flight at exactly that moment. The replacement is
+not deferred to the next send: stopping a process mid-send reaches the renderer as
+`sidecar_exited` and would fail the very turn that triggered it.
+
 ## The gate
 
 `pnpm audit:network-egress` flags a call to the global `fetch`, `new WebSocket`, and
-`new EventSource` in TypeScript, and `reqwest::Client::new()` / `.no_proxy()` in Rust. Test
-scaffolding, stories and Rust `#[cfg(test)]` modules are excluded rather than allowlisted.
+`new EventSource` in TypeScript, and `reqwest::Client::new()`, `.no_proxy()` and raw
+`TcpStream::connect` in Rust. Test scaffolding, stories and Rust `#[cfg(test)]` items (inline test
+modules, test-only functions, `mod tests;`) are excluded rather than allowlisted.
+
+A `fetch` that names a local binding — a `fetch: PlatformFetch` parameter, a destructured deps
+field, a `const fetch` around a managed client, an import — is the caller's injected transport, not
+the global, and is resolved through the TypeScript parser rather than flagged. An alias of the
+global (`const fetch = globalThis.fetch`) still counts. Rust sources are blanked with a Rust-aware
+lexer: `'static` is a lifetime, not the start of a string, which the shared TypeScript blanker got
+wrong — it hid every call between a lifetime and the next apostrophe.
 
 Everything else is declared one file at a time in
 `scripts/gates/network-egress-allowlist.json`, with a `reason` from a fixed vocabulary — `loopback`,
-`resource-read`, `browser-fallback`, `capacitor`, `companion-pinned`, `server-side`,
-`transport-impl` — and a written note. Wildcards and directory prefixes are rejected: an exception
+`resource-read`, `browser-fallback`, `capacitor`, `companion-pinned`, `server-side`, `test`,
+`transport-impl`, `pinned-public` (dials only addresses it resolved and checked as public, which a
+forward proxy would re-resolve), `user-endpoint` — and a written note. Wildcards and directory prefixes are rejected: an exception
 that covers a tree stops being read and starts being a hole. A stale entry fails the build too,
 because it would silently re-open the next bare call written in that file.
 
@@ -142,7 +177,9 @@ because it would silently re-open the next bare call written in that file.
 
 | Piece | Path |
 | --- | --- |
-| Policy, bypass, validation, WSS dialer | `crates/cognia-net/src/proxy_config/` |
+| Policy, revision, bypass, validation, WSS dialer | `crates/cognia-net/src/proxy_config/` |
+| Process owners on an older revision | `crates/cognia-net/src/proxy_config/application.rs` |
+| Sidecar idle replacement | `retire_idle_sidecar_for_proxy` in `crates/cognia-sidecar/src/supervisor.rs` |
 | Tauri commands (`proxy_apply`, `proxy_detect`, `proxy_test`, the two bridges) | `src-tauri/src/proxy_config/` |
 | Renderer transports | `lib/network/` |
 | Host adapter install | `lib/network/desktop-network-runtime.ts` |

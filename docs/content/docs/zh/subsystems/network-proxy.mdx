@@ -78,17 +78,29 @@ description: 桌面 Host 的统一出站策略 —— Off / Manual / Auto，支�
 
 权限永远优先于便利。声明了任意 `network:*` 权限的 Node 插件会被运行时直接拒绝，因此不会拿到代理凭据；网络关闭和 sandbox deny 策略同理优先。sandbox 自己的过滤代理是**链式**转发到 Host 代理，而不是自己直连出网，同时保留 SSRF 固定：解析到 loopback、link-local、RFC1918 或 `169.254.169.254` 的白名单域名，在任何字节流动前就被拒绝。
 
+## 变更何时生效
+
+每个已发布的策略都有一个 **revision**。重复应用完全相同的策略不会推进它（渲染端每次保存设置都会推送）；任何实际变化都会推进，包括钥匙串里的新密码，但 revision 本身不携带任何凭据信息。`proxy_get_active` 以不透明的 `<host epoch>-<n>` 标签报告它，因此 Host 重启前后的 revision 永远不会相等。
+
+原生客户端每次建立连接都读取实时策略，所以下一次连接就会跟随变更；已经打开的 SSE 流或 WebSocket 保持打开时的路由。进程则无法跟随：策略从派生那一刻起就写在它的环境里。这类所有者在子进程存活期间登记它启动时的 revision（`proxy_config::application::register`），`proxy_get_active` 把每一个列为 `current` 或 `restart-pending`。目前唯一登记的所有者是 Agent sidecar。
+
+`proxy_apply` 发布后会在后台把新策略交给 sidecar：如果当前进程上没有正在进行的任务（只是在两轮之间保持打开的会话不算），就把它停掉，下一个请求会用当前策略重新启动；如果有任务正在运行，则保留它而不是中断，设置 → 网络 → 通用会显示它仍在使用之前的策略，并提供显式重启。空闲检查和代际隔离都在激活待处理运行所用的同一把锁下完成，已接纳但尚未投递的发送也算作忙碌，因此不会有发送被投递到正在停止的进程。忙碌的 sidecar 在任务结束后不会自动重试替换——那一刻下一条排队消息可能正好在发出。替换不推迟到下一次发送：发送途中停止进程会以 `sidecar_exited` 到达渲染端，让触发它的那一轮直接失败。
+
 ## 门禁
 
-`pnpm audit:network-egress` 会标记 TypeScript 里对全局 `fetch` 的调用、`new WebSocket`、`new EventSource`，以及 Rust 里的 `reqwest::Client::new()` / `.no_proxy()`。测试脚手架、stories 和 Rust 的 `#[cfg(test)]` 模块直接排除在扫描之外，而不是逐条加白。
+`pnpm audit:network-egress` 会标记 TypeScript 里对全局 `fetch` 的调用、`new WebSocket`、`new EventSource`，以及 Rust 里的 `reqwest::Client::new()`、`.no_proxy()` 和裸 `TcpStream::connect`。测试脚手架、stories 和 Rust 的 `#[cfg(test)]` 项（内联测试模块、仅测试函数、`mod tests;`）直接排除在扫描之外，而不是逐条加白。
 
-其余一律在 `scripts/gates/network-egress-allowlist.json` 里逐文件声明，带一个来自固定词表的 `reason`（`loopback`、`resource-read`、`browser-fallback`、`capacitor`、`companion-pinned`、`server-side`、`transport-impl`）和一句说明。通配符和目录前缀会被拒绝：覆盖整棵树的例外没人再会去读，只会变成一个洞。失效的条目同样会让构建失败 —— 它会悄悄给该文件里下一个裸调用重新开门。
+指向局部绑定的 `fetch` —— `fetch: PlatformFetch` 参数、解构出的依赖字段、包裹受管客户端的 `const fetch`、import —— 是调用方注入的传输，不是全局 `fetch`，通过 TypeScript 解析器判定而不再被标记。全局的别名（`const fetch = globalThis.fetch`）仍然算数。Rust 源码使用理解 Rust 语法的词法器清空字符串：`'static` 是生命周期而不是字符串开头，共享的 TypeScript 清空器把它弄错了——它会隐藏生命周期到下一个撇号之间的所有调用。
+
+其余一律在 `scripts/gates/network-egress-allowlist.json` 里逐文件声明，带一个来自固定词表的 `reason`（`loopback`、`resource-read`、`browser-fallback`、`capacitor`、`companion-pinned`、`server-side`、`test`、`transport-impl`、`pinned-public`（只拨号自己解析并确认为公网的地址，正向代理会重新解析主机名）、`user-endpoint`）和一句说明。通配符和目录前缀会被拒绝：覆盖整棵树的例外没人再会去读，只会变成一个洞。失效的条目同样会让构建失败 —— 它会悄悄给该文件里下一个裸调用重新开门。
 
 ## 代码位置
 
 | 部分 | 路径 |
 | --- | --- |
-| 策略、绕过、校验、WSS 拨号 | `crates/cognia-net/src/proxy_config/` |
+| 策略、revision、绕过、校验、WSS 拨号 | `crates/cognia-net/src/proxy_config/` |
+| 仍在旧 revision 上的进程所有者 | `crates/cognia-net/src/proxy_config/application.rs` |
+| sidecar 空闲替换 | `crates/cognia-sidecar/src/supervisor.rs` 中的 `retire_idle_sidecar_for_proxy` |
 | Tauri 命令（`proxy_apply`、`proxy_detect`、`proxy_test`、两座桥） | `src-tauri/src/proxy_config/` |
 | 渲染端传输 | `lib/network/` |
 | Host adapter 安装 | `lib/network/desktop-network-runtime.ts` |

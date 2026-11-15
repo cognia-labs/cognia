@@ -35,6 +35,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 
+import { ProxyApplicationStatus } from "@/components/settings/network/proxy-application-status"
 import { useSettingsStore } from "@/stores/settings"
 import {
   applyProxyToRust,
@@ -187,6 +188,7 @@ export function NetworkGeneralTab() {
 
   return (
     <div className="space-y-6">
+      <ProxyApplicationStatus />
       {/* Mode */}
       <div className="space-y-2">
         <Label className="text-sm">{t("modeLabel")}</Label>

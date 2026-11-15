@@ -1,26 +1,9 @@
 import { invoke } from "@tauri-apps/api/core"
 import { isTauri } from "@/lib/tauri"
-import {
-  createProxyFetch,
-  createRetryableProxyFetch,
-  formatProxiedUrl,
-  getCurrentProxyUrl,
-  getProxyConfig,
-  isProxyEnabled,
-  shouldBypassProxy,
-} from "./proxy-fetch"
+import { createProxyFetch } from "./proxy-fetch"
 
 jest.mock("@tauri-apps/api/core", () => ({ invoke: jest.fn() }))
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn() }))
-
-const getState = jest.fn()
-const getActiveProxyUrl = jest.fn()
-const getNetworkProxy = jest.fn()
-jest.mock("@/stores/system", () => ({
-  useProxyStore: { getState: () => getState() },
-  getActiveProxyUrl: (...args: unknown[]) => getActiveProxyUrl(...args),
-  getNetworkProxy: () => getNetworkProxy(),
-}))
 
 const mockedInvoke = jest.mocked(invoke)
 const mockedIsTauri = jest.mocked(isTauri)
@@ -33,15 +16,6 @@ const nativeResponse = (body: Uint8Array, status = 200) => ({
 beforeEach(() => {
   jest.clearAllMocks()
   mockedIsTauri.mockReturnValue(true)
-  getState.mockReturnValue({
-    config: {
-      enabled: true,
-      mode: "manual",
-      url: "http://proxy.example:8080",
-    },
-  })
-  getActiveProxyUrl.mockImplementation((state) => state?.config?.url ?? null)
-  getNetworkProxy.mockReturnValue({ bypass: ["localhost", ".internal", "10.0.0.0/8"] })
 })
 
 describe("createProxyFetch", () => {
@@ -378,60 +352,5 @@ describe("null-body statuses", () => {
     await expect((await createProxyFetch()("https://example.test/resource")).text()).resolves.toBe(
       "ok"
     )
-  })
-})
-
-describe("public proxy helpers", () => {
-  it("returns only sanitized endpoint metadata", () => {
-    getActiveProxyUrl.mockReturnValue("http://alice:secret@proxy.example:8080")
-    expect(getCurrentProxyUrl()).toBe("http://proxy.example:8080/")
-    expect(getProxyConfig()).toEqual({
-      enabled: true,
-      url: "http://proxy.example:8080/",
-      host: "proxy.example",
-      port: 8080,
-      protocol: "http",
-    })
-    expect(formatProxiedUrl("https://target.example")).not.toContain("secret")
-  })
-
-  it("uses the configured bypass contract only for route previews", () => {
-    expect(shouldBypassProxy("http://localhost:3000")).toBe(true)
-    expect(shouldBypassProxy("https://api.internal")).toBe(true)
-    expect(shouldBypassProxy("https://10.4.2.1")).toBe(true)
-    expect(shouldBypassProxy("https://example.com")).toBe(false)
-  })
-
-  it("reports enabled state without exposing an environment override", () => {
-    getActiveProxyUrl.mockReturnValue("http://proxy.example:8080")
-    expect(isProxyEnabled()).toBe(true)
-  })
-})
-
-describe("createRetryableProxyFetch", () => {
-  it("retries retryable failures and eventually returns the response", async () => {
-    mockedInvoke
-      .mockRejectedValueOnce(new Error("ECONNRESET"))
-      .mockResolvedValueOnce(nativeResponse(new TextEncoder().encode("ok")))
-    const onRetry = jest.fn()
-    const response = await createRetryableProxyFetch()("https://example.com", {
-      maxRetries: 1,
-      initialDelay: 0,
-      onRetry,
-    })
-    expect(await response.text()).toBe("ok")
-    expect(onRetry).toHaveBeenCalledTimes(1)
-  })
-
-  it("never retries an aborted request", async () => {
-    const controller = new AbortController()
-    controller.abort()
-    await expect(
-      createRetryableProxyFetch()("https://example.com", {
-        signal: controller.signal,
-        maxRetries: 3,
-      })
-    ).rejects.toMatchObject({ name: "AbortError" })
-    expect(mockedInvoke).not.toHaveBeenCalled()
   })
 })

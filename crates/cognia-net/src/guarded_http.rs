@@ -143,15 +143,19 @@ where
 
 /// A credential-free presigned PUT. Keeps checked DNS/proxy tunneling while
 /// permitting bounded media chunks; redirects and API credentials are denied.
+///
+/// Takes a built [`Request`], not a `RequestBuilder`: every hop is sent by a
+/// client this function builds from `make_builder` and the live policy, so a
+/// caller-side client would only exist to carry the request (and would read as
+/// an unmanaged `reqwest::Client::new()` to `audit:network-egress`).
 pub async fn send_pinned_public_upload<F>(
-    request: RequestBuilder,
+    request: Request,
     make_builder: F,
     timeout: Duration,
 ) -> Result<Response, String>
 where
     F: Fn(&str) -> Result<ClientBuilder, String>,
 {
-    let request = request.build().map_err(|_| "public_upload_invalid")?;
     validate_public_upload(&request)?;
     tokio::time::timeout(
         timeout,
@@ -797,7 +801,9 @@ mod tests {
         let error = send_pinned_public_upload(
             client
                 .put("https://127.0.0.1/upload?sign=SECRET")
-                .body(bytes),
+                .body(bytes)
+                .build()
+                .unwrap(),
             |_| Ok(reqwest::Client::builder()),
             Duration::from_secs(1),
         )

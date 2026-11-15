@@ -1,10 +1,7 @@
 import { DEFAULT_NETWORK_PROXY_SETTINGS, type NetworkProxySettings } from "@/types/network/proxy"
 import {
-  buildProxyUrl,
-  formatProxyAuthority,
   isProxyActive,
   normalizeProxyHostForMatch,
-  proxyEnvVars,
   redactProxyUrl,
   shouldBypass,
   validateProxyHost,
@@ -42,45 +39,6 @@ describe("isProxyActive", () => {
 
   it("returns true for an auto-detected config", () => {
     expect(isProxyActive(make({ mode: "auto", host: "127.0.0.1", port: 7890 }))).toBe(true)
-  })
-})
-
-describe("buildProxyUrl", () => {
-  it("returns null when no proxy is active", () => {
-    expect(buildProxyUrl(undefined)).toBeNull()
-    expect(buildProxyUrl(make({ mode: "off" }))).toBeNull()
-  })
-
-  it("emits a bare http:// URL without auth", () => {
-    expect(
-      buildProxyUrl(make({ mode: "manual", protocol: "http", host: "127.0.0.1", port: 7890 }))
-    ).toBe("http://127.0.0.1:7890")
-  })
-
-  it("emits a https:// URL when protocol is https", () => {
-    expect(
-      buildProxyUrl(make({ mode: "manual", protocol: "https", host: "proxy.corp", port: 8443 }))
-    ).toBe("https://proxy.corp:8443")
-  })
-
-  it("emits a socks5:// URL", () => {
-    expect(
-      buildProxyUrl(make({ mode: "manual", protocol: "socks5", host: "127.0.0.1", port: 7891 }))
-    ).toBe("socks5://127.0.0.1:7891")
-  })
-
-  it("never embeds the persisted username in the public URL", () => {
-    expect(
-      buildProxyUrl(
-        make({
-          mode: "manual",
-          protocol: "http",
-          host: "127.0.0.1",
-          port: 7890,
-          username: "alice",
-        })
-      )
-    ).toBe("http://127.0.0.1:7890")
   })
 })
 
@@ -129,44 +87,6 @@ describe("shouldBypass", () => {
   })
 })
 
-describe("proxyEnvVars", () => {
-  it("returns empty object when proxy inactive", () => {
-    expect(proxyEnvVars(undefined)).toEqual({})
-    expect(proxyEnvVars(make({ mode: "off" }))).toEqual({})
-  })
-
-  it("emits HTTP_PROXY/HTTPS_PROXY in both casings", () => {
-    const env = proxyEnvVars(
-      make({ mode: "manual", protocol: "http", host: "127.0.0.1", port: 7890 })
-    )
-    expect(env.HTTP_PROXY).toBe("http://127.0.0.1:7890")
-    expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:7890")
-    expect(env.http_proxy).toBe("http://127.0.0.1:7890")
-    expect(env.https_proxy).toBe("http://127.0.0.1:7890")
-  })
-
-  it("emits NO_PROXY when bypass list is non-empty", () => {
-    const env = proxyEnvVars(
-      make({
-        mode: "manual",
-        protocol: "http",
-        host: "127.0.0.1",
-        port: 7890,
-        bypass: ["localhost", ".internal"],
-      })
-    )
-    expect(env.NO_PROXY).toBe("localhost,.internal")
-    expect(env.no_proxy).toBe("localhost,.internal")
-  })
-
-  it("omits NO_PROXY when bypass is empty", () => {
-    const env = proxyEnvVars(
-      make({ mode: "manual", protocol: "http", host: "127.0.0.1", port: 7890, bypass: [] })
-    )
-    expect(env.NO_PROXY).toBeUndefined()
-  })
-})
-
 describe("redactProxyUrl", () => {
   it("removes userinfo without altering the endpoint", () => {
     expect(redactProxyUrl("http://alice:secret@proxy.example:8080")).toBe(
@@ -184,7 +104,7 @@ describe("validateProxyHost", () => {
     expect(validateProxyHost("proxy.corp")).toEqual({ ok: true, host: "proxy.corp" })
     expect(validateProxyHost("  10.0.0.1 ")).toEqual({ ok: true, host: "10.0.0.1" })
     expect(validateProxyHost("::1")).toEqual({ ok: true, host: "::1" })
-    // Brackets are normalized away; `formatProxyAuthority` puts them back.
+    // Brackets are normalized away; the native side brackets it when dialling.
     expect(validateProxyHost("[2001:db8::1]")).toEqual({ ok: true, host: "2001:db8::1" })
   })
 
@@ -241,31 +161,7 @@ describe("validateProxyPort", () => {
   })
 })
 
-describe("formatProxyAuthority", () => {
-  it("brackets an IPv6 literal and leaves everything else alone", () => {
-    expect(formatProxyAuthority("proxy.corp", 8080)).toBe("proxy.corp:8080")
-    expect(formatProxyAuthority("10.0.0.1", 1080)).toBe("10.0.0.1:1080")
-    // `::1:8080` is not "::1 port 8080" — it is a different, invalid address.
-    expect(formatProxyAuthority("::1", 8080)).toBe("[::1]:8080")
-    expect(formatProxyAuthority("[2001:db8::1]", 3128)).toBe("[2001:db8::1]:3128")
-  })
-})
-
 describe("IPv6 handling across the config surface", () => {
-  function ipv6Settings(): NetworkProxySettings {
-    return {
-      ...DEFAULT_NETWORK_PROXY_SETTINGS,
-      mode: "manual",
-      protocol: "http",
-      host: "::1",
-      port: 8080,
-    }
-  }
-
-  it("builds a bracketed proxy URL", () => {
-    expect(buildProxyUrl(ipv6Settings())).toBe("http://[::1]:8080")
-  })
-
   it("bypasses an IPv6 target that matches a bare entry", () => {
     // `URL.hostname` returns `"[::1]"`, so the literal comparison used to test
     // `"[::1]" === "::1"` and never match — with `::1` in the DEFAULT bypass
@@ -295,7 +191,6 @@ describe("isProxyActive rejects a host the native side could never dial", () => 
       port: 8080,
     }
     expect(isProxyActive(withPortInHost)).toBe(false)
-    expect(buildProxyUrl(withPortInHost)).toBeNull()
 
     const withScheme: NetworkProxySettings = {
       ...DEFAULT_NETWORK_PROXY_SETTINGS,

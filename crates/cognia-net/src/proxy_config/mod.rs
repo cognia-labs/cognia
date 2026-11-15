@@ -9,6 +9,7 @@
 //! Companion of `lib/network/proxy-config.ts` on the TS side. The two
 //! representations stay in sync because the frontend is the only writer and
 //! pushes whenever it commits a settings change.
+pub mod application;
 pub mod clients;
 pub mod detect;
 pub mod wsproxy;
@@ -37,7 +38,9 @@ pub enum ProxyMode {
     Auto,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+// `PartialEq` is what lets a re-apply of the same policy keep its revision
+// (`publish`). There is deliberately no `Debug`: it would print the password.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyConfig {
     #[serde(default)]
     pub mode: ProxyMode,
@@ -128,7 +131,7 @@ pub enum ProxyRouteSummary {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ProxyRuntimeState {
     Uninitialized,
     Ready(ProxyConfig),
@@ -144,6 +147,10 @@ pub struct ProxyRuntimeStatus {
     pub credential_configured: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<ProxyErrorCode>,
+    /// Opaque label of the published policy ([`policy_revision_label`]). Two
+    /// statuses with the same label describe the same policy in the same Host
+    /// process; it is not a hash and carries nothing about the credential.
+    pub revision: String,
 }
 
 fn default_proxy_websockets() -> bool {
@@ -351,8 +358,8 @@ impl ProxyConfig {
         Ok((builder, route))
     }
 
-    /// Env vars suitable for spawning a child process. Mirrors the TS
-    /// `proxyEnvVars` helper so the Node sidecar sees the same proxy.
+    /// Env vars suitable for spawning a child process (the Node sidecar, plugin
+    /// runtimes, jobs) so it routes through the same proxy as native clients.
     pub fn env_vars(&self) -> Vec<(String, String)> {
         let Ok(Some(mut url)) = self.credentialed_proxy_url() else {
             return Vec::new();
@@ -522,31 +529,95 @@ fn ip_in_cidr(target: IpAddr, network: IpAddr, prefix: u8) -> bool {
 // outbound HTTP/WS call site.
 // ---------------------------------------------------------------------------
 
-static CURRENT: OnceLock<RwLock<ProxyRuntimeState>> = OnceLock::new();
+/// The published policy and its revision, behind one lock so a reader never
+/// pairs a config with another config's revision.
+struct ProxySlot {
+    state: ProxyRuntimeState,
+    revision: u64,
+}
 
-fn slot() -> &'static RwLock<ProxyRuntimeState> {
-    CURRENT.get_or_init(|| RwLock::new(ProxyRuntimeState::Uninitialized))
+static CURRENT: OnceLock<RwLock<ProxySlot>> = OnceLock::new();
+
+fn slot() -> &'static RwLock<ProxySlot> {
+    CURRENT.get_or_init(|| {
+        RwLock::new(ProxySlot {
+            state: ProxyRuntimeState::Uninitialized,
+            revision: 0,
+        })
+    })
+}
+
+/// Replace the published state. The revision advances only when the state
+/// actually changes — re-applying an identical policy (the renderer pushes on
+/// every settings save) must not make every process owner look stale. A
+/// credential change is a state change, so it does advance the revision.
+fn publish(state: ProxyRuntimeState) {
+    let mut slot = slot().write().expect("proxy config lock poisoned");
+    if slot.state != state {
+        slot.state = state;
+        slot.revision += 1;
+    }
 }
 
 /// Snapshot of initialized live config. Never substitutes a direct default.
 pub fn current() -> Result<ProxyConfig, ProxyError> {
-    match slot().read().expect("proxy config lock poisoned").clone() {
-        ProxyRuntimeState::Ready(config) => Ok(config),
+    current_with_revision().0
+}
+
+/// [`current`] together with the revision it was read at, taken under one
+/// lock. A process owner that bakes the policy into a child's environment
+/// records this revision so it can later tell that it is running on an older
+/// policy ([`application`]).
+pub fn current_with_revision() -> (Result<ProxyConfig, ProxyError>, u64) {
+    let slot = slot().read().expect("proxy config lock poisoned");
+    let config = match &slot.state {
+        ProxyRuntimeState::Ready(config) => Ok(config.clone()),
         ProxyRuntimeState::Uninitialized => Err(ProxyError::new(
             ProxyErrorCode::ProxyNotInitialized,
             "network proxy policy has not been initialized",
         )),
-        ProxyRuntimeState::Blocked(error) => Err(error),
-    }
+        ProxyRuntimeState::Blocked(error) => Err(error.clone()),
+    };
+    (config, slot.revision)
+}
+
+/// The revision of the published policy.
+pub fn policy_revision() -> u64 {
+    slot().read().expect("proxy config lock poisoned").revision
+}
+
+/// Whether the published policy is a usable one (not Uninitialized/Blocked).
+pub fn policy_ready() -> bool {
+    matches!(
+        slot().read().expect("proxy config lock poisoned").state,
+        ProxyRuntimeState::Ready(_)
+    )
+}
+
+/// The wire form of a revision: `<host epoch>-<revision>`.
+///
+/// The epoch is fixed for this process, so a revision from before a Host
+/// restart never compares equal to one after it, and a client cannot mistake
+/// a restarted Host's revision 1 for the policy it saw earlier. A string, not a
+/// number, so nobody does arithmetic on it.
+pub fn policy_revision_label(revision: u64) -> String {
+    static EPOCH: OnceLock<u64> = OnceLock::new();
+    let epoch = EPOCH.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos() as u64)
+            .unwrap_or_default();
+        nanos ^ u64::from(std::process::id()).rotate_left(32)
+    });
+    format!("{epoch:x}-{revision}")
 }
 
 pub fn apply_current(config: ProxyConfig) -> Result<(), ProxyError> {
     if let Err(error) = config.validate() {
-        *slot().write().expect("proxy config lock poisoned") =
-            ProxyRuntimeState::Blocked(error.clone());
+        publish(ProxyRuntimeState::Blocked(error.clone()));
         return Err(error);
     }
-    *slot().write().expect("proxy config lock poisoned") = ProxyRuntimeState::Ready(config);
+    publish(ProxyRuntimeState::Ready(config));
     Ok(())
 }
 
@@ -686,22 +757,28 @@ pub fn apply_from_environment() -> Result<ProxyConfig, ProxyError> {
 }
 
 pub fn block_current(error: ProxyError) {
-    *slot().write().expect("proxy config lock poisoned") = ProxyRuntimeState::Blocked(error);
+    publish(ProxyRuntimeState::Blocked(error));
 }
 
 pub fn runtime_status() -> ProxyRuntimeStatus {
-    match slot().read().expect("proxy config lock poisoned").clone() {
+    let (state, revision) = {
+        let slot = slot().read().expect("proxy config lock poisoned");
+        (slot.state.clone(), policy_revision_label(slot.revision))
+    };
+    match state {
         ProxyRuntimeState::Uninitialized => ProxyRuntimeStatus {
             state: "uninitialized",
             route: None,
             credential_configured: false,
             error_code: Some(ProxyErrorCode::ProxyNotInitialized),
+            revision,
         },
         ProxyRuntimeState::Blocked(error) => ProxyRuntimeStatus {
             state: "blocked",
             route: None,
             credential_configured: false,
             error_code: Some(error.code),
+            revision,
         },
         ProxyRuntimeState::Ready(config) => ProxyRuntimeStatus {
             state: "ready",
@@ -718,6 +795,7 @@ pub fn runtime_status() -> ProxyRuntimeStatus {
             },
             credential_configured: config.password.is_some(),
             error_code: None,
+            revision,
         },
     }
 }
@@ -836,9 +914,9 @@ pub fn install_uninitialized_proxy_environment() {
 /// handing proxy credentials to a process that must not reach the network
 /// would widen its permissions, not narrow them.
 pub fn child_network_env() -> Vec<(String, String)> {
-    match slot().read().expect("proxy config lock poisoned").clone() {
-        ProxyRuntimeState::Ready(config) => config.env_vars(),
-        ProxyRuntimeState::Uninitialized | ProxyRuntimeState::Blocked(_) => {
+    match current() {
+        Ok(config) => config.env_vars(),
+        Err(_) => {
             let mut out = Vec::new();
             for key in [
                 "HTTP_PROXY",
@@ -877,7 +955,7 @@ pub(crate) static NETWORK_ENV_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex:
 
 #[cfg(test)]
 pub(crate) fn reset_uninitialized() {
-    *slot().write().expect("proxy config lock poisoned") = ProxyRuntimeState::Uninitialized;
+    publish(ProxyRuntimeState::Uninitialized);
 }
 
 // `urlencoding` lives in the reqwest dep tree; expose a tiny shim so the

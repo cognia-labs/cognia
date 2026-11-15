@@ -1,4 +1,30 @@
 {
+  "application": {
+    "description": "原生请求会在下一次建立连接时使用新策略。已经在运行的进程会保留启动时的策略，直到重启。",
+    "loading": "正在检查代理策略的生效范围…",
+    "owner": {
+      "agentRuntime": "Agent 运行时"
+    },
+    "ownerState": {
+      "current": "使用当前策略",
+      "notRunning": "未运行——启动时使用当前策略",
+      "pending": "仍在使用之前的策略"
+    },
+    "pendingHint": "策略变更时它正在执行任务，因此没有被重启。下次启动时会切换到当前策略。",
+    "policy": {
+      "blocked": "已阻断——新请求会被拒绝",
+      "ready": "对新连接生效",
+      "uninitialized": "尚未初始化——新请求会被拒绝"
+    },
+    "restart": "立即重启",
+    "restartCancel": "取消",
+    "restartConfirm": "重启",
+    "restartDescription": "正在运行的 Agent 任务会被停止，之后可以重试。下一次任务将使用当前代理策略。",
+    "restartFailed": "无法重启 Agent 运行时。",
+    "restartTitle": "重启 Agent 运行时？",
+    "title": "策略生效范围",
+    "unavailable": "无法读取原生代理状态。"
+  },
   "candidates": {
     "clash": "Clash / Mihomo",
     "http": "HTTP 代理",

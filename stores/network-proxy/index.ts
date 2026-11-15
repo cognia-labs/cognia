@@ -1,29 +1,24 @@
 "use client"
 
 /**
- * Network proxy store — derives a `ProxyConfig` snapshot from
- * `useSettingsStore`'s `networkProxy` field on demand. There is no separate
- * persistent store: the source of truth is the singleton `AppSettings` row
- * in Dexie, written via `useSettingsStore.save({ networkProxy: ... })`.
+ * Network proxy store helpers over `useSettingsStore`'s `networkProxy` field.
+ * There is no separate persistent store: the source of truth is the singleton
+ * `AppSettings` row in Dexie, written via `useSettingsStore.save({ networkProxy })`.
  *
- * Two shapes are exposed:
- *
- *   1. `useProxyStore` — a Zustand-shaped accessor (`getState()` +
- *      `subscribe()`) that `lib/network/proxy-fetch.ts` already wires
- *      against. Backwards-compatible with the legacy stub at
- *      `stores/system/index.ts`.
- *
- *   2. `applyProxyToRust(cfg)` — pushes the latest config into the Rust
- *      `proxy_config` module via the `proxy_apply` Tauri command so reqwest
- *      clients see the change without re-reading Dexie. Called by the
- *      settings store after every successful save and at boot.
+ * - `useNetworkProxy` / `getNetworkProxy` read the typed settings (with
+ *   defaults) for the settings UI.
+ * - `applyProxyToRust(cfg)` pushes the latest config into the Rust
+ *   `proxy_config` module via the `proxy_apply` Tauri command. Rust is the only
+ *   routing authority: the renderer never derives a proxy URL or a route.
+ * - `getProxyRuntimeStatus()` reads the sanitized native state back, including
+ *   the policy revision and which long-lived processes still carry an older one.
  */
 
 import { invoke } from "@tauri-apps/api/core"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { isTauri } from "@/lib/tauri"
 import { isMainAppWindow } from "@/lib/platform/window-role"
-import { buildProxyUrl, isProxyActive } from "@/lib/network/proxy-config"
+import { isProxyActive } from "@/lib/network/proxy-config"
 import { notifyNetworkProxyApplied } from "@/lib/network/proxy-events"
 import {
   applyProxyPasswordMutation,
@@ -35,83 +30,11 @@ import {
   DEFAULT_NETWORK_PROXY_SETTINGS,
   type LegacyNetworkProxySettings,
   type NetworkProxySettings,
+  type ProxyActiveStatus,
   type ProxyCandidate,
-  type ProxyRuntimeStatus,
 } from "@/types/network/proxy"
 
 const log = loggers.network
-
-// ---------------------------------------------------------------------------
-// Legacy ProxyConfig shape (consumed by proxy-fetch.ts).
-// ---------------------------------------------------------------------------
-
-export interface ProxyConfig {
-  enabled: boolean
-  mode: "system" | "manual" | "off"
-  url: string | null
-  host?: string | null
-  port?: number | null
-  protocol?: string | null
-}
-
-export interface ProxyStoreState {
-  config: ProxyConfig
-}
-
-/**
- * Project the new `NetworkProxySettings` onto the legacy `ProxyConfig`
- * shape. `auto` collapses to `"manual"` once host/port are populated — both
- * code paths behave identically downstream.
- */
-function deriveLegacyConfig(np?: NetworkProxySettings | null): ProxyConfig {
-  const cfg = np ?? DEFAULT_NETWORK_PROXY_SETTINGS
-  const url = buildProxyUrl(cfg)
-  const enabled = url !== null
-  return {
-    enabled,
-    mode: enabled ? "manual" : "off",
-    url,
-    host: cfg.host || null,
-    port: cfg.port || null,
-    protocol: cfg.protocol || null,
-  }
-}
-
-// ---------------------------------------------------------------------------
-// `useProxyStore` — Zustand-shaped accessor delegating to settings store.
-// ---------------------------------------------------------------------------
-
-type Listener = (state: ProxyStoreState) => void
-
-type UseProxyStoreFn = (() => ProxyStoreState) & {
-  getState: () => ProxyStoreState
-  subscribe: (listener: Listener) => () => void
-}
-
-function snapshot(): ProxyStoreState {
-  return { config: deriveLegacyConfig(useSettingsStore.getState().settings?.networkProxy) }
-}
-
-const useProxyStoreImpl = (() => snapshot()) as UseProxyStoreFn
-useProxyStoreImpl.getState = snapshot
-useProxyStoreImpl.subscribe = (listener) =>
-  useSettingsStore.subscribe((state, prev) => {
-    if (state.settings?.networkProxy !== prev.settings?.networkProxy) {
-      listener(snapshot())
-    }
-  })
-
-export const useProxyStore: UseProxyStoreFn = useProxyStoreImpl
-
-/**
- * Return the active proxy URL (or null when disabled). Accepts an optional
- * snapshot to avoid a second store lookup when the caller already grabbed
- * one — same signature as the legacy stub.
- */
-export function getActiveProxyUrl(state?: ProxyStoreState): string | null {
-  if (state) return state.config.url
-  return useProxyStore.getState().config.url
-}
 
 // ---------------------------------------------------------------------------
 // React hook + helpers consumed by the settings UI.
@@ -188,11 +111,11 @@ export async function updateProxyPassword(mutation: ProxyPasswordMutation): Prom
 }
 
 /** Read sanitized native state for the settings UI and diagnostics. */
-export async function getProxyRuntimeStatus(): Promise<ProxyRuntimeStatus> {
+export async function getProxyRuntimeStatus(): Promise<ProxyActiveStatus> {
   if (!isTauri() || !isMainAppWindow()) {
     return { state: "ready", credentialConfigured: false }
   }
-  return invoke<ProxyRuntimeStatus>("proxy_get_active")
+  return invoke<ProxyActiveStatus>("proxy_get_active")
 }
 
 /** Test-only — clears the dedupe cache so subsequent applyProxyToRust pushes. */

@@ -245,10 +245,14 @@ async fn put(url: String, bytes: Bytes) -> Result<(), String> {
 async fn put_with_type(url: String, bytes: Bytes, content_type: &str) -> Result<(), String> {
     let timeout = Duration::from_secs(120);
     tokio::time::timeout(timeout, async {
-        let request = reqwest::Client::new()
-            .put(url)
-            .header(reqwest::header::CONTENT_TYPE, content_type)
-            .body(bytes);
+        let url = reqwest::Url::parse(&url).map_err(|_| "public_upload_invalid".to_string())?;
+        let content_type = reqwest::header::HeaderValue::from_str(content_type)
+            .map_err(|_| "public_upload_invalid".to_string())?;
+        let mut request = reqwest::Request::new(reqwest::Method::PUT, url);
+        request
+            .headers_mut()
+            .insert(reqwest::header::CONTENT_TYPE, content_type);
+        *request.body_mut() = Some(bytes.into());
         let response = guarded_http::send_pinned_public_upload(
             request,
             |_| Ok(reqwest::Client::builder().timeout(timeout)),

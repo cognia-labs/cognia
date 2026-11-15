@@ -8,13 +8,8 @@
  */
 
 import { invoke } from "@tauri-apps/api/core"
-import { loggers } from "@cognia/logging"
 
 import { isTauri } from "@/lib/tauri"
-import { redactProxyUrl, shouldBypass } from "@/lib/network/proxy-config"
-import { getActiveProxyUrl, getNetworkProxy, useProxyStore } from "@/stores/system"
-
-const log = loggers.network
 
 interface ProxiedRequestInput {
   requestId: string
@@ -246,111 +241,9 @@ async function browserFetch(
 export function createProxyFetch() {
   return async (input: RequestInfo | URL, init?: ProxyFetchOptions): Promise<Response> => {
     if (!isTauri()) return browserFetch(input, init)
-    if (process.env.NODE_ENV === "development") {
-      const endpoint = getActiveProxyUrl()
-      if (endpoint) log.debug(`Proxy: routing request through ${redactProxyUrl(endpoint)}`)
-    }
     return tauriProxiedFetch(input, init)
   }
 }
 
-export function getCurrentProxyUrl(): string | null {
-  const endpoint = getActiveProxyUrl(useProxyStore.getState())
-  return endpoint ? redactProxyUrl(endpoint) : null
-}
-
-export function isProxyEnabled(): boolean {
-  const state = useProxyStore.getState()
-  return state.config.enabled && state.config.mode !== "off"
-}
-
-export function getProxyConfig(): {
-  enabled: boolean
-  url: string | null
-  host: string | null
-  port: number | null
-  protocol: string | null
-} {
-  const url = getCurrentProxyUrl()
-  if (!url) return { enabled: false, url: null, host: null, port: null, protocol: null }
-  try {
-    const parsed = new URL(url)
-    return {
-      enabled: true,
-      url: redactProxyUrl(url),
-      host: parsed.hostname,
-      port: Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 80),
-      protocol: parsed.protocol.replace(":", ""),
-    }
-  } catch {
-    return { enabled: false, url: null, host: null, port: null, protocol: null }
-  }
-}
-
-/** Diagnostic-only route preview. Native Rust remains the routing authority. */
-export function shouldBypassProxy(url: string): boolean {
-  return shouldBypass(url, getNetworkProxy().bypass)
-}
-
-export function formatProxiedUrl(url: string): string {
-  const proxyUrl = getCurrentProxyUrl()
-  return proxyUrl ? `${url} (via ${redactProxyUrl(proxyUrl)})` : url
-}
-
-function isRetryableProxyError(error: Error): boolean {
-  const message = error.message.toLowerCase()
-  return [
-    "network",
-    "timeout",
-    "econnreset",
-    "enotfound",
-    "econnrefused",
-    "socket hang up",
-    "500",
-    "502",
-    "503",
-    "504",
-    "429",
-    "rate limit",
-  ].some((part) => message.includes(part))
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-export interface RetryableProxyFetchOptions extends ProxyFetchOptions {
-  maxRetries?: number
-  initialDelay?: number
-  onRetry?: (error: Error, attempt: number) => void
-}
-
-export function createRetryableProxyFetch() {
-  const baseFetch = createProxyFetch()
-  return async (
-    input: RequestInfo | URL,
-    init: RetryableProxyFetchOptions = {}
-  ): Promise<Response> => {
-    const { maxRetries = 3, initialDelay = 1000, onRetry, ...fetchInit } = init
-    let lastError: Error | null = null
-    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      try {
-        const response = await baseFetch(input, fetchInit)
-        if (response.status < 500 || attempt === maxRetries) return response
-        lastError = new Error(`HTTP ${response.status}`)
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error))
-        if (lastError.name === "AbortError" || !isRetryableProxyError(lastError)) throw error
-        if (attempt === maxRetries) throw lastError
-      }
-      onRetry?.(lastError, attempt)
-      const delay = initialDelay * 2 ** attempt + Math.random() * 500
-      await sleep(delay)
-    }
-    throw lastError ?? new Error("Proxy request failed")
-  }
-}
-
 export const proxyFetch = createProxyFetch()
-export const retryableProxyFetch = createRetryableProxyFetch()
 export default proxyFetch
