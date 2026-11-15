@@ -18,9 +18,9 @@ import type { CustomTheme, ThemeColors } from "@/types/plugin/plugin"
 
 /**
  * A pre-built CustomTheme produced from an inlined VSCode JSON. The parser
- * always populates the `colors` field at runtime; we derive the opposite
- * variant via OKLCH so users get correct light/dark behaviour without
- * needing to import or re-parse anything.
+ * yields the theme's own palette; we derive the opposite variant via OKLCH so
+ * users get correct light/dark behaviour without needing to import or re-parse
+ * anything.
  */
 export type BuiltInVscodeTheme = Omit<CustomTheme, "id">
 
@@ -28,7 +28,7 @@ function build(name: string, json: unknown): BuiltInVscodeTheme {
   const parsed = vscodeThemeToCustomTheme(json as VscodeThemeJson, { nameHint: name })
   const baseVariant: "light" | "dark" = parsed.theme.isDark ? "dark" : "light"
   const opposite: "light" | "dark" = baseVariant === "dark" ? "light" : "dark"
-  const single = parsed.theme.colors as ThemeColors
+  const single = parsed.theme.colors
   return {
     name,
     baseVariant,
@@ -37,10 +37,6 @@ function build(name: string, json: unknown): BuiltInVscodeTheme {
       [baseVariant]: single,
       [opposite]: deriveOppositeVariant(single, baseVariant),
     } as { light: ThemeColors; dark: ThemeColors },
-    // Keep legacy fields populated so the rollback contract from Task 8 holds
-    // for one-click presets too.
-    isDark: baseVariant === "dark",
-    colors: single,
   }
 }
 

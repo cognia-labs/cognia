@@ -105,8 +105,6 @@ function applyThemeId(
     baseVariant,
     derivedVariant: opposite,
     tokens,
-    isDark: baseVariant === "dark",
-    colors: pt.colors,
     sourcePluginId: pt.pluginId,
   })
   void deps.setActiveCustomTheme(id)

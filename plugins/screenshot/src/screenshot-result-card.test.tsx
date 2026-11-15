@@ -83,7 +83,7 @@ describe("ScreenshotResultCard", () => {
     )
   })
 
-  it("shows a legacy plain-text note verbatim", () => {
+  it("shows no note for a text block that is not a caption", () => {
     const part = {
       type: "tool-take_screenshot",
       state: "output-available",
@@ -96,9 +96,8 @@ describe("ScreenshotResultCard", () => {
       },
     } as unknown as ToolUIPart
     render(<ScreenshotResultCard part={part} />)
-    expect(screen.getByTestId("screenshot-result-note")).toHaveTextContent(
-      "screenshot.png (1234 bytes)"
-    )
+    expect(screen.getByTestId("screenshot-result-card")).toBeInTheDocument()
+    expect(screen.queryByTestId("screenshot-result-note")).not.toBeInTheDocument()
   })
 
   it("parses only well-formed captions and formats sizes", () => {

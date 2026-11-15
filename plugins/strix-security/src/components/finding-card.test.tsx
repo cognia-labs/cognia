@@ -13,6 +13,8 @@ afterEach(() => unregisterStrixBundle())
 
 const base: StrixFinding = {
   runId: "r",
+  fingerprint: "fp1",
+  ruleId: "sqli",
   vulnId: "v1",
   title: "SQL Injection",
   severity: "critical",
@@ -78,24 +80,15 @@ describe("FindingCard", () => {
   })
 
   describe("triage", () => {
-    const triageable: StrixFinding = { ...base, fingerprint: "fp1", ruleId: "sqli" }
-
-    it("offers no triage control for a finding with no stable identity", () => {
-      // A row written before fingerprinting cannot carry a verdict across a
-      // rescan, so the control is hidden rather than offered and silently lost.
-      render(<FindingCard finding={base} onStateChange={jest.fn()} />)
-      expect(screen.queryByTestId("strix-finding-state")).not.toBeInTheDocument()
-    })
-
     it("offers no triage control when no handler was supplied", () => {
-      render(<FindingCard finding={triageable} />)
+      render(<FindingCard finding={base} />)
       expect(screen.queryByTestId("strix-finding-state")).not.toBeInTheDocument()
     })
 
     it("reports the current verdict and emits a change", async () => {
       const onStateChange = jest.fn()
       const user = userEvent.setup()
-      render(<FindingCard finding={triageable} state="open" onStateChange={onStateChange} />)
+      render(<FindingCard finding={base} state="open" onStateChange={onStateChange} />)
       const trigger = screen.getByTestId("strix-finding-state")
       expect(trigger).toHaveTextContent("Open")
 
@@ -106,7 +99,7 @@ describe("FindingCard", () => {
 
     it("offers every verdict in the closed set", async () => {
       const user = userEvent.setup()
-      render(<FindingCard finding={triageable} onStateChange={jest.fn()} />)
+      render(<FindingCard finding={base} onStateChange={jest.fn()} />)
       await user.click(screen.getByTestId("strix-finding-state"))
       expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
         "Open",
@@ -117,19 +110,19 @@ describe("FindingCard", () => {
     })
 
     it("shows the recorded verdict as a badge when it is not open", () => {
-      render(<FindingCard finding={triageable} state="fixed" onStateChange={jest.fn()} />)
+      render(<FindingCard finding={base} state="fixed" onStateChange={jest.fn()} />)
       expect(screen.getByTestId("strix-finding-state-badge")).toHaveTextContent("Fixed")
     })
 
     it("shows no verdict badge while a finding is open", () => {
-      render(<FindingCard finding={triageable} state="open" onStateChange={jest.fn()} />)
+      render(<FindingCard finding={base} state="open" onStateChange={jest.fn()} />)
       expect(screen.queryByTestId("strix-finding-state-badge")).not.toBeInTheDocument()
     })
 
     it("marks a muted finding without hiding it", () => {
       // Muted means "not worth your attention now", not "gone" — hiding it
       // would make a suppressed critical invisible to the next reader.
-      render(<FindingCard finding={triageable} suppressed onStateChange={jest.fn()} />)
+      render(<FindingCard finding={base} suppressed onStateChange={jest.fn()} />)
       expect(screen.getByTestId("strix-finding")).toHaveAttribute("data-suppressed", "true")
       expect(screen.getByTestId("strix-finding-suppressed")).toBeInTheDocument()
       expect(screen.getByText("SQL Injection")).toBeInTheDocument()
@@ -139,18 +132,14 @@ describe("FindingCard", () => {
       const onSuppressRule = jest.fn()
       const user = userEvent.setup()
       const { rerender } = render(
-        <FindingCard
-          finding={triageable}
-          onStateChange={jest.fn()}
-          onSuppressRule={onSuppressRule}
-        />
+        <FindingCard finding={base} onStateChange={jest.fn()} onSuppressRule={onSuppressRule} />
       )
       await user.click(screen.getByTestId("strix-suppress-rule"))
       expect(onSuppressRule).toHaveBeenCalled()
 
       rerender(
         <FindingCard
-          finding={triageable}
+          finding={base}
           ruleMuted
           onStateChange={jest.fn()}
           onSuppressRule={onSuppressRule}
@@ -167,7 +156,7 @@ describe("FindingCard", () => {
       const user = userEvent.setup()
       render(
         <FindingCard
-          finding={triageable}
+          finding={base}
           ruleMuted
           onStateChange={jest.fn()}
           onUnsuppressRule={onUnsuppressRule}
@@ -175,17 +164,6 @@ describe("FindingCard", () => {
       )
       await user.click(screen.getByTestId("strix-rule-muted"))
       expect(onUnsuppressRule).toHaveBeenCalled()
-    })
-
-    it("cannot mute a rule for a finding that has no rule class", () => {
-      render(
-        <FindingCard
-          finding={{ ...triageable, ruleId: undefined }}
-          onStateChange={jest.fn()}
-          onSuppressRule={jest.fn()}
-        />
-      )
-      expect(screen.queryByTestId("strix-suppress-rule")).not.toBeInTheDocument()
     })
   })
 })

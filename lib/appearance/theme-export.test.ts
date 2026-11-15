@@ -56,23 +56,21 @@ describe("exportThemeToJson", () => {
     expect(json).toContain("\n  ")
   })
 
-  it("infers baseVariant from legacy isDark when missing", () => {
+  it("exports a light baseVariant when the row records none", () => {
     const theme: CustomTheme = {
       id: "x",
-      name: "Legacy",
-      isDark: true,
+      name: "Unset",
       tokens: { light: buildTokens(), dark: buildTokens() },
     }
     const json = exportThemeToJson(theme)
-    expect(JSON.parse(json).baseVariant).toBe("dark")
+    expect(JSON.parse(json).baseVariant).toBe("light")
   })
 
   it("throws when tokens are missing", () => {
     const theme: CustomTheme = {
       id: "x",
       name: "Bad",
-      isDark: true,
-      colors: buildTokens(),
+      baseVariant: "dark",
     }
     expect(() => exportThemeToJson(theme)).toThrow(/no dual-variant tokens/i)
   })
@@ -235,8 +233,7 @@ describe("cssVars round-trip", () => {
     )
     expect(parsed.tokens!.light).toEqual({ background: "#ffffff" })
     expect(parsed.tokens!.dark).toEqual({ background: "#000000", chart1: "#ff0000" })
-    // The legacy mirror follows the base variant.
-    expect(parsed.colors).toEqual({ background: "#000000", chart1: "#ff0000" })
-    expect(parsed.isDark).toBe(true)
+    expect(parsed).not.toHaveProperty("colors")
+    expect(parsed).not.toHaveProperty("isDark")
   })
 })

@@ -275,12 +275,20 @@ describe("runs + findings tables", () => {
 
   it("lists only the findings belonging to a run", async () => {
     const { api, rows } = fakeDexie()
-    rows("findings").set("f1", { id: 1, runId: "r1", severity: "high" })
-    rows("findings").set("f2", { id: 2, runId: "r2", severity: "low" })
+    rows("findings").set("f1", { id: 1, runId: "r1", fingerprint: "a", severity: "high" })
+    rows("findings").set("f2", { id: 2, runId: "r2", fingerprint: "b", severity: "low" })
 
     const findings = await listFindings(api, "r1")
     expect(findings).toHaveLength(1)
     expect(findings[0].runId).toBe("r1")
+  })
+
+  it("skips a stored row that has no fingerprint", async () => {
+    const { api, rows } = fakeDexie()
+    rows("findings").set("f1", { id: 1, runId: "r1", fingerprint: "a", severity: "high" })
+    rows("findings").set("f2", { id: 2, runId: "r1", severity: "low" })
+
+    expect((await listFindings(api, "r1")).map((f) => f.id)).toEqual([1])
   })
 
   it("deletes a run's findings with the run but leaves other runs alone", async () => {

@@ -75,7 +75,6 @@ import {
 } from "@/lib/appearance"
 import { auditThemeContrast } from "@/lib/appearance/contrast-audit"
 import { exportThemeToJson, importThemeFromJson } from "@/lib/appearance/theme-export"
-import { deriveOppositeVariant } from "@/lib/appearance/derive-variant"
 import {
   DEFAULT_GROUP_OPEN,
   TOKEN_GROUPS,
@@ -114,8 +113,6 @@ type PendingAction =
 // reference equality without thrashing when `customThemes` is undefined.
 const EMPTY_THEMES: CustomTheme[] = []
 
-const OTHER: Record<Variant, Variant> = { light: "dark", dark: "light" }
-
 function emptyDraft(): DraftTheme {
   return { name: "", tokens: { light: {}, dark: {} }, baseVariant: "dark" }
 }
@@ -132,27 +129,15 @@ function draftEquals(a: DraftTheme, b: DraftTheme): boolean {
 }
 
 function buildDraftFromTheme(theme: CustomTheme): DraftTheme {
-  const baseVariant: Variant = theme.baseVariant ?? (theme.isDark ? "dark" : "light")
-  if (theme.tokens?.light && theme.tokens?.dark) {
-    return {
-      id: theme.id,
-      name: theme.name,
-      tokens: { light: { ...theme.tokens.light }, dark: { ...theme.tokens.dark } },
-      baseVariant,
-    }
-  }
-  // Legacy single-set row: promote it once. Derived from the stored keys only,
-  // so a row that never set a chart colour still doesn't claim to have one.
-  const authored = { ...(theme.colors ?? {}) }
-  const opposite = deriveOppositeVariant(authored as ThemeColors, baseVariant)
   return {
     id: theme.id,
     name: theme.name,
+    // A row without `tokens` has no palette of its own; the editor starts blank.
     tokens: {
-      [baseVariant]: authored,
-      [OTHER[baseVariant]]: opposite,
-    } as Record<Variant, Partial<ThemeColors>>,
-    baseVariant,
+      light: { ...(theme.tokens?.light ?? {}) },
+      dark: { ...(theme.tokens?.dark ?? {}) },
+    },
+    baseVariant: theme.baseVariant ?? "light",
   }
 }
 
@@ -360,8 +345,6 @@ export function CustomThemeTab() {
         light: tokensToPersist(source.tokens.light, "light"),
         dark: tokensToPersist(source.tokens.dark, "dark"),
       },
-      isDark: source.baseVariant === "dark",
-      colors: source.tokens[source.baseVariant],
       // Carried so a copy of a plugin-derived row renders identically to the
       // row it came from — these used to be dropped here while `handleEditCopy`
       // preserved them, so duplicating a clone silently lost its extra CSS.
@@ -398,9 +381,7 @@ export function CustomThemeTab() {
   }
 
   // Writes both variants and clears `derivedVariant`: once a theme has been
-  // through this editor, neither side is an algorithm's guess any more. The
-  // legacy `colors`/`isDark` fields stay populated for the one-release rollback
-  // contract documented in Decision 8 of ADR-0007.
+  // through this editor, neither side is an algorithm's guess any more.
   const performSave = () => {
     if (!draft.name.trim()) return
     const tokens = {
@@ -412,8 +393,6 @@ export function CustomThemeTab() {
       baseVariant: draft.baseVariant,
       derivedVariant: undefined,
       tokens,
-      colors: draft.tokens[draft.baseVariant],
-      isDark: draft.baseVariant === "dark",
     }
     if (draft.id) {
       updateCustomTheme(draft.id, patch)

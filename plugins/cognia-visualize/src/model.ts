@@ -29,18 +29,6 @@ export const VISUALIZATION_PROFILES = [
 ] as const
 export type VisualizationProfile = (typeof VISUALIZATION_PROFILES)[number]
 
-/**
- * Profiles earlier versions accepted but only faked: "histogram" drew plain
- * bars of the given values (no binning), "map" drew a scatter with no basemap,
- * "simulation" drew a line. New specs cannot use them; stored artifacts that
- * do are read as the chart they always rendered as.
- */
-export const LEGACY_PROFILE_ALIASES: Readonly<Record<string, VisualizationProfile>> = {
-  histogram: "bar",
-  map: "scatter",
-  simulation: "line",
-}
-
 function isVisualizationProfile(value: unknown): value is VisualizationProfile {
   return VISUALIZATION_PROFILES.includes(value as VisualizationProfile)
 }
@@ -103,13 +91,9 @@ export function parseVisualization(content: string): VisualizationSpec {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
     throw new Error("Unsupported Cognia visualization schema.")
   const spec = parsed as Partial<VisualizationSpec>
-  const profile = isVisualizationProfile(spec.profile)
-    ? spec.profile
-    : typeof spec.profile === "string"
-      ? LEGACY_PROFILE_ALIASES[spec.profile]
-      : undefined
-  if (spec.schemaVersion !== VISUALIZATION_SCHEMA_VERSION || !profile)
+  if (spec.schemaVersion !== VISUALIZATION_SCHEMA_VERSION || !isVisualizationProfile(spec.profile))
     throw new Error("Unsupported Cognia visualization schema.")
+  const profile = spec.profile
   if (!Array.isArray(spec.data)) throw new Error("Cognia visualization data must be an array.")
   return {
     ...spec,

@@ -3,9 +3,9 @@
  * key lives, rebuilt from the OS keyring and plugin configuration.
  *
  * The key's durable home is the keyring via `ctx.secrets` (`secrets:write`
- * prompts once per session). A plaintext `apiKey` still sitting in plugin
- * config — a pre-migration install, or a fresh settings save — is moved into
- * the keyring on refresh and the field cleared.
+ * prompts once per session). The settings form saves a new key into plugin
+ * config as plaintext; refresh moves it into the keyring and clears the
+ * field.
  *
  * Only the E2B workspace backend reads this connection. The MCP server preset
  * runs `@e2b/mcp-server` in its own process with its own `E2B_API_KEY` field:
@@ -60,7 +60,7 @@ export class E2BConnectionState {
   /**
    * Rebuild the connection + status from keyring and config.
    *
-   * Migration rule: a non-empty `config.apiKey` means the key is sitting in
+   * Key rule: a non-empty `config.apiKey` means the key is sitting in
    * plaintext plugin config. Move it into `ctx.secrets` once and clear the
    * field; if the write is refused, keep using the plaintext value — the user
    * has a working setup and shouldn't lose it because we couldn't get consent —

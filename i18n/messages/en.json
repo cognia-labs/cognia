@@ -46918,10 +46918,6 @@
               "dark": "{name} has no dark palette, so it is inactive in dark mode and the base color preset is shown instead.",
               "light": "{name} has no light palette, so it is inactive in light mode and the base color preset is shown instead."
             },
-            "dormantOnly": {
-              "dark": "{name} only has a dark palette, so it is inactive in light mode and the base color preset is shown instead. It applies again when you switch to dark mode.",
-              "light": "{name} only has a light palette, so it is inactive in dark mode and the base color preset is shown instead. It applies again when you switch to light mode."
-            },
             "fixed": "{name} ships one palette and shows it unchanged in light and dark mode."
           },
           "badge": {
@@ -46936,10 +46932,6 @@
             "dormant": {
               "dark": "Active · Inactive in dark mode",
               "light": "Active · Inactive in light mode"
-            },
-            "dormantOnly": {
-              "dark": "Active · Dark only · inactive in light mode",
-              "light": "Active · Light only · inactive in dark mode"
             },
             "fixed": "Active · Same in both modes"
           }

@@ -11,8 +11,8 @@
  * for and what the current mode is actually painting (see
  * `lib/appearance/active-theme-variant.ts` for the four states).
  *
- * The `dormant` state is intentional (a single-palette theme contributes
- * nothing outside its own mode) and is labeled inert here: muted, marked
+ * The `dormant` state is intentional (a theme row without `tokens` contributes
+ * nothing) and is labeled inert here: muted, marked
  * `data-dormant`, and worded "inactive in … mode" rather than just "Active".
  */
 
@@ -26,20 +26,11 @@ import { cn } from "@/lib/utils"
  * The message key for a status, under `activeVariant.badge` / `.applied`.
  *
  * Plain per-mode keys rather than ICU `select`, so each sentence is a whole
- * sentence for the translator. `fixed` reads the same in both modes. A dormant
- * theme that records its own variant says which mode it belongs to and when it
- * applies again (`dormantOnly.<its variant>`); one that records none, or that
- * is dormant in its own mode, says only that it is inactive in this mode.
+ * sentence for the translator. `fixed` reads the same in both modes; a
+ * dormant theme says it has no palette for, and is inactive in, this mode.
  */
 export function activeThemeMessageKey(status: ActiveThemeVariant): string {
   if (status.kind === "fixed") return "fixed"
-  if (
-    status.kind === "dormant" &&
-    status.themeVariant !== null &&
-    status.themeVariant !== status.mode
-  ) {
-    return `dormantOnly.${status.themeVariant}`
-  }
   return `${status.kind}.${status.mode}`
 }
 

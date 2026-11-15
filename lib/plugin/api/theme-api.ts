@@ -152,27 +152,12 @@ export function createThemeAPI(pluginId: string): PluginThemeAPI {
 
     registerCustomTheme: (theme: Omit<CustomTheme, "id">): string => {
       const store = useSettingsStore.getState()
-      // A plugin may now supply the dual-variant `tokens.{light,dark}` shape
-      // (preferred) OR the legacy single `colors` set. We persist whichever
-      // was given and always fill a legacy `colors` set so pre-`tokens`
-      // readers keep working. The row is stamped with `ownerPluginId` so it
-      // can be garbage-collected across restarts when the plugin is disabled.
-      const baseVariant: "light" | "dark" = theme.baseVariant ?? (theme.isDark ? "dark" : "light")
-      const incoming = theme.tokens?.[baseVariant] ?? theme.colors ?? {}
-      const colors = {
-        ...incoming,
-        primary: incoming.primary || "#3b82f6",
-        secondary: incoming.secondary || "#64748b",
-        accent: incoming.accent || "#3b82f6",
-        background: incoming.background || "#ffffff",
-        foreground: incoming.foreground || "#0f172a",
-        muted: incoming.muted || "#f1f5f9",
-      }
+      // The plugin supplies the dual-variant `tokens.{light,dark}` palette.
+      // The row is stamped with `ownerPluginId` so it can be garbage-collected
+      // across restarts when the plugin is disabled.
       const seed: Omit<CustomTheme, "id"> = {
         name: theme.name,
-        isDark: theme.isDark ?? baseVariant === "dark",
-        baseVariant,
-        colors,
+        baseVariant: theme.baseVariant ?? "light",
         ownerPluginId: pluginId,
         ...(theme.tokens ? { tokens: theme.tokens } : {}),
         ...(theme.derivedVariant ? { derivedVariant: theme.derivedVariant } : {}),
@@ -191,27 +176,10 @@ export function createThemeAPI(pluginId: string): PluginThemeAPI {
       // Convert to store format
       const storeUpdates: Record<string, unknown> = {}
       if (updates.name) storeUpdates.name = updates.name
-      if (updates.isDark !== undefined) storeUpdates.isDark = updates.isDark
-      // Dual-variant fields pass straight through (the store spreads any
-      // fields), so plugins can now supply proper light+dark palettes.
       if (updates.baseVariant !== undefined) storeUpdates.baseVariant = updates.baseVariant
       if (updates.derivedVariant !== undefined) storeUpdates.derivedVariant = updates.derivedVariant
       if (updates.tokens !== undefined) storeUpdates.tokens = updates.tokens
       if (updates.cssVars !== undefined) storeUpdates.cssVars = updates.cssVars
-      if (updates.colors) {
-        const existing = store.customThemes.find((theme) => theme.id === id)
-        const existingColors = existing?.colors ?? {}
-        storeUpdates.colors = {
-          ...existingColors,
-          ...updates.colors,
-          primary: updates.colors.primary || existingColors.primary || "#3b82f6",
-          secondary: updates.colors.secondary || existingColors.secondary || "#64748b",
-          accent: updates.colors.accent || existingColors.accent || "#3b82f6",
-          background: updates.colors.background || existingColors.background || "#ffffff",
-          foreground: updates.colors.foreground || existingColors.foreground || "#0f172a",
-          muted: updates.colors.muted || existingColors.muted || "#f1f5f9",
-        }
-      }
       store.updateCustomTheme(id, storeUpdates)
       logger.info(`Updated custom theme: ${id}`)
     },

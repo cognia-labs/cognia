@@ -79,8 +79,6 @@ export function VscodeImportForm({ onComplete, showDescription = true }: VscodeI
       baseVariant,
       derivedVariant: opposite,
       tokens,
-      isDark: parsed.theme.isDark,
-      colors: parsed.theme.colors,
     }
 
     // Re-importing the same source key (same .vsix entry, same .json file)

@@ -65,9 +65,16 @@ export async function markInterruptedRuns(
   return reconciled
 }
 
-/** Findings for one run, most-severe first is applied by the caller. */
+/**
+ * Findings for one run, most-severe first is applied by the caller. A row
+ * without a fingerprint has no stable identity and is not a finding.
+ */
 export function listFindings(dexie: PluginDexieAPI, runId: string): Promise<StrixFinding[]> {
-  return findingsTable(dexie).where("runId").equals(runId).toArray()
+  return findingsTable(dexie)
+    .where("runId")
+    .equals(runId)
+    .filter((finding) => typeof finding.fingerprint === "string")
+    .toArray()
 }
 
 /** Delete a run and its findings atomically. */

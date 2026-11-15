@@ -149,7 +149,13 @@ describe("ScanHistory", () => {
         formatDate={formatDate}
         runs={[
           run({ runId: "a", status: "done" }),
-          run({ runId: "b", status: "error", error: "boom" }),
+          run({
+            runId: "b",
+            status: "error",
+            error: "boom",
+            errorCode: "exception",
+            errorParams: { message: "boom" },
+          }),
           run({ runId: "c", status: "running" }),
         ]}
         onView={() => {}}

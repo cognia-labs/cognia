@@ -153,7 +153,7 @@ export function StrixPanel(_props: ContextPanelRenderProps) {
 
   const onStateChange = useCallback(
     (finding: StrixFinding, state: FindingState) => {
-      if (!dexie || !target || !finding.fingerprint) return
+      if (!dexie || !target) return
       setFindingState(dexie, {
         target,
         fingerprint: finding.fingerprint,
@@ -166,7 +166,7 @@ export function StrixPanel(_props: ContextPanelRenderProps) {
 
   const onSuppressRule = useCallback(
     (finding: StrixFinding) => {
-      if (!dexie || !target || !finding.ruleId) return
+      if (!dexie || !target) return
       addSuppressionRule(dexie, { target, ruleId: finding.ruleId, now: now() }).catch(
         (error: unknown) => reportFailure("error.actionFailed", error)
       )
@@ -176,7 +176,7 @@ export function StrixPanel(_props: ContextPanelRenderProps) {
 
   const onUnsuppressRule = useCallback(
     (finding: StrixFinding) => {
-      if (!dexie || !target || !finding.ruleId) return
+      if (!dexie || !target) return
       removeSuppressionRule(dexie, suppressionRuleId(target, finding.ruleId)).catch(
         (error: unknown) => reportFailure("error.actionFailed", error)
       )

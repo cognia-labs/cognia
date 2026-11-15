@@ -42,7 +42,7 @@ export interface PluginTheme {
    * for swatch / preview rendering.
    */
   colors?: ThemeColors
-  /** Mirrors `CustomTheme.isDark`. Useful for filter UI in the theme tab. */
+  /** Same as `variant === "dark"`. Useful for filter UI in the theme tab. */
   isDark?: boolean
   /** Human-readable plugin name for source badges in the UI. */
   pluginName?: string

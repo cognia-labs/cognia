@@ -44,12 +44,25 @@ describe("RunStatusBanner", () => {
   })
 
   it("surfaces the failure reason for an errored run", () => {
-    render(<RunStatusBanner run={run({ status: "error", error: "docker died" })} />)
+    render(
+      <RunStatusBanner
+        run={run({
+          status: "error",
+          error: "docker died",
+          errorCode: "exception",
+          errorParams: { message: "docker died" },
+        })}
+      />
+    )
     expect(screen.getByTestId("strix-run-error")).toHaveTextContent("docker died")
   })
 
   it("marks a cancelled run, including an interruption note", () => {
-    render(<RunStatusBanner run={run({ status: "cancelled", error: "Scan was interrupted" })} />)
+    render(
+      <RunStatusBanner
+        run={run({ status: "cancelled", error: "Scan was interrupted", errorCode: "interrupted" })}
+      />
+    )
     expect(screen.getByTestId("strix-run-cancelled")).toHaveTextContent("interrupted")
   })
 })

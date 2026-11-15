@@ -104,9 +104,7 @@ describe("PresetGrid", () => {
     )
     const badge = screen.getByTestId("active-theme-badge")
     expect(badge).toHaveAttribute("data-dormant", "true")
-    expect(badge).toHaveTextContent(
-      "settings.appearance.vscode.activeVariant.badge.dormantOnly.dark"
-    )
+    expect(badge).toHaveTextContent("settings.appearance.vscode.activeVariant.badge.dormant.light")
   })
 
   it("falls back to the plain label while no mode has resolved", () => {

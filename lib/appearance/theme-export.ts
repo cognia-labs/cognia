@@ -26,17 +26,16 @@ interface ThemeJsonV1 {
 /**
  * Serialise a CustomTheme to a stable, versioned JSON document.
  *
- * - Always emits the dual-variant `tokens.{light, dark}` shape — if the
- *   passed-in theme only has the legacy `colors`/`isDark` pair, this
- *   throws (callers should run the v16 migration first).
+ * - Always emits the dual-variant `tokens.{light, dark}` shape; a theme
+ *   without both variants throws.
  * - Strips internal `id` (importers assign a fresh one).
  * - Output is pretty-printed for human inspection / diff-friendly storage.
  */
 export function exportThemeToJson(theme: CustomTheme): string {
   if (!theme.tokens || !theme.tokens.light || !theme.tokens.dark) {
-    throw new Error("Theme has no dual-variant tokens. Run the v16 migration before exporting.")
+    throw new Error("Theme has no dual-variant tokens to export.")
   }
-  const baseVariant: "light" | "dark" = theme.baseVariant ?? (theme.isDark ? "dark" : "light")
+  const baseVariant: "light" | "dark" = theme.baseVariant ?? "light"
   const payload: ThemeJsonV1 = {
     $schema: SCHEMA_URL,
     formatVersion: FORMAT_VERSION,
@@ -101,9 +100,6 @@ export function importThemeFromJson(text: string): Omit<CustomTheme, "id"> {
       light: pickKnownTokens(o.tokens.light as Record<string, unknown>),
       dark: pickKnownTokens(o.tokens.dark as Record<string, unknown>),
     } as never,
-    // Legacy mirror, same contract the editor writes.
-    colors: pickKnownTokens(o.tokens[baseVariant] as Record<string, unknown>),
-    isDark: baseVariant === "dark",
     ...(isCssVarMap(o.cssVars) ? { cssVars: o.cssVars } : {}),
     ...(typeof o.sourcePluginId === "string" ? { sourcePluginId: o.sourcePluginId } : {}),
     ...(typeof o.sourceBuiltinName === "string" ? { sourceBuiltinName: o.sourceBuiltinName } : {}),

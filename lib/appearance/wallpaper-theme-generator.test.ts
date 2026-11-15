@@ -307,7 +307,7 @@ describe("buildWallpaperTheme", () => {
     expect(theme.baseVariant).toBe("light")
     expect(theme.tokens?.light.primary).toBe("#f7d154")
     expect(theme.tokens?.dark.primary).toBe("#f7d154")
-    expect(theme.colors).toEqual(theme.tokens?.light)
+    expect(theme).not.toHaveProperty("colors")
     expect(
       wcagContrast(theme.tokens!.light.primaryForeground, theme.tokens!.light.primary)
     ).toBeGreaterThanOrEqual(4.5)

@@ -2,9 +2,18 @@
  * @jest-environment node
  */
 import { DEFAULT_A11Y } from "@/types/appearance"
-import type { CustomTheme } from "@/types/plugin/plugin"
+import type { CustomTheme, ThemeColors } from "@/types/plugin/plugin"
 import { HIGH_CONTRAST_DARK, HIGH_CONTRAST_LIGHT } from "./high-contrast-presets"
 import { getShellColors, readPaintedShellColors } from "./shell-sync"
+
+/** A custom theme row whose two variants share one palette. */
+function bothVariants(
+  baseVariant: "light" | "dark",
+  colors: Partial<ThemeColors>
+): Pick<CustomTheme, "baseVariant" | "tokens"> {
+  const side = colors as ThemeColors
+  return { baseVariant, tokens: { light: side, dark: side } }
+}
 
 describe("getShellColors", () => {
   it("passes through hex values from the default preset on light theme", () => {
@@ -39,15 +48,14 @@ describe("getShellColors", () => {
     const custom: CustomTheme = {
       id: "my-theme",
       name: "My Theme",
-      isDark: true,
-      colors: {
+      ...bothVariants("dark", {
         primary: "#abcdef",
         secondary: "#222222",
         accent: "#333333",
         background: "#101010",
         foreground: "#eeeeee",
         muted: "#444444",
-      },
+      }),
     }
     const result = getShellColors(
       {
@@ -66,15 +74,14 @@ describe("getShellColors", () => {
     const custom: CustomTheme = {
       id: "ok",
       name: "OK",
-      isDark: false,
-      colors: {
+      ...bothVariants("light", {
         primary: "oklch(0.7 0.2 30)",
         secondary: "oklch(0.5 0.1 200)",
         accent: "oklch(0.7 0.2 30)",
         background: "oklch(1 0 0)",
         foreground: "oklch(0 0 0)",
         muted: "oklch(0.95 0 0)",
-      },
+      }),
     }
     const result = getShellColors(
       {
@@ -95,15 +102,14 @@ describe("getShellColors", () => {
     const custom: CustomTheme = {
       id: "broken",
       name: "Broken",
-      isDark: true,
-      colors: {
+      ...bothVariants("dark", {
         primary: "nope",
         secondary: "nope",
         accent: "nope",
         background: "not-a-color",
         foreground: "",
         muted: "nope",
-      },
+      }),
     }
     const result = getShellColors(
       {
@@ -128,8 +134,7 @@ describe("getShellColors", () => {
     const custom: CustomTheme = {
       id: "broken",
       name: "Broken",
-      isDark: true,
-      colors: { background: "not-a-color", foreground: "also-not-a-color" },
+      ...bothVariants("dark", { background: "not-a-color", foreground: "also-not-a-color" }),
     }
     const result = getShellColors(
       { colorTheme: "default", activeCustomThemeId: "broken", customThemes: [custom] },
@@ -139,19 +144,18 @@ describe("getShellColors", () => {
     expect(result.foregroundHex).toBe("#f1f5f9")
   })
 
-  it("derives isDark from resolvedTheme, not from the custom theme's isDark flag", () => {
+  it("derives isDark from resolvedTheme, not from the custom theme's baseVariant", () => {
     const custom: CustomTheme = {
       id: "light-theme",
       name: "Light Theme",
-      isDark: false,
-      colors: {
+      ...bothVariants("light", {
         primary: "#3b82f6",
         secondary: "#64748b",
         accent: "#3b82f6",
         background: "#ffffff",
         foreground: "#0f172a",
         muted: "#f1f5f9",
-      },
+      }),
     }
     // Even though the custom theme says light, we honour the resolvedTheme
     // argument so shell chrome stays in lockstep with next-themes.

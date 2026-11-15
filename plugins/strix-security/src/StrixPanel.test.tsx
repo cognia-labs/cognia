@@ -447,7 +447,14 @@ describe("StrixPanel scan lifecycle", () => {
   it("selecting a run shows its status banner and findings", async () => {
     const user = userEvent.setup()
     fullRuntime()
-    mockedListRuns.mockResolvedValue([run({ status: "error", error: "docker died" })])
+    mockedListRuns.mockResolvedValue([
+      run({
+        status: "error",
+        error: "docker died",
+        errorCode: "exception",
+        errorParams: { message: "docker died" },
+      }),
+    ])
     mockedListFindings.mockResolvedValue([finding()])
     render(<StrixPanel {...PANEL_PROPS} />)
 
@@ -455,7 +462,7 @@ describe("StrixPanel scan lifecycle", () => {
     await user.click(await screen.findByTestId("strix-history-open"))
 
     await waitFor(() => expect(screen.getByTestId("strix-run-error")).toBeInTheDocument())
-    expect(screen.getByText("docker died")).toBeInTheDocument()
+    expect(screen.getByTestId("strix-run-error")).toHaveTextContent("docker died")
     await waitFor(() => expect(screen.getByTestId("strix-finding")).toBeInTheDocument())
     expect(screen.getByText("SQL injection")).toBeInTheDocument()
   })
@@ -575,9 +582,14 @@ describe("StrixPanel scan lifecycle", () => {
     const { showToast } = fullRuntime()
     // The banner resolves the selected runId against the runs query — the row
     // must exist there, exactly as the runner's runs.put makes it in life.
-    mockedListRuns.mockResolvedValue([run({ status: "error", error: "docker died" })])
+    const failed = run({
+      status: "error",
+      error: "docker died",
+      errorCode: "exception",
+      errorParams: { message: "docker died" },
+    })
+    mockedListRuns.mockResolvedValue([failed])
     mockedRunScan.mockImplementation(async (_opts, deps) => {
-      const failed = run({ status: "error", error: "docker died" })
       deps.onRun?.(run({ status: "running", endedAt: undefined }))
       deps.onRun?.(failed)
       return failed

@@ -110,7 +110,7 @@ function extent(values: number[]): { lo: number; hi: number } {
 }
 
 // ---------------------------------------------------------------------------
-// Bars (bar, histogram) — sign-aware horizontal bars with a zero axis.
+// Bars — sign-aware horizontal bars with a zero axis.
 // ---------------------------------------------------------------------------
 
 function barsSvg(spec: VisualizationSpec, f: Frame, opts: ChartOptions): string {
@@ -165,7 +165,7 @@ function funnelSvg(spec: VisualizationSpec, f: Frame, opts: ChartOptions): strin
 }
 
 // ---------------------------------------------------------------------------
-// Line / area / simulation — ordered points over index (or x when present).
+// Line / area — ordered points over index (or x when present).
 // ---------------------------------------------------------------------------
 
 function lineSvg(spec: VisualizationSpec, filled: boolean, f: Frame, opts: ChartOptions): string {

@@ -136,7 +136,7 @@ export function FindingsList({
             finding={f}
             state={findingStateOf(states, f.fingerprint)}
             suppressed={isSuppressed(f, suppression)}
-            ruleMuted={Boolean(f.ruleId) && rules.some((rule) => rule.ruleId === f.ruleId)}
+            ruleMuted={rules.some((rule) => rule.ruleId === f.ruleId)}
             {...(onStateChange
               ? { onStateChange: (state: FindingState) => onStateChange(f, state) }
               : {})}

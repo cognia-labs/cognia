@@ -10,7 +10,6 @@ import manifestJson from "../plugin.json"
 
 export const manifest = definePluginManifest(manifestJson)
 const statuses: IssueStatus[] = ["backlog", "todo", "in_progress", "in_review", "done", "canceled"]
-const defaults = { open: "todo", closed: "done" }
 
 function configOf(config: Record<string, unknown>) {
   const mapping = config.mapping as Record<string, unknown> | undefined
@@ -93,11 +92,6 @@ export default definePlugin({
               } catch {
                 return ["Invalid project key or status mapping"]
               }
-            },
-            migrate(fromVersion, config) {
-              if (fromVersion !== 1) throw new Error("Unsupported resource schema version")
-              // v1 had only projectKey. Keep its identity, adding the v2 status mapping.
-              return { ...config, mapping: { ...defaults } }
             },
           },
           async pull(binding, options) {

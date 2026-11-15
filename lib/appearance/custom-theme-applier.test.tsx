@@ -68,12 +68,16 @@ function buildTokens(overrides: Partial<ThemeColors> = {}): ThemeColors {
   } as ThemeColors
 }
 
+/** Both variants painted with one palette, so the test reads the same in either mode. */
+function withPalette(colors: ThemeColors): Pick<CustomTheme, "baseVariant" | "tokens"> {
+  return { baseVariant: "dark", tokens: { light: colors, dark: colors } }
+}
+
 function makeCustomTheme(overrides: Partial<CustomTheme> = {}): CustomTheme {
   return {
     id: "ct-1",
     name: "Test custom theme",
-    isDark: true,
-    colors: buildTokens(),
+    ...withPalette(buildTokens()),
     ...overrides,
   }
 }
@@ -174,14 +178,16 @@ describe("CustomThemeApplier", () => {
    * catalog declares the real ones.
    */
   it("writes the real custom-property names for the hyphen-numbered and --wf- tokens", async () => {
-    const theme = makeCustomTheme({
-      colors: buildTokens({
-        chart1: "#ff0000",
-        workflowTrigger: "#00ff00",
-        workflowStatusSkipped: "#0000ff",
-        effortUltra: "#123456",
-      }),
-    })
+    const theme = makeCustomTheme(
+      withPalette(
+        buildTokens({
+          chart1: "#ff0000",
+          workflowTrigger: "#00ff00",
+          workflowStatusSkipped: "#0000ff",
+          effortUltra: "#123456",
+        })
+      )
+    )
     useSettingsStore.setState({ activeCustomThemeId: theme.id, customThemes: [theme] })
     await act(async () => {
       render(<CustomThemeApplier />)
@@ -196,9 +202,9 @@ describe("CustomThemeApplier", () => {
   })
 
   it("derives the aliased and translucent tokens from the theme's own palette", async () => {
-    const theme = makeCustomTheme({
-      colors: buildTokens({ warning: "#abcdef", effortUltra: "#ff0000" }),
-    })
+    const theme = makeCustomTheme(
+      withPalette(buildTokens({ warning: "#abcdef", effortUltra: "#ff0000" }))
+    )
     useSettingsStore.setState({ activeCustomThemeId: theme.id, customThemes: [theme] })
     await act(async () => {
       render(<CustomThemeApplier />)
@@ -359,7 +365,7 @@ describe("CustomThemeApplier — a11y layers", () => {
    * something else forced a repaint.
    */
   it("restores the theme's own categorical colours when colourblind mode is switched off", async () => {
-    const theme = makeCustomTheme({ colors: buildTokens({ chart1: "#ff0000" }) })
+    const theme = makeCustomTheme(withPalette(buildTokens({ chart1: "#ff0000" })))
     useSettingsStore.setState({ activeCustomThemeId: theme.id, customThemes: [theme] })
     setA11y({ colorblindMode: "deuter" })
     const { rerender } = render(<CustomThemeApplier />)

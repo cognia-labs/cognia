@@ -177,14 +177,8 @@ function deriveSidebarFromCore(colors: ThemeColors, variant: "light" | "dark"): 
  * If a custom theme is active and present in `customThemes`, its
  * tokens win (with any unspecified field falling back to the preset
  * neutral palette for the right light/dark mode). Otherwise the
- * preset's pair is used directly.
- *
- * Phase 2 introduced a dual-variant `tokens.{light, dark}` shape on
- * `CustomTheme`. Newly saved rows always carry it; older rows still
- * use the legacy single `colors` + `isDark` pair. This function
- * prefers the new shape and only consults the legacy fields when
- * `tokens` is absent — so unmigrated rows keep working while Task 8
- * ships the Dexie v16 migration.
+ * preset's pair is used directly. Only the row's dual-variant
+ * `tokens.{light, dark}` paint; a row without `tokens` adds no overrides.
  */
 /**
  * Apply a standalone accent override onto a resolved palette. Retints
@@ -204,18 +198,8 @@ export function resolveActiveThemeColors(args: ResolveActiveThemeArgs): Resolved
   if (activeCustomThemeId) {
     const custom = customThemes.find((t) => t.id === activeCustomThemeId)
     if (custom) {
-      // Prefer the new dual-variant shape; fall back to legacy single
-      // `colors`. The legacy path returns undefined when the row's
-      // `isDark` doesn't match the active resolved theme — in that
-      // case we fall through to the preset baseline (no overrides).
-      const customColors =
-        custom.tokens?.[resolvedTheme] ??
-        (custom.isDark === (resolvedTheme === "dark") ? custom.colors : undefined)
-
-      // Baseline: prefer new `baseVariant`, fall back to legacy `isDark`.
-      const variantHint =
-        custom.baseVariant ??
-        (custom.isDark === true ? "dark" : custom.isDark === false ? "light" : undefined)
+      const customColors = custom.tokens?.[resolvedTheme]
+      const variantHint = custom.baseVariant
       const baseline =
         variantHint === "dark"
           ? presetPair.dark

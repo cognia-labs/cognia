@@ -20,8 +20,6 @@ const dualDerived: CustomTheme = {
   baseVariant: "dark",
   derivedVariant: "light",
   tokens: { dark: palette(DARK_BG), light: palette(LIGHT_BG) },
-  isDark: true,
-  colors: palette(DARK_BG),
   sourceBuiltinName: "Dracula",
 }
 
@@ -32,26 +30,30 @@ const dualAuthored: CustomTheme = {
   tokens: { dark: palette(DARK_BG), light: palette(LIGHT_BG) },
 }
 
-const legacyDark: CustomTheme = {
-  id: "legacy",
-  name: "Legacy dark",
-  isDark: true,
-  colors: palette(DARK_BG),
+const tokenless: CustomTheme = {
+  id: "tokenless",
+  name: "No tokens",
+  baseVariant: "dark",
 }
 
-const legacyNoVariant: CustomTheme = {
+const noVariant: CustomTheme = {
   id: "unknown",
   name: "No variant",
-  colors: palette(DARK_BG),
 }
 
-// What `ctx.theme.registerCustomTheme` stores when a plugin sends only `colors`.
-const pluginRegisteredSingle: CustomTheme = {
-  id: "plugin-single",
-  name: "Plugin single",
-  baseVariant: "dark",
+// A stored row that carries only a single `colors` set is not converted.
+const storedSingleSet = {
+  id: "single",
+  name: "Single set",
   isDark: true,
   colors: palette(DARK_BG),
+} as unknown as CustomTheme
+
+// What `ctx.theme.registerCustomTheme` stores when a plugin sends no `tokens`.
+const pluginRegisteredBare: CustomTheme = {
+  id: "plugin-bare",
+  name: "Plugin bare",
+  baseVariant: "dark",
   ownerPluginId: "some.plugin",
 }
 
@@ -84,19 +86,25 @@ describe("customThemeVariantIn", () => {
     expect(customThemeVariantIn(dualAuthored, "light").kind).toBe("authored")
   })
 
-  it("a single-palette theme is intentionally dormant outside its own mode", () => {
-    expect(customThemeVariantIn(legacyDark, "dark").kind).toBe("authored")
-    expect(customThemeVariantIn(legacyDark, "light")).toEqual({
-      kind: "dormant",
-      mode: "light",
-      themeVariant: "dark",
-    })
-    expect(customThemeVariantIn(pluginRegisteredSingle, "light").kind).toBe("dormant")
+  it("a row without tokens is intentionally dormant in both modes", () => {
+    for (const mode of ["light", "dark"] as const) {
+      expect(customThemeVariantIn(tokenless, mode)).toEqual({
+        kind: "dormant",
+        mode,
+        themeVariant: "dark",
+      })
+      expect(customThemeVariantIn(pluginRegisteredBare, mode).kind).toBe("dormant")
+      expect(customThemeVariantIn(storedSingleSet, mode)).toEqual({
+        kind: "dormant",
+        mode,
+        themeVariant: null,
+      })
+    }
   })
 
-  it("a row with no recorded variant is dormant in both modes", () => {
+  it("a row with no recorded variant reports none", () => {
     for (const mode of ["light", "dark"] as const) {
-      expect(customThemeVariantIn(legacyNoVariant, mode)).toEqual({
+      expect(customThemeVariantIn(noVariant, mode)).toEqual({
         kind: "dormant",
         mode,
         themeVariant: null,
@@ -106,9 +114,10 @@ describe("customThemeVariantIn", () => {
 
   it("reads the base variant with the resolver's precedence", () => {
     expect(customThemeBaseVariant(dualAuthored)).toBe("light")
-    expect(customThemeBaseVariant(legacyDark)).toBe("dark")
+    expect(customThemeBaseVariant(tokenless)).toBe("dark")
     expect(customThemeBaseVariant({ id: "d", name: "d", derivedVariant: "dark" })).toBe("light")
-    expect(customThemeBaseVariant(legacyNoVariant)).toBeNull()
+    expect(customThemeBaseVariant(noVariant)).toBeNull()
+    expect(customThemeBaseVariant(storedSingleSet)).toBeNull()
   })
 
   // The status is a mirror of `resolveActiveThemeColors`, not a second
@@ -117,9 +126,10 @@ describe("customThemeVariantIn", () => {
   it.each([
     ["dual derived", dualDerived],
     ["dual authored", dualAuthored],
-    ["legacy dark", legacyDark],
-    ["legacy without variant", legacyNoVariant],
-    ["plugin-registered single palette", pluginRegisteredSingle],
+    ["tokenless", tokenless],
+    ["no-variant", noVariant],
+    ["stored single colors set", storedSingleSet],
+    ["plugin-registered bare", pluginRegisteredBare],
   ])("agrees with the palette resolver for a %s theme", (_label, theme) => {
     for (const mode of ["light", "dark"] as ThemeMode[]) {
       const painted = resolveActiveThemeColors({
@@ -128,9 +138,10 @@ describe("customThemeVariantIn", () => {
         activeCustomThemeId: theme.id,
         customThemes: [theme],
       }).colors.background
-      const ownBackgrounds = [theme.tokens?.[mode]?.background, theme.colors?.background].filter(
-        Boolean
-      )
+      const ownBackgrounds = [
+        theme.tokens?.[mode]?.background,
+        (theme as { colors?: { background?: string } }).colors?.background,
+      ].filter(Boolean)
       const status = customThemeVariantIn(theme, mode)
       if (status.kind === "dormant") {
         expect(ownBackgrounds).not.toContain(painted)
@@ -172,7 +183,7 @@ describe("resolveActiveThemeSummary", () => {
     activePluginThemeId: null,
     pluginThemes: [plugin],
     activeCustomThemeId: null,
-    customThemes: [dualDerived, legacyDark],
+    customThemes: [dualDerived, tokenless],
   }
 
   it("reports nothing when no theme is active", () => {
@@ -184,9 +195,9 @@ describe("resolveActiveThemeSummary", () => {
       status: { kind: "derived", mode: "light", themeVariant: "dark" },
       name: "Dracula",
     })
-    expect(resolveActiveThemeSummary({ ...base, activeCustomThemeId: "legacy" }).status?.kind).toBe(
-      "dormant"
-    )
+    expect(
+      resolveActiveThemeSummary({ ...base, activeCustomThemeId: "tokenless" }).status?.kind
+    ).toBe("dormant")
   })
 
   it("gives a directly activated plugin theme precedence, as the appliers do", () => {

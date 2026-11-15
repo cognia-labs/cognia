@@ -48,10 +48,6 @@ describe("findingStateOf", () => {
   it("reads a recorded verdict", () => {
     expect(findingStateOf([state("fp1", "false-positive")], "fp1")).toBe("false-positive")
   })
-
-  it("treats a finding with no fingerprint as open", () => {
-    expect(findingStateOf([state("fp1", "accepted")], undefined)).toBe("open")
-  })
 })
 
 describe("isSuppressed", () => {
@@ -79,12 +75,6 @@ describe("isSuppressed", () => {
     const fresh = finding({ fingerprint: "fp-new" })
     expect(isSuppressed(fresh, { states: [], rules: [rule("sqli")] })).toBe(true)
   })
-
-  it("cannot mute a finding that has no ruleId through a rule", () => {
-    expect(
-      isSuppressed(finding({ ruleId: undefined }), { states: [], rules: [rule("sqli")] })
-    ).toBe(false)
-  })
 })
 
 describe("suppressedFingerprints", () => {
@@ -99,15 +89,6 @@ describe("suppressedFingerprints", () => {
       rules: [rule("xss")],
     })
     expect(suppressed).toEqual(new Set(["a", "c"]))
-  })
-
-  it("never suppresses a legacy row that has no fingerprint", () => {
-    // Safe direction: an un-suppressible finding is noise, but guessing at
-    // identity would mute the wrong vulnerability.
-    const legacy = finding({ fingerprint: undefined })
-    expect(suppressedFingerprints([legacy], { states: [], rules: [rule("sqli")] })).toEqual(
-      new Set()
-    )
   })
 })
 
@@ -141,12 +122,6 @@ describe("toSecurityFinding", () => {
       cwe: "CWE-89",
       cve: "CVE-1",
     })
-  })
-
-  it("keeps a legacy row in the export under a marked fallback identity", () => {
-    const exported = toSecurityFinding(finding({ fingerprint: undefined, ruleId: undefined }))
-    expect(exported.fingerprint).toBe("legacy:vuln-1")
-    expect(exported.ruleId).toBe("unknown")
   })
 
   it("records an endpoint location with an upper-cased method", () => {

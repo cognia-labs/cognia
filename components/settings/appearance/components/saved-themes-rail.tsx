@@ -57,19 +57,13 @@ interface VariantSwatch {
   primary: string
 }
 
-/** Read a usable colour for the variant, preferring the new dual-variant `tokens` shape. */
+/** Read a usable colour for the variant from the row's dual-variant `tokens`. */
 function readVariantSwatch(theme: CustomTheme, variant: "light" | "dark"): VariantSwatch {
   const tokens = theme.tokens?.[variant]
   if (tokens) {
     return { bg: tokens.background ?? "#888", primary: tokens.primary ?? "#888" }
   }
-  // Legacy single-variant rows only have one side populated.
-  const matchesLegacy =
-    (variant === "dark" && theme.isDark === true) || (variant === "light" && theme.isDark === false)
-  if (matchesLegacy && theme.colors) {
-    return { bg: theme.colors.background ?? "#888", primary: theme.colors.primary ?? "#888" }
-  }
-  // Fallback: render a muted swatch so the slot doesn't collapse visually.
+  // No palette for this side: render a muted swatch so the slot doesn't collapse visually.
   return { bg: variant === "dark" ? "#0b1220" : "#fafafa", primary: "#888" }
 }
 

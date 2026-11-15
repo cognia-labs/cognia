@@ -4488,34 +4488,23 @@ export type ResolvedThemeColors = Required<ThemeColors>
 /**
  * Custom theme definition.
  *
- * Phase 2 of the theme/background fix introduced a dual-variant shape:
- * a saved theme now carries both `tokens.light` and `tokens.dark` so the
- * runtime can render the right palette regardless of which side the
- * `next-themes` resolver lands on. The legacy `colors`/`isDark` fields
- * are retained one release for migration safety — Task 8 ships the
- * Dexie v16 migration that fills `tokens` for older rows.
+ * A saved theme carries both `tokens.light` and `tokens.dark` so the runtime
+ * can render the right palette regardless of which side the `next-themes`
+ * resolver lands on. A row without `tokens` has no palette of its own.
  */
 export interface CustomTheme {
   id: string
   name: string
 
-  // ----- New dual-variant fields (Phase 2) -----
   /** User's original variant intent — drives default light/dark when activated. */
   baseVariant?: "light" | "dark"
   /** Both variant palettes. The `derivedVariant` was filled by the algorithm. */
   tokens?: { light: ThemeColors; dark: ThemeColors }
   /**
-   * Marks which side was auto-derived (vs hand-edited or imported).
-   * Set by the v16 migration (Task 8) when promoting legacy rows, and by the
-   * VSCode import path (Task 9) when one variant is filled by deriveOppositeVariant.
+   * Marks which side was auto-derived (vs hand-edited or imported). Set by
+   * the VSCode import path when one variant is filled by deriveOppositeVariant.
    */
   derivedVariant?: "light" | "dark"
-
-  // ----- Legacy single-set fields (kept one release for migration safety) -----
-  /** @deprecated Read via `tokens` instead. Retained for pre-v16 rows. */
-  colors?: Partial<ThemeColors>
-  /** @deprecated Read via `baseVariant` instead. Retained for pre-v16 rows. */
-  isDark?: boolean
 
   /**
    * Plugin id this theme was seeded from when the user activated a plugin

@@ -33,8 +33,10 @@ const themes: CustomTheme[] = [
     id: "theme-rose",
     name: "Rosé",
     baseVariant: "light",
-    colors: { background: "#fff1f2", primary: "#e11d48" },
-    isDark: false,
+    tokens: {
+      light: { ...DEFAULT_FALLBACKS.light, background: "#fff1f2", primary: "#e11d48" },
+      dark: DEFAULT_FALLBACKS.dark,
+    },
   },
 ]
 

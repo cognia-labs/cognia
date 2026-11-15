@@ -147,12 +147,11 @@ describe("VscodeImportTab", () => {
             light: expect.any(Object),
             dark: expect.any(Object),
           }),
-          // Legacy fields still present for rollback safety:
-          isDark: true,
-          colors: expect.any(Object),
         })
       )
     )
+    expect(createCustomTheme.mock.calls[0][0]).not.toHaveProperty("isDark")
+    expect(createCustomTheme.mock.calls[0][0]).not.toHaveProperty("colors")
     // The base side preserves the parsed input verbatim; the opposite side
     // is derived, so it must differ from the source values.
     const payload = createCustomTheme.mock.calls[0][0] as {
@@ -391,8 +390,8 @@ describe("VscodeImportTab", () => {
         {
           id: "ct-1",
           name: "Imported",
-          colors: { background: "#000" },
-          isDark: true,
+          baseVariant: "dark",
+          tokens: { dark: { background: "#000" }, light: { background: "#fff" } } as never,
         },
       ],
       importedVscodeThemes: [
@@ -432,7 +431,6 @@ describe("VscodeImportTab", () => {
             baseVariant: "dark",
             derivedVariant: "light",
             tokens: { dark: { background: "#000" }, light: { background: "#fff" } } as never,
-            isDark: true,
           },
         ],
         importedVscodeThemes: [record],
@@ -443,27 +441,23 @@ describe("VscodeImportTab", () => {
       )
     })
 
-    it("labels a single-palette import as inactive outside its own mode", () => {
+    it("labels an import row without tokens as inactive", () => {
       mockResolvedTheme = "light"
       storeState.activeCustomThemeId = "ct-1"
       storeState.settings = {
-        customThemes: [
-          { id: "ct-1", name: "Imported", colors: { background: "#000" }, isDark: true },
-        ],
+        customThemes: [{ id: "ct-1", name: "Imported", baseVariant: "dark" }],
         importedVscodeThemes: [record],
       }
       render(<VscodeImportTab />)
       const badge = screen.getByTestId("active-theme-badge")
       expect(badge).toHaveAttribute("data-dormant", "true")
-      expect(badge).toHaveTextContent("activeVariant.badge.dormantOnly.dark")
+      expect(badge).toHaveTextContent("activeVariant.badge.dormant.light")
     })
 
     it("shows the plain label until a mode has resolved", () => {
       storeState.activeCustomThemeId = "ct-1"
       storeState.settings = {
-        customThemes: [
-          { id: "ct-1", name: "Imported", colors: { background: "#000" }, isDark: true },
-        ],
+        customThemes: [{ id: "ct-1", name: "Imported", baseVariant: "dark" }],
         importedVscodeThemes: [record],
       }
       render(<VscodeImportTab />)

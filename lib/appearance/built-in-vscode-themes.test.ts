@@ -37,7 +37,7 @@ describe("BUILT_IN_VSCODE_THEMES", () => {
     const nightOwl = BUILT_IN_VSCODE_THEMES.find((t) => t.name === "Night Owl")
 
     expect(nightOwl?.baseVariant).toBe("dark")
-    expect(nightOwl?.colors).toMatchObject({
+    expect(nightOwl?.tokens?.dark).toMatchObject({
       background: "#011627",
       foreground: "#d6deeb",
       primary: "#7e57c2",
@@ -49,10 +49,12 @@ describe("BUILT_IN_VSCODE_THEMES", () => {
     })
   })
 
-  it("populates legacy colors + isDark fields for rollback compatibility", () => {
+  it("carries only the dual-variant shape", () => {
     for (const theme of BUILT_IN_VSCODE_THEMES) {
-      expect(theme.colors).toBeDefined()
-      expect(typeof theme.isDark).toBe("boolean")
+      expect(theme.tokens?.light).toBeDefined()
+      expect(theme.tokens?.dark).toBeDefined()
+      expect(theme).not.toHaveProperty("colors")
+      expect(theme).not.toHaveProperty("isDark")
     }
   })
 

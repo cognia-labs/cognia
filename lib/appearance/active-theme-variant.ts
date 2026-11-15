@@ -18,14 +18,13 @@
  *  - `fixed`: a directly activated plugin theme is a single `:root{}` block
  *    (`PluginThemeApplier`) and is painted as-is in both modes. It does not
  *    adapt to the mode.
- *  - `dormant`: **intentionally dormant.** A single-palette custom theme with
- *    no `tokens` for this mode (a pre-dual-variant row, or a plugin's
- *    `ctx.theme.registerCustomTheme` call that sent only `colors`) contributes
- *    nothing in the other mode: `resolveActiveThemeColors` paints the color
- *    preset's base palette instead. The theme stays selected rather than being
- *    deselected, and applies again as soon as the mode flips back. Because the
- *    card still says "Active", the UI must label this state as inactive for
- *    the current mode (`ActiveThemeBadge`), and the mirror test in
+ *  - `dormant`: **intentionally dormant.** A custom theme row with no
+ *    `tokens` (a plugin's `ctx.theme.registerCustomTheme` call that sent no
+ *    palette) contributes nothing in either mode: `resolveActiveThemeColors`
+ *    paints the color preset's base palette instead. The theme stays selected
+ *    rather than being deselected. Because the card still says "Active", the
+ *    UI must label this state as inactive for the current mode
+ *    (`ActiveThemeBadge`), and the mirror test in
  *    `active-theme-variant.test.ts` pins it against the resolver.
  *
  * Pure, and deliberately a mirror of the resolver's rule in
@@ -41,8 +40,8 @@ export type ThemeMode = "light" | "dark"
  * What the active theme contributes in the current mode (see the module doc).
  *
  * `dormant` is INTENTIONAL DORMANCY: the theme stays selected but paints
- * nothing in this mode (a single-palette theme outside its own mode), and the
- * base color preset shows instead. Labeled inert in the UI by
+ * nothing in this mode (a row without `tokens`), and the base color preset
+ * shows instead. Labeled inert in the UI by
  * `ActiveThemeBadge` / `ActiveThemeAppliedNote` (muted, `data-dormant`,
  * "inactive in … mode"), and pinned against the palette resolver by
  * `active-theme-variant.test.ts` ("agrees with the palette resolver").
@@ -55,8 +54,8 @@ export interface ActiveThemeVariant {
   mode: ThemeMode
   /**
    * The theme's own (authored) variant: what its card's Light / Dark pill
-   * says. `null` for a legacy row that records neither `baseVariant` nor
-   * `isDark`, which is dormant in both modes.
+   * says. `null` for a row that records neither `baseVariant` nor
+   * `derivedVariant`.
    */
   themeVariant: ThemeMode | null
 }
@@ -78,8 +77,6 @@ function opposite(mode: ThemeMode): ThemeMode {
 /** The variant a custom theme was authored in, by the same precedence the resolver uses. */
 export function customThemeBaseVariant(theme: CustomTheme): ThemeMode | null {
   if (theme.baseVariant) return theme.baseVariant
-  if (theme.isDark === true) return "dark"
-  if (theme.isDark === false) return "light"
   if (theme.derivedVariant) return opposite(theme.derivedVariant)
   return null
 }
@@ -87,13 +84,11 @@ export function customThemeBaseVariant(theme: CustomTheme): ThemeMode | null {
 /** What an active custom theme contributes in `mode`. */
 export function customThemeVariantIn(theme: CustomTheme, mode: ThemeMode): ActiveThemeVariant {
   const themeVariant = customThemeBaseVariant(theme)
-  // Same order as `resolveActiveThemeColors`: dual-variant tokens first, then
-  // the legacy single `colors` set, which only counts in its own mode.
+  // Same rule as `resolveActiveThemeColors`: only the row's `tokens` paint.
   if (theme.tokens?.[mode]) {
     return { kind: theme.derivedVariant === mode ? "derived" : "authored", mode, themeVariant }
   }
-  const legacyApplies = theme.isDark === (mode === "dark") && theme.colors !== undefined
-  return { kind: legacyApplies ? "authored" : "dormant", mode, themeVariant }
+  return { kind: "dormant", mode, themeVariant }
 }
 
 /** Minimal shape of a registered plugin theme this module reads. */

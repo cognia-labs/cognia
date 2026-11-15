@@ -29,8 +29,6 @@ function designed(
     name,
     baseVariant,
     tokens: { light, dark },
-    isDark: baseVariant === "dark",
-    colors: baseVariant === "dark" ? dark : light,
   }
 }
 

@@ -417,15 +417,10 @@ export function buildWallpaperTheme(
 ): Omit<CustomTheme, "id"> {
   const light = ensureForegroundContrast(deriveVariantTokens(DEFAULT_FALLBACKS.light, analysis))
   const dark = ensureForegroundContrast(deriveVariantTokens(DEFAULT_FALLBACKS.dark, analysis))
-  const tokens = { light, dark }
-  const colors = tokens[analysis.baseVariant]
-
   return {
     name,
     baseVariant: analysis.baseVariant,
-    tokens,
-    colors,
-    isDark: analysis.baseVariant === "dark",
+    tokens: { light, dark },
   }
 }
 

@@ -99,10 +99,7 @@ export function FindingCard({
   onUnsuppressRule,
 }: FindingCardProps) {
   const t = usePluginTranslations(PLUGIN_ID)
-  // A finding written before fingerprinting existed has no stable identity, so
-  // a verdict recorded against it could not survive a rescan. Triage is hidden
-  // rather than offered-and-silently-lost.
-  const triageable = Boolean(finding.fingerprint) && Boolean(onStateChange)
+  const triageable = Boolean(onStateChange)
   return (
     <div
       className={cn("rounded-md border p-3", suppressed && "opacity-60")}
@@ -174,7 +171,7 @@ export function FindingCard({
               ))}
             </SelectContent>
           </Select>
-          {finding.ruleId && onSuppressRule && !ruleMuted && (
+          {onSuppressRule && !ruleMuted && (
             <Button
               size="sm"
               variant="outline"
@@ -198,7 +195,7 @@ export function FindingCard({
               data-testid="strix-rule-muted"
             >
               <Bell className="size-3" />
-              {t("triage.unmuteRule", { rule: finding.ruleId ?? "" })}
+              {t("triage.unmuteRule", { rule: finding.ruleId })}
             </Button>
           )}
         </div>

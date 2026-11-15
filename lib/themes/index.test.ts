@@ -1,6 +1,5 @@
-// Unit tests for `resolveActiveThemeColors`. Covers the Phase-2 dual-variant
-// `tokens.{light, dark}` shape AND the legacy single-`colors` fallback that
-// stays alive until the Task 8 Dexie v16 migration runs.
+// Unit tests for `resolveActiveThemeColors` over the dual-variant
+// `tokens.{light, dark}` shape.
 
 import { resolveActiveThemeColors } from "./index"
 import type { CustomTheme, ThemeColors } from "@/types/plugin/plugin"
@@ -153,8 +152,8 @@ describe("resolveActiveThemeColors — dual-variant tokens (Phase 2 shape)", () 
   })
 })
 
-describe("resolveActiveThemeColors — legacy fallback (pre-migration rows)", () => {
-  it("falls back to legacy colors when tokens missing", () => {
+describe("resolveActiveThemeColors — a row without tokens", () => {
+  it("adds no overrides for a stored row that carries only a single colors set", () => {
     const result = resolveActiveThemeColors({
       colorTheme: "default",
       resolvedTheme: "dark",
@@ -165,80 +164,12 @@ describe("resolveActiveThemeColors — legacy fallback (pre-migration rows)", ()
           name: "X",
           isDark: true,
           colors: buildTokens({ primary: "#abcdef" }),
-        } as CustomTheme,
+        } as unknown as CustomTheme,
       ],
     })
     expect(result.themeSource).toBe("custom")
-    expect(result.colors.primary).toBe("#abcdef")
-  })
-
-  it("legacy row with isDark mismatch falls through to preset (no overrides)", () => {
-    // row.isDark === true but resolvedTheme === "light" → custom.colors is ignored.
-    const result = resolveActiveThemeColors({
-      colorTheme: "default",
-      resolvedTheme: "light",
-      activeCustomThemeId: "t1",
-      customThemes: [
-        {
-          id: "t1",
-          name: "X",
-          isDark: true,
-          colors: buildTokens({ primary: "#abcdef" }),
-        } as CustomTheme,
-      ],
-    })
-    // The custom theme is still considered "custom" (the row exists),
-    // but its colors aren't applied because the variant mismatched.
-    expect(result.themeSource).toBe("custom")
-    // Should NOT be the legacy override.
     expect(result.colors.primary).not.toBe("#abcdef")
-    // Baseline: variantHint is "dark" (from isDark=true), so the dark
-    // preset is the baseline even though resolvedTheme is light.
     expect(result.colors.background).toBe("#0b1220")
-  })
-
-  it("legacy row with no isDark uses the resolvedTheme baseline", () => {
-    const result = resolveActiveThemeColors({
-      colorTheme: "default",
-      resolvedTheme: "light",
-      activeCustomThemeId: "t1",
-      customThemes: [
-        {
-          id: "t1",
-          name: "X",
-          colors: { primary: "#abcdef" },
-        } as CustomTheme,
-      ],
-    })
-    expect(result.themeSource).toBe("custom")
-    // Without isDark, the resolvedTheme drives the baseline AND the
-    // mismatch-check (isDark === undefined) means custom.colors is
-    // dropped — so we get a pure preset light palette with no overrides.
-    expect(result.colors.primary).not.toBe("#abcdef")
-    expect(result.colors.background).toBe("#ffffff")
-  })
-
-  it("dual-variant tokens win over legacy colors when both are present", () => {
-    const result = resolveActiveThemeColors({
-      colorTheme: "default",
-      resolvedTheme: "dark",
-      activeCustomThemeId: "t1",
-      customThemes: [
-        {
-          id: "t1",
-          name: "X",
-          baseVariant: "dark",
-          tokens: {
-            light: buildTokens({ primary: "#aaaaaa" }),
-            dark: buildTokens({ primary: "#ff00ff" }),
-          },
-          // Legacy fields still present; should be ignored.
-          isDark: true,
-          colors: buildTokens({ primary: "#deadbe" }),
-        } as CustomTheme,
-      ],
-    })
-    expect(result.colors.primary).toBe("#ff00ff")
   })
 })
 

@@ -1,7 +1,7 @@
 {
   "id": "cognia-example-issue-sync",
   "name": "Example Tracker Issues",
-  "description": "Schema-versioned issue pull with portable status mapping and migration.",
+  "description": "Schema-versioned issue pull with portable status mapping.",
   "version": "0.1.0",
   "type": "frontend",
   "main": "dist/index.js",

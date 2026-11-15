@@ -129,8 +129,6 @@ const sampleTheme = (id: string, overrides: Partial<CustomTheme> = {}): CustomTh
   name: `Theme ${id}`,
   baseVariant: "dark",
   tokens: { light: buildTokens(), dark: buildTokens({ background: "#0b0b0b" }) },
-  colors: { background: "#101010", foreground: "#ffffff" },
-  isDark: true,
   ...overrides,
 })
 
@@ -176,9 +174,8 @@ describe("CustomThemeTab", () => {
       expect(arg.tokens.dark[key]).toBeUndefined()
       expect(arg.tokens.light[key]).toBeUndefined()
     }
-    // Legacy fields kept one release for rollback safety.
-    expect(arg.isDark).toBe(true)
-    expect(arg.colors).toBeDefined()
+    expect(arg).not.toHaveProperty("isDark")
+    expect(arg).not.toHaveProperty("colors")
   })
 
   it("renders the saved themes rail and switches the draft on click", () => {
@@ -285,37 +282,25 @@ describe("CustomThemeTab", () => {
     )
   })
 
-  it("loads legacy single-variant rows (colors/isDark, no tokens) into the draft", () => {
-    const legacyDark: CustomTheme = {
-      id: "leg-d",
-      name: "Legacy Dark",
+  it("does not convert a stored row that carries only a single colors set", () => {
+    const singleSet = {
+      id: "single",
+      name: "Single Set",
       colors: { background: "#111111" },
       isDark: true,
-    }
-    const legacyLight: CustomTheme = {
-      id: "leg-l",
-      name: "Legacy Light",
-      colors: { background: "#fefefe" },
-      isDark: false,
-    }
-    // Degenerate row with neither tokens nor colors — draft falls back to empty.
+    } as unknown as CustomTheme
     const bare: CustomTheme = { id: "bare", name: "Bare" }
     storeState.settings = {
-      customThemes: [legacyDark, legacyLight, bare],
+      customThemes: [singleSet, bare],
       activeCustomThemeId: null,
     }
     render(<CustomThemeTab />)
-    fireEvent.click(screen.getByText("Legacy Dark"))
-    expect(screen.getByTestId("custom-theme-edit-dark")).toHaveAttribute("aria-pressed", "true")
-    expect(screen.getByTestId("color-token-background-hex")).toHaveValue("#111111")
-    // The row only ever stored one side; the other is promoted once so it is
-    // editable from here on rather than being re-derived at every save.
-    fireEvent.click(screen.getByTestId("custom-theme-edit-light"))
-    expect(screen.getByTestId("color-token-background-hex")).not.toHaveValue("#111111")
-
-    fireEvent.click(screen.getByText("Legacy Light"))
-    expect(screen.getByTestId("custom-theme-edit-light")).toHaveAttribute("aria-pressed", "true")
-    expect(screen.getByTestId("color-token-background-hex")).toHaveValue("#fefefe")
+    fireEvent.click(screen.getByText("Single Set"))
+    expect(screen.getByPlaceholderText("namePlaceholder")).toHaveValue("Single Set")
+    for (const side of ["light", "dark"] as const) {
+      fireEvent.click(screen.getByTestId(`custom-theme-edit-${side}`))
+      expect(screen.getByTestId("color-token-background-hex")).not.toHaveValue("#111111")
+    }
     fireEvent.click(screen.getByText("Bare"))
     expect(screen.getByPlaceholderText("namePlaceholder")).toHaveValue("Bare")
   })
@@ -417,7 +402,6 @@ describe("CustomThemeTab", () => {
     fireEvent.click(screen.getByRole("button", { name: /^saveButton$/ }))
     const arg = createCustomTheme.mock.calls[0][0]
     expect(arg.baseVariant).toBe("dark")
-    expect(arg.isDark).toBe(true)
     expect(arg.tokens.light.background).toBe("#fdfdfd")
   })
 

@@ -31,9 +31,8 @@ import {
 /** The recorded verdict, or `open` when none was recorded. */
 export function findingStateOf(
   states: readonly FindingStateRow[],
-  fingerprint: string | undefined
+  fingerprint: string
 ): FindingState {
-  if (!fingerprint) return "open"
   return states.find((row) => row.fingerprint === fingerprint)?.state ?? "open"
 }
 
@@ -44,26 +43,19 @@ export interface SuppressionInput {
 
 /** Whether this finding is muted, by either mechanism. */
 export function isSuppressed(finding: StrixFinding, input: SuppressionInput): boolean {
-  if (finding.ruleId && input.rules.some((rule) => rule.ruleId === finding.ruleId)) return true
+  if (input.rules.some((rule) => rule.ruleId === finding.ruleId)) return true
   const state = findingStateOf(input.states, finding.fingerprint)
   return (SUPPRESSING_STATES as readonly string[]).includes(state)
 }
 
-/**
- * Fingerprints to withhold from the gate.
- *
- * A finding with no fingerprint — a row written before identity existed —
- * contributes nothing here and is therefore never suppressed. That is the safe
- * direction: an un-suppressible finding is noise, whereas guessing at identity
- * would mute the wrong vulnerability.
- */
+/** Fingerprints to withhold from the gate. */
 export function suppressedFingerprints(
   findings: readonly StrixFinding[],
   input: SuppressionInput
 ): Set<string> {
   const suppressed = new Set<string>()
   for (const finding of findings) {
-    if (finding.fingerprint && isSuppressed(finding, input)) suppressed.add(finding.fingerprint)
+    if (isSuppressed(finding, input)) suppressed.add(finding.fingerprint)
   }
   return suppressed
 }
@@ -79,11 +71,8 @@ export function suppressedFingerprints(
  */
 export function toSecurityFinding(finding: StrixFinding): SecurityFinding {
   return {
-    // A row predating fingerprinting still has to appear in the export, so it
-    // falls back to the scanner's per-run id: unstable across scans, but
-    // present, which beats dropping a real vulnerability from the report.
-    fingerprint: finding.fingerprint ?? `legacy:${finding.vulnId}`,
-    ruleId: finding.ruleId ?? "unknown",
+    fingerprint: finding.fingerprint,
+    ruleId: finding.ruleId,
     title: finding.title,
     severity: normalizeSeverity(finding.severity),
     ...(finding.cvss !== undefined ? { cvss: finding.cvss } : {}),

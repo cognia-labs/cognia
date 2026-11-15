@@ -93,11 +93,14 @@ const dualVariantTheme: CustomTheme = {
   },
 }
 
-const legacyDarkTheme: CustomTheme = {
-  id: "legacy-1",
-  name: "Legacy Dark",
-  isDark: true,
-  colors: makeTokens("#101010", "#ff5500"),
+const secondTheme: CustomTheme = {
+  id: "second-1",
+  name: "Second",
+  baseVariant: "dark",
+  tokens: {
+    light: makeTokens("#fafafa", "#ff5500"),
+    dark: makeTokens("#101010", "#ff5500"),
+  },
 }
 
 function noopHandlers() {
@@ -129,7 +132,7 @@ describe("<SavedThemesRail />", () => {
     const h = noopHandlers()
     render(
       <SavedThemesRail
-        themes={[dualVariantTheme, legacyDarkTheme]}
+        themes={[dualVariantTheme, secondTheme]}
         activeId={null}
         editingId={undefined}
         labels={labels}
@@ -137,7 +140,7 @@ describe("<SavedThemesRail />", () => {
       />
     )
     expect(screen.getByTestId("saved-theme-dual-1")).toBeInTheDocument()
-    expect(screen.getByTestId("saved-theme-legacy-1")).toBeInTheDocument()
+    expect(screen.getByTestId("saved-theme-second-1")).toBeInTheDocument()
     expect(screen.getByTestId("saved-theme-dual-1-swatch")).toBeInTheDocument()
   })
 
@@ -145,7 +148,7 @@ describe("<SavedThemesRail />", () => {
     const h = noopHandlers()
     render(
       <SavedThemesRail
-        themes={[dualVariantTheme, legacyDarkTheme]}
+        themes={[dualVariantTheme, secondTheme]}
         activeId="dual-1"
         editingId={undefined}
         labels={labels}
@@ -153,7 +156,7 @@ describe("<SavedThemesRail />", () => {
       />
     )
     expect(screen.getByTestId("saved-theme-dual-1-active")).toBeInTheDocument()
-    expect(screen.queryByTestId("saved-theme-legacy-1-active")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("saved-theme-second-1-active")).not.toBeInTheDocument()
   })
 
   it("marks the editing theme with data-editing", () => {

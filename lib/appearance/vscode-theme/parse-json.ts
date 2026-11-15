@@ -1,4 +1,4 @@
-// Convert a VSCode color theme JSON into a cognia `CustomTheme`.
+// Convert a VSCode color theme JSON into a single-variant cognia palette.
 //
 // The VSCode theme schema is permissive — most fields are optional and
 // authors leave many unset. We do best-effort mapping:
@@ -13,7 +13,7 @@
 // with the standard VSCode tooling roundtrips.
 
 import { tryParseJsonc } from "@/lib/jsonc"
-import type { CustomTheme, ThemeColors } from "@/types/plugin/plugin"
+import type { ThemeColors } from "@/types/plugin/plugin"
 import { darken, lighten, parseHex, readableForeground, stripAlpha } from "./color-utils"
 import { DEFAULT_FALLBACKS, THEME_COLOR_KEYS, VSCODE_COLOR_MAP } from "./token-mapping"
 
@@ -23,7 +23,7 @@ export interface VscodeThemeJson {
    * extension manifest's `label`. The caller may override with `nameHint`.
    */
   name?: string
-  /** "light" or "dark" — drives `CustomTheme.isDark`. */
+  /** "light" or "dark" — drives `ParsedVscodeTheme.isDark`. */
   type?: "light" | "dark" | "hc-light" | "hc-black"
   colors?: Record<string, string | undefined>
   /** Token (syntax highlighting) colors — preserved on the imported theme. */
@@ -33,15 +33,25 @@ export interface VscodeThemeJson {
 }
 
 export interface ParseJsonOptions {
-  /** Override the `CustomTheme.name`. Wins over `theme.name`. */
+  /** Override the parsed theme's name. Wins over `theme.name`. */
   nameHint?: string
   /** Force a variant. When unset we read `theme.type` (defaulting to "dark"). */
   forceVariant?: "light" | "dark"
 }
 
+/**
+ * One VSCode theme as the single palette it declares. Not a stored row:
+ * callers turn it into a `CustomTheme` with `tokens` / `baseVariant`.
+ */
+export interface ParsedVscodeTheme {
+  name: string
+  /** The variant the VSCode theme declares (`type`), or the forced one. */
+  isDark: boolean
+  colors: ThemeColors
+}
+
 export interface ParsedTheme {
-  /** Ready-to-store CustomTheme; `id` will be assigned by the store on insert. */
-  theme: Omit<CustomTheme, "id" | "colors"> & { colors: ThemeColors }
+  theme: ParsedVscodeTheme
   /** True when the input had no `colors` table at all (still a valid theme). */
   emptyColors: boolean
   /** Number of cognia color slots that were filled directly from VSCode keys. */
@@ -56,7 +66,7 @@ export function parseVscodeJson(text: string): VscodeThemeJson | null {
 }
 
 /**
- * Build a `CustomTheme` from a parsed VSCode JSON object. The inverse of
+ * Build a `ParsedVscodeTheme` from a parsed VSCode JSON object. The inverse of
  * `parseVscodeJson` — accepts an in-memory object so the VSIX path can
  * skip the text-parsing step.
  */

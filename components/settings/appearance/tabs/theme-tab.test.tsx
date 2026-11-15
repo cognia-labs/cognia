@@ -290,7 +290,6 @@ describe("ThemeTab", () => {
       baseVariant: "dark" as const,
       derivedVariant: "light" as const,
       tokens: { dark: { background: "#282a36" }, light: { background: "#f8f8f2" } } as never,
-      isDark: true,
     }
 
     it("names the mode on the active card and explains a derived palette", () => {
@@ -324,9 +323,9 @@ describe("ThemeTab", () => {
       )
     })
 
-    // Intentional dormancy, pinned: a single-palette theme contributes nothing
-    // outside its own mode, and the UI labels it inert rather than "Active".
-    it("labels a single-palette theme as inactive outside its own mode", () => {
+    // Intentional dormancy, pinned: a row without `tokens` contributes nothing,
+    // and the UI labels it inert rather than "Active".
+    it("labels a theme row without tokens as inactive", () => {
       mockResolvedTheme = "light"
       storeState.settings = {
         theme: "light",
@@ -337,15 +336,14 @@ describe("ThemeTab", () => {
             id: "ct-legacy",
             name: "Dracula",
             sourceBuiltinName: "Dracula",
-            isDark: true,
-            colors: { background: "#282a36" },
+            baseVariant: "dark",
           },
         ],
       }
       render(<ThemeTab />)
       const badge = screen.getByTestId("active-theme-badge")
       expect(badge).toHaveAttribute("data-dormant", "true")
-      expect(badge).toHaveTextContent("activeVariant.badge.dormantOnly.dark")
+      expect(badge).toHaveTextContent("activeVariant.badge.dormant.light")
       expect(screen.getByTestId("active-theme-applied-note")).toHaveAttribute(
         "data-dormant",
         "true"

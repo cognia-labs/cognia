@@ -59,8 +59,7 @@ export interface StrixRun {
   /**
    * English detail for the run journal, SARIF and logs. The panel never
    * renders it when {@link errorCode} is present — stored prose cannot follow
-   * a language switch, so the panel translates the code instead. Legacy rows
-   * written before codes existed still fall back to it.
+   * a language switch, so the panel translates the code instead.
    */
   error?: string
   /** Why the run ended in `error` (or was reconciled to `cancelled`). */
@@ -88,12 +87,11 @@ export interface StrixFinding {
    *
    * `vulnId` below is Strix's own per-run id and is NOT identity: keying on it
    * makes every finding new on every scan, so a triage decision would never
-   * survive a rescan. Absent on rows written before fingerprinting existed;
-   * those simply cannot be triaged until their target is rescanned.
+   * survive a rescan.
    */
-  fingerprint?: string
-  /** The vulnerability CLASS, for suppression rules. Absent on legacy rows. */
-  ruleId?: string
+  fingerprint: string
+  /** The vulnerability CLASS, for suppression rules. */
+  ruleId: string
   vulnId: string
   title: string
   severity: Severity

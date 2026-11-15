@@ -12,9 +12,8 @@
  * the transcript. Returns `null` when no image block is present.
  *
  * The text block is a JSON `ScreenshotCaption`; the card localizes it at
- * render time from the plugin's own `manifest.i18n` bundle. A plain-text
- * block (transcripts written before the caption was structured) is shown as
- * it was stored.
+ * render time from the plugin's own `manifest.i18n` bundle. Any other text
+ * block is not a caption and is not shown.
  */
 
 import { CameraIcon } from "lucide-react"
@@ -73,7 +72,7 @@ export function parseScreenshotCaption(text: string): ScreenshotCaption | null {
       }
     }
   } catch {
-    // Not JSON — a legacy plain-text note.
+    // Not JSON, so not a caption.
   }
   return null
 }
@@ -103,9 +102,9 @@ export function ScreenshotResultCard({ part }: ToolResultRendererProps) {
       const c = b as ContentBlockLike
       return c.type === "text" && typeof c.text === "string" && c.text.trim().length > 0
     })
-    .map((b) => {
+    .flatMap((b) => {
       const caption = parseScreenshotCaption(b.text)
-      if (!caption) return b.text
+      if (!caption) return []
       const base = t("card.note", { filename: caption.filename, size: formatSize(caption.size) })
       return caption.copiedToClipboard ? `${base} ${t("card.copied")}` : base
     })

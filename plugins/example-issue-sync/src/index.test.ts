@@ -404,23 +404,13 @@ it("stops a granted target on revocation, keeps imported issues, and resumes aft
   expect(await getDb().issues.count()).toBe(1)
 })
 
-it("migrates a v1 resource on the Host working copy while preserving identity and stored data", async () => {
+it("does not convert a resource saved under an older schema version", async () => {
   expect(await connectExample()).toBe(true)
-  const target = await binding(1)
-  expect(target.resource).toMatchObject({
-    schemaVersion: 2,
-    config: { projectKey: "DEMO", mapping: { open: "todo", closed: "done" } },
-  })
+  expect(await binding(1)).toBeUndefined()
   const stored = (await getDb().issueProjects.toArray())[0].resources[0]
   expect(stored).toMatchObject({ schemaVersion: 1, config: { projectKey: "DEMO" } })
-  expect(stored).not.toHaveProperty("config.mapping")
   if (stored.kind !== "plugin") throw new Error("Expected plugin resource")
-  expect(pluginResourceState(stored).key).toBe(target.key)
-  serviceReply = () => json(remote)
-  expect(await reconcileBinding(target, getIssueSyncRegistry().get(providerId)!)).toMatchObject({
-    created: 1,
-  })
-  expect(await getIssueByExternalKey(providerId, "DEMO:42")).toMatchObject({ status: "todo" })
+  expect(pluginResourceState(stored).status).toBe("needs-attention")
 })
 
 it("refuses revoked consumer reads before sending or importing anything", async () => {

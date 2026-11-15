@@ -1,6 +1,5 @@
 import {
   createVisualization,
-  LEGACY_PROFILE_ALIASES,
   parseVisualization,
   recommendProfile,
   validateVisualization,
@@ -54,20 +53,21 @@ it("parseVisualization rejects malformed payloads with clean errors", () => {
   expect(() => parseVisualization("[1,2]")).toThrow("Unsupported Cognia visualization schema")
 })
 
-it("no longer offers faked profiles but still reads stored ones as what they rendered", () => {
-  for (const legacy of ["histogram", "map", "simulation"]) {
-    expect(VISUALIZATION_PROFILES).not.toContain(legacy)
+it("rejects profiles the renderer cannot draw as what they claim to be", () => {
+  for (const unsupported of ["histogram", "map", "simulation"]) {
+    expect(VISUALIZATION_PROFILES).not.toContain(unsupported)
     expect(() =>
       createVisualization({
-        title: "Old",
-        profile: legacy as never,
+        title: "Unsupported",
+        profile: unsupported as never,
         data: [{ label: "a", value: 1 }],
       })
     ).toThrow("Unsupported visualization profile")
-    const stored = parseVisualization(
-      JSON.stringify({ schemaVersion: 1, profile: legacy, title: "Old", data: [] })
-    )
-    expect(stored.profile).toBe(LEGACY_PROFILE_ALIASES[legacy])
+    expect(() =>
+      parseVisualization(
+        JSON.stringify({ schemaVersion: 1, profile: unsupported, title: "Unsupported", data: [] })
+      )
+    ).toThrow("Unsupported Cognia visualization schema")
   }
   expect(recommendProfile("show sales by location")).toMatchObject({ profile: "scatter" })
   expect(recommendProfile("value distribution")).toMatchObject({ profile: "bar" })

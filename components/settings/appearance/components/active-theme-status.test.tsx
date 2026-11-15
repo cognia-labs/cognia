@@ -30,8 +30,8 @@ describe("activeThemeMessageKey", () => {
     expect(activeThemeMessageKey(status("fixed", "light", "dark"))).toBe("fixed")
   })
 
-  it("names the theme's own mode for a theme dormant outside it", () => {
-    expect(activeThemeMessageKey(status("dormant", "light", "dark"))).toBe("dormantOnly.dark")
+  it("keys a dormant theme by the current mode only", () => {
+    expect(activeThemeMessageKey(status("dormant", "light", "dark"))).toBe("dormant.light")
     expect(activeThemeMessageKey(status("dormant", "dark", null))).toBe("dormant.dark")
     expect(activeThemeMessageKey(status("dormant", "dark", "dark"))).toBe("dormant.dark")
   })
@@ -80,7 +80,7 @@ describe("ActiveThemeBadge", () => {
   it("labels a dormant theme as inactive in the current mode", () => {
     render(<ActiveThemeBadge status={status("dormant", "light", "dark")} />)
     const badge = screen.getByTestId("active-theme-badge")
-    expect(badge).toHaveTextContent("Active · Dark only · inactive in light mode")
+    expect(badge).toHaveTextContent("Active · Inactive in light mode")
     expect(badge).toHaveAttribute("data-dormant", "true")
     expect(badge).toHaveClass("text-muted-foreground")
     expect(badge).not.toHaveClass("text-primary")
@@ -109,13 +109,12 @@ describe("ActiveThemeAppliedNote", () => {
     )
   })
 
-  it("explains a dormant theme and when it applies again", () => {
-    render(<ActiveThemeAppliedNote status={status("dormant", "light", "dark")} name="Legacy" />)
+  it("explains a dormant theme", () => {
+    render(<ActiveThemeAppliedNote status={status("dormant", "light", "dark")} name="Bare" />)
     const note = screen.getByRole("status")
     expect(note).toHaveTextContent(
-      "Legacy only has a dark palette, so it is inactive in light mode"
+      "Bare has no light palette, so it is inactive in light mode and the base color preset is shown instead."
     )
-    expect(note).toHaveTextContent("It applies again when you switch to dark mode.")
     expect(note).toHaveAttribute("data-dormant", "true")
   })
 

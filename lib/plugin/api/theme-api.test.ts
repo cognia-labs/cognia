@@ -10,7 +10,7 @@ import {
 } from "./theme-api"
 import { initializePluginPermissions } from "./permission-api"
 import { registerPluginTheme, __resetThemeRegistryForTesting } from "@/lib/theme/theme-registry"
-import type { CustomTheme } from "@/types/plugin/plugin"
+import type { CustomTheme, ThemeColors } from "@/types/plugin/plugin"
 
 // Mock settings store
 let mockTheme = "light"
@@ -20,6 +20,15 @@ let mockActivePluginThemeId: string | null = null
 let mockCreateCounter = 0
 const mockCustomThemes: CustomTheme[] = []
 const mockSubscribers: Array<(state: unknown) => void> = []
+
+/** A custom theme row whose two variants share one palette. */
+function bothVariants(
+  baseVariant: "light" | "dark",
+  colors: Partial<ThemeColors>
+): Pick<CustomTheme, "baseVariant" | "tokens"> {
+  const side = colors as ThemeColors
+  return { baseVariant, tokens: { light: side, dark: side } }
+}
 
 jest.mock("@/stores/settings/settings-store", () => ({
   useSettingsStore: {
@@ -112,7 +121,7 @@ jest.mock("@/lib/themes", () => {
             themeSource: "custom",
             colors: {
               ...customColors,
-              ...activeCustomTheme.colors,
+              ...activeCustomTheme.tokens?.[input.resolvedTheme],
             },
             derivedVariables: {},
             activeCustomTheme,
@@ -287,15 +296,14 @@ describe("Theme API", () => {
       mockCustomThemes.push({
         id: "custom-theme",
         name: "Custom Theme",
-        isDark: true,
-        colors: {
+        ...bothVariants("dark", {
           primary: "#112233",
           secondary: "#223344",
           accent: "#334455",
           background: "#111111",
           foreground: "#eeeeee",
           muted: "#222222",
-        },
+        }),
       })
 
       const api = createThemeAPI(testPluginId)
@@ -313,15 +321,14 @@ describe("Theme API", () => {
 
       const id = api.registerCustomTheme({
         name: "My Theme",
-        isDark: false,
-        colors: {
+        ...bothVariants("light", {
           primary: "#3b82f6",
           secondary: "#64748b",
           accent: "#3b82f6",
           background: "#ffffff",
           foreground: "#0f172a",
           muted: "#f1f5f9",
-        },
+        }),
       })
 
       expect(id).toBeDefined()
@@ -333,15 +340,14 @@ describe("Theme API", () => {
       mockCustomThemes.push({
         id: "update-theme",
         name: "Original",
-        isDark: false,
-        colors: {
+        ...bothVariants("light", {
           primary: "#000",
           secondary: "#000",
           accent: "#000",
           background: "#fff",
           foreground: "#000",
           muted: "#ccc",
-        },
+        }),
       })
 
       const api = createThemeAPI(testPluginId)
@@ -354,15 +360,14 @@ describe("Theme API", () => {
       mockCustomThemes.push({
         id: "delete-theme",
         name: "To Delete",
-        isDark: false,
-        colors: {
+        ...bothVariants("light", {
           primary: "#000",
           secondary: "#000",
           accent: "#000",
           background: "#fff",
           foreground: "#000",
           muted: "#ccc",
-        },
+        }),
       })
 
       const api = createThemeAPI(testPluginId)
@@ -376,28 +381,26 @@ describe("Theme API", () => {
         {
           id: "t1",
           name: "Theme 1",
-          isDark: false,
-          colors: {
+          ...bothVariants("light", {
             primary: "#000",
             secondary: "#000",
             accent: "#000",
             background: "#fff",
             foreground: "#000",
             muted: "#ccc",
-          },
+          }),
         },
         {
           id: "t2",
           name: "Theme 2",
-          isDark: true,
-          colors: {
+          ...bothVariants("dark", {
             primary: "#fff",
             secondary: "#fff",
             accent: "#fff",
             background: "#000",
             foreground: "#fff",
             muted: "#333",
-          },
+          }),
         }
       )
 
@@ -428,6 +431,22 @@ describe("Theme API", () => {
       expect(row.tokens?.dark.background).toBe("#000")
       expect(row.baseVariant).toBe("dark")
       expect(row.ownerPluginId).toBe(testPluginId)
+      expect(row).not.toHaveProperty("colors")
+      expect(row).not.toHaveProperty("isDark")
+    })
+
+    it("does not persist a single colors set the input does not declare", () => {
+      const api = createThemeAPI(testPluginId)
+      const id = api.registerCustomTheme({
+        name: "Single",
+        colors: { primary: "#123456", background: "#fff", foreground: "#000" },
+        isDark: true,
+      } as never)
+      const row = mockCustomThemes.find((t) => t.id === id)!
+      expect(row).not.toHaveProperty("colors")
+      expect(row).not.toHaveProperty("isDark")
+      expect(row.tokens).toBeUndefined()
+      expect(row.baseVariant).toBe("light")
     })
   })
 
@@ -451,7 +470,7 @@ describe("Theme API", () => {
           primary: "#a855f7",
           background: "#101014",
           foreground: "#fafafa",
-        } as CustomTheme["colors"] as never,
+        } as never,
       })
       mockActivePluginThemeId = "test-plugin.neon"
       const api = createThemeAPI(testPluginId)
@@ -489,25 +508,22 @@ describe("Theme API", () => {
       mockCustomThemes.push({
         id: "custom-theme",
         name: "Custom",
-        isDark: false,
-        colors: {
+        ...bothVariants("light", {
           primary: "#000000",
           secondary: "#111111",
           accent: "#222222",
           background: "#ffffff",
           foreground: "#000000",
           muted: "#f1f5f9",
-        },
+        }),
       })
 
       const api = createThemeAPI(testPluginId)
       const handler = jest.fn()
       const unsubscribe = api.onThemeChange(handler)
 
-      // `colors` is optional on CustomTheme post-Phase-2 — the row was
-      // pushed with a populated `colors` so the non-null assertion is
-      // safe here.
-      mockCustomThemes[0].colors!.primary = "#123456"
+      // Both variants share one palette object, so this edits the painted side.
+      mockCustomThemes[0].tokens!.light.primary = "#123456"
       mockSubscribers.forEach((callback) =>
         callback({
           theme: mockTheme,
@@ -533,39 +549,36 @@ describe("Theme API", () => {
 
       api.registerCustomTheme({
         name: "A-1",
-        isDark: false,
-        colors: {
+        ...bothVariants("light", {
           primary: "#000",
           secondary: "#000",
           accent: "#000",
           background: "#fff",
           foreground: "#000",
           muted: "#ccc",
-        },
+        }),
       })
       api.registerCustomTheme({
         name: "A-2",
-        isDark: true,
-        colors: {
+        ...bothVariants("dark", {
           primary: "#fff",
           secondary: "#fff",
           accent: "#fff",
           background: "#000",
           foreground: "#fff",
           muted: "#333",
-        },
+        }),
       })
       otherApi.registerCustomTheme({
         name: "B-1",
-        isDark: false,
-        colors: {
+        ...bothVariants("light", {
           primary: "#111",
           secondary: "#222",
           accent: "#333",
           background: "#fff",
           foreground: "#000",
           muted: "#eee",
-        },
+        }),
       })
 
       expect(mockCustomThemes).toHaveLength(3)
@@ -581,15 +594,14 @@ describe("Theme API", () => {
       const api = createThemeAPI("plugin-a")
       api.registerCustomTheme({
         name: "A-1",
-        isDark: false,
-        colors: {
+        ...bothVariants("light", {
           primary: "#000",
           secondary: "#000",
           accent: "#000",
           background: "#fff",
           foreground: "#000",
           muted: "#ccc",
-        },
+        }),
       })
 
       clearCustomThemesForPluginContext("plugin-a")
@@ -621,7 +633,7 @@ describe("Theme API", () => {
         id: "orphan",
         name: "Orphan",
         ownerPluginId: "plugin-a",
-        colors: { primary: "#000", background: "#fff", foreground: "#000" },
+        ...bothVariants("light", { primary: "#000", background: "#fff", foreground: "#000" }),
       })
       clearCustomThemesForPluginContext("plugin-a")
       expect(mockCustomThemes.find((t) => t.id === "orphan")).toBeUndefined()
@@ -631,27 +643,25 @@ describe("Theme API", () => {
       const api = createThemeAPI("plugin-a")
       const id1 = api.registerCustomTheme({
         name: "A-1",
-        isDark: false,
-        colors: {
+        ...bothVariants("light", {
           primary: "#000",
           secondary: "#000",
           accent: "#000",
           background: "#fff",
           foreground: "#000",
           muted: "#ccc",
-        },
+        }),
       })
       const id2 = api.registerCustomTheme({
         name: "A-2",
-        isDark: true,
-        colors: {
+        ...bothVariants("dark", {
           primary: "#fff",
           secondary: "#fff",
           accent: "#fff",
           background: "#000",
           foreground: "#fff",
           muted: "#333",
-        },
+        }),
       })
 
       // Plugin explicitly deletes one of its themes ahead of time.

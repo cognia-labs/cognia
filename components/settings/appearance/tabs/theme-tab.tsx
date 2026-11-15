@@ -166,8 +166,8 @@ export function ThemeTab() {
     const out = new Map<string, PresetItem>()
 
     for (const preset of BUILT_IN_VSCODE_THEMES) {
-      const variant: "light" | "dark" = preset.baseVariant ?? (preset.isDark ? "dark" : "light")
-      const colors = preset.tokens?.[variant] ?? (preset.colors as ThemeColors | undefined)
+      const variant: "light" | "dark" = preset.baseVariant ?? "light"
+      const colors = preset.tokens?.[variant]
       if (!colors) continue
       const key = `builtin:${preset.name}`
       out.set(key, {
@@ -184,8 +184,8 @@ export function ThemeTab() {
     // "builtin" affordances; a distinct key namespace avoids colliding with
     // the VSCode presets above.
     for (const preset of BUILT_IN_DESIGNED_THEMES) {
-      const variant: "light" | "dark" = preset.baseVariant ?? (preset.isDark ? "dark" : "light")
-      const colors = preset.tokens?.[variant] ?? (preset.colors as ThemeColors | undefined)
+      const variant: "light" | "dark" = preset.baseVariant ?? "light"
+      const colors = preset.tokens?.[variant]
       if (!colors) continue
       const key = `designed:${preset.name}`
       out.set(key, {
@@ -201,8 +201,8 @@ export function ThemeTab() {
     for (const record of importedRecords) {
       const ct = customThemes.find((c) => c.id === record.customThemeId)
       if (!ct) continue
-      const variant = ct.baseVariant ?? (ct.isDark ? "dark" : "light")
-      const colors = ct.tokens?.[variant] ?? (ct.colors as ThemeColors | undefined)
+      const variant = ct.baseVariant ?? "light"
+      const colors = ct.tokens?.[variant]
       if (!colors) continue
       const key = `imported:${record.customThemeId}`
       if (out.has(key)) continue
@@ -355,8 +355,6 @@ export function ThemeTab() {
       baseVariant,
       derivedVariant: item.tokens ? undefined : opposite,
       tokens,
-      isDark: baseVariant === "dark",
-      colors: item.colors,
       sourceBuiltinName: item.source === "builtin" ? item.name : undefined,
     }
     const id = createCustomTheme(seed)
@@ -401,8 +399,6 @@ export function ThemeTab() {
       baseVariant,
       derivedVariant: item.tokens ? undefined : opposite,
       tokens,
-      isDark: baseVariant === "dark",
-      colors: baseColors,
       sourcePluginId: item.source === "plugin" ? item.pluginId : undefined,
       cssVars: extraCssVars && Object.keys(extraCssVars).length > 0 ? extraCssVars : undefined,
     })
