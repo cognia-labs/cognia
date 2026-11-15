@@ -92,11 +92,9 @@ Usage:
                      Feishu identity registry admin for headless installs
                      (COGNIA_SERVICE_TOKEN / COGNIA_SERVER_URL /
                       COGNIA_LARK_ADAPTER_ID via env)
-  cognia-agent durability <verify|migrate|recover|rollback|finalize>
-                     --account <id> [--home dir] [--json]
-                     [--to journal|sqlite|<generation>] [--from auto|snapshot|journal|sqlite]
-                     [--activate] [--generation id] [--confirm]
-                      headless persistence: inspect, migrate, recover, roll back
+  cognia-agent durability <verify|compact>
+                     --account <id> | --root <path> (verify only) [--home dir] [--json]
+                     headless persistence: verify the SQLite store, VACUUM it
   cognia-agent best-of-n <start|status|list|cancel|select|publish|archive> ...
                      independent attempts in the desktop app; select and publish
                      need an interactive terminal and the desktop's approval
@@ -131,7 +129,7 @@ Usage:
                      Exit 0 clean / 1 inconclusive or unauthorized / 2 threshold met.
                      LLM credentials come from env (LLM_API_KEY), never a flag
   cognia-agent serve [--server-url u] [--account id] [--home dir]
-                     [--flush-debounce ms]           headless brain for cognia-server
+                                                     headless brain for cognia-server
                      (COGNIA_SERVER_URL / COGNIA_SERVICE_TOKEN / COGNIA_BRIDGE_URL /
                       COGNIA_LOCAL_ACCOUNT_ID / COGNIA_DATA_DIR via env)
 

@@ -7,11 +7,11 @@
  *      generated at open time, so a later `use()` is inert)
  *   2. open the backend and materialise its state
  *   3. restore that state into Dexie **with capture suppressed**
- *   4. from here on, every committed transaction is journalled synchronously
+ *   4. from here on, every committed transaction is written synchronously
  *
- * Compaction runs off a commit counter, never on a timer: a brain that is idle
- * has nothing to compact, and one that is hot should fold its journal on write
- * volume rather than wall clock.
+ * Upkeep runs off a commit counter, never on a timer: a brain that is idle has
+ * nothing to maintain, and one that is hot should be maintained on write volume
+ * rather than wall clock.
  */
 import { BinaryPrefetcher, type BinaryPrefetcherOptions } from "./binary-prefetch"
 import { canonicalJson, decodeKey, encodeKey } from "./canonical"
@@ -27,10 +27,8 @@ import {
   type DrainGate,
 } from "./capture"
 import { durabilityRoot, resolveBackend, type ResolvedBackend } from "./backend"
-import { applyCommits } from "./journal"
 import { decodeDurableValue, encodeDurableValue } from "./value-codec"
 import type {
-  DurabilityBackendId,
   DurabilityCommit,
   DurabilityMutation,
   DurabilityState,
@@ -71,15 +69,10 @@ export interface DurabilityStoreOptions {
   /** Await Dexie readiness (seeding) between middleware install and restore. */
   whenReady?: () => Promise<void>
   /**
-   * Ledger backend to open and pin when the account has no manifest yet. An
-   * account that already has one always boots on what its manifest says.
-   */
-  backend?: Exclude<DurabilityBackendId, "snapshot-v3">
-  /**
    * Re-declare schema the databases only gain at runtime (plugin tables)
    * before the persisted state is restored, given the version each database
    * was persisted at. A built-in plugin's tables lift the account database
-   * above its code version once they exist, and restoring that checkpoint
+   * above its code version once they exist, and restoring that state
    * into the code version alone is refused as a schema mismatch.
    */
   prepareDynamicSchema?: (
@@ -103,7 +96,7 @@ export interface DurabilityStore {
   sequence(): number
   /** Commits recorded since the store opened. */
   commitCount(): number
-  /** Fold the journal into a fresh verified generation. */
+  /** Rewrite the store from its durable state and re-pin the live schemas. */
   compact(): Promise<void>
   /** Materialise the live Dexie content in backend form (parity/tooling). */
   readLiveState(): Promise<DurabilityState>
@@ -229,13 +222,13 @@ export async function restoreState(
     // Same rule as `lib/db/storage-layout.ts` and the snapshot store: a LOWER
     // persisted version is an ordinary forward move (the newer declaration
     // only adds stores, a dropped store's rows are not restored, and rows go
-    // back through the table middleware). Only a checkpoint written by a newer
+    // back through the table middleware). Only state written by a newer
     // build is unsafe. Refusing every difference stranded each person
     // partition and the operator brain after any additive schema bump.
     if (entry.schema.version > source.db.verno) {
       const { DurabilityFault } = await import("./types")
       throw new DurabilityFault(
-        "checkpoint-schema-mismatch",
+        "schema-mismatch",
         `persisted schema version ${entry.schema.version} is newer than database ${source.name} version ${source.db.verno}`
       )
     }
@@ -254,7 +247,7 @@ export async function restoreState(
   }
 }
 
-/** Restored from a checkpoint an older build wrote (a forward move). */
+/** Restored from state an older build wrote (a forward move). */
 function isForwardMove(source: DurabilitySourceLike, previous: number | undefined): boolean {
   return previous !== undefined && previous < source.db.verno
 }
@@ -263,7 +256,7 @@ function isForwardMove(source: DurabilitySourceLike, previous: number | undefine
  * Open the durability store for one account.
  *
  * The returned handle owns the backend; `close()` compacts nothing and simply
- * releases handles — a journal that is not compacted is still complete.
+ * releases handles; every commit is already durable.
  */
 /** Unfinished side-file KiB a held transaction drains to (half of it) before its commit runs. */
 const DRAIN_WINDOW_KIB = 16 * 1024
@@ -364,15 +357,14 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     compactionTail?.push(JSON.parse(canonicalJson(commit)) as DurabilityCommit)
     commits += 1
     sinceCompaction += 1
-    // Compaction is off the commit path on purpose: the transaction is already
-    // durable, so folding it into a checkpoint is background work. A failure
-    // here is not data loss — the journal still holds every commit — so it is
-    // kept out of the event listener. It is still reported: an upkeep that
-    // keeps failing (a WAL checkpoint, say) lets the files grow unseen.
+    // Upkeep is off the commit path on purpose: the transaction is already
+    // durable, so a failure here is not data loss and is kept out of the event
+    // listener. It is still reported: an upkeep that keeps failing (a WAL
+    // checkpoint, say) lets the files grow unseen.
     if (compactEvery > 0 && sinceCompaction >= compactEvery && !compacting && !closing) {
       void periodicCompaction().catch((error: unknown) => {
         console.warn(
-          `[durability] periodic upkeep failed; every commit is still journaled: ${error instanceof Error ? error.message : String(error)}`
+          `[durability] periodic upkeep failed; every commit is still durable: ${error instanceof Error ? error.message : String(error)}`
         )
       })
     }
@@ -381,12 +373,12 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   const sources = await opts.getSources()
   for (const source of sources) {
     // Dexie generates its DBCore stack at open time, so a `use()` after open is
-    // inert — the brain would run with a journal that records nothing and no
+    // inert — the brain would run with a store that records nothing and no
     // symptom until a crash. Refuse instead.
     if (source.db.isOpen?.()) {
       const { DurabilityFault } = await import("./types")
       throw new DurabilityFault(
-        "manifest-corrupt",
+        "store-corrupt",
         `database ${source.name} was already open when durability capture was installed; ` +
           "the capture middleware must be installed before Dexie opens"
       )
@@ -406,12 +398,12 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   await opts.whenReady?.()
   for (const source of sources) await source.db.open?.()
 
-  // Seed the immutable generation from whatever the freshly-opened (seeded)
-  // databases hold, so a first boot has a checkpoint to append against.
+  // Seed an empty store from whatever the freshly-opened (seeded) databases
+  // hold, so a first boot's commits land on a pinned schema.
   const seed = await readSourcesState(sources, 0, root, prefetcher)
   let resolved: ResolvedBackend
   try {
-    resolved = await resolveBackend({ root, seed, initialBackend: opts.backend })
+    resolved = await resolveBackend({ root, seed })
   } finally {
     prefetcher.release(seed)
   }
@@ -433,7 +425,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
       await restoreState(sources, resolved.state, root)
       await prepareRestoredSessionLists(sources)
       // Pin a forward move once; future boots need not reinterpret an older
-      // checkpoint version. Restore/rebuild remains capture-suppressed.
+      // persisted version. Restore/rebuild remains capture-suppressed.
       pinned = resolved.state.dbs
       if (
         sources.some((source) =>
@@ -496,14 +488,14 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   }
 
   /**
-   * The commit-count upkeep. A backend with no journal to fold only does its
+   * The commit-count upkeep. The backend only does its
    * own cheap maintenance while its schema still matches the live one: the
    * full compaction loads, rewrites and verifies every row synchronously on
    * the brain's event loop, which stalls the brain in proportion to its data.
    */
   async function periodicCompaction(): Promise<void> {
     const backend = backendRef
-    if (!backend?.maintain || !pinned || schemaDrifted(sources, pinned)) return compact()
+    if (!backend || !pinned || schemaDrifted(sources, pinned)) return compact()
     try {
       backend.maintain()
     } finally {
@@ -537,6 +529,27 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
       return state
     },
     close,
+  }
+}
+
+/** Fold commits onto a state, in place. */
+function applyCommits(state: DurabilityState, commits: readonly DurabilityCommit[]): void {
+  for (const commit of commits) {
+    for (const mutation of commit.mutations) {
+      const db = state.dbs[mutation.database]
+      if (!db) continue
+      // A table added after the state was read (a plugin's runtime table, one
+      // a schema upgrade created) joins the state with its first commit.
+      let table = db.rows[mutation.table]
+      if (!table) {
+        table = db.rows[mutation.table] = {}
+        if (!db.schema.tables.includes(mutation.table))
+          db.schema.tables = [...db.schema.tables, mutation.table].sort()
+      }
+      if (mutation.value === null) delete table[mutation.key]
+      else table[mutation.key] = mutation.value
+    }
+    state.sequence = commit.sequence
   }
 }
 

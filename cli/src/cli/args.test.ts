@@ -100,21 +100,15 @@ describe("parseArgv", () => {
     expect(stringFlag(args, "account")).toBe("acct")
   })
 
-  it("never lets --activate or --confirm swallow the next token", () => {
-    const args = parseArgv([
-      "durability",
-      "recover",
-      "--activate",
-      "--from",
-      "journal",
-      "--confirm",
-      "--generation",
-      "gen-0002",
-    ])
-    expect(boolFlag(args, "activate")).toBe(true)
+  it("never lets --confirm swallow the next token", () => {
+    const args = parseArgv(["sdk", "delete", "--confirm", "pkg-1"])
     expect(boolFlag(args, "confirm")).toBe(true)
-    expect(stringFlag(args, "from")).toBe("journal")
-    expect(stringFlag(args, "generation")).toBe("gen-0002")
+    expect(args.positionals).toContain("pkg-1")
+  })
+
+  it("no longer treats --activate as a boolean switch", () => {
+    const args = parseArgv(["durability", "verify", "--activate", "x"])
+    expect(stringFlag(args, "activate")).toBe("x")
   })
 
   it("treats -- as a stop-parsing sentinel (tokens after go to rest)", () => {

@@ -4,13 +4,13 @@ import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { execFileSync } from "node:child_process"
 import { BINARY_PRUNE_GRACE_MS, binaryDir } from "./binary-store"
-import { generationDir, writeCheckpoint } from "./checkpoint"
 import { encodeDurableValue, decodeDurableValue } from "./value-codec"
 import { BinaryPrefetcher } from "./binary-prefetch"
 
 import {
   assertIntegrity,
-  asSqliteBackend,
+  collectSqliteBinaryReferences,
+  compactSqlite,
   openSqliteBackend,
   SQLITE_ROWS_TABLE,
   sqliteFile,
@@ -51,36 +51,18 @@ describe("openSqliteBackend", () => {
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
-  it("reclaims interrupted checkpoint reservations and staging rows during maintenance", async () => {
-    const backend = openSqliteBackend({ root })
-    writeCheckpoint(root, "gen-0001", state(1))
-    const reservation = generationDir(root, "gen-0002")
-    const staging = `${reservation}.staging-interrupted`
-    fs.mkdirSync(reservation)
-    fs.mkdirSync(staging)
-    fs.writeFileSync(path.join(staging, "partial.rows.json"), "interrupted row dump")
-    try {
-      backend.maintain()
-      expect(fs.readdirSync(path.join(root, "generations"))).toEqual(["gen-0001"])
-    } finally {
-      await backend.close()
-    }
-  })
-
   it("excludes cross-process binary publication while discovering GC references", async () => {
     const backend = openSqliteBackend({ root })
-    writeCheckpoint(root, "gen-0001", state(1))
+    await backend.compact(state(1))
     encodeDurableValue(new Uint8Array(65536), root)
     const file = path.join(binaryDir(root), fs.readdirSync(binaryDir(root))[0])
     const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
     fs.utimesSync(file, old, old)
-    const read = fs.readFileSync.bind(fs)
+    const exists = fs.existsSync.bind(fs)
     let excluded = false
-    const fault = jest.spyOn(fs, "readFileSync").mockImplementation(((
-      filename: fs.PathOrFileDescriptor,
-      options?: unknown
-    ) => {
-      if (String(filename) === path.join(generationDir(root, "gen-0001"), "checkpoint.json")) {
+    // Reference discovery starts by probing the store file, under the binary lease.
+    const fault = jest.spyOn(fs, "existsSync").mockImplementation(((target: fs.PathLike) => {
+      if (String(target) === sqliteFile(root) && !excluded) {
         const script = `
           const loaded = await import(${JSON.stringify(path.join(__dirname, "writer-lock.ts"))});
           const { acquireWriterLease } = loaded.default ?? loaded;
@@ -97,8 +79,8 @@ describe("openSqliteBackend", () => {
             encoding: "utf8",
           }).trim() === "excluded"
       }
-      return read(filename, options as never)
-    }) as typeof fs.readFileSync)
+      return exists(target)
+    }) as typeof fs.existsSync)
     try {
       expect(backend.maintain().prunedBinaries).toHaveLength(1)
       expect(excluded).toBe(true)
@@ -155,9 +137,9 @@ describe("openSqliteBackend", () => {
     await backend.close()
   })
 
-  it("round-trips a full state through replaceAll", async () => {
+  it("round-trips a full state through compact", async () => {
     const backend = openSqliteBackend({ root })
-    asSqliteBackend(backend)!.replaceAll(state(4))
+    await expect(backend.compact(state(4))).resolves.toEqual({ sequence: 4 })
     const loaded = await backend.load()
     await backend.close()
     expect(loaded.sequence).toBe(4)
@@ -198,7 +180,7 @@ describe("openSqliteBackend", () => {
     })
     const loaded = await backend.load()
     await backend.close()
-    // The journal lists it the same way; a restart re-declares it from this list.
+    // A restart re-declares it from this list.
     expect(loaded.dbs.CogniaDB.schema.tables).toEqual(["added", "messages", "sessions"])
     expect(loaded.dbs.CogniaDB.rows.added).toEqual({ "s:k": { id: "k" } })
   })
@@ -216,11 +198,13 @@ describe("openSqliteBackend", () => {
     expect(loaded.dbs.CogniaDB.schema.tables).toEqual(["added", "messages", "sessions"])
   })
 
-  it("treats an already-applied sequence as a no-op (dual-write redelivery)", async () => {
+  it("rejects redelivery of an already-applied sequence", async () => {
     const backend = openSqliteBackend({ root })
     await backend.compact(state(0))
     backend.commitSync(commit(1, "s:b", { id: "b" }))
-    backend.commitSync(commit(1, "s:b", { id: "SHOULD-NOT-APPLY" }))
+    expect(() => backend.commitSync(commit(1, "s:b", { id: "SHOULD-NOT-APPLY" }))).toThrow(
+      expect.objectContaining({ code: "sequence-gap", sequence: 2 })
+    )
     const loaded = await backend.load()
     await backend.close()
     expect(loaded.dbs.CogniaDB.rows.sessions["s:b"]).toEqual({ id: "b" })
@@ -231,7 +215,7 @@ describe("openSqliteBackend", () => {
     const backend = openSqliteBackend({ root })
     await backend.compact(state(0))
     expect(() => backend.commitSync(commit(3, "s:c", 1))).toThrow(
-      expect.objectContaining({ code: "journal-sequence-gap" })
+      expect.objectContaining({ code: "sequence-gap", sequence: 1 })
     )
     await backend.close()
   })
@@ -272,14 +256,14 @@ describe("openSqliteBackend", () => {
     expect(loaded.dbs.CogniaDB.rows.sessions["s:ok"]).toBeUndefined()
   })
 
-  it("rolls back a failed replaceAll and leaves the previous content intact", async () => {
+  it("rolls back a failed compaction and leaves the previous content intact", async () => {
     const backend = openSqliteBackend({ root })
     await backend.compact(state(1))
     const circular: Record<string, unknown> = {}
     circular.self = circular
     const broken = state(2)
     broken.dbs.CogniaDB.rows.sessions = { "s:bad": circular }
-    expect(() => asSqliteBackend(backend)!.replaceAll(broken)).toThrow()
+    await expect(backend.compact(broken)).rejects.toThrow()
     const loaded = await backend.load()
     await backend.close()
     expect(loaded.sequence).toBe(1)
@@ -302,7 +286,7 @@ describe("openSqliteBackend", () => {
     expect(loaded.sequence).toBe(3)
   })
 
-  it("collects old orphan binaries without requiring a journal generation", async () => {
+  it("collects old orphan binaries and keeps the ones a row references", async () => {
     const backend = openSqliteBackend({ root })
     try {
       await backend.compact(state(0))
@@ -319,24 +303,6 @@ describe("openSqliteBackend", () => {
       backend.commitSync(commit(2, "s:binary", null))
       backend.maintain!()
       expect(fs.readdirSync(binaryDir(root))).toEqual([])
-    } finally {
-      await backend.close()
-    }
-  })
-
-  it("keeps binaries still referenced by rollback checkpoints", async () => {
-    const value = encodeDurableValue(new Uint8Array(65536).fill(3), root)
-    const snapshot = state(1)
-    snapshot.dbs.CogniaDB.rows.sessions = { "s:binary": value }
-    writeCheckpoint(root, "gen-0001", snapshot)
-    const file = path.join(binaryDir(root), fs.readdirSync(binaryDir(root))[0])
-    const old = new Date(Date.now() - 2 * BINARY_PRUNE_GRACE_MS)
-    fs.utimesSync(file, old, old)
-    const backend = openSqliteBackend({ root })
-    try {
-      await backend.compact(state(1))
-      backend.maintain!()
-      expect(fs.existsSync(file)).toBe(true)
     } finally {
       await backend.close()
     }
@@ -367,10 +333,85 @@ describe("openSqliteBackend", () => {
     }
   })
 
+  it("skips binary collection while no side file is past the grace period", async () => {
+    const backend = openSqliteBackend({ root })
+    try {
+      await backend.compact(state(0))
+      encodeDurableValue(new Uint8Array(65536).fill(4), root)
+      expect(backend.maintain().prunedBinaries).toEqual([])
+      expect(fs.readdirSync(binaryDir(root))).toHaveLength(1)
+    } finally {
+      await backend.close()
+    }
+  })
+
   it("closes idempotently", async () => {
     const backend = openSqliteBackend({ root })
     await backend.close()
     await expect(backend.close()).resolves.toBeUndefined()
+  })
+})
+
+describe("collectSqliteBinaryReferences", () => {
+  let root: string
+  beforeEach(() => {
+    root = tempRoot()
+  })
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  it("references nothing when no store exists", () => {
+    expect([...collectSqliteBinaryReferences(root, new Set())]).toEqual([])
+  })
+
+  it("reads the side files every stored row references", async () => {
+    const backend = openSqliteBackend({ root })
+    await backend.compact(state(0))
+    backend.commitSync(commit(1, "s:bin", encodeDurableValue(new Uint8Array(65536).fill(5), root)))
+    await backend.close()
+    const files = fs.readdirSync(binaryDir(root)).filter((name) => /^[0-9a-f]{64}$/.test(name))
+    expect(files).toHaveLength(1)
+    expect([...collectSqliteBinaryReferences(root, new Set())]).toEqual(files)
+  })
+})
+
+describe("compactSqlite", () => {
+  let root: string
+  beforeEach(() => {
+    root = tempRoot()
+  })
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  it("refuses a root without a store", () => {
+    expect(() => compactSqlite(root)).toThrow(
+      expect.objectContaining({ code: "sqlite-integrity-failure" })
+    )
+  })
+
+  it("vacuums a stopped store and keeps its content", async () => {
+    const backend = openSqliteBackend({ root })
+    await backend.compact(state(0))
+    backend.commitSync(commit(1, "s:big", { text: "x".repeat(256 * 1024) }))
+    backend.commitSync(commit(2, "s:big", null))
+    await backend.close()
+    const result = compactSqlite(root)
+    expect(result.bytesAfter).toBeLessThan(result.bytesBefore)
+    const reopened = openSqliteBackend({ root })
+    try {
+      const loaded = await reopened.load()
+      expect(loaded.sequence).toBe(2)
+      expect(loaded.dbs.CogniaDB.rows.sessions).toEqual(state(0).dbs.CogniaDB.rows.sessions)
+    } finally {
+      await reopened.close()
+    }
+  })
+
+  it("refuses while a writer holds the store", async () => {
+    const backend = openSqliteBackend({ root })
+    try {
+      expect(() => compactSqlite(root)).toThrow(expect.objectContaining({ code: "writer-busy" }))
+    } finally {
+      await backend.close()
+    }
   })
 })
 
@@ -424,6 +465,21 @@ describe("sqlite corruption", () => {
     await expect(backend.load()).rejects.toThrow(/unreadable table list/)
   })
 
+  it("faults when a row's table is not listed in its schema row", async () => {
+    const backend = openSqliteBackend({
+      root,
+      open: () =>
+        fakeDb({
+          schemas: [{ database: "CogniaDB", version: 141, tables: '["sessions"]' }],
+          rows: [{ database: "CogniaDB", table_name: "unlisted", row_key: "s:a", value: "1" }],
+        }),
+    })
+    await expect(backend.load()).rejects.toThrow(
+      expect.objectContaining({ code: "sqlite-integrity-failure" })
+    )
+    await expect(backend.load()).rejects.toThrow(/does not list/)
+  })
+
   it("ignores rows addressed at a database with no schema row", async () => {
     const backend = openSqliteBackend({
       root,
@@ -473,20 +529,6 @@ describe("assertIntegrity", () => {
       close: () => {},
     }
     expect(() => assertIntegrity(db)).toThrow(/no result/)
-  })
-})
-
-describe("asSqliteBackend", () => {
-  it("narrows only the sqlite backend", async () => {
-    const root = tempRoot()
-    try {
-      const backend = openSqliteBackend({ root })
-      expect(asSqliteBackend(backend)).not.toBeNull()
-      await backend.close()
-      expect(asSqliteBackend({ ...backend, id: "journal-v4" })).toBeNull()
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
   })
 })
 

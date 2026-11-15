@@ -1,7 +1,7 @@
 /**
  * `cognia-agent serve` end-to-end against an in-process scripted server
  * (ADR-0059 T-B3): boot → hello/hello_ack → runtimes up → a sync-pull frame
- * answered from the brain's Dexie → graceful shutdown with a final flush.
+ * answered from the brain's Dexie → graceful shutdown that closes the SQLite store.
  *
  * @jest-environment node
  */
@@ -14,7 +14,8 @@ import { parseArgv } from "../cli/args"
 import { __resetCliDbForTesting } from "../db/bootstrap"
 import type { WebSocketLike } from "./bridge-client"
 import { HEADLESS_CATALOG_HASH, HEADLESS_CONTRACT_VERSION } from "./headless-contract-identity"
-import { durabilityRoot, openBackend } from "./persistence/backend"
+import { durabilityRoot } from "./persistence/backend"
+import { openSqliteBackend, sqliteFile } from "./persistence/sqlite"
 import { BRIDGE_PROTOCOL_VERSION } from "./protocol"
 import { WorkerRpcPool, type WorkerRpcPoolOptions } from "@/lib/squads/workers/worker-rpc-pool"
 import { getRemoteWorkerRuntime } from "@/lib/squads/workers/remote-worker-runtime"
@@ -497,7 +498,7 @@ describe("serveCommand", () => {
     }
   }, 30_000)
 
-  it("boots, answers a sync-pull from Dexie, and flushes on shutdown", async () => {
+  it("boots, answers a sync-pull from Dexie, and persists through shutdown", async () => {
     const detach = jest.spyOn(WorkerRpcPool.prototype, "detach")
     mockBootOrder.length = 0
     __resetCliDbForTesting()
@@ -672,11 +673,9 @@ describe("serveCommand", () => {
     // The brain persisted the seeded row in its default store (ADR-0224).
     expect(joined).toContain("serve: durability sqlite-v5")
     const root = durabilityRoot(home, "local_acct_a")
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(root, "backend-manifest.json"), "utf8")
-    ) as { activeBackend: string }
-    expect(manifest.activeBackend).toBe("sqlite-v5")
-    const store = openBackend("sqlite-v5", root)
+    expect(fs.existsSync(sqliteFile(root))).toBe(true)
+    expect(fs.existsSync(path.join(root, "backend-manifest.json"))).toBe(false)
+    const store = openSqliteBackend({ root })
     try {
       const persisted = await store.load()
       const [primaryDatabaseName] = Object.keys(persisted.dbs)

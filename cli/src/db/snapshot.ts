@@ -750,7 +750,7 @@ function collectBinaries(
 }
 
 /**
- * Shared by the single-file snapshot and the per-table store (`snapshot-v3`).
+ * Shared by the single-file snapshot and the per-table store.
  *
  * Value codec 1, the same envelope the durability journal and SQLite rows use:
  * {@link encodeSnapshotValueSync} after the binaries are prepared

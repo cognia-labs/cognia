@@ -212,6 +212,10 @@ Public navigation and deep links consume the shared `SurfaceContract` registry. 
 
 ### 2026-08-02 — Durability ladder v4/v5 landed
 
+> **Superseded 2026-11-15** by "One durability store" below: only `sqlite-v5`
+> remains. The ladder, the manifest and the migration tooling described here
+> were removed.
+
 The risk table's "ladder" is now built. `HeadlessDurabilityBackend`
 (`cli/src/serve/persistence/`) is the persistence port; three rungs implement
 it and the active one is chosen by an atomic per-account manifest
@@ -254,6 +258,36 @@ it and the active one is chosen by an atomic per-account manifest
 The "cloud installs are bounded by brain memory" consequence below still holds:
 these rungs fix durability, not the in-memory dataset ceiling.
 
+### 2026-11-15 — One durability store
+
+The brain persists through `sqlite-v5` only. `snapshot-v3` (debounced, loses
+its last window on a crash) and `journal-v4` (checkpoint generations plus a
+journal) were rungs on the way to it, and everything that existed to move an
+account between rungs went with them: the per-account `backend-manifest.json`,
+the `COGNIA_DURABILITY_BACKEND` gate, the dual-write window and its shadow
+catch-up, the parity gate, `serve --flush-debounce`, and the
+`durability migrate|recover|rollback|finalize` verbs.
+
+- **Crash safety** is SQLite's: WAL with `synchronous=FULL`, one `COMMIT` per
+  Dexie transaction from the same `complete` listener, so a transaction that
+  resolved to the caller is on disk.
+- **Corruption** surfaces as a typed fault: `integrity_check` on open, and
+  `durability verify` (read-only, on a disposable copy) materialises every row
+  and decodes every value, including its binary side file. A row of a table its
+  schema row does not list is now a fault rather than silently re-listed.
+- **Recovery is a Host backup restore.** The Host backup copies each account's
+  store with SQLite's online backup API under the `backup` lease (which fences
+  binary GC), then runs `durability verify --root` over the staged copy before
+  it seals the archive. Point-in-time rollback within one store was only ever
+  possible across rungs; a default `sqlite-v5` account never had a generation
+  to roll back to.
+- `durability compact` (offline `VACUUM`) remains for reclaiming space.
+
+An account root written by an older build (journal generations, a
+`backend-manifest.json`, a `db-<account>.json` snapshot store) is not read:
+serve opens `sqlite/store.sqlite` and nothing else, and the Host backup only
+recognises that store.
+
 ### 2026-08-26 — Account-scoped Langfuse trace egress
 
 Cloud Langfuse tracing reuses the existing `cognia-server` + brain Host rather
@@ -274,7 +308,7 @@ logs or metrics.
 
 | Risk | Mitigation |
 | --- | --- |
-| Dexie durability in Node (fake-indexeddb is in-memory; snapshots lose the last seconds on crash; whole-DB serialize is O(n)) | **Resolved 2026-08-02** — ladder built: `snapshot-v3` debounced store → `journal-v4` checksummed transaction journal (`fsync` before the transaction resolves) → `sqlite-v5` WAL row store, all behind `HeadlessDurabilityBackend` with a parity-gated migration path. Monitor brain RSS; the in-memory dataset remains this path's ceiling. |
+| Dexie durability in Node (fake-indexeddb is in-memory; snapshots lose the last seconds on crash; whole-DB serialize is O(n)) | **Resolved** — `sqlite-v5` WAL row store behind `HeadlessDurabilityBackend`, one `COMMIT` per Dexie transaction before it resolves (2026-08-02; the earlier rungs were removed 2026-11-15). Monitor brain RSS; the in-memory dataset remains this path's ceiling. |
 | Residual `window`/DOM assumptions in `lib/` runtimes the CLI never exercised (connectors, schedulers) | W2 lands a headless smoke per extracted runtime; failures surface at extraction time, not in production |
 | bwrap unavailable inside stock Docker (`CLONE_NEWUSER` blocked) | ship the tuned seccomp profile in compose; honest degradation via `UninstalledSandboxBackend` |
 | RCE surface of spawn-class RPC | preset allowlist + dedicated scope + audit; authenticated Companion/gateway front doors |

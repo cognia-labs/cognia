@@ -10,7 +10,7 @@
  * listener**, dispatched before Dexie's own `oncomplete` resolves the
  * transaction promise — because this middleware registers its listener when the
  * DBCore transaction is created, strictly before Dexie assigns `oncomplete`.
- * So the journal append runs there, synchronously (`writeSync` + `fsyncSync`),
+ * So the durable write runs there, synchronously (a SQLite `COMMIT`),
  * and a transaction that resolved to the caller is always already on disk.
  *
  * Mutations are recorded **synchronously** whenever the key is knowable up
@@ -78,7 +78,7 @@ export interface CaptureOptions {
   /**
    * Durably record one transaction. Runs on the `complete` listener and MUST
    * be synchronous; throwing here surfaces as an unhandled event-listener
-   * error, which is the correct outcome — a brain that cannot journal must not
+   * error, which is the correct outcome — a brain that cannot persist must not
    * keep serving as if it could.
    */
   onCommit: (mutations: DurabilityMutation[]) => void
@@ -131,7 +131,7 @@ export interface CaptureHandle {
   /**
    * Run `fn` with capture suspended.
    *
-   * Restore replays persisted rows back into Dexie; journaling that replay
+   * Restore replays persisted rows back into Dexie; recording that replay
    * would double every row and desynchronise the sequence.
    */
   suppress<T>(fn: () => Promise<T>): Promise<T>
@@ -152,7 +152,7 @@ export function installTransactionCapture(
   const pending = new WeakMap<object, DurabilityMutation[]>()
   /** Transactions whose outcome listeners are attached. */
   const armed = new WeakSet<object>()
-  /** Transactions opened through DBCore as read-only: never journaled. */
+  /** Transactions opened through DBCore as read-only: never recorded. */
   const readOnly = new WeakSet<object>()
   /** Transactions currently held open by a drain gate. */
   const holds = new WeakMap<object, Promise<void>>()
@@ -163,7 +163,7 @@ export function installTransactionCapture(
    * through DBCore are armed as they are created; the versionchange
    * transaction of a schema upgrade is created by Dexie itself, out of this
    * middleware's sight, so it is armed by the first write recorded on it. Its
-   * `complete` then journals what the upgrade wrote (a live schema change, such
+   * `complete` then records what the upgrade wrote (a live schema change, such
    * as a plugin adding its tables, can run upgrade functions that write).
    */
   function arm(trans: CaptureTransactionLike): void {
@@ -308,7 +308,7 @@ export function installTransactionCapture(
     // requests DBCore reports as failed. DBCore never rejects for a failed
     // request: it keeps the error from aborting the transaction and reports
     // it in `failures`, so a refused `add` the caller catches leaves the
-    // transaction to commit without that row; recording it up front journaled
+    // transaction to commit without that row; recording it up front persisted
     // a row IndexedDB never kept. Generated keys are asked for, and filled in
     // from `results`.
     const writes: DurabilityMutation[] = values.map((value, index) => ({
@@ -387,7 +387,7 @@ const ISSUE_ERRORS: ReadonlySet<string> = new Set(["DataCloneError", "DataError"
 /**
  * A mutate rejected by one of {@link ISSUE_ERRORS} may have issued part of its
  * requests; a caller that catches inside the transaction would commit those
- * while the journal, which records from the success path, keeps none. Abort
+ * while the store, which records from the success path, keeps none. Abort
  * the transaction then, so IndexedDB keeps none either. Any other rejection
  * (a lower middleware refusing before it issues anything, such as a locked
  * cipher) leaves the transaction alone: nothing was written on either side,

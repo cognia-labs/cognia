@@ -15,15 +15,18 @@ describe("writer leases", () => {
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
-  it.each(["journal", "backup"] as const)("excludes a second %s owner until release", (store) => {
-    const release = acquireWriterLease(root, store)
-    expect(hasLiveWriter(root, store)).toBe(true)
-    expect(() => acquireWriterLease(root, store)).toThrow(/live writer/)
-    release()
-    release()
-    expect(hasLiveWriter(root, store)).toBe(false)
-    acquireWriterLease(root, store)()
-  })
+  it.each(["sqlite", "binary", "backup"] as const)(
+    "excludes a second %s owner until release",
+    (store) => {
+      const release = acquireWriterLease(root, store)
+      expect(hasLiveWriter(root, store)).toBe(true)
+      expect(() => acquireWriterLease(root, store)).toThrow(/live writer/)
+      release()
+      release()
+      expect(hasLiveWriter(root, store)).toBe(false)
+      acquireWriterLease(root, store)()
+    }
+  )
 
   it("keeps an operator excluded until every local SQLite connection closes", () => {
     const first = acquireWriterLease(root, "sqlite", { shared: true })
@@ -57,7 +60,7 @@ describe("writer leases", () => {
   })
 
   it("cannot steal a replacement owner at the old stale compare/unlink boundary", () => {
-    const legacy = path.join(root, ".journal-writer.lock")
+    const legacy = path.join(root, ".backup-writer.lock")
     fs.writeFileSync(legacy, JSON.stringify({ pid: process.pid }))
     const dead = jest.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("dead fixture owner"), { code: "ESRCH" })
@@ -69,13 +72,13 @@ describe("writer leases", () => {
     const race = jest.spyOn(fs, "unlinkSync").mockImplementation((file) => {
       if (String(file) === legacy && !reentered) {
         reentered = true
-        replacement = acquireWriterLease(root, "journal")
+        replacement = acquireWriterLease(root, "backup")
       }
       unlink(file)
     })
     try {
-      release = acquireWriterLease(root, "journal")
-      expect(() => acquireWriterLease(root, "journal")).toThrow(/live writer/)
+      release = acquireWriterLease(root, "backup")
+      expect(() => acquireWriterLease(root, "backup")).toThrow(/live writer/)
       expect(replacement).toBeUndefined()
     } finally {
       release?.()
@@ -88,27 +91,27 @@ describe("writer leases", () => {
   it.each(["", "{", JSON.stringify({ pid: process.pid })])(
     "ignores crash-left PID metadata %j",
     (payload) => {
-      fs.writeFileSync(path.join(root, ".journal-writer.lock"), payload)
-      acquireWriterLease(root, "journal")()
+      fs.writeFileSync(path.join(root, ".sqlite-writer.lock"), payload)
+      acquireWriterLease(root, "sqlite")()
     }
   )
 
   it("releases a real child process's lock after SIGKILL", async () => {
-    const child = startOwner(root, "journal")
+    const child = startOwner(root, "sqlite")
     try {
       expect(await nextLine(child)).toBe("ready")
       child.stdin!.write("go\n")
       expect(await nextLine(child)).toBe("held")
-      expect(() => acquireWriterLease(root, "journal")).toThrow(/live writer/)
+      expect(() => acquireWriterLease(root, "sqlite")).toThrow(/live writer/)
       await killOwner(child)
-      acquireWriterLease(root, "journal")()
+      acquireWriterLease(root, "sqlite")()
     } finally {
       await killOwner(child)
     }
   })
 
   it("allows only one of two concurrent child acquirers", async () => {
-    const children = [startOwner(root, "journal"), startOwner(root, "journal")]
+    const children = [startOwner(root, "binary"), startOwner(root, "binary")]
     try {
       expect(await Promise.all(children.map(nextLine))).toEqual(["ready", "ready"])
       const outcomes = children.map(nextLine)
@@ -119,32 +122,23 @@ describe("writer leases", () => {
     }
   })
 
-  it.each(["journal", "sqlite"] as const)(
-    "a live child %s lease blocks destructive tooling",
-    async (store) => {
-      const { writeCheckpoint } = await import("./checkpoint")
-      const { finalizeDurability } = await import("./operations")
-      const { openSqliteBackend, compactSqlite } = await import("./sqlite")
-      if (store === "journal") writeCheckpoint(root, "gen-0001", { sequence: 0, dbs: {} })
-      else await openSqliteBackend({ root }).close()
-      const child = startOwner(root, store)
-      try {
-        expect(await nextLine(child)).toBe("ready")
-        child.stdin!.write("go\n")
-        expect(await nextLine(child)).toBe("held")
-        expect(() =>
-          store === "journal"
-            ? finalizeDurability(root, "gen-0001", { confirm: true })
-            : compactSqlite(root)
-        ).toThrow(/live writer/)
-      } finally {
-        await killOwner(child)
-      }
+  it("a live child sqlite lease blocks offline compaction", async () => {
+    const { openSqliteBackend, compactSqlite } = await import("./sqlite")
+    await openSqliteBackend({ root }).close()
+    const child = startOwner(root, "sqlite")
+    try {
+      expect(await nextLine(child)).toBe("ready")
+      child.stdin!.write("go\n")
+      expect(await nextLine(child)).toBe("held")
+      expect(() => compactSqlite(root)).toThrow(/live writer/)
+    } finally {
+      await killOwner(child)
     }
-  )
+    expect(compactSqlite(root).bytesAfter).toBeGreaterThan(0)
+  })
 })
 
-function startOwner(root: string, store: "journal" | "sqlite"): ChildProcess {
+function startOwner(root: string, store: "sqlite" | "binary" | "backup"): ChildProcess {
   const moduleUrl = pathToFileURL(path.join(__dirname, "writer-lock.ts")).href
   return spawn(
     process.execPath,

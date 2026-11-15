@@ -22,8 +22,6 @@ import {
   collectBinaryReferences,
   pruneBinaries,
 } from "./binary-store"
-import { collectJournalBinaryReferences } from "./journal"
-import { cleanupCheckpointStaging } from "./checkpoint"
 import { acquireWriterLease } from "./writer-lock"
 import { canonicalJson } from "./canonical"
 import { VALUE_CODEC } from "./value-codec"
@@ -208,10 +206,9 @@ export function openSqliteBackend(
   }
 
   /**
-   * List every table a commit touches, as the journal's `applyCommits` does:
-   * a table added after the schema row was written (a live upgrade, a plugin
-   * table) is listed from its first commit, even one that only deletes, so the
-   * two backends agree on the table set and a restart re-declares it.
+   * List every table a commit touches: a table added after the schema row was
+   * written (a live upgrade, a plugin table) is listed from its first commit,
+   * even one that only deletes, so a restart re-declares it.
    */
   function listTouchedTables(commit: DurabilityCommit): void {
     const touched = new Map<string, Set<string>>()
@@ -241,14 +238,9 @@ export function openSqliteBackend(
 
   function commitSync(commit: DurabilityCommit): void {
     if (closed) throw new DurabilityFault("sqlite-integrity-failure", "sqlite backend is closed")
-    if (commit.sequence <= sequence) {
-      // Idempotent redelivery during the dual-write window: the journal is the
-      // ordering authority and may replay a sequence SQLite already holds.
-      return
-    }
     if (commit.sequence !== sequence + 1) {
       throw new DurabilityFault(
-        "journal-sequence-gap",
+        "sequence-gap",
         `sqlite expected sequence ${sequence + 1} but was handed ${commit.sequence}`,
         sequence + 1
       )
@@ -280,9 +272,8 @@ export function openSqliteBackend(
   /**
    * Replace SQLite's whole content with `state`, inside one transaction.
    *
-   * Used by `durability migrate` to seed SQLite from the journal, and by
-   * `compact` — SQLite has no journal to fold, so "compaction" is a verified
-   * rewrite that also re-pins the schema rows.
+   * Used by `compact`: a verified rewrite that also re-pins the schema rows,
+   * and seeds an empty store on first boot.
    */
   function replaceAll(state: DurabilityState): void {
     db.exec("BEGIN IMMEDIATE")
@@ -322,10 +313,9 @@ export function openSqliteBackend(
       replaceAll(state)
       assertIntegrity(db)
       db.exec("PRAGMA wal_checkpoint(TRUNCATE);")
-      return { generation: "sqlite", previousGeneration: null, sequence }
+      return { sequence }
     },
     maintain() {
-      cleanupCheckpointStaging(opts.root)
       const result = checkpointWal(db)
       if (result.busy)
         console.warn("durability: SQLite WAL checkpoint busy; a reader retains WAL frames")
@@ -349,8 +339,7 @@ export function openSqliteBackend(
         throw error
       }
       try {
-        const references = collectJournalBinaryReferences(opts.root, new Set<string>())
-        collectSqliteBinaryReferences(opts.root, references)
+        const references = collectSqliteBinaryReferences(opts.root, new Set<string>())
         return { ...result, prunedBinaries: pruneBinaries(opts.root, references, now) }
       } finally {
         releaseBinaries()
@@ -370,19 +359,10 @@ export function openSqliteBackend(
   return backend
 }
 
-/** Narrowing helper: `replaceAll` only exists on the SQLite backend. */
-export function asSqliteBackend(
-  backend: HeadlessDurabilityBackend
-): (HeadlessDurabilityBackend & { replaceAll(state: DurabilityState): void }) | null {
-  return backend.id === "sqlite-v5"
-    ? (backend as HeadlessDurabilityBackend & { replaceAll(state: DurabilityState): void })
-    : null
-}
-
 /**
  * Side-file references every SQLite row holds, read straight from the file so
- * `durability finalize` (synchronous) can keep them. A store that does not
- * exist references nothing.
+ * binary garbage collection keeps them. A store that does not exist references
+ * nothing.
  */
 export function collectSqliteBinaryReferences(root: string, into: Set<string>): Set<string> {
   const file = sqliteFile(root)
@@ -430,11 +410,13 @@ function materializeSqlite(db: SqliteDatabaseLike, sequence: number): Durability
     if (!entry) continue
     const tableName = String(raw.table_name)
     const key = String(raw.row_key)
-    // A store written before `listTouchedTables` may hold rows of a table
-    // its schema row never listed. List it, as the journal does, so a
-    // restart re-declares it and the checkpoint writer keeps its rows.
-    if (!entry.rows[tableName] && !entry.schema.tables.includes(tableName)) {
-      entry.schema.tables = [...entry.schema.tables, tableName].sort()
+    // Every commit lists the tables it touches (`listTouchedTables`), so a
+    // row of a table its schema row does not list means a damaged store.
+    if (!entry.schema.tables.includes(tableName)) {
+      throw new DurabilityFault(
+        "sqlite-integrity-failure",
+        `sqlite holds rows for ${String(raw.database)}.${tableName}, which its schema row does not list`
+      )
     }
     const table = (entry.rows[tableName] ??= {})
     let value: unknown

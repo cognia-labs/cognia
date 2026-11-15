@@ -467,7 +467,7 @@ export class BinaryPrefetcher {
       const outcome = Atomics.wait(job.header, 0, PENDING, this.timeoutMs)
       if (outcome === "timed-out") {
         throw new Error(
-          `writing a ${job.byteLength}-byte binary for the durability journal timed out`
+          `writing a ${job.byteLength}-byte binary for the durability store timed out`
         )
       }
     }
@@ -475,7 +475,7 @@ export class BinaryPrefetcher {
       const message = job.failure ?? receiveMessageOnPort(job.port)?.message
       job.port.close()
       this.jobs.get(scope)?.delete(value)
-      throw new Error(`writing a binary for the durability journal failed: ${String(message)}`)
+      throw new Error(`writing a binary for the durability store failed: ${String(message)}`)
     }
     if (Atomics.load(job.header, 1) === 1) {
       return { bytes: new Uint8Array(job.shared, HEADER_BYTES, job.byteLength).slice() }

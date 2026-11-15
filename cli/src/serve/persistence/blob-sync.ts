@@ -63,11 +63,11 @@ export function readBlobBytesSync(blob: Blob, timeoutMs = BLOB_READ_TIMEOUT_MS):
     blobWorker().postMessage({ blob, shared, reply: port2 }, [port2 as MessagePort])
     const outcome = Atomics.wait(state, 0, 0, timeoutMs)
     if (outcome === "timed-out") {
-      throw new Error(`reading a ${blob.size}-byte Blob for the durability journal timed out`)
+      throw new Error(`reading a ${blob.size}-byte Blob for the durability store timed out`)
     }
     if (Atomics.load(state, 0) === 2) {
       const message = receiveMessageOnPort(port1)?.message
-      throw new Error(`reading a Blob for the durability journal failed: ${String(message)}`)
+      throw new Error(`reading a Blob for the durability store failed: ${String(message)}`)
     }
     // Copy out of the shared buffer: callers keep the bytes, not the SAB.
     return new Uint8Array(shared, 8).slice()

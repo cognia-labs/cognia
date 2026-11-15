@@ -48,9 +48,8 @@ export const BOOLEAN_FLAGS = new Set([
   // spelling of the same switch; both are accepted so muscle memory works.
   "bypass",
   "dangerously-skip-permissions",
-  // `durability recover --activate` / `durability finalize --confirm` — both
-  // gate an irreversible step and must never swallow the next token.
-  "activate",
+  // `sdk delete --confirm` gates an irreversible step and must never swallow
+  // the next token.
   "confirm",
   // `x --verbose` — log proxy requests for debugging.
   "verbose",

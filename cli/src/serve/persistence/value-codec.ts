@@ -1,6 +1,5 @@
 /**
- * How row values cross the durability boundary (journal lines, checkpoint row
- * files, SQLite rows).
+ * How row values cross the durability boundary (SQLite rows).
  *
  * The backends store JSON. Dexie rows are structured clones, so plain JSON
  * loses data: a `Blob` serialises as `{}`, a typed array as an index-keyed
@@ -16,7 +15,7 @@ import { INLINE_BINARY_LIMIT, readBinarySync, writeBinarySync } from "./binary-s
 import type { BinaryPrefetcher } from "./binary-prefetch"
 import { readBlobBytesSync } from "./blob-sync"
 
-/** Wire format: written into journal lines, checkpoint manifests and SQLite rows. */
+/** Wire format: written into every SQLite row (`value_codec`). */
 export const VALUE_CODEC = 1 as const
 
 /**

@@ -1,6 +1,11 @@
 /**
- * Durability v1 (ADR-0059 T-B3): the exit hooks around the snapshot db. The
- * write-flush middleware itself is tested in `../db/write-flush.test.ts`.
+ * Brain durability (ADR-0059): `startDurability` arms the SQLite durability
+ * store for one account, plus its exit hooks and RSS gauge.
+ *
+ * Every boot must meet an unopened `CogniaDB`: the store installs its capture
+ * middleware before Dexie opens and refuses an already-open database, and
+ * `lib/db/schema.ts` caches ONE singleton per module registry. `resetDb()`
+ * deletes and forgets it around every test.
  *
  * @jest-environment node
  */
@@ -11,16 +16,80 @@ import path from "node:path"
 
 import { DEFAULT_EXECUTION_CONFIG, DEFAULT_NOTIFICATION_CONFIG } from "@/types/scheduler"
 
-import { resolveDurabilityBackend, startDurability } from "./durability"
+import { startDurability } from "./durability"
 import { durabilityRoot } from "./persistence/backend"
-import { writeManifest } from "./persistence/manifest"
+import { encodeKey } from "./persistence/canonical"
+import { openSqliteBackend, sqliteFile } from "./persistence/sqlite"
+import { hasLiveWriter } from "./persistence/writer-lock"
 import { __resetCliDbForTesting } from "../db/bootstrap"
 
 jest.setTimeout(30_000)
 
+/** Forget the in-memory database, so the next boot only sees what durability restores. */
+async function resetDb(): Promise<void> {
+  const { __resetDbForTesting } = await import("@/lib/db/schema")
+  await getDb()
+    .delete()
+    .catch(() => {})
+  __resetDbForTesting()
+  __resetCliDbForTesting()
+}
+
+function session(id: string) {
+  return { id, title: id, createdAt: Date.now(), updatedAt: Date.now() } as never
+}
+
+type Proc = Pick<NodeJS.Process, "on" | "off" | "memoryUsage">
+
+function fakeProc(rss: () => number, listeners = new Map<string, () => void>()): Proc {
+  const proc = {
+    on: (event: string, fn: () => void) => {
+      listeners.set(event, fn)
+      return proc
+    },
+    off: (event: string) => {
+      listeners.delete(event)
+      return proc
+    },
+    memoryUsage: () => ({ rss: rss() }) as NodeJS.MemoryUsage,
+  }
+  return proc as unknown as Proc
+}
+
+beforeAll(async () => {
+  const { installFakeIndexedDb } = await import("@/lib/headless/node-indexeddb")
+  await installFakeIndexedDb()
+})
+
+beforeEach(resetDb)
+afterEach(resetDb)
+
 describe("startDurability", () => {
-  it("retains device-local kept-copy bindings across a CLI snapshot restart", async () => {
-    __resetCliDbForTesting()
+  it("boots a fresh account on sqlite and persists the first commit", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-sqlite-default-"))
+    let second: Awaited<ReturnType<typeof startDurability>> | undefined
+    try {
+      const first = await startDurability({ home, accountId: "acct_fresh" })
+      expect(first.backend).toBe("sqlite-v5")
+      // Before seeding an empty store, this first commit referenced a database
+      // with no schema row and failed its foreign key.
+      await getDb().sessions.put(session("fresh-session"))
+      await first.dispose()
+      expect(fs.existsSync(sqliteFile(durabilityRoot(home, "acct_fresh")))).toBe(true)
+
+      await resetDb()
+      second = await startDurability({ home, accountId: "acct_fresh" })
+      expect(second.backend).toBe("sqlite-v5")
+      expect(await getDb().sessions.get("fresh-session")).toEqual(
+        expect.objectContaining({ id: "fresh-session" })
+      )
+    } finally {
+      await second?.dispose()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it("retains device-local kept-copy bindings across a restart", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-kept-copy-"))
     const row = {
       captureId: "capture",
@@ -32,79 +101,57 @@ describe("startDurability", () => {
     }
     let durability: Awaited<ReturnType<typeof startDurability>> | undefined
     try {
-      durability = await startDurability({ home, accountId: "acct_kept", backend: "snapshot-v3" })
+      durability = await startDurability({ home, accountId: "acct_kept" })
       await getDb().remoteDocumentConnections.put(row as never)
       await durability.dispose()
-      await getDb().remoteDocumentConnections.clear()
-      __resetCliDbForTesting()
-      durability = await startDurability({ home, accountId: "acct_kept", backend: "snapshot-v3" })
+      await resetDb()
+      durability = await startDurability({ home, accountId: "acct_kept" })
       expect(await getDb().remoteDocumentConnections.get(row.captureId)).toEqual(row)
     } finally {
       await durability?.dispose()
-      __resetCliDbForTesting()
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
-  it("persists a snapshot on dispose and reports the rss gauge", async () => {
-    __resetCliDbForTesting()
+
+  it("arms the signal hooks, reports the rss gauge and detaches on dispose", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-serve-durability-"))
     const listeners = new Map<string, () => void>()
-    const proc = {
-      on: (event: string, fn: () => void) => {
-        listeners.set(event, fn)
-        return proc
-      },
-      off: (event: string) => {
-        listeners.delete(event)
-        return proc
-      },
-      memoryUsage: () => ({ rss: 42_000_000 }) as NodeJS.MemoryUsage,
-    } as unknown as Pick<NodeJS.Process, "on" | "off" | "memoryUsage">
+    try {
+      const durability = await startDurability({
+        home,
+        accountId: "acct_test_1",
+        proc: fakeProc(() => 42_000_000, listeners),
+      })
+      expect([...listeners.keys()].sort()).toEqual(["SIGINT", "SIGTERM"])
 
-    const durability = await startDurability({
-      home,
-      accountId: "acct_test_1",
-      proc,
-      backend: "snapshot-v3",
-    })
-    expect(listeners.has("SIGINT")).toBe(true)
-    expect(listeners.has("SIGTERM")).toBe(true)
+      const before = durability.rss()
+      expect(before.rssBytes).toBe(42_000_000)
+      expect(before.lastFlushAt).toBe(0)
 
-    const before = durability.rss()
-    expect(before.rssBytes).toBe(42_000_000)
-    expect(before.lastFlushAt).toBe(0)
+      // Every commit is already durable: the write hook is a no-op.
+      expect(() => durability.notifyDbWrite()).not.toThrow()
+      await getDb().sessions.put(session("gauge-session"))
+      expect(durability.rss().lastFlushAt).toBe(1)
 
-    durability.notifyDbWrite()
-    await durability.dispose()
-
-    const manifestPath = path.join(home, "db-acct_test_1.json.tables", "manifest.json")
-    expect(fs.existsSync(manifestPath)).toBe(true)
-    expect(durability.rss().lastFlushAt).toBeGreaterThan(0)
-    // Hooks detach on dispose.
-    expect(listeners.size).toBe(0)
-
-    // Idempotent.
-    await durability.dispose()
-    __resetCliDbForTesting()
+      await durability.dispose()
+      expect(listeners.size).toBe(0)
+      expect(hasLiveWriter(durabilityRoot(home, "acct_test_1"), "sqlite")).toBe(false)
+      // Idempotent.
+      await durability.dispose()
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
   })
 
   it("alerts once per RSS ceiling crossing and re-arms after recovery", async () => {
-    __resetCliDbForTesting()
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-serve-rss-"))
     let rssBytes = 120
     const onRssWarning = jest.fn()
-    const proc = {
-      on: () => proc,
-      off: () => proc,
-      memoryUsage: () => ({ rss: rssBytes }) as NodeJS.MemoryUsage,
-    } as unknown as Pick<NodeJS.Process, "on" | "off" | "memoryUsage">
-
     try {
       const durability = await startDurability({
         home,
         accountId: "acct_rss",
-        backend: "snapshot-v3",
-        proc,
+        proc: fakeProc(() => rssBytes),
         rssWarningBytes: 100,
         onRssWarning,
       })
@@ -120,61 +167,42 @@ describe("startDurability", () => {
       expect(onRssWarning).toHaveBeenCalledTimes(2)
       await durability.dispose()
     } finally {
-      __resetCliDbForTesting()
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
 
-  // A brain is stopped with a signal far more often than it is disposed cleanly,
-  // so the SIGTERM/beforeExit rungs must actually flush — the whole persistence
-  // ladder is worthless if the exit path skips it.
-  it("flushes on SIGTERM and on beforeExit", async () => {
-    __resetCliDbForTesting()
+  // A brain is stopped with a signal far more often than it is disposed
+  // cleanly, so SIGTERM must release the store with every commit on disk.
+  it("closes the store on SIGTERM and keeps every commit", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-serve-signal-"))
+    const root = durabilityRoot(home, "acct_signal")
     const listeners = new Map<string, () => void>()
-    const proc = {
-      on: (event: string, fn: () => void) => {
-        listeners.set(event, fn)
-        return proc
-      },
-      off: (event: string) => {
-        listeners.delete(event)
-        return proc
-      },
-      memoryUsage: () => ({ rss: 1 }) as NodeJS.MemoryUsage,
-    } as unknown as Pick<NodeJS.Process, "on" | "off" | "memoryUsage">
-
     let durability: Awaited<ReturnType<typeof startDurability>> | undefined
+    let revived: Awaited<ReturnType<typeof startDurability>> | undefined
     try {
       durability = await startDurability({
         home,
         accountId: "acct_signal",
-        proc,
-        backend: "snapshot-v3",
+        proc: fakeProc(() => 1, listeners),
       })
-      const manifestPath = path.join(home, "db-acct_signal.json.tables", "manifest.json")
+      await getDb().sessions.put(session("signalled-session"))
+      expect(hasLiveWriter(root, "sqlite")).toBe(true)
 
-      // beforeExit flushes without tearing the handle down. A full flush
-      // serializes every account-db table to disk (seconds, not ms), so await
-      // the flush chain itself rather than polling the file for a fixed window.
-      listeners.get("beforeExit")!()
-      await durability.db!.flush()
-      expect(fs.existsSync(manifestPath)).toBe(true)
-      expect(durability.rss().lastFlushAt).toBeGreaterThan(0)
-
-      // SIGTERM disposes: final flush, then every hook detaches. The detach
-      // runs after the flush completes, so wait for it rather than a sleep.
       listeners.get("SIGTERM")!()
-      for (let attempt = 0; attempt < 400 && listeners.has("SIGTERM"); attempt++) {
+      for (let attempt = 0; attempt < 400 && hasLiveWriter(root, "sqlite"); attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 25))
       }
-      expect(listeners.has("SIGTERM")).toBe(false)
-      expect(listeners.has("beforeExit")).toBe(false)
+      expect(hasLiveWriter(root, "sqlite")).toBe(false)
+      expect(listeners.size).toBe(0)
+
+      await resetDb()
+      revived = await startDurability({ home, accountId: "acct_signal" })
+      expect(await getDb().sessions.get("signalled-session")).toEqual(
+        expect.objectContaining({ id: "signalled-session" })
+      )
     } finally {
-      // Quiesce the handle before the home dir goes away: an in-flight flush
-      // writing into a deleted directory fails on the tmp→final rename.
       await durability?.dispose().catch(() => {})
-      __resetCliDbForTesting()
+      await revived?.dispose().catch(() => {})
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
@@ -186,9 +214,7 @@ describe("startDurability", () => {
   // `scheduledTasks` inside the account database, and the guard that survives
   // is the same one: the schedule persists, the run history does not.
   it("round-trips a scheduled task across a restart, without persisting executions", async () => {
-    __resetCliDbForTesting()
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-serve-sched-"))
-    const tableDirectory = path.join(home, "db-acct_sched.json.tables")
     const { schedulerDb } = await import("@/lib/scheduler/scheduler-db")
     const now = new Date()
     const task = {
@@ -209,7 +235,8 @@ describe("startDurability", () => {
 
     let second: Awaited<ReturnType<typeof startDurability>> | undefined
     try {
-      const first = await startDurability({ home, accountId: "acct_sched", backend: "snapshot-v3" })
+      const first = await startDurability({ home, accountId: "acct_sched" })
+      const name = getDb().name
       await schedulerDb.createTask(task as never)
       await schedulerDb.createExecution({
         id: "exec_1",
@@ -223,43 +250,25 @@ describe("startDurability", () => {
       } as never)
       await first.dispose()
 
-      // The durable artifact carries the task but not the execution history.
-      const manifest = JSON.parse(
-        fs.readFileSync(path.join(tableDirectory, "manifest.json"), "utf8")
-      )
-      expect(manifest.snapshotFormat).toBe(4)
-      const [primaryTables] = Object.values(manifest.dbs) as [{ tables: string[] }]
-      expect(primaryTables.tables).toContain("scheduledTasks")
-      expect(primaryTables.tables).not.toContain("scheduledTaskRuns")
-      const schedulerTasksFile = fs
-        .readdirSync(tableDirectory)
-        .find((name) => name.includes("scheduledTasks"))!
-      const persistedTasks = JSON.parse(
-        fs.readFileSync(path.join(tableDirectory, schedulerTasksFile), "utf8")
-      )
-      expect(persistedTasks.map((row: { id: string }) => row.id)).toContain(task.id)
-      expect(
-        fs.readdirSync(tableDirectory).some((name) => name.includes("scheduledTaskRuns"))
-      ).toBe(false)
+      // The durable store carries the task but not the execution history.
+      const backend = openSqliteBackend({ root: durabilityRoot(home, "acct_sched") })
+      try {
+        const persisted = (await backend.load()).dbs[name]
+        expect(persisted.schema.tables).toContain("scheduledTasks")
+        expect(persisted.schema.tables).not.toContain("scheduledTaskRuns")
+        expect(persisted.rows.scheduledTasks[encodeKey(task.id)]).toBeDefined()
+        expect(persisted.rows.scheduledTaskRuns).toBeUndefined()
+      } finally {
+        await backend.close()
+      }
 
-      // Simulate the restart: wipe the in-memory tables, then reopen from disk.
-      const db = getDb()
-      await db.scheduledTasks.clear()
-      await db.scheduledTaskRuns.clear()
-      __resetCliDbForTesting()
-
-      second = await startDurability({ home, accountId: "acct_sched", backend: "snapshot-v3" })
+      // Restart: a fresh in-memory database, restored from disk alone.
+      await resetDb()
+      second = await startDurability({ home, accountId: "acct_sched" })
       expect(await schedulerDb.getTask(task.id)).not.toBeNull()
       expect(await getDb().scheduledTaskRuns.count()).toBe(0)
-      await second.dispose()
     } finally {
-      await getDb()
-        .scheduledTasks.clear()
-        .catch(() => {})
-      // The clear() above schedules a debounced write into `home`; settle it
-      // through the still-open handle before removing the directory.
-      await second?.db?.flush().catch(() => {})
-      __resetCliDbForTesting()
+      await second?.dispose()
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
@@ -268,11 +277,11 @@ describe("startDurability", () => {
 describe("ledger restore over built-in plugin tables", () => {
   // A built-in plugin's tables lift the account database one version above the
   // code's once they exist, and a compaction pins that version into the
-  // checkpoint. A restarted brain opens at the code version, before any plugin
+  // store. A restarted brain opens at the code version, before any plugin
   // runs; without re-declaring those tables first, the restore refused the
-  // checkpoint and the brain exited on every start (the always-on host's bot
+  // store and the brain exited on every start (the always-on host's bot
   // went down this way after one image update).
-  it("restores a checkpoint persisted above the code version", async () => {
+  it("restores a store persisted above the code version", async () => {
     const [{ installFakeIndexedDb }, { __resetDbForTesting, CURRENT_SCHEMA_VERSION }] =
       await Promise.all([import("@/lib/headless/node-indexeddb"), import("@/lib/db/schema")])
     const [{ openDurabilityStore }, { restorePluginTables }, { getBrowserBuiltinRegistry }] =
@@ -300,7 +309,6 @@ describe("ledger restore over built-in plugin tables", () => {
       const first = await openDurabilityStore({
         home,
         accountId: "acct_plugin",
-        backend: "sqlite-v5",
         getSources: sources,
         compactEveryCommits: 0,
       })
@@ -347,7 +355,7 @@ describe("ledger restore over built-in plugin tables", () => {
 })
 
 describe("plugin tables after the code version catches up", () => {
-  // Code 247 + one plugin lifts the checkpoint to 248; a later build whose own
+  // Code 247 + one plugin lifts the store to 248; a later build whose own
   // schema is 248 then opens at the same number without the plugin table, and
   // the version alone used to say "nothing to lift", dropping the plugin rows.
   it("re-declares the persisted plugin tables before restoring", async () => {
@@ -377,7 +385,6 @@ describe("plugin tables after the code version catches up", () => {
       const first = await openDurabilityStore({
         home,
         accountId: "acct_catchup",
-        backend: "sqlite-v5",
         getSources: sources,
         compactEveryCommits: 0,
       })
@@ -416,193 +423,97 @@ describe("plugin tables after the code version catches up", () => {
   })
 })
 
-describe("resolveDurabilityBackend", () => {
-  let home: string
-  beforeEach(() => {
-    home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-backend-gate-"))
-  })
-  afterEach(() => fs.rmSync(home, { recursive: true, force: true }))
-
-  it("defaults a fresh account to the sqlite rung (ADR-0224)", () => {
-    expect(resolveDurabilityBackend(home, "acct", {})).toBe("sqlite-v5")
-  })
-
-  it("keeps snapshot-v3 reachable as an explicit opt-out", () => {
-    expect(
-      resolveDurabilityBackend(home, "acct", { COGNIA_DURABILITY_BACKEND: "snapshot-v3" })
-    ).toBe("snapshot-v3")
-  })
-
-  it("resolves an un-pinned journal root to the journal whatever the gate says", () => {
-    const root = durabilityRoot(home, "acct")
-    fs.mkdirSync(path.join(root, "generations", "gen-0001"), { recursive: true })
-    fs.writeFileSync(path.join(root, "generations", "gen-0001", "checkpoint.json"), "{}")
-    expect(resolveDurabilityBackend(home, "acct", { COGNIA_DURABILITY_BACKEND: "sqlite-v5" })).toBe(
-      "journal-v4"
-    )
-    expect(resolveDurabilityBackend(home, "acct", {})).toBe("journal-v4")
-  })
-
-  it("resolves an un-pinned sqlite root to sqlite (a crash before the first pin)", () => {
-    const root = durabilityRoot(home, "acct")
-    fs.mkdirSync(path.join(root, "sqlite"), { recursive: true })
-    fs.writeFileSync(path.join(root, "sqlite", "store.sqlite"), "")
-    expect(
-      resolveDurabilityBackend(home, "acct", { COGNIA_DURABILITY_BACKEND: "journal-v4" })
-    ).toBe("sqlite-v5")
-  })
-
-  it("refuses an un-pinned root that holds both journal and sqlite data", () => {
-    const root = durabilityRoot(home, "acct")
-    fs.mkdirSync(path.join(root, "generations", "gen-0001"), { recursive: true })
-    fs.writeFileSync(path.join(root, "generations", "gen-0001", "checkpoint.json"), "{}")
-    fs.mkdirSync(path.join(root, "sqlite"), { recursive: true })
-    fs.writeFileSync(path.join(root, "sqlite", "store.sqlite"), "")
-    expect(() => resolveDurabilityBackend(home, "acct", {})).toThrow(/both journal and sqlite/)
-  })
-
-  it("honours the rollout gate when no account has been migrated yet", () => {
-    expect(
-      resolveDurabilityBackend(home, "acct", { COGNIA_DURABILITY_BACKEND: "journal-v4" })
-    ).toBe("journal-v4")
-  })
-
-  it("ignores an unknown gate value", () => {
-    expect(resolveDurabilityBackend(home, "acct", { COGNIA_DURABILITY_BACKEND: "redis" })).toBe(
-      "sqlite-v5"
-    )
-  })
-
-  it("lets a written manifest override the gate", () => {
-    writeManifest(durabilityRoot(home, "acct"), {
-      manifestFormat: 1,
-      activeBackend: "sqlite-v5",
-      shadowBackend: null,
-      rollbackWatermark: null,
-      updatedAt: 0,
-    })
-    expect(
-      resolveDurabilityBackend(home, "acct", { COGNIA_DURABILITY_BACKEND: "journal-v4" })
-    ).toBe("sqlite-v5")
-  })
-
-  it("does not apply another local profile's manifest", () => {
-    writeManifest(durabilityRoot(home, "acct_other"), {
-      manifestFormat: 1,
-      activeBackend: "journal-v4",
-      shadowBackend: null,
-      rollbackWatermark: null,
-      updatedAt: 0,
-    })
-    expect(resolveDurabilityBackend(home, "acct", {})).toBe("sqlite-v5")
-  })
-
-  it("falls back to the gate when the manifest is unreadable", () => {
-    const root = durabilityRoot(home, "acct")
-    fs.mkdirSync(root, { recursive: true })
-    fs.writeFileSync(path.join(root, "backend-manifest.json"), "{oops")
-    expect(
-      resolveDurabilityBackend(home, "acct", { COGNIA_DURABILITY_BACKEND: "journal-v4" })
-    ).toBe("journal-v4")
-  })
-})
-
-describe("value codec 1 on every rung", () => {
-  // Value codec 1 on every rung the brain can run: what IndexedDB keeps for a
-  // row (structured clone) must be what a restart hands back.
-  it.each(["snapshot-v3", "journal-v4", "sqlite-v5"] as const)(
-    "%s round-trips every structured-clone type across a restart",
-    async (backend) => {
-      const [{ installFakeIndexedDb }, { __resetDbForTesting }] = await Promise.all([
-        import("@/lib/headless/node-indexeddb"),
-        import("@/lib/db/schema"),
-      ])
-      await installFakeIndexedDb()
-      __resetCliDbForTesting()
-      __resetDbForTesting()
-      const home = fs.mkdtempSync(path.join(os.tmpdir(), `cognia-serve-codec-${backend}-`))
-      const accountId = `acct_codec_${backend.replace(/[^a-z0-9]/g, "")}`
-      const large = Uint8Array.from({ length: 40_000 }, (_, index) => index % 251)
-      const holes = [1, , 3]
-      const row = {
-        id: "pack-1",
-        displayName: "Pack",
-        createdAt: 1,
-        large: new Blob([large], { type: "video/mp4" }),
-        small: new Blob([Uint8Array.from([1, 2, 3])], { type: "image/png" }),
-        file: new File([Uint8Array.from([9])], "a.txt", { type: "text/plain", lastModified: 5 }),
-        u16: Uint16Array.from([1, 65535]),
-        f64: Float64Array.from([Math.PI]),
-        buffer: Uint8Array.from([7, 8]).buffer,
-        view: new DataView(Uint8Array.from([4, 5]).buffer),
-        at: new Date("2026-11-01T00:00:00.000Z"),
-        map: new Map<string, unknown>([["k", new Date(0)]]),
-        set: new Set([1, "two"]),
-        pattern: /ab+/gi,
-        failure: new RangeError("boom"),
-        special: [Number.NaN, -0, Infinity],
-        big: BigInt("12345678901234567890"),
-        gone: undefined,
-        holes,
-      }
-      const tag = (value: unknown) => Object.prototype.toString.call(value)
-      let second: Awaited<ReturnType<typeof startDurability>> | undefined
-      try {
-        const first = await startDurability({ home, accountId, backend })
-        await getDb().table("petMediaPacks").put(row)
-        await first.db?.flush().catch(() => {})
-        await first.dispose()
-        // Restart: a fresh in-memory database, restored from disk alone.
-        await getDb().delete()
-        __resetDbForTesting()
-        __resetCliDbForTesting()
-
-        second = await startDurability({ home, accountId, backend })
-        const back = (await getDb().table("petMediaPacks").get("pack-1")) as typeof row & {
-          view: DataView
-        }
-        expect(back).toBeDefined()
-        expect(tag(back.large)).toBe("[object Blob]")
-        expect(back.large.type).toBe("video/mp4")
-        expect(new Uint8Array(await back.large.arrayBuffer())).toEqual(large)
-        expect(Array.from(new Uint8Array(await back.small.arrayBuffer()))).toEqual([1, 2, 3])
-        expect(tag(back.file)).toBe("[object File]")
-        expect([back.file.name, back.file.lastModified, back.file.type]).toEqual([
-          "a.txt",
-          5,
-          "text/plain",
-        ])
-        expect(tag(back.u16)).toBe("[object Uint16Array]")
-        expect(Array.from(back.u16)).toEqual([1, 65535])
-        expect(tag(back.f64)).toBe("[object Float64Array]")
-        expect(tag(back.buffer)).toBe("[object ArrayBuffer]")
-        expect(Array.from(new Uint8Array(back.buffer))).toEqual([7, 8])
-        expect(tag(back.view)).toBe("[object DataView]")
-        expect(back.view.getUint8(1)).toBe(5)
-        expect(tag(back.at)).toBe("[object Date]")
-        expect(back.at.toISOString()).toBe("2026-11-01T00:00:00.000Z")
-        expect(tag(back.map)).toBe("[object Map]")
-        expect(tag(back.map.get("k"))).toBe("[object Date]")
-        expect([...back.set]).toEqual([1, "two"])
-        expect(String(back.pattern)).toBe("/ab+/gi")
-        expect([back.failure.name, back.failure.message]).toEqual(["RangeError", "boom"])
-        expect(back.special[0]).toBeNaN()
-        expect(Object.is(back.special[1], -0)).toBe(true)
-        expect(back.special[2]).toBe(Infinity)
-        expect(back.big).toBe(BigInt("12345678901234567890"))
-        expect(Object.hasOwn(back, "gone")).toBe(true)
-        expect(back.holes).toHaveLength(3)
-        expect(Object.hasOwn(back.holes, 1)).toBe(false)
-        await second.dispose()
-      } finally {
-        await second?.db?.flush().catch(() => {})
-        await getDb()
-          .delete()
-          .catch(() => {})
-        __resetDbForTesting()
-        __resetCliDbForTesting()
-        fs.rmSync(home, { recursive: true, force: true })
-      }
+describe("value codec 1", () => {
+  // What IndexedDB keeps for a row (structured clone) must be what a restart
+  // hands back.
+  it("round-trips every structured-clone type across a restart", async () => {
+    const [{ installFakeIndexedDb }, { __resetDbForTesting }] = await Promise.all([
+      import("@/lib/headless/node-indexeddb"),
+      import("@/lib/db/schema"),
+    ])
+    await installFakeIndexedDb()
+    __resetCliDbForTesting()
+    __resetDbForTesting()
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-serve-codec-"))
+    const accountId = "acct_codec"
+    const large = Uint8Array.from({ length: 40_000 }, (_, index) => index % 251)
+    const holes = [1, , 3]
+    const row = {
+      id: "pack-1",
+      displayName: "Pack",
+      createdAt: 1,
+      large: new Blob([large], { type: "video/mp4" }),
+      small: new Blob([Uint8Array.from([1, 2, 3])], { type: "image/png" }),
+      file: new File([Uint8Array.from([9])], "a.txt", { type: "text/plain", lastModified: 5 }),
+      u16: Uint16Array.from([1, 65535]),
+      f64: Float64Array.from([Math.PI]),
+      buffer: Uint8Array.from([7, 8]).buffer,
+      view: new DataView(Uint8Array.from([4, 5]).buffer),
+      at: new Date("2026-11-01T00:00:00.000Z"),
+      map: new Map<string, unknown>([["k", new Date(0)]]),
+      set: new Set([1, "two"]),
+      pattern: /ab+/gi,
+      failure: new RangeError("boom"),
+      special: [Number.NaN, -0, Infinity],
+      big: BigInt("12345678901234567890"),
+      gone: undefined,
+      holes,
     }
-  )
+    const tag = (value: unknown) => Object.prototype.toString.call(value)
+    let second: Awaited<ReturnType<typeof startDurability>> | undefined
+    try {
+      const first = await startDurability({ home, accountId })
+      await getDb().table("petMediaPacks").put(row)
+      await first.dispose()
+      // Restart: a fresh in-memory database, restored from disk alone.
+      await getDb().delete()
+      __resetDbForTesting()
+      __resetCliDbForTesting()
+
+      second = await startDurability({ home, accountId })
+      const back = (await getDb().table("petMediaPacks").get("pack-1")) as typeof row & {
+        view: DataView
+      }
+      expect(back).toBeDefined()
+      expect(tag(back.large)).toBe("[object Blob]")
+      expect(back.large.type).toBe("video/mp4")
+      expect(new Uint8Array(await back.large.arrayBuffer())).toEqual(large)
+      expect(Array.from(new Uint8Array(await back.small.arrayBuffer()))).toEqual([1, 2, 3])
+      expect(tag(back.file)).toBe("[object File]")
+      expect([back.file.name, back.file.lastModified, back.file.type]).toEqual([
+        "a.txt",
+        5,
+        "text/plain",
+      ])
+      expect(tag(back.u16)).toBe("[object Uint16Array]")
+      expect(Array.from(back.u16)).toEqual([1, 65535])
+      expect(tag(back.f64)).toBe("[object Float64Array]")
+      expect(tag(back.buffer)).toBe("[object ArrayBuffer]")
+      expect(Array.from(new Uint8Array(back.buffer))).toEqual([7, 8])
+      expect(tag(back.view)).toBe("[object DataView]")
+      expect(back.view.getUint8(1)).toBe(5)
+      expect(tag(back.at)).toBe("[object Date]")
+      expect(back.at.toISOString()).toBe("2026-11-01T00:00:00.000Z")
+      expect(tag(back.map)).toBe("[object Map]")
+      expect(tag(back.map.get("k"))).toBe("[object Date]")
+      expect([...back.set]).toEqual([1, "two"])
+      expect(String(back.pattern)).toBe("/ab+/gi")
+      expect([back.failure.name, back.failure.message]).toEqual(["RangeError", "boom"])
+      expect(back.special[0]).toBeNaN()
+      expect(Object.is(back.special[1], -0)).toBe(true)
+      expect(back.special[2]).toBe(Infinity)
+      expect(back.big).toBe(BigInt("12345678901234567890"))
+      expect(Object.hasOwn(back, "gone")).toBe(true)
+      expect(back.holes).toHaveLength(3)
+      expect(Object.hasOwn(back.holes, 1)).toBe(false)
+      await second.dispose()
+    } finally {
+      await getDb()
+        .delete()
+        .catch(() => {})
+      __resetDbForTesting()
+      __resetCliDbForTesting()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
 })

@@ -1,30 +1,16 @@
 /**
- * Headless durability backend contract (ADR-0059, durability ladder v3→v5).
+ * Headless durability backend contract (ADR-0059).
  *
  * fake-indexeddb/Dexie stays the business-logic runtime; only the *persistence*
- * of that runtime moves behind {@link HeadlessDurabilityBackend}. Three
- * implementations ship:
- *
- * - `snapshot-v3` — the per-table JSON store `cli/src/db/bootstrap.ts` already
- *   writes. Whole-table re-dumps, debounced: the last debounce window is lost
- *   on a crash.
- * - `journal-v4` — an immutable `snapshot-v3` checkpoint plus checksummed,
- *   monotonically sequenced transaction commit records appended and `fsync`ed
- *   from the Dexie transaction-complete path, closing that crash window.
- * - `sqlite-v5` — Node's built-in SQLite (WAL) holding generic
- *   database/table/key/value rows. No second hand-maintained Cognia schema.
- *
- * Every id is wire format: it appears in the on-disk backend manifest and in
- * `durability` CLI output. Append-only, never renamed.
+ * of that runtime sits behind {@link HeadlessDurabilityBackend}. One
+ * implementation ships: `sqlite-v5`, Node's built-in SQLite (WAL) holding
+ * generic database/table/key/value rows, so there is no second hand-maintained
+ * Cognia schema.
  */
-/** Persisted backend implementations, ordered oldest → newest. */
-export const DURABILITY_BACKEND_IDS = ["snapshot-v3", "journal-v4", "sqlite-v5"] as const
+/** The persisted backend id. Wire format: it appears in `durability` CLI output. */
+export const DURABILITY_BACKEND = "sqlite-v5" as const
 
-export type DurabilityBackendId = (typeof DURABILITY_BACKEND_IDS)[number]
-
-export function isDurabilityBackendId(value: unknown): value is DurabilityBackendId {
-  return typeof value === "string" && (DURABILITY_BACKEND_IDS as readonly string[]).includes(value)
-}
+export type DurabilityBackendId = typeof DURABILITY_BACKEND
 
 /**
  * One row-level effect inside a committed transaction.
@@ -48,7 +34,7 @@ export interface DurabilityCommit {
   mutations: DurabilityMutation[]
 }
 
-/** Schema identity of one Dexie database, pinned so replay cannot cross versions. */
+/** Schema identity of one Dexie database, pinned so a restore cannot cross versions. */
 export interface DurabilitySchema {
   version: number
   /** Table names the backend persists (post-exclusion), sorted. */
@@ -57,7 +43,7 @@ export interface DurabilitySchema {
 
 /** Full materialised state: `dbs[database].rows[table][key] = value`. */
 export interface DurabilityState {
-  /** Highest applied commit sequence; 0 when only a checkpoint exists. */
+  /** Highest applied commit sequence; 0 before the first commit. */
   sequence: number
   dbs: Record<
     string,
@@ -75,7 +61,7 @@ export function emptyDurabilityState(): DurabilityState {
 /**
  * The persistence port the headless brain writes through.
  *
- * `commit` MUST be durable (appended and `fsync`ed) before it resolves: the
+ * `commit` MUST be durable (committed and synced) before it resolves: the
  * Dexie transaction-complete path awaits nothing, so the *synchronous* variant
  * `commitSync` is what actually runs on that path. `commit` exists for tooling
  * and tests that operate off the hot path.
@@ -90,39 +76,28 @@ export interface HeadlessDurabilityBackend {
   commit(commit: DurabilityCommit): Promise<void>
   /** Highest durably recorded sequence. */
   lastSequence(): number
-  /** Fold the journal (if any) into a fresh verified generation. */
+  /** Replace the persisted content with `state` and re-pin its schemas, verified. */
   compact(state: DurabilityState): Promise<CompactionResult>
   /**
-   * Routine upkeep that stands in for {@link compact} on the commit-count
-   * cadence, for a backend with no journal to fold (SQLite). The store calls
-   * it only while the schema the backend holds matches the live one. It runs
-   * on the brain's event loop, so it must not rewrite the data set. Binary
-   * garbage collection may inspect retained references.
+   * Routine upkeep on the commit-count cadence (WAL checkpoint, binary
+   * garbage collection). The store calls it only while the schema the backend
+   * holds matches the live one, and falls back to {@link compact} when it
+   * drifted. It runs on the brain's event loop, so it must not rewrite the
+   * data set.
    */
-  maintain?(): void
+  maintain(): void
   /** Release file handles. Safe to call more than once. */
   close(): Promise<void>
 }
 
 export interface CompactionResult {
-  /** Generation id the compaction produced, e.g. `gen-0003`. */
-  generation: string
-  /** Generation that stays on disk as the rollback watermark. */
-  previousGeneration: string | null
+  /** Sequence the rewritten store holds. */
   sequence: number
 }
 
-/** Errors the recovery tooling distinguishes; `code` is wire format. */
+/** Errors `durability verify` distinguishes; `code` is wire format. */
 export type DurabilityFaultCode =
-  | "journal-sequence-gap"
-  | "journal-checksum-mismatch"
-  | "journal-torn-record"
-  | "checkpoint-corrupt"
-  | "checkpoint-schema-mismatch"
-  | "sqlite-integrity-failure"
-  | "manifest-corrupt"
-  | "parity-mismatch"
-  | "writer-busy"
+  "sequence-gap" | "schema-mismatch" | "sqlite-integrity-failure" | "store-corrupt" | "writer-busy"
 
 export class DurabilityFault extends Error {
   readonly code: DurabilityFaultCode

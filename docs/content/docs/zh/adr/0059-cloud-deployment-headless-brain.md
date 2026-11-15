@@ -200,6 +200,8 @@ Langfuse 只接收 AI trace。它与 brain 单一 NodeSDK 中的通用 OTLP、Po
 
 ### 2026-08-02 —— 耐久性阶梯 v4/v5 已落地
 
+> **2026-11-15 已被下文「单一耐久存储」取代**：只保留 `sqlite-v5`。这里描述的阶梯、清单与迁移工具均已删除。
+
 `HeadlessDurabilityBackend`（`cli/src/serve/persistence/`）是持久化端口，三级实现，由每账户的原子清单（`<home>/durability/<account>/backend-manifest.json`）选定当前档位；清单缺失时回落到 `COGNIA_DURABILITY_BACKEND` 灰度开关，最后回落到 `snapshot-v3`。
 
 > **2026-10-10（[ADR-0224](./0224-an-always-on-host-is-a-peer-the-user-brings)）**：brain 的默认档位改为 `sqlite-v5`。解析顺序为：清单 → 显式的 `COGNIA_DURABILITY_BACKEND=snapshot-v3` 退出 → 未固定的根目录中已有的账本数据 → 灰度开关 → `sqlite-v5`；首次启动时把选定的档位写入清单固定（此前在全新账号上灰度开关会被静默忽略）。以前通过按表快照持久化的账号会在首次启动时一次性导入到第一个检查点，旧存储保持原样不动。
@@ -215,11 +217,22 @@ Langfuse 只接收 AI trace。它与 brain 单一 NodeSDK 中的通用 OTLP、Po
 - **除 `finalize` 外不删除任何东西。** 迁移、恢复、回滚都只*新增*世代、回滚包与清单版本。`durability recover` 先落到新世代并校验，之后才允许激活；`durability finalize --confirm` 是唯一的裁剪操作，并会报告它留下的回滚水位线。
 - **一致性闸门。** 只有模式版本、表集合、行数、键集合与逐表内容哈希全部通过，才会提升后端；失败则保持原后端权威，并打印全部差异。
 
+### 2026-11-15 —— 单一耐久存储
+
+Brain 只通过 `sqlite-v5` 持久化。`snapshot-v3`（去抖写入，崩溃时丢失最后一个窗口）与 `journal-v4`（检查点世代 + 事务日志）都只是通往它的中间档位，为在档位之间搬迁账号而存在的一切随之删除：每账户的 `backend-manifest.json`、`COGNIA_DURABILITY_BACKEND` 灰度开关、双写窗口及其影子追赶、一致性闸门、`serve --flush-debounce`，以及 `durability migrate|recover|rollback|finalize` 子命令。
+
+- **崩溃安全**由 SQLite 提供：WAL + `synchronous=FULL`，同一个 `complete` 监听器里每个 Dexie 事务一次 `COMMIT`，因此对调用方 resolve 的事务一定已经落盘。
+- **损坏**以带类型的故障暴露：打开时 `integrity_check`；`durability verify`（只读，作用于一次性副本）物化每一行并解码每个值及其二进制旁文件。某张表的行若不在其模式行列出的表中，现在直接判为故障，而不再静默补列。
+- **恢复即 Host 备份还原。** Host 备份在 `backup` 租约（同时挡住二进制 GC）下用 SQLite 在线备份 API 复制每个账号的存储，再对暂存副本运行 `durability verify --root`，通过后才封存归档。单一存储内的时间点回滚只在跨档位时才可能出现；默认的 `sqlite-v5` 账号从来没有可回滚的世代。
+- 保留 `durability compact`（离线 `VACUUM`）用于回收空间。
+
+旧版本写出的账号根目录（日志世代、`backend-manifest.json`、`db-<account>.json` 快照存储）不再读取：serve 只打开 `sqlite/store.sqlite`，Host 备份也只识别这一种存储。
+
 ## 风险
 
 | 风险 | 缓解措施 |
 | --- | --- |
-| Node 中的耐久性 Dexie（fake-indexeddb 在内存中；快照在崩溃时丢失最后几秒；全库序列化为 O(n)） | **2026-08-02 已解决** —— 阶梯已建成：`snapshot-v3` 去抖快照 → `journal-v4` 带校验和的事务日志（事务对调用方 resolve 之前先 `fsync`）→ `sqlite-v5` WAL 行存储，三者都位于 `HeadlessDurabilityBackend` 之后，并有一条经过一致性校验的迁移路径。仍需监控 Brain RSS：内存中的数据集依然是该路径的上限。 |
+| Node 中的耐久性 Dexie（fake-indexeddb 在内存中；快照在崩溃时丢失最后几秒；全库序列化为 O(n)） | **已解决** —— `HeadlessDurabilityBackend` 之后是 `sqlite-v5` WAL 行存储，每个 Dexie 事务在 resolve 之前一次 `COMMIT`（2026-08-02；更早的档位于 2026-11-15 删除）。仍需监控 Brain RSS：内存中的数据集依然是该路径的上限。 |
 | `lib/` 运行时 CLI未被执行的残余`window`/DOM假设（连接器、调度器） | W2每抽出运行时能落下无头烟雾;故障接口在提取时，而非生产阶段 |
 | BWRAP 内部库存Docker不可用（`CLONE_NEWUSER`被封锁） | 在Compose中交付调谐的Seccomp配置文件;通过`UninstalledSandboxBackend`的诚实贬低 |
 | 出生阶级RCE 接口 RPC | 预设允许列表 + 专用范围 + 审计；通过带鉴权的 Companion/gateway 前门暴露 |

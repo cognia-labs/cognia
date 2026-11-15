@@ -6,8 +6,7 @@
  *   1. env/flags → `__COGNIA_HEADLESS__` marker → fake-indexeddb shim
  *   2. `ensureHeadlessAccount` (registry create-if-missing + activate +
  *      guarded host unlock — `desktop-sync-source` rejects pulls otherwise)
- *   3. durability: the account's pinned backend, `sqlite-v5` by default
- *      (ADR-0224), importing an old snapshot store once on first boot
+ *   3. durability: the account's SQLite store (`sqlite-v5`, ADR-0059)
  *   4. `setTransport(CompanionTransport)` with an in-memory config provider
  *      (service token, never persisted) — the control plane: `agent_send`
  *      flows brain → RPC → cognia-server → its sidecar
@@ -47,7 +46,7 @@ import { CompanionTransport, type CompanionConfig } from "@/lib/tauri/transport-
 
 import { brainAccountSyncHost, brainBackup } from "../account-sync/headless-sync"
 import type { ParsedArgs } from "../cli/args"
-import { numberFlag, stringFlag } from "../cli/args"
+import { stringFlag } from "../cli/args"
 import type { OutputSink } from "../cli/output"
 import { fsReader, resolveHome, userConfigPath } from "../config/load"
 import { cliConfigFileSchema, collabCliSchema, type CollabCliConfig } from "../config/schema"
@@ -147,7 +146,6 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
     stringFlag(args, "account") ?? env.COGNIA_LOCAL_ACCOUNT_ID ?? HEADLESS_LOCAL_ACCOUNT_ID
   const bridgeUrl = env.COGNIA_BRIDGE_URL ?? deriveBridgeUrl(serverUrl)
   const home = resolveServeHome(env, stringFlag(args, "home"))
-  const flushDebounce = numberFlag(args, "flush-debounce")
   let backupInstallationId: string | undefined
   let backupFailure: Error | undefined
   if (!personBrain) {
@@ -174,9 +172,7 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
   const durability = await startDurability({
     home,
     accountId: localAccountId,
-    debounceMs: flushDebounce,
     proc,
-    env,
   })
   out.write(`serve: durability ${durability.backend}\n`)
 

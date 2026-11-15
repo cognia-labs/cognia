@@ -8,9 +8,10 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { durabilityRoot, openBackend } from "./backend"
+import { durabilityRoot } from "./backend"
 import { encodeKey } from "./canonical"
 import { verifyDurability } from "./operations"
+import { openSqliteBackend } from "./sqlite"
 import { hasLiveWriter } from "./writer-lock"
 import type { CaptureCoreLike, CaptureMutateRequest, CaptureTableLike } from "./capture"
 import {
@@ -229,7 +230,7 @@ describe("restoreState", () => {
     expect(await source.db.tables[0].toArray()).toEqual([{ id: "a" }])
   })
 
-  it("refuses a checkpoint written by a newer build", async () => {
+  it("refuses state written by a newer build", async () => {
     const source = makeSource("CogniaDB", 141)
     const state: DurabilityState = {
       sequence: 0,
@@ -238,14 +239,14 @@ describe("restoreState", () => {
       },
     }
     await expect(restoreState([source], state)).rejects.toThrow(
-      expect.objectContaining({ code: "checkpoint-schema-mismatch" })
+      expect.objectContaining({ code: "schema-mismatch" })
     )
   })
 
   // The rule `lib/db/storage-layout.ts` and the snapshot store already apply:
   // an additive bump (here 141 → 142 adding `mediaPacks`) must not strand the
   // data, which is what every person partition hit at schema 247 → 248.
-  it("restores a checkpoint an older build wrote, as a forward move", async () => {
+  it("restores state an older build wrote, as a forward move", async () => {
     const source = makeSource("CogniaDB", 142)
     source.db.tables.push(new FakeTable("mediaPacks"))
     const state: DurabilityState = {
@@ -302,7 +303,6 @@ describe("openDurabilityStore", () => {
     const store = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend: "sqlite-v5",
       getSources: async () => [source],
     })
     const root = durabilityRoot(home, "acct")
@@ -319,7 +319,7 @@ describe("openDurabilityStore", () => {
     }
   })
 
-  it("journals every committed transaction and reloads it after a crash", async () => {
+  it("persists every committed transaction and reloads it after a crash", async () => {
     const source = makeSource()
     const store = await openDurabilityStore({
       home,
@@ -350,7 +350,7 @@ describe("openDurabilityStore", () => {
     await store.close()
   })
 
-  it("does not journal the restore replay", async () => {
+  it("does not record the restore replay", async () => {
     const first = makeSource()
     const store = await openDurabilityStore({
       home,
@@ -392,42 +392,16 @@ describe("openDurabilityStore", () => {
     await reopened.close()
   })
 
-  it("compacts on the configured commit interval and keeps replaying correctly", async () => {
-    const source = makeSource()
-    const store = await openDurabilityStore({
-      home,
-      accountId: "acct",
-      getSources: async () => [source],
-      compactEveryCommits: 2,
-    })
-    await source.db.commit("sessions", { type: "put", values: [{ id: "a" }] })
-    await source.db.commit("sessions", { type: "put", values: [{ id: "b" }] })
-    await store.close()
-
-    const generations = fs.readdirSync(path.join(home, "durability", "acct", "generations"))
-    expect(generations.sort()).toEqual(["gen-0001", "gen-0002"])
-
-    const revived = makeSource()
-    const reopened = await openDurabilityStore({
-      home,
-      accountId: "acct",
-      getSources: async () => [revived],
-    })
-    expect((await revived.db.tables[0].toArray()).length).toBe(2)
-    await reopened.close()
-  })
-
   it("keeps a sqlite store's periodic upkeep off the full rewrite while its schema holds", async () => {
     const source = makeSource()
     const store = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend: "sqlite-v5",
       getSources: async () => [source],
       compactEveryCommits: 2,
     })
     const compact = jest.spyOn(store.backend, "compact")
-    const maintain = jest.spyOn(store.backend, "maintain" as never) as unknown as jest.SpyInstance
+    const maintain = jest.spyOn(store.backend, "maintain")
     for (const id of ["a", "b", "c", "d"]) {
       await source.db.commit("sessions", { type: "put", values: [{ id }] })
     }
@@ -440,7 +414,6 @@ describe("openDurabilityStore", () => {
     const reopened = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend: "sqlite-v5",
       getSources: async () => [revived],
     })
     expect((await revived.db.tables[0].toArray()).length).toBe(4)
@@ -452,15 +425,14 @@ describe("openDurabilityStore", () => {
     const store = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend: "sqlite-v5",
       getSources: async () => [source],
       compactEveryCommits: 1,
     })
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
     try {
-      jest.spyOn(store.backend, "maintain" as never).mockImplementation((() => {
+      jest.spyOn(store.backend, "maintain").mockImplementation(() => {
         throw new Error("checkpoint refused")
-      }) as never)
+      })
       await source.db.commit("sessions", { type: "put", values: [{ id: "a" }] })
       await new Promise((resolve) => setImmediate(resolve))
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("periodic upkeep failed"))
@@ -476,12 +448,11 @@ describe("openDurabilityStore", () => {
     const store = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend: "sqlite-v5",
       getSources: async () => [source],
       compactEveryCommits: 1,
     })
     const compact = jest.spyOn(store.backend, "compact")
-    const maintain = jest.spyOn(store.backend, "maintain" as never) as unknown as jest.SpyInstance
+    const maintain = jest.spyOn(store.backend, "maintain")
     // A plugin registered a table after the backend opened.
     source.db.tables.push(new FakeTable("pluginRows"))
     await source.db.commit("sessions", { type: "put", values: [{ id: "a" }] })
@@ -605,7 +576,7 @@ describe("openDurabilityStore", () => {
     await source.db.commit("sessions", { type: "put", values: [{ id: "c" }] })
     await store.close()
 
-    const backend = openBackend("journal-v4", path.join(home, "durability", "acct"))
+    const backend = openSqliteBackend({ root: path.join(home, "durability", "acct") })
     expect((await backend.load()).dbs.CogniaDB.rows.sessions).toEqual({
       [encodeKey("b")]: { id: "b", n: 2 },
       [encodeKey("c")]: { id: "c" },
@@ -626,14 +597,14 @@ describe("openDurabilityStore", () => {
     await source.db.commit("sessions", { type: "put", values: [{ id: "a" }] })
     await store.compact()
     await store.close()
-    const backend = openBackend("journal-v4", path.join(home, "durability", "acct"))
+    const backend = openSqliteBackend({ root: path.join(home, "durability", "acct") })
     expect((await backend.load()).dbs.CogniaDB.rows.sessions).toEqual({
       [encodeKey("a")]: { id: "a" },
     })
     await backend.close()
   })
 
-  it("keeps dynamic schema changes while folding overlapping writes into the checkpoint", async () => {
+  it("keeps dynamic schema changes while folding overlapping writes into the rewrite", async () => {
     const source = makeSource()
     const store = await openDurabilityStore({
       home,
@@ -691,7 +662,7 @@ describe("openDurabilityStore", () => {
     await reopened.close()
   })
 
-  it("boots a newer build on an older checkpoint and re-pins it at the new version", async () => {
+  it("boots a newer build on older state and re-pins it at the new version", async () => {
     const source = makeSource("CogniaDB", 141)
     const store = await openDurabilityStore({
       home,
@@ -713,14 +684,14 @@ describe("openDurabilityStore", () => {
     expect(await upgraded.db.tables[0].toArray()).toEqual([{ id: "kept" }])
     await reopened.close()
 
-    // Pinned at 142: rolling back to the 141 build is now a newer checkpoint.
+    // Pinned at 142: rolling back to the 141 build now meets newer state.
     await expect(
       openDurabilityStore({
         home,
         accountId: "acct",
         getSources: async () => [makeSource("CogniaDB", 141)],
       })
-    ).rejects.toThrow(expect.objectContaining({ code: "checkpoint-schema-mismatch" }))
+    ).rejects.toThrow(expect.objectContaining({ code: "schema-mismatch" }))
   })
 
   it("lifts a database to the version its plugin tables were persisted at before restoring", async () => {
@@ -741,8 +712,8 @@ describe("openDurabilityStore", () => {
     const bare = makeSource("CogniaDB", 141)
     await expect(
       openDurabilityStore({ home, accountId: "acct", getSources: async () => [bare] })
-    ).rejects.toThrow(expect.objectContaining({ code: "checkpoint-schema-mismatch" }))
-    expect(hasLiveWriter(durabilityRoot(home, "acct"), "journal")).toBe(false)
+    ).rejects.toThrow(expect.objectContaining({ code: "schema-mismatch" }))
+    expect(hasLiveWriter(durabilityRoot(home, "acct"), "sqlite")).toBe(false)
 
     const revived = makeSource("CogniaDB", 141)
     const prepared: Array<Record<string, number>> = []
@@ -761,7 +732,7 @@ describe("openDurabilityStore", () => {
     await reopened.close()
   })
 
-  it("exposes the live state for parity tooling", async () => {
+  it("exposes the live state for tooling", async () => {
     const source = makeSource()
     const store = await openDurabilityStore({
       home,
@@ -807,7 +778,7 @@ describe("openDurabilityStore", () => {
     expect(store.sequence()).toBe(2)
     await store.close()
 
-    const backend = openBackend("journal-v4", path.join(home, "durability", "acct"))
+    const backend = openSqliteBackend({ root: path.join(home, "durability", "acct") })
     const state = await backend.load()
     await backend.close()
     expect(state.dbs.CogniaSchedulerDB.schema.tables).toEqual(["sessions"])
@@ -834,15 +805,36 @@ describe("openDurabilityStore", () => {
       getSources: async () => [source],
       compactEveryCommits: 1,
     })
-    // A file where the generations directory must be: the compaction write
-    // fails, but the journal already holds the commit, so the store keeps going.
-    const generations = path.join(home, "durability", "acct", "generations")
-    fs.rmSync(generations, { recursive: true, force: true })
-    fs.writeFileSync(generations, "not a directory")
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      // A plugin table appeared, so the upkeep is a full compaction, and it fails:
+      // the commit is already durable, so the store keeps going.
+      source.db.tables.push(new FakeTable("pluginRows"))
+      const compact = jest
+        .spyOn(store.backend, "compact")
+        .mockRejectedValueOnce(new Error("disk full"))
+      await source.db.commit("sessions", { type: "put", values: [{ id: "a" }] })
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(compact).toHaveBeenCalledTimes(1)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"))
+      await source.db.commit("sessions", { type: "put", values: [{ id: "b" }] })
+      expect(store.sequence()).toBe(2)
+      await expect(store.close()).resolves.toBeUndefined()
+    } finally {
+      warn.mockRestore()
+    }
 
-    await source.db.commit("sessions", { type: "put", values: [{ id: "a" }] })
-    await expect(store.close()).resolves.toBeUndefined()
-    expect(store.sequence()).toBe(1)
+    const backend = openSqliteBackend({ root: durabilityRoot(home, "acct") })
+    try {
+      const persisted = await backend.load()
+      expect(persisted.sequence).toBe(2)
+      expect(Object.keys(persisted.dbs.CogniaDB.rows.sessions).sort()).toEqual([
+        encodeKey("a"),
+        encodeKey("b"),
+      ])
+    } finally {
+      await backend.close()
+    }
   })
 
   it("reports an explicit compaction failure to the caller", async () => {
@@ -854,14 +846,17 @@ describe("openDurabilityStore", () => {
       compactEveryCommits: 0,
     })
     await source.db.commit("sessions", { type: "put", values: [{ id: "a" }] })
-    await store.compact()
+    jest.spyOn(store.backend, "compact").mockRejectedValueOnce(new Error("disk full"))
+    await expect(store.compact()).rejects.toThrow("disk full")
     expect(store.sequence()).toBe(1)
+    await store.compact()
+    expect(store.backend.lastSequence()).toBe(1)
     await store.close()
   })
 })
 
 describe("session list durability", () => {
-  it("excludes derived rows and readiness from checkpoint and transaction capture", async () => {
+  it("excludes derived rows and readiness from the seed and transaction capture", async () => {
     const home = tempHome()
     const tables = [
       new FakeTable("sessions"),
@@ -906,7 +901,7 @@ describe("session list durability", () => {
     }
   })
 
-  it("ignores stale projection and readiness from a previously persisted checkpoint", async () => {
+  it("ignores stale projection and readiness from previously persisted state", async () => {
     const tables = [
       new FakeTable("sessions"),
       new FakeTable("sessionList"),
@@ -933,16 +928,11 @@ describe("session list durability", () => {
     expect(await tables[2].toArray()).toEqual([])
   })
 
-  it.each([
-    [240, "journal-v4"],
-    [240, "sqlite-v5"],
-    [241, "journal-v4"],
-    [241, "sqlite-v5"],
-  ] as const)(
-    "upgrades v%i %s state to v242, rebuilds projection and reopens after further writes",
-    async (previousVersion, backend) => {
+  it.each([240, 241])(
+    "upgrades v%i state to v242, rebuilds projection and reopens after further writes",
+    async (previousVersion) => {
       const home = tempHome()
-      const name = `SessionLedger-${backend}-${path.basename(home)}`
+      const name = `SessionLedger-${path.basename(home)}`
       await installFakeIndexedDb()
       const old = new FakeDexie(name, previousVersion, [
         new FakeTable("sessions"),
@@ -951,7 +941,6 @@ describe("session list durability", () => {
       const previous = await openDurabilityStore({
         home,
         accountId: "acct",
-        backend,
         getSources: async () => [{ name, db: old }],
       })
       await old.commit("sessions", {
@@ -976,7 +965,6 @@ describe("session list durability", () => {
         const options = () => ({
           home,
           accountId: "acct",
-          backend,
           getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
         })
         store = await openDurabilityStore(options())
@@ -1070,53 +1058,49 @@ describe("binary and Date values", () => {
     expect(read.plain).toEqual({})
   }
 
-  it.each(["journal-v4", "sqlite-v5"] as const)(
-    "%s round-trips Blob, typed arrays, ArrayBuffer and Date through a commit, a restart and a compaction",
-    async (backend) => {
-      const home = tempHome()
-      const name = `BinaryLedger-${backend}-${path.basename(home)}`
-      await installFakeIndexedDb()
-      const open = () => {
-        const db = new Dexie(name)
-        db.version(1).stores({ media: "id" })
-        return db
-      }
-      let db = open()
-      let store: Awaited<ReturnType<typeof openDurabilityStore>> | undefined
-      const options = () => ({
-        home,
-        accountId: "acct",
-        backend,
-        getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
-      })
-      try {
-        store = await openDurabilityStore(options())
-        await db.table("media").put(row())
-        expect(store.sequence()).toBe(1)
-        // Large values left the JSON record for content-addressed side files.
-        expect(fs.readdirSync(path.join(durabilityRoot(home, "acct"), "binary"))).toHaveLength(2)
-        await store.close()
-        await db.delete()
-
-        // Restart: the row comes back from the commit record / row store.
-        db = open()
-        store = await openDurabilityStore(options())
-        await expectRow(await db.table("media").get("media"))
-
-        // Fold into a checkpoint / rewritten rows, restart again.
-        await store.compact()
-        await store.close()
-        await db.delete()
-        db = open()
-        store = await openDurabilityStore(options())
-        await expectRow(await db.table("media").get("media"))
-      } finally {
-        await store?.close()
-        await db.delete()
-        fs.rmSync(home, { recursive: true, force: true })
-      }
+  it("round-trips Blob, typed arrays, ArrayBuffer and Date through a commit, a restart and a compaction", async () => {
+    const home = tempHome()
+    const name = `BinaryLedger-${path.basename(home)}`
+    await installFakeIndexedDb()
+    const open = () => {
+      const db = new Dexie(name)
+      db.version(1).stores({ media: "id" })
+      return db
     }
-  )
+    let db = open()
+    let store: Awaited<ReturnType<typeof openDurabilityStore>> | undefined
+    const options = () => ({
+      home,
+      accountId: "acct",
+      getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
+    })
+    try {
+      store = await openDurabilityStore(options())
+      await db.table("media").put(row())
+      expect(store.sequence()).toBe(1)
+      // Large values left the JSON record for content-addressed side files.
+      expect(fs.readdirSync(path.join(durabilityRoot(home, "acct"), "binary"))).toHaveLength(2)
+      await store.close()
+      await db.delete()
+
+      // Restart: the row comes back from the row store.
+      db = open()
+      store = await openDurabilityStore(options())
+      await expectRow(await db.table("media").get("media"))
+
+      // Rewrite every row, restart again.
+      await store.compact()
+      await store.close()
+      await db.delete()
+      db = open()
+      store = await openDurabilityStore(options())
+      await expectRow(await db.table("media").get("media"))
+    } finally {
+      await store?.close()
+      await db.delete()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("capturing a blob-heavy transaction", () => {
@@ -1134,7 +1118,6 @@ describe("capturing a blob-heavy transaction", () => {
     const store = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend: "journal-v4",
       getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
       binaryPrefetch: { poolSize: 4, fsyncDelayMs },
     })
@@ -1159,8 +1142,8 @@ describe("capturing a blob-heavy transaction", () => {
       longestGap = Math.max(longestGap, performance.now() - last)
 
       expect(store.sequence()).toBe(1)
-      // Main thread: the journal append and one binary-directory fsync. The
-      // per-file fsyncs ran in the worker pool (two per file used to run here).
+      // Main thread: at most the binary-directory fsyncs (SQLite syncs in C).
+      // The per-file fsyncs ran in the worker pool (two per file used to run here).
       expect(fsyncSync.mock.calls.length).toBeLessThanOrEqual(2)
       const root = durabilityRoot(home, "acct")
       expect(
@@ -1206,7 +1189,6 @@ describe("capturing a blob-heavy transaction", () => {
     const store = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend: "journal-v4",
       getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
       binaryPrefetch: { poolSize: 2, fsyncDelayMs },
     })
@@ -1251,7 +1233,6 @@ describe("capturing a blob-heavy transaction", () => {
     const store = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend: "journal-v4",
       getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
     })
     try {
@@ -1280,7 +1261,7 @@ describe("capturing a blob-heavy transaction", () => {
     }
   })
 
-  it("journals the bytes of each write, even for a buffer reused after an aborted transaction", async () => {
+  it("records the bytes of each write, even for a buffer reused after an aborted transaction", async () => {
     const home = tempHome()
     const name = `BlobReuse-${path.basename(home)}`
     await installFakeIndexedDb()
@@ -1289,7 +1270,6 @@ describe("capturing a blob-heavy transaction", () => {
     const store = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend: "journal-v4",
       getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
     })
     try {
@@ -1330,7 +1310,7 @@ describe("capturing a blob-heavy transaction", () => {
   })
 })
 
-describe.each(["journal-v4", "sqlite-v5"] as const)("what a restart restores (%s)", (backend) => {
+describe("what a restart restores", () => {
   // Declares only the base schema. A table a live upgrade added comes back the
   // way production re-declares plugin tables: from the store's persisted list.
   async function reopen(home: string, name: string) {
@@ -1339,7 +1319,6 @@ describe.each(["journal-v4", "sqlite-v5"] as const)("what a restart restores (%s
     const store = await openDurabilityStore({
       home,
       accountId: "acct",
-      backend,
       getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
       prepareDynamicSchema: async (_sources, _versions, persistedTables) => {
         const known = new Set(db.tables.map((table) => table.name))
@@ -1358,7 +1337,7 @@ describe.each(["journal-v4", "sqlite-v5"] as const)("what a restart restores (%s
 
   it("keeps no phantom of a refused add, and keeps a live schema upgrade's writes", async () => {
     const home = tempHome()
-    const name = `RestartOutcome-${backend}-${path.basename(home)}`
+    const name = `RestartOutcome-${path.basename(home)}`
     await installFakeIndexedDb()
     const first = await reopen(home, name)
     try {

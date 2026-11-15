@@ -2,9 +2,8 @@
  * Content-addressed side files for the binary values a durability row holds.
  *
  * A Blob or typed array of any real size does not belong in a JSON string: the
- * journal line, the SQLite `TEXT` value and above all a checkpoint's one-file
- * table dump would each have to hold its base64 — and V8 caps one string near
- * 512 MiB. Same rule as the snapshot store (`cli/src/db/bootstrap.ts`). Bytes
+ * SQLite `TEXT` value would have to hold its base64, and V8 caps one string
+ * near 512 MiB. Same rule as the snapshot store (`cli/src/db/bootstrap.ts`). Bytes
  * above {@link INLINE_BINARY_LIMIT} go to `<root>/binary/<sha256>` and the row
  * holds a `fileRef` envelope instead.
  *
@@ -155,7 +154,7 @@ export const BINARY_PRUNE_GRACE_MS = 60 * 60 * 1000
 /**
  * Remove side files (and abandoned staging files) that `keep` does not name and
  * that are older than the grace period. Callers first collect the references
- * of every generation, journal and SQLite row they keep.
+ * of every SQLite row they keep.
  */
 export function pruneBinaries(
   root: string,

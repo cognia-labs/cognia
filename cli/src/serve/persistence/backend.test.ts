@@ -1,20 +1,11 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { DatabaseSync } from "node:sqlite"
 
-import {
-  backendHeldByUnpinnedRoot,
-  createDualWriteBackend,
-  durabilityRoot,
-  ensureDurabilityRoot,
-  inspectDurabilityRoot,
-  openBackend,
-  resolveBackend,
-  resolveServeHome,
-} from "./backend"
-import { writeCheckpoint } from "./checkpoint"
-import { manifestFile, readManifest, writeManifest } from "./manifest"
-import type { DurabilityCommit, DurabilityState, HeadlessDurabilityBackend } from "./types"
+import { durabilityRoot, ensureDurabilityRoot, resolveBackend, resolveServeHome } from "./backend"
+import { SQLITE_ROWS_TABLE, sqliteFile } from "./sqlite"
+import type { DurabilityCommit, DurabilityState } from "./types"
 import { hasLiveWriter } from "./writer-lock"
 
 function tempRoot(): string {
@@ -70,227 +61,6 @@ describe("durabilityRoot", () => {
   })
 })
 
-describe("openBackend", () => {
-  it("maps snapshot-v3 onto the checkpoint half of the journal backend", () => {
-    const root = tempRoot()
-    try {
-      expect(openBackend("snapshot-v3", root).id).toBe("journal-v4")
-      expect(openBackend("journal-v4", root).id).toBe("journal-v4")
-      expect(openBackend("sqlite-v5", root).id).toBe("sqlite-v5")
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
-})
-
-describe("createDualWriteBackend", () => {
-  function recorder(id: HeadlessDurabilityBackend["id"]): HeadlessDurabilityBackend & {
-    seen: number[]
-    closed: boolean
-    compacted: number
-  } {
-    let sequence = 0
-    return {
-      id,
-      seen: [],
-      closed: false,
-      compacted: 0,
-      load: async () => state(sequence),
-      commitSync(c) {
-        sequence = c.sequence
-        ;(this as unknown as { seen: number[] }).seen.push(c.sequence)
-      },
-      async commit(c) {
-        this.commitSync(c)
-      },
-      lastSequence: () => sequence,
-      async compact(s) {
-        ;(this as unknown as { compacted: number }).compacted += 1
-        return { generation: "x", previousGeneration: null, sequence: s.sequence }
-      },
-      async close() {
-        ;(this as unknown as { closed: boolean }).closed = true
-      },
-    }
-  }
-
-  it("writes the journal first and mirrors into the shadow", async () => {
-    const order: string[] = []
-    const primary = recorder("journal-v4")
-    const shadow = recorder("sqlite-v5")
-    const wrappedPrimary = {
-      ...primary,
-      commitSync: (c: DurabilityCommit) => {
-        order.push("primary")
-        primary.commitSync(c)
-      },
-    }
-    const wrappedShadow = {
-      ...shadow,
-      commitSync: (c: DurabilityCommit) => {
-        order.push("shadow")
-        shadow.commitSync(c)
-      },
-    }
-    const dual = createDualWriteBackend(wrappedPrimary, wrappedShadow)
-    dual.commitSync(commit(1, "s:a", 1))
-    await dual.commit(commit(2, "s:b", 2))
-    expect(order).toEqual(["primary", "shadow", "primary", "shadow"])
-    expect(primary.seen).toEqual([1, 2])
-    expect(shadow.seen).toEqual([1, 2])
-  })
-
-  it("answers load and lastSequence from the primary", async () => {
-    const primary = recorder("journal-v4")
-    const shadow = recorder("sqlite-v5")
-    const dual = createDualWriteBackend(primary, shadow)
-    dual.commitSync(commit(1, "s:a", 1))
-    expect(dual.id).toBe("journal-v4")
-    expect(dual.lastSequence()).toBe(1)
-    expect((await dual.load()).sequence).toBe(1)
-  })
-
-  it("compacts and closes both", async () => {
-    const primary = recorder("journal-v4")
-    const shadow = recorder("sqlite-v5")
-    const dual = createDualWriteBackend(primary, shadow)
-    await dual.compact(state(3))
-    await dual.close()
-    expect(primary.compacted).toBe(1)
-    expect(shadow.compacted).toBe(1)
-    expect(primary.closed && shadow.closed).toBe(true)
-  })
-
-  it("preserves a dual write made before compaction resolves in both backends", async () => {
-    const root = tempRoot()
-    writeCheckpoint(root, "gen-0001", state())
-    const primary = openBackend("journal-v4", root)
-    const shadow = openBackend("sqlite-v5", root)
-    try {
-      await primary.load()
-      await shadow.compact(state())
-      const dual = createDualWriteBackend(primary, shadow)
-      dual.commitSync(commit(1, "s:a", { id: "a" }))
-      const snapshot = await dual.load()
-
-      const compacting = dual.compact(snapshot)
-      dual.commitSync(commit(2, "s:b", { id: "b" }))
-      await compacting
-      expect(await shadow.load()).toEqual(await primary.load())
-      dual.commitSync(commit(3, "s:c", { id: "c" }))
-      expect((await shadow.load()).sequence).toBe(3)
-    } finally {
-      await primary.close()
-      await shadow.close()
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
-})
-
-describe("durability root inventory", () => {
-  let root: string
-  beforeEach(() => {
-    root = tempRoot()
-  })
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
-
-  it("refuses to reseed staged data after the activation manifest is lost", async () => {
-    writeCheckpoint(root, "gen-0001", state(42), { staged: true })
-    const inventory = inspectDurabilityRoot(root)
-    expect(() => backendHeldByUnpinnedRoot(inventory)).toThrow(/only staged journal data/)
-    await expect(
-      resolveBackend({ root, initialBackend: "sqlite-v5", seed: state(0) })
-    ).rejects.toThrow(/only staged journal data/)
-  })
-
-  it("refuses to guess between staged journal data and SQLite after manifest loss", async () => {
-    writeCheckpoint(root, "gen-0001", state(43), { staged: true })
-    const sqlite = openBackend("sqlite-v5", root)
-    await sqlite.compact(state(42))
-    await sqlite.close()
-    expect(() => backendHeldByUnpinnedRoot(inspectDurabilityRoot(root))).toThrow(
-      /both journal and sqlite/
-    )
-  })
-
-  it("names the backend an un-pinned root already holds", async () => {
-    writeCheckpoint(root, "gen-0001", state(0))
-    expect(backendHeldByUnpinnedRoot(inspectDurabilityRoot(root))).toBe("journal-v4")
-  })
-
-  it("defers to the manifest once one exists", () => {
-    writeCheckpoint(root, "gen-0001", state(0))
-    writeManifest(root, {
-      manifestFormat: 1,
-      activeBackend: "sqlite-v5",
-      shadowBackend: "journal-v4",
-      rollbackWatermark: null,
-      updatedAt: 0,
-    })
-    expect(backendHeldByUnpinnedRoot(inspectDurabilityRoot(root))).toBeNull()
-  })
-})
-
-describe("resolveBackend with an initial backend", () => {
-  let root: string
-  beforeEach(() => {
-    root = tempRoot()
-  })
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
-
-  it("seeds an empty sqlite store so its first commit has a schema to land in", async () => {
-    const resolved = await resolveBackend({
-      root,
-      seed: state(0, { "s:a": { id: "a" } }),
-      initialBackend: "sqlite-v5",
-    })
-    expect(resolved.backend.id).toBe("sqlite-v5")
-    expect(resolved.state.dbs.CogniaDB.rows.sessions).toEqual({ "s:a": { id: "a" } })
-    resolved.backend.commitSync(commit(1, "s:b", { id: "b" }))
-    await resolved.backend.close()
-
-    expect(readManifest(root).activeBackend).toBe("sqlite-v5")
-    // No journal generation is written beside a sqlite pin, so a crash before
-    // the pin can never leave an ambiguous root.
-    expect(inspectDurabilityRoot(root).journal).toBe(false)
-    const reopened = await resolveBackend({ root, seed: state(0), initialBackend: "journal-v4" })
-    expect(reopened.backend.id).toBe("sqlite-v5")
-    expect(reopened.state.dbs.CogniaDB.rows.sessions).toEqual({
-      "s:a": { id: "a" },
-      "s:b": { id: "b" },
-    })
-    await reopened.backend.close()
-  })
-
-  it("pins a journal root the same way", async () => {
-    const resolved = await resolveBackend({
-      root,
-      seed: state(0, { "s:a": 1 }),
-      initialBackend: "journal-v4",
-    })
-    expect(resolved.manifest.activeBackend).toBe("journal-v4")
-    expect(fs.existsSync(manifestFile(root))).toBe(true)
-    await resolved.backend.close()
-  })
-
-  it("never re-seeds a sqlite store that already holds data", async () => {
-    const first = await resolveBackend({
-      root,
-      seed: state(0, { "s:kept": 1 }),
-      initialBackend: "sqlite-v5",
-    })
-    await first.backend.close()
-    fs.rmSync(manifestFile(root))
-    const second = await resolveBackend({
-      root,
-      seed: state(0, { "s:fresh": 1 }),
-      initialBackend: "sqlite-v5",
-    })
-    expect(second.state.dbs.CogniaDB.rows.sessions).toEqual({ "s:kept": 1 })
-    await second.backend.close()
-  })
-})
-
 describe("resolveBackend", () => {
   let root: string
   beforeEach(() => {
@@ -298,136 +68,91 @@ describe("resolveBackend", () => {
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
-  it("seeds a first-boot checkpoint from the caller's live state", async () => {
+  it("creates the root and opens an empty SQLite store without a seed", async () => {
+    const nested = path.join(root, "acct")
+    const resolved = await resolveBackend({ root: nested })
+    try {
+      expect(resolved.backend.id).toBe("sqlite-v5")
+      expect(resolved.state).toEqual({ sequence: 0, dbs: {} })
+      expect(fs.existsSync(sqliteFile(nested))).toBe(true)
+    } finally {
+      await resolved.backend.close()
+    }
+  })
+
+  it("seeds an empty store so its first commit has a schema to land in", async () => {
     const resolved = await resolveBackend({ root, seed: state(0, { "s:a": { id: "a" } }) })
-    expect(resolved.manifest.activeBackend).toBe("journal-v4")
+    expect(resolved.backend.id).toBe("sqlite-v5")
+    expect(resolved.state.sequence).toBe(0)
+    expect(resolved.state.dbs.CogniaDB.schema).toEqual({ version: 141, tables: ["sessions"] })
     expect(resolved.state.dbs.CogniaDB.rows.sessions).toEqual({ "s:a": { id: "a" } })
-    await resolved.backend.close()
-  })
-
-  it("never re-seeds once a generation exists", async () => {
-    writeCheckpoint(root, "gen-0001", state(2, { "s:kept": 1 }))
-    const resolved = await resolveBackend({ root, seed: state(0, { "s:fresh": 1 }) })
-    expect(resolved.state.dbs.CogniaDB.rows.sessions).toEqual({ "s:kept": 1 })
-    await resolved.backend.close()
-  })
-
-  it("returns no shadow when the manifest has none", async () => {
-    const resolved = await resolveBackend({ root, seed: state() })
-    expect(resolved.shadowCatchUp).toBe(0)
-    await resolved.backend.close()
-  })
-
-  it("rejects a manifest that shadows a backend onto itself", async () => {
-    writeCheckpoint(root, "gen-0001", state())
-    writeManifest(root, {
-      manifestFormat: 1,
-      activeBackend: "journal-v4",
-      shadowBackend: "journal-v4",
-      rollbackWatermark: null,
-      updatedAt: 0,
-    })
-    await expect(resolveBackend({ root })).rejects.toThrow(/shadows .* onto itself/)
-  })
-
-  it("replays the journal tail into a lagging shadow", async () => {
-    writeCheckpoint(root, "gen-0001", state(0))
-    const journal = openBackend("journal-v4", root)
-    await journal.load()
-    journal.commitSync(commit(1, "s:a", { id: "a" }))
-    journal.commitSync(commit(2, "s:b", { id: "b" }))
-    await journal.close()
-
-    // Seed SQLite at sequence 1 only — the interrupted dual-write window.
-    const sqlite = openBackend("sqlite-v5", root)
-    await sqlite.compact(state(1, { "s:a": { id: "a" } }))
-    await sqlite.close()
-
-    writeManifest(root, {
-      manifestFormat: 1,
-      activeBackend: "journal-v4",
-      shadowBackend: "sqlite-v5",
-      rollbackWatermark: null,
-      updatedAt: 0,
-    })
-
-    const resolved = await resolveBackend({ root })
-    expect(resolved.shadowCatchUp).toBe(1)
+    resolved.backend.commitSync(commit(1, "s:b", { id: "b" }))
     await resolved.backend.close()
 
-    const check = openBackend("sqlite-v5", root)
-    const caught = await check.load()
-    await check.close()
-    expect(caught.sequence).toBe(2)
-    expect(caught.dbs.CogniaDB.rows.sessions).toEqual({
-      "s:a": { id: "a" },
-      "s:b": { id: "b" },
-    })
+    const reopened = await resolveBackend({ root, seed: state(0) })
+    try {
+      expect(reopened.backend.lastSequence()).toBe(1)
+      expect(reopened.state.dbs.CogniaDB.rows.sessions).toEqual({
+        "s:a": { id: "a" },
+        "s:b": { id: "b" },
+      })
+    } finally {
+      await reopened.backend.close()
+    }
   })
 
-  it("rewrites a shadow that predates the checkpoint wholesale", async () => {
-    writeCheckpoint(root, "gen-0001", state(10, { "s:a": { id: "a" } }))
-    writeManifest(root, {
-      manifestFormat: 1,
-      activeBackend: "journal-v4",
-      shadowBackend: "sqlite-v5",
-      rollbackWatermark: null,
-      updatedAt: 0,
-    })
-    const resolved = await resolveBackend({ root })
-    expect(resolved.shadowCatchUp).toBe(10)
+  it("seeds at sequence 0 whatever sequence the seed carries", async () => {
+    const resolved = await resolveBackend({ root, seed: state(7, { "s:a": 1 }) })
+    try {
+      expect(resolved.state.sequence).toBe(0)
+      expect(resolved.backend.lastSequence()).toBe(0)
+      expect(() => resolved.backend.commitSync(commit(1, "s:b", 2))).not.toThrow()
+    } finally {
+      await resolved.backend.close()
+    }
+  })
+
+  it("never re-seeds a seeded store, even one still at sequence 0", async () => {
+    const first = await resolveBackend({ root, seed: state(0, { "s:kept": 1 }) })
+    await first.backend.close()
+    const second = await resolveBackend({ root, seed: state(0, { "s:fresh": 1 }) })
+    try {
+      expect(second.state.dbs.CogniaDB.rows.sessions).toEqual({ "s:kept": 1 })
+    } finally {
+      await second.backend.close()
+    }
+  })
+
+  it("never re-seeds a store whose commits emptied every row", async () => {
+    const first = await resolveBackend({ root, seed: state(0, { "s:gone": 1 }) })
+    first.backend.commitSync(commit(1, "s:gone", null))
+    await first.backend.close()
+    const second = await resolveBackend({ root, seed: state(0, { "s:fresh": 1 }) })
+    try {
+      expect(second.state.sequence).toBe(1)
+      expect(second.state.dbs.CogniaDB.rows.sessions).toEqual({})
+    } finally {
+      await second.backend.close()
+    }
+  })
+
+  it("holds the SQLite writer lease until the backend closes", async () => {
+    const resolved = await resolveBackend({ root, seed: state(0) })
+    expect(hasLiveWriter(root, "sqlite")).toBe(true)
     await resolved.backend.close()
-
-    const check = openBackend("sqlite-v5", root)
-    const caught = await check.load()
-    await check.close()
-    expect(caught.sequence).toBe(10)
+    expect(hasLiveWriter(root, "sqlite")).toBe(false)
   })
 
-  const sqliteActive = () =>
-    writeManifest(root, {
-      manifestFormat: 1,
-      activeBackend: "sqlite-v5",
-      shadowBackend: "journal-v4",
-      rollbackWatermark: null,
-      updatedAt: 0,
-    })
+  it("releases the store when its content cannot be loaded", async () => {
+    const seeded = await resolveBackend({ root, seed: state(0, { "s:a": 1 }) })
+    await seeded.backend.close()
+    const db = new DatabaseSync(sqliteFile(root))
+    db.prepare(`UPDATE ${SQLITE_ROWS_TABLE} SET value_codec = 9`).run()
+    db.close()
 
-  it("rewrites a shadow journal the tail cannot bridge instead of leaving it behind", async () => {
-    // The journal shadow missed commit 5 (a failed append): its own file is
-    // the only tail there is, and its load already replayed it.
-    writeCheckpoint(root, "gen-0001", state(4))
-    const sqlite = openBackend("sqlite-v5", root)
-    await sqlite.compact(state(4))
-    sqlite.commitSync(commit(5, "s:missed", { id: "missed" }))
-    await sqlite.close()
-    sqliteActive()
-
-    const resolved = await resolveBackend({ root })
-    expect(resolved.shadowCatchUp).toBe(1)
-    resolved.backend.commitSync(commit(6, "s:next", { id: "next" }))
-    await resolved.backend.close()
-    const journal = openBackend("journal-v4", root)
-    const caught = await journal.load()
-    await journal.close()
-    expect(caught.sequence).toBe(6)
-    expect(Object.keys(caught.dbs.CogniaDB.rows.sessions).sort()).toEqual(["s:missed", "s:next"])
-  })
-
-  it("refuses to run with a shadow that is ahead of the journal", async () => {
-    writeCheckpoint(root, "gen-0001", state(1))
-    const sqlite = openBackend("sqlite-v5", root)
-    await sqlite.compact(state(5))
-    await sqlite.close()
-    writeManifest(root, {
-      manifestFormat: 1,
-      activeBackend: "journal-v4",
-      shadowBackend: "sqlite-v5",
-      rollbackWatermark: null,
-      updatedAt: 0,
-    })
-    await expect(resolveBackend({ root })).rejects.toThrow(/ahead of the journal/)
-    expect(hasLiveWriter(root, "journal")).toBe(false)
+    await expect(resolveBackend({ root, seed: state(0) })).rejects.toThrow(
+      expect.objectContaining({ code: "sqlite-integrity-failure" })
+    )
     expect(hasLiveWriter(root, "sqlite")).toBe(false)
   })
 })
