@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Textarea } from "@/components/ui/textarea"
 import { useFleetSnapshot } from "@/hooks/fleet/use-fleet-snapshot"
+import { useNowTicker } from "@/hooks/fleet/use-now-ticker"
+import { deriveSquadChildStop, summarizeSquadStop } from "@/lib/squads/squad/squad-stop-status"
 import { retrySquadChild } from "@/lib/squads/durable/retry-squad-child"
 import { getDb } from "@/lib/db/schema"
 import { createDecisionLedger } from "@cognia/agent-orchestration/decision-ledger"
@@ -63,7 +65,7 @@ export function DurableOperations({
   onOpenBrowser,
 }: DurableOperationsProps) {
   const t = useTranslations("agentTeamsWorkspace.operations")
-  const [now] = useState(() => Date.now())
+  const now = useNowTicker()
   const [steering, setSteering] = useState<Record<string, string>>({})
   const [manualCommands, setManualCommands] = useState<Record<string, string>>({})
   const [manualDiffs, setManualDiffs] = useState<Record<string, string>>({})
@@ -148,6 +150,8 @@ export function DurableOperations({
 
   if (!data) return <Card className="p-6 text-sm text-muted-foreground">{t("empty")}</Card>
 
+  const runStop = summarizeSquadStop(data.run, data.children, now)
+
   // A stack publish the outbound policy held or a person refused (ADR-0239
   // phase 2) waits on its draft graph for a person's "approve and publish".
   const publishHeld =
@@ -168,8 +172,20 @@ export function DurableOperations({
             <h3 className="font-semibold">{t("run.title")}</h3>
             <p className="text-xs text-muted-foreground">{data.run.id}</p>
           </div>
-          <Badge variant="outline">{t(`status.${data.run.status}`)}</Badge>
+          <Badge variant="outline">
+            {runStop.state !== "none" ? t(`stop.${runStop.state}`) : t(`status.${data.run.status}`)}
+          </Badge>
         </div>
+        {runStop.state !== "none" ? (
+          <div role="status" aria-label={t("run.stopSummary")} className="text-sm">
+            {t(`stop.${runStop.state}`)}
+            {runStop.state === "stopped" &&
+              runStop.proofKinds.map((kind) => (
+                <span key={kind}> · {t(`stop.proof.${kind}`)}</span>
+              ))}
+            {runStop.controlLost ? <p>{t("stop.controlLost")}</p> : null}
+          </div>
+        ) : null}
         <div className="grid gap-2 text-sm sm:grid-cols-3">
           <span>{t("run.decisionVersion", { value: data.run.decisionVersion })}</span>
           <span>{t("run.tokens", { value: data.run.resourceUsage?.totalTokens ?? 0 })}</span>
@@ -250,184 +266,220 @@ export function DurableOperations({
 
       <Card className="space-y-3 p-4">
         <h3 className="font-semibold">{t("children.title")}</h3>
-        {data.children.map((child) => (
-          <div key={child.id} className="space-y-2 rounded-md border p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-mono text-xs">{child.id}</span>
-              <Badge variant="outline">{t(`status.${child.status}`)}</Badge>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {child.repositoryId} · {child.workspacePath ?? t("children.noWorkspace")}
-            </p>
-            <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-              <span>{t("children.host", { value: child.hostRef ?? t("children.localHost") })}</span>
-              <span>
-                {t("children.remoteSession", {
-                  value: child.remoteSessionId ?? t("children.noRemoteSession"),
-                })}
-              </span>
-              <span>
-                {t("children.lease", {
-                  value: child.dispatchLeaseId
-                    ? (child.dispatchLeaseExpiresAt ?? 0) > now
-                      ? t("children.leaseFresh")
-                      : t("children.leaseExpired")
-                    : t("children.noLease"),
-                })}
-              </span>
-              {child.waitingReason ? (
-                <span>{t("children.waitingReason", { value: child.waitingReason })}</span>
-              ) : null}
-            </div>
-            {child.waitingReason === "recovery_required" ? (
-              <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
-                <p className="text-sm font-medium">{t("children.recoveryRequired")}</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!child.hostRef}
-                    onClick={() =>
-                      void invoke(
-                        () => retrySquadChild(child.id, child.hostRef),
-                        t("children.retryStarted")
-                      )
-                    }
-                  >
-                    {t("children.retrySameHost")}
-                  </Button>
-                  <NativeSelect
-                    size="sm"
-                    aria-label={t("children.retryHostLabel")}
-                    value={retryHosts[child.id] ?? ""}
-                    onChange={(event) =>
-                      setRetryHosts((current) => ({
-                        ...current,
-                        [child.id]: event.target.value,
-                      }))
-                    }
-                  >
-                    <NativeSelectOption value="">{t("children.selectHost")}</NativeSelectOption>
-                    {(fleetSnapshot.hosts ?? [])
-                      .filter((host) => host.online && host.hostRef !== child.hostRef)
-                      .map((host) => (
-                        <NativeSelectOption key={host.hostRef} value={host.hostRef}>
-                          {host.hostRef}
-                        </NativeSelectOption>
-                      ))}
-                  </NativeSelect>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!retryHosts[child.id]}
-                    onClick={() =>
-                      void invoke(
-                        () => retrySquadChild(child.id, retryHosts[child.id]),
-                        t("children.retryStarted")
-                      )
-                    }
-                  >
-                    {t("children.retrySelectedHost")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() =>
-                      void invoke(
-                        () => getDurableTeamCoordinator().terminateChild(child.id),
-                        t("children.cancelled")
-                      )
-                    }
-                  >
-                    {t("children.cancel")}
-                  </Button>
-                </div>
+        {data.children.map((child) => {
+          const stop = deriveSquadChildStop(child, now)
+          const retryBlocked = !stop.proof
+          return (
+            <div key={child.id} className="space-y-2 rounded-md border p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono text-xs">{child.id}</span>
+                <Badge variant="outline">
+                  {stop.controlLost
+                    ? t("stop.controlLost")
+                    : stop.state !== "none"
+                      ? t(`stop.${stop.state}`)
+                      : t(`status.${child.status}`)}
+                </Badge>
               </div>
-            ) : null}
-            <div className="flex gap-2">
-              <Input
-                value={steering[child.id] ?? ""}
-                onChange={(event) =>
-                  setSteering((value) => ({ ...value, [child.id]: event.target.value }))
-                }
-                placeholder={t("children.steerPlaceholder")}
-              />
-              <Button
-                size="icon"
-                aria-label={t("children.steer")}
-                disabled={!steering[child.id]?.trim()}
-                onClick={() =>
-                  void invoke(async () => {
-                    await getDurableTeamCoordinator().steer(child.id, steering[child.id]!)
-                    setSteering((value) => ({ ...value, [child.id]: "" }))
-                  }, t("children.steered"))
-                }
-              >
-                <SendIcon className="size-4" />
-              </Button>
+              {stop.state !== "none" ? (
+                <p className="text-xs">
+                  {t(`stop.${stop.state}`)} ·{" "}
+                  {stop.proof ? t(`stop.proof.${stop.proof.kind}`) : t("stop.noProof")}
+                </p>
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                {child.repositoryId} · {child.workspacePath ?? t("children.noWorkspace")}
+              </p>
+              <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                <span>{t("children.attempt", { value: child.attempt ?? 0 })}</span>
+                <span>
+                  {t("children.attemptStatus", {
+                    value: stop.controlLost ? t("stop.controlLost") : t(`status.${child.status}`),
+                  })}
+                </span>
+                <span>{t("children.epoch", { value: child.dispatchEpoch ?? 0 })}</span>
+                <span>
+                  {t("children.host", { value: child.hostRef ?? t("children.localHost") })}
+                </span>
+                <span>
+                  {t("children.remoteSession", {
+                    value: child.remoteSessionId ?? t("children.noRemoteSession"),
+                  })}
+                </span>
+                <span>
+                  {t("children.lease", {
+                    value: child.dispatchLeaseId
+                      ? (child.dispatchLeaseExpiresAt ?? 0) > now
+                        ? t("children.leaseFresh")
+                        : t("children.leaseExpired")
+                      : t("children.noLease"),
+                  })}
+                </span>
+                {child.waitingReason ? (
+                  <span>{t("children.waitingReason", { value: child.waitingReason })}</span>
+                ) : null}
+              </div>
+              {["recovery_required", "stop_unconfirmed", "pause_unconfirmed"].includes(
+                child.waitingReason ?? ""
+              ) ? (
+                <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                  <p className="text-sm font-medium">{t("children.recoveryRequired")}</p>
+                  {retryBlocked ? (
+                    <p id={`${child.id}-retry-blocked`} className="text-xs">
+                      {t("stop.retryBlocked")}
+                    </p>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={retryBlocked || !child.hostRef}
+                      aria-describedby={retryBlocked ? `${child.id}-retry-blocked` : undefined}
+                      onClick={() =>
+                        void invoke(
+                          () => retrySquadChild(child.id, child.hostRef),
+                          t("children.retryStarted")
+                        )
+                      }
+                    >
+                      {t("children.retrySameHost")}
+                    </Button>
+                    <NativeSelect
+                      size="sm"
+                      aria-label={t("children.retryHostLabel")}
+                      disabled={retryBlocked}
+                      aria-describedby={retryBlocked ? `${child.id}-retry-blocked` : undefined}
+                      value={retryHosts[child.id] ?? ""}
+                      onChange={(event) =>
+                        setRetryHosts((current) => ({
+                          ...current,
+                          [child.id]: event.target.value,
+                        }))
+                      }
+                    >
+                      <NativeSelectOption value="">{t("children.selectHost")}</NativeSelectOption>
+                      {(fleetSnapshot.hosts ?? [])
+                        .filter((host) => host.online && host.hostRef !== child.hostRef)
+                        .map((host) => (
+                          <NativeSelectOption key={host.hostRef} value={host.hostRef}>
+                            {host.hostRef}
+                          </NativeSelectOption>
+                        ))}
+                    </NativeSelect>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={retryBlocked || !retryHosts[child.id]}
+                      aria-describedby={retryBlocked ? `${child.id}-retry-blocked` : undefined}
+                      onClick={() =>
+                        void invoke(
+                          () => retrySquadChild(child.id, retryHosts[child.id]),
+                          t("children.retryStarted")
+                        )
+                      }
+                    >
+                      {t("children.retrySelectedHost")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() =>
+                        void invoke(
+                          () => getDurableTeamCoordinator().terminateChild(child.id),
+                          t("children.cancelled")
+                        )
+                      }
+                    >
+                      {t("children.cancel")}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="flex gap-2">
+                <Input
+                  value={steering[child.id] ?? ""}
+                  onChange={(event) =>
+                    setSteering((value) => ({ ...value, [child.id]: event.target.value }))
+                  }
+                  placeholder={t("children.steerPlaceholder")}
+                />
+                <Button
+                  size="icon"
+                  aria-label={t("children.steer")}
+                  disabled={!steering[child.id]?.trim()}
+                  onClick={() =>
+                    void invoke(async () => {
+                      await getDurableTeamCoordinator().steer(child.id, steering[child.id]!)
+                      setSteering((value) => ({ ...value, [child.id]: "" }))
+                    }, t("children.steered"))
+                  }
+                >
+                  <SendIcon className="size-4" />
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Textarea
+                  value={manualCommands[child.id] ?? ""}
+                  onChange={(event) =>
+                    setManualCommands((value) => ({ ...value, [child.id]: event.target.value }))
+                  }
+                  placeholder={t("children.commandsPlaceholder")}
+                />
+                <Textarea
+                  value={manualDiffs[child.id] ?? ""}
+                  onChange={(event) =>
+                    setManualDiffs((value) => ({ ...value, [child.id]: event.target.value }))
+                  }
+                  placeholder={t("children.diffPlaceholder")}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={onOpenEditor}>
+                  {t("children.openEditor")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onOpenTerminal(child.workspacePath)}
+                >
+                  {t("children.openTerminal")}
+                </Button>
+                <Button size="sm" variant="outline" onClick={onOpenBrowser}>
+                  {t("children.openBrowser")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    void invoke(
+                      () => getDurableTeamCoordinator().beginTakeover(child.id),
+                      t("children.takeoverStarted")
+                    )
+                  }
+                >
+                  <HandIcon className="mr-1 size-3.5" />
+                  {t("children.takeover")}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    void invoke(
+                      () =>
+                        getDurableTeamCoordinator().completeTakeover({
+                          childRunId: child.id,
+                          commands: (manualCommands[child.id] ?? "").split("\n").filter(Boolean),
+                          diffContent: manualDiffs[child.id] || undefined,
+                        }),
+                      t("children.takeoverCompleted")
+                    )
+                  }
+                >
+                  {t("children.resume")}
+                </Button>
+              </div>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Textarea
-                value={manualCommands[child.id] ?? ""}
-                onChange={(event) =>
-                  setManualCommands((value) => ({ ...value, [child.id]: event.target.value }))
-                }
-                placeholder={t("children.commandsPlaceholder")}
-              />
-              <Textarea
-                value={manualDiffs[child.id] ?? ""}
-                onChange={(event) =>
-                  setManualDiffs((value) => ({ ...value, [child.id]: event.target.value }))
-                }
-                placeholder={t("children.diffPlaceholder")}
-              />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" onClick={onOpenEditor}>
-                {t("children.openEditor")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onOpenTerminal(child.workspacePath)}
-              >
-                {t("children.openTerminal")}
-              </Button>
-              <Button size="sm" variant="outline" onClick={onOpenBrowser}>
-                {t("children.openBrowser")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  void invoke(
-                    () => getDurableTeamCoordinator().beginTakeover(child.id),
-                    t("children.takeoverStarted")
-                  )
-                }
-              >
-                <HandIcon className="mr-1 size-3.5" />
-                {t("children.takeover")}
-              </Button>
-              <Button
-                size="sm"
-                onClick={() =>
-                  void invoke(
-                    () =>
-                      getDurableTeamCoordinator().completeTakeover({
-                        childRunId: child.id,
-                        commands: (manualCommands[child.id] ?? "").split("\n").filter(Boolean),
-                        diffContent: manualDiffs[child.id] || undefined,
-                      }),
-                    t("children.takeoverCompleted")
-                  )
-                }
-              >
-                {t("children.resume")}
-              </Button>
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </Card>
 
       <Card className="space-y-3 p-4">

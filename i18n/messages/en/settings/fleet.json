@@ -104,6 +104,12 @@
   "workers": {
     "bindingHint": "Remote AgentTeam placement reuses these authenticated Fleet hosts and Task Workspace bindings.",
     "capacity": "{used}/{total} slots",
+    "selfIsolation": "Self-isolation: {value}",
+    "strictStop": "Strict stop: {value}",
+    "supported": "supported",
+    "unsupported": "not supported",
+    "capabilityUnknown": "unknown",
+    "controlLost": "Control lost — this Worker is offline; its remote runs may still be running.",
     "commandAria": "Worker enrollment command",
     "copied": "Enrollment command copied.",
     "copy": "Copy enrollment command",

@@ -139,6 +139,7 @@
     "interrupt_expired": "该审批在被处理前已过期。",
     "interrupt_not_found": "该审批已不存在。",
     "interrupt_resolved": "该审批已被处理过。",
+    "interrupt_stale": "该审批针对的是已重新派发前的旧尝试，已不再适用。",
     "invalid_command": "命令不完整。",
     "not_controllable": "该运行没有执行日志，无法在这里控制。",
     "retried": "已由新的运行接管。",
@@ -222,6 +223,25 @@
       "label": "恢复方式",
       "reason": "原因：{reason}",
       "hostRefPlaceholder": "要重试的主机",
+      "attempt": "最近一次尝试：第 {value} 次",
+      "attemptStatus": "最近一次尝试状态：{value}",
+      "epoch": "执行代次：{value}",
+      "host": "执行主机：{value}",
+      "localHost": "本机",
+      "detailsUnavailable": "无法获取尝试详情，无法验证停止证明。",
+      "stop": {
+        "none": "未请求停止",
+        "requested": "正在停止",
+        "unconfirmed": "停止未确认",
+        "stopped": "已停止",
+        "controlLost": "控制已断开，远端运行可能仍在继续",
+        "noProof": "无停止证明",
+        "proof": {
+          "ack": "已由 Worker 确认",
+          "fence-expiry": "租约到期，Worker 已自我隔离"
+        },
+        "retryBlocked": "上一次尝试获得停止证明后才能重试。"
+      },
       "choices": {
         "retry_same_host": "在原主机重试",
         "retry_host": "在另一台主机重试",

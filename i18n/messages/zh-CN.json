@@ -2923,6 +2923,7 @@
       "interrupt_expired": "该审批在被处理前已过期。",
       "interrupt_not_found": "该审批已不存在。",
       "interrupt_resolved": "该审批已被处理过。",
+      "interrupt_stale": "该审批针对的是已重新派发前的旧尝试，已不再适用。",
       "invalid_command": "命令不完整。",
       "not_controllable": "该运行没有执行日志，无法在这里控制。",
       "retried": "已由新的运行接管。",
@@ -2998,14 +2999,20 @@
         "feedbackPlaceholder": "可选。需要改什么？个人信息会在存储前脱敏。"
       },
       "recovery": {
+        "attempt": "最近一次尝试：第 {value} 次",
+        "attemptStatus": "最近一次尝试状态：{value}",
         "choices": {
           "restart_run": "作为新运行重新开始",
           "retry_host": "在另一台主机重试",
           "retry_same_host": "在原主机重试",
           "terminate": "终止"
         },
+        "detailsUnavailable": "无法获取尝试详情，无法验证停止证明。",
+        "epoch": "执行代次：{value}",
+        "host": "执行主机：{value}",
         "hostRefPlaceholder": "要重试的主机",
         "label": "恢复方式",
+        "localHost": "本机",
         "reason": "原因：{reason}",
         "reasons": {
           "dispatch_initialization_failed": "小队未能准备任务调度",
@@ -3020,6 +3027,19 @@
           "squad_not_ready": "该小队缺少运行所需的绑定",
           "stop_unconfirmed": "已要求某个任务的执行器停止，但未能确认它已结束",
           "uncertain_side_effect": "某个副作用可能已发生也可能未发生"
+        },
+        "stop": {
+          "controlLost": "控制已断开，远端运行可能仍在继续",
+          "noProof": "无停止证明",
+          "none": "未请求停止",
+          "proof": {
+            "ack": "已由 Worker 确认",
+            "fence-expiry": "租约到期，Worker 已自我隔离"
+          },
+          "requested": "正在停止",
+          "retryBlocked": "上一次尝试获得停止证明后才能重试。",
+          "stopped": "已停止",
+          "unconfirmed": "停止未确认"
         }
       },
       "teammateRepair": {
@@ -3746,10 +3766,13 @@
     "openWorkspace": "打开工作区",
     "operations": {
       "children": {
+        "attempt": "最近一次尝试：第 {value} 次",
+        "attemptStatus": "最近一次尝试状态：{value}",
         "cancel": "取消子任务",
         "cancelled": "子任务已取消。",
         "commandsPlaceholder": "人工命令，每行一条",
         "diffPlaceholder": "人工 diff 或编辑摘要",
+        "epoch": "执行代次：{value}",
         "host": "执行主机：{value}",
         "lease": "分发租约：{value}",
         "leaseExpired": "已过期",
@@ -3837,6 +3860,7 @@
       "run": {
         "children": "{value} 个子任务",
         "decisionVersion": "决策版本 {value}",
+        "stopSummary": "运行停止摘要",
         "title": "当前持久化运行",
         "tokens": "{value} tokens"
       },
@@ -3852,6 +3876,19 @@
         "running": "运行中",
         "sleeping": "休眠中",
         "terminated": "已终止"
+      },
+      "stop": {
+        "controlLost": "控制已断开，远端运行可能仍在继续",
+        "noProof": "无停止证明",
+        "none": "未请求停止",
+        "proof": {
+          "ack": "已由 Worker 确认",
+          "fence-expiry": "租约到期，Worker 已自我隔离"
+        },
+        "requested": "正在停止",
+        "retryBlocked": "上一次尝试获得停止证明后才能重试。",
+        "stopped": "已停止",
+        "unconfirmed": "停止未确认"
       }
     },
     "overview": {
@@ -53173,8 +53210,10 @@
       "title": "Agent 舰队监控",
       "workers": {
         "bindingHint": "远程 AgentTeam 调度复用这些已认证的舰队主机与 Task Workspace 绑定。",
+        "capabilityUnknown": "未知",
         "capacity": "{used}/{total} 个槽位",
         "commandAria": "Worker 注册命令",
+        "controlLost": "控制已断开：此 Worker 已离线，远端运行可能仍在继续。",
         "copied": "注册命令已复制。",
         "copy": "复制注册命令",
         "copyFailed": "无法复制注册命令。",
@@ -53194,12 +53233,16 @@
         "remoteDispatchLabel": "远程 AgentTeam 派发",
         "revoke": "撤销",
         "revoked": "Worker 访问权限已撤销。",
+        "selfIsolation": "自我隔离：{value}",
         "status": {
           "incompatible": "不兼容",
           "offline": "离线",
           "online": "在线"
         },
-        "title": "执行 Worker"
+        "strictStop": "严格停止：{value}",
+        "supported": "支持",
+        "title": "执行 Worker",
+        "unsupported": "不支持"
       }
     },
     "gateway": {

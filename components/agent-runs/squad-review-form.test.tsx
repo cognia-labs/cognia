@@ -1,7 +1,11 @@
 /** @jest-environment jsdom */
 
-import { render, screen } from "@testing-library/react"
+import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import type { AgentTeamChildRun } from "@cognia/agent-orchestration"
+
+let liveChildren: (AgentTeamChildRun | undefined)[] = []
+jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => liveChildren }))
 
 jest.mock("next-intl", () => ({
   useTranslations: (ns?: string) => (key: string, values?: Record<string, unknown>) =>
@@ -18,7 +22,22 @@ function interrupt(reviewKind: SquadReviewKind, subject?: Record<string, unknown
   return { id: "int-1", reviewKind, expiresAt: 1, ...(subject ? { subject } : {}) }
 }
 
+const recoveryChild = (overrides: Partial<AgentTeamChildRun> = {}): AgentTeamChildRun =>
+  ({
+    id: "c1",
+    status: "needs_input",
+    attempt: 2,
+    dispatchEpoch: 3,
+    hostRef: "device:a",
+    remoteSessionId: "remote-1",
+    stop: { state: "unconfirmed", epoch: 3, requestedAt: 1 },
+    ...overrides,
+  }) as AgentTeamChildRun
+
 describe("SquadReviewForm", () => {
+  beforeEach(() => {
+    liveChildren = []
+  })
   it.each(Array.from(RECOVERY_REASONS))(
     "translates recovery reason %s in both supported locales",
     (reason) => {
@@ -164,6 +183,16 @@ describe("SquadReviewForm", () => {
   })
 
   it("recovery: retry_host stays disabled until a host is named", async () => {
+    liveChildren = [
+      recoveryChild({
+        stop: {
+          state: "confirmed",
+          epoch: 3,
+          requestedAt: 1,
+          proof: { kind: "ack", epoch: 3, at: 1 },
+        },
+      }),
+    ]
     const onDecide = jest.fn()
     render(
       <SquadReviewForm
@@ -184,6 +213,168 @@ describe("SquadReviewForm", () => {
       choice: "retry_host",
       hostRef: "host-b",
     })
+  })
+
+  it("recovery: shows every uncertain child's attempt, stop proof, epoch and host", () => {
+    liveChildren = [
+      recoveryChild({
+        stop: {
+          state: "confirmed",
+          epoch: 3,
+          requestedAt: 1,
+          proof: { kind: "ack", epoch: 3, at: 1 },
+        },
+      }),
+      recoveryChild({
+        id: "c2",
+        attempt: 4,
+        dispatchEpoch: 5,
+        hostRef: "device:b",
+        stop: { state: "requested", epoch: 5, requestedAt: 1 },
+      }),
+    ]
+    render(
+      <SquadReviewForm
+        interrupt={interrupt("team_recovery", { uncertainChildIds: ["c1", "c2"] })}
+        onDecide={jest.fn()}
+      />
+    )
+    for (const text of [
+      "c1",
+      "c2",
+      'agentRuns.review.recovery.attempt:{"value":2}',
+      'agentRuns.review.recovery.attempt:{"value":4}',
+      'agentRuns.review.recovery.epoch:{"value":3}',
+      'agentRuns.review.recovery.epoch:{"value":5}',
+      'agentRuns.review.recovery.host:{"value":"device:a"}',
+      'agentRuns.review.recovery.host:{"value":"device:b"}',
+    ])
+      expect(screen.getByText(text)).toBeInTheDocument()
+    expect(screen.getAllByText(/recovery.attemptStatus/)).toHaveLength(2)
+    expect(screen.getByText(/recovery.stop.proof.ack/)).toBeInTheDocument()
+    expect(screen.getByText(/recovery.stop.requested/)).toBeInTheDocument()
+    expect(screen.getByText(/recovery.stop.noProof/)).toBeInTheDocument()
+  })
+
+  it("recovery: offers only manual decisions without stop proof and preserves their payloads", async () => {
+    liveChildren = [recoveryChild()]
+    const onDecide = jest.fn()
+    render(
+      <SquadReviewForm
+        interrupt={interrupt("team_recovery", { uncertainChildIds: ["c1"] })}
+        onDecide={onDecide}
+      />
+    )
+    for (const choice of ["retry_same_host", "retry_host"]) {
+      const option = screen.getByRole("radio", {
+        name: `agentRuns.review.recovery.choices.${choice}`,
+      })
+      expect(option).toBeDisabled()
+      expect(option).toHaveAccessibleDescription("agentRuns.review.recovery.stop.retryBlocked")
+    }
+    const user = userEvent.setup()
+    const approve = screen.getByRole("button", {
+      name: "agentRuns.review.kinds.team_recovery.approve",
+    })
+    for (const choice of ["restart_run", "terminate"]) {
+      await user.click(screen.getByLabelText(`agentRuns.review.recovery.choices.${choice}`))
+      await user.click(approve)
+      expect(onDecide).toHaveBeenLastCalledWith("approve", { kind: "team_recovery", choice })
+    }
+    await user.click(
+      screen.getByRole("button", { name: "agentRuns.review.kinds.team_recovery.deny" })
+    )
+    expect(onDecide).toHaveBeenLastCalledWith("deny", undefined)
+  })
+
+  it("recovery: refuses retry while child records are missing", () => {
+    liveChildren = [undefined]
+    render(
+      <SquadReviewForm
+        interrupt={interrupt("team_recovery", { uncertainChildIds: ["c1"] })}
+        onDecide={jest.fn()}
+      />
+    )
+    expect(screen.getByText("agentRuns.review.recovery.detailsUnavailable")).toBeInTheDocument()
+    expect(
+      screen.getByRole("radio", { name: "agentRuns.review.recovery.choices.retry_same_host" })
+    ).toBeDisabled()
+  })
+
+  it("recovery: invalidates a selected retry if its live proof disappears", async () => {
+    liveChildren = [
+      recoveryChild({
+        stop: {
+          state: "confirmed",
+          epoch: 3,
+          requestedAt: 1,
+          proof: { kind: "ack", epoch: 3, at: 1 },
+        },
+      }),
+    ]
+    const onDecide = jest.fn()
+    const props = { interrupt: interrupt("team_recovery", { uncertainChildIds: ["c1"] }), onDecide }
+    const view = render(<SquadReviewForm {...props} />)
+    await userEvent
+      .setup()
+      .click(screen.getByLabelText("agentRuns.review.recovery.choices.retry_same_host"))
+    expect(
+      screen.getByRole("button", { name: "agentRuns.review.kinds.team_recovery.approve" })
+    ).toBeEnabled()
+    liveChildren = [recoveryChild()]
+    view.rerender(<SquadReviewForm {...props} />)
+    expect(
+      screen.getByRole("button", { name: "agentRuns.review.kinds.team_recovery.approve" })
+    ).toBeDisabled()
+  })
+
+  it("recovery: derives expiry live and releases retry without changing the interrupt", () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(6_000)
+    liveChildren = [
+      recoveryChild({
+        fenceCapable: true,
+        lastRenewalSentAt: 1_000,
+        leaseTtlMs: 5_000,
+        fenceGraceMs: 1_000,
+      }),
+    ]
+    try {
+      const view = render(
+        <SquadReviewForm
+          interrupt={interrupt("team_recovery", { uncertainChildIds: ["c1"] })}
+          onDecide={jest.fn()}
+        />
+      )
+      expect(
+        screen.getByRole("radio", { name: "agentRuns.review.recovery.choices.retry_same_host" })
+      ).toBeDisabled()
+      act(() => jest.advanceTimersByTime(1_000))
+      expect(screen.getByText(/recovery.stop.proof.fence-expiry/)).toBeInTheDocument()
+      expect(
+        screen.getByRole("radio", { name: "agentRuns.review.recovery.choices.retry_same_host" })
+      ).toBeEnabled()
+      view.unmount()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("recovery: shows control loss for a detached failed remote attempt", () => {
+    liveChildren = [
+      recoveryChild({
+        status: "failed",
+        error: "Worker connection conn-1 detached: grant_revoked",
+      }),
+    ]
+    render(
+      <SquadReviewForm
+        interrupt={interrupt("team_recovery", { uncertainChildIds: ["c1"] })}
+        onDecide={jest.fn()}
+      />
+    )
+    expect(screen.getByText(/recovery.stop.controlLost/)).toBeInTheDocument()
+    expect(screen.queryByText(/operations.status.failed/)).not.toBeInTheDocument()
   })
 
   it("disables both buttons while a command is in flight", () => {

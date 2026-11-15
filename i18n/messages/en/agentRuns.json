@@ -139,6 +139,7 @@
     "interrupt_expired": "The approval expired before it was answered.",
     "interrupt_not_found": "That approval no longer exists.",
     "interrupt_resolved": "That approval was already answered.",
+    "interrupt_stale": "That approval was for an earlier attempt that has since been re-dispatched, so it no longer applies.",
     "invalid_command": "The command was incomplete.",
     "not_controllable": "This run has no execution journal, so it cannot be controlled from here.",
     "retried": "A replacement run has taken over.",
@@ -222,6 +223,25 @@
       "label": "Recovery choice",
       "reason": "Why: {reason}",
       "hostRefPlaceholder": "Host to retry on",
+      "attempt": "Latest attempt: #{value}",
+      "attemptStatus": "Latest attempt status: {value}",
+      "epoch": "Epoch: {value}",
+      "host": "Host: {value}",
+      "localHost": "local",
+      "detailsUnavailable": "Attempt details are unavailable; stop proof cannot be verified.",
+      "stop": {
+        "none": "No stop requested",
+        "requested": "Stopping",
+        "unconfirmed": "Stop unconfirmed",
+        "stopped": "Stopped",
+        "controlLost": "Control lost — the remote run may still be running",
+        "noProof": "No stop proof",
+        "proof": {
+          "ack": "confirmed by the Worker",
+          "fence-expiry": "Worker self-fenced after its lease expired"
+        },
+        "retryBlocked": "Retry is unavailable until the previous attempt has stop proof."
+      },
       "choices": {
         "retry_same_host": "Retry where it ran",
         "retry_host": "Retry on another host",

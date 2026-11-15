@@ -5,6 +5,9 @@
     "commandsPlaceholder": "Manual commands, one per line",
     "diffPlaceholder": "Manual diff or edit summary",
     "host": "Host: {value}",
+    "attempt": "Latest attempt: #{value}",
+    "attemptStatus": "Latest attempt status: {value}",
+    "epoch": "Epoch: {value}",
     "lease": "Dispatch lease: {value}",
     "leaseExpired": "expired",
     "leaseFresh": "fresh",
@@ -92,7 +95,21 @@
     "children": "{value} children",
     "decisionVersion": "Decision version {value}",
     "title": "Current durable run",
+    "stopSummary": "Run stop summary",
     "tokens": "{value} tokens"
+  },
+  "stop": {
+    "none": "No stop requested",
+    "requested": "Stopping",
+    "unconfirmed": "Stop unconfirmed",
+    "stopped": "Stopped",
+    "controlLost": "Control lost — the remote run may still be running",
+    "noProof": "No stop proof",
+    "proof": {
+      "ack": "confirmed by the Worker",
+      "fence-expiry": "Worker self-fenced after its lease expired"
+    },
+    "retryBlocked": "Retry is unavailable until the previous attempt has stop proof."
   },
   "status": {
     "cancelled": "Cancelled",

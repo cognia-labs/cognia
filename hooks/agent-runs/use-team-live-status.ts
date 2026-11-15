@@ -23,7 +23,10 @@ import type { AgentTeamRunRecord, AgentTeamRunStatus } from "@/types/agent/agent
 const LIVE_STORE_STATUSES: ReadonlySet<TeamStatus> = new Set(["planning", "executing", "paused"])
 
 /** Map a durable run status onto the equivalent team status. */
-export function runRecordStatusToTeamStatus(status: AgentTeamRunStatus): TeamStatus {
+export function runRecordStatusToTeamStatus(
+  status: AgentTeamRunStatus,
+  fallback: TeamStatus = "idle"
+): TeamStatus {
   switch (status) {
     case "queued":
     case "running":
@@ -41,9 +44,11 @@ export function runRecordStatusToTeamStatus(status: AgentTeamRunStatus): TeamSta
     case "cancelled":
     case "terminated":
       return "cancelled"
-    default:
-      return "failed"
   }
+  // Exhaustive for the source union, defensive for newer/corrupt persisted rows.
+  const unknownStatus: never = status
+  void unknownStatus
+  return fallback
 }
 
 /**
@@ -55,7 +60,7 @@ export function deriveTeamStatus(
   newestRunStatus: AgentTeamRunStatus | undefined
 ): TeamStatus {
   if (LIVE_STORE_STATUSES.has(storeStatus)) return storeStatus
-  if (newestRunStatus) return runRecordStatusToTeamStatus(newestRunStatus)
+  if (newestRunStatus) return runRecordStatusToTeamStatus(newestRunStatus, storeStatus)
   return storeStatus
 }
 

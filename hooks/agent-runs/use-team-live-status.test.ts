@@ -35,6 +35,10 @@ describe("runRecordStatusToTeamStatus", () => {
   it.each(cases)("maps run status %s to team status %s", (run, team) => {
     expect(runRecordStatusToTeamStatus(run)).toBe(team)
   })
+
+  it("uses a neutral status for an unknown persisted value", () => {
+    expect(runRecordStatusToTeamStatus("future_status" as AgentTeamRunStatus)).toBe("idle")
+  })
 })
 
 describe("deriveTeamStatus", () => {
@@ -53,6 +57,10 @@ describe("deriveTeamStatus", () => {
   it("keeps the store status when no run record exists yet", () => {
     expect(deriveTeamStatus("idle", undefined)).toBe("idle")
     expect(deriveTeamStatus("completed", undefined)).toBe("completed")
+  })
+
+  it("keeps the mirror status for an unknown persisted value", () => {
+    expect(deriveTeamStatus("completed", "future_status" as AgentTeamRunStatus)).toBe("completed")
   })
 })
 

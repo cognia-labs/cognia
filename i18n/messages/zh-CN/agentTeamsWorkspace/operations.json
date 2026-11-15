@@ -5,6 +5,9 @@
     "commandsPlaceholder": "人工命令，每行一条",
     "diffPlaceholder": "人工 diff 或编辑摘要",
     "host": "执行主机：{value}",
+    "attempt": "最近一次尝试：第 {value} 次",
+    "attemptStatus": "最近一次尝试状态：{value}",
+    "epoch": "执行代次：{value}",
     "lease": "分发租约：{value}",
     "leaseExpired": "已过期",
     "leaseFresh": "有效",
@@ -92,7 +95,21 @@
     "children": "{value} 个子任务",
     "decisionVersion": "决策版本 {value}",
     "title": "当前持久化运行",
+    "stopSummary": "运行停止摘要",
     "tokens": "{value} tokens"
+  },
+  "stop": {
+    "none": "未请求停止",
+    "requested": "正在停止",
+    "unconfirmed": "停止未确认",
+    "stopped": "已停止",
+    "controlLost": "控制已断开，远端运行可能仍在继续",
+    "noProof": "无停止证明",
+    "proof": {
+      "ack": "已由 Worker 确认",
+      "fence-expiry": "租约到期，Worker 已自我隔离"
+    },
+    "retryBlocked": "上一次尝试获得停止证明后才能重试。"
   },
   "status": {
     "cancelled": "已取消",

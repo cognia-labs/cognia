@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { render, screen } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { AgentTeam } from "@/types/agent/agent-team"
 
@@ -39,9 +39,52 @@ const team = (): AgentTeam =>
     createdAt: new Date(),
   }) as unknown as AgentTeam
 
+const stop = (state: "requested" | "unconfirmed" | "confirmed") => ({
+  state,
+  epoch: 3,
+  requestedAt: 1,
+})
+const fence = {
+  fenceCapable: true,
+  lastRenewalSentAt: 1_000,
+  leaseTtlMs: 5_000,
+  fenceGraceMs: 1_000,
+}
+function operationsData(child: Record<string, unknown>, run: Record<string, unknown> = {}) {
+  return {
+    run: { id: "run-1", status: "running", decisionVersion: 0, ...run },
+    children: [
+      {
+        id: "child-1",
+        status: "needs_input",
+        repositoryId: "primary",
+        attempt: 2,
+        dispatchEpoch: 3,
+        hostRef: "device:a",
+        remoteSessionId: "remote-1",
+        ...child,
+      },
+    ],
+    decisions: [],
+    evidence: [],
+    deliveryNodes: [],
+    retrospectives: [],
+  }
+}
+const renderOperations = () =>
+  render(
+    <DurableOperations
+      team={team()}
+      onOpenEditor={jest.fn()}
+      onOpenTerminal={jest.fn()}
+      onOpenBrowser={jest.fn()}
+    />
+  )
+
 describe("DurableOperations", () => {
   beforeEach(() => {
     liveValue = null
+    retryChildMock.mockClear()
   })
 
   it("shows the durable empty state before a run exists", () => {
@@ -175,6 +218,8 @@ describe("DurableOperations", () => {
           waitingReason: "recovery_required",
           dispatchLeaseId: "lease-1",
           dispatchLeaseExpiresAt: Date.now() + 60_000,
+          dispatchEpoch: 3,
+          stop: { ...stop("confirmed"), proof: { kind: "ack", epoch: 3, at: 1 } },
         },
       ],
       decisions: [],
@@ -197,5 +242,113 @@ describe("DurableOperations", () => {
     expect(screen.getByText(/remote-session-1/)).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: /retry same host/i }))
     expect(retryChildMock).toHaveBeenCalledWith("child-remote", "device:worker-a")
+  })
+
+  it("renders a child with no stop request without claiming it stopped", () => {
+    liveValue = operationsData({})
+    renderOperations()
+    // An idle child carries no stop line at all, and nothing says "stopped".
+    expect(screen.queryByText(/No stop requested/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Stopped/)).not.toBeInTheDocument()
+    expect(screen.queryByRole("status", { name: "Run stop summary" })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ["requested", "Stopping"],
+    ["unconfirmed", "Stop unconfirmed"],
+  ] as const)("renders a %s stop in the child and run summary", (state, label) => {
+    liveValue = operationsData({ stop: stop(state) })
+    renderOperations()
+    expect(screen.getByRole("status", { name: "Run stop summary" })).toHaveTextContent(label)
+    expect(screen.getByText(`${label} · No stop proof`)).toBeInTheDocument()
+  })
+
+  it("renders Worker-acknowledged stop proof", () => {
+    liveValue = operationsData({
+      stop: { ...stop("confirmed"), proof: { kind: "ack", epoch: 3, at: 1 } },
+    })
+    renderOperations()
+    expect(screen.getByText("Stopped · confirmed by the Worker")).toBeInTheDocument()
+  })
+
+  it("shows the confirmed stop summary for a run with no children", () => {
+    liveValue = {
+      ...operationsData({}, { stop: stop("confirmed"), status: "cancelled" }),
+      children: [],
+    }
+    renderOperations()
+    expect(screen.getByRole("status", { name: "Run stop summary" })).toHaveTextContent("Stopped")
+  })
+
+  it("renders persisted Worker isolation expiry proof", () => {
+    liveValue = operationsData({
+      ...fence,
+      stop: { ...stop("confirmed"), proof: { kind: "fence-expiry", epoch: 3, at: 7_000 } },
+    })
+    renderOperations()
+    expect(
+      screen.getByText("Stopped · Worker self-fenced after its lease expired")
+    ).toBeInTheDocument()
+  })
+
+  it("updates a derived fence proof at the deadline without a store write", () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(6_000)
+    liveValue = operationsData({
+      ...fence,
+      stop: stop("unconfirmed"),
+      waitingReason: "recovery_required",
+    })
+    try {
+      const view = renderOperations()
+      expect(screen.getByRole("button", { name: "Retry same host" })).toBeDisabled()
+      act(() => jest.advanceTimersByTime(1_000))
+      expect(
+        screen.getByText("Stopped · Worker self-fenced after its lease expired")
+      ).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: "Retry same host" })).toBeEnabled()
+      view.unmount()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("shows control loss rather than a failed or stopped remote child", () => {
+    liveValue = operationsData(
+      {
+        status: "failed",
+        stop: stop("unconfirmed"),
+        error: "Worker connection conn-1 detached: socket_closed",
+      },
+      { status: "failed" }
+    )
+    renderOperations()
+    expect(
+      screen.getAllByText("Control lost — the remote run may still be running").length
+    ).toBeGreaterThan(0)
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument()
+    expect(screen.queryByText("Stopped")).not.toBeInTheDocument()
+  })
+
+  it("shows the previous attempt and disables both retries with a reason without proof", async () => {
+    liveValue = operationsData({ stop: stop("unconfirmed"), waitingReason: "recovery_required" })
+    renderOperations()
+    expect(screen.getByText("Latest attempt: #2")).toBeInTheDocument()
+    expect(screen.getByText("Latest attempt status: Needs input")).toBeInTheDocument()
+    expect(screen.getByText("Epoch: 3")).toBeInTheDocument()
+    expect(screen.getByText("Host: device:a")).toBeInTheDocument()
+    for (const name of ["Retry same host", "Retry selected host"]) {
+      const retry = screen.getByRole("button", { name })
+      expect(retry).toBeDisabled()
+      expect(retry).toHaveAccessibleDescription(
+        "Retry is unavailable until the previous attempt has stop proof."
+      )
+      await userEvent.setup().click(retry)
+    }
+    expect(retryChildMock).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Cancel child" })).toBeEnabled()
+    expect(
+      within(screen.getByRole("status", { name: "Run stop summary" })).getByText("Stop unconfirmed")
+    ).toBeInTheDocument()
   })
 })

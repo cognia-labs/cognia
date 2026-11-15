@@ -2923,6 +2923,7 @@
       "interrupt_expired": "The approval expired before it was answered.",
       "interrupt_not_found": "That approval no longer exists.",
       "interrupt_resolved": "That approval was already answered.",
+      "interrupt_stale": "That approval was for an earlier attempt that has since been re-dispatched, so it no longer applies.",
       "invalid_command": "The command was incomplete.",
       "not_controllable": "This run has no execution journal, so it cannot be controlled from here.",
       "retried": "A replacement run has taken over.",
@@ -2998,14 +2999,20 @@
         "feedbackPlaceholder": "Optional. What should change? Personal data is redacted before it is stored."
       },
       "recovery": {
+        "attempt": "Latest attempt: #{value}",
+        "attemptStatus": "Latest attempt status: {value}",
         "choices": {
           "restart_run": "Restart as a new run",
           "retry_host": "Retry on another host",
           "retry_same_host": "Retry where it ran",
           "terminate": "Terminate"
         },
+        "detailsUnavailable": "Attempt details are unavailable; stop proof cannot be verified.",
+        "epoch": "Epoch: {value}",
+        "host": "Host: {value}",
         "hostRefPlaceholder": "Host to retry on",
         "label": "Recovery choice",
+        "localHost": "local",
         "reason": "Why: {reason}",
         "reasons": {
           "dispatch_initialization_failed": "the Squad could not prepare to dispatch its tasks",
@@ -3020,6 +3027,19 @@
           "squad_not_ready": "the Squad is missing a binding it needs to run",
           "stop_unconfirmed": "a task's executor was told to stop, but its end was never confirmed",
           "uncertain_side_effect": "a side effect may or may not have happened"
+        },
+        "stop": {
+          "controlLost": "Control lost — the remote run may still be running",
+          "noProof": "No stop proof",
+          "none": "No stop requested",
+          "proof": {
+            "ack": "confirmed by the Worker",
+            "fence-expiry": "Worker self-fenced after its lease expired"
+          },
+          "requested": "Stopping",
+          "retryBlocked": "Retry is unavailable until the previous attempt has stop proof.",
+          "stopped": "Stopped",
+          "unconfirmed": "Stop unconfirmed"
         }
       },
       "teammateRepair": {
@@ -3746,10 +3766,13 @@
     "openWorkspace": "Open workspace",
     "operations": {
       "children": {
+        "attempt": "Latest attempt: #{value}",
+        "attemptStatus": "Latest attempt status: {value}",
         "cancel": "Cancel child",
         "cancelled": "Child cancelled.",
         "commandsPlaceholder": "Manual commands, one per line",
         "diffPlaceholder": "Manual diff or edit summary",
+        "epoch": "Epoch: {value}",
         "host": "Host: {value}",
         "lease": "Dispatch lease: {value}",
         "leaseExpired": "expired",
@@ -3837,6 +3860,7 @@
       "run": {
         "children": "{value} children",
         "decisionVersion": "Decision version {value}",
+        "stopSummary": "Run stop summary",
         "title": "Current durable run",
         "tokens": "{value} tokens"
       },
@@ -3852,6 +3876,19 @@
         "running": "Running",
         "sleeping": "Sleeping",
         "terminated": "Terminated"
+      },
+      "stop": {
+        "controlLost": "Control lost — the remote run may still be running",
+        "noProof": "No stop proof",
+        "none": "No stop requested",
+        "proof": {
+          "ack": "confirmed by the Worker",
+          "fence-expiry": "Worker self-fenced after its lease expired"
+        },
+        "requested": "Stopping",
+        "retryBlocked": "Retry is unavailable until the previous attempt has stop proof.",
+        "stopped": "Stopped",
+        "unconfirmed": "Stop unconfirmed"
       }
     },
     "overview": {
@@ -53173,8 +53210,10 @@
       "title": "Agent fleet monitor",
       "workers": {
         "bindingHint": "Remote AgentTeam placement reuses these authenticated Fleet hosts and Task Workspace bindings.",
+        "capabilityUnknown": "unknown",
         "capacity": "{used}/{total} slots",
         "commandAria": "Worker enrollment command",
+        "controlLost": "Control lost — this Worker is offline; its remote runs may still be running.",
         "copied": "Enrollment command copied.",
         "copy": "Copy enrollment command",
         "copyFailed": "Could not copy the enrollment command.",
@@ -53194,12 +53233,16 @@
         "remoteDispatchLabel": "Remote AgentTeam dispatch",
         "revoke": "Revoke",
         "revoked": "Worker access revoked.",
+        "selfIsolation": "Self-isolation: {value}",
         "status": {
           "incompatible": "Incompatible",
           "offline": "Offline",
           "online": "Online"
         },
-        "title": "Execution workers"
+        "strictStop": "Strict stop: {value}",
+        "supported": "supported",
+        "title": "Execution workers",
+        "unsupported": "not supported"
       }
     },
     "gateway": {

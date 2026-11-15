@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
+import { useLiveQuery } from "dexie-react-hooks"
 import { QRCodeSVG } from "qrcode.react"
 import { toast } from "sonner"
 
@@ -14,6 +15,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { Snippet, SnippetCopyButton, SnippetInput } from "@/components/ai-elements/snippet"
 import {
   isRemoteWorkerDispatchAvailable,
+  getRemoteWorkerRuntime,
   subscribeToRemoteWorkerRuntime,
 } from "@/lib/squads/workers/remote-worker-runtime"
 import {
@@ -29,9 +31,23 @@ import type { FleetHost } from "@/lib/fleet/types"
 import { useAgentExecutionFlag } from "@/hooks/agent/use-agent-execution-flag"
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { setAgentExecutionFlag } from "@/lib/ai/agent/execution/feature-flags"
+import { useNowTicker } from "@/hooks/fleet/use-now-ticker"
+import { getDb } from "@/lib/db/schema"
+import { hasRemoteDispatch, isChildSettled } from "@cognia/agent-orchestration/replay"
+import { deriveSquadChildStop } from "@/lib/squads/squad/squad-stop-status"
+
+/** How far back the card looks for remote attempts whose control was lost. */
+const CONTROL_LOSS_WINDOW_MS = 7 * 24 * 60 * 60_000
 
 export function ExecutionWorkersCard({ hosts }: { hosts: readonly FleetHost[] }) {
   const t = useTranslations("settings.fleet.workers")
+  const now = useNowTicker()
+  // Only recent attempts can still be in flight; never scan the whole history.
+  const [recentSince] = useState(() => Date.now() - CONTROL_LOSS_WINDOW_MS)
+  const children = useLiveQuery(
+    () => getDb().agentTeamChildRuns.where("updatedAt").above(recentSince).toArray(),
+    [recentSince]
+  )
   const [devices, setDevices] = useState<WorkerDeviceSummary[]>([])
   const [issue, setIssue] = useState<WorkerEnrollmentIssue | null>(null)
   const [busy, setBusy] = useState(false)
@@ -147,6 +163,20 @@ export function ExecutionWorkersCard({ hosts }: { hosts: readonly FleetHost[] })
         <div className="space-y-2">
           {devices.map((device) => {
             const host = onlineByHost.get(device.hostRef)
+            // The dispatch runtime already has authenticated manifests. Device
+            // management capabilities are grants, not Worker feature evidence.
+            const manifest = getRemoteWorkerRuntime()
+              ?.listWorkers()
+              .find((worker) => worker.hostRef === device.hostRef)?.manifest
+            const controlLost =
+              !host?.online &&
+              (children ?? []).some(
+                (child) =>
+                  child.hostRef === device.hostRef &&
+                  hasRemoteDispatch(child) &&
+                  !isChildSettled(child) &&
+                  !deriveSquadChildStop(child, now).proof
+              )
             const placementStatus = !host?.online
               ? "offline"
               : host.placementReady === true
@@ -170,6 +200,32 @@ export function ExecutionWorkersCard({ hosts }: { hosts: readonly FleetHost[] })
                       total: host.maxActiveTurns,
                     })}
                   </span>
+                ) : null}
+                <span className="basis-full text-muted-foreground">
+                  {t("selfIsolation", {
+                    value: t(
+                      manifest
+                        ? manifest.hardCapabilities.includes("worker-self-fence-v1")
+                          ? "supported"
+                          : "unsupported"
+                        : "capabilityUnknown"
+                    ),
+                  })}
+                  {" · "}
+                  {t("strictStop", {
+                    value: t(
+                      manifest
+                        ? manifest.hardCapabilities.includes("turn-interrupt-v1")
+                          ? "supported"
+                          : "unsupported"
+                        : "capabilityUnknown"
+                    ),
+                  })}
+                </span>
+                {controlLost ? (
+                  <SettingsAlert variant="destructive" className="basis-full py-2">
+                    {t("controlLost")}
+                  </SettingsAlert>
                 ) : null}
                 {host?.placementReason ? (
                   <SettingsAlert variant="destructive" className="basis-full py-2">

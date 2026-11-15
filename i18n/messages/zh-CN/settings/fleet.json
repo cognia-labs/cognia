@@ -104,6 +104,12 @@
   "workers": {
     "bindingHint": "远程 AgentTeam 调度复用这些已认证的舰队主机与 Task Workspace 绑定。",
     "capacity": "{used}/{total} 个槽位",
+    "selfIsolation": "自我隔离：{value}",
+    "strictStop": "严格停止：{value}",
+    "supported": "支持",
+    "unsupported": "不支持",
+    "capabilityUnknown": "未知",
+    "controlLost": "控制已断开：此 Worker 已离线，远端运行可能仍在继续。",
     "commandAria": "Worker 注册命令",
     "copied": "注册命令已复制。",
     "copy": "复制注册命令",

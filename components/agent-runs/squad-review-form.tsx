@@ -15,6 +15,7 @@
  */
 
 import { useState } from "react"
+import { useLiveQuery } from "dexie-react-hooks"
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
@@ -24,6 +25,9 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Textarea } from "@/components/ui/textarea"
 import { isWellFormedSquadReviewDecision } from "@/lib/execution/squad-review-decision"
+import { getDb } from "@/lib/db/schema"
+import { useNowTicker } from "@/hooks/fleet/use-now-ticker"
+import { deriveSquadChildStop } from "@/lib/squads/squad/squad-stop-status"
 import type {
   ExecutionRunInterrupt,
   SquadReviewDecision,
@@ -57,8 +61,23 @@ export function isRenderableSquadReview(
 
 export function SquadReviewForm({ interrupt, busy = false, onDecide }: SquadReviewFormProps) {
   const t = useTranslations("agentRuns.review")
+  const tStatus = useTranslations("agentTeamsWorkspace.operations.status")
+  const now = useNowTicker()
   const kind = interrupt.reviewKind
   const subject = (interrupt.subject ?? {}) as Record<string, unknown>
+  const uncertainChildIds = stringList(subject.uncertainChildIds)
+  const childIdsKey = JSON.stringify(uncertainChildIds)
+  const recoveryChildren = useLiveQuery(
+    async () =>
+      kind === "team_recovery" ? getDb().agentTeamChildRuns.bulkGet(uncertainChildIds) : [],
+    [kind, childIdsKey]
+  )
+  const retryBlocked =
+    kind === "team_recovery" &&
+    uncertainChildIds.some((_id, index) => {
+      const child = recoveryChildren?.[index]
+      return !child || !deriveSquadChildStop(child, now).proof
+    })
 
   const [feedback, setFeedback] = useState("")
   const [extraTokens, setExtraTokens] = useState("50000")
@@ -92,7 +111,9 @@ export function SquadReviewForm({ interrupt, busy = false, onDecide }: SquadRevi
   }
   const approveDecision = decision()
   const canApprove =
-    approveDecision !== undefined && isWellFormedSquadReviewDecision(approveDecision)
+    approveDecision !== undefined &&
+    isWellFormedSquadReviewDecision(approveDecision) &&
+    !(retryBlocked && (choice === "retry_host" || choice === "retry_same_host"))
   const offeredChoices = stringList(subject.choices) as TeamRecoveryChoice[]
   const choices = RECOVERY_CHOICES.filter(
     (c) => offeredChoices.length === 0 || offeredChoices.includes(c)
@@ -208,6 +229,42 @@ export function SquadReviewForm({ interrupt, busy = false, onDecide }: SquadRevi
               {t("recovery.reason", { reason: t(`recovery.reasons.${subject.reason}`) })}
             </p>
           )}
+          {uncertainChildIds.map((id, index) => {
+            const child = recoveryChildren?.[index]
+            const stop = child ? deriveSquadChildStop(child, now) : undefined
+            return (
+              <div key={id} className="space-y-1 rounded border p-2 text-xs">
+                <p className="font-mono">{id}</p>
+                {child && stop ? (
+                  <>
+                    <p>{t("recovery.attempt", { value: child.attempt })}</p>
+                    <p>
+                      {t("recovery.attemptStatus", {
+                        value: stop.controlLost
+                          ? t("recovery.stop.controlLost")
+                          : tStatus(child.status),
+                      })}
+                    </p>
+                    <p>
+                      {t(`recovery.stop.${stop.state}`)} ·{" "}
+                      {stop.proof
+                        ? t(`recovery.stop.proof.${stop.proof.kind}`)
+                        : t("recovery.stop.noProof")}
+                    </p>
+                    <p>{t("recovery.epoch", { value: child.dispatchEpoch ?? 0 })}</p>
+                    <p>{t("recovery.host", { value: child.hostRef ?? t("recovery.localHost") })}</p>
+                  </>
+                ) : (
+                  <p>{t("recovery.detailsUnavailable")}</p>
+                )}
+              </div>
+            )
+          })}
+          {retryBlocked ? (
+            <p id={`${interrupt.id}-retry-blocked`} className="text-xs">
+              {t("recovery.stop.retryBlocked")}
+            </p>
+          ) : null}
           <RadioGroup
             value={choice ?? ""}
             onValueChange={(value) => setChoice(value as TeamRecoveryChoice)}
@@ -216,7 +273,16 @@ export function SquadReviewForm({ interrupt, busy = false, onDecide }: SquadRevi
           >
             {choices.map((c) => (
               <label key={c} className="flex items-center gap-2 text-xs">
-                <RadioGroupItem value={c} aria-label={t(`recovery.choices.${c}`)} />
+                <RadioGroupItem
+                  value={c}
+                  aria-label={t(`recovery.choices.${c}`)}
+                  disabled={retryBlocked && (c === "retry_host" || c === "retry_same_host")}
+                  aria-describedby={
+                    retryBlocked && (c === "retry_host" || c === "retry_same_host")
+                      ? `${interrupt.id}-retry-blocked`
+                      : undefined
+                  }
+                />
                 {t(`recovery.choices.${c}`)}
               </label>
             ))}

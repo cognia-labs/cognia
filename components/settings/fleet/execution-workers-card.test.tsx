@@ -1,9 +1,14 @@
 /** @jest-environment jsdom */
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { ExecutionWorkersCard } from "./execution-workers-card"
+import type { AgentTeamChildRun } from "@cognia/agent-orchestration"
+
+let liveChildren: AgentTeamChildRun[] = []
+jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => liveChildren }))
 
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: () => (key: string, values?: Record<string, unknown>) =>
+    key === "selfIsolation" || key === "strictStop" ? `${key}:${values?.value}` : key,
 }))
 jest.mock("qrcode.react", () => ({
   QRCodeSVG: ({ value }: { value: string }) => <div data-testid="worker-qr">{value}</div>,
@@ -46,6 +51,8 @@ import { isAgentTeamRemoteDispatchEnabled } from "@/lib/ai/agent/execution/featu
 describe("ExecutionWorkersCard", () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    liveChildren = []
+    __resetRemoteWorkerRuntimeForTesting()
     window.localStorage.clear()
     api.list.mockResolvedValue([
       {
@@ -57,6 +64,70 @@ describe("ExecutionWorkersCard", () => {
     ])
     api.revoke.mockResolvedValue(undefined)
     api.access.mockReturnValue("ask")
+  })
+
+  afterEach(() => __resetRemoteWorkerRuntimeForTesting())
+
+  it.each([
+    [["worker-self-fence-v1", "turn-interrupt-v1"], "supported", "supported"],
+    [["worker-self-fence-v1"], "supported", "unsupported"],
+    [[], "unsupported", "unsupported"],
+  ])(
+    "shows only authenticated manifest support for %j",
+    async (hardCapabilities, isolation, strictStop) => {
+      const uninstall = installRemoteWorkerRuntime({
+        listWorkers: () => [{ hostRef: "device:derived-worker-a", manifest: { hardCapabilities } }],
+        run: jest.fn(),
+      } as unknown as RemoteWorkerRuntime)
+      render(<ExecutionWorkersCard hosts={[]} />)
+      expect(await screen.findByText("Worker A")).toBeInTheDocument()
+      // The card's translation mock below includes the interpolated capability.
+      expect(
+        screen.getByText(new RegExp(`selfIsolation.*${isolation}.*strictStop.*${strictStop}`))
+      ).toBeInTheDocument()
+      act(() => uninstall())
+    }
+  )
+
+  it("keeps feature support unknown when only management grants are available", async () => {
+    render(<ExecutionWorkersCard hosts={[]} />)
+    expect(await screen.findByText(/selfIsolation.*capabilityUnknown/)).toBeInTheDocument()
+  })
+
+  it("warns that an offline Worker's unproved in-flight children have lost control", async () => {
+    liveChildren = [
+      {
+        id: "c1",
+        hostRef: "device:derived-worker-a",
+        status: "needs_input",
+        dispatchEpoch: 3,
+        remoteSessionId: "remote-1",
+        stop: { state: "unconfirmed", epoch: 3, requestedAt: 1 },
+      } as AgentTeamChildRun,
+    ]
+    render(<ExecutionWorkersCard hosts={[]} />)
+    expect(await screen.findByText("controlLost")).toBeInTheDocument()
+  })
+
+  it("does not warn for an offline Worker whose child has stop proof", async () => {
+    liveChildren = [
+      {
+        id: "c1",
+        hostRef: "device:derived-worker-a",
+        status: "needs_input",
+        dispatchEpoch: 3,
+        remoteSessionId: "remote-1",
+        stop: {
+          state: "confirmed",
+          epoch: 3,
+          requestedAt: 1,
+          proof: { kind: "ack", epoch: 3, at: 1 },
+        },
+      } as AgentTeamChildRun,
+    ]
+    render(<ExecutionWorkersCard hosts={[]} />)
+    expect(await screen.findByText("Worker A")).toBeInTheDocument()
+    expect(screen.queryByText("controlLost")).not.toBeInTheDocument()
   })
 
   it("says why a device without host.admin has no workers to manage, and asks nothing", async () => {

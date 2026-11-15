@@ -98,6 +98,7 @@ const OUTCOME_REASONS = [
   "interrupt_not_found",
   "interrupt_expired",
   "interrupt_resolved",
+  "interrupt_stale",
   "source_rejected",
   "unsupported_for_kind",
   "steer_degraded",
