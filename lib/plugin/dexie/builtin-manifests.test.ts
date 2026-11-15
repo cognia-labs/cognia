@@ -2,10 +2,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 
 import { listBuiltinPrebootManifests } from "@/lib/plugin/core/builtin-preboot-manifests"
-import {
-  DORMANT_BUILTIN_DEXIE_DECLARATIONS,
-  getBuiltinPluginDexieManifests,
-} from "./builtin-manifests"
+import { getBuiltinPluginDexieManifests } from "./builtin-manifests"
 
 const PLUGINS_ROOT = join(__dirname, "..", "..", "..", "plugins")
 
@@ -83,15 +80,5 @@ it("covers every in-tree plugin that declares tables", () => {
     .sort()
   expect(inSnapshot).toEqual(declared)
 
-  const expected = declared.filter((id) => !(id in DORMANT_BUILTIN_DEXIE_DECLARATIONS))
-  expect([...getBuiltinPluginDexieManifests().keys()].sort()).toEqual(expected)
-})
-
-it("lists only dormant declarations that still exist, each with a reason", () => {
-  const declared = pluginsDeclaringTables()
-  for (const [id, reason] of Object.entries(DORMANT_BUILTIN_DEXIE_DECLARATIONS)) {
-    expect(declared).toContain(id)
-    expect(reason.length).toBeGreaterThan(20)
-  }
-  expect(getBuiltinPluginDexieManifests().has("github-delivery")).toBe(false)
+  expect([...getBuiltinPluginDexieManifests().keys()].sort()).toEqual(declared)
 })

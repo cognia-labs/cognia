@@ -1,5 +1,4 @@
 import {
-  VARIANT_ALIASES_FIELD,
   VARIANT_ID_FIELD,
   collectConfigSchemaI18nKeys,
   localizeConfigSchema,
@@ -97,7 +96,7 @@ describe("oneOf variant identity", () => {
       field
     ]
 
-  it("records the source text as a locale-independent id, and every localized title as an alias", () => {
+  it("records the source text as a locale-independent id", () => {
     const schemaIn = auth([
       { type: "object", titleKey: "auth.oauth", properties: {} },
       { type: "object", title: "API key", properties: {} },
@@ -108,9 +107,7 @@ describe("oneOf variant identity", () => {
     )
     expect(oauth.title).toBe("OAuth 登录")
     expect(oauth[VARIANT_ID_FIELD]).toBe("auth.oauth")
-    expect(oauth[VARIANT_ALIASES_FIELD]).toEqual(["OAuth", "OAuth 登录"])
     expect(apiKey[VARIANT_ID_FIELD]).toBe("API key")
-    expect(apiKey[VARIANT_ALIASES_FIELD]).toBeUndefined()
     // No source text at all: the form falls back to its positional id.
     expect(untitled[VARIANT_ID_FIELD]).toBeUndefined()
   })

@@ -16,15 +16,10 @@
  * loaded. Pure: returns a new schema and never mutates its input.
  *
  * `oneOf` variants also get a STABLE identity. The config form persists the
- * chosen variant as `__variant`, and it used to persist the variant's title as
- * rendered, which after `titleKey` resolution is the user's-language title: a
- * choice saved in Chinese no longer matched once the UI switched to English,
- * and the form silently fell back to the first variant. Localizing a variant
- * now records, beside the display title:
- *   - `x-cognia-variantId`: the source text (`title`, else `label`, else the
- *     `titleKey` itself), which no locale changes;
- *   - `x-cognia-variantAliases`: the variant's title in every locale the
- *     manifest ships, so a choice saved before this fix still resolves.
+ * chosen variant as `__variant`; a localized title would change with the UI
+ * language, so localizing a variant records, beside the display title,
+ * `x-cognia-variantId`: the source text (`title`, else `label`, else the
+ * `titleKey` itself), which no locale changes.
  */
 
 import type { PluginManifest } from "../../../types/plugin"
@@ -68,9 +63,6 @@ export function resolvePluginI18nText(
 /** Stable, locale-independent identity of a `oneOf` variant (see the module note). */
 export const VARIANT_ID_FIELD = "x-cognia-variantId"
 
-/** Every localized title a variant has had, for resolving legacy saved choices. */
-export const VARIANT_ALIASES_FIELD = "x-cognia-variantAliases"
-
 /**
  * A variant's stable identity from its SOURCE fields: `title`, else `label`,
  * else `titleKey`. `undefined` when it has none of them (the form then uses
@@ -81,21 +73,6 @@ export function variantSourceId(variant: Record<string, unknown>): string | unde
     if (typeof candidate === "string" && candidate.length > 0) return candidate
   }
   return undefined
-}
-
-function variantAliases(
-  variant: Record<string, unknown>,
-  locales: LocaleBundles,
-  id: string | undefined
-): string[] {
-  const key = variant.titleKey
-  if (typeof key !== "string" || !locales) return []
-  const aliases = new Set<string>()
-  for (const bundle of Object.values(locales)) {
-    const text = bundle?.[key]
-    if (typeof text === "string" && text.trim().length > 0 && text !== id) aliases.add(text)
-  }
-  return [...aliases]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -134,8 +111,6 @@ function localizeProperty(
           ? (variant[VARIANT_ID_FIELD] as string)
           : variantSourceId(variant)
       if (id !== undefined) localized[VARIANT_ID_FIELD] = id
-      const aliases = variantAliases(variant, locales, id)
-      if (aliases.length > 0) localized[VARIANT_ALIASES_FIELD] = aliases
       return localized
     })
   }

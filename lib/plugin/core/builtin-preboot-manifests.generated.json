@@ -217,29 +217,6 @@
         }
       ]
     },
-    "github-delivery": {
-      "version": "3.0.0",
-      "dexie": {
-        "tables": [
-          {
-            "name": "repos",
-            "schema": "&fullName, credentialMode, createdAt"
-          },
-          {
-            "name": "workOrders",
-            "schema": "++id, [status+repoFullName], issueNumber, prNumber, createdAt, updatedAt"
-          },
-          {
-            "name": "events",
-            "schema": "&deliveryId, [repoFullName+seenAt], kind, source"
-          },
-          {
-            "name": "audit",
-            "schema": "++id, [repoFullName+at], runId, &[runId+stepId+at]"
-          }
-        ]
-      }
-    },
     "pagerduty": {
       "version": "1.0.0",
       "characterPacks": [

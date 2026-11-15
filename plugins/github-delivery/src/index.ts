@@ -1328,19 +1328,6 @@ const browserSiteProviders = [
   },
 ]
 
-/**
- * Dormant by design: `manifest.dexie.tables` (`repos`, `workOrders`, `events`,
- * `audit`) are the v2 plugin's storage. v3 keeps every piece of state in the
- * host Integration runtime and never calls `ctx.dexie`; the declaration stays
- * only so a one-major rollback to the signed v2 bundle
- * (`packages/plugin-sdk/contract/compat/github-delivery-2.0.0.zip`) finds the
- * rows it wrote. The host boot registry deliberately skips them
- * (`lib/plugin/dexie/builtin-manifests.ts` → `DORMANT_BUILTIN_DEXIE_DECLARATIONS`), no
- * surface renders them, and `index.test.ts` pins that activation never
- * touches `ctx.dexie`. Drop the block together with the v2 compat bundle.
- */
-export const DORMANT_V2_DEXIE_TABLES = ["repos", "workOrders", "events", "audit"] as const
-
 export const manifest = definePluginManifest({
   ...manifestJson,
   integrations: [githubIntegration],

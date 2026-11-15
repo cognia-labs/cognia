@@ -277,7 +277,7 @@ describe("GitHub Delivery v3 official plugin", () => {
     await expect(githubExports.runIssueLoop({}, context)).rejects.toThrow("unavailable")
   })
 
-  it("activates without touching the dormant v2 Dexie tables", async () => {
+  it("activates without touching ctx.dexie", async () => {
     const info = jest.fn()
     const dexie = jest.fn()
     const pluginContext = {
@@ -290,10 +290,7 @@ describe("GitHub Delivery v3 official plugin", () => {
     await expect(githubPlugin.activate(pluginContext)).resolves.toBeUndefined()
     expect(info).toHaveBeenCalledWith("GitHub Delivery v3 activated with host-owned credentials")
     expect(dexie).not.toHaveBeenCalled()
-    // Declared only for a v2 rollback; see DORMANT_V2_DEXIE_TABLES.
-    expect(githubPlugin.manifest.dexie?.tables.map((table) => table.name)).toEqual([
-      ...githubExports.DORMANT_V2_DEXIE_TABLES,
-    ])
+    expect(githubPlugin.manifest.dexie).toBeUndefined()
   })
 
   it("states which surfaces each runtime really has", () => {

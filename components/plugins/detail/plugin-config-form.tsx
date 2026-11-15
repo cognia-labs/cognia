@@ -35,7 +35,6 @@ import { useLocale, useTranslations } from "next-intl"
 import { useSecretReveal } from "@/hooks/use-secret-reveal"
 import { useLocalizedPluginText } from "@/hooks/plugins/use-localized-plugin-text"
 import {
-  VARIANT_ALIASES_FIELD,
   VARIANT_ID_FIELD,
   localizeConfigSchema,
   variantSourceId,
@@ -92,20 +91,10 @@ interface OneOfVariant {
    * The identity persisted as `__variant`. It is the variant's SOURCE text
    * (`title`, else `label`, else `titleKey`; recorded by `localizeConfigSchema`
    * as `x-cognia-variantId`), or `variant_<n>` when it has none, and never
-   * changes with the UI language. It used to be the title as rendered, which
-   * for a `titleKey` variant was the user's-language title, so a choice saved
-   * in one language matched nothing in another. The `variant_<n>` fallback is
-   * an id, never a label: the user sees `title` or the localized
-   * `variantFallback` instead.
+   * changes with the UI language. The `variant_<n>` fallback is an id, never a
+   * label: the user sees `title` or the localized `variantFallback` instead.
    */
   key: string
-  /**
-   * Other values that name this variant: its title in every locale the
-   * manifest ships, plus the title as rendered. A `__variant` saved before the
-   * identity was made stable holds one of these; it resolves, and the form
-   * rewrites it to `key` on load (`normalizeVariantChoice`).
-   */
-  aliases: readonly string[]
   /** The plugin-authored name, when the variant has one. */
   title?: string
   /** 1-based position, for the localized fallback name. */
@@ -206,17 +195,8 @@ function parseOneOfVariants(variantsRaw: unknown): OneOfVariant[] | undefined {
       typeof recordedId === "string" && recordedId.length > 0
         ? recordedId
         : (variantSourceId(obj) ?? `variant_${i + 1}`)
-    const recordedAliases = Array.isArray(obj[VARIANT_ALIASES_FIELD])
-      ? (obj[VARIANT_ALIASES_FIELD] as unknown[]).filter(
-          (alias): alias is string => typeof alias === "string"
-        )
-      : []
-    const aliases = [...new Set([...recordedAliases, ...(title ? [title] : [])])].filter(
-      (alias) => alias !== key
-    )
     variants.push({
       key,
-      aliases,
       title,
       index: i + 1,
       fields: parseObjectProperties(obj),
@@ -538,30 +518,10 @@ export function PluginConfigFormContent({
   )
 }
 
-/**
- * The variant a stored `__variant` names: by its stable key, or by one of its
- * aliases (a choice saved before the key was made locale-independent).
- */
+/** The variant a stored `__variant` names, by its stable key. */
 function findVariant(variants: readonly OneOfVariant[], stored: unknown): OneOfVariant | undefined {
   if (typeof stored !== "string") return undefined
-  return (
-    variants.find((variant) => variant.key === stored) ??
-    variants.find((variant) => variant.aliases.includes(stored))
-  )
-}
-
-/**
- * Rewrite a legacy `__variant` (a localized title) to the variant's stable key.
- * Done when the form seeds, so the baseline already holds the stable key: the
- * migration is not a pending edit, and the next save writes it.
- */
-export function normalizeVariantChoice(field: SchemaField, value: unknown): unknown {
-  if (field.type !== "oneOf" || !field.variants) return value
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value
-  const record = value as Record<string, unknown>
-  const variant = findVariant(field.variants, record.__variant)
-  if (!variant || variant.key === record.__variant) return value
-  return { ...record, __variant: variant.key }
+  return variants.find((variant) => variant.key === stored)
 }
 
 function seedValues(
@@ -575,8 +535,6 @@ function seedValues(
       // doesn't wipe out unrelated user values.
       if (field.type === "object" && field.children) {
         seed[key] = seedValues(field.children, (persisted[key] as Record<string, unknown>) ?? {})
-      } else if (field.type === "oneOf") {
-        seed[key] = normalizeVariantChoice(field, persisted[key])
       } else {
         seed[key] = persisted[key]
       }

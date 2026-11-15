@@ -524,24 +524,11 @@ describe("PluginConfigFormContent", () => {
       config: { auth: { __variant: saved, clientId: "cid" } },
     })
 
-    it("resolves a choice saved in another language and migrates it on the next save", async () => {
-      // Saved while the UI was Chinese; the form now renders in English.
+    it("does not resolve a choice saved under a localized title", () => {
       mockPlugin = localizedPlugin("OAuth 登录")
       renderForm()
-      // The second variant is selected and shown by its English title.
-      expect(screen.getByLabelText("oneOfVariant")).toHaveTextContent("OAuth")
-      expect(screen.getByDisplayValue("cid")).toBeInTheDocument()
-      // Resolving is not an edit: nothing is pending until the user changes something.
-      expect(screen.getByTestId("plugin-config-cancel")).toBeDisabled()
-
-      fireEvent.change(screen.getByDisplayValue("cid"), { target: { value: "cid-2" } })
-      fireEvent.click(screen.getByTestId("plugin-config-save"))
-      await waitFor(() =>
-        expect(setPluginConfigMock).toHaveBeenCalledWith(
-          "p_conf",
-          expect.objectContaining({ auth: { __variant: "auth.oauth", clientId: "cid-2" } })
-        )
-      )
+      expect(screen.getByLabelText("oneOfVariant")).toHaveTextContent("API key")
+      expect(screen.queryByDisplayValue("cid")).not.toBeInTheDocument()
     })
 
     it("accepts the stable id as saved", () => {
