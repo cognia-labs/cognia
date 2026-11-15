@@ -181,6 +181,13 @@ export interface SessionHostPrompt {
   sessionId: string
   binding: SessionHostBinding
   decision: "switch-required" | "host-unavailable"
+  /**
+   * False for a send nobody is watching (an automation, a background result,
+   * a shared-room takeover). The UI then only tells the person the message
+   * was held back; it never opens a dialog an automation would wait on, and
+   * the send is refused whatever the handler returns.
+   */
+  interactive: boolean
 }
 export type SessionHostPromptHandler = (prompt: SessionHostPrompt) => Promise<boolean>
 
@@ -200,8 +207,10 @@ export function registerSessionHostPromptHandler(handler: SessionHostPromptHandl
 /** Await a user choice before admission; re-read all authority after every await. */
 export async function guardSessionHostSend(
   sessionId: string,
-  prompt: SessionHostPromptHandler
+  prompt: SessionHostPromptHandler,
+  options: { interactive?: boolean } = {}
 ): Promise<TaskWorkspaceOrigin | false> {
+  const interactive = options.interactive ?? true
   const db = getDb()
   for (;;) {
     const session = await getSession(sessionId)
@@ -237,24 +246,32 @@ export async function guardSessionHostSend(
     }
     const binding = session.hostBinding!
     if (decision === "ok") return binding.origin
-    if (!(await prompt({ sessionId, binding, decision }))) return false
+    const answer = await prompt({ sessionId, binding, decision, interactive })
+    if (!interactive || !answer) return false
     if (getDb() !== db) return false
   }
 }
 
-/** Public built-in sends only; lease-owned continuations bypass this entry. */
+/**
+ * Public built-in sends only; lease-owned continuations bypass this entry.
+ * `interactive: false` for sends no person is watching: they bind an unbound
+ * session as usual but never wait on a dialog (see `SessionHostPrompt`).
+ */
 export interface SessionHostSendPermit {
   origin: TaskWorkspaceOrigin
   isCurrent(): Promise<boolean>
 }
 
 export async function guardBuiltinSessionHostSend(
-  sessionId: string
+  sessionId: string,
+  options: { interactive?: boolean } = {}
 ): Promise<SessionHostSendPermit | false | undefined> {
   if (runtimeRefForSession(sessionId).kind !== "builtin") return undefined
   const db = getDb()
-  const origin = await guardSessionHostSend(sessionId, async (prompt) =>
-    promptHandler ? promptHandler(prompt) : false
+  const origin = await guardSessionHostSend(
+    sessionId,
+    async (prompt) => (promptHandler ? promptHandler(prompt) : false),
+    options
   )
   if (origin === false || getDb() !== db) return false
   return {

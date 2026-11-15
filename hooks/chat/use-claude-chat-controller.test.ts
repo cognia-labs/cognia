@@ -87,6 +87,30 @@ describe("public built-in send Host guard before turn admission", () => {
     useAgentRuntimeStore.setState(runtimeState, true)
   })
 
+  it("holds an unattended send back without waiting on a dialog, whatever the UI answers", async () => {
+    promptSessionHostSend.mockResolvedValue(true)
+    await getDb().sessions.put({
+      id: "s",
+      title: "A",
+      createdAt: 1,
+      updatedAt: 1,
+      hostBinding: { origin: { kind: "remote", hostId: "a" } },
+    })
+    expect(await guardBuiltinSessionHostSend("s", { interactive: false })).toBe(false)
+    expect(promptSessionHostSend).toHaveBeenCalledTimes(1)
+    expect(promptSessionHostSend).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "switch-required", interactive: false })
+    )
+  })
+
+  it("still binds an unbound session on an unattended send", async () => {
+    await getDb().sessions.put({ id: "s", title: "A", createdAt: 1, updatedAt: 1 })
+    expect(await guardBuiltinSessionHostSend("s", { interactive: false })).toMatchObject({
+      origin: { kind: "remote", hostId: "b" },
+    })
+    expect(promptSessionHostSend).not.toHaveBeenCalled()
+  })
+
   it("refuses, never sends elsewhere, when no prompt UI is installed", async () => {
     registerSessionHostPromptHandler(promptSessionHostSend)()
     await getDb().sessions.put({
@@ -111,6 +135,7 @@ describe("public built-in send Host guard before turn admission", () => {
       sessionId: "s",
       binding: hostBinding,
       decision: "switch-required",
+      interactive: true,
     })
     expect((await getDb().sessions.get("s"))?.hostBinding).toEqual(hostBinding)
   })
@@ -262,6 +287,7 @@ describe("public built-in send Host guard before turn admission", () => {
       sessionId: "s",
       binding: hostBinding,
       decision: "host-unavailable",
+      interactive: true,
     })
     expect((await getDb().sessions.get("s"))?.hostBinding).toEqual(hostBinding)
   })

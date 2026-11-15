@@ -163,11 +163,15 @@ export function ExecutionWorkersCard({ hosts }: { hosts: readonly FleetHost[] })
         <div className="space-y-2">
           {devices.map((device) => {
             const host = onlineByHost.get(device.hostRef)
-            // The dispatch runtime already has authenticated manifests. Device
-            // management capabilities are grants, not Worker feature evidence.
-            const manifest = getRemoteWorkerRuntime()
-              ?.listWorkers()
-              .find((worker) => worker.hostRef === device.hostRef)?.manifest
+            // Worker feature evidence comes from an authenticated manifest:
+            // this process's dispatch runtime on the desktop, the Host's fleet
+            // snapshot on a paired client of a headless brain. Device
+            // management capabilities are grants, not feature evidence.
+            const workerCapabilities =
+              getRemoteWorkerRuntime()
+                ?.listWorkers()
+                .find((worker) => worker.hostRef === device.hostRef)?.manifest.hardCapabilities ??
+              (host?.workerCapabilities?.length ? host.workerCapabilities : undefined)
             const controlLost =
               !host?.online &&
               (children ?? []).some(
@@ -204,8 +208,8 @@ export function ExecutionWorkersCard({ hosts }: { hosts: readonly FleetHost[] })
                 <span className="basis-full text-muted-foreground">
                   {t("selfIsolation", {
                     value: t(
-                      manifest
-                        ? manifest.hardCapabilities.includes("worker-self-fence-v1")
+                      workerCapabilities
+                        ? workerCapabilities.includes("worker-self-fence-v1")
                           ? "supported"
                           : "unsupported"
                         : "capabilityUnknown"
@@ -214,8 +218,8 @@ export function ExecutionWorkersCard({ hosts }: { hosts: readonly FleetHost[] })
                   {" · "}
                   {t("strictStop", {
                     value: t(
-                      manifest
-                        ? manifest.hardCapabilities.includes("turn-interrupt-v1")
+                      workerCapabilities
+                        ? workerCapabilities.includes("turn-interrupt-v1")
                           ? "supported"
                           : "unsupported"
                         : "capabilityUnknown"

@@ -660,18 +660,24 @@ pub fn fleet_hosts(tenant_id: &str) -> Vec<cognia_fleet::registry::FleetHost> {
                 .get("maxActiveTurns")
                 .and_then(Value::as_u64)
                 .unwrap_or(0) as u32;
-            let workspace_binding_refs = worker
-                .manifest
-                .get("workspaceBindingRefs")
-                .and_then(Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+            let manifest_strings = |key: &str| {
+                worker
+                    .manifest
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            };
+            let workspace_binding_refs = manifest_strings("workspaceBindingRefs");
+            // Paired and browser clients of a headless brain have no Worker
+            // pool of their own; this is how they learn what a Worker proved.
+            let worker_capabilities = manifest_strings("hardCapabilities");
             cognia_fleet::registry::FleetHost {
                 host_ref: worker.host_ref.clone(),
                 online: worker.online,
@@ -687,6 +693,7 @@ pub fn fleet_hosts(tenant_id: &str) -> Vec<cognia_fleet::registry::FleetHost> {
                     .to_owned(),
                 workspace_binding_ready: !workspace_binding_refs.is_empty(),
                 workspace_binding_refs,
+                worker_capabilities,
                 last_seen_at: worker.last_seen_at,
             }
         })
@@ -1346,7 +1353,8 @@ mod tests {
             manifest: serde_json::json!({
                 "runtime": "cognia-agent",
                 "maxActiveTurns": 2,
-                "workspaceBindingRefs": ["repository:project:repo"]
+                "workspaceBindingRefs": ["repository:project:repo"],
+                "hardCapabilities": ["worker-self-fence-v1", "turn-interrupt-v1"]
             }),
             last_seen_at: 1,
             used_slots: 0,
@@ -1367,6 +1375,10 @@ mod tests {
             }],
         );
         let live = fleet_hosts(tenant_id);
+        assert_eq!(
+            live[0].worker_capabilities,
+            vec!["worker-self-fence-v1", "turn-interrupt-v1"]
+        );
         assert_eq!(live[0].used_slots, Some(1));
         assert_eq!(live[0].placement_ready, Some(false));
         assert_eq!(

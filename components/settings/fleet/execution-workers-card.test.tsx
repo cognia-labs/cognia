@@ -89,6 +89,29 @@ describe("ExecutionWorkersCard", () => {
     }
   )
 
+  it("reads Worker support from the Host's fleet snapshot when this client has no pool", async () => {
+    // A paired client of a headless brain: the Worker pool lives on the Host.
+    render(
+      <ExecutionWorkersCard
+        hosts={[
+          {
+            hostRef: "device:derived-worker-a",
+            online: true,
+            maxActiveTurns: 1,
+            runtime: "test",
+            workspaceBindingReady: true,
+            lastSeenAt: 1,
+            placementReady: true,
+            workerCapabilities: ["worker-self-fence-v1"],
+          },
+        ]}
+      />
+    )
+    expect(
+      await screen.findByText(/selfIsolation.*supported.*strictStop.*unsupported/)
+    ).toBeInTheDocument()
+  })
+
   it("keeps feature support unknown when only management grants are available", async () => {
     render(<ExecutionWorkersCard hosts={[]} />)
     expect(await screen.findByText(/selfIsolation.*capabilityUnknown/)).toBeInTheDocument()

@@ -382,6 +382,12 @@ pub struct FleetHost {
     pub workspace_binding_ready: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_binding_refs: Vec<String>,
+    /// The Worker's `hardCapabilities` from the manifest the Host authenticated
+    /// (for example `worker-self-fence-v1`, `turn-interrupt-v1`). Empty, and
+    /// absent on the wire, when the Host has no manifest for it, which reads
+    /// as "unknown", never as "unsupported".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worker_capabilities: Vec<String>,
     pub last_seen_at: u64,
 }
 
@@ -1818,15 +1824,18 @@ mod tests {
             runtime: "cognia-agent".into(),
             workspace_binding_ready: false,
             workspace_binding_refs: vec![],
+            worker_capabilities: vec![],
             last_seen_at: 1,
         };
         let legacy_json = serde_json::to_value(&legacy).unwrap();
         assert!(legacy_json.get("placementReady").is_none());
         assert!(legacy_json.get("placementReason").is_none());
+        assert!(legacy_json.get("workerCapabilities").is_none());
 
         let projected = FleetHost {
             placement_ready: Some(false),
             placement_reason: Some("execution_profile_missing".into()),
+            worker_capabilities: vec!["worker-self-fence-v1".into()],
             ..legacy
         };
         let projected_json = serde_json::to_value(projected).unwrap();
@@ -1834,6 +1843,10 @@ mod tests {
         assert_eq!(
             projected_json["placementReason"],
             "execution_profile_missing"
+        );
+        assert_eq!(
+            projected_json["workerCapabilities"],
+            serde_json::json!(["worker-self-fence-v1"])
         );
     }
 

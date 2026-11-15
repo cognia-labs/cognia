@@ -7157,7 +7157,15 @@ export function useClaudeChat() {
           return busy()
         return invokeOwnedSend(existing, args, true)
       }
-      const hostPermit = await guardBuiltinSessionHostSend(sessionId)
+      // Nobody waits on a dialog for an automation, a background result or a
+      // shared-room takeover: those are held back with a notice instead.
+      const hostPermit = await guardBuiltinSessionHostSend(sessionId, {
+        interactive: !(
+          args[2]?.automatedTurn ||
+          args[2]?.backgroundDelivery ||
+          args[2]?.sharedRequest
+        ),
+      })
       if (hostPermit === false) return false
       const release = await acquireSessionTurnLease(sessionId, true)
       if (!release) return busy()

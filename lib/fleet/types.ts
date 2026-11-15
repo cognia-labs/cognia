@@ -199,6 +199,12 @@ export interface FleetHost {
   runtime: string
   workspaceBindingReady: boolean
   workspaceBindingRefs?: string[]
+  /**
+   * The Worker's `hardCapabilities` from the manifest the Host authenticated
+   * (`worker-self-fence-v1`, `turn-interrupt-v1`, ...). Absent when the Host has
+   * no manifest for it: unknown, never "unsupported".
+   */
+  workerCapabilities?: string[]
   lastSeenAt: number
 }
 

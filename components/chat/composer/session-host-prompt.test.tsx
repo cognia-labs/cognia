@@ -1,7 +1,12 @@
 /** @jest-environment jsdom */
 import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { SessionHostPromptDialog } from "./session-host-prompt"
+import { toast } from "sonner"
+import {
+  SessionHostHeldBackNotice,
+  SessionHostPromptDialog,
+  promptSessionHostSend,
+} from "./session-host-prompt"
 import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 import type { RemoteHost } from "@/stores/remote-host/remote-host-store"
 
@@ -13,6 +18,13 @@ jest.mock("./session-host-target-chip", () => ({
   SessionHostTargetChip: ({ onRebound }: { onRebound: () => void }) => (
     <button onClick={onRebound}>Choose Host B</button>
   ),
+}))
+jest.mock("sonner", () => ({
+  toast: Object.assign(jest.fn(), {
+    warning: jest.fn(),
+    custom: jest.fn(() => "prompt-toast"),
+    dismiss: jest.fn(),
+  }),
 }))
 jest.mock("@/lib/devices/execution-host-guard", () => ({ anyRunActive: async () => true }))
 const initial = useRemoteHostStore.getState()
@@ -39,7 +51,7 @@ it("offers Wait, Cancel and an explicit other-Host choice without retrying elsew
   const user = userEvent.setup()
   render(
     <SessionHostPromptDialog
-      prompt={{ sessionId: "s", binding, decision: "host-unavailable" }}
+      prompt={{ sessionId: "s", binding, decision: "host-unavailable", interactive: true }}
       onAnswer={answer}
     />
   )
@@ -54,7 +66,7 @@ it("Wait retries only when the bound Host is ready", async () => {
   const user = userEvent.setup()
   render(
     <SessionHostPromptDialog
-      prompt={{ sessionId: "s", binding, decision: "host-unavailable" }}
+      prompt={{ sessionId: "s", binding, decision: "host-unavailable", interactive: true }}
       onAnswer={answer}
     />
   )
@@ -71,7 +83,7 @@ it("offers the named bound Host and passes its switch through the in-flight conf
   const user = userEvent.setup()
   render(
     <SessionHostPromptDialog
-      prompt={{ sessionId: "s", binding, decision: "switch-required" }}
+      prompt={{ sessionId: "s", binding, decision: "switch-required", interactive: true }}
       onAnswer={answer}
     />
   )
@@ -80,4 +92,30 @@ it("offers the named bound Host and passes its switch through the in-flight conf
   expect(answer).not.toHaveBeenCalled()
   await user.click(screen.getByRole("button", { name: "devices.executionHost.confirmCancel" }))
   expect(answer).not.toHaveBeenCalledWith(true)
+})
+
+it("holds an unattended send back with a notice instead of a dialog", async () => {
+  const prompt = {
+    sessionId: "s",
+    binding,
+    decision: "switch-required" as const,
+    interactive: false,
+  }
+  await expect(promptSessionHostSend(prompt)).resolves.toBe(false)
+  expect(toast.custom).not.toHaveBeenCalled()
+  expect(toast.warning).toHaveBeenCalledWith(expect.anything(), {
+    id: "session-host-held-back:s",
+  })
+})
+
+it("names the bound Host and why the unattended send was held back", () => {
+  render(
+    <SessionHostHeldBackNotice
+      prompt={{ sessionId: "s", binding, decision: "host-unavailable", interactive: false }}
+    />
+  )
+  expect(screen.getByText("chat.composer.target.heldBackTitle")).toBeVisible()
+  expect(
+    screen.getByText('chat.composer.target.heldBackUnavailable:{"host":"Host A"}')
+  ).toBeVisible()
 })

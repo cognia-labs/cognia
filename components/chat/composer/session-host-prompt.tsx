@@ -128,9 +128,35 @@ export function SessionHostPromptDialog({
   )
 }
 
+/** Why an unattended send in this conversation did not go out. */
+export function SessionHostHeldBackNotice({ prompt }: { prompt: SessionHostPrompt }) {
+  const t = useTranslations("chat.composer.target")
+  const td = useTranslations("devices.executionHost")
+  const { hosts } = useExecutionHostTargets()
+  const host = executionHostOriginLabel(prompt.binding.origin, hosts, td)
+  return (
+    <div className="space-y-1">
+      <p className="font-medium">{t("heldBackTitle")}</p>
+      <p className="text-muted-foreground text-xs">
+        {t(prompt.decision === "switch-required" ? "heldBackSwitch" : "heldBackUnavailable", {
+          host,
+        })}
+      </p>
+    </div>
+  )
+}
+
 const pendingPrompts = new WeakMap<object, Map<string, Promise<boolean>>>()
 
 export function promptSessionHostSend(prompt: SessionHostPrompt): Promise<boolean> {
+  if (!prompt.interactive) {
+    // One notice per conversation, replaced rather than stacked when a
+    // background result retries; nothing waits on it.
+    toast.warning(<SessionHostHeldBackNotice prompt={prompt} />, {
+      id: `session-host-held-back:${prompt.sessionId}`,
+    })
+    return Promise.resolve(false)
+  }
   const db = getDb()
   let prompts = pendingPrompts.get(db)
   if (!prompts) {

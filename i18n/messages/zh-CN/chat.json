@@ -257,7 +257,10 @@
       "switchAnother": "切换到其他主机，并将此会话重新绑定到该主机：",
       "wait": "等待并重试",
       "waiting": "正在等待 {host} 就绪…",
-      "cancel": "取消"
+      "cancel": "取消",
+      "heldBackTitle": "自动消息未发送",
+      "heldBackSwitch": "此会话在 {host} 上运行，但它不是当前的执行主机。请通过会话的目标芯片切换到该主机后再发送。",
+      "heldBackUnavailable": "此会话在 {host} 上运行，但该主机已离线、尚未就绪或无法运行内置 Agent。消息没有发到其他主机。"
     },
     "contextRegion": "输入框上下文与提示",
     "ariaAttachImage": "添加文件",

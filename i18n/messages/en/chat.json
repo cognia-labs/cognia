@@ -257,7 +257,10 @@
       "switchAnother": "Switch to another Host and rebind this conversation:",
       "wait": "Wait and retry",
       "waiting": "Waiting for {host} to be ready…",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "heldBackTitle": "Automated message not sent",
+      "heldBackSwitch": "This conversation runs on {host}, which is not the active Host. Switch to it from the conversation's target chip, then send again.",
+      "heldBackUnavailable": "This conversation runs on {host}, which is offline, not ready, or cannot run the built-in Agent. Nothing was sent elsewhere."
     },
     "contextRegion": "Composer context and notices",
     "ariaAttachImage": "Attach files",
