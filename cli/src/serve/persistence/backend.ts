@@ -25,7 +25,6 @@ import {
   type BackendManifest,
 } from "./manifest"
 import { openSqliteBackend, sqliteFile } from "./sqlite"
-import { LegacyValueReport } from "./value-codec"
 import {
   DurabilityFault,
   type DurabilityBackendId,
@@ -129,11 +128,6 @@ export function inspectDurabilityRoot(root: string): DurabilityRootInventory {
   }
 }
 
-/** A root that has never persisted anything: no manifest and no backend data. */
-export function isFreshDurabilityRoot(inventory: DurabilityRootInventory): boolean {
-  return !inventory.manifest && !inventory.journal && !inventory.sqlite && !inventory.stagedJournal
-}
-
 /**
  * The ledger backend whose data an un-pinned root already holds, if any.
  *
@@ -175,13 +169,6 @@ export interface ResolvedBackend {
   state: DurabilityState
   /** Commits replayed into the shadow because it lagged the journal. */
   shadowCatchUp: number
-  /**
-   * The primary or the shadow was read from a checkpoint generation written
-   * before value codec 1 (`DurabilityState.legacyValueCodec`). The journal
-   * refuses to append to such a generation, so the caller must compact before
-   * the first commit; a dual-write compaction re-cuts both sides.
-   */
-  legacyValueCodec: boolean
 }
 
 export interface ResolveBackendOptions {
@@ -220,13 +207,7 @@ export async function resolveBackend(opts: ResolveBackendOptions): Promise<Resol
     const state = await primary.load()
 
     if (!manifest.shadowBackend) {
-      return {
-        backend: primary,
-        manifest,
-        state,
-        shadowCatchUp: 0,
-        legacyValueCodec: state.legacyValueCodec === true,
-      }
+      return { backend: primary, manifest, state, shadowCatchUp: 0 }
     }
     if (manifest.shadowBackend === manifest.activeBackend) {
       throw new DurabilityFault(
@@ -237,25 +218,12 @@ export async function resolveBackend(opts: ResolveBackendOptions): Promise<Resol
 
     shadow = openBackend(manifest.shadowBackend, root)
     const shadowState = await shadow.load()
-    // The shadow's codec-0 findings belong to the same account: hand them to the
-    // caller with the primary's, so they are on record before compaction
-    // rewrites the rows that show them.
-    if (shadowState.legacyValueFindings?.length) {
-      const merged = new LegacyValueReport()
-      for (const finding of [
-        ...(state.legacyValueFindings ?? []),
-        ...shadowState.legacyValueFindings,
-      ])
-        merged.merge(finding)
-      state.legacyValueFindings = merged.findings()
-    }
     const catchUp = await catchUpShadow(root, shadow, shadowState, state)
     return {
       backend: createDualWriteBackend(primary, shadow),
       manifest,
       state,
       shadowCatchUp: catchUp,
-      legacyValueCodec: state.legacyValueCodec === true || shadowState.legacyValueCodec === true,
     }
   } catch (error) {
     try {
@@ -296,7 +264,6 @@ async function pinInitialBackend(
       manifest: readManifest(root),
       state,
       shadowCatchUp: 0,
-      legacyValueCodec: state.legacyValueCodec === true,
     }
   } catch (error) {
     await primary.close()
@@ -315,8 +282,6 @@ async function pinInitialBackend(
  * - **Behind by a replayable tail** → apply the missing commits one by one.
  * - **Behind the checkpoint** (its sequence predates the journal's base, so the
  *   tail cannot bridge the gap) → rewrite it wholesale from the primary state.
- * - **A shadow journal on a pre-codec-1 generation**, level or not → rewrite it
- *   too: it refuses appends.
  */
 async function catchUpShadow(
   root: string,
@@ -330,13 +295,6 @@ async function catchUpShadow(
       `shadow backend is ahead of the journal (${shadowState.sequence} > ${primaryState.sequence})`,
       primaryState.sequence
     )
-  }
-  // A shadow journal on a generation from before value codec 1 refuses
-  // appends (an older build still reads that generation), so even a shadow
-  // that is level is rewritten from the primary rather than appended to.
-  if (shadowState.legacyValueCodec) {
-    await shadow.compact(primaryState)
-    return primaryState.sequence - shadowState.sequence
   }
   if (shadowState.sequence === primaryState.sequence) return 0
 

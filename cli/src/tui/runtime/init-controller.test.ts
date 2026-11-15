@@ -176,7 +176,7 @@ describe("runInit — create", () => {
   it("stages a draft + opens confirm overlay when AGENTS.md exists", async () => {
     const h = harness({ "/work/app/AGENTS.md": "# old" })
     await runInit({
-      action: "regenerate",
+      action: "create",
       dispatch: (a) => h.actions.push(a),
       cwd: "/work/app",
       fsApi: h.fsApi,
@@ -230,7 +230,7 @@ describe("runInit — rewrite", () => {
     })
     const rewriteWithModel = jest.fn().mockResolvedValue("# rewritten\n\nbody")
     await runInit({
-      action: "optimize",
+      action: "rewrite",
       dispatch: (a) => h.actions.push(a),
       cwd: "/work/app",
       config,

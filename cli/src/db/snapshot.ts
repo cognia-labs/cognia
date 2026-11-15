@@ -16,8 +16,6 @@ import { Buffer } from "node:buffer"
 import { types } from "node:util"
 import type Dexie from "dexie"
 
-import { encodeKey } from "../serve/persistence/canonical"
-
 const BINARY_CHUNK_BYTES = 64 * 1024
 const SNAPSHOT_VALUE_KEY = "$cogniaSnapshotValue"
 
@@ -809,7 +807,7 @@ export function decodeSnapshotRows(value: unknown, binaryStore?: SnapshotBinaryS
 }
 
 /** Resolve file-backed Blobs without materializing their source bytes. Other
- * binary types retain the normal synchronous codec and legacy compatibility. */
+ * binary types use the normal synchronous codec. */
 export async function decodeSnapshotRowsAsync(
   value: unknown,
   binaryStore: SnapshotBinaryStore
@@ -882,21 +880,14 @@ export interface DbSnapshot {
   tables: Record<string, unknown[]>
 }
 
-/**
- * Single-file envelope format. 3 holds value-codec-1 rows, which a build that
- * accepts only 2 refuses as corrupt instead of misreading; 2 (and the legacy
- * single-database file with no format) are still read.
- */
+/** Single-file envelope format; it holds value-codec-1 rows. Any other format is refused. */
 export const SNAPSHOT_FORMAT = 3 as const
 
 /** Snapshot envelope spanning every database the host persists. */
 export interface MultiDbSnapshot {
-  /** Envelope format ({@link SNAPSHOT_FORMAT} once parsed). Absent on legacy single-database snapshots. */
   snapshotFormat: typeof SNAPSHOT_FORMAT
-  /** Keyed by Dexie database name (`CogniaDB`, `CogniaSchedulerDB`, …). */
+  /** Keyed by Dexie database name (`CogniaDB`, …). */
   dbs: Record<string, DbSnapshot>
-  /** Parsed from a file written before value codec 1 (format 2, or no format). */
-  legacyValueCodec?: true
 }
 
 /** One database to snapshot, plus the tables deliberately left out of it. */
@@ -912,9 +903,6 @@ export interface SnapshotSource {
    */
   excludeTables?: readonly string[]
 }
-
-export type SnapshotParseResult =
-  { kind: "absent" } | { kind: "corrupt"; reason: string } | { kind: "valid"; snapshot: DbSnapshot }
 
 export type MultiSnapshotParseResult =
   | { kind: "absent" }
@@ -977,9 +965,7 @@ export async function serializeSources(
 export async function restoreSnapshot(
   db: DbLike,
   snapshot: DbSnapshot,
-  databaseName?: string,
-  /** Told what each restored table's pre-codec-1 rows may have lost. */
-  legacy?: LegacySnapshotReporter
+  databaseName?: string
 ): Promise<void> {
   // A LOWER snapshot version is an ordinary forward move within the storage
   // layout (same rule as `lib/db/storage-layout.ts`): restored rows go through
@@ -998,14 +984,6 @@ export async function restoreSnapshot(
     if (!targetTables.has(table.name)) continue
     const rows = snapshot.tables[table.name]
     if (!rows) continue
-    if (legacy && Array.isArray(rows)) {
-      reportLegacySnapshotRows(
-        snapshotRowsForTable(table.name, rows),
-        databaseName ?? "",
-        table.name,
-        legacy
-      )
-    }
     const decoded = snapshotRowsForTable(table.name, decodeSnapshotRows(rows))
     await table.clear()
     if (decoded.length > 0) await table.bulkPut(decoded)
@@ -1013,123 +991,22 @@ export async function restoreSnapshot(
 }
 
 /**
- * Overlay a multi-database snapshot onto its sources.
- *
- * A database the envelope omits is SKIPPED, not cleared — same semantics as an
- * omitted table, one level up. That is what makes the upgrade path work: the
- * first boot after this change reads a legacy single-database file, so
- * `CogniaSchedulerDB` has no entry and simply starts from its seeded state.
+ * Overlay a multi-database snapshot onto its sources. A database the envelope
+ * omits is SKIPPED, not cleared — same semantics as an omitted table, one level up.
  */
 export async function restoreMultiSnapshot(
   sources: readonly SnapshotSource[],
-  snapshot: MultiDbSnapshot,
-  /** Told what a pre-codec-1 snapshot may have lost (see {@link reportLegacySnapshotRows}). */
-  legacy?: LegacySnapshotReporter
+  snapshot: MultiDbSnapshot
 ): Promise<void> {
   for (const source of sources) {
     const perDb = snapshot.dbs[source.name]
     if (!perDb) continue
-    // Only the tables `restoreSnapshot` restores are reported, as on the table-store path.
-    await restoreSnapshot(
-      source.db,
-      perDb,
-      source.name,
-      snapshot.legacyValueCodec ? legacy : undefined
-    )
+    await restoreSnapshot(source.db, perDb, source.name)
   }
 }
 
-/**
- * What a snapshot written before value codec 1 (single file format 2 or no
- * format, table store format 3) may have lost. Its encoder kept Blob,
- * Uint8Array and ArrayBuffer and nothing else: a Date became its ISO string,
- * a Map, Set, RegExp or DataView became `{}`, another typed array an
- * index-keyed object, and a File a Blob without its name. Those rows restore
- * as written; this only names them, as the journal and SQLite readers do for
- * their own pre-codec-1 rows.
- */
-export type LegacySnapshotLossShape =
-  "empty-object" | "index-keyed-object" | "iso-date-string" | "legacy-blob"
-
-export type LegacySnapshotReporter = (
-  database: string,
-  table: string,
-  key: string,
-  path: string,
-  shape: LegacySnapshotLossShape
-) => void
-
-/** `Date.prototype.toJSON`'s output, the only form the old encoder wrote a Date in. */
-const LEGACY_DATE_JSON = /^[+-]?\d{4,6}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
-
-/**
- * Report every shape in `rows` (one table of a pre-codec-1 snapshot) that
- * may be a lost value. Read-only: the rows restore exactly as before. A row
- * is named by its encoded `id` when it has one (the journal's key form for
- * the usual primary key), otherwise by its position as `#n`.
- */
-export function reportLegacySnapshotRows(
-  rows: readonly unknown[],
-  database: string,
-  table: string,
-  report: LegacySnapshotReporter
-): void {
-  rows.forEach((row, index) => {
-    const id =
-      row && typeof row === "object" && !Array.isArray(row)
-        ? (row as Record<string, unknown>).id
-        : undefined
-    const key = typeof id === "string" || typeof id === "number" ? encodeKey(id) : `#${index}`
-    walkLegacySnapshotValue(row, "", (path, shape) => report(database, table, key, path, shape))
-  })
-}
-
-function walkLegacySnapshotValue(
-  value: unknown,
-  path: string,
-  add: (path: string, shape: LegacySnapshotLossShape) => void
-): void {
-  if (typeof value === "string") {
-    if (LEGACY_DATE_JSON.test(value)) add(path, "iso-date-string")
-    return
-  }
-  if (!value || typeof value !== "object") return
-  const child = (key: string) => (path ? `${path}.${key}` : key)
-  if (Array.isArray(value)) {
-    for (const item of value) walkLegacySnapshotValue(item, `${path}[]`, add)
-    return
-  }
-  const object = value as Record<string, unknown>
-  const keys = Object.keys(object)
-  if (keys.length === 1 && keys[0] === SNAPSHOT_VALUE_KEY) {
-    const envelope = object[SNAPSHOT_VALUE_KEY] as Record<string, unknown> | null
-    if (envelope?.type === "blob") add(path, "legacy-blob")
-    if (envelope?.type === "record" && Array.isArray(envelope.entries)) {
-      for (const entry of envelope.entries) {
-        if (Array.isArray(entry)) walkLegacySnapshotValue(entry[1], child(String(entry[0])), add)
-      }
-    }
-    return
-  }
-  if (keys.length === 0) {
-    add(path, "empty-object")
-    return
-  }
-  // `null` included: the old encoder wrote a NaN element as `null`.
-  if (
-    keys.every(
-      (key, index) =>
-        key === String(index) && (typeof object[key] === "number" || object[key] === null)
-    )
-  ) {
-    add(path, "index-keyed-object")
-    return
-  }
-  for (const key of keys) walkLegacySnapshotValue(object[key], child(key), add)
-}
-
-/** Parse snapshot JSON while preserving the absent-versus-corrupt distinction. */
-export function parseSnapshot(text: string | null | undefined): SnapshotParseResult {
+/** Parse a {@link MultiDbSnapshot} envelope. */
+export function parseMultiSnapshot(text: string | null | undefined): MultiSnapshotParseResult {
   if (text === null || text === undefined) return { kind: "absent" }
   let parsed: unknown
   try {
@@ -1141,65 +1018,6 @@ export function parseSnapshot(text: string | null | undefined): SnapshotParseRes
     return { kind: "corrupt", reason: "snapshot root is not an object" }
   }
   const obj = parsed as Record<string, unknown>
-  if (typeof obj.version !== "number" || !Number.isFinite(obj.version)) {
-    return { kind: "corrupt", reason: "snapshot version is not a finite number" }
-  }
-  if (!obj.tables || typeof obj.tables !== "object" || Array.isArray(obj.tables)) {
-    return { kind: "corrupt", reason: "snapshot tables are not an object" }
-  }
-  const tables = obj.tables as Record<string, unknown>
-  if (Object.values(tables).some((rows) => !Array.isArray(rows))) {
-    return { kind: "corrupt", reason: "one or more snapshot tables are not arrays" }
-  }
-  try {
-    for (const rows of Object.values(tables)) {
-      for (const row of rows as unknown[]) decodeSnapshotValue(row, false)
-    }
-  } catch {
-    return { kind: "corrupt", reason: "invalid snapshot binary value" }
-  }
-  return {
-    kind: "valid",
-    snapshot: { version: obj.version, tables: tables as Record<string, unknown[]> },
-  }
-}
-
-/**
- * Parse either envelope format and normalise to {@link MultiDbSnapshot}.
- *
- * `primaryDbName` is the key a legacy single-database snapshot is filed under —
- * pass the name of the database that legacy snapshots were dumped from
- * (`CogniaDB`). Only reached for files without a `snapshotFormat` key.
- */
-export function parseMultiSnapshot(
-  text: string | null | undefined,
-  primaryDbName: string
-): MultiSnapshotParseResult {
-  if (text === null || text === undefined) return { kind: "absent" }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    return { kind: "corrupt", reason: "invalid JSON" }
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { kind: "corrupt", reason: "snapshot root is not an object" }
-  }
-  const obj = parsed as Record<string, unknown>
-
-  // Legacy single-database envelope — no `snapshotFormat` key.
-  if (obj.snapshotFormat === undefined) {
-    const legacy = parseSnapshot(text)
-    if (legacy.kind !== "valid") return legacy
-    return {
-      kind: "valid",
-      snapshot: {
-        snapshotFormat: SNAPSHOT_FORMAT,
-        dbs: { [primaryDbName]: legacy.snapshot },
-        legacyValueCodec: true,
-      },
-    }
-  }
 
   if (Number.isInteger(obj.snapshotFormat) && (obj.snapshotFormat as number) > SNAPSHOT_FORMAT) {
     return {
@@ -1207,7 +1025,7 @@ export function parseMultiSnapshot(
       reason: `snapshot format ${obj.snapshotFormat} was written by a newer version of Cognia (this version reads up to ${SNAPSHOT_FORMAT})`,
     }
   }
-  if (obj.snapshotFormat !== 2 && obj.snapshotFormat !== SNAPSHOT_FORMAT) {
+  if (obj.snapshotFormat !== SNAPSHOT_FORMAT) {
     return { kind: "corrupt", reason: `unsupported snapshot format ${String(obj.snapshotFormat)}` }
   }
   if (!obj.dbs || typeof obj.dbs !== "object" || Array.isArray(obj.dbs)) {
@@ -1221,11 +1039,7 @@ export function parseMultiSnapshot(
   }
   return {
     kind: "valid",
-    snapshot: {
-      snapshotFormat: SNAPSHOT_FORMAT,
-      dbs,
-      ...(obj.snapshotFormat === 2 ? { legacyValueCodec: true as const } : {}),
-    },
+    snapshot: { snapshotFormat: SNAPSHOT_FORMAT, dbs },
   }
 }
 

@@ -69,10 +69,9 @@ export interface PacedRevealOptions {
 export function usePacedReveal(
   target: string,
   enabled: boolean,
-  options: PacedRevealOptions | number = {}
+  options: PacedRevealOptions = {}
 ): string {
-  // Back-compat: the third argument used to be `paceMs`.
-  const { paceMs = 24, epoch } = typeof options === "number" ? { paceMs: options } : options
+  const { paceMs = 24, epoch } = options
   const [shown, setShown] = useState(() => (enabled ? 0 : target.length))
   // Previous inputs held as STATE, not refs, so the comparison below is React's
   // documented "adjust state while rendering" pattern rather than a ref read

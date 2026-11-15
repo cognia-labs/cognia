@@ -5,9 +5,9 @@
  * Actions (routed by the runtime `arg`):
  *   • (bare / `run`) — create `AGENTS.md` from a template when no instruction
  *     file exists; otherwise open a menu of the actions below.
- *   • `create` / `regenerate` — (re)generate the template; overwrite only after
+ *   • `create` — (re)generate the template; overwrite only after
  *     a confirm overlay.
- *   • `rewrite` / `optimize` — ask the active model to rewrite `AGENTS.md` using
+ *   • `rewrite` — ask the active model to rewrite `AGENTS.md` using
  *     bounded project context, then confirm before overwriting.
  *   • `preview` — open the current `AGENTS.md` in a read-only pager.
  *   • `scaffold` — seed `.cognia/instructions/*.md` + `.cognia/agents/example.md`.
@@ -339,7 +339,7 @@ function writeNew(deps: InitDeps, io: InitFs): void {
   })
 }
 
-/** `create` / `regenerate`: stage the template (confirm if AGENTS.md exists). */
+/** `create`: stage the template (confirm if AGENTS.md exists). */
 function runCreate(deps: InitDeps): void {
   const io = fsOf(deps)
   const target = path.join(deps.cwd, "AGENTS.md")
@@ -351,7 +351,7 @@ function runCreate(deps: InitDeps): void {
   writeNew(deps, io)
 }
 
-/** `rewrite` / `optimize`: ask the model, then stage for confirmation. */
+/** `rewrite`: ask the model, then stage for confirmation. */
 async function runRewrite(deps: InitDeps): Promise<void> {
   const io = fsOf(deps)
   const target = path.join(deps.cwd, "AGENTS.md")
@@ -477,10 +477,8 @@ export async function runInit(deps: InitDeps): Promise<void> {
     case "run":
       return runMenuOrCreate(deps)
     case "create":
-    case "regenerate":
       return runCreate(deps)
     case "rewrite":
-    case "optimize":
       return runRewrite(deps)
     case "preview":
       return runPreview(deps)

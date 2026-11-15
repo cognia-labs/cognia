@@ -411,7 +411,7 @@ describe("runCommand", () => {
       run,
       ...noStdin,
     })
-    expect(run.mock.calls[0][0].maxTurns).toBe(5)
+    expect(run.mock.calls[0][0].maxSteps).toBe(5)
   })
 
   it("pushes a handoff after the turn when --handoff is set", async () => {

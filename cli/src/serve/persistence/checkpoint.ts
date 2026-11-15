@@ -23,7 +23,7 @@ import { randomUUID } from "node:crypto"
 import { canonicalJson } from "./canonical"
 import { acquireWriterLease } from "./writer-lock"
 import { readManifest, writeManifest, type BackendManifest } from "./manifest"
-import { LegacyValueReport, normalizeLegacyValue, VALUE_CODEC } from "./value-codec"
+import { VALUE_CODEC } from "./value-codec"
 import {
   DurabilityFault,
   type DurabilitySchema,
@@ -32,30 +32,19 @@ import {
 } from "./types"
 
 /**
- * Checkpoint envelope format. Bumped only on a breaking layout change.
- *
- * Format 4 holds value-codec-1 rows. The bump is what makes codec-1 data
- * unreadable to a build that predates it: such a build refuses any format but
- * 3, so after a downgrade it fails at boot instead of handing Dexie envelope
- * objects as row values and writing them back as plain data. Format 3 (always
- * codec 0) stays readable here and is normalised on read.
+ * Checkpoint envelope format. Bumped only on a breaking layout change. Format 4
+ * holds value-codec-1 rows; any other format is refused.
  */
 export const CHECKPOINT_FORMAT = 4 as const
-/** The last format written before value codec 1. */
-export const LEGACY_CHECKPOINT_FORMAT = 3 as const
 
 interface CheckpointManifest {
-  checkpointFormat: typeof CHECKPOINT_FORMAT | typeof LEGACY_CHECKPOINT_FORMAT
+  checkpointFormat: typeof CHECKPOINT_FORMAT
   generation: string
   createdAt: number
   /** Commit sequence the checkpoint content corresponds to. */
   sequence: number
-  /**
-   * How row values are encoded (`value-codec.ts`): 1 in format 4, which must
-   * say so; 0 for a format-3 generation, whose rows {@link readCheckpoint}
-   * normalises.
-   */
-  valueCodec: 0 | typeof VALUE_CODEC
+  /** How row values are encoded (`value-codec.ts`); format 4 must say so. */
+  valueCodec: typeof VALUE_CODEC
   dbs: Record<string, DurabilitySchema>
 }
 
@@ -296,23 +285,19 @@ function parseManifest(text: string): CheckpointManifest {
     throw new DurabilityFault("checkpoint-corrupt", "checkpoint manifest is not an object")
   }
   const root = parsed as Record<string, unknown>
-  if (
-    root.checkpointFormat !== CHECKPOINT_FORMAT &&
-    root.checkpointFormat !== LEGACY_CHECKPOINT_FORMAT
-  ) {
+  if (root.checkpointFormat !== CHECKPOINT_FORMAT) {
     throw new DurabilityFault(
       "checkpoint-corrupt",
       `unsupported checkpoint format ${String(root.checkpointFormat)}`
     )
   }
-  const legacy = root.checkpointFormat === LEGACY_CHECKPOINT_FORMAT
   if (typeof root.sequence !== "number" || !Number.isInteger(root.sequence) || root.sequence < 0) {
     throw new DurabilityFault(
       "checkpoint-corrupt",
       "checkpoint sequence is not a non-negative integer"
     )
   }
-  if (legacy ? root.valueCodec !== undefined : root.valueCodec !== VALUE_CODEC) {
+  if (root.valueCodec !== VALUE_CODEC) {
     throw new DurabilityFault(
       "checkpoint-corrupt",
       `checkpoint format ${String(root.checkpointFormat)} cannot hold value codec ${String(root.valueCodec)}`
@@ -339,26 +324,17 @@ function parseManifest(text: string): CheckpointManifest {
     dbs[name] = { version: entry.version, tables: entry.tables as string[] }
   }
   return {
-    checkpointFormat: legacy ? LEGACY_CHECKPOINT_FORMAT : CHECKPOINT_FORMAT,
+    checkpointFormat: CHECKPOINT_FORMAT,
     generation: typeof root.generation === "string" ? root.generation : "",
     createdAt: typeof root.createdAt === "number" ? root.createdAt : 0,
     sequence: root.sequence,
-    valueCodec: legacy ? 0 : VALUE_CODEC,
+    valueCodec: VALUE_CODEC,
     dbs,
   }
 }
 
-/**
- * Read one generation back into a {@link DurabilityState}, with every row value
- * in codec-1 form. A generation written before codec 1 is normalised on read,
- * what looks like lost binary data goes into `report`, and the state carries
- * `legacyValueCodec` so the journal never appends codec-1 lines to it.
- */
-export function readCheckpoint(
-  root: string,
-  generation: string,
-  report: LegacyValueReport = new LegacyValueReport()
-): DurabilityState {
+/** Read one generation back into a {@link DurabilityState}, row values in codec-1 form. */
+export function readCheckpoint(root: string, generation: string): DurabilityState {
   const dir = generationDir(root, generation)
   const manifestFile = path.join(dir, "checkpoint.json")
   if (!fs.existsSync(manifestFile)) {
@@ -369,7 +345,6 @@ export function readCheckpoint(
   }
   const manifest = parseManifest(fs.readFileSync(manifestFile, "utf8"))
   const state: DurabilityState = { sequence: manifest.sequence, dbs: {} }
-  if (manifest.valueCodec === 0) state.legacyValueCodec = true
   for (const [database, schema] of Object.entries(manifest.dbs)) {
     const rows: Record<string, Record<string, unknown>> = {}
     for (const table of schema.tables) {
@@ -389,13 +364,7 @@ export function readCheckpoint(
           `generation ${generation} rows for ${database}.${table} are not an object`
         )
       }
-      const tableRows = parsed as Record<string, unknown>
-      if (manifest.valueCodec === 0) {
-        for (const [key, value] of Object.entries(tableRows)) {
-          tableRows[key] = normalizeLegacyValue(value, { database, table, key, report })
-        }
-      }
-      rows[table] = tableRows
+      rows[table] = parsed as Record<string, unknown>
     }
     state.dbs[database] = { schema, rows }
   }
@@ -403,14 +372,11 @@ export function readCheckpoint(
 }
 
 /** Read the newest generation, or an empty state when none exists yet. */
-export function readLatestCheckpoint(
-  root: string,
-  report?: LegacyValueReport
-): {
+export function readLatestCheckpoint(root: string): {
   generation: string | null
   state: DurabilityState
 } {
   const generation = latestGeneration(root)
   if (!generation) return { generation: null, state: emptyDurabilityState() }
-  return { generation, state: readCheckpoint(root, generation, report) }
+  return { generation, state: readCheckpoint(root, generation) }
 }

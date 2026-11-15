@@ -182,18 +182,8 @@ export const PARITY_COMMANDS: CommandDescriptor[] = [
         handler: rt("init", "create"),
       },
       {
-        name: "regenerate",
-        description: "alias for create",
-        handler: rt("init", "create"),
-      },
-      {
         name: "rewrite",
         description: "rewrite AGENTS.md with the current model (confirm before overwrite)",
-        handler: rt("init", "rewrite"),
-      },
-      {
-        name: "optimize",
-        description: "alias for rewrite",
         handler: rt("init", "rewrite"),
       },
       {

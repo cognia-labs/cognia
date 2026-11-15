@@ -117,8 +117,8 @@ describe("runHeadlessTurn — parameter mapping", () => {
     })
   })
 
-  it("maps the deprecated maxTurns onto maxSteps", async () => {
-    await runHeadlessTurn({ config, prompt: "p", gate, maxTurns: 9 })
+  it("forwards maxSteps", async () => {
+    await runHeadlessTurn({ config, prompt: "p", gate, maxSteps: 9 })
     expect(lastParams().maxSteps).toBe(9)
   })
 
@@ -131,32 +131,6 @@ describe("runHeadlessTurn — parameter mapping", () => {
   it("pins the clock when the caller supplied one", async () => {
     await runHeadlessTurn({ config, prompt: "p", gate, now: 42 })
     expect(lastParams().now?.()).toBe(42)
-  })
-
-  it("accepts — and ignores — the collaborators of the deleted orchestration", async () => {
-    const subscribePluginTools = jest.fn()
-    const loadPluginRuntime = jest.fn()
-    await runHeadlessTurn({
-      config,
-      prompt: "p",
-      gate,
-      bootstrap: jest.fn(),
-      capture: jest.fn(),
-      subscribePluginTools,
-      loadPluginRuntime,
-      resolveMcpServers: jest.fn(),
-      resolveSkillIds: jest.fn(),
-      ensureDb: jest.fn(),
-      onDatabaseError: jest.fn(),
-      fetchTwin: jest.fn(),
-      devPluginsDir: "/repo/plugins",
-    })
-    // The session factory owns these now; the adapter must not act on them.
-    expect(subscribePluginTools).not.toHaveBeenCalled()
-    expect(loadPluginRuntime).not.toHaveBeenCalled()
-    const params = lastParams() as unknown as Record<string, unknown>
-    expect(params.subscribePluginTools).toBeUndefined()
-    expect(params.fetchTwin).toBeUndefined()
   })
 })
 

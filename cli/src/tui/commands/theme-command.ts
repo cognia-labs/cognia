@@ -115,11 +115,6 @@ export function parseCustomTheme(flags: string): {
   return { base, overrides }
 }
 
-/** Parse just the base-colour flags (kept for back-compat with existing callers). */
-export function parseBaseColors(flags: string): Record<string, string> {
-  return parseCustomTheme(flags).base
-}
-
 function handle(ctx: CommandContext): CommandEffect {
   const args = ctx.args.trim()
   if (!args) {

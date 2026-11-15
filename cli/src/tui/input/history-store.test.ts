@@ -2,7 +2,9 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { appendHistory, HISTORY_LIMIT, historyPath, loadHistory } from "./history-store"
+import { HISTORY_LIMIT } from "@/lib/cli-bridge/history-format"
+
+import { appendHistory, historyPath, loadHistory } from "./history-store"
 
 function memStore(initial: Record<string, string> = {}) {
   const files = { ...initial }

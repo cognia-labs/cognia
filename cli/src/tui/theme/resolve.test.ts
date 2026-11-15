@@ -36,8 +36,8 @@ describe("resolveTheme", () => {
     expect(resolveTheme(cfg("dark"), deps())).toEqual(getBuiltinTheme("dark"))
   })
 
-  it("resolves the legacy `classic` name to the raw-ANSI `ansi` palette", () => {
-    expect(resolveTheme(cfg("classic"), deps())).toEqual(getBuiltinTheme("ansi"))
+  it("treats the retired `classic` name as unknown", () => {
+    expect(resolveTheme(cfg("classic"), deps())).toEqual(getBuiltinTheme(undefined))
   })
 
   it("falls back to the default theme for an unknown theme name", () => {
@@ -141,7 +141,7 @@ describe("resolveTheme", () => {
     )
     expect(p.accent.toLowerCase()).toBe("#00ff00")
     // invalid role → classic fallback
-    expect(p.muted).toBe(getBuiltinTheme("classic").muted)
+    expect(p.muted).toBe(getBuiltinTheme("ansi").muted)
     // overrides still layer on top of the expanded base
     expect(p.heading2).toBe("blueBright")
   })

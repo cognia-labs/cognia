@@ -7,7 +7,7 @@ import { writeCheckpoint } from "../serve/persistence/checkpoint"
 import { encodeCommitLine, journalFile } from "../serve/persistence/journal"
 import { readManifest, writeManifest } from "../serve/persistence/manifest"
 import type { DurabilityCommit, DurabilityState } from "../serve/persistence/types"
-import { encodeDurableValue, recordLegacyValueFindings } from "../serve/persistence/value-codec"
+import { encodeDurableValue } from "../serve/persistence/value-codec"
 import { binaryDir } from "../serve/persistence/binary-store"
 import { parseArgv } from "./args"
 import { durabilityCommand, DURABILITY_HELP } from "./durability-command"
@@ -174,7 +174,10 @@ describe("durability verify", () => {
       }
       const root = path.join(home, format === "single-file" ? "db.json" : "db.json.tables")
       if (format === "single-file") {
-        fs.writeFileSync(root, JSON.stringify({ version: 219, tables }))
+        fs.writeFileSync(
+          root,
+          JSON.stringify({ snapshotFormat: 3, dbs: { CogniaDB: { version: 219, tables } } })
+        )
       } else {
         fs.mkdirSync(root)
         fs.writeFileSync(
@@ -211,36 +214,32 @@ describe("durability verify", () => {
     }
   )
 
-  it.each([undefined, 2, 3])(
-    "verifies a format-%s single-file snapshot read-only",
-    async (format) => {
-      const root = path.join(home, "db-account.json")
-      const db = { version: 1, tables: { messages: [{ id: "message-1" }] } }
-      fs.writeFileSync(
-        root,
-        JSON.stringify(format ? { snapshotFormat: format, dbs: { CogniaDB: db } } : db)
-      )
-      const before = treeBytes(home)
-      const { code, out } = await verifyRoot(root)
-      expect(code).toBe(0)
-      expect(out.records[0]).toMatchObject({ ok: true, root })
-      expect(treeBytes(home)).toEqual(before)
-      expect(fs.existsSync(path.join(home, "unused"))).toBe(false)
-    }
-  )
+  it("verifies a single-file snapshot read-only", async () => {
+    const root = path.join(home, "db-account.json")
+    const db = { version: 1, tables: { messages: [{ id: "message-1" }] } }
+    fs.writeFileSync(root, JSON.stringify({ snapshotFormat: 3, dbs: { CogniaDB: db } }))
+    const before = treeBytes(home)
+    const { code, out } = await verifyRoot(root)
+    expect(code).toBe(0)
+    expect(out.records[0]).toMatchObject({ ok: true, root })
+    expect(treeBytes(home)).toEqual(before)
+    expect(fs.existsSync(path.join(home, "unused"))).toBe(false)
+  })
 
-  it.each(["{broken", JSON.stringify({ snapshotFormat: 99, dbs: {} })])(
-    "rejects a corrupt or newer single-file snapshot without changing it: %s",
-    async (text) => {
-      const root = path.join(home, "db-account.json")
-      fs.writeFileSync(root, text)
-      const before = treeBytes(home)
-      const { code, out } = await verifyRoot(root)
-      expect(code).toBe(1)
-      expect(out.records[0]).toMatchObject({ ok: false, faults: expect.any(Array) })
-      expect(treeBytes(home)).toEqual(before)
-    }
-  )
+  it.each([
+    "{broken",
+    JSON.stringify({ snapshotFormat: 99, dbs: {} }),
+    JSON.stringify({ snapshotFormat: 2, dbs: {} }),
+    JSON.stringify({ version: 1, tables: {} }),
+  ])("rejects a corrupt or newer single-file snapshot without changing it: %s", async (text) => {
+    const root = path.join(home, "db-account.json")
+    fs.writeFileSync(root, text)
+    const before = treeBytes(home)
+    const { code, out } = await verifyRoot(root)
+    expect(code).toBe(1)
+    expect(out.records[0]).toMatchObject({ ok: false, faults: expect.any(Array) })
+    expect(treeBytes(home)).toEqual(before)
+  })
 
   it.each(["journal-v4", "sqlite-v5"] as const)(
     "keeps every file byte-identical when verifying a good %s root",
@@ -315,23 +314,25 @@ describe("durability verify", () => {
     }
   )
 
-  it.each([3, 4])(
-    "verifies a legacy format-%i table snapshot read-only",
-    async (snapshotFormat) => {
-      const root = path.join(home, "db-account.json.tables")
-      fs.mkdirSync(root)
+  it("verifies a table snapshot read-only and refuses one in an older format", async () => {
+    const root = path.join(home, "db-account.json.tables")
+    fs.mkdirSync(root)
+    const manifest = (snapshotFormat: number) =>
       fs.writeFileSync(
         path.join(root, "manifest.json"),
         JSON.stringify({ snapshotFormat, dbs: { "db /": { version: 1, tables: ["messages"] } } })
       )
-      const rows = path.join(root, "db%20%2F--messages.json")
-      fs.writeFileSync(rows, '[{"id":"a"}]')
-      expect((await verifyRoot(root)).code).toBe(0)
-      expect(fs.readFileSync(rows, "utf8")).toBe('[{"id":"a"}]')
-      fs.rmSync(rows)
-      expect((await verifyRoot(root)).code).toBe(1)
-    }
-  )
+    manifest(4)
+    const rows = path.join(root, "db%20%2F--messages.json")
+    fs.writeFileSync(rows, '[{"id":"a"}]')
+    expect((await verifyRoot(root)).code).toBe(0)
+    expect(fs.readFileSync(rows, "utf8")).toBe('[{"id":"a"}]')
+    manifest(3)
+    expect((await verifyRoot(root)).code).toBe(1)
+    manifest(4)
+    fs.rmSync(rows)
+    expect((await verifyRoot(root)).code).toBe(1)
+  })
 
   it("summarises a healthy account", async () => {
     await seed(home, [commit(1, "s:a", { id: "a" })])
@@ -341,25 +342,6 @@ describe("durability verify", () => {
     expect(text).toContain("active backend:  journal-v4")
     expect(text).toContain("generations:     gen-0001")
     expect(text).toContain("journal commits: 1 (sequence 1)")
-  })
-
-  it("lists values a pre-codec-1 build left lossy, without failing verify", async () => {
-    const root = await seed(home, [commit(1, "s:a", { id: "a" })])
-    recordLegacyValueFindings(root, [
-      {
-        database: "CogniaDB",
-        table: "petMediaPacks",
-        path: "blob",
-        shape: "empty-object",
-        count: 3639,
-        sampleKeys: ["s:pack-1"],
-      },
-    ])
-    const out = sink()
-    expect(await run(["verify", "--account", "acct"], out, home)).toBe(0)
-    const text = out.out.join("")
-    expect(text).toContain("value loss:      1 field path(s)")
-    expect(text).toContain("CogniaDB.petMediaPacks.blob: 3639 row(s) read back as {}")
   })
 
   it("exits non-zero and prints the fault when the journal is damaged", async () => {

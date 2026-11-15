@@ -12,8 +12,7 @@
  * Each approval can carry an optional **TTL** (`expiresAt`) and **cwd scope**
  * (`cwd`) so a broad tool like `bash` isn't trusted forever, everywhere, after a
  * single "Allow always". The on-disk shape is the richer
- * `{ "approvals": [{ tool, cwd?, expiresAt? }] }`; the legacy
- * `{ "allowed": ["…"] }` form is still read for back-compat.
+ * `{ "approvals": [{ tool, cwd?, expiresAt? }] }`.
  *
  * Names are the gate's namespaced form (`mcp__cognia-tools__<name>`), matching
  * `lib/settings/builtin-tools.ts:namespaced()` and what the sidecar emits on a
@@ -58,10 +57,7 @@ export function readToolApprovalEntries(
   const file = toolApprovalsPath(home)
   if (!fs.exists(file)) return []
   try {
-    const parsed = JSON.parse(fs.readText(file)) as {
-      approvals?: unknown
-      allowed?: unknown
-    }
+    const parsed = JSON.parse(fs.readText(file)) as { approvals?: unknown }
     const out: ToolApprovalEntry[] = []
     if (Array.isArray(parsed.approvals)) {
       for (const e of parsed.approvals) {
@@ -73,12 +69,6 @@ export function readToolApprovalEntries(
             ...(typeof expiresAt === "number" ? { expiresAt } : {}),
           })
         }
-      }
-    }
-    // Legacy back-compat: a bare `allowed: string[]` becomes unscoped entries.
-    if (Array.isArray(parsed.allowed)) {
-      for (const n of parsed.allowed) {
-        if (typeof n === "string" && !out.some((e) => e.tool === n)) out.push({ tool: n })
       }
     }
     return out
@@ -102,8 +92,7 @@ function isLive(entry: ToolApprovalEntry, now: number, cwd?: string): boolean {
  * The set of tools effectively always-allowed right now: expired entries are
  * dropped, and (when `cwd` is supplied) cwd-scoped entries that don't match are
  * dropped too. Returns the gate's namespaced names so it can union straight into
- * `suppressApprovalForTools`. Signature stays back-compatible — existing callers
- * pass `(home)` / `(home, fs)` and get TTL filtering for free.
+ * `suppressApprovalForTools`.
  */
 export function readToolApprovals(
   home: string,

@@ -15,9 +15,9 @@ function accentOf(container: HTMLElement): string | null {
 }
 
 describe("ThemeProvider / useTheme", () => {
-  it("returns the classic palette with no provider", () => {
+  it("returns the ansi palette with no provider", () => {
     const { container } = render(<Probe />)
-    expect(accentOf(container)).toBe(getBuiltinTheme("classic").accent)
+    expect(accentOf(container)).toBe(getBuiltinTheme("ansi").accent)
   })
 
   it("provides the supplied palette to descendants", () => {

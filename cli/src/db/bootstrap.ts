@@ -30,7 +30,6 @@ import {
   releaseStoreLock,
   startStoreLockHeartbeat,
   type StoreLock,
-  type StoreLockEnvironment,
 } from "./store-lock"
 import {
   decodeSnapshotRowsAsync,
@@ -40,8 +39,6 @@ import {
   prepareRestoredSessionLists,
   encodeSnapshotRows,
   parseMultiSnapshot,
-  reportLegacySnapshotRows,
-  type LegacySnapshotReporter,
   restoreMultiSnapshot,
   serializeSnapshot,
   serializeSources,
@@ -71,8 +68,7 @@ export interface EnsureCliDbOptions {
   getDatabase?: () => DbLike
   /**
    * Every database this host persists, in order — the FIRST entry is the
-   * primary, i.e. the database a legacy single-database snapshot is restored
-   * into. Middleware that must attach before Dexie opens (see
+   * primary. Middleware that must attach before Dexie opens (see
    * `cli/src/serve/durability.ts`) belongs inside this callback.
    */
   getDatabases?: () => readonly SnapshotSource[] | Promise<readonly SnapshotSource[]>
@@ -87,12 +83,6 @@ export interface EnsureCliDbOptions {
     snapshotVersions: Readonly<Record<string, number>>,
     snapshotTables?: Readonly<Record<string, readonly string[]>>
   ) => Promise<void>
-  /**
-   * Told every shape a restored pre-value-codec-1 snapshot (single file
-   * format 2, table store format 3) may have lost a value in. The rows still
-   * restore as written; the durability host records these in its loss report.
-   */
-  onLegacyValue?: LegacySnapshotReporter
 }
 
 export interface CliDbHandle {
@@ -119,7 +109,7 @@ export interface CliDbHandle {
   scheduleFlush(): void
   /** Schedule a debounced persist for one mutated database table. */
   scheduleTableFlush(databaseName: string, tableName: string): void
-  /** Persist dirty tables now (all tables for the legacy single-file seam). */
+  /** Persist dirty tables now (all tables for the injected single-file seam). */
   flush(): Promise<void>
   /** Final flush + detach. Safe to call more than once. */
   dispose(): Promise<void>
@@ -332,9 +322,8 @@ interface TableStoreWriter {
 }
 
 /**
- * Table-store manifest format. 4 holds value-codec-1 rows (`encodeSnapshotRows`),
- * which a build that accepts only 3 refuses as corrupt and preserves instead of
- * misreading; 3 is still read.
+ * Table-store manifest format. 4 holds value-codec-1 rows (`encodeSnapshotRows`);
+ * any other format is refused.
  */
 const TABLE_STORE_FORMAT = 4 as const
 
@@ -343,8 +332,6 @@ interface TableStoreManifest {
   dbs: Record<string, { version: number; tables: string[] }>
   /** Diagnostics about the process that last flushed. Never load-bearing. */
   writer?: TableStoreWriter
-  /** Parsed from a format-3 store, whose rows predate value codec 1. */
-  legacyValueCodec?: true
 }
 
 /**
@@ -512,11 +499,7 @@ function parseTableStoreManifest(text: string): TableStoreManifest | null {
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
   const root = parsed as Record<string, unknown>
-  if (
-    (root.snapshotFormat !== 3 && root.snapshotFormat !== TABLE_STORE_FORMAT) ||
-    !root.dbs ||
-    typeof root.dbs !== "object"
-  )
+  if (root.snapshotFormat !== TABLE_STORE_FORMAT || !root.dbs || typeof root.dbs !== "object")
     return null
   const dbs: TableStoreManifest["dbs"] = {}
   for (const [databaseName, raw] of Object.entries(root.dbs as Record<string, unknown>)) {
@@ -558,7 +541,6 @@ function parseTableStoreManifest(text: string): TableStoreManifest | null {
     snapshotFormat: TABLE_STORE_FORMAT,
     dbs,
     writer,
-    ...(root.snapshotFormat === 3 ? { legacyValueCodec: true as const } : {}),
   }
 }
 
@@ -581,16 +563,7 @@ async function restoreTableStore(
   preserve: (label: "corrupt" | "incompatible", problem: string) => CliDbSnapshotError = (
     label,
     problem
-  ) => preserveUnsafeSnapshot(manifestFile, label, problem),
-  /**
-   * Read binary side files into memory instead of handing out file-backed
-   * Blobs. The durability import needs this: the ledger reads every Blob it
-   * persists through a worker thread, and Node cannot pass a file-backed Blob
-   * to one (the read fails and the process aborts at exit).
-   */
-  materializeBlobs = false,
-  /** Told what a format-3 store's rows may have lost (see {@link reportLegacySnapshotRows}). */
-  legacy?: LegacySnapshotReporter
+  ) => preserveUnsafeSnapshot(manifestFile, label, problem)
 ): Promise<TableStoreRestore> {
   const rawManifest = fs.readFileSync(manifestFile, "utf8")
   const manifest = parseTableStoreManifest(rawManifest)
@@ -623,20 +596,8 @@ async function restoreTableStore(
       const tableFile = path.join(tableDirectory, tableFileName(source.name, tableName))
       let rows: unknown
       try {
-        const binaryStore = tableBinaryStore(tableDirectory)
         const raw: unknown = JSON.parse(fs.readFileSync(tableFile, "utf8"))
-        if (manifest.legacyValueCodec && legacy && Array.isArray(raw)) {
-          reportLegacySnapshotRows(
-            snapshotRowsForTable(tableName, raw),
-            source.name,
-            tableName,
-            legacy
-          )
-        }
-        rows = await decodeSnapshotRowsAsync(
-          raw,
-          materializeBlobs ? { read: binaryStore.read } : binaryStore
-        )
+        rows = await decodeSnapshotRowsAsync(raw, tableBinaryStore(tableDirectory))
       } catch {
         throw preserve(
           "corrupt",
@@ -923,7 +884,6 @@ function create(opts: EnsureCliDbOptions): CliDbHandle {
       // pending recovery still refuses the boot, exactly as it does for a
       // writer, but nothing is renamed or deleted here.
       assertNoPendingSnapshotRecovery(manifestFile)
-      if (!fs.existsSync(manifestFile)) assertNoPendingSnapshotRecovery(file)
     } else if (!useTableStore) {
       assertNoPendingSnapshotRecovery(file)
     }
@@ -1014,11 +974,6 @@ function create(opts: EnsureCliDbOptions): CliDbHandle {
           fs.rmSync(candidatePath, { force: true })
         }
       }
-      if (!fs.existsSync(manifestFile)) {
-        // No usable generation: keep the legacy-file pending check, which a
-        // table-store manifest would have suppressed had one existed.
-        assertNoPendingSnapshotRecovery(file)
-      }
     }
 
     let restore: TableStoreRestore | null = null
@@ -1029,13 +984,11 @@ function create(opts: EnsureCliDbOptions): CliDbHandle {
         sources,
         manifestFile,
         tableDirectory,
-        preserve(manifestFile),
-        false,
-        opts.onLegacyValue
+        preserve(manifestFile)
       )
     }
-    if (!restore) {
-      const parsed = parseMultiSnapshot(read(file), sources[0]?.name ?? "CogniaDB")
+    if (!useTableStore) {
+      const parsed = parseMultiSnapshot(read(file))
       if (parsed.kind === "corrupt") {
         throw preserve(file)("corrupt", `corrupt (${parsed.reason})`)
       }
@@ -1044,7 +997,7 @@ function create(opts: EnsureCliDbOptions): CliDbHandle {
       }
       if (parsed.kind === "valid") {
         try {
-          await restoreMultiSnapshot(sources, parsed.snapshot, opts.onLegacyValue)
+          await restoreMultiSnapshot(sources, parsed.snapshot)
         } catch (error) {
           if (error instanceof SnapshotVersionMismatchError) {
             throw preserve(file)(
@@ -1261,36 +1214,12 @@ export async function disposeOpenCliDb(): Promise<void> {
   await handle.dispose()
 }
 
-/** Test-only: drop the cached handle. */
-export interface SnapshotStoreImportOptions {
-  /** Directory the snapshot store lives in (the serve home). */
-  home: string
-  /** Snapshot file name within `home`, e.g. `db-<account>.json`. */
-  fileName: string
-  /** Re-declare dynamic schemas before restoring (defaults to the built-in plugin tables). */
-  prepareDynamicSchema?: (
-    sources: readonly SnapshotSource[],
-    snapshotVersions: Readonly<Record<string, number>>,
-    snapshotTables?: Readonly<Record<string, readonly string[]>>
-  ) => Promise<void>
-  /** Store-lock environment (tests). */
-  lockEnvironment?: StoreLockEnvironment
-  /** Told what a pre-value-codec-1 store may have lost (see `EnsureCliDbOptions.onLegacyValue`). */
-  onLegacyValue?: LegacySnapshotReporter
-}
-
-export type SnapshotStoreImportResult =
-  | { kind: "none" }
-  | { kind: "table-store"; tables: number }
-  | { kind: "legacy-file"; tables: number }
-
 /**
  * Whether the CLI store may hold rows of `tableName`, answered without opening
  * the database. Plain chat never opens it; a feature whose rows are usually
  * absent (prompt overrides) uses this to stay off the open/restore cost unless
  * there is something to read. `true` when the database is already open in this
- * process, or when only a legacy single-file store exists (it cannot be probed
- * per table without parsing the whole file).
+ * process.
  */
 export function cliStoreMayHoldRows(
   tableName: string,
@@ -1300,7 +1229,7 @@ export function cliStoreMayHoldRows(
   const home = opts.home ?? resolveHome(process.env, os.homedir())
   const file = path.join(home, opts.fileName ?? "db.json")
   const tableDirectory = `${file}.tables`
-  if (!fs.existsSync(path.join(tableDirectory, "manifest.json"))) return fs.existsSync(file)
+  if (!fs.existsSync(path.join(tableDirectory, "manifest.json"))) return false
   const suffix = `--${encodeURIComponent(tableName)}.json`
   for (const entry of fs.readdirSync(tableDirectory)) {
     if (!entry.endsWith(suffix)) continue
@@ -1315,111 +1244,7 @@ export function cliStoreMayHoldRows(
   return false
 }
 
-/** Whether `home` holds a `snapshot-v3` store (table store or legacy single file) for `fileName`. */
-export function hasSnapshotStore(home: string, fileName: string): boolean {
-  const file = path.join(home, fileName)
-  return fs.existsSync(path.join(`${file}.tables`, "manifest.json")) || fs.existsSync(file)
-}
-
-/**
- * Restore a `snapshot-v3` store into already-open databases without ever
- * writing to it.
- *
- * This is the one-way import a ledger durability backend runs on its first
- * boot over an account that used to persist through {@link ensureCliDb}. It
- * reuses the exact restore path (table store first, then the legacy single
- * file, with dynamic plugin schemas re-declared) but never renames,
- * quarantines, adopts or flushes anything: the old store is left byte-for-byte
- * as it was, so it stays a rollback source. It holds the store lock while it
- * reads so a still-running snapshot writer cannot change the files mid-import,
- * and it refuses outright — rather than importing a partial store — when the
- * lock is held, when a quarantined generation is pending recovery, or when the
- * store is corrupt or newer than this build.
- */
-export async function importSnapshotStore(
-  sources: readonly SnapshotSource[],
-  opts: SnapshotStoreImportOptions
-): Promise<SnapshotStoreImportResult> {
-  const file = path.join(opts.home, opts.fileName)
-  const tableDirectory = `${file}.tables`
-  const manifestFile = path.join(tableDirectory, "manifest.json")
-  const prepareDynamicSchema = opts.prepareDynamicSchema ?? prepareBuiltinPluginSchema
-  if (!hasSnapshotStore(opts.home, opts.fileName)) return { kind: "none" }
-
-  const acquisition = acquireStoreLock(file, opts.lockEnvironment)
-  if (!acquisition.ok) {
-    throw new CliDbSnapshotError(
-      `Cannot import the database snapshot at ${file}: it is in use by ${formatStoreLockOwner(acquisition.heldBy)}. Stop that process and start again. No data was changed.`,
-      file,
-      null
-    )
-  }
-  const refuse = (target: string) => (_label: "corrupt" | "incompatible", problem: string) =>
-    new CliDbSnapshotError(
-      `Cannot import the database snapshot at ${target}: it is ${problem}. It was left untouched and nothing was imported.`,
-      target,
-      null
-    )
-  try {
-    if (fs.existsSync(manifestFile)) {
-      assertNoPendingSnapshotRecovery(manifestFile)
-      const manifestText = fs.readFileSync(manifestFile, "utf8")
-      const manifest = parseTableStoreManifest(manifestText)
-      if (!manifest) {
-        const newer = newerTableStoreFormat(manifestText)
-        if (newer !== null)
-          throw refuse(manifestFile)("incompatible", newerTableStoreProblem(newer))
-        throw refuse(manifestFile)("corrupt", "corrupt (invalid table manifest)")
-      }
-      await prepareDynamicSchema(
-        sources,
-        Object.fromEntries(
-          Object.entries(manifest.dbs).map(([name, entry]) => [name, entry.version])
-        ),
-        Object.fromEntries(
-          Object.entries(manifest.dbs).map(([name, entry]) => [name, entry.tables])
-        )
-      )
-      const restore = await restoreTableStore(
-        sources,
-        manifestFile,
-        tableDirectory,
-        refuse(manifestFile),
-        true,
-        opts.onLegacyValue
-      )
-      await prepareRestoredSessionLists(sources)
-      return { kind: "table-store", tables: restore.restored.size }
-    }
-
-    assertNoPendingSnapshotRecovery(file)
-    const parsed = parseMultiSnapshot(fs.readFileSync(file, "utf8"), sources[0]?.name ?? "CogniaDB")
-    if (parsed.kind === "corrupt") throw refuse(file)("corrupt", `corrupt (${parsed.reason})`)
-    if (parsed.kind === "newer")
-      throw refuse(file)("incompatible", `incompatible: ${parsed.reason}`)
-    if (parsed.kind === "absent") return { kind: "none" }
-    try {
-      await restoreMultiSnapshot(sources, parsed.snapshot, opts.onLegacyValue)
-    } catch (error) {
-      if (error instanceof SnapshotVersionMismatchError) {
-        throw refuse(file)(
-          "incompatible",
-          `incompatible: snapshot schema version ${error.snapshotVersion} is newer than database schema version ${error.databaseVersion}; it was written by a newer build`
-        )
-      }
-      throw error
-    }
-    await prepareRestoredSessionLists(sources)
-    const tables = Object.values(parsed.snapshot.dbs).reduce(
-      (count, db) => count + Object.keys(db.tables).length,
-      0
-    )
-    return { kind: "legacy-file", tables }
-  } finally {
-    releaseStoreLock(acquisition.lock, file)
-  }
-}
-
+/** Test-only: drop the cached handle. */
 export function __resetCliDbForTesting(): void {
   cached = null
   defaultDbWriteSink = null

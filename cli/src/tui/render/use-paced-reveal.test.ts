@@ -33,7 +33,7 @@ describe("usePacedReveal", () => {
     jest.useFakeTimers()
     try {
       const target = "one two three four five"
-      const { result } = renderHook(() => usePacedReveal(target, true, 24))
+      const { result } = renderHook(() => usePacedReveal(target, true, { paceMs: 24 }))
       // Starts empty.
       expect(result.current).toBe("")
       // Advance several ticks; the revealed text is always a growing prefix.
@@ -135,11 +135,6 @@ describe("usePacedReveal — turn identity", () => {
     // The turn aborts and the surface stops pacing: the whole text is shown.
     rerender({ text: "partial answer", enabled: false })
     expect(result.current).toBe("partial answer")
-  })
-
-  it("accepts the legacy numeric paceMs argument", () => {
-    const { result } = renderHook(() => usePacedReveal("text", false, 50))
-    expect(result.current).toBe("text")
   })
 })
 

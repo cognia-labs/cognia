@@ -257,7 +257,7 @@ async function runCommandInner(
       gate,
       ...(boolFlag(args, "no-session") ? { persist: false } : {}),
       timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
-      ...(maxTurns !== undefined && maxTurns >= 1 ? { maxTurns: Math.floor(maxTurns) } : {}),
+      ...(maxTurns !== undefined && maxTurns >= 1 ? { maxSteps: Math.floor(maxTurns) } : {}),
       onEvent: (event) => {
         if (streamEvents) {
           out.json(event)

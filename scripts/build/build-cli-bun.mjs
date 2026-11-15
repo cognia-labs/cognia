@@ -35,14 +35,6 @@ const entry = path.join(root, "cli/src/cli/entry.ts")
 const hostTarget = hostTargetName(process.platform, process.arch)
 const buildArgs = parseCliBuildArgs(process.argv.slice(2), hostTarget)
 
-if (buildArgs.layoutOnly) {
-  const legacyLayout = Bun.spawn(
-    [resolveNativeBridgeInterpreter(), path.join(root, "scripts/build/build-cli-binary.mjs"), "--layout-only"],
-    { cwd: root, env: nativeBridgeInterpreterEnvironment({ ...process.env, COGNIA_PLUGIN_ARTIFACTS: pluginArtifacts.immutableDir }), stdin: "inherit", stdout: "inherit", stderr: "inherit" }
-  )
-  process.exit(await legacyLayout.exited)
-}
-
 const target = cliTarget(buildArgs.targetName)
 const binDir = path.join(root, "cli/dist/bin")
 const variants = buildArgs.variant === "all" ? ["full", "slim"] : [buildArgs.variant]

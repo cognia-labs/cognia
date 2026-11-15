@@ -14,15 +14,10 @@ import {
   disposeOpenCliDb,
   ensureCliDb,
   flushOpenCliDb,
-  hasSnapshotStore,
-  importSnapshotStore,
   installFakeIndexedDb,
   writeSnapshotAtomically,
 } from "./bootstrap"
-import { readBlobBytesSync, stopBlobReader } from "../serve/persistence/blob-sync"
-import { acquireStoreLock, releaseStoreLock } from "./store-lock"
 import { encodeSnapshotRows, type DbLike } from "./snapshot"
-import { encodeKey } from "../serve/persistence/canonical"
 
 class FakeTable {
   rows: unknown[]
@@ -175,15 +170,12 @@ describe("ensureCliDb", () => {
     expect(h.installs).toBe(1)
   })
 
-  // Back-compat: snapshots written before the multi-database envelope have no
-  // `snapshotFormat` key and must still restore into the primary database, or
-  // every existing `~/.cognia/serve/db-*.json` would be quarantined on upgrade.
-  it("restores a legacy single-database snapshot from disk into the db", async () => {
+  it("refuses a single-database snapshot without a snapshot format", async () => {
     const { opts, goals } = makeOpts({
       readSnapshot: () => JSON.stringify({ version: 82, tables: { goals: [{ id: "g1" }] } }),
     })
-    await ensureCliDb(opts)
-    expect(goals.rows).toEqual([{ id: "g1" }])
+    await expect(ensureCliDb(opts)).rejects.toThrow(/unsupported snapshot format undefined/)
+    expect(goals.rows).toEqual([{ id: "seed" }])
   })
 
   it("leaves seeded rows in place when there is no snapshot file", async () => {
@@ -192,27 +184,20 @@ describe("ensureCliDb", () => {
     expect(goals.rows).toEqual([{ id: "seed" }])
   })
 
-  it.each([
-    ["legacy", "corrupt"],
-    ["legacy", "incompatible"],
-    ["table manifest", "corrupt"],
-    ["table manifest", "incompatible"],
-  ])(
-    "keeps refusing a quarantined %s (%s) on restart until the canonical snapshot is repaired",
-    async (kind, reason) => {
+  it.each([["corrupt"], ["incompatible"]])(
+    "keeps refusing a quarantined table manifest (%s) on restart until the canonical snapshot is repaired",
+    async (reason) => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-recovery-"))
       const tableDirectory = path.join(home, "db.json.tables")
-      const file =
-        kind === "legacy" ? path.join(home, "db.json") : path.join(tableDirectory, "manifest.json")
+      const file = path.join(tableDirectory, "manifest.json")
       fs.mkdirSync(path.dirname(file), { recursive: true })
       const original =
         reason === "corrupt"
           ? "{truncated"
-          : JSON.stringify(
-              kind === "legacy"
-                ? { version: 83, tables: { goals: [{ id: "original" }] } }
-                : { snapshotFormat: 3, dbs: { CogniaDB: { version: 83, tables: ["goals"] } } }
-            )
+          : JSON.stringify({
+              snapshotFormat: 4,
+              dbs: { CogniaDB: { version: 83, tables: ["goals"] } },
+            })
       fs.writeFileSync(file, original, "utf8")
       const goals = new FakeTable("goals", [{ id: "seed" }])
       const opts = {
@@ -231,24 +216,17 @@ describe("ensureCliDb", () => {
         expect(fs.readFileSync(`${file}.${reason}-1`, "utf8")).toBe(original)
         expect(fs.existsSync(`${file}.${reason}-2`)).toBe(false)
         expect(fs.existsSync(file)).toBe(false)
-        if (kind === "legacy") {
-          fs.writeFileSync(
-            file,
-            JSON.stringify({ version: 82, tables: { goals: [{ id: "recovered" }] } })
-          )
-        } else {
-          fs.writeFileSync(
-            path.join(tableDirectory, "CogniaDB--goals.json"),
-            JSON.stringify([{ id: "recovered" }])
-          )
-          fs.writeFileSync(
-            file,
-            JSON.stringify({
-              snapshotFormat: 3,
-              dbs: { CogniaDB: { version: 82, tables: ["goals"] } },
-            })
-          )
-        }
+        fs.writeFileSync(
+          path.join(tableDirectory, "CogniaDB--goals.json"),
+          JSON.stringify([{ id: "recovered" }])
+        )
+        fs.writeFileSync(
+          file,
+          JSON.stringify({
+            snapshotFormat: 4,
+            dbs: { CogniaDB: { version: 82, tables: ["goals"] } },
+          })
+        )
         const handle = await ensureCliDb(opts)
         expect(goals.rows).toEqual([{ id: "recovered" }])
         await handle.dispose()
@@ -272,7 +250,7 @@ describe("ensureCliDb", () => {
       const tableFile = path.join(directory, "CogniaDB--goals.json")
       fs.mkdirSync(directory)
       const manifest = JSON.stringify({
-        snapshotFormat: 3,
+        snapshotFormat: 4,
         dbs: { CogniaDB: { version: 82, tables: ["goals"] } },
       })
       fs.writeFileSync(manifestFile, manifest)
@@ -308,11 +286,12 @@ describe("ensureCliDb", () => {
     null,
     [],
     { snapshotFormat: 2, dbs: {} },
-    { snapshotFormat: 3, dbs: null },
-    { snapshotFormat: 3, dbs: { CogniaDB: [] } },
-    { snapshotFormat: 3, dbs: { CogniaDB: { version: "82", tables: [] } } },
-    { snapshotFormat: 3, dbs: { CogniaDB: { version: 82, tables: null } } },
-    { snapshotFormat: 3, dbs: { CogniaDB: { version: 82, tables: [1] } } },
+    { snapshotFormat: 3, dbs: { CogniaDB: { version: 82, tables: [] } } },
+    { snapshotFormat: 4, dbs: null },
+    { snapshotFormat: 4, dbs: { CogniaDB: [] } },
+    { snapshotFormat: 4, dbs: { CogniaDB: { version: "82", tables: [] } } },
+    { snapshotFormat: 4, dbs: { CogniaDB: { version: 82, tables: null } } },
+    { snapshotFormat: 4, dbs: { CogniaDB: { version: 82, tables: [1] } } },
   ])("preserves invalid manifest structure %# and refuses restart", async (manifest) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-manifest-recovery-"))
     const directory = path.join(home, "db.json.tables")
@@ -336,10 +315,7 @@ describe("ensureCliDb", () => {
     }
   })
 
-  it.each([
-    ["table manifest", "db.json.tables/manifest.json", { snapshotFormat: 5, dbs: {} }],
-    ["single file", "db.json", { snapshotFormat: 4, dbs: {} }],
-  ])(
+  it.each([["table manifest", "db.json.tables/manifest.json", { snapshotFormat: 5, dbs: {} }]])(
     "refuses a %s a newer version wrote as incompatible, not corrupt",
     async (_kind, relative, content) => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-newer-format-"))
@@ -407,7 +383,10 @@ describe("ensureCliDb", () => {
   it("preserves and surfaces a newer-build snapshot without restoring rows", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-version-"))
     const file = path.join(home, "db.json")
-    const oldSnapshot = JSON.stringify({ version: 83, tables: { goals: [{ id: "old" }] } })
+    const oldSnapshot = JSON.stringify({
+      snapshotFormat: 3,
+      dbs: { CogniaDB: { version: 83, tables: { goals: [{ id: "old" }] } } },
+    })
     fs.writeFileSync(file, oldSnapshot, "utf8")
     const { opts, goals } = makeOpts({
       home,
@@ -471,7 +450,10 @@ describe("ensureCliDb", () => {
   it("propagates a non-version restore failure without quarantining the file", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-restore-err-"))
     const file = path.join(home, "db.json")
-    const snapshot = JSON.stringify({ version: 82, tables: { goals: [{ id: "g" }] } })
+    const snapshot = JSON.stringify({
+      snapshotFormat: 3,
+      dbs: { CogniaDB: { version: 82, tables: { goals: [{ id: "g" }] } } },
+    })
     fs.writeFileSync(file, snapshot, "utf8")
     const exploding = {
       name: "goals",
@@ -1035,7 +1017,7 @@ describe("ensureCliDb", () => {
     fs.writeFileSync(
       path.join(tableDir, "manifest.json"),
       JSON.stringify({
-        snapshotFormat: 3,
+        snapshotFormat: 4,
         dbs: { CogniaDB: { version: 83, tables: ["goals"] } },
       })
     )
@@ -1273,7 +1255,7 @@ describe("ensureCliDb — multiple databases", () => {
     const { opts, goals, tasks } = makeMultiOpts({
       readSnapshot: () =>
         JSON.stringify({
-          snapshotFormat: 2,
+          snapshotFormat: 3,
           dbs: {
             CogniaDB: { version: 82, tables: { goals: [{ id: "g1" }] } },
             CogniaSchedulerDB: { version: 2, tables: { tasks: [{ id: "t1" }] } },
@@ -1285,11 +1267,15 @@ describe("ensureCliDb — multiple databases", () => {
     expect(tasks.rows).toEqual([{ id: "t1" }])
   })
 
-  // The upgrade path: a legacy file has no scheduler entry, so that database is
-  // SKIPPED rather than cleared, and keeps whatever it was seeded with.
+  // A database the envelope has no entry for is SKIPPED rather than cleared,
+  // and keeps whatever it was seeded with.
   it("skips a database the envelope omits instead of clearing it", async () => {
     const { opts, goals, executions } = makeMultiOpts({
-      readSnapshot: () => JSON.stringify({ version: 82, tables: { goals: [{ id: "g1" }] } }),
+      readSnapshot: () =>
+        JSON.stringify({
+          snapshotFormat: 3,
+          dbs: { CogniaDB: { version: 82, tables: { goals: [{ id: "g1" }] } } },
+        }),
     })
     await ensureCliDb(opts)
     expect(goals.rows).toEqual([{ id: "g1" }])
@@ -1299,7 +1285,7 @@ describe("ensureCliDb — multiple databases", () => {
   it("names the mismatching database when a per-db schema version differs", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-multiver-"))
     const stale = JSON.stringify({
-      snapshotFormat: 2,
+      snapshotFormat: 3,
       dbs: {
         CogniaDB: { version: 82, tables: { goals: [] } },
         CogniaSchedulerDB: { version: 3, tables: { tasks: [{ id: "t1" }] } },
@@ -1338,249 +1324,6 @@ describe("ensureCliDb — multiple databases", () => {
 // destination first and `syncParentDirectory` is skipped. That branch never runs
 // on the CI platforms, so it is driven here with a stubbed `process.platform` —
 // otherwise the Windows atomic-replace path ships untested.
-describe("importSnapshotStore", () => {
-  let home: string
-  beforeEach(() => {
-    home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-snapshot-import-"))
-  })
-  afterEach(() => fs.rmSync(home, { recursive: true, force: true }))
-
-  const noDynamicSchema = async () => {}
-
-  it("reports nothing to import when the account never had a snapshot store", async () => {
-    const { db } = fakeDb()
-    expect(hasSnapshotStore(home, "db-acct.json")).toBe(false)
-    await expect(
-      importSnapshotStore([{ name: "CogniaDB", db }], {
-        home,
-        fileName: "db-acct.json",
-        prepareDynamicSchema: noDynamicSchema,
-      })
-    ).resolves.toEqual({ kind: "none" })
-  })
-
-  it("imports a legacy single file without touching it or leaving a lock behind", async () => {
-    const file = path.join(home, "db-acct.json")
-    const text = JSON.stringify({ version: 82, tables: { goals: [{ id: "g1" }] } })
-    fs.writeFileSync(file, text, "utf8")
-    const { db, goals } = fakeDb()
-    expect(hasSnapshotStore(home, "db-acct.json")).toBe(true)
-
-    const result = await importSnapshotStore([{ name: "CogniaDB", db }], {
-      home,
-      fileName: "db-acct.json",
-      prepareDynamicSchema: noDynamicSchema,
-    })
-    expect(result).toEqual({ kind: "legacy-file", tables: 1 })
-    expect(goals.rows).toEqual([{ id: "g1" }])
-    expect(fs.readFileSync(file, "utf8")).toBe(text)
-    expect(fs.existsSync(`${file}.lock`)).toBe(false)
-  })
-
-  it("keeps manifest order and seeds while skipping missing dropped, plugin and derived files", async () => {
-    const directory = path.join(home, "db-acct.json.tables")
-    fs.mkdirSync(directory)
-    const manifest = JSON.stringify({
-      snapshotFormat: 4,
-      dbs: {
-        CogniaDB: {
-          version: 219,
-          tables: [
-            "goals",
-            "petConversation",
-            "uninstalled-plugin:records",
-            "sessionList",
-            "messages",
-          ],
-        },
-      },
-    })
-    fs.writeFileSync(path.join(directory, "manifest.json"), manifest)
-    fs.writeFileSync(path.join(directory, "CogniaDB--goals.json"), "[]")
-    fs.writeFileSync(path.join(directory, "CogniaDB--messages.json"), '[{"id":"restored"}]')
-    const messages = new FakeTable("messages", [{ id: "seed-message" }])
-    const goals = new FakeTable("goals", [{ id: "seed-goal" }])
-    const seeded = new FakeTable("characters", [{ id: "builtin" }])
-    const derived = new FakeTable("sessionList", [{ id: "derived" }])
-    const clears: string[] = []
-    for (const table of [messages, goals, seeded, derived]) {
-      jest.spyOn(table, "clear").mockImplementation(async () => {
-        clears.push(table.name)
-        table.rows = []
-      })
-    }
-    const result = await importSnapshotStore(
-      [{ name: "CogniaDB", db: { verno: 250, tables: [messages, goals, seeded, derived] } }],
-      { home, fileName: "db-acct.json", prepareDynamicSchema: noDynamicSchema }
-    )
-    expect(result).toEqual({ kind: "table-store", tables: 2 })
-    expect(clears).toEqual(["goals", "messages"])
-    expect(messages.rows).toEqual([{ id: "restored" }])
-    expect(goals.rows).toEqual([])
-    expect(seeded.rows).toEqual([{ id: "builtin" }])
-    expect(derived.rows).toEqual([{ id: "derived" }])
-    expect(fs.readFileSync(path.join(directory, "manifest.json"), "utf8")).toBe(manifest)
-    expect(fs.readdirSync(directory).sort()).toEqual([
-      "CogniaDB--goals.json",
-      "CogniaDB--messages.json",
-      "manifest.json",
-    ])
-  })
-
-  it("imports table-store Blobs into memory, readable by the durability ledger's worker", async () => {
-    const bytes = Uint8Array.from({ length: 70_000 }, (_, index) => index % 253)
-    const media = new FakeTable("messageMedia", [
-      { hash: "source", blob: new Blob([bytes], { type: "application/pdf" }) },
-    ])
-    const options = {
-      home,
-      fileName: "db-acct.json",
-      getDatabase: () => ({ name: "CogniaDB", verno: 82, tables: [media] }),
-      installGlobals: async () => {},
-      whenReady: async () => {},
-      schedule: () => () => {},
-    }
-    try {
-      const written = await ensureCliDb(options)
-      await written.dispose()
-    } finally {
-      __resetCliDbForTesting()
-    }
-    expect(fs.readdirSync(path.join(home, "db-acct.json.tables", "binary"))).toHaveLength(1)
-
-    const target = new FakeTable("messageMedia")
-    const result = await importSnapshotStore(
-      [{ name: "CogniaDB", db: { verno: 82, tables: [target] } }],
-      { home, fileName: "db-acct.json", prepareDynamicSchema: noDynamicSchema }
-    )
-    expect(result).toEqual({ kind: "table-store", tables: 1 })
-    const imported = (target.rows[0] as { blob: Blob }).blob
-    expect(imported.type).toBe("application/pdf")
-    // A file-backed Blob would fail here (and abort the process at exit).
-    expect(Array.from(readBlobBytesSync(imported))).toEqual(Array.from(bytes))
-    await stopBlobReader()
-  })
-
-  it.each([
-    [3, 2],
-    [4, 0],
-  ])(
-    "reports what a format-%i table store's rows may have lost, through both readers",
-    async (format, expected) => {
-      const directory = path.join(home, "db-acct.json.tables")
-      fs.mkdirSync(directory, { recursive: true })
-      fs.writeFileSync(
-        path.join(directory, "manifest.json"),
-        JSON.stringify({
-          snapshotFormat: format,
-          dbs: { CogniaDB: { version: 82, tables: ["goals"] } },
-        })
-      )
-      // The pre-codec-1 encoder's output for `{createdAt: new Date(…), tags: new Set()}`.
-      fs.writeFileSync(
-        path.join(directory, "CogniaDB--goals.json"),
-        JSON.stringify([{ id: "g1", createdAt: "2026-10-01T08:00:00.000Z", tags: {} }])
-      )
-      const findings: string[] = []
-      const onLegacyValue = (
-        database: string,
-        table: string,
-        key: string,
-        field: string,
-        shape: string
-      ) => findings.push(`${database}.${table} ${key} ${field} ${shape}`)
-
-      const imported = fakeDb()
-      await importSnapshotStore([{ name: "CogniaDB", db: imported.db }], {
-        home,
-        fileName: "db-acct.json",
-        prepareDynamicSchema: noDynamicSchema,
-        onLegacyValue,
-      })
-      expect(imported.goals.rows).toEqual([
-        { id: "g1", createdAt: "2026-10-01T08:00:00.000Z", tags: {} },
-      ])
-      expect(findings).toHaveLength(expected)
-      if (expected) {
-        const g1 = encodeKey("g1")
-        expect(findings).toEqual([
-          `CogniaDB.goals ${g1} createdAt iso-date-string`,
-          `CogniaDB.goals ${g1} tags empty-object`,
-        ])
-      }
-
-      findings.length = 0
-      const restored = fakeDb()
-      try {
-        const handle = await ensureCliDb({
-          home,
-          fileName: "db-acct.json",
-          getDatabase: () => ({ ...restored.db, name: "CogniaDB" }),
-          installGlobals: async () => {},
-          whenReady: async () => {},
-          schedule: () => () => {},
-          prepareDynamicSchema: noDynamicSchema,
-          onLegacyValue,
-        })
-        await handle.dispose()
-      } finally {
-        __resetCliDbForTesting()
-      }
-      expect(findings).toHaveLength(expected)
-    }
-  )
-
-  it("refuses while another process holds the store, changing nothing", async () => {
-    const file = path.join(home, "db-acct.json")
-    fs.writeFileSync(file, JSON.stringify({ version: 82, tables: { goals: [] } }), "utf8")
-    const held = acquireStoreLock(file, { pid: 999_999, isProcessAlive: () => true })
-    if (!held.ok) throw new Error("test could not take the lock")
-    const { db, goals } = fakeDb()
-    try {
-      await expect(
-        importSnapshotStore([{ name: "CogniaDB", db }], {
-          home,
-          fileName: "db-acct.json",
-          prepareDynamicSchema: noDynamicSchema,
-          lockEnvironment: { isProcessAlive: () => true },
-        })
-      ).rejects.toThrow("is in use by")
-      expect(goals.rows).toEqual([{ id: "seed" }])
-    } finally {
-      releaseStoreLock(held.lock, file)
-    }
-  })
-
-  it("refuses a corrupt store without quarantining it", async () => {
-    const file = path.join(home, "db-acct.json")
-    fs.writeFileSync(file, '{"version":82,"tabl', "utf8")
-    const { db } = fakeDb()
-    await expect(
-      importSnapshotStore([{ name: "CogniaDB", db }], {
-        home,
-        fileName: "db-acct.json",
-        prepareDynamicSchema: noDynamicSchema,
-      })
-    ).rejects.toThrow("left untouched")
-    expect(fs.existsSync(file)).toBe(true)
-    expect(fs.existsSync(`${file}.corrupt-1`)).toBe(false)
-    expect(fs.existsSync(`${file}.lock`)).toBe(false)
-  })
-
-  it("refuses a store written by a newer build", async () => {
-    const file = path.join(home, "db-acct.json")
-    fs.writeFileSync(file, JSON.stringify({ version: 9_999, tables: { goals: [] } }), "utf8")
-    const { db } = fakeDb()
-    await expect(
-      importSnapshotStore([{ name: "CogniaDB", db }], {
-        home,
-        fileName: "db-acct.json",
-        prepareDynamicSchema: noDynamicSchema,
-      })
-    ).rejects.toThrow("newer build")
-  })
-})
-
 describe("writeSnapshotAtomically on win32", () => {
   const realPlatform = process.platform
 
@@ -1675,7 +1418,7 @@ describe("built-in plugin schema preparation", () => {
     fs.writeFileSync(
       path.join(tableDir, "manifest.json"),
       JSON.stringify({
-        snapshotFormat: 3,
+        snapshotFormat: 4,
         dbs: { CogniaDB: { version: 227, tables: ["goals"] } },
       })
     )
@@ -1759,8 +1502,8 @@ describe("schema moves, self-heal, and the store lock", () => {
     return path.join(dir, name)
   }
 
-  const v3 = (version: number, tables = ["goals"], writer?: unknown) => ({
-    snapshotFormat: 3,
+  const v4 = (version: number, tables = ["goals"], writer?: unknown) => ({
+    snapshotFormat: 4,
     dbs: { CogniaDB: { version, tables } },
     ...(writer !== undefined ? { writer } : {}),
   })
@@ -1768,7 +1511,7 @@ describe("schema moves, self-heal, and the store lock", () => {
   it("restores an older manifest as a forward move and converges the store on flush", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-forward-"))
     const dir = tableStoreDir(home)
-    writeManifest(dir, v3(81))
+    writeManifest(dir, v4(81))
     fs.writeFileSync(path.join(dir, "CogniaDB--goals.json"), JSON.stringify([{ id: "old" }]))
     const goals = new FakeTable("goals", [{ id: "seed" }])
     const db: DbLike = { verno: 82, name: "CogniaDB", tables: [goals] }
@@ -1795,7 +1538,7 @@ describe("schema moves, self-heal, and the store lock", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-newer-"))
     const dir = tableStoreDir(home)
     const text = JSON.stringify(
-      v3(83, ["goals"], {
+      v4(83, ["goals"], {
         pid: 4242,
         host: "other-host",
         cliVersion: "9.9.9",
@@ -1822,7 +1565,7 @@ describe("schema moves, self-heal, and the store lock", () => {
   it("adopts the newest preserved manifest generation when the canonical one is gone", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-adopt-"))
     const dir = tableStoreDir(home)
-    const preserved = writeManifest(dir, v3(81), "manifest.json.incompatible-1")
+    const preserved = writeManifest(dir, v4(81), "manifest.json.incompatible-1")
     fs.writeFileSync(path.join(dir, "CogniaDB--goals.json"), JSON.stringify([{ id: "healed" }]))
     const goals = new FakeTable("goals", [{ id: "seed" }])
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
@@ -1850,7 +1593,7 @@ describe("schema moves, self-heal, and the store lock", () => {
   it("refuses to adopt a generation written by a newer build", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-adopt-newer-"))
     const dir = tableStoreDir(home)
-    const preserved = writeManifest(dir, v3(83), "manifest.json.incompatible-1")
+    const preserved = writeManifest(dir, v4(83), "manifest.json.incompatible-1")
     fs.writeFileSync(path.join(dir, "CogniaDB--goals.json"), "[]")
     try {
       await expect(
@@ -1873,7 +1616,7 @@ describe("schema moves, self-heal, and the store lock", () => {
   it("refuses to adopt a generation whose listed table file is missing", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-adopt-missing-"))
     const dir = tableStoreDir(home)
-    const preserved = writeManifest(dir, v3(82), "manifest.json.corrupt-3")
+    const preserved = writeManifest(dir, v4(82), "manifest.json.corrupt-3")
     try {
       await expect(
         ensureCliDb(
@@ -1895,8 +1638,8 @@ describe("schema moves, self-heal, and the store lock", () => {
   it("adopts by recency, not by generation number", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-adopt-order-"))
     const dir = tableStoreDir(home)
-    const invalid = writeManifest(dir, v3(81), "manifest.json.incompatible-2")
-    const valid = writeManifest(dir, v3(81), "manifest.json.incompatible-10")
+    const invalid = writeManifest(dir, v4(81), "manifest.json.incompatible-2")
+    const valid = writeManifest(dir, v4(81), "manifest.json.incompatible-10")
     fs.writeFileSync(invalid, "{ not a manifest")
     fs.writeFileSync(path.join(dir, "CogniaDB--goals.json"), "[]")
     // -10 is lexically higher but older; -2 (garbage) is the most recent.
@@ -1921,17 +1664,21 @@ describe("schema moves, self-heal, and the store lock", () => {
     }
   })
 
-  it("restores a legacy single-file snapshot from an older version", async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-legacy-forward-"))
+  it("does not read a single-file snapshot beside the table store", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-single-file-"))
     const file = path.join(home, "db.json")
-    fs.writeFileSync(file, JSON.stringify({ version: 81, tables: { goals: [{ id: "old" }] } }))
+    const text = JSON.stringify({
+      snapshotFormat: 3,
+      dbs: { CogniaDB: { version: 81, tables: { goals: [{ id: "old" }] } } },
+    })
+    fs.writeFileSync(file, text)
     const goals = new FakeTable("goals", [{ id: "seed" }])
     try {
       const handle = await ensureCliDb(
         realOpts(home, { verno: 82, name: "CogniaDB", tables: [goals] })
       )
-      expect(goals.rows).toEqual([{ id: "old" }])
-      expect(fs.existsSync(`${file}.incompatible-1`)).toBe(false)
+      expect(goals.rows).toEqual([{ id: "seed" }])
+      expect(fs.readFileSync(file, "utf8")).toBe(text)
       await handle.dispose()
     } finally {
       __resetCliDbForTesting()
@@ -1960,7 +1707,7 @@ describe("schema moves, self-heal, and the store lock", () => {
   it("follows read-only when another live process holds the store lock", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-follower-"))
     const dir = tableStoreDir(home)
-    writeManifest(dir, v3(82))
+    writeManifest(dir, v4(82))
     fs.writeFileSync(path.join(dir, "CogniaDB--goals.json"), JSON.stringify([{ id: "kept" }]))
     const lockFile = writeHeldLock(home)
     const goals = new FakeTable("goals", [{ id: "seed" }])
@@ -2000,7 +1747,7 @@ describe("schema moves, self-heal, and the store lock", () => {
   it("never quarantines a newer manifest in read-only mode", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-db-follower-newer-"))
     const dir = tableStoreDir(home)
-    writeManifest(dir, v3(83))
+    writeManifest(dir, v4(83))
     fs.writeFileSync(path.join(dir, "CogniaDB--goals.json"), "[]")
     writeHeldLock(home)
     try {
@@ -2160,7 +1907,7 @@ it("rebuilds the session list after table-store restore and excludes derived sta
   fs.writeFileSync(
     path.join(tableDir, "manifest.json"),
     JSON.stringify({
-      snapshotFormat: 3,
+      snapshotFormat: 4,
       dbs: { [name]: { version: 241, tables: ["sessions", "sessionList", "storageLayout"] } },
     })
   )
@@ -2231,12 +1978,12 @@ describe("cliStoreMayHoldRows", () => {
     }
   })
 
-  it("cannot probe a legacy single-file store and says so", () => {
+  it("ignores a single-file store", () => {
     __resetCliDbForTesting()
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-may-hold-legacy-"))
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-may-hold-single-file-"))
     try {
       fs.writeFileSync(path.join(home, "db.json"), "{}")
-      expect(cliStoreMayHoldRows("promptOverrides", { home })).toBe(true)
+      expect(cliStoreMayHoldRows("promptOverrides", { home })).toBe(false)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }

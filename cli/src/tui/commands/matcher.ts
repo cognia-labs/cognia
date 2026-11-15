@@ -1,7 +1,8 @@
 /**
  * Slash-command parsing + palette matching. Pure helpers over the registry.
  */
-import { getCommand, listVisibleCommands, type SlashCommand } from "./registry"
+import { getCommand, listVisibleCommands } from "./registry"
+import type { CommandDescriptor } from "./types"
 
 export interface ParsedSlash {
   command: string
@@ -24,7 +25,7 @@ export function parseSlash(line: string): ParsedSlash | null {
 }
 
 /** Resolve a typed command name (or alias) to its registry entry. */
-export function resolveCommand(name: string): SlashCommand | undefined {
+export function resolveCommand(name: string): CommandDescriptor | undefined {
   return getCommand(name)
 }
 
@@ -59,7 +60,7 @@ function isSubsequence(q: string, s: string): boolean {
  * When `history` is supplied, recently used root commands sort first within the
  * chosen tier.
  */
-export function matchSlash(query: string, opts: MatchSlashOptions = {}): SlashCommand[] {
+export function matchSlash(query: string, opts: MatchSlashOptions = {}): CommandDescriptor[] {
   const q = query.toLowerCase()
   if (/[\r\n]/.test(q)) return []
   if (/\s/.test(q)) {
@@ -67,7 +68,7 @@ export function matchSlash(query: string, opts: MatchSlashOptions = {}): SlashCo
     if (!nested) return []
     const root = getCommand(nested[1])
     if (!root || root.hidden || !root.subcommands?.length) return []
-    const children: SlashCommand[] = root.subcommands.map((child) => ({
+    const children: CommandDescriptor[] = root.subcommands.map((child) => ({
       ...child,
       name: `${root.name} ${child.name}`,
       category: root.category,
@@ -85,7 +86,7 @@ export function matchSlash(query: string, opts: MatchSlashOptions = {}): SlashCo
       : children.filter((child) => child.description.toLowerCase().includes(partial))
   }
   const all = listVisibleCommands()
-  let matches: SlashCommand[]
+  let matches: CommandDescriptor[]
   if (q.length === 0) {
     matches = all
   } else {

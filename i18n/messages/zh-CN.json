@@ -11979,9 +11979,7 @@
       "init": {
         "apply": "应用待处理的 AGENTS.md 变更",
         "create": "重新生成 AGENTS.md 模板（覆盖前确认）",
-        "optimize": "rewrite 的别名",
         "preview": "预览当前 AGENTS.md",
-        "regenerate": "create 的别名",
         "rewrite": "使用当前模型重写 AGENTS.md（覆盖前确认）",
         "scaffold": "创建 .cognia/instructions/*.md 及示例子代理"
       },

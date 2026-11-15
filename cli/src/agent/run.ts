@@ -17,7 +17,6 @@
  * {@link runUnifiedTurn} directly and consume `AgentRunResultV1`.
  */
 
-import type { UnlistenFn } from "@tauri-apps/api/event"
 import type { AgentWorkspaceCaptureReceipt } from "@cognia/agent-config-types/agent-run-result"
 
 import { captureEventFromCanonical } from "@/lib/ai/agent/execution/event-envelope"
@@ -45,34 +44,14 @@ export interface RunHeadlessParams {
   onEvent?: (event: CaptureStreamEvent) => void
   signal?: AbortSignal
   timeoutMs?: number
-  /**
-   * @deprecated Use `--max-steps` / {@link UnifiedTurnParams.maxSteps}. Mapped
-   * straight through; the name changed because it never bounded *turns*.
-   */
-  maxTurns?: number
+  /** Agentic step budget for this turn ({@link UnifiedTurnParams.maxSteps}). */
+  maxSteps?: number
   home?: string
   /** Narrow this turn's resolved options (tool-less text generation only). */
   resolveOptions?: UnifiedTurnParams["resolveOptions"]
   onAttachments?: UnifiedTurnParams["onAttachments"]
   transcriptFs?: TranscriptFs
   now?: number
-
-  /**
-   * Injected collaborators from the deleted orchestration. They are accepted so
-   * existing call sites keep type-checking through the migration, and are
-   * IGNORED: the session factory owns every one of these concerns now. Passing
-   * one has no effect — move to `runUnifiedTurn` if you need to inject.
-   */
-  bootstrap?: unknown
-  capture?: unknown
-  loadPluginRuntime?: () => Promise<unknown>
-  subscribePluginTools?: () => Promise<UnlistenFn>
-  resolveMcpServers?: () => unknown
-  resolveSkillIds?: () => string[]
-  ensureDb?: () => Promise<unknown>
-  onDatabaseError?: (error: unknown) => void
-  fetchTwin?: unknown
-  devPluginsDir?: string
 }
 
 export interface RunHeadlessResult {
@@ -110,7 +89,7 @@ export async function runHeadlessTurn(params: RunHeadlessParams): Promise<RunHea
     ...(params.persist !== undefined ? { persist: params.persist } : {}),
     ...(params.signal ? { signal: params.signal } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-    ...(params.maxTurns !== undefined ? { maxSteps: params.maxTurns } : {}),
+    ...(params.maxSteps !== undefined ? { maxSteps: params.maxSteps } : {}),
     ...(params.home ? { home: params.home } : {}),
     ...(params.resolveOptions ? { resolveOptions: params.resolveOptions } : {}),
     ...(params.onAttachments ? { onAttachments: params.onAttachments } : {}),

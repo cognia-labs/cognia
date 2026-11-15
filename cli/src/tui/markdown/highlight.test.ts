@@ -56,7 +56,7 @@ describe("highlightCode error fallback", () => {
 
 describe("paletteCodeTheme", () => {
   it("returns undefined for the classic (plain-ANSI) palette — keeps default output", () => {
-    expect(paletteCodeTheme(getBuiltinTheme("classic"))).toBeUndefined()
+    expect(paletteCodeTheme(getBuiltinTheme("ansi"))).toBeUndefined()
   })
 
   it("builds a theme for a hex (truecolour) palette", () => {
@@ -68,7 +68,7 @@ describe("paletteCodeTheme", () => {
   })
 
   it("builds a theme when a code-highlight name is pinned even with ANSI tokens", () => {
-    const base = getBuiltinTheme("classic")
+    const base = getBuiltinTheme("ansi")
     expect(paletteCodeTheme({ ...base, codeHighlight: "dracula" })).toBeDefined()
   })
 

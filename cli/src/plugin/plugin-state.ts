@@ -1,7 +1,6 @@
 /**
  * Per-user plugin enable/disable overlay, persisted to
- * `~/.cognia/plugin-state.json`. The legacy `disabled[]` projection remains
- * readable for older CLIs while `lifecycle` is the canonical CAS state.
+ * `~/.cognia/plugin-state.json`. `lifecycle` is the canonical CAS state.
  */
 import nodeFs from "node:fs"
 import path from "node:path"
@@ -54,14 +53,13 @@ export function pluginStatePath(home: string): string {
 
 export interface CliPluginStateDocument {
   version: 2
-  disabled: string[]
   lifecycle: Record<string, PluginLifecycleRecord>
   /** Serialized host-owned provider bindings, separate from plugin lifecycle. */
   authProviderOwners?: string
 }
 
 function emptyDocument(): CliPluginStateDocument {
-  return { version: 2, disabled: [], lifecycle: {} }
+  return { version: 2, lifecycle: {} }
 }
 
 // Ownership reads and every write must propagate corruption: recovering an
@@ -70,23 +68,18 @@ function loadPluginState(home: string, fs: PluginStateFs): CliPluginStateDocumen
   const file = pluginStatePath(home)
   if (!fs.exists(file)) return emptyDocument()
   const parsed = JSON.parse(fs.readText(file)) as {
-    disabled?: unknown
     lifecycle?: unknown
     authProviderOwners?: string
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Plugin state storage is invalid")
   }
-  const disabled = Array.isArray(parsed.disabled)
-    ? parsed.disabled.filter((id): id is string => typeof id === "string")
-    : []
   const lifecycle =
     parsed.lifecycle && typeof parsed.lifecycle === "object"
       ? (parsed.lifecycle as Record<string, PluginLifecycleRecord>)
       : {}
   return {
     version: 2,
-    disabled,
     lifecycle,
     ...(Object.hasOwn(parsed, "authProviderOwners")
       ? { authProviderOwners: parsed.authProviderOwners }
@@ -158,8 +151,16 @@ export function createCliAuthProviderOwnershipStore(
   }
 }
 
+function disabledPlugins(document: CliPluginStateDocument): Set<string> {
+  return new Set(
+    Object.entries(document.lifecycle)
+      .filter(([, record]) => record.intent === "disabled")
+      .map(([id]) => id)
+  )
+}
+
 export function readDisabledPlugins(home: string, fs: PluginStateFs = defaultFs): Set<string> {
-  return new Set(readPluginState(home, fs).disabled)
+  return disabledPlugins(readPluginState(home, fs))
 }
 
 export function setPluginDisabled(
@@ -170,16 +171,12 @@ export function setPluginDisabled(
 ): Set<string> {
   return fs.withLock(home, (assertHeld) => {
     const document = loadPluginState(home, fs)
-    const set = new Set(document.disabled)
-    if (disabled) set.add(id)
-    else set.delete(id)
     const current = document.lifecycle[id] ?? {
       intent: "auto",
       actual: "inactive",
       revision: 0,
       updatedAt: Date.now(),
     }
-    document.disabled = [...set].sort()
     document.lifecycle[id] = {
       ...current,
       intent: disabled ? "disabled" : "enabled",
@@ -187,7 +184,7 @@ export function setPluginDisabled(
       updatedAt: Date.now(),
     }
     writePluginState(home, document, fs, assertHeld)
-    return set
+    return disabledPlugins(document)
   })
 }
 
@@ -200,7 +197,7 @@ export function createCliPluginLifecycleStateAdapter(
       const document = readPluginState(home, fs)
       return (
         document.lifecycle[pluginId] ?? {
-          intent: document.disabled.includes(pluginId) ? "disabled" : "auto",
+          intent: "auto",
           actual: "inactive",
           revision: 0,
           updatedAt: Date.now(),
@@ -213,7 +210,7 @@ export function createCliPluginLifecycleStateAdapter(
         const current =
           document.lifecycle[pluginId] ??
           ({
-            intent: document.disabled.includes(pluginId) ? "disabled" : "auto",
+            intent: "auto",
             actual: "inactive",
             revision: 0,
             updatedAt: Date.now(),
@@ -230,10 +227,6 @@ export function createCliPluginLifecycleStateAdapter(
         if (patch.dirty === undefined && "dirty" in patch) delete next.dirty
         if (patch.lastError === undefined && "lastError" in patch) delete next.lastError
         document.lifecycle[pluginId] = next
-        const disabled = new Set(document.disabled)
-        if (next.intent === "disabled") disabled.add(pluginId)
-        else disabled.delete(pluginId)
-        document.disabled = [...disabled].sort()
         writePluginState(home, document, fs, assertHeld)
         return next
       })

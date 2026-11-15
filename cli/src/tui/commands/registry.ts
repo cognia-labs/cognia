@@ -39,9 +39,6 @@ import { editorCommands } from "./editor-command"
 import type { CommandDescriptor, CommandEffect } from "./types"
 import { cellToTerminalBlock, VERBATIM_RENDER_PREFS } from "../render/cell-terminal-block"
 
-/** Back-compat alias for consumers that referenced the old shape. */
-export type SlashCommand = CommandDescriptor
-
 /** Settings fields edited via the panel's single-field form (`/settings <field> <value>`). */
 const SETTINGS_FORM_FIELDS = [
   "systemPrompt",

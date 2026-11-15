@@ -11,7 +11,7 @@ import React, { createContext, useContext } from "react"
 import { getBuiltinTheme } from "./builtins"
 import type { ThemePalette } from "./palette"
 
-const ThemeContext = createContext<ThemePalette>(getBuiltinTheme("classic"))
+const ThemeContext = createContext<ThemePalette>(getBuiltinTheme("ansi"))
 
 export interface ThemeProviderProps {
   palette: ThemePalette

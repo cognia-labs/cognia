@@ -5,7 +5,7 @@
 import React from "react"
 import { Box, Text } from "ink"
 
-import type { SlashCommand } from "../commands/registry"
+import type { CommandDescriptor } from "../commands/types"
 import { useTheme } from "../theme/context"
 import { windowList } from "./list-window"
 import { formatArgHint } from "../commands/arg-hint"
@@ -20,7 +20,7 @@ export function SlashPalette({
   maxRows = MAX_ROWS,
   width,
 }: {
-  matches: SlashCommand[]
+  matches: CommandDescriptor[]
   index: number
   /** Text after the leading slash; rendered as an explicit search affordance. */
   query?: string

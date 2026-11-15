@@ -109,12 +109,6 @@ function spansText(spans: MdSpan[]): React.ReactNode {
   ))
 }
 
-// `truncateToWidth` now lives in ../markdown/width (next to `stringWidth`) so the
-// tool-detail formatter can share it. `cellRefText` / `collectTableFootnotes`
-// moved to ../markdown/table-layout so the fullscreen renderer can lay a table
-// out the same way. Both re-exported here for existing importers.
-export { truncateToWidth, cellRefText, collectTableFootnotes }
-
 /** Render a table cell's spans, turning footnoted links into `label[n]` so the
  * URL lives below the table instead of widening (and misaligning) the column. */
 function TableCellSpans({ spans, footnotes }: { spans: MdSpan[]; footnotes: string[] }) {

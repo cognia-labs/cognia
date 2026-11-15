@@ -4,14 +4,9 @@ import { join } from "node:path"
 import React from "react"
 import { render } from "@testing-library/react"
 
-import {
-  Markdown,
-  MarkdownLine,
-  codeFrameWidth,
-  cellRefText,
-  collectTableFootnotes,
-  truncateToWidth,
-} from "./Markdown"
+import { Markdown, MarkdownLine, codeFrameWidth } from "./Markdown"
+import { cellRefText, collectTableFootnotes } from "../markdown/table-layout"
+import { truncateToWidth } from "../markdown/width"
 import type { MdLine } from "../markdown/types"
 
 describe("Markdown", () => {

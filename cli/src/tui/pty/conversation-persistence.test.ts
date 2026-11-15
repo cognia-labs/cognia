@@ -11,7 +11,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { runConversation, type ConversationSession } from "./conversation-driver"
-import { HISTORY_FILE_NAME } from "../input/history-store"
+import { HISTORY_FILE_NAME } from "@/lib/cli-bridge/history-format"
 
 jest.setTimeout(120_000)
 

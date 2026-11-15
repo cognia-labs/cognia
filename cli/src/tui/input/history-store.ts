@@ -13,16 +13,10 @@ import path from "node:path"
 
 import {
   HISTORY_FILE_NAME,
-  HISTORY_LIMIT,
   capHistory,
   parseHistory,
   serializeHistory,
 } from "@/lib/cli-bridge/history-format"
-
-// Re-exported so existing CLI consumers keep importing them from here; the
-// canonical definitions live in the shared `lib/cli-bridge/history-format`
-// module so the desktop→CLI push and the CLI write byte-for-byte identically.
-export { HISTORY_FILE_NAME, HISTORY_LIMIT }
 
 export interface HistoryStoreDeps {
   readFile?: (absPath: string) => string | null

@@ -6,7 +6,7 @@
  *
  * The colours can follow the active theme: {@link paletteCodeTheme} turns a
  * {@link ThemePalette}'s `code*` tokens into a cli-highlight `Theme`. Under the
- * `classic` palette (plain ANSI names) it returns undefined so cli-highlight's
+ * `ansi` palette (plain ANSI names) it returns undefined so cli-highlight's
  * own default theme is used — byte-for-byte the historic output. A themed
  * palette (hex code tokens, e.g. from Codex reuse) produces a custom theme.
  */
@@ -185,7 +185,7 @@ export function langFromPath(filePath: string): string | undefined {
 
 /**
  * Build a cli-highlight `Theme` from a palette's `code*` tokens, or undefined
- * when the palette uses plain ANSI names for every code token (the classic look
+ * when the palette uses plain ANSI names for every code token (the `ansi` look
  * — defer to cli-highlight's built-in default so output is unchanged).
  */
 export function paletteCodeTheme(palette: ThemePalette): Theme | undefined {

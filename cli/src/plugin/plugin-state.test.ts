@@ -41,8 +41,14 @@ describe("plugin enable/disable state", () => {
     expect(readDisabledPlugins("/home", memFs())).toEqual(new Set())
   })
 
-  it("reads the disabled list", () => {
-    const fs = memFs({ [pluginStatePath("/home")]: JSON.stringify({ disabled: ["a", "b"] }) })
+  it("reads the plugins whose lifecycle intent is disabled", () => {
+    const disabled = { intent: "disabled", actual: "inactive", revision: 1, updatedAt: 0 }
+    const fs = memFs({
+      [pluginStatePath("/home")]: JSON.stringify({
+        version: 2,
+        lifecycle: { a: disabled, b: disabled, c: { ...disabled, intent: "enabled" } },
+      }),
+    })
     expect([...readDisabledPlugins("/home", fs)].sort()).toEqual(["a", "b"])
   })
 
@@ -60,12 +66,13 @@ describe("plugin enable/disable state", () => {
     expect(readPluginState("/home", fs).lifecycle.p1.intent).toBe("enabled")
   })
 
-  it("migrates legacy disabled entries into canonical intent on first read", async () => {
-    const fs = memFs({ [pluginStatePath("/home")]: JSON.stringify({ disabled: ["legacy"] }) })
+  it("ignores a disabled list that has no lifecycle record", async () => {
+    const fs = memFs({ [pluginStatePath("/home")]: JSON.stringify({ disabled: ["old"] }) })
     const adapter = createCliPluginLifecycleStateAdapter("/home", fs)
 
-    await expect(adapter.read("legacy")).resolves.toMatchObject({
-      intent: "disabled",
+    expect(readDisabledPlugins("/home", fs)).toEqual(new Set())
+    await expect(adapter.read("old")).resolves.toMatchObject({
+      intent: "auto",
       actual: "inactive",
       revision: 0,
     })
@@ -87,7 +94,7 @@ describe("plugin enable/disable state", () => {
 describe("durable auth provider ownership", () => {
   it("fences a plugin-state writer replaced before its atomic rename", () => {
     const home = nodeFs.mkdtempSync(path.join(os.tmpdir(), "cognia-plugin-fence-"))
-    const original = JSON.stringify({ disabled: ["legacy"] })
+    const original = JSON.stringify({ version: 2, lifecycle: {} })
     const fs = memFs({ [pluginStatePath(home)]: original })
     try {
       expect(() =>
@@ -182,7 +189,7 @@ describe("durable auth provider ownership", () => {
         await Promise.allSettled(results)
       }
       const document = readPluginState(home)
-      expect(document.disabled).toEqual(
+      expect([...readDisabledPlugins(home)].sort()).toEqual(
         writers
           .slice(0, 2)
           .flatMap((writer) => Array.from({ length: 20 }, (_, i) => `${writer}-${i}`))
@@ -203,8 +210,7 @@ describe("durable auth provider ownership", () => {
   it("retains the previous plugin document when atomic replacement fails", () => {
     const original = JSON.stringify({
       version: 2,
-      disabled: ["legacy"],
-      lifecycle: {},
+      lifecycle: { earlier: { intent: "disabled", actual: "inactive", revision: 1, updatedAt: 0 } },
       authProviderOwners: "[]",
     })
     const fs = memFs({ [pluginStatePath("/home")]: original })
@@ -286,8 +292,15 @@ describe("durable auth provider ownership", () => {
     }
   })
 
-  it("reads legacy state and preserves lifecycle and ownership across independent writers", async () => {
-    const fs = memFs({ [pluginStatePath("/home")]: JSON.stringify({ disabled: ["legacy"] }) })
+  it("preserves lifecycle and ownership across independent writers", async () => {
+    const fs = memFs({
+      [pluginStatePath("/home")]: JSON.stringify({
+        version: 2,
+        lifecycle: {
+          earlier: { intent: "disabled", actual: "inactive", revision: 1, updatedAt: 0 },
+        },
+      }),
+    })
     const first = createCliAuthProviderOwnershipStore("/home", fs)
     expect(first.read()).toBeNull()
     first.write(JSON.stringify([["acme", "owner"]]))
@@ -298,7 +311,7 @@ describe("durable auth provider ownership", () => {
     const adapter = createCliPluginLifecycleStateAdapter("/home", fs)
     await adapter.write("owner", 1, { actual: "inactive" })
     expect(restarted.read()).toBe(JSON.stringify([["acme", "owner"]]))
-    expect(readDisabledPlugins("/home", fs)).toEqual(new Set(["legacy", "owner"]))
+    expect(readDisabledPlugins("/home", fs)).toEqual(new Set(["earlier", "owner"]))
 
     restarted.write("[]")
     expect(first.read()).toBe("[]")

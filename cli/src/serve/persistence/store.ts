@@ -26,20 +26,9 @@ import {
   type CaptureHandle,
   type DrainGate,
 } from "./capture"
-import {
-  durabilityRoot,
-  inspectDurabilityRoot,
-  isFreshDurabilityRoot,
-  resolveBackend,
-  type ResolvedBackend,
-} from "./backend"
+import { durabilityRoot, resolveBackend, type ResolvedBackend } from "./backend"
 import { applyCommits } from "./journal"
-import {
-  decodeDurableValue,
-  encodeDurableValue,
-  formatLegacyValueFinding,
-  recordLegacyValueFindings,
-} from "./value-codec"
+import { decodeDurableValue, encodeDurableValue } from "./value-codec"
 import type {
   DurabilityBackendId,
   DurabilityCommit,
@@ -86,13 +75,6 @@ export interface DurabilityStoreOptions {
    * account that already has one always boots on what its manifest says.
    */
   backend?: Exclude<DurabilityBackendId, "snapshot-v3">
-  /**
-   * One-time import into the freshly opened databases, run only when the
-   * account's durability root has never persisted anything. Its rows become
-   * the first checkpoint; capture is not armed yet, so nothing it writes is
-   * journalled as a commit.
-   */
-  importInitialState?: (sources: readonly DurabilitySourceLike[]) => Promise<void>
   /**
    * Re-declare schema the databases only gain at runtime (plugin tables)
    * before the persisted state is restored, given the version each database
@@ -290,7 +272,6 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   const now = opts.now ?? Date.now
   const compactEvery = opts.compactEveryCommits ?? 2_000
   const root = durabilityRoot(opts.home, opts.accountId)
-  const fresh = isFreshDurabilityRoot(inspectDurabilityRoot(root))
 
   let backendRef: HeadlessDurabilityBackend | null = null
   let sequence = 0
@@ -424,9 +405,6 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
 
   await opts.whenReady?.()
   for (const source of sources) await source.db.open?.()
-  // `backendRef` is still null here, so `onCommit` drops these writes: the
-  // imported rows reach disk as the seed below, not as journalled commits.
-  if (fresh && opts.importInitialState) await opts.importInitialState(sources)
 
   // Seed the immutable generation from whatever the freshly-opened (seeded)
   // databases hold, so a first boot has a checkpoint to append against.
@@ -440,20 +418,6 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   backendRef = resolved.backend
   sequence = resolved.backend.lastSequence()
   try {
-    // Rows written before value codec 1 that look like lost binary data. The
-    // report is kept before anything can compact those rows into codec 1 and
-    // erase the evidence; the bytes themselves are gone and are not invented.
-    const legacyReport = recordLegacyValueFindings(root, resolved.state.legacyValueFindings, now)
-    if (legacyReport) {
-      console.warn(
-        `[durability] ${resolved.state.legacyValueFindings!.length} field path(s) hold values written ` +
-          "before value codec 1 that look like lost binary data; `cognia-agent durability verify` lists them:\n" +
-          resolved.state
-            .legacyValueFindings!.map((finding) => `  ${formatLegacyValueFinding(finding)}`)
-            .join("\n")
-      )
-    }
-
     await withAllSuppressed(captures, async () => {
       if (opts.prepareDynamicSchema) {
         await opts.prepareDynamicSchema(
@@ -469,13 +433,9 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
       await restoreState(sources, resolved.state, root)
       await prepareRestoredSessionLists(sources)
       // Pin a forward move once; future boots need not reinterpret an older
-      // checkpoint version. A generation written before value codec 1 is
-      // rewritten the same way, before any commit can be appended to it (the
-      // journal refuses that), now that its findings are on record above.
-      // Restore/rebuild remains capture-suppressed.
+      // checkpoint version. Restore/rebuild remains capture-suppressed.
       pinned = resolved.state.dbs
       if (
-        resolved.legacyValueCodec ||
         sources.some((source) =>
           isForwardMove(source, resolved.state.dbs[source.name]?.schema.version)
         )

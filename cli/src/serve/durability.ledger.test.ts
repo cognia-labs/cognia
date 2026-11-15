@@ -70,57 +70,28 @@ describe("startDurability's default rung (ADR-0224)", () => {
     }
   })
 
-  it("imports an account's table store once and leaves it untouched", async () => {
+  it("starts a ledger rung empty beside an account's table store and leaves it untouched", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-sqlite-import-"))
     const tableManifest = path.join(home, "db-acct_import.json.tables", "manifest.json")
     __resetCliDbForTesting()
     try {
-      const legacy = await startDurability({
+      const snapshot = await startDurability({
         home,
         accountId: "acct_import",
         backend: "snapshot-v3",
       })
       const { getDb } = await import("@/lib/db/schema")
-      await getDb().sessions.put(session("legacy-session"))
-      await legacy.dispose()
-      const legacyManifestBytes = fs.readFileSync(tableManifest)
+      await getDb().sessions.put(session("table-store-session"))
+      await snapshot.dispose()
+      const manifestBytes = fs.readFileSync(tableManifest)
       await dropDatabase()
 
-      const onLegacyImport = jest.fn()
-      const migrated = await startDurability({
-        home,
-        accountId: "acct_import",
-        env: {},
-        onLegacyImport,
-      })
-      expect(migrated.backend).toBe("sqlite-v5")
-      expect(onLegacyImport).toHaveBeenCalledTimes(1)
-      expect(onLegacyImport.mock.calls[0][0]).toEqual(
-        expect.objectContaining({ kind: "table-store" })
-      )
+      const ledger = await startDurability({ home, accountId: "acct_import", env: {} })
+      expect(ledger.backend).toBe("sqlite-v5")
       const db = (await import("@/lib/db/schema")).getDb()
-      expect(await db.sessions.get("legacy-session")).toEqual(
-        expect.objectContaining({ id: "legacy-session" })
-      )
-      await db.sessions.put(session("after-import"))
-      await migrated.dispose()
-      // The old store is a rollback source: byte-for-byte unchanged, unlocked.
-      expect(fs.readFileSync(tableManifest).equals(legacyManifestBytes)).toBe(true)
-      expect(fs.existsSync(path.join(home, "db-acct_import.json.lock"))).toBe(false)
-
-      await dropDatabase()
-      const reboot = await startDurability({
-        home,
-        accountId: "acct_import",
-        env: {},
-        onLegacyImport,
-      })
-      // Imported exactly once: the second boot restores from sqlite alone.
-      expect(onLegacyImport).toHaveBeenCalledTimes(1)
-      const rebooted = (await import("@/lib/db/schema")).getDb()
-      expect(await rebooted.sessions.get("legacy-session")).toBeDefined()
-      expect(await rebooted.sessions.get("after-import")).toBeDefined()
-      await reboot.dispose()
+      expect(await db.sessions.get("table-store-session")).toBeUndefined()
+      await ledger.dispose()
+      expect(fs.readFileSync(tableManifest).equals(manifestBytes)).toBe(true)
     } finally {
       await dropDatabase().catch(() => {})
       fs.rmSync(home, { recursive: true, force: true })

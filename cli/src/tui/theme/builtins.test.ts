@@ -22,8 +22,8 @@ describe("builtin themes", () => {
     expect(p.toolMcp).toBe("magenta")
   })
 
-  it("resolves the legacy `classic` name to the raw-ANSI `ansi` palette", () => {
-    expect(getBuiltinTheme("classic")).toEqual(BUILTIN_THEMES.ansi)
+  it("does not resolve the retired `classic` name", () => {
+    expect(getBuiltinTheme("classic")).toEqual(BUILTIN_THEMES[DEFAULT_THEME_NAME])
   })
 
   it("cognia is the signature warm dark default", () => {

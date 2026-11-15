@@ -16,6 +16,7 @@ import {
   runtimeArtifactSourceName,
   computeCompositionDigest,
   doctorInstalledDshRuntime,
+  dshBootId,
   dshHomeFor,
   findStrayPatchLayers,
   installDshRuntime,
@@ -119,7 +120,14 @@ describe("installDshRuntime", () => {
     fs.mkdirSync(leases, { recursive: true })
     fs.writeFileSync(
       path.join(leases, "host.json"),
-      JSON.stringify({ schemaVersion: 1, pid: process.pid, processId: "another-host" })
+      JSON.stringify({
+        schemaVersion: 2,
+        pid: process.pid,
+        processId: "another-host",
+        bootId: dshBootId(),
+        retirementRequired: true,
+        retired: false,
+      })
     )
     await expect(install()).rejects.toThrow(/process|using|lease/i)
     expect(() => removeDshRuntime({ dataRoot, activeSessionCount: 0 })).toThrow(
@@ -482,13 +490,13 @@ describe("host-owned runtime leases", () => {
     expect(fs.readFileSync(path.join(home, "preserved"), "utf8")).toBe("native data")
   })
 
-  it("quarantines legacy ownership separately so an old host cannot erase the guard", () => {
+  it("quarantines a process record it cannot validate so removing it cannot erase the guard", () => {
     const original = writeOwner("processes", {
       schemaVersion: 1,
       pid: 2147483647,
       childPid: 2147483646,
     })
-    expect(() => removeDshRuntime({ dataRoot })).toThrow(/retirement|process leases/)
+    expect(() => removeDshRuntime({ dataRoot })).toThrow(/ownership/)
     fs.rmSync(original)
     expect(() => removeDshRuntime({ dataRoot })).toThrow(/retirement|process leases/)
   })
@@ -514,7 +522,15 @@ describe("host-owned runtime leases", () => {
   })
 
   it("publishes boot-scoped ownership and never drops a started unproved lease", () => {
-    const stale = writeOwner("processes", { schemaVersion: 1, pid: 2147483647 })
+    let previousBoot = randomUUID()
+    while (previousBoot === bootId()) previousBoot = randomUUID()
+    const stale = writeOwner("processes", {
+      schemaVersion: 2,
+      pid: 2147483647,
+      bootId: previousBoot,
+      retirementRequired: true,
+      retired: false,
+    })
     const lease = acquireDshProcessLease(dataRoot, "pending-session")
     lease.updateChildPid(process.pid)
     const dir = path.dirname(stale)
@@ -577,13 +593,14 @@ describe("host-owned runtime leases", () => {
         "-e",
         `
       const fs = require('node:fs');
-      const file = process.argv[1];
-      fs.writeFileSync(file + '.tmp', JSON.stringify({schemaVersion:1,pid:process.pid,processId:'independent-host'}));
+      const [file, bootId] = process.argv.slice(1);
+      fs.writeFileSync(file + '.tmp', JSON.stringify({schemaVersion:2,pid:process.pid,processId:'independent-host',bootId,retirementRequired:true,retired:false}));
       fs.renameSync(file + '.tmp', file);
       process.stdout.write('ready');
       setInterval(() => {}, 1000);
     `,
         file,
+        bootId(),
       ],
       { stdio: ["ignore", "pipe", "pipe"] }
     )

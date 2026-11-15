@@ -177,12 +177,6 @@ export async function serveCommand(args: ParsedArgs, deps: ServeDeps): Promise<n
     debounceMs: flushDebounce,
     proc,
     env,
-    onLegacyImport: (result) => {
-      if (result.kind === "none") return
-      out.write(
-        `serve: imported ${result.tables} tables from the previous snapshot store; it was left in place as a rollback source\n`
-      )
-    },
   })
   out.write(`serve: durability ${durability.backend}\n`)
 

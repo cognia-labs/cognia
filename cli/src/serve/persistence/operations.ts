@@ -44,18 +44,11 @@ import {
 import {
   decodeSnapshotRows,
   parseMultiSnapshot,
-  reportLegacySnapshotRows,
   selectSnapshotRestoreTables,
   snapshotRowsForTable,
 } from "../../db/snapshot"
 import { collectSqliteBinaryReferences, readSqliteState, sqliteFile } from "./sqlite"
-import {
-  decodeDurableValue,
-  LegacyValueReport,
-  readLegacyValueReport,
-  recordLegacyValueFindings,
-  type LegacyValueFinding,
-} from "./value-codec"
+import { decodeDurableValue } from "./value-codec"
 import {
   DurabilityFault,
   emptyDurabilityState,
@@ -79,12 +72,6 @@ export interface DurabilityStatus {
   sqliteSequence: number | null
   faults: Array<{ code: string; message: string; sequence: number | null }>
   parity: ParityReport | null
-  /**
-   * Values written before value codec 1 that look like lost binary data: the
-   * persisted report merged with what this verify read. Not a fault — the
-   * store is intact; those rows simply never held their bytes.
-   */
-  legacyValueLoss: LegacyValueFinding[]
   /** Snapshot tables restore ignores because they are derived or no longer installed. */
   skippedSnapshotTables: Array<{ database: string; table: string }>
   snapshotRoot?: string
@@ -123,10 +110,8 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
     sqliteSequence: null,
     faults: [],
     parity: null,
-    legacyValueLoss: [],
     skippedSnapshotTables: [],
   }
-  const legacy = new LegacyValueReport()
   try {
     if (!fs.existsSync(root)) {
       throw new DurabilityFault("manifest-corrupt", `durability root does not exist: ${root}`)
@@ -134,8 +119,7 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
     if (fs.statSync(root).isFile()) {
       status.manifest.activeBackend = "snapshot-v3"
       status.snapshotRoot = root
-      await verifySnapshotFile(root, legacy, status.skippedSnapshotTables)
-      status.legacyValueLoss = legacy.findings()
+      await verifySnapshotFile(root, status.skippedSnapshotTables)
       return status
     }
     if (!fs.statSync(root).isDirectory()) {
@@ -153,8 +137,7 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
     ) {
       status.manifest.activeBackend = "snapshot-v3"
       status.snapshotRoot = root
-      await verifySnapshotTables(root, legacy, status.skippedSnapshotTables)
-      status.legacyValueLoss = legacy.findings()
+      await verifySnapshotTables(root, status.skippedSnapshotTables)
       return status
     }
     status.manifest = readManifest(root)
@@ -176,8 +159,8 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
             ? `${snapshot}.tables`
             : snapshot
           if (status.snapshotRoot === snapshot)
-            await verifySnapshotFile(snapshot, legacy, status.skippedSnapshotTables)
-          else await verifySnapshotTables(status.snapshotRoot, legacy, status.skippedSnapshotTables)
+            await verifySnapshotFile(snapshot, status.skippedSnapshotTables)
+          else await verifySnapshotTables(status.snapshotRoot, status.skippedSnapshotTables)
           present = true
         } else {
           present =
@@ -202,12 +185,12 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
     status.latestGeneration = latestGeneration(root, status.manifest)
     for (const generation of status.generations) {
       try {
-        const checkpoint = readCheckpoint(root, generation, legacy)
+        const checkpoint = readCheckpoint(root, generation)
         assertDecodable(root, checkpoint)
         const checkpointSequence = checkpoint.sequence
         const file = journalFile(root, generation)
         const replay = fs.existsSync(file)
-          ? replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence, legacy)
+          ? replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence)
           : { commits: [], discardedBytes: 0 }
         for (const commit of replay.commits) decodeDurableValue(commit.mutations, root)
         applyCommits(checkpoint, replay.commits)
@@ -246,7 +229,6 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
       }
       assertDecodable(root, sqliteState)
       status.sqliteSequence = sqliteState.sequence
-      for (const finding of sqliteState.legacyValueFindings ?? []) legacy.merge(finding)
     } catch (error) {
       recordFault(status, error)
     }
@@ -265,20 +247,12 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
     }
   }
 
-  try {
-    for (const finding of readLegacyValueReport(root)?.findings ?? []) legacy.merge(finding)
-  } catch (error) {
-    recordFault(status, error)
-  }
-  status.legacyValueLoss = legacy.findings()
-
   return status
 }
 
 /** The snapshot-v3 rung uses bootstrap's table layout and the shared value codec. */
 async function verifySnapshotTables(
   root: string,
-  legacy: LegacyValueReport,
   skipped: DurabilityStatus["skippedSnapshotTables"]
 ): Promise<void> {
   let manifest
@@ -292,7 +266,7 @@ async function verifySnapshotTables(
   }
   if (
     !manifest ||
-    ![3, 4].includes(manifest.snapshotFormat) ||
+    manifest.snapshotFormat !== 4 ||
     !manifest.dbs ||
     typeof manifest.dbs !== "object" ||
     Array.isArray(manifest.dbs)
@@ -320,11 +294,6 @@ async function verifySnapshotTables(
           read: (reference, length) => readBinarySync(root, reference, length),
         })
         await verifyRows.check(database, table, decoded)
-        if (manifest.snapshotFormat === 3) {
-          reportLegacySnapshotRows(rows as unknown[], database, table, (...args) =>
-            legacy.add(...args)
-          )
-        }
       }
     }
     verifyRows.assertRestorable()
@@ -335,10 +304,9 @@ async function verifySnapshotTables(
 
 async function verifySnapshotFile(
   file: string,
-  legacy: LegacyValueReport,
   skipped: DurabilityStatus["skippedSnapshotTables"]
 ): Promise<void> {
-  const parsed = parseMultiSnapshot(fs.readFileSync(file, "utf8"), "CogniaDB")
+  const parsed = parseMultiSnapshot(fs.readFileSync(file, "utf8"))
   if (parsed.kind !== "valid") {
     throw new DurabilityFault(
       "manifest-corrupt",
@@ -349,11 +317,7 @@ async function verifySnapshotFile(
   try {
     for (const [database, snapshot] of Object.entries(parsed.snapshot.dbs)) {
       for (const table of verifyRows.selectTables(database, Object.keys(snapshot.tables))) {
-        const rows = snapshot.tables[table]
-        await verifyRows.check(database, table, decodeSnapshotRows(rows))
-        if (parsed.snapshot.legacyValueCodec) {
-          reportLegacySnapshotRows(rows, database, table, (...args) => legacy.add(...args))
-        }
+        await verifyRows.check(database, table, decodeSnapshotRows(snapshot.tables[table]))
       }
     }
     verifyRows.assertRestorable()
@@ -440,17 +404,14 @@ export function readJournalState(
   generation = latestGeneration(root)
 ): DurabilityState {
   if (!generation) return emptyDurabilityState()
-  const report = new LegacyValueReport()
-  const state = readCheckpoint(root, generation, report)
+  const state = readCheckpoint(root, generation)
   assertDecodable(root, state)
   const file = journalFile(root, generation)
   if (fs.existsSync(file)) {
-    const { commits } = replayJournal(fs.readFileSync(file, "utf8"), state.sequence, report)
+    const { commits } = replayJournal(fs.readFileSync(file, "utf8"), state.sequence)
     for (const commit of commits) decodeDurableValue(commit.mutations, root)
     applyCommits(state, commits)
   }
-  const findings = report.findings()
-  if (findings.length > 0) state.legacyValueFindings = findings
   return state
 }
 
@@ -590,8 +551,6 @@ export async function migrateDurability(
   } finally {
     await sourceBackend.close()
   }
-  // The target is written in codec 1; keep the evidence of lossy codec-0 rows.
-  recordLegacyValueFindings(root, sourceState.legacyValueFindings, now)
 
   const targetBackend = openBackend(to, root)
   let parity: ParityReport
@@ -665,7 +624,6 @@ export async function recoverDurability(
     candidates.sort((a, b) => b.state.sequence - a.state.sequence)
     const chosen = candidates[0]
     pins = collectBinaryReferences(chosen.state.dbs, new Set<string>())
-    recordLegacyValueFindings(root, chosen.state.legacyValueFindings, now)
 
     const inventory = inspectDurabilityRoot(root)
     if (
@@ -735,11 +693,8 @@ async function collectRecoveryCandidates(
   for (const generation of generations) {
     if (wanted("snapshot")) {
       try {
-        const report = new LegacyValueReport()
-        const state = readCheckpoint(root, generation, report)
+        const state = readCheckpoint(root, generation)
         assertDecodable(root, state)
-        const findings = report.findings()
-        if (findings.length > 0) state.legacyValueFindings = findings
         out.push({ source: "snapshot", state })
       } catch (error) {
         if (from !== "auto") throw error
@@ -797,12 +752,7 @@ export function rollbackDurability(
   let releaseJournal: (() => void) | undefined
   try {
     releaseJournal = acquireWriterLease(root, "journal")
-    // The target is usually older than the current generation, so it may predate
-    // value codec 1. Re-cutting it below rewrites its rows as codec 1, after which
-    // nothing on disk says they were lossy: record the report first.
-    const report = new LegacyValueReport()
-    const state = readCheckpoint(root, generation, report)
-    recordLegacyValueFindings(root, report.findings(), now)
+    const state = readCheckpoint(root, generation)
     writeRollbackBundle(root, `rollback -> ${generation}`, now)
 
     // Re-cut the target as the newest generation so the journal appends against

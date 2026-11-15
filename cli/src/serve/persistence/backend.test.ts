@@ -8,7 +8,6 @@ import {
   durabilityRoot,
   ensureDurabilityRoot,
   inspectDurabilityRoot,
-  isFreshDurabilityRoot,
   openBackend,
   resolveBackend,
   resolveServeHome,
@@ -198,7 +197,6 @@ describe("durability root inventory", () => {
   it("refuses to reseed staged data after the activation manifest is lost", async () => {
     writeCheckpoint(root, "gen-0001", state(42), { staged: true })
     const inventory = inspectDurabilityRoot(root)
-    expect(isFreshDurabilityRoot(inventory)).toBe(false)
     expect(() => backendHeldByUnpinnedRoot(inventory)).toThrow(/only staged journal data/)
     await expect(
       resolveBackend({ root, initialBackend: "sqlite-v5", seed: state(0) })
@@ -215,15 +213,9 @@ describe("durability root inventory", () => {
     )
   })
 
-  it("treats a missing or empty root as fresh", () => {
-    expect(isFreshDurabilityRoot(inspectDurabilityRoot(path.join(root, "absent")))).toBe(true)
-    expect(isFreshDurabilityRoot(inspectDurabilityRoot(root))).toBe(true)
-  })
-
   it("names the backend an un-pinned root already holds", async () => {
     writeCheckpoint(root, "gen-0001", state(0))
     expect(backendHeldByUnpinnedRoot(inspectDurabilityRoot(root))).toBe("journal-v4")
-    expect(isFreshDurabilityRoot(inspectDurabilityRoot(root))).toBe(false)
   })
 
   it("defers to the manifest once one exists", () => {
@@ -392,14 +384,6 @@ describe("resolveBackend", () => {
     expect(caught.sequence).toBe(10)
   })
 
-  /** Rewrite a generation's manifest as a build before value codec 1 wrote it. */
-  function makeLegacyGeneration(generation: string): void {
-    const file = path.join(root, "generations", generation, "checkpoint.json")
-    const manifest = JSON.parse(fs.readFileSync(file, "utf8"))
-    delete manifest.valueCodec
-    manifest.checkpointFormat = 3
-    fs.writeFileSync(file, JSON.stringify(manifest))
-  }
   const sqliteActive = () =>
     writeManifest(root, {
       manifestFormat: 1,
@@ -408,36 +392,6 @@ describe("resolveBackend", () => {
       rollbackWatermark: null,
       updatedAt: 0,
     })
-
-  it("re-cuts a level shadow journal from before codec 1 so commits can land in it", async () => {
-    // What an older build's `durability migrate --to sqlite-v5` leaves: SQLite
-    // active, the journal kept as shadow on a format-3 generation.
-    writeCheckpoint(root, "gen-0001", state(4, { "s:a": { id: "a", cover: {} } }))
-    makeLegacyGeneration("gen-0001")
-    const sqlite = openBackend("sqlite-v5", root)
-    await sqlite.compact(state(4, { "s:a": { id: "a", cover: {} } }))
-    await sqlite.close()
-    sqliteActive()
-
-    const resolved = await resolveBackend({ root })
-    expect(resolved.legacyValueCodec).toBe(true)
-    // The shadow's codec-0 findings reach the caller, for the report.
-    expect(resolved.state.legacyValueFindings).toEqual([
-      expect.objectContaining({ path: "cover", shape: "empty-object" }),
-    ])
-    resolved.backend.commitSync(commit(5, "s:b", { id: "b" }))
-    await resolved.backend.close()
-
-    const generations = fs.readdirSync(path.join(root, "generations")).sort()
-    expect(generations).toEqual(["gen-0001", "gen-0002"])
-    const again = await resolveBackend({ root })
-    expect(again.legacyValueCodec).toBe(false)
-    again.backend.commitSync(commit(6, "s:c", { id: "c" }))
-    await again.backend.close()
-    const journal = openBackend("journal-v4", root)
-    expect((await journal.load()).sequence).toBe(6)
-    await journal.close()
-  })
 
   it("rewrites a shadow journal the tail cannot bridge instead of leaving it behind", async () => {
     // The journal shadow missed commit 5 (a failed append): its own file is

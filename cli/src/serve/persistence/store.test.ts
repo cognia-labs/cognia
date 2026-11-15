@@ -9,9 +9,8 @@ import os from "node:os"
 import path from "node:path"
 
 import { durabilityRoot, openBackend } from "./backend"
-import { canonicalJson, encodeKey, sha256Hex } from "./canonical"
+import { encodeKey } from "./canonical"
 import { verifyDurability } from "./operations"
-import { readLegacyValueReport } from "./value-codec"
 import { hasLiveWriter } from "./writer-lock"
 import type { CaptureCoreLike, CaptureMutateRequest, CaptureTableLike } from "./capture"
 import {
@@ -349,40 +348,6 @@ describe("openDurabilityStore", () => {
     expect(second.sequence()).toBe(2)
     await second.close()
     await store.close()
-  })
-
-  it("imports initial state into the first checkpoint of a fresh sqlite root only", async () => {
-    const importInitialState = jest.fn(async (sources: readonly DurabilitySourceLike[]) => {
-      await sources[0].db.tables[0].bulkPut([{ id: "imported" }])
-    })
-    const first = makeSource()
-    const store = await openDurabilityStore({
-      home,
-      accountId: "acct",
-      backend: "sqlite-v5",
-      importInitialState,
-      getSources: async () => [first],
-    })
-    expect(importInitialState).toHaveBeenCalledTimes(1)
-    // The import is the seed, not a journalled commit.
-    expect(store.sequence()).toBe(0)
-    expect(store.backend.id).toBe("sqlite-v5")
-    await first.db.commit("sessions", { type: "put", values: [{ id: "after" }] })
-    await store.close()
-
-    const revived = makeSource()
-    const second = await openDurabilityStore({
-      home,
-      accountId: "acct",
-      backend: "sqlite-v5",
-      importInitialState,
-      getSources: async () => [revived],
-    })
-    expect(importInitialState).toHaveBeenCalledTimes(1)
-    expect(await revived.db.tables[0].toArray()).toEqual(
-      expect.arrayContaining([{ id: "imported" }, { id: "after" }])
-    )
-    await second.close()
   })
 
   it("does not journal the restore replay", async () => {
@@ -1439,124 +1404,5 @@ describe.each(["journal-v4", "sqlite-v5"] as const)("what a restart restores (%s
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }
-  })
-})
-
-describe("values written before value codec 1", () => {
-  let home: string
-  beforeEach(() => {
-    home = tempHome()
-  })
-  afterEach(() => {
-    jest.restoreAllMocks()
-    fs.rmSync(home, { recursive: true, force: true })
-  })
-
-  /** Rewrite every journal line as a build before codec 1 wrote it. */
-  function downgradeJournal(root: string): void {
-    const dir = path.join(root, "journal")
-    for (const name of fs.readdirSync(dir)) {
-      const file = path.join(dir, name)
-      const lines = fs
-        .readFileSync(file, "utf8")
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => {
-          const payload = JSON.parse(line.slice(0, line.lastIndexOf("\t")))
-          delete payload.valueCodec
-          const text = canonicalJson(payload)
-          return `${text}\t${sha256Hex(text)}\n`
-        })
-      fs.writeFileSync(file, lines.join(""))
-    }
-  }
-
-  /** Rewrite every generation manifest as a build before codec 1 wrote it (format 3). */
-  function downgradeGenerations(root: string): string[] {
-    const dir = path.join(root, "generations")
-    const names = fs.readdirSync(dir).sort()
-    for (const name of names) {
-      const file = path.join(dir, name, "checkpoint.json")
-      const manifest = JSON.parse(fs.readFileSync(file, "utf8"))
-      delete manifest.valueCodec
-      manifest.checkpointFormat = 3
-      fs.writeFileSync(file, JSON.stringify(manifest))
-    }
-    return names
-  }
-
-  const manifestFormat = (root: string, generation: string) =>
-    JSON.parse(
-      fs.readFileSync(path.join(root, "generations", generation, "checkpoint.json"), "utf8")
-    ).checkpointFormat
-
-  it("restores what codec 0 kept, reports what it lost, and keeps the report past compaction", async () => {
-    const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
-    const first = makeSource()
-    const store = await openDurabilityStore({
-      home,
-      accountId: "acct",
-      backend: "journal-v4",
-      getSources: async () => [first],
-    })
-    // What a codec-0 build left behind: the Blob already flattened to {}.
-    await first.db.commit("sessions", {
-      type: "put",
-      values: [{ id: "a", at: { __date: "2026-11-01T00:00:00.000Z" }, cover: {} }],
-    })
-    await store.close()
-    const root = durabilityRoot(home, "acct")
-    downgradeJournal(root)
-    const legacyGenerations = downgradeGenerations(root)
-
-    const revived = makeSource()
-    const second = await openDurabilityStore({
-      home,
-      accountId: "acct",
-      getSources: async () => [revived],
-    })
-    // Boot re-cut the format-3 generation as a format-4 one before any commit
-    // could land in its journal, which a build before codec 1 would replay.
-    const generations = fs.readdirSync(path.join(root, "generations")).sort()
-    expect(generations.length).toBe(legacyGenerations.length + 1)
-    expect(manifestFormat(root, generations.at(-1)!)).toBe(4)
-    await revived.db.commit("sessions", { type: "put", values: [{ id: "b" }] })
-    const [row] = (await revived.db.tables[0].toArray()) as Array<Record<string, unknown>>
-    expect(Object.prototype.toString.call(row.at)).toBe("[object Date]")
-    expect(row.cover).toEqual({})
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/1 field path\(s\).*sessions\.cover/s))
-    const report = readLegacyValueReport(root)
-    expect(report?.findings).toEqual([
-      expect.objectContaining({
-        table: "sessions",
-        path: "cover",
-        shape: "empty-object",
-        count: 1,
-      }),
-    ])
-
-    // Compaction rewrites the rows as codec 1; the report still names them.
-    await second.compact()
-    expect((await second.backend.load()).legacyValueFindings).toBeUndefined()
-    await second.close()
-    expect((await verifyDurability(root)).legacyValueLoss).toEqual(report?.findings)
-  })
-
-  it("writes no report for a root that never held codec-0 values", async () => {
-    const source = makeSource()
-    const store = await openDurabilityStore({
-      home,
-      accountId: "acct",
-      getSources: async () => [source],
-    })
-    await source.db.commit("sessions", { type: "put", values: [{ id: "a", meta: {} }] })
-    await store.close()
-    const again = await openDurabilityStore({
-      home,
-      accountId: "acct",
-      getSources: async () => [makeSource()],
-    })
-    await again.close()
-    expect(readLegacyValueReport(durabilityRoot(home, "acct"))).toBeNull()
   })
 })

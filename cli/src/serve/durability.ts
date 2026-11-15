@@ -16,15 +16,8 @@ import fs from "node:fs"
 
 import { getDb } from "@/lib/db/schema"
 
-import {
-  ensureCliDb,
-  hasSnapshotStore,
-  importSnapshotStore,
-  prepareBuiltinPluginSchema,
-  type CliDbHandle,
-  type SnapshotStoreImportResult,
-} from "../db/bootstrap"
-import type { DbLike, LegacySnapshotReporter, SnapshotSource } from "../db/snapshot"
+import { ensureCliDb, prepareBuiltinPluginSchema, type CliDbHandle } from "../db/bootstrap"
+import type { DbLike, SnapshotSource } from "../db/snapshot"
 import { installWriteFlush, type DexieLike } from "../db/write-flush"
 import {
   backendHeldByUnpinnedRoot,
@@ -32,12 +25,6 @@ import {
   inspectDurabilityRoot,
 } from "./persistence/backend"
 import { manifestFile, readManifest } from "./persistence/manifest"
-import {
-  formatLegacyValueFinding,
-  LegacyValueReport,
-  legacyValueReportPath,
-  recordLegacyValueFindings,
-} from "./persistence/value-codec"
 import {
   openDurabilityStore,
   type DurabilityDbLike,
@@ -58,8 +45,7 @@ import { isDurabilityBackendId, type DurabilityBackendId } from "./persistence/t
  *      an operator can always roll an un-pinned account back to the table store
  *   3. ledger data already in an un-pinned root (journal or SQLite)
  *   4. `COGNIA_DURABILITY_BACKEND` (the rollout gate)
- *   5. `sqlite-v5` — the default for a long-lived brain (ADR-0224). An account
- *      that used to persist through the table store is imported on first boot.
+ *   5. `sqlite-v5` — the default for a long-lived brain (ADR-0224).
  */
 export function resolveDurabilityBackend(
   home: string,
@@ -83,7 +69,7 @@ export function resolveDurabilityBackend(
   return isDurabilityBackendId(requested) ? requested : "sqlite-v5"
 }
 
-/** The `snapshot-v3` file name for an account, shared by the snapshot rung and the import. */
+/** The `snapshot-v3` file name for an account. */
 function snapshotFileName(localAccountId: string): string {
   return `db-${localAccountId}.json`
 }
@@ -103,8 +89,6 @@ export interface DurabilityOptions {
   rssWarningBytes?: number
   /** Injected alert sink (tests/embedding). */
   onRssWarning?: (rssBytes: number, limitBytes: number) => void
-  /** Called once when a ledger rung imported the account's old table store. */
-  onLegacyImport?: (result: SnapshotStoreImportResult) => void
 }
 
 export interface DurabilityHandle {
@@ -142,46 +126,6 @@ async function resolveDurabilitySources(): Promise<DurabilitySourceLike[]> {
 }
 
 /**
- * Collects what a snapshot store written before value codec 1 may have lost
- * (a Date kept as its string, a Map, Set, RegExp or DataView kept as `{}`, a
- * File kept as a nameless Blob) and records it in the durability root's
- * `value-loss-report.json`, as the journal and SQLite readers do for their own
- * pre-codec-1 rows, so `durability verify` names them for good.
- */
-function legacySnapshotValueReport(root: string): {
-  onLegacyValue: LegacySnapshotReporter
-  record: () => void
-} {
-  const report = new LegacyValueReport()
-  return {
-    onLegacyValue: (database, table, key, path, shape) =>
-      report.add(database, table, key, path, shape),
-    // Best-effort: the report is evidence, not data. A torn or newer report
-    // file, or a full disk, must not stop the brain booting from a store that
-    // restored fine (snapshot-v3 is the rung an operator rolls back to).
-    record: () => {
-      const findings = report.findings()
-      if (findings.length === 0) return
-      const listed = findings.map((finding) => `  ${formatLegacyValueFinding(finding)}`).join("\n")
-      try {
-        recordLegacyValueFindings(root, findings)
-      } catch (error) {
-        console.warn(
-          `[durability] could not record ${findings.length} value-loss finding(s) in ${legacyValueReportPath(root)}: ` +
-            `${error instanceof Error ? error.message : String(error)}; the snapshot store's pre-codec-1 rows:\n${listed}`
-        )
-        return
-      }
-      console.warn(
-        `[durability] ${findings.length} field path(s) of the snapshot store hold values written ` +
-          "before value codec 1 that may have lost their type; `cognia-agent durability verify` lists them:\n" +
-          listed
-      )
-    },
-  }
-}
-
-/**
  * `journal-v4` / `sqlite-v5` rungs.
  *
  * There is no debounce and no flush here — every committed Dexie transaction is
@@ -200,26 +144,10 @@ async function startLedgerDurability(
   const { installFakeIndexedDb } = await import("@/lib/headless/node-indexeddb")
   await installFakeIndexedDb()
 
-  const fileName = snapshotFileName(opts.accountId)
   const store: DurabilityStore = await openDurabilityStore({
     home: opts.home,
     accountId: opts.accountId,
     backend: backend === "snapshot-v3" ? undefined : backend,
-    // An account that persisted through the table store before this rung was
-    // its default keeps its data: the old store is imported once into the
-    // first checkpoint and then left untouched as a rollback source.
-    importInitialState: hasSnapshotStore(opts.home, fileName)
-      ? async (sources) => {
-          const legacy = legacySnapshotValueReport(durabilityRoot(opts.home, opts.accountId))
-          const result = await importSnapshotStore(sources as unknown as SnapshotSource[], {
-            home: opts.home,
-            fileName,
-            onLegacyValue: legacy.onLegacyValue,
-          })
-          legacy.record()
-          opts.onLegacyImport?.(result)
-        }
-      : undefined,
     getSources: resolveDurabilitySources,
     prepareDynamicSchema: (sources, persistedVersions, persistedTables) =>
       prepareBuiltinPluginSchema(
@@ -308,12 +236,10 @@ export async function startDurability(opts: DurabilityOptions): Promise<Durabili
     handleRef.current?.scheduleFlush()
   }
 
-  const legacy = legacySnapshotValueReport(durabilityRoot(opts.home, opts.accountId))
   const db = await ensureCliDb({
     home: opts.home,
     fileName: snapshotFileName(opts.accountId),
     debounceMs: opts.debounceMs,
-    onLegacyValue: legacy.onLegacyValue,
     // One database since schema v219: the schedule is `scheduledTasks` inside
     // the account database rather than a separate `CogniaSchedulerDB`. It still
     // MUST be snapshotted, or a restarted brain reboots with an empty schedule
@@ -336,8 +262,6 @@ export async function startDurability(opts: DurabilityOptions): Promise<Durabili
     },
   })
   handleRef.current = db
-  // `ensureCliDb` resolves after the restore, so every finding is in.
-  legacy.record()
 
   const flushAndStamp = async (): Promise<void> => {
     await db.flush()

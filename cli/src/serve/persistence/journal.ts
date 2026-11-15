@@ -33,7 +33,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { canonicalJson, sha256Hex } from "./canonical"
-import { LegacyValueReport, normalizeLegacyValue, VALUE_CODEC } from "./value-codec"
+import { VALUE_CODEC } from "./value-codec"
 import { latestGeneration, listGenerations, readCheckpoint, writeCheckpoint } from "./checkpoint"
 import { acquireWriterLease } from "./writer-lock"
 import { collectBinaryReferences } from "./binary-store"
@@ -59,8 +59,7 @@ export function journalFile(root: string, generation: string): string {
 /** Serialise one commit to its on-disk line (including the trailing newline). */
 export function encodeCommitLine(commit: DurabilityCommit): string {
   // Mutation values are already codec-1 JSON (the store encodes them at the
-  // Dexie boundary); the field tells replay so, and lines without it are
-  // normalised as codec 0.
+  // Dexie boundary); the field tells replay so.
   const payload = canonicalJson({
     sequence: commit.sequence,
     committedAt: commit.committedAt,
@@ -80,14 +79,9 @@ export interface ReplayResult {
  * Parse a journal file body into commits.
  *
  * `fromSequence` is the checkpoint's sequence: the first record must be
- * `fromSequence + 1`. Lines written before value codec 1 come back normalised,
- * with what looks like lost binary data recorded in `report`.
+ * `fromSequence + 1`.
  */
-export function replayJournal(
-  body: string,
-  fromSequence: number,
-  report: LegacyValueReport = new LegacyValueReport()
-): ReplayResult {
+export function replayJournal(body: string, fromSequence: number): ReplayResult {
   const commits: DurabilityCommit[] = []
   let expected = fromSequence + 1
   let offset = 0
@@ -121,7 +115,7 @@ export function replayJournal(
         expected
       )
     }
-    const commit = parseCommitPayload(payload, expected, report)
+    const commit = parseCommitPayload(payload, expected)
     if (commit.sequence !== expected) {
       throw new DurabilityFault(
         "journal-sequence-gap",
@@ -136,11 +130,7 @@ export function replayJournal(
   return { commits, discardedBytes }
 }
 
-function parseCommitPayload(
-  payload: string,
-  expected: number,
-  report: LegacyValueReport
-): DurabilityCommit {
+function parseCommitPayload(payload: string, expected: number): DurabilityCommit {
   let parsed: unknown
   try {
     parsed = JSON.parse(payload)
@@ -166,14 +156,13 @@ function parseCommitPayload(
       expected
     )
   }
-  if (root.valueCodec !== undefined && root.valueCodec !== VALUE_CODEC) {
+  if (root.valueCodec !== VALUE_CODEC) {
     throw new DurabilityFault(
       "journal-torn-record",
       `journal record at sequence ${expected} uses unsupported value codec ${String(root.valueCodec)}`,
       expected
     )
   }
-  const legacy = root.valueCodec === undefined
   if (!Array.isArray(root.mutations)) {
     throw new DurabilityFault(
       "journal-torn-record",
@@ -202,20 +191,11 @@ function parseCommitPayload(
         expected
       )
     }
-    const value = mutation.value === undefined ? null : (mutation.value ?? null)
     mutations.push({
       database: mutation.database,
       table: mutation.table,
       key: mutation.key,
-      value:
-        legacy && value !== null
-          ? normalizeLegacyValue(value, {
-              database: mutation.database,
-              table: mutation.table,
-              key: mutation.key,
-              report,
-            })
-          : value,
+      value: mutation.value === undefined ? null : (mutation.value ?? null),
     })
   }
   return {
@@ -265,8 +245,6 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
   let sequence = 0
   let loaded = false
   let release: (() => void) | null = null
-  /** The append target predates value codec 1 (see `DurabilityState.legacyValueCodec`). */
-  let legacyGeneration = false
 
   function ensureJournalOpen(): number {
     if (descriptor !== null) return descriptor
@@ -290,18 +268,14 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
         sequence = 0
         return emptyDurabilityState()
       }
-      const report = new LegacyValueReport()
-      const state = readCheckpoint(root, generation, report)
+      const state = readCheckpoint(root, generation)
       const file = journalFile(root, generation)
       if (fs.existsSync(file)) {
-        const { commits } = replayJournal(fs.readFileSync(file, "utf8"), state.sequence, report)
+        const { commits } = replayJournal(fs.readFileSync(file, "utf8"), state.sequence)
         applyCommits(state, commits)
       }
       sequence = state.sequence
       loaded = true
-      legacyGeneration = state.legacyValueCodec === true
-      const findings = report.findings()
-      if (findings.length > 0) state.legacyValueFindings = findings
       return state
     } catch (error) {
       loaded = false
@@ -327,15 +301,6 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
         "journal-sequence-gap",
         `journal expected sequence ${sequence + 1} but was handed ${commit.sequence}`,
         sequence + 1
-      )
-    }
-    if (legacyGeneration) {
-      throw new DurabilityFault(
-        "checkpoint-schema-mismatch",
-        `generation ${String(generation)} predates value codec 1; it must be compacted into a ` +
-          "current generation before the journal appends to it, or an older build would replay " +
-          "codec-1 lines without decoding them",
-        commit.sequence
       )
     }
     const fd = ensureJournalOpen()
@@ -394,7 +359,6 @@ export function openJournalBackend(opts: JournalBackendOptions): HeadlessDurabil
       generation = target
       sequence = state.sequence
       loaded = true
-      legacyGeneration = false
       return { generation: target, previousGeneration, sequence }
     },
     async close() {

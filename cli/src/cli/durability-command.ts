@@ -30,7 +30,6 @@ import {
   type RecoverySource,
 } from "../serve/persistence/operations"
 import { formatParityReport } from "../serve/persistence/parity"
-import { formatLegacyValueFinding } from "../serve/persistence/value-codec"
 import { DurabilityFault, type DurabilityBackendId } from "../serve/persistence/types"
 import { boolFlag, stringFlag, type ParsedArgs } from "./args"
 import type { OutputSink } from "./output"
@@ -155,14 +154,6 @@ async function runVerify(root: string, out: OutputSink, json: boolean): Promise<
   if (status.parity) out.write(`${formatParityReport(status.parity)}\n`)
   for (const { database, table } of status.skippedSnapshotTables) {
     out.write(`skipped table:   ${database}.${table}\n`)
-  }
-  if (status.legacyValueLoss.length > 0) {
-    out.write(
-      `value loss:      ${status.legacyValueLoss.length} field path(s) written before value codec 1 may have lost their value or type\n`
-    )
-    for (const finding of status.legacyValueLoss) {
-      out.write(`  ${formatLegacyValueFinding(finding)}\n`)
-    }
   }
   for (const fault of status.faults) {
     out.error(

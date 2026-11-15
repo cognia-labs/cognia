@@ -34,10 +34,9 @@ test("host target resolution rejects unsupported release architectures", () => {
   assert.throws(() => hostTargetName("darwin", "x64"), /unsupported CLI release host/)
 })
 
-test("build arguments select one explicit target and support Docker layout mode", () => {
+test("build arguments select one explicit target", () => {
   assert.deepEqual(parseCliBuildArgs(["--target", "linux-x64"], "darwin-arm64"), {
     targetName: "linux-x64",
-    layoutOnly: false,
     variant: "full",
     archive: false,
   })
@@ -47,19 +46,12 @@ test("build arguments select one explicit target and support Docker layout mode"
     "--archive",
   ], "darwin-arm64"), {
     targetName: "win32-x64",
-    layoutOnly: false,
     variant: "all",
     archive: true,
   })
-  assert.deepEqual(parseCliBuildArgs(["--layout-only"], "linux-x64"), {
-    targetName: "linux-x64",
-    layoutOnly: true,
-    variant: "full",
-    archive: false,
-  })
+  assert.throws(() => parseCliBuildArgs(["--layout-only"], "linux-x64"), /unknown build argument/)
   assert.deepEqual(parseCliBuildArgs(["--variant", "slim"], "linux-x64"), {
     targetName: "linux-x64",
-    layoutOnly: false,
     variant: "slim",
     archive: false,
   })

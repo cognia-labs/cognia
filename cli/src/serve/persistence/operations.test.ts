@@ -23,7 +23,7 @@ import {
   writeRollbackBundle,
 } from "./operations"
 import type { DurabilityCommit, DurabilityState } from "./types"
-import { decodeDurableValue, encodeDurableValue, readLegacyValueReport } from "./value-codec"
+import { decodeDurableValue, encodeDurableValue } from "./value-codec"
 import { hasLiveWriter } from "./writer-lock"
 
 function tempRoot(): string {
@@ -63,14 +63,17 @@ describe("verifyDurability", () => {
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
   it.each(["petConversation", "uninstalled-plugin:records"])(
-    "skips %s in v219 single-file and format-4 snapshots without reporting a fault",
+    "skips %s in single-file and table-store snapshots without reporting a fault",
     async (skippedTable) => {
       const snapshot = path.join(root, "db-account.json")
       const rows = {
         messages: [{ id: "message-1" }],
         [skippedTable]: [{ id: "legacy", value: {} }],
       }
-      const bytes = JSON.stringify({ version: 219, tables: rows })
+      const bytes = JSON.stringify({
+        snapshotFormat: 3,
+        dbs: { CogniaDB: { version: 219, tables: rows } },
+      })
       fs.writeFileSync(snapshot, bytes)
       const tables = `${snapshot}.tables`
       fs.mkdirSync(tables)
@@ -95,7 +98,6 @@ describe("verifyDurability", () => {
           expect(status.faults).toEqual([])
           expect(status).toMatchObject({
             skippedSnapshotTables: [{ database: "CogniaDB", table: skippedTable }],
-            legacyValueLoss: [],
           })
         }
         expect(fs.readFileSync(snapshot, "utf8")).toBe(bytes)
@@ -112,7 +114,10 @@ describe("verifyDurability", () => {
       "uninstalled-plugin:records": [{ id: "plugin-row" }],
     }
     const snapshot = path.join(root, "db-account.json")
-    fs.writeFileSync(snapshot, JSON.stringify({ version: 219, tables: rows }))
+    fs.writeFileSync(
+      snapshot,
+      JSON.stringify({ snapshotFormat: 3, dbs: { CogniaDB: { version: 219, tables: rows } } })
+    )
     const tables = `${snapshot}.tables`
     fs.mkdirSync(tables)
     // Missing table files: restore would never read them, so nothing here is restorable.
@@ -161,17 +166,23 @@ describe("verifyDurability", () => {
     ["messages", [{ id: {} }]],
     ["accountSyncOutbox", [{ table: "messages" }]],
     ["accountSyncOutbox", [{ table: "messages", rowId: null }]],
-    ["github-delivery:repos", [{ id: "wrong-key-path" }]],
+    ["strix-security:runs", [{ id: "wrong-key-path" }]],
     [
-      "github-delivery:audit",
+      "promptOverrides",
       [
-        { runId: "run", stepId: "step", at: 1 },
-        { runId: "run", stepId: "step", at: 1 },
+        { id: "a", promptId: "prompt", scope: "global", targetId: "target" },
+        { id: "b", promptId: "prompt", scope: "global", targetId: "target" },
       ],
     ],
   ])("rejects unrestorable snapshot rows in %s: %j", async (table, rows) => {
     const snapshot = path.join(root, "db-account.json")
-    fs.writeFileSync(snapshot, JSON.stringify({ version: 1, tables: { [table]: rows } }))
+    fs.writeFileSync(
+      snapshot,
+      JSON.stringify({
+        snapshotFormat: 3,
+        dbs: { CogniaDB: { version: 1, tables: { [table]: rows } } },
+      })
+    )
     const tables = `${snapshot}.tables`
     fs.mkdirSync(tables)
     fs.writeFileSync(
@@ -197,10 +208,13 @@ describe("verifyDurability", () => {
     const snapshot = path.join(root, "db-account.json")
     const rows = {
       accountSyncOutbox: [{ table: "messages", rowId: "row-1" }],
-      "github-delivery:repos": [{ fullName: "owner/repo" }],
-      "github-delivery:workOrders": [{ status: "new" }],
+      "strix-security:runs": [{ runId: "run-1" }],
+      "strix-security:findings": [{ runId: "run-1", severity: "high" }],
     }
-    fs.writeFileSync(snapshot, JSON.stringify({ version: 1, tables: rows }))
+    fs.writeFileSync(
+      snapshot,
+      JSON.stringify({ snapshotFormat: 3, dbs: { CogniaDB: { version: 1, tables: rows } } })
+    )
     expect((await verifyDurability(snapshot)).faults).toEqual([])
     const tables = `${snapshot}.tables`
     fs.mkdirSync(tables)
@@ -220,34 +234,31 @@ describe("verifyDurability", () => {
     expect((await verifyDurability(tables)).faults).toEqual([])
   })
 
-  it.each([3, 4])(
-    "verifies format-%s table stores with the shared binary codec",
-    async (format) => {
-      const tables = path.join(root, "db-legacy.json.tables")
-      const value = encodeDurableValue(new Uint8Array(20000), tables)
-      const manifest = path.join(tables, "manifest.json")
-      fs.writeFileSync(
-        manifest,
-        JSON.stringify({
-          snapshotFormat: format,
-          dbs: { "db /": { version: 1, tables: ["github-delivery:repos"] } },
-        })
-      )
-      const rows = path.join(tables, "db%20%2F--github-delivery%3Arepos.json")
-      fs.writeFileSync(rows, JSON.stringify([{ fullName: "owner/repo", value }]))
-      expect((await verifyDurability(tables)).faults).toEqual([])
-      fs.rmSync(binaryDir(tables), { recursive: true })
-      expect((await verifyDurability(tables)).faults).toEqual([
-        expect.objectContaining({ message: expect.stringContaining("is missing") }),
-      ])
-      fs.writeFileSync(rows, "{}")
-      expect((await verifyDurability(tables)).faults).toEqual([
-        expect.objectContaining({ message: expect.stringContaining("not an array") }),
-      ])
-      fs.writeFileSync(manifest, "{broken")
-      expect((await verifyDurability(tables)).faults).not.toEqual([])
-    }
-  )
+  it.each([4])("verifies format-%s table stores with the shared binary codec", async (format) => {
+    const tables = path.join(root, "db-legacy.json.tables")
+    const value = encodeDurableValue(new Uint8Array(20000), tables)
+    const manifest = path.join(tables, "manifest.json")
+    fs.writeFileSync(
+      manifest,
+      JSON.stringify({
+        snapshotFormat: format,
+        dbs: { "db /": { version: 1, tables: ["strix-security:runs"] } },
+      })
+    )
+    const rows = path.join(tables, "db%20%2F--strix-security%3Aruns.json")
+    fs.writeFileSync(rows, JSON.stringify([{ runId: "run-1", value }]))
+    expect((await verifyDurability(tables)).faults).toEqual([])
+    fs.rmSync(binaryDir(tables), { recursive: true })
+    expect((await verifyDurability(tables)).faults).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("is missing") }),
+    ])
+    fs.writeFileSync(rows, "{}")
+    expect((await verifyDurability(tables)).faults).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("not an array") }),
+    ])
+    fs.writeFileSync(manifest, "{broken")
+    expect((await verifyDurability(tables)).faults).not.toEqual([])
+  })
 
   it("checks the table store selected by an active snapshot manifest", async () => {
     const ledger = path.join(root, "durability", "legacy%20account")
@@ -271,7 +282,10 @@ describe("verifyDurability", () => {
   it("checks a single-file snapshot selected by an active snapshot manifest read-only", async () => {
     const ledger = path.join(root, "durability", "legacy%20account")
     const file = path.join(root, "db-legacy account.json")
-    const bytes = JSON.stringify({ version: 1, tables: { messages: [{ id: "message-1" }] } })
+    const bytes = JSON.stringify({
+      snapshotFormat: 3,
+      dbs: { CogniaDB: { version: 1, tables: { messages: [{ id: "message-1" }] } } },
+    })
     fs.writeFileSync(file, bytes)
     writeManifest(ledger, { ...readManifest(ledger), activeBackend: "snapshot-v3" })
     expect((await verifyDurability(ledger)).faults).toEqual([])
@@ -365,7 +379,7 @@ describe("verifyDurability", () => {
     }
   )
 
-  it("inspects legacy SQLite without migrating it or changing its hash", async () => {
+  it("faults on a SQLite store without the codec-1 rows table, without changing its hash", async () => {
     const file = sqliteFile(root)
     fs.mkdirSync(path.dirname(file), { recursive: true })
     const db = new DatabaseSync(file)
@@ -378,19 +392,13 @@ describe("verifyDurability", () => {
     db.close()
     const hash = () => createHash("sha256").update(fs.readFileSync(file)).digest("hex")
     const before = hash()
-    expect((await verifyDurability(root)).faults).toEqual([])
+    expect((await verifyDurability(root)).faults).toEqual([
+      expect.objectContaining({
+        code: "sqlite-integrity-failure",
+        message: expect.stringContaining("no readable rows table"),
+      }),
+    ])
     expect(hash()).toBe(before)
-    const reader = new DatabaseSync(file, { readOnly: true })
-    try {
-      expect(
-        reader.prepare("SELECT type FROM sqlite_master WHERE name='durability_rows'").get()
-      ).toEqual({ type: "table" })
-      expect(
-        reader.prepare("SELECT name FROM sqlite_master WHERE name='durability_rows_codec1'").get()
-      ).toBeUndefined()
-    } finally {
-      reader.close()
-    }
   })
 
   it("does not compare SQLite with a deliberately detached journal", async () => {
@@ -1015,26 +1023,6 @@ describe("rollbackDurability", () => {
     expect(listGenerations(root)).toEqual(["gen-0001", "gen-0002", "gen-0003"])
     expect(readCheckpoint(root, "gen-0003").dbs.CogniaDB.rows.sessions).toEqual({ "s:old": 1 })
     expect(readManifest(root).activeBackend).toBe("journal-v4")
-  })
-
-  it("keeps the value-loss report of a target from before codec 1 that it re-cuts", async () => {
-    writeCheckpoint(root, "gen-0001", state(1, { "s:old": { id: "old", cover: {} } }))
-    const manifestFile = path.join(generationDir(root, "gen-0001"), "checkpoint.json")
-    const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"))
-    delete manifest.valueCodec
-    manifest.checkpointFormat = 3
-    fs.writeFileSync(manifestFile, JSON.stringify(manifest))
-    writeCheckpoint(root, "gen-0002", state(9, { "s:new": 1 }))
-
-    rollbackDurability(root, "gen-0001", () => 3)
-    // The re-cut gen-0003 is codec 1 and says nothing of the loss; the
-    // persisted report does, and survives finalize pruning gen-0001.
-    expect(readLegacyValueReport(root)?.findings).toEqual([
-      expect.objectContaining({ table: "sessions", path: "cover", shape: "empty-object" }),
-    ])
-    expect((await verifyDurability(root)).legacyValueLoss).toEqual([
-      expect.objectContaining({ path: "cover", sampleKeys: ["s:old"] }),
-    ])
   })
 
   it("records a rollback bundle", () => {

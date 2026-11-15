@@ -56,15 +56,10 @@ export function cliArchiveName(target, variant) {
 
 export function parseCliBuildArgs(argv, defaultTargetName) {
   let targetName = defaultTargetName
-  let layoutOnly = false
   let variant = "full"
   let archive = false
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
-    if (arg === "--layout-only") {
-      layoutOnly = true
-      continue
-    }
     if (arg === "--archive") {
       archive = true
       continue
@@ -93,8 +88,5 @@ export function parseCliBuildArgs(argv, defaultTargetName) {
   if (!["full", "slim", "all"].includes(variant)) {
     throw new Error(`unknown CLI variant: ${variant}`)
   }
-  if (layoutOnly && (variant !== "full" || archive)) {
-    throw new Error("--layout-only cannot be combined with --variant or --archive")
-  }
-  return { targetName, layoutOnly, variant, archive }
+  return { targetName, variant, archive }
 }

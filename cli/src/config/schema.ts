@@ -1125,8 +1125,7 @@ export const cliConfigFileSchema = z
      * Absent ⇒ 0.85. Clamped to [0.5, 0.98] on read. */
     autoCompactThreshold: z.number().optional(),
     /** TUI colour theme. A built-in name (`cognia`/`dark`/`light`/
-     * `dark-daltonized`/`light-daltonized`/`ansi`/`mono`; legacy `classic` ⇒
-     * `ansi`), `"claude-code"` to reuse the user's Claude Code theme, `"codex"`
+     * `dark-daltonized`/`light-daltonized`/`ansi`/`mono`), `"claude-code"` to reuse the user's Claude Code theme, `"codex"`
      * to reuse the user's Codex code-block theme, or `"custom:<slug>"` for
      * `~/.cognia/themes/<slug>.json`. Absent / unknown ⇒ `cognia` (the signature
      * warm dark default). Validated leniently (any string) so resolution stays

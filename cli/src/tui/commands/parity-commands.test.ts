@@ -93,18 +93,13 @@ describe("PARITY_COMMANDS", () => {
       kind: "runtime",
       runtime: { feature: "init", action: "create" },
     })
-    expect(sub("regenerate")).toEqual({
-      kind: "runtime",
-      runtime: { feature: "init", action: "create" },
-    })
     expect(sub("rewrite")).toEqual({
       kind: "runtime",
       runtime: { feature: "init", action: "rewrite" },
     })
-    expect(sub("optimize")).toEqual({
-      kind: "runtime",
-      runtime: { feature: "init", action: "rewrite" },
-    })
+    expect(init.subcommands?.some((c) => c.name === "regenerate" || c.name === "optimize")).toBe(
+      false
+    )
     expect(sub("preview")).toEqual({
       kind: "runtime",
       runtime: { feature: "init", action: "preview" },

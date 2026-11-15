@@ -197,12 +197,16 @@ describe("replayJournal", () => {
 
   it.each([
     ["a non-object payload", [1, 2, 3]],
-    ["a non-integer sequence", { sequence: 1.5, mutations: [] }],
-    ["a missing mutation array", { sequence: 1 }],
-    ["a non-object mutation", { sequence: 1, mutations: ["nope"] }],
+    ["a non-integer sequence", { sequence: 1.5, valueCodec: 1, mutations: [] }],
+    ["a missing mutation array", { sequence: 1, valueCodec: 1 }],
+    ["a non-object mutation", { sequence: 1, valueCodec: 1, mutations: ["nope"] }],
     [
       "a malformed mutation address",
-      { sequence: 1, mutations: [{ database: "CogniaDB", table: 5, key: "s:a", value: null }] },
+      {
+        sequence: 1,
+        valueCodec: 1,
+        mutations: [{ database: "CogniaDB", table: 5, key: "s:a", value: null }],
+      },
     ],
   ])("rejects a well-checksummed record with %s", (_label, payload) => {
     expect(() => replayJournal(signed(payload), 0)).toThrow(
@@ -222,6 +226,7 @@ describe("replayJournal", () => {
       signed({
         sequence: 1,
         committedAt: 0,
+        valueCodec: 1,
         mutations: [{ database: "CogniaDB", table: "sessions", key: "s:a" }],
       }),
       0
@@ -230,7 +235,7 @@ describe("replayJournal", () => {
   })
 
   it("defaults a missing committedAt to 0", () => {
-    const result = replayJournal(signed({ sequence: 1, mutations: [] }), 0)
+    const result = replayJournal(signed({ sequence: 1, valueCodec: 1, mutations: [] }), 0)
     expect(result.commits[0].committedAt).toBe(0)
   })
 
@@ -413,87 +418,22 @@ describe("value codec", () => {
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
-  /** A line exactly as a build before value codec 1 wrote it (no `valueCodec`). */
-  function legacyLine(sequence: number, key: string, value: unknown): string {
-    const payload = canonicalJson({
-      sequence,
-      committedAt: 1_000 + sequence,
-      mutations: [{ database: "CogniaDB", table: "sessions", key, value }],
-    })
-    return `${payload}\t${sha256Hex(payload)}\n`
-  }
-
   it("marks every line it writes as codec 1", () => {
     const line = encodeCommitLine(commit(1, "s:a", { id: "a" }))
     expect(JSON.parse(line.slice(0, line.lastIndexOf("\t"))).valueCodec).toBe(1)
   })
 
-  it("normalises codec-0 lines on replay and reports lossy shapes", async () => {
-    seedCheckpoint(root, baseState(0))
-    fs.mkdirSync(path.dirname(journalFile(root, "gen-0001")), { recursive: true })
-    fs.writeFileSync(
-      journalFile(root, "gen-0001"),
-      legacyLine(1, "s:a", { id: "a", at: { __date: "2026-11-01T00:00:00.000Z" }, blob: {} })
-    )
-    const backend = openJournalBackend({ root })
-    const state = await backend.load()
-    expect(state.dbs.CogniaDB.rows.sessions["s:a"]).toEqual({
-      id: "a",
-      at: {
-        $cogniaSnapshotValue: {
-          version: 1,
-          type: "date",
-          time: Date.parse("2026-11-01T00:00:00.000Z"),
-        },
-      },
-      blob: {},
-    })
-    expect(state.legacyValueFindings).toEqual([
-      {
-        database: "CogniaDB",
-        table: "sessions",
-        path: "blob",
-        shape: "empty-object",
-        count: 1,
-        sampleKeys: ["s:a"],
-      },
-    ])
-    await backend.close()
-  })
-
-  it("will not append to a generation from before codec 1 until it is compacted", async () => {
-    seedCheckpoint(root, baseState(0))
-    const manifestFile = path.join(root, "generations", "gen-0001", "checkpoint.json")
-    const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"))
-    delete manifest.valueCodec
-    manifest.checkpointFormat = 3
-    fs.writeFileSync(manifestFile, JSON.stringify(manifest))
-
-    const backend = openJournalBackend({ root })
-    const state = await backend.load()
-    expect(state.legacyValueCodec).toBe(true)
-    // A build before codec 1 can still read gen-0001, and would replay this
-    // line without decoding it.
-    expect(() => backend.commitSync(commit(1, "s:a", { id: "a" }))).toThrow(
-      expect.objectContaining({ code: "checkpoint-schema-mismatch" })
-    )
-    expect(fs.existsSync(journalFile(root, "gen-0001"))).toBe(false)
-
-    const { generation } = await backend.compact(state)
-    expect(generation).toBe("gen-0002")
-    backend.commitSync(commit(1, "s:a", { id: "a" }))
-    await backend.close()
-    const reopened = openJournalBackend({ root })
-    const reloaded = await reopened.load()
-    expect(reloaded.legacyValueCodec).toBeUndefined()
-    expect(reloaded.dbs.CogniaDB.rows.sessions["s:a"]).toEqual({ id: "a" })
-    await reopened.close()
-  })
-
-  it("leaves codec-1 lines untouched, even ones whose shapes would look lossy under codec 0", () => {
+  it("leaves codec-1 lines untouched", () => {
     const line = encodeCommitLine(commit(1, "s:a", { id: "a", meta: {} }))
     const replay = replayJournal(line, 0)
     expect(replay.commits[0].mutations[0].value).toEqual({ id: "a", meta: {} })
+  })
+
+  it("refuses a line without a value codec", () => {
+    const payload = canonicalJson(commit(1, "s:a", { id: "a" }))
+    expect(() => replayJournal(`${payload}\t${sha256Hex(payload)}\n`, 0)).toThrow(
+      /unsupported value codec undefined/
+    )
   })
 
   it("refuses a line from an unknown future value codec", () => {

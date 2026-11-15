@@ -497,8 +497,26 @@ describe("value codec", () => {
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
-  /** A store exactly as a build before value codec 1 left it. */
-  function writeLegacyStore(rows: Array<[string, unknown]>): void {
+  it("writes committed rows as codec 1", async () => {
+    const backend = openSqliteBackend({ root })
+    await backend.compact(state(0))
+    backend.commitSync(commit(1, "s:x", { id: "x", meta: {} }))
+    await backend.close()
+    const db = new DatabaseSync(sqliteFile(root))
+    const row = db
+      .prepare(`SELECT value_codec FROM ${SQLITE_ROWS_TABLE} WHERE row_key = 's:x'`)
+      .get() as { value_codec: number }
+    db.close()
+    expect(row.value_codec).toBe(1)
+    const reopened = openSqliteBackend({ root })
+    expect((await reopened.load()).dbs.CogniaDB.rows.sessions["s:x"]).toEqual({
+      id: "x",
+      meta: {},
+    })
+    await reopened.close()
+  })
+
+  it("ignores the rows table of a store written before value codec 1", async () => {
     fs.mkdirSync(path.dirname(sqliteFile(root)), { recursive: true })
     const db = new DatabaseSync(sqliteFile(root))
     db.exec(`
@@ -512,139 +530,23 @@ describe("value codec", () => {
     `)
     db.prepare("INSERT INTO durability_meta VALUES ('sequence', '3')").run()
     db.prepare("INSERT INTO durability_schema VALUES ('CogniaDB', 141, '[\"media\"]')").run()
-    for (const [key, value] of rows) {
-      db.prepare("INSERT INTO durability_rows VALUES ('CogniaDB', 'media', ?, ?)").run(
-        key,
-        JSON.stringify(value)
-      )
-    }
+    db.prepare("INSERT INTO durability_rows VALUES ('CogniaDB', 'media', 's:a', '{}')").run()
     db.close()
-  }
 
-  it("moves an old store onto the codec-1 table, normalises its rows and reports lossy shapes", async () => {
-    writeLegacyStore([
-      ["s:a", { id: "a", blob: {}, at: { __date: "2026-11-01T00:00:00.000Z" } }],
-      ["s:b", { id: "b", pixels: { "0": 1, "1": 2 } }],
-    ])
     const backend = openSqliteBackend({ root })
-    const state = await backend.load()
-    expect(state.sequence).toBe(3)
-    expect(state.dbs.CogniaDB.rows.media["s:a"]).toMatchObject({
-      at: { $cogniaSnapshotValue: { type: "date" } },
-    })
-    expect(state.legacyValueFindings?.map((f) => [f.path, f.shape, f.sampleKeys])).toEqual([
-      ["blob", "empty-object", ["s:a"]],
-      ["pixels", "index-keyed-object", ["s:b"]],
-    ])
-    const inspect = new DatabaseSync(sqliteFile(root), { readOnly: true })
-    expect(
-      inspect.prepare("SELECT type FROM sqlite_master WHERE name = 'durability_rows'").get()
-    ).toEqual({ type: "view" })
-    expect(
-      inspect
-        .prepare(`SELECT row_key, value_codec FROM ${SQLITE_ROWS_TABLE} ORDER BY row_key`)
-        .all()
-    ).toEqual([
-      { row_key: "s:a", value_codec: 0 },
-      { row_key: "s:b", value_codec: 0 },
-    ])
-    inspect.close()
-
-    // Rewritten rows are codec 1: the lossy-looking `{}` is now a real `{}`.
-    await backend.compact(state)
-    const reloaded = await backend.load()
-    expect(reloaded.legacyValueFindings).toBeUndefined()
-    expect(reloaded.dbs.CogniaDB.rows.media["s:a"]).toEqual(state.dbs.CogniaDB.rows.media["s:a"])
+    expect((await backend.load()).dbs.CogniaDB.rows.media).toEqual({})
     await backend.close()
   })
 
-  it("writes committed rows as codec 1", async () => {
-    const backend = openSqliteBackend({ root })
-    await backend.compact(state(0))
-    backend.commitSync(commit(1, "s:x", { id: "x", meta: {} }))
-    await backend.close()
-    const db = new DatabaseSync(sqliteFile(root))
-    const row = db
-      .prepare(`SELECT value_codec FROM ${SQLITE_ROWS_TABLE} WHERE row_key = 's:x'`)
-      .get() as { value_codec: number }
-    db.close()
-    expect(row.value_codec).toBe(1)
-    const reopened = openSqliteBackend({ root })
-    expect((await reopened.load()).legacyValueFindings).toBeUndefined()
-    await reopened.close()
-  })
-
-  it("stops a build from before value codec 1 at open, before it writes anything", async () => {
-    const backend = openSqliteBackend({ root })
-    await backend.compact(state(0))
-    const encoded = { id: "x", at: { $cogniaSnapshotValue: { version: 1, type: "date", time: 0 } } }
-    backend.commitSync(commit(1, "s:x", encoded))
-    await backend.close()
-
-    // The statements that build ran at open, in its order.
-    const old = new DatabaseSync(sqliteFile(root))
-    old.exec(`
-      CREATE TABLE IF NOT EXISTS durability_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-      CREATE TABLE IF NOT EXISTS durability_schema (database TEXT PRIMARY KEY, version INTEGER NOT NULL, tables TEXT NOT NULL) STRICT;
-      CREATE TABLE IF NOT EXISTS durability_rows (
-        database TEXT NOT NULL REFERENCES durability_schema(database) ON DELETE CASCADE,
-        table_name TEXT NOT NULL, row_key TEXT NOT NULL, value TEXT NOT NULL,
-        PRIMARY KEY (database, table_name, row_key)
-      ) STRICT, WITHOUT ROWID;
-    `)
-    const select = old.prepare("SELECT database, table_name, row_key, value FROM durability_rows")
-    expect(() =>
-      old.prepare(
-        "INSERT INTO durability_rows (database, table_name, row_key, value) VALUES (?, ?, ?, ?) " +
-          "ON CONFLICT(database, table_name, row_key) DO UPDATE SET value = excluded.value"
-      )
-    ).toThrow(/because it is a view/)
-    // A reader that only selects gets an error, never an undecoded value.
-    expect(() => select.all()).toThrow(/malformed JSON/)
-    old.close()
-
-    const reopened = openSqliteBackend({ root })
-    const reloaded = await reopened.load()
-    expect(reloaded.legacyValueFindings).toBeUndefined()
-    expect(reloaded.dbs.CogniaDB.rows.sessions["s:x"]).toEqual(encoded)
-    await reopened.close()
-  })
-
-  it("faults instead of opening empty when the rows table behind the tombstone is gone", async () => {
-    const backend = openSqliteBackend({ root })
-    await backend.compact(state(3))
-    await backend.close()
-    const db = new DatabaseSync(sqliteFile(root))
-    db.exec("PRAGMA foreign_keys = OFF;")
-    db.exec("DROP VIEW durability_rows;")
-    db.exec(`DROP TABLE ${SQLITE_ROWS_TABLE};`)
-    db.exec(`
-      CREATE VIEW durability_rows AS SELECT 'x' AS database, 'x' AS table_name, 'x' AS row_key, 'x' AS value;
-    `)
-    db.close()
-    expect(() => openSqliteBackend({ root })).toThrow(
-      expect.objectContaining({ code: "sqlite-integrity-failure" })
-    )
-  })
-
-  it("opens a migrated store again, from another connection, without redoing the move", async () => {
-    writeLegacyStore([["s:a", { id: "a" }]])
-    const first = openSqliteBackend({ root })
-    const second = openSqliteBackend({ root })
-    expect((await second.load()).dbs.CogniaDB.rows.media).toEqual({ "s:a": { id: "a" } })
-    await first.close()
-    await second.close()
-  })
-
-  it("refuses a row from an unknown future value codec", async () => {
+  it.each([0, 2])("refuses a row with value codec %s", async (codec) => {
     const backend = openSqliteBackend({ root })
     await backend.compact(state(0))
     await backend.close()
     const db = new DatabaseSync(sqliteFile(root))
-    db.prepare(`UPDATE ${SQLITE_ROWS_TABLE} SET value_codec = 2`).run()
+    db.prepare(`UPDATE ${SQLITE_ROWS_TABLE} SET value_codec = ?`).run(codec)
     db.close()
     const reopened = openSqliteBackend({ root })
-    await expect(reopened.load()).rejects.toThrow(/unsupported value codec 2/)
+    await expect(reopened.load()).rejects.toThrow(`unsupported value codec ${codec}`)
     await reopened.close()
   })
 })

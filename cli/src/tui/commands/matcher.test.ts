@@ -2,7 +2,8 @@
  * @jest-environment node
  */
 import { matchSlash, parseSlash, resolveCommand, slashQuery } from "./matcher"
-import { registerCommand, __resetForTesting, type SlashCommand } from "./registry"
+import { registerCommand, __resetForTesting } from "./registry"
+import type { CommandDescriptor } from "./types"
 
 describe("parseSlash", () => {
   it("splits the command and args", () => {
@@ -96,7 +97,7 @@ describe("slashQuery", () => {
 })
 
 describe("nested command palette", () => {
-  const skill: SlashCommand = {
+  const skill: CommandDescriptor = {
     name: "skill",
     aliases: ["skills"],
     description: "manage skills",

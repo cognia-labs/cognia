@@ -263,7 +263,7 @@ function validateOwnershipRecord(
   kind: "maintenance" | "processes"
 ): void {
   if (
-    (record?.schemaVersion !== 1 && (kind !== "processes" || record?.schemaVersion !== 2)) ||
+    record?.schemaVersion !== (kind === "processes" ? 2 : 1) ||
     !Number.isSafeInteger(record.pid) ||
     record.pid <= 0 ||
     (kind === "maintenance" &&
@@ -286,17 +286,12 @@ function validateOwnershipRecord(
     throw new Error("invalid retirement record")
 }
 
-function quarantineObservedProcess(
-  dir: string,
-  name: string,
-  currentBoot: string,
-  source?: OwnershipRecord
-): boolean {
+function quarantineObservedProcess(dir: string, name: string, currentBoot: string): void {
   const shadow = path.join(dir, `legacy-${sha256(name)}.json`)
   publishRecord(
     shadow,
     {
-      ...(source ?? { pid: process.pid }),
+      pid: process.pid,
       schemaVersion: 2,
       bootId: currentBoot,
       retirementRequired: true,
@@ -307,7 +302,7 @@ function quarantineObservedProcess(
   )
   const metadata = fs.lstatSync(shadow)
   if (!metadata.isFile() || metadata.isSymbolicLink())
-    throw new DshInstallError("Cannot establish legacy runtime retirement")
+    throw new DshInstallError("Cannot establish quarantined runtime retirement")
   const quarantine = JSON.parse(fs.readFileSync(shadow, "utf8")) as OwnershipRecord
   validateOwnershipRecord(quarantine, shadow, "processes")
   if (
@@ -315,8 +310,7 @@ function quarantineObservedProcess(
     quarantine.legacyRecord !== name ||
     !validBootId(quarantine.bootId)
   )
-    throw new DshInstallError("Cannot establish legacy runtime retirement")
-  return quarantine.bootId === currentBoot
+    throw new DshInstallError("Cannot establish quarantined runtime retirement")
 }
 
 function hasLiveOwner(dir: string, kind: "maintenance" | "processes", own?: string): boolean {
@@ -336,10 +330,6 @@ function hasLiveOwner(dir: string, kind: "maintenance" | "processes", own?: stri
       throw new DshInstallError(
         `Cannot establish runtime ownership from ${file}: ${(error as Error).message}`
       )
-    }
-    if (kind === "processes" && record.schemaVersion === 1) {
-      if (quarantineObservedProcess(dir, name, currentBoot!, record)) return true
-      continue
     }
     if (record.schemaVersion === 2) {
       if (record.bootId !== currentBoot) continue

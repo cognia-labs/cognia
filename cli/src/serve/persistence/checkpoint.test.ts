@@ -20,7 +20,6 @@ import {
 } from "./checkpoint"
 import { resolveBackend } from "./backend"
 import { DurabilityFault, type DurabilityState } from "./types"
-import { LegacyValueReport } from "./value-codec"
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cognia-checkpoint-"))
@@ -231,16 +230,29 @@ describe("checkpoint corruption", () => {
   })
 
   it.each([
-    ["a non-object dbs entry", { checkpointFormat: 3, sequence: 0, dbs: { CogniaDB: 1 } }],
+    [
+      "a non-object dbs entry",
+      { checkpointFormat: 4, valueCodec: 1, sequence: 0, dbs: { CogniaDB: 1 } },
+    ],
     [
       "a non-numeric version",
-      { checkpointFormat: 3, sequence: 0, dbs: { CogniaDB: { version: "x", tables: [] } } },
+      {
+        checkpointFormat: 4,
+        valueCodec: 1,
+        sequence: 0,
+        dbs: { CogniaDB: { version: "x", tables: [] } },
+      },
     ],
     [
       "a malformed table list",
-      { checkpointFormat: 3, sequence: 0, dbs: { CogniaDB: { version: 1, tables: [7] } } },
+      {
+        checkpointFormat: 4,
+        valueCodec: 1,
+        sequence: 0,
+        dbs: { CogniaDB: { version: 1, tables: [7] } },
+      },
     ],
-    ["a non-object dbs map", { checkpointFormat: 3, sequence: 0, dbs: [] }],
+    ["a non-object dbs map", { checkpointFormat: 4, valueCodec: 1, sequence: 0, dbs: [] }],
     ["a non-object root", []],
   ])("faults on %s", (_label, manifest) => {
     fs.writeFileSync(
@@ -255,19 +267,15 @@ describe("checkpoint corruption", () => {
   it("tolerates a manifest with no generation or createdAt members", () => {
     fs.writeFileSync(
       path.join(generationDir(root, "gen-0001"), "checkpoint.json"),
-      JSON.stringify({ checkpointFormat: 3, sequence: 2, dbs: {} })
+      JSON.stringify({ checkpointFormat: 4, valueCodec: 1, sequence: 2, dbs: {} })
     )
-    expect(readCheckpoint(root, "gen-0001")).toEqual({
-      sequence: 2,
-      dbs: {},
-      legacyValueCodec: true,
-    })
+    expect(readCheckpoint(root, "gen-0001")).toEqual({ sequence: 2, dbs: {} })
   })
 
   it("faults on a negative sequence", () => {
     fs.writeFileSync(
       path.join(generationDir(root, "gen-0001"), "checkpoint.json"),
-      JSON.stringify({ checkpointFormat: 3, sequence: -1, dbs: {} })
+      JSON.stringify({ checkpointFormat: 4, valueCodec: 1, sequence: -1, dbs: {} })
     )
     expect(() => readCheckpoint(root, "gen-0001")).toThrow(/non-negative integer/)
   })
@@ -307,13 +315,6 @@ describe("value codec", () => {
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
   const manifestFile = () => path.join(generationDir(root, "gen-0001"), "checkpoint.json")
-  /** Rewrite the manifest as a build before codec 1 wrote it. */
-  function makeLegacy(): void {
-    const manifest = JSON.parse(fs.readFileSync(manifestFile(), "utf8"))
-    delete manifest.valueCodec
-    manifest.checkpointFormat = 3
-    fs.writeFileSync(manifestFile(), JSON.stringify(manifest))
-  }
   function patchManifest(patch: Record<string, unknown>): void {
     const manifest = JSON.parse(fs.readFileSync(manifestFile(), "utf8"))
     fs.writeFileSync(manifestFile(), JSON.stringify({ ...manifest, ...patch }))
@@ -333,36 +334,11 @@ describe("value codec", () => {
       fs.readFileSync(path.join(generationDir(root, "gen-0001"), "checkpoint.json"), "utf8")
     )
     expect(manifest.valueCodec).toBe(1)
-    // Format 4: a build before codec 1 accepts only format 3, so it refuses
-    // this generation instead of reading its envelopes as plain rows.
     expect(manifest.checkpointFormat).toBe(4)
-    const report = new LegacyValueReport()
-    expect(readCheckpoint(root, "gen-0001", report).dbs.CogniaDB.rows.sessions["s:a"]).toEqual({
+    expect(readCheckpoint(root, "gen-0001").dbs.CogniaDB.rows.sessions["s:a"]).toEqual({
       id: "a",
       meta: {},
     })
-    expect(report.findings()).toEqual([])
-  })
-
-  it("normalises a generation written before codec 1 and reports lossy shapes", () => {
-    writeCheckpoint(root, "gen-0001", {
-      ...state(1),
-      dbs: {
-        CogniaDB: {
-          schema: { version: 141, tables: ["sessions"] },
-          rows: {
-            sessions: { "s:a": { id: "a", at: { __date: "2026-11-01T00:00:00.000Z" }, blob: {} } },
-          },
-        },
-      },
-    })
-    makeLegacy()
-    const report = new LegacyValueReport()
-    const legacy = readCheckpoint(root, "gen-0001", report)
-    expect(legacy.legacyValueCodec).toBe(true)
-    const row = legacy.dbs.CogniaDB.rows.sessions["s:a"]
-    expect(row).toMatchObject({ at: { $cogniaSnapshotValue: { type: "date" } }, blob: {} })
-    expect(report.findings().map((f) => [f.path, f.shape])).toEqual([["blob", "empty-object"]])
   })
 
   it("refuses a manifest whose format and value codec disagree", () => {
@@ -371,8 +347,8 @@ describe("value codec", () => {
     expect(() => readCheckpoint(root, "gen-0001")).toThrow(/format 4 cannot hold value codec 2/)
     patchManifest({ valueCodec: undefined })
     expect(() => readCheckpoint(root, "gen-0001")).toThrow(/format 4 cannot hold value codec/)
-    patchManifest({ checkpointFormat: 3, valueCodec: 1 })
-    expect(() => readCheckpoint(root, "gen-0001")).toThrow(/format 3 cannot hold value codec 1/)
+    patchManifest({ checkpointFormat: 3, valueCodec: undefined })
+    expect(() => readCheckpoint(root, "gen-0001")).toThrow(/unsupported checkpoint format 3/)
     patchManifest({ checkpointFormat: 5, valueCodec: 1 })
     expect(() => readCheckpoint(root, "gen-0001")).toThrow(/unsupported checkpoint format 5/)
   })

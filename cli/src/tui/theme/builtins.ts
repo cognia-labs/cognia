@@ -3,15 +3,15 @@
  * {@link ThemePalette}. `cognia` is the signature default — a warm, Claude-Code-
  * inspired dark palette (brand accent `#d77757`) that gives the CLI a polished
  * out-of-box look. `ansi` reproduces the historic hardcoded 16-colour look
- * byte-for-byte for users who'd rather inherit their terminal's own palette
- * (and is the back-compat target of the legacy `classic` name). The hex themes
+ * byte-for-byte for users who'd rather inherit their terminal's own palette.
+ * The hex themes
  * mirror Claude Code's built-in set (dark / light + colour-blind "daltonized"
  * variants) and rely on Ink/chalk down-sampling truecolour to the terminal.
  */
 import { expandPalette, type BaseColors, type ThemePalette } from "./palette"
 
 /**
- * The raw ANSI palette (registered as `ansi`; legacy name `classic`) — every
+ * The raw ANSI palette (registered as `ansi`) — every
  * role maps to the exact colour name the components used before the theme system
  * existed, so it inherits the terminal's own 16-colour scheme. Keep these in sync
  * with the historic hardcoded values.
@@ -137,18 +137,10 @@ export const BUILTIN_THEME_NAMES = Object.keys(BUILTIN_THEMES) as readonly strin
 export const DEFAULT_THEME_NAME = "cognia"
 
 /**
- * Back-compat aliases for renamed theme keys, so a config written before a rename
- * keeps resolving. `classic` was the original raw-ANSI default, now `ansi`.
- */
-const THEME_ALIASES: Readonly<Record<string, string>> = { classic: "ansi" }
-
-/**
  * Resolve a built-in palette by name. An empty/unknown name falls back to the
- * {@link DEFAULT_THEME_NAME default} so the UI is never left uncoloured; a legacy
- * name ({@link THEME_ALIASES}) resolves to its current key.
+ * {@link DEFAULT_THEME_NAME default} so the UI is never left uncoloured.
  */
 export function getBuiltinTheme(name: string | undefined): ThemePalette {
   if (!name) return BUILTIN_THEMES[DEFAULT_THEME_NAME]
-  const key = THEME_ALIASES[name] ?? name
-  return BUILTIN_THEMES[key] ?? BUILTIN_THEMES[DEFAULT_THEME_NAME]
+  return BUILTIN_THEMES[name] ?? BUILTIN_THEMES[DEFAULT_THEME_NAME]
 }

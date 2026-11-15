@@ -277,7 +277,7 @@ export function buildStatusBar(ctx: {
    * historic colours when no theme is supplied (e.g. in unit tests). */
   palette?: ThemePalette
 }): StatusSegmentView[] {
-  const palette = ctx.palette ?? getBuiltinTheme("classic")
+  const palette = ctx.palette ?? getBuiltinTheme("ansi")
   const theme = ctx.config.statusBar?.theme ?? "default"
   const out: StatusSegmentView[] = []
   for (const id of resolveSegments(ctx.config)) {

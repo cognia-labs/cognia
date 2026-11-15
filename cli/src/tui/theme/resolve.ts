@@ -4,7 +4,7 @@
  *
  * Accepted `theme` values:
  *   - a built-in name (`cognia` | `dark` | `light` | `dark-daltonized` |
- *     `light-daltonized` | `ansi` | `mono`); the legacy `classic` resolves to `ansi`
+ *     `light-daltonized` | `ansi` | `mono`)
  *   - `"claude-code"` — reuse the user's Claude Code theme ({@link readClaudeCodeTheme})
  *   - `"codex"` — reuse the user's Codex code-block highlight theme only
  *     ({@link readCodexHighlightTheme}); UI stays on the raw-ANSI `ansi` palette
@@ -110,8 +110,7 @@ export function resolveTheme(config: ResolvedConfig, deps: ResolveThemeDeps): Th
   // Absent ⇒ the default theme.
   if (!theme) return getBuiltinTheme(undefined)
 
-  // A built-in name, or the legacy `classic` alias (getBuiltinTheme maps it to `ansi`).
-  if (theme in BUILTIN_THEMES || theme === "classic") return getBuiltinTheme(theme)
+  if (theme in BUILTIN_THEMES) return getBuiltinTheme(theme)
 
   if (theme === "claude-code") {
     return (

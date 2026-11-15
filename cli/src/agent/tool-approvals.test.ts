@@ -43,10 +43,10 @@ describe("tool-approvals", () => {
     expect(JSON.parse(raw)).toEqual({ approvals: [{ tool: "mcp__cognia-tools__write" }] })
   })
 
-  it("reads the legacy { allowed: [...] } shape for back-compat", () => {
+  it("ignores a file without an approvals array", () => {
     const { fsx, files } = memFs()
     files.set(toolApprovalsPath(HOME), JSON.stringify({ allowed: ["mcp__cognia-tools__bash"] }))
-    expect(readToolApprovals(HOME, fsx).has("mcp__cognia-tools__bash")).toBe(true)
+    expect(readToolApprovals(HOME, fsx).size).toBe(0)
   })
 
   it("drops an expired approval (TTL)", () => {

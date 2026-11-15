@@ -113,7 +113,7 @@ describe("setConfigValue", () => {
 
   it("persists the theme and preserves other keys", () => {
     const m = memFs({
-      [userConfigPath(HOME)]: JSON.stringify({ provider: "openai", theme: "classic" }),
+      [userConfigPath(HOME)]: JSON.stringify({ provider: "openai", theme: "ansi" }),
     })
     setConfigValue(HOME, "theme", "dark", m.fsx)
     expect(JSON.parse(m.files.get(userConfigPath(HOME))!)).toEqual({

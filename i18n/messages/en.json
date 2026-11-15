@@ -11979,9 +11979,7 @@
       "init": {
         "apply": "apply the pending AGENTS.md change",
         "create": "regenerate the AGENTS.md template (confirm before overwrite)",
-        "optimize": "alias for rewrite",
         "preview": "preview the current AGENTS.md",
-        "regenerate": "alias for create",
         "rewrite": "rewrite AGENTS.md with the current model (confirm before overwrite)",
         "scaffold": "seed .cognia/instructions/*.md and an example subagent"
       },
