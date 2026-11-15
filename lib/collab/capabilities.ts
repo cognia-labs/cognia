@@ -18,11 +18,9 @@
  * file. Unknown entries in a response are dropped, not trusted: a newer server
  * may add a feature or action, and an older client simply does not offer it.
  *
- * # An older server
+ * # A hidden workspace
  *
- * A server without the route answers 404 for it, and so does a server asked
- * about a workspace the caller cannot read. `/health` tells the two apart: a
- * server that has the route lists `org-capabilities` among its features.
+ * The server answers 404 for a workspace the caller cannot read.
  */
 
 import { CollabError, type CollabClient } from "./client"
@@ -37,9 +35,6 @@ import {
 } from "@/types/identity"
 
 export const ORG_CAPABILITIES_SCHEMA_VERSION = 1
-
-/** The `/health` feature a server with the capabilities route advertises. */
-export const ORG_CAPABILITIES_HEALTH_FEATURE = "org-capabilities"
 
 export const COLLAB_FEATURE_KEYS = [
   "shared-chat",
@@ -121,8 +116,6 @@ export interface OrgCapabilities {
 
 export type OrgCapabilitiesResult =
   | { status: "ready"; capabilities: OrgCapabilities }
-  /** The server predates the route: keep today's behavior, offer nothing new. */
-  | { status: "unsupported" }
   /** The workspace does not exist or this person cannot read it. */
   | { status: "hidden" }
 
@@ -243,9 +236,9 @@ export interface FetchOrgCapabilitiesInput {
   signal?: AbortSignal
 }
 
-/** Ask the server, telling an older server apart from a hidden workspace. */
+/** Ask the server. A 404 means the workspace is hidden from this person. */
 export async function fetchOrgCapabilities(
-  client: Pick<CollabClient, "capabilities" | "health">,
+  client: Pick<CollabClient, "capabilities">,
   input: FetchOrgCapabilitiesInput
 ): Promise<OrgCapabilitiesResult> {
   const workspaceId = input.workspaceId ?? null
@@ -257,10 +250,7 @@ export async function fetchOrgCapabilities(
     }
   } catch (cause) {
     if (!(cause instanceof CollabError) || cause.status !== 404) throw cause
-    const health = await client.health()
-    return health.features?.includes(ORG_CAPABILITIES_HEALTH_FEATURE)
-      ? { status: "hidden" }
-      : { status: "unsupported" }
+    return { status: "hidden" }
   }
 }
 

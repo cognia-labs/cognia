@@ -4,7 +4,7 @@
  * Drives the real compose → sidecar → stream path against a deliberately slow,
  * many-chunk stream (the `stream-text` scenario with a per-chunk `delayMs`) so
  * the turn stays in the live "streaming" state long enough to catch the Stop
- * control. Clicking Stop issues `claude_interrupt` to the real sidecar, which
+ * control. Clicking Stop issues `agent_interrupt` to the real sidecar, which
  * tears down the in-flight SDK query; we assert the session settles back to
  * idle (the composer becomes interactive again and accepts a new message).
  *

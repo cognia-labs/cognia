@@ -30,7 +30,6 @@ import { cn } from "@/lib/utils"
 import { ApprovalCard } from "./approval-card"
 import { SessionChangesPanel } from "./session-changes-panel"
 import { SessionTestsPanel } from "./session-tests-panel"
-import { TranscriptMessageList } from "@/components/chat/transcript-message-list"
 import { TranscriptTimelineSurface } from "@/components/chat/transcript-timeline-surface"
 import { useTranscriptController } from "@/hooks/chat/use-transcript-controller"
 import { SessionMediaProvider } from "@/hooks/chat/session-media-provider"
@@ -72,10 +71,7 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
     interrupt,
     respond,
     reconcileTranscript,
-  } =
-    useRemoteSessionStream(sessionId, {
-      seedHistory: transcript.snapshot.mode === "legacy",
-    })
+  } = useRemoteSessionStream(sessionId)
   const reconciledRevisionRef = useRef<number | null>(null)
   const connection = useConnectionState()
   // Sends can't reach the desktop while the transport is down — gate the
@@ -197,17 +193,8 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
               />
             </SessionMediaProvider>
           )
-              ) : transcript.snapshot.mode === "unknown" ? (
-                <p className="flex-1 p-4 text-xs text-muted-foreground">{t("loadingTranscript")}</p>
-              ) : messages.length === 0 ? (
-                <p className="flex-1 p-4 text-xs text-muted-foreground">{t("empty")}</p>
               ) : (
-                <TranscriptMessageList
-                  messages={messages}
-                  status={status}
-                  sessionId={sessionId}
-                  messageDisplay={messageDisplay}
-                />
+                <p className="flex-1 p-4 text-xs text-muted-foreground">{t("loadingTranscript")}</p>
               )}
             </TabsContent>
 

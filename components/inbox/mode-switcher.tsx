@@ -29,7 +29,7 @@
  *     Every other explicit-edit path (`/mode`, the override form) already
  *     cleared it. This one did not, so an operator's own pick kept rendering
  *     as escalation-forced and a later unassign could undo it.
- *  3. A best-effort `claude_interrupt`, so a running auto-mode stream does not
+ *  3. A best-effort `agent_interrupt`, so a running auto-mode stream does not
  *     keep writing after the operator switches to draft or silent. Desktop
  *     only, because it is a Tauri command, unlike the override write above.
  */
@@ -102,7 +102,7 @@ export function ModeSwitcher({
 
       if (isTauri()) {
         try {
-          await invoke("claude_interrupt", { session_id: sessionId })
+          await invoke("agent_interrupt", { sessionId })
         } catch {
           // Swallow. The interrupt is best-effort, and the override write has
           // already succeeded.

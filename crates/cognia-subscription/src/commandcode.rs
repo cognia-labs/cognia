@@ -214,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn default_gateway_and_no_legacy_oauth() {
+    fn default_gateway_and_preset_support() {
         let env = CommandCodeProvider.env_for_sidecar(&account(), None);
         assert!(env.contains(&(
             "COMMAND_CODE_BASE_URL".into(),
@@ -222,9 +222,6 @@ mod tests {
         )));
         assert!(CommandCodeProvider.supports_preset());
         assert!(!CommandCodeProvider.requires_sidecar_restart_on_active_switch());
-        assert!(
-            matches!(crate::migration::migrate_v1_to_v2(ProviderId::Commandcode).unwrap(), crate::migration::MigrationOutcome::NoLegacyData { provider } if provider == "commandcode")
-        );
     }
 
     #[test]

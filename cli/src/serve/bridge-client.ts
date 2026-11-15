@@ -69,9 +69,6 @@ export class BridgeRefusedError extends Error {
   }
 }
 
-/** Close reason an older server sends, without a `hello_refused` frame. */
-const LEGACY_CONTRACT_REFUSAL_REASON = "Headless contract mismatch"
-
 /** The subset of the WHATWG WebSocket surface the client uses (Node 20+'s
  * global `WebSocket` satisfies it; tests inject fakes). */
 export interface WebSocketLike {
@@ -487,14 +484,8 @@ export class BridgeClient implements RuntimeBridge {
       }
     })
 
-    socket.addEventListener("close", (event) => {
+    socket.addEventListener("close", () => {
       cancelAckTimeout?.()
-      // A server from before `hello_refused` only closes 1002 with this
-      // reason. Reconnecting would be refused the same way, forever.
-      if (!acked && event.code === 1002 && event.reason === LEGACY_CONTRACT_REFUSAL_REASON) {
-        this.refuse(new BridgeRefusedError("contract_mismatch", {}))
-        return
-      }
       this.onDisconnect(new Error("bridge socket closed"))
     })
     socket.addEventListener("error", (event) => {

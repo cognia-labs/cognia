@@ -2606,7 +2606,7 @@ async fn chat_and_canvas_contracts_are_pinned_and_old_clients_can_read_but_canno
     let task = tokio::spawn(async move { connection.await.unwrap() });
     admin.batch_execute("UPDATE chat_sessions SET contract_version=3 WHERE id='standing_session'; UPDATE canvas_documents SET contract_version=3 WHERE id='pinned_canvas'").await.unwrap();
     let signer = GrantSigner::new(&[9;32]).unwrap();
-    let claims = GrantClaims::issue(UserId::parse(&owner.user_id).unwrap(), OrgId::parse(&owner.org_id).unwrap(), None, None, Duration::from_secs(300)).unwrap();
+    let claims = GrantClaims::issue(UserId::parse(&owner.user_id).unwrap(), OrgId::parse(&owner.org_id).unwrap(), None, Duration::from_secs(300)).unwrap();
     let bearer = format!("Bearer {}", signer.sign(&claims).unwrap());
     let state = AppState::new(store.clone(), signer, Arc::new(TestAuthenticator))
         .with_chat_store(store.clone()).with_canvas_store(store.clone());

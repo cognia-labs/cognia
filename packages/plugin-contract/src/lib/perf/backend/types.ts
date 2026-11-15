@@ -196,10 +196,8 @@ export interface ManagedProcess {
   alive?: boolean
 }
 
-/** One composed performance frame emitted on `perf://sample`. */
+/** The measurements one performance frame carries. */
 export interface PerfSample {
-  tsMs: number
-  intervalMs: number
   processes: ProcessSample[]
   runtime: RuntimeSample
   topSpans: SpanSnapshot[]
@@ -239,8 +237,6 @@ export interface PerfSnapshot {
   sources: PerfSourceDescriptor[]
   leases: PerfLease[]
   gaps: PerfGap[]
-  /** Compatibility projection retained for one release. */
-  samples: PerfSample[]
   running: boolean
   intervalMs: number
 }

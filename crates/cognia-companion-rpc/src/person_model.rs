@@ -500,7 +500,6 @@ readline.createInterface({input:process.stdin}).on('line', line => {
         };
         assert_error(brain_dispatch(b.clone(), "agent_close_session", "p6c-frame-session").await, StatusCode::FORBIDDEN, "session_partition_mismatch");
         assert_error(brain_dispatch(a.clone(), "agent_close_session", "p6c-operator-used").await, StatusCode::FORBIDDEN, "session_partition_mismatch");
-        assert_error(brain_dispatch(a.clone(), "claude_close_session", "p6c-frame-session").await, StatusCode::FORBIDDEN, "host_surface_forbidden");
         assert!(received.try_recv().is_err(), "refused closes must write no sidecar frame");
         for session in ["p6c-frame-session", "p6c-never-bound"] {
             assert!(brain_dispatch(a.clone(), "agent_close_session", session).await.is_ok(), "{session}");

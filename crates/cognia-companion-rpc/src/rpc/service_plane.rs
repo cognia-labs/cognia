@@ -1879,7 +1879,7 @@ pub(super) async fn dispatch(
                 server_running: true,
                 bound_addr: None,
                 registered_adapter_count: count,
-                staging_token: Some(staging_token),
+                staging_token,
             })
         }
 
@@ -2601,7 +2601,7 @@ pub(super) async fn dispatch(
         // renders it and calls this to allow/deny. First-responder wins —
         // `ConsentBroker::resolve` removes the pending oneshot, so a duplicate
         // (desktop overlay + phone) is harmless. Distinct HITL channel from
-        // `claude_approve` (which resolves Claude SDK tool-use prompts).
+        // `agent_resolve_permission` (which resolves agent tool-use prompts).
         "automation_consent_respond" => {
             if host.headless().is_some() {
                 return Err(RpcError::headless_unsupported(name));

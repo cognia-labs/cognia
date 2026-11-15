@@ -819,14 +819,12 @@ export class CollabClient {
     })
   }
 
-  /** Feature probe. A legacy plain-text `ok` response means read-only protocol 0. */
+  /** Feature probe. */
   async health(): Promise<CollabHealth> {
     const response = await this.fetchImpl(`${this.baseUrl}/health`)
     if (!response.ok)
       throw new CollabError(response.status, `collaboration plane returned ${response.status}`)
-    const text = await response.text()
-    if (text.trim() === "ok") return { status: "ok", collabProtocolVersion: 0, features: [] }
-    return JSON.parse(text) as CollabHealth
+    return (await response.json()) as CollabHealth
   }
 
   /**

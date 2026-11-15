@@ -527,10 +527,6 @@
     "apiKeySetupHint": "Claude 订阅和 Console 登录使用 OAuth。第三方 API Key 和 Coding Plan 密钥请在供应商设置中配置对应供应商。",
     "apiKeySetupAction": "配置 API Key 或 Coding Plan"
   },
-  "migration": {
-    "toastBody": "已将 {count, plural, =1 {1 个旧账号} other {# 个旧账号}} 迁移到新版凭证仓。",
-    "toastTitle": "订阅模块已升级"
-  },
   "nav": {
     "groups": {
       "providersGroup": "提供方",

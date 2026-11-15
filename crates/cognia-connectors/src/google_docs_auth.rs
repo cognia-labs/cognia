@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, OnceLock},
     time::Duration,
 };
@@ -19,12 +19,6 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
 const NAMESPACE: &str = "docs-providers";
 const STATE_KEY: &str = "google-auth-lineages-v2";
-const LEGACY_KEY: &str = "google-connection-v1";
-const LEGACY_SECRET: &str = "google-client-secret";
-const BACKUP_NAMESPACE: &str = "backup-destinations";
-const BACKUP_TOKENS: &str = "google-drive-tokens";
-const BACKUP_SECRET: &str = "google-drive-client-secret";
-const DRIVE_FILE_SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
 const STALE: &str = "google_docs_state_stale";
 const MISMATCH: &str = "google_docs_state_mismatch";
 const TTL_MS: u64 = 600_000;
@@ -102,8 +96,6 @@ struct Lineage {
     status: Status,
     authorization: String,
     credential_revision: String,
-    needs_identity: bool,
-    identity_attempted: bool,
     tokens: Option<Tokens>,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -127,14 +119,6 @@ struct Pending {
     #[serde(default)]
     disconnect_generation: u64,
 }
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacyState {
-    #[serde(default)]
-    tokens: Option<Tokens>,
-    #[serde(default)]
-    account_email: Option<String>,
-}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct State {
@@ -142,12 +126,6 @@ struct State {
     lineages: Vec<Lineage>,
     pending: Vec<Pending>,
     clients: BTreeMap<String, String>,
-    legacy: Option<LegacyState>,
-    legacy_secret_migrated: bool,
-    #[serde(default)]
-    legacy_backup_migrated: bool,
-    #[serde(default)]
-    secret_overrides: BTreeSet<String>,
     #[serde(default)]
     disconnect_generation: u64,
     /// Identity barriers survive lineage deletion and process restart.
@@ -161,10 +139,6 @@ impl State {
             lineages: vec![],
             pending: vec![],
             clients: BTreeMap::new(),
-            legacy: None,
-            legacy_secret_migrated: false,
-            legacy_backup_migrated: false,
-            secret_overrides: BTreeSet::new(),
             disconnect_generation: 0,
             disconnect_barriers: BTreeMap::new(),
         }
@@ -179,12 +153,7 @@ impl State {
     deny_unknown_fields
 )]
 pub enum Input {
-    Snapshot {
-        #[serde(default)]
-        legacy_client_id: Option<String>,
-        #[serde(default)]
-        legacy_backup_client_id: Option<String>,
-    },
+    Snapshot {},
     SetClientSecret {
         client_id: String,
         secret: String,
@@ -239,7 +208,6 @@ pub struct LineageMetadata {
     pub status: Status,
     pub revision: String,
     pub credential_revision: String,
-    pub needs_identity: bool,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -300,8 +268,6 @@ pub struct Reply {
     pub lineages: Vec<LineageMetadata>,
     pub clients: Vec<ClientMetadata>,
     pub pending: Vec<PendingMetadata>,
-    pub migration_needs_client_id: bool,
-    pub backup_migration_needs_client_id: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lineage_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -314,7 +280,7 @@ pub struct Reply {
     pub outcome: Option<Outcome>,
 }
 impl Reply {
-    fn snapshot(state: &State, legacy_secret: bool) -> Self {
+    fn snapshot(state: &State) -> Self {
         let mut clients: BTreeMap<String, bool> = state
             .lineages
             .iter()
@@ -337,7 +303,6 @@ impl Reply {
                     status: l.status,
                     revision: l.authorization.clone(),
                     credential_revision: l.credential_revision.clone(),
-                    needs_identity: l.needs_identity,
                 })
                 .collect(),
             clients: clients
@@ -359,8 +324,6 @@ impl Reply {
                     reauthorize_lineage: p.reauthorize_lineage.clone(),
                 })
                 .collect(),
-            migration_needs_client_id: state.legacy.is_some() || legacy_secret,
-            backup_migration_needs_client_id: false,
             lineage_id: None,
             attempt: None,
             poll_status: None,
@@ -373,16 +336,9 @@ struct Stored {
     state: State,
     expected: Option<String>,
 }
-struct LegacyBackup {
-    tokens: Option<Tokens>,
-    secret: Option<String>,
-}
 trait Store: Send + Sync {
     fn load(&self) -> Result<Stored, String>;
     fn save(&self, state: &State, expected: Option<String>) -> Result<(), String>;
-    fn legacy_secret(&self) -> Result<Option<String>, String>;
-    /// None means a corrupt record: skip migration without committing its marker.
-    fn legacy_backup(&self) -> Result<Option<LegacyBackup>, String>;
 }
 struct EncryptedStore;
 impl Store for EncryptedStore {
@@ -396,23 +352,7 @@ impl Store for EncryptedStore {
             }
             state
         } else {
-            let mut state = State::empty();
-            state.legacy = if let Some(raw) = keyring_secrets::get(NAMESPACE, LEGACY_KEY)? {
-                // The authoritative v1 tombstone takes precedence over older TS keys.
-                let legacy: LegacyState =
-                    serde_json::from_str(&raw).map_err(|_| "invalid legacy Google connection")?;
-                legacy.tokens.as_ref().map(|_| legacy.clone())
-            } else {
-                keyring_secrets::get(NAMESPACE, "google-tokens")?.and_then(|raw| {
-                    serde_json::from_str::<Tokens>(&raw)
-                        .ok()
-                        .map(|tokens| LegacyState {
-                            tokens: Some(tokens),
-                            account_email: None,
-                        })
-                })
-            };
-            state
+            State::empty()
         };
         Ok(Stored { state, expected })
     }
@@ -426,50 +366,7 @@ impl Store for EncryptedStore {
                 changes: vec![],
             },
         )?;
-        // Commit before cleanup: restarts can never re-import a revoked lineage.
-        for key in [LEGACY_KEY, "google-tokens", "google-oauth-pending"] {
-            if keyring_secrets::clear(NAMESPACE, key).is_err() {
-                log::warn!("Google legacy cleanup deferred");
-            }
-        }
-        if state.legacy_secret_migrated && keyring_secrets::clear(NAMESPACE, LEGACY_SECRET).is_err()
-        {
-            log::warn!("Google legacy client-secret cleanup deferred");
-        }
-        if state.legacy_backup_migrated {
-            for key in [BACKUP_TOKENS, BACKUP_SECRET] {
-                if keyring_secrets::clear(BACKUP_NAMESPACE, key).is_err() {
-                    log::warn!("Google backup legacy cleanup deferred");
-                }
-            }
-        }
         Ok(())
-    }
-    fn legacy_backup(&self) -> Result<Option<LegacyBackup>, String> {
-        let tokens = if let Some(raw) = keyring_secrets::get(BACKUP_NAMESPACE, BACKUP_TOKENS)? {
-            match serde_json::from_str(&raw) {
-                Ok(tokens) => Some(tokens),
-                Err(_) => {
-                    // Preserve both legacy keys for recovery; never log their contents.
-                    static WARNING: std::sync::Once = std::sync::Once::new();
-                    WARNING.call_once(|| {
-                        log::warn!(
-                            "Google backup legacy tokens could not be parsed; import skipped"
-                        )
-                    });
-                    return Ok(None);
-                }
-            }
-        } else {
-            None
-        };
-        Ok(Some(LegacyBackup {
-            tokens,
-            secret: keyring_secrets::get(BACKUP_NAMESPACE, BACKUP_SECRET)?,
-        }))
-    }
-    fn legacy_secret(&self) -> Result<Option<String>, String> {
-        keyring_secrets::get(NAMESPACE, LEGACY_SECRET)
     }
 }
 type Notify = Arc<dyn Fn() + Send + Sync>;
@@ -528,16 +425,7 @@ impl Controller {
     fn snapshot(&self) -> Result<Reply, String> {
         let _guard = self.mutation.lock();
         let state = self.store.load()?.state;
-        let mut reply = Reply::snapshot(
-            &state,
-            !state.legacy_secret_migrated && self.store.legacy_secret()?.is_some(),
-        );
-        if !state.legacy_backup_migrated {
-            if let Some(backup) = self.store.legacy_backup()? {
-                reply.backup_migration_needs_client_id =
-                    backup.tokens.is_some() || backup.secret.is_some();
-            }
-        }
+        let mut reply = Reply::snapshot(&state);
         let blocked = self.blocked.lock();
         for lineage in &mut reply.lineages {
             if blocked.contains(&lineage.id) {
@@ -545,95 +433,6 @@ impl Controller {
             }
         }
         Ok(reply)
-    }
-    fn migrate(&self, client: Option<String>) -> Result<(), String> {
-        if let Some(client) = &client {
-            validate_client(client)?;
-        }
-        self.edit(|state| {
-            if let Some(client) = client {
-                if let Some(legacy) = state.legacy.take() {
-                    if let Some(tokens) = legacy.tokens {
-                        let id = nonce();
-                        let scopes = tokens
-                            .scope
-                            .as_ref()
-                            .map(|s| s.split_whitespace().map(str::to_owned).collect())
-                            .unwrap_or_else(|| {
-                                vec![
-                                    "https://www.googleapis.com/auth/drive.readonly".into(),
-                                    "https://www.googleapis.com/auth/documents.readonly".into(),
-                                    "https://www.googleapis.com/auth/spreadsheets.readonly".into(),
-                                ]
-                            });
-                        state.lineages.push(Lineage {
-                            sub: format!("legacy:{id}"),
-                            id,
-                            client_id: client.clone(),
-                            method: Method::LoopbackPkce,
-                            scopes,
-                            email: legacy.account_email,
-                            status: Status::Connected,
-                            authorization: nonce(),
-                            credential_revision: nonce(),
-                            needs_identity: true,
-                            identity_attempted: false,
-                            tokens: Some(tokens),
-                        });
-                    }
-                }
-                if !state.legacy_secret_migrated {
-                    if !state.secret_overrides.contains(&client) {
-                        if let Some(secret) = self.store.legacy_secret()? {
-                            state.clients.entry(client).or_insert(secret);
-                        }
-                    }
-                    state.legacy_secret_migrated = true;
-                }
-            }
-            Ok(())
-        })
-    }
-    fn migrate_backup(&self, client: Option<String>) -> Result<(), String> {
-        let Some(client) = client else { return Ok(()) };
-        validate_client(&client)?;
-        self.edit(|state| {
-            if state.legacy_backup_migrated {
-                return Ok(());
-            }
-            let Some(LegacyBackup { tokens, secret }) = self.store.legacy_backup()? else {
-                return Ok(());
-            };
-            if let Some(tokens) = tokens {
-                let id = nonce();
-                let scopes = tokens
-                    .scope
-                    .as_ref()
-                    .map(|scope| scope.split_whitespace().map(str::to_owned).collect())
-                    .unwrap_or_else(|| vec![DRIVE_FILE_SCOPE.into()]);
-                state.lineages.push(Lineage {
-                    sub: format!("legacy:{id}"),
-                    id,
-                    client_id: client.clone(),
-                    method: Method::DeviceCode,
-                    scopes,
-                    email: None,
-                    status: Status::Connected,
-                    authorization: nonce(),
-                    credential_revision: nonce(),
-                    needs_identity: true,
-                    identity_attempted: false,
-                    tokens: Some(tokens),
-                });
-            }
-            if !state.secret_overrides.contains(&client) {
-                if let Some(secret) = secret {
-                    state.clients.entry(client).or_insert(secret);
-                }
-            }
-            state.legacy_backup_migrated = true;
-            Ok(())
-        })
     }
     async fn identify(
         &self,
@@ -701,92 +500,6 @@ impl Controller {
                 .and_then(Value::as_str)
                 .map(str::to_owned),
         ))
-    }
-    async fn resolve_legacy_identities(&self) -> Result<(), String> {
-        let targets = self.edit(|state| {
-            Ok(state
-                .lineages
-                .iter_mut()
-                .filter(|l| l.needs_identity && !l.identity_attempted && l.tokens.is_some())
-                .map(|l| {
-                    l.identity_attempted = true;
-                    l.clone()
-                })
-                .collect::<Vec<_>>())
-        })?;
-        for target in targets {
-            if let Ok((sub, email)) = self
-                .identify(
-                    &Map::new(),
-                    &target.tokens.as_ref().unwrap().access_token,
-                    &target.client_id,
-                )
-                .await
-            {
-                self.edit(|state| {
-                    // Identity probing is subject to the same disconnect/rotation CAS.
-                    if let Some(index) = state.lineages.iter().position(|l| {
-                        l.id == target.id
-                            && l.authorization == target.authorization
-                            && l.credential_revision == target.credential_revision
-                            && l.status == Status::Connected
-                    }) {
-                        if self.blocked.lock().contains(&target.id) {
-                            return Ok(());
-                        }
-                        if let Some(existing) = state.lineages.iter().position(|l| {
-                            l.id != target.id
-                                && l.client_id == target.client_id
-                                && l.sub == sub
-                                && !l.needs_identity
-                        }) {
-                            // Two grants cannot lend each other scopes. Against a live
-                            // grant, keep the imported token only when it covers every
-                            // scope of the existing one. A dead lineage (disconnected,
-                            // or invalidated without tokens) has nothing to keep, so the
-                            // import revives it, exactly as a fresh sign-in would, unless
-                            // the user disconnected this identity or its fence is held.
-                            let imported = state.lineages[index].clone();
-                            let current = &state.lineages[existing];
-                            let live =
-                                current.status == Status::Connected && current.tokens.is_some();
-                            let disconnected_identity = state
-                                .disconnect_barriers
-                                .get(&current.client_id)
-                                .is_some_and(|barriers| barriers.contains_key(&current.sub));
-                            let take_import = if live {
-                                current
-                                    .scopes
-                                    .iter()
-                                    .all(|scope| imported.scopes.contains(scope))
-                            } else {
-                                !disconnected_identity && !self.blocked.lock().contains(&current.id)
-                            };
-                            if take_import {
-                                let kept = &mut state.lineages[existing];
-                                kept.tokens = imported.tokens;
-                                kept.scopes = imported.scopes;
-                                kept.status = Status::Connected;
-                                kept.credential_revision = nonce();
-                            }
-                            state.lineages[existing].authorization = nonce();
-                            let obsolete = &mut state.lineages[index];
-                            obsolete.status = Status::Disconnected;
-                            obsolete.tokens = None;
-                            obsolete.authorization = nonce();
-                            obsolete.credential_revision = nonce();
-                        } else {
-                            let lineage = &mut state.lineages[index];
-                            lineage.sub = sub;
-                            lineage.email = email.or(lineage.email.clone());
-                            lineage.needs_identity = false;
-                        }
-                    }
-                    Ok(())
-                })?;
-            }
-        }
-        Ok(())
     }
     async fn exchange(
         &self,
@@ -1038,18 +751,15 @@ impl Controller {
                     {
                         return Err(STALE.into());
                     }
-                    // Reauthorization is bound to the selected account, except a
-                    // provisional legacy identity which has never had a Google sub.
-                    if !target.needs_identity && target.sub != sub {
+                    // Reauthorization is bound to the selected account.
+                    if target.sub != sub {
                         return Err(MISMATCH.into());
                     }
                 }
                 let target = state
                     .lineages
                     .iter()
-                    .position(|l| {
-                        l.client_id == attempt.client_id && l.sub == sub && !l.needs_identity
-                    })
+                    .position(|l| l.client_id == attempt.client_id && l.sub == sub)
                     .or_else(|| {
                         attempt
                             .reauthorize_lineage
@@ -1090,8 +800,6 @@ impl Controller {
                     status: Status::Connected,
                     authorization: nonce(),
                     credential_revision: nonce(),
-                    needs_identity: false,
-                    identity_attempted: true,
                     tokens: None,
                 });
                 state.lineages.len() - 1
@@ -1136,8 +844,6 @@ impl Controller {
             lineage.sub = sub;
             lineage.email = email.or(lineage.email.clone());
             lineage.method = attempt.method;
-            lineage.needs_identity = false;
-            lineage.identity_attempted = true;
             lineage.status = Status::Connected;
             lineage.authorization = nonce();
             lineage.credential_revision = nonce();
@@ -1408,7 +1114,6 @@ impl Controller {
             l.status = Status::Disconnected;
             let client_id = l.client_id.clone();
             let sub = l.sub.clone();
-            let unresolved_identity = l.needs_identity;
             state.disconnect_generation = state
                 .disconnect_generation
                 .checked_add(1)
@@ -1418,12 +1123,9 @@ impl Controller {
                 .entry(client_id.clone())
                 .or_default()
                 .insert(sub, state.disconnect_generation);
-            // A provisional sub cannot key a barrier for the eventual real sub.
-            // Consume this client's existing attempts while identity is unknown.
-            state.pending.retain(|p| {
-                p.reauthorize_lineage.as_ref() != Some(&id)
-                    && (!unresolved_identity || p.client_id != client_id)
-            });
+            state
+                .pending
+                .retain(|p| p.reauthorize_lineage.as_ref() != Some(&id));
             Ok(token)
         })?;
         notify(); // Durable fence precedes any network effect.
@@ -1489,25 +1191,13 @@ impl Controller {
         // revision: a refused callback or a no-op write is not a change.
         let before = self.store.load()?.expected;
         let reply = match input {
-            Input::Snapshot {
-                legacy_client_id,
-                legacy_backup_client_id,
-            } => {
-                async {
-                    self.migrate(legacy_client_id)?;
-                    self.migrate_backup(legacy_backup_client_id)?;
-                    self.resolve_legacy_identities().await?;
-                    self.snapshot()
-                }
-                .await
-            }
+            Input::Snapshot {} => self.snapshot(),
             Input::SetClientSecret { client_id, secret } => {
                 validate_client(&client_id)?;
                 if secret.trim().is_empty() {
                     return Err("empty Google client secret".into());
                 }
                 self.edit(|state| {
-                    state.secret_overrides.insert(client_id.clone());
                     state.clients.insert(client_id, secret);
                     Ok(())
                 })?;
@@ -1516,7 +1206,6 @@ impl Controller {
             Input::ClearClientSecret { client_id } => {
                 validate_client(&client_id)?;
                 self.edit(|state| {
-                    state.secret_overrides.insert(client_id.clone());
                     state.clients.remove(&client_id);
                     Ok(())
                 })?;
@@ -1655,11 +1344,8 @@ mod tests {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
-    static ENCRYPTED_TEST_LOCK: Mutex<()> = Mutex::new(());
     struct MemoryStore {
         raw: Mutex<Option<String>>,
-        legacy_secret: Mutex<Option<String>>,
-        legacy_backup: Mutex<(Option<Tokens>, Option<String>)>,
         fail: AtomicBool,
         saves: AtomicUsize,
     }
@@ -1681,21 +1367,8 @@ mod tests {
                 return Err(STALE.into());
             }
             *raw = Some(serde_json::to_string(state).unwrap());
-            if state.legacy_secret_migrated {
-                self.legacy_secret.lock().take();
-            }
-            if state.legacy_backup_migrated {
-                *self.legacy_backup.lock() = (None, None);
-            }
             self.saves.fetch_add(1, Ordering::SeqCst);
             Ok(())
-        }
-        fn legacy_backup(&self) -> Result<Option<LegacyBackup>, String> {
-            let (tokens, secret) = self.legacy_backup.lock().clone();
-            Ok(Some(LegacyBackup { tokens, secret }))
-        }
-        fn legacy_secret(&self) -> Result<Option<String>, String> {
-            Ok(self.legacy_secret.lock().clone())
         }
     }
     fn quiet() -> Notify {
@@ -1704,8 +1377,6 @@ mod tests {
     fn memory(state: State) -> Arc<MemoryStore> {
         Arc::new(MemoryStore {
             raw: Mutex::new(Some(serde_json::to_string(&state).unwrap())),
-            legacy_secret: Mutex::new(None),
-            legacy_backup: Mutex::new((None, None)),
             fail: AtomicBool::new(false),
             saves: AtomicUsize::new(0),
         })
@@ -1954,9 +1625,8 @@ mod tests {
         assert!(!wire.contains("codeVerifier"));
     }
     #[tokio::test]
-    async fn google_secrets_are_write_only_and_clear_cannot_be_undone_by_legacy_import() {
-        let (owner, store) = fixture();
-        *store.legacy_secret.lock() = Some("old-secret".into());
+    async fn google_secrets_are_write_only_and_clear_removes_them() {
+        let (owner, _) = fixture();
         let reply = owner
             .clone()
             .run(
@@ -1981,7 +1651,6 @@ mod tests {
             )
             .await
             .unwrap();
-        owner.migrate(Some("client-a".into())).unwrap();
         assert!(!owner
             .store
             .load()
@@ -1989,7 +1658,6 @@ mod tests {
             .state
             .clients
             .contains_key("client-a"));
-        assert!(store.legacy_secret.lock().is_none());
         assert!(!owner
             .snapshot()
             .unwrap()
@@ -2007,26 +1675,10 @@ mod tests {
         });
         owner
             .clone()
-            .run(
-                Input::Snapshot {
-                    legacy_client_id: None,
-                    legacy_backup_client_id: None,
-                },
-                notify.clone(),
-            )
+            .run(Input::Snapshot {}, notify.clone())
             .await
             .unwrap();
-        owner
-            .clone()
-            .run(
-                Input::Snapshot {
-                    legacy_client_id: None,
-                    legacy_backup_client_id: None,
-                },
-                notify,
-            )
-            .await
-            .unwrap();
+        owner.clone().run(Input::Snapshot {}, notify).await.unwrap();
         assert_eq!(store.saves.load(Ordering::SeqCst), 0);
         assert_eq!(called.load(Ordering::SeqCst), 0);
     }
@@ -2065,432 +1717,6 @@ mod tests {
             .unwrap();
         assert_eq!(called.load(Ordering::SeqCst), 1);
     }
-    #[test]
-    fn google_legacy_lineage_and_secret_migrate_once_and_require_client_hint() {
-        let _guard = ENCRYPTED_TEST_LOCK.lock();
-        for key in [STATE_KEY, LEGACY_KEY, LEGACY_SECRET, "google-tokens"] {
-            keyring_secrets::clear(NAMESPACE, key).unwrap();
-        }
-        keyring_secrets::set(NAMESPACE, LEGACY_KEY, r#"{"version":1,"connection":"old-credential","authorization":"old-auth","tokens":{"accessToken":"legacy-access","refreshToken":"legacy-refresh","expiresAt":10000,"scope":"docs"},"accountEmail":"legacy@example.test","legacyMetadata":false}"#).unwrap();
-        keyring_secrets::set(NAMESPACE, LEGACY_SECRET, "legacy-secret").unwrap();
-        let owner = Controller::new(Arc::new(EncryptedStore), Endpoints::default());
-        owner.migrate(None).unwrap();
-        assert!(owner.snapshot().unwrap().migration_needs_client_id);
-        assert!(keyring_secrets::get(NAMESPACE, LEGACY_SECRET)
-            .unwrap()
-            .is_some());
-        owner.migrate(Some("client-a".into())).unwrap();
-        owner.migrate(Some("client-b".into())).unwrap();
-        let state = owner.store.load().unwrap().state;
-        assert_eq!(state.lineages.len(), 1);
-        let l = &state.lineages[0];
-        assert_eq!(l.client_id, "client-a");
-        assert!(l.sub.starts_with("legacy:"));
-        assert!(l.needs_identity);
-        assert_eq!(
-            l.tokens.as_ref().unwrap().refresh_token.as_deref(),
-            Some("legacy-refresh")
-        );
-        assert_eq!(state.clients["client-a"], "legacy-secret");
-        assert!(!state.clients.contains_key("client-b"));
-        assert!(keyring_secrets::get(NAMESPACE, LEGACY_KEY)
-            .unwrap()
-            .is_none());
-        assert!(keyring_secrets::get(NAMESPACE, LEGACY_SECRET)
-            .unwrap()
-            .is_none());
-        // A leftover pre-v1 TS key cannot resurrect a disconnected lineage.
-        owner
-            .edit(|s| {
-                s.lineages[0].tokens = None;
-                s.lineages[0].status = Status::Disconnected;
-                Ok(())
-            })
-            .unwrap();
-        keyring_secrets::set(
-            NAMESPACE,
-            "google-tokens",
-            r#"{"accessToken":"resurrected","expiresAt":1}"#,
-        )
-        .unwrap();
-        assert!(owner.store.load().unwrap().state.lineages[0]
-            .tokens
-            .is_none());
-        keyring_secrets::set(
-            BACKUP_NAMESPACE,
-            BACKUP_TOKENS,
-            r#"{"accessToken":"backup-access","refreshToken":"backup-refresh","expiresAt":10000}"#,
-        )
-        .unwrap();
-        keyring_secrets::set(BACKUP_NAMESPACE, BACKUP_SECRET, "backup-secret").unwrap();
-        owner.migrate_backup(None).unwrap();
-        assert!(owner.snapshot().unwrap().backup_migration_needs_client_id);
-        let stored = owner.store.load().unwrap();
-        let mut uncommitted = stored.state.clone();
-        uncommitted.legacy_backup_migrated = true;
-        assert!(owner
-            .store
-            .save(&uncommitted, Some("wrong-cas".into()))
-            .is_err());
-        assert!(keyring_secrets::get(BACKUP_NAMESPACE, BACKUP_TOKENS)
-            .unwrap()
-            .is_some());
-        assert!(keyring_secrets::get(BACKUP_NAMESPACE, BACKUP_SECRET)
-            .unwrap()
-            .is_some());
-        owner.migrate_backup(Some("backup-client".into())).unwrap();
-        assert!(keyring_secrets::get(BACKUP_NAMESPACE, BACKUP_TOKENS)
-            .unwrap()
-            .is_none());
-        assert!(keyring_secrets::get(BACKUP_NAMESPACE, BACKUP_SECRET)
-            .unwrap()
-            .is_none());
-        assert!(owner.store.load().unwrap().state.legacy_backup_migrated);
-        for key in [STATE_KEY, LEGACY_KEY, LEGACY_SECRET, "google-tokens"] {
-            keyring_secrets::clear(NAMESPACE, key).unwrap();
-        }
-    }
-    #[tokio::test]
-    async fn google_backup_legacy_import_is_once_write_only_and_survives_clear_and_disconnect() {
-        let store = memory(State::empty());
-        let mut legacy_tokens = tokens("backup-private");
-        legacy_tokens.scope = Some("docs".into());
-        *store.legacy_backup.lock() = (Some(legacy_tokens), Some("backup-secret".into()));
-        let owner = Arc::new(Controller::new(store.clone(), Endpoints::default()));
-        let waiting = owner
-            .clone()
-            .run(
-                Input::Snapshot {
-                    legacy_client_id: None,
-                    legacy_backup_client_id: None,
-                },
-                quiet(),
-            )
-            .await
-            .unwrap();
-        assert!(waiting.backup_migration_needs_client_id);
-        assert!(waiting.lineages.is_empty());
-        // A failed CAS must retain both source keys for the next attempt.
-        store.fail.store(true, Ordering::SeqCst);
-        assert!(owner.migrate_backup(Some("backup-client".into())).is_err());
-        assert!(store.legacy_backup.lock().0.is_some());
-        assert!(store.legacy_backup.lock().1.is_some());
-        owner.migrate_backup(Some("backup-client".into())).unwrap();
-        let imported = owner.store.load().unwrap().state;
-        let l = &imported.lineages[0];
-        assert!(l.method == Method::DeviceCode);
-        assert_eq!(l.scopes, vec!["docs"]);
-        assert!(l.needs_identity && l.sub.starts_with("legacy:"));
-        assert_eq!(imported.clients["backup-client"], "backup-secret");
-        assert!(store.legacy_backup.lock().0.is_none());
-        assert!(store.legacy_backup.lock().1.is_none());
-        let wire = serde_json::to_string(&owner.snapshot().unwrap()).unwrap();
-        for private in [
-            "backup-private",
-            "backup-secret",
-            "refreshToken",
-            "accessToken",
-        ] {
-            assert!(!wire.contains(private));
-        }
-        owner
-            .clone()
-            .run(
-                Input::ClearClientSecret {
-                    client_id: "backup-client".into(),
-                },
-                quiet(),
-            )
-            .await
-            .unwrap();
-        // A credential-free disconnected lineage requires no network revoke.
-        owner
-            .edit(|s| {
-                s.lineages[0].tokens = None;
-                Ok(())
-            })
-            .unwrap();
-        owner
-            .clone()
-            .run(
-                Input::Disconnect {
-                    lineage_id: l.id.clone(),
-                },
-                quiet(),
-            )
-            .await
-            .unwrap();
-        *store.legacy_backup.lock() = (Some(tokens("stale-leftover")), Some("stale-secret".into()));
-        owner.migrate_backup(Some("backup-client".into())).unwrap();
-        let after = owner.store.load().unwrap().state;
-        assert_eq!(after.lineages.len(), 1);
-        assert!(after.lineages[0].status == Status::Disconnected);
-        assert!(after.lineages[0].tokens.is_none());
-        assert!(!after.clients.contains_key("backup-client"));
-        assert!(!owner.snapshot().unwrap().backup_migration_needs_client_id);
-    }
-
-    #[tokio::test]
-    async fn google_backup_snapshot_never_reimports_and_existing_or_cleared_secret_wins() {
-        for clear in [false, true] {
-            let (owner, store) = fixture();
-            let mut token = tokens("backup");
-            token.scope = None;
-            *store.legacy_backup.lock() = (Some(token), Some("old-backup-secret".into()));
-            if clear {
-                owner
-                    .clone()
-                    .run(
-                        Input::ClearClientSecret {
-                            client_id: "client-a".into(),
-                        },
-                        quiet(),
-                    )
-                    .await
-                    .unwrap();
-            }
-            owner.migrate_backup(Some("client-a".into())).unwrap();
-            // Skip the identity network probe in this offline Snapshot test.
-            owner
-                .edit(|s| {
-                    s.lineages[0].identity_attempted = true;
-                    Ok(())
-                })
-                .unwrap();
-            let before = store.saves.load(Ordering::SeqCst);
-            let reply = owner
-                .clone()
-                .run(
-                    Input::Snapshot {
-                        legacy_client_id: None,
-                        legacy_backup_client_id: Some("client-a".into()),
-                    },
-                    quiet(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(store.saves.load(Ordering::SeqCst), before);
-            assert_eq!(reply.lineages.len(), 1);
-            assert_eq!(reply.lineages[0].scopes, vec![DRIVE_FILE_SCOPE]);
-            let state = owner.store.load().unwrap().state;
-            if clear {
-                assert!(!state.clients.contains_key("client-a"));
-            } else {
-                assert_eq!(state.clients["client-a"], "private-secret-a");
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn google_backup_identity_collision_folds_into_existing_lineage() {
-        let (owner, store, server) = network_fixture().await;
-        connected(&owner, "client-a", "principal-a");
-        *store.legacy_backup.lock() = (Some(tokens("backup")), Some("old-secret".into()));
-        owner.migrate_backup(Some("client-a".into())).unwrap();
-        Mock::given(method("GET"))
-            .and(path("/userinfo"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"sub":"principal-a"})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        owner.resolve_legacy_identities().await.unwrap();
-        owner.resolve_legacy_identities().await.unwrap();
-        let state = owner.store.load().unwrap().state;
-        assert_eq!(
-            state
-                .lineages
-                .iter()
-                .filter(|l| l.sub == "principal-a")
-                .count(),
-            1
-        );
-        assert_eq!(
-            state
-                .lineages
-                .iter()
-                .filter(|l| l.status == Status::Connected)
-                .count(),
-            1
-        );
-        let kept = state
-            .lineages
-            .iter()
-            .find(|l| l.sub == "principal-a")
-            .unwrap();
-        assert_eq!(kept.scopes, vec!["docs", "email", "openid"]);
-        assert_eq!(kept.tokens.as_ref().unwrap().access_token, "access-private");
-        assert_eq!(
-            kept.tokens.as_ref().unwrap().refresh_token.as_deref(),
-            Some("refresh-access-private")
-        );
-        assert!(!kept.scopes.iter().any(|scope| scope == DRIVE_FILE_SCOPE));
-    }
-
-    #[tokio::test]
-    async fn google_backup_identity_collision_keeps_imported_superset_token_and_exact_scopes() {
-        let (owner, store, server) = network_fixture().await;
-        connected(&owner, "client-a", "principal-a");
-        let scopes = format!("docs email openid {DRIVE_FILE_SCOPE}");
-        let mut imported = tokens("backup-superset");
-        imported.scope = Some(scopes.clone());
-        *store.legacy_backup.lock() = (Some(imported), None);
-        owner.migrate_backup(Some("client-a".into())).unwrap();
-        Mock::given(method("GET"))
-            .and(path("/userinfo"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"sub":"principal-a"})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        owner.resolve_legacy_identities().await.unwrap();
-        let state = store.load().unwrap().state;
-        let kept = state
-            .lineages
-            .iter()
-            .find(|l| l.sub == "principal-a")
-            .unwrap();
-        assert_eq!(
-            kept.scopes,
-            scopes
-                .split_whitespace()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            kept.tokens.as_ref().unwrap().access_token,
-            "backup-superset"
-        );
-        assert_eq!(
-            kept.tokens.as_ref().unwrap().refresh_token.as_deref(),
-            Some("refresh-backup-superset")
-        );
-        assert_eq!(
-            state
-                .lineages
-                .iter()
-                .filter(|l| l.status == Status::Connected)
-                .count(),
-            1
-        );
-    }
-
-    #[tokio::test]
-    async fn google_backup_collision_revives_a_dead_lineage_unless_the_identity_was_disconnected() {
-        for disconnected in [false, true] {
-            let (owner, store, server) = network_fixture().await;
-            connected(&owner, "client-a", "principal-a");
-            owner
-                .edit(|s| {
-                    // invalid_grant dropped the tokens; scopes are those of a dead grant.
-                    s.lineages[0].status = Status::NeedsReauth;
-                    s.lineages[0].tokens = None;
-                    if disconnected {
-                        s.lineages[0].status = Status::Disconnected;
-                        s.disconnect_barriers
-                            .entry("client-a".into())
-                            .or_default()
-                            .insert("principal-a".into(), 1);
-                    }
-                    Ok(())
-                })
-                .unwrap();
-            *store.legacy_backup.lock() = (Some(tokens("backup")), None);
-            owner.migrate_backup(Some("client-a".into())).unwrap();
-            Mock::given(method("GET"))
-                .and(path("/userinfo"))
-                .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_json(serde_json::json!({"sub":"principal-a"})),
-                )
-                .expect(1)
-                .mount(&server)
-                .await;
-            owner.resolve_legacy_identities().await.unwrap();
-            let state = store.load().unwrap().state;
-            let identity: Vec<_> = state
-                .lineages
-                .iter()
-                .filter(|l| l.sub == "principal-a")
-                .collect();
-            assert_eq!(identity.len(), 1, "one lineage per (client, sub)");
-            let kept = identity[0];
-            if disconnected {
-                assert!(kept.status == Status::Disconnected);
-                assert!(
-                    kept.tokens.is_none(),
-                    "a disconnected identity is not revived"
-                );
-            } else {
-                assert!(kept.status == Status::Connected);
-                assert_eq!(kept.tokens.as_ref().unwrap().access_token, "backup");
-                assert_eq!(kept.scopes, vec![DRIVE_FILE_SCOPE]);
-            }
-        }
-    }
-
-    #[test]
-    fn google_corrupt_backup_record_preserves_docs_snapshot_and_legacy_keys() {
-        let _guard = ENCRYPTED_TEST_LOCK.lock();
-        let (memory_owner, store) = fixture();
-        let docs = connected(&memory_owner, "client-a", "docs-user");
-        let state = store.load().unwrap().state;
-        let previous = keyring_secrets::get(NAMESPACE, STATE_KEY).unwrap();
-        keyring_secrets::set(
-            NAMESPACE,
-            STATE_KEY,
-            &serde_json::to_string(&state).unwrap(),
-        )
-        .unwrap();
-        keyring_secrets::set(BACKUP_NAMESPACE, BACKUP_TOKENS, "corrupt-private-record").unwrap();
-        keyring_secrets::set(BACKUP_NAMESPACE, BACKUP_SECRET, "recoverable-secret").unwrap();
-        let owner = Controller::new(Arc::new(EncryptedStore), Endpoints::default());
-        for hint in [None, Some("client-a".into())] {
-            owner.migrate_backup(hint).unwrap();
-            let reply = owner.snapshot().unwrap();
-            assert!(!reply.backup_migration_needs_client_id);
-            assert_eq!(reply.lineages.len(), 1);
-            assert_eq!(reply.lineages[0].id, docs.id);
-            assert!(reply.lineages[0].status == Status::Connected);
-            assert!(!owner.store.load().unwrap().state.legacy_backup_migrated);
-            assert_eq!(
-                keyring_secrets::get(BACKUP_NAMESPACE, BACKUP_TOKENS)
-                    .unwrap()
-                    .as_deref(),
-                Some("corrupt-private-record")
-            );
-            assert_eq!(
-                keyring_secrets::get(BACKUP_NAMESPACE, BACKUP_SECRET)
-                    .unwrap()
-                    .as_deref(),
-                Some("recoverable-secret")
-            );
-        }
-        keyring_secrets::clear(BACKUP_NAMESPACE, BACKUP_TOKENS).unwrap();
-        keyring_secrets::clear(BACKUP_NAMESPACE, BACKUP_SECRET).unwrap();
-        if let Some(previous) = previous {
-            keyring_secrets::set(NAMESPACE, STATE_KEY, &previous).unwrap();
-        } else {
-            keyring_secrets::clear(NAMESPACE, STATE_KEY).unwrap();
-        }
-    }
-
-    #[test]
-    fn google_empty_backup_migration_marks_completion_and_never_imports_later_stale_keys() {
-        let (owner, store) = fixture();
-        owner.migrate_backup(Some("client-a".into())).unwrap();
-        assert!(store.load().unwrap().state.legacy_backup_migrated);
-        *store.legacy_backup.lock() = (Some(tokens("stale-backup")), Some("stale-secret".into()));
-        owner.migrate_backup(Some("client-a".into())).unwrap();
-        assert!(store.load().unwrap().state.lineages.is_empty());
-        assert_eq!(
-            store.load().unwrap().state.clients["client-a"],
-            "private-secret-a"
-        );
-    }
-
     #[test]
     fn google_nonce_cas_rejects_late_attempt_for_disconnected_identity_only() {
         let (owner, _) = fixture();
@@ -2682,72 +1908,6 @@ mod tests {
             "fresh-access"
         );
         assert!(state.pending.is_empty());
-    }
-    #[tokio::test]
-    async fn google_disconnect_barrier_consumes_attempts_for_unresolved_legacy_identity() {
-        for method in [Method::LoopbackPkce, Method::DeviceCode] {
-            let (owner, store) = fixture();
-            let original = connected(&owner, "client-a", "principal-a");
-            owner
-                .edit(|state| {
-                    let lineage = &mut state.lineages[0];
-                    lineage.sub = format!("legacy:{}", original.id);
-                    lineage.needs_identity = true;
-                    lineage.tokens = None;
-                    Ok(())
-                })
-                .unwrap();
-            let mut attempt = pending("client-a");
-            attempt.method = method;
-            let attempt = staged(&owner, attempt);
-            let other_client = staged(&owner, pending("client-b"));
-            owner
-                .disconnect(original.id.clone(), quiet())
-                .await
-                .unwrap();
-            let restarted = Controller::new(store.clone(), Endpoints::default());
-            assert_eq!(
-                restarted
-                    .commit(&attempt, tokens("late-access"), "principal-a".into(), None)
-                    .err()
-                    .as_deref(),
-                Some(STALE)
-            );
-            assert!(store
-                .load()
-                .unwrap()
-                .state
-                .pending
-                .iter()
-                .all(|p| p.id != attempt.id));
-            restarted
-                .commit(
-                    &other_client,
-                    tokens("other-client-access"),
-                    "principal-a".into(),
-                    None,
-                )
-                .unwrap();
-            let state = store.load().unwrap().state;
-            assert!(
-                state
-                    .lineages
-                    .iter()
-                    .find(|l| l.id == original.id)
-                    .unwrap()
-                    .status
-                    == Status::Disconnected
-            );
-            assert!(!state
-                .lineages
-                .iter()
-                .any(|l| l.client_id == "client-a" && l.status == Status::Connected));
-            assert!(state
-                .lineages
-                .iter()
-                .any(|l| l.client_id == "client-b" && l.status == Status::Connected));
-            assert!(state.pending.is_empty());
-        }
     }
     async fn late_result_via_auth_action(method_kind: Method, unrelated: bool) {
         let (owner, store, server) = network_fixture().await;
@@ -3153,68 +2313,6 @@ mod tests {
         second.await.unwrap().unwrap();
         assert!(store.load().unwrap().state.lineages[0].tokens.is_none());
         assert!(owner.blocked.lock().is_empty());
-    }
-    #[tokio::test]
-    async fn google_legacy_identity_probe_once_retains_provisional_on_failure() {
-        let (owner, _, server) = network_fixture().await;
-        owner
-            .edit(|s| {
-                s.legacy = Some(LegacyState {
-                    tokens: Some(tokens("legacy")),
-                    account_email: None,
-                });
-                Ok(())
-            })
-            .unwrap();
-        owner.migrate(Some("client-a".into())).unwrap();
-        Mock::given(method("GET"))
-            .and(path("/userinfo"))
-            .respond_with(ResponseTemplate::new(401))
-            .expect(1)
-            .mount(&server)
-            .await;
-        owner.resolve_legacy_identities().await.unwrap();
-        owner.resolve_legacy_identities().await.unwrap();
-        let l = &owner.store.load().unwrap().state.lineages[0];
-        assert!(l.sub.starts_with("legacy:"));
-        assert!(l.needs_identity);
-        assert!(l.tokens.is_some());
-    }
-    #[tokio::test]
-    async fn google_legacy_identity_collision_never_creates_two_real_lineages() {
-        let (owner, _, server) = network_fixture().await;
-        connected(&owner, "client-a", "principal-a");
-        owner
-            .edit(|s| {
-                s.legacy = Some(LegacyState {
-                    tokens: Some(tokens("legacy")),
-                    account_email: None,
-                });
-                Ok(())
-            })
-            .unwrap();
-        owner.migrate(Some("client-a".into())).unwrap();
-        Mock::given(method("GET"))
-            .and(path("/userinfo"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"sub":"principal-a", "email":"user@example.test"}),
-            ))
-            .expect(1)
-            .mount(&server)
-            .await;
-        owner.resolve_legacy_identities().await.unwrap();
-        let s = owner.store.load().unwrap().state;
-        assert_eq!(
-            s.lineages.iter().filter(|l| l.sub == "principal-a").count(),
-            1
-        );
-        assert_eq!(
-            s.lineages
-                .iter()
-                .filter(|l| l.status == Status::Connected)
-                .count(),
-            1
-        );
     }
     #[tokio::test]
     async fn google_failed_disconnect_fence_blocks_cached_and_late_credentials() {

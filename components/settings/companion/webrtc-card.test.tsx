@@ -78,7 +78,7 @@ function renderCard() {
 
 // In-memory TURN credential store so the production code's
 // auto-selected `TauriKeyringStore` (which would invoke
-// `keyring_secret_*` over Tauri IPC) is replaced with a deterministic
+// `secret_store_*` over Tauri IPC) is replaced with a deterministic
 // test backend. Restored in afterAll so other test files aren't
 // affected.
 class TestTurnCredentialStore {

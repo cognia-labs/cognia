@@ -3483,7 +3483,6 @@ describe("durable local executor stop evidence", () => {
       release()
       // Let the real IPC admission finish after the stop proof was observed.
       await flushMicrotasks(50)
-      expect(call).not.toHaveBeenCalledWith("claude_send", expect.anything())
       expect(call).not.toHaveBeenCalledWith("agent_send", expect.anything())
     } finally {
       release?.()

@@ -5,7 +5,7 @@
 //!   JSON-RPC methods (`message/send`, `tasks/get`, `tasks/cancel`).
 //!
 //! `message/send` runs the turn synchronously: subscribe to the EventBus,
-//! `claude_send`, then fold every `claude://message` frame through
+//! `agent_send`, then fold every `claude://message` frame through
 //! [`A2aTurn`](super::turn::A2aTurn) until the turn terminates. The terminal
 //! `Task` is stored so a later `tasks/get` resolves.
 
@@ -213,7 +213,7 @@ async fn handle_message_send(
         state,
         &host,
         ctx,
-        "claude_send",
+        "agent_send",
         args,
         Some(idempotency_seed),
     )
@@ -282,7 +282,7 @@ async fn drive_turn(
                             state,
                             host,
                             ctx,
-                            "claude_approve",
+                            "agent_resolve_permission",
                             json!({
                                 "session_id": context_id,
                                 "request_id": request_id,
@@ -326,7 +326,7 @@ async fn interrupt(
             state,
             host,
             ctx,
-            "claude_interrupt",
+            "agent_interrupt",
             json!({ "session_id": context_id }),
             None,
         )
@@ -382,7 +382,7 @@ async fn handle_tasks_cancel(
             state,
             &host,
             ctx,
-            "claude_interrupt",
+            "agent_interrupt",
             json!({ "session_id": context_id }),
             Some(request_id),
         )

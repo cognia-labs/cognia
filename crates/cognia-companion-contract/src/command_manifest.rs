@@ -264,13 +264,6 @@ static WIRE_INDEX: Lazy<HashMap<&'static str, &'static WireCommand>> = Lazy::new
         .collect()
 });
 
-static RENAME_INDEX: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
-    known_commands::RENAMED_COMMANDS
-        .iter()
-        .map(|(from, to)| (*from, *to))
-        .collect()
-});
-
 static HEADLESS_CONTRACT: Lazy<Result<cognia_headless_contract::HeadlessContract, String>> =
     Lazy::new(|| {
         cognia_headless_contract::HeadlessContract::embedded().map_err(|error| error.to_string())
@@ -296,20 +289,6 @@ pub fn descriptor(name: &str) -> Option<&'static CommandDescriptor> {
 /// The generated row for a live wire name.
 pub fn wire_command(name: &str) -> Option<&'static WireCommand> {
     WIRE_INDEX.get(name).copied()
-}
-
-/// The replacement for a wire name this contract no longer serves.
-///
-/// Answers only for names that are absent from the table. While a renamed
-/// command is still served under its old name (every entry, until the ADR-0175
-/// rename cut lands), the old name is a live command and dispatches normally.
-/// After the cut the host answers it with 410 `command_renamed` and this
-/// replacement in `details.replacement`.
-pub fn renamed_to(name: &str) -> Option<&'static str> {
-    if WIRE_INDEX.contains_key(name) {
-        return None;
-    }
-    RENAME_INDEX.get(name).copied()
 }
 
 pub fn headless_contract(
@@ -419,7 +398,7 @@ mod tests {
         assert_eq!(command.idempotency, CommandIdempotency::Required);
         assert_eq!(command.transports, vec![CommandTransport::Internal]);
         assert_eq!(
-            descriptor("claude_send").unwrap().receipt_policy(),
+            descriptor("agent_send").unwrap().receipt_policy(),
             CommandReceiptPolicy::Replay
         );
     }
@@ -455,7 +434,7 @@ mod tests {
             CommandReceiptPolicy::Replay
         );
         assert_eq!(
-            descriptor("claude_send").unwrap().receipt_policy(),
+            descriptor("agent_send").unwrap().receipt_policy(),
             CommandReceiptPolicy::Replay
         );
     }
@@ -465,41 +444,6 @@ mod tests {
         let command = descriptor("secret_store_get").expect("descriptor");
         assert_eq!(command.target, CommandTarget::Service);
         assert_eq!(command.transports, vec![CommandTransport::Internal]);
-    }
-
-    /// The rename table is populated now and dormant on purpose: until the
-    /// ADR-0175 rename cut, every old name is still a live command, so
-    /// `renamed_to` must answer `None` for all of them and the 410 path must
-    /// never fire. This pins both halves of that so the dormancy is explicit,
-    /// and it holds the table to the sorted, duplicate-free shape the renderer
-    /// promises so the cut can switch to a binary search without surprises.
-    #[test]
-    fn rename_table_is_sorted_unique_and_dormant_until_the_cut() {
-        let table = known_commands::RENAMED_COMMANDS;
-        assert!(
-            !table.is_empty(),
-            "the rename table is rendered from the contract"
-        );
-        for pair in table.windows(2) {
-            assert!(
-                pair[0].0 < pair[1].0,
-                "rename table is not sorted by old name at {:?} / {:?}",
-                pair[0].0,
-                pair[1].0
-            );
-        }
-        for (from, to) in table {
-            assert!(
-                to.contains('.'),
-                "{from}: the replacement {to} is not a dotted wire name"
-            );
-            assert_eq!(
-                renamed_to(from),
-                None,
-                "{from} is still served under its old name, so it is not renamed yet"
-            );
-        }
-        assert_eq!(renamed_to("no_such_command_ever"), None);
     }
 
     #[test]

@@ -333,7 +333,7 @@ describe("bootstrapSidecar", () => {
       return f.child
     }
     const boot = await bootstrapSidecar({ spawn, scriptPath: "/x/claude-host.mjs" })
-    await boot.transport.call("claude_send", { sessionId: "s1", prompt: "hi" })
+    await boot.transport.call("agent_send", { sessionId: "s1", prompt: "hi" })
     expect(JSON.parse(f.writes[0].trim())).toMatchObject({ type: "send", sessionId: "s1" })
   })
 
@@ -355,7 +355,7 @@ describe("bootstrapSidecar", () => {
     const boot = await bootstrapSidecar({ spawn, scriptPath: "/x/claude-host.mjs" })
     f.emitError(new Error("ENOENT")) // would be an unhandled crash without the handler
     await expect(
-      boot.transport.call("claude_send", { sessionId: "s", prompt: "x" })
+      boot.transport.call("agent_send", { sessionId: "s", prompt: "x" })
     ).rejects.toThrow(/sidecar not running/)
   })
 
@@ -368,7 +368,7 @@ describe("bootstrapSidecar", () => {
     const boot = await bootstrapSidecar({ spawn, scriptPath: "/x/claude-host.mjs" })
     f.emitStdinError() // async EPIPE on the pipe
     await expect(
-      boot.transport.call("claude_send", { sessionId: "s", prompt: "x" })
+      boot.transport.call("agent_send", { sessionId: "s", prompt: "x" })
     ).rejects.toThrow(/sidecar not running/)
   })
 
@@ -380,9 +380,9 @@ describe("bootstrapSidecar", () => {
     }
     const boot = await bootstrapSidecar({ spawn, scriptPath: "/x/claude-host.mjs" })
     // First send: the write throws EPIPE, is caught in toHandle, and triggers teardown.
-    await boot.transport.call("claude_send", { sessionId: "s", prompt: "x" })
+    await boot.transport.call("agent_send", { sessionId: "s", prompt: "x" })
     await expect(
-      boot.transport.call("claude_send", { sessionId: "s", prompt: "y" })
+      boot.transport.call("agent_send", { sessionId: "s", prompt: "y" })
     ).rejects.toThrow(/sidecar not running/)
   })
 
@@ -496,7 +496,7 @@ describe("bootstrap startup diagnostics", () => {
     for (let i = 0; i < 128; i++) f.stderr.write(Buffer.alloc(16_384, 120))
     expect(f.stderr.readableLength).toBe(0)
     expect(f.stderr.writableLength).toBe(0)
-    await boot.transport.call("claude_send", { sessionId: "s", prompt: "still works" })
+    await boot.transport.call("agent_send", { sessionId: "s", prompt: "still works" })
     expect(JSON.parse(f.writes[0])).toMatchObject({ type: "send", prompt: "still works" })
     await boot.shutdown()
   })

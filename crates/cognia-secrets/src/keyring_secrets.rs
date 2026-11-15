@@ -46,9 +46,6 @@ pub struct SecretStoreChange {
     pub value: Option<String>,
 }
 
-/// Legacy input name retained for source compatibility.
-pub type KeyringInput = SecretStoreInput;
-
 const SERVICE_PREFIX: &str = "com.cognia.";
 const SERVICE_SUFFIX: &str = "/v1";
 
@@ -189,8 +186,9 @@ pub fn clear(namespace: &str, key: &str) -> Result<(), String> {
 
 /// Records that only a Rust Host controller reads or writes (ADR-0246): the
 /// Google lineage record with its refresh tokens and client secrets, and the
-/// legacy keys it migrates from. The generic secret-store surfaces (desktop
-/// IPC and the headless companion RPC) refuse them, so no renderer can read a
+/// keys older builds wrote, which can still hold live tokens on disk. The
+/// generic secret-store surfaces (desktop IPC and the headless companion RPC)
+/// refuse them, so no renderer can read a
 /// credential the Host holds or forge the record its CAS protects.
 const HOST_OWNED_RECORDS: &[(&str, &str)] = &[
     ("docs-providers", "google-auth-lineages-v2"),

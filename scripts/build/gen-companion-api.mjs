@@ -33,7 +33,6 @@ const BRIDGE_FIXTURE_PATH = "cli/src/serve/fixtures/bridge-frames.json"
 const BRIDGE_PROTOCOL_VERSION = 3
 const ROUTE_CONTRACT_PATH = "protocol/companion-api-routes.json"
 const COMMAND_MANIFEST_PATH = "protocol/companion-commands.json"
-const COMMAND_RENAMES_PATH = "protocol/companion-command-renames.json"
 const REQUEST_SCHEMA_CATALOG_PATH = "protocol/companion-request-schemas.json"
 const RESPONSE_SCHEMA_CATALOG_PATH = "protocol/companion-response-schemas.json"
 const HEADLESS_DISPOSITIONS_PATH = "protocol/headless-command-dispositions.json"
@@ -481,20 +480,6 @@ function rewriteRemoteGitRequestSchema(name, schema, descriptor) {
   return next
 }
 
-function rewriteLegacyComponentReferences(value) {
-  if (typeof value === "string") {
-    return value.replace(
-      "#/components/responses/JwtRejected",
-      "#/components/responses/AuthenticationRejected",
-    )
-  }
-  if (Array.isArray(value)) return value.map(rewriteLegacyComponentReferences)
-  if (!value || typeof value !== "object") return value
-  return Object.fromEntries(
-    Object.entries(value).map(([key, child]) => [key, rewriteLegacyComponentReferences(child)])
-  )
-}
-
 function mergeClosedObjectAllOf(schema) {
   if (!Array.isArray(schema.allOf) || schema.allOf.length === 0) return schema
   const branches = schema.allOf
@@ -601,7 +586,7 @@ const HOST_CATEGORIES = [
     skill: "cognia-host-agents",
     // `room_` is here, not under `sessions`: a room turn is an orchestrated
     // run of several agent members (ADR-0177), and the arm lives next to
-    // `claude_send`, not next to the transcript reads.
+    // `agent_send`, not next to the transcript reads.
     pattern:
       /^(agent_|claude_|codex_app_|external_agent_|spawn_external_agent$|send_to_external_agent$|kill_external_agent$|get_external_agent_status$|resolve_pi_extension$|fleet_|team_|goal_|room_)/,
   },
@@ -699,7 +684,7 @@ const HOST_RESOURCE_ALIASES = [
   [/^host_admin_lease_/, "admin-leases"],
   [/^integration_ingress_/, "integration-ingress"],
   [/^github_workspace_/, "github-workspaces"],
-  [/^(?:keyring_secret_|secret_store_)/, "secrets"],
+  [/^secret_store_/, "secrets"],
   [/^plugin_python_/, "plugin-python"],
   [/^plugin_wasm_/, "plugin-wasm"],
   [/^plugin_.*vscode|^plugin_vscode_/, "plugin-vscode"],
@@ -2262,9 +2247,6 @@ function ensurePublicComponents(components, publicNames) {
         "Published workflow application session or application API key, depending on the endpoint.",
     },
   }
-  delete next.securitySchemes.legacyBearer
-  delete next.securitySchemes.legacyQueryToken
-  delete next.securitySchemes.bearerAuth
   next.parameters = {
     ...(next.parameters ?? {}),
     DpopProof: {
@@ -2789,24 +2771,11 @@ function ensurePublicComponents(components, publicNames) {
     ...commandCatalogSchemas(),
   }
   next.schemas.RpcError = { $ref: "#/components/schemas/Problem" }
-  delete next.schemas.CanonicalApiError
-  delete next.schemas.BrowserSocketCommand
-  for (const legacySchema of ["IssueResponse", "PairRequest", "PairResponse"]) {
-    delete next.schemas[legacySchema]
-  }
   next.responses = {
     ...(next.responses ?? {}),
     PublicApiError: problemResponse("The request was rejected by the public Companion API."),
     AuthenticationRejected: problemResponse("Authentication or authorization rejected."),
   }
-  for (const legacyResponse of [
-    "PayloadTooLarge",
-    "RemoteControlForbidden",
-    "ServiceTokenRequired",
-  ]) {
-    delete next.responses[legacyResponse]
-  }
-  delete next.responses.JwtRejected
   const sidecarPath = next.schemas.McpServerLifecycleRequest?.properties?.sidecarPath
   if (sidecarPath) {
     sidecarPath.description =
@@ -2879,7 +2848,7 @@ function buildPublicSpec(base, contract, manifest, remoteNames, argumentSchemas)
     const operation = paths[`/api/_rpc/${name}`]?.post
     if (operation) operation.security = [{ dpopAccess: [] }]
   }
-  return removeUnusedPublicComponents(rewriteLegacyComponentReferences(normalizeOpenApi31({
+  return removeUnusedPublicComponents(normalizeOpenApi31({
     ...base,
     info: {
       ...base.info,
@@ -2900,7 +2869,6 @@ function buildPublicSpec(base, contract, manifest, remoteNames, argumentSchemas)
         COMMAND_MANIFEST_PATH,
         ROUTE_CONTRACT_PATH,
         REQUEST_SCHEMA_CATALOG_PATH,
-        COMMAND_RENAMES_PATH,
         ZOD_REQUEST_SCHEMA_PATH,
       ],
       publicCommandCount: classified.publicNames.length,
@@ -2920,7 +2888,7 @@ function buildPublicSpec(base, contract, manifest, remoteNames, argumentSchemas)
       ).length,
       legacyCompatibility: false,
     },
-  })))
+  }))
 }
 
 function normalizeOpenApi31(value) {
@@ -3158,7 +3126,6 @@ function buildHeadlessSpec(
         REQUEST_SCHEMA_CATALOG_PATH,
         RESPONSE_SCHEMA_CATALOG_PATH,
         HEADLESS_DISPOSITIONS_PATH,
-        COMMAND_RENAMES_PATH,
         ZOD_REQUEST_SCHEMA_PATH,
       ],
       internalCommandCount: classified.internalNames.length,
@@ -3622,7 +3589,6 @@ function readRepo(path) {
 
 export function inspectCommittedContract() {
   const manifest = JSON.parse(readRepo(COMMAND_MANIFEST_PATH))
-  const renames = JSON.parse(readRepo(COMMAND_RENAMES_PATH))
   const contract = JSON.parse(readRepo(ROUTE_CONTRACT_PATH))
   const requestSchemaCatalogSource = readRepo(REQUEST_SCHEMA_CATALOG_PATH)
   const requestSchemaCatalog = requestSchemaCatalogSchema.parse(
@@ -3829,7 +3795,6 @@ export function inspectCommittedContract() {
   )
   const desiredKnownCommandsRustSource = renderKnownCommandsRust({
     manifest,
-    renames,
     catalogHash: desiredHostCommandCatalog.catalogHash,
   })
   const errors = validateRouteContract({

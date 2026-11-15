@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn p6c_policy_is_the_dispatch_allowlist() {
         for command in ["person_model_ticket_mint", "agent_send", "agent_interrupt", "agent_close_session"] { assert!(person_command_allowed(command)); }
-        for command in ["org_model_credential_set", "secret_store_get", "sync_pull", "session_list", "agent_start", "claude_send", "claude_close_session"] { assert!(!person_command_allowed(command)); }
+        for command in ["org_model_credential_set", "secret_store_get", "sync_pull", "session_list", "agent_start"] { assert!(!person_command_allowed(command)); }
     }
     #[test]
     fn p6c_partition_event_publication_and_replay_exclude_operator_and_other_brains() {

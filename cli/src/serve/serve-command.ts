@@ -9,7 +9,7 @@
  *   3. durability: the account's pinned backend, `sqlite-v5` by default
  *      (ADR-0224), importing an old snapshot store once on first boot
  *   4. `setTransport(CompanionTransport)` with an in-memory config provider
- *      (service token, never persisted) — the control plane: `claude_send`
+ *      (service token, never persisted) — the control plane: `agent_send`
  *      flows brain → RPC → cognia-server → its sidecar
  *   5. `BridgeClient.connect()` + hello — the data plane the three
  *      installers answer on

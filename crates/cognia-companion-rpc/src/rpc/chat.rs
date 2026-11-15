@@ -5,21 +5,14 @@ pub(super) const COMMANDS: &[&str] = &[
     "person_agent_policy_get",
     "person_agent_usage_get",
     "person_agent_lease_prepare",
-    // ADR-0090 canonical names. Their deprecated `claude_*` aliases below run
-    // the same impl bodies; the canonical four additionally carry the caller's
-    // `commandId` idempotency key, which is the only behavioural difference.
+    // ADR-0090 canonical names.
     "agent_send",
     "agent_interrupt",
     "agent_compact",
     "agent_close_session",
     "agent_resolve_permission",
-    "claude_send",
-    "claude_interrupt",
-    "claude_compact",
     "claude_restore",
     "claude_set_mode",
-    "claude_approve",
-    "claude_close_session",
     // Sidecar round-trips a paired device drives on the host's own agent
     // runtime: live `Query` control (setModel, context usage, MCP status) and
     // the session-level SDK functions (transcripts on disk). Both reply on
@@ -42,11 +35,8 @@ pub(super) const COMMANDS: &[&str] = &[
     "read_project_mcp_config",
     "write_agent_config",
     "secret_store_get",
-    "keyring_secret_get",
     "secret_store_set",
-    "keyring_secret_set",
     "secret_store_delete",
-    "keyring_secret_clear",
 ];
 
 pub(super) async fn dispatch(
@@ -90,28 +80,8 @@ pub(super) async fn dispatch(
         // The chat-session arms are host-generic (ADR-0059 R7): the sidecar
         // state + host resolve from either the Tauri app or the headless
         // services registry, so a cloud cognia-server executes chat turns.
-        // Two arms, one body (`send_arm` below). They are not folded into a
-        // single `"a" | "b"` arm on purpose: the generated request contracts are
-        // inferred per arm from the `required(...)` calls in its body
-        // (`extractCommandArgumentSchemas` in scripts/build/gen-companion-api.mjs),
-        // so a shared arm would publish one command's schema for both — and
-        // these two genuinely differ, since only the canonical name carries the
-        // caller's `commandId`.
-        "claude_send" => {
-            let session_id: String = required_aliased(&args, "session_id", "sessionId")?;
-            let prompt: Value = required(&args, "prompt")?;
-            let options: Option<claude_commands::SendOptions> = optional(&args, "options")?;
-            let caller = SendCaller {
-                device_id,
-                tenant_id,
-                scope,
-            };
-            send_arm(state, host, caller, session_id, prompt, options, None, None).await
-        }
-
-        // The canonical send adds exactly what the desktop `agent_send` command
-        // adds over its alias: the frozen execution-spec skew guard, and the
-        // renderer's idempotency key.
+        // The send carries the frozen execution-spec skew guard the desktop
+        // `agent_send` command applies, and the caller's idempotency key.
         "agent_send" => {
             let session_id: String = required_aliased(&args, "session_id", "sessionId")?;
             let prompt: Value = required(&args, "prompt")?;
@@ -140,14 +110,6 @@ pub(super) async fn dispatch(
                 state, host, caller, session_id, prompt, options, command_id, message_id,
             )
             .await
-        }
-
-        "claude_interrupt" => {
-            let session_id: String = required_aliased(&args, "session_id", "sessionId")?;
-            claude_commands::claude_interrupt_impl_with_id(&host.sidecar_state(), session_id, None)
-                .await
-                .map(|_| Value::Null)
-                .map_err(RpcError::internal)
         }
 
         "agent_interrupt" => {
@@ -260,20 +222,6 @@ pub(super) async fn dispatch(
             .map_err(RpcError::internal)
         }
 
-        "claude_compact" => {
-            let session_id: String = required_aliased(&args, "session_id", "sessionId")?;
-            let focus: Option<String> = optional(&args, "focus")?;
-            claude_commands::claude_compact_impl_with_id(
-                &host.sidecar_state(),
-                session_id,
-                focus,
-                None,
-            )
-            .await
-            .map(|_| Value::Null)
-            .map_err(RpcError::internal)
-        }
-
         "agent_compact" => {
             let session_id: String = required_aliased(&args, "session_id", "sessionId")?;
             let focus: Option<String> = optional(&args, "focus")?;
@@ -315,29 +263,6 @@ pub(super) async fn dispatch(
             .map_err(RpcError::internal)
         }
 
-        "claude_approve" => {
-            let session_id: String = required_aliased(&args, "session_id", "sessionId")?;
-            let request_id: String = required_aliased(&args, "request_id", "requestId")?;
-            let decision: String = required(&args, "decision")?;
-            let message: Option<String> = optional(&args, "message")?;
-            let updated_input: Option<Value> =
-                optional_aliased(&args, "updated_input", "updatedInput")?;
-            let context: Option<cognia_companion::remote_execution::RemoteExecutionContext> =
-                optional_aliased(&args, "remote_execution_context", "remoteExecutionContext")?;
-            authorize_approval(context.as_ref(), device_id, scope, &session_id, &request_id)?;
-            claude_commands::claude_approve_impl(
-                &host.sidecar_state(),
-                session_id,
-                request_id,
-                decision,
-                message,
-                updated_input,
-            )
-            .await
-            .map(|_| Value::Null)
-            .map_err(RpcError::internal)
-        }
-
         "agent_resolve_permission" => {
             let session_id: String = required_aliased(&args, "session_id", "sessionId")?;
             let request_id: String = required_aliased(&args, "request_id", "requestId")?;
@@ -359,18 +284,6 @@ pub(super) async fn dispatch(
                 updated_input,
                 command_id,
                 interrupt,
-            )
-            .await
-            .map(|_| Value::Null)
-            .map_err(RpcError::internal)
-        }
-
-        "claude_close_session" => {
-            let session_id: String = required_aliased(&args, "session_id", "sessionId")?;
-            claude_commands::claude_close_session_impl_with_id(
-                &host.sidecar_state(),
-                session_id,
-                None,
             )
             .await
             .map(|_| Value::Null)
@@ -600,7 +513,7 @@ pub(super) async fn dispatch(
         }
 
         // ── Generic server secret store ──────────────────────────────────────
-        "secret_store_get" | "keyring_secret_get" => {
+        "secret_store_get" => {
             host.headless()
                 .ok_or_else(|| RpcError::headless_host_required(name))?;
             let input: cognia_secrets::keyring_secrets::SecretStoreInput =
@@ -616,7 +529,7 @@ pub(super) async fn dispatch(
             to_json(value)
         }
 
-        "secret_store_set" | "keyring_secret_set" => {
+        "secret_store_set" => {
             host.headless()
                 .ok_or_else(|| RpcError::headless_host_required(name))?;
             let input: cognia_secrets::keyring_secrets::SecretStoreInput =
@@ -646,7 +559,7 @@ pub(super) async fn dispatch(
             Ok(Value::Null)
         }
 
-        "secret_store_delete" | "keyring_secret_clear" => {
+        "secret_store_delete" => {
             host.headless()
                 .ok_or_else(|| RpcError::headless_host_required(name))?;
             let input: cognia_secrets::keyring_secrets::SecretStoreInput =
@@ -699,15 +612,14 @@ fn require_non_org_namespace(namespace: &str) -> Result<(), (StatusCode, Json<Rp
 /// asked for can be validated back to *this* turn, materialises a hosted task
 /// workspace when the caller sent one, and hands the result to the same
 /// host-generic send the desktop uses. `command_id` is the caller's idempotency
-/// key — present only on the canonical `agent_send`, because nothing that calls
-/// the deprecated alias stamps one.
+/// key.
 /// Decide whether `device_id` may answer permission `request_id` on
 /// `session_id`.
 ///
 /// Two authorities, chosen by where the turn came from:
 ///
 /// * **Remote-originated** — the turn was sent by a paired device through
-///   `agent_send` / `claude_send`, so `send_arm` minted a
+///   `agent_send`, so `send_arm` minted a
 ///   [`RemoteExecutionContext`] and the sidecar echoed it on the
 ///   `permission_request` frame. The frame was targeted at the origin device
 ///   only, and only that device may answer, with the context: generation,
@@ -717,7 +629,7 @@ fn require_non_org_namespace(namespace: &str) -> Result<(), (StatusCode, Json<Rp
 ///   context exists, the frame was broadcast, and `claude-chat-events.ts`
 ///   routes the prompt to the device holding a *control* attachment on the
 ///   session with the words "the remote … will resolve it via
-///   `claude_approve`". That route answered `400 missing
+///   `agent_resolve_permission`". That route answered `400 missing
 ///   remote_execution_context` for every such call, so a phone could only
 ///   ever approve turns it had itself sent. Here the authority is the
 ///   remote-control grant (`workspace.write`, what a control attachment is
@@ -984,7 +896,7 @@ mod tests {
             "host_provider_credential_set",
             "sync_pull",
             "agent_start",
-            "claude_send",
+            "agent_send",
         ] {
             let (status, body) = super::super::dispatch(
                 command,
@@ -1034,11 +946,8 @@ mod tests {
         ] {
             for command in [
                 "secret_store_get",
-                "keyring_secret_get",
                 "secret_store_set",
-                "keyring_secret_set",
                 "secret_store_delete",
-                "keyring_secret_clear",
             ] {
                 let (status, error) = super::dispatch(command, serde_json::json!({"input":{"namespace":namespace,"key":format!("{org}/openai"),"value":key}}),
                     &state, &host, "operator", Some("tenant"), Some("service")).await.unwrap_err();
@@ -1105,46 +1014,30 @@ mod tests {
         host_secrets::delete(HostSecretKind::Provider, "chat-fill-gate").expect("clean up");
     }
 
-    /// ADR-0090 names `agent_*` canonical and `claude_*` deprecated. The four
-    /// canonical control verbs were nonetheless stranded on `target: client` /
-    /// `transports: ["internal"]` while their deprecated aliases were already
-    /// reachable over http/ws/webrtc — so a paired device running the canonical
-    /// path (any session with a frozen execution spec) got
-    /// `404 unknown_command` on every send.
-    ///
-    /// Pin the two halves together: whatever authority the alias carries, the
-    /// canonical name carries, and no more. Drift in either direction is the
-    /// bug this test exists to catch.
+    /// The ADR-0090 control verbs are how a paired device drives a turn, so
+    /// each must be reachable over the remote transports with the execution
+    /// target, and must have an arm, or the manifest promises a command the
+    /// dispatcher will 404.
     #[test]
-    fn canonical_control_verbs_carry_exactly_their_alias_authority() {
-        use cognia_companion::command_manifest::descriptor;
-        for (canonical, alias) in [
-            ("agent_send", "claude_send"),
-            ("agent_interrupt", "claude_interrupt"),
-            ("agent_compact", "claude_compact"),
-            ("agent_close_session", "claude_close_session"),
+    fn canonical_control_verbs_are_remote_execution_commands() {
+        use cognia_companion::command_manifest::{descriptor, CommandTarget, CommandTransport};
+        for canonical in [
+            "agent_send",
+            "agent_interrupt",
+            "agent_compact",
+            "agent_close_session",
+            "agent_resolve_permission",
         ] {
             let a = descriptor(canonical)
                 .unwrap_or_else(|| panic!("{canonical} is missing from the command manifest"));
-            let b = descriptor(alias)
-                .unwrap_or_else(|| panic!("{alias} is missing from the command manifest"));
-            assert_eq!(a.target, b.target, "{canonical} target");
-            assert_eq!(a.operation, b.operation, "{canonical} operation");
-            assert_eq!(a.capability, b.capability, "{canonical} capability");
-            assert_eq!(a.risk, b.risk, "{canonical} risk");
-            assert_eq!(a.approval, b.approval, "{canonical} approval");
-            assert_eq!(a.idempotency, b.idempotency, "{canonical} idempotency");
-            assert_eq!(a.transports, b.transports, "{canonical} transports");
+            assert_eq!(a.target, CommandTarget::Execution, "{canonical} target");
+            assert_eq!(a.capability, "agent.run", "{canonical} capability");
             // Reachability is decided by the transport list, not by intent.
             assert!(
-                !a.transports
-                    .contains(&cognia_companion::command_manifest::CommandTransport::Internal),
+                !a.transports.contains(&CommandTransport::Internal),
                 "{canonical} is still confined to the internal transport"
             );
-            // And the arm has to exist on both sides, or the manifest is
-            // promising a command the dispatcher will 404.
             assert!(COMMANDS.contains(&canonical), "{canonical} has no arm");
-            assert!(COMMANDS.contains(&alias), "{alias} has no arm");
         }
     }
 

@@ -548,24 +548,11 @@ export function useSessions({
         const local = await listMessages(sessionId)
         if (stale()) return local
         if (isTauri() || isCapacitor() || !hasWebCompanionTarget()) return local
-        try {
-          if (stale()) return local
-          const hydration = await hydrateSessionHistory(activeTransport, sessionId)
-          // Transcript-capable hosts are rendered from bounded timeline pages;
-          // keep only the already-synced recent tail in Zustand for the active
-          // turn. Legacy hosts still require the fully hydrated Dexie snapshot.
-          if (stale()) return local
-          return hydration.mode === "timeline" ? local : listMessages(sessionId)
-        } catch (error) {
-          // Backward-compatible with older companion servers: keep a usable
-          // recent tail when the lazy-history RPC is unavailable, but do not
-          // hide a genuinely empty history failure.
-          if (local.length > 0) {
-            console.warn("remote session history hydration failed; using synced tail", error)
-            return local
-          }
-          throw error
-        }
+        // The host renders its own conversations from bounded timeline pages,
+        // and a conversation it has never seen is local. Either way Zustand
+        // keeps only the already-synced local rows for the active turn.
+        await hydrateSessionHistory(activeTransport, sessionId)
+        return local
       }
       loadMessages()
         .then(async (msgs) => {

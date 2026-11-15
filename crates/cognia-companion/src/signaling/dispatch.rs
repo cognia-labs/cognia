@@ -1541,7 +1541,7 @@ mod tests {
 
     #[test]
     fn inbound_rpc_accepts_optional_idempotency_key() {
-        let raw = br#"{"id":"r1","method":"claude_send","params":{},"idempotencyKey":"uuid","protocolVersion":2}"#;
+        let raw = br#"{"id":"r1","method":"agent_send","params":{},"idempotencyKey":"uuid","protocolVersion":2}"#;
         let rpc: InboundRpc = serde_json::from_slice(raw).unwrap();
         assert_eq!(rpc.idempotency_key.as_deref(), Some("uuid"));
         assert_eq!(rpc.protocol_version, 2);

@@ -90,7 +90,7 @@ test("pairing, chat, replay recovery, and browser reload remain one session", as
 
   await page.evaluate(() => window.__cogniaE2ECompanion!.subscribe("claude://message"))
   await page.evaluate(() =>
-    window.__cogniaE2ECompanion!.call("claude_send", {
+    window.__cogniaE2ECompanion!.call("agent_send", {
       session_id: "web-headless-real-e2e",
       prompt: "reply through the deterministic provider",
       options: {

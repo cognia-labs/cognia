@@ -69,8 +69,8 @@ describe("useChatRuntimeGate", () => {
           target: companion,
           vaultState: "unlocked",
           connectionState: "online",
-          // `claude_send` is gated on `agent.run` (protocol/companion-commands.json).
-          host: { compatible: true, operations: ["claude_send"], grants: ["agent.run"] },
+          // `agent_send` is gated on `agent.run` (protocol/companion-commands.json).
+          host: { compatible: true, operations: ["agent_send"], grants: ["agent.run"] },
         })
       )
     )
@@ -90,7 +90,7 @@ describe("useChatRuntimeGate", () => {
           target: companion,
           vaultState: "unlocked",
           connectionState: "online",
-          host: { compatible: true, operations: ["claude_send"], grants: ["chat.read"] },
+          host: { compatible: true, operations: ["agent_send"], grants: ["chat.read"] },
         })
       )
     )
@@ -104,8 +104,8 @@ describe("useChatRuntimeGate", () => {
   })
 
   it("p6e opens it on a member's person partition, which sends through agent_send", () => {
-    // The Host reports `claude_send` unhealthy on a person partition; the
-    // member's brain declares `agent_send` instead.
+    // The member's brain declares `agent_send` only while it runs partition
+    // chat; the Host's tool surface alone does not open the composer.
     const member = (operations: string[]) =>
       snapshot({
         target: companion,
@@ -117,7 +117,7 @@ describe("useChatRuntimeGate", () => {
     const { result } = renderHook(() => useChatRuntimeGate())
     expect(result.current.availability.state).toBe("available")
     expect(result.current.composerDisabled).toBe(false)
-    act(() => setRuntimeSnapshot(member(["claude_send"])))
+    act(() => setRuntimeSnapshot(member(["claude_sidecar_status"])))
     expect(result.current.availability.state).toBe("read-only")
     expect(result.current.composerDisabled).toBe(true)
   })

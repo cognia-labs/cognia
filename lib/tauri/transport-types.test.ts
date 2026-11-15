@@ -5,7 +5,7 @@ it("extends code-server startup without changing other command deadlines", () =>
   expect(transportCommandTimeoutMs("codeserver_ensure")).toBe(300_000)
   expect(transportCommandTimeoutMs("codeserver_status")).toBe(30_000)
   expect(transportCommandTimeoutMs("codeserver_stop")).toBe(30_000)
-  expect(transportCommandTimeoutMs("claude_send")).toBe(30_000)
+  expect(transportCommandTimeoutMs("agent_send")).toBe(30_000)
 })
 
 it.each([

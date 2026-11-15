@@ -133,7 +133,7 @@ async function denyThroughChannel(
 
   // Sidecar lane — the same ladder `respondToApproval` climbs: durable
   // host-state intent when a host channel is negotiated, then the execution
-  // handle (capability-audited), then the plain `claude_approve` IPC.
+  // handle (capability-audited), then the plain `agent_resolve_permission` IPC.
   const { enqueueHostStateIntentIfAvailable } = await import("@/lib/db/mobile-outbound-queue")
   try {
     const queued = await enqueueHostStateIntentIfAvailable({

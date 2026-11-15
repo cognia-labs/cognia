@@ -527,10 +527,6 @@
     "apiKeySetupHint": "Claude subscription and Console sign-in use OAuth. Configure third-party API keys and Coding Plan keys with their provider in Providers.",
     "apiKeySetupAction": "Set up an API key or Coding Plan"
   },
-  "migration": {
-    "toastBody": "Migrated {count, plural, =1 {1 legacy account} other {# legacy accounts}} into the new vault.",
-    "toastTitle": "Subscription module upgraded"
-  },
   "nav": {
     "groups": {
       "providersGroup": "Providers",

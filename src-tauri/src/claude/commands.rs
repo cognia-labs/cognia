@@ -7,13 +7,6 @@ use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tracing::Instrument as _;
 
-/// Old-vs-new command telemetry: quantifies the remaining migration surface
-/// (plan Phase 6 验收 / Phase 9 retirement evidence).
-#[tauri::command]
-pub async fn agent_command_telemetry() -> Result<serde_json::Value, String> {
-    cognia_sidecar::commands::agent_command_telemetry().await
-}
-
 /// Canonical send. Requires a well-formed `options.execution` spec when one
 /// is present (deep validation stays renderer-side; this guards skew).
 #[tauri::command]
@@ -42,6 +35,13 @@ pub async fn agent_send(
         }
     }
     let span = tracing::info_span!("agent.send", session_id = %session_id);
+    #[cfg(feature = "otel-export")]
+    crate::telemetry::set_parent(
+        &span,
+        options
+            .as_ref()
+            .and_then(|value| value.traceparent.as_deref()),
+    );
     claude_send_with_host_and_id(
         Arc::new(TauriSidecarHost(app)),
         state.inner().clone(),
@@ -123,71 +123,15 @@ pub async fn agent_start(
     agent_start_with_host(Arc::new(TauriSidecarHost(app)), state.inner().clone()).await
 }
 
-/// Ensure the sidecar is running, then push a user message to it.
-///
-/// `prompt` may be a string or an array of content blocks (text + image)
-/// — the value is forwarded verbatim to the sidecar, which forwards it to
-/// the Claude Agent SDK.
-#[tauri::command]
-pub async fn claude_send(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-    session_id: String,
-    prompt: Value,
-    options: Option<SendOptions>,
-) -> Result<(), String> {
-    bump_deprecated("claude_send");
-    let span = tracing::info_span!("claude.send", session_id = %session_id);
-    #[cfg(feature = "otel-export")]
-    crate::telemetry::set_parent(
-        &span,
-        options
-            .as_ref()
-            .and_then(|value| value.traceparent.as_deref()),
-    );
-    claude_send_with_host(
-        Arc::new(TauriSidecarHost(app)),
-        state.inner().clone(),
-        session_id,
-        prompt,
-        options,
-    )
-    .instrument(span)
-    .await
-}
-
-#[tauri::command]
-pub async fn claude_interrupt(
-    state: State<'_, SidecarState>,
-    session_id: String,
-) -> Result<(), String> {
-    bump_deprecated("claude_interrupt");
-    claude_interrupt_impl(&state, session_id).await
-}
-
-/// Manually compact a session's context. Mirrors `claude_interrupt` — a control
-/// message the sidecar's read loop routes to the session's `requestCompact`.
-/// `focus` is the optional compact-instruction argument.
-#[tauri::command]
-pub async fn claude_compact(
-    state: State<'_, SidecarState>,
-    session_id: String,
-    focus: Option<String>,
-) -> Result<(), String> {
-    bump_deprecated("claude_compact");
-    claude_compact_impl(&state, session_id, focus).await
-}
-
 /// Undo a prior compaction by restoring the pre-compaction message snapshot.
-/// Mirrors `claude_compact` — a fire-and-forget control message the sidecar's
-/// read loop routes to the session's `restoreConversation` (generic path only).
+/// A fire-and-forget control message the sidecar's read loop routes to the
+/// session's `restoreConversation` (generic path only).
 #[tauri::command]
 pub async fn claude_restore(
     state: State<'_, SidecarState>,
     session_id: String,
     messages: Value,
 ) -> Result<(), String> {
-    bump_deprecated("claude_restore");
     claude_restore_impl(&state, session_id, messages).await
 }
 
@@ -199,36 +143,6 @@ pub async fn claude_set_mode(
     command_id: Option<String>,
 ) -> Result<(), String> {
     claude_set_mode_impl_with_id(&state, session_id, mode, command_id).await
-}
-
-#[tauri::command]
-pub async fn claude_approve(
-    state: State<'_, SidecarState>,
-    session_id: String,
-    request_id: String,
-    decision: String,
-    message: Option<String>,
-    updated_input: Option<Value>,
-) -> Result<(), String> {
-    bump_deprecated("claude_approve");
-    claude_approve_impl(
-        &state,
-        session_id,
-        request_id,
-        decision,
-        message,
-        updated_input,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn claude_close_session(
-    state: State<'_, SidecarState>,
-    session_id: String,
-) -> Result<(), String> {
-    bump_deprecated("claude_close_session");
-    claude_close_session_impl(&state, session_id).await
 }
 
 /// Drive a live SDK `Query` control method on a session. Fire-and-forget over
@@ -245,7 +159,6 @@ pub async fn claude_session_control(
     params: Option<Value>,
     command_id: Option<String>,
 ) -> Result<(), String> {
-    bump_deprecated("claude_session_control");
     claude_session_control_impl(&state, session_id, request_id, method, params, command_id).await
 }
 
@@ -303,7 +216,7 @@ pub async fn claude_feature_abort(
 }
 
 /// Renderer → sidecar: resolve a pending plugin-tool call so the sidecar's
-/// `pendingPluginToolCalls` promise settles. Mirrors `claude_approve`.
+/// `pendingPluginToolCalls` promise settles. Mirrors `agent_resolve_permission`.
 /// Renderer-only — NOT exposed via companion RPC (plugin tools execute on the
 /// desktop host, never the phone).
 #[tauri::command]
@@ -342,7 +255,7 @@ pub async fn claude_plugin_hook_response(
 /// Renderer → sidecar: answer a `tool_result_review` (the plugin Agent SDK's
 /// PostToolUse rewrite) so the sidecar's `pendingToolResultReviews` promise
 /// settles. `updated_tool_output` rewrites the output the model sees; `None`
-/// leaves it unchanged. Mirrors `claude_approve`. Renderer-only — tool output
+/// leaves it unchanged. Mirrors `agent_resolve_permission`. Renderer-only — tool output
 /// review runs on the desktop host, never the phone.
 #[tauri::command]
 pub async fn claude_tool_result_decision(
@@ -394,7 +307,6 @@ pub async fn claude_protocol_adapter_message(
 pub async fn claude_sidecar_status(
     state: State<'_, SidecarState>,
 ) -> Result<SidecarStatus, String> {
-    bump_deprecated("claude_sidecar_status");
     claude_sidecar_status_impl(&state).await
 }
 

@@ -684,8 +684,8 @@ impl IntoResponse for Failure {
                 })),
             )
                 .into_response(),
-            // ADR-0208: `authoritative` stays the whole record so older
-            // clients keep working; `fields` names each same-field clash.
+            // ADR-0208: `authoritative` is the whole current record the
+            // client rebases on; `fields` names each same-field clash.
             Self::Store(StoreError::FieldConflict { current, fields })
             | Self::Auth(AuthError::Store(StoreError::FieldConflict { current, fields })) => (
                 StatusCode::CONFLICT,
@@ -1161,8 +1161,9 @@ async fn mint_grant(
     let org =
         OrgId::parse(org_id.clone()).map_err(|error| Failure::BadRequest(error.to_string()))?;
 
-    // `role` remains in the grant for wire compatibility and diagnostics only.
-    // Every protected request re-resolves authoritative memberships.
+    // The grant carries no role: every protected request re-resolves
+    // authoritative memberships. The role here only gates the mint and is
+    // recorded in the audit event.
     let membership = state
         .store
         .membership(&org_id, user.as_str(), body.workspace_id.as_deref())
@@ -1184,7 +1185,7 @@ async fn mint_grant(
         }
     }
 
-    let grant_claims = GrantClaims::issue(user, org, body.workspace_id, role, GRANT_TTL)
+    let grant_claims = GrantClaims::issue(user, org, body.workspace_id, GRANT_TTL)
         .map_err(|error| Failure::BadRequest(error.to_string()))?;
     let grant = state
         .signer
@@ -3103,7 +3104,6 @@ mod tests {
             user.clone(),
             OrgId::parse(ORG).unwrap(),
             None,
-            None,
             Duration::from_secs(300),
         )
         .unwrap();
@@ -3484,7 +3484,6 @@ mod tests {
             ada(),
             other,
             None,
-            None,
             std::time::Duration::from_secs(300),
         )
         .unwrap();
@@ -3665,7 +3664,6 @@ mod tests {
         let claims = GrantClaims::issue(
             ada(),
             OrgId::parse("org_elsewhere000000000000").unwrap(),
-            None,
             None,
             Duration::from_secs(300),
         )

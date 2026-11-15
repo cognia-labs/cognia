@@ -725,11 +725,11 @@ mod tests {
     fn tauri_app_on_headless_is_a_503_naming_the_command() {
         let host = headless_host();
         let err = host
-            .tauri_app("claude_send")
+            .tauri_app("agent_send")
             .expect_err("headless has no AppHandle");
         assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(err.1 .0.code, "headless_unsupported");
-        assert!(err.1 .0.message.contains("claude_send"));
+        assert!(err.1 .0.message.contains("agent_send"));
     }
 
     fn spawn_config(placed: bool) -> crate::external_agent::process::ExternalAgentSpawnConfig {

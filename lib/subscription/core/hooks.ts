@@ -2,10 +2,10 @@
 
 // Provider-agnostic React hooks for the ADR-0025 unified subscription module.
 //
-// Three hooks:
+// Hooks:
 //   * useAccounts(provider)         — live list of accounts + active pointer
 //   * useActiveAccount(provider)    — the active account's ActiveSnapshot
-//   * useProviderPreset(provider)   — read/write the per-provider preset
+//   * useProviderPresets(provider)  — the preset library + default pointer
 //
 // All hooks degrade to no-ops outside Tauri (return empty arrays / null).
 
@@ -33,7 +33,6 @@ import {
   saveProviderPreset,
   setActiveAccount,
   setDefaultPreset,
-  setProviderPreset,
 } from "./transport"
 import { deleteProviderAccount } from "./account-lifecycle"
 import type {
@@ -452,69 +451,6 @@ export function useActiveAccount(provider: ProviderId): UseActiveAccountResult {
   }, [provider])
 
   return { snapshot, loading, reload }
-}
-
-// ---------------------------------------------------------------------------
-// useProviderPreset(provider)
-// ---------------------------------------------------------------------------
-
-export interface UseProviderPresetResult {
-  preset: ProviderPreset | null
-  loading: boolean
-  reload: () => Promise<void>
-  /** Persist a new preset or clear it (`null`). */
-  save: (next: ProviderPreset | null) => Promise<void>
-}
-
-export function useProviderPreset(provider: ProviderId): UseProviderPresetResult {
-  const [preset, setPreset] = useState<ProviderPreset | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  const reload = useCallback(async () => {
-    if (!isTauri()) {
-      setPreset(null)
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    try {
-      setPreset(await getProviderPreset(provider))
-    } finally {
-      setLoading(false)
-    }
-  }, [provider])
-
-  useEffect(() => {
-    let alive = true
-    void (async () => {
-      if (!isTauri()) {
-        if (alive) {
-          setPreset(null)
-          setLoading(false)
-        }
-        return
-      }
-      try {
-        const got = await getProviderPreset(provider)
-        if (alive) setPreset(got)
-      } finally {
-        if (alive) setLoading(false)
-      }
-    })()
-    return () => {
-      alive = false
-    }
-  }, [provider])
-
-  const save = useCallback(
-    async (next: ProviderPreset | null) => {
-      await setProviderPreset(provider, next)
-      setPreset(next)
-    },
-    [provider]
-  )
-
-  return { preset, loading, reload, save }
 }
 
 // ---------------------------------------------------------------------------

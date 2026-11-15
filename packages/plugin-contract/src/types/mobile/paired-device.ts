@@ -90,7 +90,7 @@ export interface PairedDeviceRow {
 
   /**
    * Remote Session Control capability gate. When `true`, this device may
-   * issue *control* RPCs (claude_send / claude_interrupt / claude_approve,
+   * issue *control* RPCs (agent_send / agent_interrupt / agent_resolve_permission,
    * goal_*, automation_consent_respond, and a `mode: "control"`
    * session_attach) — i.e. drive and steer live agent sessions, not just
    * read-only sync. Attaching as an *observer* needs only the read capability

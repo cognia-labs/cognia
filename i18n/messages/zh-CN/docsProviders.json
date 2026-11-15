@@ -80,7 +80,6 @@
       "revoked": "已吊销",
       "tombstoned": "已断开"
     },
-    "googleNeedsIdentity": "请重新授权以确认此 Google 账号的身份。",
     "googleReauthorize": "重新授权",
     "googleRevokeUnavailable": "无法吊销授权",
     "googleSecretSaved": "密钥已保存在宿主中",
@@ -88,7 +87,6 @@
     "googleSecretSave": "保存密钥",
     "googleSecretClear": "清除已保存的密钥",
     "googleSecretSaveFailed": "无法更新已保存的密钥：{reason}",
-    "googleMigrationNeedsClientId": "请输入与已保存密钥对应的 OAuth 客户端 ID，以完成设置。",
     "googleClientHint": "请在 Google Cloud Console 创建「桌面应用」类型的凭据。",
     "googleClientId": "OAuth 客户端 ID",
     "googleClientSecret": "OAuth 客户端密钥",

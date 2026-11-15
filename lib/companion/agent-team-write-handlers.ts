@@ -163,8 +163,3 @@ export async function handleTeamTaskComment(
   })
   return comment ? { ok: true, commentId: comment.id } : { ok: false, reason: "empty-comment" }
 }
-
-// `handleTeamRunPause` / `handleTeamRunResume` / `handleTeamRunStop` were
-// retired with ADR-0169. Run control is `execution_run_control`
-// (`lib/companion/execution-run-control-handler.ts`), and the old
-// team-addressed commands answer `upgrade-required`.

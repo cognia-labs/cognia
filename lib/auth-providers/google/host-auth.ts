@@ -5,7 +5,6 @@ import {
   listAuthConnections,
   type AuthConnectionRow,
 } from "@/lib/db/auth-connections"
-import { getSettings } from "@/lib/db/settings"
 import {
   getProvider,
   registerAuthenticationProvider,
@@ -191,17 +190,7 @@ export function reconcileGoogleConnections(
 async function publishGoogleSnapshot(
   admission: GoogleStateAdmission
 ): Promise<AuthConnectionRow[]> {
-  const preferences = await getSettings()
-  const legacyClientId = preferences.docsProviders?.google?.clientId?.trim()
-  const legacyBackupClientId = preferences.backupDestinations?.googleDrive?.clientId?.trim()
-  const snapshot = await googleState(
-    {
-      action: "snapshot",
-      ...(legacyBackupClientId ? { legacyBackupClientId } : {}),
-      ...(legacyClientId ? { legacyClientId } : {}),
-    },
-    admission
-  )
+  const snapshot = await googleState({ action: "snapshot" }, admission)
   const manager = getConnectionManager()
   const previous = (await listAuthConnections("google")).filter((row) => row.ownerPluginId === null)
   const active = new Set<string>()

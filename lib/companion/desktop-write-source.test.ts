@@ -3124,7 +3124,7 @@ describe("dispatchCommand: unknown command", () => {
       features: {
         "claude.host-tools": {
           version: 1,
-          operations: expect.arrayContaining(["claude_send", "claude_interrupt"]),
+          operations: expect.arrayContaining(["agent_send", "agent_interrupt"]),
         },
       },
       limits: {

@@ -1,9 +1,8 @@
 /**
  * The companion server's lifecycle commands, shared by the Local host blocks.
  *
- * Lifted out of the retired `companion-section.tsx` unchanged: the legacy
- * grant import and the Locked Use reseed still ride every start, for the
- * reasons recorded on each function.
+ * Lifted out of the retired `companion-section.tsx`: the Locked Use reseed
+ * still rides every start, for the reason recorded on its function.
  */
 
 import { listPairedDevices } from "@/lib/db/paired-devices"
@@ -53,10 +52,7 @@ export async function startServer(bindMode: BindMode): Promise<number> {
     bindLoopbackOnly: bindMode === "loopback",
   })
   // The three elevated grants live in the host's SecurityStore, which is
-  // persistent, so nothing is re-projected at boot. All that is left is the
-  // one-time import of the pre-migration Dexie flags, so an upgrading user
-  // does not silently lose grants they had already made.
-  await migrateLegacyDeviceGrants()
+  // persistent, so nothing is re-projected at boot.
   await seedLockedComputerUseAllowList()
   return port
 }
@@ -66,34 +62,7 @@ export async function stopServer(): Promise<void> {
 }
 
 /**
- * Import the legacy Dexie grant flags into the host's SecurityStore, once.
- *
- * Deliberately not a per-boot reseed. The store is the authority now, so
- * re-projecting Dexie on every launch would let a stale mirror row resurrect a
- * grant that was revoked through the store (the `cognia-server devices` CLI,
- * the owner API). Rust guards the import behind a committed marker, so this is
- * a no-op after the first run. Best-effort: a failure leaves the store's own
- * grants untouched.
- */
-export async function migrateLegacyDeviceGrants(): Promise<void> {
-  try {
-    const devices = await listPairedDevices()
-    const live = devices.filter((d) => d.revokedAt === undefined)
-    // Each grant comes from its own column, never derived from another: they
-    // are independent, and inferring one from the other would quietly widen
-    // whichever the user actually chose.
-    await transport.call<boolean>("companion_migrate_legacy_device_grants", {
-      control: live.filter((d) => d.allowRemoteControl === true).map((d) => d.deviceId),
-      agentControl: live.filter((d) => d.allowAgentControl === true).map((d) => d.deviceId),
-      terminal: live.filter((d) => d.allowRemoteTerminal === true).map((d) => d.deviceId),
-    })
-  } catch (err) {
-    console.warn("migrateLegacyDeviceGrants failed", err)
-  }
-}
-
-/**
- * Locked Use keeps its per-boot reseed: unlike the three grants above, its list
+ * Locked Use keeps its per-boot reseed: unlike the three elevated grants, its list
  * is in-memory and intentionally dormant, so Dexie is still its only truth.
  * See `src-tauri/src/companion_api/locked_use_allow_list.rs`.
  */

@@ -21,9 +21,9 @@
 //! # What a grant is not
 //!
 //! It is not a session and not an identity. It says "the bearer proved, within
-//! the last few minutes, that they are this user with this role in this
-//! organization". Workspace and role fields remain on the wire only for old
-//! clients; services must resolve current membership for every request.
+//! the last few minutes, that they are this user in this organization". It
+//! carries no role: services must resolve current membership for every
+//! request.
 //! Anything longer-lived belongs to the IdP.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -35,7 +35,6 @@ use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::ids::{OrgId, UserId};
-use crate::roles::WorkspaceRole;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -81,11 +80,6 @@ pub struct GrantClaims {
     /// is not scoped to one of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
-    /// Informational compatibility field for pre-control-plane clients.
-    /// Deprecated: authorization must resolve the current server-side
-    /// membership for every request and must never trust this value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<WorkspaceRole>,
     pub issued_at: i64,
     pub expires_at: i64,
 }
@@ -175,7 +169,6 @@ impl GrantClaims {
         user_id: UserId,
         org_id: OrgId,
         workspace_id: Option<String>,
-        role: Option<WorkspaceRole>,
         ttl: Duration,
     ) -> Result<Self, GrantError> {
         let issued_at = unix_now()?;
@@ -184,7 +177,6 @@ impl GrantClaims {
             user_id,
             org_id,
             workspace_id,
-            role,
             issued_at,
             expires_at: issued_at + ttl.as_secs() as i64,
         })
@@ -231,7 +223,6 @@ mod tests {
             user(),
             org(),
             Some("proj-1".into()),
-            Some(WorkspaceRole::Member),
             Duration::from_secs(300),
         )
         .unwrap()
@@ -264,7 +255,7 @@ mod tests {
 
         let mut forged: GrantClaims =
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-        forged.role = Some(WorkspaceRole::Maintainer);
+        forged.workspace_id = Some("proj-2".into());
         let forged_payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&forged).unwrap());
 
         let result = signer.verify::<GrantClaims>(&format!("{forged_payload}.{signature}"));
@@ -316,17 +307,16 @@ mod tests {
     #[test]
     fn an_org_scoped_grant_omits_the_workspace_fields_entirely() {
         // `skip_serializing_if` keeps a null out of the payload, so an
-        // org-scoped grant cannot be read as "workspace: null, role: null"
-        // by a consumer that treats an explicit null as a value.
+        // org-scoped grant cannot be read as "workspace: null" by a consumer
+        // that treats an explicit null as a value.
         let claims =
-            GrantClaims::issue(user(), org(), None, None, Duration::from_secs(60)).unwrap();
+            GrantClaims::issue(user(), org(), None, Duration::from_secs(60)).unwrap();
         let json = serde_json::to_string(&claims).unwrap();
         assert!(!json.contains("workspaceId"), "{json}");
         assert!(!json.contains("\"role\""), "{json}");
         let token = signer().sign(&claims).unwrap();
         let verified = signer().verify::<GrantClaims>(&token).unwrap();
         assert_eq!(verified.workspace_id, None);
-        assert_eq!(verified.role, None);
     }
 
     #[test]

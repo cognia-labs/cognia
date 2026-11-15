@@ -643,7 +643,6 @@
     "featuresHeading": "Shared features",
     "unavailable": {
       "not-signed-in": "Sign in to see your access.",
-      "unsupported": "This collaboration server does not report access yet.",
       "hidden": "This workspace is not shared with you.",
       "error": "Access could not be checked: {message}"
     }

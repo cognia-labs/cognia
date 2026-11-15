@@ -9,7 +9,7 @@
  */
 
 import { downloadFile } from "@/lib/files/download"
-import type { PerfSample, ProcessSample, SpanSnapshot } from "./types"
+import type { PerfFrame, ProcessSample, SpanSnapshot } from "./types"
 
 export type PerfExportFormat = "json" | "csv-processes" | "csv-hotspots"
 
@@ -65,14 +65,14 @@ export function spansToCsv(spans: SpanSnapshot[]): string {
 
 /** Serialise the full capture (latest frame + rolling history) as JSON. */
 export function snapshotToJson(
-  latest: PerfSample | null,
-  history: PerfSample[],
+  latest: PerfFrame | null,
+  history: PerfFrame[],
   now: number = Date.now()
 ): string {
   return JSON.stringify(
     {
       exportedAt: new Date(now).toISOString(),
-      intervalMs: latest?.intervalMs ?? null,
+      intervalMs: latest?.actualIntervalMs ?? null,
       sampleCount: history.length,
       latest,
       history,
@@ -109,8 +109,8 @@ export function buildPerfExportFilename(
 }
 
 export interface ExportPerfOptions {
-  latest: PerfSample | null
-  history: PerfSample[]
+  latest: PerfFrame | null
+  history: PerfFrame[]
   format: PerfExportFormat
   /** Override for the timestamp baked into the filename / JSON body (tests). */
   now?: number

@@ -73,7 +73,7 @@ pub struct ProviderKeyRotation {
 /// the running server so the same cursor advances across requests.
 pub type KeyRotationMap = Mutex<HashMap<String, ProviderKeyRotation>>;
 
-/// An opaque account/transport identity. Legacy API-key leases keep their old identity.
+/// An opaque account/transport identity. A plain API-key candidate is identified by its key.
 pub fn candidate_credential_identity(candidate: &Candidate) -> String {
     let Some(account) = candidate
         .provider
@@ -686,7 +686,7 @@ pub fn upstream_headers_for(
 }
 
 /// Multiple explicitly authorized deployments keep independent sticky leases.
-/// Legacy tickets retain the original session scope.
+/// A ticket without selector deployments leases per session.
 pub fn ticket_lease_scope(
     ticket: &crate::route_ticket::RouteTicket,
     deployment_id: &str,

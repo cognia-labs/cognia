@@ -15,13 +15,9 @@ let accountState = {
   accountRevision: 1,
 }
 
-const mInitOnce = jest.fn().mockResolvedValue({
-  outcomes: [],
-  migratedCount: 0,
-  toastShown: false,
-})
+const mInitOnce = jest.fn().mockResolvedValue({})
 
-jest.mock("@/lib/subscription/core/migration", () => ({
+jest.mock("@/lib/subscription/core/init", () => ({
   subscriptionInitOnce: (...args: unknown[]) => mInitOnce(...args),
 }))
 
@@ -32,11 +28,6 @@ jest.mock("@/lib/subscription/core/subscription-events", () => ({
 
 jest.mock("@/stores/account/account-store", () => ({
   useAccountStore: (selector: (state: typeof accountState) => unknown) => selector(accountState),
-}))
-
-jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string, params?: Record<string, unknown>) =>
-    params ? `${key}:${JSON.stringify(params)}` : key,
 }))
 
 beforeEach(() => {
@@ -58,17 +49,6 @@ describe("SubscriptionInitializer", () => {
   it("fires subscriptionInitOnce on mount", async () => {
     render(<SubscriptionInitializer />)
     await waitFor(() => expect(mInitOnce).toHaveBeenCalledTimes(1))
-  })
-
-  it("forwards a translator that resolves toast keys via next-intl", async () => {
-    render(<SubscriptionInitializer />)
-    await waitFor(() => expect(mInitOnce).toHaveBeenCalledTimes(1))
-    const opts = mInitOnce.mock.calls[0][0] as {
-      translateToast?: (k: string, p?: Record<string, unknown>) => string
-    }
-    expect(opts.translateToast).toBeDefined()
-    expect(opts.translateToast!("toastTitle")).toBe("toastTitle")
-    expect(opts.translateToast!("toastBody", { count: 2 })).toBe('toastBody:{"count":2}')
   })
 
   it("does not re-fire when the component re-renders", async () => {
@@ -123,9 +103,6 @@ describe("SubscriptionInitializer", () => {
 
   it("re-runs the whole init after the secret store unlocks", async () => {
     mInitOnce.mockResolvedValueOnce({
-      outcomes: [],
-      migratedCount: 0,
-      toastShown: false,
       error: "SECRET_STORE_LOCKED: denied",
       secretStoreUnavailable: true,
     })
@@ -144,9 +121,6 @@ describe("SubscriptionInitializer", () => {
 
   it("does not replay a deferred init for an account that is no longer active", async () => {
     mInitOnce.mockResolvedValueOnce({
-      outcomes: [],
-      migratedCount: 0,
-      toastShown: false,
       secretStoreUnavailable: true,
     })
     setSecretStoreReadiness("locked")

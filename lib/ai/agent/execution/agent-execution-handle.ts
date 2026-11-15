@@ -217,7 +217,7 @@ export function createAgentExecutionHandle(
 ): AgentExecutionHandle {
   const io: AgentExecutionTransport = {
     ipc: {
-      // Canonical `agent_interrupt`, not the deprecated `claude_interrupt`
+      // Canonical `agent_interrupt`, not the deprecated `agent_interrupt`
       // alias `ipc.interruptSession` calls. Two reasons: the alias bumps the
       // Phase-9 retirement counter on every handle interrupt, making a fully
       // migrated caller look like legacy traffic; and only the `agent_*`

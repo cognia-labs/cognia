@@ -1436,7 +1436,7 @@ mod tests {
             assert_eq!(channel_execution_refused(DeploymentMode::SingleUser, enabled, true), !enabled);
             assert!(!channel_execution_refused(DeploymentMode::SingleUser, enabled, false));
         }
-        for command in ["claude_send", "agent_send", "workflow_trigger_manual", "execution_run_create", "team_run_start", "goal_create", "room_send", "codex_app_task_create"] {
+        for command in ["agent_send", "workflow_trigger_manual", "execution_run_create", "team_run_start", "goal_create", "room_send", "codex_app_task_create"] {
             let capability = if command.starts_with("workflow_") { "workflow.run" } else { "agent.run" };
             assert!(host_brain_execution(capability, command), "{command}");
         }
@@ -2012,14 +2012,14 @@ mod tests {
     fn generic_or_session_args_cannot_supply_an_execution_workspace() {
         let args = json!({ "workspaceId": "p", "projectId": "forged", "sessionId": "s" });
         assert_eq!(command_workspace("browser_session_ensure", &args), Some("p"));
-        assert_eq!(command_workspace("claude_send", &args), None);
+        assert_eq!(command_workspace("agent_send", &args), None);
         assert_eq!(command_workspace("workflow_trigger_manual", &args), None);
         struct Missing;
         impl ExecutionBindingLookup for Missing {
             fn binding(&self, _: &str) -> Result<Option<PlacementBinding>, Refusal> { Ok(None) }
         }
         assert_eq!(execution_workspace("spawn_external_agent", &args, &Missing).unwrap().as_deref(), Some("p"));
-        for arm in ["get_external_agent_status", "send_to_external_agent", "kill_external_agent", "claude_send", "workflow_trigger_manual"] {
+        for arm in ["get_external_agent_status", "send_to_external_agent", "kill_external_agent", "agent_send", "workflow_trigger_manual"] {
             assert_eq!(execution_workspace(arm, &args, &Missing).unwrap(), None, "{arm}");
         }
         // The remaining agent/workflow commands are session/run/deployment-

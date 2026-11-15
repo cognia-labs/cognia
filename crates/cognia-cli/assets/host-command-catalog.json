@@ -12668,197 +12668,6 @@
       "outputTyped": true
     },
     {
-      "name": "claude_approve",
-      "category": "agents",
-      "resource": "claude",
-      "target": "execution",
-      "operation": "side-effect",
-      "capability": "agent.run",
-      "risk": "low",
-      "approval": "none",
-      "idempotency": "required",
-      "summary": "claude_approve (agent.run)",
-      "description": "Loopback service-token command. Target: execution; risk: low.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "decision"
-        ],
-        "properties": {
-          "session_id": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string",
-            "description": "ID of the pending approval request emitted via WS."
-          },
-          "decision": {
-            "type": "string",
-            "enum": [
-              "allow",
-              "allow_always",
-              "deny"
-            ],
-            "description": "`allow` proceeds once; `allow_always` proceeds and persists a standing\npermission for this tool/rule for the session; `deny` rejects with the\noptional `message` shown to the model. To edit-and-allow, send\n`decision: allow` together with `updated_input` (the substituted tool\narguments) — there is no separate `edit` decision value.\n"
-          },
-          "message": {
-            "type": "string",
-            "description": "Optional rejection reason or note (denial only)."
-          },
-          "updated_input": {
-            "description": "Replacement tool input — substituted for the original arguments when sent (typically with `decision: allow`).",
-            "oneOf": [
-              {
-                "type": "object",
-                "additionalProperties": {},
-                "example": {}
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "remote_execution_context": {
-            "type": "object",
-            "description": "Remote-execution provenance minted by the host when the turn was dispatched.\nRequired on every companion-originated control message: the arm validates and\nconsumes it (remote_execution::validate_and_consume) before acting.\n",
-            "required": [
-              "hostId",
-              "originDeviceId",
-              "sessionId",
-              "generation",
-              "requestId",
-              "issuedAt",
-              "expiresAt"
-            ],
-            "properties": {
-              "hostId": {
-                "type": "string"
-              },
-              "originDeviceId": {
-                "type": "string"
-              },
-              "sessionId": {
-                "type": "string"
-              },
-              "generation": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "requestId": {
-                "type": "string"
-              },
-              "issuedAt": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "expiresAt": {
-                "type": "integer",
-                "minimum": 0
-              }
-            },
-            "additionalProperties": false
-          },
-          "sessionId": {
-            "type": "string"
-          },
-          "requestId": {
-            "type": "string",
-            "description": "ID of the pending approval request emitted via WS."
-          },
-          "updatedInput": {
-            "description": "Replacement tool input — substituted for the original arguments when sent (typically with `decision: allow`).",
-            "oneOf": [
-              {
-                "type": "object",
-                "additionalProperties": {},
-                "example": {}
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "remoteExecutionContext": {
-            "type": "object",
-            "description": "Remote-execution provenance minted by the host when the turn was dispatched.\nRequired on every companion-originated control message: the arm validates and\nconsumes it (remote_execution::validate_and_consume) before acting.\n",
-            "required": [
-              "hostId",
-              "originDeviceId",
-              "sessionId",
-              "generation",
-              "requestId",
-              "issuedAt",
-              "expiresAt"
-            ],
-            "properties": {
-              "hostId": {
-                "type": "string"
-              },
-              "originDeviceId": {
-                "type": "string"
-              },
-              "sessionId": {
-                "type": "string"
-              },
-              "generation": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "requestId": {
-                "type": "string"
-              },
-              "issuedAt": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "expiresAt": {
-                "type": "integer",
-                "minimum": 0
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "anyOf": [
-              {
-                "required": [
-                  "session_id"
-                ]
-              },
-              {
-                "required": [
-                  "sessionId"
-                ]
-              }
-            ]
-          },
-          {
-            "anyOf": [
-              {
-                "required": [
-                  "request_id"
-                ]
-              },
-              {
-                "required": [
-                  "requestId"
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": "null"
-      },
-      "outputTyped": true
-    },
-    {
       "name": "claude_call_reserve_respond",
       "category": "agents",
       "resource": "claude",
@@ -12965,107 +12774,6 @@
       "outputTyped": true
     },
     {
-      "name": "claude_close_session",
-      "category": "agents",
-      "resource": "claude",
-      "target": "execution",
-      "operation": "side-effect",
-      "capability": "agent.run",
-      "risk": "low",
-      "approval": "none",
-      "idempotency": "required",
-      "summary": "claude_close_session (agent.run)",
-      "description": "Loopback service-token command. Target: execution; risk: low.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "type": "string"
-          },
-          "sessionId": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "anyOf": [
-              {
-                "required": [
-                  "session_id"
-                ]
-              },
-              {
-                "required": [
-                  "sessionId"
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": "null"
-      },
-      "outputTyped": true
-    },
-    {
-      "name": "claude_compact",
-      "category": "agents",
-      "resource": "claude",
-      "target": "execution",
-      "operation": "side-effect",
-      "capability": "agent.run",
-      "risk": "low",
-      "approval": "none",
-      "idempotency": "required",
-      "summary": "claude_compact (agent.run)",
-      "description": "Loopback service-token command. Target: execution; risk: low.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "type": "string"
-          },
-          "focus": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Optional compact instruction/focus."
-          },
-          "sessionId": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "anyOf": [
-              {
-                "required": [
-                  "session_id"
-                ]
-              },
-              {
-                "required": [
-                  "sessionId"
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": "null"
-      },
-      "outputTyped": true
-    },
-    {
       "name": "claude_has_api_key",
       "category": "agents",
       "resource": "claude",
@@ -13106,53 +12814,6 @@
       "outputSchemaSource": "contract",
       "outputSchema": {
         "type": "boolean"
-      },
-      "outputTyped": true
-    },
-    {
-      "name": "claude_interrupt",
-      "category": "agents",
-      "resource": "claude",
-      "target": "execution",
-      "operation": "side-effect",
-      "capability": "agent.run",
-      "risk": "low",
-      "approval": "none",
-      "idempotency": "required",
-      "summary": "claude_interrupt (agent.run)",
-      "description": "Loopback service-token command. Target: execution; risk: low.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "type": "string"
-          },
-          "sessionId": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "anyOf": [
-              {
-                "required": [
-                  "session_id"
-                ]
-              },
-              {
-                "required": [
-                  "sessionId"
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": "null"
       },
       "outputTyped": true
     },
@@ -13517,217 +13178,6 @@
           "messages": {},
           "session_id": {
             "type": "string"
-          }
-        },
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "anyOf": [
-              {
-                "required": [
-                  "session_id"
-                ]
-              },
-              {
-                "required": [
-                  "sessionId"
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": "null"
-      },
-      "outputTyped": true
-    },
-    {
-      "name": "claude_send",
-      "category": "agents",
-      "resource": "claude",
-      "target": "execution",
-      "operation": "side-effect",
-      "capability": "agent.run",
-      "risk": "low",
-      "approval": "none",
-      "idempotency": "required",
-      "summary": "claude_send (agent.run)",
-      "description": "Loopback service-token command. Target: execution; risk: low.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "prompt"
-        ],
-        "properties": {
-          "session_id": {
-            "type": "string",
-            "description": "Logical session id chosen by the caller (Dexie row key)."
-          },
-          "prompt": {
-            "description": "Either a plain string or an array of content blocks (text + image) — forwarded\nverbatim to the Claude Agent SDK. Image blocks follow Anthropic's content-block format.\n",
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": {},
-                  "example": {}
-                }
-              }
-            ]
-          },
-          "options": {
-            "type": "object",
-            "additionalProperties": false,
-            "description": "Per-call options forwarded verbatim to the Claude Agent SDK (or the\nAI SDK dispatch path for non-Anthropic providers). Unrecognised\nfields ride along under `extra` (serde flatten). `null` is rejected\nfor optional fields — use `undefined`/missing instead, otherwise the\nSDK's option parser crashes with \"Cannot read properties of null\".\n",
-            "properties": {
-              "cwd": {
-                "type": "string"
-              },
-              "model": {
-                "type": "string"
-              },
-              "fallbackModel": {
-                "type": "string"
-              },
-              "systemPrompt": {
-                "type": "string",
-                "description": "Replaces the SDK default system prompt. Mutually exclusive with appendSystemPrompt."
-              },
-              "appendSystemPrompt": {
-                "type": "string",
-                "description": "Appended to the SDK default. Mutually exclusive with systemPrompt."
-              },
-              "allowedTools": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "disallowedTools": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "additionalDirectories": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "permissionMode": {
-                "type": "string"
-              },
-              "env": {
-                "type": "object",
-                "additionalProperties": {
-                  "type": "string"
-                },
-                "example": {}
-              },
-              "mcpServers": {
-                "type": "object",
-                "additionalProperties": {},
-                "description": "Per-name MCP server config map; forwarded to the SDK verbatim.",
-                "example": {}
-              },
-              "maxTurns": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 100
-              },
-              "includePartialMessages": {
-                "type": "boolean"
-              },
-              "settingSources": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "enum": [
-                    "user",
-                    "project",
-                    "local"
-                  ]
-                }
-              },
-              "agents": {
-                "type": "object",
-                "additionalProperties": {},
-                "description": "Dynamic subagent definitions keyed by name.",
-                "example": {}
-              },
-              "strictMcpConfig": {
-                "type": "boolean",
-                "description": "When true, only `mcpServers` from this object are loaded — settings.json is ignored."
-              },
-              "effort": {
-                "type": "string",
-                "enum": [
-                  "low",
-                  "medium",
-                  "high",
-                  "xhigh",
-                  "max"
-                ]
-              },
-              "resumeSessionId": {
-                "type": "string",
-                "description": "Resume an existing SDK session by id. Mutually exclusive with forkFromSessionId."
-              },
-              "forkFromSessionId": {
-                "type": "string",
-                "description": "Fork a new branch from an existing SDK session id."
-              },
-              "provider": {
-                "type": "string",
-                "description": "Provider id this turn dispatches against. `null`/missing or\n`\"anthropic\"` keeps the Claude Agent SDK path; any other value\n(`openai`, `google`, `mistral`, `cohere`, `openrouter`, custom)\nflows through the AI SDK dispatcher.\n"
-              },
-              "providerCredentials": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "apiKey": {
-                    "type": "string"
-                  },
-                  "baseUrl": {
-                    "type": "string"
-                  },
-                  "protocol": {
-                    "type": "string",
-                    "enum": [
-                      "openai",
-                      "anthropic",
-                      "google",
-                      "mistral",
-                      "cohere"
-                    ],
-                    "description": "AI SDK protocol family (required for custom provider ids)."
-                  }
-                }
-              },
-              "aliasResolution": {
-                "type": "object",
-                "additionalProperties": {},
-                "description": "Renderer-side metadata; the sidecar ignores this.",
-                "example": {}
-              },
-              "routingDecision": {
-                "type": "object",
-                "additionalProperties": {},
-                "example": {}
-              }
-            }
-          },
-          "sessionId": {
-            "type": "string",
-            "description": "Logical session id chosen by the caller (Dexie row key)."
           }
         },
         "additionalProperties": false,
@@ -19595,12 +19045,6 @@
                 "properties": {
                   "action": {
                     "const": "snapshot"
-                  },
-                  "legacyClientId": {
-                    "type": "string"
-                  },
-                  "legacyBackupClientId": {
-                    "type": "string"
                   }
                 },
                 "required": [
@@ -19850,9 +19294,6 @@
                 },
                 "credentialRevision": {
                   "type": "string"
-                },
-                "needsIdentity": {
-                  "type": "boolean"
                 }
               },
               "required": [
@@ -19864,8 +19305,7 @@
                 "email",
                 "status",
                 "revision",
-                "credentialRevision",
-                "needsIdentity"
+                "credentialRevision"
               ],
               "additionalProperties": false
             }
@@ -19922,12 +19362,6 @@
               ],
               "additionalProperties": false
             }
-          },
-          "migrationNeedsClientId": {
-            "type": "boolean"
-          },
-          "backupMigrationNeedsClientId": {
-            "type": "boolean"
           },
           "lineageId": {
             "type": "string"
@@ -20015,9 +19449,7 @@
         "required": [
           "lineages",
           "clients",
-          "pending",
-          "migrationNeedsClientId",
-          "backupMigrationNeedsClientId"
+          "pending"
         ],
         "additionalProperties": false
       },
@@ -47581,153 +47013,6 @@
       "outputTyped": true
     },
     {
-      "name": "keyring_secret_clear",
-      "category": "system",
-      "resource": "secrets",
-      "target": "service",
-      "operation": "write",
-      "capability": "service.internal",
-      "risk": "critical",
-      "approval": "signed-policy",
-      "idempotency": "required",
-      "summary": "keyring_secret_clear (service.internal)",
-      "description": "Loopback service-token command. Target: service; risk: critical.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "input"
-        ],
-        "properties": {
-          "input": {
-            "type": "object",
-            "required": [
-              "namespace",
-              "key"
-            ],
-            "properties": {
-              "namespace": {
-                "type": "string",
-                "minLength": 1
-              },
-              "key": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "additionalProperties": false
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": "null"
-      },
-      "outputTyped": true
-    },
-    {
-      "name": "keyring_secret_get",
-      "category": "system",
-      "resource": "secrets",
-      "target": "service",
-      "operation": "read",
-      "capability": "service.internal",
-      "risk": "critical",
-      "approval": "signed-policy",
-      "idempotency": "structural",
-      "summary": "keyring_secret_get (service.internal)",
-      "description": "Loopback service-token command. Target: service; risk: critical.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "input"
-        ],
-        "properties": {
-          "input": {
-            "type": "object",
-            "required": [
-              "namespace",
-              "key"
-            ],
-            "properties": {
-              "namespace": {
-                "type": "string",
-                "minLength": 1
-              },
-              "key": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "additionalProperties": false
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": [
-          "string",
-          "null"
-        ],
-        "x-cognia-wire-source": "Option<String> from cognia_secrets::keyring_secrets::get, via rpc/chat.rs `to_json(value)`. null means the key is absent — a successful read, not an error.",
-        "x-cognia-fixes": "Previously LegacyRecord, which requires an object. Every successful secret_store_get / keyring_secret_get response is a bare string or null, so the enforced output contract rejected all of them with contract_output_violation."
-      },
-      "outputTyped": true
-    },
-    {
-      "name": "keyring_secret_set",
-      "category": "system",
-      "resource": "secrets",
-      "target": "service",
-      "operation": "write",
-      "capability": "service.internal",
-      "risk": "critical",
-      "approval": "signed-policy",
-      "idempotency": "required",
-      "summary": "keyring_secret_set (service.internal)",
-      "description": "Loopback service-token command. Target: service; risk: critical.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "input"
-        ],
-        "properties": {
-          "input": {
-            "type": "object",
-            "required": [
-              "namespace",
-              "key",
-              "value"
-            ],
-            "properties": {
-              "namespace": {
-                "type": "string",
-                "minLength": 1
-              },
-              "key": {
-                "type": "string",
-                "minLength": 1
-              },
-              "value": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "additionalProperties": false
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": "null"
-      },
-      "outputTyped": true
-    },
-    {
       "name": "kill_external_agent",
       "category": "agents",
       "resource": "external-agents",
@@ -61040,7 +60325,7 @@
       "outputSchema": {
         "type": "object",
         "x-cognia-wire-source": "crates/cognia-ocr/src/native.rs ModelStatus",
-        "description": "`integrity` is separate from `installed` on purpose: a corrupt model is present on disk and must not be used, which one boolean cannot say. `legacy_files` are pre-v6 Paddle files that are never loaded and are reported only so a user can clean them up.",
+        "description": "`integrity` is separate from `installed` on purpose: a corrupt model is present on disk and must not be used, which one boolean cannot say.",
         "required": [
           "backend",
           "integrity",
@@ -61099,12 +60384,6 @@
           },
           "total_bytes": {
             "type": "integer"
-          },
-          "legacy_files": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
           }
         }
       },
@@ -81883,7 +81162,7 @@
           "null"
         ],
         "x-cognia-wire-source": "Option<String> from cognia_secrets::keyring_secrets::get, via rpc/chat.rs `to_json(value)`. null means the key is absent — a successful read, not an error.",
-        "x-cognia-fixes": "Previously LegacyRecord, which requires an object. Every successful secret_store_get / keyring_secret_get response is a bare string or null, so the enforced output contract rejected all of them with contract_output_violation."
+        "x-cognia-fixes": "Previously LegacyRecord, which requires an object. Every successful secret_store_get response is a bare string or null, so the enforced output contract rejected all of them with contract_output_violation."
       },
       "outputTyped": true
     },
@@ -84811,7 +84090,6 @@
         "additionalProperties": false,
         "properties": {
           "chunkBytes": {
-            "default": 24576,
             "format": "uint",
             "minimum": 1,
             "maximum": 65536,
@@ -84879,7 +84157,7 @@
           },
           "length": {
             "type": "integer",
-            "maximum": 24576
+            "maximum": 65536
           }
         },
         "additionalProperties": false
@@ -85161,7 +84439,6 @@
         "additionalProperties": false,
         "properties": {
           "chunkBytes": {
-            "default": 24576,
             "format": "uint",
             "minimum": 1,
             "maximum": 65536,
@@ -105026,86 +104303,6 @@
       "outputTyped": true
     },
     {
-      "name": "team_run_pause",
-      "category": "agents",
-      "resource": "team",
-      "target": "execution",
-      "operation": "side-effect",
-      "capability": "agent.run",
-      "risk": "high",
-      "approval": "interactive",
-      "idempotency": "required",
-      "summary": "team_run_pause (agent.run)",
-      "description": "Loopback service-token command. Target: execution; risk: high.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "teamId"
-        ],
-        "properties": {
-          "teamId": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": [
-          "object",
-          "array",
-          "string",
-          "number",
-          "boolean",
-          "null"
-        ],
-        "x-cognia-opaque-reason": "The legacy dispatch seam intentionally carries provider-, plugin-, or bridge-defined JSON. The command remains contract-covered at the JSON value boundary until its owning domain publishes a narrower stable wire type.",
-        "x-cognia-schema-owner": "team"
-      },
-      "outputTyped": true
-    },
-    {
-      "name": "team_run_resume",
-      "category": "agents",
-      "resource": "team",
-      "target": "execution",
-      "operation": "side-effect",
-      "capability": "agent.run",
-      "risk": "high",
-      "approval": "interactive",
-      "idempotency": "required",
-      "summary": "team_run_resume (agent.run)",
-      "description": "Loopback service-token command. Target: execution; risk: high.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "teamId"
-        ],
-        "properties": {
-          "teamId": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": [
-          "object",
-          "array",
-          "string",
-          "number",
-          "boolean",
-          "null"
-        ],
-        "x-cognia-opaque-reason": "The legacy dispatch seam intentionally carries provider-, plugin-, or bridge-defined JSON. The command remains contract-covered at the JSON value boundary until its owning domain publishes a narrower stable wire type.",
-        "x-cognia-schema-owner": "team"
-      },
-      "outputTyped": true
-    },
-    {
       "name": "team_run_start",
       "category": "agents",
       "resource": "team",
@@ -105242,46 +104439,6 @@
           }
         },
         "additionalProperties": false
-      },
-      "outputTyped": true
-    },
-    {
-      "name": "team_run_stop",
-      "category": "agents",
-      "resource": "team",
-      "target": "execution",
-      "operation": "side-effect",
-      "capability": "agent.run",
-      "risk": "high",
-      "approval": "interactive",
-      "idempotency": "required",
-      "summary": "team_run_stop (agent.run)",
-      "description": "Loopback service-token command. Target: execution; risk: high.",
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "teamId"
-        ],
-        "properties": {
-          "teamId": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "outputSchemaSource": "contract",
-      "outputSchema": {
-        "type": [
-          "object",
-          "array",
-          "string",
-          "number",
-          "boolean",
-          "null"
-        ],
-        "x-cognia-opaque-reason": "The legacy dispatch seam intentionally carries provider-, plugin-, or bridge-defined JSON. The command remains contract-covered at the JSON value boundary until its owning domain publishes a narrower stable wire type.",
-        "x-cognia-schema-owner": "team"
       },
       "outputTyped": true
     },
@@ -113433,5 +112590,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "8f7fcfc765db1d0b2b54856fd08bb3f9d1808a87614edea9a8dace9bbe163a95"
+  "catalogHash": "a00bae7b2fcfa9cddb227fbdd217e4e3e0b19d8ad5152ab8a4630ff60a6f2ee9"
 }

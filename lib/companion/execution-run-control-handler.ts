@@ -14,11 +14,6 @@
  * cannot borrow another device's name. A paired device that reached this arm
  * passed the Remote Control capability gate, and is therefore an operator for
  * the run it controls.
- *
- * The retired `team_run_pause|resume|stop` commands answer `upgrade-required`:
- * they addressed a TEAM, not a run, carried no revision and no decision, and
- * an older client that still sends them cannot render the projected snapshot
- * this contract assumes. Read-only history keeps working for it.
  */
 
 import { executeRunControlCommand, type RunControlResult } from "@/lib/execution/run-control"
@@ -36,8 +31,6 @@ const ACTIONS: ReadonlySet<string> = new Set<RunControlAction>([
   "steer",
   "open_details",
 ])
-
-export const UPGRADE_REQUIRED_RESULT = { ok: false, reason: "upgrade-required" } as const
 
 export interface ExecutionRunControlRejection {
   ok: false
@@ -110,9 +103,4 @@ export async function handleExecutionRunControl(
     ...(deviceId ? [deviceId] : []),
   ]
   return (deps.execute ?? executeRunControlCommand)(parsed.command, { operatorIds })
-}
-
-/** The retired team-addressed controls. Older clients get told to upgrade. */
-export async function handleLegacyTeamRunControl(): Promise<typeof UPGRADE_REQUIRED_RESULT> {
-  return UPGRADE_REQUIRED_RESULT
 }

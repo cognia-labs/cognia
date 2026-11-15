@@ -326,6 +326,17 @@ pub(super) fn request_rate_limit_class(
     descriptor: &CommandDescriptor,
     args: &Value,
 ) -> super::rate_limit::RequestClass {
+    // Transient LSP document synchronization and correlated callback replies
+    // use the wider bounded bucket. The write descriptor still controls
+    // authority and idempotency, and process/configuration RPCs stay strict.
+    if descriptor.name == "lsp_host_request"
+        && matches!(
+            args.get("method").and_then(Value::as_str),
+            Some("lsp:didOpen" | "lsp:didChange" | "lsp:didClose" | "lsp:serverResponse")
+        )
+    {
+        return super::rate_limit::RequestClass::ReadOnly;
+    }
     if descriptor.name == "claude_session_control"
         && args
             .get("method")
@@ -337,37 +348,14 @@ pub(super) fn request_rate_limit_class(
     rate_limit_class(descriptor)
 }
 
-/// The answer for a name the contract does not serve. A name the rename
-/// table knows is 410 `command_renamed` with the replacement in
-/// `details.replacement` (ADR-0175). Any other name is 404 `unknown_command`.
-fn missing_command_problem(request_id: &str, command: &str) -> Problem {
-    missing_command_problem_for(
+/// The answer for a name the contract does not serve: 404 `unknown_command`.
+fn missing_command_problem(request_id: &str) -> Problem {
+    problem(
         request_id,
-        command,
-        super::command_manifest::renamed_to(command),
+        StatusCode::NOT_FOUND,
+        "unknown_command",
+        "the requested command is not registered",
     )
-}
-
-fn missing_command_problem_for(
-    request_id: &str,
-    command: &str,
-    replacement: Option<&str>,
-) -> Problem {
-    match replacement {
-        Some(replacement) => problem(
-            request_id,
-            StatusCode::GONE,
-            "command_renamed",
-            format!("the command '{command}' was renamed. Call '{replacement}' instead"),
-        )
-        .with_detail_field("replacement", replacement),
-        None => problem(
-            request_id,
-            StatusCode::NOT_FOUND,
-            "unknown_command",
-            "the requested command is not registered",
-        ),
-    }
 }
 
 async fn execute_inner(
@@ -386,7 +374,7 @@ async fn execute_inner(
         super::person_chat::person_caller(&request.principal, &request.command)?;
     }
     let descriptor = super::command_manifest::descriptor(&request.command)
-        .ok_or_else(|| missing_command_problem(&request.request_id, &request.command))?;
+        .ok_or_else(|| missing_command_problem(&request.request_id))?;
     let admission = super::host_surface_gate::authorize_execution(
         state,
         &descriptor.capability,
@@ -596,13 +584,12 @@ async fn execute_receipted_request(
 ) -> Result<ExecutionOutcome, Problem> {
     let idempotency_key = receipt_idempotency_key(request)?;
     let operation_id = match store
-        .begin_command_operation(
+        .begin_idempotent_operation(
             &request.principal.tenant_id,
             &request.principal.device_id,
             &local_host_id(),
             &idempotency_key,
             request_hash,
-            &request.command,
             now,
         )
         .map_err(|error| map_store_error(&request.request_id, error))?
@@ -1210,7 +1197,7 @@ fn map_store_error(request_id: &str, error: SecurityStoreError) -> Problem {
                 request_id,
                 StatusCode::GONE,
                 "receipt_unavailable",
-                "the legacy result is unavailable; do not automatically repeat the side effect",
+                "the result is unavailable; do not automatically repeat the side effect",
             );
             error.retryable = false;
             error
@@ -2049,7 +2036,7 @@ mod tests {
 
     fn execution_request(scope: &str, capabilities: Option<Vec<String>>) -> ExecutionRequest {
         ExecutionRequest::new(
-            "claude_send",
+            "agent_send",
             json!({}),
             DeviceContext {
                 device_id: "device-a".to_string(),
@@ -2211,7 +2198,7 @@ mod tests {
 
     #[test]
     fn writes_and_side_effects_stay_on_the_strict_bucket() {
-        for command in ["claude_send", "app_settings_update"] {
+        for command in ["agent_send", "app_settings_update"] {
             let descriptor = super::super::command_manifest::descriptor(command)
                 .unwrap_or_else(|| panic!("{command} must be a registered command"));
             assert_eq!(
@@ -2286,6 +2273,24 @@ mod tests {
         ] {
             assert_eq!(
                 rate_limit_class(super::super::command_manifest::descriptor(command).unwrap()),
+                RequestClass::Mutating
+            );
+        }
+    }
+
+    #[test]
+    fn lsp_editor_traffic_and_process_operations_have_separate_throughput() {
+        use super::super::rate_limit::RequestClass;
+        let descriptor = super::super::command_manifest::descriptor("lsp_host_request").unwrap();
+        for method in ["lsp:didOpen", "lsp:didChange", "lsp:didClose", "lsp:serverResponse"] {
+            assert_eq!(
+                request_rate_limit_class(descriptor, &json!({"method": method})),
+                RequestClass::ReadOnly
+            );
+        }
+        for method in ["lsp:start", "lsp:stop", "lsp:install", "lsp:request"] {
+            assert_eq!(
+                request_rate_limit_class(descriptor, &json!({"method": method})),
                 RequestClass::Mutating
             );
         }
@@ -2415,7 +2420,7 @@ mod tests {
     #[test]
     fn empty_authorization_snapshot_denies_without_store_fallback() {
         let request = execution_request("device", Some(Vec::new()));
-        let descriptor = super::super::command_manifest::descriptor("claude_send").unwrap();
+        let descriptor = super::super::command_manifest::descriptor("agent_send").unwrap();
 
         let error = authorize_capability(&request, descriptor).unwrap_err();
 
@@ -2425,7 +2430,7 @@ mod tests {
     #[test]
     fn absent_authorization_snapshot_requests_store_fallback() {
         let request = execution_request("device", None);
-        let descriptor = super::super::command_manifest::descriptor("claude_send").unwrap();
+        let descriptor = super::super::command_manifest::descriptor("agent_send").unwrap();
 
         assert_eq!(
             snapshot_capability_decision(&request.principal, &descriptor.capability),
@@ -2436,7 +2441,7 @@ mod tests {
     #[test]
     fn service_principal_bypasses_device_capability_lookup() {
         let request = execution_request("service", None);
-        let descriptor = super::super::command_manifest::descriptor("claude_send").unwrap();
+        let descriptor = super::super::command_manifest::descriptor("agent_send").unwrap();
 
         assert!(authorize_capability(&request, descriptor).is_ok());
     }
@@ -2744,7 +2749,7 @@ mod tests {
 
     #[test]
     fn internal_transport_requires_service_principal() {
-        let descriptor = super::super::command_manifest::descriptor("claude_send").unwrap();
+        let descriptor = super::super::command_manifest::descriptor("agent_send").unwrap();
         let mut service = execution_request("service", None);
         service.transport = ExecutionTransport::Internal;
         assert!(authorize_transport(&service, descriptor).is_ok());
@@ -2759,7 +2764,7 @@ mod tests {
 
     #[test]
     fn service_principal_cannot_use_public_transports() {
-        let descriptor = super::super::command_manifest::descriptor("claude_send").unwrap();
+        let descriptor = super::super::command_manifest::descriptor("agent_send").unwrap();
         let service = execution_request("service", None);
         assert_eq!(
             authorize_transport(&service, descriptor).unwrap_err().code,
@@ -2781,7 +2786,7 @@ mod tests {
         assert_eq!(camel_case.policy_id.as_deref(), Some("policy-a"));
 
         let snake_case = ExecutionRequest::new(
-            "claude_send",
+            "agent_send",
             json!({ "policy_id": "policy-b" }),
             camel_case.principal,
             ExecutionTransport::Http,
@@ -2842,12 +2847,12 @@ mod tests {
         // lib/claude/ipc.ts:80 — sendPrompt
         let cases: &[(&str, Value)] = &[
             (
-                "claude_send",
+                "agent_send",
                 json!({ "sessionId": "session-a", "prompt": "hello", "options": {} }),
             ),
             // lib/claude/ipc.ts:672 — approveTool
             (
-                "claude_approve",
+                "agent_resolve_permission",
                 json!({
                     "sessionId": "session-a",
                     "requestId": "request-a",
@@ -3123,7 +3128,7 @@ mod tests {
         );
     }
 
-    /// `secret_store_get` and its `keyring_secret_get` alias were declared
+    /// `secret_store_get` was declared
     /// `LegacyRecord` — `{"type":"object"}`. The arm returns
     /// `to_json(Option<String>)`, so every SUCCESSFUL read put a bare string
     /// (or null, for an absent key) on the wire and the enforced output
@@ -3132,10 +3137,10 @@ mod tests {
     ///
     /// The bug hid inside the "vacuous response schema" pile because
     /// `LegacyRecord` reads like a catch-all. It is not one: it constrains the
-    /// root to an object, and these two commands never return an object.
+    /// root to an object, and this command never returns an object.
     #[test]
     fn secret_reads_put_a_bare_string_or_null_on_the_wire() {
-        for command in ["secret_store_get", "keyring_secret_get"] {
+        for command in ["secret_store_get"] {
             for value in [json!("s3cret"), Value::Null] {
                 validate_contract_value(
                     "request-a",
@@ -3218,13 +3223,8 @@ mod tests {
                 })
                 .unwrap(),
             ),
-            // Same arm, same `Ok(Value::Null)`, four command names. The two
-            // aliases were declared LegacyResult while their canonical twins
-            // were already NullResult.
             ("secret_store_set", Value::Null),
-            ("keyring_secret_set", Value::Null),
             ("secret_store_delete", Value::Null),
-            ("keyring_secret_clear", Value::Null),
         ];
 
         let failures: Vec<String> = cases
@@ -3580,10 +3580,10 @@ mod tests {
     #[test]
     fn protocol_request_uuid_is_stable_and_principal_scoped() {
         let principal = execution_request("device", Some(Vec::new())).principal;
-        let first = derive_protocol_request_uuid(&principal, "acp", &json!(42), "claude_send");
-        let retry = derive_protocol_request_uuid(&principal, "acp", &json!(42), "claude_send");
+        let first = derive_protocol_request_uuid(&principal, "acp", &json!(42), "agent_send");
+        let retry = derive_protocol_request_uuid(&principal, "acp", &json!(42), "agent_send");
         let other_request =
-            derive_protocol_request_uuid(&principal, "acp", &json!(43), "claude_send");
+            derive_protocol_request_uuid(&principal, "acp", &json!(43), "agent_send");
 
         assert_eq!(first, retry);
         assert_ne!(first, other_request);
@@ -3593,8 +3593,8 @@ mod tests {
     #[test]
     fn protocol_idempotency_is_manifest_driven_and_retry_stable() {
         let principal = execution_request("device", Some(Vec::new())).principal;
-        let first = protocol_idempotency_key("claude_send", &principal, "a2a", Some(&json!(7)));
-        let retry = protocol_idempotency_key("claude_send", &principal, "a2a", Some(&json!(7)));
+        let first = protocol_idempotency_key("agent_send", &principal, "a2a", Some(&json!(7)));
+        let retry = protocol_idempotency_key("agent_send", &principal, "a2a", Some(&json!(7)));
         let read =
             protocol_idempotency_key("claude_sidecar_status", &principal, "a2a", Some(&json!(7)));
 

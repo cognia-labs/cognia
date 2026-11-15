@@ -2,7 +2,7 @@
  * The plugin contract's share of `lib/plugin/api/perf-api.ts`, which re-exports these.
  */
 import type {
-  PerfSample,
+  PerfFrame,
   PerfSnapshot,
   SpanSnapshot,
   SystemDetails,
@@ -18,6 +18,6 @@ export interface PluginPerfAPI {
   systemDetails(): Promise<SystemDetails | null>
   /** Flight-recorder trace files on disk. */
   listTraces(): Promise<TraceFile[]>
-  /** Subscribe to live `perf://sample` frames. Returns a disposer. */
-  subscribe(handler: (sample: PerfSample) => void): () => void
+  /** Subscribe to live `perf://frame` frames. Returns a disposer. */
+  subscribe(handler: (frame: PerfFrame) => void): () => void
 }

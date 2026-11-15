@@ -27,19 +27,12 @@
 //! Crypto recipe mirrors `connectors::attachments` (app-side): `Aes256Gcm`, a
 //! random 12-byte nonce prepended to the ciphertext, master key auto-generated
 //! with `OsRng` on first use. Atomic disk writes reuse [`cognia_core::fs_atomic`].
-//!
-//! ## Legacy migration
-//!
-//! On a `get` miss the store checks the legacy per-subsystem Keychain without
-//! allowing a system dialog. Accessible credentials are durably copied before
-//! legacy cleanup. Missing or denied reads are remembered for this process;
-//! access denial is an error, never a missing credential to regenerate.
 
 //! ## Development builds
 //!
 //! A debug build keeps its master key in a plain `0600` file under
 //! `<dataDir>/cognia/dev/` and its encrypted blob beside it, and never touches
-//! the Keychain, the legacy per-item migration included. Every `pnpm tauri dev`
+//! the Keychain. Every `pnpm tauri dev`
 //! rebuild re-signs the binary, and a Keychain item's access list does not
 //! follow it: the passive master-key read then failed with `errSecAuthFailed`
 //! on each launch, locking every credential (and the device unlock of the
@@ -57,12 +50,11 @@
 //! each restart. Headless installs therefore run [`init_headless`] **before
 //! any secret access**: the master key comes from `COGNIA_MASTER_KEY`
 //! (64 hex chars) or `COGNIA_MASTER_KEY_FILE`, boot is **fatal** without one,
-//! the keyring source and legacy migration are disabled, and the store file
+//! the keyring source is disabled, and the store file
 //! lives under the server's own data dir with `0600` perms (unix).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -167,7 +159,6 @@ struct SecretStore {
     path: Option<PathBuf>,
     key: [u8; 32],
     cache: BTreeMap<String, String>,
-    legacy_reads: BTreeMap<String, Result<Option<String>, String>>,
 }
 
 /// One member of an atomic encrypted-store update. Values are intentionally
@@ -215,7 +206,6 @@ impl SecretStore {
             path: Some(path),
             key,
             cache,
-            legacy_reads: BTreeMap::new(),
         })
     }
 
@@ -226,40 +216,12 @@ impl SecretStore {
             path: None,
             key,
             cache: BTreeMap::new(),
-            legacy_reads: BTreeMap::new(),
         }
     }
 
-    /// Read a value straight from the in-memory cache (no migration).
+    /// Read a value straight from the in-memory cache.
     fn peek(&self, service: &str, account: &str) -> Option<String> {
         self.cache.get(&composite(service, account)).cloned()
-    }
-
-    /// Read with one-time legacy fallback: on a cache miss, consult `legacy`
-    /// (the OS keyring in production). A hit is copied into the store and
-    /// persisted so subsequent reads stay in-memory.
-    fn get_or_migrate(
-        &mut self,
-        service: &str,
-        account: &str,
-        legacy: impl Fn(&str, &str) -> Result<Option<String>, String>,
-    ) -> Result<MigrationOutcome, String> {
-        if let Some(value) = self.peek(service, account) {
-            return Ok(MigrationOutcome::Cached(value));
-        }
-        let key = composite(service, account);
-        let result = self
-            .legacy_reads
-            .entry(key)
-            .or_insert_with(|| legacy(service, account))
-            .clone();
-        match result? {
-            Some(value) => {
-                self.set(service, account, &value)?;
-                Ok(MigrationOutcome::Migrated(value))
-            }
-            None => Ok(MigrationOutcome::Missing),
-        }
     }
 
     /// Upsert a value and persist. Empty values are allowed (parity with the
@@ -270,7 +232,6 @@ impl SecretStore {
         // encrypted blob under the global lock for nothing; callers re-save
         // unchanged secrets routinely at startup.
         if self.cache.get(&key).map(String::as_str) == Some(value) {
-            self.legacy_reads.remove(&key);
             return Ok(());
         }
         let previous = self.cache.insert(key.clone(), value.to_string());
@@ -285,16 +246,7 @@ impl SecretStore {
             }
             return Err(error);
         }
-        self.legacy_reads.remove(&key);
         Ok(())
-    }
-
-    /// Forget cached legacy reads that FAILED, so the next `get` asks the
-    /// Keychain again. Misses stay cached. Only an explicit recovery calls
-    /// this: a failed passive read (a keychain locked at launch) is otherwise
-    /// remembered for the whole process.
-    fn forget_failed_legacy_reads(&mut self) {
-        self.legacy_reads.retain(|_, read| read.is_ok());
     }
 
     /// Remove a value. Idempotent — a missing key is a no-op (and skips the
@@ -307,7 +259,6 @@ impl SecretStore {
                 return Err(error);
             }
         }
-        self.legacy_reads.insert(key, Ok(None));
         Ok(())
     }
 
@@ -338,7 +289,6 @@ impl SecretStore {
         persist: impl FnOnce(&Self) -> Result<(), String>,
     ) -> Result<(), String> {
         let previous_cache = self.cache.clone();
-        let previous_legacy_reads = self.legacy_reads.clone();
         for mutation in mutations {
             match *mutation {
                 SecretMutation::Set {
@@ -346,21 +296,17 @@ impl SecretStore {
                     account,
                     value,
                 } => {
-                    let key = composite(service, account);
-                    self.cache.insert(key.clone(), value.to_string());
-                    self.legacy_reads.remove(&key);
+                    self.cache
+                        .insert(composite(service, account), value.to_string());
                 }
                 SecretMutation::Delete { service, account } => {
-                    let key = composite(service, account);
-                    self.cache.remove(&key);
-                    self.legacy_reads.insert(key, Ok(None));
+                    self.cache.remove(&composite(service, account));
                 }
             }
         }
         if self.cache != previous_cache {
             if let Err(error) = persist(self) {
                 self.cache = previous_cache;
-                self.legacy_reads = previous_legacy_reads;
                 return Err(error);
             }
         }
@@ -402,16 +348,6 @@ impl SecretStore {
         }
         Ok(())
     }
-}
-
-/// Result of [`SecretStore::get_or_migrate`], distinguishing an in-cache hit
-/// from a freshly migrated legacy item so the caller knows whether to clear
-/// the legacy keyring entry.
-#[derive(Debug)]
-enum MigrationOutcome {
-    Cached(String),
-    Migrated(String),
-    Missing,
 }
 
 // ---------------------------------------------------------------------------
@@ -745,13 +681,8 @@ fn ensure_initialized_with(
 /// Called only from an explicit recovery action, on a blocking worker. Passive
 /// reads never prompt; a denied attempt remains retryable in this process, and
 /// a successful retry makes every later passive read succeed.
-///
-/// On a store that is (or just became) ready it is also the recovery for
-/// legacy items whose passive read failed: those failures are forgotten so the
-/// next `get` reads the Keychain again instead of replaying the cached error.
 pub fn retry_failed_initialization() -> Result<(), String> {
-    let store = retry(&GLOBAL, &INIT, INITIALIZATION_WAIT, || build_global(true))?;
-    store.write().forget_failed_legacy_reads();
+    retry(&GLOBAL, &INIT, INITIALIZATION_WAIT, || build_global(true))?;
     Ok(())
 }
 
@@ -801,12 +732,6 @@ fn dev_key_file_mode() -> bool {
         dev_keychain_override.as_deref(),
         configured(MASTER_KEY_ENV) || configured(MASTER_KEY_FILE_ENV),
     )
-}
-
-/// The hermetic test global has no keychain and no dev file either.
-#[cfg(any(test, feature = "test-inmemory"))]
-fn dev_key_file_mode() -> bool {
-    false
 }
 
 /// `<dataDir>/cognia/dev`, where a debug build keeps its key and store.
@@ -1037,10 +962,6 @@ pub fn create_server_keychain_master_key() -> Result<(), String> {
 // Headless init + rotation (ADR-0059 R9)
 // ---------------------------------------------------------------------------
 
-/// Set once by [`init_headless`]; disables the legacy keyring migration
-/// (containers have no keyring — a migration attempt would error or hang).
-static HEADLESS_MODE: AtomicBool = AtomicBool::new(false);
-
 /// The store file path for a headless data dir.
 fn headless_store_path(data_dir: &Path) -> PathBuf {
     data_dir.join("cognia").join(STORE_FILE_NAME)
@@ -1142,9 +1063,7 @@ pub fn rotate_data_dir_master_key_file(
 /// (the companion signing key, push creds, vault, connector creds all funnel
 /// through this store). Errors are fatal boot errors by design.
 pub fn init_headless(data_dir: &Path) -> Result<(), String> {
-    init_headless_with(&GLOBAL, &INIT, || build_headless_store(data_dir))?;
-    HEADLESS_MODE.store(true, Ordering::SeqCst);
-    Ok(())
+    init_headless_with(&GLOBAL, &INIT, || build_headless_store(data_dir))
 }
 
 /// [`init_headless`] against an explicit cell/gate. Holding the phase lock for
@@ -1176,12 +1095,6 @@ fn init_headless_with(
     };
     gate.settled.notify_all();
     result.map(|_| ())
-}
-
-/// Whether the legacy keyring paths are live: not in headless mode, and not in
-/// a debug build on the dev key file, which must never touch the Keychain.
-fn legacy_enabled() -> bool {
-    !HEADLESS_MODE.load(Ordering::SeqCst) && !dev_key_file_mode()
 }
 
 /// Re-encrypt the store under a new master key (ADR-0059 R9). The old key is
@@ -1270,115 +1183,18 @@ fn open_envelope(key: &[u8; 32], namespace: &str, blob: &[u8]) -> Result<Vec<u8>
         .map_err(|_| "secret-store envelope authentication failed".into())
 }
 
-/// A subsystem envelope key lives in the existing encrypted map, so master-key
-/// rotation preserves independently stored ciphertext without a second vault.
-fn durable_envelope_key(
-    store: &mut SecretStore,
-    owner: &str,
-    create: bool,
-) -> Result<[u8; 32], String> {
-    const SERVICE: &str = "com.cognia.native-envelope-keys/v1";
-    if owner.is_empty() || owner.len() > 256 {
-        return Err("invalid envelope owner".into());
-    }
-    if let Some(key) = store.peek(SERVICE, owner) {
-        return parse_master_key(&key);
-    }
-    if !create {
-        return Err("envelope key is unavailable".into());
-    }
-    let key = random_key();
-    store.set(SERVICE, owner, &hex::encode(key))?;
-    Ok(key)
-}
-
-pub fn seal_durable_namespace(
-    owner: &str,
-    namespace: &str,
-    plaintext: &[u8],
-) -> Result<Vec<u8>, String> {
-    let key = durable_envelope_key(&mut global()?.write(), owner, true)?;
-    seal_envelope(&key, namespace, plaintext)
-}
-
-pub fn open_durable_namespace(
-    owner: &str,
-    namespace: &str,
-    blob: &[u8],
-) -> Result<Vec<u8>, String> {
-    let key = durable_envelope_key(&mut global()?.write(), owner, false)?;
-    open_envelope(&key, namespace, blob)
-}
-
-// ---------------------------------------------------------------------------
-// Legacy per-subsystem keyring fallback (production) / stub (tests)
-// ---------------------------------------------------------------------------
-
-#[cfg(not(any(test, feature = "test-inmemory")))]
-fn legacy_keyring_get(service: &str, account: &str) -> Result<Option<String>, String> {
-    match crate::keychain_access::read_password_without_prompt(service, account) {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("legacy keyring read: {e}")),
-    }
-}
-
-#[cfg(not(any(test, feature = "test-inmemory")))]
-fn legacy_keyring_delete(service: &str, account: &str) -> Result<(), String> {
-    match crate::keychain_access::with_keychain_interaction(false, || {
-        keyring::Entry::new(service, account)?.delete_credential()
-    }) {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(format!("legacy keyring delete: {error}")),
-    }
-}
-
-#[cfg(any(test, feature = "test-inmemory"))]
-fn legacy_keyring_get(_service: &str, _account: &str) -> Result<Option<String>, String> {
-    Ok(None)
-}
-
-#[cfg(any(test, feature = "test-inmemory"))]
-fn legacy_keyring_delete(_service: &str, _account: &str) -> Result<(), String> {
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Public API — drop-in for the old per-subsystem keyring helpers
 // ---------------------------------------------------------------------------
 
 /// Read a secret. Returns `Ok(None)` when nothing is stored under
-/// `(service, account)`. On a store miss, the legacy OS-keyring item (if any)
-/// is migrated in and then removed — desktop only; headless installs have no
-/// keyring and skip migration entirely.
+/// `(service, account)`.
 pub fn get(service: &str, account: &str) -> Result<Option<String>, String> {
-    // Fast path: read lock, no migration.
-    if let Some(value) = global()?.read().peek(service, account) {
-        return Ok(Some(value));
-    }
-    if !legacy_enabled() {
-        return Ok(None);
-    }
-    // Slow path: take the write lock and attempt one-time legacy migration.
-    let outcome = global()?
-        .write()
-        .get_or_migrate(service, account, legacy_keyring_get)?;
-    match outcome {
-        MigrationOutcome::Cached(value) => Ok(Some(value)),
-        MigrationOutcome::Migrated(value) => {
-            // The value now lives in the encrypted store; drop the legacy item
-            // so it can never re-surface or prompt again.
-            if let Err(error) = legacy_keyring_delete(service, account) {
-                log::warn!("secret migrated but legacy cleanup deferred: {error}");
-            }
-            Ok(Some(value))
-        }
-        MigrationOutcome::Missing => Ok(None),
-    }
+    Ok(global()?.read().peek(service, account))
 }
 
 /// List account identifiers within exactly one encrypted service. This reads
-/// metadata only and never enumerates legacy OS-keyring entries or values.
+/// metadata only and never enumerates OS-keyring entries or values.
 pub fn list_accounts(service: &str) -> Result<Vec<String>, String> {
     let prefix = format!("{service}{COMPOSITE_SEP}");
     Ok(global()?
@@ -1423,7 +1239,7 @@ pub fn set(service: &str, account: &str, value: &str) -> Result<(), String> {
 /// Hold the auth fence through publication, but release the credential-store
 /// read lock before calling out: SecurityStore receipt code already takes its
 /// connection before accessing ordinary secrets. Conditional batches share this
-/// fence; raw legacy set/delete, unconditional batches and ordinary receipt
+/// fence; raw set/delete, unconditional batches and ordinary receipt
 /// operations do not. Auth revisions must therefore use conditional batches.
 /// The callback must not invoke a conditional batch API or wait on async work.
 pub fn with_value<T>(
@@ -1455,7 +1271,7 @@ pub fn apply_batch(mutations: &[SecretMutation<'_>]) -> Result<(), String> {
 
 /// Compare and mutate under the SAME process-global store lock. A command
 /// queued before logout cannot publish its stale token after logout commits.
-/// The condition addresses canonical encrypted-store metadata, not legacy items.
+/// The condition addresses canonical encrypted-store metadata.
 pub fn apply_batch_if(
     mutations: &[SecretMutation<'_>],
     condition: SecretCondition<'_>,
@@ -1475,45 +1291,20 @@ fn apply_batch_guarded(
         | SecretMutation::Delete { service, account }) = *mutation;
         check_mutation_failure(service, account)?;
     }
-    {
-        let _auth_commit = condition.as_ref().map(|_| AUTH_COMMIT_FENCE.lock());
-        let mut store = global()?.write();
-        if let Some(condition) = condition {
-            store.apply_batch_if_with(mutations, condition, SecretStore::persist)?;
-        } else {
-            store.apply_batch(mutations)?;
-        }
+    let _auth_commit = condition.as_ref().map(|_| AUTH_COMMIT_FENCE.lock());
+    let mut store = global()?.write();
+    if let Some(condition) = condition {
+        store.apply_batch_if_with(mutations, condition, SecretStore::persist)
+    } else {
+        store.apply_batch(mutations)
     }
-    if legacy_enabled() {
-        for mutation in mutations {
-            if let SecretMutation::Delete { service, account } = *mutation {
-                if let Err(error) = legacy_keyring_delete(service, account) {
-                    log::warn!("secret batch committed but legacy cleanup deferred: {error}");
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
-/// Remove a secret. Idempotent. Also clears any lingering legacy keyring item
-/// so a deleted secret can't be resurrected by a later `get` migration.
-///
-/// The legacy cleanup is best-effort and runs after the store lock is
-/// released: an item the no-prompt policy cannot touch (an ACL bound to an
-/// older signature) must not keep the encrypted value alive, and readers must
-/// not wait behind a Keychain call. The store records the deletion in
-/// `legacy_reads`, so this process never migrates the item back either way.
+/// Remove a secret. Idempotent.
 pub fn delete(service: &str, account: &str) -> Result<(), String> {
     #[cfg(any(test, feature = "test-inmemory"))]
     check_mutation_failure(service, account)?;
-    global()?.write().delete(service, account)?;
-    if legacy_enabled() {
-        if let Err(error) = legacy_keyring_delete(service, account) {
-            log::warn!("secret deleted but legacy cleanup deferred: {error}");
-        }
-    }
-    Ok(())
+    global()?.write().delete(service, account)
 }
 
 // ---------------------------------------------------------------------------
@@ -1523,32 +1314,6 @@ pub fn delete(service: &str, account: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn durable_envelopes_survive_master_rotation_and_authenticate_the_row() {
-        let dir = tmp_data_dir();
-        let path = headless_store_path(&dir);
-        let mut store = SecretStore::open(path.clone(), [61; 32]).unwrap();
-        let key = durable_envelope_key(&mut store, "fixture-receipts", true).unwrap();
-        let sealed = seal_envelope(
-            &key,
-            "fixture/tenant/device/key/hash",
-            b"exact opaque receipt",
-        )
-        .unwrap();
-        drop(store);
-        rotate_master_key(&dir, [61; 32], [62; 32]).unwrap();
-        let mut rotated = SecretStore::open(path, [62; 32]).unwrap();
-        let retained = durable_envelope_key(&mut rotated, "fixture-receipts", false).unwrap();
-        assert_eq!(
-            open_envelope(&retained, "fixture/tenant/device/key/hash", &sealed).unwrap(),
-            b"exact opaque receipt"
-        );
-        assert!(open_envelope(&retained, "fixture/other-row", &sealed).is_err());
-        assert!(durable_envelope_key(&mut rotated, "missing-owner", false).is_err());
-        drop(rotated);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
 
     #[test]
     fn scoped_envelopes_authenticate_namespace_without_mutating_secret_map() {
@@ -1566,7 +1331,7 @@ mod tests {
         assert_eq!(list_accounts("test-siwc").unwrap(), before);
         assert!(seal_namespace("", b"value").is_err());
     }
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1836,7 +1601,7 @@ mod tests {
             unavailable_reason(&format!("vault: {}", initializing_error())),
             Some(Unavailable::Initializing)
         );
-        assert_eq!(unavailable_reason("legacy keyring read: denied"), None);
+        assert_eq!(unavailable_reason("keyring read: denied"), None);
         assert_eq!(Unavailable::Locked.code(), LOCKED_CODE);
         assert_eq!(Unavailable::Initializing.code(), INITIALIZING_CODE);
     }
@@ -2160,110 +1925,14 @@ mod tests {
         assert!(SecretStore::open(path, [2u8; 32]).is_err());
     }
 
-    // ---- legacy migration ----
-
     #[test]
-    fn get_or_migrate_pulls_from_legacy_then_caches() {
-        let mut s = SecretStore::open(tmp_path(), [8u8; 32]).unwrap();
-        let outcome = s
-            .get_or_migrate("svc", "acct", |svc, acct| {
-                assert_eq!((svc, acct), ("svc", "acct"));
-                Ok(Some("legacy-value".to_string()))
-            })
-            .unwrap();
-        assert!(matches!(outcome, MigrationOutcome::Migrated(v) if v == "legacy-value"));
-        // Now cached — a second call hits the cache, not legacy.
-        let outcome = s
-            .get_or_migrate("svc", "acct", |_, _| {
-                panic!("legacy must not be consulted after migration")
-            })
-            .unwrap();
-        assert!(matches!(outcome, MigrationOutcome::Cached(v) if v == "legacy-value"));
-    }
-
-    #[test]
-    fn get_or_migrate_missing_when_legacy_empty() {
-        let mut s = SecretStore::open(tmp_path(), [8u8; 32]).unwrap();
-        let outcome = s.get_or_migrate("svc", "acct", |_, _| Ok(None)).unwrap();
-        assert!(matches!(outcome, MigrationOutcome::Missing));
-    }
-
-    #[test]
-    fn get_or_migrate_propagates_legacy_error() {
-        let mut s = SecretStore::open(tmp_path(), [8u8; 32]).unwrap();
-        let err = s
-            .get_or_migrate("svc", "acct", |_, _| Err("boom".to_string()))
-            .unwrap_err();
-        assert_eq!(err, "boom");
-    }
-
-    #[test]
-    fn legacy_missing_and_denied_reads_are_not_repeated_in_a_session() {
-        let mut store = SecretStore::open(tmp_path(), [8u8; 32]).unwrap();
-        store
-            .get_or_migrate("svc", "missing", |_, _| Ok(None))
-            .unwrap();
-        assert!(matches!(
-            store
-                .get_or_migrate("svc", "missing", |_, _| panic!("duplicate legacy read"))
-                .unwrap(),
-            MigrationOutcome::Missing
-        ));
-        assert_eq!(
-            store
-                .get_or_migrate("svc", "denied", |_, _| Err("access denied".into()))
-                .unwrap_err(),
-            "access denied"
-        );
-        assert_eq!(
-            store
-                .get_or_migrate("svc", "denied", |_, _| panic!("duplicate denied read"))
-                .unwrap_err(),
-            "access denied"
-        );
-        store.set("svc", "denied", "replacement").unwrap();
-        assert!(
-            matches!(store.get_or_migrate("svc", "denied", |_, _| panic!("explicit set must win")).unwrap(), MigrationOutcome::Cached(v) if v == "replacement")
-        );
-    }
-
-    #[test]
-    fn forgetting_failed_legacy_reads_retries_only_the_failures() {
-        let mut store = SecretStore::open(tmp_path(), [8u8; 32]).unwrap();
-        store
-            .get_or_migrate("svc", "missing", |_, _| Ok(None))
-            .unwrap();
-        assert!(store
-            .get_or_migrate("svc", "locked", |_, _| Err("keychain locked".into()))
-            .is_err());
-        store.forget_failed_legacy_reads();
-        // The failure is read again, and now migrates.
-        assert!(matches!(
-            store
-                .get_or_migrate("svc", "locked", |_, _| Ok(Some("recovered".into())))
-                .unwrap(),
-            MigrationOutcome::Migrated(v) if v == "recovered"
-        ));
-        // A cached miss is still not re-read.
-        assert!(matches!(
-            store
-                .get_or_migrate("svc", "missing", |_, _| panic!("a miss stays cached"))
-                .unwrap(),
-            MigrationOutcome::Missing
-        ));
-    }
-
-    #[test]
-    fn failed_batch_commit_retains_credential_owner_epoch_and_legacy_tombstones() {
+    fn failed_batch_commit_retains_credential_owner_and_epoch() {
         let path = tmp_path();
         let key = [71u8; 32];
         let mut store = SecretStore::open(path.clone(), key).unwrap();
         store.set("batch", "credential", "old-value").unwrap();
         store.set("batch", "owner", "old-owner").unwrap();
         store.set("batch", "epoch", "old-epoch").unwrap();
-        store
-            .legacy_reads
-            .insert(composite("batch", "credential"), Ok(None));
         let mutations = [
             SecretMutation::Set {
                 service: "batch",
@@ -2290,10 +1959,6 @@ mod tests {
         );
         assert_eq!(store.peek("batch", "owner").as_deref(), Some("old-owner"));
         assert_eq!(store.peek("batch", "epoch").as_deref(), Some("old-epoch"));
-        assert_eq!(
-            store.legacy_reads.get(&composite("batch", "credential")),
-            Some(&Ok(None))
-        );
         let reopened = SecretStore::open(path, key).unwrap();
         assert_eq!(reopened.cache, store.cache);
     }
@@ -2338,18 +2003,17 @@ mod tests {
             let _conn = receipt_conn.lock();
             conn_held_tx.send(()).unwrap();
             write_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-            // This is the real receipt path: SecurityStore.conn -> durable
-            // namespace sealing -> the secret-store's write lock.
-            let result = seal_durable_namespace("receipt-lock-order", "fixture", b"receipt")
-                .and_then(|receipt| {
+            // A connection holder that writes a secret: SecurityStore.conn ->
+            // the secret-store's write lock.
+            let result = set("receipt-lock-order", "receipt", "receipt")
+                .and_then(|()| {
                     // A generic (unconditional) batch may also belong to a
                     // connection holder; only auth CAS batches take the fence.
                     apply_batch(&[SecretMutation::Set {
                         service: "receipt-lock-order",
                         account: "metadata",
                         value: "saved",
-                    }])?;
-                    Ok(receipt)
+                    }])
                 });
             receipt_events.send("receipt-finished").unwrap();
             result
@@ -2554,10 +2218,6 @@ mod tests {
         let parent = tmp_path();
         std::fs::write(&parent, b"not a directory").unwrap();
         let mut store = SecretStore::open(parent.join("store.enc"), [8u8; 32]).unwrap();
-        assert!(store
-            .get_or_migrate("svc", "account", |_, _| Ok(Some("legacy".into())))
-            .is_err());
-        assert_eq!(store.peek("svc", "account"), None);
         assert!(store.set("svc", "account", "new").is_err());
         assert_eq!(store.peek("svc", "account"), None);
         store

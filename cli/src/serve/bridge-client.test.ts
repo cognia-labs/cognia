@@ -500,15 +500,6 @@ describe("BridgeClient", () => {
     expect(h.sockets).toHaveLength(1)
   })
 
-  it("reads an older server's bare 1002 contract close as the same refusal", async () => {
-    const h = makeClient()
-    const connected = h.client.connect()
-    h.sockets[0].fire("open", {})
-    h.sockets[0].fire("close", { code: 1002, reason: "Headless contract mismatch" })
-    await expect(connected).rejects.toMatchObject({ reason: "contract_mismatch" })
-    expect(h.scheduled).toHaveLength(0)
-  })
-
   it("still reconnects after any other close before the ack", async () => {
     const h = makeClient()
     void h.client.connect()

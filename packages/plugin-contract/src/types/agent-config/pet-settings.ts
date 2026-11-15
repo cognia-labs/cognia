@@ -63,9 +63,7 @@ export interface PetDesktopOverlaySettings {
   /**
    * Persisted top-left of the overlay window, or null to center on first open.
    * In desktop units when `space` is `"desktop"`: points on macOS, physical
-   * pixels elsewhere. A position without `space` was saved before that, in the
-   * native shell's per-display "physical" pixels; the native open converts it
-   * once and the next settle re-saves it marked.
+   * pixels elsewhere. The native open ignores a position without `space`.
    */
   position?: { x: number; y: number; space?: PetPositionSpace } | null
   /** Autonomous wandering preferences. Absent = defaults (disabled). */

@@ -76,7 +76,7 @@ pub async fn connectors_health(
         server_running: inner.server_running,
         bound_addr: inner.bound_addr.clone(),
         registered_adapter_count: inner.registered_adapters.len(),
-        staging_token: Some(inner.staging_token.clone()),
+        staging_token: inner.staging_token.clone(),
     })
 }
 
@@ -233,28 +233,6 @@ pub async fn connectors_stop_server(
 /// previous load's leaked sockets are reaped first.
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub async fn connectors_reset_all_ws() -> Result<u32, String> {
-    // Piggyback the one-time attachment-cache migration on this once-per-boot
-    // reset: any plaintext copy an older build left behind is reaped, and any
-    // pre-envelope ciphertext is converted, before an adapter can re-fetch.
-    // Best-effort — a migration failure must not block the WS reset, and the
-    // completion marker means later boots short-circuit immediately.
-    match tokio::task::spawn_blocking(super::attachments::migrate_legacy_cache).await {
-        Ok(Ok(report)) => {
-            if !report.already_migrated {
-                log::info!(
-                    "connectors bootstrap: attachment cache migrated \
-                     (plaintext reaped: {}, converted: {}, expired: {}, unreadable: {})",
-                    report.plaintext_removed,
-                    report.converted,
-                    report.expired_removed,
-                    report.unreadable_removed
-                );
-            }
-        }
-        Ok(Err(e)) => log::warn!("connectors bootstrap: attachment cache migration failed: {e}"),
-        Err(e) => log::warn!("connectors bootstrap: attachment migration task failed: {e}"),
-    }
-
     let generic = super::ws_client::close_all().await;
     let lark = super::lark_ws::close_all();
     Ok((generic + lark) as u32)

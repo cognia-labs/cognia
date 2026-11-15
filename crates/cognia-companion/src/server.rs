@@ -77,7 +77,7 @@ async fn limit_public_request_body(request: Request, next: Next) -> Response {
         // A turn includes system prompts, tool schemas and inline content.
         // Give the two send aliases the same bounded budget as internal RPC;
         // authentication and command validation still apply normally.
-        (true, "/api/_rpc/agent_send" | "/api/_rpc/claude_send") => INTERNAL_BODY_LIMIT_BYTES,
+        (true, "/api/_rpc/agent_send") => INTERNAL_BODY_LIMIT_BYTES,
         (
             true,
             "/api/_rpc/task_resource_upload_write_chunk"
@@ -2093,17 +2093,12 @@ mod tests {
 
         for (command, bytes, expected) in [
             ("agent_send", 3 * 1024 * 1024, StatusCode::OK),
-            ("claude_send", 3 * 1024 * 1024, StatusCode::OK),
             (
                 "agent_send",
                 INTERNAL_BODY_LIMIT_BYTES + 1,
                 StatusCode::PAYLOAD_TOO_LARGE,
             ),
-            (
-                "claude_send",
-                INTERNAL_BODY_LIMIT_BYTES + 1,
-                StatusCode::PAYLOAD_TOO_LARGE,
-            ),
+            ("claude_send", 70 * 1024, StatusCode::PAYLOAD_TOO_LARGE),
             ("write_text_file", 70 * 1024, StatusCode::PAYLOAD_TOO_LARGE),
             ("agent_send_extra", 70 * 1024, StatusCode::PAYLOAD_TOO_LARGE),
         ] {

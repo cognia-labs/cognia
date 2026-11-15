@@ -5,7 +5,7 @@
  * Available when all of these hold: this machine has not turned shared chat
  * off (`./shared-chat-feature.ts`), a collaboration server is configured for
  * the active account, the account is signed in to its org, and the server's
- * `/health` lists `shared-chat` at a protocol this client speaks. Anything
+ * `/health` lists `shared-chat`. Anything
  * else is `unavailable` with the reason, which every entry point shows
  * instead of hiding itself: a control that disappears reads as a missing
  * feature, one that says "no collaboration server configured" says what to do.
@@ -21,7 +21,7 @@
  */
 
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
-import { SHARED_CHAT_PROTOCOL_VERSION, type CollabHealth } from "./client"
+import type { CollabHealth } from "./client"
 import { loadCollabConnection, subscribeCollabConnection } from "./connection"
 import { resolveCurrentCollabContext } from "./runtime-client"
 import { isSharedChatClientEnabled, subscribeSharedChatPreference } from "./shared-chat-feature"
@@ -40,8 +40,6 @@ export const SHARED_CHAT_UNAVAILABLE_REASONS = [
   "server_unreachable",
   /** The server answered, but does not serve shared chat. */
   "not_offered",
-  /** The server serves shared chat at a protocol this client does not speak. */
-  "protocol_unsupported",
 ] as const
 export type SharedChatUnavailableReason = (typeof SHARED_CHAT_UNAVAILABLE_REASONS)[number]
 
@@ -116,8 +114,6 @@ export async function probeSharedChatAvailability(
   if (!health) return unavailable("not_signed_in")
   if (!(health.features ?? []).includes(SHARED_CHAT_HEALTH_FEATURE))
     return unavailable("not_offered")
-  if ((health.collabProtocolVersion ?? 0) < Number(SHARED_CHAT_PROTOCOL_VERSION))
-    return unavailable("protocol_unsupported")
   return { state: "available", accountId, checkedAt: deps.now() }
 }
 

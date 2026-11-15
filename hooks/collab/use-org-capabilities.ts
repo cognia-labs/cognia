@@ -42,7 +42,6 @@ export const ORG_CAPABILITIES_REFRESH_MS = 60_000
 export type OrgCapabilitiesView =
   | { status: "loading" }
   | { status: "unavailable"; reason: "not-configured" | "not-signed-in" }
-  | { status: "unsupported" }
   | { status: "hidden" }
   | { status: "error"; message: string }
   | { status: "ready"; capabilities: OrgCapabilities }

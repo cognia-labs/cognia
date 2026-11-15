@@ -189,7 +189,7 @@ describe("ModeSwitcher", () => {
     expect(mockUpsert).not.toHaveBeenCalled()
   })
 
-  it("invokes claude_interrupt in Tauri environment on a mode change", async () => {
+  it("invokes agent_interrupt in Tauri environment on a mode change", async () => {
     mockIsTauri.mockReturnValue(true)
 
     render(
@@ -204,7 +204,7 @@ describe("ModeSwitcher", () => {
     fireEvent.click(screen.getByTestId("mode-option-draft"))
 
     await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("claude_interrupt", { session_id: "s2" })
+      expect(mockInvoke).toHaveBeenCalledWith("agent_interrupt", { sessionId: "s2" })
     })
   })
 

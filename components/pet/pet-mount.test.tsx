@@ -271,7 +271,7 @@ describe("PetMount", () => {
     })
   })
 
-  it("restores a position saved before desktop units unmarked, for Rust to convert", async () => {
+  it("passes an unmarked position on without a space, which the native open ignores", async () => {
     settingsValue = {
       petSettings: {
         ...ENABLED_SETTINGS.petSettings,

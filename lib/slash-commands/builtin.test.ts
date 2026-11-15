@@ -92,7 +92,7 @@ describe("BUILTIN_SLASH_COMMANDS registry", () => {
   it("/compact is enabled and runs a handler", () => {
     const compact = BUILTIN_SLASH_COMMANDS.find((c) => c.name === "compact")
     expect(compact?.disabled).not.toBe(true)
-    // Now a handler (not a template) so it routes a `claude_compact` control
+    // Now a handler (not a template) so it routes a `agent_compact` control
     // message, making manual compaction work on the generic path as well as
     // Anthropic's. An optional focus arg steers the summary.
     expect(compact?.template).toBeUndefined()

@@ -1022,7 +1022,7 @@ describe("call() — idempotency key", () => {
     fetchSpy.mockResolvedValue(mockResponse({}, 200))
 
     transport = new CompanionTransport()
-    await transport.call("claude_send", { session_id: "s1", prompt: "hi" })
+    await transport.call("agent_send", { session_id: "s1", prompt: "hi" })
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const headers = init.headers as Record<string, string>
@@ -1177,8 +1177,8 @@ describe("call() — idempotency key", () => {
     fetchSpy.mockResolvedValue(mockResponse({}, 200))
 
     transport = new CompanionTransport()
-    await transport.call("claude_send")
-    await transport.call("claude_send")
+    await transport.call("agent_send")
+    await transport.call("agent_send")
 
     const key1 = (
       (fetchSpy.mock.calls[0] as [string, RequestInit])[1].headers as Record<string, string>
@@ -1430,7 +1430,7 @@ describe("call() — 4xx errors", () => {
     const stateHandler = jest.fn()
     transport.onConnectionStateChange(stateHandler)
 
-    await expect(transport.call("claude_send")).rejects.toMatchObject({
+    await expect(transport.call("agent_send")).rejects.toMatchObject({
       code: "device_revoked",
       retryable: false,
     })
@@ -1491,7 +1491,7 @@ describe("call() — 4xx errors", () => {
 
     transport = new CompanionTransport()
     let caught: unknown
-    const callPromise = transport.call("claude_send").catch((e: unknown) => {
+    const callPromise = transport.call("agent_send").catch((e: unknown) => {
       caught = e
     })
     await jest.runAllTimersAsync()
@@ -1714,7 +1714,7 @@ describe("call() — retries", () => {
 
     transport = new CompanionTransport()
     const callPromise = transport.call(
-      "claude_send",
+      "agent_send",
       { session_id: "s1", prompt: "hello" },
       { idempotencyKey: "stable-key" }
     )
@@ -1913,7 +1913,7 @@ describe("call() — retries", () => {
     transport = new CompanionTransport()
     // Attach .catch() immediately to prevent unhandled rejection warnings.
     let caught: unknown
-    const callPromise = transport.call("claude_send").catch((e: unknown) => {
+    const callPromise = transport.call("agent_send").catch((e: unknown) => {
       caught = e
     })
 
@@ -1936,7 +1936,7 @@ describe("call() — retries", () => {
 
     transport = new CompanionTransport()
     let caught: unknown
-    const callPromise = transport.call("claude_send").catch((e: unknown) => {
+    const callPromise = transport.call("agent_send").catch((e: unknown) => {
       caught = e
     })
 
@@ -1959,7 +1959,7 @@ describe("call() — retries", () => {
 
     transport = new CompanionTransport()
     let result: unknown
-    const callPromise = transport.call("claude_send").then((r: unknown) => {
+    const callPromise = transport.call("agent_send").then((r: unknown) => {
       result = r
     })
 
@@ -1974,7 +1974,7 @@ describe("call() — retries", () => {
     jest.useFakeTimers()
     fetchSpy.mockRejectedValue("socket closed")
     transport = new CompanionTransport()
-    const callPromise = transport.call("claude_send").catch((error: unknown) => error)
+    const callPromise = transport.call("agent_send").catch((error: unknown) => error)
 
     await jest.advanceTimersByTimeAsync(250)
     await jest.advanceTimersByTimeAsync(500)
@@ -1994,7 +1994,7 @@ describe("call() — retries", () => {
       json: () => Promise.reject(new Error("invalid JSON")),
     })
     transport = new CompanionTransport()
-    const callPromise = transport.call("claude_send").catch((error: unknown) => error)
+    const callPromise = transport.call("agent_send").catch((error: unknown) => error)
 
     await jest.advanceTimersByTimeAsync(250)
     await jest.advanceTimersByTimeAsync(500)
@@ -2056,7 +2056,7 @@ describe("call() — timeout", () => {
     fetchSpy.mockRejectedValueOnce(abortErr)
 
     transport = new CompanionTransport()
-    const err = await transport.call("claude_send").catch((e: unknown) => e)
+    const err = await transport.call("agent_send").catch((e: unknown) => e)
 
     expect(err).toBeInstanceOf(CompanionError)
     expect((err as CompanionError).code).toBe("timeout")

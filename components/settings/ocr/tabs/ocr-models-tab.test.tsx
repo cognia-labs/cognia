@@ -1,7 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { isTauri } from "@/lib/platform/detect"
-import ocrMessages from "@/i18n/messages/en/ocr.json"
 import { listen } from "@tauri-apps/api/event"
 import {
   buildTauriModelBridge,
@@ -116,22 +115,6 @@ describe("OcrModelsTab", () => {
     const statusSpy = jest.spyOn(bridge, "status")
     render(<OcrModelsTab providerId="paddle-ocr" modelVariant="v6-tiny" bridge={bridge} />)
     await waitFor(() => expect(statusSpy).toHaveBeenCalledWith("paddle-ocr", "v6-tiny"))
-  })
-
-  it("reports preserved legacy Paddle files as non-active", async () => {
-    render(
-      <OcrModelsTab
-        providerId="paddle-ocr"
-        bridge={makeBridge({
-          backend: "paddle-ocr",
-          legacy_files: ["det.onnx", "rec.onnx", "dict.txt"],
-          legacy_model_dir: "/tmp/paddle",
-        })}
-      />
-    )
-
-    expect(await screen.findByText(ocrMessages.modelStatus.legacyDetected)).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /download models/i })).toBeInTheDocument()
   })
 })
 

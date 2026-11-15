@@ -505,7 +505,7 @@ pub fn text_content(text: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 /// The three options cognia offers on every permission prompt. Option ids
-/// double as the `claude_approve` decision they map back to.
+/// double as the `agent_resolve_permission` decision they map back to.
 pub fn permission_options() -> Value {
     json!([
         { "optionId": "allow", "name": "Allow once", "kind": "allow_once" },
@@ -536,7 +536,7 @@ pub fn permission_request_params(
     })
 }
 
-/// Map a permission-response outcome back onto a `claude_approve` decision.
+/// Map a permission-response outcome back onto a `agent_resolve_permission` decision.
 /// `selected` with a known option id maps directly; anything else (cancelled,
 /// unknown option) denies — fail closed.
 pub fn outcome_to_decision(outcome: &Value) -> String {

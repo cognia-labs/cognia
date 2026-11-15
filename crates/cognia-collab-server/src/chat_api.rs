@@ -3745,7 +3745,6 @@ mod tests {
             user.clone(),
             OrgId::parse(org).unwrap(),
             None,
-            None,
             Duration::from_secs(300),
         )
         .unwrap();
@@ -3954,7 +3953,6 @@ mod tests {
             let claims = GrantClaims::issue(
                 UserId::parse(user).unwrap(),
                 OrgId::parse(NOTICE_ORG).unwrap(),
-                None,
                 None,
                 Duration::from_secs(300),
             )

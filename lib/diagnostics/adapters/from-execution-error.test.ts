@@ -21,9 +21,7 @@ describe("diagnoseExecutionError", () => {
   })
 
   it("maps the per-command capability gate", () => {
-    const out = diagnoseExecutionError(
-      new AgentCapabilityError("streaming" as never, "claude_send")
-    )
+    const out = diagnoseExecutionError(new AgentCapabilityError("streaming" as never, "agent_send"))
     expect(out?.code).toBe("capabilityUnsatisfied")
     expect(out?.meta.extra).toEqual({ capability: "streaming" })
   })

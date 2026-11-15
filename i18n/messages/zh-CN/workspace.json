@@ -643,7 +643,6 @@
     "featuresHeading": "共享功能",
     "unavailable": {
       "not-signed-in": "登录后可查看权限。",
-      "unsupported": "当前协作服务器尚不支持报告权限。",
       "hidden": "该工作区未与你共享。",
       "error": "无法检查权限：{message}"
     }

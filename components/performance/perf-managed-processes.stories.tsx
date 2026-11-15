@@ -23,8 +23,6 @@ const runtime: PerfSample["runtime"] = {
 // A live frame with a managed process per in-scope subsystem, each joined to a
 // sampled OS process by PID (except the MCP server, whose PID is unset here).
 const latest: PerfSample = {
-  tsMs: 1,
-  intervalMs: 1000,
   processes: [
     { pid: 100, parentPid: 1, name: "npx", role: "child", cpuPct: 12, cpuPctRaw: 96, memBytes: 220 * MB, diskReadBps: 0, diskWriteBps: 0, runSecs: 340 }, // prettier-ignore
     { pid: 200, parentPid: 1, name: "node", role: "sidecar", cpuPct: 3, cpuPctRaw: 24, memBytes: 180 * MB, diskReadBps: 0, diskWriteBps: 0, runSecs: 1200 }, // prettier-ignore

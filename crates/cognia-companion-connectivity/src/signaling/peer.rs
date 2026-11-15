@@ -32,19 +32,15 @@ use webrtc::peer_connection::{
 /// DataChannel label both peers agree on. Mirrored in
 /// `lib/signaling/types.ts:DATACHANNEL_LABEL`.
 pub const DATACHANNEL_LABEL: &str = "cognia.signaling";
-/// Label used before the protocol-version suffix was dropped. The desktop is
-/// the answerer, so it has to keep accepting what an older mobile build offers
-/// — otherwise upgrading the desktop alone silently breaks every WAN session.
-pub const LEGACY_DATACHANNEL_LABEL: &str = "cognia.v2";
 pub const TERMINAL_DATACHANNEL_LABEL: &str = "cognia.terminal";
 /// One remote desktop viewer stream per channel (ADR-0234 Phase 3). The phone
 /// opens it on demand on the live peer; the first message attaches it to a
 /// session. Mirrored in `lib/tauri/transport-rtc.ts`.
 pub const RFB_DATACHANNEL_LABEL: &str = "cognia.rfb";
 
-/// True for the current label and the pre-rename one.
+/// True for the agent dispatch channel's label.
 pub fn is_agent_datachannel_label(label: &str) -> bool {
-    label == DATACHANNEL_LABEL || label == LEGACY_DATACHANNEL_LABEL
+    label == DATACHANNEL_LABEL
 }
 pub const ICE_QUEUE_CAPACITY: usize = 256;
 pub const INBOUND_FRAME_QUEUE_CAPACITY: usize = 128;

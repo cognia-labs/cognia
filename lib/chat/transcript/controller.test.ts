@@ -70,7 +70,7 @@ describe("TranscriptController", () => {
       }
     })
     const controller = new TranscriptController("s1", {
-      capabilities: async () => null,
+      capabilities: async () => transcriptCapabilitiesV1(),
       timeline: jest.fn(),
       turnMessages,
     })
@@ -155,7 +155,7 @@ describe("TranscriptController", () => {
       }
     })
     const controller = new TranscriptController("s1", {
-      capabilities: async () => null,
+      capabilities: async () => transcriptCapabilitiesV1(),
       timeline: jest.fn(),
       turnMessages,
     })
@@ -209,7 +209,7 @@ describe("TranscriptController", () => {
     const controller = new TranscriptController(
       "s1",
       {
-        capabilities: async () => null,
+        capabilities: async () => transcriptCapabilitiesV1(),
         timeline: jest.fn(),
         turnMessages,
       },
@@ -231,7 +231,7 @@ describe("TranscriptController", () => {
 
   it.each([-1, NaN, Infinity])("rejects invalid page byte sizes (%s)", async (approximateBytes) => {
     const controller = new TranscriptController("s1", {
-      capabilities: async () => null,
+      capabilities: async () => transcriptCapabilitiesV1(),
       timeline: jest.fn(),
       turnMessages: async () => ({
         messages: [],
@@ -252,7 +252,7 @@ describe("TranscriptController", () => {
   it("publishes a new snapshot when asynchronously loaded detail becomes readable", async () => {
     const pending = deferred<SessionTurnMessagesPage>()
     const controller = new TranscriptController("s1", {
-      capabilities: async () => null,
+      capabilities: async () => transcriptCapabilitiesV1(),
       timeline: jest.fn(),
       turnMessages: () => pending.promise,
     })
@@ -286,7 +286,7 @@ describe("TranscriptController", () => {
       .mockImplementationOnce(() => pending.promise)
       .mockResolvedValue(finished)
     const controller = new TranscriptController("s1", {
-      capabilities: async () => null,
+      capabilities: async () => transcriptCapabilitiesV1(),
       timeline: jest.fn(),
       turnMessages,
     })
@@ -312,7 +312,7 @@ describe("TranscriptController", () => {
     const controller = new TranscriptController(
       "s1",
       {
-        capabilities: async () => null,
+        capabilities: async () => transcriptCapabilitiesV1(),
         timeline: jest.fn(),
         turnMessages: async () => detail,
       },
@@ -580,20 +580,6 @@ describe("TranscriptController", () => {
       hasMore: false,
     })
   })
-  it("hands capability absence to the legacy owner without downloading history twice", async () => {
-    const source: PublicTranscriptSource = {
-      capabilities: jest.fn(async () => null),
-      timeline: jest.fn(),
-      turnMessages: jest.fn(),
-    }
-    const controller = new TranscriptController("s1", source)
-
-    await controller.loadInitial()
-
-    expect(controller.getSnapshot().mode).toBe("legacy")
-    expect(source.timeline).not.toHaveBeenCalled()
-  })
-
   it("serializes retries, ignores obsolete notifications, and surfaces a failing refresh", async () => {
     let notify!: (revision: number) => void
     const failure = new Error("network unavailable")

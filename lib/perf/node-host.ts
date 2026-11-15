@@ -233,7 +233,6 @@ export class NodePerformanceHost implements PerformanceHostAdapter {
       sources: [this.source],
       leases: [state.lease],
       gaps: [],
-      samples: frames,
       running: true,
       intervalMs: state.lease.requestedCadenceMs,
     }
@@ -346,8 +345,6 @@ export class NodePerformanceHost implements PerformanceHostAdapter {
           counterReset: !previous,
           sourceRestarted: sequence === 1,
         },
-        tsMs: wallEndMs,
-        intervalMs: elapsedMs,
         processes: [
           {
             pid: process.pid,

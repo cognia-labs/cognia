@@ -177,7 +177,7 @@ mod tests {
             self.store.apply_feature_policy(policy, 0, key.as_str(), "test", "operator").await.unwrap();
         }
         async fn call(&self, method: &str, path: &str, user: &str, body: Value, protocol: Option<u32>) -> (StatusCode, Value) {
-            let grant = GrantClaims::issue(UserId::parse(user).unwrap(), OrgId::parse(ORG).unwrap(), None, None, Duration::from_secs(300)).unwrap();
+            let grant = GrantClaims::issue(UserId::parse(user).unwrap(), OrgId::parse(ORG).unwrap(), None, Duration::from_secs(300)).unwrap();
             let mut request = Request::builder().method(method).uri(format!("/v1/orgs/{ORG}/{path}"))
                 .header("authorization", format!("Bearer {}", self.state.signer.sign(&grant).unwrap())).header("content-type", "application/json");
             if let Some(protocol) = protocol { request = request.header("x-cognia-collab-protocol", protocol); }

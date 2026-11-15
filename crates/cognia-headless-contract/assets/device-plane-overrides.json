@@ -10623,46 +10623,6 @@
         "additionalProperties": false
       }
     },
-    "team_run_pause": {
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "teamId",
-          "adminLease"
-        ],
-        "properties": {
-          "teamId": {
-            "type": "string"
-          },
-          "adminLease": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    "team_run_resume": {
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "teamId",
-          "adminLease"
-        ],
-        "properties": {
-          "teamId": {
-            "type": "string"
-          },
-          "adminLease": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "additionalProperties": false
-      }
-    },
     "team_run_start": {
       "inputSchemaSource": "contract",
       "inputSchema": {
@@ -10690,26 +10650,6 @@
           },
           "ultracode": {
             "type": "boolean"
-          },
-          "adminLease": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    "team_run_stop": {
-      "inputSchemaSource": "contract",
-      "inputSchema": {
-        "type": "object",
-        "required": [
-          "teamId",
-          "adminLease"
-        ],
-        "properties": {
-          "teamId": {
-            "type": "string"
           },
           "adminLease": {
             "type": "string",

@@ -359,7 +359,7 @@ describe("host feature manifest", () => {
 
     expect(manifest.features["claude.host-tools"]).toEqual({
       version: 1,
-      operations: expect.arrayContaining(["claude_send", "claude_interrupt"]),
+      operations: expect.arrayContaining(["agent_send", "agent_interrupt"]),
     })
     expect(manifest.features["skills.catalog"]).toEqual({
       version: 1,

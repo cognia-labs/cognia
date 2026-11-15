@@ -44,7 +44,7 @@ use cognia_companion::{
     deny_list::DenyList,
     desktop_messages_bridge::DesktopMessagesBridge,
     desktop_writes_bridge::DesktopWritesBridge,
-    device_grants::{DeviceGrantStore, FileDeviceGrantStore, GrantKind},
+    device_grants::GrantKind,
     event_bus::EventBus,
     idempotency::IdempotencyCache,
     lark_entry,
@@ -2817,22 +2817,6 @@ async fn run_serve(
         log::warn!("push-creds reinstall: {err}");
     }
 
-    // One-time import from the retired JSON projection. The SQLite marker is
-    // committed with the grants, so a later revocation can never be undone by
-    // importing the same legacy file again on restart.
-    let legacy = FileDeviceGrantStore::new(&data_dir).load()?;
-    let security = cognia_companion::security_store::security_store()
-        .ok_or("security store is not initialized")?;
-    let imported = security.migrate_legacy_device_grants(
-        &legacy.control.into_iter().collect::<Vec<_>>(),
-        &legacy.agent_control.into_iter().collect::<Vec<_>>(),
-        &legacy.terminal.into_iter().collect::<Vec<_>>(),
-        chrono::Utc::now().timestamp(),
-    )?;
-    if imported {
-        log::info!("imported legacy device grants into SecurityStore");
-    }
-
     // Publish the TLS fingerprint for the whoami handler (P0.3).
     set_tls_fingerprint(tls_material.fingerprint_sha256.clone());
     let idempotency = IdempotencyCache::open(data_dir.join("companion-idempotency.sqlite"))
@@ -2895,7 +2879,7 @@ async fn run_serve(
     // fail at spawn time with a clear path error rather than at boot.
     let api_keys = ApiKeyState::new();
     let sidecar_script = resolve_sidecar_script_path().unwrap_or_else(|| {
-        log::warn!("no sidecar script found (set {SIDECAR_SCRIPT_ENV}); claude_send will fail");
+        log::warn!("no sidecar script found (set {SIDECAR_SCRIPT_ENV}); agent_send will fail");
         PathBuf::from("claude-host.mjs")
     });
     if let Some(directory) = sidecar_script.parent() {

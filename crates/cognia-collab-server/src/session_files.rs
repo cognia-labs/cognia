@@ -2866,7 +2866,6 @@ mod tests {
                     UserId::parse(user).unwrap(),
                     OrgId::parse(ORG).unwrap(),
                     None,
-                    None,
                     Duration::from_secs(300),
                 )
                 .unwrap();

@@ -1,16 +1,6 @@
-import type { StoredMessage, TranscriptCapabilitiesV1 } from "@cognia/agent-config-types"
+import type { TranscriptCapabilitiesV1 } from "@cognia/agent-config-types"
 
 import { createRemoteTranscriptSource, transcriptCapabilitiesV1 } from "./source"
-
-function row(id: string, role: StoredMessage["role"], text: string): StoredMessage {
-  return {
-    id,
-    sessionId: "s1",
-    role,
-    parts: [{ type: "text", text }] as StoredMessage["parts"],
-    createdAt: Number(id.slice(1)),
-  }
-}
 
 describe("remote transcript source", () => {
   it("filters revision events to the observed session", () => {
@@ -102,7 +92,7 @@ describe("remote transcript source", () => {
     await expect(
       source.timeline({ sessionId: "s1", direction: "backward" })
     ).resolves.toMatchObject({ revision: 2 })
-    expect(host.call).toHaveBeenCalledWith("transcript_capabilities", {})
+    expect(host.call).toHaveBeenCalledWith("session_timeline", expect.anything())
     hostRevision?.({ sessionId: "s1", revision: 2 })
     expect(listener).toHaveBeenCalledWith(2)
 
@@ -125,26 +115,7 @@ describe("remote transcript source", () => {
     expect(call).not.toHaveBeenCalledWith("message_get_by_session", expect.anything())
   })
 
-  it("falls back to the legacy message API only for an unsupported capability method", async () => {
-    const call = jest.fn(async (name: string, args?: Record<string, unknown>) => {
-      if (name === "transcript_capabilities") {
-        throw Object.assign(new Error("Method not found"), { code: "METHOD_NOT_FOUND" })
-      }
-      if (name === "message_get_by_session") {
-        expect(args).toMatchObject({ session_id: "s1", limit: 200 })
-        return { rows: [row("u1", "user", "hello"), row("a2", "assistant", "hi")] }
-      }
-      throw new Error(`unexpected ${name}`)
-    })
-    const source = createRemoteTranscriptSource({ call } as never)
-
-    await expect(source.capabilities()).resolves.toBeNull()
-    await expect(source.timeline({ sessionId: "s1" })).resolves.toMatchObject({
-      items: [{ kind: "completed-turn", turnKey: "turn:u1" }],
-    })
-  })
-
-  it("does not silently trigger legacy hydration on timeouts or server failures", async () => {
+  it("surfaces a failing capability probe", async () => {
     const call = jest.fn(async () => {
       throw Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" })
     })

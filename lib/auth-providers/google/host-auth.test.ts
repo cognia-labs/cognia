@@ -4,7 +4,6 @@ import { waitFor } from "@testing-library/react"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { getAuthConnection, listAuthConnections } from "@/lib/db/auth-connections"
-import { getSettings } from "@/lib/db/settings"
 import { getPlugin } from "@/lib/db/plugins"
 import {
   __resetAuthRegistryForTesting,
@@ -47,7 +46,6 @@ jest.mock("@/lib/auth-providers/google/state", () => ({
   googleState: jest.fn(),
   subscribeGoogleStateChanged: jest.fn(() => jest.fn()),
 }))
-jest.mock("@/lib/db/settings", () => ({ getSettings: jest.fn() }))
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 jest.mock("@/lib/network/proxy-fetch", () => ({ proxyFetch: jest.fn() }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({ connectorsEnsureServer: jest.fn() }))
@@ -70,9 +68,6 @@ beforeEach(async () => {
   jest.mocked(isTauri).mockReturnValue(true)
   jest.mocked(isHeadlessHost).mockReturnValue(false)
   jest
-    .mocked(getSettings)
-    .mockResolvedValue({ docsProviders: { google: { clientId: "desktop-client" } } } as never)
-  jest
     .mocked(getPlugin)
     .mockResolvedValue({ manifest: { requiresServices: { "auth.google": "^1.0.0" } } } as never)
   jest.mocked(connectorsEnsureServer).mockResolvedValue("127.0.0.1:7842")
@@ -88,13 +83,10 @@ beforeEach(async () => {
         status: "connected",
         revision: "nonce-1",
         credentialRevision: "credential-1",
-        needsIdentity: false,
       },
     ],
     clients: [{ clientId: "desktop-client", hasClientSecret: true }],
     pending: [],
-    migrationNeedsClientId: false,
-    backupMigrationNeedsClientId: false,
   }
   jest.mocked(googleState).mockImplementation(async (input) => {
     if (input.action === "accessToken")
@@ -387,22 +379,6 @@ it("reauthorizes through Begin with the native client, scopes, lineage and actua
   })
   expect(openUrl).toHaveBeenCalledWith("https://accounts.google.com/authorize")
   expect(getHostConnectionDriver("google")?.reauthorize).toBeDefined()
-})
-
-it("passes the backup client hint alongside the Docs client during reconciliation", async () => {
-  jest.mocked(getSettings).mockResolvedValue({
-    docsProviders: { google: { clientId: "desktop-client" } },
-    backupDestinations: { googleDrive: { enabled: true, clientId: " backup-client " } },
-  } as never)
-  await reconcileGoogleConnections({ localAuthorization: LOCAL_PERSON_RUN })
-  expect(googleState).toHaveBeenCalledWith(
-    {
-      action: "snapshot",
-      legacyClientId: "desktop-client",
-      legacyBackupClientId: "backup-client",
-    },
-    { localAuthorization: LOCAL_PERSON_RUN }
-  )
 })
 
 it.each(["desktop", "headless"])(

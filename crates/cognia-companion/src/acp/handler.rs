@@ -8,15 +8,15 @@
 //! |---------------------------------|-------------------------------------------|
 //! | `initialize`                    | static capabilities                        |
 //! | `session/new`                   | mint UUID, stash cwd                       |
-//! | `session/prompt`                | `remote_execution("claude_send", …)`; the |
+//! | `session/prompt`                | `remote_execution("agent_send", …)`; the |
 //! |                                 | JSON-RPC result is deferred to turn end    |
-//! | `session/cancel` (notification) | `remote_execution("claude_interrupt", …)` |
+//! | `session/cancel` (notification) | `remote_execution("agent_interrupt", …)` |
 //! | `session/load`                  | resume via the global resume index         |
 //! | `session/request_permission` ⟵  | sidecar `permission_request` events; the   |
-//! |   client response               | response maps to `claude_approve`          |
+//! |   client response               | response maps to `agent_resolve_permission`          |
 //! | `session/update` ⟶              | EventBus `claude://message` frames         |
 //!
-//! Because `claude_send` / `claude_interrupt` / `claude_approve` are
+//! Because `agent_send` / `agent_interrupt` / `agent_resolve_permission` are
 //! host-generic dispatch arms (ADR-0059 R7), this endpoint works both on the
 //! desktop Tauri app and on the headless `cognia-server`.
 //!
@@ -331,7 +331,7 @@ impl AcpConnection {
             self.pending_permissions.remove(&id);
             if let Err(message) = self
                 .dispatch(
-                    "claude_approve",
+                    "agent_resolve_permission",
                     json!({
                         "session_id": session_id,
                         "request_id": request_id,
@@ -1039,7 +1039,7 @@ impl AcpConnection {
         self.deny_session_permissions(session_id).await;
         if let Some(pending) = entry.pending_prompt {
             let _ = self
-                .dispatch("claude_interrupt", json!({ "session_id": session_id }))
+                .dispatch("agent_interrupt", json!({ "session_id": session_id }))
                 .await;
             messages.push(types::rpc_error(
                 &pending.rpc_id,
@@ -1078,7 +1078,7 @@ impl AcpConnection {
             .and_then(|entry| entry.pending_prompt.as_ref())
         {
             let _ = self
-                .dispatch("claude_interrupt", json!({ "session_id": session_id }))
+                .dispatch("agent_interrupt", json!({ "session_id": session_id }))
                 .await;
             messages.push(types::rpc_error(
                 &pending.rpc_id,
@@ -1088,7 +1088,7 @@ impl AcpConnection {
         }
         if active_entry.is_some() {
             let _ = self
-                .dispatch("claude_close_session", json!({ "session_id": session_id }))
+                .dispatch("agent_close_session", json!({ "session_id": session_id }))
                 .await;
         }
         if let Err(error) = remove_catalog(
@@ -1205,7 +1205,7 @@ impl AcpConnection {
             "options": Value::Object(options),
         });
         if let Err(message) = self
-            .dispatch_with_request_id("claude_send", args, Some(id))
+            .dispatch_with_request_id("agent_send", args, Some(id))
             .await
         {
             return vec![types::rpc_error(
@@ -1258,10 +1258,10 @@ impl AcpConnection {
             return Vec::new();
         }
         if let Err(message) = self
-            .dispatch("claude_interrupt", json!({ "session_id": session_id }))
+            .dispatch("agent_interrupt", json!({ "session_id": session_id }))
             .await
         {
-            log::warn!("companion-api acp: claude_interrupt failed: {message}");
+            log::warn!("companion-api acp: agent_interrupt failed: {message}");
         }
         self.deny_session_permissions(&session_id).await;
         Vec::new()
@@ -1288,7 +1288,7 @@ impl AcpConnection {
         }
         if let Some((session_id, rpc_id)) = cancelled_prompt {
             if let Err(message) = self
-                .dispatch("claude_interrupt", json!({ "session_id": session_id }))
+                .dispatch("agent_interrupt", json!({ "session_id": session_id }))
                 .await
             {
                 log::warn!("companion-api acp: request cancellation interrupt failed: {message}");
@@ -1309,7 +1309,7 @@ impl AcpConnection {
         };
         if let Err(message) = self
             .dispatch(
-                "claude_approve",
+                "agent_resolve_permission",
                 json!({
                     "session_id": session_id,
                     "request_id": sidecar_request_id,
@@ -1338,7 +1338,7 @@ impl AcpConnection {
         };
         if let Err(message) = self
             .dispatch(
-                "claude_approve",
+                "agent_resolve_permission",
                 json!({
                     "session_id": session_id,
                     "request_id": request_id,
@@ -1347,7 +1347,7 @@ impl AcpConnection {
             )
             .await
         {
-            log::warn!("companion-api acp: claude_approve failed: {message}");
+            log::warn!("companion-api acp: agent_resolve_permission failed: {message}");
         }
         Vec::new()
     }
@@ -1511,10 +1511,10 @@ impl AcpConnection {
         for session_id in self.sessions.prompted_session_ids() {
             self.deny_session_permissions(&session_id).await;
             let _ = self
-                .dispatch("claude_interrupt", json!({ "session_id": session_id }))
+                .dispatch("agent_interrupt", json!({ "session_id": session_id }))
                 .await;
             let _ = self
-                .dispatch("claude_close_session", json!({ "session_id": session_id }))
+                .dispatch("agent_close_session", json!({ "session_id": session_id }))
                 .await;
         }
     }

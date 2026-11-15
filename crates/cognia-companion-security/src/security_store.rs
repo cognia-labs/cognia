@@ -15,7 +15,6 @@ use std::sync::Arc;
 /// Age from completion, not creation, so long-running operations get the
 /// same replay window. See ADR-0175.
 const IDEMPOTENCY_RETENTION_SECS: i64 = 24 * 60 * 60;
-const PRIVATE_RECEIPT_OWNER: &str = "companion-legacy-receipts/v1";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecurityStoreError {
@@ -31,7 +30,7 @@ pub enum SecurityStoreError {
     InvalidSocketTicket,
     #[error("idempotency key was already used with a different request")]
     IdempotencyConflict,
-    #[error("the legacy receipt has no recoverable result")]
+    #[error("the receipt has no recoverable result")]
     ReceiptUnavailable,
     #[error("host policy is invalid, expired, revoked, or does not cover this command")]
     InvalidPolicy,
@@ -1725,69 +1724,6 @@ impl SecurityStore {
         Ok(normalized)
     }
 
-    /// Import the retired `device-grants.json` projection exactly once.
-    pub fn migrate_legacy_device_grants(
-        &self,
-        control: &[String],
-        agent_control: &[String],
-        terminal: &[String],
-        now: i64,
-    ) -> Result<bool, SecurityStoreError> {
-        const MARKER: &str = "legacy-device-grants-v1";
-        let mut conn = self.conn.lock();
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let already_applied: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM security_migrations WHERE key = ?1)",
-            [MARKER],
-            |row| row.get(0),
-        )?;
-        if already_applied {
-            return Ok(false);
-        }
-        // Mapping comes from `GrantKind` so the import, the desktop toggles,
-        // and the `cognia-server devices` CLI cannot grant different sets.
-        for (devices, capabilities) in [
-            (control, super::device_grants::GrantKind::Control),
-            (agent_control, super::device_grants::GrantKind::AgentControl),
-            (terminal, super::device_grants::GrantKind::Terminal),
-        ]
-        .map(|(devices, kind)| (devices, kind.capabilities()))
-        {
-            for device_id in devices {
-                // A browser companion is skipped rather than failing the
-                // import. The legacy flags predate the browser class, so a
-                // browser id in them is a stale mirror row or a forged
-                // argument (the desktop command takes the lists from the
-                // renderer), and aborting would leave the marker unset and
-                // withhold every legitimate grant on every later boot.
-                let tenant: Option<String> = tx
-                    .query_row(
-                        "SELECT d.tenant_id FROM devices d
-                         WHERE d.id = ?1 AND d.status IN ('active', 'suspended')
-                           AND NOT EXISTS (
-                             SELECT 1 FROM browser_devices b
-                             WHERE b.tenant_id = d.tenant_id AND b.device_id = d.id
-                           )
-                         LIMIT 1",
-                        [device_id],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                if let Some(tenant_id) = tenant {
-                    for capability in capabilities {
-                        upsert_capability_grant(&tx, &tenant_id, device_id, capability, now)?;
-                    }
-                }
-            }
-        }
-        tx.execute(
-            "INSERT INTO security_migrations (key, applied_at) VALUES (?1, ?2)",
-            params![MARKER, now],
-        )?;
-        tx.commit()?;
-        Ok(true)
-    }
-
     /// Provision a loopback-authenticated protocol adapter as a durable
     /// service-role device principal. The wire principal still executes as a
     /// least-privilege device, with only the supplied canonical capabilities.
@@ -2030,8 +1966,8 @@ impl SecurityStore {
         )?;
         let count = tx.execute(
             "DELETE FROM idempotency_records
-             WHERE (receipt_json IS NOT NULL OR receipt_cipher IS NOT NULL
-                    OR status IN ('host-semantic', 'released')) AND updated_at < ?1",
+             WHERE (receipt_json IS NOT NULL OR status IN ('host-semantic', 'released'))
+               AND updated_at < ?1",
             [cutoff],
         )?;
         tx.commit()?;
@@ -2075,7 +2011,7 @@ impl SecurityStore {
                     params![tenant_id, device_id, idempotency_key, now],
                 )?;
                 tx.execute(
-                    "UPDATE idempotency_records SET status='host-semantic', receipt_json=NULL, receipt_cipher=NULL, receipt_owner=NULL, updated_at=?4
+                    "UPDATE idempotency_records SET status='host-semantic', receipt_json=NULL, updated_at=?4
                      WHERE tenant_id=?1 AND device_id=?2 AND idempotency_key=?3",
                     params![tenant_id, device_id, idempotency_key, now],
                 )?;
@@ -2116,34 +2052,10 @@ impl SecurityStore {
             host_id,
             idempotency_key,
             request_hash,
-            None,
             now,
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn begin_command_operation(
-        &self,
-        tenant_id: &str,
-        device_id: &str,
-        host_id: &str,
-        idempotency_key: &str,
-        request_hash: &str,
-        command: &str,
-        now: i64,
-    ) -> Result<IdempotencyDecision, SecurityStoreError> {
-        self.begin_operation(
-            tenant_id,
-            device_id,
-            host_id,
-            idempotency_key,
-            request_hash,
-            Some(command),
-            now,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn begin_operation(
         &self,
         tenant_id: &str,
@@ -2151,53 +2063,24 @@ impl SecurityStore {
         host_id: &str,
         idempotency_key: &str,
         request_hash: &str,
-        command: Option<&str>,
         now: i64,
     ) -> Result<IdempotencyDecision, SecurityStoreError> {
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        type ReplayRow = (
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-        );
+        type ReplayRow = (String, String, Option<String>, String);
         let existing: Option<ReplayRow> = tx
             .query_row(
-                "SELECT request_hash, operation_id, receipt_json, receipt_cipher, receipt_owner, status
+                "SELECT request_hash, operation_id, receipt_json, status
                  FROM idempotency_records
                  WHERE tenant_id = ?1 AND device_id = ?2 AND idempotency_key = ?3",
                 params![tenant_id, device_id, idempotency_key],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
-        if let Some((existing_hash, operation_id, receipt_json, cipher, owner, status)) = existing {
+        if let Some((existing_hash, operation_id, receipt_json, status)) = existing {
             if existing_hash != request_hash {
                 return Err(SecurityStoreError::IdempotencyConflict);
             }
-            let receipt_json = if let Some(cipher) = cipher {
-                let attested = command
-                    .or(owner.as_deref())
-                    .ok_or(SecurityStoreError::ReceiptUnavailable)?;
-                if owner.as_deref().is_some_and(|owner| owner != attested) {
-                    return Err(SecurityStoreError::IdempotencyConflict);
-                }
-                let receipt = open_private_receipt(
-                    tenant_id,
-                    device_id,
-                    idempotency_key,
-                    &operation_id,
-                    request_hash,
-                    &cipher,
-                )?;
-                tx.execute("UPDATE idempotency_records SET receipt_owner=?4 WHERE tenant_id=?1 AND device_id=?2 AND idempotency_key=?3",
-                    params![tenant_id, device_id, idempotency_key, attested])?;
-                Some(receipt)
-            } else {
-                receipt_json
-            };
             if status == "host-semantic" && receipt_json.is_none() {
                 return Err(SecurityStoreError::ReceiptUnavailable);
             }
@@ -2300,27 +2183,12 @@ impl SecurityStore {
         operation_id: &str,
     ) -> Result<Option<OperationSummary>, SecurityStoreError> {
         let row = self.conn.lock().query_row(
-            "SELECT status,receipt_json,receipt_cipher,receipt_owner,idempotency_key,request_hash,created_at,updated_at
+            "SELECT status,receipt_json,created_at,updated_at
              FROM idempotency_records WHERE tenant_id=?1 AND device_id=?2 AND operation_id=?3 AND status != 'host-semantic'",
-            params![tenant_id,device_id,operation_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,Option<String>>(2)?,row.get::<_,Option<String>>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,i64>(6)?,row.get::<_,i64>(7)?)),
+            params![tenant_id,device_id,operation_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?)),
         ).optional()?;
-        let Some((status, receipt_json, cipher, owner, key, hash, created_at, updated_at)) = row
-        else {
+        let Some((status, receipt_json, created_at, updated_at)) = row else {
             return Ok(None);
-        };
-        if cipher.is_some() && owner.is_none() {
-            return Ok(None);
-        }
-        let receipt_json = match cipher {
-            Some(cipher) => Some(open_private_receipt(
-                tenant_id,
-                device_id,
-                &key,
-                operation_id,
-                &hash,
-                &cipher,
-            )?),
-            None => receipt_json,
         };
         let receipt = receipt_json
             .map(|value| serde_json::from_str(&value))
@@ -2415,7 +2283,7 @@ impl SecurityStore {
         let updated = tx.execute(
             "UPDATE idempotency_records SET status = 'released', updated_at = ?1
              WHERE tenant_id = ?2 AND device_id = ?3 AND idempotency_key = ?4
-               AND receipt_json IS NULL AND receipt_cipher IS NULL AND status = 'running'",
+               AND receipt_json IS NULL AND status = 'running'",
             params![now, tenant_id, device_id, idempotency_key],
         )?;
         if updated != 1 {
@@ -2462,7 +2330,7 @@ impl SecurityStore {
             "UPDATE idempotency_records
              SET status = ?1, receipt_json = ?2, updated_at = ?3
              WHERE tenant_id = ?4 AND device_id = ?5 AND idempotency_key = ?6
-               AND receipt_json IS NULL AND receipt_cipher IS NULL AND status != 'host-semantic'",
+               AND receipt_json IS NULL AND status != 'host-semantic'",
             params![
                 if succeeded { "succeeded" } else { "failed" },
                 receipt_json,
@@ -3391,11 +3259,6 @@ fn reconcile_interrupted_operations(
 
 /// The capabilities a freshly paired device of `role` holds.
 ///
-/// Split out from [`insert_default_grants`] so the backfill migration
-/// ([`migrate_client_plane_grants`]) reads the same list the registration path
-/// writes. A device paired before those names existed must end up with the same
-/// grants as one paired after, and two hand-kept lists is how that stops being
-/// true.
 fn default_capabilities_for_role(role: &str) -> &'static [&'static str] {
     if role == "owner" {
         &[
@@ -3462,27 +3325,6 @@ fn default_capabilities_for_role(role: &str) -> &'static [&'static str] {
         // A member device reads its own client plane but does not write it;
         // `client.write` stays an explicit elevation, like `workspace.write`.
         &["host.observe", "agent.run", "workspace.read", "client.read"]
-    }
-}
-
-/// The capabilities this build ADDED to the defaults, by role.
-///
-/// The backfill grants exactly these to devices that were paired before they
-/// existed — not the whole default set. Re-asserting the older names would
-/// silently un-revoke a capability an admin took away on purpose; these five
-/// have no such history, because until this build nothing could grant them at
-/// all (`is_assignable_device_capability` rejected every one).
-fn backfilled_capabilities_for_role(role: &str) -> &'static [&'static str] {
-    if role == "owner" {
-        &[
-            "client.read",
-            "client.write",
-            "performance.observe",
-            "performance.traces",
-            "performance.capture",
-        ]
-    } else {
-        &["client.read"]
     }
 }
 
@@ -3713,18 +3555,11 @@ fn upsert_capability_grant(
 /// documented 12-step table rebuild.
 const MIGRATION_DEVICE_STATUS_SUSPENDED: &str = "device-status-suspended-v1";
 
-/// Files every pre-existing tenant under a `host_bindings` row so the first
-/// account unlock has something to adopt.
-const MIGRATION_HOST_BINDING_LEGACY: &str = "host-binding-legacy-v1";
 const MIGRATION_HOST_BINDING_PERSON: &str = "host-binding-person-v1";
 const MIGRATION_HOST_BINDING_CANONICAL: &str = "host-binding-canonical-v1";
 const MIGRATION_DEVICE_USER: &str = "device-user-v1";
 const MIGRATION_DEVICE_PERSON: &str = "device-person-binding-v1";
 const MIGRATION_DEVICE_QUARANTINE: &str = "device-quarantine-v1";
-const MIGRATION_CLIENT_PLANE_GRANTS: &str = "client-plane-grants-v1";
-const MIGRATION_SSH_FILES_GRANT: &str = "ssh-files-grant-v1";
-const MIGRATION_HOST_EXECUTE_GRANT: &str = "host-execute-grant-v1";
-const MIGRATION_LARK_AUTH_RECEIPTS: &str = "connector-lark-auth-secret-receipts-v1";
 
 /// Steps 4-7 of the rebuild. The column list is spelled out rather than
 /// `SELECT *` so that a future column landing in a different position cannot
@@ -3810,128 +3645,13 @@ fn apply_schema_migrations(
     now: i64,
     backup_target: Option<&Path>,
 ) -> Result<(), SecurityStoreError> {
-    migrate_lark_auth_receipts(conn, now)?;
     migrate_device_status_suspended(conn, now, backup_target)?;
-    migrate_host_binding_legacy(conn, now)?;
     migrate_host_binding_person(conn, now)?;
     migrate_host_binding_canonical(conn, now)?;
     migrate_device_user(conn, now)?;
     migrate_device_quarantine(conn, now, backup_target)?;
     migrate_device_person_binding(conn, now)?;
-    migrate_client_plane_grants(conn, now)?;
-    migrate_ssh_files_grant(conn, now)?;
-    migrate_host_execute_grant(conn, now)?;
     Ok(())
-}
-
-/// Old receipts have no command name. Encrypt potentially confidential DTOs
-/// without inferring ownership. A matching canonical command retry can recover
-/// opaque results; typed Host-semantic retries discard them and query live state.
-fn migrate_lark_auth_receipts(conn: &mut Connection, now: i64) -> Result<(), SecurityStoreError> {
-    const VERSION: &str = "connector-private-receipts-v2";
-    if migration_applied(conn, VERSION)? {
-        return Ok(());
-    }
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    for column in ["receipt_cipher", "receipt_owner"] {
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('idempotency_records') WHERE name=?1)",
-            [column],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            tx.execute_batch(&format!(
-                "ALTER TABLE idempotency_records ADD COLUMN {column} TEXT"
-            ))?;
-        }
-    }
-    {
-        let mut statement = tx.prepare("SELECT tenant_id,device_id,idempotency_key,operation_id,request_hash,receipt_json FROM idempotency_records WHERE receipt_json IS NOT NULL")?;
-        let records = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-            ))
-        })?;
-        for record in records {
-            let (tenant, device, key, operation, hash, receipt) = record?;
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&receipt) else {
-                continue;
-            };
-            let result = &value["result"];
-            if !result["authorizationEpoch"].is_string()
-                || !result["configured"].is_boolean()
-                || !result["scopes"]
-                    .as_array()
-                    .is_some_and(|scopes| scopes.iter().all(serde_json::Value::is_string))
-                || ![
-                    "accessToken",
-                    "refreshToken",
-                    "refreshRevision",
-                    "accountLabel",
-                ]
-                .iter()
-                .all(|name| {
-                    result
-                        .get(name)
-                        .is_some_and(|value| value.is_null() || value.is_string())
-                })
-            {
-                continue;
-            }
-            // Shape marks confidential data, never command ownership. Preserve
-            // opaque bytes until a canonical command+hash proves replay.
-            let cipher = cognia_secrets::secret_store::seal_durable_namespace(
-                PRIVATE_RECEIPT_OWNER,
-                &private_receipt_namespace(&tenant, &device, &key, &operation, &hash),
-                receipt.as_bytes(),
-            )
-            .map_err(SecurityStoreError::Migration)?;
-            tx.execute("UPDATE idempotency_records SET receipt_json=NULL,receipt_cipher=?4,receipt_owner=NULL
-                WHERE tenant_id=?1 AND device_id=?2 AND idempotency_key=?3",params![tenant,device,key,hex::encode(cipher)])?;
-        }
-    }
-    mark_migration(&tx, MIGRATION_LARK_AUTH_RECEIPTS, now)?;
-    mark_migration(&tx, VERSION, now)?;
-    tx.commit()?;
-    Ok(())
-}
-
-fn private_receipt_namespace(
-    tenant: &str,
-    device: &str,
-    key: &str,
-    operation: &str,
-    hash: &str,
-) -> String {
-    format!(
-        "companion-receipt/v1/{}",
-        hex::encode(Sha256::digest(
-            serde_json::to_vec(&(tenant, device, key, operation, hash)).expect("string tuple")
-        ))
-    )
-}
-
-fn open_private_receipt(
-    tenant: &str,
-    device: &str,
-    key: &str,
-    operation: &str,
-    hash: &str,
-    cipher: &str,
-) -> Result<String, SecurityStoreError> {
-    let blob = hex::decode(cipher).map_err(|_| SecurityStoreError::ReceiptUnavailable)?;
-    let bytes = cognia_secrets::secret_store::open_durable_namespace(
-        PRIVATE_RECEIPT_OWNER,
-        &private_receipt_namespace(tenant, device, key, operation, hash),
-        &blob,
-    )
-    .map_err(|_| SecurityStoreError::ReceiptUnavailable)?;
-    String::from_utf8(bytes).map_err(|_| SecurityStoreError::ReceiptUnavailable)
 }
 
 fn migrate_device_person_binding(
@@ -3955,167 +3675,6 @@ fn migrate_device_person_binding(
         );",
     )?;
     mark_migration(&tx, MIGRATION_DEVICE_PERSON, now)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Give devices that were already paired the client-plane and performance
-/// capabilities this build added to the pairing defaults.
-///
-/// [`insert_default_grants`] only runs inside `register`, so without this an
-/// upgrade fixes nothing for anybody: every existing pairing keeps answering
-/// 403 `capability_denied` on `sync_pull`, `session_list`, `message_send`,
-/// `app_settings_update` and the whole remote performance dashboard — the exact
-/// failures the new defaults exist to end — and the only remedy would be to
-/// unpair and pair again.
-///
-/// Scoped to the names in [`backfilled_capabilities_for_role`] and keyed by the
-/// device's own role, so a member is not quietly promoted, and suspended
-/// devices are included because suspension is a status the owner can lift
-/// rather than a decision about capabilities.
-///
-/// The enrollment classes are excluded by construction. A browser or worker
-/// device is a `member` row too, but it holds only its class's closed
-/// capabilities — never `host.observe`, which both ordinary default sets carry
-/// and neither class does. Selecting on that grant is what keeps this backfill
-/// from handing a browser extension the client data plane its comment
-/// explicitly denies it.
-/// Give owner devices paired before ADR-0162 the `ssh.files` grant.
-///
-/// Its own marker rather than a line added to [`backfilled_capabilities_for_role`]:
-/// that migration's marker is already committed on every existing host, so a
-/// name appended to its list would reach a fresh database and nobody else. Each
-/// backfill therefore owns the list it backfills.
-///
-/// Owner devices only, and re-granting is safe for the same reason the client
-/// plane's was: until this build `is_assignable_device_capability` rejected the
-/// name, so nobody can have revoked it on purpose and no revocation is being
-/// undone. A member device is untouched, which is where the ADR's "granted
-/// separately" lives.
-fn migrate_ssh_files_grant(conn: &mut Connection, now: i64) -> Result<(), SecurityStoreError> {
-    if migration_applied(conn, MIGRATION_SSH_FILES_GRANT)? {
-        return Ok(());
-    }
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let devices: Vec<(String, String)> = {
-        let mut statement = tx.prepare(
-            "SELECT d.id, d.tenant_id FROM devices d
-             WHERE d.status IN ('active', 'suspended') AND d.role = 'owner'",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
-    for (device_id, tenant_id) in devices {
-        upsert_capability_grant(&tx, &tenant_id, &device_id, "ssh.files", now)?;
-    }
-    mark_migration(&tx, MIGRATION_SSH_FILES_GRANT, now)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Give owner devices paired before ADR-0233 the `host.execute` grant.
-///
-/// Same shape and the same safety argument as [`migrate_ssh_files_grant`]:
-/// until this build `is_assignable_device_capability` rejected the name, so no
-/// device can have had it revoked on purpose. Members stay untouched.
-fn migrate_host_execute_grant(conn: &mut Connection, now: i64) -> Result<(), SecurityStoreError> {
-    if migration_applied(conn, MIGRATION_HOST_EXECUTE_GRANT)? {
-        return Ok(());
-    }
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let devices: Vec<(String, String)> = {
-        let mut statement = tx.prepare(
-            "SELECT d.id, d.tenant_id FROM devices d
-             WHERE d.status IN ('active', 'suspended') AND d.role = 'owner'",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
-    for (device_id, tenant_id) in devices {
-        upsert_capability_grant(&tx, &tenant_id, &device_id, "host.execute", now)?;
-    }
-    mark_migration(&tx, MIGRATION_HOST_EXECUTE_GRANT, now)?;
-    tx.commit()?;
-    Ok(())
-}
-
-fn migrate_client_plane_grants(conn: &mut Connection, now: i64) -> Result<(), SecurityStoreError> {
-    if migration_applied(conn, MIGRATION_CLIENT_PLANE_GRANTS)? {
-        return Ok(());
-    }
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let devices: Vec<(String, String, String)> = {
-        let mut statement = tx.prepare(
-            "SELECT d.id, d.tenant_id, d.role FROM devices d
-             WHERE d.status IN ('active', 'suspended')
-               AND EXISTS (
-                 SELECT 1 FROM capability_grants g
-                 WHERE g.tenant_id = d.tenant_id AND g.device_id = d.id
-                   AND g.capability = 'host.observe' AND g.revoked_at IS NULL
-               )",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
-    for (device_id, tenant_id, role) in devices {
-        for capability in backfilled_capabilities_for_role(&role) {
-            upsert_capability_grant(&tx, &tenant_id, &device_id, capability, now)?;
-        }
-    }
-    mark_migration(&tx, MIGRATION_CLIENT_PLANE_GRANTS, now)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Give every tenant that already has devices a `host_bindings` row.
-///
-/// In practice there is exactly one, the hardcoded `local_acct_a`, and it is
-/// filed under the `__local__` sentinel so the first account unlock can adopt
-/// it — keeping the tenant, and therefore every existing pairing, in place. The
-/// loop is still total, because "in practice one" is not an invariant.
-fn migrate_host_binding_legacy(conn: &mut Connection, now: i64) -> Result<(), SecurityStoreError> {
-    if migration_applied(conn, MIGRATION_HOST_BINDING_LEGACY)? {
-        return Ok(());
-    }
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let existing: i64 = tx.query_row("SELECT COUNT(*) FROM host_bindings", [], |row| row.get(0))?;
-    if existing == 0 {
-        let tenants = {
-            let mut statement =
-                tx.prepare("SELECT DISTINCT tenant_id FROM devices ORDER BY tenant_id")?;
-            let collected = statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-            collected
-        };
-        for (index, tenant_id) in tenants.iter().enumerate() {
-            // Only one bucket can be the unclaimed one. Any additional tenant
-            // is parked under a namespace nothing will ever adopt by accident,
-            // so it stays reachable but never silently attaches to an account.
-            let namespace = if index == 0 {
-                LOCAL_NAMESPACE_UNBOUND.to_string()
-            } else {
-                format!("__legacy__:{tenant_id}")
-            };
-            tx.execute(
-                "INSERT OR IGNORE INTO host_bindings
-                 (local_account_namespace, tenant_id, bound_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?3)",
-                params![namespace, tenant_id, now],
-            )?;
-        }
-    }
-    mark_migration(&tx, MIGRATION_HOST_BINDING_LEGACY, now)?;
     tx.commit()?;
     Ok(())
 }
@@ -4608,8 +4167,6 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     operation_id TEXT NOT NULL,
     status TEXT NOT NULL,
     receipt_json TEXT,
-    receipt_cipher TEXT,
-    receipt_owner TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (tenant_id, device_id, idempotency_key)
@@ -4866,10 +4423,8 @@ CREATE TABLE devices (
                 .unwrap();
             assert_eq!(count, 1, "{table} lost its row across the rebuild");
         }
-        // Grants are checked by identity rather than by count, because the
-        // backfills that run alongside this rebuild legitimately ADD rows.
-        // Counting would turn every future default-grant migration into a
-        // failure of a test that is about a table rebuild.
+        // Grants are checked by identity rather than by count: this test is
+        // about the table rebuild, not about which grants exist.
         let seeded: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM capability_grants
@@ -4942,37 +4497,6 @@ CREATE TABLE devices (
             .query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))
             .unwrap();
         assert_eq!(device_count, 2, "the second open re-ran the rebuild");
-    }
-
-    #[test]
-    fn a_legacy_tenant_is_filed_under_the_unclaimed_sentinel() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("security.sqlite");
-        seed_legacy_database(&path);
-
-        let store = SecurityStore::open(&path).unwrap();
-
-        // The tenant every pre-binding install used is now adoptable, and still
-        // owns its devices. The first account unlock takes this bucket over
-        // without the tenant moving, which is what keeps existing pairings alive.
-        assert_eq!(
-            store.unbound_host_tenant().unwrap().as_deref(),
-            Some("tenant-a")
-        );
-        let adopted = store
-            .bind_host_account("acct_real", Some("digest-a"), 200)
-            .unwrap();
-        assert_eq!(adopted.tenant_id, "tenant-a");
-        assert_eq!(
-            store
-                .host_namespace_for_tenant("tenant-a")
-                .unwrap()
-                .as_deref(),
-            Some("acct_real")
-        );
-        assert_eq!(store.list_devices("tenant-a").unwrap().len(), 2);
-        // The bucket is no longer unclaimed, so a second account cannot take it.
-        assert_eq!(store.unbound_host_tenant().unwrap(), None);
     }
 
     #[test]
@@ -7289,48 +6813,6 @@ CREATE TABLE devices (
         );
     }
 
-    /// The legacy `device-grants.json` / Dexie import is the one grant writer
-    /// that does not go through `replace_device_capabilities`, and its desktop
-    /// command takes the device lists from the renderer.
-    #[test]
-    fn the_legacy_grant_import_skips_a_browser_device_and_still_imports_the_rest() {
-        let store = SecurityStore::in_memory().unwrap();
-        register(&store, "tenant-a", "owner-a", 100);
-        register_browser(&store, "tenant-a", "browser-a", 101);
-        store
-            .replace_device_capabilities(
-                "tenant-a",
-                "owner-a",
-                "owner-a",
-                &["host.admin".into()],
-                102,
-            )
-            .unwrap();
-
-        let browser_and_owner = vec!["browser-a".to_string(), "owner-a".to_string()];
-        assert!(store
-            .migrate_legacy_device_grants(
-                &browser_and_owner,
-                &browser_and_owner,
-                &browser_and_owner,
-                103,
-            )
-            .unwrap());
-
-        assert_eq!(
-            browser_snapshot(&store, "browser-a"),
-            vec!["browser.read-own", "browser.submit"]
-        );
-        for capability in ["terminal.open", "process.spawn", "agent.run"] {
-            assert!(
-                store
-                    .has_capability("tenant-a", "owner-a", capability)
-                    .unwrap(),
-                "the import must still reach an ordinary device: {capability}"
-            );
-        }
-    }
-
     /// `ensure_service_principal` upserts whatever row has its id. Pointed at a
     /// browser device it would re-role, reactivate and re-grant the extension.
     #[test]
@@ -7813,271 +7295,6 @@ CREATE TABLE devices (
     }
 
     #[test]
-    fn upgrading_lark_auth_receipts_removes_secrets_but_preserves_retry_hashes_and_other_results() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("security.sqlite");
-        let store = SecurityStore::open(&path).unwrap();
-        let auth = serde_json::json!({"result": {
-            "authorizationEpoch":"old-epoch", "configured":true,
-            "accessToken":"fixture-access-secret", "refreshToken":"fixture-refresh-secret",
-            "refreshRevision":"revision", "accountLabel":"Fixture", "scopes":[]
-        }})
-        .to_string();
-        for (key, receipt) in [
-            ("auth", auth.as_str()),
-            ("ordinary", r#"{"result":{"messageId":"sent"}}"#),
-            ("malformed", "not-json"),
-        ] {
-            store.conn.lock().execute("INSERT INTO idempotency_records
-                (tenant_id,device_id,idempotency_key,request_hash,operation_id,status,receipt_json,created_at,updated_at)
-                VALUES ('tenant','device',?1,'original-hash',?1,'succeeded',?2,100,100)", params![key,receipt]).unwrap();
-        }
-        store
-            .conn
-            .lock()
-            .execute(
-                "DELETE FROM security_migrations WHERE key IN (?1, 'connector-private-receipts-v2')",
-                ["connector-lark-auth-secret-receipts-v1"],
-            )
-            .unwrap();
-        drop(store);
-        let upgraded = SecurityStore::open(&path).unwrap();
-        let (status, receipt): (String, Option<String>) = upgraded
-            .conn
-            .lock()
-            .query_row(
-                "SELECT status, receipt_json FROM idempotency_records WHERE idempotency_key='auth'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(status, "succeeded", "shape cannot prove command ownership");
-        assert!(receipt.is_none());
-        let cipher: Option<String> = upgraded
-            .conn
-            .lock()
-            .query_row(
-                "SELECT receipt_cipher FROM idempotency_records WHERE idempotency_key='auth'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(cipher.is_some());
-        assert!(upgraded
-            .operation("tenant", "device", "auth")
-            .unwrap()
-            .is_none());
-        upgraded
-            .bind_host_semantic_request("tenant", "device", "auth", "original-hash", 101)
-            .unwrap();
-        assert!(matches!(
-            upgraded.bind_host_semantic_request("tenant", "device", "auth", "changed", 102),
-            Err(SecurityStoreError::IdempotencyConflict)
-        ));
-        assert_eq!(
-            upgraded
-                .operation("tenant", "device", "ordinary")
-                .unwrap()
-                .unwrap()
-                .receipt
-                .unwrap()["result"]["messageId"],
-            "sent"
-        );
-        let malformed: String = upgraded
-            .conn
-            .lock()
-            .query_row(
-                "SELECT receipt_json FROM idempotency_records WHERE idempotency_key='malformed'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(malformed, "not-json");
-    }
-
-    #[test]
-    fn legacy_auth_shaped_callback_preserves_exact_replay_after_owned_retry() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("legacy-callback.sqlite");
-        let store = SecurityStore::open(&path).unwrap();
-        let receipt = r#"{"httpStatus":200,"result":{"authorizationEpoch":"document","configured":false,"accessToken":"opaque-callback-value","refreshToken":null,"refreshRevision":null,"accountLabel":null,"scopes":[],"callbackMarker":"unrelated"}}"#;
-        store.conn.lock().execute("INSERT INTO idempotency_records
-            (tenant_id,device_id,idempotency_key,request_hash,operation_id,status,receipt_json,created_at,updated_at)
-            VALUES ('tenant','device','callback','callback-hash','callback-op','succeeded',?1,100,100)", [receipt]).unwrap();
-        store.conn.lock().execute("DELETE FROM security_migrations WHERE key IN ('connector-lark-auth-secret-receipts-v1','connector-private-receipts-v2')", []).unwrap();
-        drop(store);
-        let upgraded = SecurityStore::open(&path).unwrap();
-        assert!(upgraded
-            .operation("tenant", "device", "callback-op")
-            .unwrap()
-            .is_none());
-        assert!(matches!(
-            upgraded.begin_idempotent_operation(
-                "tenant",
-                "device",
-                "host",
-                "callback",
-                "callback-hash",
-                101
-            ),
-            Err(SecurityStoreError::ReceiptUnavailable)
-        ));
-        assert!(matches!(
-            upgraded.begin_command_operation(
-                "tenant",
-                "device",
-                "host",
-                "callback",
-                "changed",
-                "plugin_invoke_js_callback",
-                101
-            ),
-            Err(SecurityStoreError::IdempotencyConflict)
-        ));
-        let decision = upgraded
-            .begin_command_operation(
-                "tenant",
-                "device",
-                "host",
-                "callback",
-                "callback-hash",
-                "plugin_invoke_js_callback",
-                101,
-            )
-            .unwrap();
-        let IdempotencyDecision::Completed { receipt_json, .. } = decision else {
-            panic!("a completed callback must remain replayable");
-        };
-        assert_eq!(receipt_json, receipt);
-        assert_eq!(
-            upgraded
-                .operation("tenant", "device", "callback-op")
-                .unwrap()
-                .unwrap()
-                .receipt
-                .unwrap()["result"]["callbackMarker"],
-            "unrelated"
-        );
-        let (plain,cipher):(Option<String>,Option<String>) = upgraded.conn.lock().query_row("SELECT receipt_json,receipt_cipher FROM idempotency_records WHERE idempotency_key='callback'", [],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
-        assert!(plain.is_none());
-        assert!(!cipher.unwrap().contains("opaque-callback-value"));
-        drop(upgraded);
-        let reopened = SecurityStore::open(&path).unwrap();
-        assert!(reopened
-            .operation("tenant", "device", "callback-op")
-            .unwrap()
-            .is_some());
-    }
-
-    #[test]
-    fn private_receipt_migration_rolls_back_and_authenticates_each_row() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("migration.sqlite");
-        let store = SecurityStore::open(&path).unwrap();
-        let receipt = r#"{ "httpStatus":200,"result":{"authorizationEpoch":"opaque","configured":false,"accessToken":null,"refreshToken":null,"refreshRevision":null,"accountLabel":null,"scopes":[]} }"#;
-        for key in ["first", "second"] {
-            store.conn.lock().execute("INSERT INTO idempotency_records
-                (tenant_id,device_id,idempotency_key,request_hash,operation_id,status,receipt_json,created_at,updated_at)
-                VALUES ('tenant','device',?1,'hash',?1,'succeeded',?2,100,100)",params![key,receipt]).unwrap();
-        }
-        store
-            .conn
-            .lock()
-            .execute_batch(
-                "DELETE FROM security_migrations WHERE key='connector-private-receipts-v2';
-            ALTER TABLE idempotency_records DROP COLUMN receipt_cipher;
-            ALTER TABLE idempotency_records DROP COLUMN receipt_owner;
-            CREATE TRIGGER reject_private_migration BEFORE UPDATE ON idempotency_records
-            BEGIN SELECT RAISE(ABORT,'fixture migration failure'); END;",
-            )
-            .unwrap();
-        drop(store);
-        assert!(SecurityStore::open(&path).is_err());
-        let database = Connection::open(&path).unwrap();
-        assert_eq!(
-            database
-                .query_row(
-                    "SELECT count(*) FROM idempotency_records WHERE receipt_json=?1",
-                    [receipt],
-                    |row| row.get::<_, i64>(0)
-                )
-                .unwrap(),
-            2
-        );
-        assert!(!migration_applied(&database, "connector-private-receipts-v2").unwrap());
-        assert!(
-            migration_applied(&database, MIGRATION_LARK_AUTH_RECEIPTS).unwrap(),
-            "an already-applied v1 must not suppress the repair"
-        );
-        database
-            .execute_batch("DROP TRIGGER reject_private_migration")
-            .unwrap();
-        drop(database);
-        let upgraded = SecurityStore::open(&path).unwrap();
-        let cipher: String = upgraded
-            .conn
-            .lock()
-            .query_row(
-                "SELECT receipt_cipher FROM idempotency_records WHERE idempotency_key='first'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        upgraded
-            .conn
-            .lock()
-            .execute(
-                "UPDATE idempotency_records SET receipt_cipher=?1 WHERE idempotency_key='second'",
-                [&cipher],
-            )
-            .unwrap();
-        assert!(matches!(
-            upgraded.begin_command_operation(
-                "tenant",
-                "device",
-                "host",
-                "second",
-                "hash",
-                "plugin_invoke_js_callback",
-                101
-            ),
-            Err(SecurityStoreError::ReceiptUnavailable)
-        ));
-        assert!(upgraded
-            .operation("tenant", "device", "second")
-            .unwrap()
-            .is_none());
-        let result = upgraded
-            .begin_command_operation(
-                "tenant",
-                "device",
-                "host",
-                "first",
-                "hash",
-                "plugin_invoke_js_callback",
-                101,
-            )
-            .unwrap();
-        assert!(
-            matches!(result,IdempotencyDecision::Completed{receipt_json,..} if receipt_json==receipt)
-        );
-        assert_eq!(
-            upgraded
-                .purge_completed_idempotency_records(100 + 86_400)
-                .unwrap(),
-            0,
-            "retain the exact 24-hour boundary"
-        );
-        assert_eq!(
-            upgraded
-                .purge_completed_idempotency_records(101 + 86_400)
-                .unwrap(),
-            2,
-            "expire encrypted receipts within the existing retention policy"
-        );
-    }
-
-    #[test]
     fn semantic_retry_bindings_expire_without_dropping_active_generic_work() {
         let store = SecurityStore::in_memory().unwrap();
         for index in 0..1000 {
@@ -8246,25 +7463,6 @@ CREATE TABLE devices (
             .unwrap());
         assert!(!store
             .has_capability("tenant-a", "owner-a", "terminal.open")
-            .unwrap());
-    }
-
-    #[test]
-    fn legacy_grants_are_imported_once_so_revocation_cannot_reappear() {
-        let store = SecurityStore::in_memory().unwrap();
-        register(&store, "tenant-a", "owner-a", 100);
-        assert!(store
-            .migrate_legacy_device_grants(&["owner-a".into()], &[], &[], 110)
-            .unwrap());
-        let reduced = vec!["host.admin".into(), "host.observe".into()];
-        store
-            .replace_device_capabilities("tenant-a", "owner-a", "owner-a", &reduced, 111)
-            .unwrap();
-        assert!(!store
-            .migrate_legacy_device_grants(&["owner-a".into()], &[], &[], 112)
-            .unwrap());
-        assert!(!store
-            .has_capability("tenant-a", "owner-a", "workspace.write")
             .unwrap());
     }
 
@@ -8972,180 +8170,5 @@ CREATE TABLE devices (
             missing.is_empty(),
             "an owner device cannot run these commands: {missing:?}"
         );
-    }
-
-    /// An owner paired before ADR-0162 gets `ssh.files` on upgrade, and a
-    /// member does not.
-    ///
-    /// Without the backfill the grant would reach only hosts paired after this
-    /// build, which is nobody who already uses the product. The member half is
-    /// the other decision: the console's second switch is what turns it on for
-    /// a device that is not the owner, and a migration that granted it wholesale
-    /// would have made that switch describe something already given.
-    #[test]
-    fn the_ssh_files_backfill_reaches_owners_and_stops_at_members() {
-        let store = SecurityStore::in_memory().unwrap();
-        register(&store, "tenant-a", "owner-a", 100);
-
-        {
-            let conn = store.conn.lock();
-            conn.execute(
-                "INSERT INTO devices (id, tenant_id, display_name, role, status, created_at, updated_at)
-                 VALUES ('member-a', 'tenant-a', 'Shared phone', 'member', 'active', 101, 101)",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "DELETE FROM capability_grants WHERE capability = 'ssh.files'",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "DELETE FROM security_migrations WHERE key = ?1",
-                [MIGRATION_SSH_FILES_GRANT],
-            )
-            .unwrap();
-        }
-        assert!(!store
-            .has_capability("tenant-a", "owner-a", "ssh.files")
-            .unwrap());
-
-        {
-            let mut conn = store.conn.lock();
-            migrate_ssh_files_grant(&mut conn, 200).unwrap();
-        }
-        assert!(store
-            .has_capability("tenant-a", "owner-a", "ssh.files")
-            .unwrap());
-        assert!(!store
-            .has_capability("tenant-a", "member-a", "ssh.files")
-            .unwrap());
-    }
-
-    /// An owner paired before ADR-0233 gets `host.execute` on upgrade, and a
-    /// member does not.
-    #[test]
-    fn the_host_execute_backfill_reaches_owners_and_stops_at_members() {
-        let store = SecurityStore::in_memory().unwrap();
-        register(&store, "tenant-a", "owner-a", 100);
-
-        {
-            let conn = store.conn.lock();
-            conn.execute(
-                "INSERT INTO devices (id, tenant_id, display_name, role, status, created_at, updated_at)
-                 VALUES ('member-a', 'tenant-a', 'Shared phone', 'member', 'active', 101, 101)",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "DELETE FROM capability_grants WHERE capability = 'host.execute'",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "DELETE FROM security_migrations WHERE key = ?1",
-                [MIGRATION_HOST_EXECUTE_GRANT],
-            )
-            .unwrap();
-        }
-        assert!(!store
-            .has_capability("tenant-a", "owner-a", "host.execute")
-            .unwrap());
-
-        {
-            let mut conn = store.conn.lock();
-            migrate_host_execute_grant(&mut conn, 200).unwrap();
-        }
-        assert!(store
-            .has_capability("tenant-a", "owner-a", "host.execute")
-            .unwrap());
-        assert!(!store
-            .has_capability("tenant-a", "member-a", "host.execute")
-            .unwrap());
-    }
-
-    /// A device paired BEFORE the client-plane defaults existed must end up
-    /// holding them after an upgrade.
-    ///
-    /// `insert_default_grants` only runs inside `register`, so without the
-    /// backfill an upgrade fixes nothing for anybody who was already paired —
-    /// the 403s on `sync_pull`, `session_list` and the performance plane simply
-    /// survive it. The enrollment classes must NOT be swept up: a browser
-    /// device is a `member` row too, and it is deliberately denied everything
-    /// outside its own two capabilities.
-    #[test]
-    fn the_backfill_reaches_existing_pairings_and_stops_at_the_enrollment_classes() {
-        let store = SecurityStore::in_memory().unwrap();
-        register(&store, "tenant-a", "owner-a", 100);
-        let challenge = store.issue_challenge("tenant-a", 100, 60).unwrap();
-        let enrollment = store
-            .create_browser_enrollment("tenant-a", "owner-a", 100, 600)
-            .unwrap();
-        store
-            .register_browser_device(
-                "tenant-a",
-                &enrollment,
-                &challenge.id,
-                &challenge.nonce,
-                "browser-a",
-                "Chrome",
-                "pem",
-                "thumb-browser",
-                "https://example.test",
-                101,
-            )
-            .unwrap();
-
-        // Rewind to a pre-upgrade database: drop the new grants and the marker
-        // so the migration has something to do.
-        {
-            let conn = store.conn.lock();
-            conn.execute(
-                "DELETE FROM capability_grants WHERE capability IN
-                 ('client.read', 'client.write', 'performance.observe',
-                  'performance.traces', 'performance.capture')",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "DELETE FROM security_migrations WHERE key = ?1",
-                [MIGRATION_CLIENT_PLANE_GRANTS],
-            )
-            .unwrap();
-        }
-        assert!(!store
-            .has_capability("tenant-a", "owner-a", "client.read")
-            .unwrap());
-
-        {
-            let mut conn = store.conn.lock();
-            migrate_client_plane_grants(&mut conn, 200).unwrap();
-        }
-
-        for capability in backfilled_capabilities_for_role("owner") {
-            assert!(
-                store
-                    .has_capability("tenant-a", "owner-a", capability)
-                    .unwrap(),
-                "the backfill missed {capability} on an already-paired owner"
-            );
-        }
-        // The browser extension keeps exactly its class, backfill or not.
-        assert_eq!(
-            store
-                .capability_snapshot("tenant-a", "browser-a")
-                .unwrap()
-                .unwrap(),
-            vec!["browser.read-own", "browser.submit"]
-        );
-
-        // Idempotent: the marker means a second open does nothing.
-        {
-            let mut conn = store.conn.lock();
-            migrate_client_plane_grants(&mut conn, 300).unwrap();
-        }
-        assert!(store
-            .has_capability("tenant-a", "owner-a", "client.write")
-            .unwrap());
     }
 }

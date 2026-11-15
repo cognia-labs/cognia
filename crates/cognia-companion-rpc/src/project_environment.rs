@@ -18,7 +18,6 @@ pub struct EnvironmentKeyringReference {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum EnvironmentScript {
-    Legacy(String),
     Structured {
         default: String,
         #[serde(default, rename = "byOs")]
@@ -29,7 +28,6 @@ pub enum EnvironmentScript {
 impl EnvironmentScript {
     fn resolve_for(&self, os: &str) -> String {
         match self {
-            Self::Legacy(script) => script.trim().to_string(),
             Self::Structured { default, by_os } => by_os
                 .get(os)
                 .map(String::as_str)
@@ -395,6 +393,13 @@ pub async fn project_environment_execute_cloud(
 mod tests {
     use super::*;
 
+    fn script(source: String) -> EnvironmentScript {
+        EnvironmentScript::Structured {
+            default: source,
+            by_os: BTreeMap::new(),
+        }
+    }
+
     fn workspace_ports() -> BTreeMap<String, String> {
         BTreeMap::from([
             ("PORT".into(), "41000".into()),
@@ -408,7 +413,7 @@ mod tests {
     async fn plain_setup_receives_trusted_ports_and_refuses_resolution_errors() {
         let dir = tempfile::tempdir().unwrap();
         let result = execute_on_host(
-            EnvironmentScript::Legacy(
+            script(
                 "printf '%s:%s:%s' \"$PORT\" \"$COGNIA_PORT\" \"$COGNIA_PORT_COUNT\"".into(),
             ),
             dir.path().to_string_lossy().into(),
@@ -442,7 +447,7 @@ mod tests {
                 .map(|port| BTreeMap::from([("PORT".into(), port.into())]))
                 .unwrap_or_default();
             let result = execute_on_host(
-                EnvironmentScript::Legacy(
+                script(
                     "printf '%s:%s:%s' \"${PORT-unset}\" \"${COGNIA_PORT-unset}\" \"${COGNIA_PORT_COUNT-unset}\"".into(),
                 ),
                 dir.path().to_string_lossy().into(),
@@ -472,7 +477,7 @@ mod tests {
         }
 
         let error = execute_on_host(
-            EnvironmentScript::Legacy("touch should-not-spawn".into()),
+            script("touch should-not-spawn".into()),
             dir.path().to_string_lossy().into(),
             BTreeMap::new(),
             vec![],
@@ -499,7 +504,7 @@ mod tests {
             let expected = resolution.clone();
             let captured = std::sync::Mutex::new(None);
             let result = execute_on_host(
-                EnvironmentScript::Legacy("env".into()),
+                script("env".into()),
                 dir.path().to_string_lossy().into(),
                 if matches!(resolution, Ok(Some(_))) {
                     BTreeMap::from([("PORT".into(), "3000".into())])

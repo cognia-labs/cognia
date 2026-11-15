@@ -577,12 +577,6 @@ pub struct ModelStatus {
     pub files: Vec<ModelFileStatus>,
     /// Total on-disk bytes across all *installed* files.
     pub total_bytes: u64,
-    /// Pre-v6 files found in the unversioned Paddle directory. They are never
-    /// loaded by the v6 backend and are reported only for user cleanup.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub legacy_files: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub legacy_model_dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -651,30 +645,6 @@ pub fn build_model_status(
             integrity,
         });
     }
-    let (legacy_files, legacy_model_dir) = if backend == "paddle-ocr" && variant.is_some() {
-        let legacy_dir = model_dir.parent().map(std::path::Path::to_path_buf);
-        let legacy_files = legacy_dir
-            .as_deref()
-            .map(|dir| {
-                [
-                    crate::backend::paddle::DETECTION_MODEL_FILE,
-                    crate::backend::paddle::RECOGNITION_MODEL_FILE,
-                    crate::backend::paddle::DICTIONARY_FILE,
-                    crate::backend::paddle::CLASSIFICATION_MODEL_FILE,
-                ]
-                .into_iter()
-                .filter(|name| dir.join(name).is_file())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let legacy_model_dir =
-            (!legacy_files.is_empty()).then(|| legacy_dir.unwrap().to_string_lossy().into_owned());
-        (legacy_files, legacy_model_dir)
-    } else {
-        (Vec::new(), None)
-    };
-    let has_legacy = !legacy_files.is_empty();
     ModelStatus {
         backend: backend.to_string(),
         variant: variant.map(str::to_string),
@@ -693,12 +663,7 @@ pub fn build_model_status(
         model_dir: model_dir.to_string_lossy().into_owned(),
         files,
         total_bytes: total,
-        legacy_files,
-        legacy_model_dir,
-        reason: has_legacy.then(|| {
-            "legacy PP-OCRv5 files detected; they are preserved but not active for PP-OCRv6"
-                .to_string()
-        }),
+        reason: None,
     }
 }
 
@@ -727,8 +692,6 @@ pub async fn ocr_model_status(
             model_dir: String::new(),
             files: Vec::new(),
             total_bytes: 0,
-            legacy_files: Vec::new(),
-            legacy_model_dir: None,
             reason: Some("backend does not manage its own models".to_string()),
         });
     };
@@ -1234,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn build_model_status_reports_legacy_paddle_files_as_non_active() {
+    fn build_model_status_ignores_paddle_files_outside_the_variant_directory() {
         let tmp = tempdir().unwrap();
         let active_dir = tmp.path().join("v6-small");
         std::fs::create_dir_all(&active_dir).unwrap();
@@ -1243,19 +1206,15 @@ mod tests {
             crate::backend::paddle::RECOGNITION_MODEL_FILE,
             crate::backend::paddle::DICTIONARY_FILE,
         ] {
-            std::fs::write(tmp.path().join(name), b"legacy-v5").unwrap();
+            std::fs::write(tmp.path().join(name), b"outside-v6").unwrap();
         }
 
         let spec = model_spec("paddle-ocr", Some("v6-small")).unwrap();
         let status = build_model_status("paddle-ocr", Some("v6-small"), active_dir, &spec);
 
         assert!(!status.installed);
-        assert_eq!(
-            status.legacy_model_dir.as_deref(),
-            Some(tmp.path().to_string_lossy().as_ref())
-        );
-        assert_eq!(status.legacy_files.len(), 3);
-        assert!(status.reason.unwrap().contains("legacy PP-OCRv5"));
+        assert_eq!(status.integrity, ModelIntegrity::Missing);
+        assert!(status.reason.is_none());
     }
 
     #[test]

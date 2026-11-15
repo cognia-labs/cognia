@@ -93,9 +93,8 @@ pub mod scope {
     pub const FEEDBACK: &str = "feedback:write";
 }
 
-/// Who is calling, as the auth middleware resolved it. A legacy key carries no
-/// scopes, so it reaches the chat endpoints exactly as before and no Run API
-/// verb at all.
+/// Who is calling, as the auth middleware resolved it. A key without scopes
+/// reaches the chat endpoints and no Run API verb at all.
 #[derive(Clone, Debug, Default)]
 pub struct RunActor {
     pub key_id: Option<String>,
@@ -1182,7 +1181,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_legacy_key_without_scopes_reaches_no_run_verb() {
+    async fn a_key_without_scopes_reaches_no_run_verb() {
         let bridge = RecordingBrainBridge::new();
         let (router, _) = app(bridge.clone(), actor_with(&[]), true);
         let response = router.oneshot(post_json("/v1/runs", "{}")).await.unwrap();

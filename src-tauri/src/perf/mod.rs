@@ -11,9 +11,9 @@
 //!    metrics registry that records `count / p50 / p95 / max / errors` for
 //!    coarse operation boundaries instrumented with [`guard`] / [`timed`].
 //!
-//! The [`sampler`] composes 1–3 into a [`sampler::PerfSample`] roughly once a
-//! second and emits it over `perf://sample` — but only while the panel is open
-//! (ref-counted start/stop), so there is no idle overhead.
+//! The [`sampler`] composes 1–3 into a [`sampler::PerfFrame`] at the fastest
+//! cadence a live lease asks for and emits it over `perf://frame` — but only
+//! while a lease is held, so there is no idle overhead.
 //!
 //! Span recording is two `Instant::now()` calls plus a tiny mutex section, so
 //! it is cheap — but it is still meant for *coarse* boundaries (a sidecar send,

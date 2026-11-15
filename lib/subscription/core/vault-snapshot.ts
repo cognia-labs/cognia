@@ -23,7 +23,6 @@ import {
   saveProviderPreset,
   setActiveAccount,
   setDefaultPreset,
-  setProviderPreset,
 } from "@/lib/subscription/core/transport"
 import type { Account, ProviderId, ProviderVault } from "@/types/subscription"
 
@@ -95,11 +94,6 @@ export async function applyVaults(
     }
     if (vault.defaultPresetId !== undefined) {
       await setDefaultPreset(provider, vault.defaultPresetId ?? null)
-    }
-    // Legacy v2 backups carried a single `preset`; fold it in via the shim so
-    // older exports still restore.
-    if ((vault.presets === undefined || vault.presets.length === 0) && vault.preset !== undefined) {
-      await setProviderPreset(provider, vault.preset ?? null)
     }
     if (vault.activeAccountId !== undefined) {
       await setActiveAccount(provider, vault.activeAccountId ?? null)

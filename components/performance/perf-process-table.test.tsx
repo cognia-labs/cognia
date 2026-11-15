@@ -42,8 +42,6 @@ function proc(
 /** Wrap one or more process snapshots into a sample history. */
 function hist(...frames: ProcessSample[][]): PerfSample[] {
   return frames.map((processes, i) => ({
-    tsMs: i + 1,
-    intervalMs: 1000,
     processes,
     runtime: {
       workers: 1,

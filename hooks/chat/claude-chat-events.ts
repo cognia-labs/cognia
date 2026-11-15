@@ -1068,7 +1068,7 @@ export async function handleEvent(
         // Remote Session Control: if a remote device holds a CONTROL lease on
         // this (non-open) session, route the approval to it instead of
         // auto-denying. The remote already received this permission_request
-        // frame over its event stream and will resolve it via claude_approve.
+        // frame over its event stream and will resolve it via agent_resolve_permission.
         // Observers do not count — holding a prompt open for a device that may
         // only watch stalls the turn until the backstop denies it.
         // The sidecar's canUseTool has no timeout of its own, so arm a

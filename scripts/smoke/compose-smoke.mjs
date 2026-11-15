@@ -748,11 +748,11 @@ async function chatTurn(jwt) {
   const setKey = await rpc("claude_set_api_key", { key: process.env.ANTHROPIC_API_KEY }, jwt)
   check(setKey.status === 200, "claude_set_api_key accepted")
   const sendRes = await rpc(
-    "claude_send",
+    "agent_send",
     { session_id: "smoke-chat", prompt: "Reply with the single word: pong" },
     jwt
   )
-  check(sendRes.status === 200, `claude_send → 200 (got ${sendRes.status})`)
+  check(sendRes.status === 200, `agent_send → 200 (got ${sendRes.status})`)
 
   const ticketPath = "/api/auth/socket-ticket"
   const ticketResponse = await fetch(`${SERVER_URL}${ticketPath}`, {

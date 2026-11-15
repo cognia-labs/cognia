@@ -125,6 +125,9 @@ import {
   taskIdForMessage,
 } from "./client"
 
+/** A host that negotiated a 24 KiB chunk, so multi-chunk paths stay small. */
+const SMALL_CHUNK = 24 * 1024
+
 describe("workspace port lease wire contracts", () => {
   beforeEach(() => call.mockReset())
 
@@ -303,6 +306,7 @@ describe("task resource transfer wire contracts", () => {
           hash: digest,
           mediaType: "application/octet-stream",
           sensitive: false,
+          chunkBytes: SMALL_CHUNK,
         }
       }
       if (command === "task_resource_download_read_chunk") {
@@ -319,7 +323,7 @@ describe("task resource transfer wire contracts", () => {
     const digest = await hash(bytes)
     call.mockImplementation(async (command: string) => {
       if (command === "task_resource_upload_open")
-        return { handleId: "upload", path: "file", expectedSize: 3 }
+        return { handleId: "upload", path: "file", expectedSize: 3, chunkBytes: SMALL_CHUNK }
       if (command === "task_resource_upload_write_chunk") return 3
       if (command === "task_resource_upload_commit") return digest
       return null
@@ -349,6 +353,7 @@ describe("task resource transfer wire contracts", () => {
           size: bytes.length,
           hash: digest,
           mediaType: "application/octet-stream",
+          chunkBytes: SMALL_CHUNK,
         }
       if (command === "task_resource_download_read_chunk") {
         active++
@@ -391,7 +396,7 @@ describe("task resource transfer wire contracts", () => {
     const digest = await hash(new Uint8Array([1, 2, 3]))
     call.mockImplementation(async (command: string) => {
       if (command === "task_resource_download_open")
-        return { handleId: "download", size: 3, hash: digest }
+        return { handleId: "download", size: 3, hash: digest, chunkBytes: SMALL_CHUNK }
       if (command === "task_resource_download_read_chunk")
         return { offset: 0, nextOffset: 3, dataBase64: "AQID", chunkHash: digest, ...override }
       return null
@@ -404,7 +409,7 @@ describe("task resource transfer wire contracts", () => {
     const digest = await hash(new Uint8Array([1, 2, 3]))
     call.mockImplementation(async (command: string) => {
       if (command === "task_resource_download_open")
-        return { handleId: "download", size: 3, hash: "wrong" }
+        return { handleId: "download", size: 3, hash: "wrong", chunkBytes: SMALL_CHUNK }
       if (command === "task_resource_download_read_chunk")
         return { offset: 0, nextOffset: 3, dataBase64: "AQID", chunkHash: digest }
       return null
@@ -415,7 +420,9 @@ describe("task resource transfer wire contracts", () => {
   })
 
   it.each([-1, 1.5, NaN])("closes an invalid download size %s", async (size) => {
-    call.mockResolvedValueOnce({ handleId: "download", size }).mockResolvedValueOnce(null)
+    call
+      .mockResolvedValueOnce({ handleId: "download", size, chunkBytes: SMALL_CHUNK })
+      .mockResolvedValueOnce(null)
     await expect(downloadTaskResource("run", "file")).rejects.toThrow("size is invalid")
     expect(call).toHaveBeenLastCalledWith("task_resource_download_close", { handleId: "download" })
   })
@@ -429,7 +436,7 @@ describe("task resource transfer wire contracts", () => {
     })
     call.mockImplementation(async (command: string) => {
       if (command === "task_resource_download_open")
-        return { handleId: "download", size: 2 * 24 * 1024 }
+        return { handleId: "download", size: 2 * 24 * 1024, chunkBytes: SMALL_CHUNK }
       if (command === "task_resource_download_read_chunk")
         return new Promise<void>((resolve) => {
           pending.push(resolve)
@@ -473,7 +480,7 @@ describe("task resource transfer wire contracts", () => {
     })
     call.mockImplementation(async (command: string) => {
       if (command === "task_resource_download_open")
-        return { handleId: "download", size: 3, hash: digest }
+        return { handleId: "download", size: 3, hash: digest, chunkBytes: SMALL_CHUNK }
       if (command === "task_resource_download_read_chunk")
         return { offset: 0, nextOffset: 3, dataBase64: "AQID", chunkHash: digest }
       return null
@@ -501,7 +508,7 @@ describe("task resource transfer wire contracts", () => {
     call.mockImplementation(
       async (command: string, args: { offset: number; dataBase64: string }) => {
         if (command === "task_resource_upload_open")
-          return { handleId: "upload", expectedSize: bytes.length }
+          return { handleId: "upload", expectedSize: bytes.length, chunkBytes: SMALL_CHUNK }
         if (command === "task_resource_upload_write_chunk") {
           offsets.push(args.offset)
           return args.offset + atob(args.dataBase64).length
@@ -518,7 +525,8 @@ describe("task resource transfer wire contracts", () => {
   it.each([0, -1, 4, NaN])("aborts when the upload acknowledgement is %s", async (ack) => {
     const bytes = new Uint8Array([1, 2, 3])
     call.mockImplementation(async (command: string) => {
-      if (command === "task_resource_upload_open") return { handleId: "upload", expectedSize: 3 }
+      if (command === "task_resource_upload_open")
+        return { handleId: "upload", expectedSize: 3, chunkBytes: SMALL_CHUNK }
       if (command === "task_resource_upload_write_chunk") return ack
       return null
     })
@@ -538,7 +546,12 @@ describe("task resource transfer wire contracts", () => {
   ])("aborts invalid upload metadata: %j", async (override) => {
     const bytes = new Uint8Array([1, 2, 3])
     call
-      .mockResolvedValueOnce({ handleId: "upload", expectedSize: 3, ...override })
+      .mockResolvedValueOnce({
+        handleId: "upload",
+        expectedSize: 3,
+        chunkBytes: SMALL_CHUNK,
+        ...override,
+      })
       .mockResolvedValueOnce(null)
     await expect(
       uploadTaskResource("run", "file", { arrayBuffer: async () => bytes.buffer } as Blob)
@@ -711,7 +724,8 @@ describe("task resource transfer wire contracts", () => {
     const bytes = new Uint8Array([1, 2, 3])
     const controller = new AbortController()
     call.mockImplementation(async (command: string) => {
-      if (command === "task_resource_upload_open") return { handleId: "upload", expectedSize: 3 }
+      if (command === "task_resource_upload_open")
+        return { handleId: "upload", expectedSize: 3, chunkBytes: SMALL_CHUNK }
       if (command === "task_resource_upload_write_chunk") {
         controller.abort(new Error("cancelled"))
         return 3

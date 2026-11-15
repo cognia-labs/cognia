@@ -38,7 +38,6 @@
         "call:<dynamic:cmd>",
         "call:companion_mdns_status",
         "call:companion_mesh_status",
-        "call:companion_migrate_legacy_device_grants",
         "call:companion_seed_locked_computer_use",
         "call:companion_server_start",
         "call:companion_server_status",

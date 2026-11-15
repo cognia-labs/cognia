@@ -6,7 +6,7 @@
  * and the pending `bot_approval` interrupts Bot handlers raised, and an answer
  * to one of them.
  *
- * The answer is the human approval itself, the way `claude_approve` answers a
+ * The answer is the human approval itself, the way `agent_resolve_permission` answers a
  * permission request on a paired chat, so it carries no admin lease: on a
  * headless host the phone could not get its own lease approved, and an
  * approval that needs a second device to approve the approval is not one a

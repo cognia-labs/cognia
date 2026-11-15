@@ -80,7 +80,6 @@ struct DataChannelSurface {
 // host.observe before the dispatcher attaches, just like the events ticket.
 const DATA_CHANNEL_SURFACES: &[DataChannelSurface] = &[
     DataChannelSurface { label: super::peer::DATACHANNEL_LABEL, adapter: DataChannelAdapter::Dispatch, capability: "host.observe", execution: false },
-    DataChannelSurface { label: super::peer::LEGACY_DATACHANNEL_LABEL, adapter: DataChannelAdapter::Dispatch, capability: "host.observe", execution: false },
     DataChannelSurface { label: super::peer::TERMINAL_DATACHANNEL_LABEL, adapter: DataChannelAdapter::Terminal, capability: "terminal.open", execution: true },
     DataChannelSurface { label: super::peer::RFB_DATACHANNEL_LABEL, adapter: DataChannelAdapter::RemoteDesktop, capability: "host.observe", execution: true },
 ];

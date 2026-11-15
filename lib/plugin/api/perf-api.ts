@@ -3,10 +3,9 @@
  * performance dashboard (ADR-0035) for monitoring / observability plugins.
  *
  * Wraps the `lib/perf/backend/commands.ts` seam. Deliberately read-only:
- * the sampler-control commands (`perfStartSampling` / `perfSetInterval` /
- * `perfStopSampling` / `perfResetHotspots` / `perfOpenTraceDir`) are NOT
- * exposed — a plugin shouldn't reconfigure the user's sampler or open OS
- * windows. Gated by `perf:read`. Desktop-only (inert empties on web).
+ * the sampler leases (`perfOpenLease` / `perfCloseLease`),
+ * `perfResetHotspots` and `perfOpenTraceDir` are NOT exposed — a plugin
+ * shouldn't reconfigure the user's sampler or open OS windows. Gated by `perf:read`. Desktop-only (inert empties on web).
  */
 
 import {
@@ -14,8 +13,9 @@ import {
   perfHotspots,
   perfSystemDetails,
   perfListTraces,
-  subscribePerfSample,
+  subscribePerfFrame,
 } from "@/lib/perf/backend/commands"
+import { isTauri } from "@/lib/tauri"
 import { createGuardedAPI } from "@/lib/plugin/security/permission-guard"
 import type { PluginPerfAPI } from "@cognia/plugin-contract/lib/plugin/api/perf-api"
 export type { PluginPerfAPI } from "@cognia/plugin-contract/lib/plugin/api/perf-api"
@@ -27,7 +27,7 @@ export function createPerfAPI(pluginId: string): PluginPerfAPI {
     hotspots: () => perfHotspots(),
     systemDetails: () => perfSystemDetails(),
     listTraces: () => perfListTraces(),
-    subscribe: (handler) => subscribePerfSample(handler),
+    subscribe: (handler) => (isTauri() ? subscribePerfFrame(handler) : () => {}),
   }
 
   return createGuardedAPI(pluginId, api, {

@@ -248,7 +248,7 @@ describe("connector approval review settlement", () => {
         { transcriptRuntime: "host-owned", route: a.route }
       )
       expect(a.call).toHaveBeenCalledWith(
-        "claude_send",
+        "agent_send",
         expect.objectContaining({ sessionId: "routed", prompt: "hi" })
       )
       expect(a.holders()).toBe(1)
@@ -256,16 +256,16 @@ describe("connector approval review settlement", () => {
       await interruptSession("routed")
       await closeSession("routed")
       expect(a.call.mock.calls.map(([command]) => command)).toEqual([
-        "claude_send",
-        "claude_interrupt",
+        "agent_send",
+        "agent_interrupt",
         "agent_close_session",
       ])
-      expect(callSpy).not.toHaveBeenCalledWith("claude_interrupt", expect.anything())
+      expect(callSpy).not.toHaveBeenCalledWith("agent_interrupt", expect.anything())
       expect(callSpy).not.toHaveBeenCalledWith("agent_close_session", expect.anything())
       // Closing lets the Host go; a later control follows the selection again.
       expect(a.holders()).toBe(0)
       await interruptSession("routed")
-      expect(callSpy).toHaveBeenCalledWith("claude_interrupt", { sessionId: "routed" })
+      expect(callSpy).toHaveBeenCalledWith("agent_interrupt", { sessionId: "routed" })
     })
 
     it("refuses a send when the Host changed after the turn subscribed", async () => {
@@ -306,7 +306,7 @@ describe("connector approval review settlement", () => {
         expect(a.holders()).toBe(0)
         await expect(interruptSession("late")).rejects.toBeInstanceOf(ExecutionRouteChangedError)
         await expect(closeSession("late")).rejects.toBeInstanceOf(ExecutionRouteChangedError)
-        expect(callSpy).not.toHaveBeenCalledWith("claude_interrupt", expect.anything())
+        expect(callSpy).not.toHaveBeenCalledWith("agent_interrupt", expect.anything())
         expect(callSpy).not.toHaveBeenCalledWith("agent_close_session", expect.anything())
       } finally {
         jest.useRealTimers()
@@ -337,8 +337,8 @@ describe("connector approval review settlement", () => {
       await sendPluginHookResponse({ sessionId: "asks", execId: "exec-1", result: {} })
       await callReserveDecision("asks", "reserve-1", { decision: "granted" })
       expect(a.call.mock.calls.map(([command]) => command)).toEqual([
-        "claude_send",
-        "claude_approve",
+        "agent_send",
+        "agent_resolve_permission",
         "claude_tool_result_decision",
         "claude_plugin_tool_response",
         "claude_plugin_hook_response",
@@ -373,7 +373,7 @@ describe("connector approval review settlement", () => {
         )
         setActiveRemoteTransport(remoteB)
         await interruptSession("unpinned")
-        expect(remoteA.call).toHaveBeenLastCalledWith("claude_interrupt", { sessionId: "unpinned" })
+        expect(remoteA.call).toHaveBeenLastCalledWith("agent_interrupt", { sessionId: "unpinned" })
         expect(remoteB.call).not.toHaveBeenCalled()
 
         // The turn's end on A lets A go after the retention, like a pinned turn.
@@ -408,7 +408,7 @@ describe("connector approval review settlement", () => {
         jest.advanceTimersByTime(IDLE_ROUTE_RETENTION_MS * 3)
         expect(a.holders()).toBe(1)
         await interruptSession("running")
-        expect(a.call).toHaveBeenCalledWith("claude_interrupt", { sessionId: "running" })
+        expect(a.call).toHaveBeenCalledWith("agent_interrupt", { sessionId: "running" })
       } finally {
         jest.useRealTimers()
       }
@@ -558,7 +558,7 @@ describe("connector approval review settlement", () => {
       authority: "human",
     })
     await expect(waiting).resolves.toBe(true)
-    expect(callSpy).not.toHaveBeenCalledWith("claude_approve", expect.anything())
+    expect(callSpy).not.toHaveBeenCalledWith("agent_resolve_permission", expect.anything())
     await expect(approveTool("session-approval", ask.requestId, "allow")).rejects.toThrow("expired")
     expect(await getActionReviewReceipt(ask.requestId)).toMatchObject({ authority: "human" })
   })
@@ -948,7 +948,7 @@ describe("personal history controls", () => {
       expect(mockUpdatePersonalSession).toHaveBeenCalledWith("controlled", {
         runtimePersonalVisibilityDigest: "visibility-current",
       })
-      expect(callSpy).toHaveBeenCalledWith("claude_compact", {
+      expect(callSpy).toHaveBeenCalledWith("agent_compact", {
         sessionId: "controlled",
         focus: undefined,
       })
@@ -978,7 +978,7 @@ describe("personal history controls", () => {
     const proof = { hostOwnedTranscriptControl: HOST_OWNED_TRANSCRIPT_CONTROL } as const
     await compactSession("cli-owned", undefined, proof)
     await restoreSession("cli-owned", [{ role: "assistant", content: "filtered history" }], proof)
-    expect(callSpy).toHaveBeenCalledWith("claude_compact", {
+    expect(callSpy).toHaveBeenCalledWith("agent_compact", {
       sessionId: "cli-owned",
       focus: undefined,
     })
@@ -1339,7 +1339,7 @@ describe("Claude session commands", () => {
       ...buildVectorManifestEntries().map(carried("cognia-vector-builtin")),
     ]
     await sendPrompt("sess", "Inspect the workspace", { pluginTools })
-    expect(callSpy).toHaveBeenCalledWith("claude_send", {
+    expect(callSpy).toHaveBeenCalledWith("agent_send", {
       sessionId: "sess",
       prompt: "Inspect the workspace",
       options: { pluginTools },
@@ -1368,7 +1368,7 @@ describe("Claude session commands", () => {
   it("sendPrompt forwards sessionId / prompt / options", async () => {
     callSpy.mockResolvedValueOnce(undefined)
     await sendPrompt("sess-1", "hello", { model: "claude-opus-4-7" })
-    expect(callSpy).toHaveBeenCalledWith("claude_send", {
+    expect(callSpy).toHaveBeenCalledWith("agent_send", {
       sessionId: "sess-1",
       prompt: "hello",
       options: { model: "claude-opus-4-7" },
@@ -1378,7 +1378,7 @@ describe("Claude session commands", () => {
   it("sendPrompt accepts undefined options", async () => {
     callSpy.mockResolvedValueOnce(undefined)
     await sendPrompt("sess-1", "hi")
-    expect(callSpy).toHaveBeenCalledWith("claude_send", {
+    expect(callSpy).toHaveBeenCalledWith("agent_send", {
       sessionId: "sess-1",
       prompt: "hi",
       options: undefined,
@@ -1406,7 +1406,7 @@ describe("Claude session commands", () => {
       )
     })
     await interruptSession("sess-2")
-    expect(callSpy).toHaveBeenCalledWith("claude_interrupt", { sessionId: "sess-2" })
+    expect(callSpy).toHaveBeenCalledWith("agent_interrupt", { sessionId: "sess-2" })
   })
 
   it("cancels renderer calls before session disposal even when the host close rejects", async () => {
@@ -1447,12 +1447,12 @@ describe("Claude session commands", () => {
     mockGetSession.mockResolvedValue({ runtimePersonalVisibilityDigest: "visibility-current" })
     callSpy.mockResolvedValue(undefined)
     await compactSession("sess-3")
-    expect(callSpy).toHaveBeenCalledWith("claude_compact", {
+    expect(callSpy).toHaveBeenCalledWith("agent_compact", {
       sessionId: "sess-3",
       focus: undefined,
     })
     await compactSession("sess-3", "the API changes")
-    expect(callSpy).toHaveBeenCalledWith("claude_compact", {
+    expect(callSpy).toHaveBeenCalledWith("agent_compact", {
       sessionId: "sess-3",
       focus: "the API changes",
     })
@@ -1479,7 +1479,7 @@ describe("Claude session commands", () => {
   it("approveTool packs the decision payload", async () => {
     callSpy.mockResolvedValueOnce(undefined)
     await approveTool("sess-3", "req-1", "deny", "no thanks", { foo: 1 })
-    expect(callSpy).toHaveBeenCalledWith("claude_approve", {
+    expect(callSpy).toHaveBeenCalledWith("agent_resolve_permission", {
       sessionId: "sess-3",
       requestId: "req-1",
       decision: "deny",
@@ -1525,7 +1525,7 @@ describe("Claude session commands", () => {
       expect(peekRemoteApprovalContext("retry-session", "retry-approval")).toBe(context)
       await approveTool("retry-session", "retry-approval", "allow")
       expect(callSpy).toHaveBeenLastCalledWith(
-        "claude_approve",
+        "agent_resolve_permission",
         expect.objectContaining({ remoteExecutionContext: context })
       )
       expect(peekRemoteApprovalContext("retry-session", "retry-approval")).toBeUndefined()
@@ -1558,7 +1558,7 @@ describe("Claude session commands", () => {
   it("approveTool tolerates omitted message / updatedInput", async () => {
     callSpy.mockResolvedValueOnce(undefined)
     await approveTool("sess-3", "req-1", "allow")
-    expect(callSpy).toHaveBeenCalledWith("claude_approve", {
+    expect(callSpy).toHaveBeenCalledWith("agent_resolve_permission", {
       sessionId: "sess-3",
       requestId: "req-1",
       decision: "allow",
@@ -1581,7 +1581,7 @@ describe("Claude session commands", () => {
       sessionId: "sess-5",
       commandId: "close-5",
     })
-    expect(callSpy).not.toHaveBeenCalledWith("claude_close_session", expect.anything())
+    expect(callSpy).toHaveBeenCalledTimes(2)
   })
 
   it("getSidecarStatus returns the parsed boolean", async () => {
@@ -1731,7 +1731,7 @@ describe("onClaudeMessage", () => {
     await approveTool("session-a", "approval-a", "allow")
 
     expect(callSpy).toHaveBeenCalledWith(
-      "claude_approve",
+      "agent_resolve_permission",
       expect.objectContaining({ remoteExecutionContext: context })
     )
   })
@@ -2144,7 +2144,7 @@ describe("transcript generation dispatch", () => {
     await sendPrompt("edited", "next", { provider: "openai" })
     expect(mockWithTranscriptRuntimeLock).toHaveBeenCalledWith("edited", expect.any(Function))
     expect(callSpy).toHaveBeenCalledWith(
-      "claude_send",
+      "agent_send",
       expect.objectContaining({
         options: { transcriptInvalidationId: "generation-2", initialConversation: [] },
       })
@@ -2158,7 +2158,7 @@ describe("transcript generation dispatch", () => {
     expect(mockPrepareTranscriptRuntimeSend).toHaveBeenCalledWith("retry", options, {
       currentMessageId: "logical-user",
     })
-    expect(callSpy).toHaveBeenCalledWith("claude_send", expect.objectContaining({ options }))
+    expect(callSpy).toHaveBeenCalledWith("agent_send", expect.objectContaining({ options }))
   })
 
   it("does not lock or prepare again when the controller already holds the lock", async () => {
@@ -2186,7 +2186,7 @@ describe("transcript generation dispatch", () => {
     expect(mockWithTranscriptRuntimeLock).not.toHaveBeenCalled()
     expect(mockPrepareTranscriptRuntimeSend).not.toHaveBeenCalled()
     expect(callSpy).toHaveBeenCalledWith(
-      "claude_send",
+      "agent_send",
       expect.objectContaining({ options: { provider: "openai" } })
     )
   })
@@ -2252,7 +2252,7 @@ describe("transcript generation dispatch", () => {
     callSpy.mockResolvedValue(undefined)
     await sendPrompt("sess-1", "hello", {}, { transcriptRuntime: "prepared", messageId: "user-1" })
     expect(callSpy).toHaveBeenLastCalledWith(
-      "claude_send",
+      "agent_send",
       expect.not.objectContaining({ messageId: expect.anything() })
     )
   })
@@ -2363,7 +2363,7 @@ it("refuses a desktop dispatch without restarting a capture-owned engine", async
     expect(transport.call).not.toHaveBeenCalled()
     await sendPrompt("occupied", "Bot", { turnId: "bot-turn" }, { transcriptRuntime: "prepared" })
     expect(transport.call).toHaveBeenCalledWith(
-      "claude_send",
+      "agent_send",
       expect.objectContaining({ sessionId: "occupied", prompt: "Bot" })
     )
   } finally {

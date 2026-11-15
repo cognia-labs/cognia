@@ -22,8 +22,6 @@ function frame(sequence: number): PerfFrame {
       counterReset: false,
       sourceRestarted: false,
     },
-    tsMs: 2004,
-    intervalMs: 1004,
     processes: [],
     runtime: {
       workers: 0,
@@ -56,7 +54,6 @@ describe("performance wire model", () => {
       sources: [],
       leases: [],
       gaps: [],
-      samples: [first],
       running: true,
       intervalMs: 1000,
     }

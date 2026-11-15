@@ -1459,7 +1459,6 @@ mod tests {
             user.clone(),
             OrgId::parse(ORG).unwrap(),
             None,
-            None,
             Duration::from_secs(300),
         )
         .unwrap();
@@ -1685,7 +1684,6 @@ mod tests {
         let claims = GrantClaims::issue(
             ada(),
             OrgId::parse("org_somebodyelse00000000").unwrap(),
-            None,
             None,
             Duration::from_secs(300),
         )

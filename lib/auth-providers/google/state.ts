@@ -27,7 +27,6 @@ export interface GoogleLineage {
   status: "connected" | "needs-reauth" | "disconnected"
   revision: string
   credentialRevision: string
-  needsIdentity: boolean
 }
 export interface GooglePendingAttempt {
   attemptId: string
@@ -45,7 +44,7 @@ export interface GoogleAuthAttempt {
   expiresAt: number
 }
 export type GoogleStateInput =
-  | { action: "snapshot"; legacyClientId?: string; legacyBackupClientId?: string }
+  | { action: "snapshot" }
   | {
       action: "begin"
       clientId: string
@@ -80,9 +79,7 @@ export interface GoogleStateReply {
     credentialRevision: string
   }
   outcome?: GoogleDisconnectOutcome
-  backupMigrationNeedsClientId: boolean
   lineageId?: string
-  migrationNeedsClientId: boolean
 }
 export type GoogleStatePort = (input: GoogleStateInput) => Promise<GoogleStateReply>
 let override: GoogleStatePort | null = null

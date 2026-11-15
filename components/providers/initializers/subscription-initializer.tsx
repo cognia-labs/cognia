@@ -1,11 +1,8 @@
 "use client"
 
-// Fires once on app boot. Calls into the Rust `subscription_init` command,
-// which detects any v1 keyring entries (from the pre-ADR-0025 single-account
-// schema) and silently wraps them as "Default" accounts in the new v2 vault.
-// A single Sonner toast notifies the user when an actual migration happened;
-// the toast key is keyed by localStorage so it only ever fires once per
-// profile, regardless of how many app boots follow.
+// Fires on app boot and on every local-account switch. Calls into the Rust
+// `subscription_init` command, which rebuilds the active-account projection
+// from the unlocked account's persisted vaults.
 //
 // Also hydrates the subscription cloud-sync passphrase (opt-in keyring copy)
 // and pokes the unattended uploader once — covering changes whose debounce
@@ -13,10 +10,9 @@
 // `maybeAutoUploadSubscription`; this is a no-op when the toggle is off.
 
 import { useEffect, useRef } from "react"
-import { useTranslations } from "next-intl"
 
 import { deferUntilSecretStoreReady } from "@/lib/credentials/secret-store-readiness"
-import { subscriptionInitOnce } from "@/lib/subscription/core/migration"
+import { subscriptionInitOnce } from "@/lib/subscription/core/init"
 import { notifySubscriptionChanged } from "@/lib/subscription/core/subscription-events"
 import { maybeAutoUploadSubscription } from "@/lib/subscription/sync/subscription-sync"
 import { useAccountStore } from "@/stores/account/account-store"
@@ -25,9 +21,6 @@ export function SubscriptionInitializer() {
   const lastInitializedKey = useRef<string | null>(null)
   const unlockedAccountId = useAccountStore((state) => state.unlockedAccountId)
   const accountRevision = useAccountStore((state) => state.accountRevision)
-  // Bind the translator once per render; the callback inside subscriptionInitOnce
-  // closes over it.
-  const t = useTranslations("subscription.migration")
 
   useEffect(() => {
     if (!unlockedAccountId) return
@@ -36,9 +29,7 @@ export function SubscriptionInitializer() {
     lastInitializedKey.current = initKey
 
     const run = async (): Promise<void> => {
-      const result = await subscriptionInitOnce({
-        translateToast: (key, params) => t(key, params as Parameters<typeof t>[1]),
-      })
+      const result = await subscriptionInitOnce()
       // A locked secret store is not a finished boot: run the whole init again
       // once the user unlocks it, unless the account has changed since.
       if (result.secretStoreUnavailable) {
@@ -54,7 +45,7 @@ export function SubscriptionInitializer() {
       await maybeAutoUploadSubscription().catch(() => undefined)
     }
     void run()
-  }, [accountRevision, t, unlockedAccountId])
+  }, [accountRevision, unlockedAccountId])
 
   return null
 }

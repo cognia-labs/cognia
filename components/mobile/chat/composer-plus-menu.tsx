@@ -124,7 +124,7 @@ export interface ComposerPlusMenuProps {
    * Optional. When provided, the camera/album/file branches additionally
    * pack their result as a {@link SendContent} block array and forward it
    * to this callback so the chat composer can ship the attachment through
-   * the normal send pipeline (`claude_send` → SDK image block).
+   * the normal send pipeline (`agent_send` → SDK image block).
    *
    * Image picks become `{ type: "image", source: { type: "base64", data,
    * media_type } }` blocks; non-image files fall back through `onAttach`

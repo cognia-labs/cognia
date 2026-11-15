@@ -1,42 +1,18 @@
-//! The elevated-grant vocabulary, plus the reader for the retired
-//! `device-grants.json` projection.
-//!
-//! # What this module is now
+//! The elevated-grant vocabulary.
 //!
 //! [`GrantKind`] is the shared vocabulary for the four elevated grants a
 //! paired device can hold, and [`GrantKind::capabilities`] is the **single**
 //! mapping from a grant to the canonical SecurityStore capabilities that the
 //! request-path gates actually check. Every writer of a grant goes through it —
 //! the desktop toggles (`companion_api::commands::companion_set_remote_terminal`
-//! and its siblings), the `cognia-server devices grant/revoke` CLI, and the
-//! one-time import in
-//! [`super::security_store::SecurityStore::migrate_legacy_device_grants`] — and
+//! and its siblings) and the `cognia-server devices grant/revoke` CLI — and
 //! the workspace access check reads the control grant's set from it, so a
 //! capability added to a grant lands on every host type at once.
 //!
-//! # Why the JSON file is read-only
-//!
-//! This module once owned a JSON file that was the persisted truth for a
-//! headless host, projected at boot onto a set of process-global in-memory
-//! allow lists. That design is retired: authorization is now the SecurityStore's
-//! `capability_grants` table, checked on the request path by
+//! Authorization itself is the SecurityStore's `capability_grants` table,
+//! checked on the request path by
 //! `companion_api::remote_execution::authorize_capability` and by the two direct
 //! `has_capability` gates in `companion_api::rpc` and `companion_api::ws_terminal`.
-//!
-//! What remains is the reader. `cognia-server` loads the file once at boot and
-//! hands it to `migrate_legacy_device_grants`, which imports it behind a
-//! committed SQLite marker so a grant revoked after the import can never be
-//! resurrected by re-reading the same file. Nothing writes it any more — a
-//! grant made today goes straight into the SecurityStore, and takes effect on
-//! the next request rather than the next restart.
-
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use serde::{Deserialize, Serialize};
-
-const GRANTS_FILE: &str = "device-grants.json";
 
 /// Which elevated capability a grant refers to.
 ///
@@ -78,11 +54,10 @@ impl GrantKind {
 
     /// The canonical SecurityStore capabilities this grant maps onto.
     ///
-    /// This is the only place the mapping exists. The desktop toggles, the
-    /// `cognia-server devices` CLI, and the legacy-grant import all route
-    /// through it, so none of the three can drift into granting a capability
-    /// the others do not — which is how a toggle ends up writing something no
-    /// gate reads.
+    /// This is the only place the mapping exists. The desktop toggles and the
+    /// `cognia-server devices` CLI both route through it, so neither can drift
+    /// into granting a capability the other does not — which is how a toggle
+    /// ends up writing something no gate reads.
     pub fn capabilities(self) -> &'static [&'static str] {
         match self {
             GrantKind::Control => &[
@@ -107,52 +82,6 @@ impl GrantKind {
             GrantKind::Terminal,
             GrantKind::SshFiles,
         ]
-    }
-}
-
-/// On-disk shape. `BTreeSet` so the file is stable and diffable, and so a
-/// hand-edited duplicate collapses instead of being counted twice.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PersistedGrants {
-    #[serde(default)]
-    pub control: BTreeSet<String>,
-    #[serde(default)]
-    pub agent_control: BTreeSet<String>,
-    #[serde(default)]
-    pub terminal: BTreeSet<String>,
-}
-
-/// Storage seam, so the boot-time import is testable without a real data
-/// directory.
-pub trait DeviceGrantStore: Send + Sync {
-    fn load(&self) -> Result<PersistedGrants, String>;
-}
-
-pub struct FileDeviceGrantStore {
-    path: PathBuf,
-}
-
-impl FileDeviceGrantStore {
-    pub fn new(data_dir: &Path) -> Arc<Self> {
-        Arc::new(Self {
-            path: data_dir.join(GRANTS_FILE),
-        })
-    }
-}
-
-impl DeviceGrantStore for FileDeviceGrantStore {
-    /// A missing file means "nothing granted", not an error: that is the state
-    /// of every freshly provisioned host.
-    fn load(&self) -> Result<PersistedGrants, String> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(raw) => {
-                serde_json::from_str(&raw).map_err(|e| format!("{}: {e}", self.path.display()))
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                Ok(PersistedGrants::default())
-            }
-            Err(err) => Err(format!("{}: {err}", self.path.display())),
-        }
     }
 }
 
@@ -239,77 +168,5 @@ mod tests {
         assert!(GrantKind::Control.capabilities().contains(&"agent.run"));
         assert!(!GrantKind::Control.capabilities().contains(&"process.spawn"));
         assert_eq!(GrantKind::AgentControl.capabilities(), &["process.spawn"]);
-    }
-
-    #[test]
-    fn a_missing_file_reads_as_nothing_granted() {
-        let dir =
-            std::env::temp_dir().join(format!("cognia-grants-missing-{}", std::process::id()));
-        let store = FileDeviceGrantStore::new(&dir);
-        assert_eq!(store.load().unwrap(), PersistedGrants::default());
-    }
-
-    #[test]
-    fn a_file_written_by_an_older_build_still_reads() {
-        // The file is retired but not extinct: an upgrading host still has one
-        // on disk, and losing the ability to read it would silently drop every
-        // grant made before the migration.
-        let dir = std::env::temp_dir().join(format!(
-            "cognia-grants-rt-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(GRANTS_FILE),
-            r#"{"control":["dev-b"],"agent_control":["dev-a"],"terminal":["dev-c"]}"#,
-        )
-        .unwrap();
-
-        let grants = FileDeviceGrantStore::new(&dir).load().unwrap();
-        assert!(grants.agent_control.contains("dev-a"));
-        assert!(grants.control.contains("dev-b"));
-        assert!(grants.terminal.contains("dev-c"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_file_missing_a_section_reads_as_nothing_granted_for_it() {
-        // `terminal` postdates the other two, so a file written before it
-        // existed has no such key. Failing to parse would strand the host's
-        // remaining grants rather than importing them.
-        let dir = std::env::temp_dir().join(format!(
-            "cognia-grants-partial-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(GRANTS_FILE), r#"{"control":["dev-b"]}"#).unwrap();
-
-        let grants = FileDeviceGrantStore::new(&dir).load().unwrap();
-        assert!(grants.control.contains("dev-b"));
-        assert!(grants.terminal.is_empty());
-        assert!(grants.agent_control.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_corrupt_file_is_an_error_rather_than_a_silent_empty_grant_set() {
-        // Reading "nothing granted" from a corrupt file would be a fail-open on
-        // the *revocation* side only, but it would also hide the corruption
-        // from the operator, who would then re-grant into a file that never
-        // loads.
-        let dir = std::env::temp_dir().join(format!(
-            "cognia-grants-corrupt-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(GRANTS_FILE), "{ not json").unwrap();
-        let store = FileDeviceGrantStore::new(&dir);
-        assert!(store.load().is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

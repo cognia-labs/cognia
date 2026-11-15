@@ -14,7 +14,7 @@ import {
   snapshotToJson,
   spansToCsv,
 } from "./export"
-import type { PerfSample, ProcessSample, SpanSnapshot } from "./types"
+import type { PerfFrame, ProcessSample, SpanSnapshot } from "./types"
 
 function makeProcess(overrides: Partial<ProcessSample> = {}): ProcessSample {
   return {
@@ -49,10 +49,23 @@ function makeSpan(overrides: Partial<SpanSnapshot> = {}): SpanSnapshot {
   }
 }
 
-function makeSample(): PerfSample {
+function makeSample(): PerfFrame {
   return {
-    tsMs: 1,
-    intervalMs: 1000,
+    wireVersion: 1,
+    sourceId: "host:test",
+    targetId: "local-desktop",
+    routingGeneration: 0,
+    hostInstanceId: "test",
+    samplingSessionId: "session",
+    sequence: 1,
+    requestedIntervalMs: 1000,
+    actualIntervalMs: 1000,
+    monotonicElapsedMs: 1000,
+    wallStartMs: 0,
+    wallEndMs: 1,
+    collectionDurationMs: 0,
+    missedTicks: 0,
+    flags: { reset: false, discontinuity: false, counterReset: false, sourceRestarted: false },
     processes: [makeProcess()],
     runtime: {
       workers: 1,
@@ -105,7 +118,7 @@ describe("snapshotToJson", () => {
     expect(parsed.exportedAt).toBe("1970-01-01T00:00:00.000Z")
     expect(parsed.intervalMs).toBe(1000)
     expect(parsed.sampleCount).toBe(2)
-    expect(parsed.latest.tsMs).toBe(1)
+    expect(parsed.latest.wallEndMs).toBe(1)
     expect(parsed.history).toHaveLength(2)
   })
 

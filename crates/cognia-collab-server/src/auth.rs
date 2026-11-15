@@ -249,7 +249,6 @@ mod tests {
             ada(),
             org(),
             workspace.map(str::to_owned),
-            Some(WorkspaceRole::Member),
             Duration::from_secs(300),
         )
         .unwrap();
@@ -411,8 +410,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_grant_the_claim_says_is_a_maintainer_is_still_only_a_viewer_in_storage() {
-        // The claim is not the authority. Storage is.
+    async fn a_workspace_grant_is_only_as_strong_as_the_stored_membership() {
+        // The grant is not the authority. Storage is.
         let store = InMemoryStore::new();
         store.add_org_member(org().as_str(), ada().as_str(), OrgRole::Member);
         store.add_workspace_member(
@@ -422,15 +421,14 @@ mod tests {
             WorkspaceRole::Viewer,
         );
 
-        let inflated = GrantClaims::issue(
+        let grant = GrantClaims::issue(
             ada(),
             org(),
             Some("proj-1".into()),
-            Some(WorkspaceRole::Maintainer),
             Duration::from_secs(300),
         )
         .unwrap();
-        let token = signer().sign(&inflated).unwrap();
+        let token = signer().sign(&grant).unwrap();
 
         assert!(matches!(
             authorize(

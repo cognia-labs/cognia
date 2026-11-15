@@ -402,9 +402,6 @@ export function GoogleDriveBackupCard() {
             {t("reauthorize")}
           </Button>
         )}
-        {snapshot?.backupMigrationNeedsClientId && (
-          <p className="text-xs text-muted-foreground">{t("migrationNeedsClientId")}</p>
-        )}
         <Button
           size="sm"
           variant="outline"

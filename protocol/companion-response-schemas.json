@@ -6155,7 +6155,7 @@
     "OcrModelStatus": {
       "type": "object",
       "x-cognia-wire-source": "crates/cognia-ocr/src/native.rs ModelStatus",
-      "description": "`integrity` is separate from `installed` on purpose: a corrupt model is present on disk and must not be used, which one boolean cannot say. `legacy_files` are pre-v6 Paddle files that are never loaded and are reported only so a user can clean them up.",
+      "description": "`integrity` is separate from `installed` on purpose: a corrupt model is present on disk and must not be used, which one boolean cannot say.",
       "required": ["backend", "integrity", "installed", "model_dir", "files", "total_bytes"],
       "properties": {
         "backend": {
@@ -6185,12 +6185,6 @@
         },
         "total_bytes": {
           "type": "integer"
-        },
-        "legacy_files": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
         }
       }
     },
@@ -7165,7 +7159,7 @@
     "SecretValue": {
       "type": ["string", "null"],
       "x-cognia-wire-source": "Option<String> from cognia_secrets::keyring_secrets::get, via rpc/chat.rs `to_json(value)`. null means the key is absent \u2014 a successful read, not an error.",
-      "x-cognia-fixes": "Previously LegacyRecord, which requires an object. Every successful secret_store_get / keyring_secret_get response is a bare string or null, so the enforced output contract rejected all of them with contract_output_violation."
+      "x-cognia-fixes": "Previously LegacyRecord, which requires an object. Every successful secret_store_get response is a bare string or null, so the enforced output contract rejected all of them with contract_output_violation."
     },
     "SessionAttachmentUploadChunk": {
       "type": "object",
@@ -9689,7 +9683,6 @@
       "additionalProperties": false,
       "properties": {
         "chunkBytes": {
-          "default": 24576,
           "format": "uint",
           "minimum": 1,
           "maximum": 65536,
@@ -10911,7 +10904,6 @@
       "additionalProperties": false,
       "properties": {
         "chunkBytes": {
-          "default": 24576,
           "format": "uint",
           "minimum": 1,
           "maximum": 65536,
@@ -16962,26 +16954,14 @@
     "character_upsert": {
       "$ref": "#/$defs/LegacyResult"
     },
-    "claude_approve": {
-      "$ref": "#/$defs/NullResult"
-    },
     "claude_call_reserve_respond": {
       "$ref": "#/$defs/RouterFusionOutcome"
-    },
-    "claude_close_session": {
-      "$ref": "#/$defs/NullResult"
-    },
-    "claude_compact": {
-      "$ref": "#/$defs/NullResult"
     },
     "claude_has_api_key": {
       "$ref": "#/$defs/BooleanResult"
     },
     "claude_has_oauth_bearer": {
       "$ref": "#/$defs/BooleanResult"
-    },
-    "claude_interrupt": {
-      "$ref": "#/$defs/NullResult"
     },
     "claude_plugin_tool_response": {
       "$ref": "#/$defs/NullResult"
@@ -16993,9 +16973,6 @@
       "$ref": "#/$defs/NullResult"
     },
     "claude_restore": {
-      "$ref": "#/$defs/NullResult"
-    },
-    "claude_send": {
       "$ref": "#/$defs/NullResult"
     },
     "claude_set_api_key": {
@@ -18966,15 +18943,6 @@
     "integration_ingress_unregister": {
       "$ref": "#/$defs/NullResult"
     },
-    "keyring_secret_clear": {
-      "$ref": "#/$defs/NullResult"
-    },
-    "keyring_secret_get": {
-      "$ref": "#/$defs/SecretValue"
-    },
-    "keyring_secret_set": {
-      "$ref": "#/$defs/NullResult"
-    },
     "kill_external_agent": {
       "$ref": "#/$defs/NullResult"
     },
@@ -20745,15 +20713,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "team_run_pause": {
-      "$ref": "#/$defs/LegacyResult"
-    },
-    "team_run_resume": {
-      "$ref": "#/$defs/LegacyResult"
-    },
-    "team_run_stop": {
-      "$ref": "#/$defs/LegacyResult"
     },
     "team_task_comment": {
       "$ref": "#/$defs/LegacyResult"
@@ -23490,9 +23449,6 @@
               },
               "credentialRevision": {
                 "type": "string"
-              },
-              "needsIdentity": {
-                "type": "boolean"
               }
             },
             "required": [
@@ -23504,8 +23460,7 @@
               "email",
               "status",
               "revision",
-              "credentialRevision",
-              "needsIdentity"
+              "credentialRevision"
             ],
             "additionalProperties": false
           }
@@ -23551,12 +23506,6 @@
             "required": ["attemptId", "clientId", "method", "expiresAt"],
             "additionalProperties": false
           }
-        },
-        "migrationNeedsClientId": {
-          "type": "boolean"
-        },
-        "backupMigrationNeedsClientId": {
-          "type": "boolean"
         },
         "lineageId": {
           "type": "string"
@@ -23625,13 +23574,7 @@
           "additionalProperties": false
         }
       },
-      "required": [
-        "lineages",
-        "clients",
-        "pending",
-        "migrationNeedsClientId",
-        "backupMigrationNeedsClientId"
-      ],
+      "required": ["lineages", "clients", "pending"],
       "additionalProperties": false
     },
     "browser_recording_control": {

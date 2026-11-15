@@ -23,13 +23,6 @@ jest.mock("dexie-react-hooks", () => ({
 }))
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
 
-const transcriptListMock = jest.fn((..._args: unknown[]) => (
-  <div data-testid="remote-transcript-list" />
-))
-jest.mock("@/components/chat/transcript-message-list", () => ({
-  TranscriptMessageList: (props: unknown) => transcriptListMock(props),
-}))
-
 const timelineSurfaceMock = jest.fn((..._args: unknown[]) => (
   <div data-testid="remote-timeline-surface" />
 ))
@@ -124,7 +117,7 @@ describe("<RemoteSessionDetail />", () => {
     messageDisplayMock.mockClear()
     transcriptControllerMock.mockReturnValue({
       snapshot: {
-        mode: "legacy",
+        mode: "unknown",
         items: [],
         revision: 0,
         loading: false,
@@ -143,7 +136,7 @@ describe("<RemoteSessionDetail />", () => {
     })
   })
 
-  it("uses the folded timeline and skips legacy history seeding on a capable host", () => {
+  it("uses the folded timeline", () => {
     transcriptControllerMock.mockReturnValue({
       snapshot: {
         mode: "timeline",
@@ -216,7 +209,7 @@ describe("<RemoteSessionDetail />", () => {
     expect(reconcileTranscript).toHaveBeenCalledTimes(1)
   })
 
-  it("renders streamed messages through the shared read-only transcript surface", () => {
+  it("renders streamed messages as the live turn of the timeline", () => {
     const messages = [
       {
         id: "a1",
@@ -227,6 +220,25 @@ describe("<RemoteSessionDetail />", () => {
         ],
       },
     ] as never
+    transcriptControllerMock.mockReturnValue({
+      snapshot: {
+        mode: "timeline",
+        items: [],
+        revision: 1,
+        loading: false,
+        loadingOlder: false,
+        hasMore: false,
+        expandedTurnKeys: new Set(),
+        loadingTurnKeys: new Set(),
+        error: null,
+      },
+      getDetail: jest.fn(),
+      loadOlder: jest.fn(),
+      expandTurn: jest.fn(),
+      pageTurn: jest.fn(),
+      collapseTurn: jest.fn(),
+      retry: jest.fn(),
+    })
     streamMock.mockReturnValue(
       baseStream({
         messages,
@@ -234,12 +246,11 @@ describe("<RemoteSessionDetail />", () => {
       })
     )
     render(<RemoteSessionDetail sessionId="s1" />)
-    expect(screen.getByTestId("remote-transcript-list")).toBeInTheDocument()
-    expect(transcriptListMock).toHaveBeenCalledWith({
-      messages,
-      messageDisplay: { preset: "balanced", motion: "restrained" },
-      sessionId: "s1",
-      status: "streaming",
+    expect(screen.getByTestId("remote-timeline-surface")).toBeInTheDocument()
+    expect(timelineSurfaceMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      liveMessages: messages,
+      liveStatus: "streaming",
+      renderAdapters: { messageDisplay: { preset: "balanced", motion: "restrained" } },
     })
   })
 

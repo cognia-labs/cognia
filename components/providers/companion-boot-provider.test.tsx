@@ -78,7 +78,7 @@ jest.mock("@/lib/runtime/account-runtime-target", () => ({
 }))
 const hostSnapshotMock = jest.fn(() => ({
   compatible: true,
-  operations: ["claude_send"],
+  operations: ["agent_send"],
   grants: ["claude.chat"],
 }))
 const setRuntimeSnapshotMock = jest.fn()
@@ -309,7 +309,7 @@ beforeEach(() => {
   hostStateResyncMock.mockClear()
   hostSnapshotMock.mockReset().mockReturnValue({
     compatible: true,
-    operations: ["claude_send"],
+    operations: ["agent_send"],
     grants: ["claude.chat"],
   })
   getActiveHostMock.mockReset().mockResolvedValue(null)

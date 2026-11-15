@@ -1,6 +1,6 @@
 /**
  * Type-safe wrappers around the Rust `perf_*` Tauri commands plus the
- * `perf://sample` event subscription. Mirrors the `lib/tauri.ts` seam pattern:
+ * `perf://frame` event subscription. Mirrors the `lib/tauri.ts` seam pattern:
  * business code imports these named functions, never `transport.call` directly.
  *
  * Every wrapper is gated by `isTauri()` so the `/performance` panel degrades to
@@ -15,7 +15,6 @@ import type {
   PerfFrame,
   PerfOpenLeaseRequest,
   PerfOpenLeaseResult,
-  PerfSample,
   PerfSnapshot,
   SpanSnapshot,
   SystemDetails,
@@ -25,7 +24,6 @@ import type {
 } from "./types"
 
 /** Tauri event channel the sampler emits frames on. */
-export const PERF_SAMPLE_EVENT = "perf://sample"
 export const PERF_FRAME_EVENT = "perf://frame"
 
 export const EMPTY_PERF_SNAPSHOT: PerfSnapshot = {
@@ -36,7 +34,6 @@ export const EMPTY_PERF_SNAPSHOT: PerfSnapshot = {
   sources: [],
   leases: [],
   gaps: [],
-  samples: [],
   running: false,
   intervalMs: 1000,
 }
@@ -72,24 +69,6 @@ export async function perfReadObservations(
 
 export function subscribePerfFrame(handler: (frame: PerfFrame) => void): () => void {
   return transport.subscribe<PerfFrame>(PERF_FRAME_EVENT, handler)
-}
-
-/** Start (or reconfigure) the 1 Hz sampler. No-op on web. */
-export async function perfStartSampling(intervalMs?: number): Promise<void> {
-  if (!isTauri()) return
-  await transport.call("perf_start_sampling", { intervalMs })
-}
-
-/** Change the sampling cadence without restarting the loop. */
-export async function perfSetInterval(intervalMs: number): Promise<void> {
-  if (!isTauri()) return
-  await transport.call("perf_set_interval", { intervalMs })
-}
-
-/** Stop the sampler (called on panel unmount). */
-export async function perfStopSampling(): Promise<void> {
-  if (!isTauri()) return
-  await transport.call("perf_stop_sampling")
 }
 
 /** Current span hotspot rows (sorted heaviest-first by the backend). */
@@ -141,15 +120,6 @@ export async function perfCloseTrace(handleId: string): Promise<void> {
 export async function perfOpenTraceDir(): Promise<void> {
   if (!isTauri()) return
   await transport.call("perf_open_trace_dir")
-}
-
-/**
- * Subscribe to live `perf://sample` frames. Returns a synchronous unsubscribe
- * function (no-op on web).
- */
-export function subscribePerfSample(handler: (sample: PerfSample) => void): () => void {
-  if (!isTauri()) return () => {}
-  return transport.subscribe<PerfSample>(PERF_SAMPLE_EVENT, handler)
 }
 
 /**

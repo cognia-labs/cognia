@@ -44,8 +44,6 @@ function frame(sequence: number): PerfFrame {
     collectionDurationMs: 1,
     missedTicks: 0,
     flags: { reset: false, discontinuity: false, counterReset: false, sourceRestarted: false },
-    tsMs: sequence * 1000 + 1000,
-    intervalMs: 1000,
     processes: [],
     runtime: {
       workers: 0,

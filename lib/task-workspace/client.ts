@@ -1404,9 +1404,8 @@ function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0))
 }
 
-// Matches cognia-task-workspace's bounded byte-range contract. Older hosts
-// return no chunk-size metadata; requests still carry an explicit length.
-const TRANSFER_CHUNK_BYTES = 24 * 1024
+// Matches cognia-task-workspace's bounded byte-range contract: every handle
+// names the chunk size the host negotiated, and requests carry an explicit length.
 const MAX_TRANSFER_CHUNK_BYTES = 64 * 1024
 const DOWNLOAD_WINDOW = 4
 
@@ -1427,7 +1426,7 @@ export async function downloadTaskResource(
     if (!Number.isSafeInteger(handle.size) || handle.size < 0) {
       throw new Error("task resource download size is invalid")
     }
-    const chunkBytes = handle.chunkBytes ?? TRANSFER_CHUNK_BYTES
+    const chunkBytes = handle.chunkBytes
     if (
       !Number.isSafeInteger(chunkBytes) ||
       chunkBytes < 1 ||
@@ -1512,7 +1511,7 @@ export async function uploadTaskResource(
   try {
     signal?.throwIfAborted()
     let offset = handle.nextOffset ?? 0
-    let chunkBytes = handle.chunkBytes ?? TRANSFER_CHUNK_BYTES
+    let chunkBytes = handle.chunkBytes
     if (
       !Number.isSafeInteger(offset) ||
       offset < 0 ||

@@ -47,8 +47,6 @@ function frame(sequence: number, overrides: Partial<PerfFrame> = {}): PerfFrame 
     collectionDurationMs: 5,
     missedTicks: 0,
     flags: { reset: false, discontinuity: false, counterReset: false, sourceRestarted: false },
-    tsMs: sequence * 1000 + 1000,
-    intervalMs: 1000,
     processes: [],
     runtime: {
       workers: 0,
@@ -80,7 +78,6 @@ function snapshotOf(frames: PerfFrame[]): PerfSnapshot {
     sources: [hostSource],
     leases: [],
     gaps: [],
-    samples: frames,
     running: true,
     intervalMs: 1000,
   }
@@ -186,7 +183,7 @@ describe("PerfHostLiveLease", () => {
     const view = recorder()
     h.lease.subscribe({ cadenceMs: 1000, onChange: view.onChange })
     expect(h.hasFrameHandler()).toBe(true)
-    h.emit(frame(3))
+    h.emit(frame(3, { leaseId: "lease-early" }))
     resolveOpen(accepted("lease-early"))
     await settle()
     expect(view.last().frames.map((item) => item.sequence)).toEqual([1, 3])

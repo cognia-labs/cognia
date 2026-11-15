@@ -6,7 +6,6 @@ import type {
   PerfConnectionState,
   PerfFrame,
   PerfGap,
-  PerfSample,
   PerfSourceDescriptor,
 } from "@/lib/perf/backend/types"
 import {
@@ -26,12 +25,6 @@ let preferredIntervalMs = DEFAULT_PERF_INTERVAL
 
 export function resetPreferredInterval(): void {
   preferredIntervalMs = DEFAULT_PERF_INTERVAL
-}
-
-export function trailingSameCadence(samples: PerfSample[], intervalMs: number): PerfSample[] {
-  let start = samples.length
-  while (start > 0 && samples[start - 1].intervalMs === intervalMs) start--
-  return samples.slice(start)
 }
 
 function appendBounded(previous: PerfFrame[], frame: PerfFrame): PerfFrame[] {

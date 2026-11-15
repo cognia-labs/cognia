@@ -280,7 +280,7 @@ async fn claude_has_oauth_bearer(state: State<'_, ApiKeyState>) -> Result<bool, 
     Ok(state.get_oauth_bearer().await.is_some())
 }
 
-/// Stop the running sidecar so the next `claude_send` spawns a new one. Used
+/// Stop the running sidecar so the next `agent_send` spawns a new one. Used
 /// after API key changes — the SDK reads `ANTHROPIC_API_KEY` at init time.
 #[tauri::command]
 async fn claude_restart_sidecar(state: State<'_, SidecarState>) -> Result<(), String> {
@@ -698,7 +698,6 @@ pub fn run() {
             account_auth::account_person,
             account_auth::account_set_cloud_deployment,
             account_auth::account_clear_cloud_deployment,
-            claude::commands::claude_send,
             claude::commands::agent_send,
             claude::commands::agent_interrupt,
             claude::commands::agent_compact,
@@ -706,18 +705,13 @@ pub fn run() {
             claude::commands::agent_close_session,
             claude::commands::agent_start,
             claude::commands::agent_status,
-            claude::commands::agent_command_telemetry,
-            claude::commands::claude_interrupt,
-            claude::commands::claude_compact,
             claude::commands::claude_restore,
             claude::commands::claude_set_mode,
-            claude::commands::claude_approve,
             claude::commands::claude_plugin_tool_response,
             claude::commands::claude_plugin_hook_response,
             claude::commands::claude_tool_result_decision,
             claude::commands::claude_call_reserve_decision,
             claude::commands::claude_protocol_adapter_message,
-            claude::commands::claude_close_session,
             claude::commands::claude_session_control,
             claude::commands::agent_session_api,
             claude::commands::claude_feature_call,
@@ -793,7 +787,6 @@ pub fn run() {
             subscription::commands::subscription_get_active,
             subscription::commands::subscription_get_account_env,
             subscription::commands::subscription_get_preset,
-            subscription::commands::subscription_set_preset,
             subscription::commands::subscription_list_presets,
             subscription::commands::subscription_save_preset,
             subscription::commands::subscription_delete_preset,
@@ -1234,9 +1227,6 @@ pub fn run() {
             tts::keyring::tts_keyring_set,
             tts::keyring::tts_keyring_delete,
             tts::keyring::tts_keyring_list_providers,
-            keyring_secrets::keyring_secret_get,
-            keyring_secrets::keyring_secret_set,
-            keyring_secrets::keyring_secret_clear,
             keyring_secrets::secret_store_get,
             keyring_secrets::secret_store_set,
             keyring_secrets::secret_store_delete,
@@ -1433,7 +1423,6 @@ pub fn run() {
             sftp_service::sftp_upload_commit,
             sftp_service::sftp_upload_abort,
             sftp_service::sftp_session_close,
-            companion_api::commands::companion_migrate_legacy_device_grants,
             companion_api::commands::companion_set_locked_computer_use,
             companion_api::commands::companion_seed_locked_computer_use,
             companion_api::commands::companion_sync_pull_response,
@@ -2056,9 +2045,6 @@ pub fn run() {
             perf::commands::perf_close_lease,
             perf::commands::perf_lease_snapshot,
             perf::commands::perf_read_observations,
-            perf::commands::perf_start_sampling,
-            perf::commands::perf_set_interval,
-            perf::commands::perf_stop_sampling,
             perf::commands::perf_hotspots,
             perf::commands::perf_reset_hotspots,
             perf::commands::perf_system_details,

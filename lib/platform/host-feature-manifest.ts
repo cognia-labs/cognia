@@ -619,10 +619,12 @@ export function buildLocalHostFeatureManifest({
     "claude.host-tools": {
       version: 1,
       operations: [
-        "claude_send",
-        "claude_interrupt",
-        "claude_compact",
-        "claude_close_session",
+        // On a person partition the send and interrupt verbs belong to
+        // `claude.tool-less-chat` instead, so each name is listed once.
+        ...(personPartition ? [] : ["agent_send", "agent_interrupt"]),
+        "agent_compact",
+        "agent_close_session",
+        "agent_resolve_permission",
         "claude_restore",
         "claude_set_mode",
         "claude_sidecar_status",

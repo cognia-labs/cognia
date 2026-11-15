@@ -44,7 +44,6 @@ import { SubscriptionPassphraseError as FakePassphraseError } from "@/lib/subscr
 const applyMocks = {
   saveAccount: jest.fn(async (..._args: unknown[]) => undefined),
   setActiveAccount: jest.fn(async (..._args: unknown[]) => undefined),
-  setProviderPreset: jest.fn(async (..._args: unknown[]) => undefined),
 }
 
 jest.mock("@/lib/subscription/core/transport", () => ({
@@ -63,7 +62,6 @@ jest.mock("@/lib/subscription/core/transport", () => ({
   getAccount: jest.fn(async () => null),
   saveAccount: (...args: unknown[]) => applyMocks.saveAccount(...args),
   setActiveAccount: (...args: unknown[]) => applyMocks.setActiveAccount(...args),
-  setProviderPreset: (...args: unknown[]) => applyMocks.setProviderPreset(...args),
 }))
 
 jest.mock("@/types/subscription", () => ({
@@ -91,7 +89,6 @@ beforeEach(() => {
   buildPackageMock.mockReset()
   applyMocks.saveAccount.mockClear()
   applyMocks.setActiveAccount.mockClear()
-  applyMocks.setProviderPreset.mockClear()
 })
 
 describe("ImportExportButtons import flow", () => {

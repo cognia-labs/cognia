@@ -23,24 +23,7 @@ async fn on_blocking_pool<T: Send + 'static>(
 #[tauri::command]
 pub async fn secret_store_get(input: SecretStoreInput) -> Result<Option<String>, String> {
     require_generic_access(&input, None)?;
-    on_blocking_pool(move || read_with_legacy_webhook_secret(&input)).await
-}
-
-fn read_with_legacy_webhook_secret(input: &SecretStoreInput) -> Result<Option<String>, String> {
-    let current = get(&input.namespace, &input.key)?;
-    if current.is_some() || input.namespace != "webhooks" || input.key != "standard-signing-secret"
-    {
-        return Ok(current);
-    }
-
-    const LEGACY_SERVICE: &str = "com.cognia.remote-control";
-    const LEGACY_KEY: &str = "outbound-signing-secret";
-    let Some(legacy) = cognia_secrets::secret_store::get(LEGACY_SERVICE, LEGACY_KEY)? else {
-        return Ok(None);
-    };
-    set(&input.namespace, &input.key, &legacy)?;
-    cognia_secrets::secret_store::delete(LEGACY_SERVICE, LEGACY_KEY)?;
-    Ok(Some(legacy))
+    on_blocking_pool(move || get(&input.namespace, &input.key)).await
 }
 
 #[tauri::command]
@@ -63,24 +46,6 @@ pub async fn secret_store_set(
 pub async fn secret_store_delete(input: SecretStoreInput) -> Result<(), String> {
     require_generic_access(&input, None)?;
     on_blocking_pool(move || clear(&input.namespace, &input.key)).await
-}
-
-/// Deprecated wire alias for pre-secret-store clients.
-#[tauri::command]
-pub async fn keyring_secret_get(input: KeyringInput) -> Result<Option<String>, String> {
-    secret_store_get(input).await
-}
-
-/// Deprecated wire alias for pre-secret-store clients.
-#[tauri::command]
-pub async fn keyring_secret_set(input: KeyringInput) -> Result<(), String> {
-    secret_store_set(input, None).await
-}
-
-/// Deprecated wire alias for pre-secret-store clients.
-#[tauri::command]
-pub async fn keyring_secret_clear(input: KeyringInput) -> Result<(), String> {
-    secret_store_delete(input).await
 }
 
 /// One provider key sealed on this host by a paired device (ADR-0224 A6).
@@ -128,21 +93,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_commands_round_trip_and_legacy_aliases_share_storage() {
+    async fn canonical_commands_round_trip() {
         secret_store_delete(input(None)).await.unwrap();
         secret_store_set(input(Some("canonical")), None)
             .await
             .unwrap();
         assert_eq!(
-            keyring_secret_get(input(None)).await.unwrap().as_deref(),
+            secret_store_get(input(None)).await.unwrap().as_deref(),
             Some("canonical")
         );
-        keyring_secret_set(input(Some("legacy"))).await.unwrap();
-        assert_eq!(
-            secret_store_get(input(None)).await.unwrap().as_deref(),
-            Some("legacy")
-        );
-        keyring_secret_clear(input(None)).await.unwrap();
+        secret_store_delete(input(None)).await.unwrap();
         assert_eq!(secret_store_get(input(None)).await.unwrap(), None);
     }
 
@@ -180,7 +140,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generic_commands_and_aliases_refuse_host_owned_records() {
+    async fn generic_commands_refuse_host_owned_records() {
         let host_record = SecretStoreInput {
             namespace: "docs-providers".into(),
             key: "google-auth-lineages-v2".into(),
@@ -188,11 +148,8 @@ mod tests {
         };
         set(&host_record.namespace, &host_record.key, "host-only").unwrap();
         assert!(secret_store_get(host_record.clone()).await.is_err());
-        assert!(keyring_secret_get(host_record.clone()).await.is_err());
         assert!(secret_store_set(host_record.clone(), None).await.is_err());
-        assert!(keyring_secret_set(host_record.clone()).await.is_err());
         assert!(secret_store_delete(host_record.clone()).await.is_err());
-        assert!(keyring_secret_clear(host_record.clone()).await.is_err());
         let mut revision = host_record.clone();
         revision.key = "unrelated-revision".into();
         let smuggled = SecretStoreSetCondition {
@@ -216,29 +173,6 @@ mod tests {
     async fn canonical_set_requires_a_value() {
         let error = secret_store_set(input(None), None).await.unwrap_err();
         assert_eq!(error, "secret-store set: value is required");
-    }
-
-    #[tokio::test]
-    async fn webhook_read_migrates_the_legacy_remote_control_secret() {
-        const LEGACY_SERVICE: &str = "com.cognia.remote-control";
-        const LEGACY_KEY: &str = "outbound-signing-secret";
-        let webhook = SecretStoreInput {
-            namespace: "webhooks".into(),
-            key: "standard-signing-secret".into(),
-            value: None,
-        };
-        secret_store_delete(webhook.clone()).await.unwrap();
-        cognia_secrets::secret_store::set(LEGACY_SERVICE, LEGACY_KEY, "legacy-secret").unwrap();
-
-        assert_eq!(
-            secret_store_get(webhook.clone()).await.unwrap().as_deref(),
-            Some("legacy-secret")
-        );
-        assert_eq!(
-            cognia_secrets::secret_store::get(LEGACY_SERVICE, LEGACY_KEY).unwrap(),
-            None
-        );
-        secret_store_delete(webhook).await.unwrap();
     }
 
     #[tokio::test]

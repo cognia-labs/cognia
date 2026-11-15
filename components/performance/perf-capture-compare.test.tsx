@@ -47,8 +47,6 @@ function frames(fps: number, count = 20): PerfFrame[] {
     collectionDurationMs: 1,
     missedTicks: 0,
     flags: { reset: false, discontinuity: false, counterReset: false, sourceRestarted: false },
-    tsMs: 0,
-    intervalMs: 1000,
     processes: [],
     runtime: {
       workers: 0,

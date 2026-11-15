@@ -137,7 +137,7 @@ function harness(options: { failReload?: boolean; failRollback?: boolean } = {})
     },
     negotiateHost: async (_config, record) => {
       order.push(`manifest:${record.hostId}`)
-      return { compatible: true, operations: ["claude_send"], grants: ["claude.chat"] }
+      return { compatible: true, operations: ["agent_send"], grants: ["claude.chat"] }
     },
     authoritativeSync: async () => {
       order.push(`sync:${activeTarget.id}`)

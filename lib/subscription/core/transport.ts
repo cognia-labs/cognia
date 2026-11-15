@@ -22,7 +22,6 @@ import type {
   AccountSummary,
   ActiveSnapshot,
   AnthropicCredentialData,
-  MigrationOutcome,
   ProviderId,
   ProviderPreset,
   ProviderCredential,
@@ -93,13 +92,12 @@ function subscriptionScope(): { localAccountId: string } {
 // ---------------------------------------------------------------------------
 
 /**
- * Run v1 → v2 migration for every provider in one shot. Idempotent — the
- * Rust side detects already-migrated accounts and returns `AlreadyMigrated`
- * without duplicating. Called once on app boot from
- * `SubscriptionInitializer` in `app/layout.tsx`.
+ * Rebuild the in-process active-account projection from the unlocked local
+ * account's vaults. Idempotent. Called on boot and after an account switch by
+ * `SubscriptionInitializer`.
  */
-export async function subscriptionInit(): Promise<MigrationOutcome[]> {
-  return await transport.call<MigrationOutcome[]>("subscription_init", subscriptionScope())
+export async function subscriptionInit(): Promise<void> {
+  await transport.call("subscription_init", subscriptionScope())
 }
 
 // ---------------------------------------------------------------------------
@@ -300,24 +298,16 @@ export async function getAccountEnv(
 }
 
 // ---------------------------------------------------------------------------
-// Provider preset
+// Default preset
 // ---------------------------------------------------------------------------
 
+/** The provider's default preset, resolved from its library. */
 export async function getProviderPreset(provider: ProviderId): Promise<ProviderPreset | null> {
   const got = await transport.call<ProviderPreset | null>("subscription_get_preset", {
     provider,
     ...subscriptionScope(),
   })
   return got ?? null
-}
-
-export async function setProviderPreset(
-  provider: ProviderId,
-  preset: ProviderPreset | null
-): Promise<void> {
-  const scope = subscriptionScope()
-  await transport.call("subscription_set_preset", { provider, ...scope, preset })
-  await vaultConnectionMutated(provider, scope.localAccountId)
 }
 
 // ---------------------------------------------------------------------------

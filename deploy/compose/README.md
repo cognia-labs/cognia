@@ -1068,7 +1068,7 @@ desktop_scroll, desktop_type, desktop_window_op, desktop_zoom, workflow_waitpoin
 
 - Subscription credential/account configuration or provider HTTP access; the script substring in subscription does not denote code execution.
 
-  `subscription_authed_get`, `subscription_authed_request`, `subscription_clear_runtime`, `subscription_delete_account`, `subscription_delete_preset`, `subscription_get_account`, `subscription_get_active`, `subscription_get_preset`, `subscription_init`, `subscription_list_accounts`, `subscription_list_presets`, `subscription_reauthenticate_codex_account`, `subscription_refresh_codex_account`, `subscription_rename_account`, `subscription_replace_account_credential`, `subscription_save_account`, `subscription_save_preset`, `subscription_set_active`, `subscription_set_default_preset`, `subscription_set_preset`, `subscription_volcengine_usage`
+  `subscription_authed_get`, `subscription_authed_request`, `subscription_clear_runtime`, `subscription_delete_account`, `subscription_delete_preset`, `subscription_get_account`, `subscription_get_active`, `subscription_get_preset`, `subscription_init`, `subscription_list_accounts`, `subscription_list_presets`, `subscription_reauthenticate_codex_account`, `subscription_refresh_codex_account`, `subscription_rename_account`, `subscription_replace_account_credential`, `subscription_save_account`, `subscription_save_preset`, `subscription_set_active`, `subscription_set_default_preset`, `subscription_volcengine_usage`
 
 - Deletes vector records; the run substring in truncate does not denote workload execution.
 

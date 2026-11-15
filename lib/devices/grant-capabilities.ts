@@ -81,7 +81,7 @@ export function grantForCapability(capability: string): DeviceGrantId | undefine
  *
  * It is the Control grant's `agent.run`, on purpose. A fusion run is agent work
  * this host executes and bills, which is what `agent.run` already authorizes
- * (`claude_send`, `room_send`, `bot_run_manual`), and the request path checks
+ * (`agent_send`, `room_send`, `bot_run_manual`), and the request path checks
  * it from each descriptor (`remote_execution::authorize_capability`). A
  * capability of its own would need a row in the canonical Rust table
  * (`device_grants.rs`) and would leave every device granted Control before

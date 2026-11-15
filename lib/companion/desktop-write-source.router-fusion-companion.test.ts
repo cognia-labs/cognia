@@ -65,7 +65,6 @@ const mockCockpitControl = jest.fn(async (_payload?: unknown) => ({
 }))
 jest.mock("@/lib/companion/execution-run-control-handler", () => ({
   handleExecutionRunControl: (payload: unknown) => mockCockpitControl(payload),
-  handleLegacyTeamRunControl: jest.fn(),
 }))
 
 jest.mock("@/lib/capacitor/network", () => ({ subscribe: jest.fn(async () => () => {}) }))

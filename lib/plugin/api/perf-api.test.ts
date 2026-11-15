@@ -7,7 +7,7 @@ import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security"
 import { PermissionError } from "@/lib/plugin/security/permission-guard"
 
 const perfSnapshot = jest.fn(async (..._a: unknown[]) => ({
-  samples: [{ t: 1 }],
+  frames: [{ sequence: 1 }],
   running: true,
   intervalMs: 1000,
 }))
@@ -15,13 +15,15 @@ const perfHotspots = jest.fn(async (..._a: unknown[]) => [{ name: "render", tota
 const perfSystemDetails = jest.fn(async (..._a: unknown[]) => ({ os: "win" }))
 const perfListTraces = jest.fn(async (..._a: unknown[]) => [{ path: "/t.json" }])
 const unsubscribe = jest.fn()
-const subscribePerfSample = jest.fn((..._a: unknown[]) => unsubscribe)
+const subscribePerfFrame = jest.fn((..._a: unknown[]) => unsubscribe)
+let mockIsTauri = true
+jest.mock("@/lib/tauri", () => ({ isTauri: () => mockIsTauri }))
 jest.mock("@/lib/perf/backend/commands", () => ({
   perfSnapshot: (...a: unknown[]) => perfSnapshot(...a),
   perfHotspots: (...a: unknown[]) => perfHotspots(...a),
   perfSystemDetails: (...a: unknown[]) => perfSystemDetails(...a),
   perfListTraces: (...a: unknown[]) => perfListTraces(...a),
-  subscribePerfSample: (...a: unknown[]) => subscribePerfSample(...a),
+  subscribePerfFrame: (...a: unknown[]) => subscribePerfFrame(...a),
 }))
 
 const PLUGIN = "perf-plugin"
@@ -31,6 +33,7 @@ describe("createPerfAPI", () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+    mockIsTauri = true
     resetPermissionGuard()
     guard = getPermissionGuard()
   })
@@ -58,9 +61,17 @@ describe("createPerfAPI", () => {
       const api = createPerfAPI(PLUGIN)
       const handler = jest.fn()
       const dispose = api.subscribe(handler)
-      expect(subscribePerfSample).toHaveBeenCalledWith(handler)
+      expect(subscribePerfFrame).toHaveBeenCalledWith(handler)
       dispose()
       expect(unsubscribe).toHaveBeenCalled()
+    })
+
+    it("subscribe is inert off the desktop", () => {
+      mockIsTauri = false
+      const api = createPerfAPI(PLUGIN)
+      const dispose = api.subscribe(jest.fn())
+      expect(subscribePerfFrame).not.toHaveBeenCalled()
+      expect(() => dispose()).not.toThrow()
     })
   })
 })

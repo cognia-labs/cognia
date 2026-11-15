@@ -47,13 +47,7 @@ async function connectionSettings(
   credentialContext?: PersonalCredentialContext
 ): Promise<GoogleDocsProviderSettings> {
   try {
-    const { lineages } = await googleState(
-      {
-        action: "snapshot",
-        legacyClientId: preferences.clientId,
-      },
-      credentialContext
-    )
+    const { lineages } = await googleState({ action: "snapshot" }, credentialContext)
     const connection = lineages.find(
       (lineage) =>
         lineage.status === "connected" &&

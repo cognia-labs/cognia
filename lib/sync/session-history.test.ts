@@ -9,7 +9,6 @@ import {
   setActiveRuntimeTargetContext,
   clearActiveRuntimeTargetContext,
 } from "@/lib/runtime/runtime-target-context"
-import { isMediaRef, parseMediaRef } from "@/lib/db/message-media"
 import type { Transport } from "@/lib/tauri/transport-types"
 import {
   CompanionTransport,
@@ -24,13 +23,10 @@ import {
   getSessionHistoryMode,
 } from "./session-history"
 
-function createTransport(call: jest.Mock, capabilities?: { version: number }): Transport {
+function createTransport(call: jest.Mock, capabilities = { version: 1 }): Transport {
   return {
     call: (async (method: string, args?: Record<string, unknown>) => {
-      if (method === "transcript_capabilities") {
-        if (capabilities) return capabilities
-        throw Object.assign(new Error("method not found"), { code: "METHOD_NOT_FOUND" })
-      }
+      if (method === "transcript_capabilities") return capabilities
       return call(method, args)
     }) as Transport["call"],
     subscribe: () => () => {},
@@ -43,74 +39,6 @@ function flush(): Promise<void> {
 }
 
 describe("hydrateSessionHistory", () => {
-  it.each([undefined, { note: "legacy" }])(
-    "does not promote an existing legacy history row (%j)",
-    async (metadata) => {
-      const row = {
-        id: "legacy-history-version",
-        sessionId: "legacy-history-session",
-        role: "assistant" as const,
-        parts: [],
-        createdAt: 1,
-      }
-      await getDb().messages.put({ ...row, metadata })
-      const hydration = await hydrateSessionHistory(
-        createTransport(
-          jest.fn().mockResolvedValue({
-            rows: [
-              { ...row, metadata: { personalMarkVersion: 1 } },
-              { ...row, id: "new-history-version", metadata: { personalMarkVersion: 1 } },
-            ],
-            total: 2,
-          })
-        ),
-        row.sessionId
-      )
-      expect(hydration).toMatchObject({ applied: 2, mode: "legacy" })
-      expect((await getDb().messages.get(row.id))?.metadata ?? {}).not.toHaveProperty(
-        "personalMarkVersion"
-      )
-      expect(
-        (await getDb().messages.get("new-history-version"))?.metadata?.personalMarkVersion
-      ).toBe(1)
-    }
-  )
-
-  it("retains personal marks across a stale history-page overwrite", async () => {
-    const personalMarks = [
-      { person: { kind: "local-person" }, source: "google-docs", markedAt: 10 },
-    ]
-    await getDb().messages.put({
-      id: "marked-history",
-      sessionId: "marked-session",
-      role: "assistant",
-      parts: [],
-      createdAt: 1,
-      metadata: { personalMarks, personalMarkVersion: 1 },
-    })
-    await hydrateSessionHistory(
-      createTransport(
-        jest.fn().mockResolvedValue({
-          rows: [
-            {
-              id: "marked-history",
-              sessionId: "marked-session",
-              role: "assistant",
-              parts: [],
-              createdAt: 1,
-            },
-          ],
-          total: 1,
-        })
-      ),
-      "marked-session"
-    )
-    expect((await getDb().messages.get("marked-history"))?.metadata).toEqual({
-      personalMarks,
-      personalMarkVersion: 1,
-    })
-  })
-
   beforeEach(async () => {
     __resetHydratedSessionHistoryForTests()
     clearActiveRuntimeTargetContext()
@@ -330,32 +258,17 @@ describe("hydrateSessionHistory", () => {
     expect(call).toHaveBeenCalledTimes(3)
   })
 
-  it("does not retry an old Host's legacy transport into the new scope", async () => {
-    let resolvePage: (value: unknown) => void = () => {}
-    const page = {
-      sessionId: "same",
-      rows: [
-        {
-          id: "old-host-message",
-          sessionId: "same",
-          role: "user",
-          parts: [{ type: "text", text: "Old Host private text" }],
-          createdAt: 1,
-        },
-      ],
-      offset: 0,
-      nextOffset: null,
-      total: 1,
-    }
+  it("does not retry an old Host's negotiation into the new scope", async () => {
+    let resolveTimeline: (value: unknown) => void = () => {}
     const call = jest
       .fn()
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
-            resolvePage = resolve
+            resolveTimeline = resolve
           })
       )
-      .mockResolvedValue(page)
+      .mockResolvedValue({ items: [] })
     setActiveRuntimeTargetContext("acct-history", "host-one", 1)
     const pending = hydrateSessionHistory(createTransport(call), "same")
     const outcome = pending.then(
@@ -364,11 +277,10 @@ describe("hydrateSessionHistory", () => {
     )
     await flush()
     setActiveRuntimeTargetContext("acct-history", "host-two", 2)
-    resolvePage(page)
+    resolveTimeline({ items: [] })
 
     expect(await outcome).toMatchObject({ message: "session_history_scope_changed" })
     expect(call).toHaveBeenCalledTimes(1)
-    expect(await getDb().messages.get("old-host-message")).toBeUndefined()
     expect(getSessionHistoryMode("same")).toBeNull()
   })
 
@@ -413,53 +325,12 @@ describe("hydrateSessionHistory", () => {
     expect(call).toHaveBeenCalledTimes(2)
   })
 
-  it("drains one selected session in bounded pages and caches completion", async () => {
-    const rows = Array.from({ length: 5 }, (_, i) => ({
-      id: `m${i}`,
-      sessionId: "s1",
-      role: "user" as const,
-      parts: [{ type: "text" as const, text: String(i) }],
-      createdAt: i + 1,
-      metadata: {
-        personalMarks: [{ person: { kind: "local-person" }, source: "google-docs", markedAt: 1 }],
-        personalMarkVersion: 1,
-      },
-    }))
-    const call = jest.fn(async (_name: string, args?: Record<string, unknown>) => {
-      const offset = Number(args?.offset ?? 0)
-      const limit = Number(args?.limit ?? 2)
-      const pageRows = rows.slice(offset, offset + limit)
-      return {
-        rows: pageRows,
-        total: rows.length,
-        next_offset: offset + pageRows.length < rows.length ? offset + pageRows.length : undefined,
-      }
-    })
-    const transport = createTransport(call)
-
-    const outcome = await hydrateSessionHistory(transport, "s1", { pageSize: 2 })
-
-    expect(outcome).toEqual({ applied: 5, total: 5, mode: "legacy" })
-    expect((await getDb().messages.get("m0"))?.metadata).toEqual(rows[0].metadata)
-    expect(call.mock.calls.map(([, args]) => args)).toEqual([
-      { session_id: "s1", limit: 2, offset: 0 },
-      { session_id: "s1", limit: 2, offset: 2 },
-      { session_id: "s1", limit: 2, offset: 4 },
-    ])
-    expect(
-      (await getDb().messages.where("sessionId").equals("s1").toArray()).map((row) => row.id)
-    ).toEqual(["m0", "m1", "m2", "m3", "m4"])
-
-    await hydrateSessionHistory(transport, "s1", { pageSize: 2 })
-    expect(call).toHaveBeenCalledTimes(3)
-  })
-
-  it("coalesces concurrent hydration for the same session", async () => {
-    let resolvePage: ((page: { rows: never[]; total: number }) => void) | undefined
+  it("coalesces concurrent hydration for the same session and caches completion", async () => {
+    let resolveTimeline: ((page: { items: never[] }) => void) | undefined
     const call = jest.fn(
       () =>
-        new Promise<{ rows: never[]; total: number }>((resolve) => {
-          resolvePage = resolve
+        new Promise<{ items: never[] }>((resolve) => {
+          resolveTimeline = resolve
         })
     )
     const transport = createTransport(call)
@@ -468,14 +339,15 @@ describe("hydrateSessionHistory", () => {
     const second = hydrateSessionHistory(transport, "s1")
 
     expect(second).toBe(first)
-    await Promise.resolve()
-    await Promise.resolve()
+    await flush()
     expect(call).toHaveBeenCalledTimes(1)
-    resolvePage?.({ rows: [], total: 0 })
+    resolveTimeline?.({ items: [] })
     await expect(Promise.all([first, second])).resolves.toEqual([
-      { applied: 0, total: 0, mode: "legacy" },
-      { applied: 0, total: 0, mode: "legacy" },
+      { applied: 0, total: 0, mode: "timeline" },
+      { applied: 0, total: 0, mode: "timeline" },
     ])
+    await hydrateSessionHistory(transport, "s1")
+    expect(call).toHaveBeenCalledTimes(1)
   })
 
   it("does not hydrate full history when transcript V1 is available", async () => {
@@ -487,7 +359,7 @@ describe("hydrateSessionHistory", () => {
       total: 0,
       mode: "timeline",
     })
-    // One newest turn settles ownership; the legacy pager is never entered.
+    // One newest turn settles ownership.
     expect(hostCall.mock.calls).toEqual([
       ["session_timeline", { session_id: "s1", direction: "backward", limit: 1 }],
     ])
@@ -511,18 +383,6 @@ describe("hydrateSessionHistory", () => {
     expect(hostCall).toHaveBeenCalledTimes(1)
   })
 
-  // Hosts predating the code-preserving RPC envelope flatten every transcript
-  // error into `internal_error` and carry the real code in the message.
-  it("reads the protocol code from the message when the envelope drops it", async () => {
-    const hostCall = jest.fn(async () => {
-      throw Object.assign(new Error("SESSION_NOT_FOUND"), { code: "internal_error" })
-    })
-
-    await expect(
-      hydrateSessionHistory(createTransport(hostCall, { version: 1 }), "s1")
-    ).resolves.toEqual({ applied: 0, total: 0, mode: "local" })
-  })
-
   it("leaves any other timeline refusal visible rather than guessing an owner", async () => {
     const hostCall = jest.fn(async () => {
       throw Object.assign(new Error("INVALID_PARAMS"), { code: "INVALID_PARAMS" })
@@ -533,128 +393,22 @@ describe("hydrateSessionHistory", () => {
     ).rejects.toThrow("INVALID_PARAMS")
   })
 
-  it("does not downgrade network failures to a legacy full-history read", async () => {
-    const legacyCall = jest.fn()
+  it("surfaces a failing capability probe", async () => {
     const transport: Transport = {
       call: jest.fn().mockRejectedValue(new Error("network timeout")) as Transport["call"],
       subscribe: () => () => {},
     }
 
     await expect(hydrateSessionHistory(transport, "s1")).rejects.toThrow("network timeout")
-    expect(legacyCall).not.toHaveBeenCalled()
+    expect(getSessionHistoryMode("s1")).toBeNull()
   })
 
-  it("clamps caller-provided page sizes to the protocol bounds", async () => {
-    const call = jest.fn(async (_name: string, _args?: Record<string, unknown>) => ({
-      rows: [],
-      total: 0,
-    }))
-    const transport = createTransport(call)
-
-    await hydrateSessionHistory(transport, "large", { pageSize: 999 })
-    await hydrateSessionHistory(transport, "small", { pageSize: 0 })
-
-    expect(call.mock.calls.map(([, args]) => args?.limit)).toEqual([500, 1])
-  })
-
-  it("derives the final total when the indexed bridge omits an exact count", async () => {
-    const transport = createTransport(
-      jest.fn(async () => ({
-        rows: [
-          {
-            id: "m1",
-            sessionId: "s1",
-            role: "user",
-            parts: [],
-            createdAt: 1,
-          },
-        ],
-      }))
-    )
-
-    await expect(hydrateSessionHistory(transport, "s1")).resolves.toEqual({
-      applied: 1,
-      total: 1,
-      mode: "legacy",
-    })
-  })
-
-  it("ingests legacy inline images instead of retaining base64 history rows", async () => {
-    const transport = createTransport(
-      jest.fn(async () => ({
-        rows: [
-          {
-            id: "image-1",
-            sessionId: "s1",
-            role: "assistant",
-            parts: [
-              {
-                type: "file",
-                url: "data:image/png;base64,aGVsbG8=",
-                mediaType: "image/png",
-              },
-            ],
-            createdAt: 1,
-          },
-        ],
-      }))
-    )
-
-    await hydrateSessionHistory(transport, "s1")
-
-    const db = getDb()
-    const row = await db.messages.get("image-1")
-    const ref = (row?.parts[0] as { url?: string } | undefined)?.url
-    expect(isMediaRef(ref)).toBe(true)
-    await expect(db.messageMediaRefs.get(["image-1", parseMediaRef(ref!)!])).resolves.toMatchObject(
-      {
-        sessionId: "s1",
-      }
-    )
-  })
-
-  it("rejects an invalid page without persisting rows", async () => {
-    const transport = createTransport(jest.fn(async () => ({ rows: null, total: -1 }) as never))
-
-    await expect(hydrateSessionHistory(transport, "s1")).rejects.toThrow(
-      /invalid session history page/
-    )
-    expect(await getDb().messages.count()).toBe(0)
-  })
-
-  it("rejects a page whose cursor does not advance", async () => {
-    const transport = createTransport(jest.fn(async () => ({ rows: [], total: 1, next_offset: 0 })))
-
-    await expect(hydrateSessionHistory(transport, "s1")).rejects.toThrow(/did not advance/)
-  })
-
-  it("rejects a page that leaks rows from another session", async () => {
-    const transport = createTransport(
-      jest.fn(async () => ({
-        rows: [
-          {
-            id: "m-other",
-            sessionId: "other",
-            role: "user",
-            parts: [],
-            createdAt: 1,
-          },
-        ],
-        total: 1,
-      }))
-    )
-
-    await expect(hydrateSessionHistory(transport, "s1")).rejects.toThrow(/session mismatch/)
-    expect(await getDb().messages.count()).toBe(0)
-  })
-
-  it("rejects malformed rows before writing the page", async () => {
-    const transport = createTransport(jest.fn(async () => ({ rows: [null], total: 1 }) as never))
-
-    await expect(hydrateSessionHistory(transport, "s1")).rejects.toThrow(
-      /invalid session history row/
-    )
-    expect(await getDb().messages.count()).toBe(0)
+  it("refuses a Host that does not speak transcript V1", async () => {
+    const call = jest.fn()
+    await expect(
+      hydrateSessionHistory(createTransport(call, { version: 2 }), "s1")
+    ).rejects.toThrow("invalid transcript capability response")
+    expect(call).not.toHaveBeenCalled()
   })
 })
 

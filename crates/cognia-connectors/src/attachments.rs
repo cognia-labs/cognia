@@ -40,12 +40,8 @@
 //!
 //! # No plaintext at rest
 //!
-//! Earlier revisions wrote a decrypted copy of every attachment beside the
-//! ciphertext so the webview could load it by path. Nothing ever read it (all
-//! consumers go through [`read_attachment_base64`]), so the plaintext copy was
-//! pure exposure and is gone: the `.enc` envelope is the only artifact this
-//! module writes. [`migrate_legacy_cache`] reaps any plaintext left behind by
-//! an older build on the first run after upgrade.
+//! The `.enc` envelope is the only artifact this module writes. Every consumer
+//! goes through [`read_attachment_base64`]; no decrypted copy is kept on disk.
 
 use std::collections::HashMap;
 use std::io::{Seek, SeekFrom, Write};
@@ -88,10 +84,6 @@ const META_CT_LEN: usize = META_PLAIN_LEN + GCM_TAG_LEN;
 const META_OFFSET: u64 = (MAGIC.len() + 1) as u64;
 const META_REGION_LEN: usize = NONCE_LEN + META_CT_LEN;
 const PAYLOAD_OFFSET: usize = META_OFFSET as usize + META_REGION_LEN;
-
-/// Marker written once the one-time legacy-cache migration has completed. Its
-/// presence is what lets the normal read path assume the current format.
-const MIGRATION_MARKER: &str = ".envelope-v1-migrated";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -151,23 +143,6 @@ pub struct AttachmentCleanupReport {
 pub struct AttachmentCleanupFailure {
     pub cache_key: String,
     pub error: String,
-}
-
-/// Result of the one-time migration off the pre-envelope layout.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyMigrationReport {
-    /// Plaintext (non-`.enc`) files reaped.
-    pub plaintext_removed: usize,
-    /// Legacy ciphertext files converted to the current envelope.
-    pub converted: usize,
-    /// Legacy files dropped because they were already past their derived TTL.
-    pub expired_removed: usize,
-    /// Files dropped because they could not be decrypted or related to an
-    /// entry (corrupt, foreign key, truncated).
-    pub unreadable_removed: usize,
-    /// True when the migration had already run and this call was a no-op.
-    pub already_migrated: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +235,7 @@ where
                 let touched = touch_meta(&enc_path, &cache_key, meta, now)?;
                 return Ok(touched.into_ref(remote_ref, true));
             }
-            // Expired, or unreadable (corrupt / foreign key / legacy) — drop it
+            // Expired, or unreadable (corrupt / foreign key) — drop it
             // and fall through to a real fetch.
             _ => {
                 let _ = std::fs::remove_file(&enc_path);
@@ -429,7 +404,7 @@ fn read_attachment_base64_from(
 // ---------------------------------------------------------------------------
 
 /// List every readable envelope in the cache. Unreadable files are skipped
-/// (they are reaped by [`delete_expired`] / [`migrate_legacy_cache`]).
+/// (they are reaped by [`delete_expired`]).
 pub fn list_attachments() -> Result<Vec<AttachmentEntry>, String> {
     let cache_dir = resolve_cache_dir()?;
     list_attachments_in(&cache_dir)
@@ -501,8 +476,7 @@ fn delete_attachments_in(cache_dir: &Path, cache_keys: &[String]) -> AttachmentC
 }
 
 /// Delete every entry belonging to `adapter_id`, matched on the adapter hash
-/// baked into each envelope. Entries migrated from the legacy format carry a
-/// zeroed adapter hash and are left to the renderer's key-driven prune.
+/// baked into each envelope.
 pub fn evict_adapter_attachments(adapter_id: &str) -> Result<AttachmentCleanupReport, String> {
     let cache_dir = resolve_cache_dir()?;
     Ok(evict_adapter_attachments_in(&cache_dir, adapter_id))
@@ -590,103 +564,6 @@ fn enforce_cache_budget_in(
     report.deleted.extend(evicted.deleted);
     report.freed_bytes = report.freed_bytes.saturating_add(evicted.freed_bytes);
     report.failed.extend(evicted.failed);
-    Ok(report)
-}
-
-// ---------------------------------------------------------------------------
-// Public API — one-time legacy migration
-// ---------------------------------------------------------------------------
-
-/// Convert a pre-envelope cache directory to the current format, exactly once.
-///
-/// Steps, in order:
-///   1. Delete every plaintext (non-`.enc`) file an older build left behind.
-///   2. For each legacy `.enc` file (raw `nonce || ciphertext`, no magic):
-///      derive `createdAt` from the file's mtime, drop it if that puts it past
-///      the default TTL, drop it if it cannot be decrypted, otherwise rewrite
-///      it atomically as a current envelope with a zeroed adapter hash.
-///   3. Write the completion marker so subsequent boots skip all of the above.
-///
-/// Called once at connector bootstrap.
-pub fn migrate_legacy_cache() -> Result<LegacyMigrationReport, String> {
-    let cache_dir = resolve_cache_dir()?;
-    migrate_legacy_cache_in(&cache_dir, now_ms())
-}
-
-fn migrate_legacy_cache_in(cache_dir: &Path, now: u64) -> Result<LegacyMigrationReport, String> {
-    let mut report = LegacyMigrationReport::default();
-    if !cache_dir.exists() {
-        return Ok(report);
-    }
-    let marker = cache_dir.join(MIGRATION_MARKER);
-    if marker.exists() {
-        report.already_migrated = true;
-        return Ok(report);
-    }
-
-    let entries =
-        std::fs::read_dir(cache_dir).map_err(|e| format!("read cache dir failed: {e}"))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if path.file_name().is_some_and(|n| n == MIGRATION_MARKER) {
-            continue;
-        }
-        let is_enc = path.extension().is_some_and(|ext| ext == "enc");
-        if !is_enc {
-            // Plaintext left by an older build — always reap.
-            if std::fs::remove_file(&path).is_ok() {
-                report.plaintext_removed += 1;
-            }
-            continue;
-        }
-        let Some(cache_key) = enc_cache_key(&path) else {
-            // `.enc` file whose stem is not a cache key — cannot be related to
-            // any entry.
-            if std::fs::remove_file(&path).is_ok() {
-                report.unreadable_removed += 1;
-            }
-            continue;
-        };
-        // Already current — nothing to do.
-        if read_meta(&path, &cache_key).is_ok() {
-            continue;
-        }
-        let created_at = file_mtime_ms(&path).unwrap_or(now);
-        let expires_at = created_at.saturating_add(DEFAULT_TTL_MS);
-        if expires_at <= now {
-            if std::fs::remove_file(&path).is_ok() {
-                report.expired_removed += 1;
-            }
-            continue;
-        }
-        match decrypt_legacy_file(&path) {
-            Ok(plaintext) => {
-                let meta = AttachmentMeta {
-                    cache_key: hex_to_digest(&cache_key)?,
-                    // Legacy files carry no adapter provenance; a zeroed hash
-                    // marks them "unknown adapter" so hash-driven eviction
-                    // skips them and key-driven prune still reaches them.
-                    adapter_hash: [0u8; 32],
-                    size_bytes: plaintext.len() as u64,
-                    created_at,
-                    last_accessed_at: created_at,
-                    expires_at,
-                };
-                write_envelope(&path, &cache_key, &meta, &plaintext)?;
-                report.converted += 1;
-            }
-            Err(_) => {
-                if std::fs::remove_file(&path).is_ok() {
-                    report.unreadable_removed += 1;
-                }
-            }
-        }
-    }
-
-    std::fs::write(&marker, b"1").map_err(|e| format!("write migration marker failed: {e}"))?;
     Ok(report)
 }
 
@@ -887,16 +764,6 @@ fn sha256_digest(data: &[u8]) -> [u8; 32] {
     h.finalize().into()
 }
 
-fn file_mtime_ms(path: &Path) -> Option<u64> {
-    std::fs::metadata(path)
-        .ok()?
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_millis() as u64)
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1000,22 +867,6 @@ fn decrypt_with_aad(nonce_bytes: &[u8], ciphertext: &[u8], aad: &[u8]) -> Result
                 aad,
             },
         )
-        .map_err(|e| format!("decrypt failed: {e}"))
-}
-
-/// Decrypt a pre-envelope file: `nonce(12) || ciphertext`, no AAD. Only the
-/// one-time migration calls this.
-fn decrypt_legacy_file(path: &Path) -> Result<Vec<u8>, String> {
-    let data = std::fs::read(path).map_err(|e| format!("read enc file failed: {e}"))?;
-    if data.len() < NONCE_LEN {
-        return Err("legacy encrypted file too short".to_string());
-    }
-    let (nonce_bytes, ciphertext) = data.split_at(NONCE_LEN);
-    let cipher = cipher()?;
-    let nonce = Nonce::try_from(nonce_bytes)
-        .map_err(|_| "legacy file nonce has invalid length".to_string())?;
-    cipher
-        .decrypt(&nonce, ciphertext)
         .map_err(|e| format!("decrypt failed: {e}"))
 }
 
@@ -1378,19 +1229,6 @@ mod tests {
         INIT.call_once(|| {
             proxy_config::apply_current(proxy_config::ProxyConfig::default()).unwrap();
         });
-    }
-
-    /// Encrypt the pre-envelope way (`nonce || ciphertext`, no AAD) so the
-    /// migration tests can build genuine legacy files.
-    fn legacy_encrypt(data: &[u8]) -> Vec<u8> {
-        let cipher = cipher().unwrap();
-        let mut nonce_bytes = [0u8; NONCE_LEN];
-        rand::fill(&mut nonce_bytes);
-        let nonce = Nonce::from(nonce_bytes);
-        let ciphertext = cipher.encrypt(&nonce, data).unwrap();
-        let mut out = nonce_bytes.to_vec();
-        out.extend_from_slice(&ciphertext);
-        out
     }
 
     /// Convenience wrapper: fetch into `dir` with the default cap and TTL.
@@ -1928,91 +1766,5 @@ mod tests {
         assert_eq!(entries[0].last_accessed_at, 6);
         assert_eq!(entries[0].expires_at, Some(7));
         assert!(entries[0].disk_bytes > entries[0].size_bytes);
-    }
-
-    // --- one-time legacy migration -----------------------------------------
-
-    #[test]
-    fn migration_reaps_plaintext_converts_legacy_and_marks_completion() {
-        let dir = tempfile::tempdir().unwrap();
-        let now = now_ms();
-
-        // Plaintext left by an older build.
-        std::fs::write(dir.path().join("aabbcc"), b"raw plaintext").unwrap();
-        // A genuine legacy ciphertext for a real cache key.
-        let legacy_key = compute_cache_key("a1", "legacy-ref");
-        std::fs::write(
-            dir.path().join(format!("{legacy_key}.enc")),
-            legacy_encrypt(b"legacy payload"),
-        )
-        .unwrap();
-        // A `.enc` file that is not a cache key at all.
-        std::fs::write(dir.path().join("garbage.enc"), b"nope").unwrap();
-        // A current envelope that must be left untouched.
-        let current = write_test_envelope(dir.path(), "a2", "r2", b"current", 1, 2, 0);
-
-        let report = migrate_legacy_cache_in(dir.path(), now).unwrap();
-        assert!(!report.already_migrated);
-        assert_eq!(report.plaintext_removed, 1);
-        assert_eq!(report.converted, 1);
-        assert_eq!(report.unreadable_removed, 1);
-
-        assert!(!dir.path().join("aabbcc").exists());
-        assert!(!dir.path().join("garbage.enc").exists());
-        assert!(dir.path().join(format!("{current}.enc")).exists());
-
-        // The converted entry is now readable through the normal path.
-        let path = dir.path().join(format!("{legacy_key}.enc"));
-        let meta = read_meta(&path, &legacy_key).unwrap();
-        assert_eq!(meta.size_bytes, b"legacy payload".len() as u64);
-        assert_eq!(
-            meta.adapter_hash, [0u8; 32],
-            "legacy entries carry no adapter provenance"
-        );
-        assert_eq!(read_payload(&path, &legacy_key).unwrap(), b"legacy payload");
-
-        // Marker written; a second run is a no-op.
-        let again = migrate_legacy_cache_in(dir.path(), now).unwrap();
-        assert!(again.already_migrated);
-        assert_eq!(again.converted, 0);
-    }
-
-    #[test]
-    fn migration_drops_legacy_files_past_their_derived_ttl() {
-        let dir = tempfile::tempdir().unwrap();
-        let legacy_key = compute_cache_key("a1", "old-ref");
-        let path = dir.path().join(format!("{legacy_key}.enc"));
-        std::fs::write(&path, legacy_encrypt(b"ancient")).unwrap();
-
-        // The file's mtime is "now", so a clock far past mtime + TTL expires it.
-        let far_future = file_mtime_ms(&path).unwrap() + DEFAULT_TTL_MS + 1;
-        let report = migrate_legacy_cache_in(dir.path(), far_future).unwrap();
-        assert_eq!(report.expired_removed, 1);
-        assert_eq!(report.converted, 0);
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn migration_drops_undecryptable_legacy_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = compute_cache_key("a1", "corrupt-ref");
-        let path = dir.path().join(format!("{key}.enc"));
-        // Right shape, wrong key material — decryption must fail.
-        let mut junk = vec![0u8; NONCE_LEN];
-        junk.extend_from_slice(&[9u8; 64]);
-        std::fs::write(&path, junk).unwrap();
-
-        let report = migrate_legacy_cache_in(dir.path(), now_ms()).unwrap();
-        assert_eq!(report.unreadable_removed, 1);
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn migration_on_missing_dir_is_ok() {
-        let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("nope");
-        let report = migrate_legacy_cache_in(&missing, now_ms()).unwrap();
-        assert_eq!(report.converted, 0);
-        assert!(!report.already_migrated);
     }
 }

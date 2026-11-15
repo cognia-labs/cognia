@@ -35,17 +35,12 @@ function deps(overrides: Partial<SharedChatAvailabilityDeps> = {}): SharedChatAv
 }
 
 describe("probeSharedChatAvailability", () => {
-  it("is available when the server serves shared chat at this client's protocol", async () => {
+  it("is available when the server serves shared chat", async () => {
     await expect(probeSharedChatAvailability(deps())).resolves.toEqual({
       state: "available",
       accountId: "acct",
       checkedAt: 1_000,
     })
-    await expect(
-      probeSharedChatAvailability(
-        deps({ readHealth: async () => ({ ...SERVING, collabProtocolVersion: 3 }) })
-      )
-    ).resolves.toMatchObject({ state: "available" })
   })
 
   const cases: Array<[SharedChatUnavailableReason, Partial<SharedChatAvailabilityDeps>]> = [
@@ -64,14 +59,6 @@ describe("probeSharedChatAvailability", () => {
     [
       "not_offered",
       { readHealth: async () => ({ ...SERVING, features: ["canvas"] }) as CollabHealth },
-    ],
-    [
-      "protocol_unsupported",
-      { readHealth: async () => ({ ...SERVING, collabProtocolVersion: 1 }) },
-    ],
-    [
-      "protocol_unsupported",
-      { readHealth: async () => ({ status: "ok", features: ["shared-chat"] }) },
     ],
   ]
   it.each(cases)("names %s", async (reason, overrides) => {

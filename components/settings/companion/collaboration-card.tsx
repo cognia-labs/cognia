@@ -20,8 +20,7 @@
  * # The shared-chat switch
  *
  * Shared conversations are detected, not flagged (ADR-0252 §6): they are
- * offered when this card's server lists `shared-chat` in `/health` at a
- * protocol this app speaks. The switch is the one thing a machine decides for
+ * offered when this card's server lists `shared-chat` in `/health`. The switch is the one thing a machine decides for
  * itself, and under it the card says what detection found, so "this machine
  * opted out" (one click away) never reads like "the server does not serve it"
  * (nothing you can do here) or "no server yet" (the field below).

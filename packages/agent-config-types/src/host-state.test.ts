@@ -1617,7 +1617,7 @@ describe("hostStateIntentCapability", () => {
    * The regression this table exists to prevent. `insert_default_grants` in
    * `security_store.rs` gives every freshly-paired member device
    * `host.observe`, `agent.run` and `workspace.read` — so keying "may drive a
-   * session" off `agent.run` (which is what `claude_send` declares) would let a
+   * session" off `agent.run` (which is what `agent_send` declares) would let a
    * phone the owner never granted Remote Control send messages and answer
    * approval prompts.
    */

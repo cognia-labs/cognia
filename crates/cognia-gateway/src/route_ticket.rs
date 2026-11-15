@@ -9,7 +9,6 @@
 //!   re-mint, which must present the SAME frozen spec (no widening);
 //! - metadata (everything but the secret) is persisted for audit/revocation;
 //! - a ticket names the OPERATIONS it may perform and an optional BUDGET.
-//!   Both default deny-safe when absent from a persisted v1 record.
 //!
 //! Budget accounting is atomic: [`RouteTicketRegistry::validate_and_reserve`]
 //! checks the secret, expiry, revocation, operation scope and budget, and
@@ -69,9 +68,9 @@ impl TicketOperation {
     }
 }
 
-/// The operations a persisted record gets when it predates the field: what
-/// the sidecar's existing Claude Code path needs, and nothing more. Neither
-/// `embeddings` nor `responses` is granted by default.
+/// The operations a mint request gets when it names none: what the
+/// sidecar's Claude Code path needs, and nothing more. Neither `embeddings`
+/// nor `responses` is granted by default.
 pub fn default_ticket_operations() -> Vec<TicketOperation> {
     vec![
         TicketOperation::Chat,
@@ -145,10 +144,9 @@ pub struct RouteTicket {
     pub profile_version: Option<u64>,
     #[serde(default)]
     pub revoked: bool,
-    /// Operation scope. Absent on v1 records ⇒ [`default_ticket_operations`].
-    #[serde(default = "default_ticket_operations")]
+    /// Operation scope, fixed at mint.
     pub operations: Vec<TicketOperation>,
-    /// Consumption ceiling. Absent ⇒ unmetered (the pre-existing behaviour).
+    /// Consumption ceiling. Absent ⇒ unmetered.
     #[serde(default)]
     pub budget: Option<TicketBudget>,
 }
@@ -2356,26 +2354,25 @@ mod tests {
     }
 
     #[test]
-    fn v1_record_deserializes_with_deny_safe_defaults() {
-        // A record persisted before `operations` / `budget` existed.
+    fn a_record_without_operations_is_not_loaded() {
+        let path = std::env::temp_dir().join(format!(
+            "cognia-tickets-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
         let raw = serde_json::json!([{
-            "ticketId": "rt_v1", "routePinId": "pin_v1",
-            "executionFingerprint": "aexf1-v1", "sessionId": "s1",
+            "ticketId": "rt_old", "routePinId": "pin_old",
+            "executionFingerprint": "aexf1-old", "sessionId": "s1",
             "candidates": [{ "deploymentId": "dep-primary", "modelId": "model-alpha" }],
             "modelBindings": { "primary": "model-alpha" },
             "credentialAffinity": "session-sticky", "routePolicy": "gateway-required",
             "issuedAtMs": 1, "expiresAtMs": 2
         }]);
-        let tickets: Vec<RouteTicket> = serde_json::from_value(raw).unwrap();
-        let ticket = &tickets[0];
-        assert_eq!(ticket.operations, default_ticket_operations());
-        assert!(ticket.allows(TicketOperation::Chat));
-        assert!(ticket.allows(TicketOperation::CountTokens));
-        assert!(ticket.allows(TicketOperation::Models));
-        assert!(!ticket.allows(TicketOperation::Embeddings));
-        assert!(!ticket.allows(TicketOperation::Responses));
-        assert!(ticket.budget.is_none(), "absent budget is unmetered");
-        assert!(!ticket.strict_selectors);
+        std::fs::write(&path, raw.to_string()).unwrap();
+        let reg = RouteTicketRegistry::new(std::sync::Arc::new(FileTicketMetaStore {
+            path: path.clone(),
+        }));
+        assert!(reg.inner.lock().records.is_empty());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

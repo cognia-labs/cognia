@@ -26,7 +26,7 @@ function snapshot(overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot {
     connectionState: "online",
     host: {
       compatible: true,
-      operations: ["claude_send", "host_capabilities", "workflow_schedule_pause"],
+      operations: ["agent_send", "host_capabilities", "workflow_schedule_pause"],
       grants: ["agent.run", "host.observe", "workflow.run"],
     },
     ...overrides,
@@ -40,7 +40,7 @@ describe("resolveOperationAvailability", () => {
       expect(
         resolveOperationAvailability({
           snapshot: snapshot({ connectionState, host: undefined }),
-          command: "claude_send",
+          command: "agent_send",
         })
       ).toEqual({ state: "offline", reason: "connection-offline" })
     }
@@ -50,7 +50,7 @@ describe("resolveOperationAvailability", () => {
     expect(
       resolveOperationAvailability({
         snapshot: snapshot({ target: standalone, host: undefined }),
-        command: "claude_send",
+        command: "agent_send",
         localExecutorAvailable: true,
       })
     ).toEqual({ state: "available", reason: "local-executor" })
@@ -70,7 +70,7 @@ describe("resolveOperationAvailability", () => {
     expect(
       resolveOperationAvailability({
         snapshot: snapshot({ vaultState: "locked" }),
-        command: "claude_send",
+        command: "agent_send",
       })
     ).toEqual({ state: "requires-unlock", reason: "vault-locked" })
   })
@@ -79,7 +79,7 @@ describe("resolveOperationAvailability", () => {
     expect(
       resolveOperationAvailability({
         snapshot: snapshot({ host: { compatible: false, operations: [], grants: [] } }),
-        command: "claude_send",
+        command: "agent_send",
       })
     ).toEqual({ state: "incompatible", reason: "host-protocol" })
 
@@ -98,11 +98,11 @@ describe("resolveOperationAvailability", () => {
         snapshot: snapshot({
           host: {
             compatible: true,
-            operations: ["claude_send"],
+            operations: ["agent_send"],
             grants: ["host.observe"],
           },
         }),
-        command: "claude_send",
+        command: "agent_send",
       })
     ).toEqual({
       state: "requires-grant",
@@ -133,7 +133,7 @@ describe("resolveOperationAvailability", () => {
     expect(
       resolveOperationAvailability({
         snapshot: snapshot({ connectionState: "offline" }),
-        command: "claude_send",
+        command: "agent_send",
         offlineQueueAllowed: false,
       })
     ).toEqual({ state: "offline", reason: "connection-offline" })
@@ -145,11 +145,11 @@ describe("resolveOperationAvailability", () => {
         snapshot: snapshot({
           host: {
             compatible: true,
-            operations: ["keyring_secret_get"],
+            operations: ["secret_store_get"],
             grants: ["service.internal"],
           },
         }),
-        command: "keyring_secret_get",
+        command: "secret_store_get",
       })
     ).toEqual({ state: "unsupported", reason: "service-only" })
   })
@@ -194,7 +194,7 @@ describe("hostGrantGate", () => {
 
 describe("hostAdvertisesOperation", () => {
   it("is true only for a compatible companion host whose manifest lists the operation", () => {
-    expect(hostAdvertisesOperation(snapshot(), "claude_send")).toBe(true)
+    expect(hostAdvertisesOperation(snapshot(), "agent_send")).toBe(true)
     expect(hostAdvertisesOperation(snapshot(), "pet_get")).toBe(false)
   })
 

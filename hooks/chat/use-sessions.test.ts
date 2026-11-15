@@ -282,7 +282,7 @@ beforeEach(() => {
   hydrateSessionHistoryMock.mockReset().mockResolvedValue({
     applied: 0,
     total: 0,
-    mode: "legacy",
+    mode: "timeline",
   })
   enqueueHostStateIntentMock.mockReset().mockResolvedValue(null)
   mockProjectState.activeProjectId = null
@@ -799,23 +799,18 @@ describe("useSessions", () => {
     expect(chatStoreState.messages.map((message) => message.id)).toEqual(["user-1", "assistant-1"])
   })
 
-  it("unfolds complete cloud history before publishing the active session", async () => {
+  it("reports a failed history negotiation instead of falling back to the synced tail", async () => {
     chatStoreState.activeSessionId = "s1"
     isTauriMock.mockReturnValue(false)
     hasWebCompanionTargetMock.mockReturnValue(true)
-    listMessagesMock
-      .mockResolvedValueOnce([{ id: "recent-tail" }])
-      .mockResolvedValueOnce([{ id: "old" }, { id: "recent-tail" }])
+    listMessagesMock.mockResolvedValue([{ id: "recent-tail" }])
+    hydrateSessionHistoryMock.mockRejectedValueOnce(new Error("host unavailable"))
 
     renderHook(() => useSessions())
 
-    await waitFor(() =>
-      expect(chatStoreState.setMessages).toHaveBeenCalledWith([
-        { id: "old" },
-        { id: "recent-tail" },
-      ])
-    )
+    await waitFor(() => expect(chatStoreState.setMessagesLoadError).toHaveBeenCalled())
     expect(hydrateSessionHistoryMock).toHaveBeenCalledWith(companionTransportMock, "s1")
+    expect(chatStoreState.setMessages).not.toHaveBeenCalledWith([{ id: "recent-tail" }])
   })
 
   it("retries history after transport replacement without a companion config event", async () => {

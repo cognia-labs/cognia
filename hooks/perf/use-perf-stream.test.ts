@@ -76,8 +76,6 @@ function frame(sequence: number, overrides: Partial<PerfFrame> = {}): PerfFrame 
     collectionDurationMs: 5,
     missedTicks: 0,
     flags: { reset: false, discontinuity: false, counterReset: false, sourceRestarted: false },
-    tsMs: sequence * 1000 + 1000,
-    intervalMs: 1000,
     processes: [],
     runtime: {
       workers: 0,
@@ -133,7 +131,6 @@ beforeEach(() => {
     sources: [hostSource],
     leases: [],
     gaps: [],
-    samples: [frame(1)],
     running: true,
     intervalMs: 1000,
   })
@@ -157,7 +154,7 @@ describe("usePerfStream", () => {
     openLease.mockReturnValue(new Promise((resolve) => (resolveOpen = resolve)))
     const { result } = renderHook(() => usePerfStream())
     expect(hostHandler).not.toBeNull()
-    act(() => hostHandler!(frame(3)))
+    act(() => hostHandler!(frame(3, { leaseId: "lease-a" })))
     await act(async () => {
       resolveOpen({ accepted: true, lease: { leaseId: "lease-a" }, source: hostSource })
       await Promise.resolve()

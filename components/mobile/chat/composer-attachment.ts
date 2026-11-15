@@ -26,7 +26,7 @@ export type ComposerAttachment =
 // (`{ type: "image", source: { type: "base64", data, media_type } }`), so
 // no new RPC is required. These helpers translate the camera / album /
 // file results into that shape so the chat composer can ship the image
-// through `onSend`'s normal path (`claude_send` → SDK image block).
+// through `onSend`'s normal path (`agent_send` → SDK image block).
 // ---------------------------------------------------------------------------
 
 export function packPhotoAsSendContent(base64: string, mime: string): SendContentBlock[] {

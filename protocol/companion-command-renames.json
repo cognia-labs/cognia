@@ -1,6 +1,6 @@
 {
   "contractVersion": 3,
-  "$comment": "Old snake_case wire name to canonical dotted name (ADR-0175). Applied at the B5 hard cut: the host answers an old name with 410 command_renamed and details.replacement, the codemod rewrites client literals, and check-command-grammar refuses old literals. merge names the surviving command when two old names were one operation.",
+  "$comment": "Old snake_case wire name to canonical dotted name (ADR-0175). Applied at the B5 hard cut: the codemod rewrites client literals, the old name stops being served (404 unknown_command), and check-command-grammar refuses old literals. merge names the surviving command when two old names were one operation.",
   "renames": {
     "a2ui_bridge_runtime_paths": {
       "to": "a2ui.bridge.runtime_paths.get"
@@ -77,9 +77,6 @@
     },
     "agent_close_session": {
       "to": "agent.session.close"
-    },
-    "agent_command_telemetry": {
-      "to": "agent.command_telemetry.record"
     },
     "agent_compact": {
       "to": "agent.session.compact"
@@ -515,21 +512,8 @@
     "check_command_exists": {
       "to": "shell.command.probe"
     },
-    "claude_approve": {
-      "to": "agent.permission.approve"
-    },
     "claude_call_reserve_respond": {
       "to": "agent.call_reservation.decide"
-    },
-    "claude_close_session": {
-      "to": "agent.session.close",
-      "merge": "agent_close_session",
-      "note": "ADR-0090 migration alias"
-    },
-    "claude_compact": {
-      "to": "agent.session.compact",
-      "merge": "agent_compact",
-      "note": "ADR-0090 migration alias"
     },
     "claude_env_for_account": {
       "to": "agent.account_env.get"
@@ -546,11 +530,6 @@
     "claude_has_oauth_bearer": {
       "to": "agent.oauth_bearer.probe"
     },
-    "claude_interrupt": {
-      "to": "agent.session.interrupt",
-      "merge": "agent_interrupt",
-      "note": "ADR-0090 migration alias"
-    },
     "claude_plugin_hook_response": {
       "to": "agent.plugin.hook.respond"
     },
@@ -565,11 +544,6 @@
     },
     "claude_restore": {
       "to": "agent.session.restore"
-    },
-    "claude_send": {
-      "to": "agent.session.send",
-      "merge": "agent_send",
-      "note": "ADR-0090 migration alias"
     },
     "claude_session_control": {
       "to": "agent.session.control"
@@ -888,9 +862,6 @@
     },
     "companion_message_response": {
       "to": "companion.message.respond"
-    },
-    "companion_migrate_legacy_device_grants": {
-      "to": "companion.device_grant.migrate_legacy"
     },
     "companion_push_clear_apns": {
       "to": "companion.push.apns.clear"
@@ -2167,15 +2138,6 @@
     "issue_create": {
       "to": "issue.create"
     },
-    "keyring_secret_clear": {
-      "to": "secret.clear"
-    },
-    "keyring_secret_get": {
-      "to": "secret.get"
-    },
-    "keyring_secret_set": {
-      "to": "secret.set"
-    },
     "kill_all_external_agents": {
       "to": "external_agent.stop_all",
       "note": "kill becomes stop with force:true (B5)"
@@ -2401,17 +2363,8 @@
     "perf_reset_hotspots": {
       "to": "perf.hotspot.reset"
     },
-    "perf_set_interval": {
-      "to": "perf.interval.set"
-    },
     "perf_snapshot": {
       "to": "perf.snapshot"
-    },
-    "perf_start_sampling": {
-      "to": "perf.sampling.start"
-    },
-    "perf_stop_sampling": {
-      "to": "perf.sampling.stop"
     },
     "perf_system_details": {
       "to": "perf.system_details.get"
@@ -3164,14 +3117,10 @@
       "to": "secret.delete"
     },
     "secret_store_get": {
-      "to": "secret.get",
-      "merge": "keyring_secret_get",
-      "note": "deprecated wire alias of keyring_secret_get"
+      "to": "secret.get"
     },
     "secret_store_set": {
-      "to": "secret.set",
-      "merge": "keyring_secret_set",
-      "note": "deprecated wire alias of keyring_secret_set"
+      "to": "secret.set"
     },
     "selection_toolbar_capture_clipboard": {
       "to": "desktop.selection.toolbar.clipboard.capture"
@@ -3509,9 +3458,6 @@
     "subscription_set_default_preset": {
       "to": "subscription.default_preset.set"
     },
-    "subscription_set_preset": {
-      "to": "subscription.preset.set"
-    },
     "subscription_volcengine_usage": {
       "to": "subscription.volcengine.usage.get"
     },
@@ -3802,15 +3748,6 @@
     },
     "task_workspace_watch": {
       "to": "task.workspace.watch.start"
-    },
-    "team_run_pause": {
-      "to": "team.run.pause"
-    },
-    "team_run_resume": {
-      "to": "team.run.resume"
-    },
-    "team_run_stop": {
-      "to": "team.run.stop"
     },
     "team_task_comment": {
       "to": "team.task.comment"

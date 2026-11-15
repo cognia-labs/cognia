@@ -80,7 +80,6 @@
       "revoked": "Revoked",
       "tombstoned": "Disconnected"
     },
-    "googleNeedsIdentity": "Reauthorize to confirm this Google account's identity.",
     "googleReauthorize": "Reauthorize",
     "googleRevokeUnavailable": "revocation unavailable",
     "googleSecretSaved": "Secret saved in the Host",
@@ -88,7 +87,6 @@
     "googleSecretSave": "Save secret",
     "googleSecretClear": "Clear saved secret",
     "googleSecretSaveFailed": "Could not update the saved secret: {reason}",
-    "googleMigrationNeedsClientId": "Enter the OAuth client ID associated with your saved secret to finish setup.",
     "googleClientHint": "Create a Desktop app credential in Google Cloud Console.",
     "googleClientId": "OAuth client ID",
     "googleClientSecret": "OAuth client secret",

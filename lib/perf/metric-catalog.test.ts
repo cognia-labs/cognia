@@ -33,8 +33,6 @@ function frame(overrides: Partial<PerfFrame> = {}): PerfFrame {
     collectionDurationMs: 1,
     missedTicks: 0,
     flags: { reset: false, discontinuity: false, counterReset: false, sourceRestarted: false },
-    tsMs: 1000,
-    intervalMs: 1000,
     processes: [],
     runtime: {
       workers: 0,

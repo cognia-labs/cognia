@@ -126,7 +126,7 @@ jest.mock("./companion-transcript-messages", () => ({
 jest.mock("@/lib/platform/web-companion", () => ({
   hasWebCompanionTarget: jest.fn(() => false),
 }))
-let historyModeMock: "timeline" | "legacy" | null = null
+let historyModeMock: "timeline" | "local" | null = null
 const hydrateSessionHistoryMock = jest.fn()
 jest.mock("@/lib/sync/session-history", () => ({
   getSessionHistoryMode: () => historyModeMock,

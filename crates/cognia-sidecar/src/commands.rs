@@ -270,23 +270,6 @@ pub struct SidecarStatus {
     pub live_session_ids: Vec<String>,
 }
 
-// ---- Canonical agent_* command surface (ADR-0090 Phase 3) -------------------
-//
-// Thin wrappers over the SAME impl bodies the claude_* commands use — one
-// behavior, two names during migration. Every legacy claude_* invocation
-// bumps a deprecation counter (surfaced via `agent_command_telemetry`) so
-// Phase 9 retires the aliases with evidence instead of guesswork.
-
-/// Per-command deprecation counters for the legacy `claude_*` aliases.
-pub static DEPRECATED_COMMAND_COUNTERS: once_cell::sync::Lazy<
-    parking_lot::Mutex<std::collections::BTreeMap<&'static str, u64>>,
-> = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(std::collections::BTreeMap::new()));
-
-pub fn bump_deprecated(command: &'static str) {
-    let mut counters = DEPRECATED_COMMAND_COUNTERS.lock();
-    *counters.entry(command).or_insert(0) += 1;
-}
-
 /// Execution-spec contract versions this host understands.
 ///
 /// Mirrors `RESOLVED_SPEC_VERSION` in
@@ -341,7 +324,7 @@ pub async fn agent_start_with_host(
     claude_sidecar_status_impl(&state).await
 }
 
-/// Host-generic body of `claude_send` (ADR-0059 R6). The desktop command
+/// Host-generic body of `agent_send` (ADR-0059 R6). The desktop command
 /// wraps the `AppHandle` in a `TauriSidecarHost`; the headless RPC arm (R7)
 /// passes the `HeadlessSidecarHost` from the services registry.
 pub async fn claude_send_with_host(
@@ -488,14 +471,6 @@ pub async fn claude_interrupt_impl_with_id(
     state.write_command(&msg).await
 }
 
-pub async fn claude_compact_impl(
-    state: &SidecarState,
-    session_id: String,
-    focus: Option<String>,
-) -> Result<(), String> {
-    claude_compact_impl_with_id(state, session_id, focus, None).await
-}
-
 pub async fn claude_compact_impl_with_id(
     state: &SidecarState,
     session_id: String,
@@ -507,27 +482,6 @@ pub async fn claude_compact_impl_with_id(
         command_id,
     );
     state.write_command(&msg).await
-}
-
-pub async fn claude_approve_impl(
-    state: &SidecarState,
-    session_id: String,
-    request_id: String,
-    decision: String,
-    message: Option<String>,
-    updated_input: Option<Value>,
-) -> Result<(), String> {
-    claude_approve_impl_with_id(
-        state,
-        session_id,
-        request_id,
-        decision,
-        message,
-        updated_input,
-        None,
-        None,
-    )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -558,13 +512,6 @@ pub async fn claude_approve_impl_with_id(
         command_id,
     );
     state.write_command(&payload).await
-}
-
-pub async fn claude_close_session_impl(
-    state: &SidecarState,
-    session_id: String,
-) -> Result<(), String> {
-    claude_close_session_impl_with_id(state, session_id, None).await
 }
 
 pub async fn claude_close_session_impl_with_id(
@@ -1104,15 +1051,6 @@ pub async fn claude_protocol_adapter_message_impl(
 // =============================================================================
 // Tests
 // =============================================================================
-
-/// Old-vs-new command telemetry: quantifies the remaining migration surface
-/// (plan Phase 6 验收 / Phase 9 retirement evidence).
-pub async fn agent_command_telemetry() -> Result<serde_json::Value, String> {
-    let counters = DEPRECATED_COMMAND_COUNTERS.lock();
-    Ok(serde_json::json!({
-        "deprecatedCalls": counters.iter().map(|(k, v)| (k.to_string(), *v)).collect::<std::collections::BTreeMap<_, _>>(),
-    }))
-}
 
 #[cfg(test)]
 mod tests {
@@ -2019,39 +1957,5 @@ mod tests {
             "operation": "mcp-discover"
         }))
         .is_ok());
-    }
-
-    #[test]
-    fn deprecated_counters_accumulate_per_command() {
-        // Counters are process-global; assert deltas, not absolutes.
-        let before = DEPRECATED_COMMAND_COUNTERS
-            .lock()
-            .get("claude_compact")
-            .copied()
-            .unwrap_or(0);
-        bump_deprecated("claude_compact");
-        bump_deprecated("claude_compact");
-        let after = DEPRECATED_COMMAND_COUNTERS
-            .lock()
-            .get("claude_compact")
-            .copied()
-            .unwrap_or(0);
-        assert_eq!(after - before, 2);
-    }
-
-    #[tokio::test]
-    async fn agent_command_telemetry_reports_the_deprecation_map() {
-        bump_deprecated("claude_send");
-        let payload = agent_command_telemetry().await.expect("telemetry");
-        let calls = payload
-            .get("deprecatedCalls")
-            .and_then(|v| v.as_object())
-            .expect("deprecatedCalls object");
-        assert!(calls
-            .get("claude_send")
-            .and_then(|v| v.as_u64())
-            .is_some_and(|n| n >= 1));
-        // Secret-free by construction: names + counts only.
-        assert!(!payload.to_string().to_lowercase().contains("api"));
     }
 }

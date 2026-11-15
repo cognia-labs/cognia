@@ -15,7 +15,6 @@ use crate::subscription::active::{self, ActiveAccountState, ActiveSnapshot};
 use crate::subscription::anthropic::AnthropicProvider;
 use crate::subscription::codex::CodexProvider;
 use crate::subscription::commandcode::CommandCodeProvider;
-use crate::subscription::migration::{self, MigrationOutcome};
 use crate::subscription::opencode::OpencodeProvider;
 use crate::subscription::preset::ProviderPreset;
 use crate::subscription::provider::{ProviderId, SubscriptionProvider};
@@ -43,9 +42,9 @@ fn for_provider<R>(id: ProviderId, f: impl FnOnce(&dyn SubscriptionProvider) -> 
 // Bootstrap
 // ---------------------------------------------------------------------------
 
-/// Run v1 → v2 migration for every provider, then rebuild the in-process
-/// active projection from the persisted vaults. Idempotent. Called once on app
-/// boot from the renderer (`lib/subscription/core/migration.ts::subscriptionInit`).
+/// Rebuild the in-process active projection from the persisted vaults.
+/// Idempotent. Called on app boot and after a local-account switch from the
+/// renderer (`lib/subscription/core/init.ts::subscriptionInitOnce`).
 ///
 /// The rebuild fulfils the `active.rs:13-15` contract: `ActiveAccountState`
 /// and the Anthropic OAuth bearer in `ApiKeyState` are in-memory caches of the
@@ -57,14 +56,13 @@ pub async fn subscription_init(
     local_account_id: String,
     active_state: State<'_, ActiveAccountState>,
     api_key_state: State<'_, ApiKeyState>,
-) -> Result<Vec<MigrationOutcome>, String> {
+) -> Result<(), String> {
     // Initialization can run again after a local-account switch. Clear the
     // previous user's projection before the first keyring read so missing,
     // stale, or temporarily unreadable vaults fail closed instead of retaining
     // credentials from the prior account.
     active_state.clear_all().await;
     api_key_state.set_oauth_bearer(None).await;
-    let outcomes = migration::migrate_all_for_account(&local_account_id);
     for id in vault::list_provider_ids(&local_account_id)? {
         match vault::load_for_account(&local_account_id, id.clone()) {
             Ok(Some(vault)) => {
@@ -83,7 +81,7 @@ pub async fn subscription_init(
             }
         }
     }
-    Ok(outcomes)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -672,7 +670,7 @@ pub async fn subscription_set_active(
 
     // Anthropic-only side effects: push the bearer into the in-process
     // ApiKeyState (the contract sidecar.rs:143-155 reads at spawn time) and
-    // kill the running sidecar so the next claude_send spawns a fresh one
+    // kill the running sidecar so the next agent_send spawns a fresh one
     // with the new env.
     if id == ProviderId::Anthropic {
         api_key_state.set_oauth_bearer(anthropic_bearer).await;
@@ -807,14 +805,7 @@ pub async fn subscription_set_default_preset(
     vault::save_for_account(&local_account_id, id.clone(), &vault)
 }
 
-// ---------------------------------------------------------------------------
-// Back-compat shims for the v2 single-preset API
-//
-// `subscription_get_preset` now resolves the default preset from the v3
-// library. `subscription_set_preset(Some(p))` upserts + sets default;
-// `subscription_set_preset(None)` clears the default pointer.
-// ---------------------------------------------------------------------------
-
+/// Resolve the provider's default preset from its library, if one is set.
 #[tauri::command]
 pub async fn subscription_get_preset(
     provider: String,
@@ -823,41 +814,12 @@ pub async fn subscription_get_preset(
     let id = ProviderId::parse(&provider)?;
     let vault = vault::load_for_account(&local_account_id, id.clone())?
         .unwrap_or_else(ProviderVault::empty);
-    // Return the default preset from the v3 library, if one is set.
     let resolved = vault
         .default_preset_id
         .as_ref()
         .and_then(|did| vault.presets.iter().find(|p| &p.id == did))
         .cloned();
     Ok(resolved)
-}
-
-#[tauri::command]
-pub async fn subscription_set_preset(
-    provider: String,
-    local_account_id: String,
-    preset: Option<ProviderPreset>,
-) -> Result<(), String> {
-    let id = ProviderId::parse(&provider)?;
-    let supports = for_provider(id.clone(), |p| p.supports_preset());
-    if preset.is_some() && !supports {
-        return Err(format!("provider {provider:?} does not support presets"));
-    }
-    let _mutation_guard = vault::VAULT_MUTATION_LOCK.lock().await;
-    let mut vault = vault::load_for_account(&local_account_id, id.clone())?
-        .unwrap_or_else(ProviderVault::empty);
-    match preset {
-        Some(p) => {
-            p.validate()?;
-            let pid = p.id.clone();
-            vault.upsert_preset(p);
-            vault.default_preset_id = Some(pid);
-        }
-        None => {
-            vault.default_preset_id = None;
-        }
-    }
-    vault::save_for_account(&local_account_id, id.clone(), &vault)
 }
 
 // ---------------------------------------------------------------------------
@@ -1654,7 +1616,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_preset_accepts_opencode() {
+    async fn save_preset_accepts_opencode() {
         // Preset parity (2026-06-07): opencode supports presets like
         // anthropic/codex. The write path needs the keyring.
         if !keyring_available() {
@@ -1671,7 +1633,7 @@ mod tests {
             template_id: None,
             model_mapping: BTreeMap::new(),
         };
-        subscription_set_preset("opencode".into(), LOCAL_ACCOUNT_ID.into(), Some(preset))
+        subscription_save_preset("opencode".into(), LOCAL_ACCOUNT_ID.into(), preset)
             .await
             .expect("opencode supports presets now");
         let _ = vault::clear_for_account(LOCAL_ACCOUNT_ID, ProviderId::Opencode);
@@ -1766,55 +1728,6 @@ mod tests {
         .await
         .expect_err("should fail");
         assert!(err.contains("no vault") || err.contains("no account"));
-    }
-
-    #[tokio::test]
-    async fn get_and_set_preset_round_trip() {
-        if !keyring_available() {
-            return;
-        }
-        let _ = vault::clear_for_account(LOCAL_ACCOUNT_ID, ProviderId::Anthropic);
-        assert!(
-            subscription_get_preset("anthropic".into(), LOCAL_ACCOUNT_ID.into())
-                .await
-                .unwrap()
-                .is_none()
-        );
-
-        let mut headers = BTreeMap::new();
-        headers.insert("X-Org".into(), "cognia".into());
-        let preset = ProviderPreset {
-            id: "p1".into(),
-            label: "Bedrock".into(),
-            base_url: "https://bedrock.example.com".into(),
-            extra_headers: headers,
-            template_id: None,
-            model_mapping: BTreeMap::new(),
-        };
-        subscription_set_preset(
-            "anthropic".into(),
-            LOCAL_ACCOUNT_ID.into(),
-            Some(preset.clone()),
-        )
-        .await
-        .unwrap();
-        let got = subscription_get_preset("anthropic".into(), LOCAL_ACCOUNT_ID.into())
-            .await
-            .unwrap();
-        assert_eq!(got, Some(preset));
-
-        // Clear it.
-        subscription_set_preset("anthropic".into(), LOCAL_ACCOUNT_ID.into(), None)
-            .await
-            .unwrap();
-        assert!(
-            subscription_get_preset("anthropic".into(), LOCAL_ACCOUNT_ID.into())
-                .await
-                .unwrap()
-                .is_none()
-        );
-
-        vault::clear_for_account(LOCAL_ACCOUNT_ID, ProviderId::Anthropic).unwrap();
     }
 
     // -----------------------------------------------------------------------
@@ -1937,11 +1850,10 @@ mod tests {
             .await
             .unwrap();
 
-        // Clear the default (set_preset(Some) above sets it as default — reset it).
         subscription_set_default_preset("anthropic".into(), LOCAL_ACCOUNT_ID.into(), None)
             .await
             .unwrap();
-        // Now the shim get_preset returns None.
+        // With no default pointer, get_preset resolves nothing.
         assert!(
             subscription_get_preset("anthropic".into(), LOCAL_ACCOUNT_ID.into())
                 .await

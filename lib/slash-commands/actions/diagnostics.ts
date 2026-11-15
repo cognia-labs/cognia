@@ -230,7 +230,7 @@ export async function handleCost(ctx: SlashContext): Promise<void> {
 
 /**
  * `/compact [focus]` — manually compact the active session's context. Routes a
- * `claude_compact` control message to the sidecar (mirrors {@link handleContext}
+ * `agent_compact` control message to the sidecar (mirrors {@link handleContext}
  * reading the active session). Works on BOTH paths: the generic (AI-SDK) path
  * runs a summary round-trip now, the Anthropic path pushes a `/compact` turn the
  * Agent SDK intercepts. The resulting `compact_boundary` renders in-transcript,

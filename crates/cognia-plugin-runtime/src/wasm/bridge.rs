@@ -94,9 +94,7 @@ pub struct WasmRendererErrorBody {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmRendererResponse {
-    #[serde(alias = "request_id")]
     pub request_id: String,
-    #[serde(alias = "plugin_id")]
     pub plugin_id: String,
     #[serde(default)]
     pub result: Option<Value>,

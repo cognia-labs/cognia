@@ -64,10 +64,10 @@ describe("diagnoseAgentEvent", () => {
     const out = diagnoseAgentEvent({
       kind: "capability-error",
       capability: "streaming" as never,
-      command: "claude_send",
+      command: "agent_send",
     })
     expect(out?.code).toBe("capabilityUnsatisfied")
-    expect(out?.message).toContain("claude_send")
+    expect(out?.message).toContain("agent_send")
     expect(out?.meta.extra).toEqual({ capability: "streaming" })
   })
 

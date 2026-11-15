@@ -66,7 +66,6 @@ test("renders one row per command with every enum mapped to its Rust variant", (
         }),
       ],
     },
-    renames: { renames: { zeta_old: { to: "zeta.get" }, alpha_old: { to: "alpha.list", merge: "alpha.list" } } },
     catalogHash: HASH,
   })
   assert.match(source, /^pub const CONTRACT_VERSION: u32 = 3;$/m)
@@ -79,11 +78,7 @@ test("renders one row per command with every enum mapped to its Rust variant", (
     source,
     /name: "fs_read_chunk".*target: CommandTarget::HostAdmin, operation: CommandOperation::SideEffect.*risk: CommandRisk::Critical, approval: CommandApproval::SignedPolicy, idempotency: CommandIdempotency::Required, transports: &\[CommandTransport::Internal\], input_schema: "x\\"y".*pagination: CommandPagination::ByteRange, long_running: true \},/
   )
-  // Renames are sorted by the old name, and only the replacement is carried.
-  const alpha = source.indexOf('("alpha_old", "alpha.list")')
-  const zeta = source.indexOf('("zeta_old", "zeta.get")')
-  assert.ok(alpha > 0 && zeta > alpha)
-  assert.ok(!source.includes("merge"))
+  assert.ok(!source.includes("RENAMED_COMMANDS"))
   assert.match(source, /#\[rustfmt::skip\]\npub static WIRE_COMMANDS/)
   // The file is mounted inside command_manifest.rs, so its imports are `super::`.
   assert.match(source, /^use super::\{$/m)
@@ -92,7 +87,7 @@ test("renders one row per command with every enum mapped to its Rust variant", (
 })
 
 test("refuses a contract it cannot map faithfully", () => {
-  const base = { renames: { renames: {} }, catalogHash: HASH }
+  const base = { catalogHash: HASH }
   assert.throws(
     () =>
       renderKnownCommandsRust({

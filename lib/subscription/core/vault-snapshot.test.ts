@@ -9,7 +9,6 @@ jest.mock("@/lib/subscription/core/transport", () => ({
   saveProviderPreset: jest.fn(),
   setActiveAccount: jest.fn(),
   setDefaultPreset: jest.fn(),
-  setProviderPreset: jest.fn(),
 }))
 
 import { applyVaults, snapshotVaults, snapshotCustomSubscriptionProviders } from "./vault-snapshot"
@@ -46,7 +45,6 @@ beforeEach(() => {
   transportMocks.saveProviderPreset.mockResolvedValue(undefined)
   transportMocks.setActiveAccount.mockResolvedValue(undefined)
   transportMocks.setDefaultPreset.mockResolvedValue(undefined)
-  transportMocks.setProviderPreset.mockResolvedValue(undefined)
 })
 
 describe("snapshotVaults", () => {
@@ -103,19 +101,6 @@ describe("applyVaults", () => {
     expect(transportMocks.saveProviderPreset).toHaveBeenCalledWith("opencode", vault.presets[0])
     expect(transportMocks.setDefaultPreset).toHaveBeenCalledWith("opencode", "p1")
     expect(transportMocks.setActiveAccount).toHaveBeenCalledWith("opencode", "a2")
-  })
-
-  it("folds a legacy v2 single preset through the shim", async () => {
-    const vault = {
-      schemaVersion: 4,
-      accounts: [],
-      preset: { id: "legacy", label: "Legacy", baseUrl: "https://l.example" },
-    } as unknown as ProviderVault
-    await applyVaults({ anthropic: vault })
-    expect(transportMocks.setProviderPreset).toHaveBeenCalledWith(
-      "anthropic",
-      expect.objectContaining({ id: "legacy" })
-    )
   })
 })
 

@@ -119,7 +119,7 @@ describe("useSdkContextUsage", () => {
 
     // An operator's paired Host offers them, and is asked.
     getSessionContextUsage.mockResolvedValue(SNAP)
-    act(() => negotiate(["host_state_submit", "claude_send"]))
+    act(() => negotiate(["host_state_submit", "agent_send", "claude_sidecar_status"]))
     const { result } = renderHook(() => useSdkContextUsage("s1", "anthropic"))
     await waitFor(() => expect(result.current.snapshot).toEqual(SNAP))
   })

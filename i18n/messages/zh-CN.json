@@ -11493,7 +11493,6 @@
       "no_server": "尚未配置协作服务器。请在“协作服务器”设置中填写地址。",
       "not_offered": "协作服务器未提供共享会话。",
       "not_signed_in": "请先登录你的组织，才能使用其协作服务器。",
-      "protocol_unsupported": "协作服务器的共享会话协议版本低于本应用支持的版本，请升级服务器。",
       "server_unreachable": "暂时无法连接协作服务器。",
       "turned_off": "本机已关闭共享会话。"
     },
@@ -17582,8 +17581,6 @@
       },
       "googleConnections": "Google 连接",
       "googleConnectionsFailed": "无法加载 Google 连接。请在宿主可用后重试。",
-      "googleMigrationNeedsClientId": "请输入与已保存密钥对应的 OAuth 客户端 ID，以完成设置。",
-      "googleNeedsIdentity": "请重新授权以确认此 Google 账号的身份。",
       "googleReauthorize": "重新授权",
       "googleRevokeUnavailable": "无法吊销授权",
       "googleScopes": "仅申请 Drive、Docs、Sheets 的只读权限。",
@@ -31786,7 +31783,6 @@
       "downloadingDetail": "{bytesDone} / {bytesTotal} 字节 — 第 {index} / {count} 个文件",
       "emptyNoModelFiles": "该后端没有需要管理的模型文件。",
       "installed": "模型就绪",
-      "legacyDetected": "检测到旧版模型文件",
       "missing": "缺少 {count} 个模型文件",
       "modelDir": "存储位置：{path}",
       "redownload": "重新下载",
@@ -51716,7 +51712,6 @@
         "folderLabel": "Drive 文件夹",
         "lastSync": "上次上传 {time}",
         "loadFailed": "无法加载 Google Drive 连接",
-        "migrationNeedsClientId": "请保存原备份客户端 ID，以迁移已有登录。",
         "neverSynced": "从未上传",
         "passphraseRequired": "上传前请先解锁同步口令（WebDAV 卡片）",
         "phase": {
@@ -63326,10 +63321,6 @@
       "usageConsole": "用量控制台",
       "usageDestination": "用量查询目标地址"
     },
-    "migration": {
-      "toastBody": "已将 {count, plural, =1 {1 个旧账号} other {# 个旧账号}} 迁移到新版凭证仓。",
-      "toastTitle": "订阅模块已升级"
-    },
     "nav": {
       "groups": {
         "providersGroup": "提供方",
@@ -73808,8 +73799,7 @@
       "unavailable": {
         "error": "无法检查权限：{message}",
         "hidden": "该工作区未与你共享。",
-        "not-signed-in": "登录后可查看权限。",
-        "unsupported": "当前协作服务器尚不支持报告权限。"
+        "not-signed-in": "登录后可查看权限。"
       },
       "viaOrgAdmin": "通过组织管理员身份",
       "workspaceRole": "工作区角色"

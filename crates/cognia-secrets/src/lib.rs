@@ -14,7 +14,7 @@
 //!
 //! `app_lib` re-aliases each module (`pub use cognia_secrets::secret_store;`)
 //! so existing `crate::secret_store::…` call sites are unchanged. The thin
-//! `#[tauri::command]` shells (`keyring_secret_*`) stay app-side.
+//! `#[tauri::command]` shells (`secret_store_*`) stay app-side.
 //!
 //! Dependents' test suites MUST enable the `test-inmemory` feature from their
 //! `[dev-dependencies]` — see the note in `Cargo.toml`.

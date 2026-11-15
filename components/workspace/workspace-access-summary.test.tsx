@@ -119,7 +119,6 @@ describe("WorkspaceAccessSummary", () => {
   })
 
   it.each([
-    [{ status: "unsupported" }, "workspace-access-unsupported", "unavailable.unsupported"],
     [{ status: "hidden" }, "workspace-access-hidden", "unavailable.hidden"],
     [
       { status: "unavailable", reason: "not-signed-in" },

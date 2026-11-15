@@ -246,7 +246,6 @@
     "downloadingDetail": "{bytesDone} / {bytesTotal} 字节 — 第 {index} / {count} 个文件",
     "emptyNoModelFiles": "该后端没有需要管理的模型文件。",
     "installed": "模型就绪",
-    "legacyDetected": "检测到旧版模型文件",
     "missing": "缺少 {count} 个模型文件",
     "modelDir": "存储位置：{path}",
     "redownload": "重新下载",

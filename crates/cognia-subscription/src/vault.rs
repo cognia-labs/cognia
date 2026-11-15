@@ -1,12 +1,13 @@
 // Provider-vault storage layer.
 //
-// One keyring entry per provider:
-//   service = "com.cognia.subscription/v2"
-//   account = "anthropic" | "codex" | "opencode" | "commandcode"
+// One encrypted secret-store entry per local account and provider:
+//   service = "com.cognia.subscription/v2/account/<localAccountId>"
+//   account = "anthropic" | "codex" | "opencode" | "commandcode" | <registered id>
 //   payload = JSON blob shaped as `ProviderVault`
 //
 // `ProviderVault` holds N `Account`s, an optional `activeAccountId` pointer,
-// and an optional `ProviderPreset`. The vault layer is responsible for keyring
+// and a preset library with a default pointer. A blob whose `schemaVersion`
+// is not [`SCHEMA_VERSION`] is treated as absent. The vault layer is responsible for keyring
 // I/O and structural validation; provider-specific credential validation is
 // delegated to `SubscriptionProvider::validate`.
 
@@ -26,8 +27,7 @@ pub static VAULT_MUTATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::con
 const EXPIRING_WINDOW_MS: i64 = 5 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
-// Credential variants — provider-specific shapes. Fields mirror today's v1
-// schemas verbatim so the migration is a straight wrap.
+// Credential variants — provider-specific shapes.
 // ---------------------------------------------------------------------------
 
 /// Anthropic credential (PKCE flow). Mirrors the v1 `SubscriptionCredential`
@@ -521,10 +521,6 @@ pub struct ProviderVault {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_preset_id: Option<String>,
-    /// Legacy single preset (v2). Read at load time and folded into `presets`
-    /// by the v2→v3 migration, then never written again.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preset: Option<ProviderPreset>,
 }
 
 impl ProviderVault {
@@ -535,31 +531,16 @@ impl ProviderVault {
             active_account_id: None,
             presets: Vec::new(),
             default_preset_id: None,
-            preset: None,
         }
     }
 
-    /// In-place upgrade to the current schema. Idempotent: when the vault is
-    /// already current it still normalizes a stray legacy `preset` and any
-    /// missing Codex identity. Returns `true` when anything changed (so callers
-    /// can persist the upgraded blob).
-    pub fn migrate_to_current(&mut self) -> bool {
+    /// Derive the Codex identity fingerprint of every account that lacks one.
+    /// An account can reach a vault without an identity (added by a path that
+    /// skipped normalization, or saved while its `id_token_raw` was not yet
+    /// parseable). The derivation is pure and only runs while the fingerprint
+    /// is missing. Returns `true` when anything changed.
+    pub fn normalize_codex_identities(&mut self) -> bool {
         let mut changed = false;
-        // Fold a legacy v2 single preset into the v3 library + default pointer.
-        if let Some(legacy) = self.preset.take() {
-            if !self.presets.iter().any(|p| p.id == legacy.id) {
-                if self.default_preset_id.is_none() {
-                    self.default_preset_id = Some(legacy.id.clone());
-                }
-                self.presets.push(legacy);
-            }
-            changed = true;
-        }
-        // Not gated on the version bump. An account can reach a current vault
-        // without an identity (added by a path that skipped normalization, or
-        // migrated while its `id_token_raw` was not yet parseable), and once the
-        // version matched, a version-gated backfill would never look again. The
-        // derivation is pure and only runs while the fingerprint is missing.
         for account in &mut self.accounts {
             if account
                 .auth_metadata
@@ -580,10 +561,6 @@ impl ProviderVault {
                 .auth_metadata
                 .get_or_insert_with(AccountAuthMetadata::default)
                 .codex_identity = Some(identity);
-            changed = true;
-        }
-        if self.schema_version < SCHEMA_VERSION {
-            self.schema_version = SCHEMA_VERSION;
             changed = true;
         }
         changed
@@ -704,11 +681,20 @@ fn validate_vault(vault: &ProviderVault) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_vault_blob(blob: &str) -> Result<ProviderVault, String> {
-    let mut parsed: ProviderVault =
+/// Parse a stored vault. A blob written under another `schemaVersion` is
+/// treated as absent rather than converted.
+fn parse_vault_blob(blob: &str) -> Result<Option<ProviderVault>, String> {
+    let value: serde_json::Value =
         serde_json::from_str(blob).map_err(|e| format!("vault parse failed: {e}"))?;
-    parsed.migrate_to_current();
-    Ok(parsed)
+    if value.get("schemaVersion").and_then(serde_json::Value::as_u64)
+        != Some(u64::from(SCHEMA_VERSION))
+    {
+        return Ok(None);
+    }
+    let mut parsed: ProviderVault =
+        serde_json::from_value(value).map_err(|e| format!("vault parse failed: {e}"))?;
+    parsed.normalize_codex_identities();
+    Ok(Some(parsed))
 }
 
 fn current_unix_ms() -> i64 {
@@ -841,24 +827,6 @@ fn runtime_projection_changed(previous: &ProviderVault, next: &ProviderVault) ->
 /// pointer); provider-specific credential validation is the caller's job
 /// (typically through `SubscriptionProvider::validate` before upsert).
 #[allow(dead_code)]
-pub fn save(provider: ProviderId, vault: &ProviderVault) -> Result<(), String> {
-    validate_vault(vault)?;
-    if ProviderId::parse(provider.as_str())? != provider {
-        return Err("noncanonical vault provider identity".into());
-    }
-    for account in &vault.accounts {
-        if account.credential.provider() != provider {
-            return Err("vault credential provider mismatch".into());
-        }
-        if let ProviderCredential::ApiKey(value) = &account.credential {
-            crate::api_key::validate(value)?;
-        }
-    }
-    let blob = serde_json::to_string(vault).map_err(|e| format!("vault serialize failed: {e}"))?;
-    cognia_secrets::secret_store::set(SERVICE, provider.as_str(), &blob)
-}
-
-#[allow(dead_code)]
 pub fn save_for_account(
     local_account_id: &str,
     provider: ProviderId,
@@ -878,13 +846,12 @@ pub fn save_for_account(
     }
     let blob = serde_json::to_string(vault).map_err(|e| format!("vault serialize failed: {e}"))?;
     let service = service_name_for_account(local_account_id)?;
-    // Read directly to avoid legacy adoption recursively saving while comparing.
     // An unreadable prior value is conservatively treated as a runtime change.
     let changed = COMMIT_OBSERVER.get().is_some()
         && cognia_secrets::secret_store::get(&service, provider.as_str())
             .ok()
             .flatten()
-            .and_then(|blob| parse_vault_blob(&blob).ok())
+            .and_then(|blob| parse_vault_blob(&blob).ok().flatten())
             .is_none_or(|previous| runtime_projection_changed(&previous, vault));
     cognia_secrets::secret_store::set(&service, provider.as_str(), &blob)?;
     if changed {
@@ -893,16 +860,10 @@ pub fn save_for_account(
     Ok(())
 }
 
-/// Read the vault. Returns `Ok(None)` when no entry exists, surfaces parse
-/// errors as `Err` so the UI can show "credential corrupted" rather than
-/// silently dropping the user back to "logged out".
-pub fn load(provider: ProviderId) -> Result<Option<ProviderVault>, String> {
-    match cognia_secrets::secret_store::get(SERVICE, provider.as_str())? {
-        Some(blob) => Ok(Some(parse_vault_blob(&blob)?)),
-        None => Ok(None),
-    }
-}
-
+/// Read the vault. Returns `Ok(None)` when no entry exists (or it was written
+/// under another schema version), surfaces parse errors as `Err` so the UI can
+/// show "credential corrupted" rather than silently dropping the user back to
+/// "logged out".
 #[allow(dead_code)]
 pub fn load_for_account(
     local_account_id: &str,
@@ -910,32 +871,12 @@ pub fn load_for_account(
 ) -> Result<Option<ProviderVault>, String> {
     let service = service_name_for_account(local_account_id)?;
     match cognia_secrets::secret_store::get(&service, provider.as_str())? {
-        Some(blob) => Ok(Some(parse_vault_blob(&blob)?)),
-        None => adopt_legacy_vault_for_account(local_account_id, provider),
+        Some(blob) => parse_vault_blob(&blob),
+        None => Ok(None),
     }
 }
 
-#[allow(dead_code)]
-fn adopt_legacy_vault_for_account(
-    local_account_id: &str,
-    provider: ProviderId,
-) -> Result<Option<ProviderVault>, String> {
-    let Some(vault) = load(provider.clone())? else {
-        return Ok(None);
-    };
-    save_for_account(local_account_id, provider.clone(), &vault)?;
-    clear(provider)?;
-    Ok(Some(vault))
-}
-
-/// Remove the vault entry. Idempotent. Exposed on the public surface for
-/// the future "sign out all" admin flow + every test in the migration suite
-/// that needs to reset between runs.
-#[allow(dead_code)]
-pub fn clear(provider: ProviderId) -> Result<(), String> {
-    cognia_secrets::secret_store::delete(SERVICE, provider.as_str())
-}
-
+/// Remove the vault entry. Idempotent.
 #[allow(dead_code)]
 pub fn clear_for_account(local_account_id: &str, provider: ProviderId) -> Result<(), String> {
     let service = service_name_for_account(local_account_id)?;
@@ -944,8 +885,9 @@ pub fn clear_for_account(local_account_id: &str, provider: ProviderId) -> Result
     Ok(())
 }
 
-/// Builtins cover legacy keyring migration; dynamic ids come only from this
-/// local account's encrypted service, including disabled/uninstalled providers.
+/// Builtins are always listed so a boot rebuild clears their projection;
+/// dynamic ids come only from this local account's encrypted service,
+/// including disabled/uninstalled providers.
 pub fn list_provider_ids(local_account_id: &str) -> Result<Vec<ProviderId>, String> {
     let service = service_name_for_account(local_account_id)?;
     let mut ids = ProviderId::builtin_ids();
@@ -1242,7 +1184,8 @@ mod tests {
     fn save_rejects_wrong_schema_version() {
         let mut vault = ProviderVault::empty();
         vault.schema_version = 99;
-        let err = save(ProviderId::Anthropic, &vault).expect_err("should reject");
+        let err = save_for_account("vault-test", ProviderId::Anthropic, &vault)
+            .expect_err("should reject");
         assert!(err.contains("schemaVersion"));
     }
 
@@ -1250,7 +1193,8 @@ mod tests {
     fn save_rejects_orphan_active() {
         let mut vault = ProviderVault::empty();
         vault.active_account_id = Some("nonexistent".into());
-        let err = save(ProviderId::Anthropic, &vault).expect_err("should reject");
+        let err = save_for_account("vault-test", ProviderId::Anthropic, &vault)
+            .expect_err("should reject");
         assert!(err.contains("activeAccountId"));
     }
 
@@ -1259,15 +1203,20 @@ mod tests {
         if !keyring_available() {
             return;
         }
-        let _ = clear(ProviderId::Anthropic);
+        let local = "vault-round-trip";
+        let _ = clear_for_account(local, ProviderId::Anthropic);
         let mut vault = ProviderVault::empty();
         vault.upsert_account(anthropic_account());
         vault.active_account_id = Some("0193c2b0-0000-7000-8000-000000000001".into());
-        save(ProviderId::Anthropic, &vault).unwrap();
-        let got = load(ProviderId::Anthropic).unwrap().unwrap();
+        save_for_account(local, ProviderId::Anthropic, &vault).unwrap();
+        let got = load_for_account(local, ProviderId::Anthropic)
+            .unwrap()
+            .unwrap();
         assert_eq!(got, vault);
-        clear(ProviderId::Anthropic).unwrap();
-        assert!(load(ProviderId::Anthropic).unwrap().is_none());
+        clear_for_account(local, ProviderId::Anthropic).unwrap();
+        assert!(load_for_account(local, ProviderId::Anthropic)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1275,8 +1224,8 @@ mod tests {
         if !keyring_available() {
             return;
         }
-        let _ = clear(ProviderId::Anthropic);
-        assert!(clear(ProviderId::Anthropic).is_ok());
+        let _ = clear_for_account("vault-clear", ProviderId::Anthropic);
+        assert!(clear_for_account("vault-clear", ProviderId::Anthropic).is_ok());
     }
 
     #[test]
@@ -1327,41 +1276,22 @@ mod tests {
     }
 
     #[test]
-    fn v3_migration_derives_codex_identity_without_external_io() {
-        let claims = serde_json::json!({
-            "iss": "https://auth.openai.com",
-            "sub": "user-subject",
-            "email": "  USER@Example.COM ",
-            "https://api.openai.com/auth": { "chatgpt_account_id": "workspace-1" }
-        });
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&claims).unwrap());
-        let mut account = codex_account();
-        if let ProviderCredential::Codex(credential) = &mut account.credential {
-            credential.id_token_raw = format!("header.{payload}.signature");
-            credential.account_id = Some("workspace-1".into());
-        }
+    fn a_blob_under_another_schema_version_reads_as_absent() {
         let mut vault = ProviderVault::empty();
-        vault.schema_version = 3;
-        vault.accounts.push(account);
-
-        assert!(vault.migrate_to_current());
-        assert_eq!(vault.schema_version, 4);
-        let identity = vault.accounts[0]
-            .auth_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.codex_identity.as_ref())
-            .expect("identity should be derived from the supplied fixture JWT");
-        assert_eq!(identity.subject.as_deref(), Some("user-subject"));
-        assert_eq!(identity.workspace_id.as_deref(), Some("workspace-1"));
-        assert_eq!(identity.email.as_deref(), Some("user@example.com"));
+        vault.upsert_account(anthropic_account());
+        let mut value = serde_json::to_value(&vault).unwrap();
+        assert!(parse_vault_blob(&value.to_string()).unwrap().is_some());
+        value["schemaVersion"] = serde_json::json!(SCHEMA_VERSION - 1);
+        assert!(parse_vault_blob(&value.to_string()).unwrap().is_none());
+        assert!(parse_vault_blob("{\"accounts\":[]}").unwrap().is_none());
+        assert!(parse_vault_blob("not json").is_err());
     }
 
-    // An account can land in an already-current vault with no fingerprint. A
-    // version-gated backfill would never look at it again, so targeted
-    // reauthentication would have nothing persisted to compare against.
+    // An account can land in a vault with no fingerprint; without the
+    // normalization targeted reauthentication would have nothing persisted to
+    // compare against.
     #[test]
-    fn identity_backfill_also_heals_a_vault_already_at_the_current_version() {
+    fn identity_normalization_heals_a_vault_at_the_current_version() {
         let claims = serde_json::json!({
             "sub": "user-subject",
             "https://api.openai.com/auth": { "chatgpt_account_id": "workspace-1" }
@@ -1377,7 +1307,7 @@ mod tests {
         vault.schema_version = SCHEMA_VERSION;
         vault.accounts.push(account);
 
-        assert!(vault.migrate_to_current());
+        assert!(vault.normalize_codex_identities());
         assert_eq!(
             vault.accounts[0]
                 .auth_metadata
@@ -1387,7 +1317,7 @@ mod tests {
             Some("workspace-1")
         );
         // Idempotent: a second pass has nothing left to normalize.
-        assert!(!vault.migrate_to_current());
+        assert!(!vault.normalize_codex_identities());
     }
 
     #[test]

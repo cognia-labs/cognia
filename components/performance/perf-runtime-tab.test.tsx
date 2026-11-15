@@ -114,8 +114,6 @@ describe("PerfRuntimeTab", () => {
 
   it("renders a sparkline per worker row", async () => {
     const history: PerfSample[] = [1, 2].map((ts) => ({
-      tsMs: ts,
-      intervalMs: 1000,
       processes: [],
       runtime: makeRuntime({ perWorkerBusyPct: [10 + ts, 20 + ts, 30 + ts, 40 + ts] }),
       topSpans: [],

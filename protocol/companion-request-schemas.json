@@ -2841,135 +2841,11 @@
       },
       "additionalProperties": false
     },
-    "claude_approve": {
-      "type": "object",
-      "required": [
-        "session_id",
-        "request_id",
-        "decision"
-      ],
-      "properties": {
-        "session_id": {
-          "type": "string"
-        },
-        "request_id": {
-          "type": "string",
-          "description": "ID of the pending approval request emitted via WS."
-        },
-        "decision": {
-          "type": "string",
-          "enum": [
-            "allow",
-            "allow_always",
-            "deny"
-          ],
-          "description": "`allow` proceeds once; `allow_always` proceeds and persists a standing\npermission for this tool/rule for the session; `deny` rejects with the\noptional `message` shown to the model. To edit-and-allow, send\n`decision: allow` together with `updated_input` (the substituted tool\narguments) — there is no separate `edit` decision value.\n"
-        },
-        "message": {
-          "type": "string",
-          "description": "Optional rejection reason or note (denial only)."
-        },
-        "updated_input": {
-          "description": "Replacement tool input — substituted for the original arguments when sent (typically with `decision: allow`).",
-          "oneOf": [
-            {
-              "type": "object",
-              "additionalProperties": true
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "remote_execution_context": {
-          "type": "object",
-          "description": "Remote-execution provenance minted by the host when the turn was dispatched.\nRequired on every companion-originated control message: the arm validates and\nconsumes it (remote_execution::validate_and_consume) before acting.\n",
-          "required": [
-            "hostId",
-            "originDeviceId",
-            "sessionId",
-            "generation",
-            "requestId",
-            "issuedAt",
-            "expiresAt"
-          ],
-          "properties": {
-            "hostId": {
-              "type": "string"
-            },
-            "originDeviceId": {
-              "type": "string"
-            },
-            "sessionId": {
-              "type": "string"
-            },
-            "generation": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "requestId": {
-              "type": "string"
-            },
-            "issuedAt": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "expiresAt": {
-              "type": "integer",
-              "minimum": 0
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "claude_close_session": {
-      "type": "object",
-      "required": [
-        "session_id"
-      ],
-      "properties": {
-        "session_id": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "claude_compact": {
-      "type": "object",
-      "required": [
-        "session_id"
-      ],
-      "properties": {
-        "session_id": {
-          "type": "string"
-        },
-        "focus": {
-          "type": "string",
-          "nullable": true,
-          "description": "Optional compact instruction/focus."
-        }
-      },
-      "additionalProperties": false
-    },
     "claude_has_api_key": {
       "type": "object"
     },
     "claude_has_oauth_bearer": {
       "type": "object"
-    },
-    "claude_interrupt": {
-      "type": "object",
-      "required": [
-        "session_id"
-      ],
-      "properties": {
-        "session_id": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
     },
     "claude_plugin_tool_response": {
       "type": "object",
@@ -3104,173 +2980,6 @@
           "type": "string"
         },
         "messages": {}
-      },
-      "additionalProperties": false
-    },
-    "claude_send": {
-      "type": "object",
-      "required": [
-        "session_id",
-        "prompt"
-      ],
-      "properties": {
-        "session_id": {
-          "type": "string",
-          "description": "Logical session id chosen by the caller (Dexie row key)."
-        },
-        "prompt": {
-          "description": "Either a plain string or an array of content blocks (text + image) — forwarded\nverbatim to the Claude Agent SDK. Image blocks follow Anthropic's content-block format.\n",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          ]
-        },
-        "options": {
-          "type": "object",
-          "additionalProperties": true,
-          "description": "Per-call options forwarded verbatim to the Claude Agent SDK (or the\nAI SDK dispatch path for non-Anthropic providers). Unrecognised\nfields ride along under `extra` (serde flatten). `null` is rejected\nfor optional fields — use `undefined`/missing instead, otherwise the\nSDK's option parser crashes with \"Cannot read properties of null\".\n",
-          "properties": {
-            "cwd": {
-              "type": "string"
-            },
-            "model": {
-              "type": "string"
-            },
-            "fallbackModel": {
-              "type": "string"
-            },
-            "systemPrompt": {
-              "type": "string",
-              "description": "Replaces the SDK default system prompt. Mutually exclusive with appendSystemPrompt."
-            },
-            "appendSystemPrompt": {
-              "type": "string",
-              "description": "Appended to the SDK default. Mutually exclusive with systemPrompt."
-            },
-            "allowedTools": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "disallowedTools": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "additionalDirectories": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "permissionMode": {
-              "type": "string"
-            },
-            "env": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "mcpServers": {
-              "type": "object",
-              "additionalProperties": true,
-              "description": "Per-name MCP server config map; forwarded to the SDK verbatim."
-            },
-            "maxTurns": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100
-            },
-            "includePartialMessages": {
-              "type": "boolean"
-            },
-            "settingSources": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "user",
-                  "project",
-                  "local"
-                ]
-              }
-            },
-            "agents": {
-              "type": "object",
-              "additionalProperties": true,
-              "description": "Dynamic subagent definitions keyed by name."
-            },
-            "strictMcpConfig": {
-              "type": "boolean",
-              "description": "When true, only `mcpServers` from this object are loaded — settings.json is ignored."
-            },
-            "effort": {
-              "type": "string",
-              "enum": [
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-                "max"
-              ]
-            },
-            "resumeSessionId": {
-              "type": "string",
-              "description": "Resume an existing SDK session by id. Mutually exclusive with forkFromSessionId."
-            },
-            "forkFromSessionId": {
-              "type": "string",
-              "description": "Fork a new branch from an existing SDK session id."
-            },
-            "provider": {
-              "type": "string",
-              "description": "Provider id this turn dispatches against. `null`/missing or\n`\"anthropic\"` keeps the Claude Agent SDK path; any other value\n(`openai`, `google`, `mistral`, `cohere`, `openrouter`, custom)\nflows through the AI SDK dispatcher.\n"
-            },
-            "providerCredentials": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "apiKey": {
-                  "type": "string"
-                },
-                "baseUrl": {
-                  "type": "string"
-                },
-                "protocol": {
-                  "type": "string",
-                  "enum": [
-                    "openai",
-                    "anthropic",
-                    "google",
-                    "mistral",
-                    "cohere"
-                  ],
-                  "description": "AI SDK protocol family (required for custom provider ids)."
-                }
-              }
-            },
-            "aliasResolution": {
-              "type": "object",
-              "additionalProperties": true,
-              "description": "Renderer-side metadata; the sidecar ignores this."
-            },
-            "routingDecision": {
-              "type": "object",
-              "additionalProperties": true
-            }
-          }
-        }
       },
       "additionalProperties": false
     },
@@ -5471,12 +5180,6 @@
               "properties": {
                 "action": {
                   "const": "snapshot"
-                },
-                "legacyClientId": {
-                  "type": "string"
-                },
-                "legacyBackupClientId": {
-                  "type": "string"
                 }
               },
               "required": [
@@ -13161,91 +12864,6 @@
       },
       "additionalProperties": false
     },
-    "keyring_secret_clear": {
-      "type": "object",
-      "required": [
-        "input"
-      ],
-      "properties": {
-        "input": {
-          "type": "object",
-          "required": [
-            "namespace",
-            "key"
-          ],
-          "properties": {
-            "namespace": {
-              "type": "string",
-              "minLength": 1
-            },
-            "key": {
-              "type": "string",
-              "minLength": 1
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "keyring_secret_get": {
-      "type": "object",
-      "required": [
-        "input"
-      ],
-      "properties": {
-        "input": {
-          "type": "object",
-          "required": [
-            "namespace",
-            "key"
-          ],
-          "properties": {
-            "namespace": {
-              "type": "string",
-              "minLength": 1
-            },
-            "key": {
-              "type": "string",
-              "minLength": 1
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "keyring_secret_set": {
-      "type": "object",
-      "required": [
-        "input"
-      ],
-      "properties": {
-        "input": {
-          "type": "object",
-          "required": [
-            "namespace",
-            "key",
-            "value"
-          ],
-          "properties": {
-            "namespace": {
-              "type": "string",
-              "minLength": 1
-            },
-            "key": {
-              "type": "string",
-              "minLength": 1
-            },
-            "value": {
-              "type": "string"
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
     "kill_external_agent": {
       "type": "object",
       "required": [
@@ -20383,7 +20001,7 @@
         },
         "length": {
           "type": "integer",
-          "maximum": 24576
+          "maximum": 65536
         }
       },
       "additionalProperties": false
@@ -21684,30 +21302,6 @@
       },
       "additionalProperties": false
     },
-    "team_run_pause": {
-      "type": "object",
-      "required": [
-        "teamId"
-      ],
-      "properties": {
-        "teamId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "team_run_resume": {
-      "type": "object",
-      "required": [
-        "teamId"
-      ],
-      "properties": {
-        "teamId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "team_run_start": {
       "type": "object",
       "required": [
@@ -21732,18 +21326,6 @@
         },
         "ultracode": {
           "type": "boolean"
-        }
-      },
-      "additionalProperties": false
-    },
-    "team_run_stop": {
-      "type": "object",
-      "required": [
-        "teamId"
-      ],
-      "properties": {
-        "teamId": {
-          "type": "string"
         }
       },
       "additionalProperties": false

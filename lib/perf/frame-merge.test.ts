@@ -17,8 +17,6 @@ const makeFrame = (sequence: number, overrides: Partial<PerfFrame> = {}): PerfFr
   collectionDurationMs: 5,
   missedTicks: 0,
   flags: { reset: false, discontinuity: false, counterReset: false, sourceRestarted: false },
-  tsMs: sequence * 1000 + 1000,
-  intervalMs: 1000,
   processes: [],
   runtime: {
     workers: 0,
@@ -48,7 +46,6 @@ const snapshot = (frames: PerfFrame[]): PerfSnapshot => ({
   sources: [],
   leases: [],
   gaps: [],
-  samples: frames,
   running: true,
   intervalMs: 1000,
 })

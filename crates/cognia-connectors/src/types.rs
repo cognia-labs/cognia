@@ -22,9 +22,6 @@ pub struct AdapterRegistration {
     /// connector has no arm, so before this existed every inbound POST for one
     /// was answered `400 unsupported adapter type` and a plugin could not
     /// receive over webhook at all.
-    ///
-    /// `serde(default)` keeps the wire shape backward compatible: a paired
-    /// desktop on an older build sends a registration without this field.
     #[serde(default)]
     pub verification: Option<crate::sigverify::declarative::WebhookVerificationSpec>,
 }
@@ -36,11 +33,7 @@ pub struct ConnectorsHealth {
     pub bound_addr: Option<String>,
     pub registered_adapter_count: usize,
     /// Bearer for `POST /internal/lark/app-avatar` (appPreset.avatar staging).
-    /// Deserialization tolerates its absence so a response produced by an
-    /// older host still parses; callers treat a missing token as "avatar
-    /// staging unsupported" and skip the param.
-    #[serde(default)]
-    pub staging_token: Option<String>,
+    pub staging_token: String,
 }
 
 /// A OneBot reverse-WS client that currently holds a live connection to the
@@ -142,7 +135,7 @@ pub struct MatrixEncryptedMediaFetchRequest {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn media_upload_optional_modes_preserve_legacy_requests() {
+    fn media_upload_optional_modes_default_to_absent() {
         let req: super::ConnectorMediaUploadRequest = serde_json::from_str(
             r#"{"uploadUrl":"https://example.com/upload","localPath":"/tmp/file"}"#,
         )

@@ -56,7 +56,6 @@ function addAccount(status: "connected" | "needs-reauth" = "connected") {
       status,
       revision: "r1",
       credentialRevision: "c1",
-      needsIdentity: false,
     },
   ]
 }

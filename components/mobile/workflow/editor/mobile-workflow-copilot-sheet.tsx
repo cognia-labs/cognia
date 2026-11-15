@@ -8,7 +8,7 @@
  * over the canvas instead of a resizable column.
  *
  * Transport: the chat tab is transport-agnostic. On Capacitor / web-companion
- * `sendPrompt` routes through the `claude_send` companion RPC to the paired
+ * `sendPrompt` routes through the `agent_send` companion RPC to the paired
  * desktop's sidecar, and streamed turns come back over the companion events
  * WebSocket (`claude://message`) — the same channel `useClaudeChat` now
  * subscribes to off-desktop. Proposals surface via `WorkflowProposalCard`,

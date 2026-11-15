@@ -20,12 +20,8 @@ it("shares pending metadata and cancellation across frontend callers", async () 
   expect(JSON.stringify(begun)).not.toMatch(/codeVerifier|refreshToken/)
 })
 
-it("carries backup migration metadata and the exact authorized device lineage without credentials", async () => {
-  const host = createGoogleDocsTestHost({ backupMigrationNeedsClientId: true })
-  expect(await host.call({ action: "snapshot", legacyBackupClientId: "backup" })).toMatchObject({
-    backupMigrationNeedsClientId: true,
-  })
-  expect(host.calls).toContainEqual({ action: "snapshot", legacyBackupClientId: "backup" })
+it("carries the exact authorized device lineage without credentials", async () => {
+  const host = createGoogleDocsTestHost()
   const begin = await host.call({
     action: "beginDevice",
     clientId: "backup",

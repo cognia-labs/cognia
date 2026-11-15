@@ -26,7 +26,6 @@ import {
   saveAccount,
   setActiveAccount,
   setDefaultPreset,
-  setProviderPreset,
   subscriptionInit,
   authedGet,
   authedRequest,
@@ -318,16 +317,6 @@ describe("subscription core transport", () => {
   it("preset get returns null when Rust returns undefined", async () => {
     mockedCall.mockResolvedValueOnce(undefined)
     expect(await getProviderPreset("anthropic")).toBeNull()
-  })
-
-  it("preset set forwards null to clear", async () => {
-    mockedCall.mockResolvedValueOnce(undefined)
-    await setProviderPreset("anthropic", null)
-    expect(mockedCall).toHaveBeenCalledWith("subscription_set_preset", {
-      provider: "anthropic",
-      localAccountId: "local_acct_a",
-      preset: null,
-    })
   })
 
   it("preset library helpers forward the active local account scope", async () => {
@@ -646,15 +635,6 @@ describe("plugin subscription discovery invalidation", () => {
       (id) => saveAccount(id, { ...sampleAccount(), presetId: "preset" }),
     ],
     [
-      "provider preset",
-      (id) =>
-        setProviderPreset(id, {
-          id: "preset",
-          label: "Relay",
-          baseUrl: "https://relay.example/v1",
-        }),
-    ],
-    [
       "preset update",
       (id) =>
         saveProviderPreset(id, {
@@ -752,15 +732,6 @@ describe("custom subscription discovery invalidation", () => {
     [
       "save account/preset binding",
       () => saveAccount(providerId, { ...sampleAccount(), presetId: "preset" }),
-    ],
-    [
-      "provider preset",
-      () =>
-        setProviderPreset(providerId, {
-          id: "preset",
-          label: "Relay",
-          baseUrl: "https://relay.example/v1",
-        }),
     ],
     [
       "preset update",

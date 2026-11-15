@@ -131,9 +131,6 @@ pub(super) const COMMANDS: &[&str] = &[
     "team_task_create",
     "team_task_comment",
     "team_run_start",
-    "team_run_pause",
-    "team_run_resume",
-    "team_run_stop",
     "execution_run_control",
     "execution_run_detail",
     "execution_run_approval_list",
@@ -990,9 +987,6 @@ pub(super) async fn dispatch(
         | "team_task_create"
         | "team_task_comment"
         | "team_run_start"
-        | "team_run_pause"
-        | "team_run_resume"
-        | "team_run_stop"
         // ADR-0169 run control: the cockpit's `RunControlCommand` from a
         // paired device, through the same TS gate. Gated by CONTROL_COMMANDS.
         | "execution_run_control"

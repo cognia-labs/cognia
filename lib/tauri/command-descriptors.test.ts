@@ -23,7 +23,6 @@ describe("companion command descriptors", () => {
 
   it("classifies host settings as execution-owned and service commands as internal", () => {
     expect(getCommandDescriptor("app_settings_update")?.target).toBe("execution")
-    expect(getCommandDescriptor("keyring_secret_get")?.target).toBe("service")
     expect(getCommandDescriptor("secret_store_get")?.target).toBe("service")
     expect(getCommandDescriptor("plugin_set_status")?.target).toBe("service")
     expect(getCommandDescriptor("git_status")?.target).toBe("execution")

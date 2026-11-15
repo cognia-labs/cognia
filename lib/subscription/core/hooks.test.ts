@@ -51,7 +51,6 @@ jest.mock("./transport", () => ({
     transport.listSubscriptionProviderIds(...args),
   renameAccount: (...args: [unknown, string, string | null]) => transport.renameAccount(...args),
   setActiveAccount: (...args: [unknown, string | null]) => transport.setActiveAccount(...args),
-  setProviderPreset: jest.fn(),
   listPresets: (...args: [unknown]) => transport.listPresets(...args),
   getProviderPreset: (...args: [unknown]) => transport.getProviderPreset(...args),
   saveProviderPreset: (...args: [unknown, unknown]) => transport.saveProviderPreset(...args),

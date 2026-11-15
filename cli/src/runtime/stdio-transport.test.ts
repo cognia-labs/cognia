@@ -149,19 +149,19 @@ describe("StdioTransport — readiness", () => {
 })
 
 describe("StdioTransport — call → stdin", () => {
-  it("writes a send line for claude_send", async () => {
+  it("writes a send line for agent_send", async () => {
     const h = makeHandle()
     const t = new StdioTransport(h.handle)
-    await t.call("claude_send", { sessionId: "s1", prompt: "hi", options: { model: "m" } })
+    await t.call("agent_send", { sessionId: "s1", prompt: "hi", options: { model: "m" } })
     expect(h.parsedWrites()).toEqual([
       { type: "send", sessionId: "s1", prompt: "hi", options: { model: "m" } },
     ])
   })
 
-  it("writes a permission_response for claude_approve", async () => {
+  it("writes a permission_response for agent_resolve_permission", async () => {
     const h = makeHandle()
     const t = new StdioTransport(h.handle)
-    await t.call("claude_approve", { sessionId: "s1", requestId: "r1", decision: "deny" })
+    await t.call("agent_resolve_permission", { sessionId: "s1", requestId: "r1", decision: "deny" })
     expect(h.parsedWrites()[0]).toMatchObject({
       type: "permission_response",
       decision: "deny",
@@ -180,7 +180,7 @@ describe("StdioTransport — call → stdin", () => {
     const t = new StdioTransport(h.handle)
     h.exit(0)
     await flush()
-    await expect(t.call("claude_send", { sessionId: "s1", prompt: "x" })).rejects.toThrow(
+    await expect(t.call("agent_send", { sessionId: "s1", prompt: "x" })).rejects.toThrow(
       /not running/
     )
   })

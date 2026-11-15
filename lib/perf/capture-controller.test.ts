@@ -51,8 +51,6 @@ const frame = (sequence: number): PerfFrame => ({
     counterReset: false,
     sourceRestarted: false,
   },
-  tsMs: sequence * 1000 + 1000,
-  intervalMs: 1000,
   processes: [],
   runtime: {
     workers: 0,

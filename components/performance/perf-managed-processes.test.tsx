@@ -49,8 +49,6 @@ function mp(over: Partial<ManagedProcess> = {}): ManagedProcess {
 
 function sample(managed: ManagedProcess[], processes: ProcessSample[] = []): PerfSample {
   return {
-    tsMs: 1,
-    intervalMs: 1000,
     processes,
     runtime: {
       workers: 1,

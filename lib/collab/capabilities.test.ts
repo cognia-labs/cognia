@@ -6,7 +6,6 @@ import {
   COLLAB_FEATURE_KEYS,
   COLLAB_FEATURE_REASONS,
   COLLAB_FEATURE_STATES,
-  ORG_CAPABILITIES_HEALTH_FEATURE,
   OrgCapabilitiesParseError,
   admitsNew,
   allowsMutation,
@@ -146,38 +145,24 @@ describe("fetchOrgCapabilities", () => {
   it("returns the parsed answer", async () => {
     const client = {
       capabilities: jest.fn().mockResolvedValue(contract.exampleResponse),
-      health: jest.fn(),
     }
     const result = await fetchOrgCapabilities(client, scope)
     expect(result.status).toBe("ready")
     expect(client.capabilities).toHaveBeenCalledWith("org_alpha", "ws_alpha", undefined)
-    expect(client.health).not.toHaveBeenCalled()
   })
 
-  it("tells an older server apart from a hidden workspace", async () => {
-    const notFound = new CollabError(404, "not found")
-    const older = {
-      capabilities: jest.fn().mockRejectedValue(notFound),
-      health: jest.fn().mockResolvedValue({ status: "ok", features: ["shared-chat"] }),
+  it("reads a 404 as a hidden workspace", async () => {
+    const client = {
+      capabilities: jest.fn().mockRejectedValue(new CollabError(404, "not found")),
     }
-    await expect(fetchOrgCapabilities(older, scope)).resolves.toEqual({ status: "unsupported" })
-
-    const current = {
-      capabilities: jest.fn().mockRejectedValue(notFound),
-      health: jest
-        .fn()
-        .mockResolvedValue({ status: "ok", features: [ORG_CAPABILITIES_HEALTH_FEATURE] }),
-    }
-    await expect(fetchOrgCapabilities(current, scope)).resolves.toEqual({ status: "hidden" })
+    await expect(fetchOrgCapabilities(client, scope)).resolves.toEqual({ status: "hidden" })
   })
 
   it("rethrows every other failure", async () => {
     const client = {
       capabilities: jest.fn().mockRejectedValue(new CollabError(403, "forbidden")),
-      health: jest.fn(),
     }
     await expect(fetchOrgCapabilities(client, scope)).rejects.toMatchObject({ status: 403 })
-    expect(client.health).not.toHaveBeenCalled()
   })
 })
 

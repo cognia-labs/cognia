@@ -8,10 +8,9 @@
  * resolved this inline and gated its composer on it; the phone shell never
  * resolved it at all, so a paired phone whose host was offline, unpaired, or
  * missing the chat grant still showed a live composer whose sends went nowhere.
- * This is the same resolution — the same command (`claude_send`, or
- * `agent_send` on a person partition), the same facts, the same recovery
- * routing — as a hook both shells can call, so the two gates cannot drift
- * apart.
+ * This is the same resolution — the same command (`agent_send`), the same
+ * facts, the same recovery routing — as a hook both shells can call, so the
+ * two gates cannot drift apart.
  */
 
 import { useMemo } from "react"
@@ -27,7 +26,6 @@ import {
   resolveRuntimeRecovery,
   type RuntimeRecoveryDestination,
 } from "@/lib/runtime/recovery-resolver"
-import { isMemberOnPartition } from "@/lib/runtime/runtime-snapshot-store"
 
 export interface ChatRuntimeGate {
   availability: OperationAvailability
@@ -45,12 +43,10 @@ export function useChatRuntimeGate(): ChatRuntimeGate {
   return useMemo(() => {
     const availability = resolveOperationAvailability({
       snapshot,
-      // On a member's person partition `claude_send` is the Host's isolated
-      // execution path and always unhealthy, so gating on it closed every
-      // member's composer. The member's brain declares `agent_send` healthy
-      // exactly when it runs partition chat; the device's turn itself goes
-      // in as a HostState `message.enqueue` (`host-state-send-eligibility.ts`).
-      command: isMemberOnPartition(snapshot) ? "agent_send" : "claude_send",
+      // On a member's person partition the brain declares `agent_send`
+      // healthy exactly when it runs partition chat; the device's turn itself
+      // goes in as a HostState `message.enqueue` (`host-state-send-eligibility.ts`).
+      command: "agent_send",
       localExecutorAvailable: snapshot.target?.kind === "standalone",
       readOnlyFallback: true,
     })

@@ -40,7 +40,6 @@ beforeEach(async () => {
         status: "connected",
         revision: "auth-1",
         credentialRevision: "creds-1",
-        needsIdentity: false,
       },
     ],
   })

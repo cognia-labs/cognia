@@ -196,7 +196,7 @@
     },
     "components/providers/initializers/subscription-initializer.tsx": {
       "symbols": ["deferUntilSecretStoreReady", "subscriptionInitOnce"],
-      "reason": "Runs Rust subscription_init over the interactive desktop subscription vault (v1 keyring to v2) and re-runs it after the person unlocks the secret store (lib/credentials/secret-store-readiness.ts). lib/headless/runtimes/initializers.ts already excludes subscription-initializer because the brain's provider credentials arrive via the claude_set_* arms (R7). The subscription_* family is target:client / internal-transport and local-only in protocol/headless-command-dispositions.json."
+      "reason": "Runs Rust subscription_init, which rebuilds the active-account projection from the interactive desktop subscription vault, and re-runs it after the person unlocks the secret store (lib/credentials/secret-store-readiness.ts). lib/headless/runtimes/initializers.ts already excludes subscription-initializer because the brain's provider credentials arrive via the claude_set_* arms (R7). The subscription_* family is target:client / internal-transport and local-only in protocol/headless-command-dispositions.json."
     },
     "components/providers/initializers/telemetry-session-initializer.tsx": {
       "symbols": ["trackAppLaunched", "trackScreenViewed"],

@@ -54,8 +54,6 @@ import { StatusBarPerf } from "./status-bar-perf"
 
 function sample(cpuPct: number, memBytes: number): PerfSample {
   return {
-    tsMs: 0,
-    intervalMs: 1000,
     processes: [
       {
         pid: 1,

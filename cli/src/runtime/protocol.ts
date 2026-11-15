@@ -100,16 +100,12 @@ export interface OutboundMessage {
 
 /** Tauri command names the agent loop issues, mapped to inbound messages. */
 export const COMMAND = {
-  SEND: "claude_send",
-  AGENT_SEND: "agent_send",
-  INTERRUPT: "claude_interrupt",
-  AGENT_INTERRUPT: "agent_interrupt",
-  COMPACT: "claude_compact",
-  AGENT_COMPACT: "agent_compact",
+  SEND: "agent_send",
+  INTERRUPT: "agent_interrupt",
+  COMPACT: "agent_compact",
   SET_MODE: "claude_set_mode",
-  APPROVE: "claude_approve",
-  CLOSE: "claude_close_session",
-  AGENT_CLOSE: "agent_close_session",
+  RESOLVE_PERMISSION: "agent_resolve_permission",
+  CLOSE: "agent_close_session",
   TOOL_RESULT_DECISION: "claude_tool_result_decision",
   PLUGIN_HOOK_RESPONSE: "claude_plugin_hook_response",
   PLUGIN_TOOL_RESPONSE: "claude_plugin_tool_response",
@@ -130,8 +126,7 @@ export function commandToInbound(
   args: Record<string, unknown> = {}
 ): InboundMessage | null {
   switch (name) {
-    case COMMAND.SEND:
-    case COMMAND.AGENT_SEND: {
+    case COMMAND.SEND: {
       const msg: InboundMessage = {
         type: "send",
         sessionId: String(args.sessionId),
@@ -142,7 +137,6 @@ export function commandToInbound(
       return msg
     }
     case COMMAND.INTERRUPT:
-    case COMMAND.AGENT_INTERRUPT:
       return {
         type: "interrupt",
         sessionId: String(args.sessionId),
@@ -150,8 +144,7 @@ export function commandToInbound(
           ? { commandId: args.commandId }
           : {}),
       }
-    case COMMAND.COMPACT:
-    case COMMAND.AGENT_COMPACT: {
+    case COMMAND.COMPACT: {
       const msg: InboundMessage = { type: "compact", sessionId: String(args.sessionId) }
       const focus = args.focus
       if (typeof focus === "string" && focus.trim().length > 0) msg.focus = focus.trim()
@@ -170,7 +163,7 @@ export function commandToInbound(
       }
       return { type: "set_mode", sessionId: String(args.sessionId), mode }
     }
-    case COMMAND.APPROVE: {
+    case COMMAND.RESOLVE_PERMISSION: {
       const decision = String(args.decision)
       if (decision !== "allow" && decision !== "allow_always" && decision !== "deny") {
         throw new Error(`invalid approval decision: ${decision}`)
@@ -182,10 +175,13 @@ export function commandToInbound(
         decision,
         message: args.message as string | undefined,
         updatedInput: args.updatedInput,
+        ...(typeof args.interrupt === "boolean" ? { interrupt: args.interrupt } : {}),
+        ...(typeof args.commandId === "string" && args.commandId
+          ? { commandId: args.commandId }
+          : {}),
       }
     }
     case COMMAND.CLOSE:
-    case COMMAND.AGENT_CLOSE:
       return {
         type: "close",
         sessionId: String(args.sessionId),

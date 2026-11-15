@@ -137,12 +137,12 @@ beforeEach(() => {
     features: {
       "claude.host-tools": {
         version: 1,
-        operations: ["claude_send"],
+        operations: ["agent_send"],
       },
     },
     operations: [
       {
-        name: "claude_send",
+        name: "agent_send",
         feature: "claude.host-tools",
         featureVersion: 1,
         healthy: true,
@@ -317,7 +317,7 @@ describe("WebCompanionBootProvider", () => {
         connectionState: "online",
         host: {
           compatible: true,
-          operations: ["claude_send"],
+          operations: ["agent_send"],
           grants: ["agent.run"],
         },
       })

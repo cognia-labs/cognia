@@ -55,7 +55,6 @@ export function mergePerfFrames(
     ...snapshot,
     wireVersion: PERF_WIRE_VERSION,
     frames,
-    samples: frames,
     oldestSequence: frames[0]?.sequence ?? null,
     latestSequence: frames.at(-1)?.sequence ?? null,
     gaps,

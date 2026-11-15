@@ -87,8 +87,8 @@ describe("SandboxPlacementBadge", () => {
   })
 
   // Rule 7: an injected credential is readable by the agent, so only `none`
-  // may say the keys were stripped; `gateway-lease` is an older Host's name
-  // for brokered delivery.
+  // may say the keys were stripped; `gateway-lease` is the single-user Host's
+  // name for a managed task's brokered lease.
   it.each([
     ["injected-env", en.placement.tooltip.credentials.injectedEnv],
     ["brokered", en.placement.tooltip.credentials.brokered],

@@ -221,8 +221,7 @@
     "no_server": "No collaboration server is configured. Add its address in the Collaboration server settings.",
     "not_signed_in": "Sign in to your organization to use its collaboration server.",
     "server_unreachable": "The collaboration server cannot be reached right now.",
-    "not_offered": "Your collaboration server does not offer shared conversations.",
-    "protocol_unsupported": "Your collaboration server's shared-conversation protocol is older than this app supports. Update the server."
+    "not_offered": "Your collaboration server does not offer shared conversations."
   },
   "roomAsleep": "This conversation is asleep: Request AI is off until an owner or maintainer changes its reply mode.",
   "roomAsleepRefused": "This conversation is asleep, so the assistant did not answer. An owner or maintainer can change its reply mode in the room settings.",

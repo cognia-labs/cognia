@@ -15,7 +15,6 @@ use super::registry::{SpanSnapshot, REGISTRY};
 use super::runtime::{RuntimeSample, RuntimeSampler};
 
 pub const FRAME_EVENT: &str = "perf://frame";
-pub const SAMPLE_EVENT: &str = "perf://sample";
 pub const PERF_WIRE_VERSION: u8 = 1;
 pub const RING_CAP: usize = 120;
 pub const DEFAULT_INTERVAL_MS: u64 = 1000;
@@ -185,17 +184,12 @@ pub struct PerfFrame {
     pub collection_duration_ms: u64,
     pub missed_ticks: u64,
     pub flags: PerfFrameFlags,
-    // One-release compatibility payload.
-    pub ts_ms: i64,
-    pub interval_ms: u64,
     pub processes: Vec<ProcessSample>,
     pub runtime: RuntimeSample,
     pub top_spans: Vec<SpanSnapshot>,
     pub system_memory: Option<SystemMemory>,
     pub managed: Vec<crate::process_registry::ManagedProcess>,
 }
-
-pub type PerfSample = PerfFrame;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -222,7 +216,6 @@ pub struct PerfSnapshot {
     pub sources: Vec<PerfSourceDescriptor>,
     pub leases: Vec<PerfLease>,
     pub gaps: Vec<PerfGap>,
-    pub samples: Vec<PerfFrame>,
     pub running: bool,
     pub interval_ms: u64,
 }
@@ -237,7 +230,6 @@ struct LeaseEntry {
 
 struct SamplerInner {
     leases: HashMap<String, LeaseEntry>,
-    legacy_leases: VecDeque<String>,
     last_open_by_device: HashMap<String, i64>,
     last_renew_by_device: HashMap<String, i64>,
     ring: VecDeque<PerfFrame>,
@@ -300,7 +292,6 @@ impl Default for SamplerHandle {
             },
             inner: Mutex::new(SamplerInner {
                 leases: HashMap::new(),
-                legacy_leases: VecDeque::new(),
                 last_open_by_device: HashMap::new(),
                 last_renew_by_device: HashMap::new(),
                 ring: VecDeque::new(),
@@ -431,7 +422,6 @@ impl SamplerHandle {
         // the client holding the lease it already had.
         for lease_id in &superseded {
             inner.leases.remove(lease_id);
-            inner.legacy_leases.retain(|legacy| legacy != lease_id);
         }
         let lease = PerfLease {
             wire_version: PERF_WIRE_VERSION,
@@ -510,28 +500,9 @@ impl SamplerHandle {
         Ok(empty)
     }
 
-    pub fn close_legacy(&self) {
-        let lease_id = self.inner.lock().legacy_leases.pop_front();
-        if let Some(lease_id) = lease_id {
-            let _ = self.close(&lease_id, None);
-        }
-    }
-
-    pub fn set_legacy_interval(&self, interval_ms: u64) {
-        let cadence = interval_ms.clamp(LOCAL_MIN_INTERVAL_MS, MAX_INTERVAL_MS);
-        let mut inner = self.inner.lock();
-        let legacy_ids: Vec<_> = inner.legacy_leases.iter().cloned().collect();
-        for lease_id in legacy_ids {
-            if let Some(entry) = inner.leases.get_mut(&lease_id) {
-                entry.lease.requested_cadence_ms = cadence;
-            }
-        }
-    }
-
     pub fn halt(&self) {
         let mut inner = self.inner.lock();
         inner.leases.clear();
-        inner.legacy_leases.clear();
         self.running.store(false, Ordering::SeqCst);
         self.generation.fetch_add(1, Ordering::SeqCst);
     }
@@ -592,7 +563,6 @@ impl SamplerHandle {
             wire_version: PERF_WIRE_VERSION,
             oldest_sequence: frames.first().map(|frame| frame.sequence),
             latest_sequence: frames.last().map(|frame| frame.sequence),
-            samples: frames.clone(),
             frames,
             sources: vec![self.source()],
             leases,
@@ -713,29 +683,6 @@ pub fn open_lease(
     result
 }
 
-/// Compatibility adapter for the old local start command.
-pub fn start(handle: Arc<SamplerHandle>, interval_ms: u64, host_port: Arc<dyn PerfHostPort>) {
-    *handle.host_port.lock() = Some(host_port);
-    let legacy_id = uuid::Uuid::new_v4().to_string();
-    let result = handle.open(
-        PerfOpenLeaseRequest {
-            client_id: format!("legacy:{legacy_id}"),
-            device_id: format!("legacy:{legacy_id}"),
-            target_id: "local-desktop".to_string(),
-            routing_generation: 0,
-            purpose: PerfLeasePurpose::Live,
-            requested_cadence_ms: interval_ms.clamp(LOCAL_MIN_INTERVAL_MS, MAX_INTERVAL_MS),
-            source_id: None,
-        },
-        false,
-        super::now_ms(),
-    );
-    if let Some(lease) = result.lease {
-        handle.inner.lock().legacy_leases.push_back(lease.lease_id);
-        ensure_loop(handle);
-    }
-}
-
 pub fn ensure_loop(handle: Arc<SamplerHandle>) {
     if handle.running.swap(true, Ordering::SeqCst) {
         return;
@@ -819,8 +766,6 @@ pub fn ensure_loop(handle: Arc<SamplerHandle>) {
                     counter_reset: cadence_changed,
                     source_restarted: sequence == 1,
                 },
-                ts_ms: wall_end_ms,
-                interval_ms: actual_ms,
                 processes,
                 runtime,
                 top_spans,

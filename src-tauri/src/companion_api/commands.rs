@@ -532,10 +532,8 @@ pub async fn companion_list_devices() -> Result<Vec<security_store::DeviceSummar
 //
 // They previously wrote a set of process-global in-memory allow lists that no
 // gate had consulted since authorization moved into the store — so the switches
-// reported granting a permission they were not granting. The headless half of
-// that migration had already landed (`cognia-server devices grant` writes the
-// store, and `migrate_legacy_device_grants` imports the retired JSON file); this
-// is the desktop half.
+// reported granting a permission they were not granting. `cognia-server devices
+// grant` writes the same store on a headless host.
 
 /// Apply one elevated grant to a paired device.
 ///
@@ -694,30 +692,6 @@ pub async fn companion_set_ssh_files(device_id: String, allowed: bool) -> Result
         super::device_grants::GrantKind::SshFiles,
         allowed,
     )
-}
-
-/// Import the desktop's legacy Dexie grant flags into the SecurityStore, once.
-///
-/// The desktop's pre-migration truth was `pairedDevices.allowRemoteControl` and
-/// its two siblings, re-projected onto in-memory lists at every boot. Those
-/// lists are gone, so without this import an upgrading user would silently lose
-/// grants they had made. It shares the marker with the headless import in
-/// [`super::security_store::SecurityStore::migrate_legacy_device_grants`], so it
-/// runs at most once per host and a grant revoked afterwards can never be
-/// resurrected by a stale Dexie row on the next launch.
-///
-/// Returns whether the import actually ran.
-#[tauri::command]
-pub async fn companion_migrate_legacy_device_grants(
-    control: Vec<String>,
-    agent_control: Vec<String>,
-    terminal: Vec<String>,
-) -> Result<bool, String> {
-    let security = security_store::security_store()
-        .ok_or_else(|| "companion security store is unavailable".to_string())?;
-    security
-        .migrate_legacy_device_grants(&control, &agent_control, &terminal, unix_time_secs())
-        .map_err(|error| error.to_string())
 }
 
 /// Grant or revoke opt-in macOS Locked Use for a paired device.

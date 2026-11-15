@@ -6,11 +6,11 @@
 // `ProviderVault` storage layer, a thin `SubscriptionProvider` trait, and a
 // third provider (`opencode`, read-only discovery + paste-Zen-key).
 //
-// Storage shape (one keyring entry per provider):
-//   service = "com.cognia.subscription/v2"
-//   account = "anthropic" | "codex" | "opencode" | "commandcode"
-//   payload = JSON-encoded `ProviderVault { schemaVersion: 2, accounts: [...],
-//             activeAccountId: Option<UUIDv7>, preset: Option<ProviderPreset> }`
+// Storage shape (one encrypted secret-store entry per local account and provider):
+//   service = "com.cognia.subscription/v2/account/<localAccountId>"
+//   account = "anthropic" | "codex" | "opencode" | "commandcode" | <registered id>
+//   payload = JSON-encoded `ProviderVault { schemaVersion: 4, accounts: [...],
+//             activeAccountId: Option<UUIDv7>, presets: [...], defaultPresetId }`
 //
 // Anthropic usage tracking (rate-limit header parsing + Dexie + active probe)
 // is **deliberately** not abstracted into the trait; it lives in TS and
@@ -25,7 +25,6 @@ pub mod anthropic;
 pub mod api_key;
 pub mod codex;
 pub mod commandcode;
-pub mod migration;
 pub mod opencode;
 pub mod preset;
 pub mod provider;

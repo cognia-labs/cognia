@@ -299,11 +299,11 @@ test.describe("mobile — remote session control", () => {
     await expect
       .poll(() =>
         desktop.calls.find(
-          (call) => call.command === "claude_send" && call.body.sessionId === SESSION_ID
+          (call) => call.command === "agent_send" && call.body.sessionId === SESSION_ID
         )
       )
       .toMatchObject({
-        command: "claude_send",
+        command: "agent_send",
         body: { sessionId: SESSION_ID, prompt: FOLLOW_UP },
       })
 
@@ -312,10 +312,10 @@ test.describe("mobile — remote session control", () => {
     await expect
       .poll(() =>
         desktop.calls.find(
-          (call) => call.command === "claude_interrupt" && call.body.sessionId === SESSION_ID
+          (call) => call.command === "agent_interrupt" && call.body.sessionId === SESSION_ID
         )
       )
-      .toMatchObject({ command: "claude_interrupt", body: { sessionId: SESSION_ID } })
+      .toMatchObject({ command: "agent_interrupt", body: { sessionId: SESSION_ID } })
     await expect(page.getByTestId("remote-send")).toBeVisible()
 
     desktop.sendEvent({
@@ -339,11 +339,11 @@ test.describe("mobile — remote session control", () => {
       .poll(() =>
         desktop.calls.find(
           (call) =>
-            call.command === "claude_approve" && call.body.requestId === "approval-e2e-release"
+            call.command === "agent_resolve_permission" && call.body.requestId === "approval-e2e-release"
         )
       )
       .toMatchObject({
-        command: "claude_approve",
+        command: "agent_resolve_permission",
         body: {
           sessionId: SESSION_ID,
           requestId: "approval-e2e-release",

@@ -45,7 +45,7 @@ export function useSdkContextUsage(
   // member's partition runs no Claude SDK session of theirs) refuses the
   // control, so it is not asked: each refusal was a 503 per completed turn.
   const host = useRuntimeSnapshot().host
-  const hostSessionControls = !host?.compatible || host.operations.includes("claude_send")
+  const hostSessionControls = !host?.compatible || host.operations.includes("claude_sidecar_status")
   const enabled =
     hostSessionControls && agentHostAvailable(resolveAgentExecutionEnvironment()) && !!sessionId
 

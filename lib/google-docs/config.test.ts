@@ -48,7 +48,6 @@ it("sends the preference hint for native migration and derives readiness from me
     status: "connected",
     revision: "r1",
     credentialRevision: "c1",
-    needsIdentity: false,
   })
   expect(await getGoogleDocsSettings({ localAuthorization: LOCAL_PERSON_RUN })).toMatchObject({
     clientId: "client",
@@ -56,7 +55,7 @@ it("sends the preference hint for native migration and derives readiness from me
     accountEmail: "person@example.com",
     grantedScopes: GOOGLE_DOCS_SCOPE_STRING,
   })
-  expect(host.calls).toContainEqual({ action: "snapshot", legacyClientId: "client" })
+  expect(host.calls).toContainEqual({ action: "snapshot" })
   host.snapshot.lineages[0].status = "needs-reauth"
   expect(await getGoogleDocsSettings({ localAuthorization: LOCAL_PERSON_RUN })).toMatchObject({
     connected: false,

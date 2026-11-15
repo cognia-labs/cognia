@@ -4,7 +4,7 @@
 import { commandToInbound, COMMAND } from "./protocol"
 
 describe("commandToInbound", () => {
-  it("maps claude_send (with options)", () => {
+  it("maps agent_send (with options)", () => {
     expect(
       commandToInbound(COMMAND.SEND, { sessionId: "s1", prompt: "hi", options: { model: "m" } })
     ).toEqual({ type: "send", sessionId: "s1", prompt: "hi", options: { model: "m" } })
@@ -27,7 +27,7 @@ describe("commandToInbound", () => {
     })
   })
 
-  it("maps canonical lifecycle aliases without losing their idempotency keys", () => {
+  it("maps the lifecycle commands without losing their idempotency keys", () => {
     expect(commandToInbound("agent_interrupt", { sessionId: "s1", commandId: "cmd-2" })).toEqual({
       type: "interrupt",
       sessionId: "s1",
@@ -51,14 +51,14 @@ describe("commandToInbound", () => {
     expect("options" in (msg as object)).toBe(false)
   })
 
-  it("maps claude_interrupt", () => {
+  it("maps agent_interrupt", () => {
     expect(commandToInbound(COMMAND.INTERRUPT, { sessionId: "s1" })).toEqual({
       type: "interrupt",
       sessionId: "s1",
     })
   })
 
-  it("maps claude_compact with a trimmed focus", () => {
+  it("maps agent_compact with a trimmed focus", () => {
     expect(
       commandToInbound(COMMAND.COMPACT, { sessionId: "s1", focus: "  the API changes  " })
     ).toEqual({ type: "compact", sessionId: "s1", focus: "the API changes" })
@@ -74,22 +74,26 @@ describe("commandToInbound", () => {
     expect("focus" in (blank as object)).toBe(false)
   })
 
-  it("maps claude_approve with all fields", () => {
+  it("maps agent_resolve_permission with all fields", () => {
     expect(
-      commandToInbound(COMMAND.APPROVE, {
+      commandToInbound(COMMAND.RESOLVE_PERMISSION, {
         sessionId: "s1",
         requestId: "r1",
-        decision: "allow",
-        message: "ok",
+        decision: "deny",
+        message: "no",
         updatedInput: { a: 1 },
+        interrupt: true,
+        commandId: "cmd-5",
       })
     ).toEqual({
       type: "permission_response",
       sessionId: "s1",
       requestId: "r1",
-      decision: "allow",
-      message: "ok",
+      decision: "deny",
+      message: "no",
       updatedInput: { a: 1 },
+      interrupt: true,
+      commandId: "cmd-5",
     })
   })
 
@@ -114,7 +118,11 @@ describe("commandToInbound", () => {
 
   it("rejects an invalid approval decision", () => {
     expect(() =>
-      commandToInbound(COMMAND.APPROVE, { sessionId: "s1", requestId: "r1", decision: "maybe" })
+      commandToInbound(COMMAND.RESOLVE_PERMISSION, {
+        sessionId: "s1",
+        requestId: "r1",
+        decision: "maybe",
+      })
     ).toThrow(/invalid approval decision/)
   })
 
@@ -152,7 +160,7 @@ describe("commandToInbound", () => {
     })
   })
 
-  it("maps claude_close_session", () => {
+  it("maps agent_close_session", () => {
     expect(commandToInbound(COMMAND.CLOSE, { sessionId: "s1" })).toEqual({
       type: "close",
       sessionId: "s1",

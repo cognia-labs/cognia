@@ -6,7 +6,7 @@
  * Almost every agent surface reaches lifecycle hooks for free: chat, teammates,
  * connector auto-replies, scheduler runs, workflow agent nodes, plan steps and
  * issue-run adapters all bottom out at `runAndCaptureAssistantReply` →
- * `claude_send`, where the host injects the hook config before the sidecar
+ * `agent_send`, where the host injects the hook config before the sidecar
  * registers it.
  *
  * Three do not, and there was no way to find that out short of watching a hook

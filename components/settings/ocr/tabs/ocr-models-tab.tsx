@@ -42,8 +42,6 @@ export interface ModelStatus {
   model_dir: string
   files: ModelFileStatus[]
   total_bytes: number
-  legacy_files?: string[]
-  legacy_model_dir?: string
   reason?: string
 }
 
@@ -217,14 +215,7 @@ export function LocalModelManager(props: LocalModelManagerProps): React.ReactEle
               : t("ocr.modelStatus.download")}
         </Button>
       </div>
-      {status?.legacy_files?.length ? (
-        <p className="text-xs text-amber-700 dark:text-amber-400">
-          {t("ocr.modelStatus.legacyDetected", {
-            count: status.legacy_files.length,
-            path: status.legacy_model_dir ?? status.model_dir,
-          })}
-        </p>
-      ) : status && status.reason ? (
+      {status && status.reason ? (
         <p className="text-xs text-muted-foreground">{status.reason}</p>
       ) : status ? (
         <p className="text-xs text-muted-foreground">

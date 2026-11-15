@@ -5,7 +5,7 @@
  * `SendOptions` host-side (`src-tauri/src/claude/commands.rs`), so the sidecar
  * registers them as SDK-native hooks and every one of the 31 lifecycle events
  * fires with full blocking + context-injection semantics. The CLI's transport
- * maps `claude_send` straight to sidecar stdin (`cli/src/runtime/protocol.ts`),
+ * maps `agent_send` straight to sidecar stdin (`cli/src/runtime/protocol.ts`),
  * bypassing that injection entirely — and the CLI never injected `hooks`
  * itself. So the CLI had NO SDK-native hooks at all; its only engine was the
  * reduced `hook-runner.ts`, which is wired into the TUI alone and never parses

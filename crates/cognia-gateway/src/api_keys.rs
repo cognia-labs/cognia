@@ -5,14 +5,9 @@
 //! models, given an expiry, its own rate limit, and an enable/disable toggle.
 //!
 //! The whole list (secrets included) is persisted as one JSON blob in the
-//! OS-keyring-backed [`cognia_secrets::secret_store`] — the same place the old single
-//! token lived. Secrets never touch the plaintext config file, are never
-//! logged, and are only returned to the renderer on an explicit reveal.
-//!
-//! Backward compatibility: on first load, a legacy `bearer-token` keyring
-//! entry (from the single-token era) is migrated into a "Default" key and the
-//! legacy entry is deleted. Idempotent — once the keys blob exists, migration
-//! never runs again.
+//! encrypted [`cognia_secrets::secret_store`]. Secrets never touch the
+//! plaintext config file, are never logged, and are only returned to the
+//! renderer on an explicit reveal.
 
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
@@ -21,7 +16,6 @@ use cognia_secrets::secret_store;
 
 const SERVICE: &str = "com.cognia.gateway";
 const KEYS_ACCOUNT: &str = "api-keys";
-const LEGACY_TOKEN_ACCOUNT: &str = "bearer-token";
 
 /// Serializes tests that persist to the process-global `cfg(test)` secret store.
 /// The `api-keys` blob is shared across all test threads, so a concurrent
@@ -36,7 +30,7 @@ pub(crate) static STORE_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayApiKey {
-    /// Host-assigned local owner. Legacy unowned keys serve headless hosts only.
+    /// Host-assigned local owner. Unowned keys serve headless hosts only.
     #[serde(default)]
     pub owner_account_id: Option<String>,
     pub id: String,
@@ -49,9 +43,8 @@ pub struct GatewayApiKey {
     pub model_allowlist: Vec<String>,
     /// Run API scopes this key carries (ADR-0188 D8): `runs:create`,
     /// `runs:read`, `runs:cancel`, `runs:approve`, `artifacts:read`,
-    /// `feedback:write`. Empty — which every key written before this field
-    /// deserializes as — means passthrough only: the chat endpoints work as
-    /// they always have, and `/v1/runs` refuses the key.
+    /// `feedback:write`. Empty means passthrough only: the chat endpoints
+    /// work, and `/v1/runs` refuses the key.
     #[serde(default)]
     pub scopes: Vec<String>,
     /// Epoch-ms expiry; `None` = never expires.
@@ -104,8 +97,8 @@ impl GatewayApiKey {
         self.enabled && !self.is_expired(now_ms)
     }
 
-    /// Whether this key carries a Run API scope. A legacy key carries none, so
-    /// every Run API verb refuses it while the chat endpoints keep working.
+    /// Whether this key carries a Run API scope. A key without scopes reaches
+    /// no Run API verb while the chat endpoints keep working.
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.iter().any(|held| held == scope)
     }
@@ -169,38 +162,12 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-/// Load the persisted key list, running the one-time legacy migration if the
-/// blob is absent but an old single token exists.
+/// Load the persisted key list. No blob means no keys.
 pub fn load_keys() -> Result<Vec<GatewayApiKey>, String> {
-    if let Some(raw) = secret_store::get(SERVICE, KEYS_ACCOUNT)? {
-        let keys: Vec<GatewayApiKey> =
-            serde_json::from_str(&raw).map_err(|e| format!("corrupt gateway key store: {e}"))?;
-        return Ok(keys);
-    }
-    // No keys blob yet — migrate a legacy single token if present.
-    if let Some(legacy) = secret_store::get(SERVICE, LEGACY_TOKEN_ACCOUNT)? {
-        let migrated = vec![GatewayApiKey {
-            owner_account_id: None,
-            id: uuid::Uuid::new_v4().simple().to_string(),
-            name: "Default".to_string(),
-            secret: legacy,
-            model_allowlist: Vec::new(),
-            // A migrated legacy token is passthrough only until the user grants it scopes.
-            scopes: Vec::new(),
-            expires_at_ms: None,
-            enabled: true,
-            rate_limit_per_min: None,
-            quota_tokens: None,
-            quota_used_tokens: 0,
-            created_at_ms: now_ms(),
-            last_used_at_ms: None,
-        }];
-        save_keys(&migrated)?;
-        // Best-effort cleanup — the blob is now authoritative.
-        let _ = secret_store::delete(SERVICE, LEGACY_TOKEN_ACCOUNT);
-        return Ok(migrated);
-    }
-    Ok(Vec::new())
+    let Some(raw) = secret_store::get(SERVICE, KEYS_ACCOUNT)? else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str(&raw).map_err(|e| format!("corrupt gateway key store: {e}"))
 }
 
 pub fn save_keys(keys: &[GatewayApiKey]) -> Result<(), String> {
@@ -396,19 +363,19 @@ mod tests {
     }
 
     #[test]
-    fn key_owner_survives_persistence_while_legacy_keys_stay_unowned() {
-        let legacy = key("legacy", "synthetic-secret");
-        let mut owned = legacy.clone();
+    fn key_owner_survives_persistence_while_unowned_keys_stay_unowned() {
+        let unowned = key("unowned", "synthetic-secret");
+        let mut owned = unowned.clone();
         owned.owner_account_id = Some("account-a".into());
         let restored: GatewayApiKey =
             serde_json::from_str(&serde_json::to_string(&owned).unwrap()).unwrap();
         assert_eq!(restored.owner_account_id.as_deref(), Some("account-a"));
-        let mut legacy_json = serde_json::to_value(legacy).unwrap();
-        legacy_json
+        let mut unowned_json = serde_json::to_value(unowned).unwrap();
+        unowned_json
             .as_object_mut()
             .unwrap()
             .remove("ownerAccountId");
-        assert!(serde_json::from_value::<GatewayApiKey>(legacy_json)
+        assert!(serde_json::from_value::<GatewayApiKey>(unowned_json)
             .unwrap()
             .owner_account_id
             .is_none());

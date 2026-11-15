@@ -337,7 +337,7 @@ export const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
     scope: "builtin",
     category: "diagnostics",
     argumentHint: "[focus]",
-    // Routes a `claude_compact` control message to the sidecar so manual
+    // Routes a `agent_compact` control message to the sidecar so manual
     // compaction works on BOTH paths: the generic (AI-SDK) path runs a summary
     // now; the Anthropic path pushes a `/compact` turn the Agent SDK intercepts.
     // An optional focus arg (e.g. `/compact the API changes`) steers what the

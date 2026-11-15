@@ -412,8 +412,6 @@ export class RendererPerformanceCollector {
         counterReset: false,
         sourceRestarted: this.sequence === 1,
       },
-      tsMs: wallEndMs,
-      intervalMs: actualIntervalMs,
       processes: [],
       runtime: {
         workers: 0,

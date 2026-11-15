@@ -5,7 +5,7 @@
  *
  * Renders a pending `permission_request` the host routed to this device and
  * lets the operator allow / allow-for-session / deny it. Resolves through
- * `useRemoteSessionStream().respond`, which calls `claude_approve` on the host.
+ * `useRemoteSessionStream().respond`, which calls `agent_resolve_permission` on the host.
  *
  * The body and the actions come from the shared
  * `PendingDecisionSurface` — this file used to reimplement both, and did it

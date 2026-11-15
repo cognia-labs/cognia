@@ -7612,7 +7612,7 @@ export function useClaudeChat() {
         }
 
         // Seal the renderer state before waiting for the IPC acknowledgement.
-        // `claude_interrupt` is best-effort transport control; if its promise is
+        // `agent_interrupt` is best-effort transport control; if its promise is
         // delayed by a busy sidecar, the GUI must still leave the streaming
         // state immediately and preserve the latest partial response.
         const coalesce = registry.get(sessionId)

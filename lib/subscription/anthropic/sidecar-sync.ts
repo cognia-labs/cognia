@@ -23,7 +23,7 @@ import { setActiveAccount } from "../core/transport"
 
 /**
  * Activate an Anthropic account. Triggers the sidecar restart that makes the
- * new bearer effective on the next `claude_send`.
+ * new bearer effective on the next `agent_send`.
  *
  * @param accountId UUIDv7 of the account stored in the v2 vault.
  */

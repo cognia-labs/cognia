@@ -12,7 +12,7 @@
  *   - `@/stores/chat`         → real Zustand store holds the session messages
  *
  * What we fake:
- *   - `@/lib/claude/ipc`      → `sendPrompt` (assert the claude_send call) and
+ *   - `@/lib/claude/ipc`      → `sendPrompt` (assert the agent_send call) and
  *                               `onClaudeMessage` (capture the handler so we can
  *                               inject fake `claude://message` events ourselves)
  *   - DB / goal / loop / plugin-bus / external-agent → no-op side channels that
@@ -21,7 +21,7 @@
  * The flow under test (all real except the sidecar):
  *   1. user types + clicks send
  *   2. useClaudeChat.send → optimistic user bubble in the real store (sync)
- *   3. send → sendPrompt("claude_send", …)  ← the sidecar boundary, asserted
+ *   3. send → sendPrompt("agent_send", …)  ← the sidecar boundary, asserted
  *   4. we inject an SDKEventEnvelope assistant event on the captured handler
  *   5. real handleEvent → real applySdkEvent → real store → assistant bubble
  *
@@ -590,7 +590,7 @@ describe("chat main flow (integration)", () => {
 
 // ── W3.1: plugin tool hooks over the real chat pump ──────────────────────────
 // A plugin's `onPreToolUse` deny must resolve the sidecar's canUseTool
-// round-trip (claude_approve deny) before any user-facing approval flow, and
+// round-trip (agent_resolve_permission deny) before any user-facing approval flow, and
 // `onPostToolUse` must answer `tool_result_review` with the rewritten output.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { usePluginStore } = require("@/stores/plugin-runtime") as {

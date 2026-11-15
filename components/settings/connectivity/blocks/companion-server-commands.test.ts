@@ -24,16 +24,11 @@ jest.mock("@/lib/db/paired-devices", () => ({
 describe("companion-server-commands", () => {
   beforeEach(() => call.mockReset().mockResolvedValue(27890))
 
-  it("starts the server on the default port and replays the grant import", async () => {
+  it("starts the server on the default port and reseeds Locked Use", async () => {
     await expect(startServer("lan")).resolves.toBe(27890)
     expect(call).toHaveBeenNthCalledWith(1, "companion_server_start", {
       port: DEFAULT_PORT,
       bindLoopbackOnly: false,
-    })
-    expect(call).toHaveBeenCalledWith("companion_migrate_legacy_device_grants", {
-      control: ["a"],
-      agentControl: [],
-      terminal: [],
     })
     expect(call).toHaveBeenCalledWith("companion_seed_locked_computer_use", { deviceIds: ["a"] })
   })

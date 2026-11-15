@@ -31,39 +31,15 @@ use cognia_signaling_core::protocol::{derive_room_id, encode_fields, PROTOCOL_VE
 
 pub const CLOCK_SKEW_MS: i64 = 5 * 60 * 1000;
 pub const SIGNALING_KEY_NAMESPACE: &str = "companion-signaling";
-/// Namespace used before the protocol-version suffix was dropped from these
-/// names. Devices paired by an older build still have the Host's role private
-/// key filed here; without a fallback every one of them would come back as
-/// "signaling identity is missing from the host keyring" after an upgrade and
-/// need a manual re-pair.
-pub const LEGACY_SIGNALING_KEY_NAMESPACE: &str = "companion-signaling-v2";
 
-/// Load a Host signaling identity, migrating a pre-rename entry forward.
-///
-/// The migration is best effort: if the rewrite fails we still return the key,
-/// because a working WebRTC session matters more than tidy keychain bookkeeping
-/// and the next call simply retries.
+/// Load a Host signaling identity.
 pub fn load_signaling_key(key_ref: &str) -> Result<Option<String>, String> {
-    if let Some(key) = cognia_secrets::keyring_secrets::get(SIGNALING_KEY_NAMESPACE, key_ref)? {
-        return Ok(Some(key));
-    }
-    let Some(legacy) =
-        cognia_secrets::keyring_secrets::get(LEGACY_SIGNALING_KEY_NAMESPACE, key_ref)?
-    else {
-        return Ok(None);
-    };
-    if cognia_secrets::keyring_secrets::set(SIGNALING_KEY_NAMESPACE, key_ref, &legacy).is_ok() {
-        let _ = cognia_secrets::keyring_secrets::clear(LEGACY_SIGNALING_KEY_NAMESPACE, key_ref);
-    }
-    Ok(Some(legacy))
+    cognia_secrets::keyring_secrets::get(SIGNALING_KEY_NAMESPACE, key_ref)
 }
 
-/// Remove a Host signaling identity from both namespaces, so revoking a device
-/// paired by an older build does not strand its key in the keychain forever.
+/// Remove a Host signaling identity.
 pub fn clear_signaling_key(key_ref: &str) -> Result<(), String> {
-    let current = cognia_secrets::keyring_secrets::clear(SIGNALING_KEY_NAMESPACE, key_ref);
-    let legacy = cognia_secrets::keyring_secrets::clear(LEGACY_SIGNALING_KEY_NAMESPACE, key_ref);
-    current.and(legacy)
+    cognia_secrets::keyring_secrets::clear(SIGNALING_KEY_NAMESPACE, key_ref)
 }
 const RETIRED_EPOCH_TTL_MS: i64 = CLOCK_SKEW_MS * 2;
 

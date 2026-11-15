@@ -29,8 +29,6 @@ const frame: PerfFrame = {
   collectionDurationMs: 1,
   missedTicks: 0,
   flags: { reset: true, discontinuity: false, counterReset: false, sourceRestarted: true },
-  tsMs: 1100,
-  intervalMs: 1000,
   processes: [],
   runtime: {
     workers: 0,

@@ -121,8 +121,6 @@ beforeEach(() => {
     lineages: [],
     clients: [],
     pending: [],
-    migrationNeedsClientId: false,
-    backupMigrationNeedsClientId: false,
   })
   ;(subscribeGoogleStateChanged as jest.Mock).mockImplementation(() => () => undefined)
   ;(subscribeGoogleDocsSettings as jest.Mock).mockImplementation(() => () => undefined)
@@ -269,11 +267,9 @@ function connection(overrides: Partial<AuthConnectionRow> = {}): AuthConnectionR
 function showConnections(rows: AuthConnectionRow[], lineages: Partial<GoogleLineage>[] = []) {
   ;(listGoogleConnections as jest.Mock).mockResolvedValue(rows)
   ;(googleState as jest.Mock).mockResolvedValue({
-    lineages: lineages.map((lineage) => ({ id: "native-ada", needsIdentity: false, ...lineage })),
+    lineages: lineages.map((lineage) => ({ id: "native-ada", ...lineage })),
     clients: [],
     pending: [],
-    migrationNeedsClientId: false,
-    backupMigrationNeedsClientId: false,
   })
 }
 
@@ -343,8 +339,6 @@ describe("DocsProvidersCard — Google connections", () => {
       lineages: [],
       clients: [{ clientId: "cid", hasClientSecret: true }],
       pending: [],
-      migrationNeedsClientId: false,
-      backupMigrationNeedsClientId: false,
     })
     const user = userEvent.setup()
     renderCard()
@@ -354,8 +348,6 @@ describe("DocsProvidersCard — Google connections", () => {
       lineages: [],
       clients: [],
       pending: [],
-      migrationNeedsClientId: false,
-      backupMigrationNeedsClientId: false,
     })
     await user.click(screen.getByRole("button", { name: "Clear saved secret" }))
     await waitFor(() => expect(clearGoogleClientSecret).toHaveBeenCalledWith("cid"))
@@ -374,20 +366,6 @@ describe("DocsProvidersCard — Google connections", () => {
     await user.click(screen.getByRole("button", { name: "Save secret" }))
     await waitFor(() => expect(saveGoogleClientSecret).toHaveBeenCalledWith("replacement", "cid"))
     expect(screen.getByLabelText("OAuth client secret")).toHaveValue("")
-    expect(beginAuthMock).not.toHaveBeenCalled()
-  })
-
-  it("prompts legacy identities to reauthorize the exact Host connection", async () => {
-    showConnections([connection()], [{ needsIdentity: true }])
-    const user = userEvent.setup()
-    renderCard()
-    await screen.findByText("Reauthorize to confirm this Google account's identity.")
-    await user.click(screen.getByRole("button", { name: "Reauthorize" }))
-    await waitFor(() =>
-      expect(authorizeGoogleConnection).toHaveBeenCalledWith("connection-ada", {
-        localAuthorization: LOCAL_PERSON_RUN,
-      })
-    )
     expect(beginAuthMock).not.toHaveBeenCalled()
   })
 
@@ -440,22 +418,6 @@ describe("DocsProvidersCard — Google connections", () => {
       jest.useRealTimers()
     }
     expect(screen.queryByRole("link", { name: "Google Drive backup" })).not.toBeInTheDocument()
-  })
-
-  it("explains when a legacy saved secret still needs its client id", async () => {
-    ;(googleState as jest.Mock).mockResolvedValue({
-      lineages: [],
-      clients: [],
-      pending: [],
-      migrationNeedsClientId: true,
-      backupMigrationNeedsClientId: false,
-    })
-    renderCard()
-    expect(
-      await screen.findByText(
-        "Enter the OAuth client ID associated with your saved secret to finish setup."
-      )
-    ).toBeVisible()
   })
 
   it("reports a localized reason when authorization cannot start", async () => {

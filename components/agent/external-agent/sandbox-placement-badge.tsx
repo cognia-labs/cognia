@@ -35,8 +35,8 @@ import { cn } from "@/lib/utils"
 
 /**
  * One sentence per delivery mode: an injected credential is readable by the
- * agent, so it must never read as stripped (Rule 7). `gateway-lease` is an
- * older Host's name for brokered delivery.
+ * agent, so it must never read as stripped (Rule 7). `gateway-lease` is the
+ * single-user Host's name for a managed task's brokered lease.
  */
 const CREDENTIAL_KEYS: Record<CredentialDelivery, "brokered" | "injectedEnv" | "none"> = {
   brokered: "brokered",

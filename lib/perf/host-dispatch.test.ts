@@ -27,7 +27,7 @@ afterEach(resetPerformanceHostAdapterForTesting)
 it("recognizes only the selected-host lease contract", () => {
   expect(isPerformanceHostCommand("perf_open_lease")).toBe(true)
   expect(isPerformanceHostCommand("perf_system_details")).toBe(true)
-  expect(isPerformanceHostCommand("perf_start_sampling")).toBe(false)
+  expect(isPerformanceHostCommand("perf_snapshot")).toBe(false)
   expect(isPerformanceHostCommand("perf_reset_hotspots")).toBe(false)
 })
 

@@ -4,7 +4,6 @@ import type {
   SessionTimelineRequest,
   SessionTurnMessagesPage,
   SessionTurnMessagesRequest,
-  StoredMessage,
   TranscriptCapabilitiesV1,
 } from "@cognia/agent-config-types"
 import {
@@ -22,20 +21,14 @@ import {
   TRANSCRIPT_LIVE_TOPIC,
   type TranscriptLiveFrame,
 } from "./live-frames"
-import { projectTranscriptTimeline } from "./projection"
 
 export interface TranscriptSource {
-  capabilities(): Promise<TranscriptCapabilitiesV1 | null>
+  capabilities(): Promise<TranscriptCapabilitiesV1>
   timeline(request: SessionTimelineRequest): Promise<SessionTimelinePage>
   turnMessages(request: SessionTurnMessagesRequest): Promise<SessionTurnMessagesPage>
   subscribeRevision?(sessionId: string, listener: (revision: number) => void): () => void
   /** A member agent's in-flight reply, as the Host relays it (`live-frames.ts`). */
   subscribeLive?(sessionId: string, listener: (frame: TranscriptLiveFrame) => void): () => void
-}
-
-interface LegacyMessagePage {
-  rows: StoredMessage[]
-  next_offset?: number
 }
 
 export function transcriptCapabilitiesV1(): TranscriptCapabilitiesV1 {
@@ -50,48 +43,7 @@ export function transcriptCapabilitiesV1(): TranscriptCapabilitiesV1 {
   }
 }
 
-function isMethodNotFound(error: unknown): boolean {
-  const record = error && typeof error === "object" ? (error as Record<string, unknown>) : undefined
-  const code = record?.code
-  const status = record?.status ?? record?.statusCode
-  const message = error instanceof Error ? error.message : String(record?.message ?? "")
-  return (
-    code === -32601 ||
-    code === "METHOD_NOT_FOUND" ||
-    status === 404 ||
-    status === 405 ||
-    /\bmethod not found\b/i.test(message)
-  )
-}
-
-async function loadLegacyMessages(
-  transport: Transport,
-  sessionId: string
-): Promise<StoredMessage[]> {
-  const rows: StoredMessage[] = []
-  let offset: number | undefined = 0
-  do {
-    const page: LegacyMessagePage = await transport.call<LegacyMessagePage>(
-      "message_get_by_session",
-      {
-        session_id: sessionId,
-        limit: 200,
-        offset,
-      }
-    )
-    rows.push(...page.rows)
-    offset = page.next_offset
-  } while (offset !== undefined)
-  return rows
-}
-
-/**
- * Transcript adapter for Companion/RTC transports.
- *
- * Capability absence is the only downgrade path. Once the host advertises V1,
- * timeouts, stale revisions, authorization failures, and server errors remain
- * visible to the controller instead of triggering an unbounded legacy read.
- */
+/** Transcript adapter for Companion/RTC transports. */
 export interface RemoteTranscriptSourceOptions {
   /**
    * Tell the source the transport was replaced, so a live revision
@@ -111,20 +63,15 @@ export function createRemoteTranscriptSource(
   // up until a reload rebuilt the module.
   const current = typeof transport === "function" ? transport : () => transport
   // The capability answer belongs to the transport (host) that gave it.
-  const capabilityState = new WeakMap<Transport, TranscriptCapabilitiesV1 | null>()
+  const capabilityState = new WeakMap<Transport, TranscriptCapabilitiesV1>()
 
-  const capabilities = async (): Promise<TranscriptCapabilitiesV1 | null> => {
+  const capabilities = async (): Promise<TranscriptCapabilitiesV1> => {
     const target = current()
-    if (capabilityState.has(target)) return capabilityState.get(target) ?? null
-    try {
-      const answer = await target.call<TranscriptCapabilitiesV1>("transcript_capabilities", {})
-      capabilityState.set(target, answer)
-      return answer
-    } catch (error) {
-      if (!isMethodNotFound(error)) throw error
-      capabilityState.set(target, null)
-      return null
-    }
+    const known = capabilityState.get(target)
+    if (known) return known
+    const answer = await target.call<TranscriptCapabilitiesV1>("transcript_capabilities", {})
+    capabilityState.set(target, answer)
+    return answer
   }
 
   return {
@@ -167,76 +114,39 @@ export function createRemoteTranscriptSource(
       }
     },
     async timeline(request) {
-      const supported = await capabilities()
-      if (supported) {
-        return current().call<SessionTimelinePage>("session_timeline", {
-          session_id: request.sessionId,
-          direction: request.direction,
-          cursor: request.cursor,
-          limit: request.limit,
-        })
-      }
-      const rows = await loadLegacyMessages(current(), request.sessionId)
-      const items = projectTranscriptTimeline({
-        sessionId: request.sessionId,
-        revision: 0,
-        messages: rows,
+      return current().call<SessionTimelinePage>("session_timeline", {
+        session_id: request.sessionId,
+        direction: request.direction,
+        cursor: request.cursor,
+        limit: request.limit,
       })
-      const limit = Math.min(Math.max(request.limit ?? 30, 1), TRANSCRIPT_TIMELINE_PAGE_MAX)
-      return { items: items.slice(-limit), revision: 0, hasMore: items.length > limit }
     },
     async turnMessages(request) {
-      const supported = await capabilities()
-      if (supported) {
-        // The wire pages by pageSize/pageToken and answers the page envelope
-        // (ADR-0175 B3). The transcript protocol keeps its own cursor words,
-        // so the token rides in `nextCursor` and comes back as `cursor`.
-        const page = await current().call<
-          Page<SessionTurnMessagesPage["messages"][number]> &
-            Pick<
-              SessionTurnMessagesPage,
-              "revision" | "detailRevision" | "total" | "approximateBytes"
-            >
-        >("session_turn_messages", {
-          session_id: request.sessionId,
-          turn_key: request.turnKey,
-          revision: request.revision,
-          detail_revision: request.detailRevision,
-          pageSize: request.limit,
-          pageToken: request.cursor,
-        })
-        return {
-          messages: page.items,
-          revision: page.revision,
-          detailRevision: page.detailRevision,
-          total: page.total,
-          approximateBytes: page.approximateBytes,
-          ...(page.nextPageToken ? { nextCursor: page.nextPageToken } : {}),
-          hasMore: Boolean(page.nextPageToken),
-        }
-      }
-      const rows = await loadLegacyMessages(current(), request.sessionId)
-      const messages = rows.filter(
-        (message) => message.turnKey === request.turnKey || `turn:${message.id}` === request.turnKey
-      )
-      const approximateBytes = new TextEncoder().encode(JSON.stringify(messages)).byteLength
+      // The wire pages by pageSize/pageToken and answers the page envelope
+      // (ADR-0175 B3). The transcript protocol keeps its own cursor words,
+      // so the token rides in `nextCursor` and comes back as `cursor`.
+      const page = await current().call<
+        Page<SessionTurnMessagesPage["messages"][number]> &
+          Pick<
+            SessionTurnMessagesPage,
+            "revision" | "detailRevision" | "total" | "approximateBytes"
+          >
+      >("session_turn_messages", {
+        session_id: request.sessionId,
+        turn_key: request.turnKey,
+        revision: request.revision,
+        detail_revision: request.detailRevision,
+        pageSize: request.limit,
+        pageToken: request.cursor,
+      })
       return {
-        messages: messages.map((message) => ({
-          id: message.id,
-          sessionId: message.sessionId,
-          ...(message.turnKey ? { turnKey: message.turnKey } : {}),
-          role: message.role,
-          parts: message.parts,
-          ...(message.senderId ? { senderId: message.senderId } : {}),
-          ...(message.senderKind ? { senderKind: message.senderKind } : {}),
-          ...(message.metadata ? { metadata: message.metadata } : {}),
-          createdAt: message.createdAt,
-        })),
-        revision: 0,
-        detailRevision: 0,
-        total: messages.length,
-        approximateBytes,
-        hasMore: false,
+        messages: page.items,
+        revision: page.revision,
+        detailRevision: page.detailRevision,
+        total: page.total,
+        approximateBytes: page.approximateBytes,
+        ...(page.nextPageToken ? { nextCursor: page.nextPageToken } : {}),
+        hasMore: Boolean(page.nextPageToken),
       }
     },
   }

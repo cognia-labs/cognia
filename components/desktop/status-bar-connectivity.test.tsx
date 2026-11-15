@@ -59,7 +59,7 @@ jest.mock("@/hooks/use-runtime-snapshot", () => ({
     connectionState: mockRuntimeConnection,
     host:
       mockTarget?.kind === "companion"
-        ? { compatible: mockHostCompatible, operations: ["claude_send"], grants: ["claude.chat"] }
+        ? { compatible: mockHostCompatible, operations: ["agent_send"], grants: ["claude.chat"] }
         : undefined,
   }),
 }))

@@ -92,48 +92,6 @@ const LIFECYCLE_WAIT_STEPS: u32 = 200;
 /// rectangle. Reset on every new build and on destroy.
 static SPRITE_FIRST_PAINT_DONE: AtomicBool = AtomicBool::new(false);
 
-/// tao "physical" rectangle `(x, y, width, height)`.
-type PhysicalRect = (f64, f64, f64, f64);
-
-/// Index of the first rectangle containing `point` (half-open on the far
-/// edges, so two monitors that touch never both claim the seam). Pure so the
-/// monitor pick is unit-tested without a display.
-fn index_of_rect_containing(point: (f64, f64), rects: &[PhysicalRect]) -> Option<usize> {
-    rects.iter().position(|&(x, y, w, h)| {
-        point.0 >= x && point.0 < x + w && point.1 >= y && point.1 < y + h
-    })
-}
-
-/// Convert a saved position persisted before saved positions were desktop
-/// units (`PetPositionSpace::Legacy`) into desktop units.
-///
-/// Those were tao "physical" pixels: on macOS the spot's points times the
-/// scale of the display the pet stood on. The display is found the way the
-/// pre-desktop-units open found it — the first tao rect containing `probe`
-/// (the window's approximate centre) — and its scale divided back out; with
-/// none containing it, `fallback_scale` (the primary display's). Elsewhere
-/// tao's physical pixels already are desktop units.
-fn legacy_position_to_desktop(
-    saved: (f64, f64),
-    probe: (f64, f64),
-    tao_monitors: &[(PhysicalRect, f64)],
-    fallback_scale: f64,
-    units_are_points: bool,
-) -> (f64, f64) {
-    if !units_are_points {
-        return saved;
-    }
-    let rects: Vec<PhysicalRect> = tao_monitors.iter().map(|(rect, _)| *rect).collect();
-    let scale = index_of_rect_containing(probe, &rects)
-        .map_or(fallback_scale, |index| tao_monitors[index].1);
-    let scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    };
-    (saved.0 / scale, saved.1 / scale)
-}
-
 /// The pet window's outer frame in desktop units.
 fn window_frame<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<DesktopRect, String> {
     let position = window.outer_position().map_err(|e| e.to_string())?;
@@ -232,14 +190,9 @@ fn monitor_key(monitor: &tauri::Monitor) -> MonitorKey {
 
 /// The coordinate space of a saved pet position. Mirrors the TS
 /// `PetPositionSpace` (`PetDesktopOverlaySettings.position.space`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PetPositionSpace {
-    /// Saved before positions were desktop units, as tao "physical" pixels.
-    /// What an unmarked position means; `legacy_position_to_desktop` converts
-    /// it on open, and the next settle re-saves it marked `Desktop`.
-    #[default]
-    Legacy,
     /// Desktop units (`desktop_space`).
     Desktop,
 }
@@ -261,9 +214,10 @@ pub struct PetWindowOpts {
     /// Saved top-left Y, if the user has dragged before.
     #[serde(default)]
     pub y: Option<f64>,
-    /// The space `x` / `y` are in.
+    /// The space `x` / `y` are in. A position without it is not in desktop
+    /// units and is ignored.
     #[serde(default)]
-    pub position_space: PetPositionSpace,
+    pub position_space: Option<PetPositionSpace>,
     /// When true the window ignores cursor events (click-through mode).
     #[serde(default = "default_click_through")]
     pub click_through: bool,
@@ -509,10 +463,10 @@ fn open_pet_window_claimed<R: Runtime>(
     // by the display's scale — then apply it with `place_window`, never the
     // builder's `.position()` (logical everywhere, so on a Windows display at
     // 150% it would land at 1/1.5 of the target).
-    let saved = opts.x.zip(opts.y).map(|saved| match opts.position_space {
-        PetPositionSpace::Desktop => saved,
-        PetPositionSpace::Legacy => legacy_position(app, saved, (opts.width, opts.height)),
-    });
+    let saved = opts
+        .x
+        .zip(opts.y)
+        .filter(|_| opts.position_space == Some(PetPositionSpace::Desktop));
     let (x, y) = resolve_sprite_position(
         saved,
         (opts.width, opts.height),
@@ -1030,44 +984,6 @@ fn resize_position(
     ))
 }
 
-/// A legacy saved position (see `legacy_position_to_desktop`) in desktop units.
-fn legacy_position<R: Runtime>(
-    app: &AppHandle<R>,
-    saved: (f64, f64),
-    logical: (f64, f64),
-) -> (f64, f64) {
-    let tao_monitors: Vec<(PhysicalRect, f64)> = app
-        .available_monitors()
-        .unwrap_or_default()
-        .iter()
-        .map(|monitor| {
-            let position = monitor.position();
-            let size = monitor.size();
-            (
-                (
-                    f64::from(position.x),
-                    f64::from(position.y),
-                    f64::from(size.width),
-                    f64::from(size.height),
-                ),
-                monitor.scale_factor(),
-            )
-        })
-        .collect();
-    let fallback_scale = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map_or(1.0, |monitor| monitor.scale_factor());
-    legacy_position_to_desktop(
-        saved,
-        (saved.0 + logical.0 / 2.0, saved.1 + logical.1 / 2.0),
-        &tao_monitors,
-        fallback_scale,
-        desktop_space::DESKTOP_UNITS_ARE_POINTS,
-    )
-}
-
 /// Named position DTO — a bare Rust tuple would serialize as a JSON array,
 /// which the TS wrapper (typed `{ x, y }`) silently read as `undefined`s and
 /// broke overlay dragging. Keep this a struct.
@@ -1245,14 +1161,6 @@ mod tests {
                 1.0,
                 true,
             ),
-        ]
-    }
-
-    /// The same pair in tao's numbers, for the legacy-position conversion.
-    fn mac_pair_tao() -> Vec<(PhysicalRect, f64)> {
-        vec![
-            ((0.0, 0.0, 3024.0, 1964.0), 2.0),
-            ((1512.0, 0.0, 2560.0, 1440.0), 1.0),
         ]
     }
 
@@ -1481,50 +1389,6 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_saved_position_is_divided_by_its_display_s_scale() {
-        // A pet saved at (600, 500)pt on the Retina laptop was stored as
-        // tao's (1200, 1000).
-        assert_eq!(
-            legacy_position_to_desktop(
-                (1200.0, 1000.0),
-                (1312.0, 1144.0),
-                &mac_pair_tao(),
-                2.0,
-                true
-            ),
-            (600.0, 500.0)
-        );
-        // Below the external display's tao rect and outside the laptop's: the
-        // primary display's scale.
-        assert_eq!(
-            legacy_position_to_desktop(
-                (3200.0, 2000.0),
-                (3312.0, 2144.0),
-                &mac_pair_tao(),
-                2.0,
-                true
-            ),
-            (1600.0, 1000.0)
-        );
-        // A broken scale is treated as one.
-        assert_eq!(
-            legacy_position_to_desktop((100.0, 100.0), (150.0, 150.0), &[], 0.0, true),
-            (100.0, 100.0)
-        );
-        // Pixel platforms: tao's physical pixels already are desktop units.
-        assert_eq!(
-            legacy_position_to_desktop(
-                (1200.0, 1000.0),
-                (1312.0, 1144.0),
-                &mac_pair_tao(),
-                2.0,
-                false
-            ),
-            (1200.0, 1000.0)
-        );
-    }
-
-    #[test]
     fn fallback_to_bottom_right_when_unsaved() {
         let (x, y) = resolve_initial_position(None, WORK_AREA, WIN);
         assert_eq!(x, 1920.0 - 280.0 - EDGE_MARGIN);
@@ -1587,20 +1451,6 @@ mod tests {
         let area = (0.0, 0.0, 200.0, 200.0);
         let (x, y) = resolve_initial_position(Some((50.0, 50.0)), area, WIN);
         assert_eq!((x, y), (0.0, 0.0));
-    }
-
-    #[test]
-    fn rect_lookup_uses_physical_bounds_and_half_open_seams() {
-        // The legacy-position lookup over tao rects. A 2x Retina laptop
-        // (3456x2234 physical) with a 1x external display to its right.
-        let rects = [(0.0, 0.0, 3456.0, 2234.0), (3456.0, 0.0, 1920.0, 1080.0)];
-        assert_eq!(index_of_rect_containing((100.0, 100.0), &rects), Some(0));
-        assert_eq!(index_of_rect_containing((3500.0, 200.0), &rects), Some(1));
-        // The shared seam belongs to the right-hand monitor only.
-        assert_eq!(index_of_rect_containing((3456.0, 10.0), &rects), Some(1));
-        // Below the shorter external display: no monitor.
-        assert_eq!(index_of_rect_containing((4000.0, 1500.0), &rects), None);
-        assert_eq!(index_of_rect_containing((-1.0, 0.0), &rects), None);
     }
 
     #[test]
@@ -1741,13 +1591,13 @@ mod tests {
         assert_eq!(opts.x, Some(120.0));
         assert_eq!(opts.y, Some(80.0));
         assert!(opts.click_through);
-        // An unmarked position is a pre-desktop-units one.
-        assert_eq!(opts.position_space, PetPositionSpace::Legacy);
+        // An unmarked position carries no space.
+        assert_eq!(opts.position_space, None);
         let opts: PetWindowOpts = serde_json::from_str(
             r#"{"width":300,"height":340,"x":120,"y":80,"positionSpace":"desktop"}"#,
         )
         .unwrap();
-        assert_eq!(opts.position_space, PetPositionSpace::Desktop);
+        assert_eq!(opts.position_space, Some(PetPositionSpace::Desktop));
         assert!(serde_json::from_str::<PetWindowOpts>(
             r#"{"width":300,"height":340,"positionSpace":"pixels"}"#
         )

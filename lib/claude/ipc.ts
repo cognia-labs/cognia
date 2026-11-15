@@ -660,14 +660,7 @@ async function dispatchPrompt(
     // The listener setup yielded; context may have become personal meanwhile.
     if (await personalEgressFenced(context)) options = { ...options, personalEgressFenced: true }
   }
-  // Paired Hosts expose current SendOptions through the canonical command.
-  // The legacy claude_send contract predates tool surfaces and model budgets.
-  // Local legacy sends retain their existing alias and transcript admission.
   const messageId = route.pairedHost ? delivery?.messageId : undefined
-  const command =
-    route.pairedHost || options?.execution || delivery?.commandId || messageId
-      ? "agent_send"
-      : "claude_send"
   // Router + Fusion's routing inputs are renderer-only (a reseal reads them
   // from the cached or frozen options); the host never needs the prompt twice.
   let wireOptions = options
@@ -698,7 +691,7 @@ async function dispatchPrompt(
   }
   delivery?.onDispatch?.()
   try {
-    await pinned.transport.call(command, {
+    await pinned.transport.call("agent_send", {
       sessionId,
       prompt,
       options: wireOptions,
@@ -747,8 +740,7 @@ export async function interruptSession(
   const context = pluginToolSessionContextsFor(target.route).get(sessionId)
   // An unknown remote identity must never fall through to local cancellation.
   if (context || !target.remote) abortPluginToolCallsForSession(sessionId, "interrupted", context)
-  const command = options?.commandId ? "agent_interrupt" : "claude_interrupt"
-  await target.transport.call(command, {
+  await target.transport.call("agent_interrupt", {
     sessionId,
     ...(options?.commandId ? { commandId: options.commandId } : {}),
   })
@@ -769,14 +761,13 @@ export async function compactSession(
     hostOwnedTranscriptControl?: typeof HOST_OWNED_TRANSCRIPT_CONTROL
   }
 ): Promise<void> {
-  const command = options?.commandId ? "agent_compact" : "claude_compact"
   if (!hasNoLeakingPiiDeep(focus)) throw new Error("compact rejected by the renderer PII gate")
   const hostOwned = options?.hostOwnedTranscriptControl === HOST_OWNED_TRANSCRIPT_CONTROL
   const protection = hostOwned ? undefined : await sessionInjectionProtection(sessionId)
   assertSafeModelInput(focus, hostOwned || protection === true)
   await assertCurrentControlContentPolicy(sessionId, protection)
   await assertPersonalControlVisibility(sessionId, options)
-  await sessionControlRoute(sessionId).transport.call(command, {
+  await sessionControlRoute(sessionId).transport.call("agent_compact", {
     sessionId,
     focus,
     ...(options?.commandId ? { commandId: options.commandId } : {}),
@@ -1435,7 +1426,7 @@ export async function approveTool(
       )
         throw new Error("Local approval identity changed")
     } else
-      await sessionControlRoute(sessionId).transport.call("claude_approve", {
+      await sessionControlRoute(sessionId).transport.call("agent_resolve_permission", {
         sessionId,
         requestId,
         decision,
@@ -1560,7 +1551,7 @@ async function recordApprovalReceipt(
  * Answer a `tool_result_review` (the plugin Agent SDK's PostToolUse rewrite).
  * `updatedToolOutput` is the rewritten output the model should see; pass
  * `undefined` to leave the tool result unchanged. Mirrors
- * `approveTool`/`claude_approve` but for tool OUTPUT.
+ * `approveTool`/`agent_resolve_permission` but for tool OUTPUT.
  */
 export async function toolResultDecision(
   sessionId: string,
@@ -1637,8 +1628,7 @@ export async function closeSession(
   if (context || !target.remote)
     abortPluginToolCallsForSession(sessionId, "session closed", context)
   // Always the canonical command (ADR-0090): it is the one a person brain's
-  // channel and a member device's grant admit (P6c, ADR-0253 G12), and it
-  // closes exactly as the legacy `claude_close_session` alias does. Its
+  // channel and a member device's grant admit (P6c, ADR-0253 G12). Its
   // idempotency key is minted here when the caller has none.
   await target.transport.call("agent_close_session", {
     sessionId,
@@ -1799,7 +1789,7 @@ export async function subscribePluginToolExec(
 
 /**
  * Write a `plugin_tool_response` back onto the sidecar stdin so the pending
- * `pendingPluginToolCalls` entry resolves. Mirrors `approveTool`/`claude_approve`.
+ * `pendingPluginToolCalls` entry resolves. Mirrors `approveTool`/`agent_resolve_permission`.
  */
 export async function sendPluginToolResponse(
   resp: PluginToolExecResponse,

@@ -95,7 +95,7 @@ export function hookRuntimeCapability(id: HookRuntimeId): HookRuntimeDescriptor 
  * Agent surfaces that lifecycle hooks deliberately do NOT cover.
  *
  * Every other agent path bottoms out at `runAndCaptureAssistantReply` →
- * `claude_send`, where the host injects the hook config, so it is covered for
+ * `agent_send`, where the host injects the hook config, so it is covered for
  * free. These three do not: they build a renderer-side `LlmClient` and call the
  * provider directly, bypassing the sidecar where SDK-native hooks live.
  * Covering them would mean a fourth hook rail, not a fire site.

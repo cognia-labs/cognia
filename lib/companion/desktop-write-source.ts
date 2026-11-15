@@ -92,10 +92,7 @@ import {
   handleTeamRunStart,
 } from "@/lib/companion/agent-team-write-handlers"
 import { roomSend, roomSquadHandoffDecide, roomStop } from "@/lib/companion/room-write-handlers"
-import {
-  handleExecutionRunControl,
-  handleLegacyTeamRunControl,
-} from "@/lib/companion/execution-run-control-handler"
+import { handleExecutionRunControl } from "@/lib/companion/execution-run-control-handler"
 import {
   handleAgentTaskCancel,
   handleAgentTaskComment,
@@ -738,14 +735,8 @@ export async function dispatchCommand(
       return handleTeamTaskCreate(payload)
     case "team_task_comment":
       return handleTeamTaskComment(payload)
-    // Retired with ADR-0169: a team-addressed control carried no revision and
-    // no decision. An older client that still sends one is told to upgrade.
     case "team_run_start":
       return handleTeamRunStart(payload)
-    case "team_run_pause":
-    case "team_run_resume":
-    case "team_run_stop":
-      return handleLegacyTeamRunControl()
     // The one remote control seam for a run: the cockpit's own command,
     // revision-checked and idempotent, through the same gate.
     // ADR-0224 A7: the approvals unattended runs are parked on, and a paired
@@ -2502,7 +2493,7 @@ type ConnectorSegment = { type?: string; text?: string }
  *  connector platform and does NOT trigger an AI reply. It only appends a
  *  local `role: "user"` message row. Real connector outbound goes through
  *  `connector_approve_draft` → the desktop outbound runner; an AI turn goes
- *  through `claude_send`. */
+ *  through `agent_send`. */
 async function connectorSend(payload: Record<string, unknown>): Promise<{ messageId: string }> {
   const sessionId = payload.sessionId as string | undefined
   const segmentsRaw = payload.segments as unknown

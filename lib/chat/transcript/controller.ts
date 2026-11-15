@@ -22,7 +22,7 @@ interface DetailWindow {
 export const TRANSCRIPT_DETAIL_WINDOW_MESSAGES = 200
 
 export interface TranscriptControllerSnapshot {
-  mode: "unknown" | "timeline" | "legacy"
+  mode: "unknown" | "timeline"
   items: TranscriptTimelineItem[]
   revision: number | null
   loading: boolean
@@ -146,19 +146,8 @@ export class TranscriptController {
     if (generation !== this.generation) return
     this.update({ loading: true, error: null })
     try {
-      const capabilities = await this.source.capabilities()
+      await this.source.capabilities()
       if (generation !== this.generation) return
-      if (!capabilities) {
-        this.nextCursor = undefined
-        this.update({
-          mode: "legacy",
-          loading: false,
-          loadingOlder: false,
-          hasMore: false,
-          error: null,
-        })
-        return
-      }
       // A revision-bound cursor cannot survive a refresh. Rebuild only the
       // already visible window, then swap it atomically so readers keep history.
       const oldest = this.snapshot.items[0]

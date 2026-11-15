@@ -246,7 +246,6 @@
     "downloadingDetail": "{bytesDone} / {bytesTotal} bytes — file {index} of {count}",
     "emptyNoModelFiles": "No managed model files for this backend.",
     "installed": "Models ready",
-    "legacyDetected": "Legacy model files detected",
     "missing": "{count} model file(s) missing",
     "modelDir": "Stored in: {path}",
     "redownload": "Re-download",

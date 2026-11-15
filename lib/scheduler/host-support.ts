@@ -118,7 +118,7 @@ export function isCardAuthoredTaskType(type: string): type is ScheduledTaskType 
  * requirement beyond "an executor is registered" (plugin/custom/im-push/…).
  *
  * Keep this in sync with what each executor actually touches:
- *   sidecar          → drives a Claude turn (`claude_send`) or an ACP agent
+ *   sidecar          → drives a Claude turn (`agent_send`) or an ACP agent
  *   shell            → spawns processes through the jobs supervisor / shell
  *   host-filesystem  → writes backups / walks the wiki root
  */

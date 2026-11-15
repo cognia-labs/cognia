@@ -393,9 +393,6 @@ function GoogleDocsRow() {
       {connections.length > 0 && (
         <ul aria-label={t("settings.googleConnections")} className="space-y-2">
           {connections.map((connection) => {
-            const lineage = snapshot?.lineages.find(
-              (value) => value.id === connection.hostMetadata?.adapterId
-            )
             const disconnecting =
               operation?.action === "disconnect" && operation.connectionId === connection.id
             const reauthorizing =
@@ -411,11 +408,6 @@ function GoogleDocsRow() {
                 <p className="text-muted-foreground break-all text-[11px]">
                   {t("settings.googleConnectionClient", { clientId: connection.clientId })}
                 </p>
-                {lineage?.needsIdentity && (
-                  <p className="text-muted-foreground text-xs">
-                    {t("settings.googleNeedsIdentity")}
-                  </p>
-                )}
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
@@ -538,11 +530,6 @@ function GoogleDocsRow() {
           </FieldContent>
         </Field>
       </FieldGroup>
-      {snapshot?.migrationNeedsClientId && (
-        <p className="text-muted-foreground text-xs">
-          {t("settings.googleMigrationNeedsClientId")}
-        </p>
-      )}
       <p className="text-muted-foreground flex items-center gap-1 text-[11px]">
         <ExternalLinkIcon className="size-3" />
         {t("settings.googleClientHint")}

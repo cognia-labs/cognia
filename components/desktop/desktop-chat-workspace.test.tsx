@@ -815,7 +815,7 @@ test("an offline Companion keeps cached chat visible and disables sending with a
     connectionState: "offline",
     host: {
       compatible: true,
-      operations: ["claude_send"],
+      operations: ["agent_send"],
       grants: ["agent.run"],
     },
   }

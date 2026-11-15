@@ -527,7 +527,7 @@ function ChatPaneContent({
 
   // Split panes, Workflow Chat and Workbench can bind a session without
   // making it the global activeSessionId. Negotiate per mounted pane so those
-  // production routes publish their own timeline/legacy mode. The history
+  // production routes publish their own timeline/local mode. The history
   // module coalesces this with an active-session negotiation already in flight.
   useEffect(() => {
     if (!boundId || !isWebCompanionPane || historyMode !== null) return

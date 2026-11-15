@@ -1,7 +1,5 @@
 import {
-  UPGRADE_REQUIRED_RESULT,
   handleExecutionRunControl,
-  handleLegacyTeamRunControl,
   parseExecutionRunControlPayload,
 } from "./execution-run-control-handler"
 import type { RunControlResult } from "@/lib/execution/run-control"
@@ -119,12 +117,5 @@ describe("handleExecutionRunControl", () => {
     const result = await handleExecutionRunControl({ ...base, action: "nope" }, { execute })
     expect(result).toEqual({ ok: false, reason: "invalid-payload", field: "action" })
     expect(execute).not.toHaveBeenCalled()
-  })
-})
-
-describe("handleLegacyTeamRunControl", () => {
-  it("tells an older client to upgrade instead of controlling a team", async () => {
-    expect(await handleLegacyTeamRunControl()).toEqual(UPGRADE_REQUIRED_RESULT)
-    expect(UPGRADE_REQUIRED_RESULT).toEqual({ ok: false, reason: "upgrade-required" })
   })
 })

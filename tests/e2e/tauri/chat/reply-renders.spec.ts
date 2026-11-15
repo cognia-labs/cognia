@@ -6,7 +6,7 @@
  * coverage before this spec: the web specs stub `@/lib/claude/ipc`, the
  * Jest "main-flow" integration test hand-fakes the SDK event shapes, and the
  * other Tauri chat spec asserts only a workflow run row (never an assistant
- * reply). Here the REAL sidecar is spawned by Rust on `claude_send`, runs the
+ * reply). Here the REAL sidecar is spawned by Rust on `agent_send`, runs the
  * real `@anthropic-ai/claude-agent-sdk`, and streams a reply back through the
  * real renderer.
  *

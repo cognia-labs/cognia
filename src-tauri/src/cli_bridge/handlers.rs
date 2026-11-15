@@ -45,7 +45,6 @@ pub struct InstallRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct InstallDirectoryRequest {
-    #[serde(alias = "sourceDir")]
     pub source_dir: String,
 }
 
@@ -58,9 +57,9 @@ pub struct UninstallRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReloadRequest {
-    #[serde(default = "default_schema_version", alias = "schemaVersion")]
+    #[serde(default = "default_schema_version")]
     pub schema_version: u32,
-    #[serde(default, alias = "sessionId")]
+    #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default = "default_attempt")]
     pub attempt: u64,
@@ -76,21 +75,19 @@ pub struct ReloadRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginDevSessionEventRequest {
-    #[serde(default = "default_schema_version", alias = "schemaVersion")]
+    #[serde(default = "default_schema_version")]
     pub schema_version: u32,
-    #[serde(alias = "sessionId")]
     pub session_id: String,
     pub attempt: u64,
     pub event: String,
-    #[serde(default, alias = "projectName")]
+    #[serde(default)]
     pub project_name: Option<String>,
     #[serde(default)]
     pub stage: Option<String>,
-    #[serde(alias = "occurredAt")]
     pub occurred_at: String,
     #[serde(default)]
     pub summary: Option<String>,
-    #[serde(default, alias = "durationMs")]
+    #[serde(default)]
     pub duration_ms: Option<u64>,
 }
 

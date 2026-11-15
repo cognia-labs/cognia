@@ -241,7 +241,7 @@ export function useAgentSession({
   createSession?: CreateSession
   /** Subscribe to the sidecar event channel (injected for tests). */
   subscribeSidecar?: (handler: (payload: unknown) => void) => () => void
-  /** Send the `claude_compact` control message (injected for tests). */
+  /** Send the `agent_compact` control message (injected for tests). */
   requestCompact?: (sessionId: string, focus?: string) => Promise<void>
   /** Build the settings.json hook runner (injected for tests). */
   createHooks?: () => HookRunner

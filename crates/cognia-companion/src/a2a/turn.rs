@@ -29,7 +29,7 @@ pub enum TurnOutcome {
 /// The side-effects of applying one translated action.
 #[derive(Debug, Default, PartialEq)]
 pub struct A2aStep {
-    /// A permission request id that must be declined via `claude_approve`
+    /// A permission request id that must be declined via `agent_resolve_permission`
     /// (fail-closed — this surface offers no interactive approval).
     pub deny_permission: Option<String>,
     /// Set once the turn reaches a terminal state.

@@ -72,7 +72,6 @@ pub fn execution_admission() -> Option<ExecutionAdmission> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CredentialDelivery {
-    #[serde(alias = "gateway-lease")]
     Brokered,
     InjectedEnv,
     None,
@@ -224,16 +223,15 @@ mod tests {
     }
 
     #[test]
-    fn p4_credential_delivery_labels_plain_injection_and_reads_legacy_gateway_leases() {
+    fn p4_credential_delivery_labels_plain_injection() {
         assert_eq!(CredentialDelivery::for_env(["PATH"]), CredentialDelivery::None);
         assert_eq!(CredentialDelivery::for_env(["COGNIA_GATEWAY_TOKEN"]), CredentialDelivery::Brokered);
         for name in ["api_key", "MY_TOKEN", "DB_PASSWORD", "service_SECRET"] {
             assert_eq!(CredentialDelivery::for_env([name]), CredentialDelivery::InjectedEnv);
             assert_eq!(CredentialDelivery::for_env(["COGNIA_GATEWAY_TOKEN", name]), CredentialDelivery::InjectedEnv);
         }
-        let legacy: CredentialDelivery = serde_json::from_str("\"gateway-lease\"").unwrap();
-        assert_eq!(legacy, CredentialDelivery::Brokered);
-        assert_eq!(serde_json::to_string(&legacy).unwrap(), "\"brokered\"");
+        assert!(serde_json::from_str::<CredentialDelivery>("\"gateway-lease\"").is_err());
+        assert_eq!(serde_json::to_string(&CredentialDelivery::Brokered).unwrap(), "\"brokered\"");
         for mode in [CredentialDelivery::Brokered, CredentialDelivery::InjectedEnv, CredentialDelivery::None] {
             assert_eq!(serde_json::from_value::<CredentialDelivery>(serde_json::to_value(mode).unwrap()).unwrap(), mode);
         }

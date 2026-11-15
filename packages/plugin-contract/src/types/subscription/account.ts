@@ -85,8 +85,6 @@ export interface ProviderVault {
   presets: ProviderPreset[]
   /** Provider-level default preset id (v3). Points at a `ProviderPreset.id` in `presets`. */
   defaultPresetId?: string
-  /** @deprecated legacy v2 single preset — folded into `presets` by the v2→v3 migration. */
-  preset?: ProviderPreset
 }
 
 // ---------------------------------------------------------------------------
@@ -106,13 +104,3 @@ export interface ActiveSnapshot {
    */
   env: Array<[string, string]>
 }
-
-// ---------------------------------------------------------------------------
-// Migration outcomes
-// ---------------------------------------------------------------------------
-
-/** Result of running `subscription_init` for one provider. */
-export type MigrationOutcome =
-  | { kind: "no-legacy-data"; provider: ProviderId }
-  | { kind: "migrated"; provider: ProviderId; accountId: string }
-  | { kind: "already-migrated"; provider: ProviderId }

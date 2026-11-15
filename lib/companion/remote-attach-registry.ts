@@ -9,7 +9,7 @@
  * consults `isSessionAttached` so a `permission_request` for a session that is
  * NOT the desktop's foreground session is **routed to the attached remote
  * device** (which already received the frame over its event stream and will
- * call `claude_approve`) instead of being auto-denied with "session not
+ * call `agent_resolve_permission`) instead of being auto-denied with "session not
  * active".
  *
  * The attachment state itself lives in `device-presence-registry.ts`. It used

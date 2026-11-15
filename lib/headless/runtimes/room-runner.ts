@@ -2,7 +2,7 @@
  * Team rooms on the headless brain (ADR-0177, batch 1).
  *
  * The brain has no React tree, so before this it could not run a team room
- * at all: a phone paired to a cloud host got `claude_send` for one member and
+ * at all: a phone paired to a cloud host got `agent_send` for one member and
  * nothing that orchestrated the round. This runtime is the same
  * process-wide `RoomRunner` the desktop renderer uses, over the same
  * store-backed sinks (zustand stores are plain modules here), with two

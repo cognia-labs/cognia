@@ -13,11 +13,6 @@ use std::{
 use uuid::Uuid;
 
 pub const MAX_TRANSFER_CHUNK_BYTES: usize = 64 * 1024;
-const LEGACY_TRANSFER_CHUNK_BYTES: usize = 24 * 1024;
-
-fn legacy_transfer_chunk_bytes() -> usize {
-    LEGACY_TRANSFER_CHUNK_BYTES
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -29,7 +24,6 @@ pub struct DownloadHandle {
     pub hash: String,
     pub media_type: String,
     pub sensitive: bool,
-    #[serde(default = "legacy_transfer_chunk_bytes")]
     #[schemars(range(min = 1, max = 65536))]
     pub chunk_bytes: usize,
 }
@@ -41,7 +35,6 @@ pub struct UploadHandle {
     pub handle_id: String,
     pub path: String,
     pub expected_size: u64,
-    #[serde(default = "legacy_transfer_chunk_bytes")]
     #[schemars(range(min = 1, max = 65536))]
     pub chunk_bytes: usize,
 }
@@ -156,7 +149,7 @@ impl TransferRegistry {
             ));
         }
         let limit = length
-            .unwrap_or(LEGACY_TRANSFER_CHUNK_BYTES)
+            .unwrap_or(MAX_TRANSFER_CHUNK_BYTES)
             .clamp(1, MAX_TRANSFER_CHUNK_BYTES);
         let available = download.size.saturating_sub(offset).min(limit as u64) as usize;
         let path = download.path.clone();
@@ -453,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn transfer_handles_negotiate_larger_chunks_and_decode_legacy_shapes() {
+    fn transfer_handles_negotiate_the_maximum_chunk() {
         let root = TempDir::new().unwrap();
         let registry = TransferRegistry::new(Duration::from_secs(60));
         let bytes = vec![7; MAX_TRANSFER_CHUNK_BYTES + 1];
@@ -489,13 +482,10 @@ mod tests {
         );
         assert_eq!(fs::read(root.path().join("large.bin")).unwrap(), bytes);
 
-        let legacy: UploadHandle = serde_json::from_value(
+        assert!(serde_json::from_value::<UploadHandle>(
             serde_json::json!({"handleId":"old", "path":"file", "expectedSize":3}),
         )
-        .unwrap();
-        assert_eq!(legacy.chunk_bytes, LEGACY_TRANSFER_CHUNK_BYTES);
-        let legacy: DownloadHandle = serde_json::from_value(serde_json::json!({"handleId":"old", "path":"file", "size":3,"hash":"abc", "mediaType":"text/plain", "sensitive":false})).unwrap();
-        assert_eq!(legacy.chunk_bytes, LEGACY_TRANSFER_CHUNK_BYTES);
+        .is_err());
     }
 
     #[test]
@@ -512,10 +502,10 @@ mod tests {
         assert_eq!(handle.hash, sha(&bytes));
 
         assert_eq!(handle.chunk_bytes, MAX_TRANSFER_CHUNK_BYTES);
-        let legacy = registry.read_chunk(&handle.handle_id, 0, None).unwrap();
+        let default_length = registry.read_chunk(&handle.handle_id, 0, None).unwrap();
         assert_eq!(
-            STANDARD.decode(&legacy.data_base64).unwrap().len(),
-            LEGACY_TRANSFER_CHUNK_BYTES
+            STANDARD.decode(&default_length.data_base64).unwrap().len(),
+            MAX_TRANSFER_CHUNK_BYTES
         );
         let first = registry
             .read_chunk(&handle.handle_id, 0, Some(handle.chunk_bytes))

@@ -216,7 +216,7 @@ it("adr-0253 d05 leaves a v1 host's grants unknown rather than reading them off 
 
   const snapshot = runtimeHostSnapshotFromManifest(v1)
 
-  expect(snapshot?.operations).toContain("claude_send")
+  expect(snapshot?.operations).toContain("agent_send")
   expect(snapshot?.grants).toBeUndefined()
 })
 

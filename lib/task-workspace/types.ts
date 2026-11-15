@@ -648,7 +648,7 @@ export interface DownloadHandle {
   hash: string
   mediaType: string
   sensitive: boolean
-  chunkBytes?: number
+  chunkBytes: number
 }
 
 export interface TransferChunk {
@@ -665,7 +665,7 @@ export interface UploadHandle {
   path: string
   nextOffset?: number
   expectedSize: number
-  chunkBytes?: number
+  chunkBytes: number
 }
 
 export interface TaskWorkspaceResourceEvent {

@@ -435,7 +435,7 @@ async fn companion_can_control_is_not_control_gated() {
 
 #[tokio::test]
 async fn baseline_chat_command_is_not_gated() {
-    // claude_send is NOT in CONTROL_COMMANDS — a paired device with no
+    // agent_send is NOT in CONTROL_COMMANDS — a paired device with no
     // remote-control grant must still be able to use baseline chat.
     let device = "dev-baseline-001";
 
@@ -444,7 +444,7 @@ async fn baseline_chat_command_is_not_gated() {
     let jwt = device_jwt(device);
     let resp = rpc_post(
         router,
-        "claude_send",
+        "agent_send",
         json!({ "session_id": "s1", "prompt": "hi" }),
         &jwt,
         None,
@@ -953,7 +953,7 @@ async fn headless_claude_arms_reach_the_registry_sidecar() {
     // Control messages against a not-running sidecar surface the plain
     // "not running" error (proving the arm reached write_command).
     let err = dispatch(
-        "claude_interrupt",
+        "agent_interrupt",
         json!({ "session_id": "s1" }),
         &state,
         &host,
@@ -1270,6 +1270,8 @@ fn lsp_facade_is_control_gated_but_not_service_only() {
         "lsp:start",
         "lsp:request",
         "lsp:cancel",
+        "lsp:serverResponse",
+        "lsp:clientNotification",
         "protocol:start",
         "protocol:request",
         "protocol:cancel",
@@ -2566,9 +2568,8 @@ async fn connectors_keyring_arms_round_trip_camel_and_snake() {
 }
 
 /// The headless brain's canonical secret-store facade is service-only.
-/// Deprecated keyring aliases delegate to the same encrypted backend.
 #[tokio::test]
-async fn secret_store_arms_and_keyring_aliases_share_the_headless_backend() {
+async fn secret_store_arms_share_the_headless_backend() {
     let state = test_state();
     let host = headless_host();
 
@@ -2593,7 +2594,7 @@ async fn secret_store_arms_and_keyring_aliases_share_the_headless_backend() {
         )
         .expect("set");
     let got = call!(
-        "keyring_secret_get",
+        "secret_store_get",
         json!({ "input": { "namespace": "backup", "key": "encryption.key.v1" } }),
     )
     .expect("get");
@@ -2716,11 +2717,8 @@ async fn generic_secret_arms_refuse_host_owned_records() {
     let record = json!({ "input": { "namespace": "docs-providers", "key": "google-auth-lineages-v2", "value": "forged" } });
     for name in [
         "secret_store_get",
-        "keyring_secret_get",
         "secret_store_set",
-        "keyring_secret_set",
         "secret_store_delete",
-        "keyring_secret_clear",
     ] {
         let (status, Json(error)) = call!(name, record.clone()).expect_err(name);
         assert_eq!(status, StatusCode::FORBIDDEN, "{name}");
@@ -3942,8 +3940,8 @@ async fn missing_required_field_returns_400() {
     let state = test_state();
     let router = build_router(state);
     let jwt = device_jwt("dev1");
-    // claude_interrupt requires session_id
-    let resp = rpc_post(router, "claude_interrupt", json!({}), &jwt, None).await;
+    // agent_interrupt requires session_id
+    let resp = rpc_post(router, "agent_interrupt", json!({}), &jwt, None).await;
     // app_handle is None so we'll get 503 before field validation for
     // commands that reach dispatch — but the routing still works.
     // The key assertion is that we never get a 5xx crash / panic.
@@ -3964,12 +3962,12 @@ async fn idempotency_cache_hit_returns_cached_body() {
     // Pre-seed the ledger with a completed response for the exact request.
     let params = json!({ "session_id": "s1", "prompt": "hi" });
     cache
-        .begin("dev-idem", "claude_send", "idem-key-1", &params)
+        .begin("dev-idem", "agent_send", "idem-key-1", &params)
         .unwrap();
     cache
         .complete(
             "dev-idem",
-            "claude_send",
+            "agent_send",
             "idem-key-1",
             &json!({ "cached": true }),
         )
@@ -3994,10 +3992,10 @@ async fn idempotency_cache_hit_returns_cached_body() {
     let router = build_router(state);
     let jwt = device_jwt("dev-idem");
 
-    // Send a NON-read-only command (e.g., claude_send) with the
+    // Send a NON-read-only command (e.g., agent_send) with the
     // pre-seeded idempotency key. The cache hit is returned before
     // the dispatch even runs (so app_handle=None doesn't matter).
-    let resp = rpc_post(router, "claude_send", params, &jwt, Some("idem-key-1")).await;
+    let resp = rpc_post(router, "agent_send", params, &jwt, Some("idem-key-1")).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp).await;
     assert_eq!(body["cached"], true);
@@ -4014,10 +4012,10 @@ async fn different_idempotency_keys_run_independently() {
     ));
     for (key, hit) in [("k1", 1), ("k2", 2)] {
         cache
-            .begin("dev2", "claude_close_session", key, &json!({}))
+            .begin("dev2", "agent_close_session", key, &json!({}))
             .unwrap();
         cache
-            .complete("dev2", "claude_close_session", key, &json!({ "hit": hit }))
+            .complete("dev2", "agent_close_session", key, &json!({ "hit": hit }))
             .unwrap();
     }
 
@@ -4040,14 +4038,14 @@ async fn different_idempotency_keys_run_independently() {
 
     // k1
     let router1 = build_router(Arc::clone(&state));
-    let r1 = rpc_post(router1, "claude_close_session", json!({}), &jwt, Some("k1")).await;
+    let r1 = rpc_post(router1, "agent_close_session", json!({}), &jwt, Some("k1")).await;
     assert_eq!(r1.status(), StatusCode::OK);
     let b1 = body_json(r1).await;
     assert_eq!(b1["hit"], 1);
 
     // k2
     let router2 = build_router(Arc::clone(&state));
-    let r2 = rpc_post(router2, "claude_close_session", json!({}), &jwt, Some("k2")).await;
+    let r2 = rpc_post(router2, "agent_close_session", json!({}), &jwt, Some("k2")).await;
     assert_eq!(r2.status(), StatusCode::OK);
     let b2 = body_json(r2).await;
     assert_eq!(b2["hit"], 2);
@@ -4109,12 +4107,12 @@ async fn expired_idempotency_key_causes_re_execution() {
     ));
     let params = json!({ "session_id": "s" });
     cache
-        .begin("dev4", "claude_interrupt", "stale", &params)
+        .begin("dev4", "agent_interrupt", "stale", &params)
         .unwrap();
     cache
         .complete(
             "dev4",
-            "claude_interrupt",
+            "agent_interrupt",
             "stale",
             &json!({ "stale": true }),
         )
@@ -4142,7 +4140,7 @@ async fn expired_idempotency_key_causes_re_execution() {
     let jwt = device_jwt("dev4");
 
     // The cache entry is expired → dispatch runs → 503 (app_handle=None).
-    let resp = rpc_post(router, "claude_interrupt", params, &jwt, Some("stale")).await;
+    let resp = rpc_post(router, "agent_interrupt", params, &jwt, Some("stale")).await;
     // 503 means dispatch was attempted (cache miss), not a cached 200.
     assert_eq!(resp.status().as_u16(), 503);
 }
@@ -4229,14 +4227,14 @@ macro_rules! assert_not_404 {
 }
 
 #[tokio::test]
-async fn dispatch_coverage_claude_interrupt() {
-    assert_not_404!("claude_interrupt", json!({ "session_id": "s" }));
+async fn dispatch_coverage_agent_interrupt() {
+    assert_not_404!("agent_interrupt", json!({ "session_id": "s" }));
 }
 
 #[tokio::test]
-async fn dispatch_coverage_claude_compact() {
+async fn dispatch_coverage_agent_compact() {
     assert_not_404!(
-        "claude_compact",
+        "agent_compact",
         json!({ "session_id": "s", "focus": "the API" })
     );
 }
@@ -4252,9 +4250,9 @@ async fn dispatch_coverage_companion_endpoints() {
 }
 
 #[tokio::test]
-async fn dispatch_coverage_claude_approve() {
+async fn dispatch_coverage_agent_resolve_permission() {
     assert_not_404!(
-        "claude_approve",
+        "agent_resolve_permission",
         json!({
             "session_id": "s",
             "request_id": "r",
@@ -4264,8 +4262,8 @@ async fn dispatch_coverage_claude_approve() {
 }
 
 #[tokio::test]
-async fn dispatch_coverage_claude_close_session() {
-    assert_not_404!("claude_close_session", json!({ "session_id": "s" }));
+async fn dispatch_coverage_agent_close_session() {
+    assert_not_404!("agent_close_session", json!({ "session_id": "s" }));
 }
 
 #[tokio::test]

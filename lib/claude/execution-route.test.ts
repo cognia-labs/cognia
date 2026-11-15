@@ -92,8 +92,8 @@ describe("captureExecutionRoute on the desktop", () => {
     expect(currentExecutionRouteKey()).toBe("remote:B")
     // A stays open for the turn: its control and its events are still A's.
     expect(a.destroy).not.toHaveBeenCalled()
-    await expect(route.transport.call("claude_interrupt", { sessionId: "s" })).resolves.toBe(
-      "A:claude_interrupt"
+    await expect(route.transport.call("agent_interrupt", { sessionId: "s" })).resolves.toBe(
+      "A:agent_interrupt"
     )
     a.emit({ type: "session_disposed" })
     expect(heard).toEqual([{ type: "session_disposed" }])
@@ -140,14 +140,14 @@ describe("captureExecutionRoute on a paired client", () => {
     expect(route.key).toBe("target:host-a:1")
     const heard: unknown[] = []
     route.transport.subscribe("claude://message", (payload) => heard.push(payload))
-    await expect(route.transport.call("claude_interrupt", {})).resolves.toBe(
-      "paired:claude_interrupt"
+    await expect(route.transport.call("agent_interrupt", {})).resolves.toBe(
+      "paired:agent_interrupt"
     )
     shared.emit("from A")
 
     mockContext = { targetId: "host-b", routingGeneration: 2, accountId: "acct" }
     expect(route.isCurrent()).toBe(false)
-    await expect(route.transport.call("claude_interrupt", {})).rejects.toBeInstanceOf(
+    await expect(route.transport.call("agent_interrupt", {})).rejects.toBeInstanceOf(
       ExecutionRouteChangedError
     )
     shared.emit("from B")

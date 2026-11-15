@@ -357,7 +357,7 @@ export class PerfHostLiveLease {
     if (generation !== this.generation) return
     const merged = mergePerfFrames(
       snapshot,
-      this.buffered.filter((frame) => !frame.leaseId || frame.leaseId === held.leaseId),
+      this.buffered.filter((frame) => frame.leaseId === held.leaseId),
       scope
     )
     this.buffered = []
@@ -454,8 +454,8 @@ export class PerfHostLiveLease {
       return
     }
     // Another lease's delivery (a capture, another window) rides the same
-    // event channel; only ours, or an untargeted legacy frame, is kept.
-    if (frame.leaseId && frame.leaseId !== held.leaseId) return
+    // event channel; only ours is kept.
+    if (frame.leaseId !== held.leaseId) return
     const nextRing = appendBounded(this.ring, frame)
     if (nextRing === this.ring) return
     this.ring = nextRing

@@ -48,7 +48,7 @@ const EGRESS_TIERS: readonly EgressTier[] = ["off", "allowlist", "on"]
 /**
  * Injected credentials are readable by the sandboxed process. Only brokered
  * delivery promises credential.use without credential.read (Rule 7).
- * gateway-lease is accepted from older Hosts.
+ * gateway-lease is the single-user Host's label for a managed task's lease.
  */
 export type CredentialDelivery = "brokered" | "injected-env" | "none" | "gateway-lease"
 

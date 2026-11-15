@@ -125,7 +125,6 @@ pub fn start_workspace_maintenance() {
             // writer clones into, so the collector and the writers can no
             // longer disagree about where the cache is.
             let mirrors = reclaim_stale_mirrors().await;
-            discard_the_legacy_relative_cache().await;
             let result = run_workspace_maintenance_once().await;
             match result {
                 Ok(outcome) => log::info!(
@@ -164,59 +163,6 @@ async fn reclaim_stale_mirrors() -> usize {
     })
     .await
     .unwrap_or(0)
-}
-
-/// The directory name the pre-ADR-0176 cache used, relative to the process
-/// working directory.
-const LEGACY_RELATIVE_CACHE: &str = "cognia-github-worktrees/.mirrors";
-
-static LEGACY_CACHE_SWEPT: AtomicBool = AtomicBool::new(false);
-
-/// Delete the cache the relative root left behind, once per process.
-///
-/// ADR-0176. The old `mirror_root` derived its path from `DEFAULT_BASE_DIR`,
-/// which is relative, so the cache landed under whatever working directory the
-/// process happened to have. Nothing ever swept it: the collector looked at the
-/// un-injected default instead. Those mirrors are bare repositories of real
-/// repositories and can be hundreds of megabytes each.
-///
-/// Only `.mirrors` is removed. The worktrees beside it are live workspaces
-/// somebody may still be working in, and this is a cache sweep, not a cleanup
-/// of the user's checkouts.
-///
-/// Best effort in every direction: a working directory that has since changed
-/// simply finds nothing, and a failure to delete is logged and dropped. This
-/// runs on the maintenance loop rather than at `install`, so a large legacy
-/// cache costs a background task rather than boot latency, and a sweep that
-/// cannot finish can never fail a clone.
-async fn discard_the_legacy_relative_cache() {
-    if LEGACY_CACHE_SWEPT.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    // Relative on purpose: the path is only meaningful against the working
-    // directory that produced it, which is the whole defect being cleaned up.
-    discard_cache_at(&PathBuf::from(LEGACY_RELATIVE_CACHE)).await;
-}
-
-/// The sweep itself, against an explicit directory.
-///
-/// Split out so the test can name a temporary directory instead of moving the
-/// process working directory. `set_current_dir` is process-global, and this
-/// module's tests share a binary with every other test in the crate.
-async fn discard_cache_at(legacy: &Path) {
-    if !legacy.is_dir() {
-        return;
-    }
-    match tokio::fs::remove_dir_all(legacy).await {
-        Ok(()) => log::info!(
-            "removed the legacy relative mirror cache at {}",
-            legacy.display()
-        ),
-        Err(error) => log::warn!(
-            "could not remove the legacy relative mirror cache at {}: {error}",
-            legacy.display()
-        ),
-    }
 }
 
 async fn run_workspace_maintenance_once() -> Result<WorkspaceMaintenanceResult, String> {
@@ -3517,51 +3463,6 @@ mod tests {
         assert_eq!(summary.counts.created, 1);
         assert_eq!(manifest.events, vec![event]);
         assert_eq!(manifest.summaries, vec![summary]);
-    }
-
-    /// ADR-0176. The legacy sweep must take the orphaned cache and nothing
-    /// else. The worktrees beside it are live workspaces, and a "cleanup" that
-    /// deleted the directory someone is working in would be worse than the
-    /// wasted disk it set out to reclaim.
-    #[tokio::test]
-    async fn the_legacy_sweep_takes_the_cache_and_leaves_the_worktrees() {
-        let base = TempDir::new().unwrap();
-        let legacy = base.path().join(LEGACY_RELATIVE_CACHE);
-        std::fs::create_dir_all(legacy.join("github.com-o-r.git")).unwrap();
-        let worktree = base.path().join("cognia-github-worktrees").join("o-r");
-        std::fs::create_dir_all(&worktree).unwrap();
-        std::fs::write(worktree.join("README.md"), "live work").unwrap();
-
-        discard_cache_at(&legacy).await;
-
-        assert!(!legacy.exists(), "the orphaned cache was not reclaimed");
-        assert!(
-            worktree.join("README.md").exists(),
-            "the sweep took a live worktree with it"
-        );
-    }
-
-    /// A working directory that never held the legacy cache finds nothing, and
-    /// says nothing about it. The sweep runs on every host at every boot, and
-    /// most of them have no such directory.
-    #[tokio::test]
-    async fn the_legacy_sweep_is_silent_when_there_is_nothing_to_sweep() {
-        let base = TempDir::new().unwrap();
-        let absent = base.path().join(LEGACY_RELATIVE_CACHE);
-
-        discard_cache_at(&absent).await;
-
-        assert!(!absent.exists());
-        assert!(base.path().exists(), "the sweep must not touch its parent");
-    }
-
-    /// Once per process. The loop runs daily, and after the first pass the path
-    /// belongs to whoever recreated it, not to us.
-    #[tokio::test]
-    async fn the_legacy_sweep_runs_once() {
-        LEGACY_CACHE_SWEPT.store(true, Ordering::Release);
-        discard_the_legacy_relative_cache().await;
-        assert!(LEGACY_CACHE_SWEPT.load(Ordering::Acquire));
     }
 
     /// ADR-0176. The mirror cache root is dormant unless boot points it at the

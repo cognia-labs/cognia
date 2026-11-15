@@ -64,15 +64,12 @@
     "browser_set_zoom",
     "browser_switch_page",
     "canvas_run_python",
-    "claude_approve",
     "claude_call_reserve_respond",
-    "claude_compact",
     "claude_plugin_hook_response",
     "claude_plugin_tool_response",
     "claude_protocol_adapter_message",
     "claude_restart_sidecar",
     "claude_restore",
-    "claude_send",
     "claude_session_control",
     "claude_set_mode",
     "claude_tool_result_decision",
@@ -372,7 +369,6 @@
     "task_workspace_session_scratch_ensure",
     "task_workspace_settle",
     "task_workspace_undo",
-    "team_run_resume",
     "team_run_start",
     "team_task_create",
     "terminal_exec",
@@ -683,10 +679,6 @@
       "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
     },
     {
-      "arm": "perf_start_sampling",
-      "reason": "Starts an observation/listener/controller task, not a user process, agent, PTY, workflow or plugin code."
-    },
-    {
       "arm": "plugin_disable",
       "reason": "Updates the Rust plugin metadata/status ledger or stops its process; executable activation uses plugin_set_enabled/launch_js/WASM/VSCode arms (plugin-runtime/lifecycle.rs)."
     },
@@ -903,24 +895,12 @@
       "reason": "Subscription credential/account configuration or provider HTTP access; the script substring in subscription does not denote code execution."
     },
     {
-      "arm": "subscription_set_preset",
-      "reason": "Subscription credential/account configuration or provider HTTP access; the script substring in subscription does not denote code execution."
-    },
-    {
       "arm": "subscription_volcengine_usage",
       "reason": "Subscription credential/account configuration or provider HTTP access; the script substring in subscription does not denote code execution."
     },
     {
       "arm": "task_workspace_list_runs",
       "reason": "Read-only status, capability, metadata or file-system query; no executable workload is launched by this target."
-    },
-    {
-      "arm": "team_run_pause",
-      "reason": "Stops/releases existing work; no new process or resumed execution is requested."
-    },
-    {
-      "arm": "team_run_stop",
-      "reason": "Stops/releases existing work; no new process or resumed execution is requested."
     },
     {
       "arm": "terminal_close_serial",

@@ -217,7 +217,7 @@ describe("hostSupportsInboxRelay", () => {
     expect(hostSupportsInboxRelay()).toBe(true)
     restore()
     // Paired to a host that never heard of the relay.
-    restore = withDeps({ snapshot: companionSnapshot(["claude_send"]) })
+    restore = withDeps({ snapshot: companionSnapshot(["agent_send"]) })
     expect(hostSupportsInboxRelay()).toBe(false)
   })
 

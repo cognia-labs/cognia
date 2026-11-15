@@ -77,7 +77,7 @@ export interface RunManualCompactDeps {
   focus?: string
   /** Subscribe to the sidecar event channel; returns an unsubscribe fn. */
   subscribe: (handler: (payload: unknown) => void) => () => void
-  /** Send the `claude_compact` control message (e.g. `compactSession`). */
+  /** Send the `agent_compact` control message (e.g. `compactSession`). */
   compact: (sessionId: string, focus?: string) => Promise<void>
   /** Route the typed boundary event to the UI (caller maps → reducer actions). */
   emit: (event: Extract<CaptureStreamEvent, { type: "compact" }>) => void

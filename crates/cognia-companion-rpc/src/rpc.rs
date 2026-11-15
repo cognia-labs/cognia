@@ -271,25 +271,19 @@ const KNOWN_COMMANDS: &[&str] = &[
     "video_cleanup_analysis",
     "plugin_media_read_chunk",
     "plugin_media_close_transfer",
-    // ADR-0090 canonical names. They share the `claude_*` arms below and are
-    // deliberately absent from `CONTROL_COMMANDS` for the same reason those
-    // are: this is the paired device's own chat path, not an escalation.
+    // ADR-0090 canonical names. Deliberately absent from `CONTROL_COMMANDS`:
+    // this is the paired device's own chat path, not an escalation.
     "agent_send",
     "agent_interrupt",
     "agent_compact",
     "agent_close_session",
     "agent_resolve_permission",
     "agent_vendor_roots",
-    "claude_send",
-    "claude_interrupt",
-    "claude_compact",
     "claude_restore",
     "claude_set_mode",
-    "claude_approve",
     "claude_plugin_tool_response",
     "claude_tool_result_decision",
     "claude_protocol_adapter_message",
-    "claude_close_session",
     // Sidecar round-trips (live `Query` control such as setModel, and the
     // session-level SDK functions). Reclassified from `client` to `execution`:
     // the state they need is the host's sidecar, which both hosts own.
@@ -382,17 +376,13 @@ const KNOWN_COMMANDS: &[&str] = &[
     "read_agent_config",
     "read_project_mcp_config",
     "write_agent_config",
-    // Generic encrypted secret-store facade for the headless brain. The
-    // keyring names are deprecated compatibility aliases.
+    // Generic encrypted secret-store facade for the headless brain.
     "secret_store_get",
     "secret_store_set",
     "connectors_google_docs_auth",
     "connectors_lark_user_auth",
     "connectors_bounded_http_request",
     "secret_store_delete",
-    "keyring_secret_get",
-    "keyring_secret_set",
-    "keyring_secret_clear",
     "ocr_extract_native",
     "ocr_list_native_backends",
     "ocr_list_available_backends",
@@ -661,8 +651,8 @@ const KNOWN_COMMANDS: &[&str] = &[
     // test below asserts they stay in lockstep with the TS enum.
     "connector_send",
     // ADR-0131 cross-shell relay: the real "enqueue an outbound job"
-    // command. `connector_send` only appends a local user message and is
-    // kept for older clients.
+    // command. `connector_send` only appends a local user message (the
+    // share target's path).
     "connector_enqueue_outbound",
     "connector_approve_draft",
     "connector_reject_draft",
@@ -778,17 +768,13 @@ const KNOWN_COMMANDS: &[&str] = &[
     "team_task_create",
     "team_task_comment",
     "team_run_start",
-    "team_run_pause",
-    "team_run_resume",
-    "team_run_stop",
     // ADR-0169: the one remote control seam for an execution run. Same
-    // elevation as the team controls above, which it retires (they now answer
-    // `upgrade-required` on the TS side).
+    // elevation as the team controls above.
     "execution_run_control",
     "execution_run_detail",
     // ADR-0224 A7: the approvals unattended runs are parked on, and a paired
     // device's answer to one. The answer is the approval itself, like
-    // `claude_approve`, so it takes no admin lease; it goes through the same
+    // `agent_resolve_permission`, so it takes no admin lease; it goes through the same
     // control gate as `execution_run_control`, as the stamped device.
     "execution_run_approval_list",
     "execution_run_approval_respond",
@@ -1574,7 +1560,6 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "mcp_oauth_load_entry",
     "read_agent_config",
     "read_project_mcp_config",
-    "keyring_secret_get",
     "secret_store_get",
     "ocr_list_native_backends",
     "ocr_list_available_backends",
@@ -1867,10 +1852,10 @@ const READ_ONLY_COMMANDS: &[&str] = &[
 /// attach to and steer host-owned agent sessions, control host goal loops, or
 /// resolve host computer-use consent.
 ///
-/// Baseline paired chat (`claude_send` / `claude_interrupt` /
-/// `claude_approve`) is deliberately **absent**: that is the phone's own chat
-/// path and predates this capability, so gating it would break existing
-/// mobile clients. Read-only sync/observe is likewise ungated.
+/// Baseline paired chat (`agent_send` / `agent_interrupt` /
+/// `agent_resolve_permission`) is deliberately **absent**: that is the
+/// phone's own chat path, not an escalation. Read-only sync/observe is
+/// likewise ungated.
 ///
 /// Command arms are added by their respective milestones; the gate fires for a
 /// name as soon as it appears here (it runs before the dispatch `match`).
@@ -1973,9 +1958,6 @@ const CONTROL_COMMANDS: &[&str] = &[
     "team_task_create",
     "team_task_comment",
     "team_run_start",
-    "team_run_pause",
-    "team_run_resume",
-    "team_run_stop",
     "execution_run_control",
     "execution_run_approval_respond",
     "agent_task_start",
@@ -2839,9 +2821,6 @@ const SERVICE_ONLY_COMMANDS: &[&str] = &[
     "connectors_lark_user_auth",
     "connectors_bounded_http_request",
     "secret_store_delete",
-    "keyring_secret_get",
-    "keyring_secret_set",
-    "keyring_secret_clear",
     "ocr_extract_native",
     "ocr_list_native_backends",
     "ocr_list_available_backends",

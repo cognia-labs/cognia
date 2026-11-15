@@ -89,8 +89,6 @@ export const SAMPLE_SPANS: SpanSnapshot[] = [
 function makeSample(i: number): PerfSample {
   const t = 1_700_000_000_000 + i * 1000
   return {
-    tsMs: t,
-    intervalMs: 1000,
     processes: [
       makeProcess({
         pid: 1000,

@@ -62,9 +62,6 @@ impl sampler::PerfHostPort for TauriPerfHostPort {
                 if let Err(error) = self.app.emit(sampler::FRAME_EVENT, &targeted) {
                     log::warn!("perf://frame emit failed: {error}");
                 }
-                if let Err(error) = self.app.emit(sampler::SAMPLE_EVENT, &targeted) {
-                    log::warn!("perf://sample compatibility emit failed: {error}");
-                }
             }
         }
     }
@@ -285,35 +282,6 @@ pub fn perf_read_observations(
         device_id.as_deref(),
         super::now_ms(),
     )
-}
-
-#[tauri::command]
-pub fn perf_start_sampling(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, PerfState>,
-    interval_ms: Option<u64>,
-) -> Result<(), String> {
-    sampler::start(
-        state.sampler.clone(),
-        interval_ms.unwrap_or(sampler::DEFAULT_INTERVAL_MS),
-        host_port(app, None),
-    );
-    Ok(())
-}
-
-#[tauri::command]
-pub fn perf_set_interval(
-    state: tauri::State<'_, PerfState>,
-    interval_ms: u64,
-) -> Result<(), String> {
-    state.sampler.set_legacy_interval(interval_ms);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn perf_stop_sampling(state: tauri::State<'_, PerfState>) -> Result<(), String> {
-    state.sampler.close_legacy();
-    Ok(())
 }
 
 #[tauri::command]

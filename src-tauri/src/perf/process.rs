@@ -25,7 +25,7 @@ pub enum ProcessRole {
     Child,
 }
 
-/// One process row in a [`super::sampler::PerfSample`].
+/// One process row in a [`super::sampler::PerfFrame`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessSample {

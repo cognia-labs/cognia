@@ -83,7 +83,7 @@ describe("RoutingTransport", () => {
     await routing.call("git_status")
     await routing.call("app_settings_update", { secret: "private" })
     await expect(routing.call("companion_server_status")).rejects.toThrow("host-admin")
-    await expect(routing.call("keyring_secret_get")).rejects.toThrow("service-only")
+    await expect(routing.call("secret_store_get")).rejects.toThrow("service-only")
 
     expect(jest.mocked(measureOperation).mock.calls.map(([name]) => name)).toEqual([
       "transport.local.call",
@@ -259,7 +259,7 @@ describe("RoutingTransport", () => {
     const routing = new RoutingTransport(local.transport)
     setActiveRemoteTransport(remote.transport)
 
-    await expect(routing.call("keyring_secret_get", { key: "secret" })).rejects.toThrow(
+    await expect(routing.call("secret_store_get", { key: "secret" })).rejects.toThrow(
       "service-only"
     )
     expect(local.calls).toHaveLength(0)

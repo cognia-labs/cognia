@@ -16,7 +16,7 @@
  *     Seeded from the synced-down Dexie history for the initial paint.
  *  3. Exposes **control** actions — send a follow-up, interrupt, and resolve a
  *     pending tool-use approval — through the shared `lib/claude/ipc.ts`
- *     surface (`claude_send` / `claude_interrupt` / `claude_approve`), which
+ *     surface (`agent_send` / `agent_interrupt` / `agent_resolve_permission`), which
  *     routes to the host sidecar via the companion transport.
  *
  * Observe works for any paired device; the control RPCs require the
@@ -43,7 +43,6 @@ import type {
   PendingApproval,
   SDKEventEnvelope,
 } from "@cognia/agent-config-types"
-import { listMessages } from "@/lib/db/messages"
 import {
   enqueueHostStateIntentIfAvailable,
   withdrawUnsentHostStateMessages,
@@ -56,7 +55,6 @@ import {
   type UploadableAttachment,
   type UploadedAttachment,
 } from "@/lib/companion/attachment-upload-client"
-import { runSyncDown } from "@/lib/sync/companion-sync"
 import { transport } from "@/lib/tauri"
 import { ATTACH_LEASE_RENEW_INTERVAL_MS } from "@/lib/companion/device-presence-registry"
 import type { AttachDowngradeReason } from "@/lib/companion/remote-attach-registry"
@@ -158,11 +156,6 @@ export interface RemoteSessionStream {
   reconcileTranscript: () => void
 }
 
-export interface RemoteSessionStreamOptions {
-  /** Legacy-only: seed the full mirrored history before applying live deltas. */
-  seedHistory?: boolean
-}
-
 function isForSession(evt: ClaudeEvent, sessionId: string): boolean {
   return (evt as { sessionId?: string }).sessionId === sessionId
 }
@@ -195,11 +188,7 @@ function isNotFound(err: unknown): boolean {
   return /\b404\b/.test(msg) || /not[_\s-]?found/i.test(msg)
 }
 
-export function useRemoteSessionStream(
-  sessionId: string | null,
-  options: RemoteSessionStreamOptions = {}
-): RemoteSessionStream {
-  const seedHistory = options.seedHistory ?? true
+export function useRemoteSessionStream(sessionId: string | null): RemoteSessionStream {
   const t = useTranslations("mobile.remoteSessions")
   const [messages, setMessages] = useState<UIMessage[]>([])
   const [status, setStatus] = useState<RemoteStreamStatus>("loading")
@@ -230,7 +219,6 @@ export function useRemoteSessionStream(
     let requestedMode: "control" | "observe" = "control"
     let cancelled = false
     let messageCommitFrame: number | null = null
-    let streamedRevision = 0
 
     const scheduleMessageCommit = () => {
       if (messageCommitFrame !== null) return
@@ -240,50 +228,14 @@ export function useRemoteSessionStream(
       })
     }
 
-    // Re-seed the scrollback from Dexie. Used both for the initial paint and
-    // after a transport `resync_required` (a cursor gap can leave the streamed
-    // list permanently stale). Only adopt the Dexie snapshot when it is at
-    // least as complete as the in-memory stream so we never clobber freshly
-    // streamed deltas that the sync orchestrator hasn't persisted yet.
-    const reseedFromDexie = async () => {
-      if (!sessionId || !seedHistory) return
-      const revisionAtStart = streamedRevision
-      try {
-        // A resync frame means the local mirror is not authoritative until the
-        // bounded sync-down completes. Afterwards, accept deletions and
-        // same-length corrections as well as append-only snapshots.
-        await runSyncDown({ only: ["messages"] })
-        const history = await listMessages(sessionId)
-        if (cancelled || streamedRevision !== revisionAtStart) return
-        messagesRef.current = history
-        scheduleMessageCommit()
-      } catch {
-        // best-effort — keep whatever we already have
-      }
-    }
-
-    // Seed history from the synced-down Dexie store, then attach + stream.
+    // History comes from the transcript timeline; this stream carries only
+    // the live turn. Start empty, then attach + stream.
     void (async () => {
       if (!sessionId) {
         setStatusBoth("idle")
         return
       }
-      if (seedHistory) {
-        try {
-          const history = await listMessages(sessionId)
-          if (!cancelled) {
-            messagesRef.current = history
-            setMessages(history)
-            setStatusBoth("idle")
-          }
-        } catch {
-          if (!cancelled) setStatusBoth("idle")
-        }
-        // Background freshness is legacy-only. Transcript-capable clients
-        // reconcile the bounded newest timeline page instead of draining the
-        // sync table into Dexie.
-        void runSyncDown({ only: ["messages"] }).catch(() => {})
-      } else if (!cancelled) {
+      if (!cancelled) {
         messagesRef.current = []
         liveTurnCompleteRef.current = false
         setMessages([])
@@ -386,12 +338,9 @@ export function useRemoteSessionStream(
 
       unsub = transport.subscribe<ClaudeEvent>(SIDECAR_EVENT, (evt) => {
         // `resync_required` is a synthetic, non-session-scoped frame the
-        // transport dispatches after a cursor gap — handle it BEFORE the
-        // session filter (it carries no `sessionId`).
-        if (frameType(evt) === "resync_required") {
-          void reseedFromDexie()
-          return
-        }
+        // transport dispatches after a cursor gap. History is the transcript
+        // timeline's, so the gap needs nothing here.
+        if (frameType(evt) === "resync_required") return
         // `sidecar_exited` is also non-session-scoped but terminal for every
         // host session — treat it as an end for the one we're watching.
         if (frameType(evt) === "sidecar_exited") {
@@ -407,7 +356,6 @@ export function useRemoteSessionStream(
             const { messages: next, turnComplete } = applySdkEvent(messagesRef.current, env.event)
             if (next !== messagesRef.current) {
               messagesRef.current = next
-              streamedRevision += 1
               scheduleMessageCommit()
             }
             liveTurnCompleteRef.current = turnComplete
@@ -473,7 +421,7 @@ export function useRemoteSessionStream(
       // ignores any id in the payload, so sending one only invited spoofing.
       void transport.call("session_detach", { sessionId }).catch(() => {})
     }
-  }, [seedHistory, sessionId, setStatusBoth])
+  }, [sessionId, setStatusBoth])
 
   const send = useCallback(
     async (
@@ -646,11 +594,11 @@ export function useRemoteSessionStream(
   )
 
   const reconcileTranscript = useCallback(() => {
-    if (seedHistory || !liveTurnCompleteRef.current) return
+    if (!liveTurnCompleteRef.current) return
     liveTurnCompleteRef.current = false
     messagesRef.current = []
     setMessages([])
-  }, [seedHistory])
+  }, [])
 
   return {
     messages,

@@ -11493,7 +11493,6 @@
       "no_server": "No collaboration server is configured. Add its address in the Collaboration server settings.",
       "not_offered": "Your collaboration server does not offer shared conversations.",
       "not_signed_in": "Sign in to your organization to use its collaboration server.",
-      "protocol_unsupported": "Your collaboration server's shared-conversation protocol is older than this app supports. Update the server.",
       "server_unreachable": "The collaboration server cannot be reached right now.",
       "turned_off": "Shared conversations are turned off on this machine."
     },
@@ -17582,8 +17581,6 @@
       },
       "googleConnections": "Google connections",
       "googleConnectionsFailed": "Could not load Google connections. Try again when the Host is available.",
-      "googleMigrationNeedsClientId": "Enter the OAuth client ID associated with your saved secret to finish setup.",
-      "googleNeedsIdentity": "Reauthorize to confirm this Google account's identity.",
       "googleReauthorize": "Reauthorize",
       "googleRevokeUnavailable": "revocation unavailable",
       "googleScopes": "Read-only access to Drive, Docs and Sheets.",
@@ -31786,7 +31783,6 @@
       "downloadingDetail": "{bytesDone} / {bytesTotal} bytes — file {index} of {count}",
       "emptyNoModelFiles": "No managed model files for this backend.",
       "installed": "Models ready",
-      "legacyDetected": "Legacy model files detected",
       "missing": "{count} model file(s) missing",
       "modelDir": "Stored in: {path}",
       "redownload": "Re-download",
@@ -51716,7 +51712,6 @@
         "folderLabel": "Drive folder",
         "lastSync": "Last upload {time}",
         "loadFailed": "Could not load Google Drive connection",
-        "migrationNeedsClientId": "Save the original backup client ID to migrate your existing sign-in.",
         "neverSynced": "Never uploaded",
         "passphraseRequired": "Unlock the sync passphrase (WebDAV card) before uploading",
         "phase": {
@@ -63326,10 +63321,6 @@
       "usageConsole": "Usage console",
       "usageDestination": "Usage query destination"
     },
-    "migration": {
-      "toastBody": "Migrated {count, plural, =1 {1 legacy account} other {# legacy accounts}} into the new vault.",
-      "toastTitle": "Subscription module upgraded"
-    },
     "nav": {
       "groups": {
         "providersGroup": "Providers",
@@ -73808,8 +73799,7 @@
       "unavailable": {
         "error": "Access could not be checked: {message}",
         "hidden": "This workspace is not shared with you.",
-        "not-signed-in": "Sign in to see your access.",
-        "unsupported": "This collaboration server does not report access yet."
+        "not-signed-in": "Sign in to see your access."
       },
       "viaOrgAdmin": "through organization admin",
       "workspaceRole": "Workspace role"

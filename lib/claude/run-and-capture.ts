@@ -22,7 +22,7 @@ import {
  * Cancellation: pass an `AbortSignal` to abort early. On abort, an
  * `interruptSession` IPC is fired (best effort), the subscription briefly
  * drains the interrupted turn's terminal usage event, then detaches and rejects
- * with `AbortError`. Mirrors the `mode-switcher.tsx:invoke("claude_interrupt",
+ * with `AbortError`. Mirrors the `mode-switcher.tsx:invoke("agent_interrupt",
  * ...)` semantics without discarding tokens already billed by completed steps.
  */
 

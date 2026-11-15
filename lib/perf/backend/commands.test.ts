@@ -11,7 +11,7 @@ jest.mock("@/lib/tauri", () => ({
 }))
 
 import {
-  PERF_SAMPLE_EVENT,
+  PERF_FRAME_EVENT,
   controlManagedProcess,
   listManagedProcesses,
   perfHotspots,
@@ -22,12 +22,9 @@ import {
   perfCloseTrace,
   perfReadSystemDetails,
   perfResetHotspots,
-  perfSetInterval,
   perfSnapshot,
-  perfStartSampling,
-  perfStopSampling,
   perfSystemDetails,
-  subscribePerfSample,
+  subscribePerfFrame,
 } from "./commands"
 
 beforeEach(() => {
@@ -41,26 +38,16 @@ describe("when not in Tauri", () => {
 
   it("returns inert values without calling transport", async () => {
     expect(await perfSnapshot()).toEqual(
-      expect.objectContaining({ samples: [], frames: [], running: false, intervalMs: 1000 })
+      expect.objectContaining({ frames: [], running: false, intervalMs: 1000 })
     )
     expect(await perfHotspots()).toEqual([])
     expect(await perfListTraces()).toEqual([])
     expect(await perfSystemDetails()).toBeNull()
-    await perfStartSampling(500)
-    await perfStopSampling()
-    await perfSetInterval(2000)
     await perfResetHotspots()
     await perfOpenTraceDir()
     expect(await listManagedProcesses()).toEqual([])
     await controlManagedProcess("chatSidecar", "chat-sidecar", "kill")
     expect(callMock).not.toHaveBeenCalled()
-  })
-
-  it("subscribePerfSample returns a no-op unsubscribe", () => {
-    const unsub = subscribePerfSample(() => {})
-    expect(typeof unsub).toBe("function")
-    expect(subscribeMock).not.toHaveBeenCalled()
-    expect(() => unsub()).not.toThrow()
   })
 
   it("routes selected-host system details even outside a local Tauri shell", async () => {
@@ -77,22 +64,13 @@ describe("when in Tauri", () => {
   })
 
   it("perfSnapshot calls the command", async () => {
-    callMock.mockResolvedValueOnce({ samples: [], running: true, intervalMs: 1000 })
+    callMock.mockResolvedValueOnce({ frames: [], running: true, intervalMs: 1000 })
     const snap = await perfSnapshot()
     expect(callMock).toHaveBeenCalledWith("perf_snapshot")
     expect(snap.running).toBe(true)
   })
 
-  it("perfStartSampling passes the interval", async () => {
-    await perfStartSampling(2000)
-    expect(callMock).toHaveBeenCalledWith("perf_start_sampling", { intervalMs: 2000 })
-  })
-
-  it("perfSetInterval / stop / reset / hotspots / traces / system / open call their commands", async () => {
-    await perfSetInterval(4000)
-    expect(callMock).toHaveBeenCalledWith("perf_set_interval", { intervalMs: 4000 })
-    await perfStopSampling()
-    expect(callMock).toHaveBeenCalledWith("perf_stop_sampling")
+  it("reset / hotspots / traces / system / open call their commands", async () => {
     await perfResetHotspots()
     expect(callMock).toHaveBeenCalledWith("perf_reset_hotspots")
 
@@ -125,12 +103,12 @@ describe("when in Tauri", () => {
     expect(callMock).toHaveBeenCalledWith("perf_trace_close", { handleId: "handle-a" })
   })
 
-  it("subscribePerfSample wires transport.subscribe to the event", () => {
+  it("subscribePerfFrame wires transport.subscribe to the frame event", () => {
     const unsub = jest.fn()
     subscribeMock.mockReturnValue(unsub)
     const handler = jest.fn()
-    const result = subscribePerfSample(handler)
-    expect(subscribeMock).toHaveBeenCalledWith(PERF_SAMPLE_EVENT, handler)
+    const result = subscribePerfFrame(handler)
+    expect(subscribeMock).toHaveBeenCalledWith(PERF_FRAME_EVENT, handler)
     expect(result).toBe(unsub)
   })
 
