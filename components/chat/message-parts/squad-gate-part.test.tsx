@@ -3,7 +3,7 @@
 import { render, screen } from "@testing-library/react"
 
 import { SquadGatePart } from "./squad-gate-part"
-import type { SquadGatePart as SquadGatePartType } from "@/lib/claude/parts-extensions"
+import type { SquadGatePart as SquadGatePartType } from "@/lib/chat/parts-extensions"
 
 function part(over: Partial<SquadGatePartType> = {}): SquadGatePartType {
   return {

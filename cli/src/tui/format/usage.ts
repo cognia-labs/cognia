@@ -3,7 +3,7 @@
  * context-window occupancy. Reuses the desktop's per-model context-window table
  * (`getModelContextWindow`) so the CLI and app agree.
  */
-import { getModelContextWindow, tokensInWindow } from "@/lib/claude/usage"
+import { getModelContextWindow, tokensInWindow } from "@/lib/usage/context-usage"
 import { costFromTokensUsd } from "@/lib/usage/pricing"
 import { UNKNOWN_COST } from "@/lib/usage/session-analytics"
 import type { ModelPricing } from "@cognia/provider-types/provider"

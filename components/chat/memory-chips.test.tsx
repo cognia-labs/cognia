@@ -9,7 +9,7 @@ import { useLearnedMemories, useRecalledMemories } from "@/hooks/memory/use-mess
 import { manageMemory } from "@/lib/memory/control-plane/manage"
 import { usePlatform } from "@/hooks/use-platform"
 import { toast } from "sonner"
-import type { SourcesPart } from "@/lib/claude/parts-extensions"
+import type { SourcesPart } from "@/lib/chat/parts-extensions"
 import type { Memory } from "@/types/memory/memory"
 
 jest.mock("motion/react", () => jest.requireActual("../../__mocks__/motion-react.js"))

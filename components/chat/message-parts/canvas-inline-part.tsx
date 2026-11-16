@@ -35,7 +35,7 @@ import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { revealCanvasDocument } from "@/lib/artifacts/reveal"
 import { CodeBlock } from "@/components/chat/renderers/code-block"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
-import type { CanvasInlinePart as CanvasInlinePartType } from "@/lib/claude/parts-extensions"
+import type { CanvasInlinePart as CanvasInlinePartType } from "@/lib/chat/parts-extensions"
 import { cn } from "@/lib/utils"
 
 interface CanvasInlinePartProps {

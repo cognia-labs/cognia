@@ -47,7 +47,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Textarea } from "@/components/ui/textarea"
 import { useLearnedMemories, useRecalledMemories } from "@/hooks/memory/use-message-memories"
 import { usePlatform } from "@/hooks/use-platform"
-import type { SourcesPart } from "@/lib/claude/parts-extensions"
+import type { SourcesPart } from "@/lib/chat/parts-extensions"
 import type { ManageMemoryResult } from "@/lib/memory/control-plane/manage"
 import { runMemoryCommand, type RoutedMemoryResult } from "@/lib/memory/control-plane/routed-manage"
 import { cn } from "@/lib/utils"

@@ -6,7 +6,7 @@ import type { ChatSession, ExternalAgentCogniaModelBinding } from "@cognia/agent
 import { useSettingsStore } from "@/stores/settings"
 import { useChatStore } from "@/stores/chat"
 import { ContextUsageIndicator } from "@/components/chat/context-usage-indicator"
-import { externalTokenUsageToUsageInfo } from "@/lib/claude/usage"
+import { externalTokenUsageToUsageInfo } from "@/lib/usage/usage-info"
 import { translateDshNotification } from "@cognia/agent-dsh/event-codec"
 import { useAgentContextWindow } from "./use-agent-context-window"
 

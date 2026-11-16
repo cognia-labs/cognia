@@ -131,7 +131,7 @@ import {
   isSquadGatePart,
   isSquadRunPart,
   isToolUseSummaryPart,
-} from "@/lib/claude/parts-extensions"
+} from "@/lib/chat/parts-extensions"
 import type {
   A2UIPart as A2UIPartType,
   VerificationVerdictPart as VerificationVerdictPartType,
@@ -139,7 +139,7 @@ import type {
   CanvasInlinePart as CanvasInlinePartType,
   GroundingPart as GroundingPartType,
   SourcesPart as SourcesPartType,
-} from "@/lib/claude/parts-extensions"
+} from "@/lib/chat/parts-extensions"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,

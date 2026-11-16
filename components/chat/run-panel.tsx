@@ -103,7 +103,7 @@ import {
   selectRunningSubagentChip,
 } from "@/lib/claude/run-status"
 import { deriveRunRecord, toRunStatus } from "@/lib/claude/run-record"
-import { getLatestUsage } from "@/lib/claude/usage"
+import { getLatestUsage } from "@/lib/usage/context-usage"
 import { useSettingsStore } from "@/stores/settings"
 import {
   aggregateRunBarUsage,

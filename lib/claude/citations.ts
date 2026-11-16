@@ -9,7 +9,7 @@
 // vector store.
 
 import type { BetaContentBlock } from "@cognia/agent-config-types"
-import type { SourcesPartItem } from "./parts-extensions"
+import type { SourcesPartItem } from "@/lib/chat/parts-extensions"
 
 /**
  * Anthropic citation shape — kept as a single permissive interface so older /

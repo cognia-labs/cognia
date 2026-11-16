@@ -6,7 +6,7 @@
  * `lib/claude/ipc.ts:getSessionContextUsage`). The SDK knows the TRUE window
  * size and a per-category token breakdown (system-prompt sections, MCP tools,
  * memory files, agents, skills) that the renderer-side estimate in
- * `lib/claude/usage.ts` can't compute.
+ * `lib/usage/context-usage.ts` can't compute.
  *
  * Returns `null` when unavailable (web, unsupported runtime, no open
  * session, or before the first turn) so the indicator falls back cleanly to the

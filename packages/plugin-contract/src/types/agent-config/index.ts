@@ -1897,7 +1897,7 @@ export interface SdkContextUsage {
   /**
    * Built-in tools the CLI declared but has not loaded into the window. They
    * back the "System tools (deferred)" category and must never be counted as
-   * occupancy — see `lib/claude/context-breakdown.ts`.
+   * occupancy — see `lib/usage/context-breakdown.ts`.
    */
   deferredBuiltinTools?: Array<{ name: string; tokens: number; isLoaded?: boolean }>
   skills?: {

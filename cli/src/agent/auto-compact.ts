@@ -8,7 +8,7 @@
  * — the App drives a between-turn effect off it, so the threshold math stays
  * unit-tested without a live session.
  */
-import { computeContextWindowUsage } from "@/lib/claude/usage"
+import { computeContextWindowUsage } from "@/lib/usage/context-usage"
 import type { UsageInfo } from "@/lib/claude/adapter"
 
 /** Default fill fraction at which auto-compaction fires (matches the gauge's ┊). */

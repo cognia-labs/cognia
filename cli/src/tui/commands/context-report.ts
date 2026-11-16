@@ -1,5 +1,5 @@
 /** Localized context diagnostics: telemetry and configuration are explicitly separated. */
-import { computeContextWindowUsage } from "@/lib/claude/usage"
+import { computeContextWindowUsage } from "@/lib/usage/context-usage"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import { DEFAULT_BUILTIN_TOOLS, type SdkContextUsage } from "@cognia/agent-config-types"
 import { BUILTIN_TOOL_CATEGORIES } from "@/lib/settings/builtin-tools"

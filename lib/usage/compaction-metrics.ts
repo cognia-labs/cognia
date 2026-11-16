@@ -23,7 +23,7 @@ import {
   type CompactBoundaryPartData,
   isCompactBoundaryMessage,
 } from "@/components/chat/message-parts/compact-boundary-part"
-import { tokensInWindow } from "@/lib/claude/usage"
+import { tokensInWindow } from "@/lib/usage/context-usage"
 import type { UsageInfo } from "@/lib/claude/adapter"
 
 /**

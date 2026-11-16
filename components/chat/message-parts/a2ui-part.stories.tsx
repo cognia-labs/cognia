@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/nextjs"
 import { fn } from "storybook/test"
-import type { A2UIPart as A2UIPartType } from "@/lib/claude/parts-extensions"
+import type { A2UIPart as A2UIPartType } from "@/lib/chat/parts-extensions"
 
 import { A2UIPart } from "./a2ui-part"
 

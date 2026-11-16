@@ -16,7 +16,7 @@ import Link from "next/link"
 import { ArrowRightIcon, ExternalLinkIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { ToolRowShell } from "@/components/chat/message-parts/tool-row"
-import type { AgentTeamDispatchPart as DispatchPartType } from "@/lib/claude/parts-extensions"
+import type { AgentTeamDispatchPart as DispatchPartType } from "@/lib/chat/parts-extensions"
 import type { AgentFlowMode } from "@/types/appearance"
 
 interface Props {

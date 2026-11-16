@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite"
 
 import { SquadRunPart } from "./squad-run-part"
-import type { SquadRunPart as SquadRunPartType } from "@/lib/claude/parts-extensions"
+import type { SquadRunPart as SquadRunPartType } from "@/lib/chat/parts-extensions"
 
 const PART: SquadRunPartType = {
   type: "squad-run",

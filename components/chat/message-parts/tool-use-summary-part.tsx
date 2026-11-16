@@ -3,7 +3,7 @@
 import { useTranslations } from "next-intl"
 import { SparklesIcon } from "lucide-react"
 
-import type { ToolUseSummaryPart as ToolUseSummaryPartData } from "@/lib/claude/parts-extensions"
+import type { ToolUseSummaryPart as ToolUseSummaryPartData } from "@/lib/chat/parts-extensions"
 
 export interface ToolUseSummaryPartProps {
   part: ToolUseSummaryPartData

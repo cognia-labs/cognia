@@ -10,7 +10,7 @@
 import { memo } from "react"
 import { useTranslations } from "next-intl"
 import type { ToolUIPart } from "ai"
-import type { McpResultBlock } from "@/lib/claude/parts-extensions"
+import type { McpResultBlock } from "@/lib/chat/parts-extensions"
 import { ToolInput } from "@/components/ai-elements/tool"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { CodeBlock } from "@/components/chat/renderers/code-block"

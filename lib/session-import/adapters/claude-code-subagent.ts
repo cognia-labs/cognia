@@ -10,7 +10,7 @@
 // dependency on the adapter (no import cycle).
 
 import type { StoredMessage } from "@cognia/agent-config-types"
-import type { SubagentPart } from "@/lib/claude/parts-extensions"
+import type { SubagentPart } from "@/lib/chat/parts-extensions"
 import type { SubAgentToolCall, SubAgentTokenUsage } from "@/types/agent/sub-agent"
 
 type PartRecord = Record<string, unknown>

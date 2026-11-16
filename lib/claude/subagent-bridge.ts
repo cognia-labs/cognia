@@ -9,8 +9,8 @@
 
 import type { UIMessage } from "ai"
 import type { SubAgent } from "@/types/agent/sub-agent"
-import type { SubagentPart } from "./parts-extensions"
-import { isSubagentPart } from "./parts-extensions"
+import type { SubagentPart } from "@/lib/chat/parts-extensions"
+import { isSubagentPart } from "@/lib/chat/parts-extensions"
 
 /**
  * Find or insert a `SubagentPart` on the assistant message that spawned

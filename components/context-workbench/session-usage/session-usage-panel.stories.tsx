@@ -6,8 +6,8 @@ import {
   buildEstimateContextBreakdown,
   buildSdkContextBreakdown,
   resolveAutoCompaction,
-} from "@/lib/claude/context-breakdown"
-import { resolveContextWindowUsage } from "@/lib/claude/usage"
+} from "@/lib/usage/context-breakdown"
+import { resolveContextWindowUsage } from "@/lib/usage/context-usage"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import type { SessionContextWindow } from "@/hooks/chat/use-session-context-window"
 import { SessionUsagePanelView } from "./session-usage-panel"

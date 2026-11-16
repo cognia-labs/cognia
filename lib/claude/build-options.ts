@@ -186,7 +186,7 @@ import {
   resolveModelMaxOutputTokens,
   resolveModelMeta,
 } from "@/lib/ai/model-options"
-import { getModelContextWindow } from "@/lib/claude/usage"
+import { getModelContextWindow } from "@/lib/usage/context-usage"
 import { processPromptTemplateVariables } from "@/stores/agent/custom-mode-store/helpers"
 import { chatFusionModeOf } from "@/stores/chat/fusion-mode-store"
 import {

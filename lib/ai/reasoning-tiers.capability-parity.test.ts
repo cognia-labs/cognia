@@ -13,7 +13,7 @@
  * a model the SDK 400s on, or hide it on one that works.
  *
  * Follows the repo's existing `*.parity.test.ts` convention
- * (`lib/claude/usage.compaction-parity.test.ts`,
+ * (`lib/usage/context-usage.compaction-parity.test.ts`,
  * `lib/claude/permissions/ruleset.sidecar-parity.test.ts`).
  */
 import { modelSupportsEffort } from "./reasoning-capability"

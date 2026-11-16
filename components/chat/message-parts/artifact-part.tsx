@@ -40,7 +40,7 @@ import {
 import { useNearViewport } from "@/hooks/chat/use-near-viewport"
 import { toast } from "sonner"
 import { useCopy } from "@/hooks/ui/use-copy"
-import type { ArtifactPart as ArtifactPartType } from "@/lib/claude/parts-extensions"
+import type { ArtifactPart as ArtifactPartType } from "@/lib/chat/parts-extensions"
 import type { Artifact } from "@/types"
 import {
   ChevronDownIcon,

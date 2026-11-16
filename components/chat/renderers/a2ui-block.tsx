@@ -9,7 +9,7 @@
 
 import { useMemo } from "react"
 import { A2UIPart } from "@/components/chat/message-parts/a2ui-part"
-import type { A2UIPart as A2UIPartType } from "@/lib/claude/parts-extensions"
+import type { A2UIPart as A2UIPartType } from "@/lib/chat/parts-extensions"
 
 interface Props {
   /** Raw fence body (the JSON between the back-ticks). */

@@ -10,7 +10,7 @@ import type { UIMessage } from "ai"
 
 import type { UsageInfo } from "@/lib/claude/adapter"
 import type { RunStatusBarSettings } from "@cognia/agent-config-types"
-import { computeContextWindowUsage, getLatestUsage } from "@/lib/claude/usage"
+import { computeContextWindowUsage, getLatestUsage } from "@/lib/usage/context-usage"
 
 // Defaults live in the leaf `run-bar-defaults.ts` (no heavy imports) so
 // `lib/db/settings.ts` can spread them into canonical DEFAULTS; re-exported here

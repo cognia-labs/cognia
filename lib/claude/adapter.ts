@@ -30,10 +30,10 @@ import type {
   SourcesPart,
   SourcesPartItem,
   ToolUseSummaryPart,
-} from "./parts-extensions"
+} from "@/lib/chat/parts-extensions"
 import type { ProjectHistoryEvidence } from "./project-history-evidence-registry"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
-import { usageInfoFromUsageBlock } from "@/lib/claude/usage"
+import { usageInfoFromUsageBlock } from "@/lib/usage/usage-info"
 import { VIDEO_ATTACHMENT_PART_KEY } from "@/lib/chat/attachments/video/attachment-info"
 import { attachUsageToLastAssistant } from "@/lib/chat/message-run-metadata"
 import type { HookNoticePartData } from "./hooks"

@@ -10,7 +10,7 @@ import {
   GROUP_LABEL_KEY,
   GROUP_STROKE,
 } from "./context-detail-panel"
-import type { ContextBreakdown } from "@/lib/claude/context-breakdown"
+import type { ContextBreakdown } from "@/lib/usage/context-breakdown"
 import enChat from "@/i18n/messages/en/chat.json"
 import zhChat from "@/i18n/messages/zh-CN/chat.json"
 

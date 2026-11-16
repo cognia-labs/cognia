@@ -31,7 +31,7 @@ import { subAgentStatusOf, useSubagentRuntimeStore } from "@/stores/agent/subage
 import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { getExecutionRun } from "@/lib/db/execution-runs"
 import { useChatStore } from "@/stores/chat/chat-store"
-import type { SubagentPart as SubagentPartType } from "@/lib/claude/parts-extensions"
+import type { SubagentPart as SubagentPartType } from "@/lib/chat/parts-extensions"
 import { SUB_AGENT_STATUS_CONFIG } from "@/types/agent/sub-agent"
 import type { SubAgentToolCall, SubAgentTokenUsage } from "@/types/agent/sub-agent"
 import type { AgentFlowMode } from "@/types/appearance"

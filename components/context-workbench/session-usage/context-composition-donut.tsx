@@ -18,7 +18,7 @@
 import { useTranslations } from "next-intl"
 
 import { GROUP_LABEL_KEY, GROUP_STROKE } from "@/components/chat/context-detail-panel"
-import type { ContextBreakdown, ContextGroup } from "@/lib/claude/context-breakdown"
+import type { ContextBreakdown, ContextGroup } from "@/lib/usage/context-breakdown"
 import { cn } from "@/lib/utils"
 import { formatTokens } from "@/types/system/usage"
 

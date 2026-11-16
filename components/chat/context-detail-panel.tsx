@@ -18,7 +18,7 @@ import { useTranslations } from "next-intl"
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
-import type { ContextBreakdown, ContextGroup, ContextGroupId } from "@/lib/claude/context-breakdown"
+import type { ContextBreakdown, ContextGroup, ContextGroupId } from "@/lib/usage/context-breakdown"
 
 /** Longest item list rendered inline — beyond this the tail is summarised. */
 const MAX_ITEMS = 8

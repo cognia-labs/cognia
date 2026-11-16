@@ -14,7 +14,7 @@
 import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
-import type { McpResultBlock } from "@/lib/claude/parts-extensions"
+import type { McpResultBlock } from "@/lib/chat/parts-extensions"
 import { cn } from "@/lib/utils"
 
 export function parseOutputJson(output: unknown): unknown | null {

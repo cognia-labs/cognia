@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from "@storybook/nextjs"
 import { CanvasInlinePart } from "./canvas-inline-part"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import type { CanvasDocument } from "@/types"
-import type { CanvasInlinePart as CanvasInlinePartType } from "@/lib/claude/parts-extensions"
+import type { CanvasInlinePart as CanvasInlinePartType } from "@/lib/chat/parts-extensions"
 
 // `CanvasInlinePart` reads the live Canvas document from
 // `useArtifactStore.canvasDocuments` by id and renders a low-height read-only

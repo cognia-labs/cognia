@@ -19,7 +19,7 @@
 import type { UIMessage } from "ai"
 
 import type { SessionUsageRow } from "@/lib/db/session-usage"
-import { getModelContextWindow } from "@/lib/claude/usage"
+import { getModelContextWindow } from "@/lib/usage/context-usage"
 import {
   aggregateByModel,
   effectiveCostUsdDetailed,

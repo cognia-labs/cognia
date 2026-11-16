@@ -4,7 +4,7 @@
 
 import { render, screen } from "@testing-library/react"
 import { AgentTeamDispatchPart } from "./agent-team-dispatch-part"
-import type { AgentTeamDispatchPart as DispatchType } from "@/lib/claude/parts-extensions"
+import type { AgentTeamDispatchPart as DispatchType } from "@/lib/chat/parts-extensions"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,

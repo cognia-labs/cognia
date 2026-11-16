@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs"
 
 import { AgentTeamDispatchPart } from "./agent-team-dispatch-part"
-import type { AgentTeamDispatchPart as DispatchPartType } from "@/lib/claude/parts-extensions"
+import type { AgentTeamDispatchPart as DispatchPartType } from "@/lib/chat/parts-extensions"
 
 // Fully props-driven banner for one `<dispatch to="…">…</dispatch>` directive
 // parsed out of a supervisor turn. No store / context — just the part + an

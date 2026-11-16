@@ -4,8 +4,8 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 
 import { analyzeSession } from "@/lib/analysis/session-report"
-import { buildSdkContextBreakdown, resolveAutoCompaction } from "@/lib/claude/context-breakdown"
-import { resolveContextWindowUsage } from "@/lib/claude/usage"
+import { buildSdkContextBreakdown, resolveAutoCompaction } from "@/lib/usage/context-breakdown"
+import { resolveContextWindowUsage } from "@/lib/usage/context-usage"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 import type { SessionContextWindow } from "@/hooks/chat/use-session-context-window"
 import { SessionUsagePanel, SessionUsagePanelView } from "./session-usage-panel"

@@ -6,7 +6,7 @@ import { render, screen } from "@testing-library/react"
 import {
   buildSdkContextBreakdown,
   buildEstimateContextBreakdown,
-} from "@/lib/claude/context-breakdown"
+} from "@/lib/usage/context-breakdown"
 import { ContextCompositionDonut } from "./context-composition-donut"
 
 const live = buildSdkContextBreakdown({

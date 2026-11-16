@@ -1,5 +1,5 @@
 import { CONVERSATION_SUMMARY_PROMPT } from "@/lib/ai/generation/summarizer"
-import { AUTO_COMPACT_FRACTION } from "@/lib/claude/usage"
+import { AUTO_COMPACT_FRACTION } from "@/lib/usage/context-usage"
 import {
   COMPACT_HANDOFF_PROMPT,
   DEFAULT_KEEP_RECENT,

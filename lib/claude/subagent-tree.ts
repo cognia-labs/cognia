@@ -10,8 +10,8 @@
 // every node renders exactly once.
 
 import { buildTree, type TreeNode } from "@/lib/execution/run-tree"
-import type { SubagentPart } from "./parts-extensions"
-import { isSubagentPart } from "./parts-extensions"
+import type { SubagentPart } from "@/lib/chat/parts-extensions"
+import { isSubagentPart } from "@/lib/chat/parts-extensions"
 
 export interface SubagentTreeNode {
   part: SubagentPart

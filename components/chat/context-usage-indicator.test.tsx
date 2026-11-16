@@ -11,7 +11,7 @@ import {
   ContextWindowHeader,
   UsageRow,
 } from "./context-usage-indicator"
-import type { SessionUsageTotals } from "@/lib/claude/usage"
+import type { SessionUsageTotals } from "@/lib/usage/context-usage"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
 import { compactSession } from "@/lib/claude/ipc"

@@ -12,7 +12,7 @@
  * picks its own, and the built-in provider's catalog default is not a stand-in
  * for it, so the model is simply omitted.
  */
-import { getModelContextWindow } from "@/lib/claude/usage"
+import { getModelContextWindow } from "@/lib/usage/context-usage"
 import { providerIdForPreset } from "@/lib/ai/agent/external/config/preset-provider"
 
 import { resolveBackendModel } from "../../config/active-model"
@@ -77,7 +77,7 @@ export function backendIdentity(config: ResolvedConfig, presetId?: string): Back
  *
  * `contextWindow` — the per-model window the session resolved from the models
  * catalog — wins whenever it is positive. Without it we may only fall back to
- * the pattern table in `lib/claude/usage`, and that table describes the models
+ * the pattern table in `lib/usage/context-usage`, and that table describes the models
  * the built-in agent drives; it says nothing about an external agent's model and
  * silently answers 128k for anything it does not recognise. Deriving a `% ctx`
  * from that on an external backend invents a fact, which is exactly what

@@ -5,7 +5,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { SubagentPart } from "./subagent-part"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
-import type { SubagentPart as SubagentPartType } from "@/lib/claude/parts-extensions"
+import type { SubagentPart as SubagentPartType } from "@/lib/chat/parts-extensions"
 import type { SubAgent } from "@/types/agent/sub-agent"
 
 jest.mock("next-intl", () => ({

@@ -6,7 +6,7 @@ import {
   applySubagentsToMessages,
   subagentSignature,
 } from "./subagent-bridge"
-import { isSubagentPart, type SubagentPart } from "./parts-extensions"
+import { isSubagentPart, type SubagentPart } from "@/lib/chat/parts-extensions"
 
 function assistantMessage(id: string, parts: unknown[] = []): UIMessage {
   return { id, role: "assistant", parts } as unknown as UIMessage

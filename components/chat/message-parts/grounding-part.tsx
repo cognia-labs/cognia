@@ -4,7 +4,7 @@ import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { AlertTriangleIcon, CheckCircle2Icon } from "lucide-react"
 
-import type { GroundingPart as GroundingPartType } from "@/lib/claude/parts-extensions"
+import type { GroundingPart as GroundingPartType } from "@/lib/chat/parts-extensions"
 import { ToolRowShell } from "@/components/chat/message-parts/tool-row"
 
 export function GroundingPart({ part }: { part: GroundingPartType }) {

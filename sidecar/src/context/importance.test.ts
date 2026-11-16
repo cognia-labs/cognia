@@ -35,9 +35,10 @@ test("each content signal is detected", () => {
     scoreMessage({ role: "user", content: "see https://example.com/x" }).signals.includes("url")
   )
   assert.ok(
-    scoreMessage({ role: "user", content: "edit lib/claude/usage.ts please" }).signals.includes(
-      "artifact"
-    )
+    scoreMessage({
+      role: "user",
+      content: "edit lib/usage/context-usage.ts please",
+    }).signals.includes("artifact")
   )
   assert.ok(
     scoreMessage({ role: "user", content: '{"key": "value", "n": 1}' }).signals.includes(

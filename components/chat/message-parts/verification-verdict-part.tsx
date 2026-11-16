@@ -33,7 +33,7 @@ import { useChatStore } from "@/stores/chat/chat-store"
 import type {
   VerificationVerdict,
   VerificationVerdictPart as VerificationVerdictPartType,
-} from "@/lib/claude/parts-extensions"
+} from "@/lib/chat/parts-extensions"
 import { cn } from "@/lib/utils"
 
 interface Props {

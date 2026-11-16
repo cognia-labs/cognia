@@ -59,7 +59,7 @@ import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/a
 import { applySdkEvent, sdkMediaPart, type UsageInfo } from "@/lib/claude/adapter"
 import { applyExternalAgentEventToParts } from "@/lib/ai/agent/external/session/event-to-parts"
 import type { UIMessage } from "ai"
-import type { A2UIPart, SourcesPart } from "@/lib/claude/parts-extensions"
+import type { A2UIPart, SourcesPart } from "@/lib/chat/parts-extensions"
 import { claimTurnUsage, trackCaptureUsage } from "@/lib/usage/claimed-turn-usage"
 import { withSessionTurnLock } from "@/lib/execution/session-turn-lock"
 import { createMutex, type Mutex } from "@cognia/primitives"

@@ -10,7 +10,7 @@ import {
   __resetA2UIChatBindingsForTesting,
   getA2UIChatBinding,
 } from "@/lib/a2ui/chat-action-routing"
-import type { A2UIPart as A2UIPartType } from "@/lib/claude/parts-extensions"
+import type { A2UIPart as A2UIPartType } from "@/lib/chat/parts-extensions"
 
 jest.mock("@/components/chat/renderers/code-block", () => ({
   CodeBlock: ({ code }: { code: string }) => <pre data-testid="code-block">{code}</pre>,

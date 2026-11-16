@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/nextjs"
 import type { UIMessage } from "ai"
 
 import { SubagentTree } from "./subagent-tree"
-import type { SubagentPart } from "@/lib/claude/parts-extensions"
+import type { SubagentPart } from "@/lib/chat/parts-extensions"
 
 const base = Date.now() - 1000 * 60 * 5
 

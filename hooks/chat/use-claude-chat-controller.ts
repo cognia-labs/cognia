@@ -108,7 +108,7 @@ import {
 } from "@/lib/chat/session-peer-delivery"
 import { expireSessionPeerMessages } from "@/lib/db/session-peer-messages"
 import { markAttachedSessionRunning } from "@/lib/chat/attached-session"
-import { externalTokenUsageToUsageInfo } from "@/lib/claude/usage"
+import { externalTokenUsageToUsageInfo } from "@/lib/usage/usage-info"
 import { recordExternalAgentUsage } from "@/lib/db/session-usage"
 import {
   attachRunMetadataToLastAssistant,

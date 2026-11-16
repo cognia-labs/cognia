@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from "@storybook/nextjs"
 import { ArtifactPart } from "./artifact-part"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import type { Artifact } from "@/types"
-import type { ArtifactPart as ArtifactPartType } from "@/lib/claude/parts-extensions"
+import type { ArtifactPart as ArtifactPartType } from "@/lib/chat/parts-extensions"
 
 // `ArtifactPart` reads the LIVE artifact from `useArtifactStore` by id (the
 // part carries only a pointer + title snapshot). Each story seeds the store

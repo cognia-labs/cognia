@@ -18,7 +18,7 @@ import type {
 
 import type { TuiAction } from "../../tui/state/types"
 import type { CanonicalAgentEvent } from "@cognia/agent-config-types/agent-execution"
-import { externalTokenUsageToUsageInfo } from "@/lib/claude/usage"
+import { externalTokenUsageToUsageInfo } from "@/lib/usage/usage-info"
 import { contentBlocksText } from "@cognia/agent-runtime-kit/content-blocks"
 
 function contentBlockEvent(

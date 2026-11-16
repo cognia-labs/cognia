@@ -4,7 +4,7 @@
 import { render, screen } from "@testing-library/react"
 import type { ToolUIPart } from "ai"
 import { McpContentBlocksCard } from "./mcp-content-blocks-card"
-import type { McpResultBlock } from "@/lib/claude/parts-extensions"
+import type { McpResultBlock } from "@/lib/chat/parts-extensions"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>

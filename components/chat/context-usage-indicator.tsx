@@ -10,7 +10,7 @@
  * Faithful to Claude Code / Codex: the ring tints green → amber → red as the
  * window fills, and the hover card draws the auto-compact threshold as a
  * marker on the fill bar. All window sizing flows through the one source of
- * truth in `lib/claude/usage.ts`.
+ * truth in `lib/usage/context-usage.ts`.
  *
  * The popover reads top-down as: how full is the window → what did the last
  * turn cost → what is actually in the window (collapsible detail) → act on it.
@@ -52,7 +52,7 @@ import {
   resolveAutoCompaction,
   resolveContextBreakdown,
   type AutoCompactionPolicy,
-} from "@/lib/claude/context-breakdown"
+} from "@/lib/usage/context-breakdown"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import {
   AUTO_COMPACT_FRACTION,
@@ -63,7 +63,7 @@ import {
   sumSessionUsage,
   type ContextLevel,
   type SessionUsageTotals,
-} from "@/lib/claude/usage"
+} from "@/lib/usage/context-usage"
 
 const LEVEL_TEXT: Record<ContextLevel, string> = {
   ok: "text-emerald-500",

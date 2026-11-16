@@ -18,7 +18,7 @@ import { CheckIcon, ExternalLinkIcon, ShieldQuestionIcon, XIcon } from "lucide-r
 
 import { cn } from "@/lib/utils"
 import { ToolRowShell, type ToolDotStatus } from "@/components/chat/message-parts/tool-row"
-import type { SquadGatePart as SquadGatePartType } from "@/lib/claude/parts-extensions"
+import type { SquadGatePart as SquadGatePartType } from "@/lib/chat/parts-extensions"
 
 interface Props {
   part: SquadGatePartType

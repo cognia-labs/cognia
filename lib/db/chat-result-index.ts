@@ -31,7 +31,7 @@ import { getDb } from "./schema"
  *
  * An artifact and a canvas document are also things a turn produces, and both
  * are deliberately NOT here. Their message parts carry a POINTER — an
- * `artifactId` plus a title snapshot (`lib/claude/parts-extensions.ts`) — while
+ * `artifactId` plus a title snapshot (`lib/chat/parts-extensions.ts`) — while
  * the body lives in `useArtifactStore` / `useCanvasStore`, where `@artifact:`
  * already reads it live. Indexing them would put one document behind two doors
  * with two different bodies, and the stale one would be the one inlined into a

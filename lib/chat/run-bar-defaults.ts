@@ -1,7 +1,7 @@
 /**
  * Leaf module: the run-status-bar metric defaults, with no imports beyond the
  * settings type. Split out of `run-bar-metrics.ts` (which pulls in
- * `lib/claude/usage`) so `lib/db/settings.ts` can spread the same object into
+ * `lib/usage/context-usage`) so `lib/db/settings.ts` can spread the same object into
  * canonical `DEFAULTS` without a heavy / cyclic import (ADR-0127).
  */
 

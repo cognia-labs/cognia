@@ -7,7 +7,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { VerificationVerdictPart } from "./verification-verdict-part"
 import compositionMessages from "@/i18n/messages/en/agentComposition.json"
 import zhCompositionMessages from "@/i18n/messages/zh-CN/agentComposition.json"
-import type { VerificationVerdictPart as VerificationVerdictPartType } from "@/lib/claude/parts-extensions"
+import type { VerificationVerdictPart as VerificationVerdictPartType } from "@/lib/chat/parts-extensions"
 
 // The global next-intl mock resolves keys from the generated aggregate, which
 // lags the split sources on dev. This one reads the files the keys are

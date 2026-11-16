@@ -12,7 +12,7 @@ import {
 } from "./common"
 import { CodeBlock } from "@/components/chat/renderers/code-block"
 import { ImageBlock } from "@/components/chat/renderers/image-block"
-import { hasMcpContent } from "@/lib/claude/parts-extensions"
+import { hasMcpContent } from "@/lib/chat/parts-extensions"
 import { basenameOf } from "@/lib/files/file-type-icon"
 import { WorkbenchFileLink } from "./workbench-file-link"
 import { stripReadLineNumbers } from "@/lib/chat/read-line-numbers"

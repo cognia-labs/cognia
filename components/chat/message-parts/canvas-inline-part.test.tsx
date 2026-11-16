@@ -4,7 +4,7 @@
 import React from "react"
 import { render, screen, fireEvent } from "@testing-library/react"
 import { CanvasInlinePart } from "./canvas-inline-part"
-import type { CanvasInlinePart as CanvasInlinePartType } from "@/lib/claude/parts-extensions"
+import type { CanvasInlinePart as CanvasInlinePartType } from "@/lib/chat/parts-extensions"
 import type { CanvasDocument } from "@/types"
 
 const mockCanvasDocs: Record<string, CanvasDocument | undefined> = {}

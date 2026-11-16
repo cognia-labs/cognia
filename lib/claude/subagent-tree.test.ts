@@ -10,7 +10,7 @@ function flatten(nodes: SubagentTreeNode[]): SubagentTreeNode[] {
   for (const n of nodes) walk(n)
   return out
 }
-import type { SubagentPart } from "./parts-extensions"
+import type { SubagentPart } from "@/lib/chat/parts-extensions"
 
 const part = (over: Partial<SubagentPart> & { subagentId: string }): SubagentPart => ({
   type: "subagent",

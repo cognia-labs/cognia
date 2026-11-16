@@ -20,7 +20,7 @@
 import { useSyncExternalStore } from "react"
 import type { DynamicToolUIPart, ToolUIPart } from "ai"
 import { ToolBody, type ToolPart } from "@/components/ai-elements/tool"
-import { hasMcpContent } from "@/lib/claude/parts-extensions"
+import { hasMcpContent } from "@/lib/chat/parts-extensions"
 import {
   getToolResultRenderer,
   getToolResultRenderersRevision,

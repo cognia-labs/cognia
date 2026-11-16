@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from "@storybook/nextjs"
 import { SubagentPart } from "./subagent-part"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { SubAgent } from "@/types/agent/sub-agent"
-import type { SubagentPart as SubagentPartType } from "@/lib/claude/parts-extensions"
+import type { SubagentPart as SubagentPartType } from "@/lib/chat/parts-extensions"
 
 // `SubagentPart` renders a sub-agent invocation. Static identity (id, name,
 // status, progress snapshot) comes from the part; LIVE `progress` + `logs`

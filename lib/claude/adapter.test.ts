@@ -22,7 +22,7 @@ import {
   mergeTwinSourcesIntoLastAssistant,
   resetStreamingToolInputs,
 } from "./adapter"
-import type { SourcesPart, SourcesPartItem } from "./parts-extensions"
+import type { SourcesPart, SourcesPartItem } from "@/lib/chat/parts-extensions"
 import type {
   BetaMessage,
   SDKAssistantMessage,

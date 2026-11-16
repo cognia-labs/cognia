@@ -30,7 +30,7 @@ import {
   isExternalAgentProviderId,
 } from "@/lib/ai/agent/external/session/session-models"
 import type { SurfaceUsageInput } from "@/lib/db/session-usage"
-import { externalTokenUsageToUsageInfo } from "@/lib/claude/usage"
+import { externalTokenUsageToUsageInfo } from "@/lib/usage/usage-info"
 import { claimTurnUsage, trackCaptureUsage } from "@/lib/usage/claimed-turn-usage"
 import { describeBestOfNAgent } from "./agents"
 import { runExternalCandidate } from "./external"

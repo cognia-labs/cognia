@@ -8,7 +8,7 @@
 // summary in ahead of the recent turns.
 //
 // The sidecar can NOT import `lib/` (build boundary), so the threshold and the
-// context-window table are mirrored from `lib/claude/usage.ts` — keep them in
+// context-window table are mirrored from `lib/usage/context-usage.ts` — keep them in
 // sync. The table only needs the families the AI SDK path actually drives
 // (OpenAI / Google / Mistral / Cohere / local OpenAI-compatible engines); the
 // Anthropic families are included for completeness since a custom provider can
@@ -26,17 +26,17 @@ export type { ConversationMessage } from "../shared/wire/conversation.ts"
 /** A content part as it may appear in `ConversationMessage.content`. */
 export type ContentPart = Record<string, unknown>
 
-/** Mirrors `lib/claude/usage.ts:AUTO_COMPACT_FRACTION`. */
+/** Mirrors `lib/usage/context-usage.ts:AUTO_COMPACT_FRACTION`. */
 export const AUTO_COMPACT_FRACTION = 0.835
 
 /**
  * Safe default window for an unknown / unrecognised model id (conservative).
- * Mirrors `lib/claude/usage.ts:DEFAULT_CONTEXT_WINDOW`; exported so the parity
- * test (`lib/claude/usage.compaction-parity.test.ts`) can assert agreement.
+ * Mirrors `lib/usage/context-usage.ts:DEFAULT_CONTEXT_WINDOW`; exported so the parity
+ * test (`lib/usage/context-usage.compaction-parity.test.ts`) can assert agreement.
  */
 export const DEFAULT_CONTEXT_WINDOW = 128_000
 
-// First match wins; mirrors the ordering in `lib/claude/usage.ts`.
+// First match wins; mirrors the ordering in `lib/usage/context-usage.ts`.
 const MODEL_CONTEXT_WINDOWS: readonly (readonly [RegExp, number])[] = [
   [/\[1m\]/i, 1_000_000],
   [/[-._]1m(\b|$)/i, 1_000_000],

@@ -3,7 +3,7 @@
  *
  * The sidecar cannot import `lib/`, so `sidecar/src/context/compaction.ts`
  * hand-mirrors the context-window table + auto-compact fraction + default
- * window from `lib/claude/usage.ts`. This test imports BOTH modules (it lives
+ * window from `lib/usage/context-usage.ts`. This test imports BOTH modules (it lives
  * under `lib/`, not `/sidecar/`, so Jest runs it; `compaction.ts` has zero
  * imports so it transforms cleanly) and asserts they agree across a model-id
  * matrix. If anyone edits one window table without the other, this goes red.
@@ -12,7 +12,7 @@ import {
   AUTO_COMPACT_FRACTION,
   DEFAULT_CONTEXT_WINDOW,
   getModelContextWindow,
-} from "@/lib/claude/usage"
+} from "@/lib/usage/context-usage"
 import {
   AUTO_COMPACT_FRACTION as SIDECAR_FRACTION,
   DEFAULT_CONTEXT_WINDOW as SIDECAR_DEFAULT,

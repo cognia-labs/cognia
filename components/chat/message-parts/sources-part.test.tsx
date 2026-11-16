@@ -4,7 +4,7 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { SourcesPart } from "./sources-part"
-import type { SourcesPart as SourcesPartType, SourcesPartItem } from "@/lib/claude/parts-extensions"
+import type { SourcesPart as SourcesPartType, SourcesPartItem } from "@/lib/chat/parts-extensions"
 import en from "@/i18n/messages/en.json"
 import zhCN from "@/i18n/messages/zh-CN.json"
 

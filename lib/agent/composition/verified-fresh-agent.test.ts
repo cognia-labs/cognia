@@ -16,7 +16,7 @@ import {
   type VerifiedFreshAgentTurnDeps,
 } from "./verified-fresh-agent"
 import { chatOrchestrationUnavailableReason } from "./chat-orchestrations"
-import type { VerificationVerdictPart } from "@/lib/claude/parts-extensions"
+import type { VerificationVerdictPart } from "@/lib/chat/parts-extensions"
 import type { ChatStatus } from "@/stores/chat/chat-store"
 import {
   __setPromptOverrideSnapshotForTests,

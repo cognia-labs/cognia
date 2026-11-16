@@ -45,7 +45,7 @@ import {
 } from "lucide-react"
 import { MAX_PREVIEW_CHARS } from "@/components/twin/source-content-preview"
 import { TwinSourcePreviewDialog } from "@/components/twin/twin-source-preview-dialog"
-import type { SourcesPart as SourcesPartType, SourcesPartItem } from "@/lib/claude/parts-extensions"
+import type { SourcesPart as SourcesPartType, SourcesPartItem } from "@/lib/chat/parts-extensions"
 
 interface SourcesPartProps {
   part: SourcesPartType

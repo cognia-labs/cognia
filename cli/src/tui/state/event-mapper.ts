@@ -4,7 +4,7 @@
  * without a live session.
  */
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
-import { usageInfoFromRecord } from "@/lib/claude/usage"
+import { usageInfoFromRecord } from "@/lib/usage/usage-info"
 import {
   isKnownCanonicalAgentEventKind,
   type AgentEventEnvelope,

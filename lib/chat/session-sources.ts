@@ -10,7 +10,7 @@
 
 import type { UIMessage } from "ai"
 
-import { isSourcesPart, type SourcesPartItem } from "@/lib/claude/parts-extensions"
+import { isSourcesPart, type SourcesPartItem } from "@/lib/chat/parts-extensions"
 
 export type SessionSourceKind = "web" | "file" | "other"
 

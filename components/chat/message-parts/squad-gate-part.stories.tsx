@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite"
 
 import { SquadGatePart } from "./squad-gate-part"
-import type { SquadGatePart as SquadGatePartType } from "@/lib/claude/parts-extensions"
+import type { SquadGatePart as SquadGatePartType } from "@/lib/chat/parts-extensions"
 
 const PART: SquadGatePartType = {
   type: "squad-gate",

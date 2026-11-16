@@ -22,7 +22,7 @@ import type { UIMessage } from "ai"
 import { getExecutionRun } from "@/lib/db/execution-runs"
 import { commitMessageDelta } from "@/lib/db/messages"
 import { useChatStore } from "@/stores/chat"
-import type { SquadGatePart } from "@/lib/claude/parts-extensions"
+import type { SquadGatePart } from "@/lib/chat/parts-extensions"
 
 export interface RecordGateAnswerInput {
   /** Execution run id, or the raw team run id — both resolve. */

@@ -20,7 +20,7 @@
  * echo + output + run-in-dock affordance with no second collapse.
  */
 
-import { toolResultMetadata } from "@/lib/claude/parts-extensions"
+import { toolResultMetadata } from "@/lib/chat/parts-extensions"
 import { useRememberedDisclosure } from "@/hooks/chat/use-remembered-disclosure"
 import { Surface } from "@/components/surface/surface"
 import { memo, useCallback, useMemo, useState } from "react"

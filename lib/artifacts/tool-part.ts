@@ -11,7 +11,7 @@
  * placeholder. The result carries the id the host actually wrote.
  */
 
-import type { ArtifactPart, CanvasInlinePart } from "@/lib/claude/parts-extensions"
+import type { ArtifactPart, CanvasInlinePart } from "@/lib/chat/parts-extensions"
 
 const CORE_TOOL_PREFIXES = ["mcp__cognia-plugin-tools__", "mcp__cognia-tools__"]
 

@@ -4,7 +4,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ToolUIPart } from "ai"
 import { ReadCard } from "./read-card"
-import type { McpResultBlock } from "@/lib/claude/parts-extensions"
+import type { McpResultBlock } from "@/lib/chat/parts-extensions"
 
 jest.mock("@/components/chat/renderers/code-block", () => ({
   CodeBlock: ({

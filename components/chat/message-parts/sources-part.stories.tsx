@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs"
 
 import { SourcesPart } from "./sources-part"
-import type { SourcesPart as SourcesPartType, SourcesPartItem } from "@/lib/claude/parts-extensions"
+import type { SourcesPart as SourcesPartType, SourcesPartItem } from "@/lib/chat/parts-extensions"
 
 const twinRag: SourcesPartItem = {
   id: "chunk-1",

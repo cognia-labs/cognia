@@ -17,7 +17,7 @@ import {
 } from "@cognia/agent-config-types/agent-execution"
 
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
-import { usageInfoFromRecord } from "@/lib/claude/usage"
+import { usageInfoFromRecord } from "@/lib/usage/usage-info"
 import { redactText } from "@cognia/redact"
 
 export { isAgentEventEnvelope, isKnownCanonicalAgentEventKind }

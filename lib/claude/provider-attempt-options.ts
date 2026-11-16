@@ -19,7 +19,7 @@ import {
   resolveModelMaxOutputTokens,
   resolveModelMeta,
 } from "@/lib/ai/model-options"
-import { getModelContextWindow } from "./usage"
+import { getModelContextWindow } from "@/lib/usage/context-usage"
 import { DEFAULT_COMPRESSION_SETTINGS } from "@cognia/agent-config-types/compression"
 import { hasOwnKey, isRemoteHostKeyedProvider } from "@/lib/host-secrets/remote-host-keys"
 import {

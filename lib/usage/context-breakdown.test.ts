@@ -8,7 +8,7 @@ import {
   resolveAutoCompaction,
   resolveContextBreakdown,
 } from "./context-breakdown"
-import { AUTO_COMPACT_FRACTION } from "./usage"
+import { AUTO_COMPACT_FRACTION } from "./context-usage"
 
 const base: SdkContextUsage = { totalTokens: 0, maxTokens: 100_000, percentage: 0 }
 

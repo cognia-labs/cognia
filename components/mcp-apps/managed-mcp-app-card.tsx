@@ -24,7 +24,7 @@ import {
   type LoadedMcpApp,
 } from "@/lib/mcp/apps-runtime"
 import type { McpAppApprovals } from "@/lib/mcp/apps-sandbox"
-import type { McpResultBlock } from "@/lib/claude/parts-extensions"
+import type { McpResultBlock } from "@/lib/chat/parts-extensions"
 import { McpAppFrame } from "./mcp-app-frame"
 
 const CSP_KEYS = ["connectDomains", "resourceDomains", "frameDomains", "baseUriDomains"] as const

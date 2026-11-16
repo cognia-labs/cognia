@@ -21,13 +21,13 @@ import {
   resolveContextBreakdown,
   type AutoCompactionPolicy,
   type ContextBreakdown,
-} from "@/lib/claude/context-breakdown"
+} from "@/lib/usage/context-breakdown"
 import {
   getLatestRunProviderId,
   getLatestUsage,
   resolveContextWindowUsage,
   type ContextWindowUsage,
-} from "@/lib/claude/usage"
+} from "@/lib/usage/context-usage"
 import { useSettingsStore } from "@/stores/settings"
 
 export interface SessionContextWindow {

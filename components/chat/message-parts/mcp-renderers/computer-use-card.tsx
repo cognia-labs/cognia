@@ -19,7 +19,7 @@ import { MousePointerClickIcon, ScanSearchIcon, ScreenShareIcon, TypeIcon } from
 import { useTranslations } from "next-intl"
 import type { ToolUIPart } from "ai"
 
-import { hasMcpContent } from "@/lib/claude/parts-extensions"
+import { hasMcpContent } from "@/lib/chat/parts-extensions"
 import { ImageBlock } from "@/components/chat/renderers/image-block"
 import { Badge } from "@/components/ui/badge"
 import { blockMediaSrc, useParsedOutput } from "./common"

@@ -5,7 +5,7 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { SquadRunPart } from "./squad-run-part"
-import type { SquadRunPart as SquadRunPartType } from "@/lib/claude/parts-extensions"
+import type { SquadRunPart as SquadRunPartType } from "@/lib/chat/parts-extensions"
 import { getDb } from "@/lib/db/schema"
 import { createExecutionRun, runEventJournal, semanticRunEvent } from "@/lib/db/execution-runs"
 import type { ExecutionRun, ExecutionRunStatus } from "@/types/execution/run"

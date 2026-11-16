@@ -16,7 +16,7 @@ import {
   AUTO_COMPACT_FRACTION,
   computeContextWindowUsage,
   getLatestUsage,
-} from "@/lib/claude/usage"
+} from "@/lib/usage/context-usage"
 import { resolveModelContextLength } from "@/lib/ai/model-options"
 import { estimateCostFromTotals } from "@/lib/usage/session-analytics"
 import type { UIMessage } from "ai"

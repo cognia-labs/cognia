@@ -16,7 +16,7 @@ import type { SDKResultMessage } from "@cognia/agent-config-types"
 import { getDb } from "./schema"
 import { commitUsageRow } from "@/lib/usage/usage-ledger"
 import { isUnpricedUsageRow } from "@/lib/usage/session-analytics"
-import { externalTokenUsageToUsageInfo } from "@/lib/claude/usage"
+import { externalTokenUsageToUsageInfo } from "@/lib/usage/usage-info"
 import type { ExternalAgentTokenUsage } from "@/types/agent/external-agent"
 import type {
   SessionUsageRow,

@@ -35,7 +35,7 @@ import { StatusBadge } from "@/components/status-badge"
 import { ToolRowShell, type ToolDotStatus } from "@/components/chat/message-parts/tool-row"
 import { getExecutionRun, listVisibleExecutionRunEvents } from "@/lib/db/execution-runs"
 import { squadRunSteps, type SquadRunStep } from "@/lib/squads/squad/squad-run-steps"
-import type { SquadRunPart as SquadRunPartType } from "@/lib/claude/parts-extensions"
+import type { SquadRunPart as SquadRunPartType } from "@/lib/chat/parts-extensions"
 import type { ExecutionRunStatus } from "@/types/execution/run"
 import { cn } from "@/lib/utils"
 

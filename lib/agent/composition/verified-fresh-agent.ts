@@ -47,7 +47,7 @@ import type {
 } from "@cognia/agent-config-types"
 import type { ChatStatus } from "@/stores/chat/chat-store"
 import type { HostProfile } from "@/lib/platform/capabilities"
-import type { VerificationVerdict, VerificationVerdictPart } from "@/lib/claude/parts-extensions"
+import type { VerificationVerdict, VerificationVerdictPart } from "@/lib/chat/parts-extensions"
 import { flattenMessageText } from "@/lib/claude/replay"
 import { extractJson } from "@cognia/eval-core/json"
 import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"

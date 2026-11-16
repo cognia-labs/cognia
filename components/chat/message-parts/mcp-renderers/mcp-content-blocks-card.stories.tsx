@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/nextjs"
 import type { ToolUIPart } from "ai"
-import type { McpResultBlock } from "@/lib/claude/parts-extensions"
+import type { McpResultBlock } from "@/lib/chat/parts-extensions"
 
 import { McpContentBlocksCard } from "./mcp-content-blocks-card"
 

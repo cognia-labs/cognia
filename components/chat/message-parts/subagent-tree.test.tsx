@@ -5,7 +5,7 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { SubagentTree } from "./subagent-tree"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
-import type { SubagentPart as SubagentPartType } from "@/lib/claude/parts-extensions"
+import type { SubagentPart as SubagentPartType } from "@/lib/chat/parts-extensions"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>

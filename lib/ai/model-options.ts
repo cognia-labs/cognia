@@ -261,7 +261,7 @@ export function compactModelLabel(name: string): string {
  * ({@link resolveModelMeta}): the user's custom-provider model metadata first,
  * then live-discovered models, then the built-in `PROVIDERS` catalog. Returns
  * `undefined` only when no catalog knows the model, so the caller falls back to
- * the curated pattern table in `lib/claude/usage.ts`.
+ * the curated pattern table in `lib/usage/context-usage.ts`.
  *
  * Consulting the built-in catalog here is what keeps the context indicator (and
  * the `/cost` / `/context` diagnostics) in lock-step with the picker: both now

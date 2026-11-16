@@ -317,7 +317,7 @@ export const DEFAULT_COMPRESSION_SETTINGS: CompressionSettings = {
   enabled: true,
   strategy: "hybrid",
   trigger: "token-threshold",
-  tokenThreshold: 83, // ≈ AUTO_COMPACT_FRACTION (lib/claude/usage.ts) — keep in sync
+  tokenThreshold: 83, // ≈ AUTO_COMPACT_FRACTION (lib/usage/context-usage.ts) — keep in sync
   messageCountThreshold: 50,
   preserveRecentMessages: 6, // mirrors COMPACT_KEEP_RECENT_MESSAGES in the sidecar
   preserveSystemMessages: true,

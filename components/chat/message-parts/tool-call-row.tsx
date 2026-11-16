@@ -1,7 +1,7 @@
 "use client"
 
 import { useRememberedDisclosure } from "@/hooks/chat/use-remembered-disclosure"
-import { toolResultMetadata } from "@/lib/claude/parts-extensions"
+import { toolResultMetadata } from "@/lib/chat/parts-extensions"
 
 /**
  * Compact single-line representation of a tool call, used by the "simplified"

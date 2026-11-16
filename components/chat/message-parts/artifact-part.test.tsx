@@ -4,7 +4,7 @@
 import React from "react"
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { ArtifactPart } from "./artifact-part"
-import type { ArtifactPart as ArtifactPartType } from "@/lib/claude/parts-extensions"
+import type { ArtifactPart as ArtifactPartType } from "@/lib/chat/parts-extensions"
 import type { Artifact } from "@/types"
 
 const mockArtifacts: Record<string, Artifact | undefined> = {}

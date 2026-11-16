@@ -20,7 +20,7 @@ import { useA2UIMessageIntegration } from "@/components/a2ui/a2ui-message-render
 import { A2UIInlineSurface } from "@/components/a2ui/a2ui-surface"
 import { CodeBlock } from "@/components/chat/renderers/code-block"
 import { useA2UIChatBinding } from "./use-a2ui-chat-binding"
-import type { A2UIPart as A2UIPartType } from "@/lib/claude/parts-extensions"
+import type { A2UIPart as A2UIPartType } from "@/lib/chat/parts-extensions"
 import type { A2UIUserAction, A2UIDataModelChange } from "@/types/a2ui/schema"
 
 interface A2UIPartProps {

@@ -20,7 +20,7 @@ import type { UIMessage } from "ai"
 import type { SdkContextUsage } from "@cognia/agent-config-types"
 
 import { buildContextSourceBreakdown } from "@/lib/analysis/context-source-breakdown"
-import { AUTO_COMPACT_FRACTION } from "@/lib/claude/usage"
+import { AUTO_COMPACT_FRACTION } from "@/lib/usage/context-usage"
 
 /**
  * Stable group identity. The first block mirrors the SDK's own categories, the
