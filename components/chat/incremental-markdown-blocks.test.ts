@@ -50,6 +50,36 @@ describe("createIncrementalMarkdownBlockParser", () => {
     expect((parse.mock.calls[0]?.[0] ?? "").length).toBeLessThan(100)
   })
 
+  // Streamdown remends before it parses: the closers it appends to an open tail
+  // are not a prefix of the next frame's text.
+  it("keeps settled blocks when only the remended tail differs from the last frame", () => {
+    const parse = jest.fn(parseMarkdownIntoBlocks)
+    const incremental = createIncrementalMarkdownBlockParser(parse)
+    const settled = "stable paragraph\n\n".repeat(1_000)
+    const first = incremental(`${settled}Final **bold**`)
+    parse.mockClear()
+
+    const next = `${settled}Final **bold te**`
+    const blocks = incremental(next)
+
+    expect(blocks).toEqual(parseMarkdownIntoBlocks(next))
+    expect(parse).toHaveBeenCalledTimes(1)
+    expect(parse).toHaveBeenCalledWith("Final **bold te**")
+    // The settled blocks are the very strings of the previous frame.
+    expect(blocks[0]).toBe(first[0])
+  })
+
+  it("reparses in full when text before the last block changed", () => {
+    const parse = jest.fn(parseMarkdownIntoBlocks)
+    const incremental = createIncrementalMarkdownBlockParser(parse)
+    incremental("first paragraph\n\nsecond")
+    parse.mockClear()
+
+    const edited = "first paragraph!\n\nsecond more"
+    expect(incremental(edited)).toEqual(parseMarkdownIntoBlocks(edited))
+    expect(parse).toHaveBeenCalledWith(edited)
+  })
+
   it("falls back to a full parse when content is replaced or truncated", () => {
     const parse = jest.fn(parseMarkdownIntoBlocks)
     const incremental = createIncrementalMarkdownBlockParser(parse)

@@ -42,6 +42,15 @@ import {
   createIncrementalMarkdownBlockParser,
   type MarkdownBlockParser,
 } from "./incremental-markdown-blocks"
+import {
+  FENCE_THROTTLE_MS,
+  inkActive,
+  isLargeOpenFence,
+  isSettledBlock,
+  settledRehypePlugins,
+  TAIL_BLOCK_ATTR,
+  useThrottledText,
+} from "./streaming-block-policy"
 
 interface Props {
   messageId?: string
@@ -135,14 +144,32 @@ export function blockRendersCode(content: unknown): boolean {
  * Settled messages keep it — `FinalizedMarkdownSection` above — where blocks
  * genuinely do leave the viewport and their remembered sizes are already true.
  */
-const StreamingBlock = memo(function StreamingBlock(props: BlockProps) {
-  const rendersCode = blockRendersCode((props as { content?: unknown }).content)
-  if (!rendersCode) return <Block {...props} />
-  return (
-    <div className="not-typeset">
-      <Block {...props} />
-    </div>
+/**
+ * It also applies the per-block streaming policy (`streaming-block-policy.ts`):
+ * a block before the tail renders without its animate plugin, and a large open
+ * fence advances on a timer.
+ *
+ * Exported for tests.
+ */
+export const StreamingBlock = memo(function StreamingBlock({
+  [TAIL_BLOCK_ATTR]: tailIndex,
+  ...props
+}: BlockProps & { [TAIL_BLOCK_ATTR]?: number }) {
+  const settled = props.animatePlugin != null && isSettledBlock(props.index, tailIndex)
+  const throttle = isLargeOpenFence(props.content, props.isIncomplete)
+  const content = useThrottledText(props.content, throttle, FENCE_THROTTLE_MS)
+  const block = settled ? (
+    <Block
+      {...props}
+      animatePlugin={null}
+      content={content}
+      rehypePlugins={settledRehypePlugins(props.rehypePlugins, props.animatePlugin!)}
+    />
+  ) : (
+    <Block {...props} content={content} />
   )
+  if (!blockRendersCode(props.content)) return block
+  return <div className="not-typeset">{block}</div>
 })
 
 function FinalizedMarkdownSection({
@@ -300,6 +327,11 @@ function StreamingTextPartInner({
   const [parser] = useState<MarkdownBlockParser>(() =>
     createIncrementalMarkdownBlockParser(parseMarkdownIntoBlocks)
   )
+  // Its own instance: Streamdown's parser sees the remended text, this one the
+  // raw text, and each reuses its own last frame.
+  const [tailParser] = useState<MarkdownBlockParser>(() =>
+    createIncrementalMarkdownBlockParser(parseMarkdownIntoBlocks)
+  )
   const components = useMemo(
     () => createStreamingComponents(projectRoot, isStreaming, messageId),
     [isStreaming, projectRoot, messageId]
@@ -350,10 +382,19 @@ function StreamingTextPartInner({
   // still reads without an animation. `animate-pulse` is a guaranteed Tailwind
   // utility (no dependency on `animate-caret-blink`). It drops the ink reveal
   // too: text then lands sharp the moment it arrives.
+  //
+  // Ink runs on the trailing block only, and not at all past `INK_REPLY_LIMIT`
+  // (D9). The tail index rides to every block as `data-tail-block`; it comes
+  // from the raw text, which splits into the same blocks as the remended text
+  // Streamdown renders. Were they ever to differ, a block would only lose (or
+  // keep) the reveal, never its text.
   const { reduce } = useFlowMotion()
+  const ink = inkActive({ text, isStreaming, reduceMotion: reduce })
+  const tailIndex = ink ? tailParser(text).length - 1 : undefined
   return (
     <MessageResponse
-      animated={reduce ? false : STREAMING_INK_ANIMATION}
+      animated={ink ? STREAMING_INK_ANIMATION : false}
+      {...{ [TAIL_BLOCK_ATTR]: tailIndex }}
       BlockComponent={StreamingBlock}
       caret="block"
       className={cn(

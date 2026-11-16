@@ -191,12 +191,17 @@ Node benches, 2026-11-16, Apple Silicon, shared machine. Load varied between run
 | step 4.1: handler p50 / p95 (ms) | 0.021 / 0.037    | 0.108 / 0.177     | 0.336 / 0.421 |
 | step 4.1: commit p50 (ms)        | 0.025            | 0.081             | 0.209         |
 
-| `StreamingTextPart`              | short (0.5 KB)    | medium (5 KB) | long (50 KB)       | code (20 KB fence) | CJK (5 KB)        |
-| -------------------------------- | ----------------- | ------------- | ------------------ | ------------------ | ----------------- |
-| per-delta p50 / p95 (ms)         | 0.8–0.9 / 1.2–1.3 | 1.1 / 2.3     | 4.0–7.8 / 7.8–14.1 | 2.5–4.3 / 5.8–9.5  | 0.6–0.7 / 1.6–1.7 |
-| p50 first → last quarter (ms)    | flat              | flat          | 1.6→5.7 … 2.3→12.7 | 0.7→4.9 … 1.9→8.6  | flat              |
-| streaming DOM (bytes)            | 50 K              | 521 K         | 4.38 M             | 979 K              | 643 K             |
-| finished `MarkdownRenderer` (ms) | 0.67              | 8.0–8.1       | 56.0               | 2.8–3.0            | 6.5–6.7           |
+| `StreamingTextPart`                | short (0.5 KB)    | medium (5 KB)     | long (50 KB)       | code (20 KB fence) | CJK (5 KB)        |
+| ---------------------------------- | ----------------- | ----------------- | ------------------ | ------------------ | ----------------- |
+| per-delta p50 / p95 (ms)           | 0.8–0.9 / 1.2–1.3 | 1.1 / 2.3         | 4.0–7.8 / 7.8–14.1 | 2.5–4.3 / 5.8–9.5  | 0.6–0.7 / 1.6–1.7 |
+| p50 first → last quarter (ms)      | flat              | flat              | 1.6→5.7 … 2.3→12.7 | 0.7→4.9 … 1.9→8.6  | flat              |
+| streaming DOM (bytes)              | 50 K              | 521 K             | 4.38 M             | 979 K              | 643 K             |
+| finished `MarkdownRenderer` (ms)   | 0.67              | 8.0–8.1           | 56.0               | 2.8–3.0            | 6.5–6.7           |
+| step 4.4: per-delta p50 / p95      | 0.8–0.9 / 1.1–1.4 | 0.9–1.2 / 1.9–2.5 | 3.2–3.9 / 6.0–8.8  | 0.7–1.3 / 1.9–2.0  | 0.6–0.7 / 1.5–2.1 |
+| step 4.4: p50 first → last quarter | flat              | flat              | 1.5→5.3 … 1.5→7.7  | 0.7→2.0 … 1.2→1.3  | flat              |
+| step 4.4: streaming DOM (bytes)    | 18 K              | 77 K              | 1.15 M             | 979 K              | 51 K              |
+
+Step 4.4 runs on Node 26 (Node 20 lacks the `sessionStorage` global `packages/logging` reads at import); figures are the two settled runs of three, the first being a cold, slower run. Remend still runs over the whole text (0.24 ms at 50 KB, and it is Streamdown's own dependency); the parser instead reuses every block before the tail when only the tail changed, which is what made remend expensive. With ink kept on past `INK_REPLY_LIMIT` (12,000 chars) the 50 KB case reads p50 3.7–3.9 / p95 6.9–7.6 ms and 1.18 MB: ink on the trailing block alone already removed its cost, so the limit is D9's product rule, not a measured cut-off. The 50 KB p50 still grows across the reply; what remains is per-frame work over every block, left for the later steps.
 
 Browser baseline: not recorded yet. The static build refuses to run while other sessions' uncommitted changes to the authoring-kit inputs (`app/globals.css`, `pnpm-lock.yaml`, `packages/plugin-contract/src`) make the working tree differ from the kit pin, and `pnpm dev` runs the same check. It needs those changes committed, or a clean worktree at the pre-fix commit.
 
@@ -206,7 +211,7 @@ Browser baseline: not recorded yet. The static build refuses to run while other 
 | Dropped frames, scripted scroll           |                |                    |       |
 | Commits / renders per streamed token      |                |                    |       |
 | `handleEvent` per event at 2,000 messages | 2.9–3.7 ms p50 | 0.108 ms p50 (4.1) |       |
-| Streaming per-delta p95, 50 KB            |                |                    |       |
-| Streaming DOM size, 50 KB                 |                |                    |       |
+| Streaming per-delta p95, 50 KB            | 7.8–14.1 ms    | 6.0–8.8 ms (4.4)   |       |
+| Streaming DOM size, 50 KB                 | 4.38 MB        | 1.15 MB (4.4)      |       |
 | Composer renders per keystroke            |                |                    |       |
 | JS heap after open / after stream         |                |                    |       |

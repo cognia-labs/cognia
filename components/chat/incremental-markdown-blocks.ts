@@ -7,6 +7,15 @@ export type MarkdownBlockParser = (markdown: string) => string[]
  * us keep every stable block and reparse only the final, potentially
  * incomplete block plus newly appended text. Replacements and parsers that do
  * not preserve source text automatically fall back to a full parse.
+ *
+ * Reuse asks only that the text before the last block is unchanged, not that
+ * the whole previous text is a prefix. Streamdown runs `remend` over the text
+ * before it parses, and remend closes whatever the tail left open (`**bold`
+ * becomes `**bold**`), so the text it hands over is not append-only: the
+ * closing markers of one delta are not a prefix of the next. Requiring a full
+ * prefix made every frame with an open marker a full reparse. remend only
+ * rewrites that unfinished tail, which is the block this parser reparses
+ * anyway, so the settled blocks before it are kept as they are.
  */
 export function createIncrementalMarkdownBlockParser(
   parseMarkdownIntoBlocks: MarkdownBlockParser
@@ -23,8 +32,9 @@ export function createIncrementalMarkdownBlockParser(
     const canReuse =
       previousText !== null &&
       previousBlocks.length > 0 &&
-      markdown.startsWith(previousText) &&
-      preservesSource
+      preservesSource &&
+      markdown.length >= stableLength &&
+      markdown.startsWith(previousText.slice(0, stableLength))
 
     if (canReuse) {
       const stableBlocks = previousBlocks.slice(0, -1)
