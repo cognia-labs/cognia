@@ -2759,7 +2759,7 @@ it.each([
 
 it("a typed desktop turn offers its OAuth HTTP server before acceptance while retaining its reserved identity", async () => {
   const { buildSendOptions } = await import("@/hooks/chat/agent-chat-send-options")
-  const { chatHookCredentialContext } = await import("@/hooks/chat/use-agent-chat-controller")
+  const { chatHookCredentialContext } = await import("@/hooks/chat/agent-chat-turn-helpers")
   const { admitPersonalCredential } = await import("./personal-credential")
   const { useProjectStore } = await import("@/stores/project/project-store")
   useProjectStore.setState({ projects: [], activeProjectId: null })
@@ -3006,7 +3006,7 @@ it.each([
 ] as const)(
   "reserved %s hooks launch ctx.agent.run with Host-known parent %s",
   async (branch, knownParent) => {
-    const { chatHookCredentialContext } = await import("@/hooks/chat/use-agent-chat-controller")
+    const { chatHookCredentialContext } = await import("@/hooks/chat/agent-chat-turn-helpers")
     const { createPluginContext } = await import("@/lib/plugin/core/context")
     const { preloadModulePluginApis } = await import("@/lib/plugin/core/module-plugin-api")
     const { getPluginEventHooks, getPluginLifecycleHooks } =

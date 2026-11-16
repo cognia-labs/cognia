@@ -8,7 +8,7 @@ import {
 } from "@/lib/execution/acting-authority"
 import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { preparePersonalSteer, prepareTranscriptRuntimeSend } from "./agent-chat-send-options"
-import { asideContextForRegenerate, buildPersonalAsideContext } from "./use-agent-chat-controller"
+import { asideContextForRegenerate, buildPersonalAsideContext } from "./agent-chat-turn-helpers"
 
 jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: jest.fn(async () => undefined),

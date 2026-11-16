@@ -5,6 +5,7 @@ jest.mock("@/lib/db/messages", () => ({
 }))
 
 import { useAgentRuntimeStore } from "@/stores/agent/agent-runtime-store"
+import { useAgentChat } from "./use-agent-chat-controller"
 import {
   executePersonalExternalTurn,
   createExternalIdleEventConsumer,
@@ -15,14 +16,13 @@ import {
   chatHookCredentialContext,
   resolveNativeExternalSessionId,
   externalSessionVisibilityMatches,
-  useAgentChat,
   userPromptText,
   rewriteUserPromptText,
   applyChatCommandOverrides,
   externalTurnPrompt,
   externalAsideTurnContent,
   redirectSendToBundleAliases,
-} from "./use-agent-chat-controller"
+} from "./agent-chat-turn-helpers"
 import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
