@@ -113,6 +113,7 @@ import {
 import { useFlowMotion } from "./motion/motion-reveal"
 import { isSupportAgentId } from "@/lib/support-agent/context"
 import { SupportAgentPanel } from "@/components/support/support-agent-panel"
+import { PerfBoundary } from "@/lib/perf"
 import { isCapacitor, isTauri } from "@/lib/platform/detect"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
 import {
@@ -975,35 +976,39 @@ function ChatPaneContent({
 
   const composerEl =
     activeSession?.kind === "subagent" ? null : (
-      <Composer
-        ref={setComposerRef}
-        session={activeSession}
-        onStartNewSession={() => onCreate()}
-        onOpenSettings={(tab) => onOpenSettings(tab)}
-        onSend={handleSend}
-        onStop={() => void onStop()}
-        status={status}
-        // Platform delivery does not consume an AI stream slot. For local chat,
-        // the concurrent-stream cap blocks the composer (this pane isn't
-        // one of the streamers, so there is nothing to steer). Awaiting approval
-        // stays writable on purpose: that is exactly when the user wants to say
-        // "don't use that tool, do it another way", and `send` already routes a
-        // message in that state into the steer queue rather than a new turn.
-        disabled={(atCapacity && !activeSession.platformBinding) || composerDisabled}
-        disabledPlaceholder={composerDisabled ? composerDisabledPlaceholder : undefined}
-        workflowMention={workflowMention}
-        runStatus={
-          runtimeStrip || showHistoryWait ? (
-            <>
-              {runtimeStrip}
-              {showHistoryWait ? <HistoryWaitStrip /> : null}
-              {runStatusBar}
-            </>
-          ) : (
-            runStatusBar
-          )
-        }
-      />
+      // Dev-only Profiler; the chat-surface benchmark counts Composer commits
+      // per keystroke from its measures. Production renders the Composer bare.
+      <PerfBoundary id="chat:composer">
+        <Composer
+          ref={setComposerRef}
+          session={activeSession}
+          onStartNewSession={() => onCreate()}
+          onOpenSettings={(tab) => onOpenSettings(tab)}
+          onSend={handleSend}
+          onStop={() => void onStop()}
+          status={status}
+          // Platform delivery does not consume an AI stream slot. For local chat,
+          // the concurrent-stream cap blocks the composer (this pane isn't
+          // one of the streamers, so there is nothing to steer). Awaiting approval
+          // stays writable on purpose: that is exactly when the user wants to say
+          // "don't use that tool, do it another way", and `send` already routes a
+          // message in that state into the steer queue rather than a new turn.
+          disabled={(atCapacity && !activeSession.platformBinding) || composerDisabled}
+          disabledPlaceholder={composerDisabled ? composerDisabledPlaceholder : undefined}
+          workflowMention={workflowMention}
+          runStatus={
+            runtimeStrip || showHistoryWait ? (
+              <>
+                {runtimeStrip}
+                {showHistoryWait ? <HistoryWaitStrip /> : null}
+                {runStatusBar}
+              </>
+            ) : (
+              runStatusBar
+            )
+          }
+        />
+      </PerfBoundary>
     )
 
   // Router + Fusion progress, pinned directly above the composer. Self-hides

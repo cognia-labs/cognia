@@ -30,6 +30,14 @@
  *                       returns children directly — recorded as null, not
  *                       asserted on.
  *   - `scroll`          worst and median frame gap over a scripted sweep.
+ *
+ * A second test (`@perf streaming and typing`) opens the same conversation and
+ * then plays one long reply into the live store at one commit per frame
+ * (`__cogniaStreamReply`), followed by 50 keystrokes in the Composer. It
+ * records frame gaps, long tasks and layout shift while streaming, the
+ * transcript's DOM size, and React commits per frame and per keystroke
+ * (`chat:list`, `chat:message`, `chat:composer`; dev server only). Set the
+ * reply length with CHAT_PERF_STREAM_CHARS (default 20000).
  */
 
 import { mkdirSync, writeFileSync } from "node:fs"
@@ -124,6 +132,8 @@ declare global {
   interface Window {
     /** Long-task durations collected since the document loaded. */
     __chatPerfLongTasks?: number[]
+    /** Cumulative layout-shift score since the observer started. */
+    __chatPerfLayoutShift?: number
   }
 }
 
@@ -147,6 +157,44 @@ async function observeLongTasks(page: Page): Promise<void> {
 
 async function readLongTasks(page: Page): Promise<number[]> {
   return page.evaluate(() => window.__chatPerfLongTasks ?? [])
+}
+
+/** Cumulative layout shift, collected like long tasks. Chromium-only. */
+async function observeLayoutShift(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    window.__chatPerfLayoutShift = 0
+    try {
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries() as Array<PerformanceEntry & { value: number }>) {
+          window.__chatPerfLayoutShift! += entry.value
+        }
+      }).observe({ type: "layout-shift", buffered: false })
+    } catch {
+      // Unsupported engine — the snapshot records zero shift.
+    }
+  })
+}
+
+/** Commit count and time per `<PerfBoundary>` id since `performance.clearMeasures()`. */
+async function readBoundaryCommits(
+  page: Page,
+  ids: string[]
+): Promise<Record<string, { count: number; totalMs: number } | null>> {
+  return page.evaluate((boundaryIds) => {
+    const out: Record<string, { count: number; totalMs: number } | null> = {}
+    for (const id of boundaryIds) {
+      const entries = performance
+        .getEntriesByType("measure")
+        .filter((e) => e.name === `workflow-ai:react:${id}`)
+      out[id] = entries.length
+        ? {
+            count: entries.length,
+            totalMs: Math.round(entries.reduce((sum, e) => sum + e.duration, 0)),
+          }
+        : null
+    }
+    return out
+  }, ids)
 }
 
 /**
@@ -276,6 +324,62 @@ async function measureScroll(
   )
 }
 
+/**
+ * Boot the shell, seed the tier's conversation and open it. Returns once the
+ * first transcript row is visible.
+ */
+async function openSeededConversation(
+  page: Page,
+  tier: Tier
+): Promise<{
+  seeded: { sessionId: string; messageIds: string[]; imageBytes: number }
+  seedMs: number
+  openMs: number
+}> {
+  if (process.env.CHAT_PERF_SHELL !== "web") {
+    await injectCapacitor(page, { platform: "android" })
+  }
+  await page.goto("/")
+  await bootstrapCogniaMobile(page, "standalone", {
+    onboardingProgress: {
+      version: 1,
+      path: "completed",
+      completedAt: "2026-09-07T00:00:00.000Z",
+    },
+  })
+  // Plugin startup is demand-driven. Open its real route so schema setup is
+  // complete before seeding; waiting on the chat page alone can wait forever.
+  await page.goto("/plugins", { waitUntil: "domcontentloaded" })
+  await waitForPluginRuntimeReady(page, 60_000)
+
+  await page.waitForFunction(() => typeof window.__cogniaSeedConversation === "function", null, {
+    timeout: 60_000,
+  })
+
+  const seedStart = Date.now()
+  const seeded = await page.evaluate(async ({ turns, ...media }) => {
+    try {
+      return await window.__cogniaSeedConversation!({ turns, media })
+    } catch (error) {
+      const cause = error as { name?: string; message?: string }
+      throw new Error(`Conversation fixture failed: ${cause.name}: ${cause.message}`)
+    }
+  }, tier)
+  const seedMs = Date.now() - seedStart
+
+  const openStart = Date.now()
+  await page.goto(`/?session=${seeded.sessionId}&message=seed-u-0`, {
+    waitUntil: "domcontentloaded",
+  })
+  await expect(page.locator(LOG)).toBeVisible({ timeout: 120_000 })
+  // The list is up; wait for a row so "opened" means "showed content".
+  await expect(page.locator(`${LOG} [data-msg-id]`).first()).toBeVisible({
+    timeout: 120_000,
+  })
+  const openMs = Date.now() - openStart
+  return { seeded, seedMs, openMs }
+}
+
 test.describe("chat render performance", () => {
   test.skip(
     process.env.CHAT_PERF_BENCH !== "1",
@@ -291,47 +395,7 @@ test.describe("chat render performance", () => {
     test.setTimeout(600_000)
 
     await observeLongTasks(page)
-    if (process.env.CHAT_PERF_SHELL !== "web") {
-      await injectCapacitor(page, { platform: "android" })
-    }
-    await page.goto("/")
-    await bootstrapCogniaMobile(page, "standalone", {
-      onboardingProgress: {
-        version: 1,
-        path: "completed",
-        completedAt: "2026-09-07T00:00:00.000Z",
-      },
-    })
-    // Plugin startup is demand-driven. Open its real route so schema setup is
-    // complete before seeding; waiting on the chat page alone can wait forever.
-    await page.goto("/plugins", { waitUntil: "domcontentloaded" })
-    await waitForPluginRuntimeReady(page, 60_000)
-
-    await page.waitForFunction(() => typeof window.__cogniaSeedConversation === "function", null, {
-      timeout: 60_000,
-    })
-
-    const seedStart = Date.now()
-    const seeded = await page.evaluate(async ({ turns, ...media }) => {
-      try {
-        return await window.__cogniaSeedConversation!({ turns, media })
-      } catch (error) {
-        const cause = error as { name?: string; message?: string }
-        throw new Error(`Conversation fixture failed: ${cause.name}: ${cause.message}`)
-      }
-    }, tier)
-    const seedMs = Date.now() - seedStart
-
-    const openStart = Date.now()
-    await page.goto(`/?session=${seeded.sessionId}&message=seed-u-0`, {
-      waitUntil: "domcontentloaded",
-    })
-    await expect(page.locator(LOG)).toBeVisible({ timeout: 120_000 })
-    // The list is up; wait for a row so "opened" means "showed content".
-    await expect(page.locator(`${LOG} [data-msg-id]`).first()).toBeVisible({
-      timeout: 120_000,
-    })
-    const openMs = Date.now() - openStart
+    const { seeded, seedMs, openMs } = await openSeededConversation(page, tier)
 
     // 40 screens: enough to traverse the perf tier end to end and to get well
     // into the robustness tier, at a fixed cost per step.
@@ -406,6 +470,115 @@ test.describe("chat render performance", () => {
         }
       }
     }
+  })
+
+  test(`@perf streaming and typing (${TIER_NAME} tier)`, async ({ page }, testInfo) => {
+    const tier = resolveTier()
+    const streamChars = Number(process.env.CHAT_PERF_STREAM_CHARS ?? 20_000)
+    test.setTimeout(900_000)
+
+    await observeLongTasks(page)
+    await observeLayoutShift(page)
+    const { seeded, openMs } = await openSeededConversation(page, tier)
+    // Open at the tail, where a reply streams in.
+    await page.goto(`/?session=${seeded.sessionId}`, { waitUntil: "domcontentloaded" })
+    await expect(
+      page.locator(`${LOG} [data-msg-id="${seeded.messageIds.at(-1)}"]`)
+    ).toBeVisible({ timeout: 120_000 })
+    await page.waitForFunction(() => typeof window.__cogniaStreamReply === "function")
+
+    const boundaries = ["chat:list", "chat:message", "chat:composer"]
+    const longTasksBefore = (await readLongTasks(page)).length
+    await page.evaluate(() => {
+      performance.clearMeasures()
+      window.__chatPerfLayoutShift = 0
+    })
+    const stream = await page.evaluate(
+      async ({ sessionId, chars, selector }) => {
+        const gaps: number[] = []
+        let last = performance.now()
+        let sampling = true
+        const sample = () => {
+          const now = performance.now()
+          gaps.push(now - last)
+          last = now
+          if (sampling) requestAnimationFrame(sample)
+        }
+        requestAnimationFrame(sample)
+        const played = await window.__cogniaStreamReply!({ sessionId, chars, deltaChars: 20 })
+        sampling = false
+        const sorted = [...gaps].sort((a, b) => a - b)
+        return {
+          ...played,
+          medianFrameMs: Math.round(sorted[Math.floor(sorted.length / 2)] ?? 0),
+          p95FrameMs: Math.round(sorted[Math.floor(sorted.length * 0.95)] ?? 0),
+          worstFrameMs: Math.round(sorted.at(-1) ?? 0),
+          transcriptDomBytes: document.querySelector(selector)?.innerHTML.length ?? 0,
+          layoutShift: Math.round((window.__chatPerfLayoutShift ?? 0) * 1000) / 1000,
+        }
+      },
+      { sessionId: seeded.sessionId, chars: streamChars, selector: LOG }
+    )
+    const streamCommits = await readBoundaryCommits(page, boundaries)
+    const streamLongTasks = (await readLongTasks(page)).slice(longTasksBefore)
+
+    // 50 keystrokes into the docked Composer.
+    const composer = page.getByRole("textbox", { name: /message/i }).first()
+    await composer.click()
+    await page.evaluate(() => performance.clearMeasures())
+    const typeStart = Date.now()
+    await page.keyboard.type("x".repeat(50), { delay: 30 })
+    const typingMs = Date.now() - typeStart
+    const typingCommits = await readBoundaryCommits(page, boundaries)
+
+    const perFrame = (commits: { count: number } | null) =>
+      commits ? Math.round((commits.count / Math.max(1, stream.frames)) * 100) / 100 : null
+    const snapshot = {
+      tier: TIER_NAME,
+      project: testInfo.project.name,
+      shell: process.env.CHAT_PERF_SHELL === "web" ? "web" : "capacitor-mock",
+      messages: seeded.messageIds.length,
+      openMs,
+      streamChars,
+      stream: {
+        ...stream,
+        longTasks: {
+          count: streamLongTasks.length,
+          totalMs: Math.round(streamLongTasks.reduce((sum, d) => sum + d, 0)),
+          worstMs: Math.round(Math.max(0, ...streamLongTasks)),
+        },
+        commits: streamCommits,
+        commitsPerFrame: Object.fromEntries(
+          boundaries.map((id) => [id, perFrame(streamCommits[id] ?? null)])
+        ),
+      },
+      typing: {
+        keystrokes: 50,
+        durationMs: typingMs,
+        commits: typingCommits,
+        composerCommitsPerKeystroke: typingCommits["chat:composer"]
+          ? Math.round((typingCommits["chat:composer"].count / 50) * 100) / 100
+          : null,
+      },
+      jsHeapUsedBytes: await readJsHeap(page),
+    }
+
+    const out = resolve(
+      process.cwd(),
+      `test-results/chat-render-perf-stream-${TIER_NAME}-${testInfo.project.name}.json`
+    )
+    mkdirSync(dirname(out), { recursive: true })
+    writeFileSync(out, JSON.stringify(snapshot, null, 2))
+    await testInfo.attach("chat-render-perf-stream", {
+      body: JSON.stringify(snapshot, null, 2),
+      contentType: "application/json",
+    })
+    console.log("[chat-render-perf-stream]", JSON.stringify(snapshot))
+
+    // Robustness only: the reply landed and the transcript kept its history.
+    expect(stream.frames).toBeGreaterThan(0)
+    await expect(page.locator(`${LOG} [data-msg-id^="stream-reply-"]`)).toBeVisible()
+    await expect(composer).toHaveValue(/x{50}/)
   })
 })
 
