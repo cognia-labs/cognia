@@ -2,7 +2,6 @@ import {
   parseFrontmatter,
   stringOrUndef,
   parseList,
-  slugify,
   nameFromFilename,
   fileMatchesAnyExt,
   ensureMinimum,
@@ -63,18 +62,6 @@ describe("parseList", () => {
 
   it("array with non-string entries — keeps strings only", () => {
     expect(parseList(["a", 42, null, "b"])).toEqual(["a", "b"])
-  })
-})
-
-describe("slugify", () => {
-  it.each([
-    ["Code Reviewer", "code-reviewer"],
-    ["  Foo--Bar  ", "foo-bar"],
-    ["a@b#c", "a-b-c"],
-    ["", "subagent"],
-    ["!!!", "subagent"],
-  ])("(%j) -> %j", (input, expected) => {
-    expect(slugify(input)).toBe(expected)
   })
 })
 

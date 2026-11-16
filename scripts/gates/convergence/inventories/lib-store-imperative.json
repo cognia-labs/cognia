@@ -1318,7 +1318,7 @@
       ]
     },
     {
-      "key": "lib/claude/subagent-importers/apply.ts",
+      "key": "lib/agents/subagent-importers/apply.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

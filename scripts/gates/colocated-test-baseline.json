@@ -101,7 +101,6 @@
     "lib/claude/chat-middleware/feature-flag.ts",
     "lib/claude/computer-use-active-settings.ts",
     "lib/claude/computer-use-tools.ts",
-    "lib/claude/subagent-importers/types.ts",
     "lib/connectivity/lan-classify.ts",
     "lib/data-hooks/context.tsx",
     "lib/db/a2ui-event-history.ts",

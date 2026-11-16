@@ -1,6 +1,6 @@
 import type { NativeSkill } from "@/lib/claude/ipc"
 import type { SessionSummary } from "@/lib/session-import"
-import type { SubagentImportDraft } from "@/lib/claude/subagent-importers"
+import type { SubagentImportDraft } from "@/lib/agents/subagent-importers"
 import type {
   MigrationArtifact,
   MigrationArtifactResult,
@@ -67,7 +67,7 @@ async function scanSubagents(
     import("@/lib/agent-roots"),
     import("@/lib/claude/instructions/paths"),
     import("@/lib/session-import/fs"),
-    import("@/lib/claude/subagent-importers"),
+    import("@/lib/agents/subagent-importers"),
     import("@/lib/agent-ecosystem/catalog"),
   ])
   const roots = await resolveVendorRoots()
@@ -279,7 +279,7 @@ async function defaultApplyDeps(): Promise<ArtifactApplyDeps> {
         await (await import("@/lib/mcp/agent-config-sync")).importFromProjectMcp(cwd, strategy)
       ),
     applySubagents: async (items, strategy) => {
-      const { applySubagentImport } = await import("@/lib/claude/subagent-importers/apply")
+      const { applySubagentImport } = await import("@/lib/agents/subagent-importers/apply")
       const result = await applySubagentImport({
         drafts: items as SubagentImportDraft[],
         target: "subagent-template",

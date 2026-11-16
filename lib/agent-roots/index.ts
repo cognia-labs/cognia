@@ -3,7 +3,7 @@
  * their config and data trees on this host.
  *
  * Every importer in the app — sessions (`lib/session-import/`), MCP
- * (`lib/mcp/config-adapters/`), subagents (`lib/claude/subagent-importers/`),
+ * (`lib/mcp/config-adapters/`), subagents (`lib/agents/subagent-importers/`),
  * skills, memory (`lib/memory/external/`), settings (`lib/settings-import/`)
  * and commands (`lib/commands-import/`) — needs the same answer, and each of
  * those trees is relocatable by an environment variable that the renderer

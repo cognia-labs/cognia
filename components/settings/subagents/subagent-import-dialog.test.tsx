@@ -66,7 +66,7 @@ jest.mock("sonner", () => ({
 }))
 
 const applyMock = jest.fn()
-jest.mock("@/lib/claude/subagent-importers/apply", () => ({
+jest.mock("@/lib/agents/subagent-importers/apply", () => ({
   applySubagentImport: (args: unknown) => applyMock(args),
 }))
 

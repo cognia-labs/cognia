@@ -2,7 +2,7 @@
 import { resolveModelMeta } from "@/lib/ai/model-options"
 import { reasoningTiersFor } from "@cognia/provider-core/providers/reasoning-tiers"
 import { isHeadlessHost } from "@/lib/platform/detect"
-import { parseFrontmatter } from "@/lib/claude/subagent-importers/_parse-helpers"
+import { parseFrontmatter } from "@/lib/agents/subagent-importers/_parse-helpers"
 import type { AppSettings } from "@cognia/agent-config-types"
 import {
   createGatewayTaskTools,

@@ -10,7 +10,7 @@
 // only paid for the sessions the user actually imports.
 //
 // Deliberately modeled on the clean `SubagentSourceAdapter` registry
-// (`lib/claude/subagent-importers/`) rather than the in-memory `ChatImporter`
+// (`lib/agents/subagent-importers/`) rather than the in-memory `ChatImporter`
 // (single-JSON-blob, closed format union) — see ADR-0062.
 
 import type {

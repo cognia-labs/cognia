@@ -5,6 +5,7 @@
 // Internal-only — do not export from `index.ts`.
 
 import matter from "gray-matter"
+import { slugify } from "@/lib/agents/agent-id"
 import type { ImportFile, ParseFailure, SubagentImportDraft, SubagentSourceId } from "./types"
 
 export interface ParsedFrontmatter {
@@ -41,17 +42,6 @@ export function parseList(v: unknown): string[] | undefined {
     return arr.length > 0 ? arr : undefined
   }
   return undefined
-}
-
-/** "Code Reviewer" → "code-reviewer". Used for sourceKey generation. */
-export function slugify(name: string): string {
-  return (
-    name
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "subagent"
-  )
 }
 
 /** Strip `.md` / `.markdown` / `.mdc` and normalize separators to spaces. */

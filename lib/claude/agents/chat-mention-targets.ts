@@ -22,7 +22,7 @@
  */
 
 import { resolveDispatchableSubagents } from "@/lib/claude/agents/subagents"
-import { slugify } from "@/lib/claude/subagent-importers/_parse-helpers"
+import { slugify } from "@/lib/agents/agent-id"
 import { parseMentions } from "@/lib/claude/team-router"
 import type { MentionResolvers } from "@/lib/chat/mentions/resolve-mentions"
 import { RESERVED_MENTION_NAMES } from "@/types/agent/agent-team"

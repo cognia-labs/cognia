@@ -9,13 +9,13 @@ import path from "node:path"
 
 import { buildMarkdownAgents, type MarkdownAgentFile } from "@/lib/claude/agents/markdown-agents"
 import type { AgentDefinition } from "@/lib/claude/agents/subagents/types"
-import { claudeCodeAdapter } from "@/lib/claude/subagent-importers/claude-code"
-import { codexCliAdapter } from "@/lib/claude/subagent-importers/codex-cli"
+import { claudeCodeAdapter } from "@/lib/agents/subagent-importers/claude-code"
+import { codexCliAdapter } from "@/lib/agents/subagent-importers/codex-cli"
 import type {
   ImportFile,
   SubagentImportDraft,
   SubagentSourceAdapter,
-} from "@/lib/claude/subagent-importers/types"
+} from "@/lib/agents/subagent-importers/types"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 
 import type { SubagentModelOverride } from "../config/schema"

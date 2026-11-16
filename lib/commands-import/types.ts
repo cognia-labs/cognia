@@ -1,4 +1,4 @@
-import { parseFrontmatter, stringOrUndef } from "@/lib/claude/subagent-importers/_parse-helpers"
+import { parseFrontmatter, stringOrUndef } from "@/lib/agents/subagent-importers/_parse-helpers"
 
 export type CommandsSourceId = "claude-code" | "codex" | "opencode" | "pi"
 export type CommandImportMergeStrategy = "skip" | "overwrite" | "duplicate"

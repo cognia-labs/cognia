@@ -20,7 +20,7 @@ import { gatewayModelSlots } from "./model-slots"
 import type { AgentModelRoleOverrides } from "@cognia/agent-contracts/model-binding"
 import { parse as parseToml } from "smol-toml"
 import { cogniaModelReasoningFacts } from "./cognia-model-options"
-import { parseFrontmatter } from "@/lib/claude/subagent-importers/_parse-helpers"
+import { parseFrontmatter } from "@/lib/agents/subagent-importers/_parse-helpers"
 
 it("preserves the managed-runtime refusal classification before its command is resolved", () => {
   const source = {

@@ -46,8 +46,8 @@ import {
   type ParseFailure,
   type SubagentImportDraft,
   type SubagentSourceId,
-} from "@/lib/claude/subagent-importers"
-import { applySubagentImport } from "@/lib/claude/subagent-importers/apply"
+} from "@/lib/agents/subagent-importers"
+import { applySubagentImport } from "@/lib/agents/subagent-importers/apply"
 import { createLogger } from "@cognia/logging"
 
 const log = createLogger("settings.subagents.import")

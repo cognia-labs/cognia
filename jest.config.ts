@@ -667,7 +667,7 @@ const globalConfig: Config = {
     "!lib/db/connector-types.ts",
     "!lib/connectors/activity/diff-types.ts",
     "!lib/squads/auto/types.ts",
-    "!lib/claude/subagent-importers/types.ts",
+    "!lib/agents/subagent-importers/types.ts",
     "!lib/perf/backend/types.ts",
     "!lib/memory/external/types.ts",
     "!lib/execution/types.ts",

@@ -8,7 +8,7 @@
 // naming OpenCode's `agent`/`subtask` frontmatter, which would be simply wrong
 // text on a Pi template.
 
-import { parseFrontmatter, stringOrUndef } from "@/lib/claude/subagent-importers/_parse-helpers"
+import { parseFrontmatter, stringOrUndef } from "@/lib/agents/subagent-importers/_parse-helpers"
 import { commandNameFromPath, type CommandImportDraft, type CommandSourceFile } from "./types"
 
 /**

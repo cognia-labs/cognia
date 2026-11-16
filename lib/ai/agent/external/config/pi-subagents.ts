@@ -1,6 +1,6 @@
 /** Host file authority and parser bindings for the package-owned Pi snapshot. */
 import { contentDigest } from "@cognia/agent"
-import { parseFrontmatter } from "@/lib/claude/subagent-importers/_parse-helpers"
+import { parseFrontmatter } from "@/lib/agents/subagent-importers/_parse-helpers"
 import { parsePiSource } from "@/lib/pi-packages/identity"
 import { extractPiPackages } from "@/lib/pi-packages/settings-io"
 import {

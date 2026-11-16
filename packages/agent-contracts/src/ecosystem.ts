@@ -51,7 +51,7 @@ export interface AgentEcosystemEntry {
   probeRootKeys: readonly string[]
   /** `PluginEcosystem` member when this agent has a convertible plugin format. */
   pluginEcosystem: string | null
-  /** `SubagentSourceId` for `lib/claude/subagent-importers`. */
+  /** `SubagentSourceId` for `lib/agents/subagent-importers`. */
   subagentSourceId: string | null
   /** `ExternalAgentId` for `lib/memory/external`. */
   memoryAgentId: string | null
