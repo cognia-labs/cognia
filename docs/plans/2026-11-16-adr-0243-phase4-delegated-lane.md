@@ -142,3 +142,25 @@ Unit and integration tests cover storage, the flow, admission, lane recording an
 
 - **Q1 (2026-11-16): the owner re-authorizes once.** D1 drops the adapter-wide token with no re-key; every Lark adapter shows `needs-reauth` until its owner signs in again.
 - **Q2 (2026-11-16): delegated needs the principal registry.** With the registry off only the local person has personal access, including in chat; the reply names the setting to turn on.
+
+## Outcome (2026-11-17)
+
+WP1–WP9 are implemented. The ADR-0243 "Implementation status" section records phase 4 and the ADR-0026 amendment describes the per-person Lark gate.
+
+What changed against the plan:
+
+- **WP3:** `humanRevision` was dropped. Nothing reads it.
+- **WP7:** `lark-config.tsx` no longer probes the old adapter-wide `user_token`/`user_refresh_token` accounts. A save keeps the per-person token names the OAuth callback added since the dialog opened. The Twin account picker names an owner only when that owner has an authorization record.
+- **WP8:** the gateway-task builder rejected an isolated instance's `COGNIA_ENGINE_PROFILE` as an unknown customization, so no isolated instance could launch a personal task. The builder now drops it, and the task takes its own profile (`packages/agent-runtime-kit/src/gateway-task.ts`).
+
+Acceptance: `lib/execution/adr-0243-acceptance.test.ts`. Scenario 6 is now run (`authed-api.test.ts`, revoke between two calls), and so are the delegated cases. Still open:
+
+- scenarios 4 and 15 end to end: a Lark CLI document write from a marked run is checked only at the sink;
+- scenario 7 at the executor;
+- scenario 12, which waits for phase 5.
+
+Known gaps:
+
+- When `sendAsUser` is on, the authorization link cannot be an ephemeral card. It falls back to a direct message or the fixed notice.
+- The authoring kit pin is invalidated by the `packages/plugin-contract` changes (`credentialLane`, `AdapterCredentialLane`) and has not been rebuilt.
+- The two-account Feishu smoke under "Verification limits" has not been run.

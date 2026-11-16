@@ -251,7 +251,7 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
    - [x] 严格的披露范围（阶段 2D，2026-11-13）。
          目前只有 owner 拥有个人访问，所以这一步先于任何其他人获得访问而落地。
 3. **部分实现：** 运行树权限（阶段 3A，进行中）；共享账本（3B-1，已实现）；外部引擎计量（3B-2，已实现）；外部引擎启动 profile 与凭据隔离（3C，已实现）。
-4. 开放代表使用者通道：按主体保存的凭据库、授权链接及其投递方式、回调身份校验（先做 Lark）。它取代仅限 owner 的检查。只有在上述旧历史标记和引擎记录失效完成之后，这一步才能发布。
+4. **已实现（Lark，2026-11-17）：** 开放代表使用者通道：按主体保存的凭据库、授权链接及其投递方式、回调身份校验（先做 Lark）。它取代仅限 owner 的检查。只有在上述旧历史标记和引擎记录失效完成之后，这一步才能发布。
 5. 绑定个人通道：确认、声明范围、控制台标注，以及转为 `needs_setup` 的迁移。
 6. 其他平台，随各自支持按用户授权而跟进。
 
@@ -275,6 +275,16 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 - 有限预算下无法计量的引擎。
 
 ## 实现状态
+
+**阶段 4，代表使用者通道（2026-11-17，Lark）。** 一个 Lark 适配器为每个人各保存一份用户授权。Host 存储以 `open_id` 的 SHA-256 为键保存每个人的 access token、refresh token 与授权 epoch（`lib/auth-providers/feishu/user-key.ts`，Rust 为 `lark_user_credential`），待完成的登录以其自身 `state` 为键；`settings.authorizedUsers` 记录谁已授权，`settings.connectedUser` 仍指所有者。每份授权发布自己的连接行（`hostMetadata.principal`、`hostMetadata.person`），同一适配器上两个人的行不再互相退役，刷新、重试与重连都按人隔离。适配器级 token 已移除且不迁移（Q1）：所有者此前登录的适配器显示需要重新授权，直到其再次登录。
+
+准入以人而非适配器为对象：`admitPersonalCredential(ctx, { source, person })` 只准入可以代表该人的运行（代表使用者通道上的 acting principal；本地使用者自己的运行与定时运行代表本地使用者，本 Host 的所有者与本地使用者等同），并以此人标记该运行。连接器轮次按适配器记录通道（`connectorTurnLane`）：本 Host 上的人把适配器设为服务通道时为 `service`（`setAdapterCredentialLane`，仅限 Host，写入审计）；平台支持按人授权且身份注册表解析出发送者时为 `delegated`，acting principal 为请求者；否则为 `legacy`，没有个人访问（Q2）。确认后的重放只有在确认者正是原代表对象时才保留其 delegated acting principal。
+
+Lark 调用先解析运行所代表的人（`larkActingPerson`），只使用此人的授权；其他适配器的人、插件调用以及不属于任何个人通道的会话以 `personal_access_refused` 拒绝。只有所有者本人已准入的轮次才以用户身份回复，其他人的轮次以机器人身份回复。尚未授权的请求者会收到只发给本人的链接（`offerDelegatedAuthorization`），作为该轮次自身的输出投递，由个人投递路由收窄到本人（仅本人可见的卡片、本人的私聊或私信，私信现在也可送达被标记的本人）；回调拒绝其他任何人，也拒绝在此人授权变化前签发的链接。私聊中的 `/auth` 发送本人的链接，`/auth revoke` 撤销本人的授权；设置页列出已授权的人，可逐人撤销并切换通道（`components/settings/connections/forms/adapter-delegated-authorizations.tsx`）。接缝与平台无关（`ConnectorVendorContribution.delegatedCredentials`），Lark 是第一个实现。
+
+外部引擎：隔离实例上的已标记轮次，若其运行处于代表使用者通道、请求者恰为其代表之人且每个标记都指向此人（`delegatedOwnPersonalTurn`），以 `personal` 启动；其他人的已标记隔离轮次仍被拒绝。gateway task 丢弃来源实例的启动 profile，使用自己的 profile。
+
+验收：`lib/execution/adr-0243-acceptance.test.ts` 列出每个场景及运行它的测试，并对照测试源码校验每个指向。仍未完成：场景 4 与 15 的端到端（已标记运行经 Lark CLI 写文档目前只在 sink 层检查），以及场景 7 的执行器层（账本已测试，并行子运行未实际运行）；场景 12 等待阶段 5。仍欠一次真实冒烟：两个飞书账号在同一个群中，所有者与成员各自授权，成员的日历读取私下回复，所有者打开成员的链接被拒绝，撤销在下一次请求时生效。计划：`docs/plans/2026-11-16-adr-0243-phase4-delegated-lane.md`。
 
 **阶段 3C（2026-11-16）。** 每个外部引擎进程都按 Host 从运行的 acting identity 推导出的一个 profile 启动，以 `COGNIA_ENGINE_PROFILE` 传递（`packages/agent-contracts/src/engine-launch-profile.ts`，Rust 为 `crates/cognia-external-agent/src/launch_profile.rs`）。两个进程宿主（桌面 Rust 宿主与 CLI 的 Node backend）解释它；两者都不点名任何引擎，因为每个私有启动决策都是启动描述符在同一个标志上的函数。
 

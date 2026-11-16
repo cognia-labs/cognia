@@ -168,21 +168,20 @@ executionRuns 记录必须属于调用技能的 sessionId；记录缺失或属�
 确认卡重新执行技能时显式携带经过回调权限验证的点击者，不再用届时正在运行的任务
 推断操作人。
 
-技能必须读取 session 持久化的 `platformBinding` 判断是否来自 IM。只有当前轮次
-的每位发送者都与适配器的 `settings.connectedUser.openId` 相同，才能使用其个人
-user token；双方都有 unionId 时还必须一致。缺少 connectedUser、发送者未知或
-为空、跨应用身份以及查询失败均以 `sender_not_token_owner` 拒绝。所有 Lark CLI
-技能的读写操作和联系人姓名搜索共用该检查；仅传 sessionId 的 `/lark` 也不能绕过。
-没有 platformBinding 的本地会话继续使用连接者的个人授权。
+自 ADR-0243 阶段 4（2026-11-17）起，一个 Lark 适配器为每个人各保存一份用户授权，
+以其 `open_id` 的 SHA-256 为键（`lib/auth-providers/feishu/user-key.ts`）。Lark
+调用使用其运行所代表之人的授权（`larkActingPerson`）：代表使用者通道上是身份注册表
+解析出的请求者，否则是本地使用者，其授权即连接器所有者（`settings.connectedUser`）
+的授权。准入（`admitPersonalCredential`）拒绝不能代表该人的运行、其他适配器的人、
+插件调用以及不属于任何个人通道的会话，原因为 `personal_access_refused`，提示会说明
+规则；未开启身份注册表时只有本地使用者拥有个人访问。尚未授权的请求者会收到只有本人
+能完成的授权链接（`offerDelegatedAuthorization`），也可以在与机器人的私聊中发送
+`/auth`；`/auth revoke` 撤销本人的授权。
 
-OAuth 将原生 token 发布操作返回的 `authorizationEpoch` 写入 connectedUser。
-检查只获取一次原生授权快照，要求元数据 epoch 与快照一致；没有 epoch 的旧记录
-必须满足快照中与 token 原子写入的 `accountLabel` 等于 `name || openId`。授权缺失
-或不匹配时拒绝。检查返回该快照中已验证的 accessToken 和 epoch：CLI 直接使用此
-token，HTTP 请求的刷新和重试也限定在此 epoch。对已记录 epoch 的元数据，切换账户
-时即使 connectedUser 尚未完成独立写入，也不能将旧所有人的元数据与新账户的 token
-组合使用。旧记录的名称比较无法区分同名账户；完成 OAuth 连接后会记录 epoch，供
-后续检查使用。
+Host 存储以每个人各自的 epoch 隔离其授权。检查在该人的键下读取一次原生快照，返回其
+accessToken 和 epoch：CLI 直接使用此 token，HTTP 请求的刷新和重试也限定在此 epoch，
+因此读取与调用之间发生撤销或重新登录都会被拒绝。按人存储之前的登录在
+`settings.authorizedUsers` 中没有记录，会显示需要重新授权，直到所有者再次登录。
 
 不再隐式从用户身份降级为 tenant 身份。CLI bridge 首选用户身份但缺少 user token
 时返回 `user_not_authorized`。OpenAPI harness 要求调用方明确选择
@@ -190,6 +189,7 @@ token，HTTP 请求的刷新和重试也限定在此 epoch。对已记录 epoch 
 `notAuthorized` 账户错误拒绝，机器人模式只使用 tenant token。文档搜索与读取、
 Twin 导入，以及按账户配置的任务清单/多维表格同步资源和选择器均显式使用用户模式。
 
-残余边界：适配器 reply-as-user 和 `lookupAsPerson` 消息路由保持原样；没有绑定
-IM 会话的 Bot 控制面运行、其他 IM 平台的身份策略，以及群聊受众权限检查均不属于
-本次修订。请求者是 token 所有人，并不代表群内所有成员都有权查看其个人数据。
+只有在所有者本人已准入的轮次中，回复才以用户身份发送；其他人的轮次以机器人身份
+回复，所有者授权不可用时直接拒绝，不会降级。群内谁能看到回复由个人投递路由决定
+（ADR-0243）：带有某人标记的内容只送达本人，形式为仅本人可见的卡片、本人的私聊或
+固定通知。其他 IM 平台的身份策略不属于本次修订。

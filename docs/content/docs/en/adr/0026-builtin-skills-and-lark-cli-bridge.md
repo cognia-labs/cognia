@@ -238,26 +238,28 @@ message timestamp. Queued messages and `steer-replay` jobs wait for the next
 turn and are ignored. Confirm-card re-fires explicitly carry the verified
 callback clicker, rather than looking up whoever happens to be running later.
 
-For a session whose persisted `platformBinding` binds it to IM, every sender
-must match the adapter's `settings.connectedUser.openId` before a Lark call
-can use that user's token. When both sides have a union id, it must also
-match. Missing ownership, unknown/empty sender sets, cross-app identities,
-and lookup failures refuse with `sender_not_token_owner`. The shared gate
-covers all Lark CLI skill reads/writes and contact-name search, including
-`/lark` calls carrying only a session id. Local sessions without a platform
-binding retain personal authorization.
+Since ADR-0243 phase 4 (2026-11-17) a Lark adapter holds one user
+authorization per person, keyed by the SHA-256 of their `open_id`
+(`lib/auth-providers/feishu/user-key.ts`), and a Lark call uses the
+authorization of the person its run acts as (`larkActingPerson`): on the
+delegated lane the requester the principal registry resolved, otherwise the
+local person, whose authorization is the connector owner's
+(`settings.connectedUser`). Admission (`admitPersonalCredential`) refuses a
+run that may not act as that person, a person of another adapter, a plugin
+invocation and a session no personal lane owns, with
+`personal_access_refused`; the hint names the rule, and with the principal
+registry off only the local person has personal access. A requester with no
+authorization of their own gets a link only they can complete
+(`offerDelegatedAuthorization`), or sends `/auth` in a direct chat with the
+bot; `/auth revoke` forgets it.
 
-OAuth stamps the `authorizationEpoch` returned by native token publication
-onto `connectedUser`. The gate takes one native authorization snapshot and
-requires the metadata epoch to match it; legacy metadata without an epoch
-must match the snapshot's atomic `accountLabel` against `name || openId`.
-Missing or mismatching authorization refuses. The gate returns that verified
-snapshot's access token and epoch: CLI execution uses the verified token,
-and HTTP requests also fence refresh/retry to its epoch. With epoch-stamped
-metadata, reconnecting cannot combine the old owner's metadata with the new
-account's token during the separate metadata write. The legacy label check
-is weaker when different accounts share a display name; a completed OAuth
-connection stamps the epoch for subsequent checks.
+The Host store fences each person's authorization by its own epoch. The gate
+reads one native snapshot under that person's key and returns its access
+token and epoch: CLI execution uses that token, and HTTP requests fence
+refresh and retry to that epoch, so a revoke or a new sign-in between the
+read and the call refuses. A sign-in from before per-person storage has no
+record in `settings.authorizedUsers` and shows needs-reauth until the owner
+signs in again.
 
 User authorization never implicitly downgrades to a tenant token. The CLI
 bridge fails with `user_not_authorized` when a preferred user token is
@@ -267,8 +269,10 @@ is missing, invalidated or cannot be refreshed. Bot mode uses only the
 tenant identity. Docs search/fetch, Twin ingestion, and the account-selected
 issue Task/Bitable resources and their pickers explicitly use user mode.
 
-Residuals: adapter reply-as-user and `lookupAsPerson` routing are unchanged.
-Bot control-plane runs without IM-bound sessions, non-Lark platform identity
-policies, and group-audience authorization (who can see a reply even when
-the requester owns the token) are outside this amendment. Ownership alone
-does not make a group safe for personal data.
+A reply sends as the user only on the owner's own admitted turn; anyone
+else's turn replies as the bot, and an owner's turn whose authorization is
+unusable refuses rather than falling back. Who can see a reply in a group is
+the personal-delivery routing's (ADR-0243): content marked with a person
+reaches that person alone, as an ephemeral card, their direct chat, or a
+fixed notice. Other IM platforms' identity policies are outside this
+amendment.
