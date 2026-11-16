@@ -17,7 +17,7 @@ jest.mock("@/lib/tauri", () => ({
 }))
 
 const readAgentConfigMock = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/native/agent-config", () => ({
   readAgentConfig: (id: string) => readAgentConfigMock(id),
 }))
 

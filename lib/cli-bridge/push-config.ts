@@ -17,7 +17,7 @@ import type {
   BuiltinToolsConfig,
   WebReaderSettingsV1,
 } from "@cognia/agent-config-types"
-import { readTextFile } from "@/lib/claude/ipc"
+import { readTextFile } from "@/lib/file/host-file-commands"
 import { BUILTIN_TOOL_CONFIG_KEYS } from "@/lib/settings/builtin-tools"
 
 import { resolveCliHome, writeCliHomeFile } from "./home"

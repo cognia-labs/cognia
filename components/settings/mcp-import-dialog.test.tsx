@@ -32,7 +32,7 @@ jest.mock("@/lib/mcp/config-adapters", () => ({
   ],
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/native/agent-config", () => ({
   readAgentConfig: jest.fn(async () => ({
     path: "/cfg.json",
     exists: true,
@@ -67,7 +67,7 @@ jest.mock("@/lib/db/mcp-servers", () => ({
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { toast } from "sonner"
-import { readAgentConfig } from "@/lib/claude/ipc"
+import { readAgentConfig } from "@/lib/native/agent-config"
 import { McpImportDialog } from "./mcp-import-dialog"
 
 async function openAndPick() {

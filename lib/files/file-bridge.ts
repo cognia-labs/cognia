@@ -5,12 +5,8 @@
 
 import { readBlobAsArrayBuffer } from "@cognia/ocr/blob-utils"
 import { isTauri } from "@/lib/tauri"
-import {
-  defaultExportDir,
-  readTextFile,
-  writeTextFile,
-  writeTextFileConfined,
-} from "@/lib/claude/ipc"
+import { defaultExportDir, readTextFile, writeTextFile } from "@/lib/file/host-file-commands"
+import { writeTextFileConfined } from "@/lib/files/confined-ops"
 import { registerDialogPathInRust } from "@/lib/files/allowed-roots-sync"
 import { open, save } from "@tauri-apps/plugin-dialog"
 

@@ -23,7 +23,7 @@ import {
   writeAgentConfig,
   type AgentReadResult,
   type AgentWriteResult,
-} from "@/lib/claude/ipc"
+} from "@/lib/native/agent-config"
 import {
   CLAUDE_CODE_AGENT,
   MCP_AGENT_ADAPTERS,

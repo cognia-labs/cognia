@@ -2798,17 +2798,17 @@
       "basis": ["lib/claude/ipc.ts#callReserveDecision>answer"]
     },
     {
-      "key": "lib/claude/ipc.ts::readProjectMcpConfig::network::cb032dabce4c:1",
-      "file": "lib/claude/ipc.ts",
+      "key": "lib/native/agent-config.ts::readProjectMcpConfig::network::cb032dabce4c:1",
+      "file": "lib/native/agent-config.ts",
       "owner": "readProjectMcpConfig",
       "kind": "network",
       "primitive": "transport.call",
       "line": 1897,
       "lexicalGate": null,
       "classification": "host-system",
-      "authority": "lib/claude/ipc.ts#readProjectMcpConfig; lib/mcp/agent-config-sync.ts",
+      "authority": "lib/native/agent-config.ts#readProjectMcpConfig; lib/mcp/agent-config-sync.ts",
       "reason": "Reads local project MCP configuration during host synchronization, without making an outbound request.",
-      "basis": ["lib/claude/ipc.ts#readProjectMcpConfig", "lib/mcp/agent-config-sync.ts"]
+      "basis": ["lib/native/agent-config.ts#readProjectMcpConfig", "lib/mcp/agent-config-sync.ts"]
     },
     {
       "key": "lib/skills/host-client.ts::skillsFetchRemoteMd::network::6111f28adc2b:1",

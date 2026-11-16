@@ -2,14 +2,13 @@
  * Confined write/mkdir backend.
  *
  * Thin wrapper over the authoritative Rust `*_confined` commands (see
- * `lib/claude/ipc.ts` and `crates/cognia-files/src/files.rs`). Kept as its own
+ * `crates/cognia-files/src/files.rs`). Kept as its own
  * module so callers stay runtime-agnostic and tests can inject a fake backend
  * without a Tauri host. Web mode (no Rust) rejects — there is no safe confined
  * write target in the browser, and its consumers run inside the desktop shell.
  */
 
-import { isTauri } from "@/lib/tauri"
-import { ensureDirConfined, writeTextFileConfined } from "@/lib/claude/ipc"
+import { isTauri, transport } from "@/lib/tauri"
 
 /** The on-disk-confined mutations a caller delegates to. */
 export interface ConfinedOps {
@@ -31,4 +30,24 @@ export const confinedOps: ConfinedOps = {
     }
     await ensureDirConfined(path, allowedRoots)
   },
+}
+
+/**
+ * Write a text file confined to `allowedRoots` (the active workspace roots).
+ * The authoritative on-disk counterpart to the unconfined `writeTextFile`
+ * (`lib/file/host-file-commands.ts`): the Rust host
+ * canonicalizes and rejects writes that escape the roots — including via a
+ * symlink the lexical TS pre-flight can't see. Prefer this for in-app writes.
+ */
+export async function writeTextFileConfined(
+  path: string,
+  content: string,
+  allowedRoots: string[]
+): Promise<void> {
+  await transport.call("write_text_file_confined", { path, content, allowedRoots })
+}
+
+/** Ensure a directory exists, confined to `allowedRoots` (see {@link writeTextFileConfined}). */
+export async function ensureDirConfined(path: string, allowedRoots: string[]): Promise<void> {
+  await transport.call("ensure_dir_confined", { path, allowedRoots })
 }

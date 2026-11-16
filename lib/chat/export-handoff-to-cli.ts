@@ -269,11 +269,12 @@ export async function exportHandoffToCli(
   // containing `../`) can't write the transcript outside the handoff tree.
   const ensureDir =
     deps.ensureDir ??
-    (async (d: string) => (await import("@/lib/claude/ipc")).ensureDirConfined(d, [cogniaHome]))
+    (async (d: string) =>
+      (await import("@/lib/files/confined-ops")).ensureDirConfined(d, [cogniaHome]))
   const writeTextFile =
     deps.writeTextFile ??
     (async (p: string, c: string) =>
-      (await import("@/lib/claude/ipc")).writeTextFileConfined(p, c, [cogniaHome]))
+      (await import("@/lib/files/confined-ops")).writeTextFileConfined(p, c, [cogniaHome]))
 
   await ensureDir(dir)
   await writeTextFile(path, lines.join("\n") + "\n")

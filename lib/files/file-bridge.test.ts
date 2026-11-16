@@ -30,10 +30,12 @@ jest.mock(
   { virtual: true }
 )
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/file/host-file-commands", () => ({
   defaultExportDir: jest.fn(),
   readTextFile: jest.fn(),
   writeTextFile: jest.fn(),
+}))
+jest.mock("@/lib/files/confined-ops", () => ({
   writeTextFileConfined: jest.fn(),
 }))
 
@@ -60,12 +62,8 @@ jest.mock(
 
 import { isTauri } from "@/lib/tauri"
 import { registerDialogPathInRust } from "@/lib/files/allowed-roots-sync"
-import {
-  defaultExportDir,
-  readTextFile,
-  writeTextFile,
-  writeTextFileConfined,
-} from "@/lib/claude/ipc"
+import { defaultExportDir, readTextFile, writeTextFile } from "@/lib/file/host-file-commands"
+import { writeTextFileConfined } from "@/lib/files/confined-ops"
 import {
   pickAndReadFiles,
   writeBackupStreamFile,

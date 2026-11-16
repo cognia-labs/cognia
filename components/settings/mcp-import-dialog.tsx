@@ -34,7 +34,7 @@ import { cn } from "@/lib/utils"
 
 import { MCP_AGENT_ADAPTERS } from "@/lib/mcp/config-adapters"
 import { previewAgentImport, type AgentImportPreview } from "@/lib/mcp/agent-config-sync"
-import { readAgentConfig } from "@/lib/claude/ipc"
+import { readAgentConfig } from "@/lib/native/agent-config"
 import { isTauri } from "@/lib/tauri"
 import type { AgentId } from "@cognia/agent-config-types"
 import type { McpImportStrategy } from "@/lib/db/mcp-servers"

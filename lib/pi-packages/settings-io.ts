@@ -21,7 +21,7 @@
  *      `lib/mcp/agent-config-sync.ts`, which exists because of exactly that bug class.
  */
 
-import type { AgentReadResult } from "@/lib/claude/ipc"
+import type { AgentReadResult } from "@/lib/native/agent-config"
 import type { PiPackageSource } from "./types"
 
 /** The only key this module ever reads out of Pi's settings file. */
@@ -49,13 +49,13 @@ function isUnparseable(result: PiConfigRead): boolean {
 }
 
 async function defaultDeps(): Promise<PiSettingsIoDeps> {
-  const [ipc, files] = await Promise.all([
-    import("@/lib/claude/ipc"),
+  const [agentConfig, files] = await Promise.all([
+    import("@/lib/native/agent-config"),
     import("@/lib/file/file-operations"),
   ])
   return {
-    readAgentConfig: (agent) => ipc.readAgentConfig(agent),
-    writeAgentConfig: (agent, value) => ipc.writeAgentConfig(agent, value),
+    readAgentConfig: (agent) => agentConfig.readAgentConfig(agent),
+    writeAgentConfig: (agent, value) => agentConfig.writeAgentConfig(agent, value),
     readTextFile: files.readTextFile,
     writeTextFile: files.writeTextFile,
     exists: files.exists,

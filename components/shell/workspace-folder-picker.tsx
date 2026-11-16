@@ -39,7 +39,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { defaultExportDir } from "@/lib/claude/ipc"
+import { defaultExportDir } from "@/lib/file/host-file-commands"
 import { listWorkspaceDir, listWorkspaceRoots } from "@/lib/files/workspace-fs"
 import type { WorkspaceEntry, WorkspaceRoot } from "@/lib/files/types"
 import { cn } from "@/lib/utils"

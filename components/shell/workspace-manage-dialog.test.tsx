@@ -47,7 +47,7 @@ jest.mock("@/hooks/workspace/use-workspace-command-gate", () => ({
       : { available: false, reason: "pair a desktop first" },
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/file/host-file-commands", () => ({
   defaultExportDir: jest.fn(),
 }))
 
@@ -152,7 +152,7 @@ const originalDeleteProject = useProjectStore.getState().deleteProject
 
 const isTauriMock = (jest.requireMock("@/lib/tauri") as { isTauri: jest.Mock }).isTauri
 const defaultExportDirMock = (
-  jest.requireMock("@/lib/claude/ipc") as { defaultExportDir: jest.Mock }
+  jest.requireMock("@/lib/file/host-file-commands") as { defaultExportDir: jest.Mock }
 ).defaultExportDir
 const listWorkspaceDirMock = (
   jest.requireMock("@/lib/files/workspace-fs") as { listWorkspaceDir: jest.Mock }

@@ -92,9 +92,7 @@ import {
   forgetRemoteApprovalContext,
   closeSession,
   HOST_OWNED_TRANSCRIPT_CONTROL,
-  defaultExportDir,
   deleteMessage,
-  ensureDir,
   ensureSidecarReady,
   compactSession,
   getSidecarStatus,
@@ -104,9 +102,6 @@ import {
   listSessions,
   normalizeRewindFilesResult,
   onClaudeMessage,
-  readAgentConfig,
-  readClaudeUserConfig,
-  readTextFile,
   restartSidecar,
   restoreSession,
   sendPluginToolResponse,
@@ -120,10 +115,6 @@ import {
   subscribePluginToolExec,
   setApiKey,
   updateMessage,
-  writeAgentConfig,
-  writeTextFile,
-  writeTextFileConfined,
-  ensureDirConfined,
 } from "./ipc"
 import {
   ExecutionRouteChangedError,
@@ -1870,88 +1861,6 @@ describe("onClaudeMessage", () => {
       "agent_resolve_permission",
       expect.objectContaining({ remoteExecutionContext: context })
     )
-  })
-})
-
-describe("filesystem commands", () => {
-  it("readTextFile returns the string content", async () => {
-    callSpy.mockResolvedValueOnce("file body")
-    await expect(readTextFile("/p")).resolves.toBe("file body")
-    expect(callSpy).toHaveBeenCalledWith("read_text_file", { path: "/p" })
-  })
-
-  it("writeTextFile forwards path + content", async () => {
-    callSpy.mockResolvedValueOnce(undefined)
-    await writeTextFile("/p", "data")
-    expect(callSpy).toHaveBeenCalledWith("write_text_file", {
-      path: "/p",
-      content: "data",
-    })
-  })
-
-  it("ensureDir forwards the path", async () => {
-    callSpy.mockResolvedValueOnce(undefined)
-    await ensureDir("/p")
-    expect(callSpy).toHaveBeenCalledWith("ensure_dir", { path: "/p" })
-  })
-
-  it("writeTextFileConfined forwards path, content, and allowed roots", async () => {
-    callSpy.mockResolvedValueOnce(undefined)
-    await writeTextFileConfined("/w/a.txt", "data", ["/w"])
-    expect(callSpy).toHaveBeenCalledWith("write_text_file_confined", {
-      path: "/w/a.txt",
-      content: "data",
-      allowedRoots: ["/w"],
-    })
-  })
-
-  it("ensureDirConfined forwards path and allowed roots", async () => {
-    callSpy.mockResolvedValueOnce(undefined)
-    await ensureDirConfined("/w/sub", ["/w"])
-    expect(callSpy).toHaveBeenCalledWith("ensure_dir_confined", {
-      path: "/w/sub",
-      allowedRoots: ["/w"],
-    })
-  })
-
-  it("defaultExportDir returns the resolved path", async () => {
-    callSpy.mockResolvedValueOnce("/exports")
-    await expect(defaultExportDir()).resolves.toBe("/exports")
-    expect(callSpy).toHaveBeenCalledWith("default_export_dir")
-  })
-})
-
-describe("readClaudeUserConfig", () => {
-  it("returns the parsed JSON tree as-is", async () => {
-    callSpy.mockResolvedValueOnce({ model: "x" })
-    await expect(readClaudeUserConfig()).resolves.toEqual({ model: "x" })
-    expect(callSpy).toHaveBeenCalledWith("read_claude_user_config")
-  })
-})
-
-describe("multi-agent MCP IO", () => {
-  it("readAgentConfig forwards the agent id and returns the result", async () => {
-    const result = {
-      path: "/x",
-      exists: true,
-      writable: true,
-      format: "json" as const,
-      raw: "{}",
-      parsed: {},
-    }
-    callSpy.mockResolvedValueOnce(result)
-    await expect(readAgentConfig("cursor")).resolves.toEqual(result)
-    expect(callSpy).toHaveBeenCalledWith("read_agent_config", { agent: "cursor" })
-  })
-
-  it("writeAgentConfig forwards the agent id and value tree", async () => {
-    callSpy.mockResolvedValueOnce({ path: "/x", backupPath: "/x.bak" })
-    const out = await writeAgentConfig("cursor", { mcpServers: { a: { command: "a" } } })
-    expect(out).toEqual({ path: "/x", backupPath: "/x.bak" })
-    expect(callSpy).toHaveBeenCalledWith("write_agent_config", {
-      agent: "cursor",
-      value: { mcpServers: { a: { command: "a" } } },
-    })
   })
 })
 

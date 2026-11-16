@@ -34,7 +34,9 @@ jest.mock("@tanstack/react-virtual", () => ({
   }),
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({ defaultExportDir: jest.fn() }))
+jest.mock("@/lib/file/host-file-commands", () => ({
+  defaultExportDir: jest.fn(),
+}))
 jest.mock("@/lib/files/workspace-fs", () => ({
   listWorkspaceDir: jest.fn(),
   listWorkspaceRoots: jest.fn(),
@@ -43,7 +45,7 @@ jest.mock("@/lib/files/workspace-fs", () => ({
 import { WorkspaceFolderPicker } from "./workspace-folder-picker"
 
 const defaultExportDirMock = (
-  jest.requireMock("@/lib/claude/ipc") as { defaultExportDir: jest.Mock }
+  jest.requireMock("@/lib/file/host-file-commands") as { defaultExportDir: jest.Mock }
 ).defaultExportDir
 const workspaceFs = jest.requireMock("@/lib/files/workspace-fs") as {
   listWorkspaceDir: jest.Mock

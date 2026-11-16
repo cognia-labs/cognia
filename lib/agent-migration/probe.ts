@@ -12,7 +12,7 @@ async function defaultDeps(): Promise<ProbeVendorsDeps> {
   const [{ resolveVendorRoots }, { exists }, { readAgentConfig }] = await Promise.all([
     import("@/lib/agent-roots"),
     import("@/lib/file/file-operations"),
-    import("@/lib/claude/ipc"),
+    import("@/lib/native/agent-config"),
   ])
   return { roots: resolveVendorRoots, exists, readAgentConfig }
 }
