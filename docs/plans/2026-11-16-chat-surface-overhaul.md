@@ -184,10 +184,12 @@ Pure structure, no behaviour change. Mechanical moves first (one commit), splits
 
 Node benches, 2026-11-16, Apple Silicon, shared machine. Load varied between runs (the 50 KB stream p50 read 7.8 ms once and 4.0 ms once), so compare medians of several back-to-back runs.
 
-| `handleEvent` per token | 200 msgs         | 2,000 msgs        | 5,000 msgs  |
-| ----------------------- | ---------------- | ----------------- | ----------- |
-| handler p50 / p95 (ms)  | 0.05 / 0.13–0.15 | 2.9–3.7 / 5.0–5.6 | 27.3 / 29.9 |
-| commit p50 (ms)         | 0.02             | 0.08–0.09         | 0.24        |
+| `handleEvent` per token          | 200 msgs         | 2,000 msgs        | 5,000 msgs    |
+| -------------------------------- | ---------------- | ----------------- | ------------- |
+| handler p50 / p95 (ms)           | 0.05 / 0.13–0.15 | 2.9–3.7 / 5.0–5.6 | 27.3 / 29.9   |
+| commit p50 (ms)                  | 0.02             | 0.08–0.09         | 0.24          |
+| step 4.1: handler p50 / p95 (ms) | 0.021 / 0.037    | 0.108 / 0.177     | 0.336 / 0.421 |
+| step 4.1: commit p50 (ms)        | 0.025            | 0.081             | 0.209         |
 
 | `StreamingTextPart`              | short (0.5 KB)    | medium (5 KB) | long (50 KB)       | code (20 KB fence) | CJK (5 KB)        |
 | -------------------------------- | ----------------- | ------------- | ------------------ | ------------------ | ----------------- |
@@ -198,13 +200,13 @@ Node benches, 2026-11-16, Apple Silicon, shared machine. Load varied between run
 
 Browser baseline: not recorded yet. The static build refuses to run while other sessions' uncommitted changes to the authoring-kit inputs (`app/globals.css`, `pnpm-lock.yaml`, `packages/plugin-contract/src`) make the working tree differ from the kit pin, and `pnpm dev` runs the same check. It needs those changes committed, or a clean worktree at the pre-fix commit.
 
-| Metric                                    | Baseline | After step 4 | Final |
-| ----------------------------------------- | -------- | ------------ | ----- |
-| First transcript paint, 2,000 messages    |          |              |       |
-| Dropped frames, scripted scroll           |          |              |       |
-| Commits / renders per streamed token      |          |              |       |
-| `handleEvent` per event at 2,000 messages |          |              |       |
-| Streaming per-delta p95, 50 KB            |          |              |       |
-| Streaming DOM size, 50 KB                 |          |              |       |
-| Composer renders per keystroke            |          |              |       |
-| JS heap after open / after stream         |          |              |       |
+| Metric                                    | Baseline       | After step 4       | Final |
+| ----------------------------------------- | -------------- | ------------------ | ----- |
+| First transcript paint, 2,000 messages    |                |                    |       |
+| Dropped frames, scripted scroll           |                |                    |       |
+| Commits / renders per streamed token      |                |                    |       |
+| `handleEvent` per event at 2,000 messages | 2.9–3.7 ms p50 | 0.108 ms p50 (4.1) |       |
+| Streaming per-delta p95, 50 KB            |                |                    |       |
+| Streaming DOM size, 50 KB                 |                |                    |       |
+| Composer renders per keystroke            |                |                    |       |
+| JS heap after open / after stream         |                |                    |       |

@@ -1237,9 +1237,10 @@ export async function handleEvent(
         appliedMessages,
         toolCallExecutionRunId(sessionId, frame.turnId, frame.attemptId)
       )
-      const deleteIds = current
-        .filter((message) => !appliedMessages.some((kept) => kept.id === message.id))
-        .map((message) => message.id)
+      // Rows the event dropped. Most events (every streamed token) only edit
+      // rows in place, so skip the walk when nothing changed; otherwise one id
+      // set, not a scan of the new list per old row (O(n²) per token).
+      const deleteIds = deletedMessageIds(current, appliedMessages)
 
       // Emit `execute_tool` child spans for every `tool_use` / `tool_result`
       // pair in this SDK event. The parent invoke_agent span was opened by
@@ -1265,13 +1266,11 @@ export async function handleEvent(
         compact_metadata?: { pre_tokens?: number; post_tokens?: number }
       }
       if (systemEvent.type === "system" && systemEvent.subtype === "compact_boundary") {
-        const boundary = [...appliedMessages]
-          .reverse()
-          .find(
-            (message) =>
-              message.role === "system" &&
-              (message.parts[0] as { type?: string } | undefined)?.type === "compact-boundary"
-          )
+        const boundary = appliedMessages.findLast(
+          (message) =>
+            message.role === "system" &&
+            (message.parts[0] as { type?: string } | undefined)?.type === "compact-boundary"
+        )
         if (boundary) {
           const checkpoint = await withTranscriptRuntimeLock(sessionId, async () => {
             if (!isCurrentEvent()) return undefined
@@ -1516,12 +1515,8 @@ export async function handleEvent(
         nextMessages = mergeInboundMessagesForStream(nextMessages, sliceMessages(sessionId))
       }
       if (nextMessages !== current) {
-        const currentAssistant = [...current]
-          .reverse()
-          .find((message) => message.role === "assistant")
-        const nextAssistant = [...nextMessages]
-          .reverse()
-          .find((message) => message.role === "assistant")
+        const currentAssistant = current.findLast((message) => message.role === "assistant")
+        const nextAssistant = nextMessages.findLast((message) => message.role === "assistant")
         if (nextAssistant && nextAssistant !== currentAssistant) {
           chatTurnPerformance.markFirstResponse(sessionId)
         }
@@ -1619,7 +1614,7 @@ export async function handleEvent(
       // of `isActive` so background sessions still accumulate cost. Idempotent
       // on (messageId) — re-applying the same result overwrites the row.
       if (sdkResult) {
-        const lastAssistant = [...nextMessages].reverse().find((m) => m.role === "assistant")
+        const lastAssistant = nextMessages.findLast((m) => m.role === "assistant")
         // The actual provider/model sent to the sidecar may differ from the
         // session record when alias routing or preset model_mapping changed it.
         const lastSendForSpan = useChatStore.getState().lastSendBySession[sessionId]
@@ -1778,7 +1773,7 @@ export async function handleEvent(
           // assistant content. Fully guarded: a plugin-observability dispatch
           // must never break turn completion (mirrors the artifacts block below).
           try {
-            const sealedAssistant = [...nextMessages].reverse().find((m) => m.role === "assistant")
+            const sealedAssistant = nextMessages.findLast((m) => m.role === "assistant")
             if (sealedAssistant) {
               // Content extraction is isolated so it can never prevent the
               // observability dispatch (the hook is fail-open by design).
@@ -1848,7 +1843,7 @@ export async function handleEvent(
         // and /goal + /loop auto-continuation below remain focused-session work.
         const completedSession = await getSession(sessionId).catch(() => undefined)
         if (completedSession?.attachedChild) {
-          const finalAssistant = [...nextMessages].reverse().find((m) => m.role === "assistant")
+          const finalAssistant = nextMessages.findLast((m) => m.role === "assistant")
           const summary = finalAssistant ? (extractAssistantText(finalAssistant) ?? "").trim() : ""
           if (summary) {
             void completeAttachedSession(sessionId, {
@@ -1866,7 +1861,7 @@ export async function handleEvent(
           try {
             const settings = useSettingsStore.getState().settings
             const artifactsCfg = settings?.artifacts
-            const lastAssistant = [...nextMessages].reverse().find((m) => m.role === "assistant")
+            const lastAssistant = nextMessages.findLast((m) => m.role === "assistant")
             const text = extractAssistantText(lastAssistant)
             if (text && lastAssistant) {
               const reviewEnabled = artifactsCfg?.reviewBeforeApply !== false
@@ -2034,7 +2029,7 @@ export async function handleEvent(
           try {
             const activeLoop = await getLoopRuntime().getActiveLoopForSession(sessionId)
             if (activeLoop?.mode === "self_paced") {
-              const lastAssistant = [...nextMessages].reverse().find((m) => m.role === "assistant")
+              const lastAssistant = nextMessages.findLast((m) => m.role === "assistant")
               const lastResponse = extractAssistantText(lastAssistant)
               const usage = sdkResult ? extractUsage(sdkResult) : null
               const tokensDelta = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)
@@ -2122,9 +2117,7 @@ export async function handleEvent(
                   ).catch(() => {})
                 }
               } else {
-                const lastAssistant = [...nextMessages]
-                  .reverse()
-                  .find((m) => m.role === "assistant")
+                const lastAssistant = nextMessages.findLast((m) => m.role === "assistant")
                 const lastResponse = extractAssistantText(lastAssistant)
                 const usage = sdkResult ? extractUsage(sdkResult) : null
                 const tokensDelta = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)
@@ -2211,7 +2204,7 @@ export async function handleEvent(
           // workflow runtime owns its steps, and advancing it here would race
           // the orchestrator writing the same rows.
           if (!selfDrivenContinuation) {
-            const lastAssistant = [...nextMessages].reverse().find((m) => m.role === "assistant")
+            const lastAssistant = nextMessages.findLast((m) => m.role === "assistant")
             // One implementation for every runtime (`plan-turn-settle.ts`): the
             // external-agent lane settles plan steps through the same call.
             await driveInSessionPlanAfterTurn({
@@ -2232,4 +2225,20 @@ export async function handleEvent(
       return
     }
   }
+}
+
+/**
+ * Ids of `before` rows missing from `after`. The same list (identity) means no
+ * row was dropped, which is the case for every in-place token update.
+ */
+export function deletedMessageIds(
+  before: readonly UIMessage[],
+  after: readonly UIMessage[]
+): string[] {
+  if (before === after) return []
+  const kept = new Set<string>()
+  for (const message of after) kept.add(message.id)
+  const deleted: string[] = []
+  for (const message of before) if (!kept.has(message.id)) deleted.push(message.id)
+  return deleted
 }

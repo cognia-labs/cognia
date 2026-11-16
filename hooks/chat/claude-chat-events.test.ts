@@ -185,6 +185,7 @@ it("routes a late native prediction to its requesting session without a transcri
 
 import { __resetClaimedTurnUsageForTesting, claimTurnUsage } from "@/lib/usage/claimed-turn-usage"
 import {
+  deletedMessageIds,
   drainSteerVia,
   handleEvent,
   isArtifactAutoCreateEnabled,
@@ -2182,4 +2183,26 @@ it("R1: an unclaimed native permission request still reaches the approval UI", a
     push.mockRestore()
     useChatStore.getState().clear()
   }
+})
+
+describe("deletedMessageIds", () => {
+  const row = (id: string) => ({ id, role: "assistant" as const, parts: [] })
+
+  it("is empty without walking for an in-place update", () => {
+    const list = [row("a"), row("b")]
+    const spy = jest.spyOn(Set.prototype, "add")
+    try {
+      expect(deletedMessageIds(list, list)).toEqual([])
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("lists the rows the event dropped, in their old order", () => {
+    expect(deletedMessageIds([row("a"), row("b"), row("c")], [row("c"), row("x")])).toEqual([
+      "a",
+      "b",
+    ])
+  })
 })
