@@ -40,6 +40,57 @@ function withoutReply(item: TranscriptTimelineItem, replyId: string): Transcript
   return item
 }
 
+/**
+ * The timeline without what the store's unfinished tail draws. A timeline read
+ * during the turn already holds the rows the Host persisted so far (the
+ * question, a partial reply) as a folded turn; drawn beside the tail, the turn
+ * appeared twice. The tail is the newer copy, so the timeline gives up those
+ * messages, and the turn itself once nothing else of it is left.
+ */
+function withoutTail(items: TranscriptTimelineItem[], tail: UIMessage[]): TranscriptTimelineItem[] {
+  if (tail.length === 0) return items
+  const drawn = new Set(tail.map((message) => message.id))
+  let changed = false
+  const kept: TranscriptTimelineItem[] = []
+  for (const item of items) {
+    const next = withoutMessages(item, drawn)
+    if (next !== item) changed = true
+    if (next) kept.push(next)
+  }
+  return changed ? kept : items
+}
+
+/** `item` minus the messages in `ids`; `null` when none of it remains. */
+function withoutMessages(
+  item: TranscriptTimelineItem,
+  ids: ReadonlySet<string>
+): TranscriptTimelineItem | null {
+  if (item.kind === "system") return ids.has(item.message.id) ? null : item
+  if (item.kind === "active-turn") {
+    if (!item.messages.some((message) => ids.has(message.id))) return item
+    const messages = item.messages.filter((message) => !ids.has(message.id))
+    return messages.length > 0 ? { ...item, messages } : null
+  }
+  const covered =
+    item.userMessages.some((message) => ids.has(message.id)) ||
+    (item.finalResponse !== undefined && ids.has(item.finalResponse.id)) ||
+    (item.visibleResult !== undefined && ids.has(item.visibleResult.id))
+  if (!covered) return item
+  const { finalResponse, visibleResult, ...rest } = item
+  const userMessages = item.userMessages.filter((message) => !ids.has(message.id))
+  const keepFinal = finalResponse && !ids.has(finalResponse.id) ? finalResponse : undefined
+  const keepResult = visibleResult && !ids.has(visibleResult.id) ? visibleResult : undefined
+  if (userMessages.length === 0 && !keepFinal && !keepResult) return null
+  return {
+    ...rest,
+    userMessages,
+    ...(keepFinal ? { finalResponse: keepFinal } : {}),
+    ...(keepResult ? { visibleResult: keepResult } : {}),
+    // Its detail holds the same rows, older: not while the tail draws them.
+    collapsed: { ...item.collapsed, exists: false },
+  }
+}
+
 export interface LiveTurnView {
   items: TranscriptTimelineItem[]
   liveMessages: UIMessage[]
@@ -55,7 +106,7 @@ export function withLiveTurn(input: {
   live: TranscriptLiveTurn | null
 }): LiveTurnView {
   const { items, tail, live } = input
-  if (!live) return { items, liveMessages: tail }
+  if (!live) return { items: withoutTail(items, tail), liveMessages: tail }
   const reply: UIMessage = { id: live.messageId, role: "assistant", parts: live.parts }
   const turn = items.findIndex((item) => isTurnOf(item, live.replyTo))
   if (turn >= 0) {

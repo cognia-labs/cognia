@@ -8582,6 +8582,10 @@
           "type": "string",
           "enum": ["user", "assistant", "system"]
         },
+        "collaboration": {
+          "type": "object",
+          "x-cognia-opaque-reason": "MessageCollaborationMetadata (ADR-0177) is the room's own author record; StoredMessage owns its shape."
+        },
         "metadata": {
           "type": "object"
         },

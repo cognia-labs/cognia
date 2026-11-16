@@ -14,6 +14,7 @@ import {
   TRANSCRIPT_SUMMARY_MEDIA_LIMIT,
 } from "@cognia/agent-config-types"
 import { isToolPartType } from "@/lib/chat/agent-flow-grouping"
+import { resolveBranchWinners, visibleThread } from "@/lib/chat/branch-visibility"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
 import { assistantAgentKey } from "@/lib/chat/transcript-agents"
 
@@ -122,6 +123,7 @@ function fullMessage(message: StoredMessage): TranscriptMessage {
     parts: message.parts,
     ...(message.senderId ? { senderId: message.senderId } : {}),
     ...(message.senderKind ? { senderKind: message.senderKind } : {}),
+    ...(message.collaboration ? { collaboration: message.collaboration } : {}),
     ...(message.metadata ? { metadata: message.metadata } : {}),
     createdAt: message.createdAt,
   }
@@ -131,30 +133,21 @@ function branchSummary(
   messages: StoredMessage[],
   activeBranchByGroup: Record<string, string> | undefined
 ): { groups: TranscriptBranchGroupSummary[] } | undefined {
-  const groups = new Map<string, Array<{ id: string; index: number }>>()
+  const groups = new Map<string, string[]>()
   for (const message of messages) {
     const groupId = message.metadata?.branchGroupId
     if (typeof groupId !== "string") continue
-    const branchIndex = message.metadata?.branchIndex
-    const members = groups.get(groupId) ?? []
-    members.push({ id: message.id, index: typeof branchIndex === "number" ? branchIndex : 0 })
-    groups.set(groupId, members)
+    groups.set(groupId, [...(groups.get(groupId) ?? []), message.id])
   }
   if (groups.size === 0) return undefined
+  // The same winner the local list shows: explicit choice, else newest sibling.
+  const winners = resolveBranchWinners(messages, activeBranchByGroup ?? {})
   return {
-    groups: [...groups.entries()].map(([groupId, members]) => {
-      const fallback = members.reduce((selected, member) =>
-        member.index >= selected.index ? member : selected
-      )
-      const explicit = activeBranchByGroup?.[groupId]
-      return {
-        groupId,
-        selectedMessageId: members.some((member) => member.id === explicit)
-          ? explicit!
-          : fallback.id,
-        messageIds: members.map((member) => member.id),
-      }
-    }),
+    groups: [...groups.entries()].map(([groupId, messageIds]) => ({
+      groupId,
+      selectedMessageId: winners.get(groupId)!,
+      messageIds,
+    })),
   }
 }
 
@@ -189,11 +182,14 @@ function completedTurn(
   revision: number,
   activeBranchByGroup: Record<string, string> | undefined
 ): TranscriptTimelineItem {
-  const userMessages = messages.filter((message) => message.role === "user")
-  const visibleResponses = messages.filter((message) => message.role === "assistant")
-  const finalResponseMessage = visibleResponses.at(-1)
+  // The folded turn shows the thread the user selected: a regenerated reply
+  // or an edited question the selection hides is not its preview.
+  const visible = visibleThread(messages, activeBranchByGroup ?? {})
+  const userMessages = visible.filter((message) => message.role === "user")
+  const finalResponseMessage = visible.filter((message) => message.role === "assistant").at(-1)
   const finalResponseIndex = finalResponseMessage ? messages.indexOf(finalResponseMessage) : -1
   const mediaCount = messages.reduce((sum, message) => sum + collectMedia(message).length, 0)
+  const branches = branchSummary(messages, activeBranchByGroup)
   const item: TranscriptTimelineItem = {
     kind: "completed-turn",
     itemKey: turnKey,
@@ -218,9 +214,7 @@ function completedTurn(
         finalResponseIndex >= 0 ? Math.max(0, messages.length - finalResponseIndex - 1) : 0,
       mediaCount,
     },
-    ...(branchSummary(messages, activeBranchByGroup)
-      ? { branchSummary: branchSummary(messages, activeBranchByGroup) }
-      : {}),
+    ...(branches ? { branchSummary: branches } : {}),
     startedAt: messages[0]?.createdAt ?? 0,
     completedAt: messages.at(-1)?.createdAt,
     durationMs: Math.max(0, (messages.at(-1)?.createdAt ?? 0) - (messages[0]?.createdAt ?? 0)),

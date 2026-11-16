@@ -51,9 +51,45 @@ const current: TranscriptTimelineItem = {
 const tail: UIMessage[] = [{ id: "u2", role: "user", parts: [{ type: "text", text: "second" }] }]
 
 describe("withLiveTurn", () => {
-  it("p6e leaves the timeline and tail alone without a live reply", () => {
-    const view = withLiveTurn({ items: [earlier, current], tail, live: null })
-    expect(view).toEqual({ items: [earlier, current], liveMessages: tail })
+  it("leaves the timeline alone when there is no unfinished tail", () => {
+    const items = [earlier, current]
+    const view = withLiveTurn({ items, tail: [], live: null })
+    expect(view.items).toBe(items)
+    expect(view.liveMessages).toEqual([])
+  })
+
+  it("does not draw the in-flight turn twice when the timeline read it mid-turn", () => {
+    // The Host persisted the question and a partial reply; the store's tail
+    // streams the same turn. The tail is the newer copy and draws it alone.
+    const streamingTail: UIMessage[] = [
+      ...tail,
+      { ...reply, parts: [{ type: "text", text: "lo" }] },
+    ]
+    const view = withLiveTurn({ items: [earlier, current], tail: streamingTail, live: null })
+    expect(view.items).toEqual([earlier])
+    expect(view.liveMessages).toBe(streamingTail)
+  })
+
+  it("keeps the part of a turn the tail does not draw", () => {
+    // A steered turn: its first question is history, the tail starts at the second.
+    const firstAsk = { id: "u1b", role: "user" as const, text: "first ask", createdAt: 2 }
+    const steered: TranscriptTimelineItem = {
+      ...current,
+      userMessages: [firstAsk, { id: "u2", role: "user", text: "second", createdAt: 3 }],
+    }
+    const view = withLiveTurn({ items: [steered], tail, live: null })
+    expect(view.items).toEqual([
+      { ...steered, userMessages: [firstAsk], collapsed: { ...current.collapsed, exists: false } },
+    ])
+  })
+
+  it("leaves turns the tail does not touch identical", () => {
+    const view = withLiveTurn({
+      items: [earlier],
+      tail: [{ id: "u9", role: "user", parts: [] }],
+      live: null,
+    })
+    expect(view.items[0]).toBe(earlier)
   })
 
   it("p6e keeps the turn's user side in the timeline and draws its reply live", () => {

@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai"
+import type { MessageCollaborationMetadata } from "./collaboration"
 
 export const TRANSCRIPT_PROTOCOL_VERSION = 1 as const
 export const TRANSCRIPT_TIMELINE_PAGE_DEFAULT = 30
@@ -60,6 +61,8 @@ export interface TranscriptMessage {
   parts: UIMessage["parts"]
   senderId?: string
   senderKind?: "user" | "assistant" | "system"
+  /** A shared session's author record, which names who wrote the message. */
+  collaboration?: MessageCollaborationMetadata
   metadata?: Record<string, unknown>
   createdAt: number
 }

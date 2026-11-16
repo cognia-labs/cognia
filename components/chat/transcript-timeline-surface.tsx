@@ -92,6 +92,11 @@ function previewMessage(preview: TranscriptMessagePreview, sessionId: string): U
   }
 }
 
+/**
+ * A Host message as the in-memory `UIMessage`, hoisting the same columns onto
+ * `metadata` that `rowToUIMessage` does locally, so the renderer attributes a
+ * team or shared-room message the same way on both sides.
+ */
 function fullMessage(message: TranscriptMessage): UIMessage {
   return {
     id: message.id,
@@ -99,6 +104,9 @@ function fullMessage(message: TranscriptMessage): UIMessage {
     parts: message.parts,
     metadata: {
       ...(message.metadata ?? {}),
+      ...(message.senderId ? { senderId: message.senderId } : {}),
+      ...(message.senderKind ? { senderKind: message.senderKind } : {}),
+      ...(message.collaboration ? { collaboration: message.collaboration } : {}),
       sessionId: message.sessionId,
       createdAt: message.createdAt,
       ...(message.turnKey ? { turnKey: message.turnKey } : {}),

@@ -1188,7 +1188,19 @@ describe("transcript bridge projections", () => {
   it("keeps sender and branch metadata and stops an implicit turn before an explicit turn", async () => {
     await getDb().sessions.update("s1", { activeBranchByGroup: { group: "answer" } } as never)
     await getDb().messages.bulkPut([
-      { id: "user", sessionId: "s1", role: "user", parts: [], createdAt: 1 },
+      {
+        id: "user",
+        sessionId: "s1",
+        role: "user",
+        parts: [],
+        createdAt: 1,
+        collaboration: {
+          author: { kind: "human", id: "person-b", displayName: "Bea" },
+          sourceEventId: "e1",
+          eventSequence: 1,
+          version: 1,
+        },
+      },
       {
         id: "answer",
         sessionId: "s1",
@@ -1214,6 +1226,10 @@ describe("transcript bridge projections", () => {
       detailRevision: 4,
     })
     expect(page.messages.map((message) => message.id)).toEqual(["user", "answer"])
+    // A shared room's author record names who wrote the question.
+    expect(page.messages[0]).toMatchObject({
+      collaboration: { author: { kind: "human", id: "person-b", displayName: "Bea" } },
+    })
     expect(page.messages[1]).toMatchObject({
       senderId: "agent",
       senderKind: "assistant",

@@ -82204,6 +82204,10 @@
                     "system"
                   ]
                 },
+                "collaboration": {
+                  "type": "object",
+                  "x-cognia-opaque-reason": "MessageCollaborationMetadata (ADR-0177) is the room's own author record; StoredMessage owns its shape."
+                },
                 "metadata": {
                   "type": "object"
                 },
@@ -82229,7 +82233,8 @@
           "approximateBytes": {
             "type": "integer"
           }
-        }
+        },
+        "x-cognia-schema-owner": "session"
       },
       "outputTyped": true
     },
@@ -112590,5 +112595,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "a00bae7b2fcfa9cddb227fbdd217e4e3e0b19d8ad5152ab8a4630ff60a6f2ee9"
+  "catalogHash": "df7cb91c2fd4297eb60fe17e0f36c6f25b2e96040552e7f80a60cafb47897eb2"
 }

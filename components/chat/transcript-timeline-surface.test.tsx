@@ -347,6 +347,81 @@ describe("<TranscriptTimelineSurface />", () => {
     expect(screen.getByTestId("message-a1")).toHaveTextContent("Full answer")
   })
 
+  it("hands expanded Host messages to the renderer with their author, as local rows are", () => {
+    const item = {
+      kind: "completed-turn" as const,
+      itemKey: "t1",
+      turnKey: "t1",
+      revision: 1,
+      detailRevision: 1,
+      status: "completed" as const,
+      userMessages: [{ id: "u1", role: "user" as const, text: "Question", createdAt: 1 }],
+      collapsed: { exists: true, messageCount: 2, trailingCount: 0, mediaCount: 0 },
+      startedAt: 1,
+    }
+    const author = { kind: "human" as const, id: "person-b", displayName: "Bea" }
+    const detail = {
+      messages: [
+        {
+          id: "u1",
+          sessionId: "s1",
+          turnKey: "t1",
+          role: "user" as const,
+          parts: [{ type: "text" as const, text: "Question" }],
+          collaboration: { author, sourceEventId: "e1", eventSequence: 1, version: 1 },
+          createdAt: 1,
+        },
+        {
+          id: "a1",
+          sessionId: "s1",
+          turnKey: "t1",
+          role: "assistant" as const,
+          parts: [{ type: "text" as const, text: "Answer" }],
+          senderId: "char-1",
+          senderKind: "assistant" as const,
+          metadata: { model: "m" },
+          createdAt: 2,
+        },
+      ],
+      revision: 1,
+      detailRevision: 1,
+      total: 2,
+      approximateBytes: 100,
+      hasMore: false,
+    }
+    messageRenderMock.mockClear()
+    render(
+      <TranscriptTimelineSurface
+        sessionId="s1"
+        items={[item]}
+        expandedTurnKeys={new Set(["t1"])}
+        getDetail={() => detail}
+        onExpand={jest.fn()}
+        onCollapse={jest.fn()}
+        onLoadOlder={jest.fn()}
+        onRetry={jest.fn()}
+        hasMore={false}
+        loading={false}
+        loadingOlder={false}
+        error={null}
+        liveMessages={[]}
+        liveStatus="idle"
+        labels={labels}
+      />
+    )
+    const rendered = new Map(
+      messageRenderMock.mock.calls.map(([message]) => [message.id, message.metadata])
+    )
+    // The speaker resolver and the team-member lookup read these off metadata.
+    expect(rendered.get("u1")).toMatchObject({ collaboration: { author } })
+    expect(rendered.get("a1")).toMatchObject({
+      senderId: "char-1",
+      senderKind: "assistant",
+      model: "m",
+      turnKey: "t1",
+    })
+  })
+
   it("renders a folded turn through MessageRenderer and expands lazily", () => {
     const onExpand = jest.fn()
     render(

@@ -235,6 +235,33 @@ describe("transcript projection", () => {
     })
   })
 
+  it("keeps the author and sender of an active turn's messages", () => {
+    const author = { kind: "human" as const, id: "person-b", displayName: "Bea" }
+    const items = projectTranscriptTimeline({
+      sessionId: "session-1",
+      revision: 1,
+      activeTurnKey: "t",
+      messages: [
+        {
+          ...message("u1", "user", [text("q")], { turnKey: "t" }),
+          collaboration: { author, sourceEventId: "e1", eventSequence: 1, version: 1 },
+        },
+        {
+          ...message("a1", "assistant", [text("a")], { turnKey: "t" }),
+          senderId: "char-1",
+          senderKind: "assistant",
+        },
+      ],
+    })
+    expect(items[0]).toMatchObject({
+      kind: "active-turn",
+      messages: [
+        { id: "u1", collaboration: { author } },
+        { id: "a1", senderId: "char-1", senderKind: "assistant" },
+      ],
+    })
+  })
+
   it("caps summary bytes and media references while retaining detail counts", () => {
     const imageParts = Array.from({ length: 20 }, (_, index) => ({
       type: "file",
@@ -297,6 +324,76 @@ describe("transcript projection", () => {
       },
       { groupId: "other", selectedMessageId: "a2", messageIds: ["a2"] },
     ])
+  })
+
+  function regenerated(activeBranchByGroup?: Record<string, string>) {
+    const items = projectTranscriptTimeline({
+      sessionId: "session-1",
+      revision: 2,
+      ...(activeBranchByGroup ? { activeBranchByGroup } : {}),
+      messages: [
+        message("u1", "user", [text("question")], { createdAt: 1 }),
+        message("a0", "assistant", [text("first answer")], {
+          createdAt: 2,
+          metadata: { branchGroupId: "answer", branchIndex: 0 },
+        }),
+        message("a1", "assistant", [text("regenerated answer")], {
+          createdAt: 3,
+          metadata: { branchGroupId: "answer", branchIndex: 1 },
+        }),
+      ],
+    })
+    const turn = items[0]
+    if (turn.kind !== "completed-turn") throw new Error("expected a completed turn")
+    return turn
+  }
+
+  it("folds a regenerated turn to the reply the user selected", () => {
+    // The earlier sibling is the selection; the last row is not the answer shown.
+    const turn = regenerated({ answer: "a0" })
+    expect(turn.finalResponse).toMatchObject({ id: "a0", text: "first answer" })
+    // The hidden sibling is still reachable by expanding the turn.
+    expect(turn.collapsed.exists).toBe(true)
+  })
+
+  it("folds to the newest sibling without a selection, or with a stale one", () => {
+    expect(regenerated().finalResponse?.id).toBe("a1")
+    expect(regenerated({ answer: "deleted-variant" }).finalResponse?.id).toBe("a1")
+  })
+
+  it("previews the edited question that is selected, not both", () => {
+    const items = projectTranscriptTimeline({
+      sessionId: "session-1",
+      revision: 2,
+      activeBranchByGroup: { ask: "u1" },
+      messages: [
+        message("u1", "user", [text("original question")], {
+          createdAt: 1,
+          turnKey: "t1",
+          metadata: { branchGroupId: "ask", branchIndex: 0 },
+        }),
+        message("a1", "assistant", [text("original answer")], {
+          createdAt: 2,
+          turnKey: "t1",
+          metadata: { branchOwnerId: "u1" },
+        }),
+        message("u2", "user", [text("edited question")], {
+          createdAt: 3,
+          turnKey: "t1",
+          metadata: { branchGroupId: "ask", branchIndex: 1 },
+        }),
+        message("a2", "assistant", [text("edited answer")], {
+          createdAt: 4,
+          turnKey: "t1",
+          metadata: { branchOwnerId: "u2" },
+        }),
+      ],
+    })
+    const turn = items[0]
+    if (turn.kind !== "completed-turn") throw new Error("expected a completed turn")
+    expect(turn.userMessages.map((preview) => preview.id)).toEqual(["u1"])
+    // The answer hanging off the hidden edit goes with it.
+    expect(turn.finalResponse?.id).toBe("a1")
   })
 })
 

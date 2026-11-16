@@ -174476,6 +174476,10 @@ paths:
                             - user
                             - assistant
                             - system
+                        collaboration:
+                          type: object
+                          x-cognia-opaque-reason: MessageCollaborationMetadata (ADR-0177) is the room's own author record; StoredMessage owns its
+                            shape.
                         metadata:
                           type: object
                         createdAt:
@@ -174491,6 +174495,7 @@ paths:
                     type: integer
                   approximateBytes:
                     type: integer
+                x-cognia-schema-owner: session
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
           content:

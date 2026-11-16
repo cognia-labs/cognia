@@ -932,6 +932,7 @@ function toTranscriptMessage(message: StoredMessage): TranscriptMessage {
     parts: projectRemoteDocumentData(message.parts, true),
     ...(message.senderId ? { senderId: message.senderId } : {}),
     ...(message.senderKind ? { senderKind: message.senderKind } : {}),
+    ...(message.collaboration ? { collaboration: message.collaboration } : {}),
     ...(message.metadata ? { metadata: projectRemoteDocumentData(message.metadata, true) } : {}),
     createdAt: message.createdAt,
   }
