@@ -469,6 +469,19 @@ describe("MarkdownRenderer", () => {
     expect(screen.queryByText(/\$\$Approve\$\$/)).toBeNull()
   })
 
+  it("keeps LaTeX for untrusted documents that opt in, with the rest still restricted", () => {
+    const { rerender } = render(<MarkdownRenderer content="x" />)
+    const config = () => screen.getByTestId("react-markdown-config").dataset
+    const trustedRehype = Number(config().rehypeCount)
+    rerender(<MarkdownRenderer untrusted untrustedMath content={"\\(x^2\\) costs"} />)
+    expect(screen.getByText("$x^2$ costs")).toBeInTheDocument()
+    // Raw HTML is still dropped.
+    expect(Number(config().rehypeCount)).toBe(trustedRehype - 1)
+    // Ignored without `untrusted`.
+    rerender(<MarkdownRenderer untrustedMath enableMath={false} content={"\\(x^2\\)"} />)
+    expect(screen.getByText("\\(x^2\\)")).toBeInTheDocument()
+  })
+
   it("shows an A2UI fence from a third party as code, never as a live surface", () => {
     render(
       <MarkdownRenderer

@@ -613,10 +613,16 @@ function MarkdownText({
       data-body-font={display.bodyFont}
     >
       {title ? <h1 className="mb-4 text-xl font-semibold text-foreground">{title}</h1> : null}
+      {/* A share link is someone else's text rendered in this app's origin:
+          no raw HTML, live A2UI, file links or app-scheme links. HTML
+          payloads get a sandboxed frame for the same reason. Math stays,
+          because the text is a document, not a chat message. */}
       <MarkdownRenderer
         content={text}
         enableEnhancedImages={false}
         markdown={display.markdown}
+        untrusted
+        untrustedMath
         className="rounded-lg border border-transparent bg-muted/50 p-4"
       />
     </article>

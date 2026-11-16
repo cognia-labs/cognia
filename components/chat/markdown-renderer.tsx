@@ -136,6 +136,7 @@ const baseRemarkPlugins: RemarkPlugins = [
 ]
 const mathRemarkPlugins: RemarkPlugins = [...baseRemarkPlugins, remarkMath]
 const untrustedRemarkPlugins: RemarkPlugins = [...baseRemarkPlugins, remarkLimitUntrustedDepth]
+const untrustedMathRemarkPlugins: RemarkPlugins = [...untrustedRemarkPlugins, remarkMath]
 // In-app references are linked after sanitization, so their marks survive it.
 const rehypePlugins: RehypePlugins = [
   rehypeRaw,
@@ -315,6 +316,13 @@ export interface MarkdownRendererProps {
    * `false`.
    */
   untrusted?: boolean
+  /**
+   * Keep LaTeX on for `untrusted` Markdown whose author meant it as a
+   * document, such as a shared conversation, where `$x$` is math rather than
+   * money. Everything else `untrusted` restricts still applies. Ignored
+   * without `untrusted`.
+   */
+  untrustedMath?: boolean
 }
 
 export const MarkdownRenderer = memo(function MarkdownRenderer({
@@ -341,11 +349,15 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   projectRoot,
   onOpenProjectFile,
   untrusted = false,
+  untrustedMath = false,
 }: MarkdownRendererProps) {
-  // A third party's `$5 and $10` or escaped `\[x\]` is not LaTeX.
-  const enableMath = untrusted ? false : requestedMath
+  // A third party's `$5 and $10` or escaped `\[x\]` is not LaTeX, unless the
+  // caller says the text is a document.
+  const enableMath = untrusted && !untrustedMath ? false : requestedMath
   const remarkPlugins = untrusted
-    ? untrustedRemarkPlugins
+    ? enableMath
+      ? untrustedMathRemarkPlugins
+      : untrustedRemarkPlugins
     : enableMath
       ? mathRemarkPlugins
       : baseRemarkPlugins

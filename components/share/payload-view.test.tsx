@@ -5,6 +5,18 @@ import type { SharePayload } from "@/lib/share/types"
 import { createTemplateDefinition } from "@/lib/templates/contracts"
 import type { TemplateDefinitionEnvelope, TemplateJson } from "@/lib/templates/contracts"
 
+const mockMarkdownProps = jest.fn()
+jest.mock("@/components/chat/markdown-renderer", () => {
+  const actual = jest.requireActual("@/components/chat/markdown-renderer")
+  return {
+    ...actual,
+    MarkdownRenderer: (props: Record<string, unknown>) => {
+      mockMarkdownProps(props)
+      return <actual.MarkdownRenderer {...props} />
+    },
+  }
+})
+
 // jsdom doesn't implement object URLs; the backup card + image download need them.
 beforeAll(() => {
   Object.defineProperty(URL, "createObjectURL", {
@@ -44,6 +56,14 @@ describe("PayloadView", () => {
     expect(article).not.toBeNull()
     expect(article).toHaveAttribute("data-body-font", "sans")
     expect(screen.getByText("body")).toBeInTheDocument()
+  })
+
+  it("renders shared Markdown as untrusted text that keeps its math", () => {
+    mockMarkdownProps.mockClear()
+    render(<PayloadView payload={payload({ kind: "chat-md", data: "<div>x</div> $a^2$" })} />)
+    expect(mockMarkdownProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ untrusted: true, untrustedMath: true })
+    )
   })
 
   it("renders chat-html in a script-free sandboxed iframe", () => {
