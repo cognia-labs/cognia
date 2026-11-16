@@ -116,6 +116,17 @@ declare global {
       title?: string
       media?: ChatPerfMediaOptions
     }) => Promise<{ sessionId: string; messageIds: string[]; imageBytes: number }>
+    /**
+     * Play one assistant reply into the live chat store of an open session, one
+     * commit per animation frame (the stream coalescer's cadence), as a
+     * streaming turn. Nothing is persisted. The chat-surface benchmark uses it
+     * to measure the renderer while a reply streams.
+     */
+    __cogniaStreamReply?: (draft: {
+      sessionId: string
+      chars: number
+      deltaChars?: number
+    }) => Promise<{ frames: number; durationMs: number }>
     __cogniaSeedSkill?: (draft: {
       name: string
       trigger?: string
@@ -634,6 +645,33 @@ export function ExposeTestGlobals(): null {
           })
           await persistMessages(session.id, messages as never)
           return { sessionId: session.id, messageIds: messages.map((m) => m.id), imageBytes }
+        }
+
+        window.__cogniaStreamReply = async ({ sessionId, chars, deltaChars = 20 }) => {
+          const [{ useChatStore }, { buildStreamingReply, streamReplyFrames }] = await Promise.all([
+            import("@/stores/chat/chat-store"),
+            import("./chat-perf-fixtures"),
+          ])
+          const store = useChatStore.getState()
+          const base = store.sessions[sessionId]?.messages ?? []
+          // Replacing an unloaded slice would drop the transcript under test.
+          if (base.length === 0) throw new Error(`Session ${sessionId} has no loaded messages`)
+          const frames = streamReplyFrames(buildStreamingReply(chars), deltaChars)
+          const id = `stream-reply-${Date.now()}`
+          const createdAt = Date.now()
+          const started = performance.now()
+          store.setSessionStatus(sessionId, "streaming")
+          for (const text of frames) {
+            useChatStore
+              .getState()
+              .replaceMessagesForSession(sessionId, [
+                ...base,
+                { id, role: "assistant", parts: [{ type: "text", text }], metadata: { createdAt } },
+              ] as never)
+            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+          }
+          useChatStore.getState().setSessionStatus(sessionId, "idle")
+          return { frames: frames.length, durationMs: Math.round(performance.now() - started) }
         }
 
         const seedPlan: NonNullable<Window["__cogniaSeedPlan"]> = async (draft) => {
@@ -1177,6 +1215,7 @@ export function ExposeTestGlobals(): null {
         delete window.__cogniaE2EOutbound
         delete window.__cogniaSeedCharacter
         delete window.__cogniaSeedConversation
+        delete window.__cogniaStreamReply
         delete window.__cogniaSeedPlan
         delete window.__cogniaSeedTeam
         delete window.__cogniaSeedSquad

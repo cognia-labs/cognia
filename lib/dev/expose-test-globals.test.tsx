@@ -39,6 +39,7 @@ const cleanWindowKeys: Array<keyof Window> = [
   "__cogniaSeedSkill",
   "__cogniaSeedConnectorDraft",
   "__cogniaSeedStagedConversation",
+  "__cogniaStreamReply",
   "__cogniaAdvanceStage",
   "__cogniaSeedRun",
   "__cogniaSetMockBaseUrls",
@@ -133,6 +134,7 @@ describe("ExposeTestGlobals", () => {
     expect(typeof window.__cogniaSeedConnectorDraft).toBe("function")
     expect(typeof window.__cogniaSeedStagedConversation).toBe("function")
     expect(typeof window.__cogniaAdvanceStage).toBe("function")
+    expect(typeof window.__cogniaStreamReply).toBe("function")
     expect(typeof window.__cogniaSeedRun).toBe("function")
     expect(typeof window.__cogniaSetMockBaseUrls).toBe("function")
     expect(typeof window.__cogniaSaveCompanionConfig).toBe("function")
@@ -746,6 +748,40 @@ describe("ExposeTestGlobals", () => {
       await outcome
     } finally {
       jest.useRealTimers()
+    }
+  })
+
+  it("__cogniaStreamReply plays a reply into the live store one frame at a time", async () => {
+    process.env.NEXT_PUBLIC_E2E = "1"
+    const { useChatStore } = await import("@/stores/chat/chat-store")
+    const question = { id: "q", role: "user", parts: [{ type: "text", text: "hi" }] }
+    useChatStore.getState().replaceMessagesForSession("stream-s", [question] as never)
+    const statuses: string[] = []
+    const unsubscribe = useChatStore.subscribe((state) => {
+      const status = state.sessions["stream-s"]?.status
+      if (status && statuses.at(-1) !== status) statuses.push(status)
+    })
+    render(<ExposeTestGlobals />)
+    await waitFor(() => expect(window.__cogniaTestGlobalsReady).toBe(true))
+    try {
+      const result = await window.__cogniaStreamReply!({
+        sessionId: "stream-s",
+        chars: 300,
+        deltaChars: 100,
+      })
+      const messages = useChatStore.getState().sessions["stream-s"]!.messages
+      expect(messages.map((message) => message.id)).toEqual([
+        "q",
+        expect.stringMatching(/^stream-reply-/),
+      ])
+      const reply = messages[1] as { role: string; parts: Array<{ text: string }> }
+      expect(reply.role).toBe("assistant")
+      expect(reply.parts[0]!.text.length).toBeGreaterThanOrEqual(300)
+      expect(result.frames).toBe(Math.ceil(reply.parts[0]!.text.length / 100))
+      expect(statuses).toEqual(["streaming", "idle"])
+    } finally {
+      unsubscribe()
+      useChatStore.getState().clear()
     }
   })
 

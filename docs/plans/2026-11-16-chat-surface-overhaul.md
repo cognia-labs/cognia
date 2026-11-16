@@ -95,14 +95,11 @@ Review and commit, by theme, the uncommitted changes in files this plan touches.
 
 Build the measuring tools first, then record numbers on the unchanged code.
 
-- **Node benches**, following `lib/connectors/outbound-runner.benchmark.test.ts` (env-gated, `--runInBand`, script `benchmark:chat` in `package.json`):
-  - `hooks/chat/claude-chat-events.benchmark.test.ts`: per-event cost of `handleEvent` at 200 / 2,000 / 5,000 messages.
-  - `components/chat/streaming-text-part.benchmark.test.ts`: the 5-document corpus (short, 5 KB, 50 KB, 20 KB fence, CJK) streamed in 20-char deltas under jsdom; finished render of `MarkdownRenderer`; reports per-delta p50/p95, reparse rate, streaming DOM size. Corpus in a co-located fixture file.
-- **Browser bench**: `tests/e2e/performance/chat-surface.spec.ts`. Seeds a 2,000-message conversation (tools, code, long Markdown, images) through the plaintext IndexedDB seed and drives a mocked event stream. Two modes, because the existing `PerfBoundary` (`lib/perf/profiler-boundary.tsx`, `React.Profiler` → `performance.measure`) is elided in production:
-  - **Timing, production static build** (`test:e2e:build` + `PLAYWRIGHT_STATIC=1`): time to first transcript paint on open; dropped frames over a scripted scroll to top and back; long tasks and layout shift while streaming a tool-heavy turn; JS heap after open and after streaming 50 KB.
-  - **Render counts, dev build** (fresh Playwright context, plaintext seed, per the dev seeding recipe): `PerfBoundary` around the message list, the streaming row, the timeline, the run panel and the Composer; commits per streamed token and Composer commits per keystroke over 50 keystrokes.
-  - Desktop and mobile viewports in the same spec.
-- Output a JSON report; commit the numbers as the baseline table in this plan's "Results" section. No changeset.
+- **Node benches**, following `lib/connectors/outbound-runner.benchmark.test.ts` (env-gated, `--runInBand`). Run with `CHAT_BENCHMARK=1 node scripts/test/jest.mjs hooks/chat/claude-chat-events.benchmark.test.ts components/chat/streaming-text-part.benchmark.test.ts --runInBand`; a `benchmark:chat` script waits until `package.json` is not in flux under other sessions.
+  - `hooks/chat/claude-chat-events.benchmark.test.ts`: per-token cost of `handleEvent` (real SDK adapter, `message_start` + text deltas) and of one forced commit, at 200 / 2,000 / 5,000 messages.
+  - `components/chat/streaming-text-part.benchmark.test.ts`: Jest mocks Streamdown, so this bundles `tests/integration/fixtures/streaming-markdown-benchmark.tsx` with esbuild (the `markdown-renderer.heavy.test.ts` recipe) and runs the real `StreamingTextPart` in a jsdom root: 5-document corpus (short, 5 KB, 50 KB, 20 KB fence, CJK) in 20-char deltas, per-delta p50/p95 and p50 per quarter, streaming DOM size, plus a finished `MarkdownRenderer` render.
+- **Browser bench**: reuses the existing opt-in `tests/e2e/mobile/chat-render-perf.spec.ts` (ADR-0127 tiers; `adr0127-long` is 2,000 messages; `CHAT_PERF_SHELL=web` selects the `web-chat-perf` project). Its open/scroll/heap/long-task test stays; a second `@perf streaming and typing` test plays a reply into the live store at one commit per frame (`__cogniaStreamReply`, `lib/dev/expose-test-globals.tsx`) and types 50 keystrokes into the Composer, recording frame gaps, long tasks, layout shift, transcript DOM size, and `PerfBoundary` commits for `chat:list`, `chat:message` and a new `chat:composer` (dev server only; production elides the Profiler). Timing on the static build (`test:e2e:build` + `PLAYWRIGHT_STATIC=1`), commit counts on a dev server.
+- Output JSON; record the numbers in "Results". No changeset.
 
 ### 3. Correctness and security fixes
 
@@ -185,7 +182,21 @@ Pure structure, no behaviour change. Mechanical moves first (one commit), splits
 
 ## Results
 
-Filled in by steps 2, 4 and 8.
+Node benches, 2026-11-16, Apple Silicon, shared machine. Load varied between runs (the 50 KB stream p50 read 7.8 ms once and 4.0 ms once), so compare medians of several back-to-back runs.
+
+| `handleEvent` per token | 200 msgs         | 2,000 msgs        | 5,000 msgs  |
+| ----------------------- | ---------------- | ----------------- | ----------- |
+| handler p50 / p95 (ms)  | 0.05 / 0.13–0.15 | 2.9–3.7 / 5.0–5.6 | 27.3 / 29.9 |
+| commit p50 (ms)         | 0.02             | 0.08–0.09         | 0.24        |
+
+| `StreamingTextPart`              | short (0.5 KB)    | medium (5 KB) | long (50 KB)       | code (20 KB fence) | CJK (5 KB)        |
+| -------------------------------- | ----------------- | ------------- | ------------------ | ------------------ | ----------------- |
+| per-delta p50 / p95 (ms)         | 0.8–0.9 / 1.2–1.3 | 1.1 / 2.3     | 4.0–7.8 / 7.8–14.1 | 2.5–4.3 / 5.8–9.5  | 0.6–0.7 / 1.6–1.7 |
+| p50 first → last quarter (ms)    | flat              | flat          | 1.6→5.7 … 2.3→12.7 | 0.7→4.9 … 1.9→8.6  | flat              |
+| streaming DOM (bytes)            | 50 K              | 521 K         | 4.38 M             | 979 K              | 643 K             |
+| finished `MarkdownRenderer` (ms) | 0.67              | 8.0–8.1       | 56.0               | 2.8–3.0            | 6.5–6.7           |
+
+Browser baseline: not recorded yet. The static build refuses to run while other sessions' uncommitted changes to the authoring-kit inputs (`app/globals.css`, `pnpm-lock.yaml`, `packages/plugin-contract/src`) make the working tree differ from the kit pin, and `pnpm dev` runs the same check. It needs those changes committed, or a clean worktree at the pre-fix commit.
 
 | Metric                                    | Baseline | After step 4 | Final |
 | ----------------------------------------- | -------- | ------------ | ----- |

@@ -4,9 +4,11 @@ import {
   buildMarkdownTable,
   buildMermaidSource,
   buildPerfConversation,
+  buildStreamingReply,
   createNoiseImageDataUrl,
   dataUrlMediaType,
   imageDimensions,
+  streamReplyFrames,
   type SeededPerfMessage,
 } from "./chat-perf-fixtures"
 
@@ -304,5 +306,29 @@ describe("createNoiseImageDataUrl", () => {
     frames.push(createNoiseImageDataUrl(16, 1), createNoiseImageDataUrl(16, 2))
 
     expect(frames[0]).not.toBe(frames[1])
+  })
+})
+
+describe("streamReplyFrames", () => {
+  it("grows by the delta and ends on the full text", () => {
+    expect(streamReplyFrames("abcdefg", 3)).toEqual(["abc", "abcdef", "abcdefg"])
+  })
+
+  it("emits the text once when it fits in one delta", () => {
+    expect(streamReplyFrames("abc", 10)).toEqual(["abc"])
+  })
+
+  it("returns nothing for empty text and clamps a zero delta to one", () => {
+    expect(streamReplyFrames("", 5)).toEqual([])
+    expect(streamReplyFrames("ab", 0)).toEqual(["a", "ab"])
+  })
+})
+
+describe("buildStreamingReply", () => {
+  it("reaches the target length with prose, code and a table", () => {
+    const reply = buildStreamingReply(5_000)
+    expect(reply.length).toBeGreaterThanOrEqual(5_000)
+    expect(reply).toContain("```ts")
+    expect(reply).toMatch(/^\| /m)
   })
 })

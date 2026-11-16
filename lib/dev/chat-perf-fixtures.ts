@@ -288,3 +288,35 @@ export function createNoiseImageDataUrl(longEdge: number, seed: number): string 
   ctx.putImageData(frame, 0, 0)
   return canvas.toDataURL("image/jpeg", 0.92)
 }
+
+/**
+ * A streaming reply cut into the text a frame commit would hold: the first
+ * `deltaChars` characters, then each next `deltaChars`, ending on the full
+ * text. Used to play one reply into the live store at one commit per frame,
+ * the cadence the stream coalescer gives the renderer.
+ */
+export function streamReplyFrames(text: string, deltaChars: number): string[] {
+  if (!text) return []
+  const step = Math.max(1, Math.floor(deltaChars))
+  const frames: string[] = []
+  for (let end = step; end < text.length; end += step) frames.push(text.slice(0, end))
+  frames.push(text)
+  return frames
+}
+
+/** A long mixed-Markdown reply for the streaming benchmark. */
+export function buildStreamingReply(targetChars: number): string {
+  const blocks: string[] = []
+  let length = 0
+  for (let i = 0; length < targetChars; i++) {
+    const block =
+      i % 8 === 3
+        ? `\`\`\`ts\n${buildCodeBlock(20)}\n\`\`\``
+        : i % 8 === 6
+          ? buildMarkdownTable(6)
+          : `Paragraph ${i}: the agent reads **the files** it needs, writes a short plan with \`steps\`, and then edits code while it runs the tests. ${"More detail follows. ".repeat(4)}`
+    blocks.push(block)
+    length += block.length + 2
+  }
+  return blocks.join("\n\n")
+}
