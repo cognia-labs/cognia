@@ -17,7 +17,9 @@ jest.mock("@/lib/claude/adapter-hooks", () => ({
   ...jest.requireActual("@/lib/claude/adapter-hooks"),
   dispatchPreToolUse: jest.fn(async () => ({ action: "allow" })),
 }))
-jest.mock("@/lib/claude/permissions/auto-mode-runner", () => ({ runAutoModeForTool: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/permissions/auto-mode-runner", () => ({
+  runAutoModeForTool: jest.fn(),
+}))
 jest.mock("@/lib/ai/generation/utility-client", () => ({
   buildUtilityLlmClient: jest.fn(() => null),
 }))

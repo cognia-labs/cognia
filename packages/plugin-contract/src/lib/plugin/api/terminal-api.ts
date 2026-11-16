@@ -102,7 +102,7 @@ export interface PluginTerminalAPI {
   registerCompletionProvider(provider: PluginTerminalCompletionProvider): () => void
   /**
    * Contribute command-safety rules consulted by the agent's shell Auto-mode
-   * (`lib/claude/permissions/auto-mode.ts`). Each rule maps a command glob to
+   * (`lib/ai/agent/execution/permissions/auto-mode.ts`). Each rule maps a command glob to
    * an allow/ask/deny verdict; they sit BELOW the user's own
    * `agentPermissions.commandRules` in precedence, so a plugin can tighten or
    * loosen the policy for its own commands without overriding the user. The

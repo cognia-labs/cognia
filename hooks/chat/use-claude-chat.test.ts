@@ -201,7 +201,7 @@ const approveToolMock = jest.fn().mockResolvedValue(undefined)
 // Real module otherwise — only the epoch bump is asserted, and a stubbed
 // `judgeCommandSafety` returning null keeps the auto-mode tier a safe no-op.
 const invalidateJudgeContextMock = jest.fn()
-jest.mock("@/lib/claude/permissions/command-judge", () => ({
+jest.mock("@/lib/ai/agent/execution/permissions/command-judge", () => ({
   invalidateJudgeContext: (...a: unknown[]) => invalidateJudgeContextMock(...a),
   judgeCommandSafety: jest.fn(async () => null),
   __resetJudgeCache: jest.fn(),
@@ -1068,8 +1068,8 @@ jest.mock("@/lib/ai/generation/utility-client", () => ({
 // Wrap the real Auto-mode runner so most tests keep its deterministic rules
 // tier, while one test can override it to a never-resolving promise (a wedged
 // model judge) and assert the renderer's timeout still surfaces the dialog.
-jest.mock("@/lib/claude/permissions/auto-mode-runner", () => {
-  const actual = jest.requireActual("@/lib/claude/permissions/auto-mode-runner")
+jest.mock("@/lib/ai/agent/execution/permissions/auto-mode-runner", () => {
+  const actual = jest.requireActual("@/lib/ai/agent/execution/permissions/auto-mode-runner")
   return { ...actual, runAutoModeForTool: jest.fn(actual.runAutoModeForTool) }
 })
 jest.mock("@/stores/settings", () => ({
@@ -6191,8 +6191,8 @@ describe("useClaudeChat — actions", () => {
 
     afterEach(() => {
       jest
-        .requireActual<typeof import("@/lib/claude/permissions/session-denials")>(
-          "@/lib/claude/permissions/session-denials"
+        .requireActual<typeof import("@/lib/ai/agent/execution/permissions/session-denials")>(
+          "@/lib/ai/agent/execution/permissions/session-denials"
         )
         .__resetSessionDenialsForTesting()
     })
@@ -6216,9 +6216,9 @@ describe("useClaudeChat — actions", () => {
     })
 
     it("leaves an enforced refusal to the fence instead of the session denial list", async () => {
-      const denials = jest.requireActual<typeof import("@/lib/claude/permissions/session-denials")>(
-        "@/lib/claude/permissions/session-denials"
-      )
+      const denials = jest.requireActual<
+        typeof import("@/lib/ai/agent/execution/permissions/session-denials")
+      >("@/lib/ai/agent/execution/permissions/session-denials")
       const { result } = renderHook(() => useClaudeChat())
       await flush()
       await act(async () => {
@@ -7547,7 +7547,8 @@ describe("useClaudeChat — actions", () => {
   )
 
   it("surfaces the manual approval dialog when the Auto-mode judge hangs (no-dialog hang guard)", async () => {
-    const { runAutoModeForTool } = await import("@/lib/claude/permissions/auto-mode-runner")
+    const { runAutoModeForTool } =
+      await import("@/lib/ai/agent/execution/permissions/auto-mode-runner")
     renderHook(() => useClaudeChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))

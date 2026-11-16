@@ -25,7 +25,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useSettingsStore } from "@/stores/settings"
-import type { PermissionVerdict, ToolRules } from "@/lib/claude/permissions/ruleset"
+import type {
+  PermissionVerdict,
+  ToolRules,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 
 const VERDICTS: PermissionVerdict[] = ["allow", "ask", "deny"]
 

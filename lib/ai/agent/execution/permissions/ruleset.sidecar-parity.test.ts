@@ -25,8 +25,11 @@
  * one: anything an explicit rule denies is denied by both, through every
  * spelling the shell accepts.
  */
-import { resolveBashPermission, type Ruleset } from "./ruleset"
-import { resolveForToolCall } from "../../../sidecar/src/policy/permission/resolver.ts"
+import {
+  resolveBashPermission,
+  type Ruleset,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
+import { resolveForToolCall } from "../../../../../sidecar/src/policy/permission/resolver.ts"
 
 const sidecarVerdict = (ruleset: Ruleset, command: string): string =>
   (resolveForToolCall as (r: Ruleset, t: string, i: unknown) => string)(ruleset, "Bash", {

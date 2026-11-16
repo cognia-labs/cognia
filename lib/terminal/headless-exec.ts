@@ -26,7 +26,7 @@ import type { PersonalCredentialContext } from "@/lib/execution/personal-credent
  * durable `unattendedExecAudit` table.
  */
 
-import { classifyCommand } from "@/lib/claude/permissions/command-safety"
+import { classifyCommand } from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
 import { useSettingsStore } from "@/stores/settings"
 
 import { selectTerminalTransportChain } from "./pick-transport"

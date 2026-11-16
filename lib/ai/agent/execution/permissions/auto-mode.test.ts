@@ -1,7 +1,7 @@
 import { evaluateAutoDecision, type AutoModeConfig } from "./auto-mode"
 import { __resetJudgeCache } from "./command-judge"
 import type { LlmClient } from "@/lib/twin/distill/llm"
-import type { Ruleset } from "./ruleset"
+import type { Ruleset } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 
 function client(response: string): LlmClient & { complete: jest.Mock } {
   const complete = jest.fn(async () => response)

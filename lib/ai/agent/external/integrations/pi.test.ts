@@ -6,7 +6,7 @@ import {
   type PiHostServices,
 } from "@cognia/agent-pi/rpc-client"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
-import { matchGlob } from "@/lib/claude/permissions/ruleset"
+import { matchGlob } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import { LeaseConflictError } from "@/lib/execution/lease-conflict"
 import { configuredApprovalPolicy } from "../policy/tool-preapproval"
 import { createPiRpcAdapter, createPiRpcAdapterFactory, resolvePluginPiPackages } from "./pi"

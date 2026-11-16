@@ -33,7 +33,11 @@
  * durable deny is authored.
  */
 
-import type { PermissionVerdict, Ruleset, ToolRules } from "./ruleset"
+import type {
+  PermissionVerdict,
+  Ruleset,
+  ToolRules,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import { deriveAllowRuleFromApproval } from "./approval-rule"
 
 /** Refusals kept per session before the session fails closed. */

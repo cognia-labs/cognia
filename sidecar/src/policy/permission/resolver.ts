@@ -1,5 +1,5 @@
 // Sidecar-side glob permission resolver — the JS mirror of
-// `lib/claude/permissions/ruleset.ts`, consulted by the permission ladder
+// `packages/plugin-contract/src/lib/claude/permissions/ruleset.ts`, consulted by the permission ladder
 // (`./ladder.ts`) to short-circuit the `permission_request` round-trip when
 // the renderer pre-resolved an *explicit* allow/deny rule for a tool call.
 //
@@ -124,7 +124,7 @@ function better(a: RuleMatch | null, b: RuleMatch): RuleMatch {
 
 /**
  * Byte-for-byte mirror of `readAnsiCQuote` in
- * `lib/claude/permissions/command-parse.ts`.
+ * `packages/plugin-contract/src/lib/claude/permissions/command-parse.ts`.
  */
 function readAnsiCQuote(segment: string, start: number): { text: string; next: number } {
   let out = ""
@@ -202,7 +202,7 @@ function readAnsiCQuote(segment: string, start: number): { text: string; next: n
 }
 
 /**
- * Mirror of `canonicalizeCommand` in `lib/claude/permissions/command-parse.ts`
+ * Mirror of `canonicalizeCommand` in `packages/plugin-contract/src/lib/claude/permissions/command-parse.ts`
  * — the single spelling the shell would actually run. Used ONLY as a deny
  * probe: it may add a refusal a respelt command dodged, never satisfy an
  * allow. `ruleset.sidecar-parity.test.ts` pins the two implementations
@@ -272,8 +272,8 @@ function collectSegments(command: string, out: string[], depth: number): void {
  *
  * Quote- and depth-aware, and it recursively surfaces commands hidden inside
  * `$(...)`, backticks, and subshells — the mirror of `splitCommandSegments` in
- * `lib/claude/permissions/command-parse.ts`, pinned by
- * `lib/claude/permissions/ruleset.sidecar-parity.test.ts`.
+ * `packages/plugin-contract/src/lib/claude/permissions/command-parse.ts`, pinned by
+ * `lib/ai/agent/execution/permissions/ruleset.sidecar-parity.test.ts`.
  *
  * The previous version split on a bare `/&&|\|\||;|\n|\|/`, which meant a
  * denied command wrapped in a substitution (`echo $(git push)`) produced one

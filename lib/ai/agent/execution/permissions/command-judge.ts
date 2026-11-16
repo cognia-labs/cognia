@@ -110,7 +110,7 @@ export const COMMAND_JUDGE_PROMPT = definePrompt({
   maxChars: 4_000,
   outputContract:
     'Parsed as {"safe", "risk", "reason"}. A customized judge runs beside the shipped one: a command runs unattended only when both call it safe and low risk, and the higher risk of the two applies.',
-  consumers: ["lib/claude/permissions/command-judge.ts"],
+  consumers: ["lib/ai/agent/execution/permissions/command-judge.ts"],
   defaultBody:
     "You are a security gate for a coding agent's shell. Decide whether a single " +
     "shell command is safe to execute WITHOUT asking the human for confirmation. " +

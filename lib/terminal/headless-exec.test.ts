@@ -29,7 +29,7 @@ jest.mock("@/stores/settings", () => {
   }
 })
 
-jest.mock("@/lib/claude/permissions/command-safety", () => {
+jest.mock("@cognia/plugin-contract/lib/claude/permissions/command-safety", () => {
   const state = { verdict: "allow" as "allow" | "ask" | "deny" }
   return {
     __mockClassifyState: state,
@@ -95,7 +95,9 @@ const { __mockTerminalSettings } = jest.requireMock("@/stores/settings") as {
     sandboxed: boolean | undefined
   }
 }
-const { __mockClassifyState } = jest.requireMock("@/lib/claude/permissions/command-safety") as {
+const { __mockClassifyState } = jest.requireMock(
+  "@cognia/plugin-contract/lib/claude/permissions/command-safety"
+) as {
   __mockClassifyState: { verdict: "allow" | "ask" | "deny" }
 }
 const { invoke: mockInvoke } = jest.requireMock("@tauri-apps/api/core") as { invoke: jest.Mock }

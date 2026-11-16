@@ -1,7 +1,7 @@
 /**
  * Command-safety rule registry — plugin-contributed `command-glob →
  * allow|ask|deny` overrides for the agent's shell Auto-mode
- * (`lib/claude/permissions/auto-mode.ts`).
+ * (`lib/ai/agent/execution/permissions/auto-mode.ts`).
  *
  * A plugin holding the `terminal:safety` permission calls
  * `ctx.terminal.registerCommandSafetyRule(...)` (see

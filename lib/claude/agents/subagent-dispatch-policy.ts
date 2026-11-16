@@ -8,12 +8,12 @@
  * Pure — used by the renderer enum builder (build-options) and the dispatch
  * guard (`dispatchSubagent`). The CLI host has no access to renderer Dexie
  * settings, so it enforces only the `disabled` flag, not this settings-level
- * policy. Reuses the shared glob machinery from `lib/claude/permissions/ruleset`
+ * policy. Reuses the shared glob machinery from `packages/plugin-contract/src/lib/claude/permissions/ruleset`
  * (NOT a new matcher): most-specific-match wins; `ask` is reserved and treated
  * as `allow` in v1. Default allow when no rule matches or no rules configured.
  */
 
-import { matchGlob, type ToolRules } from "@/lib/claude/permissions/ruleset"
+import { matchGlob, type ToolRules } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 
 export type SubagentDispatchVerdict = "allow" | "deny"
 

@@ -1,7 +1,7 @@
 /**
  * Vocabulary parity between the sidecar gate and the action-review contract.
  *
- * `lib/claude/permissions/ruleset.sidecar-parity.test.ts` already pins the
+ * `lib/ai/agent/execution/permissions/ruleset.sidecar-parity.test.ts` already pins the
  * *semantics* of the two matchers. This test pins something narrower and
  * different: that every verdict string `resolveForToolCall` can physically
  * return is a member of {@link ActionReviewVerdict}.
@@ -22,7 +22,7 @@ import {
   ACTION_REVIEW_VERDICTS,
   type ActionReviewVerdict,
 } from "@cognia/agent-config-types/action-review"
-import type { Ruleset } from "@/lib/claude/permissions/ruleset"
+import type { Ruleset } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import {
   resolveForToolCall,
   resolveToolVerdict,

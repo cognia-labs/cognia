@@ -1,4 +1,8 @@
-import type { PermissionVerdict, Ruleset, ToolRules } from "@/lib/claude/permissions/ruleset"
+import type {
+  PermissionVerdict,
+  Ruleset,
+  ToolRules,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import { settingsDraft, type SettingsImportDraft, type SettingsSnapshot } from "../types"
 
 function record(value: unknown): Record<string, unknown> {

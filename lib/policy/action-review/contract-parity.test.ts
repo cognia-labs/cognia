@@ -4,7 +4,7 @@
  * `packages/agent-config-types/src/action-review.ts` must stay free of `@/`
  * imports so the CLI and any future zero-dep consumer can read the contract.
  * The cost of that is three RESTATED vocabularies — verdict, tier, and risk
- * surface — that duplicate `lib/claude/permissions/ruleset.ts` and
+ * surface — that duplicate `packages/plugin-contract/src/lib/claude/permissions/ruleset.ts` and
  * `lib/policy/risk/*`.
  *
  * This test is what makes the duplication safe. It pins the restatements both
@@ -25,7 +25,7 @@ import {
   type ActionReviewTier,
   type ActionReviewVerdict,
 } from "@cognia/agent-config-types/action-review"
-import type { PermissionVerdict } from "@/lib/claude/permissions/ruleset"
+import type { PermissionVerdict } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import type { RiskTier } from "@/lib/policy/risk/classify-risk"
 import { RISK_SURFACE_IDS, type RiskSurfaceId } from "@/lib/policy/risk/risk-surfaces"
 

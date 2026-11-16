@@ -56,7 +56,9 @@ jest.mock("@/lib/db/sessions", () => ({
   setSdkSessionId: jest.fn(async () => {}),
   getSession: (...args: unknown[]) => mockReadSession(...args),
 }))
-jest.mock("@/lib/claude/permissions/auto-mode-runner", () => ({ runAutoModeForTool: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/permissions/auto-mode-runner", () => ({
+  runAutoModeForTool: jest.fn(),
+}))
 jest.mock("@/lib/ai/generation/utility-client", () => ({
   buildUtilityLlmClient: jest.fn(() => null),
 }))
@@ -1992,7 +1994,8 @@ describe("renderer broker Auto-mode responder", () => {
   it.each(["allow", "deny", "ask"] as const)(
     "routes %s without requiring the native SDK approval transport",
     async (decision) => {
-      const { runAutoModeForTool } = await import("@/lib/claude/permissions/auto-mode-runner")
+      const { runAutoModeForTool } =
+        await import("@/lib/ai/agent/execution/permissions/auto-mode-runner")
       const { tryAutoModeDecision } = await import("./claude-chat-events")
       jest
         .mocked(runAutoModeForTool)
@@ -2021,7 +2024,8 @@ describe("renderer broker Auto-mode responder", () => {
 
 describe("Auto mode and per-call tools (ADR-0201)", () => {
   it("never lets Auto mode allow a per-call tool, but lets it deny one", async () => {
-    const { runAutoModeForTool } = await import("@/lib/claude/permissions/auto-mode-runner")
+    const { runAutoModeForTool } =
+      await import("@/lib/ai/agent/execution/permissions/auto-mode-runner")
     const { tryAutoModeDecision } = await import("./claude-chat-events")
     const respond = jest.fn(async (_decision: "allow" | "deny", _message?: string) => {})
     const request = {

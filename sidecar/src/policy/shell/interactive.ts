@@ -1,4 +1,4 @@
-// MIRROR of lib/claude/permissions/interactive-command.ts, kept in sync so the
+// MIRROR of lib/ai/agent/execution/permissions/interactive-command.ts, kept in sync so the
 // agent `bash` tool and the browser/CLI paths flag the same commands as
 // TTY-requiring. The sidecar is not in the workspace and cannot import `lib/`,
 // so the segmenter (a compact port of `command-parse.ts` splitCommandSegments)

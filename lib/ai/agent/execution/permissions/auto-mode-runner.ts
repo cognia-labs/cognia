@@ -10,7 +10,7 @@ import type { AppSettings } from "@cognia/agent-config-types"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import { extractCommand } from "./command-from-tool"
 import { evaluateAutoDecision, type AutoDecision, type AutoModeConfig } from "./auto-mode"
-import type { Ruleset } from "./ruleset"
+import type { Ruleset } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import type { PromptResolutionContext } from "@/lib/prompts/types"
 
 export interface RunAutoModeArgs {

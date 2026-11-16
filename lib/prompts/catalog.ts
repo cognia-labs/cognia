@@ -27,7 +27,7 @@ import { ASIDE_READ_ONLY_PROMPT, ASIDE_SYSTEM_PROMPT } from "@/lib/agent/prompts
 import { CANVAS_ACTION_PROMPTS } from "@/lib/ai/generation/canvas-actions"
 import { SELECTION_SUMMARY_PROMPT } from "@/lib/ai/generation/summarize-material"
 import { CONVERSATION_SUMMARY_PROMPT } from "@/lib/ai/generation/summarizer"
-import { COMMAND_JUDGE_PROMPT } from "@/lib/claude/permissions/command-judge"
+import { COMMAND_JUDGE_PROMPT } from "@/lib/ai/agent/execution/permissions/command-judge"
 import { DIFFICULTY_JUDGE_PROMPT } from "@/lib/ai/routing/difficulty-judge"
 import { ROUTER_FUSION_ROLE_PROMPTS } from "@/lib/router-fusion/prompts/role-prompts"
 import { TITLE_CHAT_PROMPT, TITLE_WORK_PROMPT } from "@/lib/ai/generation/title"

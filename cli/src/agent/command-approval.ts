@@ -9,7 +9,7 @@
  * actually deserve one.
  *
  * The repository already has the classifier that answers the real question:
- * `lib/claude/permissions/command-safety.ts` reads the command line itself,
+ * `packages/plugin-contract/src/lib/claude/permissions/command-safety.ts` reads the command line itself,
  * follows `&&` chains and command substitutions, understands `git status` is not
  * `git push`, escalates anything behind `sudo`, refuses to call a write redirect
  * read-only, and names catastrophes outright. It is what the desktop Auto-mode
@@ -30,8 +30,8 @@
 import {
   classifyCommand,
   type CommandClassification,
-} from "@/lib/claude/permissions/command-safety"
-import { extractCommand } from "@/lib/claude/permissions/command-from-tool"
+} from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
+import { extractCommand } from "@/lib/ai/agent/execution/permissions/command-from-tool"
 
 /**
  * The shell tools this gate speaks for, keyed by every spelling that reaches

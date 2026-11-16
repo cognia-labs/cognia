@@ -28,7 +28,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 
-import { classifyCommand } from "@/lib/claude/permissions/command-safety"
+import { classifyCommand } from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
 import type { TerminalCompletionSuggestion } from "@/lib/terminal/completion/types"
 import { cn } from "@/lib/utils"
 

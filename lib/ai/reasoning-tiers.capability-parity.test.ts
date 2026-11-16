@@ -14,7 +14,7 @@
  *
  * Follows the repo's existing `*.parity.test.ts` convention
  * (`lib/usage/context-usage.compaction-parity.test.ts`,
- * `lib/claude/permissions/ruleset.sidecar-parity.test.ts`).
+ * `lib/ai/agent/execution/permissions/ruleset.sidecar-parity.test.ts`).
  */
 import { modelSupportsEffort } from "./reasoning-capability"
 import { reasoningTiersFor } from "@cognia/provider-core/providers/reasoning-tiers"

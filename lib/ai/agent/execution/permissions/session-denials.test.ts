@@ -9,10 +9,13 @@ import {
   isSessionSaturated,
   rememberDenial,
 } from "./session-denials"
-import { resolveBashPermission, type Ruleset } from "./ruleset"
+import {
+  resolveBashPermission,
+  type Ruleset,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 // The gate that actually runs: unlike the renderer resolver it prepends no
 // `*: allow` default, so "no matching rule" reads as "ask" here.
-import { resolveForToolCall } from "../../../sidecar/src/policy/permission/resolver.ts"
+import { resolveForToolCall } from "../../../../../sidecar/src/policy/permission/resolver.ts"
 
 beforeEach(() => {
   __resetSessionDenialsForTesting()

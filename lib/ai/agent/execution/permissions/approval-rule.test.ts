@@ -1,5 +1,5 @@
 import { deriveAllowRuleFromApproval } from "./approval-rule"
-import { resolveBashPermission } from "./ruleset"
+import { resolveBashPermission } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 
 /** Does a derived rule cover this command, per the real resolver? */
 const matchesRule = (pattern: string, command: string): boolean =>

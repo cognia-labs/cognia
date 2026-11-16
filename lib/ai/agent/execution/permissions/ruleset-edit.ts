@@ -10,7 +10,11 @@
  * turns — so tool keys and glob keys are emitted in sorted order.
  */
 
-import type { PermissionVerdict, Ruleset, ToolRules } from "./ruleset"
+import type {
+  PermissionVerdict,
+  Ruleset,
+  ToolRules,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 
 /** Set (add or update) one `pattern → verdict` rule under a tool key. */
 export function setToolRule(

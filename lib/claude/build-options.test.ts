@@ -4133,7 +4133,7 @@ describe("resolveSendOptions — permission ruleset merge", () => {
 
   it("projects a session refusal into the ruleset as an explicit deny", async () => {
     const { __resetSessionDenialsForTesting, rememberDenial } =
-      await import("@/lib/claude/permissions/session-denials")
+      await import("@/lib/ai/agent/execution/permissions/session-denials")
     __resetSessionDenialsForTesting()
     rememberDenial("sess-deny", "Bash", { command: "git push --force" })
     const opts = await resolveSendOptions({
@@ -4152,7 +4152,7 @@ describe("resolveSendOptions — permission ruleset merge", () => {
 
   it("keeps a refusal ahead of a bare-name always-allow grant", async () => {
     const { __resetSessionDenialsForTesting, rememberDenial } =
-      await import("@/lib/claude/permissions/session-denials")
+      await import("@/lib/ai/agent/execution/permissions/session-denials")
     __resetSessionDenialsForTesting()
     rememberDenial("sess-deny-2", "Bash", { command: "rm -rf /tmp/x" })
     const opts = await resolveSendOptions({
@@ -4167,7 +4167,7 @@ describe("resolveSendOptions — permission ruleset merge", () => {
 
   it("leaves a session with no refusals exactly as before", async () => {
     const { __resetSessionDenialsForTesting } =
-      await import("@/lib/claude/permissions/session-denials")
+      await import("@/lib/ai/agent/execution/permissions/session-denials")
     __resetSessionDenialsForTesting()
     const opts = await resolveSendOptions({
       session: { id: "sess-clean" } as never,

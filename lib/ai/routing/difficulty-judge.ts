@@ -2,7 +2,7 @@
  * Second-opinion difficulty judge — the optional model tier of Auto routing
  * (ADR-0043 Phase 10).
  *
- * Structurally the same thing as `lib/claude/permissions/command-judge.ts`, and
+ * Structurally the same thing as `lib/ai/agent/execution/permissions/command-judge.ts`, and
  * deliberately so: a deterministic classifier handles the common cases offline,
  * and a cheap background model is consulted only where the deterministic answer
  * is genuinely uncertain. That module's shape — PII gate before the call, short

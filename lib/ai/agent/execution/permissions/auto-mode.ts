@@ -20,9 +20,15 @@
  */
 
 import type { LlmClient } from "@/lib/twin/distill/llm"
-import { classifyCommand, type CommandVerdict } from "./command-safety"
+import {
+  classifyCommand,
+  type CommandVerdict,
+} from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
 import { judgeCommandSafety, type RiskLevel } from "./command-judge"
-import { resolveBashPermission, type Ruleset } from "./ruleset"
+import {
+  resolveBashPermission,
+  type Ruleset,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import type { PromptResolutionContext } from "@/lib/prompts/types"
 
 export interface AutoModeConfig {

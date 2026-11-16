@@ -1,5 +1,5 @@
 import { setToolRule, removeToolRule, listRules, deterministicRulesetSort } from "./ruleset-edit"
-import type { Ruleset } from "./ruleset"
+import type { Ruleset } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 
 describe("setToolRule", () => {
   it("adds a rule to an empty ruleset", () => {

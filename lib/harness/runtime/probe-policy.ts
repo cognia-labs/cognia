@@ -30,8 +30,11 @@
  */
 
 import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
-import { splitCommandSegments } from "@/lib/claude/permissions/command-parse"
-import { classifyCommand, normalizePosixPath } from "@/lib/claude/permissions/command-safety"
+import { splitCommandSegments } from "@cognia/plugin-contract/lib/claude/permissions/command-parse"
+import {
+  classifyCommand,
+  normalizePosixPath,
+} from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
 import { moduleToolNamesWhere } from "@/lib/modules/tool-declarations"
 import type {
   HarnessIsolationKind,

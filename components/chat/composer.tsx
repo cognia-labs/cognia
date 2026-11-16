@@ -296,7 +296,7 @@ import { shellJobTranscript } from "@/lib/chat/shell-job-transcript"
 import { useShellJobCopy } from "./shell-job/use-shell-job-copy"
 import { runInTerminalDock } from "@/lib/terminal/run-in-dock"
 import { terminalAvailable } from "@/lib/terminal/pick-transport"
-import { detectInteractiveCommand } from "@/lib/claude/permissions/interactive-command"
+import { detectInteractiveCommand } from "@/lib/ai/agent/execution/permissions/interactive-command"
 import { appendMemory } from "@/lib/files/memory"
 // `rememberFact` is imported lazily at its call site, not here: it pulls in the
 // Dexie session schema and the redaction package, which every composer test

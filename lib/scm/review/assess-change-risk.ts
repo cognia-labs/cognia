@@ -15,7 +15,7 @@
  * each rule by its code.
  */
 
-import { matchGlob } from "@/lib/claude/permissions/ruleset"
+import { matchGlob } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import type { RiskTier } from "@/lib/policy/risk/classify-risk"
 import { isSensitiveResourcePath } from "@/lib/task-workspace/run-changes"
 

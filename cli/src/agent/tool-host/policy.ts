@@ -39,7 +39,7 @@ import {
   resolvePermissionDetailed,
   resolveBashPermission,
   matchGlob,
-} from "@/lib/claude/permissions/ruleset"
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import { normalizeToolId } from "@/lib/policy/risk/outbound-tools"
 import { commandHasGhWrite } from "@/lib/policy/action-review/gh-targets"
 

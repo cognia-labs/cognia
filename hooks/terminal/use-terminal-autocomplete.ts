@@ -22,7 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { useTerminalStore } from "@/stores/terminal/terminal-store"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
-import { classifyCommand } from "@/lib/claude/permissions/command-safety"
+import { classifyCommand } from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
 import { detectPlatform } from "@/lib/terminal/shell-detect"
 import { AutocompleteController, type AutocompleteView } from "@/lib/terminal/completion/controller"
 import {

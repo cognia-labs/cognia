@@ -18,7 +18,7 @@ import {
   type PiSessionRecord,
 } from "@cognia/agent-pi/rpc-client"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
-import { matchGlob } from "@/lib/claude/permissions/ruleset"
+import { matchGlob } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import { agentProcessConflictFrom } from "@/lib/execution/lease-conflict"
 import { agentInvoke } from "../agent-transport"
 import { createAgentTransportProcessHost } from "../host/process-host"

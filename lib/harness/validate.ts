@@ -14,7 +14,7 @@
  */
 
 import { hasNoLeakingPii } from "@cognia/redact"
-import { classifyCommand } from "@/lib/claude/permissions/command-safety"
+import { classifyCommand } from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
 import { validateSkill } from "@/lib/skills/validate"
 import type {
   HarnessComponentName,

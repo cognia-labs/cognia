@@ -32,8 +32,11 @@ import {
   hasSessionBypass,
   resolveApproval,
 } from "@/lib/claude/hitl/approval-registry"
-import { resolvePermissionDetailed, type Ruleset } from "@/lib/claude/permissions/ruleset"
-import { setToolRule } from "@/lib/claude/permissions/ruleset-edit"
+import {
+  resolvePermissionDetailed,
+  type Ruleset,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
+import { setToolRule } from "@/lib/ai/agent/execution/permissions/ruleset-edit"
 
 /**
  * Marks a requestId as belonging to a realtime voice session. `respondToApproval`

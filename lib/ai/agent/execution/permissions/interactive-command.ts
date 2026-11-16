@@ -22,7 +22,10 @@
  * with this rule set.
  */
 
-import { normalizeHead, splitCommandSegments } from "./command-parse"
+import {
+  normalizeHead,
+  splitCommandSegments,
+} from "@cognia/plugin-contract/lib/claude/permissions/command-parse"
 
 export interface InteractiveDetection {
   /** True when at least one segment would block on a TTY. */

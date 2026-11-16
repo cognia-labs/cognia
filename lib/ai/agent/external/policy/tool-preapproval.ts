@@ -1,4 +1,4 @@
-import { matchGlob } from "@/lib/claude/permissions/ruleset"
+import { matchGlob } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 
 /**
  * Decide whether a tool call is pre-approved by a `dontAsk` allow-list.

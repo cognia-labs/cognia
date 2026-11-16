@@ -15,7 +15,7 @@ import { listBuiltinTools, type BuiltinToolRiskLevel } from "@/lib/settings/buil
 import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import type { PermissionChoice, PermissionRequestEvent } from "../../state/types"
 import { classifyToolCommand, shellCommandOf } from "../../../agent/command-approval"
-import type { CommandVerdict } from "@/lib/claude/permissions/command-safety"
+import type { CommandVerdict } from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
 import { useCriticalInput, useModalInput } from "../../input/input-router"
 import { usePanelClick } from "../../input/use-panel-click"
 import { parseMouseEvent } from "../../input/mouse"

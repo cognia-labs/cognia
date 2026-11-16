@@ -74,8 +74,8 @@ import { toDiagnostic } from "@/lib/diagnostics/to-diagnostic"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
 import { flushProjectEditorEdits } from "@/lib/files/project-editor-bridge"
 import { getGoalRuntime } from "@/lib/goal/runtime"
-import { deriveAllowRuleFromApproval } from "@/lib/claude/permissions/approval-rule"
-import { setToolRule } from "@/lib/claude/permissions/ruleset-edit"
+import { deriveAllowRuleFromApproval } from "@/lib/ai/agent/execution/permissions/approval-rule"
+import { setToolRule } from "@/lib/ai/agent/execution/permissions/ruleset-edit"
 import { getLoopRuntime } from "@/lib/loop/runtime"
 import { renderLoopIterationMessage } from "@/lib/loop/prompts"
 import { notifyDroppedCapabilityOnce } from "@/lib/claude/dropped-capability-toast"
@@ -97,7 +97,7 @@ import {
 } from "@/lib/chat/steer-runtime"
 import { supersedePendingApprovals } from "./approval-supersede"
 import { denialMessageForModel, denialReasonOf } from "@/lib/chat/approval-routing"
-import { invalidateJudgeContext } from "@/lib/claude/permissions/command-judge"
+import { invalidateJudgeContext } from "@/lib/ai/agent/execution/permissions/command-judge"
 import {
   drainSessionPeerMessages,
   registerSessionPeerRuntime,
@@ -8052,7 +8052,8 @@ export function useClaudeChat() {
       // the recipient for the rest of the requester's instruction, on every
       // tool and child run (ADR-0239), and a new instruction lifts it.
       if (decision === "deny" && !approval.outbound?.enforced) {
-        const { rememberDenial } = await import("@/lib/claude/permissions/session-denials")
+        const { rememberDenial } =
+          await import("@/lib/ai/agent/execution/permissions/session-denials")
         rememberDenial(approval.sessionId, approval.toolName, approval.input)
       }
       // Persist the always-allow choice. Prefer a TARGET-SCOPED rule

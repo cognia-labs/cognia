@@ -38,8 +38,8 @@ import {
   registerPluginCompletionProvider,
 } from "@/lib/plugin/bridge/terminal-completion-bridge"
 import { registerPluginCommandRules } from "@/lib/plugin/registries/command-safety-registry"
-import { classifyCommand as classifyCommandImpl } from "@/lib/claude/permissions/command-safety"
-import type { ToolRules } from "@/lib/claude/permissions/ruleset"
+import { classifyCommand as classifyCommandImpl } from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
+import type { ToolRules } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import type { SpawnRequest } from "@/lib/terminal/types"
 import type { PluginTerminalAPI } from "@cognia/plugin-contract/lib/plugin/api/terminal-api"
 export type {

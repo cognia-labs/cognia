@@ -162,7 +162,7 @@ const REVIEWED_SITES: Record<string, string> = {
     "preparePersonalDerivedHistory:1;preparePersonalHistory:2;resume:forkFromSessionId:2;resume:forkedFromSdkSessionId:6;resume:resumeSessionId:2;resume:sdkSessionId:4;withPersonalMemoryVisibility:1;withPersonalRerankerVisibility:1",
   "lib/claude/ipc.ts":
     "listMessages:1;preparePersonalHistory:1;resume:expectedRuntimeSessionId:2;resume:forkFromSessionId:1;resume:initialConversation:6;resume:resumeSessionId:1",
-  "lib/claude/permissions/command-judge.ts": "complete:1",
+  "lib/ai/agent/execution/permissions/command-judge.ts": "complete:1",
   "lib/claude/run-and-capture.ts":
     "resume:externalSessionId:1;resume:resumeSessionId:1;resume:sdkSessionId:7",
   "lib/ai/agent/team/primary-router.ts": "complete:1",

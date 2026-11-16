@@ -1,8 +1,8 @@
 // Quote- and paren-aware shell command segmentation, shared by the
 // permission resolver and the interactive-command detector. Mirrors
 // `splitCommandSegments` and its helpers in
-// `lib/claude/permissions/command-parse.ts`; the sidecar cannot import `lib/`,
-// so `lib/claude/permissions/ruleset.sidecar-parity.test.ts` pins the two.
+// `packages/plugin-contract/src/lib/claude/permissions/command-parse.ts`; the sidecar cannot import `lib/`,
+// so `lib/ai/agent/execution/permissions/ruleset.sidecar-parity.test.ts` pins the two.
 //
 // Kept free of `node:` imports and `import.meta`: the app's Jest suites
 // compile it through the resolver.

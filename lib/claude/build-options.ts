@@ -33,8 +33,8 @@ import {
   isExternalAgentProviderId,
 } from "@/lib/ai/agent/external/session/session-models"
 import { resolveAppDefaultModel } from "@/lib/ai/app-default-model"
-import { mergeRulesets } from "@/lib/claude/permissions/ruleset"
-import { deterministicRulesetSort } from "@/lib/claude/permissions/ruleset-edit"
+import { mergeRulesets } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
+import { deterministicRulesetSort } from "@/lib/ai/agent/execution/permissions/ruleset-edit"
 import { detectHostProfile } from "@/lib/platform/capabilities"
 import { isCliHost, isHeadlessHost } from "@/lib/platform/detect"
 import { resolveLspServers } from "@/lib/lsp/resolve-config"
@@ -1050,7 +1050,7 @@ const NO_IM_HOST_CAPABILITIES: Readonly<Record<ImHostCapabilityId, boolean>> = {
  * the model never sees them (OpenCode `permission.task` semantics).
  */
 async function listDispatchAgentAvailable(
-  rules?: import("@/lib/claude/permissions/ruleset").ToolRules
+  rules?: import("@cognia/plugin-contract/lib/claude/permissions/ruleset").ToolRules
 ): Promise<Array<{ id: string; description: string }>> {
   try {
     const [{ resolveDispatchableSubagents }, { isSubagentDispatchAllowed }] = await Promise.all([
@@ -2934,7 +2934,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // session refused more than the memory can track it fails closed here: every
   // auto-approval is stripped and the session asks about everything, rather
   // than pretending a refusal it can no longer hold is still in force.
-  const { applySessionDenials } = await import("@/lib/claude/permissions/session-denials")
+  const { applySessionDenials } =
+    await import("@/lib/ai/agent/execution/permissions/session-denials")
   const sessionPermissions = applySessionDenials(session?.id, {
     ruleset: mergedRuleset,
     ...(appSettings?.alwaysAllowTools && appSettings.alwaysAllowTools.length > 0

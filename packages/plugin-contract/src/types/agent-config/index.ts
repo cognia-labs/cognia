@@ -833,7 +833,7 @@ export type SendOptions = {
    * OpenCode-style glob permission ruleset consulted by the sidecar
    * `canUseTool` before emitting a `permission_request`. A resolved
    * `tool → glob → allow|ask|deny` map (see
-   * `lib/claude/permissions/ruleset.ts`). `allow` runs without prompting,
+   * `packages/plugin-contract/src/lib/claude/permissions/ruleset.ts`). `allow` runs without prompting,
    * `deny` rejects the tool call, `ask` falls through to the existing
    * round-trip. Assembled by `resolveSendOptions` from the baked-in
    * defaults + permission mode + character + `agentPermissions.commandRules`.

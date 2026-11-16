@@ -36,8 +36,14 @@ import { loggers } from "@cognia/logging"
 import type { ClaudeEvent, SendOptions } from "@cognia/agent-config-types"
 import { handlePluginToolExec } from "@/lib/claude/plugin-tool-ipc"
 import { requestLocalToolApproval } from "@/lib/claude/ipc"
-import { resolvePermissionDetailed, type PermissionVerdict } from "@/lib/claude/permissions/ruleset"
-import { canonicalizeCommand, splitCommandSegments } from "@/lib/claude/permissions/command-parse"
+import {
+  resolvePermissionDetailed,
+  type PermissionVerdict,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
+import {
+  canonicalizeCommand,
+  splitCommandSegments,
+} from "@cognia/plugin-contract/lib/claude/permissions/command-parse"
 
 /** Keep standalone provider/credit use bounded to the product's eight-step ceiling. */
 export const STANDALONE_MAX_STEPS = 8

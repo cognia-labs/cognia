@@ -55,7 +55,7 @@ try {
 }
 
 // Extract the command line a tool call would run. Mirrors
-// lib/claude/permissions/command-from-tool.ts — duplicated on purpose because
+// lib/ai/agent/execution/permissions/command-from-tool.ts — duplicated on purpose because
 // bundled hooks may not import app code (they spawn in both runtimes).
 function extractCommand(toolName, toolInput) {
   const obj = toolInput && typeof toolInput === "object" ? toolInput : {}

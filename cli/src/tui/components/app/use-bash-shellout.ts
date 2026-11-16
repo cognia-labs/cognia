@@ -3,7 +3,7 @@ import type { Dispatch } from "react"
 import type { TuiAction } from "../../state/types"
 import { formatBashResult } from "../../commands/bash-shellout"
 import type { ShellResult, RunShellOpts } from "../../../agent/run-shell"
-import { detectInteractiveCommand } from "@/lib/claude/permissions/interactive-command"
+import { detectInteractiveCommand } from "@/lib/ai/agent/execution/permissions/interactive-command"
 
 type RunShell = (command: string, opts: RunShellOpts) => Promise<ShellResult>
 type RunInteractiveShell = (

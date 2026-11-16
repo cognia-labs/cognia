@@ -37,7 +37,7 @@
 
 import { isTauri } from "@/lib/tauri"
 import { proxyToRenderer } from "@/lib/external-bridge/orchestration-proxy-client"
-import type { CommandClassification } from "@/lib/claude/permissions/command-safety"
+import type { CommandClassification } from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
 import type { BackgroundJobOutput, BackgroundJobRecord } from "@/lib/jobs/background-jobs"
 import type { WorkspaceContentMatch, WorkspaceEntry, WorkspaceStat } from "@/lib/files/types"
 import type { GitCommit, GitDiff, GitFileChange, GitStatus } from "@/types/git"
@@ -178,7 +178,7 @@ async function defaultDeps(): Promise<WorkspaceBridgeDeps> {
       import("@/lib/git/commands"),
       import("@/lib/git/workspace-diff"),
       import("@/lib/jobs/background-jobs"),
-      import("@/lib/claude/permissions/command-safety"),
+      import("@cognia/plugin-contract/lib/claude/permissions/command-safety"),
       import("@/lib/plugin/security/consent-broker"),
       import("@/lib/i18n/runtime-translator"),
       import("@cognia/redact"),

@@ -1,5 +1,5 @@
 import type { AppSettings } from "@cognia/agent-config-types"
-import type { Ruleset } from "@/lib/claude/permissions/ruleset"
+import type { Ruleset } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 
 export type SettingsSourceId = "claude-code" | "codex" | "opencode" | "pi"
 export type SettingsGroup = "model" | "permissions" | "sandbox" | "env" | "hooks" | "ui"

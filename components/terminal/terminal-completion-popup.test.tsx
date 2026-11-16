@@ -13,7 +13,7 @@ const mockClassify = jest.fn((cmd: string) => ({
   reason: "test",
   segments: [],
 }))
-jest.mock("@/lib/claude/permissions/command-safety", () => ({
+jest.mock("@cognia/plugin-contract/lib/claude/permissions/command-safety", () => ({
   classifyCommand: (cmd: string) => mockClassify(cmd),
 }))
 

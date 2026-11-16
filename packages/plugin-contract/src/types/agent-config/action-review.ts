@@ -13,7 +13,7 @@
 // ADR-0239 decides it (`planActionReview` in `lib/policy/action-review/policy.ts`),
 // starting with outbound actions. They deliberately restate —
 // rather than import — the verdict, tier, and surface vocabularies from
-// `lib/claude/permissions/ruleset.ts` and `lib/policy/risk/*`, because this
+// `packages/plugin-contract/src/lib/claude/permissions/ruleset.ts` and `lib/policy/risk/*`, because this
 // package must stay free of `@/` imports so the CLI can consume it. The
 // restatements are pinned by `lib/policy/action-review/contract-parity.test.ts`,
 // which fails if the two ever drift.
@@ -96,7 +96,7 @@ export const ACTION_REVIEW_CHANNELS: readonly ActionReviewChannel[] = [
   "browser-submission",
 ]
 
-/** RESTATEMENT of `PermissionVerdict` (lib/claude/permissions/ruleset.ts). */
+/** RESTATEMENT of `PermissionVerdict` (packages/plugin-contract/src/lib/claude/permissions/ruleset.ts). */
 export type ActionReviewVerdict = "allow" | "ask" | "deny"
 
 export const ACTION_REVIEW_VERDICTS: readonly ActionReviewVerdict[] = ["allow", "ask", "deny"]

@@ -1,5 +1,5 @@
 import type { ClaudeSettings } from "@/lib/claude/settings"
-import type { Ruleset } from "@/lib/claude/permissions/ruleset"
+import type { Ruleset } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import { settingsDraft, type SettingsImportDraft, type SettingsSnapshot } from "../types"
 
 function stringList(value: unknown): string[] {

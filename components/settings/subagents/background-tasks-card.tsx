@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import type { ToolRules } from "@/lib/claude/permissions/ruleset"
+import type { ToolRules } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import type { AppSettings } from "@cognia/agent-config-types"
 
 /** Serialize a deny-list of projected subagent ids back into editor text. */

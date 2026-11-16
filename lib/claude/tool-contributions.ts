@@ -35,7 +35,10 @@ import type {
 import { findDeclaredModuleTool, type DeclaredModuleTool } from "@/lib/modules/tool-declarations"
 import { detectPlatform, isCliHost, isHeadlessHost } from "@/lib/platform/detect"
 import { readContextSessionState } from "@/lib/ai/agent/execution/contributions/context-session-state"
-import type { PermissionVerdict, Ruleset } from "./permissions/ruleset"
+import type {
+  PermissionVerdict,
+  Ruleset,
+} from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 
 /** How long all families together may take to say what a run is offered. */
 export const TOOL_SURFACE_DEADLINE_MS = 2_000

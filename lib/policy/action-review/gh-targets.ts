@@ -17,9 +17,9 @@
  * `gh-targets.sidecar-parity.test.ts`.
  */
 
-import { splitCommandSegments } from "@/lib/claude/permissions/command-parse"
-import { extractCommand } from "@/lib/claude/permissions/command-from-tool"
-import { peelCommandWrappers } from "@/lib/claude/permissions/command-safety"
+import { splitCommandSegments } from "@cognia/plugin-contract/lib/claude/permissions/command-parse"
+import { extractCommand } from "@/lib/ai/agent/execution/permissions/command-from-tool"
+import { peelCommandWrappers } from "@cognia/plugin-contract/lib/claude/permissions/command-safety"
 import { normalizeToolId, SHELL_TOOL_IDS } from "@/lib/policy/risk/outbound-tools"
 import {
   classifyGhArgs,
