@@ -1,6 +1,6 @@
 # ADR-0243 3C — one launch profile for external engines
 
-Status: approved 2026-11-16; rebased onto the engine launch descriptors (`2026-11-16-engine-launch-descriptors.md`, ADR-0217 2026-11-16 section), which landed first.
+Status: implemented 2026-11-16 (approved the same day); rebased onto the engine launch descriptors (`2026-11-16-engine-launch-descriptors.md`, ADR-0217 2026-11-16 section), which landed first.
 
 ## Problem
 
@@ -108,7 +108,7 @@ The `personalEgressFenced` Codex special case goes away: a marked session's next
 
   Devin's `mcpConfigFile.privateCopy` (the `credentials.toml` copy) is removed from its descriptor, and the field from the vocabulary: it copies the owner's native login into an isolated launch.
 
-- An isolated engine with neither is refused with `needsSetup`: "isolated runs need a Cognia model or an agent key".
+- ~~An isolated engine with neither is refused with `needsSetup`.~~ Not adopted: a keyless isolated launch can be legitimate (an engine on a local model endpoint), the Host cannot know every engine's credential form, and an engine without a sign-in reports its own error.
 - The Codex account overlay (`env-builder.ts`) applies to _owner_ only.
 
 ### 6. Dead code removed
@@ -130,10 +130,9 @@ The per-engine profile wiring this plan first listed is gone with option C: no h
 - **Second requester:** a non-owner requester gets the isolated instance; a second requester gets a new key and a fresh engine session (manager tests).
 - **Resumed engine session after a second requester joins:** the resume uses the new key's state and never the old session id.
 - **Personal admission:**
-  - an external engine without a `personal` lease is refused;
-  - with one, a declared read is admitted and marked;
-  - a write, outbound or opaque tool is denied by the broker;
-  - an engine without a gateway task is refused.
+  - an external engine handed a personal credential (`externalEngine`) is refused, as before; there is no lease (§4);
+  - a marked run's Host-owned read is admitted, and a write, outbound or opaque tool is denied, by every tool host (`isHostOwnedReadTool`);
+  - a marked turn on an engine without a Cognia gateway task is refused.
 - **Bot runs** keep their behaviour through `isolated/bot` (existing bot tests, rewired).
 - **Owner runs** keep native logins and `SSH_AUTH_SOCK` but lose unrelated ambient env (desktop now matches the CLI).
 
@@ -162,4 +161,4 @@ Not proven by tests, owed as a desktop smoke:
 3. Split in two commits:
    - **3a (done)**: the `personal` profile (`loopbackPorts`) in the contract and both hosts, the launcher's `--network-allow-loopback` and the proxy's loopback admission, the remote `Full` ceiling requirement, the manager's `personalLaunch` with tool-host-only MCP, and the Codex fence removed (`ExternalAgentExecutionOptions.personalEgressFenced` and every branch in `app-server-client.ts`).
    - **3b (done)**: one Host-read classifier for the preflight, the CLI broker and the dispatcher (the broker had denied module reads, the preflight host read built-ins), and the decision that no lease replaces the `external-engine` refusal (§4).
-4. ADR implementation status, docs and changeset.
+4. **(done)** ADR implementation status (en + zh) and docs: the launch profiles in the external-hosting security page, the loopback exception in the sandbox page, the Pi package `isolated-launch` code. Every earlier commit shipped its own changeset; this one is docs only.

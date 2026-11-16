@@ -97,9 +97,9 @@ Cognia 的拦截扩展仍会对每次工具调用把关。对逐次调用权限�
 ## 运行位置
 
 - 从目录或市场安装的插件可用。**内置插件（`builtin://`）不能携带 Pi 包**：没有 Pi 可读取的目录，所有操作都会明确拒绝。
-- 托管会话运行在桌面沙箱中。包目录只对 Pi 进程以只读方式挂载，且仅当它位于应用自身的插件存储（`<data dir>/cognia/plugins`）之内时才挂载；从其他位置加载的插件，以及隐藏了主目录的 Bot 隔离智能体，都无法加载包——会话启动时会明确说明（`bot-isolation`）。
+- 托管会话运行在桌面沙箱中。包目录只对 Pi 进程以只读方式挂载，且仅当它位于应用自身的插件存储（`<data dir>/cognia/plugins`）之内时才挂载；从其他位置加载的插件，以及隐藏了主目录的 isolated 启动（为他人执行的回合、Bot 运行，或在含个人数据的会话中的回合），都无法加载包——会话启动时会明确说明（`isolated-launch`）。
 - 包位于本设备。运行在已配对主机上的智能体无法加载它们，会话启动时会明确说明。
 
 ## 失败模式
 
-托管会话从不静默跳过智能体已选择加入的包。会话启动会以 `PiPackageUnavailableError`（原因码 `pi_package_unavailable`）失败，并给出以下之一：`not-found`（插件缺失或已禁用）、`not-on-disk`、`invalid-path`、`not-hosted`、`not-prepared`、`workspace-required`、`double-load`、`bot-isolation`、`env-conflict`（两个包为同一变量设置了不同的值）或 `pi-version`。
+托管会话从不静默跳过智能体已选择加入的包。会话启动会以 `PiPackageUnavailableError`（原因码 `pi_package_unavailable`）失败，并给出以下之一：`not-found`（插件缺失或已禁用）、`not-on-disk`、`invalid-path`、`not-hosted`、`not-prepared`、`workspace-required`、`double-load`、`isolated-launch`、`env-conflict`（两个包为同一变量设置了不同的值）或 `pi-version`。

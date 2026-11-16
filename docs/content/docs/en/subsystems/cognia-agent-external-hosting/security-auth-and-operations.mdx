@@ -82,8 +82,26 @@ replaces the shared writable paths above, and those paths become `--deny-readabl
 cannot fall back to your own login. The table is `agentStateIsolation` in
 `protocol/external-agent-security-policy.json`; `pnpm audit:agent-capabilities` keeps the Rust
 copy identical. A runtime without a row cannot be isolated and its isolated launch is refused.
-Bot-isolated and gateway-task launches already own a private home and ignore the key. Deleting the
-configuration deletes the root (`external_agent_state_root_remove`).
+An isolated or personal launch (below) and a gateway task own a private home and ignore the key.
+Deleting the configuration deletes the root (`external_agent_state_root_remove`).
+
+### Launch profiles
+
+Whose run a launch serves decides how it starts ([ADR-0243](../../adr/0243-a-run-acts-for-someone-and-says-who)).
+The Host derives one profile per execution and passes it as `COGNIA_ENGINE_PROFILE`; both process
+hosts read it with `readEngineLaunchProfile` (TypeScript) or `LaunchProfile::of` (Rust).
+
+| Profile | When | What the launch gets |
+| --- | --- | --- |
+| `owner` | your own run, an IM request from the account the connector is signed in as, or a Host operation bound to no run | the configured agent as described above: your native login, `SSH_AUTH_SOCK` and the launch environment's owner keys |
+| `isolated` | a request from anyone else, an external event, the service lane, a Bot run, or a run whose identity cannot be read | no ambient credential, helper socket, native login or keychain; home unreadable; a private root `<data dir>/cognia/isolated-agents/<key>` per conversation and requester set |
+| `personal` | your turn in a conversation that has read your personal data | `isolated`, run as a Cognia gateway task whose only network is the Host's gateway and tool-host ports (`--network-allow-loopback`); configured MCP servers are dropped |
+
+An isolated launch inherits only the request environment the policy's `launchEnvironment` admits,
+so a model credential reaches it only through the Host gateway or a key the agent stores in Cognia.
+Engines that keep accounts in a shared keychain (`privateLaunchUnsupported`) are refused, and an
+isolated launch outside the sandbox is refused. A personal launch needs a Cognia model on the agent;
+a remote Host whose network ceiling is not `full` refuses it.
 
 If the launcher is absent, build it with:
 
@@ -146,7 +164,8 @@ Common failures:
 
 - v1 verifies local Codex and Claude Code executable hosting; it does not port container or
   Kubernetes external-agent backends.
-- The outer wrapper enables network access for hosted agents. Codex's inner `workspaceWrite`
-  sandbox has the per-agent network option described above; outer egress filtering remains absent.
+- The outer wrapper enables network access for owner and isolated launches unless the agent's
+  sandbox policy narrows it. Codex's inner `workspaceWrite` sandbox has the per-agent network
+  option described above. A personal launch is the one case the Host always filters.
 - Cross-built archives must contain a native launcher for their target; otherwise hosting fails
   closed while built-in chat continues to work.

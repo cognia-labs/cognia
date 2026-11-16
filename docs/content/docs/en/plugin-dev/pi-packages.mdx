@@ -154,8 +154,9 @@ declare. `piPackages[].nameKey` / `descriptionKey` follow the same rule.
 - Hosted sessions run inside the desktop sandbox. The package directory is
   mounted read-only for the Pi process (and only for Pi), and only when it
   resolves inside the app's own plugin store (`<data dir>/cognia/plugins`);
-  plugins loaded from elsewhere, and Bot-isolated agents (whose home is hidden),
-  cannot load packages — the session start says so (`bot-isolation`).
+  plugins loaded from elsewhere, and isolated launches (a turn for someone else, a Bot run, or a
+  turn in a conversation holding personal data; their home is hidden) cannot load packages — the
+  session start says so (`isolated-launch`).
 - Packages live on this device. An agent running on a paired host cannot load
   them, and the session start says so.
 
@@ -165,5 +166,5 @@ A hosted session never silently skips a package the agent opted into. Session
 start fails with `PiPackageUnavailableError` (reason code
 `pi_package_unavailable`) and one of: `not-found` (plugin missing or disabled),
 `not-on-disk`, `invalid-path`, `not-hosted`, `not-prepared`,
-`workspace-required`, `double-load`, `bot-isolation`, `env-conflict` (two packages set one variable differently)
+`workspace-required`, `double-load`, `isolated-launch`, `env-conflict` (two packages set one variable differently)
 or `pi-version`.

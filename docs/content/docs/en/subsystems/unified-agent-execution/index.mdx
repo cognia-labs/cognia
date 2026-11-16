@@ -84,7 +84,7 @@ and passes through the adapter, `AgentProcessSpawnSpec`, and desktop or CLI spaw
 shared Rust launcher. Missing fields preserve network `full` and readable scope `home`. Choose
 `allowlist` with exact hosts or `*.domain` patterns, or `off`, to narrow outbound access; an empty
 allowlist is off. Choose `workspace` to remove blanket home reads while retaining agent state,
-required toolchain roots and Git configuration. Credential denies and bot isolation still apply.
+required toolchain roots and Git configuration. Credential denies and the isolated launch profile still apply.
 This outer policy is independent of Codex's native sandbox permissions and applies to the whole
 spawned process tree. It does not constrain an already running remote HTTP/WebSocket agent service.
 

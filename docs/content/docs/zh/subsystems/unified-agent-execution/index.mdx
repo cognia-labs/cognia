@@ -57,7 +57,7 @@ stdio 外部 agent 需要一张进程表。能提供进程表的运行时有三�
 `AgentProcessSpawnSpec` 及桌面端或 CLI 启动配置传入共享 Rust launcher。字段缺省时保持网络
 `full`、可读范围 `home`。选择 `allowlist` 并填写完整主机或 `*.domain` 模式，或选择 `off`，
 可以收紧出站访问；空允许列表等效于关闭网络。选择 `workspace` 可去掉整个主目录的读取权限，
-同时保留 Agent 状态、所需工具链目录及 Git 配置。凭据拒绝规则与 Bot 隔离仍然生效。这层外部
+同时保留 Agent 状态、所需工具链目录及 Git 配置。凭据拒绝规则与 isolated 启动 profile 仍然生效。这层外部
 策略独立于 Codex 自身的沙箱权限，作用于整个新启动的进程树，不约束已经运行的远程
 HTTP/WebSocket Agent 服务。
 

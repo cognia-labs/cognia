@@ -250,7 +250,7 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
    - 受众收窄和出口检查；
    - [x] 严格的披露范围（阶段 2D，2026-11-13）。
          目前只有 owner 拥有个人访问，所以这一步先于任何其他人获得访问而落地。
-3. **部分实现：** 运行树权限（阶段 3A，进行中）；共享账本（3B-1，已实现）；外部引擎计量（3B-2，已实现）；外部引擎代理和配置隔离（3C）仍未完成。
+3. **部分实现：** 运行树权限（阶段 3A，进行中）；共享账本（3B-1，已实现）；外部引擎计量（3B-2，已实现）；外部引擎启动 profile 与凭据隔离（3C，已实现）。
 4. 开放代表使用者通道：按主体保存的凭据库、授权链接及其投递方式、回调身份校验（先做 Lark）。它取代仅限 owner 的检查。只有在上述旧历史标记和引擎记录失效完成之后，这一步才能发布。
 5. 绑定个人通道：确认、声明范围、控制台标注，以及转为 `needs_setup` 的迁移。
 6. 其他平台，随各自支持按用户授权而跟进。
@@ -275,6 +275,16 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 - 有限预算下无法计量的引擎。
 
 ## 实现状态
+
+**阶段 3C（2026-11-16）。** 每个外部引擎进程都按 Host 从运行的 acting identity 推导出的一个 profile 启动，以 `COGNIA_ENGINE_PROFILE` 传递（`packages/agent-contracts/src/engine-launch-profile.ts`，Rust 为 `crates/cognia-external-agent/src/launch_profile.rs`）。两个进程宿主（桌面 Rust 宿主与 CLI 的 Node backend）解释它；两者都不点名任何引擎，因为每个私有启动决策都是启动描述符在同一个标志上的函数。
+
+- `owner`：本地用户自己的运行，或只有一个请求者、且会话所在渠道验证其为本 Host 所有者的请求（`ConversationChannel.requesterIsOwner`，由各厂商的 `ownerPrincipal` 回答；Lark 取适配器的已连接用户）。未绑定运行的 Host 操作也是 `owner`。每个子进程都从各模式唯一的启动环境开始（`protocol/external-agent-security-policy.json` 中的 `launchEnvironment`），因此桌面端的 owner 启动不再继承整个 Host 环境。
+- `isolated`，原因为 `requester`、`event`、`service` 或 `bot`：其余一切，包括无法读取身份的运行。它没有环境凭据、helper socket、原生登录或钥匙串，私有状态根为 `<data>/cognia/isolated-agents/<key>`。key 是会话（或运行树）与排序后请求者集合的哈希，因此后来的请求者永远不会续接先前请求者的引擎会话。manager 在临时实例 `<agentId>:iso:<key>` 中运行它。描述符声明 `privateLaunchUnsupported` 的引擎会被拒绝（`check_private_launch`）。Bot 运行请求 `isolated/bot`；`COGNIA_BOT_ISOLATION` 与 launcher 的 bot 模式已删除。
+- `personal`：已被标记为个人内容的会话中的 owner 回合。它是 `isolated`，同时也是 Cognia gateway task，唯一的网络是 Host 自己的回环服务：gateway 和托管的 tool-host MCP 服务器（`loopbackPorts`）。launcher 的 `--network-allow-loopback <port>` 只让这些端口通过过滤代理，引擎也只拿到 tool-host MCP 服务器。manager 拒绝被标记的 isolated 或 Bot 回合，以及没有 Cognia 模型的智能体（包括原生登录的 Codex）。网络上限不是 `full` 的远程 Host 拒绝该启动。
+
+这取代了阶段 2C-2 的 Codex 围栏（断网、禁用原生 MCP；见下文“外部引擎类别”）：`personalEgressFenced` 及读取它的每个分支都已删除。每个 Host 工具宿主现在用同一种方式判断被标记运行可调用的 Host 工具（`isHostOwnedReadTool`）：模块拥有且声明 `effect: "read"` 的工具，或 Host 的只读内置工具，别无其他。`admitPersonalCredential` 继续拒绝 `externalEngine`：设置它的每个调用方都会把凭据交给引擎进程。引擎的个人读取经 tool host 在 Host 上执行，由运行的标记把关，因此不存在个人凭据租约。
+
+已覆盖的验收测试：向外部 CLI 导出 token（isolated 启动的子进程环境、可读根目录与 SBPL 钥匙串拒绝），以及第二个请求者加入后续接引擎会话（新 key、新会话）。未采纳：计划中对既无 Cognia 模型也无智能体密钥的 isolated 引擎返回 `needsSetup` 的拒绝。无密钥启动可以是合法的（例如接本地模型端点的引擎），没有登录的引擎会报告它自己的错误。残留项（待桌面冒烟测试）：真实的 isolated Claude Code 与 Codex 启动（未登录启动、gateway 登录、钥匙串拒绝、引擎通过代理访问回环服务），以及一次飞书非所有者回合。Linux bubblewrap 路径只有单元测试。提交 `630939666b`、`d9e31bbbae`、`c3bbb20dff`、`5ff8b5b52b`、`e4eaf4bf96`；计划：`docs/plans/2026-11-16-adr-0243-3c-engine-launch-profile.md`。
 
 **阶段 3B-1（2026-11-16）。** 每棵运行树一本 `RunLedgerV1`，不建索引，记在声明它的 `ExecutionRun` 上，只在单个 Dexie 事务里写入（`lib/execution/run-ledger.ts`）。预留沿 `parentRunId` 找到最近一个带账本的运行，并从这条链上最近的有效预留里借，先看运行自己，所以正在运行的 turn 再执行一次时，从这个 turn 自己的预留里借。可用额度是父预留的额度减去它已观测的花费和已借出的部分；在根上是上限减去已花费和顶层预留。结算时，有停止证明就按上报的用量扣，否则扣除预留减去仍在运行的子预留；扣款计入 `spent`，并从每个上级预留中减去；比父级活得久的子预留挂到下一个有效预留上。兄弟占着剩余额度时，预留会等待（可中止、轮询、受截止时间约束），只有没有任何东西能释放额度时才以 `budget_exhausted` 拒绝；`deadline_exceeded` 以及美元上限下的 `pricing_unknown` 立即拒绝。每个预留都通过子运行归属声明认领；启动恢复把所有没人认领的预留按未确认停止结算。
 

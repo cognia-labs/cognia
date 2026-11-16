@@ -353,8 +353,8 @@ The agent editor shows these controls beside the agent-specific sandbox options.
 | `readableScope: "home"` | Yes | Existing home-directory read access. |
 | `readableScope: "workspace"` | No | Workspace, agent state, resolved command/toolchain installation roots, package-runner cache and read-only Git configuration; no blanket home-directory read. |
 
-Protected credential deny floors and Aider's implicit-config denies remain in every mode. Bot
-isolation retains its stricter filesystem scope. A remote client cannot use this policy to widen
+Protected credential deny floors and Aider's implicit-config denies remain in every mode. An
+isolated launch (ADR-0243 launch profile) keeps its stricter filesystem scope. A remote client cannot use this policy to widen
 the Host's spawn authorization. The default Host network ceiling remains `full`; a configured
 allowlist ceiling conservatively admits only the same allowlist patterns (case-insensitive, with
 outer whitespace ignored), a subset of those patterns, or `off`. It does not infer narrower domain
@@ -375,6 +375,10 @@ match subdomains but not the domain itself. Schemes, paths, ports, trailing-dot 
 IP patterns are invalid. The shared proxy supports HTTPS `CONNECT` tunnels and absolute-form HTTP
 requests, not SOCKS, UDP or arbitrary direct sockets. DNS resolution remains on the Host; private,
 loopback, link-local and metadata destinations stay blocked even when named in the allowlist.
+The one exception is `--network-allow-loopback <port>`, which only a personal launch receives (once
+per Host gateway or tool-host port, never with `--network`): the proxy dials an admitted
+`127.0.0.1` or `localhost` port directly, without DNS, the private-address filter or an upstream
+proxy, and refuses every other host and loopback port.
 Tools that ignore HTTP proxy variables, need unsupported Unix IPC on Linux, or require extra files
 outside workspace scope may fail. Include provider, authentication and package-download hosts when
 needed; `off` also prevents online model calls and package downloads.

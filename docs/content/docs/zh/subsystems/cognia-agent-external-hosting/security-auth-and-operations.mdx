@@ -58,7 +58,19 @@ app-server，并保留原生 session 以恢复对话。并发 turn 若需要不�
 
 ### 隔离配置
 
-state 为 `isolated` 的配置不共享上述路径。启动时设置 `COGNIA_AGENT_STATE_KEY=<configId>`，spawn backend（桌面端 Rust 或本 Node backend）解析私有 root `<data dir>/cognia/external-agents/<configId>`（macOS 为 `~/Library/Application Support`，Linux 为 `$XDG_DATA_HOME` 或 `~/.local/share`，Windows 为 `%APPDATA%`），以仅属主可访问的权限创建，并把运行时的 home 变量指向其中（`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`QWEN_HOME`、`PI_CODING_AGENT_DIR`、`KIMI_CODE_HOME`、`CLINE_DIR`、`QODER_CONFIG_DIR`、`COPILOT_HOME`，以及 OpenCode 的 config 与 XDG home）。在 sandbox 中该 root 取代上表的共享可写路径，而这些共享路径改为 `--deny-readable`，CLI 因此无法回退到你自己的登录。规则表是 `protocol/external-agent-security-policy.json` 中的 `agentStateIsolation`，`pnpm audit:agent-capabilities` 保证 Rust 副本与之一致。没有对应规则的运行时无法隔离，其隔离启动会被拒绝。Bot 隔离与 gateway task 启动已有私有 home，会忽略该 key。删除配置时会删除该 root（`external_agent_state_root_remove`）。
+state 为 `isolated` 的配置不共享上述路径。启动时设置 `COGNIA_AGENT_STATE_KEY=<configId>`，spawn backend（桌面端 Rust 或本 Node backend）解析私有 root `<data dir>/cognia/external-agents/<configId>`（macOS 为 `~/Library/Application Support`，Linux 为 `$XDG_DATA_HOME` 或 `~/.local/share`，Windows 为 `%APPDATA%`），以仅属主可访问的权限创建，并把运行时的 home 变量指向其中（`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`QWEN_HOME`、`PI_CODING_AGENT_DIR`、`KIMI_CODE_HOME`、`CLINE_DIR`、`QODER_CONFIG_DIR`、`COPILOT_HOME`，以及 OpenCode 的 config 与 XDG home）。在 sandbox 中该 root 取代上表的共享可写路径，而这些共享路径改为 `--deny-readable`，CLI 因此无法回退到你自己的登录。规则表是 `protocol/external-agent-security-policy.json` 中的 `agentStateIsolation`，`pnpm audit:agent-capabilities` 保证 Rust 副本与之一致。没有对应规则的运行时无法隔离，其隔离启动会被拒绝。isolated 或 personal 启动（见下文）与 gateway task 自有私有 home，会忽略该 key。删除配置时会删除该 root（`external_agent_state_root_remove`）。
+
+### 启动 profile
+
+一次启动为谁的运行服务，决定它如何启动（[ADR-0243](../../adr/0243-a-run-acts-for-someone-and-says-who)）。Host 为每次执行推导一个 profile，并以 `COGNIA_ENGINE_PROFILE` 传递；两个进程宿主分别用 `readEngineLaunchProfile`（TypeScript）或 `LaunchProfile::of`（Rust）读取。
+
+| Profile | 何时 | 启动得到什么 |
+| --- | --- | --- |
+| `owner` | 你自己的运行、来自连接器所登录账号的 IM 请求，或未绑定运行的 Host 操作 | 上文所述的已配置智能体：你的原生登录、`SSH_AUTH_SOCK` 以及启动环境的 owner 变量 |
+| `isolated` | 其他任何人的请求、外部事件、service 通道、Bot 运行，或无法读取身份的运行 | 无环境凭据、helper socket、原生登录或钥匙串；主目录不可读；每个会话与请求者集合一个私有根 `<data dir>/cognia/isolated-agents/<key>` |
+| `personal` | 在已读取你个人数据的会话中你的回合 | `isolated`，并作为 Cognia gateway task 运行，唯一的网络是 Host 的 gateway 与 tool-host 端口（`--network-allow-loopback`）；已配置的 MCP 服务器被丢弃 |
+
+isolated 启动只继承策略中 `launchEnvironment` 允许的请求环境变量，因此模型凭据只能经 Host gateway 或智能体保存在 Cognia 中的密钥到达。把账号存放在共享钥匙串中的引擎（`privateLaunchUnsupported`）会被拒绝，sandbox 之外的 isolated 启动也会被拒绝。personal 启动要求智能体使用 Cognia 模型；网络上限不是 `full` 的远程 Host 会拒绝它。
 
 若 launcher 缺失，运行：
 
