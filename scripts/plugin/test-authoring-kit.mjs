@@ -182,12 +182,24 @@ try {
   )
   for (const file of Object.values(patchedDependencies))
     write(file, fs.readFileSync(path.join(ROOT, file)))
+  // A patch the proof carries for a transitive package (fake-timers, under
+  // jest) applies to one exact version. The proof resolves afresh, so pin that
+  // package to the Host's patched version, or a newer release leaves the patch
+  // unused and pnpm refuses the install.
+  const patchedTransitives = Object.fromEntries(
+    Object.keys(patchedDependencies)
+      .map((specifier) => [
+        specifier.slice(0, specifier.lastIndexOf("@")),
+        specifier.slice(specifier.lastIndexOf("@") + 1),
+      ])
+      .filter(([name]) => !dependencies[name])
+  )
   write(
     "pnpm-workspace.yaml",
     yaml.stringify({
       packages: ["."],
       patchedDependencies,
-      overrides: workspace.overrides,
+      overrides: { ...workspace.overrides, ...patchedTransitives },
       catalog: workspace.catalog,
     })
   )
