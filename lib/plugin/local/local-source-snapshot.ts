@@ -13,7 +13,7 @@
  * Injectable fs so the whole thing is testable without a desktop shell.
  */
 
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import {
   MAX_SNAPSHOT_ENTRIES,
   MAX_TEXT_FILE_BYTES,

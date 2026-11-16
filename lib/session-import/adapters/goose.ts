@@ -1,5 +1,5 @@
 import { createPortableAgentSessionSource } from "./portable-agent-source"
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 
 type Row = Record<string, unknown>
 const row = (value: unknown): Row =>

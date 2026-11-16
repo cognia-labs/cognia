@@ -30,7 +30,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import { searchWorkspaceContent } from "@/lib/files/workspace-fs"
 import type { WorkspaceContentMatch } from "@/lib/files/types"
 import { cn } from "@/lib/utils"

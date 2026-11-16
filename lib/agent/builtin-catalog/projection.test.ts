@@ -1,4 +1,4 @@
-import { resolveAllSubagents, getDispatchableSubagentDef, knownSubagentIds } from "./index"
+import { resolveAllSubagents, getDispatchableSubagentDef, knownSubagentIds } from "./projection"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import {
   registerSubagent,

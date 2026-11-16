@@ -43,7 +43,7 @@ import { isTauri } from "@/lib/tauri"
 import { useModelOptions } from "@/components/shared/model-select"
 import { listBuiltinTools } from "@/lib/settings/builtin-tools"
 import { SDK_NATIVE_TOOL_NAMES } from "@/lib/workflow/editor/agent-tool-names"
-import { resolveDispatchableSubagents } from "@/lib/claude/agents/subagents"
+import { resolveDispatchableSubagents } from "@/lib/agent/builtin-catalog/projection"
 import { useExternalAgentStore } from "@/stores/agent/external-agent-store"
 import { MultiEntityPicker } from "./multi-entity-picker"
 

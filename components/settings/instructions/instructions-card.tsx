@@ -17,7 +17,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useSettingsStore } from "@/stores/settings"
 import { createLogger } from "@cognia/logging"
-import type { InstructionMode, InstructionsConfig } from "@/lib/claude/instructions/types"
+import type { InstructionMode, InstructionsConfig } from "@/lib/agents/instructions/types"
 
 const log = createLogger("settings.instructions")
 

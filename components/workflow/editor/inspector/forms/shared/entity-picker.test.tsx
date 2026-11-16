@@ -55,7 +55,9 @@ jest.mock("@/lib/db/knowledge-bases", () => ({
 jest.mock("@/lib/claude/feature-call", () => ({ discoverMcpServerViaSidecar: jest.fn() }))
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
 jest.mock("@/lib/settings/builtin-tools", () => ({ listBuiltinTools: () => [] }))
-jest.mock("@/lib/claude/agents/subagents", () => ({ resolveDispatchableSubagents: () => [] }))
+jest.mock("@/lib/agent/builtin-catalog/projection", () => ({
+  resolveDispatchableSubagents: () => [],
+}))
 jest.mock("@/stores/agent/external-agent-store", () => ({
   useExternalAgentStore: (selector: (s: unknown) => unknown) => selector({ agents: {} }),
 }))

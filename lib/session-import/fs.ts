@@ -1,7 +1,7 @@
 // Native history scans use a dedicated confined read-only command.
 // Picker imports supply contents directly and never touch the filesystem.
 
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import { isTauri } from "@/lib/platform/detect"
 import { mapBounded } from "./pacing"
 import type { SessionFs } from "./types"

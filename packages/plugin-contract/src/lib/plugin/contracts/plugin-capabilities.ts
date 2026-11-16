@@ -1103,7 +1103,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     runtimeBinding: "registerSubagent + subagent-registry overlay + resolveAllSubagents union",
     hostBindings: [
       "lib/plugin/registries/subagent-registry.ts",
-      "lib/claude/agents/subagents/index.ts",
+      "lib/agent/builtin-catalog/projection.ts",
     ],
     typescriptSdk: ["packages/plugin-sdk/src/define/define-subagent.ts"],
     pythonSdk: ["plugin-sdk/python/src/cognia/agent.py"],

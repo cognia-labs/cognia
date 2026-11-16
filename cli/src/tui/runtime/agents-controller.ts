@@ -8,7 +8,7 @@ import path from "node:path"
 
 import { dispatchSubagent } from "@/lib/plugin/agent-sdk/dispatch"
 import { normalizeDispatchBudgetResult } from "@/lib/claude/agents/dispatch-error"
-import { serializeMarkdownAgent } from "@/lib/claude/agents/markdown-agents"
+import { serializeMarkdownAgent } from "@/lib/agents/markdown-agents"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { listBackgroundTaskRecords } from "@/lib/db/background-tasks"

@@ -1,7 +1,7 @@
 /**
  * Map an agent definition's declared `color` onto something Ink's `<Text
  * color>` renders. Names come from the shared palette
- * (`lib/claude/agents/agent-color.ts`). The ANSI-native ones map to their
+ * (`lib/agents/agent-color.ts`). The ANSI-native ones map to their
  * keyword so the user's terminal theme decides the exact shade, and the
  * three the 16-colour set lacks get fixed hex values. A hex colour passes
  * through. Anything undeclared yields the caller's fallback (normally the
@@ -9,7 +9,7 @@
  * existed.
  */
 
-import { isNamedAgentColor, normalizeAgentColor } from "@/lib/claude/agents/agent-color"
+import { isNamedAgentColor, normalizeAgentColor } from "@/lib/agents/agent-color"
 
 const NAMED_TO_INK: Record<string, string> = {
   red: "red",

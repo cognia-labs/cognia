@@ -733,7 +733,7 @@ test("moved runtime obligations exist in the complete map while type-only and te
     "packages/provider-types/src/provider.ts",
   ]
   const excluded = [
-    "lib/claude/agents/subagents/types.ts",
+    "lib/agent/builtin-catalog/agent-definition.ts",
     "packages/agent-config-types/src/lsp-config.ts",
     "cli/src/tui/pty/tui-app-fixture.tsx",
   ]
@@ -767,7 +767,7 @@ test("the exact type-only exclusions cannot acquire runtime statements silently"
       .outputText.trim()
       .replace(/^export\s*\{\s*\};?$/, "")
   for (const file of [
-    "lib/claude/agents/subagents/types.ts",
+    "lib/agent/builtin-catalog/agent-definition.ts",
     "packages/agent-config-types/src/lsp-config.ts",
   ]) {
     assert.equal(

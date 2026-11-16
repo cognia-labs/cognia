@@ -1,7 +1,7 @@
 /**
  * Pure discovery of markdown-defined subagents under `.cognia/agents/*.md`
  * (project) and an optional global agents dir. Produces the `MarkdownAgentFile[]`
- * that `lib/claude/agents/markdown-agents.ts:buildMarkdownAgents` consumes.
+ * that `lib/agents/markdown-agents.ts:buildMarkdownAgents` consumes.
  *
  * Ordering matters: `buildMarkdownAgents` lets later files override earlier ones
  * by id, so we read global first, then non-primary roots, then the PRIMARY root
@@ -10,7 +10,7 @@
 
 import { basename, joinPath } from "./paths"
 import { PROJECT_AGENTS_DIR, type InstructionFs } from "./types"
-import type { MarkdownAgentFile } from "@/lib/claude/agents/markdown-agents"
+import type { MarkdownAgentFile } from "@/lib/agents/markdown-agents"
 
 function kebabId(fileName: string): string {
   return (

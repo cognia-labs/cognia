@@ -18,7 +18,7 @@
  * unit tests working without the desktop IPC.
  */
 
-import { joinPath, stripTrailingSep } from "@/lib/claude/instructions/paths"
+import { joinPath, stripTrailingSep } from "@/lib/agents/instructions/paths"
 import type { ExternalPlatform } from "@/lib/memory/external/types"
 import { detectPlatform, resolveHome } from "@/lib/memory/external/home"
 import type { VendorRoots } from "@cognia/plugin-contract/lib/agent-roots/index"

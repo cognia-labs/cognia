@@ -12,12 +12,12 @@
  * `SendOptions.agents`, keyed by the value the dispatcher uses to invoke it.
  */
 
-export { workflowDesignerAgent } from "./workflow-designer"
-export { workflowDebuggerAgent } from "./workflow-debugger"
-export { workflowRefactorerAgent } from "./workflow-refactorer"
-export { workflowDocWriterAgent } from "./workflow-doc-writer"
-export type { AgentDefinition } from "./types"
-import type { AgentDefinition } from "./types"
+export { workflowDesignerAgent } from "./workflow-agents/workflow-designer"
+export { workflowDebuggerAgent } from "./workflow-agents/workflow-debugger"
+export { workflowRefactorerAgent } from "./workflow-agents/workflow-refactorer"
+export { workflowDocWriterAgent } from "./workflow-agents/workflow-doc-writer"
+export type { AgentDefinition } from "./agent-definition"
+import type { AgentDefinition } from "./agent-definition"
 
 import {
   BUILTIN_AGENT_IDS,

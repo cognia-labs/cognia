@@ -10,7 +10,7 @@
  * This module is the PURE parse + merge layer. Filesystem discovery is
  * injected (a `{ id, content }[]` list) so it stays platform-agnostic and
  * unit-testable; the Tauri/global-dir wiring lives at the call site and
- * merges the result into `lib/claude/agents/subagents/index.ts`'s
+ * merges the result into `lib/agent/builtin-catalog/projection.ts`'s
  * `resolveAllSubagents`.
  *
  * Frontmatter:
@@ -25,7 +25,7 @@
 
 import matter from "gray-matter"
 import { normalizeAgentColor } from "./agent-color"
-import type { AgentDefinition } from "./subagents/types"
+import type { AgentDefinition } from "@/lib/agent/builtin-catalog/agent-definition"
 
 export interface MarkdownAgentResult {
   /** Successfully parsed agents keyed by id (later files override earlier). */

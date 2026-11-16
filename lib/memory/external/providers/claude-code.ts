@@ -10,7 +10,7 @@
  * Pure + fs-injected (see {@link DiscoverCtx}); no real disk access here.
  */
 
-import { ancestorChain, joinPath, pathKey, relLabel } from "@/lib/claude/instructions/paths"
+import { ancestorChain, joinPath, pathKey, relLabel } from "@/lib/agents/instructions/paths"
 import { encodeClaudeProject } from "../home"
 import type { DiscoverCtx, ExternalMemoryFile, ExternalFs, ExternalPlatform } from "../types"
 

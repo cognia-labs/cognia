@@ -1,5 +1,5 @@
 /**
- * The plugin contract's share of `lib/claude/instructions/types.ts`, which re-exports these.
+ * The plugin contract's share of `lib/agents/instructions/types.ts`, which re-exports these.
  */
 /** How the directory tree is walked when collecting instruction files. */
 export type InstructionMode = "layered" | "nearest"

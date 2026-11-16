@@ -676,7 +676,7 @@ const globalConfig: Config = {
     "!lib/tray-panel/types.ts",
     "!lib/attention/types.ts",
     "!lib/chat/mentions/types.ts",
-    "!lib/claude/agents/subagents/types.ts",
+    "!lib/agent/builtin-catalog/agent-definition.ts",
     "!lib/db/behavior-event-types.ts",
     "!lib/db/crm-types.ts",
     "!lib/db/inbox-telemetry-types.ts",

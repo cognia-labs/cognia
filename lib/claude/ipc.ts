@@ -2251,7 +2251,7 @@ export async function skillsScanCodex(): Promise<NativeSkill[]> {
 export async function skillsScanOpencode(): Promise<NativeSkill[]> {
   const [{ resolveVendorRoots }, { joinPath }] = await Promise.all([
     import("@/lib/agent-roots"),
-    import("@/lib/claude/instructions/paths"),
+    import("@/lib/agents/instructions/paths"),
   ])
   const { opencodeConfigDir } = await resolveVendorRoots()
   if (!opencodeConfigDir) return []
@@ -2262,7 +2262,7 @@ export async function skillsScanOpencode(): Promise<NativeSkill[]> {
 export async function skillsScanCursor(): Promise<NativeSkill[]> {
   const [{ resolveVendorRoots }, { joinPath }] = await Promise.all([
     import("@/lib/agent-roots"),
-    import("@/lib/claude/instructions/paths"),
+    import("@/lib/agents/instructions/paths"),
   ])
   const { cursorDir } = await resolveVendorRoots()
   if (!cursorDir) return []

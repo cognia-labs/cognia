@@ -1,11 +1,11 @@
 const loadInstructionsMock = jest.fn()
-jest.mock("@/lib/claude/instructions/load", () => ({
+jest.mock("@/lib/agents/instructions/load", () => ({
   loadProjectInstructions: (...a: unknown[]) => loadInstructionsMock(...a),
 }))
 
-import { markdownAgentTargets, discoverMarkdownAgentTargets } from "./markdown-mention-targets"
-import { resolveTargetAgentId } from "./chat-mention-targets"
-import type { MarkdownAgentFile } from "@/lib/claude/agents/markdown-agents"
+import { markdownAgentTargets, discoverMarkdownAgentTargets } from "./markdown-agent-targets"
+import { resolveTargetAgentId } from "./agent-targets"
+import type { MarkdownAgentFile } from "@/lib/agents/markdown-agents"
 
 beforeEach(() => loadInstructionsMock.mockReset())
 

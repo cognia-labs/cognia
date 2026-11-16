@@ -85,7 +85,7 @@ export function variableDiagnostics(
  */
 export type Reachability = "disabled" | "fork-only" | "dispatch-only" | "direct"
 
-/** Mirrors `isNativeDelegationEligible` in `lib/claude/agents/subagents/index.ts`. */
+/** Mirrors `isNativeDelegationEligible` in `lib/agent/builtin-catalog/projection.ts`. */
 export function nativeDelegationEligible(config: SubAgentTemplate["config"] | undefined): boolean {
   return !config?.provider && !config?.externalPresetId
 }

@@ -44,7 +44,7 @@ const resolveCaller = jest.fn(async () => ({
 const startDispatchRun = jest.fn(async () => ({ runId: "new-run", text: "started" }))
 const updateBackgroundTaskRecord = jest.fn(async () => undefined)
 
-jest.mock("@/lib/claude/agents/subagents", () => ({
+jest.mock("@/lib/agent/builtin-catalog/projection", () => ({
   getDispatchableSubagentDef: (...args: unknown[]) => getDispatchableSubagentDef(...(args as [])),
 }))
 jest.mock("@/lib/claude/agents/dispatch-run", () => ({

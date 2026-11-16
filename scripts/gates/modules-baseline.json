@@ -298,7 +298,7 @@
     "lib/chat/video-job-card.ts -> slash-commands",
     "lib/claude/adapter.ts -> artifact",
     "lib/claude/agents/cancel-subagent.ts -> background-tasks",
-    "lib/claude/agents/chat-mention-targets.ts -> squads",
+    "lib/chat/mentions/agent-targets.ts -> squads",
     "lib/claude/agents/dispatch-agent-handler.ts -> background-tasks",
     "lib/claude/agents/dispatch-run.ts -> background-tasks",
     "lib/claude/agents/dispatch-run.ts -> knowledge-base",

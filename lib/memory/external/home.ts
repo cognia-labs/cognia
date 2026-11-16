@@ -5,7 +5,7 @@
  * — mirrors `lib/chat/export-handoff-to-cli.ts`.
  */
 
-import { stripTrailingSep } from "@/lib/claude/instructions/paths"
+import { stripTrailingSep } from "@/lib/agents/instructions/paths"
 import type { ExternalPlatform } from "./types"
 
 /** Resolve the OS home dir via `@tauri-apps/api/path`; null when unavailable. */

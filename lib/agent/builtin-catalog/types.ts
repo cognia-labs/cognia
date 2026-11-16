@@ -60,7 +60,7 @@ export interface BuiltinAgentEntry {
   maxTurns?: number
   /**
    * Presentation colour for pickers and the CLI's live agent rows (a palette
-   * name from `lib/claude/agents/agent-color`). Never reaches the model.
+   * name from `lib/agents/agent-color`). Never reaches the model.
    */
   color?: string
 }

@@ -4,7 +4,7 @@
  * external coding agents (Claude Code, Codex).
  *
  * The discovery layer is pure and dependency-injected over {@link ExternalFs}
- * (mirrors `lib/claude/instructions/types.ts:InstructionFs`) so it is unit
+ * (mirrors `lib/agents/instructions/types.ts:InstructionFs`) so it is unit
  * testable without a real desktop filesystem.
  */
 

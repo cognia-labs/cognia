@@ -5,7 +5,7 @@
  */
 
 const loadProjectInstructions = jest.fn()
-jest.mock("@/lib/claude/instructions/load", () => ({
+jest.mock("@/lib/agents/instructions/load", () => ({
   loadProjectInstructions: (...args: unknown[]) => loadProjectInstructions(...args),
 }))
 

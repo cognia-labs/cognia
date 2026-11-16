@@ -6,7 +6,7 @@
  * structural; running is a separate decision.
  */
 
-import type { AgentDefinition } from "./types"
+import type { AgentDefinition } from "@/lib/agent/builtin-catalog/agent-definition"
 
 const SYSTEM_PROMPT = `You are the Workflow Refactorer subagent. You restructure an EXISTING subgraph chosen by the user without changing its observable behaviour.
 

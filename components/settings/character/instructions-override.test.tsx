@@ -9,7 +9,7 @@ jest.mock("next-intl", () => ({
 import { useState } from "react"
 import { fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import type { InstructionsConfig } from "@/lib/claude/instructions/types"
+import type { InstructionsConfig } from "@/lib/agents/instructions/types"
 
 import { InstructionsOverride, parseExtraPaths } from "./instructions-override"
 

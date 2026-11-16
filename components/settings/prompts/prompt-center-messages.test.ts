@@ -9,7 +9,7 @@
 
 import en from "@/i18n/messages/en/settings/promptCenter.json"
 import zh from "@/i18n/messages/zh-CN/settings/promptCenter.json"
-import type { InstructionSource } from "@/lib/claude/instructions/types"
+import type { InstructionSource } from "@/lib/agents/instructions/types"
 import type { PromptRevisionKind, PromptRevisionOrigin } from "@/lib/db/prompt-overrides"
 import type { BaseSystemPromptSource } from "@/lib/prompts/base-selection"
 import {

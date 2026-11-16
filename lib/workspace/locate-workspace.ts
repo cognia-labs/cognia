@@ -17,7 +17,7 @@
  * the result is stable across calls rather than dependent on iteration luck.
  */
 
-import { isDescendant, pathKey, stripTrailingSep } from "@/lib/claude/instructions/paths"
+import { isDescendant, pathKey, stripTrailingSep } from "@/lib/agents/instructions/paths"
 import type { Project, WorkspaceRoot } from "@/types"
 
 export interface WorkspaceLocation<T> {

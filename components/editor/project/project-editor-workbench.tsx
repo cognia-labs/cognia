@@ -62,7 +62,7 @@ import {
 // Deliberately not `code-server-pane`'s `joinProjectPath`: importing that would
 // drag the whole Tauri-coupled Pro IDE component into the Monaco path, and it
 // hardcodes `/` besides.
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import { cn } from "@/lib/utils"
 import { readMonacoActiveEditor, type ReadableMonacoEditor } from "./monaco-active-editor"
 import { useKeybindingStore } from "@/stores/canvas/keybinding-store"

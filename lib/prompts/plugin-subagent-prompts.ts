@@ -26,7 +26,7 @@ import {
 import { resolvePrompt } from "./resolve"
 
 const LOCAL_PREFIX = "subagent."
-const CONSUMER = "lib/claude/agents/subagents/index.ts"
+const CONSUMER = "lib/agent/builtin-catalog/projection.ts"
 
 function localIdOf(subagentId: string): string {
   return `${LOCAL_PREFIX}${subagentId}`

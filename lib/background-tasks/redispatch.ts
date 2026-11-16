@@ -159,7 +159,7 @@ export async function redispatchBackgroundRun(
   }
 
   const [{ getDispatchableSubagentDef }, { resolveCaller, startDispatchRun }] = await Promise.all([
-    import("@/lib/claude/agents/subagents"),
+    import("@/lib/agent/builtin-catalog/projection"),
     import("@/lib/claude/agents/dispatch-run"),
   ])
   if (!getDispatchableSubagentDef(record.subagentId)) {

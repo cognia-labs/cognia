@@ -4,7 +4,7 @@
  * system prompt. See ADR / the `lib/claude/instructions/` module README.
  */
 
-import type { MarkdownAgentFile } from "@/lib/claude/agents/markdown-agents"
+import type { MarkdownAgentFile } from "@/lib/agents/markdown-agents"
 import type {
   InstructionMode,
   InstructionSource,

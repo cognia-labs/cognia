@@ -7,7 +7,7 @@ jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(() => true),
 }))
 const mockLoadInstructions = jest.fn()
-jest.mock("@/lib/claude/instructions/load", () => ({
+jest.mock("@/lib/agents/instructions/load", () => ({
   loadProjectInstructions: (...args: unknown[]) => mockLoadInstructions(...args),
 }))
 

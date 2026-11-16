@@ -1,5 +1,5 @@
 import { discoverMarkdownAgentFiles, discoverMarkdownAgentPaths } from "./discover-agents"
-import { buildMarkdownAgents } from "@/lib/claude/agents/markdown-agents"
+import { buildMarkdownAgents } from "@/lib/agents/markdown-agents"
 import type { InstructionFs } from "./types"
 
 function fakeFs(files: Record<string, string>): InstructionFs {

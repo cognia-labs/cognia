@@ -8,7 +8,7 @@
 // `~/.continue/sessions/sessions.json` is a lightweight index we ignore (we read
 // the per-session files directly, which is robust to a stale index).
 
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import type { ImportedConversation } from "@/lib/data/importers/types"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { walkFiles } from "../fs"

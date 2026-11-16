@@ -21,7 +21,7 @@
  * dependency the other did not.
  */
 
-import { resolveDispatchableSubagents } from "@/lib/claude/agents/subagents"
+import { resolveDispatchableSubagents } from "@/lib/agent/builtin-catalog/projection"
 import { slugify } from "@/lib/agents/agent-id"
 import { parseMentions } from "@/lib/claude/team-router"
 import type { MentionResolvers } from "@/lib/chat/mentions/resolve-mentions"

@@ -18,7 +18,7 @@ import {
 } from "@/lib/execution/acting-authority"
 import { startDispatchRun, resolveCaller, loadNesting, type ResolvedCaller } from "./dispatch-run"
 import { dispatchSubagent } from "@/lib/plugin/agent-sdk/dispatch"
-import { getDispatchableSubagentDef } from "@/lib/claude/agents/subagents"
+import { getDispatchableSubagentDef } from "@/lib/agent/builtin-catalog/projection"
 import { getSettings } from "@/lib/db/settings"
 import { getSession } from "@/lib/db/sessions"
 import { getExecutionRun } from "@/lib/db/execution-runs"
@@ -54,7 +54,7 @@ jest.mock("@/lib/plugin/agent-sdk/dispatch", () => ({
   __esModule: true,
   dispatchSubagent: jest.fn(),
 }))
-jest.mock("@/lib/claude/agents/subagents", () => ({
+jest.mock("@/lib/agent/builtin-catalog/projection", () => ({
   __esModule: true,
   getDispatchableSubagentDef: jest.fn(),
 }))

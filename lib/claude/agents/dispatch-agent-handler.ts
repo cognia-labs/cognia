@@ -160,7 +160,7 @@ async function resumeDispatchRun(
     await Promise.all([
       import("@/lib/db/background-tasks"),
       import("@/lib/background-tasks/completion-delivery"),
-      import("@/lib/claude/agents/subagents"),
+      import("@/lib/agent/builtin-catalog/projection"),
     ])
 
   let record: Awaited<ReturnType<typeof getBackgroundTaskRecord>>

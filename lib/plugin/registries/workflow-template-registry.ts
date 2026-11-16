@@ -15,7 +15,7 @@ import { createValidatingOverlayRegistry } from "./createValidatingOverlayRegist
 import { listSkillIds } from "./skill-registry"
 import { listMcpServerPresetIds } from "./mcp-server-preset-registry"
 import { listNativeAnthropicToolIds } from "./native-anthropic-tool-registry"
-import { knownSubagentIds } from "@/lib/claude/agents/subagents"
+import { knownSubagentIds } from "@/lib/agent/builtin-catalog/projection"
 import { getPluginCatalogSnapshot } from "@/lib/workflow/nodes/catalog"
 import type {
   PluginWorkflowTemplateWarning,

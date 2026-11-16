@@ -7,7 +7,7 @@
  * delegation-mode preview: the candidate child spec implied by the current
  * binding is resolved through the SAME `resolveAgentExecutionSpec` authority
  * and classified via `decideDelegationMode` (the registry-time native filter
- * in `lib/claude/agents/subagents` is that decision's conservative
+ * in `lib/agent/builtin-catalog/projection` is that decision's conservative
  * projection). Refs only: this field never accepts endpoints or key
  * material.
  */

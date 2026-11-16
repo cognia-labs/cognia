@@ -18,7 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { SettingsCard } from "@/components/settings/common/settings-section"
-import { resolveAllSubagents } from "@/lib/claude/agents/subagents"
+import { resolveAllSubagents } from "@/lib/agent/builtin-catalog/projection"
 
 import type { PresetEditorState } from "../preset-editor-state"
 

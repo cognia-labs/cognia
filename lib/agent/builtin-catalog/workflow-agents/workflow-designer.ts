@@ -13,7 +13,7 @@
  * to run after authoring is done).
  */
 
-import type { AgentDefinition } from "@/lib/claude/agents/subagents/types"
+import type { AgentDefinition } from "@/lib/agent/builtin-catalog/agent-definition"
 
 const SYSTEM_PROMPT = `You are the Workflow Designer subagent. You author and refactor visual workflows on behalf of the user via the wf_* MCP tools.
 

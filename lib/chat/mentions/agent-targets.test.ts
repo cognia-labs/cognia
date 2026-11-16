@@ -2,14 +2,14 @@ import {
   buildChatMentionTargets,
   chatMentionResolvers,
   resolveTargetAgentId,
-} from "./chat-mention-targets"
-import type { SubagentMentionTarget } from "./chat-mention-targets"
+} from "./agent-targets"
+import type { SubagentMentionTarget } from "./agent-targets"
 import { buildRouteTargets } from "@/lib/squads/runtime-targets"
 
 // Mock only the subagent source; slugify + parseMentions run for real so the
 // handle derivation and the scanner reuse are exercised end-to-end.
 const mockResolve = jest.fn()
-jest.mock("@/lib/claude/agents/subagents", () => ({
+jest.mock("@/lib/agent/builtin-catalog/projection", () => ({
   resolveDispatchableSubagents: () => mockResolve(),
 }))
 

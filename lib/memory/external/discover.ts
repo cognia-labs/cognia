@@ -5,7 +5,7 @@
  * supplies the real fs + home + roots.
  */
 
-import { pathKey } from "@/lib/claude/instructions/paths"
+import { pathKey } from "@/lib/agents/instructions/paths"
 import { claudeConfigDir, discoverClaudeCode } from "./providers/claude-code"
 import { codexHomeDir, discoverCodex } from "./providers/codex"
 import { discoverOpencode, opencodeConfigDir } from "./providers/opencode"

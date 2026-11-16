@@ -7,8 +7,8 @@
 import nodeFs from "node:fs/promises"
 import path from "node:path"
 
-import { buildMarkdownAgents, type MarkdownAgentFile } from "@/lib/claude/agents/markdown-agents"
-import type { AgentDefinition } from "@/lib/claude/agents/subagents/types"
+import { buildMarkdownAgents, type MarkdownAgentFile } from "@/lib/agents/markdown-agents"
+import type { AgentDefinition } from "@/lib/agent/builtin-catalog/agent-definition"
 import { claudeCodeAdapter } from "@/lib/agents/subagent-importers/claude-code"
 import { codexCliAdapter } from "@/lib/agents/subagent-importers/codex-cli"
 import type {

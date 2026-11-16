@@ -7,7 +7,7 @@
 // environment variables), how the corpus is read and budgeted, and how a
 // parsed rollout becomes app rows and an imported session graph.
 
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import { presetIdsForSessionSource } from "@/lib/agent-ecosystem/runtime-link"
 import type { ImportedConversation } from "@/lib/data/importers/types"
 import type { StoredMessage } from "@cognia/agent-config-types"

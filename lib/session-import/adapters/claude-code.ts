@@ -9,7 +9,7 @@
 // (`SubagentPart`) on the spawning turn, hidden nested subagent sessions, team
 // members, and the imported session graph.
 
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import type { ImportedConversation } from "@/lib/data/importers/types"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import type {

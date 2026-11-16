@@ -16,7 +16,7 @@ import { useMemo } from "react"
 import {
   buildChatMentionTargets,
   type SubagentMentionTarget,
-} from "@/lib/claude/agents/chat-mention-targets"
+} from "@/lib/chat/mentions/agent-targets"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 
 export function useMentionableSubagents(): SubagentMentionTarget[] {

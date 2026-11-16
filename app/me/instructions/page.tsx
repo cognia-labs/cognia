@@ -35,7 +35,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { useSettingsPatch } from "@/hooks/use-settings-patch"
 import { useSettingsStore } from "@/stores/settings"
-import type { InstructionMode, InstructionsConfig } from "@/lib/claude/instructions/types"
+import type { InstructionMode, InstructionsConfig } from "@/lib/agents/instructions/types"
 
 const MODES: InstructionMode[] = ["layered", "nearest"]
 

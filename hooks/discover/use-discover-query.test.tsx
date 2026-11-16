@@ -145,7 +145,7 @@ jest.mock("@/lib/ai/agent/external/config/presets", () => ({
     tags: ["cli"],
   })),
 }))
-jest.mock("@/lib/claude/agents/subagents", () => ({
+jest.mock("@/lib/agent/builtin-catalog/projection", () => ({
   resolveDispatchableSubagents: jest.fn(() => [
     {
       id: "workflow-designer",

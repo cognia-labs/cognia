@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { clearInstructionCache } from "@/lib/claude/instructions/load"
+import { clearInstructionCache } from "@/lib/agents/instructions/load"
 import {
   ABSENT_FILE_VERSION,
   createInstructionFilePromptAdapter,
@@ -9,8 +9,8 @@ import {
   type InstructionFileAdapterDeps,
 } from "./instruction-files"
 
-jest.mock("@/lib/claude/instructions/load", () => ({
-  ...jest.requireActual("@/lib/claude/instructions/load"),
+jest.mock("@/lib/agents/instructions/load", () => ({
+  ...jest.requireActual("@/lib/agents/instructions/load"),
   clearInstructionCache: jest.fn(),
 }))
 

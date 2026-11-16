@@ -23,7 +23,7 @@
 
 import { computeDiff } from "@/lib/artifacts/diff"
 import { parseSkillMarkdown, serializeSkill } from "@/lib/claude/skills-io"
-import { parseMarkdownAgent, serializeMarkdownAgent } from "@/lib/claude/agents/markdown-agents"
+import { parseMarkdownAgent, serializeMarkdownAgent } from "@/lib/agents/markdown-agents"
 import { isValidSkillSlug } from "@/lib/skills/slug"
 import type {
   HarnessComponentName,

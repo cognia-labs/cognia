@@ -22,7 +22,7 @@
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 
 import { readClaudeEffectiveSettings, type ClaudeSettings } from "@/lib/claude/settings"
-import { resolveInstructionsConfig } from "@/lib/claude/instructions/types"
+import { resolveInstructionsConfig } from "@/lib/agents/instructions/types"
 import { listRules } from "@/lib/claude/permissions/ruleset-edit"
 import type { Ruleset, ToolRules } from "@/lib/claude/permissions/ruleset"
 import { listMcpServers } from "@/lib/db/mcp-servers"

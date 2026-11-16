@@ -19,7 +19,7 @@ import { AgentTeamAvatar, mentionTargetAvatarSubject } from "./agent-team-avatar
 import type { MentionTarget } from "@/lib/squads/runtime-targets"
 import type { AgentRuntimeDescriptor } from "@/lib/ai/agent/runtime-catalog/types"
 import type { RouteLane } from "@/lib/chat/turn-route/types"
-import type { SubagentMentionTarget } from "@/lib/claude/agents/chat-mention-targets"
+import type { SubagentMentionTarget } from "@/lib/chat/mentions/agent-targets"
 import type { Character } from "@cognia/agent-config-types"
 import type { TeammateRuntime } from "@/types/agent/agent-team"
 

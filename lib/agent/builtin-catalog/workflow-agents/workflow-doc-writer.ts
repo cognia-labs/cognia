@@ -6,7 +6,7 @@
  * nodes (so it never accidentally deletes user content while annotating).
  */
 
-import type { AgentDefinition } from "./types"
+import type { AgentDefinition } from "@/lib/agent/builtin-catalog/agent-definition"
 
 const SYSTEM_PROMPT = `You are the Workflow Doc Writer subagent. You add explanatory \`annotation.note\` nodes near functional clusters so a future reader (the user, a teammate, or a fresh AI session) can understand the workflow at a glance.
 

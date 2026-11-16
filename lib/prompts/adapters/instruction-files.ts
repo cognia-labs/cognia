@@ -15,9 +15,9 @@
 import {
   clearInstructionCache,
   discoverProjectInstructionFiles,
-} from "@/lib/claude/instructions/load"
-import { basename, dirname, joinPath } from "@/lib/claude/instructions/paths"
-import { resolveInstructionsConfig, type InstructionSource } from "@/lib/claude/instructions/types"
+} from "@/lib/agents/instructions/load"
+import { basename, dirname, joinPath } from "@/lib/agents/instructions/paths"
+import { resolveInstructionsConfig, type InstructionSource } from "@/lib/agents/instructions/types"
 import { readWorkspaceFileVersioned, writeWorkspaceFileChecked } from "@/lib/files/workspace-fs"
 import { useSettingsStore } from "@/stores/settings"
 import {

@@ -10,7 +10,7 @@ import {
   GENERAL_PURPOSE_AGENT_ID,
   PLAN_AGENT_ID,
 } from "./catalog"
-import { isNamedAgentColor, normalizeAgentColor } from "@/lib/claude/agents/agent-color"
+import { isNamedAgentColor, normalizeAgentColor } from "@/lib/agents/agent-color"
 import { SUBAGENT_CONTRACT_TAG } from "@/lib/agent/prompts/subagent-frame"
 import {
   __setPromptOverrideSnapshotForTests,

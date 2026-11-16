@@ -1167,7 +1167,7 @@
       ]
     },
     {
-      "key": "lib/claude/agents/subagents/index.ts",
+      "key": "lib/agent/builtin-catalog/projection.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

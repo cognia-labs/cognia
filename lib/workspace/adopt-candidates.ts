@@ -24,7 +24,7 @@
  * worth syncing to a phone.
  */
 
-import { basename, pathKey } from "@/lib/claude/instructions/paths"
+import { basename, pathKey } from "@/lib/agents/instructions/paths"
 import type { Project } from "@/types"
 
 import { unclaimedPaths } from "./locate-workspace"

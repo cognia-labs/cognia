@@ -7,7 +7,7 @@
  * Dependency-injected so the guard logic is unit-testable without a real disk.
  */
 
-import { isDescendant } from "@/lib/claude/instructions/paths"
+import { isDescendant } from "@/lib/agents/instructions/paths"
 import { isTauri } from "@/lib/tauri"
 
 export interface EditDeps {

@@ -8,7 +8,7 @@ import {
   resolveAllSubagents,
   resolveDispatchableSubagents,
   getDispatchableSubagentDef,
-} from "./index"
+} from "./projection"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { SubAgentTemplate } from "@/types/agent/sub-agent"
 import { builtinAgentById } from "@/lib/agent/builtin-catalog/catalog"

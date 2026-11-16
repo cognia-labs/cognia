@@ -48,7 +48,7 @@ describe("plugin subagent prompt slots", () => {
       def: {
         defaultBody: "Research the question.",
         scopes: ["account"],
-        consumers: ["lib/claude/agents/subagents/index.ts"],
+        consumers: ["lib/agent/builtin-catalog/projection.ts"],
       },
     })
   })

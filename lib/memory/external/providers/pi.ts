@@ -27,7 +27,7 @@
  * Pure + fs-injected (see {@link DiscoverCtx}); no real disk access here.
  */
 
-import { joinPath, pathKey, relLabel } from "@/lib/claude/instructions/paths"
+import { joinPath, pathKey, relLabel } from "@/lib/agents/instructions/paths"
 import type { DiscoverCtx, ExternalMemoryFile, ExternalFs } from "../types"
 
 const SYSTEM_FILE = "SYSTEM.md"

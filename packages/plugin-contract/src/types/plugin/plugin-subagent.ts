@@ -6,14 +6,14 @@
  * each entry into the `subagent-registry` overlay on enable and unregisters
  * on disable — identical lifecycle to `skills` / `mcp-server-preset`.
  *
- * Runtime resolution (see `lib/claude/agents/subagents/index.ts:resolveAllSubagents`)
+ * Runtime resolution (see `lib/agent/builtin-catalog/projection.ts:resolveAllSubagents`)
  * unions the 4 host-bundled subagents (workflow-designer / workflow-debugger /
  * workflow-refactorer / workflow-doc-writer) with the plugin overlay. Plugin
  * subagent names are namespaced as `<pluginId>:<id>` at projection time so
  * they never collide with built-in dispatcher names.
  *
  * This is NOT a 1:1 mirror of `AgentDefinition`
- * (`lib/claude/agents/subagents/types.ts`), and the doc here used to claim it
+ * (`lib/agent/builtin-catalog/agent-definition.ts`), and the doc here used to claim it
  * was. It is a deliberately narrower subset, plus the `id` discriminator and a
  * display `name`.
  *
@@ -77,7 +77,7 @@ export interface PluginSubagentDef {
   effort?: PluginSubagentEffort
   /**
    * Display colour for this agent's rows and badges (palette name or
-   * `#rrggbb`, see `lib/claude/agents/agent-color`). Presentation only, never
+   * `#rrggbb`, see `lib/agents/agent-color`). Presentation only, never
    * sent to the model.
    */
   color?: string

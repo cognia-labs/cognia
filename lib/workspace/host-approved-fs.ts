@@ -25,7 +25,7 @@
  * queue. Crossing them would mint a lease nothing picks up.
  */
 
-import { isDescendant, stripTrailingSep } from "@/lib/claude/instructions/paths"
+import { isDescendant, stripTrailingSep } from "@/lib/agents/instructions/paths"
 import { listWorkspaceRoots } from "@/lib/files/workspace-fs"
 import type { WorkspaceRoot } from "@/lib/files/types"
 import { gitInit, runGitUserAction } from "@/lib/git/commands"

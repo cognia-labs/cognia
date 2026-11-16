@@ -119,7 +119,7 @@ export function declaredDependencyDepsFor(
       const [{ approvedDeclaration }, { primaryRootOf }, { pathKey }] = await Promise.all([
         import("@/lib/task-workspace/workspace-provisioning"),
         import("@/lib/workspace/roots"),
-        import("@/lib/claude/instructions/paths"),
+        import("@/lib/agents/instructions/paths"),
       ])
       // The workspace primary's own folder keeps the workspace's approval;
       // any other folder's file is approved at that folder.

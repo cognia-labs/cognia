@@ -74,7 +74,7 @@ export function useEffectiveChatPreview(selection: EffectiveChatPreviewSelection
         instructions = { omitted: "no-filesystem" }
       } else {
         try {
-          const { loadProjectInstructions } = await import("@/lib/claude/instructions/load")
+          const { loadProjectInstructions } = await import("@/lib/agents/instructions/load")
           const resolved = await loadProjectInstructions({
             cwd: roots[0],
             roots,

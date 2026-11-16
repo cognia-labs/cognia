@@ -41,7 +41,7 @@
  * separate repository nested inside one.
  */
 
-import { pathKey } from "@/lib/claude/instructions/paths"
+import { pathKey } from "@/lib/agents/instructions/paths"
 import { mergeProvisioning, provisioningFromConsent } from "@/lib/workspace/provisioning-inference"
 import { loadDeclaredWorkspace, type DeclaredWorkspace } from "@/lib/workspace/repo-declared"
 import { primaryRootOf } from "@/lib/workspace/roots"

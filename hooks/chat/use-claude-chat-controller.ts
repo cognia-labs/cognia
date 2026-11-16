@@ -260,7 +260,7 @@ import {
 import { useAgentExecutionHandleDirectory } from "@/components/providers/agent-execution-handle-provider"
 import { useGitStore } from "@/stores/git/git-store"
 import { refreshGitStatus } from "@/lib/git/load"
-import { chatMentionResolvers } from "@/lib/claude/agents/chat-mention-targets"
+import { chatMentionResolvers } from "@/lib/chat/mentions/agent-targets"
 import {
   routeTargetsFromStores,
   snapshotRouteContext,

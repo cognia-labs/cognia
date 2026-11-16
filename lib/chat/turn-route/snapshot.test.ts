@@ -61,7 +61,7 @@ jest.mock("@/lib/ai/agent/external/runtimes/remote/remote-host-configs", () => (
   listRemoteHostConfigs: () => hostConfigs.list(),
 }))
 const subagentHandles: string[] = []
-jest.mock("@/lib/claude/agents/chat-mention-targets", () => ({
+jest.mock("@/lib/chat/mentions/agent-targets", () => ({
   buildChatMentionTargets: () => subagentHandles.map((handle) => ({ handle })),
 }))
 const sessions: Record<string, unknown> = {}

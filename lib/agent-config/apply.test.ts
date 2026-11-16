@@ -10,7 +10,7 @@ jest.mock("@/lib/files/workspace-fs", () => ({
 }))
 
 const mockClearCache = jest.fn()
-jest.mock("@/lib/claude/instructions/load", () => ({
+jest.mock("@/lib/agents/instructions/load", () => ({
   clearInstructionCache: () => mockClearCache(),
 }))
 

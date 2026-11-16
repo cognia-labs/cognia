@@ -2,7 +2,7 @@
  * The agents Cognia ships, written once and read by every shell (ADR-0161).
  *
  * The prompts below are the merged text. `Explore` and `Plan` previously
- * existed twice, in `lib/claude/agents/subagents/` and in
+ * existed twice, in `lib/agent/builtin-catalog/projection/` and in
  * `cli/src/agent/builtin-agents.ts`, with different wording and different
  * descriptions, so the same name meant two different agents depending on which
  * shell dispatched it. Each merged prompt keeps the concrete working guidance
@@ -11,11 +11,11 @@
  */
 
 import { readOnlyBuiltinToolNames } from "@/lib/settings/builtin-tools"
-import type { AgentDefinition } from "@/lib/claude/agents/subagents/types"
-import { workflowDesignerAgent } from "@/lib/claude/agents/subagents/workflow-designer"
-import { workflowDebuggerAgent } from "@/lib/claude/agents/subagents/workflow-debugger"
-import { workflowRefactorerAgent } from "@/lib/claude/agents/subagents/workflow-refactorer"
-import { workflowDocWriterAgent } from "@/lib/claude/agents/subagents/workflow-doc-writer"
+import type { AgentDefinition } from "@/lib/agent/builtin-catalog/agent-definition"
+import { workflowDesignerAgent } from "@/lib/agent/builtin-catalog/workflow-agents/workflow-designer"
+import { workflowDebuggerAgent } from "@/lib/agent/builtin-catalog/workflow-agents/workflow-debugger"
+import { workflowRefactorerAgent } from "@/lib/agent/builtin-catalog/workflow-agents/workflow-refactorer"
+import { workflowDocWriterAgent } from "@/lib/agent/builtin-catalog/workflow-agents/workflow-doc-writer"
 import { resolvePrompt } from "@/lib/prompts/resolve"
 import { definePrompt, type PromptDefinitionV1, type PromptHost } from "@/lib/prompts/types"
 import type { BuiltinAgentEntry, BuiltinAgentSurface, BuiltinToolPolicy } from "./types"

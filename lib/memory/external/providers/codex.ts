@@ -11,7 +11,7 @@
  * Pure + fs-injected (see {@link DiscoverCtx}); no real disk access here.
  */
 
-import { ancestorChain, joinPath, pathKey, relLabel } from "@/lib/claude/instructions/paths"
+import { ancestorChain, joinPath, pathKey, relLabel } from "@/lib/agents/instructions/paths"
 import type { DiscoverCtx, ExternalMemoryFile, ExternalFs } from "../types"
 
 /** Same-dir precedence: override wins, but we surface both so either can be edited. */

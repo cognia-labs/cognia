@@ -19,7 +19,7 @@ import { buildWorkspaceInstructionsSection } from "@/lib/workspace/workspace-ins
 import { resolveSessionWorkspaceRoot } from "@/lib/task-workspace/session-execution-context"
 import { isSessionScratchWorkspace } from "@/lib/task-workspace/managed-workspace"
 import { listBuiltinTools, namespaced } from "@/lib/settings/builtin-tools"
-import type { MarkdownAgentFile } from "@/lib/claude/agents/markdown-agents"
+import type { MarkdownAgentFile } from "@/lib/agents/markdown-agents"
 import type { RagEmbeddingProvider } from "@cognia/provider-embedding/embedding-catalog"
 import type { BedrockConnectionSettings } from "@cognia/provider-types"
 import type { IVectorStore } from "@cognia/vector/store"
@@ -1054,7 +1054,7 @@ async function listDispatchAgentAvailable(
 ): Promise<Array<{ id: string; description: string }>> {
   try {
     const [{ resolveDispatchableSubagents }, { isSubagentDispatchAllowed }] = await Promise.all([
-      import("@/lib/claude/agents/subagents"),
+      import("@/lib/agent/builtin-catalog/projection"),
       import("@/lib/claude/agents/subagent-dispatch-policy"),
     ])
     return resolveDispatchableSubagents()
@@ -2545,7 +2545,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   const skipDiscovery = session?.bareMode ?? character?.bareMode ?? appSettings?.bareMode
   if (!skipDiscovery && session?.kind !== "workflow-editor") {
     try {
-      const { loadProjectInstructions } = await import("@/lib/claude/instructions/load")
+      const { loadProjectInstructions } = await import("@/lib/agents/instructions/load")
       const instructionsConfig = character?.instructionsOverride ?? appSettings?.instructions
       const resolved = await loadProjectInstructions({
         cwd,
@@ -4625,7 +4625,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     // nested logs in the chat tree (default off in the SDK).
     opts.forwardSubagentText = true
     try {
-      const { resolveAllSubagents } = await import("@/lib/claude/agents/subagents")
+      const { resolveAllSubagents } = await import("@/lib/agent/builtin-catalog/projection")
       opts.agents = {
         ...(opts.agents ?? {}),
         ...resolveAllSubagents({ context: "workflow-editor" }),
@@ -4667,7 +4667,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     // Forward subagent text/thinking so the SDK-subagent bridge renders rich logs.
     opts.forwardSubagentText = true
     try {
-      const { resolveAllSubagents } = await import("@/lib/claude/agents/subagents")
+      const { resolveAllSubagents } = await import("@/lib/agent/builtin-catalog/projection")
       opts.agents = {
         ...(opts.agents ?? {}),
         ...resolveAllSubagents({ context: "team" }),
@@ -4695,7 +4695,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     opts.forwardSubagentText = true
     try {
       const { resolveAllSubagents, workflowEditorSubagents } =
-        await import("@/lib/claude/agents/subagents")
+        await import("@/lib/agent/builtin-catalog/projection")
       // Include the 4 host built-ins so they are `@`-mentionable in general
       // chat (they back the picker via `resolveDispatchableSubagents`); union
       // with the user's own plugin + template subagents. Keys align across the
@@ -4737,7 +4737,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   if (projectMarkdownAgentFiles.length > 0 && !ctx.dispatchContext) {
     try {
       const { buildMarkdownAgents, markdownAgentsToSdkMap } =
-        await import("@/lib/claude/agents/markdown-agents")
+        await import("@/lib/agents/markdown-agents")
       const { agents } = buildMarkdownAgents(projectMarkdownAgentFiles)
       const sdkMap = markdownAgentsToSdkMap(agents)
       if (Object.keys(sdkMap).length > 0) {

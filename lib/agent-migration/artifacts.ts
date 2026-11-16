@@ -65,7 +65,7 @@ async function scanSubagents(
     { configRootKeyForMigrationVendor, subagentSourceIdForMigrationVendor },
   ] = await Promise.all([
     import("@/lib/agent-roots"),
-    import("@/lib/claude/instructions/paths"),
+    import("@/lib/agents/instructions/paths"),
     import("@/lib/session-import/fs"),
     import("@/lib/agents/subagent-importers"),
     import("@/lib/agent-ecosystem/catalog"),
@@ -169,7 +169,7 @@ async function defaultPreviewDeps(): Promise<ArtifactPreviewDeps> {
           // generic scanner instead of a vendor command.
           const [{ resolveHome }, { joinPath }] = await Promise.all([
             import("@/lib/memory/external/home"),
-            import("@/lib/claude/instructions/paths"),
+            import("@/lib/agents/instructions/paths"),
           ])
           const home = (await resolveHome()) ?? ""
           return home ? ipc.skillsScanDir(joinPath(home, ".agents/skills")) : []

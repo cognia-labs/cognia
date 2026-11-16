@@ -26,7 +26,7 @@ import {
 import { getSettings } from "@/lib/db/settings"
 
 jest.mock("@/lib/plugin/agent-sdk/dispatch", () => ({ dispatchSubagent: jest.fn() }))
-jest.mock("./subagents", () => ({
+jest.mock("@/lib/agent/builtin-catalog/projection", () => ({
   getDispatchableSubagentDef: () => ({ id: "reader", name: "Reader", prompt: "Read", tools: [] }),
 }))
 jest.mock("@/lib/db/settings", () => ({

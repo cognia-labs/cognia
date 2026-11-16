@@ -10,7 +10,7 @@
 // as Gemini's recording service. Official JSON content-array exports are also
 // accepted; unlike JSONL recordings they do not carry resumable metadata.
 
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import type { ImportedConversation } from "@/lib/data/importers/types"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { walkFiles } from "../fs"

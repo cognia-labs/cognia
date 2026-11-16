@@ -32,7 +32,7 @@ jest.mock("@/lib/plugin/registries/character-pack-registry", () => ({
 jest.mock("@/lib/db/characters", () => ({
   listCharacters: () => Promise.resolve([]),
 }))
-jest.mock("@/lib/claude/agents/subagents", () => ({
+jest.mock("@/lib/agent/builtin-catalog/projection", () => ({
   resolveAllSubagents: () => ({}),
 }))
 jest.mock("@/lib/ai/agent/external/config/presets", () => ({

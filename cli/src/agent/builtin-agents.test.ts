@@ -75,7 +75,7 @@ describe("exploreAgent / planAgent", () => {
     expect(a.def.tools).toEqual([...READ_ONLY_BUILTIN_TOOLS])
   })
 
-  // Before the shared catalog this file and `lib/claude/agents/subagents/` each
+  // Before the shared catalog this file and `lib/agent/builtin-catalog/projection/` each
   // wrote their own `Explore` and `Plan`, with different prompts and different
   // descriptions, so one name meant two different agents.
   it("projects the shared catalog rather than keeping a second copy", () => {

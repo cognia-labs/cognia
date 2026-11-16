@@ -20,7 +20,7 @@ import {
   readPiSession,
   summarizePiSession,
 } from "@cognia/agent-pi/history"
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import { scanFileSummaries } from "../scan"
 import { buildImportedSessionGraph } from "../graph"
 import { historyMessagesToStored, historySummaryToSessionSummary } from "../history-to-stored"

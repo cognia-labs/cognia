@@ -1,4 +1,4 @@
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 
 import { createPortableAgentSessionSource } from "./portable-agent-source"
 

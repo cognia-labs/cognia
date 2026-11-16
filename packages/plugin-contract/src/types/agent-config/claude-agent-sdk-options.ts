@@ -771,7 +771,7 @@ export interface AgentDefinition {
   /**
    * Display colour for this agent's rows and badges, so parallel runs are
    * telling apart at a glance (Claude Code and OpenCode `color:` parity). A
-   * palette name or `#rrggbb`, normalised by `lib/claude/agents/agent-color`.
+   * palette name or `#rrggbb`, normalised by `lib/agents/agent-color`.
    * Never sent to the model.
    */
   color?: string

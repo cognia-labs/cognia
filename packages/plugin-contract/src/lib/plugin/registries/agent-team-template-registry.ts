@@ -50,7 +50,7 @@ export interface AgentTeamTemplateValidationResult {
 
 /**
  * Built-in subagent dispatcher names always available in the team runtime.
- * Kept in sync with `lib/claude/agents/subagents/index.ts:workflowEditorSubagents`.
+ * Kept in sync with `lib/agent/builtin-catalog/projection.ts:workflowEditorSubagents`.
  */
 const BUILT_IN_SUBAGENT_IDS: readonly string[] = [
   "workflow-designer",

@@ -9,11 +9,8 @@ import type { ResolvedAgentExecutionSpec } from "@cognia/agent-config-types/agen
 import { useGitStore } from "@/stores/git/git-store"
 import { primaryRootOf } from "@/lib/workspace/roots"
 import { pendingRecoveryPhase } from "@/lib/usage/compaction-metrics"
-import {
-  buildChatMentionTargets,
-  resolveTargetAgentId,
-} from "@/lib/claude/agents/chat-mention-targets"
-import { discoverMarkdownAgentTargets } from "@/lib/claude/agents/markdown-mention-targets"
+import { buildChatMentionTargets, resolveTargetAgentId } from "@/lib/chat/mentions/agent-targets"
+import { discoverMarkdownAgentTargets } from "@/lib/chat/mentions/markdown-agent-targets"
 import { useProjectStore } from "@/stores/project/project-store"
 import { resolveSessionWorkspace } from "@/lib/workspace/session-workspace"
 import { allRootPaths } from "@/lib/workspace/roots"

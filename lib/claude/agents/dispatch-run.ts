@@ -372,7 +372,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
 
   const [{ dispatchSubagent }, { getDispatchableSubagentDef }, nesting] = await Promise.all([
     import("@/lib/plugin/agent-sdk/dispatch"),
-    import("@/lib/claude/agents/subagents"),
+    import("@/lib/agent/builtin-catalog/projection"),
     loadNesting(),
   ])
   if (!p.recovery && p.resumeOfRunId) {

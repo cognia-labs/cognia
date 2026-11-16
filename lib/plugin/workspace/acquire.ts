@@ -32,7 +32,7 @@ import {
   type WorkspaceWalkOptions,
   type WorkspaceWalkResult,
 } from "@/lib/files/workspace-fs"
-import { isDescendant } from "@/lib/claude/instructions/paths"
+import { isDescendant } from "@/lib/agents/instructions/paths"
 import {
   gitCheckoutBranch,
   gitCloneGuarded,

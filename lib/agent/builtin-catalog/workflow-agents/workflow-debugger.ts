@@ -7,7 +7,7 @@
  * applies them.
  */
 
-import type { AgentDefinition } from "./types"
+import type { AgentDefinition } from "@/lib/agent/builtin-catalog/agent-definition"
 
 const SYSTEM_PROMPT = `You are the Workflow Debugger subagent. Diagnose why a workflow failed and explain the most likely fix.
 

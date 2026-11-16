@@ -1,4 +1,4 @@
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import type { VendorRoots } from "@/lib/agent-roots"
 import type { SessionFs } from "@/lib/session-import/types"
 import { commandsFromCodexFiles } from "./codex"

@@ -11,7 +11,7 @@
  * Per-plugin cleanup: `unregisterSubagentsByPlugin(pluginId)`.
  *
  * Runtime resolution lives in
- * `lib/claude/agents/subagents/index.ts:resolveAllSubagents`. It unions the
+ * `lib/agent/builtin-catalog/projection.ts:resolveAllSubagents`. It unions the
  * 4 host-bundled subagents (workflow-designer / workflow-debugger /
  * workflow-refactorer / workflow-doc-writer) with the overlay; overlay
  * entries are projected under `<pluginId>:<id>` to avoid colliding with

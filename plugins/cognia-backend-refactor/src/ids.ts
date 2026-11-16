@@ -6,7 +6,7 @@
  *    `def.id` (identity keyFn), so authors self-namespace as
  *    `<pluginId>:<name>`. Characters reference them via `pluginSkillIds`.
  *  - Plugin subagents resolve at `<pluginId>:<id>` (see
- *    `lib/claude/agents/subagents/index.ts:resolveAllSubagents`).
+ *    `lib/agent/builtin-catalog/projection.ts:resolveAllSubagents`).
  *  - Custom workflow node kinds are auto-prefixed `<pluginId>.<kind>` by
  *    `lib/plugin/core/context.ts:prefixKind`, so templates reference the
  *    prefixed form.

@@ -928,7 +928,7 @@ export interface PluginManifest {
    * mirrors the Claude Code SDK `AgentDefinition` shape and is registered
    * into `subagent-registry` on enable. Teams and the workflow editor union
    * the overlay with the host's 4 bundled subagents via
-   * `lib/claude/agents/subagents/index.ts:resolveAllSubagents`. Plugin
+   * `lib/agent/builtin-catalog/projection.ts:resolveAllSubagents`. Plugin
    * subagent names are namespaced as `<pluginId>:<id>` at projection time so
    * they never collide with built-in dispatcher names.
    */

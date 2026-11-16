@@ -2,10 +2,10 @@
  * @jest-environment jsdom
  */
 
-import type { SubagentMentionTarget } from "@/lib/claude/agents/chat-mention-targets"
+import type { SubagentMentionTarget } from "@/lib/chat/mentions/agent-targets"
 
 const discoverMock = jest.fn<Promise<SubagentMentionTarget[]>, [unknown]>()
-jest.mock("@/lib/claude/agents/markdown-mention-targets", () => ({
+jest.mock("@/lib/chat/mentions/markdown-agent-targets", () => ({
   discoverMarkdownAgentTargets: (input: unknown) => discoverMock(input),
 }))
 

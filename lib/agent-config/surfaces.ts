@@ -15,9 +15,9 @@
  */
 
 import { getSkill } from "@/lib/db/skills"
-import { discoverProjectAgentFiles } from "@/lib/claude/instructions/load"
-import { joinPath } from "@/lib/claude/instructions/paths"
-import type { InstructionSource } from "@/lib/claude/instructions/types"
+import { discoverProjectAgentFiles } from "@/lib/agents/instructions/load"
+import { joinPath } from "@/lib/agents/instructions/paths"
+import type { InstructionSource } from "@/lib/agents/instructions/types"
 import { readWorkspaceFileVersioned } from "@/lib/files/workspace-fs"
 import { listPromptResources, ownerAdapterFor } from "@/lib/prompts/adapters"
 import {

@@ -8,11 +8,11 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
 
-jest.mock("@/lib/claude/agents/subagents", () => ({
+jest.mock("@/lib/agent/builtin-catalog/projection", () => ({
   resolveAllSubagents: jest.fn(),
 }))
 
-import { resolveAllSubagents } from "@/lib/claude/agents/subagents"
+import { resolveAllSubagents } from "@/lib/agent/builtin-catalog/projection"
 import { SubagentSection } from "./subagent-section"
 import { emptyEditorState } from "../preset-editor-state"
 

@@ -21,7 +21,7 @@ import {
   hostConfigsAvailability,
   listRemoteHostConfigs,
 } from "@/lib/ai/agent/external/runtimes/remote/remote-host-configs"
-import { buildChatMentionTargets } from "@/lib/claude/agents/chat-mention-targets"
+import { buildChatMentionTargets } from "@/lib/chat/mentions/agent-targets"
 import { getSession } from "@/lib/db/sessions"
 import { catalogInputFromState } from "@/hooks/agent/use-agent-runtime-catalog"
 import { ensureBootCapability } from "@/lib/boot/capabilities"

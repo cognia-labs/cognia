@@ -16,8 +16,8 @@
  * (+ the global agents dir), never the cwd (see `discoverMarkdownAgentFiles`).
  */
 
-import { buildMarkdownAgents, type MarkdownAgentFile } from "@/lib/claude/agents/markdown-agents"
-import type { SubagentMentionTarget } from "@/lib/claude/agents/chat-mention-targets"
+import { buildMarkdownAgents, type MarkdownAgentFile } from "@/lib/agents/markdown-agents"
+import type { SubagentMentionTarget } from "@/lib/chat/mentions/agent-targets"
 
 /** "code-reviewer" → "Code Reviewer" (AgentDefinition carries no display name). */
 function humanizeId(id: string): string {
@@ -53,7 +53,7 @@ export async function discoverMarkdownAgentTargets(input: {
   roots: string[]
 }): Promise<SubagentMentionTarget[]> {
   try {
-    const { loadProjectInstructions } = await import("@/lib/claude/instructions/load")
+    const { loadProjectInstructions } = await import("@/lib/agents/instructions/load")
     const { markdownAgentFiles } = await loadProjectInstructions({
       cwd: input.cwd,
       roots: input.roots,

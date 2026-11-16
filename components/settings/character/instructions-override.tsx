@@ -34,7 +34,7 @@ import {
   resolveInstructionsConfig,
   type InstructionMode,
   type InstructionsConfig,
-} from "@/lib/claude/instructions/types"
+} from "@/lib/agents/instructions/types"
 import { InheritSelect } from "./inherit-select"
 
 const MODES: InstructionMode[] = ["layered", "nearest"]

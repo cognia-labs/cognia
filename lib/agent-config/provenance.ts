@@ -10,7 +10,7 @@
  */
 
 import { gitBlame } from "@/lib/git/commands"
-import { basename, dirname, joinPath } from "@/lib/claude/instructions/paths"
+import { basename, dirname, joinPath } from "@/lib/agents/instructions/paths"
 import { parseInstructionFileKey } from "@/lib/prompts/adapters/instruction-files"
 import { parseResourceKey } from "@/lib/prompts/resources"
 import { parseAgentFileKey } from "./surfaces"

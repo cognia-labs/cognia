@@ -94,7 +94,7 @@ import {
 } from "@/lib/chat/team-transcript"
 import type { ContextRef } from "@/lib/chat/mentions/types"
 import { resolveTurnContextRefs } from "@/lib/chat/mentions/resolve-mentions"
-import { chatMentionResolvers } from "@/lib/claude/agents/chat-mention-targets"
+import { chatMentionResolvers } from "@/lib/chat/mentions/agent-targets"
 import {
   carryPromptPreamble,
   chipCitationsOf,

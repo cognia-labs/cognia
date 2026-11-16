@@ -14,7 +14,7 @@ import {
   isDescendant,
   joinPath,
   stripTrailingSep,
-} from "@/lib/claude/instructions/paths"
+} from "@/lib/agents/instructions/paths"
 import { listWorkspaceRoots } from "@/lib/files/workspace-fs"
 import type { WorkspaceRoot } from "@/lib/files/types"
 import { resolveHome, type ResolveHomeDeps } from "@/lib/memory/external/home"

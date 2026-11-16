@@ -32,7 +32,7 @@ import {
   renderStarterAgentFile,
   type AgentAuthoringFs,
 } from "./agents-controller"
-import { parseMarkdownAgent } from "@/lib/claude/agents/markdown-agents"
+import { parseMarkdownAgent } from "@/lib/agents/markdown-agents"
 import {
   __clearLiveSubagentsForTesting,
   getLiveSubagent,

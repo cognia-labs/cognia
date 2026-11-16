@@ -17,7 +17,7 @@
  * user for each write); this module only performs a write already approved.
  */
 
-import { clearInstructionCache } from "@/lib/claude/instructions/load"
+import { clearInstructionCache } from "@/lib/agents/instructions/load"
 import { writeWorkspaceFileChecked } from "@/lib/files/workspace-fs"
 import { ownerAdapterFor } from "@/lib/prompts/adapters"
 import { getPromptDefinition, loadPromptCatalog } from "@/lib/prompts/catalog"

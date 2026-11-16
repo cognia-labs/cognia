@@ -17,7 +17,7 @@ import { piSessionSource } from "./adapters/pi"
 import { qwenCodeSessionSource } from "./adapters/qwen-code"
 import { gooseSessionSource } from "./adapters/goose"
 import type { VendorRoots } from "@/lib/agent-roots"
-import { joinPath } from "@/lib/claude/instructions/paths"
+import { joinPath } from "@/lib/agents/instructions/paths"
 import type { AgentSessionSourceAdapter, PickedSessionFile } from "./types"
 
 /** Static, ordered for auto-detect priority. */
