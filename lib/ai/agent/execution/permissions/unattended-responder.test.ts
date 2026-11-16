@@ -7,7 +7,7 @@ import {
   unattendedDenialMessage,
   unattendedRefusalMessage,
   unattendedTimeoutMessage,
-} from "./unattended-permission-responder"
+} from "./unattended-responder"
 
 function request(toolName: string, requestId = `req-${toolName}`): PermissionRequestEvent {
   return {
@@ -169,7 +169,7 @@ describe("createUnattendedPermissionResponder attribution (ADR-0239)", () => {
 })
 
 it("binds human HITL evidence to the durable park's exact request", async () => {
-  const { isVerifiedHumanApproval } = await import("./unattended-permission-responder")
+  const { isVerifiedHumanApproval } = await import("./unattended-responder")
   const request = {
     type: "permission_request" as const,
     sessionId: "s",
@@ -197,7 +197,7 @@ it("binds human HITL evidence to the durable park's exact request", async () => 
 
 it("accepts only the original human control credential, not an automated or cloned allow", async () => {
   const { recordHumanParkControlDecision, isHumanParkControlDecision } =
-    await import("./unattended-permission-responder")
+    await import("./unattended-responder")
   const automated = { decision: "allow" as const, attribution: { authority: "human" as const } }
   expect(isHumanParkControlDecision(automated)).toBe(false)
   const human = recordHumanParkControlDecision({ decision: "allow" as const })

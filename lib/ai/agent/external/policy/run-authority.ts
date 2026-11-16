@@ -18,7 +18,7 @@ import type {
 import type { MeteredUsage } from "@/lib/execution/run-budget-rail"
 import { adaptPermissionMode } from "./permission-modes"
 import { isCogniaProjectedTool } from "./tool-preapproval"
-import { createUnattendedPermissionResponder } from "@/lib/claude/unattended-permission-responder"
+import { createUnattendedPermissionResponder } from "@/lib/ai/agent/execution/permissions/unattended-responder"
 
 /** Shipped protocols with a stream of native tool/assistant execution steps. */
 const COUNTABLE = new Set<ExternalAgentProtocol>([

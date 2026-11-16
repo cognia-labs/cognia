@@ -3,7 +3,7 @@ import {
   BROWSER_TOOL_DEFINITIONS,
 } from "@cognia/plugin-sdk/api/browser"
 import { MAX_TOOL_TIMEOUT_MS } from "@cognia/plugin-contract/lib/plugin/resilience/config"
-import type { UnattendedParkDeps } from "@/lib/claude/unattended-park"
+import type { UnattendedParkDeps } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import { siteTarget, unknownSiteTarget } from "@/lib/policy/action-review/outbound-targets"
 import type { BrowserSubmissionAsk } from "@/lib/policy/action-review/plan-browser"
 

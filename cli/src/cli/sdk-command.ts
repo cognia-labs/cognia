@@ -48,7 +48,7 @@ async function defaultDeps(out: OutputSink, args: ParsedArgs): Promise<Required<
     import("../runtime/bootstrap"),
     import("@/lib/ai/agent/execution/claude-session-api"),
   ])
-  const { sdkSessionApiOptions } = await import("@/lib/claude/claude-sdk-rollout")
+  const { sdkSessionApiOptions } = await import("@/lib/ai/agent/execution/claude-sdk-options")
   const activeFlags = flags.getAgentExecutionFlags()
   const requestedStorage = stringFlag(args, "storage")
   const sessionOptions = await sdkSessionApiOptions({

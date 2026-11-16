@@ -510,7 +510,7 @@ it("writes a real reply and terminal settlement only into the person account dat
 
 it("starts a member's queued tool-less turn only once the running turn has settled", async () => {
   const { initializePersonChat } = await import("@/lib/headless/person-chat")
-  const personChat = await import("@/lib/claude/person-chat-turn")
+  const personChat = await import("@/lib/ai/agent/execution/person-chat-turn")
   initializePersonChat("person-brain", { COGNIA_PERSON_CHAT: "tool-less" })
   let handler: ((event: ClaudeEvent) => void) | undefined
   let settled!: () => void
@@ -552,7 +552,7 @@ it("starts a member's queued tool-less turn only once the running turn has settl
 
 it("frees a member's queued tool-less turns when the sidecar exits", async () => {
   const { initializePersonChat } = await import("@/lib/headless/person-chat")
-  const personChat = await import("@/lib/claude/person-chat-turn")
+  const personChat = await import("@/lib/ai/agent/execution/person-chat-turn")
   initializePersonChat("person-brain", { COGNIA_PERSON_CHAT: "tool-less" })
   let handler: ((event: ClaudeEvent) => void) | undefined
   const stop = startWorkSubmissionTerminalEvents({

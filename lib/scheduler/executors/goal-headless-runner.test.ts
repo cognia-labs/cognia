@@ -27,7 +27,7 @@ const createUnattendedParkMock = jest.fn((_options: Record<string, unknown>) => 
   finish: (...args: unknown[]) => parkFinishMock(...args),
   runId: () => null,
 }))
-jest.mock("@/lib/claude/unattended-park", () => ({
+jest.mock("@/lib/ai/agent/execution/permissions/unattended-park", () => ({
   createUnattendedPark: (options: Record<string, unknown>) => createUnattendedParkMock(options),
 }))
 jest.mock("@/lib/db/sessions", () => ({ getSession: (...a: unknown[]) => getSessionMock(...a) }))

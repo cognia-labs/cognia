@@ -6,7 +6,7 @@ jest.mock("@/lib/execution/acting-authority", () => ({
 import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 import type { PermissionRequestEvent } from "@cognia/agent-config-types"
 
-import type { CapturePermissionDecision } from "./run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import {
   UNATTENDED_PARK_TTL_MS,
   UNATTENDED_SIDECAR_APPROVAL_TTL_MS,

@@ -33,7 +33,7 @@ jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: jest.fn(async () => {}),
 }))
 jest.mock("@/lib/runtime/standalone-mode", () => ({ isStandaloneChatMode: () => false }))
-jest.mock("@/lib/claude/unattended-park", () => ({
+jest.mock("@/lib/ai/agent/execution/permissions/unattended-park", () => ({
   createUnattendedPark: () => ({ park: jest.fn(), finish: async () => {}, runId: () => null }),
 }))
 

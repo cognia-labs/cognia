@@ -34,7 +34,7 @@
  */
 
 import type { PermissionRequestEvent } from "@cognia/agent-config-types"
-import type { CapturePermissionDecision } from "./run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import type { UnattendedPark } from "./unattended-park"
 
 // Only this host-owned durable-park path can mint the opaque HITL proof.

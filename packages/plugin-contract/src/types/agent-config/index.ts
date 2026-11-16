@@ -857,7 +857,7 @@ export type SendOptions = {
    * lowercased (`normalizeToolId`), so `send_email` covers
    * `mcp__<any server>__send_email`. Phase 1 lists outbound tools only:
    * `OUTBOUND_TOOL_IDS` plus every plugin tool in the `outbound` class.
-   * Computed by `resolveSendOptions` (`lib/claude/always-explicit-tools.ts`);
+   * Computed by `resolveSendOptions` (`lib/ai/agent/execution/always-explicit-tools.ts`);
    * the sidecar labels a listed request `permissionClass: "outbound"`.
    * Listing other surfaces (computer use, native commands) is a separate
    * decision that needs a class per entry first.

@@ -538,7 +538,7 @@ export function createAgentRpcHostStateDispatcher(
                 messageId: action.action.messageId,
               })
             } else if (partitionChat) {
-              const personChat = await import("@/lib/claude/person-chat-turn")
+              const personChat = await import("@/lib/ai/agent/execution/person-chat-turn")
               project =
                 dependencies.projectRuntimeEnvelope ??
                 (await import("@/lib/companion/desktop-write-source")).projectBrainRuntimeEnvelope
@@ -663,7 +663,7 @@ export function createAgentRpcHostStateDispatcher(
           if (await getPersonAgentRunner()?.abort(sessionId)) break
         }
         if (personChatCapability().chat === "tool-less") {
-          const { forgetPersonChatTurn } = await import("@/lib/claude/person-chat-turn")
+          const { forgetPersonChatTurn } = await import("@/lib/ai/agent/execution/person-chat-turn")
           forgetPersonChatTurn(sessionId)
         }
         if (dependencies.abort) {

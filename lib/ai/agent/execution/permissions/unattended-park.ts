@@ -23,7 +23,7 @@
  */
 
 import type { PermissionClass, PermissionRequestEvent } from "@cognia/agent-config-types"
-import type { CapturePermissionDecision } from "./run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import type { RunApprovalOrigin } from "@/lib/execution/run-approval-push"
 import {
   observeActingAuthority,
@@ -205,7 +205,7 @@ function defaultDeps(): UnattendedParkDeps {
     },
     awaitDecision: async (sessionId, requestId, options) => {
       const { awaitApproval } = await import("@/lib/ai/agent/execution/hitl/approval-registry")
-      const { isHumanParkControlDecision } = await import("./unattended-permission-responder")
+      const { isHumanParkControlDecision } = await import("./unattended-responder")
       const decision = await awaitApproval(sessionId, requestId, options)
       return decision.decision === "allow" && !isHumanParkControlDecision(decision)
         ? { decision: "deny", message: "needs_approval", attribution: { authority: "system" } }

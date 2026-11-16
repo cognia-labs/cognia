@@ -31,7 +31,7 @@ jest.mock("@/lib/claude/build-options", () => ({
 jest.mock("@/lib/claude/run-and-capture", () => ({
   runAndCaptureAssistantReply: jest.fn(async () => ({ text: "Reviewed", messageId: "reply" })),
 }))
-jest.mock("@/lib/claude/unattended-park", () => ({
+jest.mock("@/lib/ai/agent/execution/permissions/unattended-park", () => ({
   createUnattendedPark: () => ({ park: jest.fn(), finish: async () => {}, runId: () => null }),
 }))
 jest.mock("@/lib/i18n/runtime-translator", () => ({

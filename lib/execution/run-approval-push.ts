@@ -4,7 +4,7 @@
  *
  * Two kinds of question park a run with nobody watching it: a tool call an
  * unattended turn may only make with approval (`tool_approval`, raised by
- * `lib/claude/unattended-park.ts`) and a Bot handler's own approval step
+ * `lib/ai/agent/execution/permissions/unattended-park.ts`) and a Bot handler's own approval step
  * (`bot_approval`, `lib/bot/runtime/step.ts`). Both are execution-run
  * interrupts, and both are announced the same way:
  *

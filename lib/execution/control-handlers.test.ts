@@ -153,7 +153,7 @@ describe("execution source control handlers", () => {
   it("attaches an opaque human credential only through the agent approval control", async () => {
     const { awaitApproval } = await import("@/lib/ai/agent/execution/hitl/approval-registry")
     const { isHumanParkControlDecision } =
-      await import("@/lib/claude/unattended-permission-responder")
+      await import("@/lib/ai/agent/execution/permissions/unattended-responder")
     await createExecutionRun({
       id: "park-proof",
       kind: "agent-turn",

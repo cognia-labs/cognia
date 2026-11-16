@@ -4,7 +4,7 @@ import {
   sdkOptionsForStorage,
   sdkSessionStorageFromOptions,
   claudeCodeRuntimeOptions,
-} from "./claude-sdk-rollout"
+} from "./claude-sdk-options"
 
 describe("Claude Code runtime preferences", () => {
   it("keeps both capabilities off when no preference is saved", () => {

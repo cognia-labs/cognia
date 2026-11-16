@@ -107,8 +107,8 @@ import {
   createUnattendedPermissionResponder,
   needsApprovalSummary,
   type UnattendedPermissionResponder,
-} from "@/lib/claude/unattended-permission-responder"
-import { createUnattendedPark } from "@/lib/claude/unattended-park"
+} from "@/lib/ai/agent/execution/permissions/unattended-responder"
+import { createUnattendedPark } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import { registerCaptureResponder } from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { holdExecutionClock } from "../execution-clock"
 import type {

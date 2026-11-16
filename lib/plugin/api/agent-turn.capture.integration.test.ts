@@ -24,7 +24,7 @@ import { execLarkCli } from "@/lib/auth-providers/feishu/cli/exec-lark-cli"
 import { recordedRunMetadata, resolveRunActingIdentity } from "@/lib/execution/acting-authority"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
-import { createUnattendedPark } from "@/lib/claude/unattended-park"
+import { createUnattendedPark } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
 import { resolveBuiltInSkillContext } from "@/lib/skills/built-in/context"
 import { runBuiltInSkill } from "@/lib/skills/built-in/dispatcher"
@@ -66,7 +66,7 @@ jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   sessionControl: async () => null,
 }))
 jest.mock("@/lib/runtime/standalone-mode", () => ({ isStandaloneChatMode: () => false }))
-jest.mock("@/lib/claude/unattended-park", () => ({
+jest.mock("@/lib/ai/agent/execution/permissions/unattended-park", () => ({
   createUnattendedPark: jest.fn(() => ({
     park: jest.fn(),
     finish: async () => {},

@@ -38,8 +38,8 @@ import {
   type PluginAgentTurnRequest,
   type PluginAgentTurnResult,
 } from "@cognia/plugin-sdk/api/agent-turn"
-import { createUnattendedPermissionResponder } from "@/lib/claude/unattended-permission-responder"
-import { createUnattendedPark } from "@/lib/claude/unattended-park"
+import { createUnattendedPermissionResponder } from "@/lib/ai/agent/execution/permissions/unattended-responder"
+import { createUnattendedPark } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
 import type { ChatSession, SendOptions } from "@cognia/agent-config-types"
 import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"

@@ -2,7 +2,7 @@
 import "fake-indexeddb/auto"
 
 import { __resetApprovalRegistryForTesting } from "@/lib/ai/agent/execution/hitl/approval-registry"
-import { createUnattendedPark } from "@/lib/claude/unattended-park"
+import { createUnattendedPark } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import { createExecutionRun } from "@/lib/db/execution-runs"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { installExecutionRunControlHandlers } from "./control-handlers"

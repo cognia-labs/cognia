@@ -12,7 +12,7 @@
 //
 // A layer may lower a class to `ask` (workspace) or `deny` (any class). An
 // asking call parks the run until someone answers or the park times out
-// (`lib/claude/unattended-permission-responder.ts`).
+// (`lib/ai/agent/execution/permissions/unattended-responder.ts`).
 //
 // The sidecar enforces the resolved profile (`SendOptions.permissionProfile`)
 // in its permission ladder and, for the Claude Agent SDK whose bypass mode

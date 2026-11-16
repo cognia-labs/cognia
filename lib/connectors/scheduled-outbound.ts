@@ -64,8 +64,8 @@ import {
   createUnattendedPermissionResponder,
   needsApprovalSummary,
   NEEDS_APPROVAL_STATUS,
-} from "@/lib/claude/unattended-permission-responder"
-import { createUnattendedPark } from "@/lib/claude/unattended-park"
+} from "@/lib/ai/agent/execution/permissions/unattended-responder"
+import { createUnattendedPark } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import type { OutboundToolPlannerOptions } from "@/lib/policy/action-review/plan-tool-call"
 import { holdExecutionClock } from "@/lib/scheduler/execution-clock"

@@ -7,7 +7,7 @@
  * the time someone takes to answer must not be charged against that budget,
  * or every parked request near the end of a run would turn into an
  * `execution-timeout` instead of the decision it was waiting for. The park
- * bounds that wait on its own (`lib/claude/unattended-park.ts`).
+ * bounds that wait on its own (`lib/ai/agent/execution/permissions/unattended-park.ts`).
  *
  * The clock is bound to the execution's AbortSignal so the executors keep
  * their `(task, execution, signal)` signature: whoever holds the signal can

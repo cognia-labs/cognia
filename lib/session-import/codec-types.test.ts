@@ -361,7 +361,7 @@ describe("materialize is deliberately dormant (Working Rule 7)", () => {
 
     const ALLOWED = new Set([
       // The definition (re-exported from the plugin contract, which declares the
-      // codec type), the two codecs that declare it, and `lib/claude/replay.ts`
+      // codec type), the two codecs that declare it, and `lib/ai/agent/execution/sidecar-replay.ts`
       // which only mentions it in a comment to disambiguate its own helper.
       "lib/session-import/codec-types.ts",
       "packages/plugin-contract/src/lib/session-import/codec-types.ts",
@@ -371,8 +371,8 @@ describe("materialize is deliberately dormant (Working Rule 7)", () => {
       "lib/session-import/codecs/pi-codec.ts",
       "lib/session-import/codecs/pi-codec.test.ts",
       "lib/session-import/adapters/pi.test.ts",
-      "lib/claude/replay.ts",
-      "lib/claude/replay.test.ts",
+      "lib/ai/agent/execution/sidecar-replay.ts",
+      "lib/ai/agent/execution/sidecar-replay.test.ts",
       // Generated SDK ambient types — a mirror of the contract, not a caller.
       "plugins/impeccable/types/cognia-plugin-sdk.d.ts",
       // The UI that LABELS the dormancy, and its tests.

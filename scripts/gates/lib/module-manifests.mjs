@@ -986,7 +986,7 @@ const LAZY_REGISTRIES = {
     type: "ModuleCapabilityContributionsEntry",
     reader: [
       "// Every module's `capabilityContributions`, read by the send resolver",
-      "// (`lib/claude/capability-contributions.ts`, ADR-0198 amendment).",
+      "// (`lib/ai/agent/execution/contributions/capability-contributions.ts`, ADR-0198 amendment).",
     ],
   },
   context: {
@@ -995,7 +995,7 @@ const LAZY_REGISTRIES = {
     type: "ModuleContextEntry",
     reader: [
       "// Every module's `context` contributions, read by the send resolver",
-      "// (`lib/claude/context-contributions.ts`, ADR-0250 §14 `context` amendment).",
+      "// (`lib/ai/agent/execution/contributions/context-contributions.ts`, ADR-0250 §14 `context` amendment).",
     ],
   },
   workflowNodes: {

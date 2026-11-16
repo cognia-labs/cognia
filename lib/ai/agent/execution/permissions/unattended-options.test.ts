@@ -1,9 +1,6 @@
 import type { SendOptions } from "@cognia/agent-config-types"
 
-import {
-  applyUnattendedPermissionProfile,
-  classesForPluginTool,
-} from "./unattended-permission-options"
+import { applyUnattendedPermissionProfile, classesForPluginTool } from "./unattended-options"
 import { UNATTENDED_SIDECAR_APPROVAL_TTL_MS } from "./unattended-park"
 
 const ATTESTATION = { schemaVersion: 1 as const, tier: "microvm" as const, verifiedAt: 5 }
@@ -126,7 +123,7 @@ async function withDeclaredModuleTools<T>(load: () => Promise<T>): Promise<T> {
 describe("module-contributed tools", () => {
   it("classes a declared tool from its effect and secrets, whatever its plugin declares", async () => {
     const { classesForPluginTool: classes } = await withDeclaredModuleTools(
-      () => import("./unattended-permission-options")
+      () => import("./unattended-options")
     )
     expect(classes(tool("Crate_Send", "cognia-crate-builtin"), [])).toEqual(["outbound"])
     expect(classes(tool("crate_unlock", "cognia-crate-builtin"), [])).toEqual(["secrets"])

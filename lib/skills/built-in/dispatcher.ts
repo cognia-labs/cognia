@@ -2,8 +2,11 @@ import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   createUnattendedPermissionResponder,
   isVerifiedHumanApproval,
-} from "@/lib/claude/unattended-permission-responder"
-import { createUnattendedPark, type UnattendedPark } from "@/lib/claude/unattended-park"
+} from "@/lib/ai/agent/execution/permissions/unattended-responder"
+import {
+  createUnattendedPark,
+  type UnattendedPark,
+} from "@/lib/ai/agent/execution/permissions/unattended-park"
 import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
 import { assertPersonalSink } from "@/lib/execution/personal-sink"
 /**

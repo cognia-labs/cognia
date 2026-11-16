@@ -6935,7 +6935,7 @@ export function useClaudeChat() {
                   : "ai-sdk")) === "claude-agent-sdk"
             ) {
               const { sdkSessionStorageFromOptions } =
-                await import("@/lib/claude/claude-sdk-rollout")
+                await import("@/lib/ai/agent/execution/claude-sdk-options")
               await updateSession(sessionId, {
                 sdkSessionStorage: sdkSessionStorageFromOptions(sendOptions),
               })

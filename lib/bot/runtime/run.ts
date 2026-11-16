@@ -35,7 +35,7 @@ import {
 import { getDb } from "@/lib/db/schema"
 import { completeBotRunStep, getBotRunStep } from "@/lib/db/bot-run-steps"
 import { BOT_RUN_POLICY_STEP } from "@/lib/bot/policy/run-authority"
-import { NEEDS_APPROVAL_STATUS } from "@/lib/claude/unattended-permission-responder"
+import { NEEDS_APPROVAL_STATUS } from "@/lib/ai/agent/execution/permissions/unattended-responder"
 import { expireRunInterruptFromSource } from "@/lib/execution/run-control"
 import { writeBotTriggerState } from "@/lib/db/bot-installations"
 import { resolveBotExecutionComposition, resolveBotPolicy } from "@/lib/bot/policy/ceilings"

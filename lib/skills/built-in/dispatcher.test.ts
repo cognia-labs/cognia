@@ -28,7 +28,7 @@ jest.mock("./desktop-hitl", () => ({
   requestDesktopSkillApproval: (...a: unknown[]) => mockDesktopApproval(...a),
 }))
 
-import { createUnattendedPermissionResponder } from "@/lib/claude/unattended-permission-responder"
+import { createUnattendedPermissionResponder } from "@/lib/ai/agent/execution/permissions/unattended-responder"
 import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
 import { runBuiltInSkill } from "./dispatcher"
 import { registerBuiltInSkill, __resetSharedBuiltInSkillRegistry } from "./registry"

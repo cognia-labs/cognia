@@ -21,7 +21,7 @@
 import type { PendingOutboundReview } from "@cognia/agent-config-types"
 
 import type { RunApprovalOrigin } from "@/lib/execution/run-approval-push"
-import type { UnattendedParkOptions } from "@/lib/claude/unattended-park"
+import type { UnattendedParkOptions } from "@/lib/ai/agent/execution/permissions/unattended-park"
 
 export interface HeldIntegrationJobPush {
   /** What is held: a job's id, or `team-delivery:<runId>` for a stack publish. */
@@ -55,7 +55,8 @@ export async function pushHeldIntegrationJob(push: HeldIntegrationJobPush): Prom
   pushes.get(push.jobId)?.abort()
   const controller = new AbortController()
   pushes.set(push.jobId, controller)
-  const { createUnattendedPark } = await import("@/lib/claude/unattended-park")
+  const { createUnattendedPark } =
+    await import("@/lib/ai/agent/execution/permissions/unattended-park")
   const sessionId = push.sessionId ?? heldIntegrationJobSessionId(push.jobId)
   const park = createUnattendedPark({
     origin: push.origin,

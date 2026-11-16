@@ -48,8 +48,8 @@ import {
 import { resolveSandboxEnabled, resolveSandboxSessionBinding } from "@/lib/sandbox/binding"
 import { resolveHostTaskPlacement } from "@/lib/sandbox/host-task-placement"
 import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
-import { applyUnattendedPermissionProfile } from "./unattended-permission-options"
-import { applyAlwaysExplicitTools } from "./always-explicit-tools"
+import { applyUnattendedPermissionProfile } from "@/lib/ai/agent/execution/permissions/unattended-options"
+import { applyAlwaysExplicitTools } from "@/lib/ai/agent/execution/always-explicit-tools"
 import { readOutboundAuthorizationMode } from "@/lib/policy/action-review/policy"
 import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
@@ -222,7 +222,7 @@ import {
   type AgentCapabilityGrantV1,
 } from "@cognia/agent-config-types/agent-capability-grant"
 import { extensionBindingFor } from "@/lib/browser/extension-engine"
-import { resolveTurnCompositionSafely } from "./resolve-turn-composition-safely"
+import { resolveTurnCompositionSafely } from "@/lib/agent/composition/resolve-turn-composition-safely"
 import { resolvePrompt } from "@/lib/prompts/resolve"
 import { buildPersonaSection, selectBaseSystemPrompt } from "@/lib/prompts/base-selection"
 import { loadPromptOverrideSnapshot, type PromptOverrideSnapshot } from "@/lib/prompts/snapshot"
@@ -1306,7 +1306,8 @@ export async function resolveSessionAsideReadOnly(
     selection: overrides.compositionSelection,
   })
   // A module's contributed permission cap binds the aside's authority too.
-  const { collectContributedGrants } = await import("./capability-contributions")
+  const { collectContributedGrants } =
+    await import("@/lib/ai/agent/execution/contributions/capability-contributions")
   const contributed = await collectContributedGrants({
     session,
     agent: character ?? null,
@@ -1690,7 +1691,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   }
   // What feature modules contribute to every run they apply to (ADR-0198
   // amendment): after the caller's grants, before the resolver's own.
-  const { collectContributedGrants } = await import("./capability-contributions")
+  const { collectContributedGrants } =
+    await import("@/lib/ai/agent/execution/contributions/capability-contributions")
   const contributed = await collectContributedGrants({
     session: session ?? null,
     agent: character,
@@ -2718,7 +2720,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // retrieval sections.
   // The caller's host dependencies pass through by name: the twin's, memory's,
   // the knowledge bases' and the knowledge ceiling.
-  const { collectContextContributions } = await import("./context-contributions")
+  const { collectContextContributions } =
+    await import("@/lib/ai/agent/execution/contributions/context-contributions")
   const { toolSurfaceHost: contextHost } =
     await import("@/lib/ai/agent/execution/contributions/tool-contributions")
   const contributedContext = await collectContextContributions(
@@ -5624,7 +5627,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       opts.execution = sendSpecFromResolved(spec, undefined, composition)
     }
     if (spec.runtimeAdapter === "claude-agent-sdk") {
-      const { claudeSdkRolloutOptions, sdkOptionsForStorage } = await import("./claude-sdk-rollout")
+      const { claudeSdkRolloutOptions, sdkOptionsForStorage } =
+        await import("@/lib/ai/agent/execution/claude-sdk-options")
       const storage =
         session?.sdkSessionId || session?.forkedFromSdkSessionId
           ? session.sdkSessionStorage
@@ -5869,7 +5873,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     !readOnlyAside &&
     appSettings?.claudeCodeRuntime
   ) {
-    const { claudeCodeRuntimeOptions } = await import("./claude-sdk-rollout")
+    const { claudeCodeRuntimeOptions } = await import("@/lib/ai/agent/execution/claude-sdk-options")
     opts.claudeAgentSdk = claudeCodeRuntimeOptions(appSettings.claudeCodeRuntime, {
       unattended: opts.permissionProfile !== undefined,
       current: opts.claudeAgentSdk,

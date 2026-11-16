@@ -32,7 +32,7 @@ import type { OutboundAuthorizationMode } from "@/lib/policy/action-review/polic
 import { isGithubWriteTool } from "@/lib/policy/action-review/github-targets"
 import { normalizeToolId, OUTBOUND_TOOL_IDS } from "@/lib/policy/risk/outbound-tools"
 
-import { classesForPluginTool } from "./unattended-permission-options"
+import { classesForPluginTool } from "./permissions/unattended-options"
 
 type PluginTool = NonNullable<SendOptions["pluginTools"]>[number]
 

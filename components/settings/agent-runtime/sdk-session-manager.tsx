@@ -73,7 +73,10 @@ import { buildSessionHref } from "@/lib/chat/message-permalink"
 import { isSessionExposed } from "@/lib/chat/session-exposure"
 import { sessionDisplayTitle } from "@/lib/chat/placeholder-title"
 import { useChatStore } from "@/stores/chat"
-import { sdkSessionApiOptions, type SdkSessionStorage } from "@/lib/claude/claude-sdk-rollout"
+import {
+  sdkSessionApiOptions,
+  type SdkSessionStorage,
+} from "@/lib/ai/agent/execution/claude-sdk-options"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useSettingsStore } from "@/stores/settings"
 import { resolveEffectiveCwd } from "@/lib/workspace/effective-cwd"

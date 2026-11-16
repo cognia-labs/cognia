@@ -23,7 +23,7 @@ import { TimeoutError, withTimeout } from "@cognia/primitives"
 
 import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import type { RunApprovalOrigin } from "@/lib/execution/run-approval-push"
-import type { UnattendedParkOptions } from "@/lib/claude/unattended-park"
+import type { UnattendedParkOptions } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import type { OutboundTarget } from "@/lib/policy/action-review/outbound-targets"
 import {
   capturedTurnOf as defaultCapturedTurnOf,
@@ -166,7 +166,8 @@ async function askOnPhone(
   requestId: string,
   deps: BrowserSubmissionAskDeps
 ): Promise<BrowserSubmissionAnswer> {
-  const { createUnattendedPark } = await import("@/lib/claude/unattended-park")
+  const { createUnattendedPark } =
+    await import("@/lib/ai/agent/execution/permissions/unattended-park")
   const sessionId = ask.sessionId ?? `browser-submission:${ask.ownerRef}`
   const park = createUnattendedPark({
     origin: context.approvalOrigin,

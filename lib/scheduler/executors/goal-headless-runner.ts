@@ -64,8 +64,8 @@ import {
   needsApprovalSummary,
   type UnattendedPermissionDenial,
   type UnattendedPermissionResponder,
-} from "@/lib/claude/unattended-permission-responder"
-import { createUnattendedPark } from "@/lib/claude/unattended-park"
+} from "@/lib/ai/agent/execution/permissions/unattended-responder"
+import { createUnattendedPark } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import { holdExecutionClock } from "../execution-clock"
 import { loadOwningWorkspace, resolveScheduledWorkspaceTrust } from "./owning-workspace"
 import { loggers } from "@cognia/logging"

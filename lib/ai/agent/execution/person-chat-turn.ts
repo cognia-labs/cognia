@@ -85,7 +85,7 @@ export async function sendPersonChatTurn(
         }
         throw Object.assign(new Error("host_surface_forbidden"), { code: "host_surface_forbidden" })
       }
-      const { resolveSendOptions } = await import("./build-options")
+      const { resolveSendOptions } = await import("@/lib/claude/build-options")
       const options = await resolveSendOptions({
         personChat: { model, secret: ticket.secret, endpoint: ticket.endpoint },
         capabilityGrants: [

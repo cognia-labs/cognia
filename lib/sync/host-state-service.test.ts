@@ -4445,7 +4445,7 @@ describe("HostState Agent RPC dispatcher", () => {
   }, 30_000)
 
   afterEach(async () => {
-    const personChat = await import("@/lib/claude/person-chat-turn")
+    const personChat = await import("@/lib/ai/agent/execution/person-chat-turn")
     personChat.forgetPersonChatTurn("session-1")
     personChat.endAllPersonChatTurns()
     await getDb().delete()
@@ -4754,7 +4754,7 @@ describe("HostState Agent RPC dispatcher", () => {
       )
     } finally {
       initializePersonChat("brain", {})
-      const { forgetPersonChatTurn } = await import("@/lib/claude/person-chat-turn")
+      const { forgetPersonChatTurn } = await import("@/lib/ai/agent/execution/person-chat-turn")
       forgetPersonChatTurn("session-1")
       mint.mockReset()
       resolve.mockReset()
@@ -4841,7 +4841,7 @@ describe("HostState Agent RPC dispatcher", () => {
         expect(
           (await getDb().sessionAttachmentUploads.get(second.uploadId))?.heldAt
         ).toBeUndefined()
-        const { endPersonChatTurn } = await import("@/lib/claude/person-chat-turn")
+        const { endPersonChatTurn } = await import("@/lib/ai/agent/execution/person-chat-turn")
         endPersonChatTurn("session-1")
         await flush()
         expect((await getDb().sessionAttachmentUploads.get(second.uploadId))?.heldBy).toBe(
@@ -4868,7 +4868,7 @@ describe("HostState Agent RPC dispatcher", () => {
         event: { delivery: "after-settle" },
       })
 
-      const { endPersonChatTurn } = await import("@/lib/claude/person-chat-turn")
+      const { endPersonChatTurn } = await import("@/lib/ai/agent/execution/person-chat-turn")
       endPersonChatTurn("session-1")
       await flush()
       expect(queueEvents()).toEqual([
@@ -4893,7 +4893,7 @@ describe("HostState Agent RPC dispatcher", () => {
       jest
         .mocked(gateway.mintPersonModelTicket)
         .mockRejectedValue({ code: "member_usage_cap_reached", resetAt: 123 })
-      const { endPersonChatTurn } = await import("@/lib/claude/person-chat-turn")
+      const { endPersonChatTurn } = await import("@/lib/ai/agent/execution/person-chat-turn")
       endPersonChatTurn("session-1")
       await flush()
       expect(queueEvents()).toEqual([
@@ -5019,7 +5019,7 @@ describe("HostState Agent RPC dispatcher", () => {
         expect(mint).toHaveBeenCalledWith("anthropic", "claude-sonnet-4-5", "session-1")
         expect(sendPromptMock).toHaveBeenCalled()
       } finally {
-        const { forgetPersonChatTurn } = await import("@/lib/claude/person-chat-turn")
+        const { forgetPersonChatTurn } = await import("@/lib/ai/agent/execution/person-chat-turn")
         forgetPersonChatTurn("session-1")
         mint.mockReset()
         jest.mocked(resolver.resolveSendOptions).mockReset()
@@ -5054,7 +5054,7 @@ describe("HostState Agent RPC dispatcher", () => {
         expect(mint).toHaveBeenCalledWith("anthropic", "claude-sonnet-4-5", "session-1")
         expect(sendPromptMock).toHaveBeenCalled()
       } finally {
-        const { forgetPersonChatTurn } = await import("@/lib/claude/person-chat-turn")
+        const { forgetPersonChatTurn } = await import("@/lib/ai/agent/execution/person-chat-turn")
         forgetPersonChatTurn("session-1")
         mint.mockReset()
         personAgentPolicyMock.mockReset()

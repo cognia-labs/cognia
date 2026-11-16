@@ -4,7 +4,7 @@ import {
   runEventJournal,
   semanticRunEvent,
 } from "@/lib/db/execution-runs"
-import { recordHumanParkControlDecision } from "@/lib/claude/unattended-permission-responder"
+import { recordHumanParkControlDecision } from "@/lib/ai/agent/execution/permissions/unattended-responder"
 import { getDb } from "@/lib/db/schema"
 import {
   fusionApprovalRunIdOf,

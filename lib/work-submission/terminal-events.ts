@@ -217,7 +217,7 @@ export function startWorkSubmissionTerminalEvents(
       enqueue(event.sessionId, async () => {
         const personChat =
           personChatCapability().chat === "tool-less"
-            ? await import("@/lib/claude/person-chat-turn")
+            ? await import("@/lib/ai/agent/execution/person-chat-turn")
             : null
         const terminal = personChat ? await personChat.personChatTerminalEvent(event) : event
         if (!terminal) return
@@ -246,7 +246,7 @@ export function startWorkSubmissionTerminalEvents(
         .finally(() => {
           // No turn the runtime held will report its end now.
           if (personChatCapability().chat !== "tool-less") return
-          void import("@/lib/claude/person-chat-turn")
+          void import("@/lib/ai/agent/execution/person-chat-turn")
             .then((personChat) => personChat.endAllPersonChatTurns())
             .catch((error) => deps.onError?.(error))
         })

@@ -48,7 +48,7 @@ import type {
 import type { ChatStatus } from "@/stores/chat/chat-store"
 import type { HostProfile } from "@/lib/platform/capabilities"
 import type { VerificationVerdict, VerificationVerdictPart } from "@/lib/chat/parts-extensions"
-import { flattenMessageText } from "@/lib/claude/replay"
+import { flattenMessageText } from "@/lib/ai/agent/execution/sidecar-replay"
 import { extractJson } from "@cognia/eval-core/json"
 import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"
 import type { WorkspaceDiffSnapshot } from "@/lib/git/workspace-diff"

@@ -1,4 +1,4 @@
-import type { UnattendedParkDeps } from "@/lib/claude/unattended-park"
+import type { UnattendedParkDeps } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 
 import {

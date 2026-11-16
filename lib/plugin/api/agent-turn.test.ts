@@ -106,7 +106,7 @@ jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: (...a: unknown[]) =>
     (resolveSendOptions as (...args: unknown[]) => unknown)(...a),
 }))
-jest.mock("@/lib/claude/unattended-park", () => ({
+jest.mock("@/lib/ai/agent/execution/permissions/unattended-park", () => ({
   createUnattendedPark: (options: Record<string, unknown>) => createUnattendedPark(options),
 }))
 const recordSurfaceUsage = jest.fn(async (..._args: unknown[]) => null as unknown)

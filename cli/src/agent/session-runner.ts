@@ -2,7 +2,7 @@ import {
   sdkOptionsForStorage,
   sdkSessionStorageFromOptions,
   type SdkSessionStorage,
-} from "@/lib/claude/claude-sdk-rollout"
+} from "@/lib/ai/agent/execution/claude-sdk-options"
 /**
  * Persistent multi-turn agent session — the core behind the interactive TUI.
  *

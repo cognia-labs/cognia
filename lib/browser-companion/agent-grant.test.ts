@@ -9,7 +9,7 @@ import companionModule from "./module"
 import {
   __resetCapabilityContributionsForTests,
   collectContributedGrants,
-} from "@/lib/claude/capability-contributions"
+} from "@/lib/ai/agent/execution/contributions/capability-contributions"
 import { bindExtensionSession, resetExtensionBindings } from "@/lib/browser/extension-engine"
 import type { CapabilityContributionContext } from "@/lib/modules/manifest-types"
 import {

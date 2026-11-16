@@ -160,7 +160,7 @@ jest.mock("@/lib/db/outbound-jobs", () => {
 // seams; what they decide is theirs and tested where they live.
 let mockParkOutcome: { kind: string; decision?: unknown } = { kind: "expired" }
 const mockParks: Array<{ options: Record<string, unknown>; finish: jest.Mock }> = []
-jest.mock("@/lib/claude/unattended-park", () => ({
+jest.mock("@/lib/ai/agent/execution/permissions/unattended-park", () => ({
   createUnattendedPark: (options: Record<string, unknown>) => {
     const finish = jest.fn(async () => undefined)
     mockParks.push({ options, finish })

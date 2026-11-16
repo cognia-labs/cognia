@@ -2,7 +2,7 @@ jest.mock("@/lib/gateway/person-model-ticket", () => ({
   ...jest.requireActual("@/lib/gateway/person-model-ticket"),
   mintPersonModelTicket: jest.fn(),
 }))
-jest.mock("./build-options", () => ({
+jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: jest.fn(async (ctx) => ({
     model: ctx.personChat.model,
     providerCredentials: {
@@ -19,7 +19,7 @@ jest.mock("./build-options", () => ({
 }))
 import type { ChatSession } from "@cognia/agent-config-types"
 import { mintPersonModelTicket } from "@/lib/gateway/person-model-ticket"
-import { resolveSendOptions } from "./build-options"
+import { resolveSendOptions } from "@/lib/claude/build-options"
 import {
   admitPersonChatTurn,
   endAllPersonChatTurns,
