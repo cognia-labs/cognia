@@ -533,7 +533,7 @@ Paths in the Source column identify audited origins relative to `lib/claude/`; l
 | [ipc.control.test.ts](../../lib/ai/agent/execution/sidecar-client.control.test.ts)                                    | `lib/ai/agent/execution/sidecar-client.control.test.ts`             | Control roundtrips and command ids                                               |
 | [ipc.session-api.test.ts](../../lib/ai/agent/execution/claude-session-api.test.ts)                                    | `lib/ai/agent/execution/claude-session-api.test.ts`                 | Claude native stored-session API and engine refusal                              |
 | [permissions/ruleset.sidecar-parity.test.ts](../../lib/ai/agent/execution/permissions/ruleset.sidecar-parity.test.ts) | `lib/ai/agent/execution/permissions/ruleset.sidecar-parity.test.ts` | Explicit-deny parity with sidecar; retarget relative import                      |
-| [sidecar-wire-contract.test.ts](../../lib/claude/sidecar-wire-contract.test.ts)                                       | `lib/ai/agent/execution/sidecar-wire-contract.test.ts`              | App/sidecar assignability; update root-tsc test path gate                        |
+| [sidecar-wire-contract.test.ts](../../lib/ai/agent/execution/sidecar-wire-contract.test.ts)                           | `lib/ai/agent/execution/sidecar-wire-contract.test.ts`              | App/sidecar assignability; update root-tsc test path gate                        |
 | [usage.compaction-parity.test.ts](../../lib/usage/context-usage.compaction-parity.test.ts)                            | `lib/usage/context-usage.compaction-parity.test.ts`                 | Sidecar/UI context default and compaction parity                                 |
 
 ## 12. Decisions, review record and implementation readiness
@@ -608,30 +608,31 @@ Pre-existing gate state, recorded as the baseline every cohort compared against:
 
 ### 13.2 Cohort commits
 
-| Stage | Commit       | Cohort                                                                                                                                  |
-| ----- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| P1    | `0c416dfcfd` | MCP config adapters, presets, projection sync, builtin MCP resolution → `lib/mcp/`                                                      |
-| P1    | `077dc74ae8` | Subagent importers → `lib/agents/subagent-importers/`; `slugify` → `lib/agents/agent-id.ts`                                             |
-| P1    | `55e54e5610` | Instruction loading, agent colour/markdown agents, mention targets, builtin subagent projection and workflow agents                     |
-| P1    | `38220ed596` | `usage.ts` split into `lib/usage/{context-usage,usage-info}.ts`; context breakdown; message part types → `lib/chat/parts-extensions.ts` |
-| P1    | `f1fdb98781` | Skills helpers, web/attachment/session-peer/working-set relays, team routers and session ids, ask-user tool, history evidence registry  |
-| P1    | `27d0887756` | Execution leaves, turn agent mode, model options split, turn activity, context-contribution readers                                     |
-| P2    | `e40e68fd2d` | Reviewed sink inventory re-sorted after the P1 session-peer move                                                                        |
-| P2    | `38446c5c53` | Approval helpers → `lib/ai/agent/execution/permissions/`; contract shims deleted                                                        |
-| P2    | `61b960688f` | Hook system → `execution/hooks/`; plugin hook IPC/dispatch → `lib/plugin/messaging/`; fleet hooks → `lib/fleet/`                        |
-| P2    | `1c8ed3879b` | Chat middleware → `lib/plugin/messaging/chat-middleware/`; Computer Use state → `lib/plugin/security/`; HITL and controller proxy       |
-| P2    | `407a0d8f0c` | Provider attempt options, account environment, routing runtime deps, Claude settings transport                                          |
-| P2    | `d06e62fde9` | `feature-call.ts` split: transport, sidecar models, OpenCode discovery, MCP discovery                                                   |
-| P2    | `cd3356f463` | Agent tool dispatcher and its wire types → `lib/plugin/bridge/`; tool contributions → `execution/contributions/`                        |
-| P2    | `356e8c5d4a` | `ipc.ts` leaf: Skills host commands → `lib/skills/host-client.ts`                                                                       |
-| P2    | `494b924f61` | `ipc.ts` leaves: host file commands, confined commands, agent configuration IO                                                          |
-| P2    | `e787ef1478` | `ipc.ts` leaves: Agent Host lifecycle → `lib/native/local-runtime.ts`; credentials → `lib/ai/providers/sidecar-credentials.ts`          |
-| P2    | `16ff00aa5b` | `ipc.ts` leaf: stored-session SDK API → `execution/claude-session-api.ts`                                                               |
-| P2    | `3b7c30dae9` | The rest of `ipc.ts` → `execution/sidecar-client.ts`; `execution-route.ts` beside it                                                    |
-| P3    | `edfe97082f` | SDK option projection, replay, composition guard, unattended approvals, contribution runners, person chat turn, always-explicit tools   |
-| P3    | `4878fcb570` | `agents/` delegation runtime → `lib/ai/agent/execution/delegation/`                                                                     |
-| P3    | `c8632d9d5a` | `run-and-capture.ts` capture contracts → `execution/capture-types.ts`                                                                   |
-| P3    | `4b9ee8d82b` | The run-and-capture runner → `execution/run-and-capture.ts`                                                                             |
+| Stage | Commit       | Cohort                                                                                                                                                     |
+| ----- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1    | `0c416dfcfd` | MCP config adapters, presets, projection sync, builtin MCP resolution → `lib/mcp/`                                                                         |
+| P1    | `077dc74ae8` | Subagent importers → `lib/agents/subagent-importers/`; `slugify` → `lib/agents/agent-id.ts`                                                                |
+| P1    | `55e54e5610` | Instruction loading, agent colour/markdown agents, mention targets, builtin subagent projection and workflow agents                                        |
+| P1    | `38220ed596` | `usage.ts` split into `lib/usage/{context-usage,usage-info}.ts`; context breakdown; message part types → `lib/chat/parts-extensions.ts`                    |
+| P1    | `f1fdb98781` | Skills helpers, web/attachment/session-peer/working-set relays, team routers and session ids, ask-user tool, history evidence registry                     |
+| P1    | `27d0887756` | Execution leaves, turn agent mode, model options split, turn activity, context-contribution readers                                                        |
+| P2    | `e40e68fd2d` | Reviewed sink inventory re-sorted after the P1 session-peer move                                                                                           |
+| P2    | `38446c5c53` | Approval helpers → `lib/ai/agent/execution/permissions/`; contract shims deleted                                                                           |
+| P2    | `61b960688f` | Hook system → `execution/hooks/`; plugin hook IPC/dispatch → `lib/plugin/messaging/`; fleet hooks → `lib/fleet/`                                           |
+| P2    | `1c8ed3879b` | Chat middleware → `lib/plugin/messaging/chat-middleware/`; Computer Use state → `lib/plugin/security/`; HITL and controller proxy                          |
+| P2    | `407a0d8f0c` | Provider attempt options, account environment, routing runtime deps, Claude settings transport                                                             |
+| P2    | `d06e62fde9` | `feature-call.ts` split: transport, sidecar models, OpenCode discovery, MCP discovery                                                                      |
+| P2    | `cd3356f463` | Agent tool dispatcher and its wire types → `lib/plugin/bridge/`; tool contributions → `execution/contributions/`                                           |
+| P2    | `356e8c5d4a` | `ipc.ts` leaf: Skills host commands → `lib/skills/host-client.ts`                                                                                          |
+| P2    | `494b924f61` | `ipc.ts` leaves: host file commands, confined commands, agent configuration IO                                                                             |
+| P2    | `e787ef1478` | `ipc.ts` leaves: Agent Host lifecycle → `lib/native/local-runtime.ts`; credentials → `lib/ai/providers/sidecar-credentials.ts`                             |
+| P2    | `16ff00aa5b` | `ipc.ts` leaf: stored-session SDK API → `execution/claude-session-api.ts`                                                                                  |
+| P2    | `3b7c30dae9` | The rest of `ipc.ts` → `execution/sidecar-client.ts`; `execution-route.ts` beside it                                                                       |
+| P3    | `edfe97082f` | SDK option projection, replay, composition guard, unattended approvals, contribution runners, person chat turn, always-explicit tools                      |
+| P3    | `4878fcb570` | `agents/` delegation runtime → `lib/ai/agent/execution/delegation/`                                                                                        |
+| P3    | `c8632d9d5a` | `run-and-capture.ts` capture contracts → `execution/capture-types.ts`                                                                                      |
+| P3    | `4b9ee8d82b` | The run-and-capture runner → `execution/run-and-capture.ts`                                                                                                |
+| P3    | `162325286f` | `sidecar-wire-contract.test.ts` → `execution/`; dependency-smoke list in `scripts/test/coverage-changed.mjs` follows it (old copy removed in `740494f42c`) |
 
 Each cohort passed these checks against the baseline above: `pnpm typecheck` (no new error), `pnpm audit:modules` (no new violation), `pnpm audit:colocated-tests`, `pnpm audit:baseline-growth` and its moved and touched suites through `node scripts/test/jest.mjs <paths> --runInBand`. A suite that failed was compared against HEAD in a separate worktree before the commit. No runtime smoke was run: these are relocations with unchanged behaviour, and section 8's real-host acceptance remains open.
 
@@ -655,6 +656,7 @@ P2 notes:
 P3 notes:
 
 - `run-and-capture.ts` was split before it moved. Its exported contracts went to `capture-types.ts` first, so the many type-only consumers (connectors, plugin IDE broker, CLI goal runs, scheduler and workflow executors) import a leaf; `lib/plugin/api/agent-turn.ts` now imports `RunAndCaptureError` statically instead of reading it off the lazily loaded runner. Tests that rebuilt the error class through `jest.requireActual(runner)` read it from `capture-types`.
+- `sidecar-wire-contract.test.ts` has no source of its own; it moved beside the sidecar client because root `tsc` checks the app-to-sidecar assignment it holds, and its relative import of `sidecar/src/shared/wire/inbound.ts` was re-rooted.
 - The delegation runtime moved as one unit; the empty `lib/claude/agents/` directory is gone.
 - `build-options.ts` and `routing-fallback.ts` stay in `lib/claude` until the session holding their uncommitted work lands it; P3 edited only their import lines, staged from HEAD.
 - Failing suites were compared against HEAD as before; none is new. `lib/plugin/api/agent-turn.integration.test.ts` "uses Web Locks" is flaky on HEAD as well.
