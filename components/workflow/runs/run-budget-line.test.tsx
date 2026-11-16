@@ -9,7 +9,7 @@ import type { WorkflowRunEventRow, WorkflowRunRow } from "@/types/workflow/visua
 
 import { RunBudgetLine } from "./run-budget-line"
 
-type BudgetRun = Pick<WorkflowRunRow, "workflowSnapshot" | "lineage" | "error">
+type BudgetRun = Pick<WorkflowRunRow, "workflowSnapshot" | "error">
 
 function run(maxCostUsd: number | undefined, extra: Partial<BudgetRun> = {}): BudgetRun {
   return {
@@ -28,12 +28,11 @@ const usage = (stepId: string, costUsd: number) =>
     payload: { inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd },
   }) as unknown as WorkflowRunEventRow
 
-const uncovered = (stepId: string) =>
+const settled = (spentUsd: number) =>
   ({
     type: "run_log",
-    level: "warn",
-    stepId,
-    payload: { message: "m", data: { budget: "uncovered", reason: "unreported" } },
+    level: "info",
+    payload: { message: "m", data: { budget: "spent", limitUsd: 1, spentUsd } },
   }) as unknown as WorkflowRunEventRow
 
 function mount(budgetRun: BudgetRun, events: WorkflowRunEventRow[]) {
@@ -54,25 +53,14 @@ describe("RunBudgetLine", () => {
     mount(run(2), [usage("n_ai", 0.5)])
     expect(screen.getByTestId("run-budget")).toHaveTextContent("Budget: $0.500 of $2.00")
     expect(screen.queryByTestId("run-budget-exhausted")).toBeNull()
-    expect(screen.queryByTestId("run-budget-uncovered")).toBeNull()
   })
 
-  it("says when the budget stopped the run and names the uncovered steps", () => {
+  it("says when the budget stopped the run, with the ledger's settled spend", () => {
     mount(run(1, { error: { message: "spent", code: "budget_exhausted" } }), [
-      usage("n_ai", 1),
-      uncovered("n_ai"),
-      uncovered("n_gone"),
+      usage("n_ai", 0.5),
+      settled(1.1),
     ])
+    expect(screen.getByTestId("run-budget")).toHaveTextContent("Budget: $1.10 of $1.00")
     expect(screen.getByTestId("run-budget-exhausted")).toHaveTextContent("Stopped: budget spent")
-    expect(screen.getByTestId("run-budget-uncovered")).toHaveTextContent(
-      "Not covered by the budget: Summarise, n_gone"
-    )
-  })
-
-  it("marks a limit inherited from the parent run", () => {
-    mount(run(5, { lineage: { rootRunId: "r", parentRunId: "p", budgetCeilingUsd: 0.25 } }), [])
-    expect(screen.getByTestId("run-budget")).toHaveTextContent(
-      "Budget: $0 of $0.250 (what the parent run had left)"
-    )
   })
 })

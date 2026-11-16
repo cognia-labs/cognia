@@ -18,7 +18,7 @@ function ctx(over: Partial<Parameters<typeof shouldRetryDispatch>[1]> = {}) {
     policy,
     signal: new AbortController().signal,
     nextDelayMs: 1_000,
-    budgetExhausted: () => false,
+    budgetSpent: false,
     ...over,
   }
 }
@@ -85,7 +85,7 @@ describe("shouldRetryDispatch", () => {
   })
 
   it("re-checks the token budget before every retry", () => {
-    expect(shouldRetryDispatch(envelope(), ctx({ budgetExhausted: () => true }))).toBe(false)
+    expect(shouldRetryDispatch(envelope(), ctx({ budgetSpent: true }))).toBe(false)
   })
 })
 

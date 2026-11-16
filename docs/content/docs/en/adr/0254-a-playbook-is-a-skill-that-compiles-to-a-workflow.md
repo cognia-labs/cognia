@@ -78,9 +78,9 @@ The gate passes the change's risk tier to review.
 - **Spend is bounded by budgets, not estimates:**
   - Squads keep `RunBudgetGovernor`.
   - Skill mode carries the grant's `maxBudgetUsd`.
-  - Workflow runs gain a USD cap (`WorkflowSettings.maxCostUsd`), counted from the usage ledger. The cap is a new budget, not an estimate.
-  - Counting rule (decided 2026-11-07): a step's reported cost, and any usage a model's pricing table can price, count against the cap. A step whose spend cannot be priced, or a model-calling step that reports no usage, does not stop the run; the run log and the run summary mark it "not covered by the budget". This differs on purpose from the chat quota, which refuses unknown cost: a workflow runs unattended, and refusing would fail runs whose cost is simply not measurable.
-  - A sub-workflow inherits what its parent has left and charges its spend to the parent.
+  - Workflow runs gain a USD cap (`WorkflowSettings.maxCostUsd`). The cap is a new budget, not an estimate.
+  - Counting rule (ADR-0243 3B, 2026-11-16, superseding the 2026-11-07 rule that let unpriced or unreported steps run on as "not covered by the budget"): the cap is declared on the run tree's ledger. Every model call a step makes reserves there before it starts and settles on the usage it reports; a call that reports none is charged its whole hold, and under the cap a model with no price is refused until it has one.
+  - A sub-workflow draws on what its parent's tree has left; a resumed run keeps what it spent; a manual retry starts a fresh budget.
 - A run that reaches its budget stops: steps in flight are aborted, no further step starts, and the run fails with `budget_exhausted` through the normal failure path (catch nodes, failure notification, completion fan-out), whatever its error policy says.
 - Scheduled playbooks are off by default. A person enables one from its card through the scheduler form, which keeps the scheduler's confirmation rule for agent tasks.
 

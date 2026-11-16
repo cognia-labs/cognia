@@ -512,7 +512,6 @@ const families = [
           parentDepth: 0,
           maxDepth: 3,
           parentChain: [],
-          budgetRoot: "matrix-parent",
           maxConcurrent: 0,
         },
       })
@@ -2420,10 +2419,10 @@ it("a side chat applies parent surface permission but inherits only the parent's
   }
 })
 
-it("pre-upgrade observed surfaces do not cap the real child options, while their pools still propagate", async () => {
+it("pre-upgrade observed surfaces do not cap the real child options", async () => {
   const { caps: _caps, ...legacy } = narrow
   await getDb().executionRuns.update("matrix-parent", {
-    authority: { ...legacy, pools: { rootRunId: "matrix-parent", costUsd: 1 } },
+    authority: legacy,
   })
   const run = await startToolExecutionRun(session.id, { parentRunId: "matrix-parent" })
   const options = await build(run.id)
@@ -2440,7 +2439,6 @@ it("pre-upgrade observed surfaces do not cap the real child options, while their
     "agents",
   ] as const)
     expect(options[field]).toEqual(controlOptions[field])
-  expect(options.runAuthority?.pools).toEqual({ rootRunId: "matrix-parent", costUsd: 1 })
   expect(options.runAuthority?.caps).toBe("explicit-v1")
 })
 

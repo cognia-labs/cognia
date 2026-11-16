@@ -53,11 +53,9 @@ describe("dispatch-context-registry", () => {
     expect(getDispatchContext("")).toBeUndefined()
   })
 
-  it("carries optional deadline / budget keys", () => {
-    registerDispatchContext("s1", ctx({ deadlineMs: 123, budgetRootRunId: "root-run" }))
-    const got = getDispatchContext("s1")
-    expect(got?.deadlineMs).toBe(123)
-    expect(got?.budgetRootRunId).toBe("root-run")
+  it("carries the optional deadline", () => {
+    registerDispatchContext("s1", ctx({ deadlineMs: 123 }))
+    expect(getDispatchContext("s1")?.deadlineMs).toBe(123)
   })
 
   describe("resolved permission-ceiling registry", () => {

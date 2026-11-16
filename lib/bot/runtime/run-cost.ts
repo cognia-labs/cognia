@@ -1,24 +1,17 @@
 /**
- * The cost ledger of one Bot run, and the `maxRunCostUsd` ceiling on it.
+ * What one Bot run's model invocations cost, for its run detail.
  *
  * Every model invocation a run makes records what it cost as its own
  * completed step (`__host:cost:<invocation step>`), so a replayed invocation
- * never charges twice and the run's spend is a sum over its steps rather than
- * a counter something could forget to update.
+ * never shows twice and the run's spend is a sum over its steps.
  *
- * Two enforcement strengths, chosen by the installation's execution route:
- *
- *  - **gateway**: the remaining allowance becomes the gateway ticket's token
- *    ceiling, so one invocation cannot overrun it (a hard cap);
- *  - **native**: the CLI talks to its provider directly, so the cap is checked
- *    between invocations only (a soft cap): the one that crosses it finishes,
- *    every later one is refused.
- *
- * A cap with no known price is refused rather than guessed at: pricing an
- * unknown model at $0 would make any ceiling a no-op.
+ * The `maxRunCostUsd` ceiling itself is the run tree's ledger
+ * (`lib/execution/run-ledger.ts`), where each invocation reserves before it
+ * starts. A ceiling with no known price is refused there rather than guessed
+ * at: pricing an unknown model at $0 would make any ceiling a no-op.
  */
 
-import { completeBotRunStep, getBotRunStep, listBotRunSteps } from "@/lib/db/bot-run-steps"
+import { completeBotRunStep, listBotRunSteps } from "@/lib/db/bot-run-steps"
 import {
   costFromTokensUsd,
   resolveModelPricingUsd,
@@ -43,20 +36,6 @@ export interface BotRunCostSummary {
   /** Invocations whose cost is unknown; their spend is not in `spentUsd`. */
   unpricedInvocations: number
   invocations: number
-}
-
-export class BotRunBudgetExceededError extends Error {
-  readonly code = "budget_exceeded"
-  constructor(
-    readonly spentUsd: number,
-    readonly maxRunCostUsd: number
-  ) {
-    super(
-      `Bot run spent $${spentUsd.toFixed(4)} of its $${maxRunCostUsd.toFixed(2)} cost ceiling; ` +
-        "no further model calls are allowed"
-    )
-    this.name = "BotRunBudgetExceededError"
-  }
 }
 
 export class BotRunPricingUnknownError extends Error {
@@ -109,44 +88,12 @@ export function priceBotInvocation(
   return { costUsd, source: "pricing", inputTokens, outputTokens }
 }
 
-/**
- * How many tokens `remainingUsd` buys at the model's most expensive token
- * rate, or `undefined` when the model has no known price. Used as the gateway
- * ticket ceiling, so it rounds down and never exceeds the allowance.
- */
-export function tokenAllowanceForUsd(
-  remainingUsd: number,
-  model: { providerId?: string; modelId: string },
-  opts: ResolvePricingOptions = {}
-): number | undefined {
-  const pricing = resolveModelPricingUsd(model.providerId, model.modelId, opts)
-  if (!pricing) return undefined
-  const rates = [
-    pricing.promptPer1M,
-    pricing.completionPer1M,
-    pricing.cacheCreationPer1M,
-    pricing.cachedInputPer1M,
-  ].filter((rate): rate is number => typeof rate === "number" && Number.isFinite(rate))
-  const highest = Math.max(0, ...rates)
-  // A free model: the ceiling is not a token question.
-  if (highest === 0) return Number.MAX_SAFE_INTEGER
-  return Math.max(0, Math.floor((remainingUsd * 1_000_000) / highest))
-}
-
 export async function recordBotInvocationCost(
   runId: string,
   invocationStep: string,
   cost: BotRunInvocationCost
 ): Promise<void> {
   await completeBotRunStep(runId, `${BOT_RUN_COST_STEP_PREFIX}${invocationStep}`, cost)
-}
-
-export async function getBotInvocationCost(
-  runId: string,
-  invocationStep: string
-): Promise<BotRunInvocationCost | undefined> {
-  const row = await getBotRunStep(runId, `${BOT_RUN_COST_STEP_PREFIX}${invocationStep}`)
-  return row?.status === "completed" ? (row.output as BotRunInvocationCost) : undefined
 }
 
 export async function summarizeBotRunCost(runId: string): Promise<BotRunCostSummary> {
@@ -162,29 +109,4 @@ export async function summarizeBotRunCost(runId: string): Promise<BotRunCostSumm
     else unpricedInvocations += 1
   }
   return { spentUsd, unpricedInvocations, invocations }
-}
-
-/**
- * Refuse a new invocation once the run has spent its ceiling, and say how much
- * is left. `undefined` ceiling means uncapped.
- */
-export async function remainingBotRunBudgetUsd(
-  runId: string,
-  maxRunCostUsd: number | undefined
-): Promise<number | undefined> {
-  if (maxRunCostUsd === undefined) return undefined
-  const { spentUsd } = await summarizeBotRunCost(runId)
-  if (spentUsd >= maxRunCostUsd) throw new BotRunBudgetExceededError(spentUsd, maxRunCostUsd)
-  return maxRunCostUsd - spentUsd
-}
-
-/** The pricing settings of this Host, when its settings store is loaded. */
-export async function currentPricingSettings(): Promise<ResolvePricingOptions> {
-  try {
-    const { useSettingsStore } = await import("@/stores/settings")
-    const settings = useSettingsStore.getState().settings
-    return settings ? { settings } : {}
-  } catch {
-    return {}
-  }
 }

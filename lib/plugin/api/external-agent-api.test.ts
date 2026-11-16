@@ -38,6 +38,13 @@ jest.mock("@/lib/bot/runtime/step", () => ({
 }))
 jest.mock("@/lib/execution/run-control", () => ({ expireRunInterruptFromSource: jest.fn() }))
 jest.mock("@/lib/bot/policy/run-authority", () => ({ resolveOwnedBotAuthority: jest.fn() }))
+const mockBudgetRefusal = jest.fn(
+  async (..._args: unknown[]): Promise<string | undefined> => undefined
+)
+jest.mock("@/lib/execution/run-ledger", () => ({
+  ...jest.requireActual("@/lib/execution/run-ledger"),
+  runBudgetRefusal: (...args: unknown[]) => mockBudgetRefusal(...args),
+}))
 jest.mock("./permission-api", () => ({ pluginHasApiPermission: jest.fn() }))
 jest.mock("@/lib/db/bot-installations", () => ({ updateBotInstallation: jest.fn() }))
 jest.mock("@/lib/ai/agent/external/agent-transport", () => ({ agentInvoke: jest.fn() }))
@@ -1174,37 +1181,24 @@ describe("execution route and cost ceiling", () => {
     expect(mockManager.execute).not.toHaveBeenCalled()
   })
 
-  it("turns the remaining cost allowance into the gateway ticket's token ceiling", async () => {
-    mockGatewayCapable.value = true
-    installation(routed)
-    jest
-      .mocked(resolveOwnedBotAuthority)
-      .mockResolvedValue({ grant: {}, effectivePolicy: { maxRunCostUsd: 1 } } as never)
-    mockSteps.set("run:__host:cost:earlier", { costUsd: 0.5, source: "pricing" })
-    succeed()
-    await runPluginExternalAgent("plugin", "codex", "test", { runId: "run", workspace })
-    const execution = mockManager.execute.mock.calls[0][2] as ExternalAgentExecutionOptions
-    // $0.50 left at the $10/M top rate.
-    expect(execution.gatewayTicketBudget).toEqual({ maxTokens: 50_000 })
-  })
-
-  it("refuses an invocation once the run has spent its ceiling", async () => {
+  it("refuses an invocation the run's ledger would refuse, before marking it dispatched", async () => {
     installation({ mode: "native" })
-    jest
-      .mocked(resolveOwnedBotAuthority)
-      .mockResolvedValue({ grant: {}, effectivePolicy: { maxRunCostUsd: 1 } } as never)
-    mockSteps.set("run:__host:cost:earlier", { costUsd: 1.2, source: "provider" })
+    mockBudgetRefusal.mockResolvedValueOnce("budget_exhausted")
     await expect(runPluginExternalAgent("plugin", "devin", "test", options)).rejects.toMatchObject({
-      code: "budget_exceeded",
+      name: "RunBudgetError",
+      reason: "budget_exhausted",
     })
+    expect(mockBudgetRefusal).toHaveBeenCalledWith(
+      "run",
+      expect.objectContaining({ model: { modelId: expect.any(String) } })
+    )
+    expect(mockSteps.has("run:__host:external-agent:dispatched")).toBe(false)
     expect(mockManager.execute).not.toHaveBeenCalled()
   })
 
   it("refuses a cost ceiling it cannot price instead of treating the model as free", async () => {
     installation({ mode: "native" })
-    jest
-      .mocked(resolveOwnedBotAuthority)
-      .mockResolvedValue({ grant: {}, effectivePolicy: { maxRunCostUsd: 1 } } as never)
+    mockBudgetRefusal.mockResolvedValueOnce("pricing_unknown")
     await expect(runPluginExternalAgent("plugin", "devin", "test", options)).rejects.toThrow(
       "No price is known"
     )

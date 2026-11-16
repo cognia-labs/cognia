@@ -189,13 +189,15 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 
 没有任何字段是“内层优先”。解析之后才设置的值（插件的 `permissionMode`、队友的 `add` 叠加、授予中的 `tools.add`）与权限取交，绝不替换它。
 
-额度池不拆分。token、费用和总时长是整棵运行树共用的一份持久化账本，它扩展了现有的子树 token 预算，并纳入 Bot 费用上限：
+额度池不拆分。token、费用和总时长是整棵运行树共用的一份持久化账本，记在声明它的那个运行上。子代理嵌套预算、Bot 费用上限、工作流费用上限和 best-of-N 费用上限，都是对这本账的声明：
 
-- 子 agent 在启动前先从账本预留额度；
-- 重试和恢复从同一个池中扣除；
-- 截止时间是绝对时间，恢复时不会重置。
+- 每次执行在请求发出前预留：自带上限就预留自己的上限，否则占用剩余的全部，所以没有自带上限的兄弟执行会互相等待；
+- 子执行从它上方最近的有效预留里借，所以一棵子树花的不会超过父级预留的；
+- 自动重试和恢复从同一本账扣除，并保留它的绝对截止时间；人手动重跑用自己的一本新账和新的截止时间，但仍挂在原来的父运行下，归属不变；
+- 确认执行已停止后，按它上报的用量结算；没有停止证明或没有用量时，扣除整个预留。未知的消耗绝不按零结算；
+- 有美元上限时，没有价格的模型在设置价格之前会被拒绝。
 
-在有限额度池下，每次执行都需要一个可强制执行的上界。无法计量或无法限制消耗的引擎会被拒绝，而不只是被移除工具，因为没有工具的引擎仍会消耗模型 token。未知的消耗绝不按零结算。只有确认执行已经停止后，才释放预留额度。
+引擎分层计量。能走 Host 模型网关的引擎走网关，网关 ticket 的上限就是它的预留。用自己供应商登录的引擎预留最坏情况，按它上报的用量结算，否则扣除整个预留。只有既不能计量、也不能限制步数的引擎，在有限预算下会被拒绝，而不只是被移除工具，因为没有工具的引擎仍会消耗模型 token。
 
 权限随运行持久化，完整传给运行启动另一个 agent 的每一种方式：原生子 agent、队友、squad、工作流 agent 节点、外部和 ACP agent、插件 agent 回合。有一个测试枚举这些启动路径。Bot 策略通过它到达每个子 agent。
 
@@ -248,7 +250,7 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
    - 受众收窄和出口检查；
    - [x] 严格的披露范围（阶段 2D，2026-11-13）。
          目前只有 owner 拥有个人访问，所以这一步先于任何其他人获得访问而落地。
-3. **部分实现：** 运行树权限（阶段 3A，进行中）；共享账本（3B）及外部引擎代理和配置隔离（3C）仍未完成。
+3. **部分实现：** 运行树权限（阶段 3A，进行中）；共享账本（3B-1，已实现）；让支持网关的外部引擎强制走网关（3B-2）及外部引擎代理和配置隔离（3C）仍未完成。
 4. 开放代表使用者通道：按主体保存的凭据库、授权链接及其投递方式、回调身份校验（先做 Lark）。它取代仅限 owner 的检查。只有在上述旧历史标记和引擎记录失效完成之后，这一步才能发布。
 5. 绑定个人通道：确认、声明范围、控制台标注，以及转为 `needs_setup` 的迁移。
 6. 其他平台，随各自支持按用户授权而跟进。
@@ -273,6 +275,14 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 - 有限预算下无法计量的引擎。
 
 ## 实现状态
+
+**阶段 3B-1（2026-11-16）。** 每棵运行树一本 `RunLedgerV1`，不建索引，记在声明它的 `ExecutionRun` 上，只在单个 Dexie 事务里写入（`lib/execution/run-ledger.ts`）。预留沿 `parentRunId` 找到最近一个带账本的运行，并从这条链上最近的有效预留里借，先看运行自己，所以正在运行的 turn 再执行一次时，从这个 turn 自己的预留里借。可用额度是父预留的额度减去它已观测的花费和已借出的部分；在根上是上限减去已花费和顶层预留。结算时，有停止证明就按上报的用量扣，否则扣除预留减去仍在运行的子预留；扣款计入 `spent`，并从每个上级预留中减去；比父级活得久的子预留挂到下一个有效预留上。兄弟占着剩余额度时，预留会等待（可中止、轮询、受截止时间约束），只有没有任何东西能释放额度时才以 `budget_exhausted` 拒绝；`deadline_exceeded` 以及美元上限下的 `pricing_unknown` 立即拒绝。每个预留都通过子运行归属声明认领；启动恢复把所有没人认领的预留按未确认停止结算。
+
+各条执行通道在执行时预留（`lib/execution/run-budget-rail.ts`）：`dispatchPrompt` 里的 sidecar turn（sidecar 通过 `runBudget` 收到预留的 token 上限和截止时间；Claude SDK pump 用完时中断，AI-SDK 循环限制每次请求并拒绝下一步；停止证明是没有后台进程的 `turn_settled` 或 `session_disposed`，sidecar 退出不算）、进程内 completion 通道、外部代理管理器的 `execute`/`executeStreaming`（网关 ticket 的上限就是预留），以及工作流里每个 `ai.prompt` 模型客户端（不隐藏重试、限制输出、按本次调用的用量结算）。声明：顶层子代理派发把 `subagentNesting.tokenBudget` 和 `timeoutMs` 声明在它挂靠子代理的那个运行上（如果这个运行在有预算的树里、自己却没有预留，就在子代理运行期间作为一个预留），子代理运行到这棵树的绝对截止时间；Bot 运行声明 `maxRunCostUsd`；工作流运行把 `maxCostUsd` 声明在它的执行运行上（在父树里是自己的一个预留，手动重试开新账，恢复沿用原账），结束时记录花了多少；best-of-N 组声明费用上限，每个候选（包括外部代理）预留自己那一份（`maxCostUsd / n`），所以候选仍然并行。Job Center 的手动重跑保留父运行，但声明一本新账；自动恢复保留原来的账，不再因 token 预算被拦下。
+
+已删除：内存中的子树守卫（`dispatch-budget.ts`、`_budgetRootRunId`、`budgetRootRunId`）及其强制串行；3A 起记录但从未执行的 `RunAuthorityV1.pools`；Bot 在两次调用之间检查已花费的逻辑及其 ticket 换算；工作流预算引擎（`run-budget.ts`）、「预算未覆盖」标记和 `WorkflowRunLineage.budgetCeilingUsd`；best-of-N 对没有原生美元上限的运行时的拒绝。小队的 `tokenBudget` 仍是软性升级守卫（通知、暂停、降低并发），不是账本上限。
+
+遗留：嵌入调用（`knowledge.embed`、`twin.rag`）不预留；用自己登录的外部引擎只按它上报的用量计量，要等 3B-2 让支持网关的引擎强制走网关。具体命令和结果：`docs/evidence/2026-11-16-adr-0243-run-tree-budget-ledger.md`。
 
 **阶段 3A（第 15 轮，部分完成）。** 精确 cap 规则与 `caps: "explicit-v1"` 标记保持有效：仅继承的显式 authority、grant、Bot/composition authority、显式 workflow node cap 与 policy/unattended cap 进入记录；旧 surface 只继承 pools。Thread 准备阶段被拒绝后消耗该 run identity，重试使用新 queued 行并获得 durable acceptance 与活跃 child journal。Typed workflow runner 经新旧 deployment admission 将 workflow 及 agent node 关联到 Host tool-call/invocation run；模型参数不能选择父级，无 run 调用保持根。插件 façade 解析调用方的方式与 plugin SDK launch 相同：已准入行，其次 reservation 的 Host 已知父级，否则为根；reserved turn id 不会成为 workflow 父级。跨 project 的子 workflow 以带 observation 的根启动、不建立谱系链接，但把父级继承的显式 cap 记录为自身上限，其 agent node 仍受限；无显式 cap 时与 HEAD 相同，为普通根。凡携带尚未准入 turn id 的 hook 上下文（deferred build hook、goal/loop 续跑、plan step、后台投递、早期 chat error）都标记为 reserved，并在 Host 已知时附带父级。Plugin SDK/session/external launch 与 typed workflow façade 随后优先使用已准入行，其次该父级（仅当其行存在），否则无父级启动（已删除的 captured coordinator 保留带 observation 的根例外），不会因行缺失而被拒绝。Reader/mark 保留 reserved turn id；例外是 local-person 分支只携带 Host-only local proof（与 HEAD 相同），以及 façade 对无行 reservation 的隐私闸门不带该 id、但保留全部显式依赖。`onChatError` 经 await 的 hook 路径投递，不再作为 cold-cache 同步通知。CLI 自身工具选项保持 HEAD 的空 allow 与精确 deny 语义，继承 cap 单独应用严格空 allow 与 glob deny。本人输入的 project-thread turn 保留 Host-only local-person OAuth/checkout proof 及调用者显式 MCP 选项，行、hook 与 reader 仍保持 coordinator 谱系；普通已准入 turn 仍按自身行解析凭据。Legacy workflow retry 可保留自身 workflow root metadata，但 canonical execution parent 与 caps 仍经验证继承，其他矛盾 root 继续拒绝。Room 成员保持无父级 service/person 根且不继承 tree cap，privacy provenance 不建立祖先关系。Captured coordinator 缺失及已入 journal 的 pruned-parent 恢复仍保留带 observation 的根例外。Host 构建 MCP map、无映射 server withholding、三个已知 SDK server 例外及 workflow 自身选项语义保持不变。远程 `execution.turnOptions` 为没有生产 sender 的 dormant receiver seam，已在类型、receiver 注释与 AST 测试固定；既有远程限制仍在 `execution.policy`。在 dev `a1f113309d` 上的最终验证：320/328 suites、8219/8566 tests 通过；8 个失败 suite 在干净 dev 上同样失败。Native tsc 有 58 条全局诊断，全部 179 个修改路径诊断为零；修改的 sidecar suite 105/105 通过。不声明 native/provider 验收。精确命令、启动路径/引擎表及边界见 evidence ledger。3B 共享 accounting 与 3C credential/env/config 隔离及剩余 broker enforcement 仍未完成。
 

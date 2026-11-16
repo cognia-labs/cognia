@@ -38,8 +38,14 @@ it("launches the recorded configuration in the candidate root through the manage
     onEvent: f.forward,
     signal: input.signal,
   })
-  // No MCP servers, tool ceiling or dollar budget can reach the external CLI.
+  // No MCP servers or tool ceiling can reach the external CLI.
   expect(f.execute.mock.calls[0]).toHaveLength(3)
+})
+
+it("hands the candidate's dollar share to its ledger hold", async () => {
+  const f = deps(true)
+  await runExternalCandidate({ ...input, maxBudgetUsd: 0.5 }, f.deps)
+  expect(f.execute.mock.calls[0][2]).toMatchObject({ maxBudgetUsd: 0.5 })
 })
 
 it("registers an unloaded configuration and refuses one that cannot run", async () => {

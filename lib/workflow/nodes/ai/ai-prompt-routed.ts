@@ -34,6 +34,8 @@ import type { RouterFusionSurface } from "@cognia/router-fusion/settings/switche
 import { isRefusal, type RouterFusionRefusalError } from "@/lib/router-fusion/gate/faults"
 import type { UtilityRunOrigin } from "@/lib/router-fusion/gate/utility-ledger"
 import type { StepExecutionContext } from "@/types/workflow/visual"
+import { budgetedLlmClient } from "@/lib/execution/run-budget-rail"
+import { RunBudgetError } from "@/lib/execution/run-ledger"
 
 export interface ResolvedCreds {
   protocol: LlmConfig["provider"]
@@ -128,6 +130,8 @@ export interface DefaultRoutedPromptDepsOptions {
   /** The ADR-0043 routing surface the plans are made for. Defaults to `workflow`. */
   routingSurface?: RoutingSurface
   ledger: RoutedPromptLedger
+  /** The run whose tree budget each attempt reserves from (ADR-0243). */
+  executionRunId?: string
 }
 
 /** Build the production deps. Imported lazily so tests never touch stores. */
@@ -221,15 +225,23 @@ export async function defaultRoutedPromptDeps(
     },
     // One ledgered client per attempt: each attempt is its own reservation.
     // `settings` is the row this function just read, on either host.
-    makeClient: (config, deployment) =>
-      ledgerUtilityCalls(createLlmClient(config), {
-        binding: {
-          ...options.ledger,
-          providerId: deployment.providerId,
-          modelId: deployment.modelId,
-        },
-        settings,
-      }),
+    makeClient: (config, deployment) => {
+      // The run-tree hold sits inside, so a refused call never reserves.
+      const client = createLlmClient(config)
+      return ledgerUtilityCalls(
+        options.executionRunId
+          ? budgetedLlmClient(client, options.executionRunId, deployment)
+          : client,
+        {
+          binding: {
+            ...options.ledger,
+            providerId: deployment.providerId,
+            modelId: deployment.modelId,
+          },
+          settings,
+        }
+      )
+    },
     recordOutcome: recordProviderOutcome,
     getCircuitBreakerState: (id) => useCircuitBreakerStore.getState().getState(id),
     estimateCostUsd: async (input) =>
@@ -274,7 +286,7 @@ export async function runRoutedPrompt(
   const controller = new RoutingAttemptController(route, deps.maxFallbackAttempts ?? 3, deps.now)
   const skipped: string[] = []
   const errors: string[] = []
-  const refusals: RouterFusionRefusalError[] = []
+  const refusals: Array<RouterFusionRefusalError | RunBudgetError> = []
   let attempts = 0
   let entry = controller.begin()
   while (entry) {
@@ -337,6 +349,16 @@ export async function runRoutedPrompt(
         routingReason: route.reasonCodes.join(", "),
       }
     } catch (err) {
+      // The run tree's ledger: a spent budget or a passed deadline ends the
+      // step for every candidate; an unpriced model leaves the next one to try.
+      if (err instanceof RunBudgetError) {
+        if (err.reason !== "pricing_unknown") throw err
+        attempts--
+        refusals.push(err)
+        skipped.push(`${entry.providerId} (no price under the run's USD budget)`)
+        entry = controller.failAndAdvance()
+        continue
+      }
       if (isRefusal(err)) {
         // The ledger refused before anything was sent: not an attempt, and not
         // a provider failure the health metrics should learn from.
@@ -370,7 +392,7 @@ export async function runRoutedPrompt(
     // Every candidate that could run was refused: the refusal is the answer,
     // and retrying the step would be refused again.
     const [refusal] = refusals
-    ;(refusal as RouterFusionRefusalError & { retryable?: boolean }).retryable = false
+    ;(refusal as Error & { retryable?: boolean }).retryable = false
     throw refusal
   }
   if (attempts === 0) {

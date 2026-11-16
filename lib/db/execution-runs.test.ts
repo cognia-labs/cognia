@@ -245,7 +245,6 @@ describe("execution run journal", () => {
         schemaVersion: 1,
         permissionMode: "default",
         maxTurns: 4,
-        pools: { rootRunId: "parent", costUsd: 2 },
       },
     }
     await createExecutionRun(parent)

@@ -20,6 +20,12 @@ import { adaptPermissionMode, PROTOCOL_PERMISSION_MODE_SUPPORT } from "./permiss
 export interface PermissionBoundExternalExecutionOptions extends ExternalAgentExecutionOptions {
   permissionCeiling?: AgentPermissionCeiling
   inheritedRunAuthority?: import("@/types/execution/run").RunAuthorityV1
+  /**
+   * ADR-0243: this execution's own dollar share of its run tree's ledger (a
+   * best-of-N candidate's cost / n). Without it the execution takes all that
+   * is left.
+   */
+  maxBudgetUsd?: number
 }
 
 export function hasUnsupportedExternalPermissionDimensions(

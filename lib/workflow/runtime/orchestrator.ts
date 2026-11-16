@@ -1,4 +1,4 @@
-import { syncWorkflowExecutionRun } from "@/lib/execution/workflow-bridge"
+import { syncWorkflowExecutionRun, workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 import { RunAuthorityError } from "@/lib/execution/run-authority"
 /**
  * Workflow orchestrator. Top-level entry point for executing a workflow.
@@ -45,17 +45,10 @@ import type {
 } from "@/types/workflow/visual"
 // Importing the built-ins triggers their registration side effect.
 import "@/lib/workflow/nodes/built-ins"
-import { createRunLogger, listRunEvents } from "./event-log"
+import { createRunLogger } from "./event-log"
 import { releaseRegisteredRunResources } from "./run-resources"
-import { effectiveBudgetLimitUsd } from "@/lib/workflow/runs/budget-summary"
-import {
-  createRunBudget,
-  getRunBudget,
-  registerRunBudget,
-  unregisterRunBudget,
-  WorkflowBudgetExhaustedError,
-  type RunBudget,
-} from "./run-budget"
+import { declareRunBudget, RunBudgetError } from "@/lib/execution/run-ledger"
+import { BUDGET_EXHAUSTED_CODE, type RunBudgetLogData } from "@/lib/workflow/runs/budget-summary"
 import {
   CAPABILITY_MISSING_CODE_PREFIX,
   formatPreflightFailures,
@@ -93,6 +86,20 @@ export type {
   RunWorkflowResult,
 } from "@cognia/plugin-contract/lib/workflow/runtime/orchestrator"
 
+/** `error.code` a run the ledger stopped fails with. */
+function runBudgetErrorCode(error: RunBudgetError): string {
+  return error.reason === "budget_exhausted" ? BUDGET_EXHAUSTED_CODE : error.reason
+}
+
+/** Settles each live run's budget declaration, logging what it spent. */
+const runBudgetReleases = new Map<string, () => Promise<void>>()
+
+async function releaseRunBudget(runId: string): Promise<void> {
+  const release = runBudgetReleases.get(runId)
+  runBudgetReleases.delete(runId)
+  await release?.().catch(() => undefined)
+}
+
 /**
  * Release run-scoped resources, then drop the cancel-registry entry.
  * Resources a module's node family opened (the terminal module's sessions,
@@ -117,7 +124,7 @@ async function releaseRunResources(runId: string): Promise<void> {
   } catch {
     // best-effort cleanup
   }
-  unregisterRunBudget(runId)
+  await releaseRunBudget(runId)
   // Lease teardown (ADR 0061 P4) — stop renewing, then free the claim so a
   // resume/replay elsewhere isn't blocked for a full TTL.
   stopLeaseHeartbeat(runId)
@@ -476,34 +483,30 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     createConcurrencyController(validated.settings.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY)
   const workflowGraph = createWorkflowGraphIndex(validated as VisualWorkflow)
 
-  // Run budget (ADR-0254 §6, playbooks plan WP5). Steps log through the
-  // budget's wrapped logger so the usage they report is counted; a resumed run
-  // starts from what its earlier events spent. A budgeted parent that started
-  // this run (lineage.budgetCeilingUsd) caps it and is charged as it spends.
-  const budgetLimitUsd = effectiveBudgetLimitUsd(
-    validated.settings.maxCostUsd,
-    lineage.budgetCeilingUsd
-  )
-  let budget: RunBudget | undefined
-  if (budgetLimitUsd !== undefined) {
-    const parentBudget =
-      lineage.budgetCeilingUsd !== undefined && lineage.parentRunId
-        ? getRunBudget(lineage.parentRunId)
-        : undefined
-    budget = createRunBudget({
-      runId,
-      limitUsd: budgetLimitUsd,
-      logger,
-      nodeKindOf: (stepId) => workflowGraph.nodeById.get(stepId)?.type,
-      onExhausted: (error) => ac.abort(error),
-      ...(parentBudget && lineage.parentStepId
-        ? { parent: parentBudget, parentStepId: lineage.parentStepId }
-        : {}),
+  // Run budget (ADR-0254 §6, as ADR-0243 3B amends it): `maxCostUsd` is
+  // declared on the run tree's ledger. Every model call a step makes reserves
+  // there before it starts and settles on what it reports, so a sub-workflow
+  // draws on what its parent has left, a resumed run keeps what it spent and
+  // a manual retry starts a fresh budget. A spent budget fails the run.
+  const maxCostUsd = validated.settings.maxCostUsd
+  if (maxCostUsd !== undefined) {
+    const release = await declareRunBudget(
+      workflowExecutionRunId(runId),
+      { costUsd: maxCostUsd },
+      { fresh: lineage.retryOfRunId !== undefined, signal: ac.signal }
+    ).catch((error: unknown) => {
+      if (!(error instanceof RunBudgetError)) throw error
+      ac.abort(error)
+      return undefined
     })
-    registerRunBudget(budget)
-    if (existingRow) budget.hydrate(await listRunEvents(runId))
+    if (release)
+      runBudgetReleases.set(runId, async () => {
+        const spentUsd = (await release())?.costUsd
+        if (spentUsd === undefined) return
+        const data: RunBudgetLogData = { budget: "spent", limitUsd: maxCostUsd, spentUsd }
+        await logger.log("info", "Run budget settled", data)
+      })
   }
-  const stepLogger = budget?.logger ?? logger
 
   // Loop-container bodies: nodes whose parent is a flow.loop
   // container belong to that container's sub-canvas and are executed by the
@@ -802,7 +805,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
                 cache,
                 retryPolicy,
                 secretResolver,
-                logger: stepLogger,
+                logger,
                 honorPinData: input.honorPinData,
                 traceId,
                 lineage,
@@ -821,7 +824,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
                 cache,
                 retryPolicy,
                 secretResolver,
-                logger: stepLogger,
+                logger,
                 honorPinData: input.honorPinData,
                 traceId,
                 lineage,
@@ -936,12 +939,15 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           markSkipped(stepId)
           return
         }
-        // The budget stopped the run: whatever this step threw, no error
-        // policy may turn it into a handled failure and keep spending.
-        if (ac.signal.reason instanceof WorkflowBudgetExhaustedError) {
-          if (!firstFailure) {
-            firstFailure = { stepId, err: ac.signal.reason, code: ac.signal.reason.code }
-          }
+        // The run tree's ledger refused or stopped the step: no error policy
+        // may turn it into a handled failure, and nothing more may start.
+        // A ledger wait the run's own abort cancelled is not a budget stop.
+        const budgetStop =
+          err instanceof RunBudgetError && err.reason !== "cancelled" ? err : ac.signal.reason
+        if (budgetStop instanceof RunBudgetError) {
+          if (!firstFailure)
+            firstFailure = { stepId, err: budgetStop, code: runBudgetErrorCode(budgetStop) }
+          ac.abort(budgetStop)
           return
         }
         const errorObj = err instanceof Error ? err : new Error(String(err))
@@ -1045,7 +1051,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   while (completed.size + skipped.size < topLevelNodeCount) {
     if (firstFailure) break
     // Spent: start nothing more, and let the drain below settle what runs.
-    if (ac.signal.reason instanceof WorkflowBudgetExhaustedError) break
+    if (ac.signal.reason instanceof RunBudgetError) break
     if (ac.signal.aborted && inflight.size === 0) break
 
     let scheduledThisTick = 0
@@ -1109,16 +1115,15 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     )
   }
 
-  // The budget stopped the run. The abort also stopped the step whose usage
-  // reached the limit, so the run fails even when that was its last step.
-  const budgetStop =
-    ac.signal.reason instanceof WorkflowBudgetExhaustedError ? ac.signal.reason : undefined
-  if (budgetStop) {
+  // The ledger refused the run's own declaration, or a step it stopped
+  // aborted the run before reporting: the run fails either way.
+  const budgetStop = ac.signal.reason instanceof RunBudgetError ? ac.signal.reason : undefined
+  if (budgetStop && !firstFailure) {
     const pendingStepId = order.find((stepId) => !completed.has(stepId) && !skipped.has(stepId))
     firstFailure = {
-      stepId: budgetStop.stepId ?? firstFailure?.stepId ?? pendingStepId ?? "unknown",
+      stepId: pendingStepId ?? "unknown",
       err: budgetStop,
-      code: budgetStop.code,
+      code: runBudgetErrorCode(budgetStop),
     }
   }
 

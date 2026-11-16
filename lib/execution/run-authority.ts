@@ -81,7 +81,6 @@ async function resolveInDatabase(
   const visited = new Set<string>()
   const missing = new Set<string>()
   if (parentId && !parent) missing.add(parentId)
-  const ancestors: ExecutionRun[] = []
   let cursor = parent ?? run
   while (cursor) {
     if (cursor.id === input.forbiddenAncestorRunId)
@@ -89,7 +88,6 @@ async function resolveInDatabase(
     if (visited.has(cursor.id) || visited.size >= 64)
       throw new RunAuthorityError("authority_unavailable", "cyclic or excessive ancestry")
     visited.add(cursor.id)
-    ancestors.push(cursor)
     const next = cursor.parentRunId
     cursor = next ? await db.executionRuns.get(next) : undefined
     if (next && !cursor) missing.add(next)
@@ -140,13 +138,7 @@ async function resolveInDatabase(
   }
   // Each row already records inherited ∧ own caps. Retention of an older
   // ancestor must not be a prerequisite for dispatch or restart.
-  const inheritedPools = parent
-    ? ancestors.find((ancestor) => ancestor.id !== run?.id && ancestor.authority?.pools)?.authority
-        ?.pools
-    : undefined
-  let inheritedAuthority =
-    inheritableRunAuthority(parent?.authority) ??
-    (inheritedPools ? { schemaVersion: 1 as const, pools: inheritedPools } : undefined)
+  let inheritedAuthority = inheritableRunAuthority(parent?.authority)
   const recoveryAuthority = inheritableRunAuthority(
     run?.recoveryAuthority ?? input.recoveryAuthority
   )
@@ -164,23 +156,6 @@ async function resolveInDatabase(
     const requested = { ...input.requested, caps: "explicit-v1" as const }
     authority = authority ? meetRunAuthority(authority, requested) : requested
   }
-  if (!parent && authority && run?.authority?.pools && !input.requested?.pools)
-    authority = { ...authority, pools: run.authority.pools }
-  const requestedPools = input.requested?.pools
-  if (!parent && authority && requestedPools && requestedPools.rootRunId === run?.id) {
-    const pools = { ...(run?.authority?.pools ?? authority.pools ?? requestedPools) }
-    for (const field of ["tokenBudget", "costUsd", "deadlineMs"] as const) {
-      const next = requestedPools[field]
-      if (next !== undefined) pools[field] = Math.min(pools[field] ?? Infinity, next)
-    }
-    authority = { ...authority, pools }
-  }
-  if (parent && authority) {
-    // A child cannot mint a pool even when its parent has no pool.
-    authority = { ...authority }
-    if (inheritedPools) authority.pools = inheritedPools
-    else delete authority.pools
-  }
   if (authority) authority = { ...authority, caps: "explicit-v1" }
   if (getDb() !== db) throw new RunAuthorityError("authority_unavailable", "database changed")
   for (const row of [parent, run]) {
@@ -194,7 +169,6 @@ async function resolveInDatabase(
       if (!observed)
         await appendRunObservation(row.id, {
           operation: "legacy_authority_observed",
-          inheritedFields: row.authority!.pools ? ["pools"] : [],
         })
     })
   }
@@ -275,7 +249,7 @@ export function applyRunAuthorityToSendOptions(
   ceiling: RunAuthorityV1
 ): RunAuthorityV1 {
   const effective = ceiling
-  if (!Object.keys(effective).some((key) => !["schemaVersion", "caps", "pools"].includes(key)))
+  if (!Object.keys(effective).some((key) => !["schemaVersion", "caps"].includes(key)))
     return effective
   const surface = meetRunAuthority(effective, {
     schemaVersion: 1,
@@ -397,10 +371,7 @@ export async function enforceRunAuthorityOnSendOptions(
   options: SendOptions,
   skillIds?: readonly string[]
 ): Promise<void> {
-  const resolved = await persistRunAuthority(runId, {
-    ...authorityForSendOptions(options),
-    ...(options.runAuthority?.pools ? { pools: options.runAuthority.pools } : {}),
-  })
+  const resolved = await persistRunAuthority(runId, authorityForSendOptions(options))
   if (
     skillIds &&
     resolved.inheritedAuthority?.skills?.only &&

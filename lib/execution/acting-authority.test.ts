@@ -401,7 +401,6 @@ it("records legacy roots and preserves every fixed parent identity field", () =>
       caps: "explicit-v1" as const,
       permissionMode: "default",
       maxTurns: 4,
-      pools: { rootRunId: "run", costUsd: 1 },
     },
   })
   const child = recordedRunMetadata("child", {
@@ -411,7 +410,6 @@ it("records legacy roots and preserves every fixed parent identity field", () =>
       caps: "explicit-v1" as const,
       permissionMode: "bypassPermissions",
       maxTurns: 8,
-      pools: { rootRunId: "child", costUsd: 8 },
     },
   })
   expect(child.actingIdentity).toBe(parent.actingIdentity)
@@ -749,7 +747,7 @@ it("observes legacy missing identities and tolerates absent and terminal runs", 
   })
 })
 
-it("replaces own preparation caps while retaining monotonically narrowed pools", async () => {
+it("replaces own preparation caps", async () => {
   await createExecutionRun(
     seed({
       authority: {
@@ -757,7 +755,6 @@ it("replaces own preparation caps while retaining monotonically narrowed pools",
         caps: "explicit-v1" as const,
         permissionMode: "plan",
         tools: { deny: ["Bash"] },
-        pools: { rootRunId: "run", costUsd: 2 },
       },
     })
   )
@@ -777,20 +774,8 @@ it("replaces own preparation caps while retaining monotonically narrowed pools",
     permissionMode: "bypassPermissions",
     tools: { allow: ["Read"] },
     maxTurns: 3,
-    pools: { rootRunId: "run", costUsd: 2 },
   })
   await expect(recordRunAuthority("missing", { schemaVersion: 1 })).resolves.toBeUndefined()
-  await recordRunAuthority(
-    "session",
-    { schemaVersion: 1, pools: { rootRunId: "run", costUsd: 1 } },
-    "run"
-  )
-  await recordRunAuthority(
-    "session",
-    { schemaVersion: 1, pools: { rootRunId: "run", costUsd: 9 } },
-    "run"
-  )
-  expect((await getExecutionRun("run"))?.authority?.pools?.costUsd).toBe(1)
 })
 
 it("detaches tenant data observations onto the current IM run and excludes projected siblings", async () => {

@@ -13,7 +13,9 @@ import type {
   ExternalAgentConfig,
   ExternalAgentProtocol,
   ExternalAgentEvent,
+  ExternalAgentTokenUsage,
 } from "@/types/agent/external-agent"
+import type { MeteredUsage } from "@/lib/execution/run-budget-rail"
 import { adaptPermissionMode } from "./permission-modes"
 import { isCogniaProjectedTool } from "./tool-preapproval"
 import { createUnattendedPermissionResponder } from "@/lib/claude/unattended-permission-responder"
@@ -214,6 +216,36 @@ export function externalAuthorityStepGuard(
 // Composite privacy sources are deliberately not a single execution identity.
 // Keep the dispatch owner in Host memory without changing that privacy shape.
 const externalRunOwners = new WeakMap<object, string>()
+/** The Host-bound run an external execution acts for, if any. */
+export function externalRunAuthorityId(
+  context: PersonalEgressContext | undefined
+): string | undefined {
+  return context ? (externalRunOwners.get(context) ?? context.executionRunId) : undefined
+}
+
+/**
+ * Engine usage as the ledger meters it. ACP reports context occupancy with no
+ * prompt/completion split; that is not billed tokens, so it stays unknown.
+ */
+export function externalMeteredUsage(
+  usage: ExternalAgentTokenUsage | undefined
+): MeteredUsage | undefined {
+  if (!usage || (usage.promptTokens === 0 && usage.completionTokens === 0)) return undefined
+  return {
+    inputTokens: usage.promptTokens,
+    outputTokens: usage.completionTokens,
+    ...(usage.promptTokensIncludeCache
+      ? {}
+      : {
+          cacheReadTokens: usage.cacheReadTokens ?? 0,
+          cacheCreationTokens: usage.cacheWriteTokens ?? 0,
+        }),
+    ...(usage.providerCost?.currency?.toUpperCase() === "USD"
+      ? { costUsd: usage.providerCost.amount }
+      : {}),
+  }
+}
+
 export function bindExternalRunAuthority<T extends PersonalEgressContext>(
   context: T,
   runId: string
@@ -230,14 +262,13 @@ export async function enforceExternalRunAuthority(
 ): Promise<PermissionBoundExternalExecutionOptions | undefined> {
   // Provenance is not ancestry. Only the Host-bound external run selects the
   // canonical parent chain; personalSources can never select a write target.
-  if (!context) return options
-  const runId = externalRunOwners.get(context) ?? context.executionRunId
+  const runId = externalRunAuthorityId(context)
   if (!runId) return options
   const resolved = await resolveRunAuthority({ runId })
   if (
     !resolved.inheritedAuthority ||
     !Object.keys(resolved.inheritedAuthority).some(
-      (key) => !["schemaVersion", "caps", "pools"].includes(key)
+      (key) => !["schemaVersion", "caps"].includes(key)
     )
   )
     return options

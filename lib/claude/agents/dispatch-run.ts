@@ -42,8 +42,14 @@ import type {
 import { getDispatchContext, getResolvedPermissionCeiling } from "./dispatch-context-registry"
 import { getKnowledgeAccessForSession } from "@/lib/knowledge-base/runtime/session-reader"
 import type { KnowledgeReadingAccess } from "@/lib/knowledge-base/runtime/progressive-reading"
-import { getOrCreateDispatchBudget, isDispatchBudgetExhausted } from "./dispatch-budget"
 import { resolveRootSessionId } from "./root-session"
+import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
+import {
+  declareRootRunBudget,
+  declareRunBudget,
+  readRunBudget,
+  runBudgetRefusal,
+} from "@/lib/execution/run-ledger"
 import {
   journalRendererForegroundRun,
   startAcceptedRendererBackgroundRun,
@@ -95,13 +101,11 @@ export interface ResolvedCaller {
   parentChain: string[]
   parentSubagentId?: string
   deadlineMs?: number
-  budgetRoot: string
   /** The caller's resolved permission ceiling, clamping every child it dispatches. */
   parentCeiling?: AgentPermissionCeiling
   /**
    * Max sibling runs one `dispatch_agent` fan-out may keep in flight at once
-   * (`subagentNesting.maxConcurrent`). `0` means unlimited. A finite token
-   * budget still forces serial fan-out regardless of this value.
+   * (`subagentNesting.maxConcurrent`). `0` means unlimited.
    */
   maxConcurrent: number
 }
@@ -177,8 +181,7 @@ async function fallbackCeilingFromSession(
 /**
  * Resolve the CALLER's nesting context: a running subagent resolves from the
  * per-session dispatch-context registry; anything else (top-level chat, Job
- * Center re-run, boot auto-resume) derives from app settings and seeds the
- * subtree budget once.
+ * Center re-run, boot auto-resume) derives from app settings.
  */
 export async function resolveCaller(sessionId: string): Promise<ResolvedCaller> {
   const authority = getKnowledgeAccessForSession(sessionId)
@@ -215,24 +218,20 @@ export async function resolveCaller(sessionId: string): Promise<ResolvedCaller> 
       parentChain: ctx.parentChain,
       parentSubagentId: ctx.selfRunId,
       deadlineMs: ctx.deadlineMs,
-      budgetRoot: ctx.budgetRootRunId ?? `dispatch:${sessionId}`,
       maxConcurrent: settings.maxConcurrent,
       ...(cwd ? { cwd } : {}),
       ...(parentCeiling ? { parentCeiling } : {}),
       knowledgeAccess,
     })
   }
-  // Top-level chat: derive from settings and seed the subtree budget once.
-  const budgetRoot = `dispatch:${sessionId}`
-  getOrCreateDispatchBudget(budgetRoot, settings.tokenBudget)
+  // Top-level chat: derive from settings. The token budget and deadline are
+  // declared on the run tree's ledger when the first child launches.
   return withObservation({
     parentDepth: 0,
     maxDepth: settings.maxDepth,
     parentChain: [],
-    budgetRoot,
     maxConcurrent: settings.maxConcurrent,
     ...(cwd ? { cwd } : {}),
-    ...(settings.timeoutMs > 0 ? { deadlineMs: Date.now() + settings.timeoutMs } : {}),
     ...(parentCeiling ? { parentCeiling } : {}),
     knowledgeAccess,
   })
@@ -291,6 +290,13 @@ export interface StartDispatchRunParams {
   runId?: string
   /** Provenance: this dispatch resumes/re-runs that journal row. */
   resumeOfRunId?: string
+  /**
+   * A person's explicit re-run (ADR-0243 D5): the child keeps the original
+   * parent, and with it the identity and authority it inherits, but gets a
+   * ledger of its own with a fresh budget and deadline instead of drawing on
+   * what the original tree has left.
+   */
+  freshBudget?: boolean
   /** Chained auto-resume attempt counter (crash-loop cap). */
   resumeAttempt?: number
   /**
@@ -431,7 +437,6 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
       _depth: effectiveCaller.parentDepth,
       _maxDepth: effectiveCaller.maxDepth,
       _parentChain: effectiveCaller.parentChain,
-      _budgetRootRunId: effectiveCaller.budgetRoot,
       _onEvent: tracker.sink,
       abortSignal: abort.signal,
       _approvalRoute: approvalRoute,
@@ -539,7 +544,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
         ...(effectiveCaller.deadlineMs !== undefined
           ? { deadlineMs: effectiveCaller.deadlineMs }
           : {}),
-        budgetExhausted: () => isDispatchBudgetExhausted(effectiveCaller.budgetRoot),
+        budgetSpent: (await runBudgetRefusal(childJobExecutionRunId(childRunId))) !== undefined,
       })
       if (!retry) {
         envelope.attempts = attempt
@@ -578,6 +583,30 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
     errorEnvelope: { code: "unknown", retryable: false, message },
   })
 
+  // The nesting budget lives on the run tree's ledger (ADR-0243 3B): a
+  // top-level dispatch declares it on the run the child was launched under
+  // (the turn that issued it), or on the child itself when it has no parent.
+  // Recovery keeps the ledger it had; a person's re-run gets its own. The
+  // child's deadline is the tree's.
+  // Returns the release of a hold the caps became, for when the child ends:
+  // inside a budgeted tree where the parent row holds nothing of its own.
+  const bindNestingBudget = async () => {
+    const childExecutionRunId = childJobExecutionRunId(childRunId)
+    const caps = { tokens: nesting.tokenBudget, deadlineMs: nesting.timeoutMs }
+    let release: (() => Promise<unknown>) | undefined
+    if (p.freshBudget) await declareRootRunBudget(childExecutionRunId, caps, { fresh: true })
+    else if (!p.recovery && effectiveCaller.parentDepth === 0) {
+      const { getExecutionRun } = await import("@/lib/db/execution-runs")
+      const launchedUnder = (await getExecutionRun(childExecutionRunId))?.parentRunId
+      release = await declareRunBudget(launchedUnder ?? childExecutionRunId, caps, {
+        signal: abort.signal,
+      })
+    }
+    const deadlineAt = (await readRunBudget(childExecutionRunId))?.deadlineAt
+    if (deadlineAt !== undefined) effectiveCaller.deadlineMs = deadlineAt
+    return release
+  }
+
   // The child run (ADR-0252 §3): the launcher writes its `execution:job:` row
   // under the pinned parent, settles it from the dispatch's outcome and
   // records the dispatch. The retrying dispatch is this caller's own engine.
@@ -602,7 +631,12 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
         label: p.subagentId,
         engine: {
           run: async () => {
-            result = await runWithRetriesCore()
+            const release = await bindNestingBudget()
+            try {
+              result = await runWithRetriesCore()
+            } finally {
+              await release?.()
+            }
             return dispatchResultOutcome(result)
           },
         },

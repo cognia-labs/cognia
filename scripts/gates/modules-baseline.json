@@ -300,7 +300,6 @@
     "lib/claude/agents/cancel-subagent.ts -> background-tasks",
     "lib/claude/agents/chat-mention-targets.ts -> squads",
     "lib/claude/agents/dispatch-agent-handler.ts -> background-tasks",
-    "lib/claude/agents/dispatch-budget.ts -> squads",
     "lib/claude/agents/dispatch-run.ts -> background-tasks",
     "lib/claude/agents/dispatch-run.ts -> knowledge-base",
     "lib/claude/build-options.ts -> agent-trace",

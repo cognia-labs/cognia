@@ -28,8 +28,6 @@ export interface DispatchContext {
   parentChain: string[]
   /** Absolute epoch-ms wall-clock deadline shared by the whole subtree. */
   deadlineMs?: number
-  /** Key locating the shared token-budget guard for this subtree. */
-  budgetRootRunId?: string
   /**
    * The run id of the agent owning this session (this subagent's own run). When
    * it dispatches a child, the child's `parentSubagentId` (the tree edge) = this.

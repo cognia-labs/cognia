@@ -4247,7 +4247,77 @@ export class ExternalAgentManager {
       : (supplied ?? retained ?? {})
   }
 
+  /**
+   * ADR-0243 ledger hold for one external execution. Phase 3B-2 moves metered
+   * engines onto the gateway lane with the hold as their ticket; until then the
+   * hold is settled from the usage the engine reports, or charged in full.
+   */
+  private async beginExternalBudget(
+    agentId: string,
+    options: PermissionBoundExternalExecutionOptions | undefined
+  ) {
+    const [{ externalRunAuthorityId }, { beginRailBudget }, { bindPersonalEgressOptions }] =
+      await Promise.all([
+        import("./policy/run-authority"),
+        import("@/lib/execution/run-budget-rail"),
+        import("@/lib/execution/personal-egress"),
+      ])
+    const source = personalEgressOptionsSource(options)
+    const binding = options?.cogniaModel ?? this.instances.get(agentId)?.config.cogniaModel
+    const budget = await beginRailBudget(
+      externalRunAuthorityId(source),
+      { providerId: binding?.providerId, modelId: binding?.modelId ?? options?.model ?? "" },
+      {
+        ...(options?.maxBudgetUsd !== undefined ? { caps: { costUsd: options.maxBudgetUsd } } : {}),
+        ...(options?.signal ? { signal: options.signal } : {}),
+      }
+    )
+    if (!budget) return undefined
+    // The copy carries the hold's signal and keeps the Host-bound source. On
+    // the gateway lane what the hold buys becomes the task ticket's ceiling,
+    // so one call cannot overrun it.
+    const { tokens } = budget
+    const bounded = {
+      ...options,
+      signal: budget.signal,
+      ...(tokens !== undefined
+        ? {
+            gatewayTicketBudget: {
+              maxTokens: Math.max(
+                1,
+                Math.floor(Math.min(options?.gatewayTicketBudget?.maxTokens ?? Infinity, tokens))
+              ),
+            },
+          }
+        : {}),
+    }
+    if (source) bindPersonalEgressOptions(bounded, source)
+    return { budget, options: bounded }
+  }
+
   async *executeStreaming(
+    agentId: string,
+    prompt: string,
+    options?: PermissionBoundExternalExecutionOptions
+  ): AsyncIterable<ExternalAgentEvent> {
+    const held = await this.beginExternalBudget(agentId, options)
+    if (!held) return yield* this.executeStreamingUnbudgeted(agentId, prompt, options)
+    const { budget } = held
+    const { externalMeteredUsage } = await import("./policy/run-authority")
+    let usage: import("@/types/agent/external-agent").ExternalAgentTokenUsage | undefined
+    let ended = false
+    try {
+      for await (const event of this.executeStreamingUnbudgeted(agentId, prompt, held.options)) {
+        if (event.type === "usage_update" && event.tokenUsage) usage = event.tokenUsage
+        if (event.type === "session_end") ended = true
+        yield event
+      }
+    } finally {
+      await budget.finish(externalMeteredUsage(usage), ended)
+    }
+  }
+
+  private async *executeStreamingUnbudgeted(
     agentId: string,
     prompt: string,
     options?: PermissionBoundExternalExecutionOptions
@@ -4294,7 +4364,8 @@ export class ExternalAgentManager {
         try {
           // The inner manager path retains tool approvals, PII gating, hooks,
           // timeout handling and the protocol's normal tool-call loop.
-          for await (const event of this.executeStreaming(
+          // The outer call's hold already covers the gateway's inner agent.
+          for await (const event of this.executeStreamingUnbudgeted(
             gateway.agentId,
             prompt,
             bindPersonalEgressOptions(
@@ -4751,6 +4822,29 @@ export class ExternalAgentManager {
     /** Independent terminal evidence; execute rejection alone never calls this. */
     onExecutorStopped?: () => void
   ): Promise<ExternalAgentResult> {
+    const held = await this.beginExternalBudget(agentId, options)
+    if (!held) return this.executeUnbudgeted(agentId, prompt, options, onExecutorStopped)
+    const { budget } = held
+    const { externalMeteredUsage } = await import("./policy/run-authority")
+    let stopped = false
+    let result: ExternalAgentResult | undefined
+    try {
+      result = await this.executeUnbudgeted(agentId, prompt, held.options, () => {
+        stopped = true
+        onExecutorStopped?.()
+      })
+      return result
+    } finally {
+      await budget.finish(externalMeteredUsage(result?.tokenUsage), stopped)
+    }
+  }
+
+  private async executeUnbudgeted(
+    agentId: string,
+    prompt: string,
+    options?: PermissionBoundExternalExecutionOptions,
+    onExecutorStopped?: () => void
+  ): Promise<ExternalAgentResult> {
     assertExternalAgentContentSafety(prompt, options)
     const {
       personalEgressFenced,
@@ -4791,7 +4885,7 @@ export class ExternalAgentManager {
       const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
       if (gateway) {
         try {
-          const result = await this.execute(
+          const result = await this.executeUnbudgeted(
             gateway.agentId,
             prompt,
             bindPersonalEgressOptions(gateway.options ?? {}, personalContext),

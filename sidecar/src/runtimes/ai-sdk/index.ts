@@ -1,5 +1,6 @@
 import { pluginToolIsOpaqueEgress } from "../../tools/plugin/proxy.ts"
 import { drainPendingRoundTrips } from "../common/round-trips.ts"
+import { createRunBudgetGuard, withRunBudgetStep } from "../common/run-budget.ts"
 import {
   personalEgressState,
   quiescePersonalEgress,
@@ -924,9 +925,11 @@ export function dispatchAiSdk({
     // per-leg fields these are never reset between legs.
     let turnLastStepInputTokens = 0
     let turnLastStepOutputTokens = 0
+    const budget = sendOptions.runBudget ? createRunBudgetGuard(sendOptions.runBudget) : undefined
     const recordCompletedStepUsage = (value: unknown) => {
       const usage = record(value)
       if (!usage || typeof usage !== "object") return
+      budget?.observe(usage)
       const input = usage.inputTokens ?? usage.promptTokens
       const output = usage.outputTokens ?? usage.completionTokens
       if (typeof input === "number" && input > 0) {
@@ -984,7 +987,18 @@ export function dispatchAiSdk({
       // seed, maxRetries) in AI SDK v6 call-option naming. Spread them so the
       // turn honours the user's provider config instead of silently dropping
       // every knob. Undefined keys are omitted by the builder upstream.
-      const modelParams = sendOptions.modelParams ?? {}
+      const configured = sendOptions.modelParams ?? {}
+      // ADR-0243 hold: each leg asks for no more output than the hold still buys.
+      const modelParams = budget
+        ? {
+            ...configured,
+            maxOutputTokens: budget.nextOutputCap(
+              typeof configured.maxOutputTokens === "number"
+                ? configured.maxOutputTokens
+                : undefined
+            ),
+          }
+        : configured
       lastCreds = creds
       lastModelParams = modelParams
 
@@ -1364,33 +1378,36 @@ export function dispatchAiSdk({
           // Near-miss tool names and aliased argument keys (common behind
           // relays) are repaired instead of failing the call.
           repairToolCall: repairToolCallFn,
-          ...(sendOptions.semanticInterceptors?.includes("agent.turn.decide")
-            ? {
-                prepareStep: async (
-                  step: Parameters<ReturnType<typeof withVerificationFeedback>>[0]
-                ) => {
-                  abortController.signal.throwIfAborted()
-                  const prepare = verificationBudget.snapshot().enabled
-                    ? withVerificationFeedback(
-                        verificationBudget,
-                        toolSearchController?.prepareStep
-                      )
-                    : toolSearchController?.prepareStep
-                  const prepared = await prepare?.(step)
-                  await semantics.beforeStep(step.stepNumber)
-                  return prepared
-                },
-              }
-            : verificationBudget.snapshot().enabled
+          ...withRunBudgetStep(
+            budget,
+            sendOptions.semanticInterceptors?.includes("agent.turn.decide")
               ? {
-                  prepareStep: withVerificationFeedback(
-                    verificationBudget,
-                    toolSearchController?.prepareStep
-                  ),
+                  prepareStep: async (
+                    step: Parameters<ReturnType<typeof withVerificationFeedback>>[0]
+                  ) => {
+                    abortController.signal.throwIfAborted()
+                    const prepare = verificationBudget.snapshot().enabled
+                      ? withVerificationFeedback(
+                          verificationBudget,
+                          toolSearchController?.prepareStep
+                        )
+                      : toolSearchController?.prepareStep
+                    const prepared = await prepare?.(step)
+                    await semantics.beforeStep(step.stepNumber)
+                    return prepared
+                  },
                 }
-              : toolSearchController
-                ? { prepareStep: toolSearchController.prepareStep }
-                : {}),
+              : verificationBudget.snapshot().enabled
+                ? {
+                    prepareStep: withVerificationFeedback(
+                      verificationBudget,
+                      toolSearchController?.prepareStep
+                    ),
+                  }
+                : toolSearchController
+                  ? { prepareStep: toolSearchController.prepareStep }
+                  : {}
+          ),
           maxSteps: perLegCap,
           captureRequestMessages: sendOptions.compaction?.enabled !== false,
           credentials: creds,

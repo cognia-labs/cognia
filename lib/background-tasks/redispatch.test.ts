@@ -40,7 +40,6 @@ const resolveCaller = jest.fn(async () => ({
   parentDepth: 0,
   maxDepth: 2,
   parentChain: [],
-  budgetRoot: "dispatch:chat-1",
 }))
 const startDispatchRun = jest.fn(async () => ({ runId: "new-run", text: "started" }))
 const updateBackgroundTaskRecord = jest.fn(async () => undefined)
@@ -115,6 +114,7 @@ describe("redispatchBackgroundRun", () => {
         parentSessionId: "chat-1",
         resumeOfRunId: "orig-1",
         resumeAttempt: 0, // manual resets the chain
+        freshBudget: true, // and a ledger of its own: fresh budget and deadline
       })
     )
     expect(updateBackgroundTaskRecord).toHaveBeenCalledWith("orig-1", {
@@ -209,6 +209,10 @@ describe("verified background recovery", () => {
         caller: recovery.caller,
       })
     )
+    // An automatic resume keeps the original tree's ledger and deadline.
+    expect(startDispatchRun.mock.calls[0]).not.toContainEqual(
+      expect.objectContaining({ freshBudget: true })
+    )
   })
 
   it("parks enabled tools and external runtimes even when a forged no-effects hint exists", async () => {
@@ -225,16 +229,11 @@ describe("verified background recovery", () => {
     expect(startDispatchRun).not.toHaveBeenCalled()
   })
 
-  it("parks changes to the definition and finite budgets", async () => {
+  it("parks changes to the definition", async () => {
     const recovery = await recoverable()
     getDispatchableSubagentDef
       .mockReturnValueOnce({ id: "explore", prompt: "new policy" })
       .mockReturnValueOnce({ id: "explore", prompt: "new policy" })
-    expect(await redispatchBackgroundRun(record({ recovery }), { kind: "auto" })).toMatchObject({
-      ok: false,
-      reason: "recovery-required",
-    })
-    mockSettings.mockResolvedValueOnce({ subagentNesting: { tokenBudget: 100 } })
     expect(await redispatchBackgroundRun(record({ recovery }), { kind: "auto" })).toMatchObject({
       ok: false,
       reason: "recovery-required",
@@ -513,7 +512,7 @@ describe("background owner recovery maintenance", () => {
     stop = startBackgroundTaskRecovery()
     await flush()
     stop()
-    resolve({ parentDepth: 0, maxDepth: 2, parentChain: [], budgetRoot: "dispatch:chat-1" })
+    resolve({ parentDepth: 0, maxDepth: 2, parentChain: [] })
     await flush()
     expect(startDispatchRun).not.toHaveBeenCalled()
   })

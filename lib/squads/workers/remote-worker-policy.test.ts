@@ -146,15 +146,6 @@ it.each([
     encodeRemoteWorkerPolicy({}, false, undefined, { schemaVersion: 1, ...field })
   ).toThrow("unsupported_authority: remote Squad worker:")
 })
-it("leaves Host-enforced pools out of the worker's capability requirements", () => {
-  expect(
-    encodeRemoteWorkerPolicy({}, false, undefined, {
-      schemaVersion: 1,
-      caps: "explicit-v1",
-      pools: { rootRunId: "bot-root", costUsd: 2 },
-    })
-  ).toBeUndefined()
-})
 it("meets the inherited mode, tools and MCP list into the actual worker wire policy", () => {
   expect(
     encodeRemoteWorkerPolicy(

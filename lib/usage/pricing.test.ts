@@ -6,6 +6,7 @@ import {
   mergePricingLayers,
   priceTokensForModel,
   resolveModelPricingUsd,
+  tokenAllowanceForUsd,
   type CatalogPricingLookup,
   type PricingSettings,
 } from "./pricing"
@@ -486,5 +487,32 @@ describe("bundled LiteLLM-derived floor layer", () => {
     expect(
       resolveModelPricingUsd("anthropic", "no-such-model-anywhere", { catalog: emptyCatalog })
     ).toBeNull()
+  })
+})
+
+const allowanceCatalog: CatalogPricingLookup = (_provider, model) =>
+  model === "priced-model"
+    ? { promptPer1M: 2, completionPer1M: 10, cachedInputPer1M: 0.2 }
+    : undefined
+
+describe("tokenAllowanceForUsd", () => {
+  it("buys tokens at the most expensive rate, rounded down", () => {
+    expect(
+      tokenAllowanceForUsd(
+        1,
+        { providerId: "p", modelId: "priced-model" },
+        { catalog: allowanceCatalog }
+      )
+    ).toBe(100_000)
+  })
+
+  it("has no allowance for an unpriced model", () => {
+    expect(
+      tokenAllowanceForUsd(
+        1,
+        { providerId: "p", modelId: "mystery-model" },
+        { catalog: allowanceCatalog }
+      )
+    ).toBeUndefined()
   })
 })

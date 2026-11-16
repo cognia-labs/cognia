@@ -143,6 +143,11 @@ export async function holdChildRunOwnership(runId: string): Promise<() => void> 
   }
 }
 
+/** The claims some live process holds, or `null` when this host cannot tell. */
+export function heldChildRunOwnership(): Promise<ReadonlySet<string> | null> {
+  return currentOwnership().held()
+}
+
 export interface OrphanReconcileDeps {
   /** Open `job` rows (queued, running, waiting, paused). */
   listOpenJobRuns(): Promise<ExecutionRun[]>

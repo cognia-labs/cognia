@@ -51,8 +51,8 @@ export interface ShouldRetryContext {
   deadlineMs?: number
   /** The backoff that WOULD be taken (from {@link retryDelayMs}). */
   nextDelayMs: number
-  /** Fresh subtree-budget check, evaluated before every retry. */
-  budgetExhausted: () => boolean
+  /** The run tree's ledger has nothing left, read before every retry. */
+  budgetSpent: boolean
   now?: () => number
 }
 
@@ -71,7 +71,7 @@ export function shouldRetryDispatch(
   if (ctx.signal.aborted) return false
   const now = ctx.now ?? Date.now
   if (ctx.deadlineMs !== undefined && now() + ctx.nextDelayMs >= ctx.deadlineMs) return false
-  if (ctx.budgetExhausted()) return false
+  if (ctx.budgetSpent) return false
   return true
 }
 

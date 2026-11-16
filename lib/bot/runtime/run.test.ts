@@ -123,11 +123,12 @@ describe("botRunId", () => {
 })
 
 describe("runBotDelivery", () => {
-  it("keeps a Bot cost pool through real Squad admission without refusing remote worker policy", async () => {
+  it("keeps a Bot's cost ledger over a Squad it admits, without refusing remote worker policy", async () => {
     const { delivery, resolved } = await seed()
     resolved.policy = { maxRunCostUsd: 2 }
     const { createSquadRunRecords } = await import("@/lib/squads/squad/squad-run-records")
     const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
+    const { readRunBudget } = await import("@/lib/execution/run-ledger")
     const { encodeRemoteWorkerPolicy } = await import("@/lib/squads/workers/remote-worker-policy")
     const handler = jest.fn(async (ctx: BotExecutorContext) => {
       await createSquadRunRecords({
@@ -141,7 +142,7 @@ describe("runBotDelivery", () => {
       const { authority } = await resolveRunAuthority({
         parentRunId: "execution:team:r12-pool-squad",
       })
-      expect(authority?.pools).toEqual({ rootRunId: ctx.runId, costUsd: 2 })
+      expect((await readRunBudget("execution:team:r12-pool-squad"))?.costUsd).toBe(2)
       expect(() => encodeRemoteWorkerPolicy({}, false, undefined, authority)).not.toThrow()
       return { output: {} }
     })
@@ -181,8 +182,8 @@ describe("runBotDelivery", () => {
       caps: "explicit-v1",
       permissionMode: "plan",
       permissionProfile: { outbound: "deny" },
-      pools: { rootRunId: outcome.runId, costUsd: 2 },
     })
+    expect(run?.runLedger).toMatchObject({ limits: { costUsd: 2 } })
   })
 
   it("records timed triggers without guessing a schedule's authorizer", async () => {

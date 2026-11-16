@@ -33,6 +33,8 @@ export interface SendOptions {
   runAuthority?: NonNullable<import("@cognia/agent-config-types").SendOptions["runAuthority"]>
   inheritedRunAuthority?: SendOptions["runAuthority"]
   runAuthorityMcpServerIds?: Record<string, string>
+  /** ADR-0243 ledger hold: cap each model request at `tokens`; stop at `deadlineAt`. */
+  runBudget?: { tokens?: number; deadlineAt?: number }
   personalEgressFenced?: boolean
   personalEgressReadTools?: string[]
   personalEgressState?: { fenced: boolean }

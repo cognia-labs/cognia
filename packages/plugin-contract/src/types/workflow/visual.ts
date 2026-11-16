@@ -926,12 +926,11 @@ export interface WorkflowSettings {
    * Spend ceiling for one run, in USD, counted from the usage its steps report
    * (ADR-0254 §6). A budget, not an estimate: ADR-0232 estimates stay advisory.
    *
-   * Enforced by `runWorkflow` (`lib/workflow/runtime/run-budget.ts`): reported
-   * costs and usage a model's pricing table can price count; once the spend
-   * reaches the limit the steps in flight stop, none starts, and the run fails
-   * with `budget_exhausted`. A step whose spend cannot be priced does not stop the
-   * run; it is marked "not covered by the budget" in the run log and summary.
-   * A sub-workflow inherits what is left (`WorkflowRunLineage.budgetCeilingUsd`).
+   * Declared on the run tree's ledger (ADR-0243 3B): every model call a step
+   * makes reserves there before it starts, a call with no price under this USD
+   * limit is refused, one that reports no usage is charged its whole hold, and
+   * a refused or stopped call fails the run with `budget_exhausted`. A
+   * sub-workflow draws on what its parent has left.
    * Set in the editor's settings tab, or from a playbook's `limits.maxBudgetUsd`.
    */
   maxCostUsd?: number
@@ -1126,13 +1125,6 @@ export interface WorkflowRunLineage {
   parentStepId?: string
   retryOfRunId?: string
   retryMode?: WorkflowRetryMode
-  /**
-   * USD the parent run's budget had left when it started this run
-   * (`flow.subworkflow` under a budgeted parent). The run spends at most this,
-   * whatever its own `settings.maxCostUsd` says, and charges its spend to the
-   * parent while the parent runs in the same process.
-   */
-  budgetCeilingUsd?: number
 }
 
 /** Security provenance that must survive subflows and crash recovery. */

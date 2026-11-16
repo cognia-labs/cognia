@@ -14,14 +14,12 @@ import { DEFAULT_EXTERNAL_AGENT_RETRY_CONFIG } from "@/types/agent/external-agen
 import { updateBotInstallation } from "@/lib/db/bot-installations"
 import { resolveOwnedBotAuthority } from "@/lib/bot/policy/run-authority"
 import {
-  BotRunBudgetExceededError,
   BotRunPricingUnknownError,
-  currentPricingSettings,
   priceBotInvocation,
   recordBotInvocationCost,
-  remainingBotRunBudgetUsd,
-  tokenAllowanceForUsd,
 } from "@/lib/bot/runtime/run-cost"
+import { currentPricingSettings } from "@/lib/execution/run-budget-rail"
+import { RunBudgetError, runBudgetRefusal } from "@/lib/execution/run-ledger"
 import type {
   PluginBotExternalAgentPermissionMode,
   PluginExternalAgentOptions,
@@ -519,23 +517,16 @@ async function dispatchPluginExternalAgent(
     )
       return needsSetup("External agent did not confirm the requested unattended permission mode")
   }
-  // The cost ceiling: refuse once spent, and on the gateway lane turn what is
-  // left into the task ticket's token ceiling, so this one call cannot overrun.
-  const { effectivePolicy } = await resolveOwnedBotAuthority(pluginId, runId)
-  const maxRunCostUsd = effectivePolicy.maxRunCostUsd
+  // The run's cost ceiling is its tree ledger: the execution reserves there
+  // and the gateway ticket is capped by the hold. Refuse here what it would
+  // refuse, before the dispatch marker makes the turn uncertain.
   const costModel = gatewayRoute
     ? { providerId: gatewayRoute.providerId, modelId: gatewayRoute.modelId }
     : { modelId: model }
   const pricingOptions = await currentPricingSettings()
-  const remainingUsd = await remainingBotRunBudgetUsd(runId, maxRunCostUsd)
-  let gatewayTicketBudget: { maxTokens: number } | undefined
-  if (remainingUsd !== undefined) {
-    const allowance = tokenAllowanceForUsd(remainingUsd, costModel, pricingOptions)
-    if (allowance === undefined) return needsSetup(new BotRunPricingUnknownError(model).message)
-    if (allowance <= 0)
-      throw new BotRunBudgetExceededError(maxRunCostUsd! - remainingUsd, maxRunCostUsd!)
-    if (gatewayRoute) gatewayTicketBudget = { maxTokens: allowance }
-  }
+  const refusal = await runBudgetRefusal(runId, { model: costModel, pricing: pricingOptions })
+  if (refusal === "pricing_unknown") return needsSetup(new BotRunPricingUnknownError(model).message)
+  if (refusal) throw new RunBudgetError(refusal)
   await assertOwnedBotWorkspace(pluginId, workspace)
   if (signal?.aborted) throw new Error("Bot run was cancelled")
   const { createBotStepApi, botApprovalInterruptId } = await import("@/lib/bot/runtime/step")
@@ -637,7 +628,6 @@ async function dispatchPluginExternalAgent(
             ...(gatewayRoute.accountId !== undefined ? { accountId: gatewayRoute.accountId } : {}),
           }
         : null,
-      ...(gatewayTicketBudget ? { gatewayTicketBudget } : {}),
       workingDirectory: workspace.root,
       timeout,
       signal,

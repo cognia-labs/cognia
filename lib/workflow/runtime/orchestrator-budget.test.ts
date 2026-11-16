@@ -1,10 +1,11 @@
 /**
  * @jest-environment jsdom
  *
- * The run budget (`settings.maxCostUsd`, ADR-0254 §6, playbooks plan WP5) as
- * `runWorkflow` enforces it: priced spend stops the run, unpriced spend is
- * marked "not covered" and the run goes on, and a sub-workflow inherits what
- * its parent has left.
+ * The run budget (`settings.maxCostUsd`, ADR-0254 §6) as ADR-0243 3B amends
+ * it: the budget is declared on the run tree's ledger, every model call a step
+ * makes reserves there before it starts, and a refused or stopped call fails
+ * the run. A sub-workflow draws on what its parent has left; a resumed run
+ * keeps what it spent; a manual retry starts a fresh budget.
  */
 import "fake-indexeddb/auto"
 
@@ -15,18 +16,14 @@ jest.mock("./workflow-completion-fanout", () => ({
 
 import { runWorkflow } from "./orchestrator"
 import { listRunEvents } from "./event-log"
-import { createRunBudget, registerRunBudget, unregisterRunBudget } from "./run-budget"
 import { registerNodeExecutor } from "@/lib/workflow/nodes/registry"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { readBudgetLog, summarizeRunBudget } from "@/lib/workflow/runs/budget-summary"
-import type {
-  TriggerEvent,
-  VisualWorkflow,
-  WorkflowRunEventRow,
-  WorkflowSettings,
-} from "@/types/workflow/visual"
-import type { RunLogger } from "./event-log"
+import { beginRailBudget } from "@/lib/execution/run-budget-rail"
+import { declareRunBudget } from "@/lib/execution/run-ledger"
+import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
+import type { TriggerEvent, VisualWorkflow, WorkflowSettings } from "@/types/workflow/visual"
 
 jest.setTimeout(30_000)
 
@@ -36,36 +33,39 @@ beforeEach(async () => {
   await dbFixture.restore()
   await getDb().workflowRuns.clear()
   await getDb().workflowRunEvents.clear()
+  await getDb().executionRuns.clear()
   executed.length = 0
 })
 afterAll(dbFixture.dispose)
 
 const executed: string[] = []
+/** A model the static price table knows, so a USD budget can reserve for it. */
+const PRICED = "gpt-5.4-mini"
 
+// A model step as the rails run one: reserve on the run's ledger, call, then
+// settle on what the call reported (nothing reported: the whole hold).
 registerNodeExecutor({
   kind: "ai.test.spend" as never,
   typeVersion: 1,
   execute: async (ctx) => {
+    const params = ctx.params as { costUsd?: number; modelId?: string }
+    const budget = await beginRailBudget(
+      workflowExecutionRunId(ctx.runId),
+      { modelId: params.modelId ?? PRICED },
+      { signal: ctx.signal }
+    )
     executed.push(ctx.stepId)
-    const params = ctx.params as { costUsd?: number; modelId?: string; throwWhenStopped?: boolean }
     ctx.reportUsage?.({
       inputTokens: 1000,
       outputTokens: 500,
       totalTokens: 1500,
       ...(params.costUsd !== undefined ? { costUsd: params.costUsd } : {}),
-      ...(params.modelId ? { modelId: params.modelId } : {}),
     })
-    // A real model step notices the abort of its own run and throws.
-    if (params.throwWhenStopped && ctx.signal.aborted) throw new Error("aborted")
+    await budget?.finish(
+      params.costUsd === undefined ? undefined : { costUsd: params.costUsd },
+      params.costUsd !== undefined
+    )
     return { output: ctx.stepId }
-  },
-})
-registerNodeExecutor({
-  kind: "ai.test.silent" as never,
-  typeVersion: 1,
-  execute: async (ctx) => {
-    executed.push(ctx.stepId)
-    return { output: "no usage" }
   },
 })
 
@@ -114,168 +114,122 @@ function chain(steps: Step[], settings: Partial<WorkflowSettings> = {}): VisualW
   } as VisualWorkflow
 }
 
-const spend = (id: string, costUsd: number, extra: Record<string, unknown> = {}): Step => ({
+const spend = (id: string, costUsd?: number, extra: Record<string, unknown> = {}): Step => ({
   id,
-  params: { costUsd, ...extra },
+  params: { ...(costUsd !== undefined ? { costUsd } : {}), ...extra },
 })
 
-async function budgetRecords(runId: string) {
+async function settledSpend(runId: string) {
   const events = await listRunEvents(runId)
-  return events
-    .map((event) => [event.stepId, readBudgetLog(event)] as const)
-    .filter(([, record]) => record !== null)
+  return events.map(readBudgetLog).filter((record) => record !== null)
 }
 
 describe("runWorkflow run budget", () => {
-  it("stops a run whose spend reaches the limit before its work is done", async () => {
+  it("refuses the call that finds the budget spent and fails the run there", async () => {
     const workflow = chain(
       [spend("s1", 0.4), spend("s2", 0.4), spend("s3", 0.4), spend("s4", 0.4)],
-      {
-        maxCostUsd: 1,
-      }
+      { maxCostUsd: 1 }
     )
     const result = await runWorkflow({ workflow, trigger })
 
     expect(result.status).toBe("failed")
-    expect(result.error).toMatchObject({ code: "budget_exhausted", nodeId: "s3" })
-    expect(result.error?.message).toContain("$1.00")
+    expect(result.error).toMatchObject({ code: "budget_exhausted", nodeId: "s4" })
     expect(executed).toEqual(["s1", "s2", "s3"])
-    expect(await budgetRecords(result.runId)).toEqual([
-      ["s3", expect.objectContaining({ budget: "exhausted", limitUsd: 1, scope: "run" })],
+    expect(await settledSpend(result.runId)).toEqual([
+      { budget: "spent", limitUsd: 1, spentUsd: expect.closeTo(1.2) },
     ])
     const row = await getDb().workflowRuns.get(result.runId)
-    expect(summarizeRunBudget(row!, await listRunEvents(result.runId))).toMatchObject({
+    expect(summarizeRunBudget(row!, await listRunEvents(result.runId))).toEqual({
       limitUsd: 1,
       spentUsd: expect.closeTo(1.2),
       exhausted: true,
     })
   })
 
-  it("fails a run whose last step reached the limit: the abort stops that step too", async () => {
-    const workflow = chain([spend("s1", 0.6), spend("s2", 0.6)], { maxCostUsd: 1 })
-    const result = await runWorkflow({ workflow, trigger })
-
-    expect(result.status).toBe("failed")
-    expect(result.error).toMatchObject({ code: "budget_exhausted", nodeId: "s2" })
-    expect(await budgetRecords(result.runId)).toEqual([
-      ["s2", expect.objectContaining({ budget: "exhausted" })],
-    ])
-  })
-
-  it("lets no error policy turn the budget stop into a handled failure", async () => {
-    const workflow = chain([spend("s1", 1, { throwWhenStopped: true }), spend("s2", 0.1)], {
+  it("lets no error policy turn a refused call into a handled failure", async () => {
+    const workflow = chain([spend("s1", 1), spend("s2", 0.1), spend("s3", 0.1)], {
       maxCostUsd: 1,
       errorPolicy: "continue",
     })
     const result = await runWorkflow({ workflow, trigger })
 
     expect(result.status).toBe("failed")
-    expect(result.error).toMatchObject({ code: "budget_exhausted", nodeId: "s1" })
+    expect(result.error).toMatchObject({ code: "budget_exhausted", nodeId: "s2" })
     expect(executed).toEqual(["s1"])
   })
 
-  it("marks spend it cannot price as not covered and keeps running", async () => {
-    const workflow = chain(
-      [
-        { id: "unpriced", params: { modelId: "mystery-model-xyz" } },
-        { id: "silent", kind: "ai.test.silent" },
-        { id: "done", kind: "flow.set", params: { variable: "v", value: 1 } },
-      ],
-      { maxCostUsd: 0.01 }
-    )
+  it("charges a call that reported nothing its whole hold, never zero", async () => {
+    const workflow = chain([spend("silent"), spend("after", 0.1)], { maxCostUsd: 1 })
     const result = await runWorkflow({ workflow, trigger })
 
-    expect(result.status).toBe("succeeded")
-    expect(executed).toEqual(["unpriced", "silent"])
-    expect(await budgetRecords(result.runId)).toEqual([
-      ["unpriced", { budget: "uncovered", reason: "unpriced", nodeKind: "ai.test.spend" }],
-      ["silent", { budget: "uncovered", reason: "unreported", nodeKind: "ai.test.silent" }],
-    ])
-    const row = await getDb().workflowRuns.get(result.runId)
-    expect(summarizeRunBudget(row!, await listRunEvents(result.runId))).toMatchObject({
-      spentUsd: 0,
-      uncoveredStepIds: ["unpriced", "silent"],
-      exhausted: false,
+    expect(result.error).toMatchObject({ code: "budget_exhausted", nodeId: "after" })
+    expect(executed).toEqual(["silent"])
+  })
+
+  it("refuses a model with no price under a USD budget before it is called", async () => {
+    const workflow = chain([spend("unpriced", 0.1, { modelId: "mystery-model-xyz" })], {
+      maxCostUsd: 1,
     })
+    const result = await runWorkflow({ workflow, trigger })
+
+    expect(result.status).toBe("failed")
+    expect(result.error).toMatchObject({ code: "pricing_unknown", nodeId: "unpriced" })
+    expect(executed).toEqual([])
   })
 
   it("does nothing for a workflow without a budget", async () => {
-    const workflow = chain([spend("s1", 5), { id: "silent", kind: "ai.test.silent" }])
+    const workflow = chain([spend("s1", 5), spend("silent")])
     const result = await runWorkflow({ workflow, trigger })
 
     expect(result.status).toBe("succeeded")
-    expect(await budgetRecords(result.runId)).toEqual([])
+    expect(await settledSpend(result.runId)).toEqual([])
+    expect(
+      (await getDb().executionRuns.get(workflowExecutionRunId(result.runId)))?.runLedger
+    ).toBeUndefined()
   })
 
-  it("holds a sub-workflow to what its live parent has left and charges the parent", async () => {
-    // A live budget is not a persisted lineage. Admit the real parent as the
-    // production subworkflow launcher does before registering its budget.
+  it("holds a sub-workflow to what its parent's tree has left", async () => {
     await runWorkflow({ workflow: chain([]), trigger, runId: "run_parent" })
-    const parentLog = { log: jest.fn(async () => undefined) } as unknown as RunLogger
-    const parentStop = jest.fn()
-    const parent = createRunBudget({
-      runId: "run_parent",
-      limitUsd: 1,
-      logger: parentLog,
-      nodeKindOf: () => "flow.subworkflow",
-      onExhausted: parentStop,
+    await declareRunBudget(workflowExecutionRunId("run_parent"), { costUsd: 0.5 })
+    const workflow = chain([spend("c1", 0.3), spend("c2", 0.3), spend("c3", 0.3)])
+    const result = await runWorkflow({
+      workflow,
+      trigger,
+      lineage: { rootRunId: "run_parent", parentRunId: "run_parent", parentStepId: "sub" },
     })
-    registerRunBudget(parent)
-    try {
-      const workflow = chain([spend("c1", 0.3), spend("c2", 0.3), spend("c3", 0.3)])
-      const result = await runWorkflow({
-        workflow,
-        trigger,
-        lineage: {
-          rootRunId: "run_parent",
-          parentRunId: "run_parent",
-          parentStepId: "sub",
-          budgetCeilingUsd: 0.5,
-        },
-      })
-
-      expect(result.status).toBe("failed")
-      expect(result.error).toMatchObject({ code: "budget_exhausted", nodeId: "c2" })
-      expect(executed).toEqual(["c1", "c2"])
-      expect(parent.spentUsd()).toBeCloseTo(0.6)
-      expect(parentStop).not.toHaveBeenCalled()
-      expect((parentLog.log as jest.Mock).mock.calls.map((call) => call[2])).toEqual([
-        { budget: "child-spend", childRunId: result.runId, costUsd: 0.3 },
-        { budget: "child-spend", childRunId: result.runId, costUsd: 0.3 },
-      ])
-    } finally {
-      unregisterRunBudget("run_parent")
-    }
-  })
-
-  it("resumes with what the run already spent", async () => {
-    const workflow = chain([spend("s1", 0.4), spend("s2", 0.4)], { maxCostUsd: 1 })
-    await getDb().workflowRuns.put({
-      id: "run_resume",
-      workflowId: "wf_budget",
-      status: "running",
-      triggerKind: "trigger.manual",
-      triggerPayload: {},
-      startedAt: 1,
-      workflowSnapshot: workflow,
-      lineage: { rootRunId: "run_resume" },
-    } as never)
-    await getDb().workflowRunEvents.bulkPut([
-      {
-        id: "ev_1",
-        runId: "run_resume",
-        ts: 1,
-        sequence: 1,
-        type: "step_usage",
-        stepId: "earlier",
-        payload: { inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd: 0.7 },
-      } as unknown as WorkflowRunEventRow,
-    ])
-
-    const result = await runWorkflow({ workflow, trigger, runId: "run_resume" })
 
     expect(result.status).toBe("failed")
-    expect(result.error).toMatchObject({ code: "budget_exhausted", nodeId: "s1" })
-    expect(executed).toEqual(["s1"])
+    expect(result.error).toMatchObject({ code: "budget_exhausted", nodeId: "c3" })
+    expect(executed).toEqual(["c1", "c2"])
+    const parentLedger = (await getDb().executionRuns.get(workflowExecutionRunId("run_parent")))
+      ?.runLedger
+    expect(parentLedger?.spent.costUsd).toBeCloseTo(0.6)
+  })
+
+  it("resumes with what the run already spent, and a manual retry starts fresh", async () => {
+    const spender = chain([spend("s1", 0.7)], { maxCostUsd: 1 })
+    const first = await runWorkflow({ workflow: spender, trigger, runId: "run_resume" })
+    expect(first.status).toBe("succeeded")
+    // The process died before the run's row settled: it is resumed in place.
+    await getDb().workflowRuns.update("run_resume", { status: "running", completedAt: undefined })
+    executed.length = 0
+    // A resumed run re-enters its own declaration: the ledger keeps the 0.7.
+    const resumed = await runWorkflow({
+      workflow: chain([spend("s2", 0.4), spend("s3", 0.1)], { maxCostUsd: 1 }),
+      trigger,
+      runId: "run_resume",
+    })
+    expect(resumed.error).toMatchObject({ code: "budget_exhausted", nodeId: "s3" })
+    expect(executed).toEqual(["s2"])
+    executed.length = 0
+    // A retry of it is a new root with a ledger of its own.
+    const retried = await runWorkflow({
+      workflow: chain([spend("s2", 0.4), spend("s3", 0.1)], { maxCostUsd: 1 }),
+      trigger,
+      lineage: { rootRunId: "run_retry", retryOfRunId: "run_resume" },
+      runId: "run_retry",
+    })
+    expect(retried.status).toBe("succeeded")
+    expect(executed).toEqual(["s2", "s3"])
   })
 })

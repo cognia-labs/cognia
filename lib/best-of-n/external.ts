@@ -36,6 +36,8 @@ export interface ExternalCandidateInput {
   model?: string | null
   /** The candidate's own workspace root, never the parent checkout. */
   workingDirectory: string
+  /** The candidate's share of the group's dollar budget. */
+  maxBudgetUsd?: number
   signal: AbortSignal
   onCapture(event: CaptureStreamEvent): void
   /**
@@ -68,9 +70,9 @@ const production: ExternalCandidateDeps = {
 
 /**
  * One candidate on an external CLI agent, through the same manager launch path
- * Agent Team teammates use. The external execute contract exposes neither
- * Cognia's tools nor a dollar budget: no MCP servers are forwarded, so the
- * candidate grant's denials hold, and cost stays unknown.
+ * Agent Team teammates use. The external execute contract exposes none of
+ * Cognia's tools: no MCP servers are forwarded, so the candidate grant's
+ * denials hold. Its dollar share reserves from the group's ledger.
  */
 export async function runExternalCandidate(
   input: ExternalCandidateInput,
@@ -97,6 +99,7 @@ export async function runExternalCandidate(
       {
         workingDirectory: input.workingDirectory,
         ...(input.model ? { model: input.model } : {}),
+        ...(input.maxBudgetUsd !== undefined ? { maxBudgetUsd: input.maxBudgetUsd } : {}),
         onEvent,
         signal: input.signal,
       },

@@ -48,6 +48,11 @@ export function toDispatchErrorEnvelope(
   if (opts.aborted || code === "aborted") {
     return { code: "aborted", retryable: false, message, ...partial }
   }
+  // The run tree's ledger refused or stopped the child (read structurally so
+  // this module stays Dexie-free). Retrying cannot buy more budget.
+  if (err instanceof Error && err.name === "RunBudgetError") {
+    return { ...envelopeForBudgetExhausted(message), ...partial }
+  }
   if (isPluginInterceptorRefusal(err)) {
     return { code: "rejection-policy", retryable: false, message, ...partial }
   }

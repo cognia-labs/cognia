@@ -41,6 +41,12 @@ jest.mock("@/lib/twin/distill/llm", () => ({
   createLlmClient: (...args: unknown[]) => mockCreateLlmClient(...(args as [])),
 }))
 
+// The ledger behind it is exercised in run-budget-rail.test.ts.
+const mockBudgetedLlmClient = jest.fn((client: unknown, ..._rest: unknown[]) => client)
+jest.mock("@/lib/execution/run-budget-rail", () => ({
+  budgetedLlmClient: (...args: [unknown, ...unknown[]]) => mockBudgetedLlmClient(...args),
+}))
+
 jest.mock("@cognia/provider-core/providers/model-pricing", () => ({
   estimateCallCostUsd: jest.fn(() => 0.0042),
 }))
@@ -107,6 +113,12 @@ describe("executeAiPrompt — explicit mode", () => {
     expect(mockEndSpan).toHaveBeenCalledWith(
       "span1",
       expect.objectContaining({ responseModel: "gpt-x" })
+    )
+    // Every call reserves on the workflow run's tree ledger (ADR-0243 3B).
+    expect(mockBudgetedLlmClient).toHaveBeenCalledWith(
+      expect.anything(),
+      `execution:workflow:${ctx.runId}`,
+      { providerId: "openai", modelId: "gpt-x" }
     )
   })
 
@@ -548,6 +560,8 @@ describe("executeAiPrompt — routed mode", () => {
         featureId: "workflow:n1",
         workspaceId: null,
       },
+      // And every candidate's model call reserves on the run tree's budget ledger.
+      executionRunId: `execution:workflow:${ctx.runId}`,
     })
   })
 

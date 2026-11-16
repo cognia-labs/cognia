@@ -669,10 +669,25 @@ async function dispatchPrompt(
     wireOptions = rest
   }
   const mcpConfiguration = stableHash(JSON.stringify(wireOptions?.mcpServers ?? {}))
+  // ADR-0243: reserve from the run tree's ledger at dispatch, after preparation.
+  const budget = await reserveTurnBudget(
+    pinned,
+    sessionId,
+    context.executionRunId,
+    options,
+    delivery
+  )
+  if (budget) wireOptions = { ...wireOptions, runBudget: budget.bounds }
   // No await between this check and dispatch: cancelled admission cannot
   // lazily restart the Rust sidecar after its capture has declared it stopped.
-  delivery?.signal?.throwIfAborted()
-  if (!pinned.isCurrent()) throw new ExecutionRouteChangedError(pinned.key)
+  try {
+    delivery?.signal?.throwIfAborted()
+    if (!pinned.isCurrent()) throw new ExecutionRouteChangedError(pinned.key)
+  } catch (error) {
+    // Nothing was dispatched, so nothing can still spend this hold.
+    await budget?.settle({ inputTokens: 0, outputTokens: 0 }, true)
+    throw error
+  }
   bindSessionExecutionRoute(sessionId, pinned)
   // A route this send pinned itself has no listener to settle it: the turn's
   // end on that Host does. Subscribed before dispatch, so a fast end is heard.
@@ -700,12 +715,94 @@ async function dispatchPrompt(
     })
   } catch (error) {
     settleOwn()
+    // A failed ACK may still have delivered the request: no stop proof.
+    await budget?.settle(undefined, false)
     throw error
   }
   sentMcpConfigurations.set(sessionId, {
     configuration: mcpConfiguration,
     generation: wireOptions?.transcriptInvalidationId,
   })
+}
+
+/**
+ * One sidecar turn's ledger hold. Usage comes from the turn's result; stop
+ * proof is the executor's own: the turn settled with nothing left running, or
+ * the executor was disposed. A sidecar that exits proves nothing, so the whole
+ * hold is charged.
+ */
+async function reserveTurnBudget(
+  pinned: ExecutionRoute,
+  sessionId: string,
+  runId: string,
+  options: SendOptions | undefined,
+  delivery: PromptDelivery | undefined
+) {
+  const { beginRailBudget } = await import("@/lib/execution/run-budget-rail")
+  const budget = await beginRailBudget(
+    runId,
+    { providerId: options?.provider, modelId: options?.model ?? "" },
+    {
+      ...(options?.maxBudgetUsd !== undefined ? { caps: { costUsd: options.maxBudgetUsd } } : {}),
+      ...(delivery?.signal ? { signal: delivery.signal } : {}),
+    }
+  )
+  if (!budget) return undefined
+  const bounds = {
+    ...(budget.tokens !== undefined ? { tokens: budget.tokens } : {}),
+    ...(budget.deadlineAt !== undefined ? { deadlineAt: budget.deadlineAt } : {}),
+  }
+  const { extractUsage } = await import("./adapter")
+  let usage: import("@/lib/execution/run-budget-rail").MeteredUsage | undefined
+  let executorId: string | undefined
+  const interrupt = () =>
+    void pinned.transport.call("agent_interrupt", { sessionId }).catch(() => undefined)
+  budget.signal.addEventListener("abort", interrupt, { once: true })
+  let unlisten: UnlistenFn = () => {}
+  let settled: Promise<void> | undefined
+  const settle = (final: typeof usage, confirmed: boolean) =>
+    (settled ??= (async () => {
+      unlisten()
+      budget.signal.removeEventListener("abort", interrupt)
+      await budget.finish(final, confirmed)
+    })())
+  unlisten = pinned.transport.subscribe<ClaudeEvent>(SIDECAR_EVENT, (event) => {
+    const lifecycle = event as {
+      type: string
+      sessionId?: string
+      turnId?: string
+      executorId?: string
+      backgroundProcessesRunning?: boolean
+    }
+    if (lifecycle.type === "sidecar_exited") return void settle(usage, false)
+    if (lifecycle.sessionId !== sessionId) return
+    const ours = !options?.turnId || lifecycle.turnId === options.turnId
+    if (lifecycle.type === "executor_started" && ours) executorId = lifecycle.executorId
+    if (!ours && (!executorId || lifecycle.executorId !== executorId)) return
+    if (event.type === "session_ended") {
+      // A send the sidecar refused before any executor bound it spent nothing.
+      if ((event as { sendRefused?: boolean }).sendRefused && !executorId)
+        return void settle({ inputTokens: 0, outputTokens: 0 }, true)
+      const result = event.result ? extractUsage(event.result) : null
+      usage = result
+        ? {
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+            cacheReadTokens: result.cacheReadInputTokens,
+            cacheCreationTokens: result.cacheCreationInputTokens,
+            // The generic (AI-SDK) lane reports 0 for a turn it did not price;
+            // the rail prices those tokens itself.
+            ...(result.totalCostUsd ? { costUsd: result.totalCostUsd } : {}),
+          }
+        : undefined
+      if (usage) void budget.report(usage).catch(() => undefined)
+    } else if (
+      lifecycle.type === "session_disposed" ||
+      (lifecycle.type === "turn_settled" && lifecycle.backgroundProcessesRunning === false)
+    )
+      void settle(usage, true)
+  })
+  return { bounds, settle }
 }
 
 /**

@@ -285,7 +285,7 @@ export interface PluginBotPolicyV1 {
   requireApprovalForWrites?: boolean
   /** Wall-clock ceiling for one run. */
   maxRunDurationMs?: number
-  /** Cost ceiling for one run, handed to the run budget governor. */
+  /** Cost ceiling for one run, declared on its run tree's ledger. */
   maxRunCostUsd?: number
   /** Runs allowed in flight for one installation. */
   maxConcurrentRuns?: number

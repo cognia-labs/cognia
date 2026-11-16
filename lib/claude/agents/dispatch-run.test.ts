@@ -33,7 +33,12 @@ import {
   registerDispatchContext,
   __clearAllDispatchContextsForTesting,
 } from "./dispatch-context-registry"
-import { __clearAllDispatchBudgetsForTesting, getOrCreateDispatchBudget } from "./dispatch-budget"
+import {
+  declareRootRunBudget,
+  declareRunBudget,
+  readRunBudget,
+  runBudgetRefusal,
+} from "@/lib/execution/run-ledger"
 import {
   requestCancelSubagentRun,
   __liveSubagentRunCountForTesting,
@@ -63,6 +68,12 @@ jest.mock("@/lib/db/sessions", () => ({
 }))
 jest.mock("@/lib/db/execution-runs", () => ({
   getExecutionRun: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/execution/run-ledger", () => ({
+  declareRootRunBudget: jest.fn(async () => true),
+  declareRunBudget: jest.fn(async () => async () => undefined),
+  readRunBudget: jest.fn(async () => undefined),
+  runBudgetRefusal: jest.fn(async () => undefined),
 }))
 jest.mock("@/lib/workspace/session-cwd", () => ({
   __esModule: true,
@@ -180,7 +191,6 @@ function caller(over: Partial<ResolvedCaller> = {}): ResolvedCaller {
     maxDepth: 2,
     maxConcurrent: 0,
     parentChain: [],
-    budgetRoot: "dispatch:test-session",
     ...over,
   }
 }
@@ -248,7 +258,6 @@ beforeEach(() => {
   jest.clearAllMocks()
   jest.mocked(getExecutionRun).mockReset().mockResolvedValue(undefined)
   __clearAllDispatchContextsForTesting()
-  __clearAllDispatchBudgetsForTesting()
   useSubagentRuntimeStore.getState().clearRuntime()
   mockGetDef.mockReturnValue({ id: "coder", prompt: "task" } as never)
   mockGetSession.mockResolvedValue(undefined)
@@ -636,10 +645,9 @@ describe("startDispatchRun — retry loop", () => {
     expect(handle.text).toContain("terminated early")
   })
 
-  it("skips the retry when the subtree token budget is exhausted", async () => {
+  it("skips the retry when the run tree's ledger has nothing left", async () => {
     nesting({ dispatchMaxRetries: 2 })
-    const guard = getOrCreateDispatchBudget("dispatch:budgeted", 100)
-    guard.add({ promptTokens: 90, completionTokens: 9, totalTokens: 99 })
+    jest.mocked(runBudgetRefusal).mockResolvedValueOnce("budget_exhausted")
     mockDispatch.mockRejectedValue(new Error("429 rate limit"))
 
     await startDispatchRun({
@@ -648,11 +656,101 @@ describe("startDispatchRun — retry loop", () => {
       toolsEnabled: true,
       background: false,
       parentSessionId: "chat-1",
-      caller: caller({ budgetRoot: "dispatch:budgeted" }),
+      caller: caller(),
     })
 
     expect(mockDispatch).toHaveBeenCalledTimes(1)
     expect(runs()[0].status).toBe("failed")
+  })
+
+  it("reads a ledger refusal as budget exhaustion, never as a retryable error", async () => {
+    nesting({ dispatchMaxRetries: 2 })
+    const refusal = Object.assign(new Error("This run's budget is used up."), {
+      name: "RunBudgetError",
+    })
+    mockDispatch.mockRejectedValue(refusal)
+
+    const handle = await startDispatchRun({
+      subagentId: "coder",
+      prompt: "p",
+      toolsEnabled: true,
+      background: false,
+      parentSessionId: "chat-1",
+      caller: caller(),
+    })
+
+    expect(mockDispatch).toHaveBeenCalledTimes(1)
+    expect(handle.text).toContain("budget is used up")
+  })
+
+  it("declares a top-level nesting budget on the run the child was launched under", async () => {
+    nesting({ tokenBudget: 500, timeoutMs: 60_000 })
+    jest
+      .mocked(getExecutionRun)
+      .mockImplementation(async (id: string) =>
+        id === "execution:job:child-1"
+          ? ({ id, parentRunId: "execution:turn:1" } as never)
+          : undefined
+      )
+    jest
+      .mocked(readRunBudget)
+      .mockResolvedValueOnce({ spent: { tokens: 0, costUsd: 0 }, deadlineAt: 4_242 })
+    const release = jest.fn(async () => undefined)
+    jest.mocked(declareRunBudget).mockResolvedValueOnce(release)
+
+    await startDispatchRun({
+      subagentId: "coder",
+      prompt: "p",
+      toolsEnabled: true,
+      background: false,
+      parentSessionId: "chat-1",
+      runId: "child-1",
+      caller: caller(),
+    })
+
+    expect(declareRunBudget).toHaveBeenCalledWith(
+      "execution:turn:1",
+      { tokens: 500, deadlineMs: 60_000 },
+      { signal: expect.any(AbortSignal) }
+    )
+    // The child runs to the tree's one absolute deadline.
+    expect(mockDispatch.mock.calls[0][2]).toMatchObject({ _deadlineMs: 4_242 })
+    // A hold the caps became is released once the child ends.
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it("gives a person's re-run a ledger of its own under the same parent", async () => {
+    nesting({ tokenBudget: 500 })
+    await startDispatchRun({
+      subagentId: "coder",
+      prompt: "p",
+      toolsEnabled: true,
+      background: false,
+      parentSessionId: "chat-1",
+      runId: "rerun-1",
+      resumeOfRunId: "orig-1",
+      freshBudget: true,
+      caller: caller(),
+    })
+    expect(declareRootRunBudget).toHaveBeenCalledWith(
+      "execution:job:rerun-1",
+      { tokens: 500, deadlineMs: 0 },
+      { fresh: true }
+    )
+  })
+
+  it("declares nothing for a nested caller: the tree above already holds the budget", async () => {
+    nesting({ tokenBudget: 500 })
+    await startDispatchRun({
+      subagentId: "coder",
+      prompt: "p",
+      toolsEnabled: true,
+      background: false,
+      parentSessionId: "chat-1",
+      caller: caller({ parentDepth: 1, parentSubagentId: "parent-run" }),
+    })
+    expect(declareRunBudget).not.toHaveBeenCalled()
+    expect(declareRootRunBudget).not.toHaveBeenCalled()
   })
 
   it("never retries guard rejections (resolved rejection results)", async () => {
@@ -797,7 +895,8 @@ describe("resolveCaller / loadNesting", () => {
     nesting({ timeoutMs: 60_000 })
     const c = await resolveCaller("chat-1")
     expect(c).toMatchObject({ parentDepth: 0, maxDepth: 2, parentChain: [] })
-    expect(c.deadlineMs).toBeGreaterThan(Date.now())
+    // The deadline is the run tree's, bound when the first child launches.
+    expect(c.deadlineMs).toBeUndefined()
     await expect(loadNesting()).resolves.toMatchObject({ dispatchMaxRetries: 1 })
   })
 
@@ -807,14 +906,12 @@ describe("resolveCaller / loadNesting", () => {
       maxDepth: 3,
       parentChain: ["root"],
       selfRunId: "run-A",
-      budgetRootRunId: "budget-root",
     })
     await expect(resolveCaller("sub-session")).resolves.toMatchObject({
       parentDepth: 1,
       maxDepth: 3,
       parentChain: ["root"],
       parentSubagentId: "run-A",
-      budgetRoot: "budget-root",
     })
   })
 
@@ -845,7 +942,6 @@ describe("resolveCaller / loadNesting, concurrency cap", () => {
       maxDepth: 3,
       parentChain: ["root"],
       selfRunId: "run-B",
-      budgetRootRunId: "budget-root",
     })
     await expect(resolveCaller("sub-cap")).resolves.toMatchObject({
       parentDepth: 1,
@@ -864,7 +960,6 @@ describe("startDispatchRun, per-call model override", () => {
     parentDepth: 0,
     maxDepth: 2,
     parentChain: [],
-    budgetRoot: "dispatch:model",
     maxConcurrent: 0,
   }
 

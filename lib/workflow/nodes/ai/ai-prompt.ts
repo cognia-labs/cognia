@@ -24,6 +24,8 @@
  */
 
 import { resolveNodeApiKey } from "../shared/executor-support"
+import { budgetedLlmClient } from "@/lib/execution/run-budget-rail"
+import { workflowExecutionRunId } from "@/lib/execution/workflow-bridge"
 import type { StepExecutionContext, StepExecutionResult } from "@/types/workflow/visual"
 import type { ApiFlavor } from "@cognia/provider-types/provider"
 import type { PiiGateMode } from "./pii-gate"
@@ -219,7 +221,10 @@ export async function executeAiPrompt(ctx: StepExecutionContext): Promise<StepEx
       await import("./ai-prompt-routed")
     // Every candidate and fallback attempt is its own `agentsWorkflows`
     // reservation (ADR-0188 D27); off, the clients are exactly as built.
-    const deps = await defaultRoutedPromptDeps({ ledger: workflowNodeLedger(ctx) })
+    const deps = await defaultRoutedPromptDeps({
+      ledger: workflowNodeLedger(ctx),
+      executionRunId: workflowExecutionRunId(ctx.runId),
+    })
     // Sum usage/cost across the auto-fix retry so `step_usage` reflects what
     // the node actually spent, not just the last call.
     const totals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
@@ -311,14 +316,22 @@ export async function executeAiPrompt(ctx: StepExecutionContext): Promise<StepEx
   // included — when the `agentsWorkflows` switch is on (ADR-0188 D27). Off, the default, `ledgerUtilityCalls` returns `built` itself.
   // The settings read works on the headless brain too, which never loads the
   // settings store.
-  const client = ledgerUtilityCalls(built, {
-    binding: {
-      ...workflowNodeLedger(ctx),
+  // The run-tree hold sits inside, so a call the utility ledger refuses never
+  // reserves from the tree.
+  const client = ledgerUtilityCalls(
+    budgetedLlmClient(built, workflowExecutionRunId(ctx.runId), {
       providerId: params.provider,
       modelId: params.model,
-    },
-    settings: await currentRouterFusionGateSettings(),
-  })
+    }),
+    {
+      binding: {
+        ...workflowNodeLedger(ctx),
+        providerId: params.provider,
+        modelId: params.model,
+      },
+      settings: await currentRouterFusionGateSettings(),
+    }
+  )
 
   const callOnce = async (fix?: string): Promise<PromptOutcome> => {
     const user = withFix(gated.user, fix)

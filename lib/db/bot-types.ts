@@ -79,7 +79,8 @@ export interface BotDefinitionRow {
  *   `maxRunCostUsd` ceiling becomes a hard token ceiling on the task ticket.
  * - `native`: the agent CLI uses its own provider login. Chosen explicitly by
  *   the user; there is no gateway PII gate on its model traffic and a cost
- *   ceiling is enforced only between invocations (a soft cap).
+ *   ceiling is checked between invocations only: the one that crosses it
+ *   finishes, every later one is refused (a soft cap).
  */
 export type BotExecutionRoute =
   | { mode: "gateway"; providerId: string; modelId: string; accountId?: string | null }

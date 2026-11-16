@@ -36,7 +36,6 @@ import type {
 } from "@/types/plugin/plugin-agent-sdk"
 import { assertNoLeakingPiiDeep } from "@/lib/plugin/api/plugin-pii-gate"
 import { fireAgentHook, type AgentHookContext } from "@/lib/ai/agent/external/agent-hooks"
-import { getDispatchBudget, isDispatchBudgetExhausted } from "@/lib/claude/agents/dispatch-budget"
 import { composeSubagentSystemPrompt } from "@/lib/agent/prompts/subagent-frame"
 import {
   dispatchResultOutcome,
@@ -212,20 +211,6 @@ export async function dispatchSubagent(
       attemptedDepth: childDepth,
     })
   }
-  // Budget: refuse a deeper/sibling dispatch when the subtree pool is critical.
-  if (isDispatchBudgetExhausted(options._budgetRootRunId)) {
-    const message = "Dispatch refused — the token budget for this dispatch subtree is exhausted."
-    return {
-      text: message,
-      channel: "text",
-      toolsAvailable: false,
-      finishReason: "error",
-      runId,
-      depthExhausted: true,
-      errorEnvelope: envelopeForBudgetExhausted(message),
-    }
-  }
-
   const deadlineMs = options._deadlineMs
   const timeoutMs = typeof deadlineMs === "number" ? deadlineMs - Date.now() : undefined
   // Zero disables capture's wall-clock timer, so an elapsed explicit deadline
@@ -364,7 +349,6 @@ export async function dispatchSubagent(
               parentChain: childChain,
               selfRunId: runId,
               ...(typeof deadlineMs === "number" ? { deadlineMs } : {}),
-              ...(options._budgetRootRunId ? { budgetRootRunId: options._budgetRootRunId } : {}),
             },
           }
         : {}),
@@ -390,16 +374,6 @@ export async function dispatchSubagent(
   void fireAgentHook("SubagentStop", hookCtx, {
     payload: { ...subagentHookPayload, success: outcome.finishReason !== "error" },
   })
-
-  // Draw the run's usage down the shared subtree budget (best-effort — the
-  // root dispatch creates the guard with the real limit).
-  if (options._budgetRootRunId && result.usage) {
-    getDispatchBudget(options._budgetRootRunId)?.add({
-      promptTokens: result.usage.inputTokens,
-      completionTokens: result.usage.outputTokens,
-      totalTokens: result.usage.totalTokens,
-    })
-  }
 
   // ADR-0090 Phase 7: classify this dispatch's delegation mode at RUNTIME
   // (not just in the editor preview). The parent baseline and the child spec

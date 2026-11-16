@@ -8,12 +8,7 @@ jest.mock("@/lib/execution/personal-visibility", () => ({
 }))
 import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 
-import {
-  runDispatchAgentTool,
-  releaseDispatchBudgetForSession,
-  releaseDispatchStateForSession,
-  resolveDispatchWidth,
-} from "./dispatch-agent-handler"
+import { runDispatchAgentTool, releaseDispatchStateForSession } from "./dispatch-agent-handler"
 import { dispatchSubagent } from "@/lib/plugin/agent-sdk/dispatch"
 import {
   registerKnowledgeAccessForSession,
@@ -28,11 +23,6 @@ import {
   getResolvedPermissionCeiling,
   __clearAllDispatchContextsForTesting,
 } from "./dispatch-context-registry"
-import {
-  __clearAllDispatchBudgetsForTesting,
-  getOrCreateDispatchBudget,
-  getDispatchBudget,
-} from "./dispatch-budget"
 import {
   __clearRendererBackgroundRunsForTesting,
   cancelRendererBackgroundRun,
@@ -49,6 +39,10 @@ import { getExecutionRun } from "@/lib/db/execution-runs"
 
 // These routing tests have no browser database. Real journal/identity/Lark
 // behavior is exercised by dispatch-run.identity.test.ts.
+jest.mock("@/lib/execution/run-authority", () => ({
+  ...jest.requireActual("@/lib/execution/run-authority"),
+  resolveRunAuthority: jest.fn(async () => ({})),
+}))
 jest.mock("@/lib/execution/acting-authority", () => ({
   startToolExecutionRun: jest.fn(async (_sessionId, options) => ({ id: options.runId })),
   finishToolExecutionRun: jest.fn(async () => undefined),
@@ -58,6 +52,13 @@ jest.mock("@/lib/execution/acting-authority", () => ({
 }))
 jest.mock("@/lib/db/execution-runs", () => ({
   getExecutionRun: jest.fn(async () => undefined),
+}))
+// The run tree's ledger is exercised by run-ledger.test.ts and dispatch-run.test.ts.
+jest.mock("@/lib/execution/run-ledger", () => ({
+  declareRootRunBudget: jest.fn(async () => true),
+  declareRunBudget: jest.fn(async () => async () => undefined),
+  readRunBudget: jest.fn(async () => undefined),
+  runBudgetRefusal: jest.fn(async () => undefined),
 }))
 
 /** Spin the event loop until `pred()` is truthy or attempts run out. */
@@ -155,7 +156,6 @@ const ok = (text: string, runId = "child-1"): PluginSubagentDispatchResult => ({
 beforeEach(() => {
   jest.clearAllMocks()
   __clearAllDispatchContextsForTesting()
-  __clearAllDispatchBudgetsForTesting()
   __clearRendererBackgroundRunsForTesting()
   useSubagentRuntimeStore.getState().clearRuntime()
   mockGetDef.mockReturnValue(undefined)
@@ -203,7 +203,12 @@ describe("runDispatchAgentTool — call modes", () => {
   })
 
   it("forwards the Host-correlated execution run into dispatch admission", async () => {
-    jest.mocked(getExecutionRun).mockResolvedValueOnce({ id: "issuing-run" } as never)
+    // The launcher reads the child's own row first, then the issuing parent's.
+    jest
+      .mocked(getExecutionRun)
+      .mockImplementation(async (id: string) =>
+        id === "issuing-run" ? ({ id } as never) : undefined
+      )
     await runDispatchAgentTool({
       sessionId: "chat-1",
       executionRunId: "issuing-run",
@@ -242,7 +247,6 @@ describe("runDispatchAgentTool — call modes", () => {
       maxDepth: 3,
       parentChain: ["root-agent"],
       selfRunId: "run-A",
-      budgetRootRunId: "budget-root",
     })
     await runDispatchAgentTool({
       sessionId: "sub-session",
@@ -252,7 +256,6 @@ describe("runDispatchAgentTool — call modes", () => {
       _depth: 1,
       _maxDepth: 3,
       _parentChain: ["root-agent"],
-      _budgetRootRunId: "budget-root",
     })
     // The store run links to the caller's run id as its tree edge.
     const runs = Object.values(useSubagentRuntimeStore.getState().subAgents)
@@ -600,27 +603,17 @@ describe("runDispatchAgentTool — call modes", () => {
     expect(runs.some((r) => r.status === "failed")).toBe(true)
   })
 
-  it("releaseDispatchBudgetForSession drops the session's leaked guard", () => {
-    getOrCreateDispatchBudget("dispatch:chat-xyz", 1000)
-    expect(getDispatchBudget("dispatch:chat-xyz")).toBeDefined()
-    releaseDispatchBudgetForSession("chat-xyz")
-    expect(getDispatchBudget("dispatch:chat-xyz")).toBeUndefined()
-  })
-
-  it("releaseDispatchStateForSession drops the budget guard AND the resolved ceiling", () => {
+  it("releaseDispatchStateForSession drops the knowledge scope AND the resolved ceiling", () => {
     registerKnowledgeAccessForSession("chat-xyz", { knowledgeBaseIds: ["kb"] })
-    getOrCreateDispatchBudget("dispatch:chat-xyz", 1000)
     recordResolvedPermissionCeiling("chat-xyz", { allowedTools: ["Read"] })
-    expect(getDispatchBudget("dispatch:chat-xyz")).toBeDefined()
     expect(getResolvedPermissionCeiling("chat-xyz")).toBeDefined()
     releaseDispatchStateForSession("chat-xyz")
-    expect(getDispatchBudget("dispatch:chat-xyz")).toBeUndefined()
     expect(getResolvedPermissionCeiling("chat-xyz")).toBeUndefined()
     expect(getKnowledgeAccessForSession("chat-xyz")).toBeUndefined()
   })
 })
 
-describe("runDispatchAgentTool — fan-out concurrency vs budget", () => {
+describe("runDispatchAgentTool — fan-out concurrency", () => {
   // Track peak concurrent dispatches so we can distinguish serialized from
   // parallel fan-out without depending on wall-clock timing.
   const trackingDispatch = () => {
@@ -643,18 +636,18 @@ describe("runDispatchAgentTool — fan-out concurrency vs budget", () => {
     ],
   }
 
-  it("serializes parallel fan-out under a FINITE budget (peak concurrency 1)", async () => {
+  it("keeps fan-out parallel under a token budget: siblings meet on the run's ledger instead", async () => {
     mockGetSettings.mockResolvedValue({
       subagentNesting: { enabled: true, maxDepth: 2, tokenBudget: 100, timeoutMs: 0 },
     } as never)
     const peak = trackingDispatch()
     const out = await runDispatchAgentTool({ sessionId: "chat-finite", args: twoDispatches })
-    expect(peak()).toBe(1)
+    expect(peak()).toBe(2)
     expect(out).toContain("R:one")
     expect(out).toContain("R:two")
   })
 
-  it("keeps parallel fan-out under an UNLIMITED budget (peak concurrency 2)", async () => {
+  it("keeps parallel fan-out without a budget (peak concurrency 2)", async () => {
     // Default beforeEach settings carry tokenBudget: 0 (unlimited).
     const peak = trackingDispatch()
     await runDispatchAgentTool({ sessionId: "chat-unlimited", args: twoDispatches })
@@ -767,7 +760,7 @@ describe("runDispatchAgentTool, cancel / multi-collect / model / width", () => {
     expect(mockDispatch.mock.calls[0][0]).toBe("coder")
   })
 
-  it("bounds fan-out width by subagentNesting.maxConcurrent under an unlimited budget", async () => {
+  it("bounds fan-out width by subagentNesting.maxConcurrent", async () => {
     mockGetSettings.mockResolvedValue({
       subagentNesting: {
         enabled: true,
@@ -798,12 +791,5 @@ describe("runDispatchAgentTool, cancel / multi-collect / model / width", () => {
     })
     expect(peak).toBe(1)
     expect(out).toContain("R:three")
-  })
-
-  it("resolveDispatchWidth: finite budget beats the cap, 0 means unlimited", () => {
-    expect(resolveDispatchWidth({ budgetRoot: "none", maxConcurrent: 0 })).toBe(Infinity)
-    expect(resolveDispatchWidth({ budgetRoot: "none", maxConcurrent: 3 })).toBe(3)
-    getOrCreateDispatchBudget("finite-root", 100)
-    expect(resolveDispatchWidth({ budgetRoot: "finite-root", maxConcurrent: 3 })).toBe(1)
   })
 })

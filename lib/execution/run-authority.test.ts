@@ -23,7 +23,6 @@ const narrow: RunAuthorityV1 = {
   subagents: { only: ["reader"] },
   maxTurns: 2,
   permissionProfile: { workspace: "deny", outbound: "deny" },
-  pools: { rootRunId: "parent", costUsd: 1 },
 }
 const wider: RunAuthorityV1 = {
   schemaVersion: 1,
@@ -35,7 +34,6 @@ const wider: RunAuthorityV1 = {
   subagents: { only: ["reader", "writer"] },
   maxTurns: 20,
   permissionProfile: { workspace: "sandbox", outbound: "ask" },
-  pools: { rootRunId: "child", costUsd: 100 },
 }
 function row(id: string, overrides: Partial<ExecutionRun> = {}): ExecutionRun {
   return {
@@ -132,7 +130,7 @@ it("retains a child's own narrowing when the parent has no authority", async () 
   await getDb().executionRuns.add(row("parent"))
   expect(
     (await resolveRunAuthority({ parentRunId: "parent", requested: wider })).authority
-  ).toEqual({ ...wider, pools: undefined })
+  ).toEqual(wider)
 })
 it("reads the live identity revision and uses the direct parent's recorded cap", async () => {
   const root = row("root", { authority: narrow })
@@ -194,38 +192,34 @@ it("refuses missing parents, cycles, and a requested lane switch", async () => {
     reason: "authority_unavailable",
   })
 })
-it.each([false, true])(
-  "inherits only marked 3A caps, preserving legacy pools (marked=%s)",
-  async (marked) => {
-    const { caps: _caps, ...phaseOne } = narrow
-    const parent = row("pre-upgrade", { authority: marked ? narrow : phaseOne })
-    await getDb().executionRuns.add(parent)
-    await Promise.all([
-      resolveRunAuthority({ parentRunId: parent.id }),
-      resolveRunAuthority({ parentRunId: parent.id }),
-    ])
-    const child = await startToolExecutionRun("legacy-session", { parentRunId: parent.id })
-    const options: SendOptions = {
-      permissionMode: "bypassPermissions",
-      allowedTools: ["Read", "Bash"],
-      maxTurns: 40,
-      mcpServers: { safe: { command: "safe" }, unsafe: { command: "unsafe" } },
-      runAuthorityMcpServerIds: { safe: "safe", unsafe: "unsafe" },
-    }
-    await enforceRunAuthorityOnSendOptions(child.id, options)
-    await resolveRunAuthority({ runId: child.id })
-    expect(options.permissionMode).toBe(marked ? "plan" : "bypassPermissions")
-    expect(options.allowedTools).toEqual(marked ? ["Read"] : ["Read", "Bash"])
-    expect(options.maxTurns).toBe(marked ? 2 : 40)
-    expect(Object.keys(options.mcpServers!)).toEqual(marked ? ["safe"] : ["safe", "unsafe"])
-    expect(options.runAuthority?.pools).toEqual(narrow.pools)
-    expect(options.runAuthority?.caps).toBe("explicit-v1")
-    const observations = await getDb().executionRunEvents.where("runId").equals(parent.id).toArray()
-    expect(
-      observations.filter((event) => event.payload.operation === "legacy_authority_observed")
-    ).toHaveLength(marked ? 0 : 1)
+it.each([false, true])("inherits only marked 3A caps (marked=%s)", async (marked) => {
+  const { caps: _caps, ...phaseOne } = narrow
+  const parent = row("pre-upgrade", { authority: marked ? narrow : phaseOne })
+  await getDb().executionRuns.add(parent)
+  await Promise.all([
+    resolveRunAuthority({ parentRunId: parent.id }),
+    resolveRunAuthority({ parentRunId: parent.id }),
+  ])
+  const child = await startToolExecutionRun("legacy-session", { parentRunId: parent.id })
+  const options: SendOptions = {
+    permissionMode: "bypassPermissions",
+    allowedTools: ["Read", "Bash"],
+    maxTurns: 40,
+    mcpServers: { safe: { command: "safe" }, unsafe: { command: "unsafe" } },
+    runAuthorityMcpServerIds: { safe: "safe", unsafe: "unsafe" },
   }
-)
+  await enforceRunAuthorityOnSendOptions(child.id, options)
+  await resolveRunAuthority({ runId: child.id })
+  expect(options.permissionMode).toBe(marked ? "plan" : "bypassPermissions")
+  expect(options.allowedTools).toEqual(marked ? ["Read"] : ["Read", "Bash"])
+  expect(options.maxTurns).toBe(marked ? 2 : 40)
+  expect(Object.keys(options.mcpServers!)).toEqual(marked ? ["safe"] : ["safe", "unsafe"])
+  expect(options.runAuthority?.caps).toBe("explicit-v1")
+  const observations = await getDb().executionRunEvents.where("runId").equals(parent.id).toArray()
+  expect(
+    observations.filter((event) => event.payload.operation === "legacy_authority_observed")
+  ).toHaveLength(marked ? 0 : 1)
+})
 
 it("rebuilds and restarts an existing run after its direct parent was pruned", async () => {
   const parent = row("parent", { authority: narrow })
@@ -441,21 +435,6 @@ it("only a skills cap filters native extensions and retains named content", () =
   expect(options.runtimeExtensions).toEqual([
     { kind: "directory", path: "/keep", id: "plugin-keep" },
   ])
-})
-
-it("inherits pools through an authority-less middle row", async () => {
-  const root = row("parent", { authority: narrow })
-  await getDb().executionRuns.bulkAdd([
-    root,
-    row("middle", {
-      parentRunId: root.id,
-      ...recordedRunMetadata("child", { parent: root }),
-      authority: undefined,
-    }),
-  ])
-  expect(
-    (await resolveRunAuthority({ parentRunId: "middle", requested: wider })).authority?.pools
-  ).toEqual(narrow.pools)
 })
 
 it("preserves a confirmed replay's own identity root when persisting authority", async () => {

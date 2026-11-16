@@ -420,3 +420,27 @@ export function priceTokensForModel(
     known: pricing !== null,
   }
 }
+
+/**
+ * How many tokens `remainingUsd` buys at the model's most expensive token
+ * rate, or `undefined` when the model has no known price. Used as the gateway
+ * ticket ceiling, so it rounds down and never exceeds the allowance.
+ */
+export function tokenAllowanceForUsd(
+  remainingUsd: number,
+  model: { providerId?: string; modelId: string },
+  opts: ResolvePricingOptions = {}
+): number | undefined {
+  const pricing = resolveModelPricingUsd(model.providerId, model.modelId, opts)
+  if (!pricing) return undefined
+  const rates = [
+    pricing.promptPer1M,
+    pricing.completionPer1M,
+    pricing.cacheCreationPer1M,
+    pricing.cachedInputPer1M,
+  ].filter((rate): rate is number => typeof rate === "number" && Number.isFinite(rate))
+  const highest = Math.max(0, ...rates)
+  // A free model: the ceiling is not a token question.
+  if (highest === 0) return Number.MAX_SAFE_INTEGER
+  return Math.max(0, Math.floor((remainingUsd * 1_000_000) / highest))
+}

@@ -627,12 +627,6 @@ describe("createSquadRunRecords", () => {
       authorityRevision: 3,
       bindingId: "binding",
     }
-    const pools = {
-      rootRunId: "execution:team:old",
-      tokenBudget: 100,
-      costUsd: 2,
-      deadlineMs: 5000,
-    }
     await getDb().executionRuns.add({
       id: "execution:team:old",
       kind: "team",
@@ -649,7 +643,6 @@ describe("createSquadRunRecords", () => {
         permissionMode: "default",
         tools: { allow: ["Read", "Write"], deny: ["Bash"] },
         maxTurns: 8,
-        pools,
       },
     })
     const result = await createSquadRunRecords({
@@ -674,7 +667,6 @@ describe("createSquadRunRecords", () => {
       permissionMode: "default",
       tools: { allow: ["Read", "Write"], deny: ["Bash"] },
       maxTurns: 8,
-      pools,
     })
   })
 

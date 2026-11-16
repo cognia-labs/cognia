@@ -470,10 +470,7 @@ export async function adoptExecutionRun(runId: string, parentRunId: string): Pro
       if (run.authority && run.authority.caps !== "explicit-v1")
         await appendRunObservation(
           run.id,
-          {
-            operation: "legacy_authority_observed",
-            inheritedFields: run.authority.pools ? ["pools"] : [],
-          },
+          { operation: "legacy_authority_observed" },
           { throttleMs: Number.MAX_SAFE_INTEGER }
         )
       await db.executionRuns.update(runId, {

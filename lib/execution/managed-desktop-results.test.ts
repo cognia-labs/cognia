@@ -89,7 +89,6 @@ test.each([
         schemaVersion: 1,
         caps: "explicit-v1",
         permissionMode: "plan",
-        pools: { rootRunId: "parent", costUsd: 1 },
       },
       kind: "job",
       sourceId: "task",

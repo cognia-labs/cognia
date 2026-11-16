@@ -374,7 +374,6 @@ function admissionRow(overrides: Partial<BackgroundTaskJournalRow> = {}) {
         maxDepth: 2,
         maxConcurrent: 0,
         parentChain: [],
-        budgetRoot: "dispatch:ses_1",
       },
       target: { id: "reviewer", name: "Reviewer", description: "Review", prompt: "review" },
       sideEffect: "none",

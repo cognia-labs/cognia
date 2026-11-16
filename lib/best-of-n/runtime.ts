@@ -15,6 +15,7 @@ import {
   settleBestOfNExecutionRun,
 } from "@/lib/execution/best-of-n-bridge"
 import { getExecutionRun } from "@/lib/db/execution-runs"
+import { declareRootRunBudget } from "@/lib/execution/run-ledger"
 import {
   acquireWorkspaceBundle,
   getWorkspaceBundle,
@@ -117,6 +118,14 @@ export function createBestOfNExecution(): BestOfNExecution {
         ...(request.sessionId ? { sessionId: request.sessionId } : {}),
         ...(request.projectId ? { projectId: request.projectId } : {}),
         at: Date.now(),
+      })
+      // The group's dollar budget is one ledger over every candidate; each
+      // candidate's turn reserves its own share (`maxBudgetUsd`, cost / n), so
+      // candidates still run side by side.
+      await declareRootRunBudget(bestOfNExecutionRunId(group.teamRunId), {
+        ...(group.budgetPolicy.maxCostUsd == null
+          ? {}
+          : { costUsd: group.budgetPolicy.maxCostUsd }),
       })
       await coordinator.prepareRun(bestOfNTeam(group, request), group.teamRunId)
     },
@@ -332,9 +341,6 @@ export function createBestOfNExecution(): BestOfNExecution {
             if (externalConfigId !== undefined) {
               if (!externalConfigId)
                 throw new Error("Best-of-N candidate names an unscoped external agent")
-              // The external execute contract has no dollar cap and reports no cost.
-              if (group.budgetPolicy.maxCostUsd != null)
-                throw new Error("The selected runtime cannot enforce the best-of-N cost budget")
               const externalModel =
                 (declared.kind === "external" ? candidate.agent.model : options?.model) ?? undefined
               let reported: SurfaceUsageInput | undefined
@@ -345,6 +351,7 @@ export function createBestOfNExecution(): BestOfNExecution {
                   prompt: request.prompt,
                   model: externalModel,
                   workingDirectory: workspace.physicalRoot,
+                  ...(grant.maxBudgetUsd !== undefined ? { maxBudgetUsd: grant.maxBudgetUsd } : {}),
                   signal: AbortSignal.any([attemptSignal, AbortSignal.timeout(remainingMs)]),
                   onCapture: dispatch.capture,
                   onUsage: (usage) => {
@@ -363,21 +370,7 @@ export function createBestOfNExecution(): BestOfNExecution {
               }
             } else {
               const sendOptions = options!
-              // The frozen execution spec is the sidecar's runtime authority. The
-              // AI-SDK lane does not enforce SendOptions.maxBudgetUsd, so a dollar
-              // cap must fail closed there instead of silently becoming advisory.
               const runtimeAdapter = sendOptions.execution?.runtimeAdapter
-              const costCap = group.budgetPolicy.maxCostUsd
-              if (
-                costCap != null &&
-                (runtimeAdapter !== "claude-agent-sdk" ||
-                  sendOptions.maxBudgetUsd == null ||
-                  !Number.isFinite(sendOptions.maxBudgetUsd) ||
-                  sendOptions.maxBudgetUsd <= 0 ||
-                  sendOptions.maxBudgetUsd > costCap / group.n)
-              ) {
-                throw new Error("The selected runtime cannot enforce the best-of-N cost budget")
-              }
               // The desktop chat runtime ingests this child's stream too, and
               // would book it as a `chat` row naming no provider. Claim the turn
               // so the row below, with provider, model and run, is the only one.

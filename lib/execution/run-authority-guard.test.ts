@@ -7,6 +7,10 @@ const root = join(__dirname, "../..")
 const launches = new Set([
   "execute",
   "executeStreaming",
+  // The external manager's ledger-held wrappers delegate to these; the
+  // gateway's inner agent launches through them under the outer hold.
+  "executeUnbudgeted",
+  "executeStreamingUnbudgeted",
   "launchChildRun",
   "createExecutionRun",
   "adoptExecutionRun",

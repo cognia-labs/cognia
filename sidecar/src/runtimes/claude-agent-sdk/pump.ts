@@ -4,6 +4,7 @@ import {
 } from "../../policy/personal-egress.ts"
 import type { PumpContext } from "./runtime-types.ts"
 import { randomUUID } from "node:crypto"
+import { createRunBudgetGuard, type StepUsage } from "../common/run-budget.ts"
 
 import { PLUGIN_TOOLS_SERVER_NAME } from "../../policy/tool-catalog/names.ts"
 
@@ -56,9 +57,27 @@ export function startAnthropicPump({
     turnEnded = true
     emit(event)
   }
+  // ADR-0243 hold: the SDK sizes its own requests, so a spent hold or a passed
+  // deadline interrupts the query before it takes another step.
+  const budget = sendOptions.runBudget ? createRunBudgetGuard(sendOptions.runBudget) : undefined
+  const stopForBudget = () =>
+    void Promise.resolve()
+      .then(() => q.interrupt())
+      .catch((error: unknown) => log("warn", `budget interrupt failed: ${String(error)}`))
+  const deadlineTimer =
+    sendOptions.runBudget?.deadlineAt === undefined
+      ? undefined
+      : setTimeout(stopForBudget, Math.max(0, sendOptions.runBudget.deadlineAt - Date.now()))
   void (async () => {
     try {
       for await (const evt of q) {
+        if (budget && evt.type === "assistant") {
+          // The SDK emits one assistant frame per content block, each
+          // carrying its API message's usage.
+          const message = evt.message as { id?: string; usage?: StepUsage } | undefined
+          budget.observe(message?.usage ?? {}, message?.id)
+          if (budget.spent()) stopForBudget()
+        }
         streamLog.onEvent()
         if (!sdkSessionIdSeen && evt && typeof evt.session_id === "string") {
           sdkSessionIdSeen = true
@@ -136,6 +155,7 @@ export function startAnthropicPump({
       // Flush any trailing partial stderr line so the last unterminated MCP log
       // isn't dropped at session end.
       mcpStderrSink.end()
+      clearTimeout(deadlineTimer)
       // Close the per-session LSP servers and code-graph store + file watcher.
       toolSession.disposeResolvers()
 

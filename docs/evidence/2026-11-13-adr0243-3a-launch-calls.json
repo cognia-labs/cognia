@@ -197,12 +197,17 @@
   {
     "file": "lib/ai/agent/external/manager.ts",
     "call": "execute",
-    "count": 5
+    "count": 4
   },
   {
     "file": "lib/ai/agent/external/manager.ts",
-    "call": "executeStreaming",
-    "count": 1
+    "call": "executeStreamingUnbudgeted",
+    "count": 3
+  },
+  {
+    "file": "lib/ai/agent/external/manager.ts",
+    "call": "executeUnbudgeted",
+    "count": 3
   },
   {
     "file": "lib/ai/agent/external/runtimes/remote/remote-run-service.ts",

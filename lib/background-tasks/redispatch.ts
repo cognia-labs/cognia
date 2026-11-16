@@ -3,7 +3,8 @@
  * row — the crash-recovery path. Two entry points share it:
  *
  *  - Job Center "Re-run" (kind `manual`): explicit user intent, resets the
- *    auto-resume attempt counter.
+ *    auto-resume attempt counter and gives the re-run a ledger of its own
+ *    with a fresh budget and deadline (ADR-0243 D5).
  *  - Lease-expiry auto-resume (kind `auto`, opt-in via
  *    `settings.backgroundTasks.autoResumeInterrupted`): re-dispatches expired
  *    owners and unclaimed versioned recovery records, chaining
@@ -190,8 +191,6 @@ export async function redispatchBackgroundRun(
     let recovery: BackgroundDispatchRecovery | undefined
     if (options.kind === "auto") {
       const saved = record.recovery
-      const { getSettings } = await import("@/lib/db/settings")
-      const settings = await getSettings()
       if (
         !saved ||
         saved.version !== 1 ||
@@ -207,7 +206,6 @@ export async function redispatchBackgroundRun(
           (saved.sideEffect !== "none" ||
             (record.toolsEnabled !== false && saved.target.tools?.length !== 0))) ||
         saved.caller.parentDepth !== 0 ||
-        (settings?.subagentNesting?.tokenBudget ?? 0) > 0 ||
         (saved.caller.deadlineMs !== undefined && saved.caller.deadlineMs <= Date.now())
       ) {
         return {
@@ -250,7 +248,7 @@ export async function redispatchBackgroundRun(
       ...(record.rootSessionId ? { rootSessionId: record.rootSessionId } : {}),
       caller,
       resumeOfRunId: record.runId,
-      ...(recovery ? { recovery } : {}),
+      ...(recovery ? { recovery } : { freshBudget: true }),
       // Manual re-run = explicit user intent, reset the chain; auto chains it.
       resumeAttempt: options.kind === "auto" ? priorAttempt + 1 : 0,
     })
@@ -322,6 +320,10 @@ export function startBackgroundTaskRecovery(
       const { reconcileOrphanedChildRuns } = await import("@/lib/execution/child-run-ownership")
       if (!isCurrent()) return
       await reconcileOrphanedChildRuns().catch(() => undefined)
+      if (!isCurrent()) return
+      // Their budget holds too: an unconfirmed stop is charged in full.
+      const { recoverRunBudgetHolds } = await import("@/lib/execution/run-ledger")
+      await recoverRunBudgetHolds().catch(() => undefined)
       if (!isCurrent()) return
       if (boot) {
         await pruneBackgroundTaskRecords({ now: Date.now(), host: "renderer" }).catch(

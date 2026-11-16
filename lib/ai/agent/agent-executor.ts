@@ -850,8 +850,8 @@ async function runToolEnabledStandalone(
     if (persistent && result.sdkSessionId) {
       await sessionsDb.setSdkSessionId(session.id, result.sdkSessionId).catch(() => undefined)
     }
-    // Surface usage (best-effort) so nested-dispatch budget accounting can draw
-    // down the subtree pool. The SDK result carries it at `session_ended`.
+    // Surface usage (best-effort) for the caller's result and trace. The SDK
+    // result carries it at `session_ended`.
     const usage = result.usage ? sidecarUsage(result.usage) : undefined
     // The options of the attempt that answered: a routing fallback swaps the
     // provider and model the run started with.
@@ -1188,6 +1188,8 @@ export async function runCompletionRail(
       : attemptController.signal
     const semanticContext = { operationId, sessionId, signal: attemptSignal, credentialContext }
     let lease: import("@/lib/ai/ledgered-model-call").LedgeredGenerationLease | null = null
+    let budget: import("@/lib/execution/run-budget-rail").RailBudget | undefined
+    let sent = false
     let streamed = false
     try {
       const resolution = resolveFeatureProvider(
@@ -1247,6 +1249,21 @@ export async function runCompletionRail(
       }
       if (config.temperature !== undefined) options.temperature = config.temperature
       options.abortSignal = attemptSignal
+      // ADR-0243: this one model step reserves from its run tree's ledger.
+      const { beginRailBudget } = await import("@/lib/execution/run-budget-rail")
+      budget = await beginRailBudget(
+        config.executionIdentity?.runId,
+        { providerId: candidate.providerId, modelId: candidate.modelId },
+        { signal: attemptSignal, ...(liveSettings ? { pricing: { settings: liveSettings } } : {}) }
+      )
+      if (budget) {
+        options.abortSignal = budget.signal
+        if (budget.tokens !== undefined)
+          options.maxOutputTokens = Math.max(
+            1,
+            Math.min(Number(options.maxOutputTokens ?? Infinity), Math.floor(budget.tokens))
+          )
+      }
 
       // This rail makes exactly one model step and exposes no tools. Gate that
       // step before dispatch so a policy refusal cannot become a provider retry.
@@ -1264,6 +1281,7 @@ export async function runCompletionRail(
             }
           : undefined
       )
+      sent = true
       const result = streamText(options as Parameters<typeof streamText>[0])
       let text = ""
       let providerText = ""
@@ -1288,6 +1306,17 @@ export async function runCompletionRail(
       const providerMetadata = await Promise.resolve(result.providerMetadata).catch(() => undefined)
       const billed = usageOfResult(rawUsage, providerMetadata)
       if (lease) await lease.succeeded(billed)
+      await budget?.finish(
+        rawUsage
+          ? {
+              inputTokens,
+              outputTokens,
+              cacheReadTokens: billed?.cacheReadTokens ?? 0,
+              cacheCreationTokens: billed?.cacheWriteTokens ?? 0,
+            }
+          : undefined,
+        true
+      )
       controller.complete()
       return {
         text,
@@ -1312,6 +1341,8 @@ export async function runCompletionRail(
       }
     } catch (error) {
       lastError = error
+      // A request that never left spent nothing; one that did has no bill here.
+      await budget?.finish(sent ? undefined : { inputTokens: 0, outputTokens: 0 }, !sent)
       if (lease) {
         // Text already arrived, so the request was billed and its bill never
         // read: the money stays held. Before any text the error says what

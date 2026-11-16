@@ -532,6 +532,159 @@ describe("connector approval review settlement", () => {
     }
   })
 
+  describe("the turn's ledger hold (ADR-0243 3B)", () => {
+    const turnRow = (id: string, parentRunId?: string) =>
+      getDb().executionRuns.put({
+        id,
+        ...(parentRunId ? { parentRunId } : {}),
+        kind: "agent-turn",
+        sourceId: id,
+        title: id,
+        status: "running",
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+      })
+    function budgetHost() {
+      const handlers: Array<(event: unknown) => void> = []
+      const call = jest.fn(async (..._args: unknown[]) => undefined)
+      const pinned = {
+        call,
+        subscribe: jest.fn((_channel: string, handler: (event: unknown) => void) => {
+          handlers.push(handler)
+          return () => void handlers.splice(handlers.indexOf(handler), 1)
+        }),
+      } as unknown as Transport
+      const route: ExecutionRoute = {
+        key: "remote:budget",
+        remote: true,
+        identity: pinned,
+        transport: pinned,
+        reachableAfterSwitch: true,
+        isCurrent: () => true,
+        retain: () => route,
+        release() {},
+      }
+      return { route, call, emit: (event: unknown) => [...handlers].forEach((h) => h(event)) }
+    }
+    const spent = async () => (await getDb().executionRuns.get("budget-root"))?.runLedger?.spent
+    async function send(host: ReturnType<typeof budgetHost>, turnId: string) {
+      const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+      bindToolCallRun("budget-session", turnId, `run-${turnId}`, `attempt-${turnId}`)
+      await turnRow(`run-${turnId}`, "budget-root")
+      await sendPrompt(
+        "budget-session",
+        "hi",
+        { turnId, execution: { identity: { attemptId: `attempt-${turnId}` } } } as Parameters<
+          typeof sendPrompt
+        >[2],
+        { transcriptRuntime: "host-owned", route: host.route }
+      )
+    }
+    beforeEach(async () => {
+      const { declareRunBudget } = await import("@/lib/execution/run-ledger")
+      await getDb().executionRuns.delete("budget-root")
+      await turnRow("budget-root")
+      await declareRunBudget("budget-root", { tokens: 1000 })
+    })
+    afterEach(() => __resetSessionExecutionRoutesForTests())
+
+    it("hands the sidecar the hold and settles the turn's own usage on stop proof", async () => {
+      const host = budgetHost()
+      await send(host, "budget-ok")
+      expect(host.call).toHaveBeenCalledWith(
+        "agent_send",
+        expect.objectContaining({
+          options: expect.objectContaining({ runBudget: { tokens: 1000 } }),
+        })
+      )
+      host.emit({
+        type: "session_ended",
+        sessionId: "budget-session",
+        turnId: "budget-ok",
+        result: { usage: { input_tokens: 120, output_tokens: 30 } },
+      })
+      host.emit({
+        type: "turn_settled",
+        sessionId: "budget-session",
+        turnId: "budget-ok",
+        backgroundProcessesRunning: false,
+      })
+      await waitFor(async () => expect((await spent())?.tokens).toBe(150))
+    })
+
+    it("charges the whole hold when the sidecar exits without stop proof", async () => {
+      const host = budgetHost()
+      await send(host, "budget-lost")
+      host.emit({
+        type: "session_ended",
+        sessionId: "budget-session",
+        turnId: "budget-lost",
+        result: { usage: { input_tokens: 10, output_tokens: 5 } },
+      })
+      host.emit({ type: "sidecar_exited" })
+      await waitFor(async () => expect((await spent())?.tokens).toBe(1000))
+    })
+
+    it("prices a turn whose generic lane reported a zero cost", async () => {
+      const { declareRunBudget } = await import("@/lib/execution/run-ledger")
+      const { costFromTokensUsd, resolveModelPricingUsd } = await import("@/lib/usage/pricing")
+      await getDb().executionRuns.update("budget-root", { runLedger: undefined })
+      await declareRunBudget("budget-root", { costUsd: 5 })
+      const host = budgetHost()
+      const { bindToolCallRun } = await import("@/lib/execution/acting-authority")
+      bindToolCallRun("budget-session", "budget-usd", "run-budget-usd", "attempt-budget-usd")
+      await turnRow("run-budget-usd", "budget-root")
+      await sendPrompt(
+        "budget-session",
+        "hi",
+        {
+          turnId: "budget-usd",
+          model: "gpt-5.4-mini",
+          execution: { identity: { attemptId: "attempt-budget-usd" } },
+        } as Parameters<typeof sendPrompt>[2],
+        { transcriptRuntime: "host-owned", route: host.route }
+      )
+      host.emit({
+        type: "session_ended",
+        sessionId: "budget-session",
+        turnId: "budget-usd",
+        result: { total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 1000 } },
+      })
+      host.emit({
+        type: "session_disposed",
+        sessionId: "budget-session",
+        turnId: "budget-usd",
+      })
+      const expected = costFromTokensUsd(
+        {
+          inputTokens: 1000,
+          outputTokens: 1000,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+        },
+        resolveModelPricingUsd(undefined, "gpt-5.4-mini")!
+      )
+      expect(expected).toBeGreaterThan(0)
+      await waitFor(async () => expect((await spent())?.costUsd).toBeCloseTo(expected))
+    })
+
+    it("releases a send the sidecar refused before any executor bound it, free", async () => {
+      const host = budgetHost()
+      await send(host, "budget-refused")
+      host.emit({
+        type: "session_ended",
+        sessionId: "budget-session",
+        turnId: "budget-refused",
+        sendRefused: true,
+        error: "provider-visible payload rejected by the PII gate",
+      })
+      const ledger = async () => (await getDb().executionRuns.get("budget-root"))?.runLedger
+      await waitFor(async () => expect(Object.keys((await ledger())!.holds)).toEqual([]))
+      expect((await spent())?.tokens ?? 0).toBe(0)
+    })
+  })
+
   it("routes local model-step approval through the existing response funnel without native IPC", async () => {
     const events: import("@cognia/agent-config-types").ClaudeEvent[] = []
     const controller = new AbortController()

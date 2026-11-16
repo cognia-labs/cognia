@@ -1,8 +1,8 @@
 /**
  * The dollar cost of one `step_usage` report, priced the same way everywhere
- * a workflow run's spend is read: the run budget while the run executes
- * (`lib/workflow/runtime/run-budget.ts`) and the Runs UI afterwards
- * (`usage-aggregate.ts`, `budget-summary.ts`). Pure.
+ * the Runs UI reads a workflow run's spend (`usage-aggregate.ts`,
+ * `budget-summary.ts`). The run's budget is the run tree's ledger, metered at
+ * each model call (ADR-0243 3B). Pure.
  */
 
 import type { StepUsage } from "@/types/workflow/visual"

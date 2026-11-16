@@ -507,6 +507,12 @@ export type SendOptions = {
    */
   maxBudgetUsd?: number
   /**
+   * ADR-0243 ledger hold for this turn, set by the Host at dispatch only. The
+   * built-in rails cap each model request at `tokens` (what the hold still
+   * buys) and stop at `deadlineAt`. Never set by callers.
+   */
+  runBudget?: { tokens?: number; deadlineAt?: number }
+  /**
    * Register the ADR-0045 plan-authoring tools (`create_plan` / `update_plan`)
    * for this send. Both dispatch paths default to ON — no provider ships them
    * natively — so this only carries the user's opt-OUT

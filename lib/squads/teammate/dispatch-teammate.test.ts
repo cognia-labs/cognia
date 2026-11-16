@@ -1678,14 +1678,10 @@ describe("dispatchTeammate — remote durable worker", () => {
     }
   )
 
-  it("claims a child lease, dispatches with a Host cost pool by stable repository ref, and captures events once", async () => {
+  it("claims a child lease, dispatches with marked Host authority by stable repository ref, and captures events once", async () => {
     const { resolveRunAuthority } = await import("@/lib/execution/run-authority")
-    const poolAuthority = {
-      schemaVersion: 1 as const,
-      caps: "explicit-v1" as const,
-      pools: { rootRunId: "bot-root", costUsd: 2 },
-    }
-    jest.mocked(resolveRunAuthority).mockResolvedValue({ authority: poolAuthority })
+    const hostAuthority = { schemaVersion: 1 as const, caps: "explicit-v1" as const }
+    jest.mocked(resolveRunAuthority).mockResolvedValue({ authority: hostAuthority })
     process.env.NEXT_PUBLIC_AGENT_TEAM_REMOTE_DISPATCH = "true"
     const complete = jest.fn(async () => undefined)
     const attachControl = jest.fn(async () => undefined)

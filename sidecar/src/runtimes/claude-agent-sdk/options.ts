@@ -76,7 +76,7 @@ export function enforceNativeRunAuthority(options: Options, sendOptions: SendOpt
   const authority = sendOptions.inheritedRunAuthority
   const childAuthority = sendOptions.runAuthority
   const hasCaps = (value: typeof authority) =>
-    value && Object.keys(value).some((key) => !["schemaVersion", "caps", "pools"].includes(key))
+    value && Object.keys(value).some((key) => !["schemaVersion", "caps"].includes(key))
   if (!hasCaps(authority) && !hasCaps(childAuthority)) return options
   const inherited = authority ?? { schemaVersion: 1 }
   const allow = normalizeClaudeToolNames(inherited.tools?.allow)

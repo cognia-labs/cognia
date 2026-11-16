@@ -5,15 +5,7 @@ import "fake-indexeddb/auto"
 import { completeBotRunStep } from "@/lib/db/bot-run-steps"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 
-import {
-  BotRunBudgetExceededError,
-  getBotInvocationCost,
-  priceBotInvocation,
-  recordBotInvocationCost,
-  remainingBotRunBudgetUsd,
-  summarizeBotRunCost,
-  tokenAllowanceForUsd,
-} from "./run-cost"
+import { priceBotInvocation, recordBotInvocationCost, summarizeBotRunCost } from "./run-cost"
 
 const catalog = (_provider: string, model: string) =>
   model === "priced-model"
@@ -82,20 +74,6 @@ describe("priceBotInvocation", () => {
   })
 })
 
-describe("tokenAllowanceForUsd", () => {
-  it("buys tokens at the most expensive rate, rounded down", () => {
-    expect(tokenAllowanceForUsd(1, { providerId: "p", modelId: "priced-model" }, { catalog })).toBe(
-      100_000
-    )
-  })
-
-  it("has no allowance for an unpriced model", () => {
-    expect(
-      tokenAllowanceForUsd(1, { providerId: "p", modelId: "mystery-model" }, { catalog })
-    ).toBeUndefined()
-  })
-})
-
 describe("run ledger", () => {
   const cost = (costUsd: number | null) => ({
     costUsd,
@@ -113,21 +91,8 @@ describe("run ledger", () => {
     await recordBotInvocationCost("run_2", "__host:external-agent", cost(5))
     await completeBotRunStep("run_1", "collect-context", { bytes: 10 })
 
-    expect(await getBotInvocationCost("run_1", "__host:external-agent")).toMatchObject({
-      costUsd: 0.4,
-    })
     const summary = await summarizeBotRunCost("run_1")
     expect(summary.spentUsd).toBeCloseTo(0.7)
     expect(summary).toMatchObject({ unpricedInvocations: 1, invocations: 3 })
-  })
-
-  it("leaves an uncapped run uncapped and refuses a spent one", async () => {
-    await expect(remainingBotRunBudgetUsd("run_1", undefined)).resolves.toBeUndefined()
-    await recordBotInvocationCost("run_1", "a", cost(1.5))
-    await expect(remainingBotRunBudgetUsd("run_1", 2)).resolves.toBeCloseTo(0.5)
-    await recordBotInvocationCost("run_1", "b", cost(0.5))
-    await expect(remainingBotRunBudgetUsd("run_1", 2)).rejects.toBeInstanceOf(
-      BotRunBudgetExceededError
-    )
   })
 })

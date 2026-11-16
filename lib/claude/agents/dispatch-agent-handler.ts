@@ -23,7 +23,6 @@ import {
 } from "./dispatch-agent-tool"
 import { runDispatchFanout } from "./dispatch-core"
 import { clearResolvedPermissionCeiling } from "./dispatch-context-registry"
-import { releaseDispatchBudget, isDispatchBudgetFinite } from "./dispatch-budget"
 import { collectRendererBackgroundResult } from "@/lib/background-tasks/renderer-subagent-registry"
 import { cancelSubagentRun } from "./cancel-subagent"
 import { renderDispatchOutcomeForModel } from "./dispatch-error"
@@ -51,21 +50,6 @@ async function visibleDispatchText(
     { runIds: runIds.map(childJobExecutionRunId), executionRunId: req.executionRunId }
   )
   return history.messages[0].content
-}
-
-/**
- * Resolve the fan-out width for one call. A finite token budget forces
- * serial fan-out (see below). Otherwise the user's concurrency cap applies,
- * and `0` (unset) keeps the historical fully-parallel behaviour.
- *
- * @internal Test seam: exported for its unit tests, not for production callers.
- */
-export function resolveDispatchWidth(caller: {
-  budgetRoot: string
-  maxConcurrent: number
-}): number {
-  if (isDispatchBudgetFinite(caller.budgetRoot)) return 1
-  return caller.maxConcurrent > 0 ? caller.maxConcurrent : Infinity
 }
 
 /**
@@ -126,13 +110,10 @@ export async function runDispatchAgentTool(req: DispatchAgentToolRequest): Promi
   const caller = await resolveCaller(req.sessionId)
 
   // Fan-out policy via the shared core (unified with the CLI handler so the two
-  // can't drift). The guard is a post-hoc accumulator (`add` runs AFTER each
-  // run), so under a FINITE budget concurrent siblings would all clear the
-  // pre-spend exhaustion gate and overshoot in one batch. When the budget is
-  // finite, serialize (`width: 1`) so each sibling sees the prior siblings'
-  // draw-down and the per-child budget check trips mid-batch. An unlimited
-  // budget has nothing to overshoot, so it runs as wide as the user's cap.
-  const width = resolveDispatchWidth(caller)
+  // can't drift). `0` (unset) keeps the fully-parallel behaviour; under a token
+  // budget each child reserves on the run tree's ledger, so siblings without a
+  // cap of their own wait for each other there.
+  const width = caller.maxConcurrent > 0 ? caller.maxConcurrent : Infinity
   const sourceRunIds: string[] = []
   const outcomes = await runDispatchFanout({
     dispatches: parsed.dispatches,
@@ -234,31 +215,16 @@ async function resumeDispatchRun(
 }
 
 /**
- * Release a top-level chat session's dispatch budget guard. The guard is
- * seeded lazily by `resolveCaller` on the first `dispatch_agent` of a session
- * and must survive across multiple dispatches within a turn (shared subtree
- * accounting), so it can only be dropped at session teardown — call this from
- * the chat session-close path. Without it, `getOrCreateDispatchBudget` leaks
- * one guard per distinct session id for the renderer's lifetime.
- *
- * @internal Test seam: exported for its unit tests, not for production callers.
- */
-export function releaseDispatchBudgetForSession(sessionId: string): void {
-  releaseDispatchBudget(`dispatch:${sessionId}`)
-}
-
-/**
  * Drop ALL per-session dispatch state at chat session teardown: what the
- * modules' context contributions left (the knowledge scope among it), the
- * subtree budget guard AND the resolved permission ceiling. `resolveSendOptions`
+ * modules' context contributions left (the knowledge scope among it) AND the
+ * resolved permission ceiling. `resolveSendOptions`
  * deposits a ceiling under the chat session id on every send (not just dispatch
- * turns), so — like the budget guard — it leaks one entry per distinct session
+ * turns), so it leaks one entry per distinct session
  * id for the renderer's lifetime unless cleared here. Subagent/team sessions are
  * ephemeral and clear their own ceiling in their executor `finally`; only the
  * long-lived chat session needs this teardown hook.
  */
 export function releaseDispatchStateForSession(sessionId: string): void {
   forgetContextSessionState(sessionId)
-  releaseDispatchBudgetForSession(sessionId)
   clearResolvedPermissionCeiling(sessionId)
 }

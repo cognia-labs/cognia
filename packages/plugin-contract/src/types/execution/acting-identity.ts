@@ -108,15 +108,50 @@ export interface RunAuthorityV1 {
   subagents?: { only?: string[] }
   permissionProfile?: UnattendedPermissionProfileV1
   maxTurns?: number
-  pools?: { rootRunId: string; tokenBudget?: number; costUsd?: number; deadlineMs?: number }
 }
 
-/** Phase-1 pools were ceilings; its other fields were resolved surfaces. */
+/** Unmarked phase-1 records were resolved surfaces, never caps. */
 export function inheritableRunAuthority(
   authority: RunAuthorityV1 | undefined
 ): RunAuthorityV1 | undefined {
-  if (authority?.caps === "explicit-v1") return authority
-  return authority?.pools ? { schemaVersion: 1, pools: authority.pools } : undefined
+  return authority?.caps === "explicit-v1" ? authority : undefined
+}
+
+/** Tokens and USD a ledger limits or a hold may spend. An absent field is unlimited. */
+export interface RunBudgetAmountsV1 {
+  tokens?: number
+  costUsd?: number
+}
+
+/**
+ * One live reservation. A child's hold is taken out of its nearest holding
+ * ancestor's; when the child settles, its charge leaves that ancestor's amounts.
+ */
+export interface RunBudgetHoldV1 {
+  runId: string
+  parentHoldId?: string
+  amounts: RunBudgetAmountsV1
+  /** Direct spend reported while running (monotonic); a child cannot borrow it. */
+  observed?: RunBudgetAmountsV1
+  /** What holds lent from it have settled; already taken off `amounts`. */
+  charged?: RunBudgetAmountsV1
+  /** A nested declaration's own deadline; the ledger's still applies. */
+  deadlineAt?: number
+  createdAt: number
+}
+
+/**
+ * ADR-0243 §6: the one budget of a run tree, on the ExecutionRun that declared
+ * it. Unindexed; every write is one Dexie rw transaction. Settled holds are
+ * removed, their charge kept in `spent`.
+ */
+export interface RunLedgerV1 {
+  schemaVersion: 1
+  limits: RunBudgetAmountsV1
+  /** Absolute; set when the ledger is created and never re-anchored. */
+  deadlineAt?: number
+  spent: { tokens: number; costUsd: number }
+  holds: Record<string, RunBudgetHoldV1>
 }
 
 function intersect(a: string[] | undefined, b: string[] | undefined): string[] | undefined {
@@ -131,7 +166,7 @@ function union(a: string[] | undefined, b: string[] | undefined): string[] | und
   return [...new Set([...a, ...b])].sort()
 }
 
-/** Every execution bound narrows. Pools belong to the parent and are never split or reset. */
+/** Every execution bound narrows. */
 export function meetRunAuthority(parent: RunAuthorityV1, child: RunAuthorityV1): RunAuthorityV1 {
   const result: RunAuthorityV1 = { schemaVersion: 1 }
   if (parent.caps || child.caps) result.caps = "explicit-v1"
@@ -154,7 +189,6 @@ export function meetRunAuthority(parent: RunAuthorityV1, child: RunAuthorityV1):
   if (profile) result.permissionProfile = profile
   const turns = [parent.maxTurns, child.maxTurns].filter((n): n is number => n !== undefined)
   if (turns.length) result.maxTurns = Math.min(...turns)
-  if (parent.pools) result.pools = parent.pools
   return result
 }
 

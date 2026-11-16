@@ -1,7 +1,12 @@
 /** Stable execution semantics shared by agent turns, workflows, and IM presenters. */
 
 import type { ConversationDeliveryTarget } from "../connectors/event"
-import type { ActingIdentityV1, PersonalMarkV1, RunAuthorityV1 } from "./acting-identity"
+import type {
+  ActingIdentityV1,
+  PersonalMarkV1,
+  RunAuthorityV1,
+  RunLedgerV1,
+} from "./acting-identity"
 export * from "./acting-identity"
 
 export type ExecutionRunKind =
@@ -404,8 +409,10 @@ export interface ExecutionRun {
   actingIdentity?: ActingIdentityV1
   /** Unindexed, run-scoped personal-data provenance (ADR-0243 phase 2A-1). */
   personalMarks?: PersonalMarkV1[]
-  /** Explicit `caps: "explicit-v1"` ceilings bind descendants; unmarked records inherit only pools. */
+  /** Explicit `caps: "explicit-v1"` ceilings bind descendants; unmarked records bind nothing. */
   authority?: RunAuthorityV1
+  /** ADR-0243 3B: present only on the run that declared its tree's budget. Unindexed. */
+  runLedger?: RunLedgerV1
   /** Host-retained inherited ceiling for an unparented journal recovery. Unindexed. */
   recoveryAuthority?: RunAuthorityV1
   /** Verified owning Host for ADR-0233 acceptance projections and canonical deletion. */

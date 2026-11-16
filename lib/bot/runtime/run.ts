@@ -59,6 +59,7 @@ import { bindImPresentationForBotDelivery } from "./im-presentation"
 import { beginBotOutboundRun } from "@/lib/policy/action-review/configured-grants"
 import { parseBotDefinitionId } from "@/lib/plugin/registries/bot-registry"
 import { recordedRunMetadata, recordRunAuthority } from "@/lib/execution/acting-authority"
+import { declareRootRunBudget } from "@/lib/execution/run-ledger"
 import type { RunAuthorityV1 } from "@/types/execution/run"
 
 export function recordedBotRunMetadata(delivery: BotEventDeliveryRow) {
@@ -455,6 +456,10 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
     }
   }
 
+  // The cost ceiling is the run tree's ledger (ADR-0243 3B): every model call
+  // under the run reserves there. A resumed run keeps the ledger it started.
+  await declareRootRunBudget(runId, { costUsd: resolved.policy.maxRunCostUsd })
+
   // An IM-originated delivery carries its conversation's delivery target in
   // the envelope payload; binding it here hands the run the generic
   // presentation plane (progress card, COT, approval controls) with no
@@ -553,9 +558,6 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
       permissionMode: executionComposition.authority,
       ...(resolved.policy.permissionProfile
         ? { permissionProfile: resolved.policy.permissionProfile }
-        : {}),
-      ...(resolved.policy.maxRunCostUsd !== undefined
-        ? { pools: { rootRunId: runId, costUsd: resolved.policy.maxRunCostUsd } }
         : {}),
     }
     const effectiveAuthority = await recordRunAuthority("", recordedAuthority, runId)

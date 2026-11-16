@@ -14,16 +14,15 @@ import {
   type TenantTokenPurposeV1,
 } from "./acting-identity"
 
-it("inherits explicit 3A caps and only pools from pre-upgrade observations", () => {
+it("inherits explicit 3A caps and nothing from pre-upgrade observations", () => {
   const legacy: RunAuthorityV1 = {
     schemaVersion: 1,
     permissionMode: "plan",
     tools: { allow: ["Read"] },
     mcpServers: { only: ["github"] },
     maxTurns: 2,
-    pools: { rootRunId: "root", costUsd: 1 },
   }
-  expect(inheritableRunAuthority(legacy)).toEqual({ schemaVersion: 1, pools: legacy.pools })
+  expect(inheritableRunAuthority(legacy)).toBeUndefined()
   expect(inheritableRunAuthority({ schemaVersion: 1, maxTurns: 2 })).toBeUndefined()
   const explicit = { ...legacy, caps: "explicit-v1" as const }
   expect(inheritableRunAuthority(explicit)).toBe(explicit)
@@ -114,7 +113,7 @@ describe("acting identity", () => {
 
 describe("meetRunAuthority", () => {
   const empty: RunAuthorityV1 = { schemaVersion: 1 }
-  it("meets every field and carries the parent's pool by reference", () => {
+  it("meets every field", () => {
     const parent: RunAuthorityV1 = {
       schemaVersion: 1,
       permissionMode: "default",
@@ -124,7 +123,6 @@ describe("meetRunAuthority", () => {
       subagents: { only: ["a", "b"] },
       permissionProfile: { workspace: "ask", secrets: "ask" },
       maxTurns: 3,
-      pools: { rootRunId: "root", tokenBudget: 100, costUsd: 2, deadlineMs: 999 },
     }
     const child: RunAuthorityV1 = {
       schemaVersion: 1,
@@ -135,7 +133,6 @@ describe("meetRunAuthority", () => {
       subagents: { only: ["b", "c"] },
       permissionProfile: { workspace: "sandbox", secrets: "deny", outbound: "deny" },
       maxTurns: 9,
-      pools: { rootRunId: "child", tokenBudget: 999 },
     }
     expect(meetRunAuthority(parent, child)).toEqual({
       ...parent,
@@ -145,8 +142,6 @@ describe("meetRunAuthority", () => {
       subagents: { only: ["b"] },
       permissionProfile: { workspace: "ask", secrets: "deny", outbound: "deny" },
     })
-    expect(meetRunAuthority(parent, child).pools).toBe(parent.pools)
-    expect(meetRunAuthority(empty, child).pools).toBeUndefined()
   })
   it.each(["tools", "skills", "mcpServers", "subagents"] as const)(
     "treats undefined as unrestricted and empty %s as none",
@@ -159,7 +154,7 @@ describe("meetRunAuthority", () => {
       expect(meetRunAuthority(empty, one)[field]).toEqual({ [key]: ["a"] })
     }
   )
-  it("is idempotent, commutative outside pools, and never widens either input", () => {
+  it("is idempotent, commutative, and never widens either input", () => {
     const authorities: RunAuthorityV1[] = [empty]
     for (const permissionMode of Object.keys(AUTHORITY_RANK) as Array<
       keyof typeof AUTHORITY_RANK

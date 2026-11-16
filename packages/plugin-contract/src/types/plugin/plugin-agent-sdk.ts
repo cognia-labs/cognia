@@ -207,8 +207,6 @@ export interface PluginDispatchSubagentOptions {
   _parentChain?: string[]
   /** Absolute epoch-ms wall-clock deadline shared by the whole dispatch subtree. */
   _deadlineMs?: number
-  /** Key locating the shared token-budget guard for this dispatch subtree. */
-  _budgetRootRunId?: string
   /**
    * The dispatching (parent) agent's RESOLVED permission ceiling. The child run
    * is clamped against it in `resolveSendOptions` (allow-list intersect,

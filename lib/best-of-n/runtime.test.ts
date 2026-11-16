@@ -121,6 +121,10 @@ jest.mock("@/lib/execution/best-of-n-bridge", () => ({
   ensureBestOfNExecutionRun: (...args: unknown[]) => ensureGroupRow(...args),
   settleBestOfNExecutionRun: (...args: unknown[]) => settleGroupRow(...args),
 }))
+const declareLedger = jest.fn(async (..._args: unknown[]) => true)
+jest.mock("@/lib/execution/run-ledger", () => ({
+  declareRootRunBudget: (...args: unknown[]) => declareLedger(...args),
+}))
 const settleTeamRow = jest.fn(async (..._args: unknown[]) => undefined)
 jest.mock("@/lib/execution/agent-team-bridge", () => ({
   agentTeamExecutionRunId: (id: string) => `execution:team:${id}`,
@@ -197,6 +201,9 @@ it("binds a valid durable team without a planning or cross-candidate evidence ga
   expect(ensureGroupRow.mock.invocationCallOrder[0]).toBeLessThan(
     prepareRun.mock.invocationCallOrder[0]!
   )
+  // One ledger over the group; each candidate's turn reserves cost / n there.
+  expect(declareLedger).toHaveBeenCalledWith("execution:best-of-n:team", { costUsd: 4 })
+  expect(candidateGrant(group, group.candidates[0]).maxBudgetUsd).toBe(2)
 })
 
 it("hands the group's stop to the candidate's checkout", async () => {
@@ -458,28 +465,6 @@ it("does not turn provider budget or turn-limit failures into publishable succes
   expect(dispatch.fail).toHaveBeenCalled()
 })
 
-it.each(["ai-sdk", undefined])(
-  "rejects a monetary cap when the resolved runtime is %s before sending",
-  async (runtimeAdapter) => {
-    resolve.mockResolvedValue({
-      ...options,
-      execution: runtimeAdapter ? ({ runtimeAdapter } as SendOptions["execution"]) : undefined,
-    })
-    await expect(execute()).rejects.toThrow("cannot enforce the best-of-N cost budget")
-    expect(run).not.toHaveBeenCalled()
-    expect(capture).not.toHaveBeenCalled()
-  }
-)
-
-it.each([undefined, 3, Number.POSITIVE_INFINITY])(
-  "rejects an absent or widened resolved per-candidate cap %s",
-  async (maxBudgetUsd) => {
-    resolve.mockResolvedValue({ ...options, maxBudgetUsd })
-    await expect(execute()).rejects.toThrow("cannot enforce the best-of-N cost budget")
-    expect(run).not.toHaveBeenCalled()
-  }
-)
-
 it("keeps an AI-SDK zero wire cost unknown for duration-only attempts", async () => {
   resolve.mockResolvedValue({
     ...options,
@@ -542,12 +527,6 @@ it("runs an external candidate in its own workspace root and keeps its cost unkn
   )
 })
 
-it("refuses a dollar cap for an external candidate before it starts", async () => {
-  await expect(execute(group, codex)).rejects.toThrow("cannot enforce the best-of-N cost budget")
-  expect(external).not.toHaveBeenCalled()
-  expect(capture).not.toHaveBeenCalled()
-})
-
 it("routes a Cognia agent whose resolved runtime is external through the same lane", async () => {
   resolve.mockResolvedValue({ ...options, provider: "cognia:external-agent:claude-1", model: "m" })
   external.mockResolvedValue({ text: "ok" })
@@ -556,6 +535,12 @@ it("routes a Cognia agent whose resolved runtime is external through the same la
     expect.objectContaining({ configId: "claude-1", model: "m" })
   )
   expect(run).not.toHaveBeenCalled()
+})
+
+it("gives an external candidate its share of the group's dollar budget", async () => {
+  external.mockResolvedValue({ text: "ok" })
+  await execute(group, codex)
+  expect(external).toHaveBeenCalledWith(expect.objectContaining({ maxBudgetUsd: 2 }))
 })
 
 it("refuses the legacy unscoped external marker instead of guessing an agent", async () => {

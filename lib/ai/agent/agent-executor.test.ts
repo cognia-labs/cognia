@@ -73,6 +73,10 @@ const mockResolveProviderAttemptOptions = jest.fn()
 const mockHasNoLeakingPiiDeep = jest.fn((_value?: unknown) => true)
 
 jest.mock("ai", () => ({ streamText: jest.fn() }))
+const mockBeginRailBudget = jest.fn(async (..._args: unknown[]): Promise<unknown> => undefined)
+jest.mock("@/lib/execution/run-budget-rail", () => ({
+  beginRailBudget: (...args: unknown[]) => mockBeginRailBudget(...args),
+}))
 const mockBeginLedgeredUtilityCall = jest.fn()
 jest.mock("@/lib/router-fusion/gate/load-engine", () => ({
   loadRouterFusionHost: async () => ({
@@ -282,6 +286,62 @@ describe("executeAgent", () => {
       )
       await expect(runCompletionRail("hi")).rejects.toThrow("blocked completion")
       expect(mockStreamText).not.toHaveBeenCalled()
+    })
+
+    it("bounds the one model step by its run tree's ledger hold and settles its usage", async () => {
+      primeTextChannel(["ok"])
+      mockStreamText.mockReturnValue({
+        textStream: (async function* () {
+          yield "ok"
+        })(),
+        finishReason: Promise.resolve("stop"),
+        usage: Promise.resolve({ inputTokens: 40, outputTokens: 2 }),
+      } as never)
+      const signal = new AbortController().signal
+      const finish = jest.fn(async () => undefined)
+      mockBeginRailBudget.mockResolvedValueOnce({
+        signal,
+        tokens: 25.7,
+        report: jest.fn(),
+        finish,
+      })
+      await runCompletionRail("hi", {
+        executionIdentity: { runId: "execution:job:budgeted" },
+      } as never)
+      expect(mockBeginRailBudget).toHaveBeenCalledWith(
+        "execution:job:budgeted",
+        { providerId: "openai", modelId: "gpt-4o" },
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      )
+      expect(mockStreamText.mock.calls[0][0]).toMatchObject({ maxOutputTokens: 25 })
+      expect(mockStreamText.mock.calls[0][0].abortSignal).toBe(signal)
+      expect(finish).toHaveBeenCalledWith(
+        expect.objectContaining({ inputTokens: 40, outputTokens: 2 }),
+        true
+      )
+    })
+
+    it("settles a step refused before dispatch as stopped and free", async () => {
+      primeTextChannel(["raw"])
+      const finish = jest.fn(async () => undefined)
+      mockBeginRailBudget.mockResolvedValueOnce({
+        signal: new AbortController().signal,
+        report: jest.fn(),
+        finish,
+      })
+      registerInterceptor(
+        createInterceptorRegistration({
+          pointId: "agent.turn.decide",
+          pluginId: "guard",
+          semantic: "guard",
+          source: "interceptors",
+          handler: (async () => ({ decision: "deny", reason: "blocked" })) as never,
+        })
+      )
+      await expect(
+        runCompletionRail("hi", { executionIdentity: { runId: "execution:job:b" } } as never)
+      ).rejects.toThrow("blocked")
+      expect(finish).toHaveBeenCalledWith({ inputTokens: 0, outputTokens: 0 }, true)
     })
 
     it("projects completion deltas and snapshots while preserving structured provider output", async () => {

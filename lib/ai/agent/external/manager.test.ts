@@ -4,6 +4,11 @@ jest.mock("@/lib/execution/run-authority", () => ({
   resolveRunAuthority: jest.fn(async () => ({})),
   enforceRunAuthorityOnSendOptions: jest.fn(async () => undefined),
 }))
+// The ledger itself is exercised in run-ledger.test.ts and run-budget-rail.test.ts.
+const mockBeginRailBudget = jest.fn(async (..._args: unknown[]): Promise<unknown> => undefined)
+jest.mock("@/lib/execution/run-budget-rail", () => ({
+  beginRailBudget: (...args: unknown[]) => mockBeginRailBudget(...args),
+}))
 const mockEgressTaint = jest.fn(async (..._args: unknown[]) => ({
   verified: true,
   marks: [] as unknown[],
@@ -4661,6 +4666,32 @@ describe("Cognia gateway task lifecycle", () => {
       expect(mockGatewayMint.mock.calls[0][0]).toMatchObject({ budget: { maxTokens: 50_000 } })
       await manager.execute("managed", "again")
       expect(mockGatewayMint.mock.calls[1][0]).not.toHaveProperty("budget")
+    } finally {
+      restorePlane()
+    }
+  })
+
+  it("caps the gateway ticket by the run's ledger hold and settles the hold once", async () => {
+    const { manager, restorePlane } = prepare()
+    mockBeginRailBudget.mockClear()
+    const finish = jest.fn(async () => undefined)
+    mockBeginRailBudget.mockResolvedValueOnce({
+      signal: new AbortController().signal,
+      tokens: 1234.6,
+      report: jest.fn(),
+      finish,
+    })
+    try {
+      await manager.addAgent(managedConfig())
+      await manager.execute("managed", "task", {
+        gatewayTicketBudget: { maxTokens: 50_000 },
+        maxBudgetUsd: 0.25,
+      })
+      expect(mockGatewayMint.mock.calls[0][0]).toMatchObject({ budget: { maxTokens: 1234 } })
+      // The gateway's inner agent runs under the outer hold, not a second one.
+      expect(mockBeginRailBudget).toHaveBeenCalledTimes(1)
+      expect(mockBeginRailBudget.mock.calls[0][2]).toMatchObject({ caps: { costUsd: 0.25 } })
+      expect(finish).toHaveBeenCalledTimes(1)
     } finally {
       restorePlane()
     }
