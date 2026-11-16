@@ -74,7 +74,7 @@ jest.mock("@/stores/settings", () => ({
 }))
 jest.mock("./search-sections", () => ({ useSearchSectionNav: () => mockNavigate }))
 const mockHostFetch = jest.fn()
-jest.mock("@/lib/claude/plugin-tool-ipc", () => ({
+jest.mock("@/lib/plugin/bridge/agent-tool-dispatch", () => ({
   resolveWebToolDeps: async () => ({
     fetchImpl: mockHostFetch,
     hostReachable: { jina: false },

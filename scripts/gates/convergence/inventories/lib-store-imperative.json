@@ -1229,7 +1229,7 @@
       ]
     },
     {
-      "key": "lib/claude/plugin-tool-ipc.ts",
+      "key": "lib/plugin/bridge/agent-tool-dispatch.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

@@ -33,7 +33,7 @@ export function TerminalBootInitializer() {
     // Warm-import so the first agent-driven terminal_dock_* call does
     // not pay a dynamic-import round-trip inside `handlePluginToolExec`.
     // Best-effort: if the import fails (e.g. test environment without
-    // the settings store), the lazy import in plugin-tool-ipc.ts still
+    // the settings store), the lazy import in agent-tool-dispatch.ts still
     // works on the actual call.
     void import("@/lib/terminal/dock-tool-handler").catch(() => undefined)
     const syncProfiles = () => {

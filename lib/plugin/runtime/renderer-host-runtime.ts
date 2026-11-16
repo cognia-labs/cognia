@@ -224,7 +224,7 @@ export function createRendererHostRuntime(_request: PluginHostRuntimeRequest): P
       args: Record<string, unknown>,
       options?: { signal?: AbortSignal }
     ) => {
-      const { resolveWebToolDeps } = await import("@/lib/claude/plugin-tool-ipc")
+      const { resolveWebToolDeps } = await import("@/lib/plugin/bridge/agent-tool-dispatch")
       return runAuthorCallableHostTool(name, args, await resolveWebToolDeps(), {
         ...options,
         // The snapshot engine is vendored into the desktop app only.

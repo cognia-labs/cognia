@@ -351,7 +351,8 @@ export async function assertPersonalToolEgress(
     )
   if (owner?.kind !== "plugin" && !opaque && declaredRead) return
   if (!owner) {
-    const { toolOwnerBeforePlugin } = await import("@/lib/claude/tool-contributions")
+    const { toolOwnerBeforePlugin } =
+      await import("@/lib/ai/agent/execution/contributions/tool-contributions")
     if (toolOwnerBeforePlugin(name)) owner = { kind: "host" }
   }
   if (personalEgressToolDenied(name, true, [], owner)) throw new PersonalEgressDeniedError()

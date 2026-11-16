@@ -28,11 +28,11 @@ import {
 import { runDispatchFanout } from "@/lib/claude/agents/dispatch-core"
 import { normalizeDispatchBudgetResult } from "@/lib/claude/agents/dispatch-error"
 import type { PluginToolManifestEntry } from "@/lib/plugin/bridge/sidecar-tools-bridge"
+import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
 import {
-  handlePluginToolExec,
   type PluginToolExecRequest,
   type PluginToolExecResponse,
-} from "@/lib/claude/plugin-tool-ipc"
+} from "@/lib/plugin/bridge/agent-tool-types"
 import type { McpServer } from "@cognia/agent-config-types"
 import type { SendOptions } from "@cognia/agent-config-types"
 import type { BuildOptionsContext } from "@/lib/claude/build-options"

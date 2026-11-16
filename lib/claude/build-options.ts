@@ -2719,7 +2719,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // The caller's host dependencies pass through by name: the twin's, memory's,
   // the knowledge bases' and the knowledge ceiling.
   const { collectContextContributions } = await import("./context-contributions")
-  const { toolSurfaceHost: contextHost } = await import("./tool-contributions")
+  const { toolSurfaceHost: contextHost } =
+    await import("@/lib/ai/agent/execution/contributions/tool-contributions")
   const contributedContext = await collectContextContributions(
     {
       session: session ?? null,
@@ -2912,7 +2913,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // answer per family gates both its manifest entries below and the tier
   // derived from their declarations here, so neither appears without the other.
   const { collectContributedTools, toolSurfaceHost, toolOwnerBeforePlugin, mergeContributedTools } =
-    await import("./tool-contributions")
+    await import("@/lib/ai/agent/execution/contributions/tool-contributions")
   const contributedTools = await collectContributedTools({
     session: session ?? null,
     agent: character,

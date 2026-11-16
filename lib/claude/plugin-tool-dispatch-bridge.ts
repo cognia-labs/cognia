@@ -1,7 +1,10 @@
 /** Shared sidecar tool round-trip for desktop, CLI and the headless brain. */
 import { loggers } from "@cognia/logging"
 import type { sendPluginToolResponse, subscribePluginToolExec } from "./ipc"
-import type { PluginToolExecRequest, PluginToolExecResponse } from "./plugin-tool-ipc"
+import type {
+  PluginToolExecRequest,
+  PluginToolExecResponse,
+} from "@/lib/plugin/bridge/agent-tool-types"
 import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 
 export interface PluginToolDispatchBridgeDeps {
@@ -94,7 +97,9 @@ async function execute(
       signal.throwIfAborted()
       if (request.remoteExecutionContext && owner.canExecuteRemote?.() === false)
         return failure("REMOTE_FEATURE_UNSUPPORTED: controller tool proxy is not advertised")
-      const handle = owner.handle ?? (await import("./plugin-tool-ipc")).handlePluginToolExec
+      const handle =
+        owner.handle ??
+        (await import("@/lib/plugin/bridge/agent-tool-dispatch")).handlePluginToolExec
       signal.throwIfAborted()
       return handle({ ...prepared, abortSignal: signal })
     }

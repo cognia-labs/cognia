@@ -12,7 +12,10 @@
  * subscription uses. One executor, one behaviour, on both backends.
  */
 
-import type { PluginToolExecRequest, PluginToolExecResponse } from "@/lib/claude/plugin-tool-ipc"
+import type {
+  PluginToolExecRequest,
+  PluginToolExecResponse,
+} from "@/lib/plugin/bridge/agent-tool-types"
 
 import { makeCliPluginToolHandle } from "../subagent-dispatch"
 import type { ExecResult } from "./protocol"

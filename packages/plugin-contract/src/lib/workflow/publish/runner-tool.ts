@@ -6,10 +6,10 @@
  * primary registration lives in the `cognia-workflow-ai` plugin
  * (`plugins/workflow-ai/src/tools/run-typed-tools.ts`); when that plugin is
  * disabled, the skills→tools projection in `lib/claude/build-options.ts`
- * appends this manifest entry itself and `lib/claude/plugin-tool-ipc.ts`
+ * appends this manifest entry itself and `lib/plugin/bridge/agent-tool-dispatch.ts`
  * executes it via `lib/workflow/publish/run-workflow-typed-tool.ts`.
  *
- * Kept free of runtime imports on purpose — `plugin-tool-ipc.ts` (also used by
+ * Kept free of runtime imports on purpose — `agent-tool-dispatch.ts` (also used by
  * the CLI host) must be able to import the NAME without dragging Dexie or the
  * workflow orchestrator into its module graph.
  */

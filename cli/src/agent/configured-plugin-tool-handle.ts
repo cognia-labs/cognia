@@ -2,11 +2,11 @@
 
 import { ASK_USER_TOOL_NAME } from "@/lib/ai/agent/execution/ask-user-tool"
 
+import type { PluginToolExecHostDeps } from "@/lib/plugin/bridge/agent-tool-dispatch"
 import type {
-  PluginToolExecHostDeps,
   PluginToolExecRequest,
   PluginToolExecResponse,
-} from "@/lib/claude/plugin-tool-ipc"
+} from "@/lib/plugin/bridge/agent-tool-types"
 
 import os from "node:os"
 
@@ -22,7 +22,7 @@ type PluginToolExecutor = (
 ) => Promise<PluginToolExecResponse>
 
 const defaultExecutor: PluginToolExecutor = async (request, hostDeps) => {
-  const { handlePluginToolExec } = await import("@/lib/claude/plugin-tool-ipc")
+  const { handlePluginToolExec } = await import("@/lib/plugin/bridge/agent-tool-dispatch")
   return handlePluginToolExec(request, hostDeps)
 }
 

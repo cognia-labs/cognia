@@ -251,7 +251,7 @@ export async function hostWebEvidence(): Promise<WebEvidence | null> {
   if (!webEvidenceAvailable()) return null
   const [{ webFetch, webSearch }, { resolveWebToolDeps }] = await Promise.all([
     import("@/lib/web/web-tools-core"),
-    import("@/lib/claude/plugin-tool-ipc"),
+    import("@/lib/plugin/bridge/agent-tool-dispatch"),
   ])
   const shared = await resolveWebToolDeps()
   // The user switched web tools off: a panel gets none either.

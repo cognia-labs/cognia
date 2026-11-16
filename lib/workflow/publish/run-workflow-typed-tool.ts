@@ -7,7 +7,7 @@
  * `plugins/workflow-ai/src/tools/run-typed-tools.ts` so the same behavior
  * backs BOTH surfaces:
  *   1. the `cognia-workflow-ai` plugin registration (primary), and
- *   2. the skills→tools fallback in `lib/claude/plugin-tool-ipc.ts` used when
+ *   2. the skills→tools fallback in `lib/plugin/bridge/agent-tool-dispatch.ts` used when
  *      a `kind:"workflow"` skill is active but the plugin is disabled.
  *
  * Every failure mode returns a structured `{ ok: false, error }` envelope —

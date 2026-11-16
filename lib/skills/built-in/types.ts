@@ -131,7 +131,7 @@ export interface BuiltInSkillContext {
   /**
    * What authorizes the connector deliveries this invocation makes (ADR-0239),
    * set by the host path that started it: the agent's tool call
-   * (`plugin-tool-ipc`), a person's click on the IM confirm card (the bus), or
+   * (`agent-tool-dispatch`), a person's click on the IM confirm card (the bus), or
    * a plugin (`ctx.skills.invokeBuiltIn`). Absent elsewhere (a `/lark` command,
    * which an agent can also run): the deliveries are then planned as
    * unattended in the session's origin (`skillDeliveryAuthorization`).

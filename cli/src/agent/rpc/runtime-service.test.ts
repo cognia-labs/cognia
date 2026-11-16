@@ -40,7 +40,10 @@ jest.mock("../configured-plugin-tool-handle", () => ({
 
 import type { AgentEventEnvelope } from "@cognia/agent-config-types/agent-execution"
 import { computeSequenceDigest } from "@cognia/agent-config-types/canonical-session"
-import type { PluginToolExecRequest, PluginToolExecResponse } from "@/lib/claude/plugin-tool-ipc"
+import type {
+  PluginToolExecRequest,
+  PluginToolExecResponse,
+} from "@/lib/plugin/bridge/agent-tool-types"
 import { computeToolSchemaDigest } from "@/packages/agent/src/agent-definition"
 import { contentDigest } from "@/packages/agent/src/digest"
 import type { PluginTool } from "@/types/plugin"

@@ -26,6 +26,11 @@ import { withPluginExecutionContext } from "@/lib/plugin/core/invocation-identit
  * renderer-side event router.
  */
 
+import type {
+  PluginToolExecRequest,
+  PluginToolExecResponse,
+  PluginToolResolver,
+} from "./agent-tool-types"
 import type { PluginToolContext } from "@/types/plugin"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import {
@@ -37,10 +42,10 @@ import {
   findContributedTool,
   runContributedTool,
   toolOwnerBeforePlugin,
-} from "./tool-contributions"
+} from "@/lib/ai/agent/execution/contributions/tool-contributions"
 import type { DeclaredModuleTool } from "@/lib/modules/tool-declarations"
 import { ASK_USER_TOOL_NAME } from "@/lib/ai/agent/execution/ask-user-tool"
-import { DISPATCH_AGENT_TOOL_NAME, TASK_TOOL_NAME } from "./agents/dispatch-agent-tool"
+import { DISPATCH_AGENT_TOOL_NAME, TASK_TOOL_NAME } from "@/lib/claude/agents/dispatch-agent-tool"
 import { isWebBuiltinTool, runWebBuiltinTool, type WebToolRunDeps } from "@/lib/web/agent-tools"
 import {
   isSkillBuiltinTool,
@@ -91,53 +96,6 @@ function assertSafePluginToolResult<T>(result: T): T {
 // Closing this properly needs a per-tool decision about which failures are
 // refusals and which are errors, plus a unified result envelope across the
 // family (audit P1-2). Left open on purpose rather than papered over.
-
-export interface PluginToolExecRequest {
-  type: "plugin_tool_exec"
-  sessionId: string
-  toolUseId: string
-  name: string
-  args: Record<string, unknown>
-  turnId?: string
-  runId?: string
-  attemptId?: string
-  sandboxRuntimeRef?: string
-  /** Cooperative cancellation for renderer-hosted calls, including the sidecar bridge. */
-  abortSignal?: AbortSignal
-  remoteExecutionContext?: RemoteExecutionContext
-}
-
-export interface PluginToolExecResponse {
-  type: "plugin_tool_response"
-  sessionId: string
-  toolUseId: string
-  result?: unknown
-  error?: string
-}
-
-/**
- * Resolver for the live plugin registry. Lifted to a module-level slot so
- * unit tests can swap a mock implementation in without touching the real
- * plugin manager singleton (which throws when uninitialised in jsdom).
- */
-export interface PluginToolResolver {
-  /**
-   * Look up a plugin tool by its bare name. Returns `undefined` when the
-   * tool is unknown or its owning plugin is disabled.
-   */
-  getTool(name: string):
-    | {
-        pluginId: string
-        execute: (args: Record<string, unknown>, context: PluginToolContext) => Promise<unknown>
-      }
-    | undefined
-  /**
-   * Per-plugin runtime config snapshot, surfaced inside the
-   * {@link PluginToolContext} passed to `execute`. Returning `undefined`
-   * is treated as "no config" and the context falls through to `{}`.
-   */
-  getPluginConfig?: (pluginId: string) => Record<string, unknown> | undefined
-}
 
 let resolverOverride: PluginToolResolver | null = null
 

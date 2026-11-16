@@ -105,7 +105,7 @@ describe("tool ownership before plugins", () => {
     const { buildWebBuiltinManifestEntries } = await import("@/lib/web/agent-tools")
     const { buildAskUserManifestEntry } = await import("@/lib/ai/agent/execution/ask-user-tool")
     const { buildDispatchAgentManifestEntry, TASK_TOOL_NAME, DISPATCH_AGENT_PLUGIN_ID } =
-      await import("./agents/dispatch-agent-tool")
+      await import("@/lib/claude/agents/dispatch-agent-tool")
     const { buildSkillManifestEntries } = await import("@/lib/skills/agent-tools")
     const { buildSessionPeerManifestEntries } = await import("@/lib/chat/session-peer-agent-tools")
     const { buildAttachmentManifestEntries } = await import("@/lib/chat/attachments/agent-tools")

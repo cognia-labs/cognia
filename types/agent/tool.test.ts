@@ -14,7 +14,7 @@ import {
 import type { BuiltInToolName } from "./tool"
 import { projectHistoryToolEntries } from "@/lib/memory/project-history-tool"
 import { buildPetManifestEntries } from "@/lib/pet/agent-tools"
-import { contributedToolPluginId } from "@/lib/claude/tool-contributions"
+import { contributedToolPluginId } from "@/lib/ai/agent/execution/contributions/tool-contributions"
 import { buildMediaManifestEntries } from "@/lib/media/agent-tools"
 
 // The artifact/canvas arm, restated as a value so it can be compared. If the

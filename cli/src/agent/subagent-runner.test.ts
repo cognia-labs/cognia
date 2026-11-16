@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 import type { PluginToolDispatchDeps } from "../plugin/plugin-tool-dispatch"
-import type { PluginToolExecRequest } from "@/lib/claude/plugin-tool-ipc"
+import type { PluginToolExecRequest } from "@/lib/plugin/bridge/agent-tool-types"
 import { runCliSubagent, type RunCliSubagentDeps } from "./subagent-runner"
 import type { BuildOptionsContext } from "@/lib/claude/build-options"
 import type { SendOptions } from "@cognia/agent-config-types"

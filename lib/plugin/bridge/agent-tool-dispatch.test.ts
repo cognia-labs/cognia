@@ -19,7 +19,7 @@ import {
   collectContributedTools,
   mergeContributedTools,
   type ContributedPluginTool,
-} from "./tool-contributions"
+} from "@/lib/ai/agent/execution/contributions/tool-contributions"
 import { __setFilespaceToolDepsForTesting } from "@/lib/filespace/agent-tools"
 import { __setProjectCoordinatorToolDepsForTesting } from "@/lib/project-coordinator/agent-tools"
 import {
@@ -29,9 +29,8 @@ import {
   __setSessionPeerToolDepsForTesting,
   handlePluginToolExec,
   resolveWebToolDeps,
-  type PluginToolExecRequest,
-  type PluginToolResolver,
-} from "./plugin-tool-ipc"
+} from "./agent-tool-dispatch"
+import { type PluginToolExecRequest, type PluginToolResolver } from "./agent-tool-types"
 import { __setPetToolDepsForTesting, toolFamily as petToolFamily } from "@/lib/pet/agent-tools"
 import {
   __setMediaToolDepsForTesting,
@@ -78,7 +77,7 @@ import {
 import {
   registerTeamDispatchContext,
   clearTeamDispatchContext,
-} from "./agents/dispatch-context-registry"
+} from "@/lib/claude/agents/dispatch-context-registry"
 import { createSkillLoadContext, releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
 import type { Skill } from "@cognia/agent-config-types"
 import {
@@ -1187,7 +1186,7 @@ describe("handlePluginToolExec — ask_user elicitation", () => {
     jest.doMock("@/stores/agent/ask-user-store", () => ({ runAskUser }))
 
     const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
-      await import("./plugin-tool-ipc")
+      await import("./agent-tool-dispatch")
     const shadow = jest.fn().mockResolvedValue("plugin result")
     freshSet({ getTool: () => ({ pluginId: "stale-plugin", execute: shadow }) })
 
@@ -1217,7 +1216,7 @@ describe("handlePluginToolExec — ask_user elicitation", () => {
     jest.doMock("@/stores/agent/ask-user-store", () => ({ runAskUser }))
 
     const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
-      await import("./plugin-tool-ipc")
+      await import("./agent-tool-dispatch")
     freshSet({ getTool: () => undefined })
 
     const abortSignal = new AbortController().signal
@@ -1249,7 +1248,7 @@ describe("handlePluginToolExec — ask_user elicitation", () => {
     jest.doMock("@/stores/agent/ask-user-store", () => ({ runAskUser }))
 
     const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
-      await import("./plugin-tool-ipc")
+      await import("./agent-tool-dispatch")
     freshSet({ getTool: () => undefined })
 
     const response = await freshHandle({
@@ -1675,7 +1674,7 @@ describe("handlePluginToolExec — Task alias for dispatch_agent", () => {
       jest.doMock("@/lib/claude/agents/dispatch-agent-handler", () => ({ runDispatchAgentTool }))
 
       const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
-        await import("./plugin-tool-ipc")
+        await import("./agent-tool-dispatch")
       // This routing fixture has no live PluginManager. Resolve an empty plugin
       // registry so its absence does not throw before the Task fallback is reached.
       freshSet({ getTool: () => undefined })
@@ -1707,7 +1706,7 @@ describe("handlePluginToolExec — Task alias for dispatch_agent", () => {
     const runDispatchAgentTool = jest.fn().mockResolvedValue("subagent result")
     jest.doMock("@/lib/claude/agents/dispatch-agent-handler", () => ({ runDispatchAgentTool }))
     const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
-      await import("./plugin-tool-ipc")
+      await import("./agent-tool-dispatch")
     freshSet({ getTool: () => undefined })
     await freshHandle({
       type: "plugin_tool_exec",

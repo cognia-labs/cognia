@@ -1,7 +1,7 @@
 /**
  * @jest-environment node
  */
-import type { PluginToolExecRequest } from "@/lib/claude/plugin-tool-ipc"
+import type { PluginToolExecRequest } from "@/lib/plugin/bridge/agent-tool-types"
 
 import { createHostToolExecutor } from "./host-tools"
 

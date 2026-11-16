@@ -7,7 +7,7 @@
  * the four `terminal_dock_*` tools are the terminal module's tools
  * contribution (`./agent-tools.ts`), the sidecar proxies them through the
  * existing `plugin_tool_exec` stream (`sidecar/src/tools/plugin/server.ts`),
- * and the renderer's `lib/claude/plugin-tool-ipc.ts:handlePluginToolExec`
+ * and the renderer's `lib/plugin/bridge/agent-tool-dispatch.ts:handlePluginToolExec`
  * routes them by declared name to the module, which calls here.
  *
  * Result: the bytes the agent "types" land in the user's visible PTY.

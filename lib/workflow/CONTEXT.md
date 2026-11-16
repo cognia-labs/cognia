@@ -144,7 +144,7 @@ re-executed — the only iterating construct is the `flow.loop` v2 container).
     stored bodies self-heal at render), and the skills→tools projection in
     `lib/claude/build-options.ts` guarantees the runner tool is in the session
     whenever a workflow skill is active — with an execution fallback in
-    `lib/claude/plugin-tool-ipc.ts` for when the workflow-ai plugin is
+    `lib/plugin/bridge/agent-tool-dispatch.ts` for when the workflow-ai plugin is
     disabled. It is NOT injected as a prose playbook (that would lose
     deterministic execution — explicitly rejected).
   - **Chaining (ADR-0081):** `trigger.workflow.completed` fires a decoupled

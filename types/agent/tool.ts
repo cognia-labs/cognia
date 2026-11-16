@@ -129,7 +129,7 @@ export type BuiltInToolName =
   | "display_animation"
   // Canvas tools — the artifact module's tool contribution
   // (`lib/artifacts/agent-tools.ts`, ADR-0250 §14), routed host-side through
-  // `lib/claude/plugin-tool-ipc.ts`.
+  // `lib/plugin/bridge/agent-tool-dispatch.ts`.
   | "canvas_create"
   | "canvas_update"
   | "canvas_read"
@@ -156,7 +156,7 @@ export type BuiltInToolName =
   | "artifact_capture"
   // Desktop pet (ADR-0058): the pet module's tool contribution
   // (`lib/pet/agent-tools.ts`, ADR-0250 §14), routed host-side through
-  // `lib/claude/plugin-tool-ipc.ts`. Offered only when the user turned them on
+  // `lib/plugin/bridge/agent-tool-dispatch.ts`. Offered only when the user turned them on
   // in Settings, Tools, and only in the desktop app, where the pet runs.
   | "pet_status"
   | "pet_care"
@@ -165,7 +165,7 @@ export type BuiltInToolName =
   | "pet_show"
   // Project-context deep path — the memory module's tool contribution
   // (`lib/memory/agent-tools.ts`, ADR-0250 §14), routed host-side through
-  // `lib/claude/plugin-tool-ipc.ts`. Offered only when the user turned project
+  // `lib/plugin/bridge/agent-tool-dispatch.ts`. Offered only when the user turned project
   // continuity on AND the chat is bound to a workspace, because the workspace
   // scope IS the isolation.
   | "project_history_search"

@@ -93,7 +93,7 @@ export interface TeamToolCaller {
   teammateId: string
   teammateName: string
   runId?: string
-  /** Exact Host execution, correlated with this tool call by plugin-tool-ipc. */
+  /** Exact Host execution, correlated with this tool call by agent-tool-dispatch. */
   executionRunId?: string
   /**
    * The tool call being run, from the call's context. What `team_post_to_chat`

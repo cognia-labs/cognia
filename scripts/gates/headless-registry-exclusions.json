@@ -288,7 +288,7 @@
     "components/providers/initializers/background-task-initializer.tsx": {
       "symbols": ["setRendererBackgroundSettleListener"],
       "phase": "phase 2",
-      "reason": "The brain can run background dispatch_agent subagents (lib/claude/plugin-tool-ipc.ts -> lib/claude/agents/dispatch-agent-handler.ts -> renderer-subagent-registry). With no settle listener, a settled run is never re-injected into its parent session and never notified. Delivery lives in hooks/chat/background-result-runtime.ts, bound to the renderer steer runtime and chat-hook send, so the brain needs a host-side delivery through its own work submission. That means moving the delivery authority off the renderer chat store."
+      "reason": "The brain can run background dispatch_agent subagents (lib/plugin/bridge/agent-tool-dispatch.ts -> lib/claude/agents/dispatch-agent-handler.ts -> renderer-subagent-registry). With no settle listener, a settled run is never re-injected into its parent session and never notified. Delivery lives in hooks/chat/background-result-runtime.ts, bound to the renderer steer runtime and chat-hook send, so the brain needs a host-side delivery through its own work submission. That means moving the delivery authority off the renderer chat store."
     },
     "components/providers/initializers/best-of-n-recovery-initializer.tsx": {
       "symbols": ["recoverBestOfNRunsOnStartup"],

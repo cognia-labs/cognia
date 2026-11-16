@@ -1,7 +1,7 @@
 /**
  * Renderer-side executor for the `dispatch_agent` host tool (A4).
  *
- * Called from `lib/claude/plugin-tool-ipc.ts:handlePluginToolExec` when a
+ * Called from `lib/plugin/bridge/agent-tool-dispatch.ts:handlePluginToolExec` when a
  * `plugin_tool_exec` event names `dispatch_agent`. It runs in the RENDERER —
  * exactly where `dispatchSubagent` lives — so it sidesteps the missing
  * sidecar→renderer orchestration proxy (Thread D4) by riding the existing

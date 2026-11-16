@@ -5,7 +5,7 @@
  * For a connector-initiated run there is nobody watching the desktop dialog —
  * the question would never reach a user. The connector runtime registers one
  * context here for the duration of a capture (`lib/connectors/runtime.ts`);
- * `handlePluginToolExec` (`lib/claude/plugin-tool-ipc.ts`) looks it up by the
+ * `handlePluginToolExec` (`lib/plugin/bridge/agent-tool-dispatch.ts`) looks it up by the
  * `sessionId` carried on the `plugin_tool_exec` request and, when present,
  * routes the tool call to `runImAskUser`, which projects an interactive A2UI
  * card into the owning IM conversation and suspends on its callback.

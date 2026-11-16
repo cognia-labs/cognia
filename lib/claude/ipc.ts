@@ -48,7 +48,7 @@ import {
   isProtocolAdapterCancelEvent,
   isSessionApiResponseEvent,
 } from "@cognia/agent-config-types"
-import type { PluginToolExecResponse } from "./plugin-tool-ipc"
+import type { PluginToolExecResponse } from "@/lib/plugin/bridge/agent-tool-types"
 import type { ProtocolAdapterExecEvent } from "@/lib/plugin/bridge/protocol-adapter-ipc"
 import type { ProtocolAdapterCancelEvent } from "@cognia/agent-config-types"
 import type {

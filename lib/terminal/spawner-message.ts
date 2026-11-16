@@ -2,7 +2,7 @@
  * Which assistant message a `terminal_dock_*` tool call belongs to.
  *
  * The plugin-tool wire carries only a session id (see
- * `lib/claude/plugin-tool-ipc.ts` — the request shape crosses the sidecar
+ * `lib/plugin/bridge/agent-tool-dispatch.ts` — the request shape crosses the sidecar
  * boundary), so the message id is not available where the spawn happens. It is
  * inferred renderer-side instead: a tool call is emitted *by* an assistant
  * message, and that message is the one currently being streamed into, i.e. the

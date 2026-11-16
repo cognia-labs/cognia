@@ -8,7 +8,7 @@
  * import TS. `build-options` appends {@link buildWebBuiltinManifestEntries}
  * when the web capability is on and filters the plugin's duplicate
  * `web_search`/`web_fetch` so the model sees exactly one of each;
- * `plugin-tool-ipc` resolves the calls via {@link runWebBuiltinTool}.
+ * `agent-tool-dispatch` resolves the calls via {@link runWebBuiltinTool}.
  */
 
 import {
@@ -193,7 +193,7 @@ export function isWebBuiltinTool(name: string): boolean {
 export type WebToolRunDeps = WebFetchDeps & WebSearchDeps & { enabled?: boolean }
 
 /**
- * Execute a promoted web tool host-side. Called from `plugin-tool-ipc`'s
+ * Execute a promoted web tool host-side. Called from `agent-tool-dispatch`'s
  * `plugin_tool_exec` handler, which supplies the resolved provider settings.
  */
 export async function runWebBuiltinTool(

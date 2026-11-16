@@ -19,7 +19,7 @@
  *    it ({@link forgetPlannedOutboundToolCall}).
  * 3. The tool's delivery names its call (`sessionId`, `toolUseId`), and the
  *    gateway looks the call up ({@link authorizedOutboundToolCall}). Plugin
- *    code cannot name a call: `plugin-tool-ipc` marks which plugin a running
+ *    code cannot name a call: `agent-tool-dispatch` marks which plugin a running
  *    call belongs to ({@link beginOutboundToolExecution}), and a plugin's
  *    delivery is matched against its own running calls
  *    ({@link runningAuthorizedToolCallsOf}).

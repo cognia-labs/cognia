@@ -1,7 +1,7 @@
 /**
  * Built-in-skill context hydration (W2 — closes an ADR-0026 trust-model gap).
  *
- * The sidecar tool-exec IPC path (`lib/claude/plugin-tool-ipc.ts`) used to
+ * The sidecar tool-exec IPC path (`lib/plugin/bridge/agent-tool-dispatch.ts`) used to
  * call `runBuiltInSkill(id, args, { sessionId })` with a BARE context: no
  * `imBinding`, no `imOverrideRow`. Since every dispatcher gate keys off
  * `ctx.imBinding` (imAccess tier, per-chat allowlist, HITL), tool-call

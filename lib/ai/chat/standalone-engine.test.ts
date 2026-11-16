@@ -46,7 +46,7 @@ jest.mock("ai", () => ({
   isStepCount: (n: number) =>
     Object.assign(jest.requireActual("ai").isStepCount(n), { __stopAfterSteps: n }),
 }))
-jest.mock("@/lib/claude/plugin-tool-ipc", () => ({
+jest.mock("@/lib/plugin/bridge/agent-tool-dispatch", () => ({
   handlePluginToolExec: jest.fn(async () => ({ result: "ok" })),
 }))
 jest.mock("@/stores/settings/settings-store", () => ({

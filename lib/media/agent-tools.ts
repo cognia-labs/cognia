@@ -251,7 +251,7 @@ function describeJob(row: MediaGenerationJobRow): Record<string, unknown> {
 
 /**
  * Run one media tool. Never throws: every failure is an `ok: false` envelope
- * the model can read and adapt to (see the note in `plugin-tool-ipc.ts`).
+ * the model can read and adapt to (see the note in `agent-tool-dispatch.ts`).
  */
 export async function runMediaBuiltinTool(
   name: string,

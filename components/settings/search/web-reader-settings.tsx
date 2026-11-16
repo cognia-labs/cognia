@@ -95,7 +95,7 @@ export function WebReaderSettings() {
     try {
       // Test through the same host transport and reachability real reads
       // use (native proxy on desktop/mobile, CORS-limited fetch in a browser).
-      const { resolveWebToolDeps } = await import("@/lib/claude/plugin-tool-ipc")
+      const { resolveWebToolDeps } = await import("@/lib/plugin/bridge/agent-tool-dispatch")
       const host = await resolveWebToolDeps()
       const result = await testReaderConnection(id, {
         fetchImpl: host.fetchImpl,

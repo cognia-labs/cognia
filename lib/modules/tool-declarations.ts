@@ -13,7 +13,7 @@
  * that denies or reviews a tool an `experimental` module never offers costs
  * nothing, and leaving it out would make the list depend on a stage flip.
  * Dispatch is the one place that skips `experimental` modules
- * (`lib/claude/tool-contributions.ts`).
+ * (`lib/ai/agent/execution/contributions/tool-contributions.ts`).
  */
 
 import type { PermissionClass } from "@cognia/agent-config-types"

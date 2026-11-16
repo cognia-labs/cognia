@@ -4,7 +4,10 @@ import {
   abortPluginToolCallsForSession,
   subscribePluginToolDispatchBridge,
 } from "./plugin-tool-dispatch-bridge"
-import type { PluginToolExecRequest, PluginToolExecResponse } from "./plugin-tool-ipc"
+import type {
+  PluginToolExecRequest,
+  PluginToolExecResponse,
+} from "@/lib/plugin/bridge/agent-tool-types"
 import { runAskUser, useAskUserStore } from "@/stores/agent/ask-user-store"
 
 jest.mock("./ipc", () => ({

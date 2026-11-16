@@ -15,7 +15,7 @@ import {
   renderLoadedSkill,
 } from "./skill-load-tool"
 import type { Skill, SkillResource } from "@cognia/agent-config-types"
-import type { PluginToolExecRequest } from "@/lib/claude/plugin-tool-ipc"
+import type { PluginToolExecRequest } from "@/lib/plugin/bridge/agent-tool-types"
 
 function skill(over: Partial<Skill> = {}): Skill {
   return {

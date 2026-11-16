@@ -67,7 +67,7 @@ export async function requestDesktopSkillApproval(
 
   const requestId = `${BUILTIN_SKILL_APPROVAL_PREFIX}${input.skill.id}:${crypto.randomUUID()}`
 
-  // Lazy store import (precedent: plugin-tool-ipc → ask-user-store) so pure
+  // Lazy store import (precedent: agent-tool-dispatch → ask-user-store) so pure
   // logic paths / node-env tests never pay for the zustand store unless the
   // dialog is actually needed.
   const { useChatStore } = await import("@/stores/chat/chat-store")

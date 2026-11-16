@@ -14,7 +14,10 @@
  */
 import type { Skill } from "@cognia/agent-config-types"
 import type { PluginToolManifestEntry } from "@/lib/plugin/bridge/sidecar-tools-bridge"
-import type { PluginToolExecRequest, PluginToolExecResponse } from "@/lib/claude/plugin-tool-ipc"
+import type {
+  PluginToolExecRequest,
+  PluginToolExecResponse,
+} from "@/lib/plugin/bridge/agent-tool-types"
 import { resolveBuiltinSkillIdentity } from "@/lib/skills/built-in-catalog"
 import {
   createSkillLoadContext,

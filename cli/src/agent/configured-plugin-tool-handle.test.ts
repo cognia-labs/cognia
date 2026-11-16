@@ -5,11 +5,11 @@ import path from "node:path"
 
 import { DEFAULT_RESOLVED_CONFIG } from "../config/schema"
 import { makeConfiguredCliPluginToolHandle } from "./configured-plugin-tool-handle"
+import type { PluginToolExecHostDeps } from "@/lib/plugin/bridge/agent-tool-dispatch"
 import type {
-  PluginToolExecHostDeps,
   PluginToolExecRequest,
   PluginToolExecResponse,
-} from "@/lib/claude/plugin-tool-ipc"
+} from "@/lib/plugin/bridge/agent-tool-types"
 
 type PluginToolExecutorForTest = (
   request: PluginToolExecRequest,

@@ -291,8 +291,8 @@
       "line": 73,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "CLI web tool dependency injects this fetch implementation into the promoted web executor; web_fetch is checked at plugin-tool IPC before dispatch, while web_search remains an explicit exception.",
       "basis": [
         "cli/src/config/guarded-web-fetch.ts#createGuardedWebFetch>dispatcher",
@@ -309,8 +309,8 @@
       "line": 75,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "CLI web tool dependency injects this fetch implementation into the promoted web executor; web_fetch is checked at plugin-tool IPC before dispatch, while web_search remains an explicit exception.",
       "basis": [
         "cli/src/config/guarded-web-fetch.ts#createGuardedWebFetch",
@@ -1936,8 +1936,8 @@
       "line": 383,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "Run-origin video operations enter declared module/plugin tool dispatch before reaching the video-job provider/download adapter. Separate media UI cancellation/download is an explicit Host action.",
       "basis": [
         "lib/ai/media/video-jobs/engine.ts#createVideoJobEngine>download",
@@ -1955,8 +1955,8 @@
       "line": 545,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "Run-origin video operations enter declared module/plugin tool dispatch before reaching the video-job provider/download adapter. Separate media UI cancellation/download is an explicit Host action.",
       "basis": [
         "lib/ai/media/video-jobs/engine.ts#createVideoJobEngine>cancel>response",
@@ -1974,8 +1974,8 @@
       "line": 41,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "Run-origin video operations enter declared module/plugin tool dispatch before reaching the video-job provider/download adapter. Separate media UI cancellation/download is an explicit Host action.",
       "basis": [
         "lib/ai/media/video-jobs/host.ts#defaultHost>fetch",
@@ -1993,8 +1993,8 @@
       "line": 43,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "Run-origin video operations enter declared module/plugin tool dispatch before reaching the video-job provider/download adapter. Separate media UI cancellation/download is an explicit Host action.",
       "basis": [
         "lib/ai/media/video-jobs/host.ts#defaultHost>fetch",
@@ -2012,8 +2012,8 @@
       "line": 113,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "Run-origin account operations are declared Host tool dispatch; fixed provider balance/quota request adapters also serve separate account UI reads.",
       "basis": [
         "lib/ai/operations/handlers/account.ts#balanceReadHandler>handler>response",
@@ -2031,8 +2031,8 @@
       "line": 199,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "Run-origin account operations are declared Host tool dispatch; fixed provider balance/quota request adapters also serve separate account UI reads.",
       "basis": [
         "lib/ai/operations/handlers/account.ts#quotaReadHandler>handler>authedGet>response",
@@ -2050,8 +2050,8 @@
       "line": 210,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "Run-origin account operations are declared Host tool dispatch; fixed provider balance/quota request adapters also serve separate account UI reads.",
       "basis": [
         "lib/ai/operations/handlers/account.ts#quotaReadHandler>handler>limits",
@@ -2113,14 +2113,14 @@
       "line": 460,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "Run-origin managed-desktop acceptance operations enter the declared module-tool gate; the other callers are management UI and lifecycle helpers.",
       "basis": [
         "lib/automation/managed-desktop-client.ts#call>result",
         "lib/automation/agent-tools.ts#runAcceptanceBuiltinTool",
-        "lib/claude/tool-contributions.ts#runContributedTool"
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool"
     },
     {
       "key": "lib/automation/managed-desktop-client.ts::call>result::network::27056c99117d:1",
@@ -2131,14 +2131,14 @@
       "line": 481,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "Run-origin managed-desktop acceptance operations enter the declared module-tool gate; the other callers are management UI and lifecycle helpers.",
       "basis": [
         "lib/automation/managed-desktop-client.ts#call>result",
         "lib/automation/agent-tools.ts#runAcceptanceBuiltinTool",
-        "lib/claude/tool-contributions.ts#runContributedTool"
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool"
     },
     {
       "key": "lib/automation/sandbox-client.ts::sandboxClient>uploadFile::network::b3af8c48511a:1",
@@ -2155,7 +2155,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>uploadFile",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2175,7 +2175,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>downloadFile",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2195,7 +2195,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>desktopFrame",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2215,7 +2215,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>acquireControl",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2235,7 +2235,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>renewControl",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2255,7 +2255,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>releaseControl",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2275,7 +2275,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>streamOpen",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2295,7 +2295,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>streamClaim",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2315,7 +2315,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>streamClose",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2335,7 +2335,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>controlInput",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2355,7 +2355,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>create",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2375,7 +2375,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>start",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2395,7 +2395,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>suspend",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2415,7 +2415,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>resume",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2435,7 +2435,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>stop",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2455,7 +2455,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>delete",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2475,7 +2475,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>inspect",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2495,7 +2495,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>health",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2515,7 +2515,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>exec",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2535,7 +2535,7 @@
         "lib/automation/sandbox-client.ts#sandboxClient>readFile",
         "lib/sandbox/connection-lifecycle.ts#runSandboxConnectionOperation",
         "lib/sandbox/session-runtime.ts#fileOperation",
-        "lib/claude/tool-contributions.ts#runContributedTool",
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
         "lib/sandbox/session-runtime.ts#executeSandbox"
       ],
       "entry": "lib/sandbox/session-runtime.ts#executeSandbox"
@@ -2846,23 +2846,6 @@
         "lib/skills/skillssh-http.ts",
         "hooks/skills/use-skill-marketplace.ts",
         "lib/updates/runtime.ts"
-      ]
-    },
-    {
-      "key": "lib/claude/plugin-tool-ipc.ts::resolveWebToolDeps::network::258853c8ad49:1",
-      "file": "lib/claude/plugin-tool-ipc.ts",
-      "owner": "resolveWebToolDeps",
-      "kind": "network",
-      "primitive": "pinnedFetch",
-      "line": 298,
-      "lexicalGate": null,
-      "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
-      "reason": "Capacitor pinned fetch is injected into promoted web dependencies; actual web_fetch dispatch is gated before runWebTool.",
-      "basis": [
-        "lib/claude/plugin-tool-ipc.ts#resolveWebToolDeps",
-        "lib/claude/plugin-tool-ipc.ts#resolveWebToolDeps"
       ]
     },
     {
@@ -3490,12 +3473,12 @@
       "line": 42,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/claude/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
       "reason": "The generic command transport is shared by run-callable connector remote query/actions, module tools, integration APIs and workflow actions plus independent adapter daemons. Classify only after connector capability gaps below are gated; independent background handshakes/keepalive are not evidence for classifying the shared primitive host-system.",
       "basis": [
-        "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/claude/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+        "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
       ],
-      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/claude/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
     },
     {
       "key": "lib/connectors/tauri/commands.ts::tauriInvoker::network::27e9a4a179d6:1",
@@ -3506,12 +3489,12 @@
       "line": 42,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/claude/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
       "reason": "The generic command transport is shared by run-callable connector remote query/actions, module tools, integration APIs and workflow actions plus independent adapter daemons. Classify only after connector capability gaps below are gated; independent background handshakes/keepalive are not evidence for classifying the shared primitive host-system.",
       "basis": [
-        "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/claude/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+        "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
       ],
-      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/claude/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
     },
     {
       "key": "lib/connectors/tauri/commands.ts::defaultInvoker::network::30c05d0ec836:1",
@@ -3522,12 +3505,12 @@
       "line": 57,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/claude/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
       "reason": "The generic command transport is shared by run-callable connector remote query/actions, module tools, integration APIs and workflow actions plus independent adapter daemons. Classify only after connector capability gaps below are gated; independent background handshakes/keepalive are not evidence for classifying the shared primitive host-system.",
       "basis": [
-        "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/claude/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+        "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
       ],
-      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/claude/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod via createConnectorsAPI; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/integrations/action-runner.ts#authenticatedRequest; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
     },
     {
       "key": "lib/credentials/keyring-store.ts::createKeyringStore::network::8d91baf47324:1",
@@ -3864,7 +3847,7 @@
       "line": 37,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "The concrete run-tool reachability is build_site -> runSitesBuiltinTool -> resolveSitesToolDeps.build -> buildAndSaveSiteVersion. readBinaryFile also serves CLI binary hashing reached under invokePluginTool. Other imports are startup/configuration, user UI, installation/import or fixed attachment preparation; filesystem plugin capability uses native gateway, not this helper.",
       "basis": [
         "lib/file/file-operations.ts#readTextFile>res",
@@ -3873,7 +3856,7 @@
         "lib/plugin/security/binary-hash.ts#hashBinaryFile",
         "lib/plugin/core/invoke-plugin-tool.ts#invokePluginTool"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool"
     },
     {
       "key": "lib/file/file-operations.ts::exists>res::network::ce21d7806608:1",
@@ -3884,7 +3867,7 @@
       "line": 62,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "The concrete run-tool reachability is build_site -> runSitesBuiltinTool -> resolveSitesToolDeps.build -> buildAndSaveSiteVersion. readBinaryFile also serves CLI binary hashing reached under invokePluginTool. Other imports are startup/configuration, user UI, installation/import or fixed attachment preparation; filesystem plugin capability uses native gateway, not this helper.",
       "basis": [
         "lib/file/file-operations.ts#exists>res",
@@ -3893,7 +3876,7 @@
         "lib/plugin/security/binary-hash.ts#hashBinaryFile",
         "lib/plugin/core/invoke-plugin-tool.ts#invokePluginTool"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool"
     },
     {
       "key": "lib/file/file-operations.ts::readBinaryFile>res::network::8a319a1c8422:1",
@@ -3904,7 +3887,7 @@
       "line": 110,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool",
       "reason": "The concrete run-tool reachability is build_site -> runSitesBuiltinTool -> resolveSitesToolDeps.build -> buildAndSaveSiteVersion. readBinaryFile also serves CLI binary hashing reached under invokePluginTool. Other imports are startup/configuration, user UI, installation/import or fixed attachment preparation; filesystem plugin capability uses native gateway, not this helper.",
       "basis": [
         "lib/file/file-operations.ts#readBinaryFile>res",
@@ -3913,7 +3896,7 @@
         "lib/plugin/security/binary-hash.ts#hashBinaryFile",
         "lib/plugin/core/invoke-plugin-tool.ts#invokePluginTool"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool"
     },
     {
       "key": "lib/file/file-operations.ts::statFile>res::network::ce21d7806608:1",
@@ -4816,15 +4799,15 @@
       "line": 63,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Installer lends proxyFetch to web-search/RAG packages. Run web_search enters the concrete plugin-tool gate; RAG fixed-provider/model consumers are a separate reviewed channel and do not establish arbitrary tool egress.",
       "basis": [
         "lib/network/desktop-network-runtime.ts#defaultDeps>proxyFetch",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
         "lib/network/desktop-network-runtime.ts#installDesktopNetworkRuntime",
         "packages/rag/src/rag-pipeline.ts#RAGPipeline"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "lib/network/ip-info.ts::fetchIpInfo>res::network::1848f2c01626:1",
@@ -4886,15 +4869,15 @@
       "line": 207,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Shared transport: run web-fetch dispatch enters runPluginToolExec; evidence/model/UI/background consumers share the fetch factory and do not themselves prove a tool bypass. Router-fusion evidence call chain remains a separately noted review boundary.",
       "basis": [
         "lib/network/platform-fetch.ts#selectPlatformFetch",
         "lib/router-fusion/tools/web-evidence.ts#hostWebEvidence",
         "lib/ai/media/video-jobs/renderer-host.ts#createRendererVideoJobHost",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "lib/network/platform-fetch.ts::selectPlatformFetch::network::c1adbedd503e:1",
@@ -4905,15 +4888,15 @@
       "line": 217,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Shared transport: run web-fetch dispatch enters runPluginToolExec; evidence/model/UI/background consumers share the fetch factory and do not themselves prove a tool bypass. Router-fusion evidence call chain remains a separately noted review boundary.",
       "basis": [
         "lib/network/platform-fetch.ts#selectPlatformFetch",
         "lib/router-fusion/tools/web-evidence.ts#hostWebEvidence",
         "lib/ai/media/video-jobs/renderer-host.ts#createRendererVideoJobHost",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "lib/network/platform-streaming-fetch.ts::nativeBodyStream>ack::network::640dfc206830:1",
@@ -5114,14 +5097,14 @@
       "line": 130,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Shared browser/native HTTP transport. Run web tools use runPluginToolExec; plugin ctx.network has a lexical per-call wrapper. Metadata/model/UI consumers also share this helper.",
       "basis": [
         "lib/network/proxy-fetch.ts#tauriProxiedFetch>cancelNative",
         "lib/plugin/core/context.ts#createNetworkAPI",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "lib/network/proxy-fetch.ts::tauriProxiedFetch>preparation::network::bb33c01b6194:1",
@@ -5132,14 +5115,14 @@
       "line": 186,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Shared browser/native HTTP transport. Run web tools use runPluginToolExec; plugin ctx.network has a lexical per-call wrapper. Metadata/model/UI consumers also share this helper.",
       "basis": [
         "lib/network/proxy-fetch.ts#tauriProxiedFetch>preparation",
         "lib/plugin/core/context.ts#createNetworkAPI",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "lib/network/proxy-fetch.ts::tauriProxiedFetch>native::network::6232a045643e:1",
@@ -5150,14 +5133,14 @@
       "line": 197,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Shared browser/native HTTP transport. Run web tools use runPluginToolExec; plugin ctx.network has a lexical per-call wrapper. Metadata/model/UI consumers also share this helper.",
       "basis": [
         "lib/network/proxy-fetch.ts#tauriProxiedFetch>native",
         "lib/plugin/core/context.ts#createNetworkAPI",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "lib/network/proxy-fetch.ts::browserFetch::network::84e4ae8b1839:1",
@@ -5168,14 +5151,14 @@
       "line": 229,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Shared browser/native HTTP transport. Run web tools use runPluginToolExec; plugin ctx.network has a lexical per-call wrapper. Metadata/model/UI consumers also share this helper.",
       "basis": [
         "lib/network/proxy-fetch.ts#browserFetch",
         "lib/plugin/core/context.ts#createNetworkAPI",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "lib/network/proxy-fetch.ts::browserFetch::network::ee675e61237a:1",
@@ -5186,14 +5169,14 @@
       "line": 238,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Shared browser/native HTTP transport. Run web tools use runPluginToolExec; plugin ctx.network has a lexical per-call wrapper. Metadata/model/UI consumers also share this helper.",
       "basis": [
         "lib/network/proxy-fetch.ts#browserFetch",
         "lib/plugin/core/context.ts#createNetworkAPI",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "lib/network/proxy-fetch.ts::createProxyFetch::network::aa907d00fd7b:1",
@@ -5204,14 +5187,14 @@
       "line": 248,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Shared browser/native HTTP transport. Run web tools use runPluginToolExec; plugin ctx.network has a lexical per-call wrapper. Metadata/model/UI consumers also share this helper.",
       "basis": [
         "lib/network/proxy-fetch.ts#createProxyFetch",
         "lib/plugin/core/context.ts#createNetworkAPI",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "lib/ocr/deps.ts::invokeOcrCommand::network::281151d0b576:1",
@@ -5487,6 +5470,23 @@
         "lib/plugin/auth/client-secrets.ts#setProviderClientSecret",
         "lib/plugin/auth/client-secrets.ts#clearProviderClientSecret",
         "lib/plugin/auth/client-secrets.ts#hasProviderClientSecret"
+      ]
+    },
+    {
+      "key": "lib/plugin/bridge/agent-tool-dispatch.ts::resolveWebToolDeps::network::258853c8ad49:1",
+      "file": "lib/plugin/bridge/agent-tool-dispatch.ts",
+      "owner": "resolveWebToolDeps",
+      "kind": "network",
+      "primitive": "pinnedFetch",
+      "line": 298,
+      "lexicalGate": null,
+      "classification": "tool-gated",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
+      "reason": "Capacitor pinned fetch is injected into promoted web dependencies; actual web_fetch dispatch is gated before runWebTool.",
+      "basis": [
+        "lib/plugin/bridge/agent-tool-dispatch.ts#resolveWebToolDeps",
+        "lib/plugin/bridge/agent-tool-dispatch.ts#resolveWebToolDeps"
       ]
     },
     {
@@ -6911,12 +6911,12 @@
       "line": 257,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/claude/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink",
+      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink",
       "reason": "Plugin ctx.share create/revoke/stats enter the opted-in capability egress gate; filespace_share and filespace_revoke_share are declared outbound/write and run through runContributedTool. Blob PUT, commit and withdrawal are private createShareLink descendants using its producer-bound fetch closure. Other create/revoke callers are explicit UI or authenticated workflow-result REST actions.",
       "basis": [
-        "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/claude/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink"
+        "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink"
       ],
-      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/claude/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink"
+      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink"
     },
     {
       "key": "lib/share/blobs.ts::uploadShareBlob>res::network::5ec7519ae4ab:1",
@@ -6927,12 +6927,12 @@
       "line": 313,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/claude/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink",
+      "authority": "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink",
       "reason": "Plugin ctx.share create/revoke/stats enter the opted-in capability egress gate; filespace_share and filespace_revoke_share are declared outbound/write and run through runContributedTool. Blob PUT, commit and withdrawal are private createShareLink descendants using its producer-bound fetch closure. Other create/revoke callers are explicit UI or authenticated workflow-result REST actions.",
       "basis": [
-        "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/claude/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink"
+        "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink"
       ],
-      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/claude/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink"
+      "entry": "lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/share/client.ts#createShareLink"
     },
     {
       "key": "lib/share/blobs.ts::downloadShareBlob>fetchChunk>res::network::c9e3b4c9c0ca:1",
@@ -7101,12 +7101,12 @@
       "line": 159,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
       "reason": "Sites module deploy_site is an outbound declaration and reaches publishSiteVersion→uploadSiteVersion→CloudflareSitesService.uploadVersion→uploadCloudflareWorkerVersion. The second run-tool path is workflow action.site.deploy, which currently has canonical assertPersonalSink and should join executeWorkflowEgress strict egress kinds. Console publish is an explicit UI action.",
       "basis": [
-        "lib/claude/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+        "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
     },
     {
       "key": "lib/sites/confined-build.ts::runConfinedSiteBuild>result::network::05c32f904080:1",
@@ -7481,15 +7481,15 @@
       "line": 163,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; lib/plugin/core/context.ts#createNetworkAPI; lib/plugin/core/transport.ts#invokePluginShellApi; lib/project-environment/executor.ts#runScript",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; lib/plugin/core/context.ts#createNetworkAPI; lib/plugin/core/transport.ts#invokePluginShellApi; lib/project-environment/executor.ts#runScript",
       "reason": "This generic transport serves run web-fetch through the Host builtin dispatch and paired-Host RPCs from narrow capability entries; it is not an independent authorization and must inherit each caller operation through the full transport promise.",
       "basis": [
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
-        "lib/claude/plugin-tool-ipc.ts#pinnedFetch fetchImpl",
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
+        "lib/plugin/bridge/agent-tool-dispatch.ts#pinnedFetch fetchImpl",
         "lib/tauri/pinned-fetch.ts#pinnedFetch",
         "lib/tauri/transport-companion.ts#fetchWithRetry"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; lib/plugin/core/context.ts#createNetworkAPI; lib/plugin/core/transport.ts#invokePluginShellApi; lib/project-environment/executor.ts#runScript"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; lib/plugin/core/context.ts#createNetworkAPI; lib/plugin/core/transport.ts#invokePluginShellApi; lib/project-environment/executor.ts#runScript"
     },
     {
       "key": "lib/tauri/recovery.ts::call::network::58002fcd8a8a:1",
@@ -7915,7 +7915,7 @@
       "line": 72,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
       "reason": "Run-origin terminal spawns/writes enter module terminal dock dispatch, process-tracked ctx.terminal, process-tracked VSCode terminal callbacks, or canonical workflow terminal attempts before shared local PTY/LAN/WAN infrastructure; UI list/reattach/recovery calls carry no run content.",
       "basis": [
         "lib/terminal/agent-tools.ts#toolFamily",
@@ -7925,7 +7925,7 @@
         "lib/terminal/transport-ws.ts#openLanConnection",
         "lib/terminal/spawn-orchestrator.ts#spawnFromDock"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
     },
     {
       "key": "lib/terminal/remote-api.ts::execTerminalCommand::network::f1bb31809ff2:1",
@@ -7970,7 +7970,7 @@
       "line": 77,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
       "reason": "Run-origin terminal spawns/writes enter module terminal dock dispatch, process-tracked ctx.terminal, process-tracked VSCode terminal callbacks, or canonical workflow terminal attempts before shared local PTY/LAN/WAN infrastructure; UI list/reattach/recovery calls carry no run content.",
       "basis": [
         "lib/terminal/agent-tools.ts#toolFamily",
@@ -7980,7 +7980,7 @@
         "lib/terminal/transport-ws.ts#openLanConnection",
         "lib/terminal/spawn-orchestrator.ts#spawnFromDock"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
     },
     {
       "key": "lib/terminal/spawn-orchestrator.ts::withRemoteProfile::process::74ff0e91cb63:1",
@@ -7991,7 +7991,7 @@
       "line": 170,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
       "reason": "Run-origin terminal spawns/writes enter module terminal dock dispatch, process-tracked ctx.terminal, process-tracked VSCode terminal callbacks, or canonical workflow terminal attempts before shared local PTY/LAN/WAN infrastructure; UI list/reattach/recovery calls carry no run content.",
       "basis": [
         "lib/terminal/agent-tools.ts#toolFamily",
@@ -8001,7 +8001,7 @@
         "lib/terminal/transport-ws.ts#openLanConnection",
         "lib/terminal/spawn-orchestrator.ts#spawnFromDock"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
     },
     {
       "key": "lib/terminal/spawn-orchestrator.ts::spawnFromDock::process::d947155b03a3:1",
@@ -8012,7 +8012,7 @@
       "line": 241,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
       "reason": "Run-origin terminal spawns/writes enter module terminal dock dispatch, process-tracked ctx.terminal, process-tracked VSCode terminal callbacks, or canonical workflow terminal attempts before shared local PTY/LAN/WAN infrastructure; UI list/reattach/recovery calls carry no run content.",
       "basis": [
         "lib/terminal/agent-tools.ts#toolFamily",
@@ -8022,7 +8022,7 @@
         "lib/terminal/transport-ws.ts#openLanConnection",
         "lib/terminal/spawn-orchestrator.ts#spawnFromDock"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
     },
     {
       "key": "lib/terminal/ssh-session.ts::connect>result::network::1d4846a18e47:1",
@@ -8052,7 +8052,7 @@
       "line": 133,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
+      "authority": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress",
       "reason": "Run-origin terminal spawns/writes enter module terminal dock dispatch, process-tracked ctx.terminal, process-tracked VSCode terminal callbacks, or canonical workflow terminal attempts before shared local PTY/LAN/WAN infrastructure; UI list/reattach/recovery calls carry no run content.",
       "basis": [
         "lib/terminal/agent-tools.ts#toolFamily",
@@ -8062,7 +8062,7 @@
         "lib/terminal/transport-ws.ts#openLanConnection",
         "lib/terminal/spawn-orchestrator.ts#spawnFromDock"
       ],
-      "entry": "lib/claude/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
+      "entry": "lib/ai/agent/execution/contributions/tool-contributions.ts#runContributedTool; lib/plugin/security/permission-guard.ts#invokeEgressMethod; lib/plugin/api/terminal-api.ts#doSpawn; lib/plugin/vscode-shim/terminal-handlers.ts#createProcessTerminal; lib/workflow/runtime/step-executor.ts#executeWorkflowEgress"
     },
     {
       "key": "lib/terminal/transport-ws.ts::__setWebSocketFactoryForTesting::network::5521513a1410:1",
@@ -8212,7 +8212,7 @@
       "line": 28,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/jina.ts#fetchViaJina>res",
@@ -8221,7 +8221,7 @@
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
     },
     {
       "key": "lib/web/reader/jina.ts::readViaJina::network::d19f0415c674:1",
@@ -8232,7 +8232,7 @@
       "line": 58,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/jina.ts#readViaJina",
@@ -8241,7 +8241,7 @@
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
     },
     {
       "key": "lib/web/reader/platform-scrapers/wechat.ts::scrapeWeChat>res::network::062916eb14c8:1",
@@ -8252,7 +8252,7 @@
       "line": 20,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/platform-scrapers/wechat.ts#scrapeWeChat>res",
@@ -8261,7 +8261,7 @@
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
     },
     {
       "key": "lib/web/reader/platform-scrapers/x-twitter.ts::scrapeX>res::network::758df902481c:1",
@@ -8272,7 +8272,7 @@
       "line": 71,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/platform-scrapers/x-twitter.ts#scrapeX>res",
@@ -8281,7 +8281,7 @@
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
     },
     {
       "key": "lib/web/reader/platform-scrapers/youtube.ts::scrapeYouTube>res::network::f01b39ee6f84:1",
@@ -8292,7 +8292,7 @@
       "line": 125,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/platform-scrapers/youtube.ts#scrapeYouTube>res",
@@ -8301,7 +8301,7 @@
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
     },
     {
       "key": "lib/web/reader/platform-scrapers/youtube.ts::scrapeYouTube>capRes::network::753f527b4e7e:1",
@@ -8312,7 +8312,7 @@
       "line": 154,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker",
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/platform-scrapers/youtube.ts#scrapeYouTube>capRes",
@@ -8321,7 +8321,7 @@
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec; cli/src/agent/tool-host/broker.ts#startToolHostBroker"
     },
     {
       "key": "lib/webhooks/delivery.ts::deliverWebhook>res::network::8e461f112a04:1",
@@ -9689,15 +9689,15 @@
       "line": 70,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Shared Companion challenge/token session authenticates Host traffic; run execution reaches the corresponding tool/API gate before it uses authenticated sends. UI/admin clients share this session helper.",
       "basis": [
         "packages/companion-client/src/session.ts#createCompanionSession",
         "lib/plugin/core/context.ts#createNetworkAPI",
         "lib/sandbox/session-runtime.ts#executeSandbox",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "packages/document/src/runtime-adapters.ts::documentTransport>call::network::dc0817588128:1",
@@ -9708,14 +9708,14 @@
       "line": 67,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Document extraction/fetch used by web_fetch is reached through the web tool dispatch gate; UI import/document reads also share the adapter.",
       "basis": [
         "packages/document/src/runtime-adapters.ts#documentTransport>call",
         "lib/web/web-tools-core.ts#webFetch",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "packages/logging/src/transports/remote-transport.ts::module::network::7da8ce4134ab:1",
@@ -11340,14 +11340,14 @@
       "line": 29,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Run web_search is admitted through the concrete web-tool entry; search is the policy-preserved exception. This adapter also serves UI/background search.",
       "basis": [
         "packages/web-search/src/runtime-adapters.ts#defaultProxyFetch",
         "lib/web/web-tools-core.ts#webSearch",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "packages/web-search/src/runtime-adapters.ts::webSearchFetch::network::47c0bb098f81:1",
@@ -11358,14 +11358,14 @@
       "line": 62,
       "lexicalGate": null,
       "classification": "tool-gated",
-      "authority": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec",
+      "authority": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec",
       "reason": "Run web_search is admitted through the concrete web-tool entry; search is the policy-preserved exception. This adapter also serves UI/background search.",
       "basis": [
         "packages/web-search/src/runtime-adapters.ts#webSearchFetch",
         "lib/web/web-tools-core.ts#webSearch",
-        "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+        "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
       ],
-      "entry": "lib/claude/plugin-tool-ipc.ts#runPluginToolExec"
+      "entry": "lib/plugin/bridge/agent-tool-dispatch.ts#runPluginToolExec"
     },
     {
       "key": "plugins/example-auth-provider/src/index.ts::createProvider>describe>response::network::b2e8c04e6f60:1",

@@ -15,7 +15,7 @@ const requestLocalToolApproval = jest.fn()
 jest.mock("@/lib/claude/ipc", () => ({
   requestLocalToolApproval: (...args: unknown[]) => requestLocalToolApproval(...args),
 }))
-jest.mock("@/lib/claude/plugin-tool-ipc", () => ({
+jest.mock("@/lib/plugin/bridge/agent-tool-dispatch", () => ({
   handlePluginToolExec: (...args: unknown[]) => handlePluginToolExec(...args),
 }))
 

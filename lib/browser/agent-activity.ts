@@ -1,7 +1,7 @@
 /**
  * Tiny window-event bus so the `/browser` pane can show when the AGENT (not the
  * human) is driving the embedded preview. The browser-tools engine runs in the
- * renderer (resolved by `plugin-tool-ipc`), so a same-window CustomEvent reaches
+ * renderer (resolved by `agent-tool-dispatch`), so a same-window CustomEvent reaches
  * the React UI without any IPC. No-op outside the browser (SSR / sidecar).
  */
 export const BROWSER_AGENT_ACTIVITY_EVENT = "cognia:browser-agent-activity"

@@ -12,7 +12,7 @@
  *
  * ## Why this rides the plugin-tool relay
  *
- * `lib/claude/plugin-tool-ipc.ts` + `opts.pluginTools` is a generic host-routed
+ * `lib/plugin/bridge/agent-tool-dispatch.ts` + `opts.pluginTools` is a generic host-routed
  * tool channel that is already live on both dispatch paths and already carries
  * many tool families. The artifact store lives in the renderer and the sidecar
  * cannot import `lib/`, so this is exactly the shape that channel exists for.

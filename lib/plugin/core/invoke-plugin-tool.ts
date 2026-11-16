@@ -4,7 +4,7 @@ import { withPluginExecutionContext, withPluginContentDispatch } from "./invocat
  * Unified plugin-tool invocation seam.
  *
  * Every host-side caller that wants to execute a plugin-registered tool —
- * the sidecar `plugin_tool_exec` IPC path (`lib/claude/plugin-tool-ipc.ts`),
+ * the sidecar `plugin_tool_exec` IPC path (`lib/plugin/bridge/agent-tool-dispatch.ts`),
  * the `action.plugin.invoke` workflow node (`lib/workflow/nodes/built-ins.ts`),
  * and future surfaces (quick actions, agent team) — goes through
  * {@link invokePluginTool} so resolution, lazy activation, permission
@@ -166,7 +166,7 @@ let depsOverride: InvokePluginToolDeps | null = null
 
 /**
  * Inject custom deps. Test-only — mirrors
- * `__setPluginToolResolverForTesting` in `lib/claude/plugin-tool-ipc.ts`.
+ * `__setPluginToolResolverForTesting` in `lib/plugin/bridge/agent-tool-dispatch.ts`.
  * Pass `null` to restore the dynamic-import defaults.
  */
 export function __setInvokePluginToolDepsForTesting(deps: InvokePluginToolDeps | null): void {

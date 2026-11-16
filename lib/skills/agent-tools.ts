@@ -9,7 +9,7 @@
  * built-in catalog (`lib/skills/built-in-catalog`) and the Dexie custom-skills
  * table (`lib/db/skills`) — TS the pure `.mjs` sidecar can't import.
  * `build-options` appends {@link buildSkillManifestEntries} when the
- * `selfInvokeTools.skill` setting is on (opt-in); `plugin-tool-ipc` resolves
+ * `selfInvokeTools.skill` setting is on (opt-in); `agent-tool-dispatch` resolves
  * the call via {@link runSkillBuiltinTool}.
  */
 

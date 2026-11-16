@@ -4,7 +4,7 @@ import { markPluginSynchronousCallback } from "@/lib/plugin/core/invocation-iden
  *
  * Thin facade over five `createOverlayRegistry` instances (one per
  * contribution kind). The public method surface is unchanged so the ~13
- * call sites (tools-bridge, plugin-tool-ipc, manager, stores) keep working;
+ * call sites (tools-bridge, agent-tool-dispatch, manager, stores) keep working;
  * internally the hand-rolled Maps are gone and every registration flows
  * through the single shared factory.
  *
@@ -31,7 +31,7 @@ import {
 } from "@/lib/plugin/registries/createOverlayRegistry"
 import { reportRegistryConflict } from "@/lib/plugin/contracts/conflict-reporter"
 import { loggers } from "./logger"
-import { toolOwnerBeforePlugin } from "@/lib/claude/tool-contributions"
+import { toolOwnerBeforePlugin } from "@/lib/ai/agent/execution/contributions/tool-contributions"
 
 // Build a first-wins-cross-plugin conflict handler that both logs (dev
 // console) and records a diagnostic (plugins panel) for a given registry label.

@@ -9,7 +9,7 @@
 //    BACK to the renderer (web_search / web_fetch, skills, slash commands,
 //    editor, team, and every plugin-registered tool), each carrying a name, a
 //    description, and a JSON Schema.
-//  - `handlePluginToolExec` (`lib/claude/plugin-tool-ipc.ts`) already executes
+//  - `handlePluginToolExec` (`lib/plugin/bridge/agent-tool-dispatch.ts`) already executes
 //    exactly that catalog in the renderer, behind the `@cognia/redact` PII gate
 //    and the per-plugin rate limiter.
 //  - `createSdkEventMapper` already maps AI SDK `tool-call` / `tool-result` /
@@ -34,7 +34,7 @@ import { z } from "zod"
 import { loggers } from "@cognia/logging"
 
 import type { ClaudeEvent, SendOptions } from "@cognia/agent-config-types"
-import { handlePluginToolExec } from "@/lib/claude/plugin-tool-ipc"
+import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
 import { requestLocalToolApproval } from "@/lib/claude/ipc"
 import {
   resolvePermissionDetailed,

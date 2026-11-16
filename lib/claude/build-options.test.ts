@@ -9990,7 +9990,8 @@ describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
   const surface = jest.fn()
 
   beforeEach(async () => {
-    const { __resetContributedToolsForTests } = await import("./tool-contributions")
+    const { __resetContributedToolsForTests } =
+      await import("@/lib/ai/agent/execution/contributions/tool-contributions")
     __resetContributedToolsForTests()
     surface.mockReset()
     moduleToolRegistry().push({
@@ -10128,7 +10129,8 @@ describe("module-contributed tools (ADR-0250 §14 amendment)", () => {
           tools: [{ name: "crate_other", description: "Undeclared.", jsonSchema: schema }],
         }),
     ]) {
-      const { __resetContributedToolsForTests } = await import("./tool-contributions")
+      const { __resetContributedToolsForTests } =
+        await import("@/lib/ai/agent/execution/contributions/tool-contributions")
       __resetContributedToolsForTests()
       answer()
       const opts = await resolveSendOptions({

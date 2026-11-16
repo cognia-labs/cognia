@@ -55,7 +55,7 @@ export interface LiveVoiceRuntimeBindings {
   droppedTools: DroppedTool[]
 }
 
-// These names are routed around invokePluginTool by plugin-tool-ipc. Their
+// These names are routed around invokePluginTool by agent-tool-dispatch. Their
 // host runners do not share one cancellation contract, so advertising them in
 // a Gemini session would let toolCallCancellation report success while a
 // dialog/task/terminal side effect kept running. Regular plugin tools receive
@@ -90,7 +90,7 @@ const defaultDeps: LiveVoiceRuntimeDeps = {
     return buildPluginToolsManifest()
   },
   executeTool: async (request) => {
-    const { handlePluginToolExec } = await import("@/lib/claude/plugin-tool-ipc")
+    const { handlePluginToolExec } = await import("@/lib/plugin/bridge/agent-tool-dispatch")
     const response = await handlePluginToolExec({
       type: "plugin_tool_exec",
       sessionId: request.sessionId,

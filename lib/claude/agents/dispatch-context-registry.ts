@@ -2,7 +2,7 @@
  * Per-session nested-dispatch context registry (renderer-side).
  *
  * The `dispatch_agent` host tool round-trips through the existing
- * `plugin_tool_exec` wire (see `lib/claude/plugin-tool-ipc.ts`). That wire only
+ * `plugin_tool_exec` wire (see `lib/plugin/bridge/agent-tool-dispatch.ts`). That wire only
  * carries `{sessionId, toolUseId, name, args}` — it has no notion of how deep
  * the calling agent is nested. This registry closes that gap: when a subagent
  * run starts, `agent-executor` registers its {depth, maxDepth, parentChain}

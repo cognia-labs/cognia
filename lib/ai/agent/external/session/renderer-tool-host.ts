@@ -4,7 +4,7 @@ import {
   callSidecarToolHost,
   createSidecarFeatureCallClient,
 } from "@/lib/ai/agent/execution/sidecar-feature-client"
-import { handlePluginToolExec } from "@/lib/claude/plugin-tool-ipc"
+import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
 import { dispatchPostToolUse, dispatchPreToolUse } from "@/lib/plugin/messaging/agent-hook-dispatch"
 import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import { transport } from "@/lib/tauri"

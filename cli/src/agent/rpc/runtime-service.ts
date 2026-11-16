@@ -14,7 +14,10 @@ import type {
 import type { AgentRunResultV1 } from "@cognia/agent-config-types/agent-run-result"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import type { PluginTool } from "@/types/plugin"
-import type { PluginToolExecRequest, PluginToolExecResponse } from "@/lib/claude/plugin-tool-ipc"
+import type {
+  PluginToolExecRequest,
+  PluginToolExecResponse,
+} from "@/lib/plugin/bridge/agent-tool-types"
 import {
   ASK_USER_TOOL_NAME,
   formatAskUserAnswer,

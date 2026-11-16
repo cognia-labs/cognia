@@ -10,7 +10,7 @@ jest.mock("@/lib/ai/agent/execution/sidecar-feature-client", () => ({
   ...jest.requireActual("@/lib/ai/agent/execution/sidecar-feature-client"),
   callSidecarToolHost: jest.fn(),
 }))
-jest.mock("@/lib/claude/plugin-tool-ipc", () => ({ handlePluginToolExec: jest.fn() }))
+jest.mock("@/lib/plugin/bridge/agent-tool-dispatch", () => ({ handlePluginToolExec: jest.fn() }))
 jest.mock("@/lib/tauri", () => ({ transport: { subscribe: jest.fn() } }))
 jest.mock("@/lib/plugin/messaging/agent-hook-dispatch", () => ({
   dispatchPostToolUse: jest.fn(),
@@ -24,7 +24,7 @@ import {
   RENDERER_TOOL_HOST_APPROVAL_PREFIX,
 } from "./renderer-tool-host"
 import { callSidecarToolHost } from "@/lib/ai/agent/execution/sidecar-feature-client"
-import { handlePluginToolExec } from "@/lib/claude/plugin-tool-ipc"
+import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
 import { transport } from "@/lib/tauri"
 import {
   setActiveRemoteTransport,

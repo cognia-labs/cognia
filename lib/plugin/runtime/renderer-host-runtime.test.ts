@@ -31,7 +31,7 @@ jest.mock("@/stores/settings/settings-store", () => ({
 
 jest.mock("ai", () => ({ streamText: jest.fn() }))
 
-jest.mock("@/lib/claude/plugin-tool-ipc", () => ({
+jest.mock("@/lib/plugin/bridge/agent-tool-dispatch", () => ({
   resolveWebToolDeps: jest.fn(async () => ({
     enabled: true,
     searchExecutor: async () => ({ query: "q", provider: "tavily", results: [] }),
@@ -224,7 +224,7 @@ describe("runHostTool", () => {
   it.each(["ambient", "caller"] as const)(
     "preserves %s cancellation through the renderer adapter",
     async (cancel) => {
-      const { resolveWebToolDeps } = jest.requireMock("@/lib/claude/plugin-tool-ipc")
+      const { resolveWebToolDeps } = jest.requireMock("@/lib/plugin/bridge/agent-tool-dispatch")
       const ambient = new AbortController()
       const caller = new AbortController()
       const searchExecutor = jest.fn(

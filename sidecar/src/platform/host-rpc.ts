@@ -4,7 +4,7 @@ import type { PendingEntry } from "../shared/pending.ts"
 // Rust host, over the existing stdio JSON-lines protocol.
 //
 // Why this exists rather than reusing `plugin_tool_exec`: that frame is
-// forwarded to and answered by the RENDERER (see `lib/claude/plugin-tool-ipc.ts`
+// forwarded to and answered by the RENDERER (see `lib/plugin/bridge/agent-tool-dispatch.ts`
 // and the Companion relay in `crates/cognia-companion-bus/src/event_bus.rs`). A
 // renderer-terminated channel cannot serve a headless host, where there is no
 // renderer at all, and it pays an extra hop when a remote client is driving.

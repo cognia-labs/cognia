@@ -1065,7 +1065,7 @@ function renderTools(modules) {
     "//",
     "// Every module's `tools`: the declarations as data and a lazy import of the",
     "// family, read by the send resolver and the tool dispatcher",
-    "// (`lib/claude/tool-contributions.ts`) and by the derived name lists",
+    "// (`lib/ai/agent/execution/contributions/tool-contributions.ts`) and by the derived name lists",
     "// (`lib/modules/tool-declarations.ts`).",
     "",
     'import type { ModuleToolsEntry } from "@/lib/modules/manifest-types"',

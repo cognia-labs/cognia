@@ -2430,7 +2430,7 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
       })
     let nativeTurnId: string | undefined
     const { handlePluginToolExec, __setPluginToolResolverForTesting } =
-      await import("@/lib/claude/plugin-tool-ipc")
+      await import("@/lib/plugin/bridge/agent-tool-dispatch")
     __setPluginToolResolverForTesting({ getTool: () => undefined })
     let dispatched = false
     let toolResponse: unknown

@@ -2,7 +2,10 @@
  * @jest-environment node
  */
 import { subscribePluginToolDispatch } from "./plugin-tool-dispatch"
-import type { PluginToolExecRequest, PluginToolExecResponse } from "@/lib/claude/plugin-tool-ipc"
+import type {
+  PluginToolExecRequest,
+  PluginToolExecResponse,
+} from "@/lib/plugin/bridge/agent-tool-types"
 import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
 
 jest.mock("@/lib/claude/ipc", () => ({
