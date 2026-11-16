@@ -10,6 +10,7 @@ import path from "node:path"
 import type {
   EngineCompanionExecutable,
   EngineLaunchDescriptor,
+  EngineMcpConfigFile,
 } from "@cognia/agent-contracts/engine-launch"
 import { descriptorsFor } from "@cognia/agent-contracts/engine-launch"
 import { ENGINE_LAUNCH_DESCRIPTORS } from "@/lib/ai/agent/external/policy/engine-launch"
@@ -329,4 +330,19 @@ export function acceptsExtraWritableRoots(command: string, args: readonly string
 /** Whether plugin Pi packages (ADR-0210) may be mounted into the launched engine. */
 export function takesPiPackages(command: string, args: readonly string[]): boolean {
   return matching(command, args).some((descriptor) => descriptor.piPackages)
+}
+
+/**
+ * The engine a launch runs when it reads its MCP servers from its own
+ * configuration files and the launch is that engine's server-taking
+ * subcommand.
+ */
+export function mcpConfigFile(
+  command: string,
+  args: readonly string[]
+): { id: string; file: EngineMcpConfigFile } | undefined {
+  const descriptor = matching(command, args).find(
+    ({ mcpConfigFile: file }) => file && args[0] === file.subcommand
+  )
+  return descriptor && { id: descriptor.id, file: descriptor.mcpConfigFile! }
 }

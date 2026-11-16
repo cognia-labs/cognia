@@ -189,6 +189,37 @@ pub struct EngineLaunchDescriptor {
     pub extra_writable_roots: bool,
     #[serde(default)]
     pub pi_packages: bool,
+    pub mcp_config_file: Option<McpConfigFile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectConfig {
+    pub directory: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PrivateCopy {
+    pub home: String,
+    pub state: String,
+}
+
+/// An engine that reads its MCP servers only from its configuration files
+/// (`EngineMcpConfigFile`); `crate::mcp_config_file` interprets it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpConfigFile {
+    pub subcommand: String,
+    pub root_env: String,
+    pub root_default: String,
+    pub directory: String,
+    pub servers_file: String,
+    pub settings_file: String,
+    pub project: ProjectConfig,
+    pub private_keep: Vec<String>,
+    pub private_set: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub private_copy: Vec<PrivateCopy>,
 }
 
 #[derive(Deserialize)]
@@ -737,6 +768,19 @@ pub fn is_stderr_noise(line: &str) -> bool {
 /// Whether the launched engine honours per-launch writable roots.
 pub fn accepts_extra_writable_roots(command: &str, args: &[String]) -> bool {
     descriptors_for(command, args).iter().any(|descriptor| descriptor.extra_writable_roots)
+}
+
+/// The engine a launch runs when it reads its MCP servers from its own
+/// configuration files and the launch is that engine's server-taking
+/// subcommand.
+pub fn mcp_config_file(command: &str, args: &[String]) -> Option<(&'static str, &'static McpConfigFile)> {
+    descriptors_for(command, args).into_iter().find_map(|descriptor| {
+        descriptor
+            .mcp_config_file
+            .as_ref()
+            .filter(|file| args.first() == Some(&file.subcommand))
+            .map(|file| (descriptor.id.as_str(), file))
+    })
 }
 
 /// Whether plugin Pi packages (ADR-0210) may be mounted into the launched engine.

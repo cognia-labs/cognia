@@ -118,6 +118,47 @@ export interface EngineHiddenFiles {
   home?: readonly string[]
 }
 
+/**
+ * The request env an adapter puts a session's MCP servers in (ACP
+ * `McpServer[]` JSON) for an engine that reads its servers only from its
+ * own configuration files. The host consumes it; the engine never sees it.
+ */
+export const ENGINE_MCP_SERVERS_ENV = "COGNIA_ENGINE_MCP_SERVERS"
+
+/**
+ * An engine that reads its MCP servers only from its configuration files.
+ * For each launch carrying `ENGINE_MCP_SERVERS_ENV` the host builds a private
+ * copy of the engine's configuration root, writes the servers into
+ * `directory/serversFile` (its `mcpServers` map: `command`/`args`/`env` or
+ * `url`/`transport`/`headers`) and points `rootEnv` at the copy. The owner's
+ * launch keeps the engine's own servers and links the rest of the root; a
+ * private launch (a Bot run) keeps only `privateKeep` of the settings file and
+ * none of the root. Every stdio server gets `rootEnv` set to the person's own
+ * root unless it names one.
+ */
+export interface EngineMcpConfigFile {
+  /** The first argument a launch carrying servers has. */
+  subcommand: string
+  /** Env key the engine reads its configuration root from. */
+  rootEnv: string
+  /** The root when `rootEnv` is unset, relative to home. */
+  rootDefault: string
+  /** The engine's directory inside the root. */
+  directory: string
+  /** File in `directory` the servers are written to. */
+  serversFile: string
+  /** File in `directory` with the engine's settings, whose `mcpServers` the owner's launch keeps too. */
+  settingsFile: string
+  /** Project configuration the engine reads from the working directory and its ancestors; a project server named like a session server is refused. */
+  project: Readonly<{ directory: string; files: readonly string[] }>
+  /** Dotted paths of the settings file a private launch keeps, when they hold a scalar. */
+  privateKeep: readonly string[]
+  /** Dotted paths a private launch sets in the settings file. */
+  privateSet: Readonly<Record<string, string | number | boolean>>
+  /** Files a private launch copies once from home into its own state, which the engine needs to sign in. */
+  privateCopy?: readonly Readonly<{ home: string; state: string }>[]
+}
+
 export interface EngineLaunchDescriptor {
   /** Runtime family id, for diagnostics. */
   id: string
@@ -161,6 +202,7 @@ export interface EngineLaunchDescriptor {
   extraWritableRoots?: boolean
   /** Plugin Pi packages (ADR-0210) may be mounted into this engine read-only. */
   piPackages?: boolean
+  mcpConfigFile?: EngineMcpConfigFile
 }
 
 /** The command without directory or Windows executable suffix, lower-cased. */

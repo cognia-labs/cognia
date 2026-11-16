@@ -3,14 +3,19 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import {
-  DEVIN_MCP_SERVERS_ENV,
-  devinOwnedConfigRoot,
-  prepareDevinMcpConfig,
-} from "./devin-mcp-config"
+  ENGINE_MCP_SERVERS_ENV,
+  injectedServers,
+  mcpConfigOverlayOf,
+  parseJsonc,
+  prepareMcpConfigFile,
+  privateSettings,
+} from "./mcp-config-file"
+import { mcpConfigFile } from "./launch-descriptor"
 import { NodeExternalAgentBackend } from "./node-backend"
 import { buildSandboxLauncherArgs } from "./sandbox-launcher"
 
-describe("isolated Devin MCP configuration", () => {
+// Devin is the engine whose package declares an MCP configuration file today.
+describe("engine MCP configuration files", () => {
   let home: string
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "devin-config-test-"))
@@ -31,9 +36,9 @@ describe("isolated Devin MCP configuration", () => {
     command: "devin",
     args: ["acp"],
     cwd: home,
-    env: { [DEVIN_MCP_SERVERS_ENV]: raw },
+    env: { [ENGINE_MCP_SERVERS_ENV]: raw },
   })
-  const runtime = () => ({ home, temp: home })
+  const runtime = (hostEnv: Record<string, string> = {}) => ({ home, temp: home, hostEnv })
   const write = (relative: string, value: string) => {
     const filename = path.join(home, relative)
     fs.mkdirSync(path.dirname(filename), { recursive: true })
@@ -47,20 +52,20 @@ describe("isolated Devin MCP configuration", () => {
     (relative) => {
       const filename = path.join(home, relative)
       write(relative, '"' + "a".repeat(1_048_576) + '"')
-      expect(() => prepareDevinMcpConfig(config(), runtime())).toThrow(
-        new Error("Invalid Devin MCP configuration")
+      expect(() => prepareMcpConfigFile(config(), runtime())).toThrow(
+        new Error("Invalid MCP configuration for devin")
       )
-      expect(
-        fs.readdirSync(home).filter((name) => name.startsWith("cognia-devin-config-"))
-      ).toEqual([])
+      expect(fs.readdirSync(home).filter((name) => name.startsWith("cognia-mcp-config-"))).toEqual(
+        []
+      )
       fs.rmSync(filename)
       fs.mkdirSync(filename)
-      expect(() => prepareDevinMcpConfig(config(), runtime())).toThrow(
-        new Error("Invalid Devin MCP configuration")
+      expect(() => prepareMcpConfigFile(config(), runtime())).toThrow(
+        new Error("Invalid MCP configuration for devin")
       )
-      expect(
-        fs.readdirSync(home).filter((name) => name.startsWith("cognia-devin-config-"))
-      ).toEqual([])
+      expect(fs.readdirSync(home).filter((name) => name.startsWith("cognia-mcp-config-"))).toEqual(
+        []
+      )
     }
   )
 
@@ -75,7 +80,7 @@ describe("isolated Devin MCP configuration", () => {
     )
     write(".config/gh/hosts.yml", "github secret")
     const state = path.join(home, "bot-state")
-    const prepared = prepareDevinMcpConfig(
+    const prepared = prepareMcpConfigFile(
       {
         ...config(),
         env: { ...config().env, COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: state },
@@ -109,7 +114,7 @@ describe("isolated Devin MCP configuration", () => {
     write(".config/devin/rules/a.md", "permission rules")
     write(".config/other/config.json", "untouched")
     const original = fs.readFileSync(path.join(home, ".config/devin/config.json"), "utf8")
-    const prepared = prepareDevinMcpConfig(config(), runtime())
+    const prepared = prepareMcpConfigFile(config(), runtime())
     const root = prepared.root!
     expect(read(root)).toMatchObject({
       extra: "retain",
@@ -127,12 +132,10 @@ describe("isolated Devin MCP configuration", () => {
     expect(fs.readFileSync(path.join(root, "other/config.json"), "utf8")).toBe("untouched")
     expect(fs.statSync(root).mode & 0o777).toBe(0o700)
     expect(fs.statSync(path.join(root, "devin/mcp_config.json")).mode & 0o777).toBe(0o600)
-    expect(prepared.config.env).not.toHaveProperty(DEVIN_MCP_SERVERS_ENV)
+    expect(prepared.config.env).not.toHaveProperty(ENGINE_MCP_SERVERS_ENV)
     expect(prepared.config.env).not.toHaveProperty("HOME")
     expect(buildSandboxLauncherArgs(prepared.config, home)).toContain(root)
-    expect(
-      devinOwnedConfigRoot({ ...config(), env: { XDG_CONFIG_HOME: "/forged" } })
-    ).toBeUndefined()
+    expect(mcpConfigOverlayOf({ ...config(), env: { XDG_CONFIG_HOME: "/forged" } })).toBeUndefined()
     prepared.cleanup()
     expect(fs.existsSync(root)).toBe(false)
     expect(fs.readFileSync(path.join(home, ".config/devin/config.json"), "utf8")).toBe(original)
@@ -141,12 +144,12 @@ describe("isolated Devin MCP configuration", () => {
   it("isolates concurrent tokens, handles empty arrays, and restores explicit original XDG for subprocesses", () => {
     const xdgConfigHome = path.join(home, "custom")
     fs.mkdirSync(xdgConfigHome)
-    const first = prepareDevinMcpConfig(config(), { ...runtime(), xdgConfigHome })
-    const second = prepareDevinMcpConfig(config(JSON.stringify(servers("two"))), {
-      ...runtime(),
-      xdgConfigHome,
-    })
-    const empty = prepareDevinMcpConfig(config("[]"), runtime())
+    const first = prepareMcpConfigFile(config(), runtime({ XDG_CONFIG_HOME: xdgConfigHome }))
+    const second = prepareMcpConfigFile(
+      config(JSON.stringify(servers("two"))),
+      runtime({ XDG_CONFIG_HOME: xdgConfigHome })
+    )
+    const empty = prepareMcpConfigFile(config("[]"), runtime())
     expect(first.root).not.toBe(second.root)
     expect(read(first.root!).mcpServers["cognia-tools"].env).toEqual({
       TOKEN: "one",
@@ -161,7 +164,7 @@ describe("isolated Devin MCP configuration", () => {
   })
 
   it("maps ACP HTTP/SSE headers and transports without exposing them in errors", () => {
-    const prepared = prepareDevinMcpConfig(
+    const prepared = prepareMcpConfigFile(
       config(
         JSON.stringify([
           {
@@ -193,21 +196,29 @@ describe("isolated Devin MCP configuration", () => {
     JSON.stringify(servers().concat(servers())),
     " ".repeat(1_048_577),
   ])("rejects malformed payload without echoing it (%#)", (raw) => {
-    expect(() => prepareDevinMcpConfig(config(raw), runtime())).toThrow(
-      "Invalid Devin MCP configuration"
+    expect(() => prepareMcpConfigFile(config(raw), runtime())).toThrow(
+      "Invalid MCP configuration for devin"
     )
     expect(fs.readdirSync(home)).toEqual([])
   })
 
   it("rejects wrong commands and project shadowing, including JSONC ancestor configuration", () => {
-    expect(() => prepareDevinMcpConfig({ ...config(), command: "codex" }, runtime())).toThrow()
+    expect(() => prepareMcpConfigFile({ ...config(), command: "codex" }, runtime())).toThrow(
+      "does not take MCP servers"
+    )
+    expect(() => prepareMcpConfigFile({ ...config(), args: ["run"] }, runtime())).toThrow(
+      "does not take MCP servers"
+    )
+    expect(() =>
+      prepareMcpConfigFile({ ...config(), command: "DEVIN.EXE" }, runtime())
+    ).not.toThrow()
     write(
       ".devin/mcp_config.local.json",
       '{/* project */ "mcpServers":{"cognia-tools":{"command":"other",},},}'
     )
     const nested = path.join(home, "nested")
     fs.mkdirSync(nested)
-    expect(() => prepareDevinMcpConfig({ ...config(), cwd: nested }, runtime())).toThrow("shadows")
+    expect(() => prepareMcpConfigFile({ ...config(), cwd: nested }, runtime())).toThrow("shadows")
   })
 
   it.each([
@@ -229,8 +240,8 @@ describe("isolated Devin MCP configuration", () => {
     { name: "bad-headers", type: "http", url: "https://example.com", headers: {} },
     { name: "unknown-field", command: "node", args: [], channel: true },
   ])("rejects invalid standard server fields (%#)", (server) => {
-    expect(() => prepareDevinMcpConfig(config(JSON.stringify([server])), runtime())).toThrow(
-      "Invalid Devin MCP configuration"
+    expect(() => prepareMcpConfigFile(config(JSON.stringify([server])), runtime())).toThrow(
+      "Invalid MCP configuration for devin"
     )
   })
 
@@ -242,38 +253,36 @@ describe("isolated Devin MCP configuration", () => {
       "/* unclosed",
     ]) {
       write(".config/devin/mcp_config.json", contents)
-      expect(() => prepareDevinMcpConfig(config(), runtime())).toThrow(
-        "Invalid Devin MCP configuration"
+      expect(() => prepareMcpConfigFile(config(), runtime())).toThrow(
+        "Invalid MCP configuration for devin"
       )
-      expect(fs.readdirSync(home).some((name) => name.startsWith("cognia-devin-config-"))).toBe(
-        false
-      )
+      expect(fs.readdirSync(home).some((name) => name.startsWith("cognia-mcp-config-"))).toBe(false)
     }
-    expect(() =>
-      prepareDevinMcpConfig(config(), { ...runtime(), xdgConfigHome: "relative" })
-    ).toThrow("must be absolute")
+    expect(() => prepareMcpConfigFile(config(), runtime({ XDG_CONFIG_HOME: "relative" }))).toThrow(
+      "must be absolute"
+    )
     const plain = { id: "plain", command: "codex" }
-    expect(prepareDevinMcpConfig(plain, runtime()).config).toBe(plain)
+    expect(prepareMcpConfigFile(plain, runtime()).config).toBe(plain)
   })
 
   it("copies symlinked configuration safely, rejects cycles and malformed user settings with cleanup", () => {
     write("real-config/config.json", '{"text":"a,} // retain", "permissions":{"mode":"ask"}}')
     fs.mkdirSync(path.join(home, ".config"))
     fs.symlinkSync(path.join(home, "real-config"), path.join(home, ".config/devin"))
-    const prepared = prepareDevinMcpConfig(config(), runtime())
+    const prepared = prepareMcpConfigFile(config(), runtime())
     expect(fs.lstatSync(path.join(prepared.root!, "devin")).isSymbolicLink()).toBe(false)
     expect(fs.readFileSync(path.join(prepared.root!, "devin/config.json"), "utf8")).toContain(
       "a,} // retain"
     )
     prepared.cleanup()
     fs.symlinkSync(path.join(home, "real-config"), path.join(home, "real-config/loop"))
-    expect(() => prepareDevinMcpConfig(config(), runtime())).toThrow("cycle")
+    expect(() => prepareMcpConfigFile(config(), runtime())).toThrow("cycle")
     fs.unlinkSync(path.join(home, "real-config/loop"))
     write("real-config/config.json", "{invalid token-secret")
-    expect(() => prepareDevinMcpConfig(config(), runtime())).toThrow(
-      "Invalid Devin MCP configuration"
+    expect(() => prepareMcpConfigFile(config(), runtime())).toThrow(
+      "Invalid MCP configuration for devin"
     )
-    expect(fs.readdirSync(home).some((name) => name.startsWith("cognia-devin-config-"))).toBe(false)
+    expect(fs.readdirSync(home).some((name) => name.startsWith("cognia-mcp-config-"))).toBe(false)
   })
 
   it.each(["exit", "kill", "failure", "spawn-error"])(
@@ -283,7 +292,7 @@ describe("isolated Devin MCP configuration", () => {
       const backend = new NodeExternalAgentBackend({
         workspacesRoot: home,
         resolveLaunch: async (input) => {
-          root = devinOwnedConfigRoot(input)
+          root = mcpConfigOverlayOf(input)?.root
           expect(root).toBeDefined()
           if (kind === "failure") throw new Error("fixture launch failure")
           if (kind === "spawn-error")
@@ -317,7 +326,7 @@ describe("isolated Devin MCP configuration", () => {
     }
   )
 
-  it("reaps only the Devin launch group when its leader leaves an MCP descendant behind", async () => {
+  it("reaps only the launch group when its leader leaves an MCP descendant behind", async () => {
     if (process.platform === "win32") return
     let root: string | undefined
     let pid: number | undefined
@@ -325,7 +334,7 @@ describe("isolated Devin MCP configuration", () => {
     const backend = new NodeExternalAgentBackend({
       workspacesRoot: home,
       resolveLaunch: async (input) => {
-        root = devinOwnedConfigRoot(input)
+        root = mcpConfigOverlayOf(input)?.root
         return {
           command: process.execPath,
           args: [
@@ -378,4 +387,47 @@ describe("isolated Devin MCP configuration", () => {
       }
     }
   })
+})
+
+const { file } = mcpConfigFile("devin", ["acp"])!
+
+it("preserves comment-like strings and trailing commas in JSONC", () => {
+  expect(parseJsonc('{/* comment */ "url":"https://host/a,}", "list":[1,],}')).toEqual({
+    url: "https://host/a,}",
+    list: [1],
+  })
+  expect(() => parseJsonc("{/* unterminated")).toThrow("bounded JSONC")
+  expect(() => parseJsonc("[1]")).toThrow("bounded JSONC")
+})
+
+it("keeps only the declared scalar settings in a private launch and sets the declared ones", () => {
+  expect(
+    privateSettings(file, {
+      version: 2,
+      devin: { org_id: "org", token: "private" },
+      mcpServers: { ambient: {} },
+    })
+  ).toEqual({ version: 2, devin: { org_id: "org" }, shell: { setup_complete: true } })
+  expect(privateSettings(file, { version: { nested: true }, devin: "flat" })).toEqual({
+    shell: { setup_complete: true },
+  })
+})
+
+it("rejects duplicate headers before any host IO", () => {
+  expect(() =>
+    injectedServers(
+      "devin",
+      JSON.stringify([
+        {
+          name: "x",
+          type: "http",
+          url: "https://local",
+          headers: [
+            { name: "A", value: "1" },
+            { name: "A", value: "2" },
+          ],
+        },
+      ])
+    )
+  ).toThrow("Invalid MCP configuration for devin")
 })

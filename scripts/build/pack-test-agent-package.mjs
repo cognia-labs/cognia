@@ -736,19 +736,15 @@ const ${symbol}Contract: import("@cognia/agent-contracts/gateway-task").GatewayR
 export { ${symbol}Contract }
 `
 }
-SPECS["agent-acp"].entries.push("./session-catalog","./devin-mcp-config")
-SPECS["agent-acp"].dataOnly.push("./session-catalog","./devin-mcp-config")
+SPECS["agent-acp"].entries.push("./session-catalog")
+SPECS["agent-acp"].dataOnly.push("./session-catalog")
 SPECS["agent-acp"].smoke += `
 import { createKimiSessionCatalog } from "@cognia/agent-acp/session-catalog"
-import { parseDevinJsonc, devinInjectedServers, projectDevinMcpConfig } from "@cognia/agent-acp/devin-mcp-config"
 const listing = createKimiSessionCatalog(()=>0)
 listing.deleted("gone")
 if(listing.listed([{sessionId:"gone"}]).length)throw new Error("installed deletion reconciliation")
 listing.clear()
 if(listing.listed([{sessionId:"gone"}]).length!==1)throw new Error("installed reconciliation cleanup")
-if(parseDevinJsonc('{/*comment*/"value":"https://local",}').value!=="https://local")throw new Error("installed JSONC")
-const injected=devinInjectedServers(JSON.stringify([{name:"session",command:"node",args:[],env:[]}]))
-if(projectDevinMcpConfig({}, {}, injected, "/owned",false).dedicated.mcpServers.session.env.XDG_CONFIG_HOME!=="/owned")throw new Error("installed MCP overlay")
 `
 SPECS["agent-pi"].entries.push("./subagent-snapshot")
 SPECS["agent-pi"].dataOnly.push("./subagent-snapshot")

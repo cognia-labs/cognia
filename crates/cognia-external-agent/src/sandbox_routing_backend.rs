@@ -605,7 +605,7 @@ impl ExecBackend for SandboxRoutingBackend {
 }
 
 impl SandboxRoutingBackend {
-    /// Local-only payloads (a managed gateway task, an isolated Devin MCP
+    /// Local-only payloads (a managed gateway task, an engine MCP
     /// configuration) reach their agent either through a sandbox bridge or as
     /// a local process. A fault on a Host whose existing path is anything
     /// else cannot fall back without handing the payload to a path that
@@ -614,7 +614,7 @@ impl SandboxRoutingBackend {
         let local_only = config.env.contains_key(crate::gateway_task::PAYLOAD_ENV)
             || config
                 .env
-                .contains_key(crate::devin_mcp_config::PAYLOAD_ENV);
+                .contains_key(crate::mcp_config_file::PAYLOAD_ENV);
         !local_only || self.existing.kind() == "local-process"
     }
 
@@ -1497,7 +1497,7 @@ mod tests {
         let sink = EmitterEventSink::new(RecordingAgentEmitter::new());
         for payload in [
             crate::gateway_task::PAYLOAD_ENV,
-            crate::devin_mcp_config::PAYLOAD_ENV,
+            crate::mcp_config_file::PAYLOAD_ENV,
         ] {
             let mut placed = config(payload, Some(placement(false)));
             placed.env.insert(payload.into(), "{}".into());

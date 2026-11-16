@@ -344,10 +344,10 @@ pub async fn spawn_with_events(
     let runs_locally = config.sandbox.is_none() && backend.kind() == "local-process";
     if config
         .env
-        .contains_key(crate::devin_mcp_config::PAYLOAD_ENV)
+        .contains_key(crate::mcp_config_file::PAYLOAD_ENV)
         && !runs_locally
     {
-        return Err("Isolated Devin MCP configuration requires a local process backend".into());
+        return Err("An engine MCP configuration requires a local process backend".into());
     }
     // A managed gateway task reaches the gateway either as a local process or
     // through a sandbox driver's exec-channel bridge (ADR-0182, ADR-0221). A
@@ -525,7 +525,7 @@ mod tests {
     // ── spawn_with_events choreography ────────────────────────────────────────
 
     #[tokio::test]
-    async fn devin_mcp_payload_never_reaches_remote_execution() {
+    async fn engine_mcp_payload_never_reaches_remote_execution() {
         struct Remote;
         #[async_trait]
         impl ExecBackend for Remote {
@@ -571,7 +571,7 @@ mod tests {
             id: "devin".into(),
             command: "devin".into(),
             args: vec!["acp".into()],
-            env: HashMap::from([(crate::devin_mcp_config::PAYLOAD_ENV.into(), "[]".into())]),
+            env: HashMap::from([(crate::mcp_config_file::PAYLOAD_ENV.into(), "[]".into())]),
             cwd: None,
             framing: Default::default(),
             sandbox_policy: Default::default(),
@@ -676,7 +676,7 @@ mod tests {
         let backend = LocalProcessBackend::new();
         for env in [
             crate::gateway_task::PAYLOAD_ENV,
-            crate::devin_mcp_config::PAYLOAD_ENV,
+            crate::mcp_config_file::PAYLOAD_ENV,
         ] {
             let mut config = placed("payload", "codex-acp", false);
             config.env.insert(env.into(), "{}".into());

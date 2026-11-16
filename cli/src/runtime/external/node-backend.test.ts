@@ -597,7 +597,7 @@ console.log(JSON.stringify({values, githubTokenPresent: !!process.env.GITHUB_TOK
     }
   })
 
-  it("rejects a Devin MCP payload on another runtime before resolving a launch", async () => {
+  it("rejects an engine MCP payload on a runtime that takes none before resolving a launch", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-agent-payload-"))
     const resolveLaunch = jest.fn(async () => ({ command: "must-not-run", args: [] }))
     const backend = new NodeExternalAgentBackend({ workspacesRoot: workspace, resolveLaunch })
@@ -609,10 +609,10 @@ console.log(JSON.stringify({values, githubTokenPresent: !!process.env.GITHUB_TOK
             command: "codex",
             args: ["app-server"],
             cwd: workspace,
-            env: { COGNIA_DEVIN_MCP_SERVERS: "[]" },
+            env: { COGNIA_ENGINE_MCP_SERVERS: "[]" },
           },
         })
-      ).rejects.toThrow("Invalid Devin MCP configuration")
+      ).rejects.toThrow("does not take MCP servers")
       expect(resolveLaunch).not.toHaveBeenCalled()
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true })

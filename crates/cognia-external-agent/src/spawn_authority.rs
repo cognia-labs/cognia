@@ -111,7 +111,7 @@ impl CredentialDelivery {
             } else if credential_env_name(name) || {
                 let name = name.to_ascii_uppercase();
                 name.contains("CONFIG") || name.ends_with("_JSON") || name.contains("CREDENTIAL")
-                    || name.ends_with("_AUTH") || matches!(name.as_str(), "COGNIA_DEVIN_MCP_SERVERS"
+                    || name.ends_with("_AUTH") || matches!(name.as_str(), "COGNIA_ENGINE_MCP_SERVERS"
                         | "COGNIA_GATEWAY_RUNTIME_ENV" | "CODEX_HOME" | "GEMINI_HOME" | "GROK_HOME"
                         | "KIMI_CODE_HOME" | "CLINE_DIR" | "PI_CODING_AGENT_DIR")
             } {
@@ -191,7 +191,7 @@ mod tests {
     fn p4_review_structured_credential_channels_share_admission_and_report_classification() {
         let mut decision = ExecutionAdmission { binding: PlacementBinding { org_id: "o".into(), workspace_id: "w".into(), actor_user_id: "u".into(), run_id: "r".into() }, actions: vec!["execution.request".into(), "workspace.read".into()] };
         for name in ["OPENCODE_CONFIG_CONTENT", "PROVIDER_CONFIG_CONTENT", "AGENT_CONFIG_JSON", "JSON_CONFIG",
-            "COGNIA_DEVIN_MCP_SERVERS", "GOOGLE_APPLICATION_CREDENTIALS", "AWS_SHARED_CREDENTIALS_FILE",
+            "COGNIA_ENGINE_MCP_SERVERS", "GOOGLE_APPLICATION_CREDENTIALS", "AWS_SHARED_CREDENTIALS_FILE",
             "CLAUDE_CONFIG_DIR", "CODEX_HOME", "COGNIA_GATEWAY_RUNTIME_ENV"] {
             assert_eq!(CredentialDelivery::for_env([name]), CredentialDelivery::InjectedEnv, "{name}");
             assert_eq!(decision.authorize_credentials([name]), Err("credential_use_forbidden"), "{name}");

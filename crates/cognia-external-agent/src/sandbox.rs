@@ -1075,8 +1075,8 @@ pub fn wrap_with_sandbox(
             env.insert(key.into(), root.to_string_lossy().into_owned());
         }
     }
-    if env.contains_key(crate::devin_mcp_config::PAYLOAD_ENV) {
-        env.insert(crate::devin_mcp_config::WRAPPED_ENV.into(), "1".into());
+    if env.contains_key(crate::mcp_config_file::PAYLOAD_ENV) {
+        env.insert(crate::mcp_config_file::WRAPPED_ENV.into(), "1".into());
     }
     if let Some((runtime, _)) = &managed_dsh {
         let target = args
@@ -2549,11 +2549,11 @@ mod tests {
         let mut original = config("devin", &["acp"], Some("/work/project"));
         original
             .env
-            .insert(crate::devin_mcp_config::PAYLOAD_ENV.into(), "[]".into());
+            .insert(crate::mcp_config_file::PAYLOAD_ENV.into(), "[]".into());
         let wrapped = wrap_with_sandbox(original, &host).unwrap();
         assert_eq!(wrapped.command, "/opt/launcher");
-        assert_eq!(wrapped.env[crate::devin_mcp_config::WRAPPED_ENV], "1");
-        assert_eq!(wrapped.env[crate::devin_mcp_config::PAYLOAD_ENV], "[]");
+        assert_eq!(wrapped.env[crate::mcp_config_file::WRAPPED_ENV], "1");
+        assert_eq!(wrapped.env[crate::mcp_config_file::PAYLOAD_ENV], "[]");
     }
 
     #[test]

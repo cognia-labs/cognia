@@ -142,7 +142,7 @@ describe("Devin ACP process ownership", () => {
       expect(launched.process.keepAlive).toBe(false)
       expect(launched.process.restartOnCrash).toBe(false)
       expect(launched.process.env.DEVIN_TEST).toBe("kept")
-      expect(JSON.parse(launched.process.env.COGNIA_DEVIN_MCP_SERVERS)[0].env[0].value).toBe(
+      expect(JSON.parse(launched.process.env.COGNIA_ENGINE_MCP_SERVERS)[0].env[0].value).toBe(
         index === 0 ? "first" : "second"
       )
       expect(child.createSession).toHaveBeenCalledWith({ ...options, mcpServers: [] })
@@ -512,7 +512,7 @@ it("preserves safe fork context and workspace without inheriting broker credenti
   const fork = await adapter.forkSession(source.id)
   expect(children[1].connect.mock.calls[0][0].process).toMatchObject({
     cwd: "/different-workspace",
-    env: { COGNIA_DEVIN_MCP_SERVERS: "[]" },
+    env: { COGNIA_ENGINE_MCP_SERVERS: "[]" },
   })
   expect(children[1].forkSession).toHaveBeenCalledWith(source.id, {
     cwd: "/different-workspace",

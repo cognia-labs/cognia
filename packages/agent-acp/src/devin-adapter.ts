@@ -4,6 +4,7 @@
  * The discovery transport carries no conversation credentials.
  */
 import { defineAdapterExtension } from "@cognia/agent-contracts/adapter-extension"
+import { ENGINE_MCP_SERVERS_ENV } from "@cognia/agent-contracts/engine-launch"
 import type { ExternalAgentConfig, AcpConfigOption } from "@cognia/agent-contracts/external-agent"
 import type { SessionCreateOptions } from "@cognia/agent-contracts/adapter"
 import {
@@ -31,7 +32,7 @@ export class DevinAcpAdapter extends IsolatedAcpAdapter {
         ...config.process!,
         env: {
           ...config.process?.env,
-          COGNIA_DEVIN_MCP_SERVERS: JSON.stringify(options?.mcpServers ?? []),
+          [ENGINE_MCP_SERVERS_ENV]: JSON.stringify(options?.mcpServers ?? []),
         },
       },
     }

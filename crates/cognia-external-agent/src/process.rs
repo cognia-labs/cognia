@@ -481,19 +481,18 @@ impl ExternalAgentProcessManager {
         } else {
             None
         };
-        let devin_config = if config
+        let mcp_config = if config
             .env
-            .contains_key(crate::devin_mcp_config::PAYLOAD_ENV)
+            .contains_key(crate::mcp_config_file::PAYLOAD_ENV)
         {
             let home = std::env::var_os("HOME")
                 .or_else(|| std::env::var_os("USERPROFILE"))
-                .ok_or("Devin requires a host home directory")?;
-            let original_xdg = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from);
-            crate::devin_mcp_config::prepare(
+                .ok_or("An engine MCP configuration requires a host home directory")?;
+            crate::mcp_config_file::prepare(
                 &mut config,
                 std::path::Path::new(&home),
                 &std::env::temp_dir(),
-                original_xdg.as_deref(),
+                |key| std::env::var_os(key).map(std::path::PathBuf::from),
             )?
         } else {
             None
@@ -511,8 +510,8 @@ impl ExternalAgentProcessManager {
             configure_siwc_environment(&mut cmd);
         }
         review_engine_environment(&mut cmd, &mut config, std::env::vars_os().map(|(key, _)| key));
-        cmd.env_remove(crate::devin_mcp_config::PAYLOAD_ENV);
-        cmd.env_remove(crate::devin_mcp_config::WRAPPED_ENV);
+        cmd.env_remove(crate::mcp_config_file::PAYLOAD_ENV);
+        cmd.env_remove(crate::mcp_config_file::WRAPPED_ENV);
         // The state key is a request to this host, never child input — not
         // even when the host process itself happens to carry one.
         cmd.env_remove(crate::state_isolation::AGENT_STATE_KEY_ENV);
@@ -775,10 +774,10 @@ impl ExternalAgentProcessManager {
 
             // MCP children can outlive an ACP process that exits or crashes.
             // Reap this launch's group before deleting its private config.
-            if devin_config.is_some() {
+            if mcp_config.is_some() {
                 super::proc_group::kill_process_group(supervisor_pid);
             }
-            drop(devin_config);
+            drop(mcp_config);
             // Exit observers may immediately restart this task. Release its
             // private files and lock before publishing that lifecycle barrier.
             drop(task_files);
@@ -1764,8 +1763,8 @@ mod tests {
                 command: launcher.to_string_lossy().into_owned(),
                 args: vec!["--".into(), "devin".into(), "acp".into()],
                 env: HashMap::from([
-                    (crate::devin_mcp_config::PAYLOAD_ENV.into(), "[]".into()),
-                    (crate::devin_mcp_config::WRAPPED_ENV.into(), "1".into()),
+                    (crate::mcp_config_file::PAYLOAD_ENV.into(), "[]".into()),
+                    (crate::mcp_config_file::WRAPPED_ENV.into(), "1".into()),
                 ]),
                 cwd: Some(workspace.path().to_string_lossy().into_owned()),
                 framing: Default::default(),
@@ -1792,7 +1791,7 @@ mod tests {
                 let info = manager.get_info("devin-overlay").await.unwrap();
                 assert!(!info
                     .to_string()
-                    .contains(crate::devin_mcp_config::PAYLOAD_ENV));
+                    .contains(crate::mcp_config_file::PAYLOAD_ENV));
                 manager.kill("devin-overlay").await.unwrap();
             }
             tokio::time::timeout(std::time::Duration::from_secs(3), async {

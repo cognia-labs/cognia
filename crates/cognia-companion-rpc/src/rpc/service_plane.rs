@@ -4452,7 +4452,7 @@ mod tests {
             ],
         };
         let args = |id: &str| serde_json::json!({"workspaceId":"w", "config":{"id":id, "command":"codex-acp", "cwd":workspace.to_string_lossy(), "sandbox":{"kind":"container", "spec":{}, "isolationMandatory":false}}});
-        for channel in ["OPENCODE_CONFIG_CONTENT", "COGNIA_DEVIN_MCP_SERVERS"] {
+        for channel in ["OPENCODE_CONFIG_CONTENT", "COGNIA_ENGINE_MCP_SERVERS"] {
             let mut injection = args("injected");
             injection["config"]["env"] =
                 serde_json::json!({(channel):r#"{"provider":{"options":{"apiKey":"fixture"}}}"#});

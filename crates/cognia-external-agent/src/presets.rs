@@ -148,7 +148,9 @@ const ENV_KEY_ALLOWLIST: &[&str] = &[
     // Host-consumed task configuration and its one-time gateway lease.
     "COGNIA_GATEWAY_TASK_CONFIG",
     "COGNIA_GATEWAY_TOKEN",
-    "COGNIA_DEVIN_MCP_SERVERS",
+    // A session's MCP servers for an engine that reads them from its own
+    // files; the host consumes it (`mcp_config_file`).
+    "COGNIA_ENGINE_MCP_SERVERS",
     "COGNIA_BOT_ISOLATION",
     "COGNIA_BOT_STATE_DIR",
     "DISABLE_AUTO_UPDATE",
@@ -358,7 +360,7 @@ impl SpawnPolicy {
         self.validate_command(&config.command, &config.args)?;
         crate::dsh_runtime::normalize_managed_launch(&mut config).map_err(PolicyViolation)?;
         crate::native_bridge::validate_network_requirement(&config).map_err(PolicyViolation)?;
-        crate::devin_mcp_config::validate_target(&config.command, &config.args, &config.env)
+        crate::mcp_config_file::validate_target(&config.command, &config.args, &config.env)
             .map_err(PolicyViolation)?;
         config.cwd = Some(self.validate_cwd(config.cwd.as_deref())?);
         validate_bot_runtime_state(&config)?;
@@ -404,7 +406,7 @@ impl SpawnPolicy {
         self.validate_command(&config.command, &config.args)?;
         crate::dsh_runtime::normalize_managed_launch(&mut config).map_err(PolicyViolation)?;
         crate::native_bridge::validate_network_requirement(&config).map_err(PolicyViolation)?;
-        crate::devin_mcp_config::validate_target(&config.command, &config.args, &config.env)
+        crate::mcp_config_file::validate_target(&config.command, &config.args, &config.env)
             .map_err(PolicyViolation)?;
         config.cwd = match config
             .cwd
@@ -1444,33 +1446,33 @@ mod tests {
     }
 
     #[test]
-    fn devin_mcp_payload_reaches_only_the_native_devin_acp_launch() {
+    fn engine_mcp_payload_reaches_only_an_engine_that_reads_mcp_files() {
         let (_tmp, p) = policy(false);
         let mut input = config("devin", &["acp"]);
         input
             .env
-            .insert(crate::devin_mcp_config::PAYLOAD_ENV.into(), "[]".into());
+            .insert(crate::mcp_config_file::PAYLOAD_ENV.into(), "[]".into());
         input
             .env
-            .insert(crate::devin_mcp_config::WRAPPED_ENV.into(), "1".into());
+            .insert(crate::mcp_config_file::WRAPPED_ENV.into(), "1".into());
         assert!(!p
             .validate(input.clone())
             .unwrap()
             .config
             .env
-            .contains_key(crate::devin_mcp_config::WRAPPED_ENV));
+            .contains_key(crate::mcp_config_file::WRAPPED_ENV));
         assert!(p
             .validate(input.clone())
             .unwrap()
             .config
             .env
-            .contains_key(crate::devin_mcp_config::PAYLOAD_ENV));
+            .contains_key(crate::mcp_config_file::PAYLOAD_ENV));
         assert!(p
             .validate_desktop(input.clone())
             .unwrap()
             .config
             .env
-            .contains_key(crate::devin_mcp_config::PAYLOAD_ENV));
+            .contains_key(crate::mcp_config_file::PAYLOAD_ENV));
         input.command = "codex".into();
         assert!(p.validate(input.clone()).is_err());
         assert!(p.validate_desktop(input).is_err());

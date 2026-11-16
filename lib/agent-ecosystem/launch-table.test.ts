@@ -93,4 +93,36 @@ describe("buildEngineLaunchTable", () => {
     refuse({ companion: { sibling: "../helper", env: "HELPER" } }, /not a file name/)
     refuse({ platformArgs: { linux: ["uid="] } }, /not a long option/)
   })
+
+  it("refuses engine env, files and MCP config files a host could not apply safely", () => {
+    const refuse = (patch: Partial<EngineLaunchDescriptor>, message: RegExp) =>
+      expect(() => buildEngineLaunchTable([], [{ ...codex, ...patch }])).toThrow(message)
+    refuse({ env: { prefixes: ["CODEX"] } }, /not an env family/)
+    refuse({ env: { prefixes: ["DYLD_"] } }, /not an env family/)
+    refuse({ env: { keys: ["NODE_OPTIONS"] } }, /not an env name/)
+    refuse({ env: { reviewedRequestOnly: true } }, /needs reviewedPrefixes/)
+    refuse({ hiddenFiles: { searched: ["a/b"] } }, /not a file name/)
+    refuse({ stderrNoise: [["ok", ""]] }, /nonempty substrings/)
+    const mcpConfigFile = {
+      subcommand: "acp",
+      rootEnv: "XDG_CONFIG_HOME",
+      rootDefault: ".config",
+      directory: "engine",
+      serversFile: "mcp.json",
+      settingsFile: "config.json",
+      project: { directory: ".engine", files: ["mcp.json"] },
+      privateKeep: ["version"],
+      privateSet: { "shell.ready": true },
+    }
+    expect(() => buildEngineLaunchTable([], [{ ...codex, mcpConfigFile }])).not.toThrow()
+    refuse({ mcpConfigFile: { ...mcpConfigFile, directory: "../engine" } }, /not a file name/)
+    refuse({ mcpConfigFile: { ...mcpConfigFile, settingsFile: "mcp.json" } }, /over its settings/)
+    refuse({ mcpConfigFile: { ...mcpConfigFile, rootEnv: "LD_PRELOAD" } }, /not an env name/)
+    refuse({ mcpConfigFile: { ...mcpConfigFile, rootDefault: "/etc" } }, /relative path/)
+    refuse({ mcpConfigFile: { ...mcpConfigFile, privateKeep: ["a..b"] } }, /empty segment/)
+    refuse(
+      { mcpConfigFile: { ...mcpConfigFile, privateCopy: [{ home: "../x", state: "x" }] } },
+      /must not contain/
+    )
+  })
 })

@@ -388,35 +388,6 @@ export function findAgentHostBoundaryViolations(repoRoot = REPO_ROOT) {
     )
       violations.push({ file, line: 1, rule: "native-compatibility-entry" })
   }
-  const devinFile = "cli/src/runtime/external/devin-mcp-config.ts"
-  if (existsSync(join(repoRoot, devinFile))) {
-    const ast = ts.createSourceFile(
-      devinFile,
-      readFileSync(join(repoRoot, devinFile), "utf8"),
-      ts.ScriptTarget.Latest,
-      true
-    )
-    const visit = (node) => {
-      if (
-        (ts.isFunctionDeclaration(node) &&
-          [
-            "parseJsonc",
-            "parseDevinJsonc",
-            "serverMap",
-            "injectedServers",
-            "projectDevinMcpConfig",
-          ].includes(node.name?.text)) ||
-        (ts.isCallExpression(node) && node.expression.getText(ast) === "JSON.parse")
-      )
-        violations.push({
-          file: devinFile,
-          line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1,
-          rule: "host-vendor-configuration",
-        })
-      ts.forEachChild(node, visit)
-    }
-    visit(ast)
-  }
   return violations
 }
 

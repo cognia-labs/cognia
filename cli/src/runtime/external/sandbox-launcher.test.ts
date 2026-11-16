@@ -804,12 +804,12 @@ describe("external-agent sandbox launcher", () => {
         command: "devin",
         args: ["acp"],
         cwd: "/work/repo",
-        env: { XDG_CONFIG_HOME: "/untrusted/private", COGNIA_DEVIN_MCP_SERVERS: "[]" },
+        env: { XDG_CONFIG_HOME: "/untrusted/private", COGNIA_ENGINE_MCP_SERVERS: "[]" },
       },
       "/home/user"
     )
     expect(args).not.toContain("/untrusted/private")
-    expect(args).not.toContain("COGNIA_DEVIN_MCP_SERVERS")
+    expect(args).not.toContain("COGNIA_ENGINE_MCP_SERVERS")
   })
 
   it("discovers launchers beside both single-file and split bundles", () => {

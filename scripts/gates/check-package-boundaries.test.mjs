@@ -86,10 +86,6 @@ test("rejects preset/runtime aliases, returned launch recipes and copied CLI ven
     "cli/src/runtime/external/codex-model-catalog.ts",
     "export function buildCodexModelCatalog() { return JSON.stringify({models:[]}) }"
   )
-  write(
-    "cli/src/runtime/external/devin-mcp-config.ts",
-    "function parseJsonc(raw) { return JSON.parse(raw) }"
-  )
   const violations = findAgentHostBoundaryViolations(root)
   assert.equal(violations.filter((v) => v.rule === "manager-runtime-branch").length, 4)
   assert.ok(
@@ -107,7 +103,6 @@ test("rejects preset/runtime aliases, returned launch recipes and copied CLI ven
       (v) => v.file.endsWith("codex-model-catalog.ts") && v.rule === "native-compatibility-entry"
     )
   )
-  assert.ok(violations.some((v) => v.rule === "host-vendor-configuration"))
 })
 
 test("permits bounded Host Pi traversal and package recipe delegation", (t) => {

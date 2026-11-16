@@ -613,7 +613,7 @@ impl BuildService {
                 run(pull, cancelled, deadline).await?;
             }
         }
-        let raw = cognia_external_agent::devin_mcp_config::parse_jsonc(
+        let raw = cognia_external_agent::jsonc::parse_jsonc(
             std::str::from_utf8(&declaration_bytes).map_err(|error| error.to_string())?,
         )?;
         let base_tag = format!("{tag}-base");
@@ -790,7 +790,7 @@ fn read_declaration(path: &Path) -> Result<Vec<u8>, String> {
 
 fn validate_declaration(bytes: &[u8]) -> Result<(), String> {
     let raw = std::str::from_utf8(bytes).map_err(|_| "build declaration is not UTF-8")?;
-    let object = cognia_external_agent::devin_mcp_config::parse_jsonc(raw)
+    let object = cognia_external_agent::jsonc::parse_jsonc(raw)
         .map_err(|_| "build declaration is not a valid bounded JSONC object")?;
     let root = serde_json::Value::Object(object);
     validate_host_substitutions(&root)

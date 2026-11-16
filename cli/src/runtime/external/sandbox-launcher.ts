@@ -22,7 +22,7 @@ import {
   type ExternalAgentLaunch,
   type NodeExternalAgentSpawnConfig,
 } from "./node-backend"
-import { devinOwnedConfigRoot, devinOriginalConfigRoot } from "./devin-mcp-config"
+import { mcpConfigOverlayOf } from "./mcp-config-file"
 import { hostAgentStateDataDir, type StateIsolationPlan } from "./state-isolation"
 import { assertDshWritableRoots } from "./dsh-installer"
 import {
@@ -360,8 +360,8 @@ export function buildSandboxLauncherArgs(
     ...(isolation && !managedDsh && !botIsolation && !taskHome ? [isolation.root] : []),
     toolHostRuntimeDir(),
   ]
-  const devinConfigRoot = devinOwnedConfigRoot(config)
-  if (devinConfigRoot) writable.push(devinConfigRoot)
+  const mcpOverlay = mcpConfigOverlayOf(config)
+  if (mcpOverlay) writable.push(mcpOverlay.root)
   if (managedDsh) {
     assertDshWritableRoots(path.dirname(managedDsh.runtimeHome), writable)
   }
@@ -412,9 +412,7 @@ export function buildSandboxLauncherArgs(
           ]
         : ["--readable", effectiveHome]
       : []),
-    ...(!botIsolation && devinOriginalConfigRoot(config)
-      ? ["--readable", devinOriginalConfigRoot(config)!]
-      : []),
+    ...(mcpOverlay?.original && !mcpOverlay.private ? ["--readable", mcpOverlay.original] : []),
     ...(taskHome
       ? [
           ...(config.sandboxPolicy?.readableScope === "workspace" ? [] : ["--readable", homedir]),

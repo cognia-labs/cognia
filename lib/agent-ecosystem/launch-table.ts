@@ -41,7 +41,7 @@ function relativePathError(path: string): string | null {
 
 function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
   const at = `launch descriptor "${descriptor.id}"`
-  const { isolation, relocation, temp, companion, env } = descriptor
+  const { isolation, relocation, temp, companion, env, mcpConfigFile } = descriptor
   if (descriptor.match.values.length === 0) errors.push(`${at}: match has no values`)
   const paths: [string, readonly (string | undefined)[] | undefined][] = [
     ["stateRoots", descriptor.stateRoots],
@@ -58,6 +58,9 @@ function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
     ["hiddenFiles.searched", descriptor.hiddenFiles?.searched],
     ["programRoots", descriptor.programRoots],
     ["loginRoots", descriptor.loginRoots],
+    ["mcpConfigFile.rootDefault", [mcpConfigFile?.rootDefault]],
+    ["mcpConfigFile.privateCopy.home", mcpConfigFile?.privateCopy?.map((copy) => copy.home)],
+    ["mcpConfigFile.privateCopy.state", mcpConfigFile?.privateCopy?.map((copy) => copy.state)],
   ]
   for (const [field, list] of paths) {
     for (const path of list ?? []) {
@@ -87,6 +90,7 @@ function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
     ...(companion ? [companion.env] : []),
     ...(env?.keys ?? []),
     ...(env?.privateBlank ?? []),
+    ...(mcpConfigFile ? [mcpConfigFile.rootEnv] : []),
   ]
   for (const key of envKeys) {
     if (!ENV_KEY.test(key) || LOADER_ENV.test(key))
@@ -98,6 +102,25 @@ function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
   }
   if (env?.reviewedRequestOnly && !env.reviewedPrefixes?.length)
     errors.push(`${at}: env.reviewedRequestOnly needs reviewedPrefixes`)
+  if (mcpConfigFile) {
+    const { directory, serversFile, settingsFile, project } = mcpConfigFile
+    for (const name of [
+      directory,
+      serversFile,
+      settingsFile,
+      project.directory,
+      ...project.files,
+    ]) {
+      if (!/^[A-Za-z0-9._-]+$/.test(name) || name === "." || name === "..")
+        errors.push(`${at}: mcpConfigFile name "${name}" is not a file name`)
+    }
+    if (serversFile === settingsFile)
+      errors.push(`${at}: mcpConfigFile writes its servers over its settings file`)
+    for (const dotted of [...mcpConfigFile.privateKeep, ...Object.keys(mcpConfigFile.privateSet)]) {
+      if (dotted.split(".").some((part) => !part))
+        errors.push(`${at}: mcpConfigFile path "${dotted}" has an empty segment`)
+    }
+  }
   for (const name of descriptor.hiddenFiles?.searched ?? []) {
     if (name.includes("/")) errors.push(`${at}: searched file "${name}" is not a file name`)
   }

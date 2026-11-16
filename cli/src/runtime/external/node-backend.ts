@@ -10,7 +10,7 @@ import os from "node:os"
 import readline from "node:readline"
 import { resolveWorkspacePortEnv } from "../workspace-port-env"
 import { deleteGatewayTask, gatewayRuntimeEnvironment, prepareGatewayTask } from "./gateway-task"
-import { devinOwnedConfigRoot, prepareDevinMcpConfig } from "./devin-mcp-config"
+import { mcpConfigOverlayOf, prepareMcpConfigFile } from "./mcp-config-file"
 import {
   admitsRequestEnv,
   privateBlankCredentials,
@@ -695,9 +695,9 @@ export class NodeExternalAgentBackend {
       this.validateDshWritableScope(cwd, config.env)
     }
     const gateway = prepareGatewayTask({ ...config, cwd })
-    let prepared: ReturnType<typeof prepareDevinMcpConfig>
+    let prepared: ReturnType<typeof prepareMcpConfigFile>
     try {
-      prepared = prepareDevinMcpConfig(gateway.config)
+      prepared = prepareMcpConfigFile(gateway.config)
     } catch (error) {
       gateway.cleanup()
       throw error
@@ -747,8 +747,9 @@ export class NodeExternalAgentBackend {
     // this process inherited one.
     delete env[AGENT_STATE_KEY_ENV]
     Object.assign(env, launch.env)
-    const devinConfigRoot = devinOwnedConfigRoot(config)
-    if (devinConfigRoot) env.XDG_CONFIG_HOME = devinConfigRoot
+    // The overlay root is host-resolved, so it is applied after the filter.
+    const mcpOverlay = mcpConfigOverlayOf(config)
+    if (mcpOverlay) env[mcpOverlay.rootEnv] = mcpOverlay.root
     // The launcher child (and the sandboxed exec it starts) resolves the agent
     // binary from PATH, so it must see the SAME enriched search path the
     // readiness probe used — otherwise a binary the probe found in a fallback
@@ -820,7 +821,7 @@ export class NodeExternalAgentBackend {
     child.once("exit", (code, signal) => {
       // A crashed ACP leader can leave MCP descendants alive with its tokens.
       // Reap only this launch's process group before discarding its overlay.
-      if (devinConfigRoot && process.platform !== "win32" && child.pid) {
+      if (mcpOverlay && process.platform !== "win32" && child.pid) {
         try {
           process.kill(-child.pid, "SIGKILL")
         } catch {

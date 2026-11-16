@@ -27,6 +27,24 @@ export const devinAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
     },
     stateRoots: [".config/devin", ".local/share/devin", ".cache/devin"],
     programRoots: [".local/share/devin/cli/_versions"],
+    // Devin takes no MCP servers over ACP; it reads them from its own files.
+    mcpConfigFile: {
+      subcommand: "acp",
+      rootEnv: "XDG_CONFIG_HOME",
+      rootDefault: ".config",
+      directory: "devin",
+      serversFile: "mcp_config.json",
+      settingsFile: "config.json",
+      project: {
+        directory: ".devin",
+        files: ["config.json", "config.local.json", "mcp_config.json", "mcp_config.local.json"],
+      },
+      privateKeep: ["version", "devin.org_id"],
+      privateSet: { "shell.setup_complete": true },
+      privateCopy: [
+        { home: ".local/share/devin/credentials.toml", state: "data/devin/credentials.toml" },
+      ],
+    },
   },
   permissionModes: {
     toNative: (mode) => DEVIN_PERMISSION_MODES[mode] ?? mode,

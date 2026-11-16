@@ -8,12 +8,13 @@ pub mod command_resolver;
 #[cfg(feature = "tauri-host")]
 pub mod commands;
 pub mod container_backend;
-pub mod devin_mcp_config;
 pub mod dsh_runtime;
 pub mod exec_backend;
 pub mod gateway_task;
+pub mod jsonc;
 pub mod kube_backend;
 pub mod launch_descriptor;
+pub mod mcp_config_file;
 pub mod native_bridge;
 pub mod presets;
 pub mod person_workspace;
