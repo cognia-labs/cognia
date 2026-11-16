@@ -32,7 +32,7 @@ const seedSettings = async () => {
 function makeWorkflow(): VisualWorkflow {
   return {
     id: "wf_demo",
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: "Lead intake",
     nodes: [
       {
@@ -45,7 +45,7 @@ function makeWorkflow(): VisualWorkflow {
       {
         id: "n2",
         type: "ai.prompt",
-        typeVersion: 1,
+        typeVersion: 2,
         position: { x: 240, y: 0 },
         data: { label: "Draft reply", params: {} },
       },
