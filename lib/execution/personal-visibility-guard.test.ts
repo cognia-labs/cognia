@@ -71,11 +71,14 @@ const REVIEWED_SITES: Record<string, string> = {
   "hooks/analysis/use-session-report.ts": "listMessages:1",
   "hooks/canvas/use-canvas-suggestions.ts": "generateObject:1",
   "hooks/chat/agent-chat-events.ts": "listMessages:1;resume:sdkSessionId:1",
+  "hooks/chat/agent-chat-external-turn.ts":
+    "listMessages:2;preparePersonalHistory:2;renderTranscript:2;resume:externalSessionId:3",
   "hooks/chat/agent-chat-send-options.ts":
     "convertToModelMessages:1;listMessages:2;preparePersonalHistory:4;renderBranchSeed:1;resume:expectedRuntimeSessionId:3;resume:forkFromSessionId:5;resume:forkedFromSdkSessionId:1;resume:initialConversation:4;resume:resumeSessionId:5;resume:sdkSessionId:9",
+  "hooks/chat/agent-chat-turn-helpers.ts": "preparePersonalHistory:1",
   "hooks/chat/agent-chat-turn-tasks.ts": "prepareOwnerHistory:2",
   "hooks/chat/use-agent-chat-controller.ts":
-    "buildHandoffContext:1;compactSession:1;listMessages:5;prepareHandoffContext:1;preparePersonalDerivedHistory:3;preparePersonalHistory:10;renderTranscript:2;resume:externalSessionId:6;resume:forkFromSessionId:2;resume:forkedFromSdkSessionId:2;resume:initialConversation:1;resume:resumeSessionId:4;resume:sdkSessionId:2;steerSession:1;stored-message-read:1",
+    "buildHandoffContext:1;compactSession:1;listMessages:3;prepareHandoffContext:1;preparePersonalDerivedHistory:3;preparePersonalHistory:7;resume:externalSessionId:3;resume:forkFromSessionId:2;resume:forkedFromSdkSessionId:2;resume:initialConversation:1;resume:resumeSessionId:4;resume:sdkSessionId:2;steerSession:1;stored-message-read:1",
   "hooks/chat/use-composer-ghost-text.ts": "complete:2;prepareOwnerHistory:1",
   "hooks/chat/use-conversation-summary-draft.ts":
     "preparePersonalHistory:1;renderConversationSegments:1",
@@ -579,7 +582,7 @@ it("requires an actual digest comparison before retaining each engine's opaque m
   const engines = [
     "hooks/chat/agent-chat-send-options.ts",
     "lib/ai/agent/execution/sidecar-client.ts",
-    "hooks/chat/use-agent-chat-controller.ts",
+    "hooks/chat/agent-chat-external-turn.ts",
     "cli/src/agent/session-runner.ts",
     "cli/src/agent/external-agent-session.ts",
     "sidecar/src/host/commands/send.ts",
@@ -715,8 +718,13 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "preparePersonalHistory",
     "preparePersonalDerivedHistory",
     "buildPersonalAsideContext",
+  ],
+  "hooks/chat/agent-chat-external-turn.ts": [
+    "preparePersonalHistory",
+    "buildPersonalAsideContext",
     "personalVisibilityDigest",
   ],
+  "hooks/chat/agent-chat-turn-helpers.ts": ["preparePersonalHistory"],
   "lib/ai/agent/execution/sidecar-client.ts": [
     "preparePersonalHistory",
     "assertPersonalVisibilityDigest",

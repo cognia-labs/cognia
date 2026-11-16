@@ -120,12 +120,12 @@
     "count": 3
   },
   {
-    "file": "hooks/chat/use-claude-chat-controller.ts",
+    "file": "hooks/chat/agent-chat-turn-helpers.ts",
     "call": "execute",
     "count": 1
   },
   {
-    "file": "hooks/chat/use-claude-chat-controller.ts",
+    "file": "hooks/chat/use-agent-chat-controller.ts",
     "call": "startSquadRun",
     "count": 1
   },

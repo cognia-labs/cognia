@@ -31,8 +31,8 @@ const cases = {
       ),
   },
   R11controller: {
-    source: "hooks/chat/use-claude-chat-controller.ts",
-    test: "hooks/chat/use-claude-chat.test.ts",
+    source: "hooks/chat/agent-chat-external-turn.ts",
+    test: "hooks/chat/use-agent-chat.test.ts",
     pin: "R11 controller external entry",
     mutate: (source) =>
       replace(
@@ -122,8 +122,8 @@ const cases = {
       ),
   },
   R10chat: {
-    source: "hooks/chat/use-claude-chat-controller.ts",
-    test: "hooks/chat/use-claude-chat-controller.test.ts",
+    source: "hooks/chat/agent-chat-turn-helpers.ts",
+    test: "hooks/chat/agent-chat-turn-helpers.test.ts",
     pin: "R10 external chat dispatch",
     mutate: (source) =>
       replace(

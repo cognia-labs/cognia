@@ -34,10 +34,18 @@ import { externalTokenUsageToUsageInfo } from "@/lib/usage/usage-info"
 import { externalSessionLinkForSession } from "@/stores/agent/agent-runtime-store"
 import { useChatStore, type selectComposerPendingCommandOverrides } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
-import { type SendContent, type SendOptions } from "@cognia/agent-config-types"
-import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"
+import { type SendContent, type SendOptions, type MessageReplyTo } from "@cognia/agent-config-types"
+import {
+  automatedTurnMetadata,
+  type AutomatedTurnProducer,
+} from "@cognia/agent-config-types/automated-turn"
 import { createDiagnostic, type CogniaDiagnostic } from "@cognia/diagnostics"
 import { type UIMessage } from "ai"
+import { type AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
+import { type ChatTemplateRun } from "@/lib/chat/template/run"
+import { type PromptPreambleSummary } from "@/lib/chat/prompt-preamble"
+import { type ContextRef } from "@/lib/chat/mentions/types"
+import { type TurnRoute } from "@/lib/chat/turn-route/types"
 
 /** Plugins receive only the user-authored block following the attachment manifest. */
 /** Reissued turns can reuse only the context captured for their own user row. */
@@ -626,4 +634,136 @@ export function createExternalIdleEventConsumer(
       await cleanupDecisions()
     },
   })
+}
+
+/** Per-call options of the chat send pipeline (`useAgentChat().send` and its lanes). */
+export interface AgentChatSendCallOptions {
+  localAuthorization?: LocalPersonRun
+  /** Host-only preparation ownership, captured by invokeOwnedSend. */
+  onExecutionRunPrepared?: (runId: string) => void
+  /** Skip the optimistic user-message append. Used by `regenerate` so we
+   *  don't duplicate the user turn when re-issuing the SDK request. */
+  sharedRequest?: { messageId: string; queueItemId: string; takeover?: boolean }
+  skipUserAppend?: boolean
+  /** Continue the latest interrupted user turn on the runtime that handled it. */
+  continuationOf?: string
+  /** Stable journal batch identity, reserved before automatic result delivery. */
+  backgroundDelivery?: {
+    id: string
+    onAccepted: () => void
+    personalRunIds?: readonly string[]
+  }
+  /**
+   * An automation, not the person, is sending this turn. Stamped on the
+   * user row as `metadata.automatedTurn` so it never counts as the
+   * person's instruction (ADR-0239). A background delivery is always
+   * `background-result`.
+   */
+  automatedTurn?: AutomatedTurnProducer
+  /** Let approval continuations retain a retry action when dispatch is refused. */
+  throwOnError?: boolean
+  /** Skip Thread-B delegation routing. Set on the built-in fallback
+   *  re-entry so a failed external delegation runs the SDK path without
+   *  re-evaluating (and re-matching) the delegation rules. */
+  bypassDelegation?: boolean
+  /** This turn is the steer queue replaying itself. Like `skipUserAppend`
+   *  it must not append a user message (each queued entry was already
+   *  shown optimistically when typed), but unlike it this IS a genuine
+   *  user turn: it still pauses a self-driving goal/loop, still counts as
+   *  a sent message, and still goes through delegation routing. Kept as
+   *  its own flag rather than reusing `skipUserAppend` precisely so those
+   *  three behaviors don't silently disappear. */
+  steerDrain?: boolean
+  /** Target session — defaults to the focused session. A multi-pane
+   *  composer passes its own session id so each pane sends to itself. */
+  sessionId?: string
+  /** Private Context Workbench snapshot/selection. This is never exposed
+   *  to plugin prompt hooks or persisted as visible message content. */
+  resourceContext?: string
+  /** Provenance for the leading attachment blocks, from
+   *  `buildSendContent`. Lets the optimistic user message render file
+   *  cards (with filenames) instead of raw extracted text. */
+  attachmentManifest?: readonly AttachmentManifestEntry[]
+  /** What this turn was written from, when a template with parameters
+   *  produced it. Persisted on the user message row so the turn can be
+   *  re-run with different values — the sent text has the values
+   *  substituted in and no longer marks which words they were. */
+  templateRun?: ChatTemplateRun | null
+  /** Search sources resolved by the composer before this turn dispatches. */
+  webSearchContext?: SendOptions["webSearchContext"]
+  /** Explicit user choice after a failed interactive setup. Scheduled
+   * runs never expose or honor this bypass. */
+  bypassEnvironmentSetup?: boolean
+  /** Stamp the optimistic USER message into a branch group.
+   *
+   *  Set by `editAndResend`, which keeps the original question as a
+   *  sibling instead of deleting it. Passed explicitly rather than via a
+   *  pending-tag ref (the shape `regenerate` uses) because the message
+   *  being tagged is created right here — a ref would have to survive
+   *  until an SDK event arrives, which is only necessary when the target
+   *  is an assistant message that does not exist yet. */
+  branchTag?: {
+    groupId: string
+    index: number
+    edit?: { messageId: string; previousContent: string }
+  }
+  /** Own this turn's replies by an edit's replacement row that is
+   *  already in the transcript (set by the external-delegation fallback
+   *  when it re-issues an `editAndResend`, alongside `skipUserAppend`).
+   *
+   *  Only the owner half of `branchTag`: the send that appended the row
+   *  already stamped it into its group and selected it. Re-running
+   *  `branchTag` here would stamp and select the fresh user message this
+   *  send builds but never appends, and own the reply by that id — a row
+   *  that does not exist, so the reply shows under every sibling. */
+  branchOwnerId?: string
+  /** Re-issue the thread's last user turn as a new branch (set by
+   *  `regenerate`, alongside `skipUserAppend`).
+   *
+   *  The replies under `anchorId` become siblings in its branch group
+   *  and the reply this turn produces is armed to take the next slot.
+   *  Applied here, past every gate that can refuse the turn before it
+   *  starts, rather than by `regenerate` up front: a tag armed for a turn
+   *  that never runs is consumed by the NEXT turn's first reply. */
+  regenerateBranch?: { anchorId: string }
+  /**
+   * The message this turn answers (ADR-0177 batch 2). Persisted as
+   * `metadata.replyTo` on the user row, and read to the model as one
+   * line ahead of the prompt, so the quoted text never becomes part of
+   * what the user is recorded as having typed.
+   */
+  replyTo?: MessageReplyTo
+  /**
+   * What the context envelope in front of the typed text carries
+   * (`lib/chat/prompt-preamble.ts`). Persisted as
+   * `metadata.promptPreamble` so the bubble can name the references.
+   */
+  promptPreamble?: PromptPreambleSummary
+  /**
+   * The records this turn cites, assembled by the composer from the
+   * chips it sent. Preferred over the store's `citedRefs`, which are
+   * keyed by conversation and so empty for a first message staged in
+   * the new-chat composer. Absent for sends that do not come from a
+   * composer.
+   */
+  citations?: readonly ContextRef[]
+  /** The executor chosen for THIS turn only (ADR-0117 axes).
+   *
+   *  Deliberately not persisted: a sticky override would quietly become
+   *  a session-level switch, leaving nothing on screen to name what the
+   *  conversation is actually bound to. The composer resets after send;
+   *  the durable binding is `ChatSession.squadId`. */
+  compositionOverride?:
+    import("@cognia/agent-config-types/agent-composition").AgentCompositionSelectionV1 | null
+  /**
+   * The runtime this turn is addressed to by its leading `@claude` /
+   * `@codex` / `@<Squad member>` (`lib/chat/turn-route/`).
+   *
+   * Re-resolved here against the stores at commit time: a lane that
+   * cannot run refuses the turn before anything is written, and it NEVER
+   * falls back to the conversation's own runtime. Persisted as
+   * `metadata.turnRoute` on the user row so a regenerate re-runs the turn
+   * where it was addressed. Nothing about the session changes.
+   */
+  turnRoute?: TurnRoute | null
 }

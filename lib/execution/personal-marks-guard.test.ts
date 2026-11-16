@@ -12,9 +12,11 @@ const REVIEWED_WRITES: Record<string, number> = {
   "components/chat/message-parts/async-questions-card.tsx": 1,
   "components/settings/agent-runtime/sdk-session-manager.tsx": 1,
   "hooks/chat/agent-chat-events.ts": 8,
+  "hooks/chat/agent-chat-external-turn.ts": 4,
+  "hooks/chat/agent-chat-turn-helpers.ts": 2,
   "hooks/chat/plan-turn-settle.ts": 1,
   "hooks/chat/router-fusion-chat-turn.ts": 2,
-  "hooks/chat/use-agent-chat-controller.ts": 17,
+  "hooks/chat/use-agent-chat-controller.ts": 11,
   "hooks/chat/use-sessions.ts": 2,
   "lib/agent/composition/verified-fresh-agent.ts": 2,
   "lib/background-tasks/host-delivery-lane.ts": 1,
@@ -178,8 +180,10 @@ it("pins each Host producer and every canonical persistence form to marking", ()
       "toolCallExecutionRunId(sessionId, frame.turnId, frame.attemptId)",
     ],
     "hooks/chat/use-agent-chat-controller.ts": [
-      "bindPersonalMessageRun(assistantId, executionRunId)",
       "bindPersonalMessageRun(userMsg.id, callOptions.backgroundDelivery.personalRunIds)",
+    ],
+    "hooks/chat/agent-chat-external-turn.ts": [
+      "bindPersonalMessageRun(assistantId, executionRunId)",
     ],
     "lib/plugin/api/agent-turn.ts": ["bindPersonalMessageRun(message.id, entry?.id)"],
     "lib/headless/person-agent/index.ts": [
