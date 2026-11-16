@@ -13,6 +13,7 @@ import {
   TRANSCRIPT_SUMMARY_BYTE_LIMIT,
   TRANSCRIPT_SUMMARY_MEDIA_LIMIT,
 } from "@cognia/agent-config-types"
+import { isToolPartType } from "@/lib/chat/agent-flow-grouping"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
 import { assistantAgentKey } from "@/lib/chat/transcript-agents"
 
@@ -205,7 +206,13 @@ function completedTurn(
     userMessages: userMessages.map(preview),
     ...(finalResponseMessage ? { finalResponse: preview(finalResponseMessage) } : {}),
     collapsed: {
-      exists: messages.length > userMessages.length + (finalResponseMessage ? 1 : 0),
+      exists:
+        messages.length > userMessages.length + (finalResponseMessage ? 1 : 0) ||
+        (finalResponseMessage?.parts.some(
+          (part) =>
+            isToolPartType(part.type) && "state" in part && part.state === "output-available"
+        ) ??
+          false),
       messageCount: messages.length,
       trailingCount:
         finalResponseIndex >= 0 ? Math.max(0, messages.length - finalResponseIndex - 1) : 0,

@@ -44,6 +44,50 @@ function text(value: string): StoredMessage["parts"][number] {
 }
 
 describe("transcript projection", () => {
+  it.each(["tool-Read", "dynamic-tool"] as const)(
+    "keeps a two-message turn with a %s result expandable without adding the result to the preview",
+    (type) => {
+      const [turn] = projectTranscriptTimeline({
+        sessionId: "session-1",
+        revision: 1,
+        messages: [
+          message("u1", "user", [text("Read the file")]),
+          message("a2", "assistant", [
+            {
+              type,
+              toolName: "Read",
+              toolCallId: "read-1",
+              state: "output-available",
+              input: { file_path: "result.txt" },
+              output: "Contents of result.txt",
+            },
+            text("I read the file."),
+          ]),
+        ],
+      })
+
+      expect(turn).toMatchObject({
+        kind: "completed-turn",
+        finalResponse: { text: "I read the file." },
+        collapsed: { exists: true, messageCount: 2 },
+      })
+      expect(JSON.stringify(turn)).not.toContain("Contents of result.txt")
+    }
+  )
+
+  it("keeps the detail button unavailable when a short turn has only text and a step marker", () => {
+    const [turn] = projectTranscriptTimeline({
+      sessionId: "session-1",
+      revision: 1,
+      messages: [
+        message("u1", "user", [text("Hello")]),
+        message("a2", "assistant", [{ type: "step-start" }, text("Hi")]),
+      ],
+    })
+
+    expect(turn).toMatchObject({ kind: "completed-turn", collapsed: { exists: false } })
+  })
+
   it("keeps clipped previews expandable and preserves Unicode boundaries", () => {
     const content = "a".repeat(24 * 1024 - 3) + "😀tail"
     const messages = [
