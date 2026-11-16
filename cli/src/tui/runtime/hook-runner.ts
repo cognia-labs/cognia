@@ -25,8 +25,11 @@ import { hasAnyHookGroup } from "../../hooks/resolve-hooks-config"
 import { runHooks } from "../../hooks/run-hooks"
 import type { HookEvent, HooksConfig } from "../../hooks/types"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
-import { buildBuiltinHookGroups, type BuiltinHookOverrides } from "@/lib/claude/hooks/builtin-hooks"
-import { resolveToolProvenance } from "@/lib/claude/hooks/tool-provenance"
+import {
+  buildBuiltinHookGroups,
+  type BuiltinHookOverrides,
+} from "@/lib/ai/agent/execution/hooks/builtin-hooks"
+import { resolveToolProvenance } from "@/lib/ai/agent/execution/hooks/tool-provenance"
 
 export interface HookRunnerDeps {
   /** Cognia config home (`~/.cognia`). */

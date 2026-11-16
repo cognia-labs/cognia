@@ -23,7 +23,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { buildBuiltinHookGroups } from "../../../lib/claude/hooks/builtin-hooks"
+import { buildBuiltinHookGroups } from "../../../lib/ai/agent/execution/hooks/builtin-hooks"
 import { isTrusted } from "../config/trusted-folders"
 import { pluginDiscoveryRoots } from "../plugin/discover-plugins"
 import { readDisabledPlugins } from "../plugin/plugin-state"

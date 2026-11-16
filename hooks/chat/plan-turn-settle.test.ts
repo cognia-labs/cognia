@@ -18,7 +18,7 @@ const handlePlanTurnComplete = jest.fn()
 jest.mock("@/lib/agent/plan/turn-driver", () => ({
   handlePlanTurnComplete: (...args: unknown[]) => handlePlanTurnComplete(...args),
 }))
-jest.mock("@/lib/claude/hooks/lifecycle-firer", () => ({
+jest.mock("@/lib/ai/agent/execution/hooks/lifecycle-firer", () => ({
   defaultLifecycleFirer: { fire: jest.fn() },
 }))
 const commitMessageDeltaMock = jest.fn().mockResolvedValue(undefined)

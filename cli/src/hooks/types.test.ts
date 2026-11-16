@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { HOOK_EVENTS as APP_HOOK_EVENTS } from "@/lib/claude/hooks/event-catalog"
+import { HOOK_EVENTS as APP_HOOK_EVENTS } from "@/lib/ai/agent/execution/hooks/event-catalog"
 import { HOOK_EVENTS, HooksConfigSchema, hookGroupSchema, type HooksConfig } from "./types"
 
 describe("HOOK_EVENTS", () => {

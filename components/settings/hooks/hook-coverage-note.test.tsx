@@ -3,7 +3,7 @@
  */
 
 import { render, screen } from "@testing-library/react"
-import { HOOK_UNCOVERED_SURFACES } from "@/lib/claude/hooks/capabilities"
+import { HOOK_UNCOVERED_SURFACES } from "@/lib/ai/agent/execution/hooks/capabilities"
 import { HookCoverageNote } from "./hook-coverage-note"
 
 jest.mock("next-intl", () => ({

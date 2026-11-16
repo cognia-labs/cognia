@@ -289,7 +289,7 @@ import {
   dispatchUserPromptSubmit as dispatchPluginUserPromptSubmit,
   dispatchOnMessageSend as dispatchPluginMessageSend,
   hasPostToolUseListeners,
-} from "@/lib/claude/adapter-hooks"
+} from "@/lib/plugin/messaging/agent-hook-dispatch"
 import {
   prepareAsideContext,
   ASIDE_REFERENCE_HEADER,

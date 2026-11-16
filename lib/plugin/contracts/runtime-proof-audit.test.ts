@@ -83,7 +83,7 @@ describe("plugin runtime proof audit", () => {
 
   // ADR 0016 P1-9 / W3.4 — dispatch-reachability gate. Every canonical hook
   // must be reachable through a LIVE chain: hooks-system dispatcher → (an
-  // optional `lib/claude/adapter-hooks.ts` wrapper) → a production caller.
+  // optional `lib/plugin/messaging/agent-hook-dispatch.ts` wrapper) → a production caller.
   // The original check green-lit a hook as soon as adapter-hooks.ts called
   // the dispatcher, even when the wrapper itself was dead (the exact bug
   // that left onPreToolUse/onPostToolUse dormant while reporting healthy) —
@@ -91,7 +91,7 @@ describe("plugin runtime proof audit", () => {
   // missing one soft-passed). The chain check below fails on either.
   describe("every canonical hook has a host call site (build-time check)", () => {
     const REPO_ROOT = resolve(__dirname, "../../..")
-    const ADAPTER_HOOKS_FILE = "lib/claude/adapter-hooks.ts"
+    const ADAPTER_HOOKS_FILE = "lib/plugin/messaging/agent-hook-dispatch.ts"
 
     // One shared snapshot of every production source file. Read once — the
     // per-hook checks then run over in-memory strings.
@@ -199,7 +199,7 @@ describe("plugin runtime proof audit", () => {
         if (
           bridges.length &&
           productionSources
-            .get("lib/claude/plugin-hook-ipc.ts")
+            .get("lib/plugin/messaging/agent-hook-ipc.ts")
             ?.includes("resolveHandler(req.pluginId, req.hookId)")
         )
           return bridges[0]

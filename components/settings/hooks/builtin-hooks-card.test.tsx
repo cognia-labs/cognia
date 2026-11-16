@@ -4,7 +4,7 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { BuiltinHooksCard } from "./builtin-hooks-card"
-import { BUILTIN_HOOKS, isBuiltinHookEnabled } from "@/lib/claude/hooks/builtin-hooks"
+import { BUILTIN_HOOKS, isBuiltinHookEnabled } from "@/lib/ai/agent/execution/hooks/builtin-hooks"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>

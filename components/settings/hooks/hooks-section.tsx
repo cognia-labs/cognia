@@ -6,7 +6,7 @@
  * Phase 5 of the ClaudeCode 完整化 plan. Three scopes (User / Project / Local)
  * map onto the three reader/writer pairs in `lib/claude/settings.ts`. Within
  * a scope, the panel groups every `HookEvent` by lifecycle category from the
- * shared `lib/claude/hooks/event-catalog.ts` (the single source of truth shared
+ * shared `lib/ai/agent/execution/hooks/event-catalog.ts` (the single source of truth shared
  * with the chat hook-notice row). Each event hosts a list of `HookGroup` editors.
  *
  * Layout is master–detail: the category-grouped event list is a sticky left
@@ -61,24 +61,24 @@ import {
   writeClaudeLocalSettings,
   type ClaudeSettings,
 } from "@/lib/claude/settings"
-import type { HookEvent, HookGroup, HooksConfig } from "@/lib/claude/hooks"
+import type { HookEvent, HookGroup, HooksConfig } from "@/lib/ai/agent/execution/hooks/types"
 import {
   knownHookRuntimeCapabilities,
   type HookRuntimeCapabilities,
-} from "@/lib/claude/hooks/runtime-capabilities"
+} from "@/lib/ai/agent/execution/hooks/runtime-capabilities"
 import {
   HOOK_EVENTS,
   HOOK_EVENT_CATEGORIES,
   hookEventsByCategory,
   isDormantEvent,
   type HookEventCategory,
-} from "@/lib/claude/hooks/event-catalog"
+} from "@/lib/ai/agent/execution/hooks/event-catalog"
 import { cn } from "@/lib/utils"
 import { HookGroupEditor, validateMatcher } from "./hook-group-editor"
 import { validateHandler } from "./hook-handler-form"
 import { BuiltinHooksCard } from "./builtin-hooks-card"
 import { HookCoverageNote } from "./hook-coverage-note"
-import { hookRuntimeCapability } from "@/lib/claude/hooks/capabilities"
+import { hookRuntimeCapability } from "@/lib/ai/agent/execution/hooks/capabilities"
 import { createLogger } from "@cognia/logging"
 import {
   CLAUDE_CODE_RELATED,

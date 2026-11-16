@@ -26,7 +26,7 @@ import { createDiagnostic } from "@cognia/diagnostics"
 import { toDiagnostic } from "@/lib/diagnostics/to-diagnostic"
 import { getGoalRuntime } from "@/lib/goal/runtime"
 import { handleTurnComplete } from "@/lib/goal/turn-driver"
-import { defaultLifecycleFirer } from "@/lib/claude/hooks/lifecycle-firer"
+import { defaultLifecycleFirer } from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 import { buildGoalJudgeClient } from "@/lib/goal/judge-client"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import { runAutoModeForTool } from "@/lib/ai/agent/execution/permissions/auto-mode-runner"
@@ -116,7 +116,7 @@ import {
   dispatchPreToolUse as dispatchPluginPreToolUse,
   dispatchPostToolUse as dispatchPluginPostToolUse,
   dispatchOnAssistantMessage as dispatchPluginAssistantMessage,
-} from "@/lib/claude/adapter-hooks"
+} from "@/lib/plugin/messaging/agent-hook-dispatch"
 import { isStandaloneChatMode } from "@/lib/runtime/standalone-mode"
 import type {
   ClaudeEvent,

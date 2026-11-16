@@ -17,7 +17,7 @@ const HOST_DISPATCH_BINDINGS: Record<string, string[]> = {
     "bindToolCallRun",
     "prepareTranscriptRuntimeSend",
   ],
-  "lib/claude/plugin-hook-ipc.ts": ["withPluginContentDispatch", "HOST_BACKGROUND"],
+  "lib/plugin/messaging/agent-hook-ipc.ts": ["withPluginContentDispatch", "HOST_BACKGROUND"],
   "lib/plugin/core/invocation-identity.ts": [
     "HOST_BACKGROUND",
     "localAuthorization",
@@ -116,7 +116,7 @@ const HOST_DISPATCH_BINDINGS: Record<string, string[]> = {
     "withPluginCommandExecution",
     "execution ? () => execution : undefined",
   ],
-  "lib/claude/adapter-hooks.ts": [
+  "lib/plugin/messaging/agent-hook-dispatch.ts": [
     "execution?: PersonalCredentialContext",
     "dispatchOnMessageReceive",
     "dispatchPostChatReceive",

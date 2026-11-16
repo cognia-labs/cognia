@@ -2,7 +2,7 @@
 import { EventEmitter } from "node:events"
 
 import { createCliLifecycleFirer } from "./lifecycle-firer"
-import type { AgentHookContext } from "@/lib/claude/hooks/lifecycle-firer"
+import type { AgentHookContext } from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 
 /** A fake child process that records the piped stdin + a scripted close code. */
 function fakeChild(code: number) {

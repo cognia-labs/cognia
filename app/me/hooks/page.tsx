@@ -23,7 +23,7 @@ import { PairedOnly } from "@/components/mobile/me/paired-only"
 import { SubPageShell } from "@/components/mobile/me/sub-page-shell"
 import { Badge } from "@/components/ui/badge"
 import { Item, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item"
-import { BUILTIN_HOOKS } from "@/lib/claude/hooks/builtin-hooks"
+import { BUILTIN_HOOKS } from "@/lib/ai/agent/execution/hooks/builtin-hooks"
 
 function HooksBody() {
   const t = useTranslations("mobile.hooks")

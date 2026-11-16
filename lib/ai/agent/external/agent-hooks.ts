@@ -26,8 +26,8 @@ import type {
   ExternalAgentEvent,
   ExternalAgentPermissionRequestEvent,
 } from "@/types/agent/external-agent"
-import type { HookAgentKind } from "@/lib/claude/hooks"
-import { resolveToolProvenance } from "@/lib/claude/hooks/tool-provenance"
+import type { HookAgentKind } from "@/lib/ai/agent/execution/hooks/types"
+import { resolveToolProvenance } from "@/lib/ai/agent/execution/hooks/tool-provenance"
 import {
   getInstalledExternalAgentHost,
   type InstalledExternalAgentPluginHooks,

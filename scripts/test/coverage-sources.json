@@ -87,7 +87,7 @@
     "!cli/src/tui/**/types.ts",
     "!stores/**/types.ts",
     "!hooks/**/index.ts",
-    "!lib/claude/hooks.ts",
+    "!lib/ai/agent/execution/hooks/types.ts",
     "!lib/data/importers/types.ts",
     "!lib/skills/marketplace-types.ts",
     "!lib/storage/persistence/types.ts",

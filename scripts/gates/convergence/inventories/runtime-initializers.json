@@ -1310,12 +1310,12 @@
       "evidence": "b767f6137e855ab7"
     },
     {
-      "key": "components/providers/plugin-tool-dispatch-provider.tsx#handlePluginHookExec@lib/claude/plugin-hook-ipc.ts",
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#handlePluginHookExec@lib/plugin/messaging/agent-hook-ipc.ts",
       "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
       "symbol": "handlePluginHookExec",
-      "module": "lib/claude/plugin-hook-ipc.ts",
+      "module": "lib/plugin/messaging/agent-hook-ipc.ts",
       "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
-      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:68 (lib/claude/plugin-hook-ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:68 (lib/plugin/messaging/agent-hook-ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
       "evidence": "6c8518dea1249601"
     },
     {

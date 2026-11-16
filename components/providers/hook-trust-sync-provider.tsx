@@ -12,7 +12,7 @@
  */
 
 import { useEffect } from "react"
-import { syncTrustedWorkspacesToRust } from "@/lib/claude/hook-trust-sync"
+import { syncTrustedWorkspacesToRust } from "@/lib/ai/agent/execution/hooks/trust-sync"
 import { syncAllowedRootsToRust } from "@/lib/files/allowed-roots-sync"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useAccountStore } from "@/stores/account/account-store"

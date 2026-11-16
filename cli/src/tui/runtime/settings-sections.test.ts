@@ -6,7 +6,7 @@ import {
 } from "./settings-sections"
 import type { ResolvedConfig } from "../../config/schema"
 import type { BuiltinToolsConfig } from "@cognia/agent-config-types"
-import { BUILTIN_HOOKS } from "@/lib/claude/hooks/builtin-hooks"
+import { BUILTIN_HOOKS } from "@/lib/ai/agent/execution/hooks/builtin-hooks"
 import { BUILTIN_TOOL_CONFIG_KEYS } from "@/lib/settings/builtin-tools"
 import { externalCapabilities } from "./backend-capabilities"
 

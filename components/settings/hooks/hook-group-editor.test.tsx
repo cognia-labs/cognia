@@ -3,7 +3,7 @@
  */
 
 import { fireEvent, render, screen } from "@testing-library/react"
-import type { HookGroup } from "@/lib/claude/hooks"
+import type { HookGroup } from "@/lib/ai/agent/execution/hooks/types"
 import { HookGroupEditor, validateMatcher } from "./hook-group-editor"
 
 jest.mock("next-intl", () => ({

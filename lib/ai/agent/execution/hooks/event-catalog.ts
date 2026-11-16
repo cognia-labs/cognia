@@ -1,7 +1,7 @@
 // Single source of truth for the lifecycle hook events the runtime knows about.
 //
 // Before this module, three lists drifted apart: the `HookEvent` union
-// (`lib/claude/hooks.ts`), the settings panel's local `HOOK_EVENTS` /
+// (`lib/ai/agent/execution/hooks/types.ts`), the settings panel's local `HOOK_EVENTS` /
 // `NO_TRIGGER_EVENTS`, and the chat hook-notice row's `KNOWN_EVENTS` (only 13
 // of 27). The catalog below is the only place events, their lifecycle category,
 // and their dormant status are declared; the settings panel and the chat row
@@ -12,7 +12,7 @@
 // module. i18n labels are looked up by convention by the consumers under the
 // `hooks` namespace (`hooks.events.<EventId>.{label,desc}`, `hooks.categories.*`).
 
-import type { HookEvent } from "@/lib/claude/hooks"
+import type { HookEvent } from "@/lib/ai/agent/execution/hooks/types"
 
 /** Lifecycle grouping used to organise the settings panel. */
 export type HookEventCategory = "tools" | "session" | "permissions" | "tasks" | "lifecycle"

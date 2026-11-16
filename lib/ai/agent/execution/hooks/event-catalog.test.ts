@@ -1,4 +1,4 @@
-import type { HookEvent } from "@/lib/claude/hooks"
+import type { HookEvent } from "@/lib/ai/agent/execution/hooks/types"
 import {
   HOOK_EVENT_CATALOG,
   HOOK_EVENTS,

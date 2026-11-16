@@ -3,7 +3,7 @@
  */
 
 import { fireEvent, render, screen } from "@testing-library/react"
-import type { HookHandler } from "@/lib/claude/hooks"
+import type { HookHandler } from "@/lib/ai/agent/execution/hooks/types"
 import { emptyHandlerForType, HookHandlerForm, validateHandler } from "./hook-handler-form"
 
 jest.mock("next-intl", () => ({

@@ -25,9 +25,9 @@ import {
 } from "@/components/ui/select"
 import { LightCodeEditor } from "@/components/editor/light-code-editor"
 import { cn } from "@/lib/utils"
-import { DORMANT_HOOK_HANDLER_FIELDS } from "@/lib/claude/hooks"
-import type { HookHandler, HookHandlerType } from "@/lib/claude/hooks"
-import { knownHookRuntimeCapabilities } from "@/lib/claude/hooks/runtime-capabilities"
+import { DORMANT_HOOK_HANDLER_FIELDS } from "@/lib/ai/agent/execution/hooks/types"
+import type { HookHandler, HookHandlerType } from "@/lib/ai/agent/execution/hooks/types"
+import { knownHookRuntimeCapabilities } from "@/lib/ai/agent/execution/hooks/runtime-capabilities"
 
 const DEFAULT_HANDLER_TYPES = knownHookRuntimeCapabilities("claude").handlerTypes
 

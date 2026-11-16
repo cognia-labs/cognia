@@ -12,7 +12,7 @@ jest.mock("@/lib/claude/ipc", () => ({
 jest.mock("@/lib/claude/plugin-tool-ipc", () => ({
   handlePluginToolExec: jest.fn(),
 }))
-jest.mock("@/lib/claude/plugin-hook-ipc", () => ({
+jest.mock("@/lib/plugin/messaging/agent-hook-ipc", () => ({
   handlePluginHookExec: jest.fn(),
 }))
 jest.mock("@/lib/claude/protocol-adapter-ipc", () => ({
@@ -43,7 +43,7 @@ import {
   sendProtocolAdapterMessage,
 } from "@/lib/claude/ipc"
 import { handlePluginToolExec } from "@/lib/claude/plugin-tool-ipc"
-import { handlePluginHookExec } from "@/lib/claude/plugin-hook-ipc"
+import { handlePluginHookExec } from "@/lib/plugin/messaging/agent-hook-ipc"
 import { dispatchProtocolAdapterExec } from "@/lib/claude/protocol-adapter-ipc"
 import type { PluginToolExecEvent } from "@cognia/agent-config-types"
 

@@ -3,7 +3,7 @@ import { useState } from "react"
 import { fn } from "storybook/test"
 
 import { HookGroupEditor } from "./hook-group-editor"
-import type { HookGroup } from "@/lib/claude/hooks"
+import type { HookGroup } from "@/lib/ai/agent/execution/hooks/types"
 
 // Controlled editor for a single `HookGroup` (matcher regex + handler list).
 // The stories wrap it in local state so the matcher field and the nested

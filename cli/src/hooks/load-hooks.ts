@@ -7,7 +7,7 @@
  */
 import path from "node:path"
 
-import { isFleetHookHandler } from "@/lib/claude/hooks/fleet-hooks"
+import { isFleetHookHandler } from "@/lib/fleet/claude-code-hooks"
 
 import {
   HOOK_EVENTS,
@@ -92,7 +92,7 @@ export function loadHooks(opts: {
    */
   plugin?: HooksConfig
   /**
-   * Product-bundled built-in hook groups (see `lib/claude/hooks/builtin-hooks`).
+   * Product-bundled built-in hook groups (see `lib/ai/agent/execution/hooks/builtin-hooks`).
    * Merged UNDER the user's own hooks — for each event the cognia then claude
    * groups run first, then the built-in groups, so a user hook can block before
    * a built-in one ever runs.

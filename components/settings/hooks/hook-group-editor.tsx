@@ -6,7 +6,7 @@
  * Phase 5 of the ClaudeCode 完整化 plan. The matcher field is a Claude Code
  * tool-name regex (or `"*"` / pipe-list). Validation is regex-only — pipe
  * lists work too because they're valid regex alternations. An empty matcher
- * means "match all", consistent with `lib/claude/hooks.ts:HookGroup`.
+ * means "match all", consistent with `lib/ai/agent/execution/hooks/types.ts:HookGroup`.
  *
  * `agents` is the orthogonal selector: `matcher` narrows by tool, `agents`
  * narrows by which agent produced the turn. It is a COGNIA EXTENSION — this
@@ -23,9 +23,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card } from "@/components/ui/card"
-import { HOOK_AGENT_KINDS } from "@/lib/claude/hooks"
-import type { HookGroup, HookHandler, HookHandlerType } from "@/lib/claude/hooks"
-import { knownHookRuntimeCapabilities } from "@/lib/claude/hooks/runtime-capabilities"
+import { HOOK_AGENT_KINDS } from "@/lib/ai/agent/execution/hooks/types"
+import type { HookGroup, HookHandler, HookHandlerType } from "@/lib/ai/agent/execution/hooks/types"
+import { knownHookRuntimeCapabilities } from "@/lib/ai/agent/execution/hooks/runtime-capabilities"
 import { emptyHandlerForType, HookHandlerForm } from "./hook-handler-form"
 
 const DEFAULT_HANDLER_TYPES = knownHookRuntimeCapabilities("claude").handlerTypes

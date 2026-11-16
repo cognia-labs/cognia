@@ -4,8 +4,8 @@ import {
   hookDocumentToCanonical,
   type HookIssueSink,
 } from "./hook-dialects"
-import type { HooksConfig } from "@/lib/claude/hooks"
-import { HOOK_EVENTS } from "@/lib/claude/hooks/event-catalog"
+import type { HooksConfig } from "@/lib/ai/agent/execution/hooks/types"
+import { HOOK_EVENTS } from "@/lib/ai/agent/execution/hooks/event-catalog"
 
 const sink = (): HookIssueSink => ({ warnings: [], blocking: [] })
 

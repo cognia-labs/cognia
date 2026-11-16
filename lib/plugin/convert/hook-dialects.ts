@@ -28,8 +28,8 @@
  *   warning: exit code 2 blocking is shared, JSON decisions are not.
  */
 
-import type { HookEvent, HooksConfig } from "@/lib/claude/hooks"
-import { HOOK_EVENTS } from "@/lib/claude/hooks/event-catalog"
+import type { HookEvent, HooksConfig } from "@/lib/ai/agent/execution/hooks/types"
+import { HOOK_EVENTS } from "@/lib/ai/agent/execution/hooks/event-catalog"
 
 export interface HookConversionIssue {
   capability: string

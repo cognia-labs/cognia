@@ -18,7 +18,7 @@
 
 import matter from "gray-matter"
 import { HOOK_DIALECTS, canonicalHooksToDialect, type HookDialect } from "./hook-dialects"
-import type { HooksConfig } from "@/lib/claude/hooks"
+import type { HooksConfig } from "@/lib/ai/agent/execution/hooks/types"
 
 export type ClaudeFamilyEcosystem =
   "claude-code" | "factory-droid" | "qoder" | "codebuddy" | "auggie" | "open-plugins"

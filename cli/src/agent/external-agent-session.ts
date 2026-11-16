@@ -17,7 +17,7 @@ import {
   dispatchStreamEnd,
   dispatchChatError,
   dispatchTokenUsage,
-} from "@/lib/claude/adapter-hooks"
+} from "@/lib/plugin/messaging/agent-hook-dispatch"
 import os from "node:os"
 import path from "node:path"
 import { createHash } from "node:crypto"

@@ -20,7 +20,7 @@ import {
   firePostCallHooks,
   type AgentHookContext,
   type LifecycleHookFirer,
-} from "@/lib/claude/hooks/lifecycle-firer"
+} from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 import { parseProposedPlan } from "./plan-parse"
 import {
   buildLeadReviewPrompt,

@@ -58,7 +58,8 @@ export async function driveInSessionPlanAfterTurn(
     const unregister = getPlanRuntime().registerAbortController(activePlan.id, ac)
     let outcome: Awaited<ReturnType<typeof handlePlanTurnComplete>>
     try {
-      const { defaultLifecycleFirer } = await import("@/lib/claude/hooks/lifecycle-firer")
+      const { defaultLifecycleFirer } =
+        await import("@/lib/ai/agent/execution/hooks/lifecycle-firer")
       outcome = await handlePlanTurnComplete({
         planId: activePlan.id,
         lastResponse: input.lastResponse,

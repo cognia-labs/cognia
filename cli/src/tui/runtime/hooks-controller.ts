@@ -2,7 +2,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { BUILTIN_HOOKS } from "@/lib/claude/hooks/builtin-hooks"
+import { BUILTIN_HOOKS } from "@/lib/ai/agent/execution/hooks/builtin-hooks"
 import { loadHooks, type FileReader } from "../../hooks/load-hooks"
 import { HOOK_EVENTS, HooksConfigSchema, type HookEvent, type HooksConfig } from "../../hooks/types"
 import type { ResolvedConfig } from "../../config/schema"

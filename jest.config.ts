@@ -651,7 +651,7 @@ const globalConfig: Config = {
     "!hooks/**/index.ts",
     // Type-only modules — TS strips them at runtime, so V8 records 0 coverage
     // even though tests assert on the public surface.
-    "!lib/claude/hooks.ts",
+    "!lib/ai/agent/execution/hooks/types.ts",
     "!lib/data/importers/types.ts",
     "!lib/skills/marketplace-types.ts",
     // Pure type/interface modules — TS strips them at runtime, so V8 always

@@ -15,7 +15,7 @@ import {
   stripFleetGroups,
   uninstallFleetHooks,
   withFleetGroups,
-} from "./fleet-hooks"
+} from "./claude-code-hooks"
 
 const invokeMock = jest.fn()
 jest.mock("@tauri-apps/api/core", () => ({

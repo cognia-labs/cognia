@@ -1303,7 +1303,7 @@ const INTERCEPTOR_POINT_DECLARATIONS: Record<
       // can never widen back.
       failurePolicy: "fail-open",
     },
-    binding: "lib/claude/adapter-hooks.ts:dispatchPostToolUse",
+    binding: "lib/plugin/messaging/agent-hook-dispatch.ts:dispatchPostToolUse",
     status: "implemented",
     stability: "experimental",
     introducedIn: "0.9.0",
@@ -1318,7 +1318,7 @@ const INTERCEPTOR_POINT_DECLARATIONS: Record<
       failurePolicy: "require-approval",
     },
     binding:
-      "lib/plugin/interceptors/consumers.ts:decideAgentTurn; lib/claude/plugin-hook-ipc.ts:handlePluginHookExec (AI SDK prepareStep)",
+      "lib/plugin/interceptors/consumers.ts:decideAgentTurn; lib/plugin/messaging/agent-hook-ipc.ts:handlePluginHookExec (AI SDK prepareStep)",
     status: "implemented",
     stability: "experimental",
     introducedIn: "0.9.0",

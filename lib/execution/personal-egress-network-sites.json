@@ -1478,7 +1478,7 @@
       "reason": "Builtin PreToolUse command-auth hook is registered in builtin-hooks; configured hook execution is refused when fenced by runHandler. Its process lifetime is tracked there. Direct standalone script execution is independent operator behavior.",
       "basis": [
         "hooks/builtin/command-auth-gate.mjs#runEnsure>result",
-        "lib/claude/hooks/builtin-hooks.ts#BUILTIN_HOOKS",
+        "lib/ai/agent/execution/hooks/builtin-hooks.ts#BUILTIN_HOOKS",
         "sidecar/src/hooks/handlers/index.ts#runHandler"
       ],
       "entry": "sidecar/src/hooks/handlers/index.ts#runHandler"
@@ -1496,7 +1496,7 @@
       "reason": "Builtin PreToolUse command-auth hook is registered in builtin-hooks; configured hook execution is refused when fenced by runHandler. Its process lifetime is tracked there. Direct standalone script execution is independent operator behavior.",
       "basis": [
         "hooks/builtin/command-auth-gate.mjs#runEnsure>result",
-        "lib/claude/hooks/builtin-hooks.ts#BUILTIN_HOOKS",
+        "lib/ai/agent/execution/hooks/builtin-hooks.ts#BUILTIN_HOOKS",
         "sidecar/src/hooks/handlers/index.ts#runHandler"
       ],
       "entry": "sidecar/src/hooks/handlers/index.ts#runHandler"

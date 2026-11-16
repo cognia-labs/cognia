@@ -7,8 +7,8 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
-import { DORMANT_HOOK_HANDLER_FIELDS, HOOK_AGENT_KINDS, isHookAgentKind } from "./hooks"
-import type { HookAgentKind, HookEvent, HookGroup, HookHandler, HooksConfig } from "./hooks"
+import { DORMANT_HOOK_HANDLER_FIELDS, HOOK_AGENT_KINDS, isHookAgentKind } from "./types"
+import type { HookAgentKind, HookEvent, HookGroup, HookHandler, HooksConfig } from "./types"
 
 describe("hooks types module", () => {
   it("HookHandler accepts a command shape", () => {
@@ -115,7 +115,7 @@ describe("HookAgentKind", () => {
 })
 
 describe("dormant handler fields", () => {
-  const ROOT = join(__dirname, "../..")
+  const ROOT = join(__dirname, "../../../../..")
   const RUNNERS = [
     "sidecar/src/hooks/matcher.ts",
     "crates/cognia-hooks/src/command.rs",

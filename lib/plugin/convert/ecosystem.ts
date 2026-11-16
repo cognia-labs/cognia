@@ -1,8 +1,12 @@
 import { parseMarkdownAgent, serializeMarkdownAgent } from "@/lib/agents/markdown-agents"
 import { MCP_AGENT_ADAPTERS } from "@/lib/mcp/config-adapters"
 import { serializeSkill } from "@/lib/skills/markdown-io"
-import { HOOK_EVENTS } from "@/lib/claude/hooks/event-catalog"
-import { DORMANT_HOOK_HANDLER_FIELDS, type HookGroup, type HooksConfig } from "@/lib/claude/hooks"
+import { HOOK_EVENTS } from "@/lib/ai/agent/execution/hooks/event-catalog"
+import {
+  DORMANT_HOOK_HANDLER_FIELDS,
+  type HookGroup,
+  type HooksConfig,
+} from "@/lib/ai/agent/execution/hooks/types"
 import type { PluginManifest } from "@/types/plugin/plugin"
 import type { PluginMcpServerPresetDef } from "@/types/plugin/plugin-mcp-preset"
 import type { PluginSkillDef } from "@/types/plugin/plugin-skill"

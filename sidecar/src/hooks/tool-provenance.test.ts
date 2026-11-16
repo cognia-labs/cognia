@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { resolveToolProvenance } from "./tool-provenance.ts"
 
-// Mirror of lib/claude/hooks/tool-provenance.test.ts — the sidecar copy cannot
+// Mirror of lib/ai/agent/execution/hooks/tool-provenance.test.ts — the sidecar copy cannot
 // import `@/`, so both copies are pinned by identical shape assertions.
 
 test("resolveToolProvenance: null for absent or empty names", () => {

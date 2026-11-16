@@ -5,7 +5,7 @@
 import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 import { invoke } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
-import { defaultLifecycleFirer } from "@/lib/claude/hooks/lifecycle-firer"
+import { defaultLifecycleFirer } from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 
 /**
  * Fire the `ConfigChange` lifecycle hook after a settings write (ADR-0040

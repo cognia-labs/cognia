@@ -154,11 +154,11 @@ jest.mock("@/lib/db/session-usage", () => ({
 jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: jest.fn(async () => ({ model: "sonnet", systemPrompt: "sys" })),
 }))
-jest.mock("@/lib/claude/adapter-hooks", () => {
+jest.mock("@/lib/plugin/messaging/agent-hook-dispatch", () => {
   // Keep the REAL tool-hook dispatchers (dispatchPreToolUse/dispatchPostToolUse/
   // hasPostToolUseListeners) — the W3.1 tests below drive them through the real
   // hooks-system. Only the prompt/error/usage side channels stay stubbed.
-  const actual = jest.requireActual("@/lib/claude/adapter-hooks")
+  const actual = jest.requireActual("@/lib/plugin/messaging/agent-hook-dispatch")
   return {
     ...actual,
     dispatchUserPromptSubmit: jest.fn(async () => ({ action: "proceed" as const })),

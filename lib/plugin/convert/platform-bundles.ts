@@ -18,7 +18,7 @@
  */
 import matter from "gray-matter"
 import { parseJsonc } from "@/lib/jsonc"
-import type { HooksConfig } from "@/lib/claude/hooks"
+import type { HooksConfig } from "@/lib/ai/agent/execution/hooks/types"
 import {
   HOOK_DIALECTS,
   canonicalHooksToDialect,

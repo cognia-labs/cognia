@@ -18,7 +18,7 @@
 import { useTranslations } from "next-intl"
 import { InfoIcon } from "lucide-react"
 import { Card } from "@/components/ui/card"
-import { HOOK_UNCOVERED_SURFACES } from "@/lib/claude/hooks/capabilities"
+import { HOOK_UNCOVERED_SURFACES } from "@/lib/ai/agent/execution/hooks/capabilities"
 
 export function HookCoverageNote() {
   const t = useTranslations("settings.hooks.coverage")

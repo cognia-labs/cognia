@@ -5,7 +5,7 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { HooksSection } from "./hooks-section"
-import { knownHookRuntimeCapabilities } from "@/lib/claude/hooks/runtime-capabilities"
+import { knownHookRuntimeCapabilities } from "@/lib/ai/agent/execution/hooks/runtime-capabilities"
 
 // The command field renders the shared CodeMirror `LightCodeEditor`, which
 // measures the DOM and crashes under jsdom. Swap it for a plain textarea with

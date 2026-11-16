@@ -1218,7 +1218,7 @@
       ]
     },
     {
-      "key": "lib/claude/plugin-hook-ipc.ts",
+      "key": "lib/plugin/messaging/agent-hook-ipc.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

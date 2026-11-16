@@ -136,14 +136,17 @@ jest.mock("@/lib/runtime/standalone-mode", () => ({
   isStandaloneChatMode: () => mockStandaloneChatMode(),
 }))
 
-jest.mock("@/lib/claude/adapter-hooks", () => ({
-  ...jest.requireActual("@/lib/claude/adapter-hooks"),
+jest.mock("@/lib/plugin/messaging/agent-hook-dispatch", () => ({
+  ...jest.requireActual("@/lib/plugin/messaging/agent-hook-dispatch"),
   dispatchPostChatReceive: jest.fn(async () => ({})),
   dispatchOnAssistantMessage: jest.fn(async (message) => message),
 }))
 
 import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
-import { dispatchPostChatReceive, dispatchOnAssistantMessage } from "@/lib/claude/adapter-hooks"
+import {
+  dispatchPostChatReceive,
+  dispatchOnAssistantMessage,
+} from "@/lib/plugin/messaging/agent-hook-dispatch"
 import { bindToolCallRun } from "@/lib/execution/acting-authority"
 
 it("routes a late native prediction to its requesting session without a transcript write", async () => {
@@ -2145,7 +2148,7 @@ it.each([false, true])(
 )
 
 it("R1: an unclaimed native permission request still reaches the approval UI", async () => {
-  const hooks = await import("@/lib/claude/adapter-hooks")
+  const hooks = await import("@/lib/plugin/messaging/agent-hook-dispatch")
   const pre = jest.spyOn(hooks, "dispatchPreToolUse").mockResolvedValueOnce({ action: "allow" })
   const store = useChatStore.getState()
   store.clear()

@@ -6,7 +6,7 @@ import React from "react"
 import { render, screen, waitFor } from "@testing-library/react"
 
 const syncTrustedWorkspacesToRust = jest.fn()
-jest.mock("@/lib/claude/hook-trust-sync", () => ({
+jest.mock("@/lib/ai/agent/execution/hooks/trust-sync", () => ({
   syncTrustedWorkspacesToRust: () => syncTrustedWorkspacesToRust(),
 }))
 

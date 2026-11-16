@@ -3,8 +3,8 @@
  */
 import { getCliSubagentContext } from "./subagent-dispatch"
 import { createCliContextAssembler } from "./session-context"
-jest.mock("@/lib/claude/adapter-hooks", () => {
-  const actual = jest.requireActual("@/lib/claude/adapter-hooks")
+jest.mock("@/lib/plugin/messaging/agent-hook-dispatch", () => {
+  const actual = jest.requireActual("@/lib/plugin/messaging/agent-hook-dispatch")
   return {
     ...actual,
     ...Object.fromEntries(
@@ -386,7 +386,7 @@ describe("createExternalAgentSession", () => {
   })
 
   it("runs shared prompt and stream hooks around an external turn", async () => {
-    const hooks = jest.requireMock("@/lib/claude/adapter-hooks")
+    const hooks = jest.requireMock("@/lib/plugin/messaging/agent-hook-dispatch")
     const submit = hooks.dispatchUserPromptSubmit.mockResolvedValueOnce({
       action: "modify",
       modifiedPrompt: "hook rewritten prompt",

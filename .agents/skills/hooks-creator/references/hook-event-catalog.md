@@ -2,9 +2,9 @@
 
 The 27 lifecycle events the settings.json runtime knows, where they fire, and
 whether a hook on them can block. Canonical product metadata lives in
-`lib/claude/hooks/event-catalog.ts`; wire types mirror it in
+`lib/ai/agent/execution/hooks/event-catalog.ts`; wire types mirror it in
 `crates/cognia-hooks/src/types.rs`, `cli/src/hooks/types.ts`, and
-`lib/claude/hooks.ts`. Agent-stream classification lives in
+`lib/ai/agent/execution/hooks/types.ts`. Agent-stream classification lives in
 `src-tauri/src/hooks/classify.rs` and `cli/src/hooks/classify.ts`.
 
 **Before wiring a hook, confirm the event fires.** A hook on a dormant event is
@@ -28,7 +28,7 @@ dead code.
 Relevant lifecycle seams also fire for **external agents** (Claude Code, Codex,
 OpenCode) via the
 TS bridge `lib/ai/agent/external/agent-hooks.ts`, and for the **goal judge** and
-**team planning** via `lib/claude/hooks/lifecycle-firer.ts`.
+**team planning** via `lib/ai/agent/execution/hooks/lifecycle-firer.ts`.
 
 ## Fires today — blocking
 
@@ -65,7 +65,7 @@ UI badges them "no trigger source yet". Add a source before relying on them.
 
 ## Built-in hooks shipped today
 
-See the mirrored catalogs in `lib/claude/hooks/builtin-hooks.ts` and
+See the mirrored catalogs in `lib/ai/agent/execution/hooks/builtin-hooks.ts` and
 `crates/cognia-hooks/src/builtin.rs`, plus `hooks/builtin/`:
 
 - `auto-context-loader.mjs` — injects `.cognia/agent-context.md` (SessionStart + UserPromptSubmit; default ON).

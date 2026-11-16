@@ -8,7 +8,7 @@ description: >-
   event (PreToolUse, PostToolUse, UserPromptSubmit, SessionStart/End, Stop,
   PreCompact, InstructionsLoaded, …), gate/deny a tool or prompt, inject context
   into a turn, or "make cognia do X automatically before/after the agent runs".
-  Covers built-in hook scripts under hooks/builtin/, the lib/claude/hooks/
+  Covers built-in hook scripts under hooks/builtin/, the lib/ai/agent/execution/hooks/
   registry, the CLI + Rust runners, and the plugin hook SDK. Use it even when the
   user only says "add a hook", "block edits to X", "auto-load context", or
   "run a check before every tool call" without naming the hook system.
@@ -34,7 +34,7 @@ belongs to a specific plugin reacting to an app event, build a **System-A
 plugin hook**.
 
 Read `references/hook-event-catalog.md` before choosing an event. Confirm it
-against the authoritative metadata in `lib/claude/hooks/event-catalog.ts`; a
+against the authoritative metadata in `lib/ai/agent/execution/hooks/event-catalog.ts`; a
 typed event can still be dormant.
 
 ---
@@ -78,7 +78,7 @@ context so a runaway file can't blow the prompt budget.
 
 Add matching entries to:
 
-- `lib/claude/hooks/builtin-hooks.ts` for the renderer/CLI runtime
+- `lib/ai/agent/execution/hooks/builtin-hooks.ts` for the renderer/CLI runtime
 - `crates/cognia-hooks/src/builtin.rs` for the Rust desktop runtime
 
 The two catalogs are intentionally mirrored; neither is generated from the
@@ -113,14 +113,14 @@ id through `builtinHookOverrides` (id → enabled), so users keep final control.
 
 ### 4. Test it (required — coverage gate ≥90%)
 
-- Add spawn-smoke cases to `lib/claude/hooks/builtin-hooks.test.ts`: run the
+- Add spawn-smoke cases to `lib/ai/agent/execution/hooks/builtin-hooks.test.ts`: run the
   script with `execFileSync(process.execPath, [scriptPath], { input })` and
   assert exit code + stdout/stderr for the allow, block, and inject paths.
 - If you added a registry entry, assert `buildBuiltinHookGroups` emits/omits it
   under the right `overrides`.
 - Extend the Rust tests in `crates/cognia-hooks/src/builtin.rs` so catalog parity,
   defaults, overrides, and command construction stay covered.
-- Run `rtk pnpm test -- lib/claude/hooks/builtin-hooks.test.ts` and
+- Run `rtk pnpm test -- lib/ai/agent/execution/hooks/builtin-hooks.test.ts` and
   `rtk cargo test --manifest-path src-tauri/Cargo.toml hooks::builtin`.
 
 ---

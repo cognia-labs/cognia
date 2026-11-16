@@ -22,7 +22,10 @@ import {
   isPluginHooksEnabled,
   listHookContributors,
 } from "@/lib/plugin/registries/hook-registry"
-import { BLOCKING_HOOK_EVENTS, HOOK_INTERCEPT_PERMISSION } from "@/lib/claude/plugin-hook-ipc"
+import {
+  BLOCKING_HOOK_EVENTS,
+  HOOK_INTERCEPT_PERMISSION,
+} from "@/lib/plugin/messaging/agent-hook-ipc"
 import type { PluginHooksAPI } from "@cognia/plugin-contract/lib/plugin/api/hooks-api"
 export type {
   PluginHookBinding,

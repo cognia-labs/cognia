@@ -43,7 +43,7 @@ import { backendIdentity } from "./backend-identity"
 import { createCliTranslator } from "../i18n"
 import type { BuiltinToolsConfig } from "@cognia/agent-config-types"
 import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
-import { BUILTIN_HOOKS } from "@/lib/claude/hooks/builtin-hooks"
+import { BUILTIN_HOOKS } from "@/lib/ai/agent/execution/hooks/builtin-hooks"
 import { THEME_CHOICES } from "../theme/resolve"
 import { DEFAULT_THEME_NAME } from "../theme/builtins"
 import {

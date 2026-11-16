@@ -1,4 +1,4 @@
-import type { HookEvent, HookHandlerType } from "@/lib/claude/hooks"
+import type { HookEvent, HookHandlerType } from "@/lib/ai/agent/execution/hooks/types"
 import { HOOK_EVENTS } from "./event-catalog"
 
 export const HOOK_CAPABILITY_CONTRACT_VERSION = 1 as const

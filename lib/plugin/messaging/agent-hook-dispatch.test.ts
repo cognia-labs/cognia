@@ -25,7 +25,7 @@ import {
   dispatchPostChatReceive,
   __hasEventListenersForTests,
   __hasListenersForTests,
-} from "./adapter-hooks"
+} from "./agent-hook-dispatch"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
 import { emitSystemBusEvent, SystemEvents } from "@/lib/plugin/messaging/message-bus"

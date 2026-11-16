@@ -16,7 +16,7 @@ import {
   BLOCKING_HOOK_EVENTS,
   HOOK_INTERCEPT_PERMISSION,
   PLUGIN_HOOK_BROADCAST,
-} from "./plugin-hook-ipc"
+} from "./agent-hook-ipc"
 
 const resolveMock = getPluginHookHandler as jest.Mock
 const contributorsMock = listHookContributors as jest.Mock

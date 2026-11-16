@@ -17,7 +17,7 @@ import {
   type PluginToolDispatchBridgeDeps,
 } from "@/lib/claude/plugin-tool-dispatch-bridge"
 import { subscribePluginHookExec, sendPluginHookResponse } from "@/lib/claude/ipc"
-import { handlePluginHookExec } from "@/lib/claude/plugin-hook-ipc"
+import { handlePluginHookExec } from "@/lib/plugin/messaging/agent-hook-ipc"
 import { loggers } from "@cognia/logging"
 import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
 import type { UnlistenFn } from "@tauri-apps/api/event"

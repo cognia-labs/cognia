@@ -1,4 +1,4 @@
-import type { HookEvent, HookHandler } from "@/lib/claude/hooks"
+import type { HookEvent, HookHandler } from "@/lib/ai/agent/execution/hooks/types"
 import { HOOK_EVENTS } from "./event-catalog"
 
 export type HookRuntimeId = "claude-agent-sdk" | "rust-host" | "cli"

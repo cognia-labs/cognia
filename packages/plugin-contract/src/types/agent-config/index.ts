@@ -340,7 +340,7 @@ export type SendOptions = {
    * SDK only fills `agent_id` / `agent_type` inside a Task subagent. Without
    * these two fields a teammate turn is indistinguishable from a chat turn.
    *
-   * `agentKind` is a `HookAgentKind` (`lib/claude/hooks.ts`); typed as a string
+   * `agentKind` is a `HookAgentKind` (`lib/ai/agent/execution/hooks/types.ts`); typed as a string
    * here because this package must stay free of app imports.
    */
   agentKind?: string

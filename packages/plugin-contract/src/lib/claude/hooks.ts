@@ -1,5 +1,5 @@
 /**
- * The plugin contract's share of `lib/claude/hooks.ts`, which re-exports these.
+ * The plugin contract's share of `lib/ai/agent/execution/hooks/types.ts`, which re-exports these.
  */
 /** Claude Agent SDK 0.3.269 lifecycle events. */
 export type HookEvent =

@@ -16,7 +16,7 @@ export interface ToolProvenance {
 
 /**
  * Tool-provenance resolver for lifecycle-hook payloads — sidecar mirror of
- * `lib/claude/hooks/tool-provenance.ts`.
+ * `lib/ai/agent/execution/hooks/tool-provenance.ts`.
  *
  * `tool_provenance` tells a hook script which surface declared the tool being
  * invoked (built-in Cognia set, plugin manifest, external MCP server, or an

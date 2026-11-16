@@ -12,7 +12,7 @@ jest.mock("@/lib/claude/feature-call", () => ({
 }))
 jest.mock("@/lib/claude/plugin-tool-ipc", () => ({ handlePluginToolExec: jest.fn() }))
 jest.mock("@/lib/tauri", () => ({ transport: { subscribe: jest.fn() } }))
-jest.mock("@/lib/claude/adapter-hooks", () => ({
+jest.mock("@/lib/plugin/messaging/agent-hook-dispatch", () => ({
   dispatchPostToolUse: jest.fn(),
   dispatchPreToolUse: jest.fn(async () => ({ action: "allow" })),
 }))
@@ -71,8 +71,8 @@ function setup() {
   }))
   const review = jest.fn(async () => ({ modifiedResult: "reviewed output" }))
   const before = jest.fn<
-    ReturnType<typeof import("@/lib/claude/adapter-hooks").dispatchPreToolUse>,
-    Parameters<typeof import("@/lib/claude/adapter-hooks").dispatchPreToolUse>
+    ReturnType<typeof import("@/lib/plugin/messaging/agent-hook-dispatch").dispatchPreToolUse>,
+    Parameters<typeof import("@/lib/plugin/messaging/agent-hook-dispatch").dispatchPreToolUse>
   >(async () => ({ action: "allow" }))
   const host = createRendererToolHost("chat-1", {
     call,

@@ -102,7 +102,7 @@ jest.mock("../../db/bootstrap", () => ({
 afterAll(async () => {
   await disposeOpenCliDb()
 })
-import { BUILTIN_HOOKS } from "@/lib/claude/hooks/builtin-hooks"
+import { BUILTIN_HOOKS } from "@/lib/ai/agent/execution/hooks/builtin-hooks"
 import * as limitsData from "../runtime/limits-data"
 jest.mock("../runtime/limits-data", () => ({
   ...jest.requireActual("../runtime/limits-data"),

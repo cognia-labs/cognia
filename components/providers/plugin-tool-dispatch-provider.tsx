@@ -64,7 +64,7 @@ export function PluginToolDispatchProvider({ children }: { children: React.React
     void subscribePluginHookExec((req) => {
       // handlePluginHookExec never throws (every failure collapses onto
       // `error`); only the write-back can.
-      void import("@/lib/claude/plugin-hook-ipc")
+      void import("@/lib/plugin/messaging/agent-hook-ipc")
         .then(({ handlePluginHookExec }) => handlePluginHookExec(req))
         .then((outcome) =>
           sendPluginHookResponse({

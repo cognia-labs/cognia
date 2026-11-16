@@ -19,7 +19,7 @@ jest.mock("./step-watchdog", () => ({
 }))
 
 import { getPlan, updatePlan, appendPlanEvent } from "@/lib/db/plans"
-import { defaultLifecycleFirer } from "@/lib/claude/hooks/lifecycle-firer"
+import { defaultLifecycleFirer } from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 import { getPlanRuntime } from "./runtime"
 import { PLAN_RENDERER_BOOT_ID } from "./step-halt"
 import { armPlanStepWatch, disarmPlanStepWatch } from "./step-watchdog"

@@ -2,7 +2,7 @@ import { toolCallEgressRunId } from "@/lib/execution/acting-authority"
 import type { PermissionRequestEvent, SendOptions, ToolHostEvent } from "@cognia/agent-config-types"
 import { callSidecarToolHost, createSidecarFeatureCallClient } from "@/lib/claude/feature-call"
 import { handlePluginToolExec } from "@/lib/claude/plugin-tool-ipc"
-import { dispatchPostToolUse, dispatchPreToolUse } from "@/lib/claude/adapter-hooks"
+import { dispatchPostToolUse, dispatchPreToolUse } from "@/lib/plugin/messaging/agent-hook-dispatch"
 import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import { transport } from "@/lib/tauri"
 import {

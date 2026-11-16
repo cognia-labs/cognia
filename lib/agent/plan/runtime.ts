@@ -744,7 +744,7 @@ class PlanRuntime {
     try {
       const [{ chatPlanStepHooks }, { firePostCallHooks }] = await Promise.all([
         import("./turn-driver"),
-        import("@/lib/claude/hooks/lifecycle-firer"),
+        import("@/lib/ai/agent/execution/hooks/lifecycle-firer"),
       ])
       const hooks = chatPlanStepHooks(plan.id, plan.sessionId)
       if (!hooks.firer || !hooks.hookContext) return

@@ -23,7 +23,7 @@ import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
 import { getGoalRuntime } from "@/lib/goal/runtime"
 import { buildGoalJudgeClient } from "@/lib/goal/judge-client"
 import { handleTurnComplete } from "@/lib/goal/turn-driver"
-import type { LifecycleHookFirer } from "@/lib/claude/hooks/lifecycle-firer"
+import type { LifecycleHookFirer } from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 import { getGoal, getOpenGoalForSession } from "@/lib/db/goals"
 import { getSession } from "@/lib/db/sessions"
 

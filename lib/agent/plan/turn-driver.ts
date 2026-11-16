@@ -22,7 +22,7 @@
  * Lifecycle hooks: this driver had no firer seam at all, unlike its sibling
  * `lib/goal/turn-driver.ts` — so a settings.json hook could not see, augment or
  * gate a plan step even though every other autonomous turn honoured them. Each
- * step is now bracketed through the shared `lib/claude/hooks/lifecycle-firer`
+ * step is now bracketed through the shared `lib/ai/agent/execution/hooks/lifecycle-firer`
  * with `agent_kind: "plan-step"`, so an `agents: "plan-step"` selector scopes to
  * exactly these turns. A blocking hook PAUSES the plan (rather than failing it)
  * so the user can fix the hook and resume.
@@ -45,7 +45,7 @@ import {
   noopLifecycleFirer,
   type AgentHookContext,
   type LifecycleHookFirer,
-} from "@/lib/claude/hooks/lifecycle-firer"
+} from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 import { applyStepStatus, currentInProgressStep, nextRunnableStep } from "./steps"
 import { renderPlanStepMessage } from "./prompts"
 import { emitPlanStatus } from "./notify"

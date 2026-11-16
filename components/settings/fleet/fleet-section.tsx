@@ -10,7 +10,7 @@
  * own section (ADR: Fleet agent-monitor island) so Hooks stays purely about
  * authoring lifecycle hooks — Fleet is monitoring + a desktop overlay + session
  * history, a different mental model. The install toggles still write hook
- * entries via the shared catalog (`lib/claude/hooks/fleet-hooks.ts`) and config
+ * entries via the shared catalog (`lib/fleet/claude-code-hooks.ts`) and config
  * files, so a change here is reflected back through `subscribeClaudeSettings`.
  *
  * Toggles:
@@ -40,7 +40,7 @@ import {
   readFleetHooksStatus,
   uninstallFleetHooks,
   type FleetHooksInstallState,
-} from "@/lib/claude/hooks/fleet-hooks"
+} from "@/lib/fleet/claude-code-hooks"
 import {
   Select,
   SelectContent,

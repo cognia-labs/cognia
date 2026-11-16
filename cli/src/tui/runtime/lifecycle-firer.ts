@@ -1,7 +1,7 @@
 /**
  * CLI lifecycle-hook firer.
  *
- * The renderer/desktop firer (`lib/claude/hooks/lifecycle-firer.ts`) reaches the
+ * The renderer/desktop firer (`lib/ai/agent/execution/hooks/lifecycle-firer.ts`) reaches the
  * Rust System-B runtime through the `run_agent_hook` Tauri bridge. The CLI has
  * no Tauri host, so this adapter fires the same lifecycle events through the
  * CLI's own command-hook runner (`cli/src/hooks/*`) — the loaded `~/.cognia` +
@@ -20,7 +20,7 @@ import path from "node:path"
 import { loadHooks, type FileReader } from "../../hooks/load-hooks"
 import { runHooks } from "../../hooks/run-hooks"
 import { HOOK_EVENTS, type HookEvent, type HooksConfig } from "../../hooks/types"
-import type { LifecycleHookFirer } from "@/lib/claude/hooks/lifecycle-firer"
+import type { LifecycleHookFirer } from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 
 export interface CliLifecycleFirerDeps {
   /** Cognia config home (`~/.cognia`). */

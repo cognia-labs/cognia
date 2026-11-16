@@ -3,7 +3,7 @@ import { useState } from "react"
 import { fn } from "storybook/test"
 
 import { HookHandlerForm } from "./hook-handler-form"
-import type { HookHandler } from "@/lib/claude/hooks"
+import type { HookHandler } from "@/lib/ai/agent/execution/hooks/types"
 
 // Controlled discriminated form for a `HookHandler` — `command` or `webhook`.
 // Switching the type select swaps the field set; the stories keep local state

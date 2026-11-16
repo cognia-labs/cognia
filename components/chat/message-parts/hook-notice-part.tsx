@@ -13,14 +13,14 @@ import { useState, type ComponentType } from "react"
 import { useTranslations } from "next-intl"
 import { FileInputIcon, ShieldXIcon, TriangleAlertIcon, type LucideProps } from "lucide-react"
 import type { UIMessage } from "ai"
-import { isKnownHookEvent } from "@/lib/claude/hooks/event-catalog"
-import type { HookNoticePartData } from "@/lib/claude/hooks"
+import { isKnownHookEvent } from "@/lib/ai/agent/execution/hooks/event-catalog"
+import type { HookNoticePartData } from "@/lib/ai/agent/execution/hooks/types"
 import { ToolRowShell, type ToolDotStatus } from "@/components/chat/message-parts/tool-row"
 import { cn } from "@/lib/utils"
 
-// Canonical home is `lib/claude/hooks.ts`; re-exported here so existing
+// Canonical home is `lib/ai/agent/execution/hooks/types.ts`; re-exported here so existing
 // consumers (message-renderer, tests) keep importing it from the renderer.
-export type { HookNoticePartData } from "@/lib/claude/hooks"
+export type { HookNoticePartData } from "@/lib/ai/agent/execution/hooks/types"
 
 /** True when a message is a synthetic hook-notice marker. */
 export function isHookNoticeMessage(message: UIMessage): boolean {

@@ -39,7 +39,10 @@
  */
 
 import type { LlmClient } from "@/lib/twin/distill/llm"
-import type { AgentHookContext, LifecycleHookFirer } from "@/lib/claude/hooks/lifecycle-firer"
+import type {
+  AgentHookContext,
+  LifecycleHookFirer,
+} from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import type { ExitReason, Goal, GoalStatus } from "@/types/goal"
 import { isTerminalGoalStatus, statusForExit } from "@/types/goal"

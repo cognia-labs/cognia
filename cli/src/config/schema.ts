@@ -1101,7 +1101,7 @@ export const cliConfigFileSchema = z
      * approval prompt. Applies when a session is (re)created. */
     additionalRoots: z.array(z.string().min(1)).optional(),
     /** Per-id enable/disable overrides for the product-bundled built-in hooks
-     * (`lib/claude/hooks/builtin-hooks`). Maps a built-in hook id to whether it
+     * (`lib/ai/agent/execution/hooks/builtin-hooks`). Maps a built-in hook id to whether it
      * runs; absent ids fall back to the hook's `defaultEnabled`. */
     builtinHookOverrides: z.record(z.string(), z.boolean()).optional(),
     /** Reuse other agents' skill dirs (Claude Code `~/.claude/skills` + project

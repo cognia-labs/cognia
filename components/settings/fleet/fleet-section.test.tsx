@@ -33,7 +33,7 @@ const mockHooks = {
   uninstallFleetHooks: jest.fn(),
   readFleetHooksStatus: jest.fn(),
 }
-jest.mock("@/lib/claude/hooks/fleet-hooks", () => ({
+jest.mock("@/lib/fleet/claude-code-hooks", () => ({
   installFleetHooks: () => mockHooks.installFleetHooks(),
   uninstallFleetHooks: () => mockHooks.uninstallFleetHooks(),
   readFleetHooksStatus: () => mockHooks.readFleetHooksStatus(),

@@ -83,7 +83,7 @@ import {
 import { releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
 import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
 import { beginCapturedTurn } from "@/lib/policy/action-review/captured-turns"
-import { dispatchPreToolUse, dispatchPostToolUse } from "@/lib/claude/adapter-hooks"
+import { dispatchPreToolUse, dispatchPostToolUse } from "@/lib/plugin/messaging/agent-hook-dispatch"
 import { mayBeOutboundCall } from "@/lib/policy/risk/outbound-tools"
 import { deepMerge } from "@cognia/a2ui-core/data-model"
 import { resolveStreamedRootId } from "@cognia/a2ui-core/component-tree"

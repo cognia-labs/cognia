@@ -16,7 +16,7 @@
  * monitor off (or Cognia closed) each hook exits 0 in ~10 ms.
  */
 
-import type { HookEvent, HookGroup, HooksConfig } from "@/lib/claude/hooks"
+import type { HookEvent, HookGroup, HooksConfig } from "@/lib/ai/agent/execution/hooks/types"
 import {
   readClaudeUserSettings,
   writeClaudeUserSettings,

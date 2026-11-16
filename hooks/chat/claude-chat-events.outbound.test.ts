@@ -13,8 +13,8 @@ jest.mock("@/lib/policy/action-review/plan-tool-call", () => ({
   planOutboundAsk: (...args: unknown[]) => mockPlanOutboundAsk(...args),
   recordOutboundShadowObservation: (...args: unknown[]) => mockRecordShadow(...args),
 }))
-jest.mock("@/lib/claude/adapter-hooks", () => ({
-  ...jest.requireActual("@/lib/claude/adapter-hooks"),
+jest.mock("@/lib/plugin/messaging/agent-hook-dispatch", () => ({
+  ...jest.requireActual("@/lib/plugin/messaging/agent-hook-dispatch"),
   dispatchPreToolUse: jest.fn(async () => ({ action: "allow" })),
 }))
 jest.mock("@/lib/ai/agent/execution/permissions/auto-mode-runner", () => ({
@@ -30,7 +30,7 @@ import { useChatStore } from "@/stores/chat"
 
 import { handleEvent } from "./claude-chat-events"
 import { bindToolCallRun } from "@/lib/execution/acting-authority"
-import { dispatchPreToolUse } from "@/lib/claude/adapter-hooks"
+import { dispatchPreToolUse } from "@/lib/plugin/messaging/agent-hook-dispatch"
 
 const SEND = "mcp__cognia-plugin-tools__im_broadcast"
 const REVIEW: PendingOutboundReview = {

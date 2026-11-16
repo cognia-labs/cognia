@@ -534,7 +534,7 @@ jest.mock("@/lib/db/execution-runs", () => ({
 const dispatchChatErrorMock = jest.fn()
 const dispatchTokenUsageMock = jest.fn()
 const dispatchPostChatReceiveMock = jest.fn(async () => ({}))
-jest.mock("@/lib/claude/adapter-hooks", () => ({
+jest.mock("@/lib/plugin/messaging/agent-hook-dispatch", () => ({
   dispatchUserPromptSubmit: (...a: unknown[]) => dispatchUserPromptSubmitMock(...(a as [])),
   dispatchChatError: (...a: unknown[]) => dispatchChatErrorMock(...(a as [])),
   dispatchTokenUsage: (...a: unknown[]) => dispatchTokenUsageMock(...(a as [])),
@@ -7826,7 +7826,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("lets a plugin deny a per-call tool but never approve it through a modify", async () => {
-    const preToolUse = jest.requireMock("@/lib/claude/adapter-hooks")
+    const preToolUse = jest.requireMock("@/lib/plugin/messaging/agent-hook-dispatch")
       .dispatchPreToolUse as jest.Mock
     renderHook(() => useClaudeChat())
     await flush()

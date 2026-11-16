@@ -15,10 +15,10 @@ import {
   type EffectiveSettings,
 } from "./settings"
 
-jest.mock("@/lib/claude/hooks/lifecycle-firer", () => ({
+jest.mock("@/lib/ai/agent/execution/hooks/lifecycle-firer", () => ({
   defaultLifecycleFirer: jest.fn(async () => null),
 }))
-import { defaultLifecycleFirer } from "@/lib/claude/hooks/lifecycle-firer"
+import { defaultLifecycleFirer } from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 const mockedFirer = defaultLifecycleFirer as unknown as jest.Mock
 
 const mockedInvoke = invoke as unknown as jest.Mock

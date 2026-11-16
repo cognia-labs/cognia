@@ -13,7 +13,7 @@ const invoke = invokeRaw as jest.Mock
 const isTauri = isTauriRaw as jest.Mock
 const listTrustedWorkspaces = listTrustedWorkspacesRaw as jest.Mock
 
-import { syncTrustedWorkspacesToRust } from "./hook-trust-sync"
+import { syncTrustedWorkspacesToRust } from "./trust-sync"
 
 beforeEach(() => {
   invoke.mockReset()

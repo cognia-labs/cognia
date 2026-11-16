@@ -145,7 +145,7 @@ import type {
 import type { AgentExecutionIdentity } from "@cognia/agent-config-types/agent-execution"
 import type { SessionImAuthority } from "@cognia/plugin-contract/types/connectors/binding"
 import type { Project } from "@/types"
-import { defaultLifecycleFirer } from "@/lib/claude/hooks/lifecycle-firer"
+import { defaultLifecycleFirer } from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
 import type { ConnectorMode } from "@/types/connectors/policy"
 import { type AgentModeConfig } from "@/types/agent/agent-mode"
 import { buildAgentModeSessionUpdate } from "@/lib/agent/mode-session-update"
@@ -516,7 +516,7 @@ export interface BuildOptionsContext {
    * (`HookGroup.agents`). Defaults to `"chat"` — override from the surfaces
    * that resolve options for a non-chat turn (team chat per-member sends).
    */
-  agentKind?: import("@/lib/claude/hooks").HookAgentKind
+  agentKind?: import("@/lib/ai/agent/execution/hooks/types").HookAgentKind
   /** Receives the already-resolved execution spec stamped onto this send. */
   onResolvedExecutionSpec?: (
     spec: import("@cognia/agent-config-types/agent-execution").ResolvedAgentExecutionSpec
@@ -2821,7 +2821,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       agentId: "build-options",
       // Carries the same identity this send was just resolved with, so an
       // `agents`-narrowed InstructionsLoaded hook scopes like the rest.
-      agentKind: opts.agentKind as import("@/lib/claude/hooks").HookAgentKind,
+      agentKind: opts.agentKind as import("@/lib/ai/agent/execution/hooks/types").HookAgentKind,
       sessionId: ctx.session?.id ?? "session",
     },
     { payload: { hasSystemPrompt: Boolean(systemPrompt) } }

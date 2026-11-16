@@ -11,7 +11,7 @@ import {
   mergeBuiltinUnder,
   type BuiltinHookDef,
 } from "./builtin-hooks"
-import type { HooksConfig } from "@/lib/claude/hooks"
+import type { HooksConfig } from "@/lib/ai/agent/execution/hooks/types"
 
 const SCRIPTS_DIR = path.join(process.cwd(), "hooks", "builtin")
 

@@ -70,7 +70,7 @@ const onClaudeMessageMock = jest.fn(async (handler: (evt: ClaudeEvent) => void) 
 
 const preToolUseMock = jest.fn(async () => ({ action: "allow" }))
 const postToolUseMock = jest.fn(async () => ({}))
-jest.mock("@/lib/claude/adapter-hooks", () => ({
+jest.mock("@/lib/plugin/messaging/agent-hook-dispatch", () => ({
   dispatchPreToolUse: (...args: unknown[]) => (preToolUseMock as jest.Mock)(...args),
   dispatchPostToolUse: (...args: unknown[]) => (postToolUseMock as jest.Mock)(...args),
 }))
@@ -5108,8 +5108,9 @@ describe("F1 clean plugin/bot capture provenance", () => {
         await getDb().executionRuns.update(run.id, {
           personalMarks: [{ person: { kind: "local-person" }, source: "F1", markedAt: 1 }],
         })
-      const dispatch =
-        jest.requireActual<typeof import("./adapter-hooks")>("./adapter-hooks").dispatchPreToolUse
+      const dispatch = jest.requireActual<
+        typeof import("@/lib/plugin/messaging/agent-hook-dispatch")
+      >("@/lib/plugin/messaging/agent-hook-dispatch").dispatchPreToolUse
       preToolUseMock.mockImplementation(dispatch as never)
       const approver = jest.fn(async () => ({ decision: "allow" as const }))
       try {

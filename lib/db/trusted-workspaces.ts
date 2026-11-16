@@ -163,7 +163,7 @@ export async function revokeWorkspaceTrust(path: string): Promise<void> {
  * (the sync helper is a no-op on web). Errors are swallowed inside the helper.
  */
 function syncTrustGateToRust(): void {
-  void import("@/lib/claude/hook-trust-sync")
+  void import("@/lib/ai/agent/execution/hooks/trust-sync")
     .then((m) => m.syncTrustedWorkspacesToRust())
     .catch(() => {})
 }

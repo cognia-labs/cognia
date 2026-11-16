@@ -2,7 +2,7 @@
 
 /**
  * BuiltinHooksCard — toggles for the product-bundled built-in hooks
- * (`lib/claude/hooks/builtin-hooks.ts`). The desktop Rust runtime + the CLI
+ * (`lib/ai/agent/execution/hooks/builtin-hooks.ts`). The desktop Rust runtime + the CLI
  * merge these UNDER the user's own hooks; the enable/disable state lives in
  * `builtinHookOverrides` (id → bool) inside `~/.claude/settings.json`, so it is
  * always user-scoped regardless of the per-event editor's scope tab.
@@ -27,7 +27,7 @@ import {
   BUILTIN_HOOKS,
   isBuiltinHookEnabled,
   type BuiltinHookOverrides,
-} from "@/lib/claude/hooks/builtin-hooks"
+} from "@/lib/ai/agent/execution/hooks/builtin-hooks"
 import { createLogger } from "@cognia/logging"
 
 const log = createLogger("settings.hooks.builtin")

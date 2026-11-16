@@ -19,7 +19,7 @@
  * the current shell.
  */
 
-import type { HookEvent, HookGroup, HooksConfig } from "@/lib/claude/hooks"
+import type { HookEvent, HookGroup, HooksConfig } from "@/lib/ai/agent/execution/hooks/types"
 
 /** One bundled hook contribution. */
 export interface BuiltinHookDef {

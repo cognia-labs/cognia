@@ -338,7 +338,7 @@ const BUILTIN_SETTINGS_NAV: NavItem[] = [
     group: "agents",
     icon: RadarIcon,
     // Pinned to the desktop until `lib/tauri/fleet.ts` and
-    // `lib/claude/hooks/fleet-hooks.ts` (raw `invoke`, host-parity Class A)
+    // `lib/fleet/claude-code-hooks.ts` (raw `invoke`, host-parity Class A)
     // move onto the transport seam.
     requires: ["shell"],
     profiles: ["desktop"],

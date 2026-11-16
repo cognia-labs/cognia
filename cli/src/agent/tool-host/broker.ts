@@ -13,7 +13,7 @@
  * tool on a session it no longer belongs to.
  */
 
-import { dispatchPreToolUse, dispatchPostToolUse } from "@/lib/claude/adapter-hooks"
+import { dispatchPreToolUse, dispatchPostToolUse } from "@/lib/plugin/messaging/agent-hook-dispatch"
 import net from "node:net"
 import fs from "node:fs"
 import path from "node:path"
