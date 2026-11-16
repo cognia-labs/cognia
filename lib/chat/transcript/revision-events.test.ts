@@ -5,6 +5,8 @@ import {
   acknowledgeTranscriptRuntime,
   invalidateTranscriptRuntime,
   publishTranscriptRevision,
+  TRANSCRIPT_REVISION_TURN_KEYS_MAX,
+  transcriptTurnKeysOf,
   withTranscriptRuntimeLock,
   createTranscriptRuntimeFence,
 } from "./revision-events"
@@ -312,5 +314,37 @@ describe("publishTranscriptRevision", () => {
       sessionId: "s1",
       revision: 5,
     })
+  })
+})
+
+describe("transcriptTurnKeysOf", () => {
+  it("names explicit turns and the implicit turn a user row anchors", () => {
+    expect(
+      transcriptTurnKeysOf([
+        { id: "u", role: "user" },
+        { id: "a", role: "assistant", turnKey: "t1" },
+        { id: "b", role: "assistant", turnKey: "t1" },
+      ])
+    ).toEqual(["turn:u", "t1"])
+    expect(transcriptTurnKeysOf([], [{ id: "a", role: "assistant", turnKey: "t2" }])).toEqual([
+      "t2",
+    ])
+  })
+
+  it("names nothing when a row's turn is implied by rows the writer does not hold", () => {
+    // An assistant row without a key belongs to whichever user row precedes it.
+    expect(transcriptTurnKeysOf([{ id: "a", role: "assistant" }])).toBeUndefined()
+    // Removing a key-less user row merges the rows after it into the turn before.
+    expect(transcriptTurnKeysOf([], [{ id: "u", role: "user" }])).toBeUndefined()
+    expect(transcriptTurnKeysOf([])).toBeUndefined()
+    expect(
+      transcriptTurnKeysOf(
+        Array.from({ length: TRANSCRIPT_REVISION_TURN_KEYS_MAX + 1 }, (_, index) => ({
+          id: `r${index}`,
+          role: "assistant",
+          turnKey: `t${index}`,
+        }))
+      )
+    ).toBeUndefined()
   })
 })

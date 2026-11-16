@@ -26,18 +26,25 @@ interface ProjectTimelineOptions {
   activeBranchByGroup?: Record<string, string>
 }
 
+/**
+ * Where the next backward page starts: just older than this row. A keyset,
+ * not a row count from the newest edge, so it stays valid while the session
+ * grows at the newest edge (a reply streaming in bumps the revision on every
+ * checkpoint). Earlier cursors were a revision-bound `position`; one of those
+ * reads as stale, and the client re-reads from the newest page.
+ */
 interface TimelineCursorPayload {
   version: typeof TRANSCRIPT_PROTOCOL_VERSION
+  kind: "keyset"
   sessionId: string
-  revision: number
   direction: TranscriptDirection
-  position: number
+  before: { createdAt: number; id: string }
 }
 
+/** A position inside one turn, valid while that turn's version holds. */
 interface TurnDetailCursorPayload {
   version: typeof TRANSCRIPT_PROTOCOL_VERSION
   sessionId: string
-  revision: number
   turnKey: string
   detailRevision: number
   position: number
@@ -176,6 +183,31 @@ function fitSummary(item: TranscriptTimelineItem): TranscriptTimelineItem {
   return item
 }
 
+/**
+ * A completed turn's own version: changes whenever one of its rows is added,
+ * rewritten or removed, and only then. Built from each row's id and the
+ * Host's durable per-write stamp (`syncRevision`, `lib/db/message-sync-revision.ts`),
+ * so a reply streaming into another turn, or a write elsewhere in the session,
+ * leaves it alone. That is what lets a client keep a turn's detail across a
+ * session revision bump. Compared for equality only; a 53-bit FNV-1a pair.
+ */
+export function transcriptTurnVersion(rows: readonly StoredMessage[]): number {
+  let high = 0x811c9dc5
+  let low = 0x01000193 ^ rows.length
+  const mix = (value: string) => {
+    for (let index = 0; index < value.length; index++) {
+      const code = value.charCodeAt(index)
+      high = Math.imul(high ^ code, 0x01000193)
+      low = Math.imul(low ^ code, 0x01000193 ^ 0x5bd1e995)
+    }
+  }
+  for (const row of rows) {
+    const stamp = (row as StoredMessage & { syncRevision?: number }).syncRevision
+    mix(`${row.id}\u0000${typeof stamp === "number" ? stamp : ""}\u0001`)
+  }
+  return (high >>> 0) * 0x200000 + ((low >>> 0) >>> 11)
+}
+
 function completedTurn(
   turnKey: string,
   messages: StoredMessage[],
@@ -195,7 +227,7 @@ function completedTurn(
     itemKey: turnKey,
     turnKey,
     revision,
-    detailRevision: revision,
+    detailRevision: transcriptTurnVersion(messages),
     status: messages.some((message) => message.metadata?.status === "failed")
       ? "failed"
       : "completed",
@@ -302,8 +334,10 @@ function decodeCursor(value: string): unknown {
   return JSON.parse(new TextDecoder().decode(bytes))
 }
 
-export function encodeTimelineCursor(value: Omit<TimelineCursorPayload, "version">): string {
-  return encodeCursor({ version: TRANSCRIPT_PROTOCOL_VERSION, ...value })
+export function encodeTimelineCursor(
+  value: Omit<TimelineCursorPayload, "version" | "kind">
+): string {
+  return encodeCursor({ version: TRANSCRIPT_PROTOCOL_VERSION, kind: "keyset", ...value })
 }
 
 export function encodeTurnDetailCursor(value: Omit<TurnDetailCursorPayload, "version">): string {
@@ -312,24 +346,33 @@ export function encodeTurnDetailCursor(value: Omit<TurnDetailCursorPayload, "ver
 
 export function validateTimelineCursor(
   cursor: string,
-  expected: Pick<TimelineCursorPayload, "sessionId" | "revision" | "direction">
+  expected: Pick<TimelineCursorPayload, "sessionId" | "direction">
 ): CursorValidation<TimelineCursorPayload> {
   try {
-    const value = decodeCursor(cursor) as Partial<TimelineCursorPayload>
+    const value = decodeCursor(cursor) as Partial<TimelineCursorPayload> & { position?: unknown }
+    if (value.version !== TRANSCRIPT_PROTOCOL_VERSION || typeof value.sessionId !== "string") {
+      return { ok: false, code: "INVALID_PARAMS" }
+    }
+    // A position cursor from before keyset paging: the client re-reads from
+    // the newest page instead of failing.
+    if (value.kind === undefined && typeof value.position === "number") {
+      return { ok: false, code: "TRANSCRIPT_STALE" }
+    }
+    const before = value.before
     if (
-      value.version !== TRANSCRIPT_PROTOCOL_VERSION ||
-      typeof value.sessionId !== "string" ||
-      typeof value.revision !== "number" ||
+      value.kind !== "keyset" ||
       (value.direction !== "backward" && value.direction !== "forward") ||
-      typeof value.position !== "number" ||
-      value.position < 0
+      !before ||
+      typeof before.id !== "string" ||
+      before.id.length === 0 ||
+      !Number.isSafeInteger(before.createdAt) ||
+      before.createdAt < 0
     ) {
       return { ok: false, code: "INVALID_PARAMS" }
     }
     if (value.sessionId !== expected.sessionId || value.direction !== expected.direction) {
       return { ok: false, code: "INVALID_PARAMS" }
     }
-    if (value.revision !== expected.revision) return { ok: false, code: "TRANSCRIPT_STALE" }
     return { ok: true, value: value as TimelineCursorPayload }
   } catch {
     return { ok: false, code: "INVALID_PARAMS" }
@@ -338,14 +381,13 @@ export function validateTimelineCursor(
 
 export function validateTurnDetailCursor(
   cursor: string,
-  expected: Pick<TurnDetailCursorPayload, "sessionId" | "revision" | "turnKey" | "detailRevision">
+  expected: Pick<TurnDetailCursorPayload, "sessionId" | "turnKey" | "detailRevision">
 ): CursorValidation<TurnDetailCursorPayload> {
   try {
     const value = decodeCursor(cursor) as Partial<TurnDetailCursorPayload>
     if (
       value.version !== TRANSCRIPT_PROTOCOL_VERSION ||
       typeof value.sessionId !== "string" ||
-      typeof value.revision !== "number" ||
       typeof value.turnKey !== "string" ||
       typeof value.detailRevision !== "number" ||
       typeof value.position !== "number" ||
@@ -355,7 +397,7 @@ export function validateTurnDetailCursor(
     }
     if (value.sessionId !== expected.sessionId) return { ok: false, code: "INVALID_PARAMS" }
     if (value.turnKey !== expected.turnKey) return { ok: false, code: "TURN_NOT_FOUND" }
-    if (value.revision !== expected.revision || value.detailRevision !== expected.detailRevision) {
+    if (value.detailRevision !== expected.detailRevision) {
       return { ok: false, code: "TRANSCRIPT_STALE" }
     }
     return { ok: true, value: value as TurnDetailCursorPayload }

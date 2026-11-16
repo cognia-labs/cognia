@@ -16,6 +16,7 @@ import {
 } from "@cognia/agent-config-types"
 import type { Transport } from "@/lib/tauri/transport-types"
 
+import { TRANSCRIPT_REVISION_TURN_KEYS_MAX } from "./revision-events"
 import {
   isTranscriptLiveFrame,
   TRANSCRIPT_LIVE_TOPIC,
@@ -26,7 +27,14 @@ export interface TranscriptSource {
   capabilities(): Promise<TranscriptCapabilitiesV1>
   timeline(request: SessionTimelineRequest): Promise<SessionTimelinePage>
   turnMessages(request: SessionTurnMessagesRequest): Promise<SessionTurnMessagesPage>
-  subscribeRevision?(sessionId: string, listener: (revision: number) => void): () => void
+  /**
+   * `turnKeys` names the turns the bump changed, when the Host could name
+   * them; without it every loaded turn may have changed.
+   */
+  subscribeRevision?(
+    sessionId: string,
+    listener: (revision: number, turnKeys?: readonly string[]) => void
+  ): () => void
   /** A member agent's in-flight reply, as the Host relays it (`live-frames.ts`). */
   subscribeLive?(sessionId: string, listener: (frame: TranscriptLiveFrame) => void): () => void
 }
@@ -78,11 +86,20 @@ export function createRemoteTranscriptSource(
     capabilities,
     subscribeRevision(sessionId, listener) {
       const listen = () =>
-        current().subscribe<{ sessionId?: string; revision?: number }>(
+        current().subscribe<{ sessionId?: string; revision?: number; turnKeys?: unknown }>(
           "transcript://revision",
           (event) => {
             if (event.sessionId !== sessionId || typeof event.revision !== "number") return
-            listener(event.revision)
+            // A list the client cannot trust whole is no list: it means
+            // "anything may have changed", never "only these".
+            const turnKeys =
+              Array.isArray(event.turnKeys) &&
+              event.turnKeys.length > 0 &&
+              event.turnKeys.length <= TRANSCRIPT_REVISION_TURN_KEYS_MAX &&
+              event.turnKeys.every((key) => typeof key === "string" && key.length > 0)
+                ? (event.turnKeys as string[])
+                : undefined
+            listener(event.revision, turnKeys)
           }
         )
       let unsubscribe = listen()

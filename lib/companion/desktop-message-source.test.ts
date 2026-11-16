@@ -696,6 +696,46 @@ describe("persistIncomingMessage", () => {
   })
 })
 
+/**
+ * The `[sessionId+createdAt]` index as the keyset reader uses it, over rows
+ * already in descending order: `between` bounds the newest timestamp,
+ * `filter` drops the cursor row's ties, `limit` reads a chunk.
+ */
+function keysetCollection(
+  rowsDescending: Array<{ createdAt: number; id: string }>,
+  reads?: number[]
+) {
+  const make = (keep: (row: { createdAt: number; id: string }) => boolean) => ({
+    between: (_lower: unknown, upper: [string, number]) =>
+      make((row) => row.createdAt <= upper[1] && keep(row)),
+    reverse: () => make(keep),
+    filter: (predicate: (row: { createdAt: number; id: string }) => boolean) =>
+      make((row) => keep(row) && predicate(row)),
+    limit: (count: number) => ({
+      toArray: async () => {
+        const page = rowsDescending.filter(keep).slice(0, count)
+        reads?.push(page.length)
+        return page
+      },
+    }),
+  })
+  return make(() => true)
+}
+
+/** A completed turn's version as the Host's timeline reports it to `pairedReader`. */
+async function versionOf(
+  turnKey: string,
+  sessionId = "s1",
+  pairedReader?: unknown
+): Promise<number> {
+  const page = await readTranscriptTimeline({ sessionId, limit: 100, pairedReader })
+  const item = page.items.find(
+    (entry) => entry.kind === "completed-turn" && entry.turnKey === turnKey
+  )
+  if (!item || item.kind !== "completed-turn") throw new Error(`no completed turn ${turnKey}`)
+  return item.detailRevision
+}
+
 describe("transcript bridge projections", () => {
   beforeEach(async () => {
     __resetInstalledForTests()
@@ -803,34 +843,24 @@ describe("transcript bridge projections", () => {
       createdAt: index + 1,
     })).reverse()
     // Keep the cap check deterministic without fake-indexeddb's expensive
-    // reverse cursor emulation. Smaller tests above exercise actual DB order.
+    // reverse cursor emulation. Smaller tests above exercise actual DB order;
+    // this mock only has to honour the keyset bound the reader asks for.
     const reads: number[] = []
-    const collection = {
-      between: () => collection,
-      reverse: () => collection,
-      offset: (offset: number) => ({
-        first: async () => rows[offset],
-        limit: (limit: number) => ({
-          toArray: async () => {
-            const page = rows.slice(offset, offset + limit)
-            reads.push(page.length)
-            return page
-          },
-        }),
-      }),
-    }
-    const query = jest.spyOn(getDb().messages, "where").mockReturnValue(collection as never)
+    const query = jest
+      .spyOn(getDb().messages, "where")
+      .mockReturnValue(keysetCollection(rows, reads) as never)
     try {
       const page = await readTranscriptTimeline({ sessionId: "s1", limit: 2 })
       expect(page.items).toHaveLength(1)
       expect(page.items[0]).toMatchObject({ itemKey: "newest", collapsed: { messageCount: 2 } })
       expect(page.hasMore).toBe(true)
-      expect(reads).toEqual(Array(10).fill(200))
+      // Ten scan chunks, then one row to learn whether anything is older.
+      expect(reads).toEqual([...Array(10).fill(200), 1])
       reads.length = 0
       await expect(
         readTranscriptTimeline({ sessionId: "s1", cursor: page.nextCursor })
       ).rejects.toMatchObject({ code: "INVALID_PARAMS" })
-      expect(reads).toEqual(Array(10).fill(200))
+      expect(reads).toEqual([...Array(10).fill(200), 1])
     } finally {
       query.mockRestore()
     }
@@ -844,15 +874,9 @@ describe("transcript bridge projections", () => {
       parts: [],
       createdAt: index + 1,
     })).reverse()
-    const collection = {
-      between: () => collection,
-      reverse: () => collection,
-      offset: (offset: number) => ({
-        first: async () => rows[offset],
-        limit: (limit: number) => ({ toArray: async () => rows.slice(offset, offset + limit) }),
-      }),
-    }
-    const query = jest.spyOn(getDb().messages, "where").mockReturnValue(collection as never)
+    const query = jest
+      .spyOn(getDb().messages, "where")
+      .mockReturnValue(keysetCollection(rows) as never)
     try {
       const seen: string[] = []
       let cursor: string | undefined
@@ -979,7 +1003,7 @@ describe("transcript bridge projections", () => {
       sessionId: "s1",
       turnKey: "turn:u1",
       revision: 4,
-      detailRevision: 4,
+      detailRevision: await versionOf("turn:u1"),
     })
 
     expect(page.messages.map((message) => message.id)).toEqual(["u1", "a1"])
@@ -997,7 +1021,7 @@ describe("transcript bridge projections", () => {
       sessionId: "s1",
       turnKey: "turn:b-user",
       revision: 4,
-      detailRevision: 4,
+      detailRevision: await versionOf("turn:b-user"),
     })
     expect(page.messages.map((message) => message.id)).toEqual(["b-user", "c-answer"])
   })
@@ -1012,6 +1036,7 @@ describe("transcript bridge projections", () => {
         createdAt: index + 1,
       })) as never[]
     )
+    const detailRevision = await versionOf("turn:message-0")
     const read = jest.fn((message) => message)
     getDb().messages.hook("reading", read)
     try {
@@ -1019,7 +1044,7 @@ describe("transcript bridge projections", () => {
         sessionId: "s1",
         turnKey: "turn:message-0",
         revision: 4,
-        detailRevision: 4,
+        detailRevision,
       })
       expect(page.messages.map((message) => message.id)).toEqual(["message-0", "message-1"])
       expect(read).toHaveBeenCalledTimes(3)
@@ -1028,15 +1053,52 @@ describe("transcript bridge projections", () => {
     }
   })
 
-  it("rejects detail reads from a stale session revision", async () => {
+  it("rejects a detail read once its own turn has changed", async () => {
+    await getDb().messages.bulkPut([
+      { id: "u1", sessionId: "s1", turnKey: "t1", role: "user", parts: [], createdAt: 1 },
+      { id: "a1", sessionId: "s1", turnKey: "t1", role: "assistant", parts: [], createdAt: 2 },
+    ] as never[])
+    const detailRevision = await versionOf("t1")
+    await getDb().messages.update("a1", { parts: [{ type: "text", text: "edited" }] } as never)
+    await expect(
+      readTranscriptTurnMessages({ sessionId: "s1", turnKey: "t1", revision: 4, detailRevision })
+    ).rejects.toMatchObject({ code: "TRANSCRIPT_STALE" })
+    await getDb().messages.delete("a1")
     await expect(
       readTranscriptTurnMessages({
         sessionId: "s1",
-        turnKey: "turn:u1",
-        revision: 3,
-        detailRevision: 3,
+        turnKey: "t1",
+        revision: 4,
+        detailRevision: await versionOf("t1"),
       })
-    ).rejects.toMatchObject({ code: "TRANSCRIPT_STALE" })
+    ).resolves.toMatchObject({ messages: [{ id: "u1" }] })
+  })
+
+  // A reply streaming into the newest turn bumps the session revision on
+  // every checkpoint. An older turn's detail, and its cursor, stay readable.
+  it("keeps an older turn's detail and cursor valid while another turn grows", async () => {
+    await getDb().messages.bulkPut(
+      Array.from({ length: 3 }, (_, index) => ({
+        id: `old-${index}`,
+        sessionId: "s1",
+        turnKey: "old",
+        role: index === 0 ? "user" : "assistant",
+        parts: [],
+        createdAt: index + 1,
+      })) as never[]
+    )
+    const detailRevision = await versionOf("old")
+    const request = { sessionId: "s1", turnKey: "old", revision: 4, detailRevision, limit: 2 }
+    const first = await readTranscriptTurnMessages(request)
+    await getDb().messages.bulkPut([
+      { id: "new-u", sessionId: "s1", turnKey: "new", role: "user", parts: [], createdAt: 10 },
+      { id: "new-a", sessionId: "s1", turnKey: "new", role: "assistant", parts: [], createdAt: 11 },
+    ] as never[])
+    await getDb().sessions.update("s1", { transcriptRevision: 9 } as never)
+    const second = await readTranscriptTurnMessages({ ...request, cursor: first.nextCursor })
+    expect(second.messages.map((message) => message.id)).toEqual(["old-2"])
+    expect(second.revision).toBe(9)
+    expect(second.detailRevision).toBe(detailRevision)
   })
 
   it.each([
@@ -1088,8 +1150,14 @@ describe("transcript bridge projections", () => {
         },
       })
       try {
+        // A turn-detail read names the turn's own version, as a client takes
+        // it from the timeline item.
+        const request =
+          event === "session-turn-messages" && !fails
+            ? { ...payload, detailRevision: await versionOf("explicit") }
+            : payload
         handlers[`companion://${event}-request`]({
-          payload: { requestId: "round-trip", ...payload },
+          payload: { requestId: "round-trip", ...request },
         })
         await expect(response).resolves.toMatchObject({
           requestId: "round-trip",
@@ -1117,7 +1185,7 @@ describe("transcript bridge projections", () => {
       sessionId: "s1",
       turnKey: "explicit",
       revision: 4,
-      detailRevision: 4,
+      detailRevision: await versionOf("explicit"),
       limit: 2,
     }
     const first = await readTranscriptTurnMessages(request)
@@ -1152,7 +1220,7 @@ describe("transcript bridge projections", () => {
       sessionId: "s1",
       turnKey: "large",
       revision: 4,
-      detailRevision: 4,
+      detailRevision: await versionOf("large"),
     })
     expect(page.messages).toHaveLength(1)
     expect(page.hasMore).toBe(true)
@@ -1164,7 +1232,7 @@ describe("transcript bridge projections", () => {
         sessionId: "s1",
         turnKey: "large",
         revision: 4,
-        detailRevision: 4,
+        detailRevision: await versionOf("large"),
       })
     ).rejects.toMatchObject({ code: "INVALID_PARAMS" })
   })
@@ -1223,7 +1291,7 @@ describe("transcript bridge projections", () => {
       turnKey: "turn:user",
       pairedReader: "owner",
       revision: 4,
-      detailRevision: 4,
+      detailRevision: await versionOf("turn:user"),
     })
     expect(page.messages.map((message) => message.id)).toEqual(["user", "answer"])
     // A shared room's author record names who wrote the question.
@@ -1680,7 +1748,7 @@ it("sanitizes provenance in paired-device message pages and turn details", async
     sessionId: "cloud-owner",
     turnKey: "turn:cloud-user",
     revision: 4,
-    detailRevision: 4,
+    detailRevision: await versionOf("turn:cloud-user", "cloud-owner"),
   })
   for (const row of [page.rows[0], turn.messages[0]]) {
     expect(row.parts[0]).toHaveProperty("remoteDocument", cloudProvenance)
@@ -1754,7 +1822,7 @@ it("keeps owner marked messages and derived titles across paired pages and timel
     pairedReader: "owner",
     turnKey: "turn:private-turn",
     revision: 1,
-    detailRevision: 1,
+    detailRevision: await versionOf("turn:private-turn", "private-paired", "owner"),
   })
   const sessions = await readSessionPage(200, 0, undefined, "owner")
   expect(JSON.stringify(sessions)).toContain("secret title")
@@ -1795,7 +1863,9 @@ it("withholds member and missing-role reads across every paired transcript proje
         pairedReader,
         turnKey: "turn:private-turn",
         revision: 1,
-        detailRevision: 1,
+        // Taken from this reader's own, withheld timeline: the version is the
+        // stored turn's, so the detail read it names is not refused as stale.
+        detailRevision: await versionOf("turn:private-turn", "private-paired", pairedReader),
       }),
       await readSessionPage(200, 0, undefined, pairedReader),
     ]

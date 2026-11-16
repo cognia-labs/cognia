@@ -1027,4 +1027,163 @@ describe("TranscriptController", () => {
     expect(source.timeline).toHaveBeenCalledWith({ sessionId: "s1", direction: "backward" })
     expect(controller.getSnapshot()).toMatchObject({ revision: 2, error: null })
   })
+
+  describe("notices that name their turns", () => {
+    function turn(key: string, startedAt: number, detailRevision = 1, revision = 1) {
+      return {
+        ...completedItem(revision),
+        itemKey: key,
+        turnKey: key,
+        detailRevision,
+        startedAt,
+        userMessages: [{ id: key, role: "user" as const, text: key, createdAt: startedAt }],
+      }
+    }
+    function detail(key: string, detailRevision: number): SessionTurnMessagesPage {
+      return {
+        messages: [{ id: `${key}-m`, sessionId: "s1", role: "assistant", parts: [], createdAt: 1 }],
+        revision: 1,
+        detailRevision,
+        total: 1,
+        approximateBytes: 100,
+        hasMore: false,
+      }
+    }
+    function harness() {
+      let notify!: (revision: number, turnKeys?: readonly string[]) => void
+      const timeline = jest.fn()
+      const turnMessages = jest.fn(async ({ turnKey, detailRevision }) =>
+        detail(turnKey as string, detailRevision as number)
+      )
+      const controller = new TranscriptController("s1", {
+        capabilities: async () => transcriptCapabilitiesV1(),
+        timeline,
+        turnMessages,
+        subscribeRevision: (_id, listener) => {
+          notify = listener
+          return () => {}
+        },
+      })
+      controller.start()
+      return {
+        controller,
+        timeline,
+        turnMessages,
+        notify: (...args: Parameters<typeof notify>) => notify(...args),
+      }
+    }
+
+    // A reply streaming into the newest turn bumps the revision on every
+    // checkpoint. Each bump reads one page; older history and the details of
+    // other expanded turns stay as they are.
+    it("reads only the newest page and reloads only the named expanded turn", async () => {
+      const { controller, timeline, turnMessages, notify } = harness()
+      timeline
+        .mockResolvedValueOnce(
+          page({ items: [turn("t2", 20), turn("t3", 30)], hasMore: true, nextCursor: "c-older" })
+        )
+        .mockResolvedValueOnce(page({ items: [turn("t1", 10)], hasMore: false }))
+      await controller.loadInitial()
+      await controller.loadOlder()
+      await controller.expandTurn("t1", 1, 1)
+      await controller.expandTurn("t3", 1, 1)
+      expect(turnMessages).toHaveBeenCalledTimes(2)
+      timeline.mockClear()
+      turnMessages.mockClear()
+
+      timeline.mockResolvedValueOnce(
+        page({
+          revision: 2,
+          items: [turn("t2", 20, 1, 2), turn("t3", 30, 7, 2)],
+          hasMore: true,
+          nextCursor: "c-newer",
+        })
+      )
+      notify(2, ["t3"])
+      await flushRequests()
+
+      expect(timeline).toHaveBeenCalledTimes(1)
+      expect(timeline).toHaveBeenCalledWith({ sessionId: "s1", direction: "backward" })
+      expect(controller.getSnapshot().items.map((item) => item.itemKey)).toEqual(["t1", "t2", "t3"])
+      expect(controller.getSnapshot()).toMatchObject({
+        revision: 2,
+        hasMore: false,
+        loading: false,
+      })
+      // t3 changed: reloaded at its new version. t1 kept its cached detail.
+      expect(turnMessages).toHaveBeenCalledTimes(1)
+      expect(turnMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ turnKey: "t3", detailRevision: 7 })
+      )
+      expect(controller.getDetail("t1")).toMatchObject({ detailRevision: 1 })
+      expect(controller.getDetail("t3")).toMatchObject({ detailRevision: 7 })
+      expect(controller.getSnapshot().expandedTurnKeys).toEqual(new Set(["t1", "t3"]))
+    })
+
+    it("reloads a turn whose version moved even when the notice did not name it", async () => {
+      const { controller, timeline, turnMessages, notify } = harness()
+      timeline.mockResolvedValueOnce(page({ items: [turn("t1", 10), turn("t2", 20)] }))
+      await controller.loadInitial()
+      await controller.expandTurn("t1", 1, 1)
+      turnMessages.mockClear()
+      timeline.mockResolvedValueOnce(
+        page({ revision: 2, items: [turn("t1", 10, 3, 2), turn("t2", 20, 1, 2)] })
+      )
+      notify(2, ["t2"])
+      await flushRequests()
+      expect(turnMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ turnKey: "t1", detailRevision: 3 })
+      )
+    })
+
+    it.each([
+      ["a named turn is loaded but older than the newest page", ["t1"], true],
+      ["the newest page does not reach what is loaded", ["t9"], false],
+    ])("re-reads the whole window when %s", async (_case, named, overlaps) => {
+      const { controller, timeline, notify } = harness()
+      timeline
+        .mockResolvedValueOnce(
+          page({ items: [turn("t2", 20), turn("t3", 30)], hasMore: true, nextCursor: "c-older" })
+        )
+        .mockResolvedValueOnce(page({ items: [turn("t1", 10)], hasMore: false }))
+      await controller.loadInitial()
+      await controller.loadOlder()
+      timeline.mockClear()
+      const newest = overlaps
+        ? [turn("t3", 30, 1, 2)]
+        : [turn("t8", 80, 1, 2), turn("t9", 90, 1, 2)]
+      timeline
+        .mockResolvedValueOnce(
+          page({ revision: 2, items: newest, hasMore: true, nextCursor: "n1" })
+        )
+        .mockResolvedValueOnce(
+          page({ revision: 2, items: [turn("t1", 10, 1, 2), turn("t2", 20, 1, 2), ...newest] })
+        )
+      notify(2, named)
+      await flushRequests()
+      // The newest page, then a whole re-read back to the oldest loaded item.
+      expect(timeline.mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(controller.getSnapshot().items.map((item) => item.itemKey)).toEqual([
+        "t1",
+        "t2",
+        ...newest.map((item) => item.itemKey),
+      ])
+      expect(controller.getSnapshot()).toMatchObject({ revision: 2, error: null })
+    })
+
+    it("re-reads the whole window for a notice that names no turns", async () => {
+      const { controller, timeline, turnMessages, notify } = harness()
+      timeline.mockResolvedValueOnce(page({ items: [turn("t1", 10), turn("t2", 20)] }))
+      await controller.loadInitial()
+      await controller.expandTurn("t1", 1, 1)
+      turnMessages.mockClear()
+      timeline.mockResolvedValueOnce(
+        page({ revision: 2, items: [turn("t1", 10, 1, 2), turn("t2", 20, 1, 2)] })
+      )
+      notify(2)
+      await flushRequests()
+      // The cache is cleared and the expanded turn reloads, as before.
+      expect(turnMessages).toHaveBeenCalledWith(expect.objectContaining({ turnKey: "t1" }))
+    })
+  })
 })

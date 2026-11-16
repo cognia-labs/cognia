@@ -45,6 +45,34 @@ function staleTranscript(): Error {
   })
 }
 
+function turnKeyOf(item: TranscriptTimelineItem): string | undefined {
+  return item.kind === "system" ? undefined : item.turnKey
+}
+
+/**
+ * Splice a freshly read newest page onto the history already loaded, when
+ * that is provably the same as re-reading the whole window: the page reaches
+ * back into what is loaded (its oldest item is one we hold), and every turn
+ * the notice named is either in the page or not loaded at all. Returns
+ * `undefined` otherwise, and the caller re-reads the window.
+ */
+function spliceNewestPage(
+  loaded: TranscriptTimelineItem[],
+  page: SessionTimelinePage,
+  named: ReadonlySet<string>
+): TranscriptTimelineItem[] | undefined {
+  if (!page.hasMore) return page.items
+  const oldestNew = page.items[0]
+  if (!oldestNew) return undefined
+  const overlap = loaded.findIndex((item) => item.itemKey === oldestNew.itemKey)
+  if (overlap < 0) return undefined
+  const inPage = new Set(page.items.flatMap((item) => turnKeyOf(item) ?? []))
+  for (const key of named) {
+    if (!inPage.has(key) && loaded.some((item) => turnKeyOf(item) === key)) return undefined
+  }
+  return prependPage(loaded.slice(0, overlap), page.items)
+}
+
 /** Pages are already in host order; timestamps alone cannot order tied rows. */
 function prependPage(older: TranscriptTimelineItem[], newer: TranscriptTimelineItem[]) {
   const seen = new Set(newer.map((item) => item.itemKey))
@@ -68,6 +96,13 @@ export class TranscriptController {
   private generation = 0
   private readEpoch = 0
   private requestedRevision = 0
+  /**
+   * What the notices since the last refresh started said changed: the turns
+   * they named, or `full` once any of them could not name its turns (or a
+   * caller asked for a whole reload).
+   */
+  private pendingTurnKeys = new Set<string>()
+  private pendingFull = true
   private refreshPromise: Promise<void> | undefined
   private readonly detailRequests = new Map<string, Promise<void>>()
   private readonly detailReadVersions = new Map<string, number>()
@@ -102,12 +137,17 @@ export class TranscriptController {
   start = (): void => {
     if (this.started) return
     this.started = true
-    this.unsubscribeRevision = this.source.subscribeRevision?.(this.sessionId, (revision) => {
-      if (!Number.isSafeInteger(revision) || revision < 0) return
-      if (this.snapshot.revision !== null && revision <= this.snapshot.revision) return
-      this.requestedRevision = Math.max(this.requestedRevision, revision)
-      void this.loadInitial()
-    })
+    this.unsubscribeRevision = this.source.subscribeRevision?.(
+      this.sessionId,
+      (revision, turnKeys) => {
+        if (!Number.isSafeInteger(revision) || revision < 0) return
+        if (this.snapshot.revision !== null && revision <= this.snapshot.revision) return
+        if (turnKeys) for (const key of turnKeys) this.pendingTurnKeys.add(key)
+        else this.pendingFull = true
+        this.requestedRevision = Math.max(this.requestedRevision, revision)
+        void this.scheduleRefresh()
+      }
+    )
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -121,13 +161,37 @@ export class TranscriptController {
     return this.detailCache.get(this.cacheKey(turnKey))
   }
 
+  /** Re-read the whole visible window (first load, retry, recovery). */
   loadInitial(): Promise<void> {
+    this.pendingFull = true
+    return this.scheduleRefresh()
+  }
+
+  /**
+   * One refresh at a time; notices that arrive meanwhile are folded into a
+   * single follow-up. A refresh that only has named turns to account for
+   * leaves every other turn's detail read and cache entry alone.
+   */
+  private scheduleRefresh(): Promise<void> {
     if (this.refreshPromise) return this.refreshPromise
     const generation = this.generation
-    const epoch = ++this.readEpoch
-    this.detailReadVersions.clear()
-    this.update({ loadingTurnKeys: new Set() })
-    const request = Promise.resolve().then(() => this.refresh(generation, epoch))
+    const full =
+      this.pendingFull ||
+      this.snapshot.mode !== "timeline" ||
+      this.snapshot.error !== null ||
+      this.snapshot.items.length === 0
+    const named = this.pendingTurnKeys
+    this.pendingTurnKeys = new Set()
+    this.pendingFull = false
+    let epoch = this.readEpoch
+    if (full) {
+      epoch = ++this.readEpoch
+      this.detailReadVersions.clear()
+      this.update({ loadingTurnKeys: new Set() })
+    }
+    const request = Promise.resolve().then(() =>
+      full ? this.refresh(generation, epoch) : this.refreshNewest(generation, epoch, named)
+    )
     this.refreshPromise = request
     void request.finally(() => {
       if (this.refreshPromise !== request) return
@@ -135,11 +199,105 @@ export class TranscriptController {
       if (
         this.snapshot.mode === "timeline" &&
         !this.snapshot.error &&
-        this.requestedRevision > (this.snapshot.revision ?? 0)
+        (this.pendingFull || this.requestedRevision > (this.snapshot.revision ?? 0))
       )
-        void this.loadInitial()
+        void this.scheduleRefresh()
     })
     return request
+  }
+
+  /**
+   * A notice that named its turns: read the newest page only and splice it
+   * on. Older loaded items keep their place and the cursor that pages beyond
+   * them; expanded turns reload only when they changed. Anything this cannot
+   * prove equivalent to a whole re-read falls back to one.
+   */
+  private async refreshNewest(
+    generation: number,
+    epoch: number,
+    named: ReadonlySet<string>
+  ): Promise<void> {
+    if (generation !== this.generation) return
+    try {
+      for (;;) {
+        const requestedAtStart = this.requestedRevision
+        const page = await this.source.timeline({
+          sessionId: this.sessionId,
+          direction: "backward",
+        })
+        if (generation !== this.generation || epoch !== this.readEpoch) return
+        if (page.revision < this.requestedRevision && this.requestedRevision > requestedAtStart)
+          continue
+        const items =
+          page.revision >= requestedAtStart
+            ? spliceNewestPage(this.snapshot.items, page, named)
+            : undefined
+        if (!items) return this.refreshWhole(generation)
+        const previous = new Map(this.snapshot.items.map((item) => [item.itemKey, item] as const))
+        const changed = new Set(named)
+        for (const item of page.items) {
+          const before = previous.get(item.itemKey)
+          const key = turnKeyOf(item)
+          if (!key) continue
+          if (
+            !before ||
+            before.kind !== item.kind ||
+            (before.kind === "completed-turn" &&
+              item.kind === "completed-turn" &&
+              before.detailRevision !== item.detailRevision)
+          )
+            changed.add(key)
+        }
+        const completed = new Map(
+          items.flatMap((item) =>
+            item.kind === "completed-turn" ? [[item.turnKey, item] as const] : []
+          )
+        )
+        const expandedTurnKeys = new Set(
+          [...this.snapshot.expandedTurnKeys].filter((key) => completed.has(key))
+        )
+        const loadingTurnKeys = new Set(this.snapshot.loadingTurnKeys)
+        for (const key of changed) {
+          // The cached detail and any read in flight belong to the old version.
+          this.detailReadVersions.delete(key)
+          this.detailCache.delete(this.cacheKey(key))
+          this.detailWindows.delete(key)
+          loadingTurnKeys.delete(key)
+        }
+        if (!page.hasMore) this.nextCursor = undefined
+        this.update({
+          mode: "timeline",
+          items,
+          // Not `page.revision`: a notice at or below it that this read did
+          // not account for (one naming an older turn, still in flight) must
+          // not be dropped as already seen.
+          revision: Math.max(this.snapshot.revision ?? 0, requestedAtStart),
+          loading: false,
+          hasMore: page.hasMore ? this.snapshot.hasMore : false,
+          expandedTurnKeys,
+          loadingTurnKeys,
+          error: null,
+        })
+        for (const key of changed) {
+          const item = completed.get(key)
+          if (item && expandedTurnKeys.has(key))
+            void this.loadTurn(key, item.revision, item.detailRevision, false)
+        }
+        return
+      }
+    } catch (error) {
+      if (generation !== this.generation) return
+      if (errorCode(error) === "TRANSCRIPT_STALE") return this.refreshWhole(generation)
+      this.update({ loading: false, error })
+    }
+  }
+
+  /** Fall back from a newest-page refresh to a whole re-read, in place. */
+  private refreshWhole(generation: number): Promise<void> {
+    const epoch = ++this.readEpoch
+    this.detailReadVersions.clear()
+    this.update({ loadingTurnKeys: new Set() })
+    return this.refresh(generation, epoch)
   }
 
   private async refresh(generation: number, epoch: number): Promise<void> {
@@ -216,6 +374,12 @@ export class TranscriptController {
           loadingTurnKeys: new Set(),
           error: null,
         })
+        // A whole re-read at or past every revision announced so far already
+        // shows what those notices (and a reload asked for meanwhile) meant.
+        if (page.revision >= this.requestedRevision) {
+          this.pendingFull = false
+          this.pendingTurnKeys.clear()
+        }
         for (const item of page.items) {
           if (item.kind === "completed-turn" && expandedTurnKeys.has(item.turnKey)) {
             void this.loadTurn(item.turnKey, item.revision, item.detailRevision, false)
@@ -252,14 +416,24 @@ export class TranscriptController {
         cursor: this.nextCursor,
       })
       if (epoch !== this.readEpoch) return
-      if (page.revision !== revision) throw staleTranscript()
+      // A Host that went backwards (a reset database) cannot extend this view.
+      if (revision !== null && page.revision < revision) throw staleTranscript()
+      // The Host refuses a cursor it can no longer honour (TRANSCRIPT_STALE,
+      // handled below), so an older page may come back at a newer session
+      // revision: keyset cursors outlive revision bumps. The snapshot keeps
+      // its own revision; the newer one is a change this view has not shown
+      // yet, so it gets a newest-page refresh even if its notice was lost.
       this.nextCursor = page.nextCursor
       this.update({
         items: prependPage(page.items, this.snapshot.items),
-        revision: page.revision,
+        revision: this.snapshot.revision ?? revision,
         loadingOlder: false,
         hasMore: page.hasMore,
       })
+      if (page.revision > (this.snapshot.revision ?? 0)) {
+        this.requestedRevision = Math.max(this.requestedRevision, page.revision)
+        void this.scheduleRefresh()
+      }
     } catch (error) {
       if (epoch !== this.readEpoch) return
       if (errorCode(error) === "TRANSCRIPT_STALE") {
@@ -364,8 +538,9 @@ export class TranscriptController {
           ...(cursor ? { cursor } : {}),
         })
         if (!isCurrent()) return
-        if (page.revision !== revision || page.detailRevision !== detailRevision)
-          throw staleTranscript()
+        // A turn's detail is versioned by the turn, not the session: another
+        // turn streaming moves `page.revision` without touching this one.
+        if (page.detailRevision !== detailRevision) throw staleTranscript()
         if (!Number.isSafeInteger(page.approximateBytes) || page.approximateBytes < 0) {
           throw new Error("transcript detail page has an invalid byte size")
         }
@@ -467,6 +642,8 @@ export class TranscriptController {
     this.detailReadVersions.clear()
     this.detailWindows.clear()
     this.requestedRevision = 0
+    this.pendingTurnKeys = new Set()
+    this.pendingFull = true
     this.unsubscribeRevision?.()
     this.unsubscribeRevision = undefined
     this.started = false

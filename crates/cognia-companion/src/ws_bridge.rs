@@ -1593,13 +1593,22 @@ fn route_respond(state: &SharedState, command: &str, payload: Value) {
 
 const TRANSCRIPT_REVISION_TOPIC: &str = "transcript://revision";
 
+/// Most turn keys one revision frame may name (`TRANSCRIPT_REVISION_TURN_KEYS_MAX`
+/// in `lib/chat/transcript/revision-events.ts`).
+const TRANSCRIPT_REVISION_TURN_KEYS_MAX: usize = 16;
+/// A turn key is an explicit key or `turn:<message id>`: an id, never text.
+const TRANSCRIPT_REVISION_TURN_KEY_MAX_BYTES: usize = 256;
+
 /// The only fields a brain-published `transcript://revision` frame may carry.
 ///
 /// The channel is documented as content-free (`event_channels.rs`), and this
 /// keeps it so whatever the brain sends: a session id and a revision number,
-/// plus the runtime generation and database name a destructive invalidation
-/// names. Anything else is dropped; a frame without a session id or revision
-/// is refused.
+/// the keys of the turns that changed, plus the runtime generation and
+/// database name a destructive invalidation names. Anything else is dropped; a
+/// frame without a session id or revision is refused. A malformed or oversized
+/// `turnKeys` is dropped rather than trimmed: a partial list would tell a
+/// client that turns it omits are unchanged, while no list makes it re-read
+/// every turn it holds.
 fn transcript_revision_envelope(event: &Value) -> Option<Value> {
     let session_id = event
         .get("sessionId")
@@ -1609,6 +1618,26 @@ fn transcript_revision_envelope(event: &Value) -> Option<Value> {
     let mut envelope = serde_json::Map::new();
     envelope.insert("sessionId".into(), Value::String(session_id.to_string()));
     envelope.insert("revision".into(), Value::from(revision));
+    if let Some(Value::Array(keys)) = event.get("turnKeys") {
+        let named: Vec<&str> = keys.iter().filter_map(Value::as_str).collect();
+        let well_formed = !named.is_empty()
+            && named.len() == keys.len()
+            && named.len() <= TRANSCRIPT_REVISION_TURN_KEYS_MAX
+            && named
+                .iter()
+                .all(|key| !key.is_empty() && key.len() <= TRANSCRIPT_REVISION_TURN_KEY_MAX_BYTES);
+        if well_formed {
+            envelope.insert(
+                "turnKeys".into(),
+                Value::Array(
+                    named
+                        .into_iter()
+                        .map(|key| Value::String(key.to_string()))
+                        .collect(),
+                ),
+            );
+        }
+    }
     for key in ["runtimeGeneration", "databaseName"] {
         if let Some(value) = event.get(key).and_then(Value::as_str) {
             envelope.insert(key.into(), Value::String(value.to_string()));
@@ -3153,6 +3182,29 @@ mod tests {
                 assert_eq!(frame.payload, json!({ "sessionId": "s1", "revision": 4 }));
             }
             _ => panic!("replay from seq 0 must be available in-test"),
+        }
+        // The changed turns' keys ride along; a malformed list is dropped whole.
+        for (turn_keys, expected) in [
+            (json!(["t1", "turn:m2"]), Some(json!(["t1", "turn:m2"]))),
+            (json!(["t1", 7]), None),
+            (json!([]), None),
+            (
+                json!(["x".repeat(TRANSCRIPT_REVISION_TURN_KEY_MAX_BYTES + 1)]),
+                None,
+            ),
+            (
+                json!((0..=TRANSCRIPT_REVISION_TURN_KEYS_MAX)
+                    .map(|i| format!("t{i}"))
+                    .collect::<Vec<_>>()),
+                None,
+            ),
+            (json!("t1"), None),
+        ] {
+            let payload = transcript_revision_envelope(
+                &json!({ "sessionId": "s1", "revision": 5, "turnKeys": turn_keys }),
+            )
+            .expect("identity fields present");
+            assert_eq!(payload.get("turnKeys"), expected.as_ref(), "{turn_keys}");
         }
         route_respond(
             &state,

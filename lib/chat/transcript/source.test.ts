@@ -18,7 +18,38 @@ describe("remote transcript source", () => {
     handler?.({ sessionId: "s2", revision: 3 })
     handler?.({ sessionId: "s1", revision: 4 })
 
-    expect(listener).toHaveBeenCalledWith(4)
+    expect(listener).toHaveBeenCalledWith(4, undefined)
+  })
+
+  // Named turns let the controller reload only those; a list it cannot
+  // trust whole must read as "anything may have changed".
+  it("passes on a well-formed turn-key list and drops a malformed one whole", () => {
+    let handler: ((event: unknown) => void) | undefined
+    const listener = jest.fn()
+    const source = createRemoteTranscriptSource({
+      call: jest.fn(),
+      subscribe: jest.fn((_event, next) => {
+        handler = next as typeof handler
+        return jest.fn()
+      }),
+    } as never)
+    source.subscribeRevision?.("s1", listener)
+
+    handler?.({ sessionId: "s1", revision: 5, turnKeys: ["t1", "turn:m2"] })
+    handler?.({ sessionId: "s1", revision: 6, turnKeys: ["t1", 7] })
+    handler?.({ sessionId: "s1", revision: 7, turnKeys: [] })
+    handler?.({
+      sessionId: "s1",
+      revision: 8,
+      turnKeys: Array.from({ length: 17 }, (_, i) => `t${i}`),
+    })
+
+    expect(listener.mock.calls).toEqual([
+      [5, ["t1", "turn:m2"]],
+      [6, undefined],
+      [7, undefined],
+      [8, undefined],
+    ])
   })
 
   it("p6e passes on only well-formed live reply frames of the observed session", () => {
@@ -94,7 +125,7 @@ describe("remote transcript source", () => {
     ).resolves.toMatchObject({ revision: 2 })
     expect(host.call).toHaveBeenCalledWith("session_timeline", expect.anything())
     hostRevision?.({ sessionId: "s1", revision: 2 })
-    expect(listener).toHaveBeenCalledWith(2)
+    expect(listener).toHaveBeenCalledWith(2, undefined)
 
     unsubscribe?.()
     expect(unsubscribeHost).toHaveBeenCalled()

@@ -14,6 +14,7 @@ import {
   encodeTimelineCursor,
   encodeTurnDetailCursor,
   projectTranscriptTimeline,
+  transcriptTurnVersion,
   validateTimelineCursor,
   validateTurnDetailCursor,
 } from "./projection"
@@ -398,58 +399,54 @@ describe("transcript projection", () => {
 })
 
 describe("transcript cursors", () => {
-  it("round-trips an opaque timeline cursor bound to session, direction, and revision", () => {
+  it("round-trips an opaque keyset timeline cursor that survives revision bumps", () => {
     const cursor = encodeTimelineCursor({
       sessionId: "session-1",
-      revision: 11,
       direction: "backward",
-      position: 30,
+      before: { createdAt: 30, id: "m-30" },
     })
 
     expect(cursor).not.toContain("session-1")
     expect(
-      validateTimelineCursor(cursor, {
-        sessionId: "session-1",
-        revision: 11,
-        direction: "backward",
-      })
+      validateTimelineCursor(cursor, { sessionId: "session-1", direction: "backward" })
     ).toEqual({
       ok: true,
       value: {
+        version: 1,
+        kind: "keyset",
+        sessionId: "session-1",
+        direction: "backward",
+        before: { createdAt: 30, id: "m-30" },
+      },
+    })
+    expect(
+      validateTimelineCursor(cursor, { sessionId: "session-2", direction: "backward" })
+    ).toEqual({ ok: false, code: "INVALID_PARAMS" })
+    expect(
+      validateTimelineCursor("not a cursor", { sessionId: "session-1", direction: "backward" })
+    ).toEqual({ ok: false, code: "INVALID_PARAMS" })
+  })
+
+  // A client may still hold a cursor a Host issued before keyset paging. It
+  // reads as stale, which the client answers by re-reading the newest page.
+  it("reads a pre-keyset position cursor as stale, not malformed", () => {
+    const legacy = btoa(
+      JSON.stringify({
         version: 1,
         sessionId: "session-1",
         revision: 11,
         direction: "backward",
         position: 30,
-      },
-    })
-    expect(
-      validateTimelineCursor(cursor, {
-        sessionId: "session-1",
-        revision: 12,
-        direction: "backward",
       })
+    ).replace(/=+$/u, "")
+    expect(
+      validateTimelineCursor(legacy, { sessionId: "session-1", direction: "backward" })
     ).toEqual({ ok: false, code: "TRANSCRIPT_STALE" })
-    expect(
-      validateTimelineCursor(cursor, {
-        sessionId: "session-2",
-        revision: 11,
-        direction: "backward",
-      })
-    ).toEqual({ ok: false, code: "INVALID_PARAMS" })
-    expect(
-      validateTimelineCursor("not a cursor", {
-        sessionId: "session-1",
-        revision: 11,
-        direction: "backward",
-      })
-    ).toEqual({ ok: false, code: "INVALID_PARAMS" })
   })
 
-  it("binds detail cursors to turn and detail revisions", () => {
+  it("binds detail cursors to the turn and its own version only", () => {
     const cursor = encodeTurnDetailCursor({
       sessionId: "session-1",
-      revision: 5,
       turnKey: "turn:u1",
       detailRevision: 3,
       position: 100,
@@ -458,7 +455,6 @@ describe("transcript cursors", () => {
     expect(
       validateTurnDetailCursor(cursor, {
         sessionId: "session-1",
-        revision: 5,
         turnKey: "turn:u1",
         detailRevision: 3,
       })
@@ -466,7 +462,6 @@ describe("transcript cursors", () => {
     expect(
       validateTurnDetailCursor(cursor, {
         sessionId: "session-1",
-        revision: 5,
         turnKey: "turn:u1",
         detailRevision: 4,
       })
@@ -474,10 +469,49 @@ describe("transcript cursors", () => {
     expect(
       validateTurnDetailCursor(cursor, {
         sessionId: "session-1",
-        revision: 5,
         turnKey: "turn:u2",
         detailRevision: 3,
       })
     ).toEqual({ ok: false, code: "TURN_NOT_FOUND" })
+  })
+})
+
+describe("transcriptTurnVersion", () => {
+  const row = (id: string, syncRevision?: number) =>
+    ({
+      id,
+      sessionId: "s",
+      role: "assistant",
+      parts: [],
+      createdAt: 1,
+      ...(syncRevision === undefined ? {} : { syncRevision }),
+    }) as unknown as StoredMessage
+
+  it("is a safe integer that changes on an added, rewritten or removed row only", () => {
+    const base = transcriptTurnVersion([row("u", 1), row("a", 2), row("b", 3)])
+    expect(Number.isSafeInteger(base)).toBe(true)
+    expect(base).toBeGreaterThanOrEqual(0)
+    expect(transcriptTurnVersion([row("u", 1), row("a", 2), row("b", 3)])).toBe(base)
+    // Rewritten: the Host stamps a new syncRevision on every write.
+    expect(transcriptTurnVersion([row("u", 1), row("a", 9), row("b", 3)])).not.toBe(base)
+    // Removed, including a row that is not the newest.
+    expect(transcriptTurnVersion([row("u", 1), row("b", 3)])).not.toBe(base)
+    // Added.
+    expect(transcriptTurnVersion([row("u", 1), row("a", 2), row("b", 3), row("c", 4)])).not.toBe(
+      base
+    )
+    // Rows written before the stamp existed still version by identity.
+    expect(transcriptTurnVersion([row("u"), row("a")])).not.toBe(transcriptTurnVersion([row("u")]))
+  })
+
+  it("is what a completed turn reports as its detailRevision, independent of the session", () => {
+    const messages = [
+      { ...row("u", 1), role: "user", turnKey: "t1" },
+      { ...row("a", 2), turnKey: "t1" },
+    ] as StoredMessage[]
+    const at = (revision: number) =>
+      projectTranscriptTimeline({ sessionId: "s", revision, messages })[0]
+    expect(at(4)).toMatchObject({ revision: 4, detailRevision: transcriptTurnVersion(messages) })
+    expect(at(9)).toMatchObject({ revision: 9, detailRevision: transcriptTurnVersion(messages) })
   })
 })

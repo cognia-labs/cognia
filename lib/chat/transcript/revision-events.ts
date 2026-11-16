@@ -245,21 +245,68 @@ export async function acknowledgeTranscriptRuntime(
 
 export const TRANSCRIPT_REVISION_EVENT = "transcript://revision"
 
+/** At most this many turns ride one notice; a write touching more names none. */
+export const TRANSCRIPT_REVISION_TURN_KEYS_MAX = 16
+
 export interface TranscriptRevisionEvent {
   sessionId: string
   revision: number
+  /**
+   * The turns this write changed, as timeline `turnKey`s. Absent when the
+   * writer cannot name them (a whole-session clear, a truncate, a branch
+   * selection, a row whose turn is implicit, more than
+   * {@link TRANSCRIPT_REVISION_TURN_KEYS_MAX}): a reader then treats every
+   * turn it holds as possibly changed, as it did before notices named turns.
+   * Ids only; the notice still carries no content.
+   */
+  turnKeys?: string[]
   /** Present for destructive runtime invalidation; scoped across host windows. */
   runtimeGeneration?: string
   databaseName?: string
 }
 
-/** Publish only identity + revision; transcript content never enters event logs. */
+/**
+ * The timeline turns that rows written or removed in one transaction belong
+ * to, or `undefined` when one of them cannot be named. An explicit `turnKey`
+ * names itself; a user row without one anchors its own implicit turn
+ * (`turn:<id>`, as `projectTranscriptTimeline` keys it) unless it is being
+ * removed, which merges the rows after it into the turn before. Any other row
+ * without a key belongs to whichever user row precedes it, which the writer
+ * does not know.
+ */
+export function transcriptTurnKeysOf(
+  written: ReadonlyArray<{ id: string; role: string; turnKey?: string }>,
+  removed: ReadonlyArray<{ id: string; role: string; turnKey?: string }> = []
+): string[] | undefined {
+  const keys = new Set<string>()
+  for (const [rows, removing] of [
+    [written, false],
+    [removed, true],
+  ] as const) {
+    for (const row of rows) {
+      if (row.turnKey) keys.add(row.turnKey)
+      else if (row.role === "user" && !removing) keys.add(`turn:${row.id}`)
+      else return undefined
+    }
+  }
+  if (keys.size === 0 || keys.size > TRANSCRIPT_REVISION_TURN_KEYS_MAX) return undefined
+  return [...keys]
+}
+
+/**
+ * Publish identity, revision and the changed turns' keys; transcript content
+ * never enters event logs.
+ */
 export async function publishTranscriptRevision(
   sessionId: string,
   revision: number,
-  runtimeGeneration?: string
+  runtimeGeneration?: string,
+  turnKeys?: readonly string[]
 ): Promise<void> {
   const payload: TranscriptRevisionEvent = { sessionId, revision }
+  if (turnKeys && turnKeys.length > 0 && turnKeys.length <= TRANSCRIPT_REVISION_TURN_KEYS_MAX) {
+    payload.turnKeys = [...turnKeys]
+  }
   if (runtimeGeneration !== undefined) {
     const { getDb } = await import("@/lib/db/schema")
     payload.runtimeGeneration = runtimeGeneration

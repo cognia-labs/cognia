@@ -757,7 +757,34 @@ describe("persistMessages + listMessages", () => {
         expect(publish).not.toHaveBeenCalled()
       })
       expect(publish).toHaveBeenCalledTimes(1)
-      expect(publish).toHaveBeenCalledWith("atomic-events", 1)
+      // An assistant row without a turn key cannot name its turn.
+      expect(publish).toHaveBeenCalledWith("atomic-events", 1, undefined, undefined)
+    } finally {
+      publish.mockRestore()
+    }
+  })
+
+  // The notice names the turns a write touched, so a paired client reloads
+  // those and keeps the rest.
+  it("names the changed turns in the revision notice when every row's turn is known", async () => {
+    await putSession("named-turns")
+    const publish = jest.spyOn(revisionEvents, "publishTranscriptRevision").mockResolvedValue()
+    try {
+      await commitMessageDelta("named-turns", {
+        upserts: [
+          msg("q", "user", "question"),
+          msg("a", "assistant", "answer", { turnKey: "t-explicit" }),
+        ],
+      })
+      expect(publish).toHaveBeenLastCalledWith("named-turns", 1, undefined, [
+        "turn:q",
+        "t-explicit",
+      ])
+      await updateMessageMetadata("named-turns", "a", { pinned: true })
+      expect(publish).toHaveBeenLastCalledWith("named-turns", 2, undefined, ["t-explicit"])
+      // Removing a key-less user row regroups the rows after it: unnamed.
+      await deleteStoredMessage("q")
+      expect(publish).toHaveBeenLastCalledWith("named-turns", 3, undefined, undefined)
     } finally {
       publish.mockRestore()
     }

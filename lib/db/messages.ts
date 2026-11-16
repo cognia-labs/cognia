@@ -23,6 +23,7 @@ import { persistMessageSessionAssets } from "./session-assets"
 import {
   invalidateTranscriptRuntime,
   publishTranscriptRevision,
+  transcriptTurnKeysOf,
   withTranscriptRuntimeLock,
 } from "@/lib/chat/transcript/revision-events"
 import { getDb, withDbReopenRetry } from "./schema"
@@ -497,6 +498,7 @@ async function replaceSessionTranscriptNow(
   let clearSnapshot = false
   const orphanCandidates = new Set<string>()
   let publishedRevision: number | null = null
+  let publishedTurnKeys: string[] | undefined
 
   await withDbReopenRetry(() => {
     assertDatabaseScope(db.name)
@@ -505,6 +507,7 @@ async function replaceSessionTranscriptNow(
     nextSnapshot = null
     clearSnapshot = false
     publishedRevision = null
+    publishedTurnKeys = undefined
     return transactionDb.transaction(
       "rw",
       [
@@ -699,6 +702,11 @@ async function replaceSessionTranscriptNow(
                 }
                 if (changedIds.length > 0) {
                   publishedRevision = await bumpTranscriptRevision(transactionDb, sessionId)
+                  const removed = new Set(toDelete)
+                  publishedTurnKeys = transcriptTurnKeysOf(
+                    rows,
+                    omittedRows.filter((row): row is StoredMessage => !!row && removed.has(row.id))
+                  )
                 }
               })
             }
@@ -716,7 +724,7 @@ async function replaceSessionTranscriptNow(
     await collectUnreferencedMessageMedia(orphanCandidates)
   }
   if (publishedRevision !== null) {
-    await publishTranscriptRevision(sessionId, publishedRevision)
+    await publishTranscriptRevision(sessionId, publishedRevision, undefined, publishedTurnKeys)
   }
 
   // Commit the cache only after the transaction resolved cleanly.
@@ -833,6 +841,7 @@ async function commitMessageDeltaNow(
   const orphanCandidates = new Set<string>()
   let deletedMessageIds: string[] = []
   let publishedRevision: number | null = null
+  let publishedTurnKeys: string[] | undefined
 
   await db.transaction(
     "rw",
@@ -943,6 +952,10 @@ async function commitMessageDeltaNow(
       )
       if (replacementRefs.length > 0) await db.messageMediaRefs.bulkPut(replacementRefs)
       publishedRevision = await bumpTranscriptRevision(db, sessionId)
+      publishedTurnKeys = transcriptTurnKeysOf(
+        rows,
+        existingDeletes.filter((row): row is StoredMessage => row?.sessionId === sessionId)
+      )
     }
   )
 
@@ -955,7 +968,7 @@ async function commitMessageDeltaNow(
       await collectUnreferencedMessageMedia(orphanCandidates)
     }
     if (publishedRevision !== null) {
-      await publishTranscriptRevision(sessionId, publishedRevision)
+      await publishTranscriptRevision(sessionId, publishedRevision, undefined, publishedTurnKeys)
     }
     if (newUserMessageIds.length > 0) {
       void dispatchChatMessageTriggers(sessionId, newUserMessageIds, session?.characterId).catch(
@@ -1281,6 +1294,7 @@ async function deleteStoredMessageNow(messageId: string, sessionId: string): Pro
     .filter(isMessageOwnedMediaRef)
     .toArray()
   let revision: number | null = null
+  let turnKeys: string[] | undefined
   let deleted = false
   await db.transaction(
     "rw",
@@ -1301,6 +1315,7 @@ async function deleteStoredMessageNow(messageId: string, sessionId: string): Pro
         .filter(isMessageOwnedMediaRef)
         .delete()
       revision = await bumpTranscriptRevision(db, row.sessionId)
+      turnKeys = transcriptTurnKeysOf([], [row])
     }
   )
   if (deleted)
@@ -1314,7 +1329,7 @@ async function deleteStoredMessageNow(messageId: string, sessionId: string): Pro
   if (refs.length > 0) {
     await collectUnreferencedMessageMedia(refs.map((ref) => ref.hash))
   }
-  if (revision !== null) await publishTranscriptRevision(sessionId, revision)
+  if (revision !== null) await publishTranscriptRevision(sessionId, revision, undefined, turnKeys)
 }
 
 /**
@@ -1345,6 +1360,7 @@ async function updateMessageMetadataNow(
 ): Promise<void> {
   const db = getDb()
   let revision: number | null = null
+  let turnKeys: string[] | undefined
   await db.transaction("rw", db.messages, db.sessions, async () => {
     assertSessionWritable(await db.sessions.get(sessionId), "metadata")
     const row = await db.messages.get(messageId)
@@ -1360,11 +1376,12 @@ async function updateMessageMetadataNow(
       : markedMetadata
     await db.messages.update(messageId, { metadata: merged })
     revision = await bumpTranscriptRevision(db, sessionId)
+    turnKeys = transcriptTurnKeysOf([row])
   })
   // The row changed out-of-band from the persist snapshot; drop it so the next
   // `persistMessages` re-derives existence/createdAt from disk.
   invalidatePersistSnapshot(sessionId)
-  if (revision !== null) await publishTranscriptRevision(sessionId, revision)
+  if (revision !== null) await publishTranscriptRevision(sessionId, revision, undefined, turnKeys)
 }
 
 /**
@@ -1397,6 +1414,7 @@ async function setMessageReactionNow(
   assertSessionWritable(session, "metadata")
   let result: MessageReaction[] | null = null
   let revision: number | null = null
+  let turnKeys: string[] | undefined
   let changed = false
   await db.transaction("rw", db.messages, db.sessions, async () => {
     const row = await db.messages.get(messageId)
@@ -1411,11 +1429,12 @@ async function setMessageReactionNow(
     const metadata = stripHoistedMeta({ ...(row.metadata ?? {}), reactions: next })
     await db.messages.update(messageId, { metadata: metadata ?? {} })
     revision = await bumpTranscriptRevision(db, sessionId)
+    turnKeys = transcriptTurnKeysOf([row])
     changed = true
   })
   if (changed) {
     invalidatePersistSnapshot(sessionId)
-    if (revision !== null) await publishTranscriptRevision(sessionId, revision)
+    if (revision !== null) await publishTranscriptRevision(sessionId, revision, undefined, turnKeys)
   }
   return result
 }
@@ -1587,6 +1606,7 @@ async function appendImageEditVersionNow({
   let appended = false
   let resultParts: StoredMessage["parts"] = []
   let publishedRevision: number | null = null
+  let publishedTurnKeys: string[] | undefined
 
   try {
     await db.transaction("rw", db.messages, db.messageMediaRefs, db.sessions, async () => {
@@ -1652,6 +1672,7 @@ async function appendImageEditVersionNow({
       const refs = messageMediaRefRows(messageId, sessionId, nextParts)
       if (refs.length > 0) await db.messageMediaRefs.bulkPut(refs)
       publishedRevision = await bumpTranscriptRevision(db, sessionId)
+      publishedTurnKeys = transcriptTurnKeysOf([row])
       resultParts = nextParts
       appended = true
     })
@@ -1665,7 +1686,7 @@ async function appendImageEditVersionNow({
     invalidatePersistSnapshot(sessionId)
     markSessionDirty(sessionId)
     if (publishedRevision !== null) {
-      await publishTranscriptRevision(sessionId, publishedRevision)
+      await publishTranscriptRevision(sessionId, publishedRevision, undefined, publishedTurnKeys)
     }
   }
   return { appended, parts: resultParts }

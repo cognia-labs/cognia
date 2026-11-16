@@ -38,6 +38,7 @@ import type {
   SessionTurnMessagesRequest,
   StoredMessage,
   TranscriptMessage,
+  TranscriptTimelineItem,
 } from "@cognia/agent-config-types"
 import {
   TRANSCRIPT_DETAIL_PAGE_BYTE_LIMIT,
@@ -61,6 +62,7 @@ import {
   encodeTimelineCursor,
   encodeTurnDetailCursor,
   projectTranscriptTimeline,
+  transcriptTurnVersion,
   validateTimelineCursor,
   validateTurnDetailCursor,
 } from "@/lib/chat/transcript/projection"
@@ -789,8 +791,40 @@ async function transcriptRevision(sessionId: string): Promise<{
 }
 
 /**
+ * Up to `limit` rows strictly older than `before`, newest first, read through
+ * the `[sessionId+createdAt]` index. IndexedDB orders equal timestamps by
+ * primary key, so `(createdAt, id)` is a total order and the keyset never
+ * skips or repeats a row — unlike `offset`, which also shifted under every
+ * row a streaming reply added at the newest edge.
+ */
+function readOlderRows(
+  sessionId: string,
+  before: { createdAt: number; id: string } | undefined,
+  limit: number
+): Promise<StoredMessage[]> {
+  const index = getDb().messages.where("[sessionId+createdAt]")
+  if (!before) {
+    return index
+      .between([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER])
+      .reverse()
+      .limit(limit)
+      .toArray()
+  }
+  return index
+    .between([sessionId, 0], [sessionId, before.createdAt], true, true)
+    .reverse()
+    .filter((row) => row.createdAt < before.createdAt || row.id < before.id)
+    .limit(limit)
+    .toArray()
+}
+
+function keyOf(row: StoredMessage): { createdAt: number; id: string } {
+  return { createdAt: row.createdAt, id: row.id }
+}
+
+/**
  * Read the newest completed turns without materializing the full session.
- * The cursor position counts raw rows from the newest edge; scanning stops
+ * The cursor names the oldest row the previous page consumed; scanning stops
  * at complete turn boundaries, including explicitly keyed multi-message turns.
  */
 export async function readTranscriptTimeline(
@@ -803,32 +837,27 @@ export async function readTranscriptTimeline(
     TRANSCRIPT_TIMELINE_PAGE_MAX
   )
   const session = await transcriptRevision(request.sessionId)
-  let position = 0
+  let before: { createdAt: number; id: string } | undefined
   if (request.cursor) {
     const validation = validateTimelineCursor(request.cursor, {
       sessionId: request.sessionId,
-      revision: session.revision,
       direction,
     })
     if (!validation.ok) throw transcriptError(validation.code)
-    position = validation.value.position
+    before = validation.value.before
   }
 
   const rowsDescending: StoredMessage[] = []
   let completedTurns = 0
   let completeRowCount = 0
   let reachedLimit = false
-  const collection = () =>
-    getDb()
-      .messages.where("[sessionId+createdAt]")
-      .between([request.sessionId, 0], [request.sessionId, Number.MAX_SAFE_INTEGER])
-      .reverse()
+  const oldestRead = () => {
+    const oldest = rowsDescending.at(-1)
+    return oldest ? keyOf(oldest) : before
+  }
 
   while (!reachedLimit && rowsDescending.length < TRANSCRIPT_MAX_SCANNED_MESSAGES) {
-    const chunk = await collection()
-      .offset(position + rowsDescending.length)
-      .limit(TRANSCRIPT_SCAN_CHUNK)
-      .toArray()
+    const chunk = await readOlderRows(request.sessionId, oldestRead(), TRANSCRIPT_SCAN_CHUNK)
     if (chunk.length === 0) break
     for (const row of chunk) {
       const newer = rowsDescending.at(-1)
@@ -854,9 +883,7 @@ export async function readTranscriptTimeline(
     if (chunk.length < TRANSCRIPT_SCAN_CHUNK) break
   }
 
-  const following = await collection()
-    .offset(position + rowsDescending.length)
-    .first()
+  const [following] = await readOlderRows(request.sessionId, oldestRead(), 1)
   if (!reachedLimit && following && rowsDescending.length >= TRANSCRIPT_MAX_SCANNED_MESSAGES) {
     const oldest = rowsDescending.at(-1)
     if (oldest?.turnKey && oldest.turnKey !== following.turnKey) {
@@ -871,16 +898,35 @@ export async function readTranscriptTimeline(
     rowsDescending.length = completeRowCount
   }
   const rows = rowsDescending.reverse()
-  const filtered = await preparePairedHistory(rows, request.pairedReader)
-  const projected = projectTranscriptTimeline({
+  // One projection of the Host's own rows feeds the summary index and, when
+  // the reader sees every row as stored, the page itself. A reader whose view
+  // withholds or rewrites rows gets its own projection, carrying the turn
+  // versions of the stored rows: the detail endpoint versions those, so a
+  // version taken from the filtered view would never match.
+  const hostItems = projectTranscriptTimeline({
     sessionId: request.sessionId,
     revision: session.revision,
-    messages: filtered.messages,
+    messages: rows,
     activeBranchByGroup: session.activeBranchByGroup,
   })
+  const filtered = await preparePairedHistory(rows, request.pairedReader)
+  const asStored =
+    filtered.messages.length === rows.length &&
+    filtered.messages.every((message, index) => message === rows[index])
+  const projected = asStored
+    ? hostItems
+    : withStoredTurnVersions(
+        projectTranscriptTimeline({
+          sessionId: request.sessionId,
+          revision: session.revision,
+          messages: filtered.messages,
+          activeBranchByGroup: session.activeBranchByGroup,
+        }),
+        hostItems
+      )
   const items = projected.slice(-limit)
   // A leading system row is a timeline item too. If the page budget excludes
-  // it, leave its raw position for the next request instead of skipping it.
+  // it, leave it for the next request instead of skipping it.
   const first = items[0]
   const firstRow = first
     ? rows.findIndex((row) =>
@@ -889,38 +935,51 @@ export async function readTranscriptTimeline(
           : row.turnKey === first.turnKey || `turn:${row.id}` === first.turnKey
       )
     : 0
-  const consumedRows = rows.length - Math.max(0, firstRow)
-  const nextPosition = position + consumedRows
+  const consumedFrom = Math.max(0, firstRow)
+  const consumedRows = rows.length - consumedFrom
   const hasMore = Boolean(following) || consumedRows < rows.length
+  const boundary = rows[consumedFrom]
   // The summary index is a resumable cache, never a prerequisite for showing
   // the bounded page that was already read successfully. Quota/private-mode
   // failures must not turn a valid transcript response into a server error.
   await commitTranscriptIndexPage({
     sessionId: request.sessionId,
     revision: session.revision,
-    items: projectTranscriptTimeline({
-      sessionId: request.sessionId,
-      revision: session.revision,
-      messages: rows,
-      activeBranchByGroup: session.activeBranchByGroup,
-    }).slice(-limit),
+    items: hostItems.slice(-limit),
     complete: !hasMore,
   }).catch(() => undefined)
   return {
     items,
     revision: session.revision,
-    ...(hasMore
+    ...(hasMore && boundary
       ? {
           nextCursor: encodeTimelineCursor({
             sessionId: request.sessionId,
-            revision: session.revision,
             direction,
-            position: nextPosition,
+            before: keyOf(boundary),
           }),
         }
       : {}),
     hasMore,
   }
+}
+
+/** Give each completed turn the version its stored rows carry. */
+function withStoredTurnVersions(
+  items: TranscriptTimelineItem[],
+  stored: TranscriptTimelineItem[]
+): TranscriptTimelineItem[] {
+  const versions = new Map<string, number>()
+  for (const item of stored) {
+    if (item.kind === "completed-turn") versions.set(item.turnKey, item.detailRevision)
+  }
+  return items.map((item) => {
+    if (item.kind !== "completed-turn") return item
+    const version = versions.get(item.turnKey)
+    return version === undefined || version === item.detailRevision
+      ? item
+      : { ...item, detailRevision: version }
+  })
 }
 
 function toTranscriptMessage(message: StoredMessage): TranscriptMessage {
@@ -964,21 +1023,6 @@ export async function readTranscriptTurnMessages(
   request: SessionTurnMessagesRequest & { pairedReader?: unknown }
 ): Promise<SessionTurnMessagesPage> {
   const session = await transcriptRevision(request.sessionId)
-  if (session.revision !== request.revision || session.revision !== request.detailRevision) {
-    throw transcriptError("TRANSCRIPT_STALE")
-  }
-  let position = 0
-  if (request.cursor) {
-    const validation = validateTurnDetailCursor(request.cursor, {
-      sessionId: request.sessionId,
-      revision: request.revision,
-      turnKey: request.turnKey,
-      detailRevision: request.detailRevision,
-    })
-    if (!validation.ok) throw transcriptError(validation.code)
-    position = validation.value.position
-  }
-
   const allRows = request.turnKey.startsWith("turn:")
     ? await readImplicitTurn(request.sessionId, request.turnKey)
     : await getDb()
@@ -986,6 +1030,21 @@ export async function readTranscriptTurnMessages(
         .equals([request.sessionId, request.turnKey])
         .sortBy("createdAt")
   if (allRows.length === 0) throw transcriptError("TURN_NOT_FOUND")
+  // The turn's own version, not the session's: a reply streaming into another
+  // turn bumps the session revision on every checkpoint, and must not make
+  // this turn's detail stale. `revision` in the request is not compared.
+  const detailRevision = transcriptTurnVersion(allRows)
+  if (request.detailRevision !== detailRevision) throw transcriptError("TRANSCRIPT_STALE")
+  let position = 0
+  if (request.cursor) {
+    const validation = validateTurnDetailCursor(request.cursor, {
+      sessionId: request.sessionId,
+      turnKey: request.turnKey,
+      detailRevision,
+    })
+    if (!validation.ok) throw transcriptError(validation.code)
+    position = validation.value.position
+  }
 
   const limit = Math.min(
     Math.max(request.limit ?? TRANSCRIPT_DETAIL_PAGE_DEFAULT, 1),
@@ -1014,16 +1073,15 @@ export async function readTranscriptTurnMessages(
   return {
     messages: page,
     revision: session.revision,
-    detailRevision: session.revision,
+    detailRevision,
     total: allRows.length,
     approximateBytes,
     ...(hasMore
       ? {
           nextCursor: encodeTurnDetailCursor({
             sessionId: request.sessionId,
-            revision: session.revision,
             turnKey: request.turnKey,
-            detailRevision: session.revision,
+            detailRevision,
             position: nextPosition,
           }),
         }
