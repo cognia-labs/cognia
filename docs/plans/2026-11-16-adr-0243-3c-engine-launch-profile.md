@@ -40,14 +40,14 @@ Bot and gateway each override state isolation silently, detected by different si
 type EngineLaunchProfile =
   | { kind: "owner" } // the local person's own run
   | { kind: "isolated"; key: string; reason: IsolationReason }
-  | { kind: "personal"; key: string; person: PrincipalRefV1 }
+  | { kind: "personal"; key: string; loopbackPorts: number[] }
 type IsolationReason = "bot" | "requester" | "event" | "service"
 ```
 
 `engineLaunchProfile({ context, chatSessionId })` in `lib/ai/agent/external/policy/launch-profile.ts` is the only producer. It reads the root acting identity of the execution's Host-bound run (`resolveRunActingIdentity`):
 
 - **owner**: an execution bound to no run (a Host operation the local person started: a direct connect, a model probe); a `local` or `schedule` trigger whose authorizing principal is `local-person` with no other requester (a direct UI run records exactly that); or a `requester` trigger with exactly one requester who is the local person or whom their channel verifies as this Host's owner. The verification is vendor-neutral: `ConversationChannel.requesterIsOwner` (read through `platformRequesterIsOwner` in `lib/chat/conversation-channel.ts`), which the connectors answer from `ConnectorVendorContribution.ownerPrincipal(row)` on the requester's own enabled adapter. Lark names the adapter's `connectedUser`, the account `verifyLarkImOwnerAuthorization` checks; a vendor without the hook has no owner.
-- **personal**: an owner run that needs a personal credential through the broker. It is admitted only when the engine supports the personal profile (§4).
+- **personal**: not produced here. The manager turns an `owner` turn into `personal` when its session is marked and the turn runs as a Cognia gateway task (§4).
 - **isolated**: everything else. That covers a requester who is not the owner, an event actor, the service lane, more than one requester, and every Bot run. A Bot stops setting `COGNIA_BOT_ISOLATION` itself and asks for `isolated/bot`.
 - A run with no resolvable identity is **isolated**, never owner.
 
@@ -89,8 +89,8 @@ Each profile launches as follows.
 `personal` is `isolated` plus:
 
 - **Model through the Host gateway only.** The engine must support a gateway task (`codex, opencode, pi, claude, qwen, dsh, kimi, goose, copilot, aider`) and the run must have a Cognia model binding. Native logins are unreachable by construction.
-- **Network allowlist.** Network is `Allowlist` with the gateway's loopback port only; the existing launcher proxy enforces it. The tool host is a unix socket, already admitted. `Full` is refused.
-- **Host MCP only.** Only the tool-host projection reaches the engine. Configured MCP servers are refused for this profile, because static headers are the owner's secrets.
+- **Network: the Host's own loopback services only.** The profile carries `loopbackPorts`: the gateway port from the lease endpoint and the port of every hosted tool-host MCP server (`cognia-tools`, `cognia-plugin-tools` on `127.0.0.1`), because the tool host is HTTP on loopback, not a unix socket. Both hosts pass each as the launcher's `--network-allow-loopback <port>`, which conflicts with `--network`. The filtering proxy (`net_proxy.rs`, `ProxyPolicy.loopback_ports`) dials an admitted `127.0.0.1`/`localhost` port directly, skipping DNS, the private-address filter and any upstream proxy; every other host and loopback port stays forbidden. A remote Host whose network ceiling is not `Full` refuses the launch (`validate_sandbox_policy`, `spawnLeased`), since loopback access exceeds it.
+- **Host MCP only.** Only the tool-host projection reaches the engine (`isToolHostMcpServer`). Configured MCP servers are dropped for this profile, because static headers are the owner's secrets.
 - **Broker checks** in `cli/src/agent/tool-host/broker.ts` `authorize()` and the desktop `renderer-tool-host.ts`. A call that would use a personal credential is checked on every call:
   - **resource**: the tool is a declared module tool whose `effect` is `read`;
   - **action**: anything else is denied. That includes write, outbound and opaque tools (shell, fetch, browser, git), which the personal egress check already names;
@@ -99,7 +99,7 @@ Each profile launches as follows.
   - the call's execution carries a Host-recorded `personal` profile lease for the same person; otherwise
   - it is refused with `"external-engine"`, as today.
 
-The `personalEgressFenced` Codex special case goes away: a marked session's next turn requires the `personal` profile. Codex is one engine that gets it through its gateway task. Every other engine is refused for a marked session exactly as now until it has a gateway task.
+The `personalEgressFenced` Codex special case goes away: a marked session's next turn requires the `personal` profile. The manager (`personalLaunch`) admits it for an owner turn with a Cognia gateway binding and refuses (`PersonalEgressDeniedError`) a marked isolated or Bot turn, an agent with no instance and one with no Cognia model, native-login Codex included. A personal session acknowledges further marks; any other session refuses them. Both hosts refuse a personal launch that is not a gateway task (`engine_personal_unsupported`).
 
 ### 5. Credentials in isolated launches
 
@@ -161,5 +161,7 @@ Not proven by tests, owed as a desktop smoke:
 2. Split in two commits, each wired end to end:
    - **2a (done)**: the profile contract (`packages/agent-contracts/src/engine-launch-profile.ts`, Rust `launch_profile.rs`), the isolated profile replacing Bot isolation in both hosts (private state root from the key, `apply_state_isolation` / `applyStateIsolation` applying the engine's rule inside it, sandbox confinement, `Inheritance::Isolated` with `isolatedKeys` / `isolatedSet` in the policy table, refusal outside the sandbox), the launcher's `--isolated` confinement flag without its own env allowlist, Bot runs asking for `isolated/bot` keyed by their agent id, and the root deleted on `removeAgent`. Removed: `COGNIA_BOT_ISOLATION` / `COGNIA_BOT_STATE_DIR`, `validate_bot_runtime_state`, `launch_owns_private_home` / `launchOwnsPrivateHome`, the launcher's `bot_environment` and `--bot-isolation` with the CLI's capability probe, `PluginWorkspaceHandle.runtimeStateRoot`, and `EngineMcpConfigFile.privateCopy`.
    - **2b (done)**: `engineLaunchProfile` with the vendor-neutral owner check (`ConversationChannel.requesterIsOwner`, `ConnectorVendorContribution.ownerPrincipal`), and the manager's transient `<agentId>:iso:<key>` instances (§2).
-3. The personal profile: gateway + allowlist + broker checks + `admitPersonalCredential` lease; Codex fence removed.
+3. Split in two commits:
+   - **3a (done)**: the `personal` profile (`loopbackPorts`) in the contract and both hosts, the launcher's `--network-allow-loopback` and the proxy's loopback admission, the remote `Full` ceiling requirement, the manager's `personalLaunch` with tool-host-only MCP, and the Codex fence removed (`ExternalAgentExecutionOptions.personalEgressFenced` and every branch in `app-server-client.ts`).
+   - **3b**: `admitPersonalCredential` with the Host-recorded `personal` lease, and the broker's per-call resource/action/recipient checks.
 4. ADR implementation status, docs and changeset.

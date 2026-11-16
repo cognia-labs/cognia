@@ -763,9 +763,17 @@ pub fn wrap_with_sandbox(
     crate::dsh_runtime::normalize_managed_launch(&mut config).map_err(SandboxError::InvalidPolicy)?;
     crate::launch_descriptor::apply_platform_args(&config.command, &mut config.args, host.os());
     config.sandbox_policy.validate().map_err(SandboxError::InvalidPolicy)?;
-    let isolated = crate::launch_profile::LaunchProfile::of(&config.env)
-        .map_err(SandboxError::StateIsolation)?
-        .is_isolated();
+    let profile = crate::launch_profile::LaunchProfile::of(&config.env)
+        .map_err(SandboxError::StateIsolation)?;
+    let isolated = profile.is_isolated();
+    // A personal launch reaches the model only through its gateway task.
+    let loopback_ports = profile.loopback_ports().map(<[u16]>::to_vec);
+    if loopback_ports.is_some() && !config.env.contains_key(crate::gateway_task::PAYLOAD_ENV) {
+        return Err(SandboxError::StateIsolation(
+            "engine_personal_unsupported: a personal launch runs only as a Cognia gateway task"
+                .into(),
+        ));
+    }
     crate::launch_descriptor::check_private_launch(&config.command, &config.args, isolated)
         .map_err(SandboxError::StateIsolation)?;
     crate::process::blank_private_credentials(&mut config);
@@ -846,7 +854,15 @@ pub fn wrap_with_sandbox(
     };
     if isolated {
         let separator = args.iter().position(|arg| arg == "--").expect("target separator");
-        args.splice(separator..separator, sandbox_network_args(&config.sandbox_policy));
+        // A personal launch's only network is the Host's own loopback services.
+        let network = match &loopback_ports {
+            Some(ports) => ports
+                .iter()
+                .flat_map(|port| ["--network-allow-loopback".to_string(), port.to_string()])
+                .collect(),
+            None => sandbox_network_args(&config.sandbox_policy),
+        };
+        args.splice(separator..separator, network);
         // The launcher denies helper sockets and keychain IPC too; the
         // process table builds the isolated env.
         args.splice(
@@ -881,17 +897,23 @@ pub fn wrap_with_sandbox(
                 home.to_string_lossy().into_owned(),
             ],
         );
-        if config.sandbox_policy.readable_scope == SandboxReadableScope::Home {
-        args.splice(
-            0..0,
-            [
-                "--readable".to_string(),
-                host_home.to_string_lossy().into_owned(),
-            ],
-        );
-        } else {
-            for root in workspace_toolchain_readable_roots(&config.command, &host_home) {
-                args.splice(0..0, ["--readable".into(), root.to_string_lossy().into_owned()]);
+        // A private launch's home stays hidden; it already reads its toolchains.
+        if !isolated {
+            if config.sandbox_policy.readable_scope == SandboxReadableScope::Home {
+                args.splice(
+                    0..0,
+                    [
+                        "--readable".to_string(),
+                        host_home.to_string_lossy().into_owned(),
+                    ],
+                );
+            } else {
+                for root in workspace_toolchain_readable_roots(&config.command, &host_home) {
+                    args.splice(
+                        0..0,
+                        ["--readable".into(), root.to_string_lossy().into_owned()],
+                    );
+                }
             }
         }
         // Every engine keeps logins and provider settings in its own roots;
@@ -2491,6 +2513,47 @@ mod tests {
                 "{relative}"
             );
         }
+    }
+
+    #[test]
+    fn a_personal_gateway_task_reaches_only_the_hosts_loopback_services() {
+        let data = tempfile::tempdir().unwrap();
+        let host = isolated_host(data.path());
+        let mut original = config("codex", &["app-server"], Some("/work/project"));
+        original.env.insert(
+            crate::launch_profile::ENGINE_PROFILE_ENV.into(),
+            r#"{"kind":"personal","key":"task-1","loopbackPorts":[9900,4100]}"#.into(),
+        );
+        original.env.insert(
+            crate::gateway_task::PAYLOAD_ENV.into(),
+            serde_json::json!({"taskId":"task-1","runtime":"codex","binding":{},"files":{}})
+                .to_string(),
+        );
+        // The request cannot widen it.
+        original.sandbox_policy.network = SandboxNetworkMode::Full;
+        let wrapped = wrap_with_sandbox(original.clone(), &host).unwrap();
+        assert!(wrapped.args.iter().any(|arg| arg == "--isolated"));
+        assert_eq!(
+            pairs(&wrapped.args, "--network-allow-loopback"),
+            vec!["9900", "4100"]
+        );
+        assert!(!wrapped
+            .args
+            .iter()
+            .any(|arg| arg == "--network" || arg == "--network-allow"));
+        assert!(wrapped
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--deny-readable", "/home/dev"]));
+        assert!(!pairs(&wrapped.args, "--readable").contains(&"/home/dev"));
+        assert!(pairs(&wrapped.args, "--writable")
+            .contains(&"/home/dev/.local/share/cognia-agent-tasks/task-1"));
+        let root = crate::launch_profile::isolated_state_root(data.path(), "task-1");
+        assert!(wrapped.env["TMPDIR"].starts_with(&*root.to_string_lossy()));
+
+        original.env.remove(crate::gateway_task::PAYLOAD_ENV);
+        let refused = wrap_with_sandbox(original, &host).unwrap_err().to_string();
+        assert!(refused.contains("engine_personal_unsupported"), "{refused}");
     }
 
     #[test]

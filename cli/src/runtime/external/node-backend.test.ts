@@ -242,6 +242,27 @@ describe("NodeExternalAgentBackend", () => {
       registered.mockImplementation(jest.requireActual("./native-bridges").registeredNativeBridgeId)
     }
   })
+  it("refuses a personal launch on a host whose network ceiling is not full", async () => {
+    const backend = new NodeExternalAgentBackend({
+      workspacesRoot: os.tmpdir(),
+      sandboxPolicy: { network: "off" },
+    })
+    await expect(
+      backend.invoke("spawn_external_agent", {
+        config: {
+          id: "personal",
+          command: "codex",
+          cwd: os.tmpdir(),
+          sandboxPolicy: { network: "off" },
+          env: engineLaunchProfileEnv({
+            kind: "personal",
+            key: "task-1",
+            loopbackPorts: [9900, 4100],
+          }),
+        },
+      })
+    ).rejects.toThrow("a personal launch needs loopback access")
+  })
   it("forces Codebuff through the mandatory sandbox and fails closed when it is unavailable", async () => {
     const registered = jest
       .mocked(nativeBridges.registeredNativeBridgeId)

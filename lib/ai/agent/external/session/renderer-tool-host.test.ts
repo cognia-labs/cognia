@@ -22,6 +22,7 @@ import {
   createRendererToolHost,
   isTrustedLocalMcpCredential,
   RENDERER_TOOL_HOST_APPROVAL_PREFIX,
+  isToolHostMcpServer,
 } from "./renderer-tool-host"
 import { callSidecarToolHost } from "@/lib/ai/agent/execution/sidecar-feature-client"
 import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
@@ -632,6 +633,32 @@ describe("remote renderer tool-host transport", () => {
     await expect(host.pause()).rejects.toThrow("Host")
     await host.close().catch(() => undefined)
     expect(other.call).not.toHaveBeenCalled()
+  })
+})
+
+describe("isToolHostMcpServer", () => {
+  const server = (fields: Record<string, unknown>) =>
+    ({
+      type: "http",
+      name: "cognia-tools",
+      url: "http://127.0.0.1:4100/mcp",
+      headers: [],
+      ...fields,
+    }) as never
+
+  it("recognises only a tool host's servers on this machine's loopback", () => {
+    expect(isToolHostMcpServer(server({}))).toBe(true)
+    expect(isToolHostMcpServer(server({ name: "cognia-plugin-tools" }))).toBe(true)
+    for (const other of [
+      server({ name: "issues" }),
+      server({ url: "https://127.0.0.1:4100/mcp" }),
+      server({ url: "http://localhost:4100/mcp" }),
+      server({ url: "http://127.0.0.1/mcp" }),
+      server({ url: "not a url" }),
+      server({ type: "sse" }),
+      { name: "cognia-tools", command: "node", args: [], env: [] } as never,
+    ])
+      expect(isToolHostMcpServer(other)).toBe(false)
   })
 })
 

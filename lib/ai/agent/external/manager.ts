@@ -15,6 +15,8 @@ import {
 
 import { assertExternalAgentContentSafety } from "./policy/outbound-prompt-pii"
 import type {
+  AcpMcpServerConfig,
+  AcpMcpServerHttp,
   ExternalAgentConfig,
   ExternalAgentSession,
   ExternalAgentMessage,
@@ -553,6 +555,29 @@ export class ExternalAgentManager {
   }
 
   /**
+   * Whether this execution carries personal content and so must launch
+   * `personal` (ADR-0243 3C): the owner's turn as a Cognia gateway task
+   * whose only network is the Host's own services. Anyone else's marked turn
+   * is refused, as is one on an agent with no Cognia model.
+   */
+  private async personalLaunch(
+    agentId: string,
+    personalContext: PersonalEgressContext,
+    options: PermissionBoundExternalExecutionOptions | undefined
+  ): Promise<boolean> {
+    const { personalEgressFenced, PersonalEgressDeniedError } =
+      await import("@/lib/execution/personal-egress")
+    if (!(await personalEgressFenced(personalContext))) return false
+    const config = this.instances.get(agentId)?.config
+    const profile = readEngineLaunchProfile(config?.process?.env)
+    // The marked turn's own gateway task.
+    if (profile.kind === "personal") return true
+    if (profile.kind === "isolated" || !config || !gatewayBindingFor(config, options))
+      throw new PersonalEgressDeniedError()
+    return true
+  }
+
+  /**
    * Route an execution whose run is not the owner's own to the isolated
    * instance its launch profile names (ADR-0243 3C), re-derived on every
    * execute because a run's requesters only grow. `undefined` runs it here:
@@ -735,7 +760,8 @@ export class ExternalAgentManager {
   private async prepareGatewayExecution(
     agentId: string,
     options?: PermissionBoundExternalExecutionOptions,
-    prompt?: string
+    prompt?: string,
+    personal = false
   ) {
     const source = this.instances.get(agentId)
     if (!source) throw new Error(`Agent not found: ${agentId}`)
@@ -1081,6 +1107,29 @@ export class ExternalAgentManager {
         }
       }
       if (taskCwd) prepared.config.process!.cwd = taskCwd
+      // A marked turn's task reaches only the Host's own services: its
+      // gateway and the tool host servers it is handed.
+      let toolHostServers: AcpMcpServerHttp[] | undefined
+      if (personal) {
+        const { isToolHostMcpServer } = await import("./session/renderer-tool-host")
+        toolHostServers = (
+          Array.isArray(custom?.mcpServers) ? (custom.mcpServers as AcpMcpServerConfig[]) : []
+        ).filter(isToolHostMcpServer)
+        prepared.config.process!.env = {
+          ...prepared.config.process!.env,
+          ...engineLaunchProfileEnv({
+            kind: "personal",
+            key: `task-${taskId}`,
+            loopbackPorts: [
+              ...new Set(
+                [lease.endpoint, ...toolHostServers.map((server) => server.url)].map((url) =>
+                  Number(new URL(url).port)
+                )
+              ),
+            ],
+          }),
+        }
+      }
       if (spawnPlacementFor(agentId) !== placement)
         throw new Error("Agent runtime environment changed during task preparation")
       if (childPlacement) registerSpawnPlacement(childId, childPlacement)
@@ -1167,6 +1216,7 @@ export class ExternalAgentManager {
             ...options?.context,
             custom: {
               ...custom,
+              ...(toolHostServers ? { mcpServers: toolHostServers } : {}),
               sessionId: transcript ? undefined : previous?.nativeSessionId,
               ...(transcript && continuationHistory
                 ? { conversationHistory: continuationHistory }
@@ -3248,8 +3298,8 @@ export class ExternalAgentManager {
     this.capabilityCommandSignatures.delete(agentId)
     if (this.isolatedInstances.delete(agentId))
       (await import("@/lib/sandbox/spawn-placement-registry")).clearSpawnPlacement(agentId)
-    // A transient isolated instance owns its private state root.
-    if (profile.kind === "isolated") {
+    // A transient private instance owns its private state root.
+    if (profile.kind !== "owner") {
       const { removeIsolatedStateRoot } = await import("./lifecycle/state-root")
       await removeIsolatedStateRoot(profile.key)
     }
@@ -3705,7 +3755,6 @@ export class ExternalAgentManager {
       // Per-agent Codex defaults (sandbox mode / reasoning effort / summary)
       // ride to the adapter through metadata — same channel as selectedModel.
       codexOptions: instance.config.codexOptions,
-      personalEgressFenced: options?.personalEgressFenced === true,
       // Per-execution thinking level. Rides the same metadata channel as
       // `selectedModel`, and because the Codex client only applies
       // `codexOptions.defaultReasoningEffort` when this is undefined, setting it
@@ -3819,13 +3868,6 @@ export class ExternalAgentManager {
               .filter((candidate) => candidate.metadata?.cogniaSessionId === chatSessionId)
           )
         : undefined
-    if (
-      session &&
-      Boolean(session.metadata?.personalEgressFenced) !== Boolean(options?.personalEgressFenced)
-    ) {
-      session = undefined
-      preferredSessionId = undefined
-    }
     // Re-enter the existing, visibility-checked resume route to apply Codex's
     // per-thread policy. A cached native session never silently keeps its old MCP floor.
     if (
@@ -4592,12 +4634,8 @@ export class ExternalAgentManager {
     evidence?: ExternalBudgetEvidence
   ): AsyncIterable<ExternalAgentEvent> {
     assertExternalAgentContentSafety(prompt, options)
-    const {
-      personalEgressFenced,
-      PersonalEgressDeniedError,
-      bindPersonalEgressSession,
-      bindPersonalEgressOptions,
-    } = await import("@/lib/execution/personal-egress")
+    const { bindPersonalEgressSession, bindPersonalEgressOptions } =
+      await import("@/lib/execution/personal-egress")
     // Canonical run producers bind options at their Host dispatch boundary.
     // Resumes retain the sources already consumed by that native session;
     // new content callers add their exact Host run at the dispatch boundary.
@@ -4623,22 +4661,15 @@ export class ExternalAgentManager {
     }
     let releasePersonal = () => {}
     try {
-      const fenced = await personalEgressFenced(personalContext)
-      if (fenced && this.instances.get(agentId)?.config.protocol !== "codex-app-server")
-        throw new PersonalEgressDeniedError()
-      // Only an already network-off Codex session can acknowledge an
-      // additional mark; an unfenced external session still refuses admission.
+      const personal = await this.personalLaunch(agentId, personalContext, options)
+      // A personal launch reaches only the Host's own services, so it can
+      // acknowledge another mark; any other session refuses one.
       releasePersonal = bindPersonalEgressSession(
         personalContext,
-        fenced && this.instances.get(agentId)?.config.protocol === "codex-app-server"
-          ? async () => {}
-          : undefined
+        personal ? async () => {} : undefined
       )
-      options = bindPersonalEgressOptions(
-        { ...options, personalEgressFenced: fenced },
-        personalContext
-      )
-      const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
+      options = bindPersonalEgressOptions({ ...options }, personalContext)
+      const gateway = await this.prepareGatewayExecution(agentId, options, prompt, personal)
       if (gateway) {
         try {
           // The inner manager path retains tool approvals, PII gating, hooks,
@@ -5127,12 +5158,8 @@ export class ExternalAgentManager {
     evidence?: ExternalBudgetEvidence
   ): Promise<ExternalAgentResult> {
     assertExternalAgentContentSafety(prompt, options)
-    const {
-      personalEgressFenced,
-      PersonalEgressDeniedError,
-      bindPersonalEgressSession,
-      bindPersonalEgressOptions,
-    } = await import("@/lib/execution/personal-egress")
+    const { bindPersonalEgressSession, bindPersonalEgressOptions } =
+      await import("@/lib/execution/personal-egress")
     // Canonical run producers bind options at their Host dispatch boundary.
     // Resumes retain the sources already consumed by that native session;
     // new content callers add their exact Host run at the dispatch boundary.
@@ -5163,22 +5190,15 @@ export class ExternalAgentManager {
     }
     let releasePersonal = () => {}
     try {
-      const fenced = await personalEgressFenced(personalContext)
-      if (fenced && this.instances.get(agentId)?.config.protocol !== "codex-app-server")
-        throw new PersonalEgressDeniedError()
-      // Only an already network-off Codex session can acknowledge an
-      // additional mark; an unfenced external session still refuses admission.
+      const personal = await this.personalLaunch(agentId, personalContext, options)
+      // A personal launch reaches only the Host's own services, so it can
+      // acknowledge another mark; any other session refuses one.
       releasePersonal = bindPersonalEgressSession(
         personalContext,
-        fenced && this.instances.get(agentId)?.config.protocol === "codex-app-server"
-          ? async () => {}
-          : undefined
+        personal ? async () => {} : undefined
       )
-      options = bindPersonalEgressOptions(
-        { ...options, personalEgressFenced: fenced },
-        personalContext
-      )
-      const gateway = await this.prepareGatewayExecution(agentId, options, prompt)
+      options = bindPersonalEgressOptions({ ...options }, personalContext)
+      const gateway = await this.prepareGatewayExecution(agentId, options, prompt, personal)
       if (gateway) {
         try {
           const result = await this.executeUnbudgeted(

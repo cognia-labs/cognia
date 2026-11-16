@@ -11,6 +11,11 @@
 //!   host's sandbox with an unreadable home and a private state root derived
 //!   from its key ([`isolated_state_root`]), and is refused for an engine that
 //!   cannot run privately.
+//! - [`LaunchProfile::Personal`]: the owner's run once it carries personal
+//!   content. Everything [`LaunchProfile::Isolated`] gets, and it must be a
+//!   Cognia gateway task whose only network is the Host's own loopback
+//!   services (its gateway and its tool host), through this host's
+//!   filtering proxy.
 //!
 //! The value never reaches the engine: the process table drops it before the
 //! child starts.
@@ -37,6 +42,10 @@ pub enum LaunchProfile {
         key: String,
         reason: IsolationReason,
     },
+    Personal {
+        key: String,
+        loopback_ports: Vec<u16>,
+    },
 }
 
 #[derive(serde::Deserialize)]
@@ -46,6 +55,11 @@ enum Wire {
     Isolated {
         key: String,
         reason: IsolationReason,
+    },
+    #[serde(rename_all = "camelCase")]
+    Personal {
+        key: String,
+        loopback_ports: Vec<u16>,
     },
 }
 
@@ -66,12 +80,39 @@ impl LaunchProfile {
         match serde_json::from_str::<Wire>(raw).map_err(|_| invalid())? {
             Wire::Owner => Ok(Self::Owner),
             Wire::Isolated { key, reason } if key_valid(&key) => Ok(Self::Isolated { key, reason }),
-            Wire::Isolated { .. } => Err(invalid()),
+            Wire::Personal {
+                key,
+                loopback_ports,
+            } if key_valid(&key) && !loopback_ports.is_empty() && !loopback_ports.contains(&0) => {
+                Ok(Self::Personal {
+                    key,
+                    loopback_ports,
+                })
+            }
+            Wire::Isolated { .. } | Wire::Personal { .. } => Err(invalid()),
         }
     }
 
+    /// A private launch: [`Self::Isolated`] or [`Self::Personal`].
     pub fn is_isolated(&self) -> bool {
-        matches!(self, Self::Isolated { .. })
+        !matches!(self, Self::Owner)
+    }
+
+    /// The key naming a private launch's state root.
+    pub fn private_key(&self) -> Option<&str> {
+        match self {
+            Self::Owner => None,
+            Self::Isolated { key, .. } | Self::Personal { key, .. } => Some(key),
+        }
+    }
+
+    /// The Host loopback ports a personal launch may reach; `None` for any
+    /// other launch.
+    pub fn loopback_ports(&self) -> Option<&[u16]> {
+        match self {
+            Self::Personal { loopback_ports, .. } => Some(loopback_ports),
+            _ => None,
+        }
     }
 }
 
@@ -80,7 +121,7 @@ pub fn isolated_state_root(data_dir: &Path, key: &str) -> PathBuf {
     data_dir.join("cognia").join("isolated-agents").join(key)
 }
 
-/// Whether a launch env asks for an isolated launch. For a launch the spawn
+/// Whether a launch env asks for a private launch. For a launch the spawn
 /// policy already admitted, whose profile is known to parse; a malformed
 /// value counts as isolated.
 pub fn isolated(env: &HashMap<String, String>) -> bool {
@@ -115,6 +156,21 @@ mod tests {
             r#"{"kind":"isolated","key":"k","reason":"requester"}"#
         )));
         assert!(!isolated(&HashMap::new()));
+        let personal = LaunchProfile::of(&env(
+            r#"{"kind":"personal","key":"task-1","loopbackPorts":[9900,4100]}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            personal,
+            LaunchProfile::Personal {
+                key: "task-1".into(),
+                loopback_ports: vec![9900, 4100]
+            }
+        );
+        assert!(personal.is_isolated());
+        assert_eq!(personal.private_key(), Some("task-1"));
+        assert_eq!(personal.loopback_ports(), Some(&[9900, 4100][..]));
+        assert_eq!(LaunchProfile::Owner.private_key(), None);
     }
 
     #[test]
@@ -125,6 +181,11 @@ mod tests {
             r#"{"kind":"isolated","key":"k","reason":"someone"}"#,
             r#"{"kind":"isolated","reason":"bot"}"#,
             r#"{"kind":"personal","key":"k"}"#,
+            r#"{"kind":"personal","key":"k","loopbackPorts":[]}"#,
+            r#"{"kind":"personal","key":"k","loopbackPorts":[0]}"#,
+            r#"{"kind":"personal","key":"k","loopbackPorts":[70000]}"#,
+            r#"{"kind":"personal","key":"../k","loopbackPorts":[9900]}"#,
+            r#"{"kind":"visitor","key":"k"}"#,
         ] {
             assert!(LaunchProfile::of(&env(raw)).is_err(), "{raw}");
             assert!(isolated(&env(raw)), "{raw}");

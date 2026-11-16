@@ -22,6 +22,9 @@ struct Args {
     /// An isolated launch (ADR-0243 3C): no helper socket and no keychain IPC.
     /// Its environment is built by the process host that starts this launcher.
     isolated: bool,
+    /// Loopback ports the filtering proxy admits (`--network-allow-loopback`):
+    /// a personal launch's Host gateway. Implies the proxy, like `--network-allow`.
+    loopback_ports: Vec<u16>,
 }
 
 fn parse_args(raw: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -33,6 +36,7 @@ fn parse_args(raw: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut network = NetworkPolicy::Off;
     let mut restrict_readable = false;
     let mut isolated = false;
+    let mut loopback_ports = Vec::new();
 
     while let Some(arg) = iter.next() {
         if arg == "--" {
@@ -52,6 +56,7 @@ fn parse_args(raw: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 },
                 target,
                 isolated,
+                loopback_ports,
             });
         }
         match arg.as_str() {
@@ -78,6 +83,20 @@ fn parse_args(raw: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 if let NetworkPolicy::Allowlist { hosts } = &mut network {
                     hosts.push(host);
                 }
+            }
+            "--network-allow-loopback" => {
+                if matches!(network, NetworkPolicy::On) {
+                    return Err("--network-allow-loopback conflicts with --network".into());
+                }
+                let port = next_value(&mut iter, "--network-allow-loopback")?
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|port| *port != 0)
+                    .ok_or("--network-allow-loopback needs a port")?;
+                if !matches!(network, NetworkPolicy::Allowlist { .. }) {
+                    network = NetworkPolicy::Allowlist { hosts: Vec::new() };
+                }
+                loopback_ports.push(port);
             }
             "--isolated" => isolated = true,
             other => return Err(format!("unknown argument: {other}")),
@@ -331,11 +350,14 @@ impl AgentSupervisor {
     }
 
     #[cfg(target_os = "macos")]
-    async fn prepare(&mut self, hosts: Vec<String>) -> Result<(), String> {
+    async fn prepare(
+        &mut self,
+        policy: cognia_exec_sandbox::net_proxy::ProxyPolicy,
+    ) -> Result<(), String> {
         // Render/check the sandbox before allocating the proxy. The proxy is
         // outside Seatbelt and the child can reach exactly its loopback port.
         render_launch(&self.args)?;
-        let proxy = cognia_exec_sandbox::net_proxy::FilteringProxy::start(hosts)
+        let proxy = cognia_exec_sandbox::net_proxy::FilteringProxy::start_with_policy(policy)
             .await
             .map_err(|error| format!("filtering proxy setup failed: {error}"))?;
         let port = proxy.port();
@@ -349,7 +371,10 @@ impl AgentSupervisor {
     }
 
     #[cfg(target_os = "linux")]
-    async fn prepare(&mut self, hosts: Vec<String>) -> Result<(), String> {
+    async fn prepare(
+        &mut self,
+        policy: cognia_exec_sandbox::net_proxy::ProxyPolicy,
+    ) -> Result<(), String> {
         use cognia_exec_sandbox::{launcher, seccomp};
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::PermissionsExt;
@@ -378,7 +403,7 @@ impl AgentSupervisor {
         let control_socket = dir.path().join("control.sock");
         self.directory = Some(dir);
         self.proxy = Some(
-            cognia_exec_sandbox::net_proxy::FilteringProxy::start_unix(&proxy_socket, hosts)
+            cognia_exec_sandbox::net_proxy::FilteringProxy::start_unix(&proxy_socket, policy)
                 .await
                 .map_err(|error| format!("filtering proxy setup failed: {error}"))?,
         );
@@ -421,7 +446,10 @@ impl AgentSupervisor {
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    async fn prepare(&mut self, _hosts: Vec<String>) -> Result<(), String> {
+    async fn prepare(
+        &mut self,
+        _policy: cognia_exec_sandbox::net_proxy::ProxyPolicy,
+    ) -> Result<(), String> {
         Err("allowlist sandbox supervision is unsupported on this platform".into())
     }
 
@@ -453,12 +481,23 @@ impl AgentSupervisor {
 impl Supervision for AgentSupervisor {
     async fn setup(&mut self) -> Result<(), String> {
         let hosts = match &self.args.scope.network {
-            NetworkPolicy::Allowlist { hosts } if !hosts.is_empty() => hosts.clone(),
+            NetworkPolicy::Allowlist { hosts }
+                if !hosts.is_empty() || !self.args.loopback_ports.is_empty() =>
+            {
+                hosts.clone()
+            }
             _ => return Err("proxy supervision requires a nonempty allowlist".into()),
         };
-        validate_network_allowlist(&hosts)?;
+        if !hosts.is_empty() {
+            validate_network_allowlist(&hosts)?;
+        }
         self.signals = Some(ForwardSignals::new().map_err(|error| error.to_string())?);
-        self.prepare(hosts).await
+        self.prepare(cognia_exec_sandbox::net_proxy::ProxyPolicy {
+            allowlist: hosts,
+            loopback_ports: self.args.loopback_ports.clone(),
+            ..Default::default()
+        })
+        .await
     }
 
     fn spawn(&mut self) -> Result<(), String> {
@@ -636,7 +675,19 @@ mod tests {
             }
         );
         assert!(allow.scope.restrict_readable);
+        let personal = parse(&["--network-allow-loopback", "9900", "--isolated"]).unwrap();
+        assert_eq!(
+            personal.scope.network,
+            NetworkPolicy::Allowlist { hosts: vec![] }
+        );
+        assert_eq!(personal.loopback_ports, vec![9900]);
+        assert!(personal.isolated);
         for flags in [
+            vec!["--network", "--network-allow-loopback", "9900"],
+            vec!["--network-allow-loopback", "9900", "--network"],
+            vec!["--network-allow-loopback", "0"],
+            vec!["--network-allow-loopback", "70000"],
+            vec!["--network-allow-loopback", "localhost:9900"],
             vec!["--network", "--network-allow", "example.com"],
             vec!["--network-allow", "example.com", "--network"],
             vec!["--network-allow", "https://example.com"],

@@ -10,6 +10,11 @@
  *   It gets no ambient credential, helper socket or native login, a private
  *   state root the host derives from `key`, and only the request env the
  *   host admits.
+ * - `personal`: the owner's run once it carries personal content. It is
+ *   `isolated` and also a Cognia gateway task whose only network is the
+ *   Host's own loopback services in `loopbackPorts` (its gateway and its
+ *   tool host), so the content reaches the model and Cognia's tools and
+ *   nothing else.
  */
 
 /** Host-minted; never forwarded to the engine. */
@@ -18,7 +23,9 @@ export const ENGINE_PROFILE_ENV = "COGNIA_ENGINE_PROFILE"
 export type EngineIsolationReason = "bot" | "requester" | "event" | "service"
 
 export type EngineLaunchProfile =
-  { kind: "owner" } | { kind: "isolated"; key: string; reason: EngineIsolationReason }
+  | { kind: "owner" }
+  | { kind: "isolated"; key: string; reason: EngineIsolationReason }
+  | { kind: "personal"; key: string; loopbackPorts: number[] }
 
 /**
  * A key is a directory name: the isolated launch's private state root is
@@ -53,24 +60,27 @@ export function readEngineLaunchProfile(
     throw new EngineLaunchProfileError()
   }
   if (typeof value !== "object" || value === null) throw new EngineLaunchProfileError()
-  const { kind, key, reason } = value as Record<string, unknown>
+  const { kind, key, reason, loopbackPorts } = value as Record<string, unknown>
   if (kind === "owner") return { kind }
-  if (
-    kind === "isolated" &&
-    typeof key === "string" &&
-    ENGINE_PROFILE_KEY_PATTERN.test(key) &&
-    typeof reason === "string" &&
-    REASONS.has(reason)
-  )
+  if (typeof key !== "string" || !ENGINE_PROFILE_KEY_PATTERN.test(key))
+    throw new EngineLaunchProfileError()
+  if (kind === "isolated" && typeof reason === "string" && REASONS.has(reason))
     return { kind, key, reason: reason as EngineIsolationReason }
+  if (
+    kind === "personal" &&
+    Array.isArray(loopbackPorts) &&
+    loopbackPorts.length > 0 &&
+    loopbackPorts.every((port) => Number.isInteger(port) && port > 0 && port < 65536)
+  )
+    return { kind, key, loopbackPorts: loopbackPorts as number[] }
   throw new EngineLaunchProfileError()
 }
 
-/** Whether a launch env asks for an isolated launch. */
+/** Whether a launch env asks for a private launch: `isolated` or `personal`. */
 export function isIsolatedLaunch(
   env: Readonly<Record<string, string | undefined>> | undefined
 ): boolean {
-  return readEngineLaunchProfile(env).kind === "isolated"
+  return readEngineLaunchProfile(env).kind !== "owner"
 }
 
 /** The env entry that carries `profile`; an owner launch carries none. */

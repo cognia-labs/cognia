@@ -1007,7 +1007,7 @@ it("R10 runner binds its action Host run and preserves clean replay", async () =
   await h.runner.closeAll()
 })
 
-it("R10 real runner settles clean replay, refuses marked ACP, and fences Codex before tool reuse", async () => {
+it("R10 real runner settles clean replay and refuses a marked turn before tool reuse on every engine without a Cognia model", async () => {
   const { createDbTestFixture } = await import("@/lib/db/test-fixture")
   const { getDb } = await import("@/lib/db/schema")
   const { startToolExecutionRun, LOCAL_PERSON_RUN } =
@@ -1133,18 +1133,15 @@ it("R10 real runner settles clean replay, refuses marked ACP, and fences Codex b
         expect(h.settled).toEqual([
           {
             actionId,
-            outcome: marked && protocol === "acp" ? "failed" : "completed",
-            errorCode: marked && protocol === "acp" ? "personal-egress-denied" : undefined,
+            outcome: marked ? "failed" : "completed",
+            errorCode: marked ? "personal-egress-denied" : undefined,
           },
         ])
-        if (marked && protocol === "acp") expect(adapter.lastMessage).toBeUndefined()
+        if (marked) expect(adapter.lastMessage).toBeUndefined()
         else {
           expect(adapter.lastMessage?.content).toEqual([{ type: "text", text: "next" }])
           expect(adapter.lastOptions?.context?.custom?.conversationHistory).toBe(replay)
           expect(replay).toContain("replayed history")
-          expect(adapter.lastSessionOptions?.metadata).toMatchObject({
-            personalEgressFenced: marked,
-          })
         }
       } finally {
         await h.runner.closeAll()

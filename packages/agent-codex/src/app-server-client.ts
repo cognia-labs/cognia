@@ -1114,25 +1114,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
       readObject(params.config) as Record<string, unknown> | undefined,
       options?.mcpServers
     )
-    if (metadata.personalEgressFenced === true) {
-      const servers = await this.readMcpServers()
-      const table = readObject(config?.mcp_servers) ?? {}
-      const disabled = Object.fromEntries(
-        [
-          ...new Set([
-            ...Object.keys(table),
-            ...servers
-              .map((server) => server.name)
-              .filter((name): name is string => typeof name === "string"),
-          ]),
-        ].map((name) => [name, { ...(readObject(table[name]) ?? {}), enabled: false }])
-      )
-      params.config = {
-        ...(config ?? {}),
-        sandbox_workspace_write: { network_access: false },
-        mcp_servers: disabled,
-      }
-    } else if (config) params.config = config
+    if (config) params.config = config
     await this.restrictNativeMcpConfig(params, options?.nativePolicy)
     const serviceTier = readString(metadata.serviceTier)
     if (serviceTier && this.emit0151Param("serviceTier")) params.serviceTier = serviceTier
@@ -1311,9 +1293,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
         : permissionMode === "acceptEdits" && metadata?.sandboxMode !== "readOnly"
           ? "workspaceWrite"
           : "readOnly"
-    return metadata?.personalEgressFenced === true && mode === "dangerFullAccess"
-      ? "workspaceWrite"
-      : mode
+    return mode
   }
 
   /**
@@ -1355,9 +1335,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
         return allowed
       }),
       networkAccess:
-        metadata?.personalEgressFenced !== true &&
-        this._config?.codexOptions?.networkAccess === true &&
-        configured?.networkAccess === true,
+        this._config?.codexOptions?.networkAccess === true && configured?.networkAccess === true,
       excludeTmpdirEnvVar: true,
       excludeSlashTmp: true,
     }
@@ -1543,14 +1521,6 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
   ): Promise<ExternalAgentSession> {
     if (this._sessions.get(sessionId)?.metadata?.archived === true)
       throw new Error("Restore the archived Codex thread before resuming it")
-    const previousFence = this._sessions.get(sessionId)?.metadata?.personalEgressFenced
-    if (options?.metadata?.personalEgressFenced === true && previousFence !== true)
-      throw new Error("Codex personal egress identity unverified; create a new session")
-    if (
-      previousFence !== undefined &&
-      Boolean(previousFence) !== Boolean(options?.metadata?.personalEgressFenced)
-    )
-      throw new Error("Codex personal egress identity changed; create a new session")
     const metadata: Record<string, unknown> = {
       ...this.buildSessionMetadata(options),
       ...(options?.nativePolicy ? { nativePolicy: options.nativePolicy } : {}),
@@ -1574,24 +1544,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
     const systemPrompt = resolveSystemPromptText(metadata)
     if (systemPrompt) params.developerInstructions = systemPrompt
     const config = withCodexMcpServers(undefined, options?.mcpServers)
-    if (metadata.personalEgressFenced === true) {
-      const servers = await this.readMcpServers()
-      const table = readObject(config?.mcp_servers) ?? {}
-      params.config = {
-        ...(config ?? {}),
-        sandbox_workspace_write: { network_access: false },
-        mcp_servers: Object.fromEntries(
-          [
-            ...new Set([
-              ...Object.keys(table),
-              ...servers
-                .map((server) => server.name)
-                .filter((name): name is string => typeof name === "string"),
-            ]),
-          ].map((name) => [name, { ...(readObject(table[name]) ?? {}), enabled: false }])
-        ),
-      }
-    } else if (config) params.config = config
+    if (config) params.config = config
     await this.restrictNativeMcpConfig(params, options?.nativePolicy)
     const serviceTier = readString(metadata.serviceTier)
     if (serviceTier && this.emit0151Param("serviceTier")) params.serviceTier = serviceTier
@@ -1670,7 +1623,6 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
     const metadata: Record<string, unknown> = {
       ...source?.metadata,
       ...this.buildSessionMetadata(options),
-      ...(source?.metadata?.personalEgressFenced === true ? { personalEgressFenced: true } : {}),
     }
     const mode = options?.permissionMode ?? source?.permissionMode ?? "default"
     const params: Record<string, unknown> = {
@@ -1687,24 +1639,7 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
     const systemPrompt = resolveSystemPromptText(metadata)
     if (systemPrompt) params.developerInstructions = systemPrompt
     const config = withCodexMcpServers(undefined, options?.mcpServers)
-    if (metadata.personalEgressFenced === true) {
-      const servers = await this.readMcpServers()
-      const table = readObject(config?.mcp_servers) ?? {}
-      params.config = {
-        ...(config ?? {}),
-        sandbox_workspace_write: { network_access: false },
-        mcp_servers: Object.fromEntries(
-          [
-            ...new Set([
-              ...Object.keys(table),
-              ...servers
-                .map((server) => server.name)
-                .filter((name): name is string => typeof name === "string"),
-            ]),
-          ].map((name) => [name, { ...(readObject(table[name]) ?? {}), enabled: false }])
-        ),
-      }
-    } else if (config) params.config = config
+    if (config) params.config = config
     await this.restrictNativeMcpConfig(params, options?.nativePolicy)
     const serviceTier = readString(metadata.serviceTier)
     if (serviceTier && this.emit0151Param("serviceTier")) params.serviceTier = serviceTier
@@ -3368,7 +3303,6 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
   ): Promise<{ decision: string }> {
     const sessionId = this.resolveSessionId(params)
     const session = sessionId ? this._sessions.get(sessionId) : undefined
-    if (session?.metadata?.personalEgressFenced === true) return { decision: "decline" }
     const itemId = readString(params.itemId) ?? `approval_${Date.now()}`
     // zsh-exec-bridge and stdin callbacks can share one parent command item.
     const requestId = readString(params.approvalId) ?? itemId
@@ -3442,7 +3376,6 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
   ): Promise<unknown> {
     const sessionId = this.resolveSessionId(params)
     const session = sessionId ? this._sessions.get(sessionId) : undefined
-    if (session?.metadata?.personalEgressFenced === true) return { permissions: {}, scope: "turn" }
     const itemId = readString(params.itemId) ?? `permissions_${String(rpcId)}`
     const requestedPermissions = readObject(params.permissions) ?? {}
     const request: AcpPermissionRequest = {
@@ -3512,8 +3445,6 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
   ): Promise<{ decision: string }> {
     const sessionId = readString(params.conversationId) ?? this.resolveSessionId(params)
     const session = sessionId ? this._sessions.get(sessionId) : undefined
-    if (session?.metadata?.personalEgressFenced === true)
-      return Promise.resolve({ decision: "denied" })
     const approvalId = readString(params.approvalId)
     const callId = readString(params.callId)
     const requestId = approvalId ?? callId ?? `legacy_approval_${String(rpcId)}`
@@ -3700,10 +3631,6 @@ export class CodexAppServerAdapter extends BaseProtocolAdapter {
     if (pending.kind === "humanCommand") {
       response = { ...response, scope: "once", rememberChoice: false, optionId: undefined }
     }
-    if (
-      this._sessions.get(pending.sessionId || _sessionId)?.metadata?.personalEgressFenced === true
-    )
-      response = { ...response, granted: false }
     this.pendingApprovals.delete(response.requestId)
     pending.resolve(
       pending.kind === "permissionProfile"

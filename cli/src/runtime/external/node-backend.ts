@@ -2,7 +2,10 @@ import {
   validateExternalAgentSandboxPolicy,
   type ExternalAgentProcessSandboxPolicy,
 } from "@cognia/agent-contracts"
-import { isIsolatedLaunch } from "@cognia/agent-contracts/engine-launch-profile"
+import {
+  isIsolatedLaunch,
+  readEngineLaunchProfile,
+} from "@cognia/agent-contracts/engine-launch-profile"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { EventEmitter } from "node:events"
 import fs from "node:fs"
@@ -589,6 +592,15 @@ export class NodeExternalAgentBackend {
   ): Promise<string> {
     if (this.processes.has(config.id)) throw new Error(`agent already running: ${config.id}`)
     validateSandboxPolicyCeiling(config.sandboxPolicy, this.networkCeiling)
+    // A personal launch reaches this host's own services on loopback, which
+    // only a host that already grants full network lets a caller reach.
+    if (
+      readEngineLaunchProfile(config.env).kind === "personal" &&
+      (this.networkCeiling.network ?? "full") !== "full"
+    )
+      throw new Error(
+        "a personal launch needs loopback access this host's network policy does not grant"
+      )
     validateCommand(config, this.allowSmokeAgent, this.dataRoot)
     const bridgeId = registeredNativeBridgeId(config.command, config.args ?? [])
     validateNativeBridgeSandbox(bridgeId, config.sandboxPolicy?.network)

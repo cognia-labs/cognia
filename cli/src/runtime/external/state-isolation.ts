@@ -185,7 +185,7 @@ export function applyStateIsolation<T extends StateIsolationSpawnConfig>(
   const profile = readEngineLaunchProfile(env)
   const rule = agentStateIsolationFor(config.command, config.args ?? [])
   const gatewayTask = ownsGatewayHome(env)
-  if (profile.kind === "isolated") {
+  if (profile.kind !== "owner") {
     const root = isolatedStateRoot(requireDataDir(host), profile.key)
     // A gateway task keeps its engine's state in its own home.
     const own = gatewayTask ? null : rule

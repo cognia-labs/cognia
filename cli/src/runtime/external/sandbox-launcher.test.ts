@@ -785,6 +785,45 @@ describe("external-agent sandbox launcher", () => {
       )
     ).toThrow("needs its own private state root")
   })
+  it("lets a personal gateway task reach only its gateway port and write only its own roots", () => {
+    const taskHome = "/home/user/.local/share/cognia-agent-tasks/task-1"
+    const env = {
+      ...engineLaunchProfileEnv({ kind: "personal", key: "task-1", loopbackPorts: [9900, 4100] }),
+      COGNIA_GATEWAY_TASK_HOME: taskHome,
+    }
+    const args = buildSandboxLauncherArgs(
+      {
+        id: "task",
+        command: "codex",
+        args: ["app-server"],
+        cwd: "/work/repo",
+        env,
+        // The request cannot widen it.
+        sandboxPolicy: { network: "full" },
+      },
+      "/home/user",
+      privateState("/work/state")
+    )
+    expect(args).toContain("--isolated")
+    expect(args.filter((_, index) => args[index - 1] === "--network-allow-loopback")).toEqual([
+      "9900",
+      "4100",
+    ])
+    expect(args).not.toContain("--network")
+    const readRoots = args.filter((_, index) => args[index - 1] === "--readable")
+    const writeRoots = args.filter((_, index) => args[index - 1] === "--writable")
+    expect(readRoots).not.toContain("/home/user")
+    expect(writeRoots).toEqual(expect.arrayContaining(["/work/state", taskHome]))
+    const { COGNIA_GATEWAY_TASK_HOME: _home, ...withoutTask } = env
+    expect(() =>
+      buildSandboxLauncherArgs(
+        { id: "task", command: "codex", cwd: "/work/repo", env: withoutTask },
+        "/home/user",
+        privateState("/work/state")
+      )
+    ).toThrow("engine_personal_unsupported")
+  })
+
   it("does not trust caller-supplied XDG paths as Devin writable capabilities", () => {
     const args = buildSandboxLauncherArgs(
       {

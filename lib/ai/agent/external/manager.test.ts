@@ -4428,6 +4428,71 @@ describe("Cognia gateway task lifecycle", () => {
     }
   })
 
+  it("runs a marked owner turn as a personal task that reaches only the Host's own services", async () => {
+    const { manager, restorePlane } = prepare()
+    const connected = jest.spyOn(MockAdapter.prototype, "connect")
+    const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+    mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
+    try {
+      await manager.addAgent(managedConfig())
+      const toolHost = {
+        type: "http" as const,
+        name: "cognia-tools",
+        url: "http://127.0.0.1:4100/mcp",
+        headers: [{ name: "Authorization", value: "Bearer host" }],
+      }
+      const configured = {
+        type: "http" as const,
+        name: "issues",
+        url: "https://mcp.example.com/",
+        headers: [{ name: "Authorization", value: "Bearer owner-secret" }],
+      }
+      await manager.execute(
+        "managed",
+        "private",
+        bindPersonalEgressOptions(
+          { context: { custom: { chatSessionId: "marked", mcpServers: [toolHost, configured] } } },
+          { executionRunId: "marked-run" }
+        )
+      )
+      const child = connected.mock.calls
+        .map(([config]) => config)
+        .find((config) => config.metadata?.cogniaGatewayTask)!
+      const profile = JSON.parse(child.process!.env!.COGNIA_ENGINE_PROFILE!)
+      expect(profile).toEqual({
+        kind: "personal",
+        key: expect.stringMatching(/^task-/),
+        loopbackPorts: [9900, 4100],
+      })
+      const adapter = connected.mock.instances.find(
+        (instance) => (instance as unknown as MockAdapter).lastSessionOptions
+      ) as unknown as MockAdapter
+      expect(adapter.lastSessionOptions?.mcpServers).toEqual([toolHost])
+      // The task's private root goes with it.
+      expect(mockRemoveIsolatedStateRoot).toHaveBeenCalledWith(profile.key)
+    } finally {
+      mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+      connected.mockRestore()
+      restorePlane()
+    }
+  })
+
+  it("keeps an unmarked owner turn on the configured task launch", async () => {
+    const { manager, restorePlane } = prepare()
+    const connected = jest.spyOn(MockAdapter.prototype, "connect")
+    try {
+      await manager.addAgent(managedConfig())
+      await manager.execute("managed", "task")
+      const child = connected.mock.calls
+        .map(([config]) => config)
+        .find((config) => config.metadata?.cogniaGatewayTask)!
+      expect(child.process!.env!.COGNIA_ENGINE_PROFILE).toBeUndefined()
+    } finally {
+      connected.mockRestore()
+      restorePlane()
+    }
+  })
+
   it("admits another provider's explicit child through its frozen client selector", async () => {
     const { manager, restorePlane } = prepare()
     const connected = jest.spyOn(MockAdapter.prototype, "connect")
@@ -6220,7 +6285,7 @@ it("refuses a marked external turn before engine dispatch", async () => {
   ).rejects.toMatchObject({ code: "personal-egress-denied" })
 })
 
-it("G4: marked Codex uses a fenced native identity and never reuses it unfenced", async () => {
+it("refuses a marked turn on an agent with no Cognia model, native Codex included", async () => {
   const manager = freshManager()
   protocolAdapterRegistry.register("codex-app-server", () => currentMock as never)
   await manager.addAgent(buildBaseConfig({ protocol: "codex-app-server" }))
@@ -6228,24 +6293,19 @@ it("G4: marked Codex uses a fenced native identity and never reuses it unfenced"
   mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
   try {
     const opts = bindPersonalEgressOptions(
-      { context: { custom: { chatSessionId: "fenced-codex" } } },
+      { context: { custom: { chatSessionId: "marked-codex" } } },
       { executionRunId: "marked-codex" }
     )
-    const marked = await manager.execute("agent-1", "private", opts)
-    expect(currentMock.lastSessionOptions?.metadata).toMatchObject({ personalEgressFenced: true })
-    mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
-    const clear = await manager.execute("agent-1", "clear", {
-      ...opts,
-      sessionId: marked.sessionId,
+    await expect(manager.execute("agent-1", "private", opts)).rejects.toMatchObject({
+      code: "personal-egress-denied",
     })
-    expect(clear.sessionId).not.toBe(marked.sessionId)
-    expect(currentMock.lastSessionOptions?.metadata).toMatchObject({ personalEgressFenced: false })
+    expect(currentMock.lastMessage).toBeUndefined()
   } finally {
     mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
   }
 })
 
-it("Q3 person-agent replay binds its real Host run: clean unchanged, marked refused or Codex network off", async () => {
+it("Q3 person-agent replay binds its real Host run: clean unchanged, marked refused on every engine without a Cognia model", async () => {
   const { indexedDB, IDBKeyRange } = await import("fake-indexeddb")
   const { default: Dexie } = await import("dexie")
   Dexie.dependencies.indexedDB = indexedDB
@@ -6357,7 +6417,7 @@ it("Q3 person-agent replay binds its real Host run: clean unchanged, marked refu
         })
         const tool = Object.values(tools)[0]
         expect(tool).toBeDefined()
-        if (marked && protocol === "acp")
+        if (marked)
           await expect(tool.execute({ value: "run-bound input" })).rejects.toMatchObject({
             code: "personal-egress-denied",
           })
@@ -6366,14 +6426,8 @@ it("Q3 person-agent replay binds its real Host run: clean unchanged, marked refu
           const retainedTool = Object.values(manager.getAgentTools(`person-agent-q3-${index}`))[0]
           await expect(retainedTool.execute({ value: "clean retained input" })).resolves.toBe("ok")
         }
-        if (marked && protocol === "acp") expect(currentMock.lastMessage).toBeUndefined()
-        else {
-          expect(currentMock.lastMessage).toBeDefined()
-          if (marked)
-            expect(currentMock.lastSessionOptions?.metadata).toMatchObject({
-              personalEgressFenced: true,
-            })
-        }
+        if (marked) expect(currentMock.lastMessage).toBeUndefined()
+        else expect(currentMock.lastMessage).toBeDefined()
       } finally {
         await runner.closeAll()
       }

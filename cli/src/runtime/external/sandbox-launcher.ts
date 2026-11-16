@@ -1,5 +1,8 @@
 import { validateExternalAgentSandboxPolicy } from "@cognia/agent-contracts"
-import { isIsolatedLaunch } from "@cognia/agent-contracts/engine-launch-profile"
+import {
+  isIsolatedLaunch,
+  readEngineLaunchProfile,
+} from "@cognia/agent-contracts/engine-launch-profile"
 import { resolveAgentSearchPath } from "./agent-path"
 import { resolveProbeExecutable } from "./version-probe"
 import { validateCodexWritableRoots } from "@cognia/agent-codex/app-server-client"
@@ -330,6 +333,12 @@ export function buildSandboxLauncherArgs(
   // already its whole writable scope.
   launchRelocation(config, homedir, privateState)
   const taskHome = config.env?.COGNIA_GATEWAY_TASK_HOME
+  const profile = readEngineLaunchProfile(config.env)
+  // A personal launch reaches the model only through its gateway task.
+  if (profile.kind === "personal" && !taskHome)
+    throw new Error(
+      "engine_personal_unsupported: a personal launch runs only as a Cognia gateway task"
+    )
   if (hermesProbeRoot)
     config = { ...config, sandboxPolicy: { ...config.sandboxPolicy, readableScope: "workspace" } }
   if (!config.cwd) throw new Error("external-agent sandbox requires a working directory")
@@ -342,11 +351,10 @@ export function buildSandboxLauncherArgs(
       : []),
     ...(managedDsh
       ? managedDsh.state
-      : privateState
-        ? [privateState]
-        : taskHome
-          ? [taskHome]
-          : agentStateWritableRoots(config, homedir, isolation)),
+      : privateState || taskHome
+        ? // A private gateway task keeps its engine's state in its task home.
+          [privateState, taskHome].filter((root): root is string => !!root)
+        : agentStateWritableRoots(config, homedir, isolation)),
     ...(isolation && !managedDsh && !privateState && !taskHome ? [isolation.root] : []),
     toolHostRuntimeDir(),
   ]
@@ -405,7 +413,10 @@ export function buildSandboxLauncherArgs(
     ...(mcpOverlay?.original && !mcpOverlay.private ? ["--readable", mcpOverlay.original] : []),
     ...(taskHome
       ? [
-          ...(config.sandboxPolicy?.readableScope === "workspace" ? [] : ["--readable", homedir]),
+          // A private launch's home stays hidden; it already reads its toolchains.
+          ...(config.sandboxPolicy?.readableScope === "workspace" || privateState
+            ? []
+            : ["--readable", homedir]),
           // Every engine keeps logins and provider settings in its own roots;
           // a task uses its own, and never reads another task's.
           ...[
@@ -414,11 +425,14 @@ export function buildSandboxLauncherArgs(
           ].flatMap((root) => ["--deny-readable", root]),
         ]
       : []),
-    ...(config.sandboxPolicy?.network === "off"
-      ? []
-      : config.sandboxPolicy?.network === "allowlist"
-        ? (config.sandboxPolicy.allowedHosts ?? []).flatMap((host) => ["--network-allow", host])
-        : ["--network"]),
+    // A personal launch's only network is the Host's own loopback services.
+    ...(profile.kind === "personal"
+      ? profile.loopbackPorts.flatMap((port) => ["--network-allow-loopback", String(port)])
+      : config.sandboxPolicy?.network === "off"
+        ? []
+        : config.sandboxPolicy?.network === "allowlist"
+          ? (config.sandboxPolicy.allowedHosts ?? []).flatMap((host) => ["--network-allow", host])
+          : ["--network"]),
     "--",
     config.command,
     ...(config.args ?? []),

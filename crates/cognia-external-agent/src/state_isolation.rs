@@ -284,7 +284,7 @@ pub fn apply_state_isolation(
         })
     };
     let gateway_task = config.env.contains_key(crate::gateway_task::PAYLOAD_ENV);
-    if let crate::launch_profile::LaunchProfile::Isolated { key, .. } = &profile {
+    if let Some(key) = profile.private_key() {
         let root = crate::launch_profile::isolated_state_root(data_dir()?, key);
         // A gateway task keeps its engine's state in its own home.
         let rule = if gateway_task {

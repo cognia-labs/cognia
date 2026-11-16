@@ -40,9 +40,13 @@ export interface EngineLaunchProfileInput {
   chatSessionId?: string
 }
 
+/**
+ * `owner` or `isolated`. `personal` is the manager's, for a marked owner turn
+ * it runs as a gateway task.
+ */
 export async function engineLaunchProfile(
   input: EngineLaunchProfileInput
-): Promise<EngineLaunchProfile> {
+): Promise<Extract<EngineLaunchProfile, { kind: "owner" | "isolated" }>> {
   const runId = externalRunAuthorityId(input.context)
   if (!runId) return { kind: "owner" }
   const { resolveRunActingIdentity } = await import("@/lib/execution/acting-authority")

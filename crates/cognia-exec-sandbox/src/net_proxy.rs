@@ -50,6 +50,11 @@ pub enum ProxyEndpoint {
 #[derive(Clone, Debug)]
 pub struct ProxyPolicy {
     pub allowlist: Vec<String>,
+    /// Loopback ports the host admits (ADR-0243 3C personal launch: the
+    /// Host gateway). A request for `127.0.0.1` or `localhost` on one of
+    /// them is dialed directly; every other loopback or private target stays
+    /// forbidden.
+    pub loopback_ports: Vec<u16>,
     pub max_concurrent_connections: usize,
     pub header_timeout: Duration,
     pub dns_timeout: Duration,
@@ -63,6 +68,7 @@ impl Default for ProxyPolicy {
     fn default() -> Self {
         Self {
             allowlist: Vec::new(),
+            loopback_ports: Vec::new(),
             max_concurrent_connections: 128,
             header_timeout: Duration::from_secs(10),
             dns_timeout: Duration::from_secs(5),
@@ -336,6 +342,21 @@ impl Network {
         }
         dial_upstream(host, port, vetted).await
     }
+
+    /// An admitted loopback port: this machine, never the upstream proxy.
+    async fn dial_loopback(&self, target: SocketAddr) -> io::Result<ProxyStream> {
+        #[cfg(test)]
+        if let Some(test) = &self.test {
+            return test.dial("127.0.0.1", target.port(), target).await;
+        }
+        Ok(Box::new(TcpStream::connect(target).await?))
+    }
+}
+
+/// The loopback address a request names when its port is admitted.
+fn admitted_loopback(host: &str, port: u16, admitted: &[u16]) -> Option<SocketAddr> {
+    (admitted.contains(&port) && (host == "127.0.0.1" || host.eq_ignore_ascii_case("localhost")))
+        .then(|| SocketAddr::from(([127, 0, 0, 1], port)))
 }
 
 /// Environment variable naming a file through which a host hands its
@@ -904,36 +925,45 @@ where
         Ok(request) => request,
         Err(_) => return reject(&mut client, "400 Bad Request", policy.header_timeout).await,
     };
+    let loopback = admitted_loopback(&request.host, request.port, &policy.loopback_ports);
     // Host and URI authorities have been checked for exact canonical equality;
     // they therefore share this allowlist decision and this single DNS result.
-    if !is_host_allowed(&request.host, &policy.allowlist) {
+    if loopback.is_none() && !is_host_allowed(&request.host, &policy.allowlist) {
         return reject(&mut client, "403 Forbidden", policy.header_timeout).await;
     }
-    let addresses = match timeout(
-        policy.dns_timeout,
-        network.resolve(&request.host, request.port),
-    )
-    .await
-    {
-        Ok(Ok(addresses)) => addresses,
-        Err(_) => return reject(&mut client, "504 Gateway Timeout", policy.header_timeout).await,
-        Ok(Err(_)) => return reject(&mut client, "502 Bad Gateway", policy.header_timeout).await,
-    };
-    let vetted = interleave_families(
-        addresses
-            .into_iter()
-            .filter(|addr| !is_forbidden_dest_ip(&addr.ip()))
-            .collect(),
-    );
-    if vetted.is_empty() {
-        return reject(&mut client, "403 Forbidden", policy.header_timeout).await;
-    }
-    let upstream = match dial_any(network, &request.host, request.port, &vetted, policy.dial_timeout)
+    let upstream = if let Some(target) = loopback {
+        match timeout(policy.dial_timeout, network.dial_loopback(target)).await {
+            Ok(Ok(upstream)) => upstream,
+            Err(_) => {
+                return reject(&mut client, "504 Gateway Timeout", policy.header_timeout).await
+            }
+            Ok(Err(_)) => {
+                return reject(&mut client, "502 Bad Gateway", policy.header_timeout).await
+            }
+        }
+    } else {
+        let addresses = match timeout(
+            policy.dns_timeout,
+            network.resolve(&request.host, request.port),
+        )
         .await
-    {
-        Ok(upstream) => upstream,
-        Err(DialFailure::TimedOut) => {
-            return reject(&mut client, "504 Gateway Timeout", policy.header_timeout).await
+        {
+            Ok(Ok(addresses)) => addresses,
+            Err(_) => {
+                return reject(&mut client, "504 Gateway Timeout", policy.header_timeout).await
+            }
+            Ok(Err(_)) => {
+                return reject(&mut client, "502 Bad Gateway", policy.header_timeout).await
+            }
+        };
+        let vetted = interleave_families(
+            addresses
+                .into_iter()
+                .filter(|addr| !is_forbidden_dest_ip(&addr.ip()))
+                .collect(),
+        );
+        if vetted.is_empty() {
+            return reject(&mut client, "403 Forbidden", policy.header_timeout).await;
         }
         Err(DialFailure::Refused) => {
             return reject(&mut client, "502 Bad Gateway", policy.header_timeout).await
@@ -1431,6 +1461,61 @@ mod tests {
             }
             assert!(fake.dials.lock().unwrap().is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn an_admitted_loopback_port_is_dialed_directly_and_no_other_is() {
+        for target in ["127.0.0.1:9900", "localhost:9900"] {
+            let fake = Arc::new(FakeNetwork::new(&[]));
+            let mut origin = fake.upstream();
+            let mut rules = policy();
+            rules.loopback_ports = vec![9900];
+            let (mut client, handler) = spawn_client(rules, &fake);
+            client
+                .write_all(
+                    format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").as_bytes(),
+                )
+                .await
+                .unwrap();
+            client.shutdown().await.unwrap();
+            origin.shutdown().await.unwrap();
+            let mut reply = Vec::new();
+            timeout(Duration::from_secs(2), client.read_to_end(&mut reply))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(reply.starts_with(b"HTTP/1.1 200"), "{target}");
+            handler.await.unwrap().unwrap();
+            assert_eq!(fake.resolutions.load(Ordering::SeqCst), 0, "{target}");
+            assert_eq!(
+                *fake.dials.lock().unwrap(),
+                vec!["127.0.0.1:9900".parse::<SocketAddr>().unwrap()]
+            );
+        }
+        let fake = Arc::new(FakeNetwork::new(&["127.0.0.1"]));
+        let mut rules = policy();
+        rules.loopback_ports = vec![9900];
+        for request in [
+            &b"CONNECT 127.0.0.1:9901 HTTP/1.1\r\n\r\n"[..],
+            &b"GET http://127.0.0.1:22/ HTTP/1.1\r\nHost: 127.0.0.1:22\r\n\r\n"[..],
+            &b"CONNECT 10.0.0.1:9900 HTTP/1.1\r\n\r\n"[..],
+        ] {
+            let (mut client, handler) = spawn_client(rules.clone(), &fake);
+            client.write_all(request).await.unwrap();
+            client.shutdown().await.unwrap();
+            let mut reply = Vec::new();
+            timeout(Duration::from_secs(2), client.read_to_end(&mut reply))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(reply.starts_with(b"HTTP/1.1 403"));
+            handler.await.unwrap().unwrap();
+        }
+        // Without an admitted port, loopback stays forbidden.
+        assert!(response(b"CONNECT 127.0.0.1:9900 HTTP/1.1\r\n\r\n", &fake)
+            .await
+            .starts_with(b"HTTP/1.1 403"));
+        assert!(fake.dials.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -16,7 +16,11 @@ import {
 import { spawnPlacementFor } from "@/lib/sandbox/spawn-placement-registry"
 import { activeHostFeatureManifest } from "@/stores/remote-host/remote-host-store"
 import { supportsHostFeatureOperation } from "@/lib/platform/host-feature-manifest"
-import type { AcpMcpServerConfig, ExternalAgentEvent } from "@/types/agent/external-agent"
+import type {
+  AcpMcpServerConfig,
+  AcpMcpServerHttp,
+  ExternalAgentEvent,
+} from "@/types/agent/external-agent"
 
 interface LocalMcpCredential {
   agentId: string
@@ -45,6 +49,25 @@ export function isTrustedLocalMcpCredential(candidate: LocalMcpCredential): bool
 }
 
 export const RENDERER_TOOL_HOST_APPROVAL_PREFIX = "external-tool-host:"
+
+/** The MCP servers a Cognia tool host serves, by name. */
+const TOOL_HOST_SERVER_NAMES: ReadonlySet<string> = new Set(["cognia-tools", "cognia-plugin-tools"])
+
+/**
+ * A server a Cognia tool host handed an engine: one of its names, over HTTP
+ * on this machine's loopback. The `personal` launch keeps only these
+ * (ADR-0243 3C).
+ */
+export function isToolHostMcpServer(server: AcpMcpServerConfig): server is AcpMcpServerHttp {
+  if (!("type" in server) || server.type !== "http" || !TOOL_HOST_SERVER_NAMES.has(server.name))
+    return false
+  try {
+    const url = new URL(server.url)
+    return url.protocol === "http:" && url.hostname === "127.0.0.1" && url.port !== ""
+  } catch {
+    return false
+  }
+}
 
 export interface RendererToolHostStartOptions {
   agentId?: string
@@ -121,7 +144,7 @@ function serverConfigs(value: unknown, leaseId: string, deferredSandbox: boolean
     }
     if (
       server.transport !== "http" ||
-      !["cognia-tools", "cognia-plugin-tools"].includes(server.name ?? "") ||
+      !TOOL_HOST_SERVER_NAMES.has(server.name ?? "") ||
       url.protocol !== "http:" ||
       url.hostname !== "127.0.0.1" ||
       url.username ||

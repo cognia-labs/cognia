@@ -206,6 +206,20 @@ impl SpawnPolicy {
     fn validate_sandbox_policy(&self, config: &ExternalAgentSpawnConfig, remote: bool) -> Result<(), PolicyViolation> {
         use crate::process::SandboxNetworkMode;
         config.sandbox_policy.validate().map_err(PolicyViolation)?;
+        // A personal launch reaches this host's own services on loopback, which
+        // only a host that already grants full network lets a remote caller reach.
+        if remote
+            && self.network_ceiling.network != SandboxNetworkMode::Full
+            && crate::launch_profile::LaunchProfile::of(&config.env)
+                .map_err(PolicyViolation)?
+                .loopback_ports()
+                .is_some()
+        {
+            return Err(PolicyViolation(
+                "a personal launch needs loopback access this host's network policy does not grant"
+                    .into(),
+            ));
+        }
         if !remote && !crate::launch_profile::isolated(&config.env) {
             return Ok(());
         }
@@ -815,6 +829,36 @@ mod tests {
         assert!(policy.validate(cfg.clone()).is_err());
         cfg.sandbox_policy.network = SandboxNetworkMode::Off;
         assert!(policy.validate(cfg).is_ok());
+    }
+
+    #[test]
+    fn a_remote_personal_launch_needs_a_full_network_ceiling() {
+        use crate::process::{ExternalAgentSandboxPolicy, SandboxNetworkMode};
+        let personal = |cfg: &mut ExternalAgentSpawnConfig| {
+            cfg.env.insert(
+                crate::launch_profile::ENGINE_PROFILE_ENV.into(),
+                r#"{"kind":"personal","key":"task-1","loopbackPorts":[9900]}"#.into(),
+            );
+            cfg.sandbox_policy.network = SandboxNetworkMode::Off;
+        };
+        let (_tmp, open) = policy(false);
+        let mut cfg = config("codex", &[]);
+        personal(&mut cfg);
+        assert!(open.validate(cfg.clone()).is_ok());
+        let (_tmp, restricted) = policy(false);
+        let restricted = restricted
+            .with_network_ceiling(ExternalAgentSandboxPolicy {
+                network: SandboxNetworkMode::Off,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(restricted
+            .validate(cfg.clone())
+            .unwrap_err()
+            .0
+            .contains("personal launch"));
+        // The desktop's own Host mints it.
+        assert!(restricted.validate_desktop(cfg).is_ok());
     }
 
     #[test]
