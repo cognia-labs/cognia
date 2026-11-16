@@ -133,6 +133,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { getDocumentAcceptExtensions } from "@cognia/document/support-matrix"
 import { toast } from "sonner"
+import { isImeComposing } from "@/lib/ui/ime"
 import { cn } from "@/lib/utils"
 import { expandPastes, findPastePlaceholders } from "@/lib/paste-collapse"
 import { usePlatform } from "@/hooks/use-platform"
@@ -2693,6 +2694,12 @@ function ComposerInner(props: InnerProps) {
   const onStopTurn = props.onStop
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      // While an IME composes (Chinese, Japanese, Korean), every key belongs to
+      // the candidate window: Enter picks a candidate, Esc cancels it, arrows
+      // move through it. Nothing below may claim one. WebKit (Safari, the Tauri
+      // macOS webview) reports the confirming key after compositionend, so the
+      // shared check also reads keyCode 229.
+      if (isComposing || isImeComposing(e)) return
       // `?` opens the shortcut cheatsheet — but ONLY on a completely empty
       // input, so it never swallows a question mark the user is typing.
       if (e.key === "?" && textInput.value.length === 0) {
@@ -2713,9 +2720,7 @@ function ComposerInner(props: InnerProps) {
         !e.ctrlKey &&
         !e.metaKey &&
         !e.altKey &&
-        !e.shiftKey &&
-        !isComposing &&
-        !e.nativeEvent.isComposing
+        !e.shiftKey
       ) {
         if (e.key === "Tab" || e.key === "ArrowRight") {
           if (acceptPrediction(prediction.suggestions[0])) e.preventDefault()
@@ -2735,9 +2740,7 @@ function ComposerInner(props: InnerProps) {
         !e.metaKey &&
         !e.altKey &&
         textInput.value === "" &&
-        activeHintRef.current !== "" &&
-        !isComposing &&
-        !e.nativeEvent.isComposing
+        activeHintRef.current !== ""
       ) {
         e.preventDefault()
         const hint = activeHintRef.current
@@ -2751,14 +2754,6 @@ function ComposerInner(props: InnerProps) {
             el.selectionStart = el.selectionEnd = el.value.length
           }
         })
-        return
-      }
-      // While an IME composition is active, Enter / Arrow / Tab / Escape belong
-      // to the candidate window — let them fall through so picking a Chinese (or
-      // Japanese, etc.) candidate doesn't accidentally confirm/navigate the
-      // popover. `nativeEvent.isComposing` is authoritative for the keystroke
-      // that ends composition; the state flag is a belt-and-suspenders backup.
-      if (completionTrigger && (isComposing || e.nativeEvent.isComposing)) {
         return
       }
       if (completionTrigger) {
@@ -2814,13 +2809,10 @@ function ComposerInner(props: InnerProps) {
       }
       // Atomic pill delete: a Backspace/Delete next to an already-inserted
       // `/command` or `@mention` removes the WHOLE token in one keystroke, so a
-      // picked chip deletes as a unit instead of nibbling `/rese`. Only when not
-      // composing and a plain key (let ⌥/⌘ word/line deletes through). A soft
-      // keyboard reports these keys as "Unidentified"; `beforeinput` below
-      // covers it.
+      // picked chip deletes as a unit instead of nibbling `/rese`. Only a plain
+      // key (let ⌥/⌘ word/line deletes through). A soft keyboard reports these
+      // keys as "Unidentified"; `beforeinput` below covers it.
       if (
-        !isComposing &&
-        !e.nativeEvent.isComposing &&
         (e.key === "Backspace" || e.key === "Delete") &&
         !e.metaKey &&
         !e.ctrlKey &&
@@ -2921,11 +2913,11 @@ function ComposerInner(props: InnerProps) {
         void onStopTurn()
         return
       }
-      // ↑/↓ recall of previously sent messages (only when no popover is open
-      // and not composing). ↑ engages from the very start of the input; while
+      // ↑/↓ recall of previously sent messages (only when no popover is open).
+      // ↑ engages from the very start of the input; while
       // navigating, both arrows walk the history and ↓ past the newest restores
       // the stashed draft.
-      if (inputHistoryRecall && (e.key === "ArrowUp" || e.key === "ArrowDown") && !isComposing) {
+      if (inputHistoryRecall && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         const ta = e.currentTarget
         const caretAtStart = ta.selectionStart === 0 && ta.selectionEnd === 0
         const next = history.recall(e.key === "ArrowUp" ? "up" : "down", {
@@ -2949,7 +2941,7 @@ function ComposerInner(props: InnerProps) {
       // Submit on Enter. Default: plain Enter sends, Shift+Enter is a newline.
       // When `sendOnEnter` is off: Enter inserts a newline and ⌘/Ctrl+Enter
       // sends instead (the non-submit cases fall through to the textarea).
-      if (e.key === "Enter" && !e.nativeEvent.isComposing && !isComposing) {
+      if (e.key === "Enter") {
         const wantsSubmit = sendOnEnter ? !e.shiftKey : e.metaKey || e.ctrlKey
         if (wantsSubmit) {
           e.preventDefault()

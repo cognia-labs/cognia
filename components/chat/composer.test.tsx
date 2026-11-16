@@ -1015,6 +1015,52 @@ describe("Composer — data-hooks integration", () => {
   })
 })
 
+describe("Composer — IME composition keys", () => {
+  function renderComposer(status?: "streaming") {
+    const onSend = jest.fn(async () => undefined)
+    const onStop = jest.fn()
+    const Wrapper = withAdapter(makeAdapter())
+    render(
+      <Wrapper>
+        <Composer
+          session={mkSession()}
+          onStartNewSession={async () => undefined}
+          onOpenSettings={() => undefined}
+          onSend={onSend}
+          onStop={onStop}
+          {...(status ? { status } : {})}
+        />
+      </Wrapper>
+    )
+    return { onSend, onStop, textarea: screen.getByRole("textbox") as HTMLTextAreaElement }
+  }
+
+  // WebKit (Safari, the Tauri macOS webview) fires the confirming keydown after
+  // compositionend with isComposing false; keyCode 229 is the only signal.
+  it("does not send on the Enter that confirms a WebKit IME candidate", async () => {
+    const { onSend, textarea } = renderComposer()
+    fireEvent.change(textarea, { target: { value: "nihao" } })
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 229 })
+    await act(async () => {})
+    expect(onSend).not.toHaveBeenCalled()
+    expect(textarea).toHaveValue("nihao")
+  })
+
+  it("does not stop a streaming turn on the Esc that cancels a candidate", async () => {
+    const { onStop, textarea } = renderComposer("streaming")
+    fireEvent.compositionStart(textarea)
+    fireEvent.keyDown(textarea, { key: "Escape", isComposing: true })
+    fireEvent.keyDown(textarea, { key: "Escape", keyCode: 229 })
+    expect(onStop).not.toHaveBeenCalled()
+  })
+
+  it("still stops a streaming turn on a plain Esc", () => {
+    const { onStop, textarea } = renderComposer("streaming")
+    fireEvent.keyDown(textarea, { key: "Escape" })
+    expect(onStop).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("Composer — run status slot", () => {
   it("docks the host's run strip directly on top of the input card, inset by the skin radius", () => {
     const Wrapper = withAdapter(makeAdapter())
