@@ -63,12 +63,23 @@ export type AgentApprovalSemantics = "per-tool-call" | "profile-fixed" | "none"
  */
 export type AgentProcessModel = "shared" | "per-session" | "per-turn" | "remote"
 
+/**
+ * Whether the runtime reports what a turn spent (ADR-0243 3B-2).
+ *
+ * - `turn`: it reports each turn's token usage on its stream or terminal frame,
+ *   so a run budget can settle on it and stop the turn once its hold is spent.
+ * - `none`: it reports nothing a budget can settle on. Under a finite token or
+ *   dollar budget it runs only through the Host model gateway.
+ */
+export type AgentUsageReport = "turn" | "none"
+
 export interface AgentExecutionSemantics {
   cancel: AgentCancelSemantics
   resume: AgentResumeSemantics
   fork: AgentForkSemantics
   approvals: AgentApprovalSemantics
   processModel: AgentProcessModel
+  usageReport: AgentUsageReport
   /** Upper bound on concurrent processes the runtime itself enforces, if any. */
   maxProcesses?: number
 }
@@ -76,7 +87,8 @@ export interface AgentExecutionSemantics {
 /**
  * The conservative reading for an adapter that declares nothing (plugin
  * adapters written before ADR-0217): a cancel may take the whole process down
- * and require a reconnect, nothing resumes or forks, and approvals are asked.
+ * and require a reconnect, nothing resumes or forks, approvals are asked, and
+ * no usage is reported.
  * Never more permissive than an adapter could actually be.
  */
 export const UNDECLARED_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.freeze({
@@ -85,6 +97,7 @@ export const UNDECLARED_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.fr
   fork: "unsupported",
   approvals: "per-tool-call",
   processModel: "shared",
+  usageReport: "none",
 }) as AgentExecutionSemantics
 
 /** The semantics an adapter declares, or the conservative default. */

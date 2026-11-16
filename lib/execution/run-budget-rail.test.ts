@@ -86,6 +86,28 @@ describe("beginRailBudget", () => {
     await budget.finish(undefined, false)
   })
 
+  it("aborts an execution whose running usage reaches the hold, and only then", async () => {
+    await declareRunBudget("root", { tokens: 100 })
+    const budget = (await beginRailBudget("call", PRICED))!
+    await budget.observe({ inputTokens: 40, outputTokens: 20 })
+    expect(budget.signal.aborted).toBe(false)
+    await budget.observe({ inputTokens: 70, outputTokens: 30 })
+    expect(budget.signal.aborted).toBe(true)
+    expect(budget.signal.reason).toMatchObject({ reason: "budget_exhausted" })
+    await budget.finish({ inputTokens: 70, outputTokens: 30 }, true)
+    expect((await spent())?.tokens).toBe(100)
+  })
+
+  it("prices running usage against a dollar hold", async () => {
+    await declareRunBudget("root", { costUsd: 0.001 })
+    const budget = (await beginRailBudget("call", PRICED))!
+    await budget.observe({ costUsd: 0.0004 })
+    expect(budget.signal.aborted).toBe(false)
+    await budget.observe({ costUsd: 0.002 })
+    expect(budget.signal.aborted).toBe(true)
+    await budget.finish({ costUsd: 0.002 }, true)
+  })
+
   it("follows the caller's own abort", async () => {
     await declareRunBudget("root", { tokens: 10 })
     const controller = new AbortController()

@@ -187,6 +187,7 @@ export const ampAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
     fork: "unsupported",
     approvals: "none",
     processModel: "shared",
+    usageReport: "turn",
   },
 })
 export const zcodeAcpProfile: AcpVendorProfile = Object.freeze({

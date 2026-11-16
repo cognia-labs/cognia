@@ -14,6 +14,7 @@ export const CRUSH_EXECUTION_SEMANTICS: AgentExecutionSemantics = {
   fork: "unsupported",
   approvals: "per-tool-call",
   processModel: "per-session",
+  usageReport: "none",
 }
 export const crushManifest: AgentIntegrationManifest = {
   ecosystem: {

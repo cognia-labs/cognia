@@ -26,6 +26,7 @@ export const OPENCODE_V2_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.f
   fork: "native",
   approvals: "per-tool-call",
   processModel: "shared",
+  usageReport: "turn",
 }) as AgentExecutionSemantics
 
 /**
@@ -40,6 +41,7 @@ export const OPENCODE_SERVER_EXECUTION_SEMANTICS: AgentExecutionSemantics = Obje
   fork: "native",
   approvals: "per-tool-call",
   processModel: "shared",
+  usageReport: "turn",
 }) as AgentExecutionSemantics
 
 export const OPENCODE_ECOSYSTEM_ID = "opencode"

@@ -14,6 +14,7 @@ export const ROVO_EXECUTION_SEMANTICS: AgentExecutionSemantics = {
   fork: "unsupported",
   approvals: "per-tool-call",
   processModel: "per-session",
+  usageReport: "none",
 }
 export const rovoDevManifest: AgentIntegrationManifest = {
   ecosystem: {

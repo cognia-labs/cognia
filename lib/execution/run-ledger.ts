@@ -24,7 +24,12 @@ import { resolveModelPricingUsd, type ResolvePricingOptions } from "@/lib/usage/
 import { holdChildRunOwnership, heldChildRunOwnership } from "./child-run-ownership"
 
 export type RunBudgetRefusal =
-  "budget_exhausted" | "deadline_exceeded" | "pricing_unknown" | "cancelled" | "hold_unavailable"
+  | "budget_exhausted"
+  | "deadline_exceeded"
+  | "pricing_unknown"
+  | "unmetered"
+  | "cancelled"
+  | "hold_unavailable"
 
 export class RunBudgetError extends Error {
   constructor(readonly reason: RunBudgetRefusal) {
@@ -35,7 +40,9 @@ export class RunBudgetError extends Error {
           ? "This run's budget is used up."
           : reason === "deadline_exceeded"
             ? "This run's deadline has passed."
-            : reason
+            : reason === "unmetered"
+              ? "This run has a budget, and this agent reports no usage it could be charged against. Run it on a Cognia model through the Host gateway where it supports one, or without a budget."
+              : reason
     )
     this.name = "RunBudgetError"
   }

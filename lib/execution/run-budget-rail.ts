@@ -72,6 +72,11 @@ export interface RailBudget {
   /** Tokens the hold buys, after converting USD: the request's ceiling. */
   readonly tokens?: number
   report(usage: MeteredUsage): Promise<void>
+  /**
+   * Report the running usage of an execution the rail cannot cap per request,
+   * and abort it with `budget_exhausted` once that reaches the hold.
+   */
+  observe(usage: MeteredUsage): Promise<void>
   /** Settle once. Without stop proof, or without usage, the whole hold is charged. */
   finish(usage: MeteredUsage | undefined, confirmedStopped: boolean): Promise<void>
 }
@@ -126,6 +131,17 @@ export async function beginRailBudget(
     ...(hold.deadlineAt !== undefined ? { deadlineAt: hold.deadlineAt } : {}),
     ...(Number.isFinite(tokens) ? { tokens } : {}),
     report: (usage) => hold.report(price(usage)),
+    observe(usage) {
+      const spent = price(usage)
+      if (
+        (["tokens", "costUsd"] as const).some(
+          (field) =>
+            hold.amounts[field] !== undefined && (spent[field] ?? 0) >= hold.amounts[field]!
+        )
+      )
+        controller.abort(new RunBudgetError("budget_exhausted"))
+      return hold.report(spent)
+    },
     async finish(usage, confirmedStopped) {
       clearTimeout(timer)
       options.signal?.removeEventListener("abort", onAbort)

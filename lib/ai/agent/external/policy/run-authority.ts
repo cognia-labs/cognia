@@ -230,19 +230,27 @@ export function externalRunAuthorityId(
 export function externalMeteredUsage(
   usage: ExternalAgentTokenUsage | undefined
 ): MeteredUsage | undefined {
-  if (!usage || (usage.promptTokens === 0 && usage.completionTokens === 0)) return undefined
+  if (!usage) return undefined
+  const tokens = usage.promptTokens > 0 || usage.completionTokens > 0
+  // A dollar cost the provider named in USD stands on its own (Goose reports
+  // only that); a cost in any other unit, or none, leaves the dollars unknown.
+  const costUsd =
+    usage.providerCost?.currency?.toUpperCase() === "USD" ? usage.providerCost.amount : undefined
+  if (!tokens && costUsd === undefined) return undefined
   return {
-    inputTokens: usage.promptTokens,
-    outputTokens: usage.completionTokens,
-    ...(usage.promptTokensIncludeCache
-      ? {}
-      : {
-          cacheReadTokens: usage.cacheReadTokens ?? 0,
-          cacheCreationTokens: usage.cacheWriteTokens ?? 0,
-        }),
-    ...(usage.providerCost?.currency?.toUpperCase() === "USD"
-      ? { costUsd: usage.providerCost.amount }
+    ...(tokens
+      ? {
+          inputTokens: usage.promptTokens,
+          outputTokens: usage.completionTokens,
+          ...(usage.promptTokensIncludeCache
+            ? {}
+            : {
+                cacheReadTokens: usage.cacheReadTokens ?? 0,
+                cacheCreationTokens: usage.cacheWriteTokens ?? 0,
+              }),
+        }
       : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
   }
 }
 

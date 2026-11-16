@@ -9,12 +9,18 @@ import type {
   ExternalAgentResult,
   AcpPermissionResponse,
 } from "@cognia/agent-contracts/external-agent"
-import { BaseProtocolAdapter, foldUsageUpdate, mergeTurnUsage } from "./base-adapter"
+import {
+  BaseProtocolAdapter,
+  createTurnUsageTracker,
+  foldUsageUpdate,
+  mergeTurnUsage,
+} from "./base-adapter"
 
 class TestAdapter extends BaseProtocolAdapter {
   readonly protocol = "test"
 
   events: ExternalAgentEvent[] = []
+  throwAfterEvents = false
   permissionRecords: AcpPermissionResponse[] = []
   cancelled: string[] = []
   promptRecords: ExternalAgentMessage[] = []
@@ -54,6 +60,7 @@ class TestAdapter extends BaseProtocolAdapter {
     for (const event of this.events) {
       yield event
     }
+    if (this.throwAfterEvents) throw new Error("stream broken mid-turn")
   }
   async respondToPermission(_sessionId: string, response: AcpPermissionResponse): Promise<void> {
     this.permissionRecords.push(response)
@@ -706,6 +713,63 @@ describe("turn usage folding", () => {
 
   it("reports no usage when nothing did", async () => {
     expect((await runWith([done()])).tokenUsage).toBeUndefined()
+  })
+
+  it("keeps what a turn reported before its stream broke", async () => {
+    const adapter = new TestAdapter()
+    await adapter.connect({} as ExternalAgentConfig)
+    adapter.events = [
+      {
+        type: "message_end",
+        sessionId: "s1",
+        timestamp: new Date(),
+        messageId: "a1",
+        tokenUsage: { promptTokens: 30, completionTokens: 5, totalTokens: 35 },
+      },
+    ]
+    adapter.throwAfterEvents = true
+    const result = await adapter.execute("s1", message)
+    expect(result.success).toBe(false)
+    expect(result.tokenUsage).toMatchObject({ promptTokens: 30, completionTokens: 5 })
+  })
+})
+
+describe("createTurnUsageTracker", () => {
+  const at = new Date()
+  it("says when the turn's figure changed and lets `done` settle it", () => {
+    const usage = createTurnUsageTracker()
+    expect(
+      usage.observe({
+        type: "message_delta",
+        sessionId: "s",
+        timestamp: at,
+        delta: { type: "text", text: "x" },
+      } as ExternalAgentEvent)
+    ).toBe(false)
+    expect(usage.current()).toBeUndefined()
+    expect(
+      usage.observe({
+        type: "message_end",
+        sessionId: "s",
+        timestamp: at,
+        messageId: "m",
+        tokenUsage: { promptTokens: 4, completionTokens: 1, totalTokens: 5 },
+      })
+    ).toBe(true)
+    expect(usage.current()?.totalTokens).toBe(5)
+    expect(usage.observe({ type: "done", sessionId: "s", timestamp: at, success: true })).toBe(
+      false
+    )
+    expect(
+      usage.observe({
+        type: "done",
+        sessionId: "s",
+        timestamp: at,
+        success: true,
+        tokenUsage: { promptTokens: 9, completionTokens: 2, totalTokens: 11 },
+      })
+    ).toBe(true)
+    expect(usage.current()).toMatchObject({ promptTokens: 9, completionTokens: 2, totalTokens: 11 })
   })
 })
 

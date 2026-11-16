@@ -21,6 +21,7 @@ export const A2A_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.freeze({
   fork: "unsupported",
   approvals: "none",
   processModel: "remote",
+  usageReport: "none",
 }) as AgentExecutionSemantics
 
 export const A2A_PROTOCOL = "a2a"

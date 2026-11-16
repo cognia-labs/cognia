@@ -101,6 +101,7 @@ import {
 } from "./protocol-adapter"
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { clampThinkingLevel } from "@cognia/agent-runtime-kit/thinking-levels"
+import { createTurnUsageTracker } from "@cognia/agent-runtime-kit/base-adapter"
 import { AgentConnectionCoordinator } from "@cognia/agent-runtime-kit/connection-coordinator"
 import { acquireProcessWriteScope } from "./host/process-write-authority"
 import {
@@ -417,6 +418,32 @@ function placementWithToolHostLeases(
 }
 
 /** The most recently active session; later entries win a tie. */
+/**
+ * What an external execution proved for its ADR-0243 hold: a successful turn,
+ * and on the gateway lane that its ticket was revoked.
+ */
+interface ExternalBudgetEvidence {
+  completed: boolean
+  gateway: boolean
+  revoked: boolean
+}
+
+/**
+ * The Cognia model a task runs on through the Host gateway: the caller's
+ * explicit binding (`null` opts out), otherwise the configuration's, otherwise
+ * the one a resumed gateway session carries. None means the native lane.
+ */
+function gatewayBindingFor(
+  config: ExternalAgentConfig,
+  options: PermissionBoundExternalExecutionOptions | undefined
+) {
+  return normalizeCogniaModelBinding(
+    options?.cogniaModel === undefined
+      ? (config.cogniaModel ?? parseGatewaySessionId(options?.sessionId)?.binding)
+      : options.cogniaModel
+  )
+}
+
 function latestSession<T extends Pick<ExternalAgentSession, "lastActivityAt">>(
   sessions: readonly T[]
 ): T | undefined {
@@ -482,7 +509,8 @@ export class ExternalAgentManager {
     {
       parentId: string
       taskId: string
-      release: () => Promise<void>
+      /** True when the task's ticket was revoked. */
+      release: () => Promise<boolean>
       allowedModels?: string[]
       planFingerprint?: string
     }
@@ -537,11 +565,7 @@ export class ExternalAgentManager {
   ) {
     const source = this.instances.get(agentId)
     if (!source) throw new Error(`Agent not found: ${agentId}`)
-    let binding = normalizeCogniaModelBinding(
-      options?.cogniaModel === undefined
-        ? (source.config.cogniaModel ?? parseGatewaySessionId(options?.sessionId)?.binding)
-        : options.cogniaModel
-    )
+    let binding = gatewayBindingFor(source.config, options)
     if (!binding) {
       if (options?.resetExternalSession !== true && parseGatewaySessionId(options?.sessionId))
         throw new Error("A gateway task must resume with its Cognia model binding")
@@ -786,17 +810,23 @@ export class ExternalAgentManager {
       })
       return publicId
     }
-    let releasePromise: Promise<void> | undefined
+    let releasePromise: Promise<boolean> | undefined
     let childAdapter: ProtocolAdapter | undefined
-    const release = (): Promise<void> =>
+    // Resolves true once the ticket is revoked: nothing can spend on it after.
+    const release = (): Promise<boolean> =>
       (releasePromise ??= (async () => {
         // Revoke first, so even a stuck child cannot keep spending while teardown runs.
-        await (lease.revoke ? lease.revoke() : gatewayRevokeRouteTicket(lease.ticketId)).catch(
-          (error) =>
+        const revoked = await (
+          lease.revoke ? lease.revoke() : gatewayRevokeRouteTicket(lease.ticketId)
+        ).then(
+          () => true,
+          (error) => {
             externalAgentManagerLogger.warn("Gateway task ticket revocation failed", {
               ticketId: lease.ticketId,
               error: this.normalizeErrorMessage(error),
             })
+            return false
+          }
         )
         const child = this.instances.get(childId)
         for (const session of child?.sessions.values() ?? []) {
@@ -819,6 +849,7 @@ export class ExternalAgentManager {
           clearSpawnPlacement(childId)
         this.gatewayTasks.delete(childId)
         this.gatewayPreparing.delete(reservationKey)
+        return revoked
       })().catch((error) => {
         // Retain ownership and allow a later stop/delete to retry failed teardown.
         releasePromise = undefined
@@ -972,13 +1003,15 @@ export class ExternalAgentManager {
             ? (event: ExternalAgentEvent) => options.onEvent?.(mapEvent(event))
             : undefined,
         } as PermissionBoundExternalExecutionOptions,
+        /** True when the task's ticket was revoked. */
         release: async () => {
           options?.signal?.removeEventListener("abort", abort)
           lease.signal?.removeEventListener("abort", abort)
-          await release()
+          const revoked = await release()
           // A connection that was already pending when abort removed the child
           // may complete afterwards. Close that captured adapter as well.
           if (childAdapter?.isConnected()) await childAdapter.disconnect()
+          return revoked
         },
       }
     } catch (error) {
@@ -4248,22 +4281,41 @@ export class ExternalAgentManager {
   }
 
   /**
-   * ADR-0243 ledger hold for one external execution. Phase 3B-2 moves metered
-   * engines onto the gateway lane with the hold as their ticket; until then the
-   * hold is settled from the usage the engine reports, or charged in full.
+   * Whether the agent's runtime reports what a turn spent, so a run budget
+   * can charge and stop it on its native login (ADR-0243 3B-2).
+   */
+  reportsTurnUsage(agentId: string): boolean {
+    const adapter = this.adapters.get(agentId)
+    return adapter !== undefined && executionSemanticsOf(adapter).usageReport === "turn"
+  }
+
+  /**
+   * ADR-0243 ledger hold for one external execution. A task on a Cognia model
+   * runs through the Host gateway with what the hold buys as its ticket's
+   * ceiling; a native login is charged its running usage as the engine
+   * reports it and stopped once that reaches the hold. The hold settles on
+   * the turn's usage after a successful turn (on the gateway lane, also after
+   * its ticket is revoked); anything else is charged in full. Under a finite
+   * token or dollar hold, a native engine that reports no usage is refused.
    */
   private async beginExternalBudget(
     agentId: string,
     options: PermissionBoundExternalExecutionOptions | undefined
   ) {
-    const [{ externalRunAuthorityId }, { beginRailBudget }, { bindPersonalEgressOptions }] =
-      await Promise.all([
-        import("./policy/run-authority"),
-        import("@/lib/execution/run-budget-rail"),
-        import("@/lib/execution/personal-egress"),
-      ])
+    const [
+      { externalRunAuthorityId, externalMeteredUsage },
+      { beginRailBudget },
+      { bindPersonalEgressOptions },
+      { RunBudgetError },
+    ] = await Promise.all([
+      import("./policy/run-authority"),
+      import("@/lib/execution/run-budget-rail"),
+      import("@/lib/execution/personal-egress"),
+      import("@/lib/execution/run-ledger"),
+    ])
     const source = personalEgressOptionsSource(options)
-    const binding = options?.cogniaModel ?? this.instances.get(agentId)?.config.cogniaModel
+    const instance = this.instances.get(agentId)
+    const binding = instance ? gatewayBindingFor(instance.config, options) : undefined
     const budget = await beginRailBudget(
       externalRunAuthorityId(source),
       { providerId: binding?.providerId, modelId: binding?.modelId ?? options?.model ?? "" },
@@ -4273,11 +4325,18 @@ export class ExternalAgentManager {
       }
     )
     if (!budget) return undefined
+    const { tokens } = budget
+    if (!binding && tokens !== undefined && !this.reportsTurnUsage(agentId)) {
+      // Its spend could be neither counted nor stopped. Nothing has left yet.
+      await budget.finish({ inputTokens: 0, outputTokens: 0 }, true)
+      throw new RunBudgetError("unmetered")
+    }
+    const usage = createTurnUsageTracker()
+    const evidence: ExternalBudgetEvidence = { completed: false, gateway: false, revoked: false }
     // The copy carries the hold's signal and keeps the Host-bound source. On
     // the gateway lane what the hold buys becomes the task ticket's ceiling,
-    // so one call cannot overrun it.
-    const { tokens } = budget
-    const bounded = {
+    // so one call cannot overrun it. Both lanes hand every event to onEvent.
+    const bounded: PermissionBoundExternalExecutionOptions = {
       ...options,
       signal: budget.signal,
       ...(tokens !== undefined
@@ -4290,9 +4349,32 @@ export class ExternalAgentManager {
             },
           }
         : {}),
+      onEvent: (event) => {
+        if (usage.observe(event)) {
+          const running = externalMeteredUsage(usage.current())
+          if (running) void budget.observe(running).catch(() => undefined)
+        }
+        if (
+          (event.type === "done" && event.success) ||
+          (event.type === "session_end" && event.reason === "completed")
+        )
+          evidence.completed = true
+        options?.onEvent?.(event)
+      },
     }
     if (source) bindPersonalEgressOptions(bounded, source)
-    return { budget, options: bounded }
+    return {
+      options: bounded,
+      evidence,
+      /** `result` is what a non-streaming execution returned, when it did. */
+      finish(result?: Pick<ExternalAgentResult, "success" | "tokenUsage">) {
+        if (result?.success) evidence.completed = true
+        return budget.finish(
+          externalMeteredUsage(result?.tokenUsage ?? usage.current()),
+          evidence.completed && (!evidence.gateway || evidence.revoked)
+        )
+      },
+    }
   }
 
   async *executeStreaming(
@@ -4302,25 +4384,18 @@ export class ExternalAgentManager {
   ): AsyncIterable<ExternalAgentEvent> {
     const held = await this.beginExternalBudget(agentId, options)
     if (!held) return yield* this.executeStreamingUnbudgeted(agentId, prompt, options)
-    const { budget } = held
-    const { externalMeteredUsage } = await import("./policy/run-authority")
-    let usage: import("@/types/agent/external-agent").ExternalAgentTokenUsage | undefined
-    let ended = false
     try {
-      for await (const event of this.executeStreamingUnbudgeted(agentId, prompt, held.options)) {
-        if (event.type === "usage_update" && event.tokenUsage) usage = event.tokenUsage
-        if (event.type === "session_end") ended = true
-        yield event
-      }
+      yield* this.executeStreamingUnbudgeted(agentId, prompt, held.options, held.evidence)
     } finally {
-      await budget.finish(externalMeteredUsage(usage), ended)
+      await held.finish()
     }
   }
 
   private async *executeStreamingUnbudgeted(
     agentId: string,
     prompt: string,
-    options?: PermissionBoundExternalExecutionOptions
+    options?: PermissionBoundExternalExecutionOptions,
+    evidence?: ExternalBudgetEvidence
   ): AsyncIterable<ExternalAgentEvent> {
     assertExternalAgentContentSafety(prompt, options)
     const {
@@ -4381,7 +4456,8 @@ export class ExternalAgentManager {
             yield mapped
           }
         } finally {
-          await gateway.release()
+          const revoked = await gateway.release()
+          if (evidence) Object.assign(evidence, { gateway: true, revoked })
         }
         return
       }
@@ -4824,18 +4900,18 @@ export class ExternalAgentManager {
   ): Promise<ExternalAgentResult> {
     const held = await this.beginExternalBudget(agentId, options)
     if (!held) return this.executeUnbudgeted(agentId, prompt, options, onExecutorStopped)
-    const { budget } = held
-    const { externalMeteredUsage } = await import("./policy/run-authority")
-    let stopped = false
     let result: ExternalAgentResult | undefined
     try {
-      result = await this.executeUnbudgeted(agentId, prompt, held.options, () => {
-        stopped = true
-        onExecutorStopped?.()
-      })
+      result = await this.executeUnbudgeted(
+        agentId,
+        prompt,
+        held.options,
+        onExecutorStopped,
+        held.evidence
+      )
       return result
     } finally {
-      await budget.finish(externalMeteredUsage(result?.tokenUsage), stopped)
+      await held.finish(result)
     }
   }
 
@@ -4843,7 +4919,8 @@ export class ExternalAgentManager {
     agentId: string,
     prompt: string,
     options?: PermissionBoundExternalExecutionOptions,
-    onExecutorStopped?: () => void
+    onExecutorStopped?: () => void,
+    evidence?: ExternalBudgetEvidence
   ): Promise<ExternalAgentResult> {
     assertExternalAgentContentSafety(prompt, options)
     const {
@@ -4897,7 +4974,8 @@ export class ExternalAgentManager {
             sessionId: gatewaySessionId(gateway.taskId, result.sessionId, gateway.binding),
           }
         } finally {
-          await gateway.release()
+          const revoked = await gateway.release()
+          if (evidence) Object.assign(evidence, { gateway: true, revoked })
         }
       }
       const releaseToolHosts = await this.bindSandboxToolHostLeases(agentId, options)

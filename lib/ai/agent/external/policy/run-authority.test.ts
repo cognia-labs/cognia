@@ -3,7 +3,11 @@ import "fake-indexeddb/auto"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { recordedRunMetadata } from "@/lib/execution/acting-authority"
 import { enforceExternalRunAuthority, bindExternalRunAuthority } from "./run-authority"
-import { externalAuthorityStepGuard, externalAuthorityOptions } from "./run-authority"
+import {
+  externalAuthorityStepGuard,
+  externalAuthorityOptions,
+  externalMeteredUsage,
+} from "./run-authority"
 
 it.each(["pi-rpc", "opencode", "opencode-v2"] as const)(
   "%s refuses an unrepresentable native argument deny rather than disabling all Bash",
@@ -298,4 +302,38 @@ it("retains inherited Pi allows through the permission translator for MCP projec
   })
   expect(enforced?.nativePolicy?.tools?.allow).toEqual(["Read"])
   expect(enforced?.permissionCeiling?.allowedTools).toEqual(["Read"])
+})
+
+describe("externalMeteredUsage", () => {
+  it("meters tokens with the cache split unless the prompt already counts it", () => {
+    expect(
+      externalMeteredUsage({
+        promptTokens: 10,
+        completionTokens: 2,
+        totalTokens: 12,
+        cacheReadTokens: 5,
+      })
+    ).toEqual({ inputTokens: 10, outputTokens: 2, cacheReadTokens: 5, cacheCreationTokens: 0 })
+    expect(
+      externalMeteredUsage({
+        promptTokens: 10,
+        completionTokens: 2,
+        totalTokens: 12,
+        cacheReadTokens: 5,
+        promptTokensIncludeCache: true,
+      })
+    ).toEqual({ inputTokens: 10, outputTokens: 2 })
+  })
+
+  it("keeps a USD cost reported without tokens, and no other unit", () => {
+    const empty = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+    expect(
+      externalMeteredUsage({ ...empty, providerCost: { amount: 0.3, currency: "usd" } })
+    ).toEqual({ costUsd: 0.3 })
+    expect(
+      externalMeteredUsage({ ...empty, providerCost: { amount: 3, currency: "ACU" } })
+    ).toBeUndefined()
+    expect(externalMeteredUsage({ ...empty, providerCost: { amount: 3 } })).toBeUndefined()
+    expect(externalMeteredUsage(undefined)).toBeUndefined()
+  })
 })

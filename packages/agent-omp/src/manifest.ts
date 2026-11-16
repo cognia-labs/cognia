@@ -17,6 +17,7 @@ export const OMP_RPC_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.freez
   fork: "native",
   approvals: "per-tool-call",
   processModel: "per-session",
+  usageReport: "turn",
   maxProcesses: 4,
 })
 /** The host's closed protocol union remains unchanged until integration is approved. */

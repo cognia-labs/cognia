@@ -14,6 +14,7 @@ export const CONTINUE_EXECUTION_SEMANTICS: AgentExecutionSemantics = {
   fork: "unsupported",
   approvals: "profile-fixed",
   processModel: "per-turn",
+  usageReport: "none",
 }
 export const continueDevManifest: AgentIntegrationManifest = {
   ecosystem: {

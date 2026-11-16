@@ -26,6 +26,7 @@ export const AIDER_CLI_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.fre
   fork: "unsupported",
   approvals: "none",
   processModel: "per-turn",
+  usageReport: "none",
 }) as AgentExecutionSemantics
 
 export const AIDER_ECOSYSTEM_ID = "aider"

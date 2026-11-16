@@ -118,6 +118,52 @@ export function mergeTurnUsage(
 }
 
 /**
+ * One turn's token usage, read from its events the same way everywhere: the
+ * host's collect-all `execute()`, the external manager's streaming path and a
+ * run budget all settle on {@link TurnUsageTracker.current}.
+ *
+ * `usage_update` and `message_end` are the running figure, `done` the
+ * authoritative final one; {@link mergeTurnUsage} combines them.
+ */
+export interface TurnUsageTracker {
+  /** Fold one event in. True when the turn's figure changed. */
+  observe(event: ExternalAgentEvent): boolean
+  current(): ExternalAgentTokenUsage | undefined
+}
+
+export function createTurnUsageTracker(): TurnUsageTracker {
+  let finalUsage: ExternalAgentTokenUsage | undefined
+  let streamedUsage: ExternalAgentTokenUsage | undefined
+  return {
+    observe(event) {
+      switch (event.type) {
+        case "usage_update":
+          // A context-window report. It carries occupancy rather than a
+          // prompt/completion split, so it can only FILL what nothing else
+          // has said — never overwrite a real breakdown with zeros.
+          streamedUsage = foldUsageUpdate(streamedUsage, event)
+          return true
+        case "message_end":
+          // Folded, not assigned. `message_end` carries a prompt/completion
+          // breakdown and, on several adapters, nothing else — so replacing
+          // outright discards the live context window and the provider cost a
+          // preceding `usage_update` had already established.
+          if (!event.tokenUsage) return false
+          streamedUsage = mergeTurnUsage(event.tokenUsage, streamedUsage)
+          return true
+        case "done":
+          if (!event.tokenUsage) return false
+          finalUsage = event.tokenUsage
+          return true
+        default:
+          return false
+      }
+    },
+    current: () => mergeTurnUsage(finalUsage, streamedUsage),
+  }
+}
+
+/**
  * Base class for protocol adapters providing common functionality.
  */
 export abstract class BaseProtocolAdapter
@@ -266,20 +312,18 @@ export abstract class BaseProtocolAdapter
     const artifacts = new Map<string, AcpContentBlock[]>()
     let success = true
     let error: string | undefined
-    // Two sources, deliberately kept apart until the end. `done` carries the
-    // authoritative final figure when an adapter has one; the streaming
-    // `usage_update` / `message_end` events are the running one. Reading only
-    // `done` (which is what this used to do) meant every adapter that reports
-    // usage mid-stream and settles without repeating it — OpenCode, and any
-    // ACP agent that sends `usage_update` — returned a result with no usage at
-    // all, while the events the caller had just seen carried it.
-    let finalUsage: ExternalAgentResult["tokenUsage"]
-    let streamedUsage: ExternalAgentResult["tokenUsage"]
+    // Reading only `done` (which is what this used to do) meant every adapter
+    // that reports usage mid-stream and settles without repeating it —
+    // OpenCode, and any ACP agent that sends `usage_update` — returned a
+    // result with no usage at all, while the events the caller had just seen
+    // carried it.
+    const usage = createTurnUsageTracker()
 
     try {
       for await (const event of this.prompt(sessionId, message, options)) {
         // Call event callback if provided
         options?.onEvent?.(event)
+        usage.observe(event)
 
         switch (event.type) {
           case "artifact_update":
@@ -352,25 +396,6 @@ export abstract class BaseProtocolAdapter
             error = event.error
             break
 
-          case "usage_update":
-            // A context-window report. It carries occupancy rather than a
-            // prompt/completion split, so it can only FILL what nothing else
-            // has said — never overwrite a real breakdown with zeros.
-            streamedUsage = foldUsageUpdate(streamedUsage, event)
-            break
-
-          case "message_end":
-            // Folded, not assigned. `message_end` carries a prompt/completion
-            // breakdown and, on several adapters, nothing else — so replacing
-            // outright discards the live context window and the provider cost a
-            // preceding `usage_update` had already established. `mergeTurnUsage`
-            // is the same rule applied at the end of the turn: the newer
-            // accounting wins, the fields it structurally cannot carry survive.
-            if (event.tokenUsage) {
-              streamedUsage = mergeTurnUsage(event.tokenUsage, streamedUsage)
-            }
-            break
-
           case "done":
             // A `done` frame cannot un-say a refusal the agent already
             // reported and never answered. Pi settles EVERY turn with
@@ -391,7 +416,6 @@ export abstract class BaseProtocolAdapter
                 currentText === "" &&
                 ![...artifacts.values()].some((blocks) => blocks.length > 0)
               )
-            if (event.tokenUsage) finalUsage = event.tokenUsage
             break
         }
       }
@@ -419,10 +443,12 @@ export abstract class BaseProtocolAdapter
         steps,
         toolCalls,
         duration: Date.now() - startTime,
-        tokenUsage: mergeTurnUsage(finalUsage, streamedUsage),
+        tokenUsage: usage.current(),
         error,
       }
     } catch (err) {
+      // A turn that throws mid-stream has still spent what it reported.
+      const spent = usage.current()
       return {
         success: false,
         sessionId,
@@ -431,6 +457,7 @@ export abstract class BaseProtocolAdapter
         steps,
         toolCalls,
         duration: Date.now() - startTime,
+        ...(spent ? { tokenUsage: spent } : {}),
         error: err instanceof Error ? err.message : String(err),
       }
     }

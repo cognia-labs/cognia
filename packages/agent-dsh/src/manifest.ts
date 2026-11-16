@@ -27,6 +27,7 @@ export const DSH_SDK_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.freez
   fork: "unsupported",
   approvals: "profile-fixed",
   processModel: "per-session",
+  usageReport: "turn",
 }) as AgentExecutionSemantics
 
 export const DSH_ECOSYSTEM_ID = "deepseek-harness"

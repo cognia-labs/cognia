@@ -18,6 +18,7 @@ const mockSteps = new Map<string, unknown>()
 const mockAgents = new Map<string, { config: { id: string } }>()
 const mockManager = {
   getAgent: jest.fn(),
+  reportsTurnUsage: jest.fn((_agentId: string) => true),
   addAgent: jest.fn(),
   removeAgent: jest.fn(),
   execute: jest.fn(),
@@ -41,9 +42,11 @@ jest.mock("@/lib/bot/policy/run-authority", () => ({ resolveOwnedBotAuthority: j
 const mockBudgetRefusal = jest.fn(
   async (..._args: unknown[]): Promise<string | undefined> => undefined
 )
+const mockReadRunBudget = jest.fn(async (..._args: unknown[]): Promise<unknown> => undefined)
 jest.mock("@/lib/execution/run-ledger", () => ({
   ...jest.requireActual("@/lib/execution/run-ledger"),
   runBudgetRefusal: (...args: unknown[]) => mockBudgetRefusal(...args),
+  readRunBudget: (...args: unknown[]) => mockReadRunBudget(...args),
 }))
 jest.mock("./permission-api", () => ({ pluginHasApiPermission: jest.fn() }))
 jest.mock("@/lib/db/bot-installations", () => ({ updateBotInstallation: jest.fn() }))
@@ -1202,6 +1205,18 @@ describe("execution route and cost ceiling", () => {
     await expect(runPluginExternalAgent("plugin", "devin", "test", options)).rejects.toThrow(
       "No price is known"
     )
+    expect(mockManager.execute).not.toHaveBeenCalled()
+  })
+
+  it("asks for setup when an agent that reports no usage runs on its own login under a cost ceiling", async () => {
+    installation({ mode: "native" })
+    mockManager.reportsTurnUsage.mockReturnValueOnce(false)
+    mockReadRunBudget.mockResolvedValueOnce({ costUsd: 1, spent: { tokens: 0, costUsd: 0 } })
+    await expect(runPluginExternalAgent("plugin", "devin", "test", options)).rejects.toThrow(
+      "reports no usage"
+    )
+    expect(mockReadRunBudget).toHaveBeenCalledWith("run")
+    expect(mockSteps.has("run:__host:external-agent:dispatched")).toBe(false)
     expect(mockManager.execute).not.toHaveBeenCalled()
   })
 })

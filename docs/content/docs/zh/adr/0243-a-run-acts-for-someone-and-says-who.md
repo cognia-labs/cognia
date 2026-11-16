@@ -197,7 +197,7 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 - 确认执行已停止后，按它上报的用量结算；没有停止证明或没有用量时，扣除整个预留。未知的消耗绝不按零结算；
 - 有美元上限时，没有价格的模型在设置价格之前会被拒绝。
 
-引擎分层计量。能走 Host 模型网关的引擎走网关，网关 ticket 的上限就是它的预留。用自己供应商登录的引擎预留最坏情况，按它上报的用量结算，否则扣除整个预留。只有既不能计量、也不能限制步数的引擎，在有限预算下会被拒绝，而不只是被移除工具，因为没有工具的引擎仍会消耗模型 token。
+引擎分层计量。绑定了 Cognia 模型的任务走 Host 模型网关，网关 ticket 的上限就是它的预留；回合成功结束且 ticket 已吊销后，按回合用量结算。用自己供应商登录的引擎保留自己的登录（2026-11-16 修订：不强制走网关）：它预留最坏情况，回合进行中按上报的用量扣除，达到预留即被中止，回合成功结束后按该用量结算。失败、取消或丢失的回合扣除整个预留。在有限的 token 或美元预算下，用自己登录、运行时不上报用量的引擎会被拒绝，而不只是被移除工具，因为没有工具的引擎仍会消耗模型 token；它可以改用 Cognia 模型走网关。
 
 权限随运行持久化，完整传给运行启动另一个 agent 的每一种方式：原生子 agent、队友、squad、工作流 agent 节点、外部和 ACP agent、插件 agent 回合。有一个测试枚举这些启动路径。Bot 策略通过它到达每个子 agent。
 
@@ -250,7 +250,7 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
    - 受众收窄和出口检查；
    - [x] 严格的披露范围（阶段 2D，2026-11-13）。
          目前只有 owner 拥有个人访问，所以这一步先于任何其他人获得访问而落地。
-3. **部分实现：** 运行树权限（阶段 3A，进行中）；共享账本（3B-1，已实现）；让支持网关的外部引擎强制走网关（3B-2）及外部引擎代理和配置隔离（3C）仍未完成。
+3. **部分实现：** 运行树权限（阶段 3A，进行中）；共享账本（3B-1，已实现）；外部引擎计量（3B-2，已实现）；外部引擎代理和配置隔离（3C）仍未完成。
 4. 开放代表使用者通道：按主体保存的凭据库、授权链接及其投递方式、回调身份校验（先做 Lark）。它取代仅限 owner 的检查。只有在上述旧历史标记和引擎记录失效完成之后，这一步才能发布。
 5. 绑定个人通道：确认、声明范围、控制台标注，以及转为 `needs_setup` 的迁移。
 6. 其他平台，随各自支持按用户授权而跟进。
@@ -282,7 +282,9 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 
 已删除：内存中的子树守卫（`dispatch-budget.ts`、`_budgetRootRunId`、`budgetRootRunId`）及其强制串行；3A 起记录但从未执行的 `RunAuthorityV1.pools`；Bot 在两次调用之间检查已花费的逻辑及其 ticket 换算；工作流预算引擎（`run-budget.ts`）、「预算未覆盖」标记和 `WorkflowRunLineage.budgetCeilingUsd`；best-of-N 对没有原生美元上限的运行时的拒绝。小队的 `tokenBudget` 仍是软性升级守卫（通知、暂停、降低并发），不是账本上限。
 
-遗留：嵌入调用（`knowledge.embed`、`twin.rag`）不预留；用自己登录的外部引擎只按它上报的用量计量，要等 3B-2 让支持网关的引擎强制走网关。具体命令和结果：`docs/evidence/2026-11-16-adr-0243-run-tree-budget-ledger.md`。
+遗留：嵌入调用（`knowledge.embed`、`twin.rag`）不预留。具体命令和结果：`docs/evidence/2026-11-16-adr-0243-run-tree-budget-ledger.md`。
+
+**阶段 3B-2（2026-11-16）。** 每个运行时在执行语义里声明是否上报回合用量（`AgentExecutionSemantics.usageReport`，取 `turn` 或 `none`；什么都没声明的适配器按 `none` 处理）。一个回合用量跟踪器（`@cognia/agent-runtime-kit/base-adapter` 的 `createTurnUsageTracker`）以同样方式读取 `usage_update`、`message_end` 和 `done`，供收集式 `execute()`、外部代理管理器的流式路径和预留共用，因此流式回合不再丢失终止帧携带的用量。管理器在用量变化时把当前数字记到预留上（`RailBudget.observe` 在达到预留时中止执行），只有在有停止证明时才按回合用量结算：回合成功结束（`done` 成功、`session_end` 完成或成功的结果），网关通道还要求 ticket 已吊销。在 token 或美元预留下，运行时不上报用量的原生引擎在发出任何请求之前以 `unmetered` 被拒绝；只有截止时间的预留仍允许运行。Bot 的外部代理路径在标记派发之前做同样的检查，并要求先完成设置。以美元上报、没有 token 拆分的供应商费用现在也计入；其他单位不计入。遗留：网关任务按引擎上报的用量结算，以 ticket 为上限，因为网关不返回 ticket 实际计量的花费；原生登录下引擎在成功 `done` 之后的调用不计入；按消息而非按回合上报的适配器（OpenCode v1）在回合中途可能滞后，直到 `done`。具体命令和结果：`docs/evidence/2026-11-16-adr-0243-external-engine-metering.md`。
 
 **阶段 3A（第 15 轮，部分完成）。** 精确 cap 规则与 `caps: "explicit-v1"` 标记保持有效：仅继承的显式 authority、grant、Bot/composition authority、显式 workflow node cap 与 policy/unattended cap 进入记录；旧 surface 只继承 pools。Thread 准备阶段被拒绝后消耗该 run identity，重试使用新 queued 行并获得 durable acceptance 与活跃 child journal。Typed workflow runner 经新旧 deployment admission 将 workflow 及 agent node 关联到 Host tool-call/invocation run；模型参数不能选择父级，无 run 调用保持根。插件 façade 解析调用方的方式与 plugin SDK launch 相同：已准入行，其次 reservation 的 Host 已知父级，否则为根；reserved turn id 不会成为 workflow 父级。跨 project 的子 workflow 以带 observation 的根启动、不建立谱系链接，但把父级继承的显式 cap 记录为自身上限，其 agent node 仍受限；无显式 cap 时与 HEAD 相同，为普通根。凡携带尚未准入 turn id 的 hook 上下文（deferred build hook、goal/loop 续跑、plan step、后台投递、早期 chat error）都标记为 reserved，并在 Host 已知时附带父级。Plugin SDK/session/external launch 与 typed workflow façade 随后优先使用已准入行，其次该父级（仅当其行存在），否则无父级启动（已删除的 captured coordinator 保留带 observation 的根例外），不会因行缺失而被拒绝。Reader/mark 保留 reserved turn id；例外是 local-person 分支只携带 Host-only local proof（与 HEAD 相同），以及 façade 对无行 reservation 的隐私闸门不带该 id、但保留全部显式依赖。`onChatError` 经 await 的 hook 路径投递，不再作为 cold-cache 同步通知。CLI 自身工具选项保持 HEAD 的空 allow 与精确 deny 语义，继承 cap 单独应用严格空 allow 与 glob deny。本人输入的 project-thread turn 保留 Host-only local-person OAuth/checkout proof 及调用者显式 MCP 选项，行、hook 与 reader 仍保持 coordinator 谱系；普通已准入 turn 仍按自身行解析凭据。Legacy workflow retry 可保留自身 workflow root metadata，但 canonical execution parent 与 caps 仍经验证继承，其他矛盾 root 继续拒绝。Room 成员保持无父级 service/person 根且不继承 tree cap，privacy provenance 不建立祖先关系。Captured coordinator 缺失及已入 journal 的 pruned-parent 恢复仍保留带 observation 的根例外。Host 构建 MCP map、无映射 server withholding、三个已知 SDK server 例外及 workflow 自身选项语义保持不变。远程 `execution.turnOptions` 为没有生产 sender 的 dormant receiver seam，已在类型、receiver 注释与 AST 测试固定；既有远程限制仍在 `execution.policy`。在 dev `a1f113309d` 上的最终验证：320/328 suites、8219/8566 tests 通过；8 个失败 suite 在干净 dev 上同样失败。Native tsc 有 58 条全局诊断，全部 179 个修改路径诊断为零；修改的 sidecar suite 105/105 通过。不声明 native/provider 验收。精确命令、启动路径/引擎表及边界见 evidence ledger。3B 共享 accounting 与 3C credential/env/config 隔离及剩余 broker enforcement 仍未完成。
 

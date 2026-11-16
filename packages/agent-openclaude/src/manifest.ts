@@ -17,6 +17,7 @@ export const OPENCLAUDE_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.fr
   fork: "unsupported",
   approvals: "per-tool-call",
   processModel: "per-session",
+  usageReport: "turn",
 })
 export const openClaudeManifest: AgentIntegrationManifest = Object.freeze({
   ecosystem: {

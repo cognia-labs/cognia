@@ -25,6 +25,7 @@ export const PI_RPC_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.freeze
   fork: "native",
   approvals: "per-tool-call",
   processModel: "per-session",
+  usageReport: "turn",
   maxProcesses: 4,
 }) as AgentExecutionSemantics
 

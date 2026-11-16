@@ -19,7 +19,7 @@ import {
   recordBotInvocationCost,
 } from "@/lib/bot/runtime/run-cost"
 import { currentPricingSettings } from "@/lib/execution/run-budget-rail"
-import { RunBudgetError, runBudgetRefusal } from "@/lib/execution/run-ledger"
+import { readRunBudget, RunBudgetError, runBudgetRefusal } from "@/lib/execution/run-ledger"
 import type {
   PluginBotExternalAgentPermissionMode,
   PluginExternalAgentOptions,
@@ -527,6 +527,13 @@ async function dispatchPluginExternalAgent(
   const refusal = await runBudgetRefusal(runId, { model: costModel, pricing: pricingOptions })
   if (refusal === "pricing_unknown") return needsSetup(new BotRunPricingUnknownError(model).message)
   if (refusal) throw new RunBudgetError(refusal)
+  // On its own login an agent that reports no usage can be neither charged
+  // nor stopped under a token or dollar ceiling (ADR-0243 3B-2).
+  if (!gatewayRoute && !manager.reportsTurnUsage(agentId)) {
+    const left = await readRunBudget(runId)
+    if (left?.tokens !== undefined || left?.costUsd !== undefined)
+      return needsSetup(new RunBudgetError("unmetered").message)
+  }
   await assertOwnedBotWorkspace(pluginId, workspace)
   if (signal?.aborted) throw new Error("Bot run was cancelled")
   const { createBotStepApi, botApprovalInterruptId } = await import("@/lib/bot/runtime/step")

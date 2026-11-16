@@ -1,3 +1,4 @@
+import { UNDECLARED_EXECUTION_SEMANTICS } from "@cognia/agent-contracts/semantics"
 // Authority storage is exercised with real IndexedDB in run-authority.test.ts.
 jest.mock("@/lib/execution/run-authority", () => ({
   ...jest.requireActual("@/lib/execution/run-authority"),
@@ -4691,7 +4692,32 @@ describe("Cognia gateway task lifecycle", () => {
       // The gateway's inner agent runs under the outer hold, not a second one.
       expect(mockBeginRailBudget).toHaveBeenCalledTimes(1)
       expect(mockBeginRailBudget.mock.calls[0][2]).toMatchObject({ caps: { costUsd: 0.25 } })
+      // A successful turn whose ticket was revoked settles on its usage.
       expect(finish).toHaveBeenCalledTimes(1)
+      expect(finish).toHaveBeenCalledWith(
+        { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        true
+      )
+    } finally {
+      restorePlane()
+    }
+  })
+
+  it("charges the whole hold when the gateway ticket could not be revoked", async () => {
+    const { manager, restorePlane } = prepare()
+    const finish = jest.fn(async () => undefined)
+    mockBeginRailBudget.mockResolvedValueOnce({
+      signal: new AbortController().signal,
+      tokens: 1000,
+      report: jest.fn(),
+      observe: jest.fn(async () => undefined),
+      finish,
+    })
+    mockGatewayRevoke.mockRejectedValueOnce(new Error("gateway down"))
+    try {
+      await manager.addAgent(managedConfig())
+      await manager.execute("managed", "task")
+      expect(finish).toHaveBeenCalledWith(expect.anything(), false)
     } finally {
       restorePlane()
     }
@@ -6325,4 +6351,88 @@ it("Q3 person-agent replay binds its real Host run: clean unchanged, marked refu
     mockEgressTaint.mockImplementation(async () => ({ verified: true, marks: [] }))
     await fixture.dispose()
   }
+})
+
+describe("the run budget on the native lane (ADR-0243 3B-2)", () => {
+  const at = new Date()
+  /** `null`: a hold with no token or dollar ceiling, only a deadline. */
+  const hold = (tokens: number | null = 1000) => {
+    const finish = jest.fn(async (..._args: unknown[]) => undefined)
+    const observe = jest.fn(async (..._args: unknown[]) => undefined)
+    mockBeginRailBudget.mockResolvedValueOnce({
+      signal: new AbortController().signal,
+      ...(tokens !== null ? { tokens } : {}),
+      report: jest.fn(),
+      observe,
+      finish,
+    })
+    return { finish, observe }
+  }
+  const reportsUsage = () =>
+    Object.assign(currentMock, {
+      semantics: { ...UNDECLARED_EXECUTION_SEMANTICS, usageReport: "turn" as const },
+    })
+  const turn = (success: boolean): ExternalAgentEvent[] => [
+    {
+      type: "message_end",
+      sessionId: "s_1",
+      timestamp: at,
+      messageId: "m1",
+      tokenUsage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+    },
+    {
+      type: "done",
+      sessionId: "s_1",
+      timestamp: at,
+      success,
+      tokenUsage: { promptTokens: 30, completionTokens: 5, totalTokens: 35 },
+    },
+  ]
+
+  it("charges a streamed turn's usage as it runs and settles it after a successful turn", async () => {
+    const { finish, observe } = hold()
+    reportsUsage()
+    currentMock.events = turn(true)
+    const manager = freshManager()
+    await manager.addAgent(buildBaseConfig())
+    for await (const _event of manager.executeStreaming("agent-1", "hi")) {
+      /* drain */
+    }
+    expect(observe).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 10, outputTokens: 2 })
+    )
+    expect(finish).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 30, outputTokens: 5 }),
+      true
+    )
+  })
+
+  it("charges the whole hold of a turn that did not end successfully", async () => {
+    const { finish } = hold()
+    reportsUsage()
+    currentMock.events = turn(false)
+    const manager = freshManager()
+    await manager.addAgent(buildBaseConfig())
+    for await (const _event of manager.executeStreaming("agent-1", "hi")) {
+      /* drain */
+    }
+    expect(finish).toHaveBeenCalledWith(expect.anything(), false)
+  })
+
+  it("refuses a native engine that reports no usage under a token or dollar hold, free", async () => {
+    const { finish } = hold()
+    const manager = freshManager()
+    await manager.addAgent(buildBaseConfig())
+    await expect(manager.execute("agent-1", "hi")).rejects.toMatchObject({ reason: "unmetered" })
+    expect(finish).toHaveBeenCalledWith({ inputTokens: 0, outputTokens: 0 }, true)
+    expect(currentMock.lastMessage).toBeUndefined()
+  })
+
+  it("runs it under a deadline-only hold, which the hold's signal enforces", async () => {
+    const { finish } = hold(null)
+    const manager = freshManager()
+    await manager.addAgent(buildBaseConfig())
+    await expect(manager.execute("agent-1", "hi")).resolves.toMatchObject({ success: true })
+    expect(finish).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 1 }), true)
+  })
 })

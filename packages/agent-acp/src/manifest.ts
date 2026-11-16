@@ -29,12 +29,14 @@ export const ACP_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.freeze({
   fork: "native",
   approvals: "per-tool-call",
   processModel: "shared",
+  usageReport: "turn",
 }) as AgentExecutionSemantics
 
 /** The same protocol reached over HTTP, SSE or WebSocket: the host owns no process. */
 export const ACP_REMOTE_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.freeze({
   ...ACP_EXECUTION_SEMANTICS,
   processModel: "remote",
+  usageReport: "turn",
 }) as AgentExecutionSemantics
 
 /**
@@ -44,6 +46,7 @@ export const ACP_REMOTE_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.fr
 export const ISOLATED_ACP_EXECUTION_SEMANTICS: AgentExecutionSemantics = Object.freeze({
   ...ACP_EXECUTION_SEMANTICS,
   processModel: "per-session",
+  usageReport: "turn",
 }) as AgentExecutionSemantics
 
 export const DEVIN_ACP_EXECUTION_SEMANTICS = ISOLATED_ACP_EXECUTION_SEMANTICS

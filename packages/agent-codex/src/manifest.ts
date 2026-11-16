@@ -24,6 +24,7 @@ export const CODEX_APP_SERVER_EXECUTION_SEMANTICS: AgentExecutionSemantics = Obj
   fork: "native-turn-boundary",
   approvals: "per-tool-call",
   processModel: "shared",
+  usageReport: "turn",
 }) as AgentExecutionSemantics
 
 export const CODEX_ECOSYSTEM_ID = "codex"

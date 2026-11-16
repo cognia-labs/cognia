@@ -63,3 +63,30 @@ it("wires runtime policies beside factories without giving unknown plugins a wri
   expect(registry.runtimePolicy("aider-cli")).toBe(aiderRuntimePolicy)
   expect(registry.runtimePolicy("plugin:custom").processWriteScope).toBeUndefined()
 })
+
+it("pins which built-in runtimes report a turn's usage to a run budget (ADR-0243 3B-2)", async () => {
+  const { executionSemanticsOf } = await import("@cognia/agent-contracts/semantics")
+  const registry = new ProtocolAdapterRegistry()
+  registerBuiltinProtocolAdapters(registry)
+  const reports = Object.fromEntries(
+    registry
+      .getProtocols()
+      .map((protocol) => [protocol, executionSemanticsOf(registry.create(protocol)!).usageReport])
+  )
+  expect(reports).toEqual({
+    acp: "turn",
+    "codex-app-server": "turn",
+    "codex-siwc-app-server": "turn",
+    "opencode-v2": "turn",
+    opencode: "turn",
+    a2a: "none",
+    "dsh-sdk": "turn",
+    "pi-rpc": "turn",
+    "aider-cli": "none",
+    "openclaude-cli": "turn",
+    "crush-http": "none",
+    "continue-cli": "none",
+    "rovo-http": "none",
+    "codebuff-sdk": "none",
+  })
+})

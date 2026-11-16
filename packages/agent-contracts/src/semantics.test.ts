@@ -12,6 +12,7 @@ const turnShared: AgentExecutionSemantics = {
   fork: "native-turn-boundary",
   approvals: "per-tool-call",
   processModel: "shared",
+  usageReport: "turn",
 }
 
 const processPerSession: AgentExecutionSemantics = {
@@ -20,11 +21,14 @@ const processPerSession: AgentExecutionSemantics = {
   fork: "unsupported",
   approvals: "profile-fixed",
   processModel: "per-session",
+  usageReport: "none",
 }
 
 describe("execution semantics", () => {
   it("falls back to the conservative reading when an adapter declares nothing", () => {
     expect(executionSemanticsOf({})).toBe(UNDECLARED_EXECUTION_SEMANTICS)
+    // An adapter that never said it reports usage cannot be charged on it.
+    expect(UNDECLARED_EXECUTION_SEMANTICS.usageReport).toBe("none")
     expect(executionSemanticsOf({ semantics: turnShared })).toBe(turnShared)
   })
 
