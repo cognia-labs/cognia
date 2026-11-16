@@ -137,6 +137,8 @@ Pure structure, no behaviour change. Mechanical moves first (one commit), splits
 - Split `composer.tsx` (5,246 lines; `ComposerInner` ~3,300): trigger detection and popover, slash/`!`/`#` modes, templates, link and paste folding, attachments/OCR/video intake, draft and history, ghost text, `@` routing, IM platform mode, best-of-N, keyboard. Existing composer tests stay green; new hooks get co-located tests.
 - No changeset (internal).
 
+Progress (2026-11-17): the `lib/claude` cohort moved in `e9902c9108` (migration plan §13.2). The `hooks/chat` renames, the controller split and the Composer split wait until other sessions commit their uncommitted work in `claude-chat-events.ts`, `use-claude-chat-controller.ts`, their tests and `composer.tsx` (the user's call).
+
 ### 6. Convergence (D7, D10, D11, D12)
 
 1. **One Markdown configuration**: a single module builds remark/rehype lists, components, fence renderers, URL transform and sanitize schema from resolved display settings; `MarkdownRenderer`, `StreamingTextPart` and reasoning all take it. Streaming gains heading ids, LaTeX preprocessing, a `diff` fence renderer and `onOpenProjectFile`. Display settings travel through `MessageRenderContext`, so nested renderers inherit them. Mentions render inside Markdown (a remark/rehype step) instead of replacing it. `FinalizedLongTextPart` keeps lazy sections but resolves heading ids and footnote/reference definitions across the whole message. Pet chat and the skill AI popup use the chat configuration. Parity test covers the feature matrix.
