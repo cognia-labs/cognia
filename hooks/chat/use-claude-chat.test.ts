@@ -449,6 +449,13 @@ jest.mock("@/lib/db/sessions", () => ({
   updateSession: (...a: unknown[]) => updateSessionMock(...a),
 }))
 
+// The Host binding guard has its own suite (lib/chat/session-host-binding.test.ts)
+// and needs a real session table; here every session is local and unguarded.
+jest.mock("@/lib/chat/session-host-binding", () => ({
+  ...jest.requireActual("@/lib/chat/session-host-binding"),
+  guardBuiltinSessionHostSend: jest.fn().mockResolvedValue(undefined),
+}))
+
 jest.mock("@/lib/db/session-state", () => ({
   bumpUnread: jest.fn().mockResolvedValue(undefined),
 }))
