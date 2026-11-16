@@ -140,7 +140,7 @@ describe("provider adaptation", () => {
 
   it("collapses a generic gateway to the three tiers it distinguishes", () => {
     mockWidth = 360
-    renderSelector(onModel("deepseek-reasoner", "deepseek"), { mode: "list" })
+    renderSelector(onModel("custom-reasoning-model", "custom-gateway"), { mode: "list" })
     const names = screen.getAllByRole("radio").map((el) => el.textContent ?? "")
     // Auto + low/medium/high, and nothing above: the channel folds xhigh AND
     // max onto `high`, so offering them would be three controls with one effect.
@@ -150,7 +150,7 @@ describe("provider adaptation", () => {
   })
 
   it("draws one tick per offered tier, not per ladder entry", () => {
-    renderSelector(onModel("deepseek-reasoner", "deepseek"))
+    renderSelector(onModel("custom-reasoning-model", "custom-gateway"))
     expect(screen.getAllByTestId("effort-track-tick")).toHaveLength(3)
     expect(screen.getByTestId("effort-track")).toHaveAttribute("aria-valuemax", "2")
   })
@@ -178,13 +178,13 @@ describe("provider adaptation", () => {
   it("displays a persisted tier the active model cannot honour as what will be sent", () => {
     // `max` on a gateway really goes out as `high`; showing `max` would
     // misreport the turn. The session row is left alone.
-    renderSelector({ ...onModel("deepseek-reasoner", "deepseek"), thinkingLevel: "max" })
+    renderSelector({ ...onModel("custom-reasoning-model", "custom-gateway"), thinkingLevel: "max" })
     expect(screen.getByTestId("effort-selector-value")).toHaveTextContent("High")
     expect(mockedUpdateSession).not.toHaveBeenCalled()
   })
 
   it("keeps the slider ends addressable on a narrowed ladder", () => {
-    renderSelector(onModel("deepseek-reasoner", "deepseek"))
+    renderSelector(onModel("custom-reasoning-model", "custom-gateway"))
     fireEvent.keyDown(screen.getByTestId("effort-track"), { key: "End" })
     // "End" lands on the last OFFERED tier, not on the ladder's `ultracode`.
     expect(mockedUpdateSession).toHaveBeenLastCalledWith("ses_1", {

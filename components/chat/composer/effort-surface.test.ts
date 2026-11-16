@@ -51,10 +51,11 @@ describe("resolveEffortSurface — built-in Claude rail", () => {
   })
 
   it("narrows to the tiers a generic gateway keeps distinct", () => {
+    // Keep the generic-gateway contract independent of vendor catalog changes.
     const surface = resolveEffortSurface({
       runtime: "claude-sdk",
-      sessionProvider: "deepseek",
-      sessionModel: "deepseek-reasoner",
+      sessionProvider: "custom-gateway",
+      sessionModel: "custom-reasoning-model",
     })
     // That channel folds xhigh AND max onto `high`, so offering them would be
     // three controls with one effect — and `ultracode` would promise depth the
@@ -116,8 +117,8 @@ describe("resolveEffortSurface — hidden-tier preference", () => {
   it("does not resurrect a tier the surface never offered", () => {
     const surface = resolveEffortSurface({
       runtime: "claude-sdk",
-      sessionProvider: "deepseek",
-      sessionModel: "deepseek-reasoner",
+      sessionProvider: "custom-gateway",
+      sessionModel: "custom-reasoning-model",
       hiddenTiers: ["low"],
     })
     expect(surface.levels).toEqual(["medium", "high"])

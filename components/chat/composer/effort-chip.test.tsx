@@ -148,8 +148,8 @@ describe("label", () => {
       <EffortChip
         session={{
           ...session,
-          providerOverride: "deepseek",
-          model: "deepseek-reasoner",
+          providerOverride: "custom-gateway",
+          model: "custom-reasoning-model",
           thinkingLevel: "max",
         }}
       />
