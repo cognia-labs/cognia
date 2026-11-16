@@ -11,9 +11,9 @@
  * actually spawns, carried a `cline` entry no preset references, and neither
  * side gave OpenCode a state root.
  *
- * TypeScript consumes this file directly. Rust keeps compiled-in literals — a
- * security allowlist must not depend on parsing a file at runtime — and
- * `pnpm audit:agent-capabilities` fails when the two disagree.
+ * TypeScript imports this file and Rust compiles it in with `include_str!`, so
+ * the two hosts read one copy; `pnpm audit:agent-capabilities` fails when
+ * either carries its own.
  */
 
 import POLICY from "@/protocol/external-agent-security-policy.json"
@@ -25,6 +25,21 @@ interface RawPolicy {
   sandbox: { supportedPlatforms: string[]; reasonKey: string }
   binaryAllowlist: { commands: string[] }
   npxPackageAllowlist: { packages: string[] }
+  launchEnvironment: ExternalAgentLaunchEnvironment
+}
+
+/** What a launch inherits from the Host's own environment, by mode (ADR-0243 3C). */
+export interface ExternalAgentLaunchEnvironment {
+  /** Every launch. */
+  essentialKeys: readonly string[]
+  /** The owner's own run: the person's session layout and toolchain roots. */
+  sessionKeys: readonly string[]
+  /** The owner's own run only: the person's SSH agent and model-provider credentials. */
+  ownerKeys: readonly string[]
+  ownerPrefixes: readonly string[]
+  /** Host-owned keys a request may set, which the owner's own run also inherits. */
+  configKeys: readonly string[]
+  configPrefixes: readonly string[]
 }
 
 const policy = POLICY as unknown as RawPolicy
@@ -42,6 +57,9 @@ export const EXTERNAL_AGENT_BINARY_ALLOWLIST: readonly string[] = policy.binaryA
 
 /** Packages `npx` may execute. */
 export const EXTERNAL_AGENT_NPX_ALLOWLIST: readonly string[] = policy.npxPackageAllowlist.packages
+
+export const EXTERNAL_AGENT_LAUNCH_ENVIRONMENT: ExternalAgentLaunchEnvironment =
+  policy.launchEnvironment
 
 /**
  * The env variable a configuration sets to ask its spawn backend for a private

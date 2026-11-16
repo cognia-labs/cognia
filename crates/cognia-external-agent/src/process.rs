@@ -336,13 +336,6 @@ impl Default for ExternalAgentProcessManager {
     }
 }
 
-fn configure_siwc_environment(cmd: &mut Command) {
-    // Reuse the native runtime allowlist. Inherited OPENAI/CODEX credentials,
-    // shell startup hooks and proxy destinations cannot compete with SIWC.
-    cmd.env_clear()
-        .envs(crate::gateway_task::runtime_environment());
-}
-
 impl ExternalAgentProcessManager {
     /// Create a new process manager
     pub fn new() -> Self {
@@ -505,24 +498,25 @@ impl ExternalAgentProcessManager {
         if let Some(companion) = companion {
             config.env.insert(companion.env.into(), companion.helper.to_string_lossy().into_owned());
         }
+        // The child starts from what its launch inherits, never from the
+        // Host's whole environment (ADR-0243 3C). A SIWC launch and a managed
+        // gateway task get their credentials from the Host, so inherited
+        // OPENAI/CODEX credentials, shell startup hooks and proxy destinations
+        // cannot compete with them; the managed DSH launcher validates its
+        // runtime home before importing plugins and inherits nothing.
         let protected_siwc = config.env.contains_key("COGNIA_AGENT_SIWC_CAPABILITY");
-        if protected_siwc {
-            configure_siwc_environment(&mut cmd);
-        }
-        review_engine_environment(&mut cmd, &mut config, std::env::vars_os().map(|(key, _)| key));
-        cmd.env_remove(crate::mcp_config_file::PAYLOAD_ENV);
-        cmd.env_remove(crate::mcp_config_file::WRAPPED_ENV);
-        // The state key is a request to this host, never child input — not
-        // even when the host process itself happens to carry one.
-        cmd.env_remove(crate::state_isolation::AGENT_STATE_KEY_ENV);
-        if managed_gateway {
-            cmd.env_clear()
-                .envs(crate::gateway_task::runtime_environment());
-        }
-        if let Some(runtime_home) = config.env.get("COGNIA_DSH_RUNTIME_HOME").cloned() {
-            // The managed DSH launcher validates this home before importing
-            // plugins. Its isolated profiles must not inherit host credentials.
-            cmd.env_clear();
+        let dsh_runtime_home = config.env.get("COGNIA_DSH_RUNTIME_HOME").cloned();
+        let inheritance = if dsh_runtime_home.is_some() {
+            crate::launch_environment::Inheritance::None
+        } else if managed_gateway || protected_siwc {
+            crate::launch_environment::Inheritance::Essential
+        } else {
+            crate::launch_environment::Inheritance::Owner
+        };
+        let mut ambient = crate::launch_environment::inherited(inheritance, std::env::vars_os());
+        review_engine_environment(&mut config, &mut ambient);
+        cmd.env_clear().envs(ambient);
+        if let Some(runtime_home) = dsh_runtime_home {
             config.env.retain(|key, _| {
                 matches!(
                     key.as_str(),
@@ -936,18 +930,15 @@ pub(crate) fn blank_private_credentials(config: &mut ExternalAgentSpawnConfig) {
 /// Keep each engine's reviewed env families to their reviewed keys: from the
 /// request always, and from the host outside a private launch.
 fn review_engine_environment(
-    command: &mut Command,
     config: &mut ExternalAgentSpawnConfig,
-    ambient_keys: impl IntoIterator<Item = std::ffi::OsString>,
+    inherited: &mut Vec<(String, std::ffi::OsString)>,
 ) {
     let private = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
     let (engine, engine_args) = crate::launch_descriptor::unwrapped(&config.command, &config.args);
     let (engine, engine_args) = (engine.to_string(), engine_args.to_vec());
-    for key in ambient_keys {
-        if crate::launch_descriptor::reviewed_env_refused(&engine, &engine_args, &key.to_string_lossy(), true, private) {
-            command.env_remove(key);
-        }
-    }
+    inherited.retain(|(key, _)| {
+        !crate::launch_descriptor::reviewed_env_refused(&engine, &engine_args, key, true, private)
+    });
     config.env.retain(|key, _| {
         !crate::launch_descriptor::reviewed_env_refused(&engine, &engine_args, key, false, private)
     });
@@ -1086,20 +1077,10 @@ mod tests {
     }
     #[test]
     fn siwc_environment_clears_inherited_credentials_and_keeps_runtime_only() {
-        let mut command = tokio::process::Command::new("codex");
-        command
-            .env("OPENAI_API_KEY", "synthetic")
-            .env("CODEX_AUTH_TOKEN", "synthetic")
-            .env("NODE_OPTIONS", "synthetic");
-        super::configure_siwc_environment(&mut command);
-        let env: std::collections::HashMap<_, _> = command
-            .as_std()
-            .get_envs()
-            .filter_map(|(k, v)| v.map(|v| (k.to_owned(), v.to_owned())))
-            .collect();
-        for key in ["OPENAI_API_KEY", "CODEX_AUTH_TOKEN", "NODE_OPTIONS"] {
-            assert!(!env.contains_key(std::ffi::OsStr::new(key)));
-        }
+        let ambient = [("OPENAI_API_KEY", "synthetic"), ("CODEX_AUTH_TOKEN", "synthetic"), ("NODE_OPTIONS", "synthetic"), ("PATH", "/usr/bin")]
+            .map(|(key, value)| (std::ffi::OsString::from(key), std::ffi::OsString::from(value)));
+        let kept = crate::launch_environment::inherited(crate::launch_environment::Inheritance::Essential, ambient);
+        assert_eq!(kept.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(), ["PATH"]);
     }
     #[cfg(unix)]
     #[tokio::test]
@@ -1228,18 +1209,17 @@ mod tests {
         }
     }
 
-    fn removed_env(command: &Command) -> Vec<String> {
-        command
-            .as_std()
-            .get_envs()
-            .filter_map(|(key, value)| value.is_none().then_some(key.to_string_lossy().into_owned()))
-            .collect()
+    fn inherited(keys: &[&str]) -> Vec<(String, std::ffi::OsString)> {
+        keys.iter().map(|key| (key.to_string(), "ambient".into())).collect()
+    }
+
+    fn names(inherited: &[(String, std::ffi::OsString)]) -> Vec<&str> {
+        inherited.iter().map(|(key, _)| key.as_str()).collect()
     }
 
     #[test]
     fn kimi_environment_filters_ambient_identity_hooks_and_bot_credentials() {
         for bot in [false, true] {
-            let mut command = Command::new("fixture");
             let mut config = echo_config("kimi-env");
             config.command = crate::sandbox::launcher_file_name(std::env::consts::OS).into();
             config.args = vec!["--".into(), "kimi".into(), "acp".into()];
@@ -1251,23 +1231,19 @@ mod tests {
             if bot {
                 config.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
             }
-            review_engine_environment(
-                &mut command,
-                &mut config,
-                [
-                    "KIMI_CODE_HOME",
-                    "KIMI_MODEL_API_KEY",
-                    "KIMI_OAUTH_HOST",
-                    "KIMI_CODE_USER_AGENT",
-                    "KIMI_BIN_PATH",
-                ]
-                .map(std::ffi::OsString::from),
-            );
-            let removed = removed_env(&command);
+            let mut ambient = inherited(&[
+                "KIMI_CODE_HOME",
+                "KIMI_MODEL_API_KEY",
+                "KIMI_OAUTH_HOST",
+                "KIMI_CODE_USER_AGENT",
+                "KIMI_BIN_PATH",
+            ]);
+            review_engine_environment(&mut config, &mut ambient);
+            let kept = names(&ambient);
             for key in ["KIMI_OAUTH_HOST", "KIMI_CODE_USER_AGENT", "KIMI_BIN_PATH"] {
-                assert!(removed.contains(&key.to_string()));
+                assert!(!kept.contains(&key));
             }
-            assert_eq!(removed.contains(&"KIMI_MODEL_API_KEY".to_string()), bot);
+            assert_eq!(kept.contains(&"KIMI_MODEL_API_KEY"), !bot);
             assert_eq!(config.env["KIMI_CODE_HOME"], "/owned/kimi");
             assert_eq!(config.env["KIMI_MODEL_API_KEY"], "explicit-fixture");
             assert!(!config.env.contains_key("KIMI_OAUTH_HOST"));
@@ -1276,33 +1252,27 @@ mod tests {
 
     #[test]
     fn aider_takes_reviewed_settings_from_the_request_only() {
-        let mut command = Command::new("fixture");
         let mut config = echo_config("aider-env");
         config.command = "aider".into();
         config.env.extend([
             ("AIDER_MODEL".into(), "deepseek/test".into()),
             ("AIDER_LOAD".into(), "commands".into()),
         ]);
-        review_engine_environment(
-            &mut command,
-            &mut config,
-            ["AIDER_MODEL", "AIDER_LOAD"].map(std::ffi::OsString::from),
-        );
-        let removed = removed_env(&command);
-        assert!(removed.contains(&"AIDER_MODEL".to_string()));
-        assert!(removed.contains(&"AIDER_LOAD".to_string()));
+        let mut ambient = inherited(&["AIDER_MODEL", "AIDER_LOAD"]);
+        review_engine_environment(&mut config, &mut ambient);
+        assert!(ambient.is_empty());
         assert_eq!(config.env["AIDER_MODEL"], "deepseek/test");
         assert!(!config.env.contains_key("AIDER_LOAD"));
     }
 
     #[test]
     fn other_engines_keep_their_environment_unreviewed() {
-        let mut command = Command::new("fixture");
         let mut config = echo_config("codex-env");
         config.command = "codex".into();
         config.env.insert("KIMI_OAUTH_HOST".into(), "unrelated".into());
-        review_engine_environment(&mut command, &mut config, ["AIDER_MODEL"].map(std::ffi::OsString::from));
-        assert!(removed_env(&command).is_empty());
+        let mut ambient = inherited(&["AIDER_MODEL"]);
+        review_engine_environment(&mut config, &mut ambient);
+        assert_eq!(names(&ambient), ["AIDER_MODEL"]);
         assert!(config.env.contains_key("KIMI_OAUTH_HOST"));
     }
     use super::*;

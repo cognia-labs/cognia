@@ -45,7 +45,8 @@
         ]
       },
       "env": {
-        "prefixes": ["ANTHROPIC_", "CLAUDE_"]
+        "prefixes": ["ANTHROPIC_", "CLAUDE_"],
+        "keys": ["AWS_REGION", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK", "CLOUD_ML_REGION"]
       },
       "stateRoots": [".claude", ".claude.json", ".claude.json.backup"],
       "fileRoots": [".claude.json", ".claude.json.backup"],

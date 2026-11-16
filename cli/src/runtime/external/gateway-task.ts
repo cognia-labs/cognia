@@ -3,6 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import type { NodeExternalAgentSpawnConfig } from "./node-backend"
 import { buildCodexModelCatalog } from "./codex-model-catalog"
+import { inheritedEnvironment } from "./launch-environment"
 
 const PAYLOAD_ENV = "COGNIA_GATEWAY_TASK_CONFIG"
 /** Mirrors `RUNTIMES` in `crates/cognia-sandboxd/src/gateway_task.rs`. */
@@ -25,27 +26,11 @@ const ALLOWED_FILES = new Set([
   "qwen/settings.json",
   "claude/settings.json",
 ])
-const ESSENTIAL_ENV = new Set([
-  "PATH",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "TERM",
-  "COLORTERM",
-  "TMPDIR",
-  "TMP",
-  "TEMP",
-  "SYSTEMROOT",
-  "WINDIR",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "NODE_EXTRA_CA_CERTS",
-])
 
 export function gatewayRuntimeEnvironment(ambient: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     NODE_ENV: ambient.NODE_ENV ?? "production",
-    ...Object.fromEntries(Object.entries(ambient).filter(([key]) => ESSENTIAL_ENV.has(key))),
+    ...inheritedEnvironment(ambient, "essential"),
   }
 }
 

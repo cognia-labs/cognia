@@ -60,6 +60,20 @@ const MAX_OPERATOR_NAME_BYTES: usize = 128;
 struct SecurityPolicy {
     binary_allowlist: BinaryAllowlist,
     npx_package_allowlist: NpxPackageAllowlist,
+    launch_environment: LaunchEnvironmentTable,
+}
+
+/// `launchEnvironment`: what a launch inherits from the Host, by mode
+/// (`crate::launch_environment`), and the host's own request keys.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LaunchEnvironmentTable {
+    pub essential_keys: Vec<String>,
+    pub session_keys: Vec<String>,
+    pub owner_keys: Vec<String>,
+    pub owner_prefixes: Vec<String>,
+    pub config_keys: Vec<String>,
+    pub config_prefixes: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -87,67 +101,33 @@ fn npx_package_allowlisted(package: &str) -> bool {
     SECURITY_POLICY.npx_package_allowlist.packages.iter().any(|name| name == package)
 }
 
-/// Exact env keys the host itself passes to every engine. Each engine's own
-/// keys come from its launch descriptor
+pub(crate) fn launch_environment_table() -> &'static LaunchEnvironmentTable {
+    &SECURITY_POLICY.launch_environment
+}
+
+/// A host configuration key a request may set, which the owner's own run also
+/// inherits (`launchEnvironment.configKeys` / `configPrefixes`).
+pub(crate) fn host_config_env(key: &str) -> bool {
+    let table = launch_environment_table();
+    table.config_keys.iter().any(|known| known == key)
+        || table.config_prefixes.iter().any(|prefix| key.starts_with(prefix.as_str()))
+}
+
+/// Request keys the host consumes itself: the workspace port, the gateway
+/// task and its lease, an engine's MCP servers, the Bot state and the update
+/// switch. Host configuration keys come from the security policy
+/// ([`host_config_env`]) and each engine's own keys from its launch descriptor
 /// ([`crate::launch_descriptor::admits_request_env`]).
-const ENV_KEY_ALLOWLIST: &[&str] = &[
-    "COGNIA_HERMES_ACP_BOOTSTRAP",
+const HOST_CONTROL_ENV: &[&str] = &[
     "COGNIA_PORT",
     "COGNIA_PORT_COUNT",
     "PORT",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "NO_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "no_proxy",
-    "TERM",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "TZ",
-    "NO_COLOR",
-    "FORCE_COLOR",
-    // Pins the DeepSeek Harness user-data root into Cognia-owned space. Without
-    // it DSH falls back to ~/.dsh, where a user-writable cordis.patch.yml can
-    // inject plugins and arbitrary JS into a certified composition.
-    "DSH_HOME",
-    // Host-consumed task configuration and its one-time gateway lease.
     "COGNIA_GATEWAY_TASK_CONFIG",
     "COGNIA_GATEWAY_TOKEN",
-    // A session's MCP servers for an engine that reads them from its own
-    // files; the host consumes it (`mcp_config_file`).
     "COGNIA_ENGINE_MCP_SERVERS",
     "COGNIA_BOT_ISOLATION",
     "COGNIA_BOT_STATE_DIR",
     "DISABLE_AUTO_UPDATE",
-];
-
-/// Env key families the host itself passes (Cognia-owned runtimes and
-/// handshakes). Each engine's own families come from its launch descriptor.
-const ENV_PREFIX_ALLOWLIST: &[&str] = &[
-    "CODEBUFF_",
-    "ACP_",
-    "COGNIA_AGENT_",
-    // DeepSeek Harness: the provider credential plus the composition's own
-    // COGNIA_DSH_* inputs (workspace, session root, model, persona). DSH_HOME is
-    // an exact key above — it is a path, not a prefix family.
-    "DEEPSEEK_",
-    "COGNIA_DSH_",
-    // Tool-host handshake for the bundled Cognia Pi extension. Pi has no
-    // per-session mcpServers parameter, so the socket path and per-attempt
-    // token reach the extension through its process env rather than through an
-    // MCP server spec. The broker's authorize() remains the permission
-    // authority; see ADR-0119.
-    "COGNIA_TOOLHOST_",
-    // Plugin Pi package values (ADR-0210). Only a cooperating extension that a
-    // plugin ships and the user opted an agent into reads these; no program,
-    // loader or runtime interprets a `COGNIA_PIPKG_*` key. The values come from
-    // the plugin's manifest literals, its own configuration or the session
-    // workspace path — never from the model — and the dedicated prefix is what
-    // keeps a plugin from reaching `NODE_OPTIONS`, `LD_PRELOAD` or a provider
-    // credential through this channel.
-    "COGNIA_PIPKG_",
 ];
 
 /// A policy violation. The message is safe to surface to the caller and to
@@ -818,10 +798,8 @@ fn filter_env_with_additions(
     let mut kept = HashMap::new();
     let mut dropped = Vec::new();
     for (key, value) in env {
-        let allowed = ENV_KEY_ALLOWLIST.contains(&key.as_str())
-            || ENV_PREFIX_ALLOWLIST
-                .iter()
-                .any(|prefix| key.starts_with(prefix))
+        let allowed = HOST_CONTROL_ENV.contains(&key.as_str())
+            || host_config_env(&key)
             || crate::launch_descriptor::admits_request_env(&key);
         let host_policy_key = key.eq_ignore_ascii_case(COMMAND_ALLOWLIST_ENV)
             || key.eq_ignore_ascii_case(ENV_ALLOWLIST_ENV);

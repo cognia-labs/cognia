@@ -1664,9 +1664,10 @@ it("keeps plugin Pi package env away from every non-Pi agent, from both sources"
   const pi = buildExternalAgentChildEnv(ambient, overrides, { command: "pi" })
   expect(pi).toMatchObject({
     COGNIA_PIPKG_MODE: "hosted",
-    COGNIA_PIPKG_AMBIENT: "a",
     COGNIA_TOOLHOST_PI_PACKAGE_ROOTS: '["/x"]',
   })
+  // Cognia's own keys reach a launch only through its request.
+  expect(pi).not.toHaveProperty("COGNIA_PIPKG_AMBIENT")
 })
 
 it("passes only an explicit managed DeepSeek endpoint", () => {

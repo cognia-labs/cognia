@@ -11,12 +11,8 @@ import readline from "node:readline"
 import { resolveWorkspacePortEnv } from "../workspace-port-env"
 import { deleteGatewayTask, gatewayRuntimeEnvironment, prepareGatewayTask } from "./gateway-task"
 import { mcpConfigOverlayOf, prepareMcpConfigFile } from "./mcp-config-file"
-import {
-  admitsRequestEnv,
-  privateBlankCredentials,
-  reviewedEnvRefused,
-  takesPiPackages,
-} from "./launch-descriptor"
+import { privateBlankCredentials, reviewedEnvRefused, takesPiPackages } from "./launch-descriptor"
+import { admitsRequestKey, inheritedEnvironment } from "./launch-environment"
 import {
   applyStateIsolation,
   defaultStateIsolationHost,
@@ -147,93 +143,10 @@ const CHANNEL = {
 } as const
 
 // What the CLI is willing to launch is the security policy's allowlist
-// (protocol/external-agent-security-policy.json), the one the desktop's
-// TypeScript reads and the Rust literal arrays are audited against
-// (`pnpm audit:agent-capabilities`). No second copy lives here.
+// (protocol/external-agent-security-policy.json), the one the desktop reads
+// too (`pnpm audit:agent-capabilities`). No second copy lives here.
 const BINARY_ALLOWLIST: ReadonlySet<string> = new Set(EXTERNAL_AGENT_BINARY_ALLOWLIST)
 const NPX_ALLOWLIST: ReadonlySet<string> = new Set(EXTERNAL_AGENT_NPX_ALLOWLIST)
-// Env the host itself passes to every engine. Each engine's own keys and
-// families come from its launch descriptor (`admitsRequestEnv`).
-const CONFIG_ENV_KEYS = new Set([
-  "COGNIA_HERMES_ACP_BOOTSTRAP",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
-  "TERM",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "TZ",
-  "NO_COLOR",
-  "FORCE_COLOR",
-  // Pins the DeepSeek Harness user-data root into Cognia-owned space; without
-  // it DSH falls back to ~/.dsh, where a user-writable cordis.patch.yml can
-  // inject plugins and arbitrary JS into a certified composition.
-  "DSH_HOME",
-])
-const RUNTIME_ENV_KEYS = new Set([
-  "PATH",
-  "PWD",
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "SHELL",
-  "TMPDIR",
-  "TMP",
-  "TEMP",
-  "XDG_CONFIG_HOME",
-  "XDG_CACHE_HOME",
-  "XDG_DATA_HOME",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "NODE_EXTRA_CA_CERTS",
-  "COLORTERM",
-  "NO_COLOR",
-  "FORCE_COLOR",
-  "LC_CTYPE",
-  "NVM_BIN",
-  "NVM_DIR",
-  "NVM_INC",
-  "PNPM_HOME",
-  "BUN_INSTALL",
-  "__CF_USER_TEXT_ENCODING",
-  "__CFBundleIdentifier",
-  "XPC_FLAGS",
-  "XPC_SERVICE_NAME",
-  "MallocNanoZone",
-  "OSLogRateLimit",
-  // External CLIs perform their own update checks unless their launcher sets
-  // this conventional switch. Preserve the parent's explicit opt-out so an
-  // ACP session/new cannot stall behind an updater inside the sandbox.
-  "DISABLE_AUTO_UPDATE",
-])
-const CONFIG_ENV_PREFIXES = [
-  "CODEBUFF_",
-  "ACP_",
-  "COGNIA_AGENT_",
-  // DeepSeek Harness: the provider credential plus the composition's own
-  // COGNIA_DSH_* inputs (workspace, session root, model, persona).
-  "DEEPSEEK_",
-  "COGNIA_DSH_",
-  // The tool-host handshake (socket path + per-attempt token + server name).
-  // ACP agents never needed this because the token goes to the MCP bridge they
-  // spawn; Pi has no per-session mcpServers parameter, so the bundled Cognia
-  // extension reads it from its own process env instead. Safe because the
-  // broker's authorize() is the permission authority, not possession of the
-  // token — see ADR-0119.
-  "COGNIA_TOOLHOST_",
-  // Plugin Pi package values (ADR-0210), mirroring ENV_PREFIX_ALLOWLIST in
-  // crates/cognia-external-agent/src/presets.rs. Read only by a cooperating
-  // extension the user opted an agent into; values come from the plugin's
-  // manifest, its own configuration or the workspace path, never the model.
-  "COGNIA_PIPKG_",
-]
-const DANGEROUS_ENV =
-  /^(?:LD_|DYLD_|NODE_OPTIONS$|GCONV_PATH$|GIT_CONFIG_|HOSTALIASES$|NLSPATH$|RESOLV_HOST_CONF$|PSMODULEPATH$|PSEXECUTIONPOLICYPREFERENCE$)/i
-
 interface ProcessRecord {
   child: ChildProcessWithoutNullStreams
   stopping: boolean
@@ -375,15 +288,6 @@ function isDshHostProofKey(key: string): boolean {
   return key === "COGNIA_DSH_PROCESS_LEASE" || key === "COGNIA_DSH_PROCESS_LEASE_NONCE"
 }
 
-function admittedConfigKey(key: string): boolean {
-  return (
-    !DANGEROUS_ENV.test(key) &&
-    (CONFIG_ENV_KEYS.has(key) ||
-      CONFIG_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)) ||
-      admitsRequestEnv(key))
-  )
-}
-
 const WRITABLE_REQUEST_ENV = new Set([
   "COGNIA_AGENT_WRITABLE_ROOTS",
   "COGNIA_AGENT_WRITABLE_CEILING",
@@ -446,18 +350,15 @@ export function buildExternalAgentChildEnv(
   const bot = overrides?.COGNIA_BOT_ISOLATION === "1"
   const blanked = bot || launch.isolatedState ? privateBlankCredentials(launch.command, args) : []
   const env: NodeJS.ProcessEnv = { NODE_ENV: ambient.NODE_ENV ?? "production" }
-  for (const [key, value] of Object.entries(ambient)) {
-    if (isDshHostProofKey(key) || WRITABLE_REQUEST_ENV.has(key) || blanked.includes(key)) continue
-    if (!pi && isPiPackageOnlyKey(key)) continue
-    if (reviewedEnvRefused(launch.command, args, key, true, bot)) continue
-    if (RUNTIME_ENV_KEYS.has(key) ? !DANGEROUS_ENV.test(key) : admittedConfigKey(key))
-      env[key] = value
+  for (const [key, value] of Object.entries(inheritedEnvironment(ambient, "owner"))) {
+    if (blanked.includes(key) || reviewedEnvRefused(launch.command, args, key, true, bot)) continue
+    env[key] = value
   }
   for (const [key, value] of Object.entries(overrides ?? {})) {
     if (isDshHostProofKey(key) || WRITABLE_REQUEST_ENV.has(key)) continue
     if (!pi && isPiPackageOnlyKey(key)) continue
     if (reviewedEnvRefused(launch.command, args, key, false, bot)) continue
-    if (admittedConfigKey(key)) env[key] = value
+    if (admitsRequestKey(key)) env[key] = value
   }
   for (const key of blanked) env[key] ??= ""
   Object.assign(env, botRuntimeEnvironment(overrides))

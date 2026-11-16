@@ -72,7 +72,11 @@ export const claudeCodeManifest: AgentIntegrationManifest = Object.freeze({
           "@zed-industries/claude-code-acp",
         ],
       },
-      env: { prefixes: ["ANTHROPIC_", "CLAUDE_"] },
+      env: {
+        prefixes: ["ANTHROPIC_", "CLAUDE_"],
+        // Bedrock and Vertex sign-in (`CLAUDE_CODE_USE_BEDROCK` / `_VERTEX`).
+        keys: ["AWS_REGION", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK", "CLOUD_ML_REGION"],
+      },
       stateRoots: [".claude", ".claude.json", ".claude.json.backup"],
       fileRoots: [".claude.json", ".claude.json.backup"],
       isolation: {

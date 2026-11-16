@@ -14,6 +14,7 @@ pub mod gateway_task;
 pub mod jsonc;
 pub mod kube_backend;
 pub mod launch_descriptor;
+pub mod launch_environment;
 pub mod mcp_config_file;
 pub mod native_bridge;
 pub mod presets;
