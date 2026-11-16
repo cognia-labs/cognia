@@ -211,8 +211,12 @@ export async function buildSlackAdapter(row: AdapterInstanceRow): Promise<Platfo
     signingSecret: () => connectorsKeyringGet(row.id, "signingSecret").then((t) => t ?? ""),
     userToken: async () => {
       // Scheduled presence updates have no verified personal authorizer.
-      const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
-      if (!(await admitPersonalCredential(undefined, { source: "slack-user", person: row.id })).ok)
+      const { admitPersonalCredential, LOCAL_PERSON } =
+        await import("@/lib/execution/personal-credential")
+      if (
+        !(await admitPersonalCredential(undefined, { source: "slack-user", person: LOCAL_PERSON }))
+          .ok
+      )
         return ""
       return (await connectorsKeyringGet(row.id, "userToken")) ?? ""
     },

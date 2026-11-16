@@ -1,6 +1,7 @@
 /**
  * @jest-environment node
  */
+import { createHash } from "node:crypto"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 import { LarkApiError } from "@cognia/feishu-protocol"
@@ -16,6 +17,11 @@ jest.mock("./auth", () => ({
 }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({ connectorsLarkUserAuth: jest.fn() }))
 
+/** `larkUserKey(openId)`: whose authorization a call names. */
+const keyOf = (openId: string) => createHash("sha256").update(openId).digest("hex")
+const ALICE = keyOf("ou_alice")
+const BOB = keyOf("ou_bob")
+
 beforeEach(() => {
   mockClearTokenCache.mockClear()
   ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockResolvedValue({
@@ -29,6 +35,7 @@ beforeEach(() => {
 describe("withUserTokenRefresh", () => {
   const ctx = {
     adapterId: "fixture",
+    principal: ALICE,
     appId: "app",
     appSecret: "secret",
     credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
@@ -44,6 +51,37 @@ describe("withUserTokenRefresh", () => {
       expectedAuthorizationEpoch: "request-epoch",
     })
     expect(fn).toHaveBeenCalledTimes(2)
+    // Every capture reads the same person's authorization.
+    expect(connectorsLarkUserAuth).toHaveBeenCalled()
+    for (const [input] of (connectorsLarkUserAuth as jest.Mock).mock.calls)
+      expect(input).toEqual({ action: "snapshot", adapterId: "fixture", principal: ALICE })
+  })
+  it("refreshes only the person whose call was rejected", async () => {
+    ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async (input) => ({
+      configured: true,
+      authorizationEpoch: input.principal === ALICE ? "alice-epoch" : "bob-epoch",
+      accessToken: input.principal === ALICE ? "alice-token" : "bob-token",
+    }))
+    const aliceCall = jest.fn().mockResolvedValue("alice result")
+    const bobCall = jest
+      .fn()
+      .mockRejectedValueOnce(new LarkApiError({ status: 401, code: null, message: "expired" }))
+      .mockResolvedValueOnce("bob result")
+    await expect(withUserTokenRefresh(ctx, aliceCall)).resolves.toBe("alice result")
+    await expect(withUserTokenRefresh({ ...ctx, principal: BOB }, bobCall)).resolves.toBe(
+      "bob result"
+    )
+    expect(aliceCall.mock.calls).toEqual([["alice-token", "alice-epoch"]])
+    expect(bobCall.mock.calls).toEqual([
+      ["bob-token", "bob-epoch"],
+      ["bob-token", "bob-epoch"],
+    ])
+    expect(refreshUserToken).toHaveBeenCalledTimes(1)
+    expect(refreshUserToken).toHaveBeenCalledWith({
+      ...ctx,
+      principal: BOB,
+      expectedAuthorizationEpoch: "bob-epoch",
+    })
   })
   it("retains the Lark international deployment during user refresh", async () => {
     const fn = jest
@@ -189,7 +227,13 @@ it("forwards Host credential admission into a refresh without replacing its epoc
   const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
   let first = true
   await withUserTokenRefresh(
-    { adapterId: "fixture", appId: "app", appSecret: "secret", credentialContext },
+    {
+      adapterId: "fixture",
+      principal: ALICE,
+      appId: "app",
+      appSecret: "secret",
+      credentialContext,
+    },
     async () => {
       if (first) {
         first = false
@@ -199,6 +243,10 @@ it("forwards Host credential admission into a refresh without replacing its epoc
     }
   )
   expect(refreshUserToken).toHaveBeenCalledWith(
-    expect.objectContaining({ credentialContext, expectedAuthorizationEpoch: "request-epoch" })
+    expect.objectContaining({
+      credentialContext,
+      principal: ALICE,
+      expectedAuthorizationEpoch: "request-epoch",
+    })
   )
 })

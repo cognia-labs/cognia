@@ -2268,5 +2268,22 @@
     "save": "保存",
     "saved": "连接器已保存",
     "unregistered": "已经没有启用的插件提供「{kind}」连接器了。它的设置会保留，但在插件重新启用之前无法启动。"
+  },
+  "delegatedAuthorizations": {
+    "title": "个人授权",
+    "laneLabel": "以每位请求者身份执行",
+    "laneDelegatedHelp": "每个人的请求使用其本人授权的账号；尚未授权的人会收到登录链接。",
+    "laneServiceHelp": "所有运行都使用应用自身的权限，不使用任何人的个人账号。",
+    "laneHostOnly": "只有此连接器所在的 Host 可以修改。",
+    "laneSaved": "已保存",
+    "laneFailed": "保存失败：{reason}",
+    "peopleLabel": "已授权的人",
+    "empty": "还没有人授权此机器人。请在与机器人的私聊中发送 /auth。",
+    "authorizedAt": "授权于 {when}",
+    "revoke": "撤销",
+    "revokeAria": "撤销 {name} 的授权",
+    "revoked": "已撤销授权",
+    "revokeFailed": "撤销失败：{reason}",
+    "registryNote": "个人访问需要开启身份注册表；未开启时只有你本人有个人访问。"
   }
 }

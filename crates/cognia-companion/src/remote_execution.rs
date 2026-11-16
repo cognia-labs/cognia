@@ -1818,7 +1818,8 @@ mod tests {
         });
         let request = ExecutionRequest::new(
             "connectors_lark_user_auth",
-            json!({"input":{"action":"snapshot","adapterId":"fixture"}}),
+            json!({"input":{"action":"snapshot","adapterId":"fixture",
+                "principal":"4d2c1b0a99887766554433221100ffeeddccbbaa99887766554433221100ffee"}}),
             execution_request("service", None).principal,
             ExecutionTransport::Internal,
             Some(Uuid::new_v4().to_string()),

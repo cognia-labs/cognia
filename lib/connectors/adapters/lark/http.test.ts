@@ -1,10 +1,6 @@
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
-  connectorsLarkUserAuth: jest.fn(async () => ({
-    configured: true,
-    authorizationEpoch: "http-fixture",
-    accessToken: "connected-user",
-  })),
+  connectorsLarkUserAuth: jest.fn(),
 }))
 
 jest.mock("@/lib/auth-providers/feishu/auth", () => {
@@ -12,23 +8,25 @@ jest.mock("@/lib/auth-providers/feishu/auth", () => {
   return {
     getTenantAccessToken,
     getTenantToken: getTenantAccessToken,
-    getUserAccessToken: jest.fn(),
     clearTokenCache: jest.fn(),
     refreshUserToken: jest.fn(),
   }
 })
 
+import { createHash } from "node:crypto"
 import { LarkApiError } from "@cognia/feishu-protocol"
 import { connectorsHttpRequest, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import {
   clearTokenCache,
   getTenantAccessToken,
-  getUserAccessToken,
   refreshUserToken,
 } from "@/lib/auth-providers/feishu/auth"
 import { classifyScopeError, larkTenantRequest, larkUserRequest } from "./http"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
-import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
+import {
+  assertLarkActingIdentity,
+  LarkActingIdentityError,
+} from "@/lib/auth-providers/feishu/cli/acting-identity"
 import { resolveBuiltInSkillRunScope } from "@/lib/skills/built-in/context"
 jest.mock("@/lib/skills/built-in/context", () => ({
   resolveBuiltInSkillRunScope: jest.fn((ctx) => ({
@@ -36,32 +34,48 @@ jest.mock("@/lib/skills/built-in/context", () => ({
     runId: ctx.executionRunId,
   })),
 }))
+// Admission itself is pinned by acting-identity.test.ts; this suite covers the
+// HTTP call made with the authorization it admits.
 jest.mock("@/lib/auth-providers/feishu/cli/acting-identity", () => ({
+  ...jest.requireActual("@/lib/auth-providers/feishu/cli/acting-identity"),
   assertLarkActingIdentity: jest.fn(),
 }))
 
 const mHttp = connectorsHttpRequest as jest.Mock
 const mTat = getTenantAccessToken as jest.Mock
-const mUserToken = getUserAccessToken as jest.Mock
 const mClear = clearTokenCache as jest.Mock
+const mSnapshot = connectorsLarkUserAuth as jest.Mock
 
 const CREDS = { appId: "cli_x", appSecret: "sec" }
+/** The admitted person's authorization key (`larkUserKey` of their open_id). */
+const KEY = createHash("sha256").update("ou_member").digest("hex")
+/** The token the native snapshot holds for KEY; null = none. */
+let userToken: string | null
 
 beforeEach(() => {
   jest.clearAllMocks()
+  userToken = "connected-user"
   jest
     .mocked(assertLarkActingIdentity)
     .mockReset()
-    .mockImplementation(async () => {
-      const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId: "fixture" })
+    .mockImplementation(async (adapterId) => {
+      const snapshot = await connectorsLarkUserAuth({
+        action: "snapshot",
+        adapterId,
+        principal: KEY,
+      })
       return snapshot.configured && snapshot.accessToken
-        ? { accessToken: snapshot.accessToken, authorizationEpoch: snapshot.authorizationEpoch }
+        ? {
+            principal: KEY,
+            accessToken: snapshot.accessToken,
+            authorizationEpoch: snapshot.authorizationEpoch!,
+          }
         : undefined
     })
-  ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockImplementation(async () => ({
-    configured: true,
+  mSnapshot.mockReset().mockImplementation(async () => ({
+    configured: userToken !== null,
     authorizationEpoch: "http-fixture",
-    accessToken: await mUserToken("fixture"),
+    accessToken: userToken,
   }))
   mTat.mockResolvedValue("tat-1")
   mHttp.mockResolvedValue({ status: 200, body: JSON.stringify({ code: 0, data: { ok: true } }) })
@@ -166,90 +180,91 @@ describe("larkTenantRequest — body/parse edges", () => {
 })
 
 describe("larkUserRequest", () => {
-  it("sends the verified IM token rather than a separately read or recaptured token", async () => {
-    jest
-      .mocked(assertLarkActingIdentity)
-      .mockResolvedValue({ accessToken: "verified-token", authorizationEpoch: "auth-owner" })
-    jest.mocked(connectorsLarkUserAuth).mockResolvedValue({
+  it("sends the admitted token, re-checking the same person's authorization", async () => {
+    jest.mocked(assertLarkActingIdentity).mockResolvedValue({
+      principal: KEY,
+      accessToken: "admitted-token",
+      authorizationEpoch: "auth-member",
+    })
+    mSnapshot.mockResolvedValue({
       configured: true,
       accessToken: "later-same-authorization-token",
-      authorizationEpoch: "auth-owner",
-    } as never)
-    await larkUserRequest("a1", CREDS, "GET", "/search/v1/user?query=x", undefined, {
-      sessionId: "s1",
+      authorizationEpoch: "auth-member",
     })
-    expect(mHttp.mock.calls[0][0].headers.Authorization).toBe("Bearer verified-token")
-    expect(mUserToken).not.toHaveBeenCalled()
+    const ctx = { sessionId: "s1" }
+    await larkUserRequest("a1", CREDS, "GET", "/search/v1/user?query=x", undefined, ctx)
+    expect(assertLarkActingIdentity).toHaveBeenCalledWith("a1", ctx)
+    expect(mHttp.mock.calls[0][0].headers.Authorization).toBe("Bearer admitted-token")
+    expect(mSnapshot).toHaveBeenCalledWith({ action: "snapshot", adapterId: "a1", principal: KEY })
   })
 
-  it("refuses an authorization change between the gate and the HTTP call", async () => {
-    jest
-      .mocked(assertLarkActingIdentity)
-      .mockResolvedValue({ accessToken: "alice-token", authorizationEpoch: "auth-alice" })
-    jest.mocked(connectorsLarkUserAuth).mockResolvedValue({
+  it("refuses an authorization change between admission and the HTTP call", async () => {
+    jest.mocked(assertLarkActingIdentity).mockResolvedValue({
+      principal: KEY,
+      accessToken: "alice-token",
+      authorizationEpoch: "auth-alice",
+    })
+    mSnapshot.mockResolvedValue({
       configured: true,
-      accessToken: "bob-token",
-      authorizationEpoch: "auth-bob",
-    } as never)
+      accessToken: "alice-reauthorized-token",
+      authorizationEpoch: "auth-alice-2",
+    })
     await expect(
       larkUserRequest("a1", CREDS, "GET", "/search/v1/user?query=x", undefined, { sessionId: "s1" })
     ).rejects.toThrow("lark_auth_stale")
     expect(mHttp).not.toHaveBeenCalled()
-    expect(mUserToken).not.toHaveBeenCalled()
   })
 
-  it("does not refresh and retry a verified IM request under a replacement authorization", async () => {
+  it("does not refresh and retry an admitted request under a replacement authorization", async () => {
     jest
       .mocked(resolveBuiltInSkillRunScope)
       .mockReturnValueOnce({ sessionId: "parent", runId: "execution:job:child" })
-    jest
-      .mocked(assertLarkActingIdentity)
-      .mockResolvedValue({ accessToken: "alice-token", authorizationEpoch: "auth-alice" })
+    jest.mocked(assertLarkActingIdentity).mockResolvedValue({
+      principal: KEY,
+      accessToken: "alice-token",
+      authorizationEpoch: "auth-alice",
+    })
     let epoch = "auth-alice"
-    jest.mocked(connectorsLarkUserAuth).mockImplementation(
-      async () =>
-        ({
-          configured: true,
-          accessToken: epoch === "auth-alice" ? "alice-token" : "bob-token",
-          authorizationEpoch: epoch,
-        }) as never
-    )
+    mSnapshot.mockImplementation(async () => ({
+      configured: true,
+      accessToken: epoch === "auth-alice" ? "alice-token" : "alice-new-token",
+      authorizationEpoch: epoch,
+    }))
     mHttp.mockResolvedValue({ status: 401, body: JSON.stringify({ code: 99991677 }) })
     jest.mocked(refreshUserToken).mockImplementationOnce(async () => {
-      epoch = "auth-bob"
-      return "bob-token"
+      epoch = "auth-alice-2"
+      return "alice-new-token"
     })
     await expect(
       larkUserRequest("a1", CREDS, "GET", "/search/v1/user?query=x", undefined, { sessionId: "s1" })
     ).rejects.toThrow("lark_auth_stale")
     expect(refreshUserToken).toHaveBeenCalledWith(
       expect.objectContaining({
+        adapterId: "a1",
+        principal: KEY,
         expectedAuthorizationEpoch: "auth-alice",
-        credentialContext: {
-          sessionId: "parent",
-          executionRunId: "execution:job:child",
-          larkContext: { sessionId: "s1" },
-        },
+        credentialContext: { sessionId: "parent", executionRunId: "execution:job:child" },
       })
     )
     expect(mHttp).toHaveBeenCalledTimes(1)
     expect(mHttp.mock.calls[0][0].headers.Authorization).toBe("Bearer alice-token")
   })
+
   it("checks the acting identity before reading a user token", async () => {
-    jest.mocked(assertLarkActingIdentity).mockRejectedValueOnce(new Error("sender_not_token_owner"))
+    jest.mocked(assertLarkActingIdentity).mockRejectedValueOnce(new LarkActingIdentityError())
     const ctx = { sessionId: "im-session" }
     await expect(
       larkUserRequest("a1", CREDS, "GET", "/search/v1/user?query=x", undefined, ctx)
-    ).rejects.toThrow("sender_not_token_owner")
+    ).rejects.toThrow(/^personal_access_refused/)
     expect(assertLarkActingIdentity).toHaveBeenCalledWith("a1", ctx)
-    expect(mUserToken).not.toHaveBeenCalled()
+    expect(mSnapshot).not.toHaveBeenCalled()
     expect(mTat).not.toHaveBeenCalled()
     expect(mHttp).not.toHaveBeenCalled()
   })
+
   it("does not retry a write as a replacement identity after refresh commits", async () => {
     let state = { configured: true, authorizationEpoch: "auth-a", accessToken: "user-a" }
-    ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => state)
-    mUserToken.mockImplementation(async () => state.accessToken)
+    mSnapshot.mockImplementation(async () => state)
     ;(refreshUserToken as jest.Mock).mockImplementation(async () => {
       state = { ...state, authorizationEpoch: "auth-b", accessToken: "user-b" }
       return "refreshed-a"
@@ -259,12 +274,15 @@ describe("larkUserRequest", () => {
       larkUserRequest("fixture", CREDS, "POST", "/im/v1/messages", { text: "fixture" })
     ).rejects.toThrow("lark_auth_stale")
     expect(mHttp).toHaveBeenCalledTimes(1)
+    expect(refreshUserToken).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: KEY, credentialContext: undefined })
+    )
   })
 
   it("uses the token captured with the retry epoch even when another native continuation replaces the account", async () => {
     let state = { configured: true, authorizationEpoch: "auth-a", accessToken: "user-a" }
     let refreshFinished = false
-    ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => {
+    mSnapshot.mockImplementation(async () => {
       const captured = state
       if (refreshFinished)
         queueMicrotask(() => {
@@ -272,7 +290,6 @@ describe("larkUserRequest", () => {
         })
       return captured
     })
-    mUserToken.mockImplementation(async () => state.accessToken)
     ;(refreshUserToken as jest.Mock).mockImplementation(async () => {
       state = { ...state, accessToken: "refreshed-a" }
       refreshFinished = true
@@ -290,17 +307,14 @@ describe("larkUserRequest", () => {
       "Bearer refreshed-a",
     ])
   })
-  it("returns null when the adapter has no stored user token", async () => {
-    mUserToken.mockResolvedValue(null)
+  it("returns null when the admitted person has no stored user token", async () => {
+    userToken = null
     expect(await larkUserRequest("a1", CREDS, "GET", "/search/v1/user?query=x")).toBeNull()
     expect(mHttp).not.toHaveBeenCalled()
   })
 
   it("uses the user token as the bearer when present", async () => {
-    mUserToken.mockResolvedValue("user-tok")
-    jest
-      .mocked(assertLarkActingIdentity)
-      .mockResolvedValue({ accessToken: "user-tok", authorizationEpoch: "http-fixture" })
+    userToken = "user-tok"
     const out = await larkUserRequest("a1", CREDS, "GET", "/search/v1/user?query=x")
     expect(out).toEqual({ code: 0, data: { ok: true } })
     expect(mHttp.mock.calls[0][0].headers.Authorization).toBe("Bearer user-tok")
@@ -360,10 +374,9 @@ it.each(["transport", "service-data", "adapter-admin"] as const)(
   }
 )
 
-it("does not fall back to user_token when admission has no authorization snapshot", async () => {
+it("does not fall back to another token when admission has no authorization snapshot", async () => {
   jest.mocked(assertLarkActingIdentity).mockResolvedValue(undefined)
-  mUserToken.mockResolvedValue("ambient")
   expect(await larkUserRequest("a1", CREDS, "GET", "/private")).toBeNull()
-  expect(mUserToken).not.toHaveBeenCalled()
+  expect(mSnapshot).not.toHaveBeenCalled()
   expect(mHttp).not.toHaveBeenCalled()
 })

@@ -28,6 +28,7 @@ import { isClientSecretRequired } from "./client-secrets"
 import { ConsumerTokenReadDenied } from "./consumer-token-read-policy"
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -480,8 +481,11 @@ export class AuthConnectionManager {
             existing.tenantId !== description.tenantId)
         )
           throw new ConnectionIdentityConflict()
+        // One authorization slot: the adapter's, or one person's on it.
         const rows = (await this.store.list(providerId)).filter(
-          (row) => row.hostMetadata?.adapterId === hostMetadata.adapterId
+          (row) =>
+            row.hostMetadata?.adapterId === hostMetadata.adapterId &&
+            row.hostMetadata.principal === hostMetadata.principal
         )
         // An account switch retires the previous identity without clearing the new native grant.
         for (const old of rows) {
@@ -821,7 +825,7 @@ export class AuthConnectionManager {
             : row.hostMetadata && row.providerId === "google"
               ? "google-docs"
               : "integration-user",
-        person: row.hostMetadata?.adapterId ?? row.id,
+        person: row.hostMetadata?.person ?? LOCAL_PERSON,
       })
       if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
     }
@@ -1033,7 +1037,7 @@ export class AuthConnectionManager {
       if (access && access.pluginId === row.ownerPluginId && context === undefined) return
       const decision = await admitPersonalCredential(context, {
         source: "integration-user",
-        person: row.id,
+        person: LOCAL_PERSON,
       })
       if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
     }
@@ -1044,6 +1048,7 @@ export class AuthConnectionManager {
       if (hostRow.providerId === "google" && hostRow.principalKind === "user") {
         const decision = await admitPersonalCredential(credentialContext(), {
           source: "google-docs",
+          person: LOCAL_PERSON,
         })
         if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
       }
@@ -1434,7 +1439,7 @@ export async function forgetProfileAuthSecrets(
                   if (!["bot", "service"].includes(lineage.identity.principal.kind)) {
                     const decision = await admitPersonalCredential(credentialContext, {
                       source: "integration-user",
-                      person: lineage.identity.principal.id,
+                      person: LOCAL_PERSON,
                     })
                     if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
                   }

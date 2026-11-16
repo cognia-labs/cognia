@@ -48956,6 +48956,23 @@
         "storedPlaceholder": "Saved — leave blank to keep it",
         "unlock": "Unlock"
       },
+      "delegatedAuthorizations": {
+        "authorizedAt": "Authorized {when}",
+        "empty": "Nobody has authorized this bot yet. A person sends /auth in a direct chat with it.",
+        "laneDelegatedHelp": "Each person's request uses the account they authorized themselves; someone who has not authorized gets a sign-in link.",
+        "laneFailed": "Could not save: {reason}",
+        "laneHostOnly": "Only this connector's Host can change this.",
+        "laneLabel": "Act as each requester",
+        "laneSaved": "Saved",
+        "laneServiceHelp": "Every turn uses the app's own access; nobody's personal account is used.",
+        "peopleLabel": "Authorized people",
+        "registryNote": "Personal access needs the principal registry turned on; with it off only you have personal access.",
+        "revoke": "Revoke",
+        "revokeAria": "Revoke {name}'s authorization",
+        "revokeFailed": "Could not revoke: {reason}",
+        "revoked": "Authorization revoked",
+        "title": "Personal authorizations"
+      },
       "description": "Configure messaging platform adapters (Telegram, Discord, Slack, …) and manage the outbound delivery queue.",
       "dingtalk": {
         "adapterCreated": "DingTalk connector added",
@@ -60941,7 +60958,7 @@
   "skills": {
     "actingIdentity": {
       "confirmedSkillTitle": "Confirmed skill: {skillId}",
-      "personalAccessPhases": "Personal access for Bot and plugin turns requires per-person access in phase 4 or bound-person access in phase 5 (ADR-0243 phases 4 and 5)."
+      "personalAccessRule": "Personal Lark access needs the principal registry turned on and the person's own authorization of this connection; event, Bot and plugin turns never get it."
     },
     "ai": {
       "accept": "Accept",

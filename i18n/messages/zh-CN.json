@@ -48956,6 +48956,23 @@
         "storedPlaceholder": "已保存 —— 留空表示不修改",
         "unlock": "解锁"
       },
+      "delegatedAuthorizations": {
+        "authorizedAt": "授权于 {when}",
+        "empty": "还没有人授权此机器人。请在与机器人的私聊中发送 /auth。",
+        "laneDelegatedHelp": "每个人的请求使用其本人授权的账号；尚未授权的人会收到登录链接。",
+        "laneFailed": "保存失败：{reason}",
+        "laneHostOnly": "只有此连接器所在的 Host 可以修改。",
+        "laneLabel": "以每位请求者身份执行",
+        "laneSaved": "已保存",
+        "laneServiceHelp": "所有运行都使用应用自身的权限，不使用任何人的个人账号。",
+        "peopleLabel": "已授权的人",
+        "registryNote": "个人访问需要开启身份注册表；未开启时只有你本人有个人访问。",
+        "revoke": "撤销",
+        "revokeAria": "撤销 {name} 的授权",
+        "revokeFailed": "撤销失败：{reason}",
+        "revoked": "已撤销授权",
+        "title": "个人授权"
+      },
       "description": "配置消息平台适配器（Telegram、Discord、Slack 等）并管理出站投递队列。",
       "dingtalk": {
         "adapterCreated": "已添加钉钉连接器",
@@ -60941,7 +60958,7 @@
   "skills": {
     "actingIdentity": {
       "confirmedSkillTitle": "已确认的技能：{skillId}",
-      "personalAccessPhases": "Bot 和 plugin turn 的个人访问需要 phase 4 的 per-person access 或 phase 5 的 bound-person access（ADR-0243 phases 4 and 5）。"
+      "personalAccessRule": "飞书个人访问需要开启身份注册表，并由本人授权此连接；事件、Bot 和插件触发的运行不会获得个人访问。"
     },
     "ai": {
       "accept": "采用",

@@ -1,6 +1,7 @@
 /** Drive is a Host contributor: Rust owns all OAuth credentials and transitions. */
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -91,7 +92,10 @@ export async function bindGoogleDriveConnection(
 
 export async function getGoogleDriveCredentialLease(credentialContext?: PersonalCredentialContext) {
   const context = { ...(credentialContext ?? HOST_BACKGROUND) }
-  const decision = await admitPersonalCredential(context, { source: "google-drive-backup" })
+  const decision = await admitPersonalCredential(context, {
+    source: "google-drive-backup",
+    person: LOCAL_PERSON,
+  })
   if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
   const connection = await resolveGoogleDriveConnection(context)
   if (!connection) throw new ConnectionUnavailableError("backup-not-bound")

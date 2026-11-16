@@ -116,7 +116,7 @@ export async function execLarkCli(input: ExecLarkCliInput): Promise<LarkCliResul
     return {
       status: "error",
       reason: "auth_unavailable",
-      message: new LarkActingIdentityError(undefined, await larkPersonalAccessHint()).message,
+      message: new LarkActingIdentityError(await larkPersonalAccessHint()).message,
     }
   const auth =
     input.__authOverride ??

@@ -20,11 +20,12 @@ const mockConnectorsKeyringDelete = jest.fn().mockResolvedValue(undefined)
 const mockConnectorsHttpRequest = jest.fn()
 const mockOpenUrl = jest.fn().mockResolvedValue(undefined)
 
+const mockGetAdapterInstance = jest.fn(async (..._args: unknown[]): Promise<unknown> => null)
 jest.mock("@/lib/db/adapter-instances", () => ({
   createAdapterInstance: (...args: unknown[]) => mockCreateAdapterInstance(...args),
   updateAdapterInstance: (...args: unknown[]) => mockUpdateAdapterInstance(...args),
   patchAdapterInstanceSettings: (...args: unknown[]) => mockPatchAdapterInstanceSettings(...args),
-  getAdapterInstance: jest.fn().mockResolvedValue(null),
+  getAdapterInstance: (...args: unknown[]) => mockGetAdapterInstance(...args),
 }))
 
 jest.mock("@/lib/connectors/tauri/commands", () => ({
@@ -34,6 +35,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsKeyringDelete: (...args: unknown[]) => mockConnectorsKeyringDelete(...args),
   connectorsHttpRequest: (...args: unknown[]) => mockConnectorsHttpRequest(...args),
   connectorsKeyringList: (...args: unknown[]) => mockKeyringList(...args),
+  connectorsKeyringGetSnapshot: jest.fn(async () => null),
 }))
 
 // Settable, not a constant. `useConnectorIngress` reads the host profile to
@@ -407,6 +409,34 @@ describe("LarkConfigDialog — edit existing", () => {
     })
   })
 
+  it("keeps the per-person token names the OAuth callback listed since the dialog opened", async () => {
+    const personal = [
+      `user_token.${"a".repeat(64)}`,
+      `user_refresh_token.${"a".repeat(64)}`,
+      `user_authorization_epoch.${"a".repeat(64)}`,
+    ]
+    mockGetAdapterInstance.mockResolvedValueOnce({
+      ...existingRow,
+      credentialsRef: {
+        ...existingRow.credentialsRef,
+        accounts: [...existingRow.credentialsRef.accounts, ...personal],
+      },
+    })
+    render(<LarkConfigDialog open={true} onOpenChange={jest.fn()} row={existingRow} />)
+    fireEvent.change(screen.getByDisplayValue("Prod Lark Bot"), {
+      target: { value: "Renamed" },
+    })
+    await clickSave()
+
+    await waitFor(() => expect(mockUpdateAdapterInstance).toHaveBeenCalled())
+    expect(mockUpdateAdapterInstance.mock.calls[0][1]).toMatchObject({
+      credentialsRef: {
+        keyringService: "com.cognia.platforms",
+        accounts: ["appId", "appSecret", "verificationToken", "encryptKey", ...personal],
+      },
+    })
+  })
+
   it("saves an appearance-only edit through a settings merge without replacing other panels", async () => {
     render(
       <LarkConfigDialog
@@ -532,8 +562,8 @@ describe("LarkConfigDialog — send as user", () => {
     // reads back when the relay returns the code. It must NOT be in Web
     // Storage: on a self-hosted install the completing process is a different
     // one from whatever browser rendered this dialog.
-    const pendingWrite = mockConnectorsKeyringSet.mock.calls.find(
-      (call) => call[1] === "oauth_pending"
+    const pendingWrite = mockConnectorsKeyringSet.mock.calls.find((call) =>
+      /^oauth_pending\.[0-9a-f]{64}$/.test(call[1] as string)
     )
     expect(pendingWrite).toBeDefined()
     const pending = JSON.parse(String(pendingWrite![2])) as Record<string, string>

@@ -1843,7 +1843,10 @@ it("persists a marked room member's output through the canonical message writer"
           LOCAL_PERSON_RUN as typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
       })
       expect(
-        await admitPersonalCredential({ executionRunId: run.id }, { source: "mcp-oauth" })
+        await admitPersonalCredential(
+          { executionRunId: run.id },
+          { source: "mcp-oauth", person: { kind: "local-person" } }
+        )
       ).toMatchObject({ ok: true })
       return run.id
     }

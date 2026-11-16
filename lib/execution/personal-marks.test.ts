@@ -91,7 +91,10 @@ it("marks a child's read on every team/plan/delegation ancestor before releasing
   const team = await startToolExecutionRun("team", { parentRunId: root.id })
   const child = await startToolExecutionRun("child", { parentRunId: team.id })
   expect(
-    await admitPersonalCredential({ executionRunId: child.id }, { source: "google-docs" })
+    await admitPersonalCredential(
+      { executionRunId: child.id },
+      { source: "google-docs", person: { kind: "local-person" } }
+    )
   ).toMatchObject({ ok: true })
   for (const id of [root.id, team.id, child.id]) {
     expect((await getDb().executionRuns.get(id))?.personalMarks).toEqual([
@@ -100,7 +103,10 @@ it("marks a child's read on every team/plan/delegation ancestor before releasing
     const events = await getDb().executionRunEvents.where("runId").equals(id).toArray()
     expect(events.filter((event) => event.type === "personal.marked")).toHaveLength(1)
   }
-  await admitPersonalCredential({ executionRunId: child.id }, { source: "google-docs" })
+  await admitPersonalCredential(
+    { executionRunId: child.id },
+    { source: "google-docs", person: { kind: "local-person" } }
+  )
   expect(
     (await getDb().executionRunEvents.where("runId").equals(root.id).toArray()).filter(
       (event) => event.type === "personal.marked"
@@ -137,7 +143,10 @@ it("fails closed and rolls back all ancestors when journal persistence fails", a
     .mockRejectedValueOnce(new Error("storage failed"))
   try {
     expect(
-      await admitPersonalCredential({ executionRunId: child.id }, { source: "github-user" })
+      await admitPersonalCredential(
+        { executionRunId: child.id },
+        { source: "github-user", person: { kind: "local-person" } }
+      )
     ).toMatchObject({ ok: false, reason: "mark-unavailable" })
     expect((await getDb().executionRuns.get(child.id))?.personalMarks).toBeUndefined()
     expect((await getDb().executionRuns.get(root.id))?.personalMarks).toBeUndefined()
@@ -152,7 +161,10 @@ it("can mark a completed parent while preserving terminal state", async () => {
   await finishToolExecutionRun(root.id)
   const before = await getDb().executionRuns.get(root.id)
   expect(
-    await admitPersonalCredential({ executionRunId: child.id }, { source: "mcp-oauth" })
+    await admitPersonalCredential(
+      { executionRunId: child.id },
+      { source: "mcp-oauth", person: { kind: "local-person" } }
+    )
   ).toMatchObject({ ok: true })
   expect(await getDb().executionRuns.get(root.id)).toMatchObject({
     currentRevision: before!.currentRevision,
@@ -256,7 +268,10 @@ it.each(["missing", "cycle"])(
       parentRunId: kind === "missing" ? "missing-ancestor" : child.id,
     })
     expect(
-      await admitPersonalCredential({ executionRunId: child.id }, { source: "google-docs" })
+      await admitPersonalCredential(
+        { executionRunId: child.id },
+        { source: "google-docs", person: { kind: "local-person" } }
+      )
     ).toMatchObject({ ok: false, reason: "mark-unavailable" })
     expect((await getDb().executionRuns.get(child.id))?.personalMarks).toBeUndefined()
     expect((await getDb().executionRuns.get(root.id))?.personalMarks).toBeUndefined()

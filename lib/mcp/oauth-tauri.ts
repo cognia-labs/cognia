@@ -12,6 +12,7 @@
  */
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -85,7 +86,7 @@ export async function mcpOAuthLoadEntry(
 ): Promise<McpOAuthEntry | undefined> {
   const admission = await admitPersonalCredential(credentialContext, {
     source: "mcp-oauth",
-    person: serverId,
+    person: LOCAL_PERSON,
   })
   if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
   const credentialKey = server
@@ -115,7 +116,7 @@ export async function mcpOAuthRefresh(
 ): Promise<McpOAuthEntry | undefined> {
   const admission = await admitPersonalCredential(credentialContext, {
     source: "mcp-oauth",
-    person: serverId,
+    person: LOCAL_PERSON,
   })
   if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
   const partition = await resolveMcpOAuthCredentialPartition(serverId, server)

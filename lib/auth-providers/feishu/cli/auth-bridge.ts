@@ -33,9 +33,12 @@ import {
   resolveBuiltInSkillSessionBinding,
 } from "@/lib/skills/built-in/context"
 import {
+  admitLarkUserAuthorization,
   assertLarkActingIdentity,
   LarkActingIdentityError,
+  larkSkillCredentialContext,
   resolveLarkRunIdentity,
+  type LarkUserAuthorization,
 } from "./acting-identity"
 import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
 import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
@@ -70,7 +73,7 @@ export type LarkAuthBridgeError =
   | { ok: false; reason: "missing_app_secret"; message: string; adapterId: string }
   | {
       ok: false
-      reason: "user_not_authorized" | "sender_not_token_owner"
+      reason: "user_not_authorized" | "personal_access_refused"
       message: string
       adapterId: string
     }
@@ -138,57 +141,42 @@ export async function resolveLarkAuth(
   // Plugin, webhook and schedule sessions have run authority without an IM
   // binding. The binding selects the account, not the run's identity.
   const runIdentity = input.context ? await resolveLarkRunIdentity(input.context) : undefined
-  // A requester in an IM conversation is delegated (ADR-0243 §3): their own
-  // token, behind the owner check. Everything else that is not local uses the
-  // service lane by default.
-  const delegatedRequester =
-    runIdentity?.trigger === "requester" && Boolean(sessionBinding?.binding)
+  // A delegated run uses its acting person's own token (ADR-0243 §3).
+  // Everything else that is not local uses the service lane by default.
   const preferred =
     input.identity ??
     (runIdentity?.lane === "service" ||
-    (runIdentity && runIdentity.trigger !== "local" && !delegatedRequester)
+    (runIdentity && runIdentity.trigger !== "local" && runIdentity.lane !== "delegated")
       ? "bot"
       : "user")
   if (preferred === "user") {
-    let verified: Awaited<ReturnType<typeof assertLarkActingIdentity>>
+    const credentialContext = input.context
+      ? larkSkillCredentialContext(input.context)
+      : input.credentialContext
+    let authorization: LarkUserAuthorization | undefined
     try {
-      if (input.context) verified = await assertLarkActingIdentity(adapter.id, input.context)
-      else {
-        const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
-        const admission = await admitPersonalCredential(input.credentialContext, {
-          source: "lark-user",
-          person: adapter.id,
-        })
-        if (!admission.ok) throw new LarkActingIdentityError()
-        const { connectorsLarkUserAuth } = await import("@/lib/connectors/tauri/commands")
-        const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId: adapter.id })
-        verified =
-          snapshot.configured && snapshot.accessToken && snapshot.authorizationEpoch
-            ? { accessToken: snapshot.accessToken, authorizationEpoch: snapshot.authorizationEpoch }
-            : undefined
-      }
+      authorization = input.context
+        ? await assertLarkActingIdentity(adapter.id, input.context)
+        : await admitLarkUserAuthorization(adapter.id, credentialContext)
     } catch (err) {
       if (!(err instanceof LarkActingIdentityError)) throw err
       return { ok: false, reason: err.reason, message: err.message, adapterId: adapter.id }
     }
-    let connection: Awaited<ReturnType<typeof resolveLarkConnection>>
-    let userToken: string
+    let connection: Awaited<ReturnType<typeof resolveLarkConnection>> | undefined
+    let userToken = ""
     try {
-      const scope = input.context ? resolveBuiltInSkillRunScope(input.context) : undefined
-      const credentialContext = input.context
-        ? {
-            sessionId: scope!.sessionId,
-            executionRunId: scope!.runId,
-            larkContext: input.context,
-            delivery: input.context.delivery,
-          }
-        : input.credentialContext
-      connection = await resolveLarkConnection(adapter.id, undefined, credentialContext)
-      if (verified && verified.authorizationEpoch !== connection.hostMetadata?.authorizationEpoch)
-        throw new Error("lark_auth_stale")
-      userToken = (
-        await getConnectionManager().getCredentials(connection.id, { credentialContext })
-      ).accessToken
+      if (authorization) {
+        connection = await resolveLarkConnection(
+          adapter.id,
+          authorization.principal,
+          credentialContext
+        )
+        if (authorization.authorizationEpoch !== connection.hostMetadata?.authorizationEpoch)
+          throw new Error("lark_auth_stale")
+        userToken = (
+          await getConnectionManager().getCredentials(connection.id, { credentialContext })
+        ).accessToken
+      }
     } catch {
       return {
         ok: false,
@@ -198,7 +186,7 @@ export async function resolveLarkAuth(
         adapterId: adapter.id,
       }
     }
-    if (userToken) {
+    if (connection && userToken) {
       return {
         ok: true,
         adapterId: adapter.id,

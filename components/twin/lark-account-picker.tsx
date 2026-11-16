@@ -6,15 +6,17 @@
  * Lists the user's configured Lark connector adapter instances (the "bound
  * Feishu accounts" — Platform Connectors owns binding + OAuth) and lets the
  * user choose which account's credentials fetch a doc. Metadata only: the
- * picker never reads the keyring. Accounts with a completed OAuth user
- * connection show the connected user's name; app-only accounts get a hint
- * that document ACLs will apply to the bot identity.
+ * picker never reads the keyring. An account whose owner authorized it
+ * (`settings.authorizedUsers` holds the signed-in user, ADR-0243 phase 4)
+ * shows the owner's name; any other, including a sign-in from before that
+ * record existed, gets a hint that document ACLs will apply to the bot.
  */
 
 import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import type { LarkConnectedUser } from "@/lib/auth-providers/feishu/oauth-handler"
+import { larkAuthorizedUsers, larkUserKey } from "@/lib/auth-providers/feishu/user-key"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -44,18 +46,22 @@ export function LarkAccountPicker({ value, onChange, disabled }: LarkAccountPick
     let cancelled = false
     void (async () => {
       const rows = await listAdapterInstancesByType("lark")
+      const enabled = await Promise.all(
+        rows
+          .filter((row) => row.enabled)
+          .map(async (row) => {
+            const owner = (row.settings as { connectedUser?: LarkConnectedUser }).connectedUser
+            const authorized =
+              owner?.openId !== undefined &&
+              larkAuthorizedUsers(row.settings)[await larkUserKey(owner.openId)] !== undefined
+            return {
+              adapterId: row.id,
+              displayName: row.displayName,
+              connectedUserName: authorized ? owner.name : undefined,
+            }
+          })
+      )
       if (cancelled) return
-      const enabled = rows
-        .filter((row) => row.enabled)
-        .map((row) => {
-          const connectedUser = (row.settings as { connectedUser?: LarkConnectedUser })
-            .connectedUser
-          return {
-            adapterId: row.id,
-            displayName: row.displayName,
-            connectedUserName: connectedUser?.name,
-          }
-        })
       setAccounts(enabled)
     })()
     return () => {

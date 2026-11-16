@@ -56,6 +56,11 @@ import { runBuiltInSkill } from "./dispatcher"
 import { registerBuiltInSkill, getSharedBuiltInSkillRegistry } from "./registry"
 
 jest.mock("@/lib/db/connector-audit", () => ({ append: jest.fn() }))
+// Marks are their own suite's subject; this one's database fake has no transactions.
+jest.mock("@/lib/execution/personal-marks", () => ({
+  ...jest.requireActual("@/lib/execution/personal-marks"),
+  markPersonalCredential: jest.fn(async () => undefined),
+}))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsKeyringGet: jest.fn(),
   connectorsLarkUserAuth: jest.fn(),
@@ -326,7 +331,7 @@ describe("resolveBuiltInSkillContext", () => {
       const context = await resolveBuiltInSkillContext("teammate")
       expect(context).toEqual({ sessionId: "teammate", personalLane: "unverified" })
       await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow(
-        "sender_not_token_owner"
+        "personal_access_refused"
       )
     }
   )
@@ -340,7 +345,7 @@ describe("resolveBuiltInSkillContext", () => {
     })
     const context = await resolveBuiltInSkillContext("teammate")
     expect(context).toEqual({ sessionId: "teammate", personalLane: "unverified" })
-    await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow("sender_not_token_owner")
+    await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow("personal_access_refused")
   })
 
   it.each([
@@ -360,7 +365,7 @@ describe("resolveBuiltInSkillContext", () => {
     const context = await resolveBuiltInSkillContext("teammate")
     expect(context.personalLane).toBe("unverified")
     expect(context.imBinding).toBeUndefined()
-    await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow("sender_not_token_owner")
+    await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow("personal_access_refused")
   })
 
   it.each(["execution", "durable", "both"])(
@@ -377,7 +382,7 @@ describe("resolveBuiltInSkillContext", () => {
       const context = await resolveBuiltInSkillContext("teammate")
       expect(context.personalLane).toBe("unverified")
       await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow(
-        "sender_not_token_owner"
+        "personal_access_refused"
       )
     }
   )
@@ -449,7 +454,7 @@ describe("resolveBuiltInSkillContext", () => {
   })
 
   it.each(["desktop", "background-child"])(
-    "allows the personal token through a real local root: %s",
+    "allows the owner's personal token through a real local root: %s",
     async (sessionId) => {
       localRunForSession()
       mockSessionGet.mockImplementation(async (id) =>
@@ -461,20 +466,27 @@ describe("resolveBuiltInSkillContext", () => {
         id: "a1",
         type: "lark",
         enabled: true,
-        settings: {},
+        settings: { connectedUser: { openId: "ou_owner" } },
       })
-      jest
-        .mocked(connectorsKeyringGet)
-        .mockImplementation(async (_adapter, key) =>
-          key === "user_token" ? "personal-token" : "app-credential"
-        )
+      jest.mocked(connectorsLarkUserAuth).mockResolvedValue({
+        configured: true,
+        accessToken: "personal-token",
+        authorizationEpoch: "e1",
+      } as never)
       const context = await resolveBuiltInSkillContext(sessionId)
       expect(context.personalLane).toBe("local-session")
-      await expect(resolveLarkAuth({ adapterId: "a1", context })).resolves.toMatchObject({
-        ok: true,
-        env: { LARKSUITE_CLI_USER_ACCESS_TOKEN: "personal-token" },
+      const { createHash } = await import("node:crypto")
+      const principal = createHash("sha256").update("ou_owner").digest("hex")
+      await expect(assertLarkActingIdentity("a1", context)).resolves.toEqual({
+        principal,
+        accessToken: "personal-token",
+        authorizationEpoch: "e1",
       })
-      expect(connectorsKeyringGet).toHaveBeenCalledWith("a1", "user_token")
+      expect(connectorsLarkUserAuth).toHaveBeenCalledWith({
+        action: "snapshot",
+        adapterId: "a1",
+        principal,
+      })
     }
   )
 
@@ -511,7 +523,7 @@ describe("resolveBuiltInSkillContext", () => {
     })
     await expect(resolveLarkAuth({ adapterId: "a1", context })).resolves.toMatchObject({
       ok: false,
-      reason: "sender_not_token_owner",
+      reason: "personal_access_refused",
     })
     await expect(
       larkUserRequest(
@@ -547,7 +559,7 @@ describe("resolveBuiltInSkillContext", () => {
       const context = await resolveBuiltInSkillContext("root")
       expect(context.personalLane).toBe("unverified")
       await expect(assertLarkActingIdentity("a1", context)).rejects.toThrow(
-        "sender_not_token_owner"
+        "personal_access_refused"
       )
     }
   )

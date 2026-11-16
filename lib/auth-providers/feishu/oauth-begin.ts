@@ -10,9 +10,13 @@
  * are the same WebView, and could never work on a self-hosted install.
  *
  * Callers:
- *   - the settings dialog, in-process on the desktop;
+ *   - the settings dialog, in-process on the desktop: the owner's sign-in,
+ *     which names nobody in advance;
  *   - the `oauth-begin` operator intent (`cognia-agent lark authorize`), which
- *     is how a headless deployment authorizes without a UI.
+ *     is how a headless deployment authorizes without a UI;
+ *   - a delegated authorization link (ADR-0243 phase 4), issued to exactly
+ *     one requester (`issuedTo`), whom the Host lets publish only their own
+ *     authorization.
  *
  * It returns a URL rather than opening one: only the caller knows whether a
  * browser is reachable from where it runs.
@@ -25,7 +29,11 @@ import {
   LARK_SENDAS_SCOPES,
   mergeLarkScopes,
 } from "@cognia/feishu-protocol"
-import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import {
+  connectorsKeyringGet,
+  connectorsKeyringGetSnapshot,
+  connectorsLarkUserAuth,
+} from "@/lib/connectors/tauri/commands"
 import { buildLarkOAuthState } from "./oauth-handler"
 import { setLarkOAuthPending } from "./oauth-pending"
 
@@ -33,6 +41,11 @@ export interface BeginLarkOAuthInput {
   brand?: "feishu" | "lark"
   connection?: { ref: string; revision: number }
   adapterId: string
+  /**
+   * The person (`larkUserKey`) a delegated link is issued to. Absent for the
+   * owner's sign-in from settings, which authorizes whoever signs in.
+   */
+  issuedTo?: string
   /**
    * Exact `redirect_uri` to register with Feishu — normally
    * `{ingressBase}{LARK_OAUTH_RELAY_PATH}`. Required: the value has to match
@@ -58,6 +71,7 @@ export interface BeginLarkOAuthResult {
 
 export interface BeginLarkOAuthDependencies {
   keyringGet: typeof connectorsKeyringGet
+  keyringSnapshot: typeof connectorsKeyringGetSnapshot
   userAuth: typeof connectorsLarkUserAuth
   setPending: typeof setLarkOAuthPending
   makeVerifier: typeof generateCodeVerifier
@@ -85,6 +99,7 @@ export async function beginLarkOAuth(
 ): Promise<BeginLarkOAuthResult> {
   const deps: BeginLarkOAuthDependencies = {
     keyringGet: connectorsKeyringGet,
+    keyringSnapshot: connectorsKeyringGetSnapshot,
     userAuth: connectorsLarkUserAuth,
     setPending: setLarkOAuthPending,
     makeVerifier: generateCodeVerifier,
@@ -97,9 +112,23 @@ export async function beginLarkOAuth(
   const redirectUri = input.redirectUri.trim()
   if (!isUsableRedirect(redirectUri)) throw new Error("redirect_uri_invalid")
 
-  const captured = await deps.userAuth({ action: "snapshot", adapterId })
   const appId = ((await deps.keyringGet(adapterId, "appId")) ?? "").trim()
   if (!appId) throw new Error("app_id_missing")
+  // The fence the Host checks when it publishes: a person's link captures
+  // their own authorization epoch, the owner's sign-in the app credentials'.
+  const issuedTo = input.issuedTo
+    ? {
+        principal: input.issuedTo,
+        authorizationEpoch: (
+          await deps.userAuth({ action: "snapshot", adapterId, principal: input.issuedTo })
+        ).authorizationEpoch,
+      }
+    : {
+        appEpoch: [
+          (await deps.keyringSnapshot(adapterId, "appId"))?.revision ?? "absent",
+          (await deps.keyringSnapshot(adapterId, "appSecret"))?.revision ?? "absent",
+        ].join(":"),
+      }
 
   const state = buildLarkOAuthState(adapterId, deps.makeNonce())
   const codeVerifier = deps.makeVerifier()
@@ -111,7 +140,7 @@ export async function beginLarkOAuth(
     state,
     codeVerifier,
     redirectUri,
-    authorizationEpoch: captured.authorizationEpoch,
+    ...issuedTo,
     ...(input.connection ? { connection: input.connection } : {}),
   })
 

@@ -23,6 +23,7 @@
 
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
 import { listAllIntegrationAccounts } from "@/lib/db/integrations"
@@ -82,7 +83,10 @@ export async function githubReadAccountsFor(
 ): Promise<IntegrationAccount[]> {
   const owner = repoFullName.split("/")[0]?.trim().toLowerCase() ?? ""
   const accounts = await deps.listAccounts().catch(() => [] as IntegrationAccount[])
-  const admission = await admitPersonalCredential(credentialContext, { source: "github-user" })
+  const admission = await admitPersonalCredential(credentialContext, {
+    source: "github-user",
+    person: LOCAL_PERSON,
+  })
   const eligible: IntegrationAccount[] = []
   for (const account of accounts) {
     if (!GITHUB_PROVIDER_IDS.has(account.providerId)) continue
@@ -143,7 +147,7 @@ export async function resolveGithubReadToken(
       !(
         await admitPersonalCredential(credentialContext, {
           source: "github-user",
-          person: account.id,
+          person: LOCAL_PERSON,
         })
       ).ok
     )

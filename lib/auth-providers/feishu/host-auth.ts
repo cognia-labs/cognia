@@ -1,4 +1,9 @@
-/** Lark's Rust credential controller adapted to the Host connection contract (ADR-0246 P5a). */
+/**
+ * Lark's Rust credential controller adapted to the Host connection contract
+ * (ADR-0246 P5a). An adapter holds one authorization per person (ADR-0243
+ * phase 4): each is its own connection row, `hostMetadata.principal` names
+ * the person (`larkUserKey`), and every read names the person it is for.
+ */
 import { larkDeployment } from "@cognia/feishu-protocol"
 import { liveQuery } from "dexie"
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
@@ -38,9 +43,12 @@ import type { LarkConnectedUser } from "./oauth-handler"
 import { beginLarkOAuth } from "./oauth-begin"
 import { CONNECTOR_OAUTH_STATE_KEY } from "@/lib/connectors/oauth-state"
 import { LARK_OAUTH_RELAY_PATH } from "@/lib/connectors/server-transport"
+import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
+import { larkAuthorizedUsers, larkPerson, larkUserKey } from "./user-key"
 import { openUrl } from "@/lib/native/opener"
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -54,10 +62,11 @@ export function ensureLarkHostProvider(): void {
   const disposeDriver = registerHostConnectionDriver("lark", {
     publisher: "cognia",
     synchronize: async (row) => {
-      await reconcileLarkConnection(row.hostMetadata!.adapterId)
+      await reconcileLarkConnection(row.hostMetadata!.adapterId, row.hostMetadata!.principal!)
     },
     getCredentials: async (row, authorization) => {
       const adapterId = row.hostMetadata!.adapterId
+      const principal = row.hostMetadata!.principal!
       await assertHostConnectionCredentialAuthorization(authorization, adapterId)
       const adapter = await getAdapterInstance(adapterId)
       if (!adapter?.enabled) throw new ConnectionUnavailableError("adapter-unavailable")
@@ -72,6 +81,7 @@ export function ensureLarkHostProvider(): void {
         if (!appId || !appSecret) throw new ConnectionUnavailableError("needs-reauth")
         await refreshUserToken({
           adapterId,
+          principal,
           appId,
           appSecret,
           expectedAuthorizationEpoch: row.hostMetadata.authorizationEpoch,
@@ -79,7 +89,7 @@ export function ensureLarkHostProvider(): void {
           connectionAuthorization: authorization,
         })
       }
-      const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
+      const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId, principal })
       await assertHostConnectionCredentialAuthorization(authorization, adapterId)
       if (
         !snapshot.accessToken ||
@@ -90,11 +100,13 @@ export function ensureLarkHostProvider(): void {
     },
     disconnect: async (row) => {
       const adapterId = row.hostMetadata!.adapterId
-      const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
+      const principal = row.hostMetadata!.principal!
+      const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId, principal })
       if (!snapshot.accessToken) return
       await connectorsLarkUserAuth({
         action: "disconnect",
         adapterId,
+        principal,
         expectedAuthorizationEpoch: row.hostMetadata!.authorizationEpoch,
       })
     },
@@ -133,69 +145,163 @@ type LarkReconcileOptions = {
   credentialContext?: PersonalCredentialContext
 }
 
+/** The account the connector is signed in as (the owner): their key and person. */
+export async function larkOwner(
+  adapterId: string
+): Promise<{ key: string; person: PrincipalRefV1 } | undefined> {
+  const owner = (await getAdapterInstance(adapterId))?.settings.connectedUser as
+    LarkConnectedUser | undefined
+  return owner?.openId
+    ? { key: await larkUserKey(owner.openId), person: larkPerson(adapterId, owner) }
+    : undefined
+}
+
+/** The key of the account the connector is signed in as, if any. */
+export async function larkOwnerKey(adapterId: string): Promise<string | undefined> {
+  return (await larkOwner(adapterId))?.key
+}
+
+/** The person whose authorization `principal` is on `adapterId`, if they authorized. */
+export async function larkAuthorizedPerson(
+  adapterId: string,
+  principal: string
+): Promise<PrincipalRefV1 | undefined> {
+  const user = larkAuthorizedUsers((await getAdapterInstance(adapterId))?.settings ?? {})[principal]
+  return user ? larkPerson(adapterId, user) : undefined
+}
+
 /**
- * Identity is fetched only for legacy metadata; all token lineage checks remain Rust-owned.
- * The snapshot read and its publication run under one per-adapter auth lock shared by
- * every window, so a stale "not configured" snapshot read in one window cannot tombstone
- * a reauthorization another window has already published.
+ * Whose Lark authorization a run uses on `adapterId`: the acting principal of
+ * a delegated run, otherwise the local person, whose authorization is the
+ * connector's signed-in account (the owner's). `key` is absent when that
+ * person has no authorization here; `undefined` when the run acts as a
+ * person of another adapter or platform.
+ */
+export async function larkActingPerson(
+  adapterId: string,
+  credentialContext: PersonalCredentialContext | undefined
+): Promise<{ person: PrincipalRefV1; key?: string } | undefined> {
+  if (credentialContext?.sessionId || credentialContext?.executionRunId) {
+    const { resolveRunActingIdentity } = await import("@/lib/execution/acting-authority")
+    const identity = await resolveRunActingIdentity(
+      credentialContext.sessionId,
+      credentialContext.executionRunId,
+      credentialContext.delivery ? { delivery: true } : undefined
+    )
+    const acting = identity?.lane === "delegated" ? identity.actingPrincipal : undefined
+    if (acting?.kind === "platform")
+      return acting.platform === "lark" && acting.adapterId === adapterId
+        ? { person: acting, key: await larkUserKey(acting.remoteUserId) }
+        : undefined
+  }
+  // Every other run is the local person's, whose Lark account is the owner's.
+  const owner = await larkOwner(adapterId)
+  return { person: LOCAL_PERSON, ...(owner ? { key: owner.key } : {}) }
+}
+
+/** The key of the authorization `larkActingPerson` names, if it can have one. */
+export async function larkActingKey(
+  adapterId: string,
+  credentialContext: PersonalCredentialContext | undefined
+): Promise<string | undefined> {
+  return (await larkActingPerson(adapterId, credentialContext))?.key
+}
+
+/**
+ * Publish one person's authorization as their connection row. The snapshot
+ * read and its publication run under one per-person auth lock shared by
+ * every window, so a stale "not configured" snapshot read in one window
+ * cannot tombstone a reauthorization another window has already published.
  */
 export async function reconcileLarkConnection(
   adapterId: string,
+  principal: string,
   options: LarkReconcileOptions = {}
 ): Promise<AuthConnectionRow | undefined> {
   if (options.onlyExisting && !getHostConnectionDriver("lark")) return undefined
   ensureLarkHostProvider()
   return withAuthLock(
-    `cognia-auth-provider:lark:reconcile:${adapterId}`,
-    () => publishLarkSnapshot(adapterId, options),
+    `cognia-auth-provider:lark:reconcile:${adapterId}:${principal}`,
+    () => publishLarkSnapshot(adapterId, principal, options),
     "provider-reconcile"
   )
 }
 
+/** Every person with an authorization or a connection row on `adapterId`. */
+async function larkAdapterPrincipals(adapterId: string): Promise<Set<string>> {
+  const adapter = await getAdapterInstance(adapterId)
+  const principals = new Set(Object.keys(larkAuthorizedUsers(adapter?.settings ?? {})))
+  for (const row of await listAuthConnections("lark"))
+    if (row.hostMetadata?.adapterId === adapterId && row.hostMetadata.principal)
+      principals.add(row.hostMetadata.principal)
+  return principals
+}
+
+/** Reconcile every person's authorization on `adapterId`. */
+export async function reconcileLarkAdapter(
+  adapterId: string,
+  options: LarkReconcileOptions = {}
+): Promise<void> {
+  for (const principal of await larkAdapterPrincipals(adapterId))
+    await reconcileLarkConnection(adapterId, principal, options)
+}
+
 async function publishLarkSnapshot(
   adapterId: string,
+  principal: string,
   options: LarkReconcileOptions
 ): Promise<AuthConnectionRow | undefined> {
   const manager = getConnectionManager()
   const previous = (await listAuthConnections("lark")).filter(
-    (row) => row.hostMetadata?.adapterId === adapterId
+    (row) => row.hostMetadata?.adapterId === adapterId && row.hostMetadata.principal === principal
   )
   const adapter = await getAdapterInstance(adapterId)
   if (!adapter || adapter.type !== "lark") {
     for (const row of previous) await manager.dropHostConnection(row.id)
     return undefined
   }
-  const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
+  const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId, principal })
   if (!snapshot.configured || !snapshot.accessToken) {
     for (const row of previous) await manager.retireHostConnection(row.id)
     return undefined
   }
   const appId = (await connectorsKeyringGet(adapterId, "appId"))?.trim()
   if (!appId) throw new ConnectionUnavailableError("needs-reauth")
-  let user = adapter.settings.connectedUser as LarkConnectedUser | undefined
+  const authorized = larkAuthorizedUsers(adapter.settings)
+  let user = authorized[principal]
   const brand = adapter.settings.brand === "lark" ? "lark" : "feishu"
   if (!user?.openId || !user.tenantKey || user.authorizationEpoch !== snapshot.authorizationEpoch) {
     // Metadata reconciliation must not silently perform a user-authenticated read.
+    if (!user?.openId) throw new ConnectionUnavailableError("identity-unavailable")
     const decision = await admitPersonalCredential(options.credentialContext, {
       source: "lark-user",
-      person: adapterId,
+      person: larkPerson(adapterId, user),
     })
     if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
     const identity = await fetchLarkUserInfo(snapshot.accessToken, brand)
-    if (!identity.openId || !identity.tenantKey)
+    if (
+      !identity.openId ||
+      !identity.tenantKey ||
+      (await larkUserKey(identity.openId)) !== principal
+    )
       throw new ConnectionUnavailableError("identity-unavailable")
-    const current = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
+    const current = await connectorsLarkUserAuth({ action: "snapshot", adapterId, principal })
     if (current.authorizationEpoch !== snapshot.authorizationEpoch || !current.accessToken)
       throw new ConnectionUnavailableError("authorization-changed")
     user = {
       ...user,
       ...identity,
       authorizationEpoch: snapshot.authorizationEpoch,
-      expiresAtMs: user?.expiresAtMs ?? 0,
-      refreshExpiresAtMs: user?.refreshExpiresAtMs ?? 0,
+      expiresAtMs: user.expiresAtMs ?? 0,
+      refreshExpiresAtMs: user.refreshExpiresAtMs ?? 0,
     }
+    const owner = adapter.settings.connectedUser as LarkConnectedUser | undefined
     await updateAdapterInstance(adapterId, {
-      settings: { ...adapter.settings, connectedUser: user },
+      settings: {
+        ...adapter.settings,
+        authorizedUsers: { ...authorized, [principal]: user },
+        ...(owner?.openId === user.openId ? { connectedUser: user } : {}),
+      },
     })
   }
   const prior = previous.find(
@@ -217,6 +323,8 @@ async function publishLarkSnapshot(
     },
     {
       adapterId,
+      principal,
+      person: larkPerson(adapterId, user),
       authorizationEpoch: snapshot.authorizationEpoch,
       credentialVersion: snapshot.refreshRevision ?? undefined,
       bot: snapshot.configured,
@@ -227,25 +335,30 @@ async function publishLarkSnapshot(
   return getAuthConnection(ref)
 }
 
-/** Stored resources keep their portable adapter id; execution resolves the local connection. */
+/**
+ * Stored resources keep their portable adapter id; execution resolves the
+ * connection of the person a read is for (`larkActingKey`, `larkOwnerKey`).
+ */
 export async function resolveLarkConnection(
   adapterId: string,
-  expectedRevision?: number,
+  principal: string | undefined,
   credentialContext?: PersonalCredentialContext
 ): Promise<AuthConnectionRow> {
-  const row = await reconcileLarkConnection(adapterId, { credentialContext })
+  if (!principal) throw new ConnectionUnavailableError("unavailable")
+  const row = await reconcileLarkConnection(adapterId, principal, { credentialContext })
   if (!row) throw new ConnectionUnavailableError("unavailable")
-  return getConnectionManager().getConnection(row.id, expectedRevision)
+  return getConnectionManager().getConnection(row.id)
 }
 
 /** Only the still-current authorization can be marked rejected by a late refresh. */
 export async function markLarkNeedsReauth(
   adapterId: string,
+  principal: string,
   authorizationEpoch: string,
   refreshRevision?: string | null
 ): Promise<void> {
   if (!getHostConnectionDriver("lark")) return
-  const current = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
+  const current = await connectorsLarkUserAuth({ action: "snapshot", adapterId, principal })
   if (
     current.authorizationEpoch !== authorizationEpoch ||
     (refreshRevision !== undefined && current.refreshRevision !== refreshRevision)
@@ -254,6 +367,7 @@ export async function markLarkNeedsReauth(
   for (const row of await listAuthConnections("lark")) {
     if (
       row.hostMetadata?.adapterId === adapterId &&
+      row.hostMetadata.principal === principal &&
       row.hostMetadata.authorizationEpoch === authorizationEpoch
     )
       await getConnectionManager().retireHostConnection(row.id, "needs-reauth")
@@ -267,7 +381,7 @@ export async function listLarkConnections(
   ensureLarkHostProvider()
   for (const adapter of await listAdapterInstancesByType("lark")) {
     try {
-      await reconcileLarkConnection(adapter.id, { credentialContext })
+      await reconcileLarkAdapter(adapter.id, { credentialContext })
     } catch {
       console.warn("Lark Host authorization reconciliation pending")
     }
@@ -332,6 +446,8 @@ export async function authorizeLarkConnection(
   if (!effectiveRedirect) throw new ConnectionUnavailableError("redirect-uri-required")
   const begun = await beginLarkOAuth({
     adapterId: adapter.id,
+    // A reconnect is the same person signing in again.
+    ...(row.hostMetadata.principal ? { issuedTo: row.hostMetadata.principal } : {}),
     redirectUri: effectiveRedirect,
     extraScopes: row.scopes.join(" "),
     brand: adapter.settings.brand === "lark" ? "lark" : "feishu",
@@ -363,7 +479,7 @@ export function startLarkHostAuth(): () => void {
         for (const id of ids) {
           if (stopped) return
           try {
-            await reconcileLarkConnection(id)
+            await reconcileLarkAdapter(id)
           } catch {
             console.warn("Lark Host authorization reconciliation pending")
           }
@@ -400,13 +516,17 @@ export function startLarkHostAuth(): () => void {
 export async function larkConnectionAdapter(
   ref: string,
   revision?: number
-): Promise<{ connection: AuthConnectionRow; adapterId: string }> {
+): Promise<{ connection: AuthConnectionRow; adapterId: string; principal: string }> {
   const connection = await getConnectionManager().getConnection(ref as AuthConnectionRef, revision)
   if (
     connection.providerId !== "lark" ||
     connection.ownerPluginId !== null ||
-    !connection.hostMetadata
+    !connection.hostMetadata?.principal
   )
     throw new ConnectionUnavailableError("provider-mismatch")
-  return { connection, adapterId: connection.hostMetadata.adapterId }
+  return {
+    connection,
+    adapterId: connection.hostMetadata.adapterId,
+    principal: connection.hostMetadata.principal,
+  }
 }

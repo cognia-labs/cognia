@@ -328,7 +328,10 @@ describe("runUsagePresenceRefresh", () => {
       lane: "service",
     })
     expect(
-      await admitPersonalCredential({ executionRunId }, { source: "lark-user" })
+      await admitPersonalCredential(
+        { executionRunId },
+        { source: "lark-user", person: { kind: "local-person" } }
+      )
     ).toMatchObject({ ok: false, reason: "service-lane" })
     const seg = jobs[0].request.segments[0] as { type: string; md: string }
     expect(seg.type).toBe("markdown")

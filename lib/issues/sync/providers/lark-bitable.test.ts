@@ -3,13 +3,19 @@ import { withLarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import type { LarkAuthedApi } from "@/lib/auth-providers/feishu/authed-api"
 import type { IssueProject, LarkBitableFieldMap } from "@/types/issues"
 import type { IssueSyncBinding } from "../types"
-import { resolveLarkConnection, larkConnectionAdapter } from "@/lib/auth-providers/feishu/host-auth"
+import { createHash } from "node:crypto"
+import {
+  larkActingKey,
+  resolveLarkConnection,
+  larkConnectionAdapter,
+} from "@/lib/auth-providers/feishu/host-auth"
 import {
   bitableFieldsFromIssue,
   bitableFieldsFromPatch,
   bitableRecordToRemote,
   createLarkBitableSyncProvider,
 } from "./lark-bitable"
+const OWNER_KEY = createHash("sha256").update("ou_owner").digest("hex")
 
 it("describes its built-in resource without migrating its account binding", () => {
   const descriptor = createLarkBitableSyncProvider().resource!
@@ -27,7 +33,11 @@ it("describes its built-in resource without migrating its account binding", () =
 jest.mock("@/lib/auth-providers/feishu/authed-api", () => ({
   withLarkAuthedApi: jest.fn(),
 }))
+// The acting person's key (ADR-0243 phase 4): the hex SHA-256 of their open_id.
 jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
+  larkActingKey: jest.fn(async () =>
+    jest.requireActual("node:crypto").createHash("sha256").update("ou_owner").digest("hex")
+  ),
   resolveLarkConnection: jest.fn(),
   larkConnectionAdapter: jest.fn(),
 }))
@@ -310,7 +320,12 @@ it("pages all Bitable records with a terminal cursor and no since filter", async
 it("resolves the Bitable adapter's Host connection before sync", async () => {
   jest.mocked(resolveLarkConnection).mockResolvedValueOnce({
     id: "lark-connection",
-    hostMetadata: { authorizationEpoch: "epoch-a" },
+    hostMetadata: {
+      adapterId: "cai_1",
+      authorizationEpoch: "epoch-a",
+      principal: OWNER_KEY,
+      person: { kind: "platform", platform: "lark", adapterId: "cai_1", remoteUserId: "ou_owner" },
+    },
   } as never)
   const provider = createLarkBitableSyncProvider()
   const prepared = await provider.prepare!(binding())
@@ -326,7 +341,27 @@ it("resolves the Bitable adapter's Host connection before sync", async () => {
     }),
     expect.any(Function)
   )
-  expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1", undefined, undefined)
+  expect(larkActingKey).toHaveBeenCalledWith("cai_1", undefined)
+  expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1", OWNER_KEY, undefined)
+})
+
+it("prepares with the connection of the person the run acts as", async () => {
+  const memberKey = createHash("sha256").update("ou_member").digest("hex")
+  const credentialContext = { sessionId: "delegated-session" }
+  jest.mocked(larkActingKey).mockResolvedValueOnce(memberKey)
+  jest.mocked(resolveLarkConnection).mockResolvedValueOnce({
+    id: "member-connection",
+    hostMetadata: {
+      adapterId: "cai_1",
+      authorizationEpoch: "epoch-member",
+      principal: memberKey,
+      person: { kind: "platform", platform: "lark", adapterId: "cai_1", remoteUserId: "ou_member" },
+    },
+  } as never)
+  const prepared = await createLarkBitableSyncProvider().prepare!(binding(), credentialContext)
+  expect(prepared.connectionRef).toBe("member-connection")
+  expect(larkActingKey).toHaveBeenCalledWith("cai_1", credentialContext)
+  expect(resolveLarkConnection).toHaveBeenCalledWith("cai_1", memberKey, credentialContext)
 })
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 const fixture = createDbTestFixture({ seeded: false })

@@ -34,12 +34,12 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 const mockGetPending = jest.fn()
 const mockClearPending = jest.fn()
 jest.mock("./oauth-pending", () => ({
-  getLarkOAuthPending: (adapterId: string) => mockGetPending(adapterId),
-  clearLarkOAuthPending: (adapterId: string) => mockClearPending(adapterId),
+  getLarkOAuthPending: (adapterId: string, state: string) => mockGetPending(adapterId, state),
+  clearLarkOAuthPending: (adapterId: string, state: string) => mockClearPending(adapterId, state),
 }))
 
+import { createHash } from "node:crypto"
 import { buildLarkOAuthState, parseLarkOAuthState, handleLarkOAuth } from "./oauth-handler"
-import { getUserAccessToken } from "./auth"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { getAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
 import { assertLarkIdentityAvailable, reconcileLarkConnection } from "./host-auth"
@@ -49,6 +49,8 @@ const mockGetAdapter = getAdapterInstance as jest.Mock
 const mockUpdateAdapter = updateAdapterInstance as jest.Mock
 
 const REDIRECT = "https://relay.example/oauth/lark/callback"
+const ALICE = createHash("sha256").update("ou_alice").digest("hex")
+const BOB = createHash("sha256").update("ou_bob").digest("hex")
 
 const makeAdapterRow = () => ({
   id: "lk-1",
@@ -65,15 +67,22 @@ const makeAdapterRow = () => ({
   updatedAt: 1,
 })
 
-/** Make `getLarkOAuthPending` return a pending record matching `state`. */
-function primePending(state: string) {
-  mockGetPending.mockReturnValue({
-    state,
-    codeVerifier: "verifier-1",
-    redirectUri: REDIRECT,
-    ts: Date.now(),
-    authorizationEpoch: "auth-a",
-  })
+/**
+ * Make `getLarkOAuthPending` return a pending record for exactly `state`: the
+ * owner's settings sign-in, or a link issued to `principal`.
+ */
+function primePending(state: string, principal?: string) {
+  mockGetPending.mockImplementation((_adapterId: string, asked: string) =>
+    asked === state
+      ? {
+          state,
+          codeVerifier: "verifier-1",
+          redirectUri: REDIRECT,
+          ts: Date.now(),
+          ...(principal ? { principal, authorizationEpoch: "auth-a" } : { appEpoch: "1:1" }),
+        }
+      : undefined
+  )
 }
 
 /** v2 token-exchange HTTP response (flat OAuth 2.0 shape). */
@@ -178,6 +187,7 @@ describe("handleLarkOAuth — happy path", () => {
     expect(connectorsLarkUserAuth).toHaveBeenCalledWith({
       action: "disconnect",
       adapterId: "lk-1",
+      principal: ALICE,
       expectedAuthorizationEpoch: "auth-b",
     })
   })
@@ -206,6 +216,7 @@ describe("handleLarkOAuth — happy path", () => {
       expect.objectContaining({
         action: "authorize",
         adapterId: "lk-1",
+        principal: ALICE,
         expectedAuthorizationEpoch: "auth-a",
         pendingState: state,
         accessToken: "u-access-789",
@@ -227,11 +238,12 @@ describe("handleLarkOAuth — happy path", () => {
     )
     const patch = mockUpdateAdapter.mock.calls[0][1]
     expect(patch.settings.connectedUser.openId).toBe("ou_alice")
+    expect(patch.settings.authorizedUsers[ALICE]).toEqual(patch.settings.connectedUser)
     expect(patch.settings.connectedUser.tenantKey).toBe("tenant-alice")
     // Granted scopes normalized (split, deduped, sorted) and stamped.
     expect(patch.settings.connectedScopes.scopes).toEqual(["im:message", "offline_access"])
     expect(patch.credentialsRef.accounts).toEqual(
-      expect.arrayContaining(["appSecret", "user_token", "user_refresh_token"])
+      expect.arrayContaining(["appSecret", `user_token.${ALICE}`, `user_refresh_token.${ALICE}`])
     )
 
     // Native publication consumes the checked pending state; no delayed renderer delete.
@@ -337,10 +349,46 @@ describe("handleLarkOAuth — error paths", () => {
   })
 })
 
-describe("handleLarkOAuth — cross-window token reads", () => {
-  it("cannot revive a pending authorization begun before revocation", async () => {
+describe("handleLarkOAuth — a link issued to one person", () => {
+  it("records the person's authorization without changing who the connector is signed in as", async () => {
+    const state = buildLarkOAuthState("lk-1", "link")
+    primePending(state, ALICE)
+    mockGetAdapter.mockResolvedValueOnce({
+      ...makeAdapterRow(),
+      settings: { appId: "cli_test123", connectedUser: { openId: "ou_owner" } },
+    })
+    mockHttp.mockResolvedValueOnce(tokenV2Response()).mockResolvedValueOnce(userInfoResponse())
+    await handleLarkOAuth("code", { state })
+    expect(connectorsLarkUserAuth).toHaveBeenCalledWith({
+      action: "snapshot",
+      adapterId: "lk-1",
+      principal: ALICE,
+    })
+    expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "authorize", principal: ALICE, pendingState: state })
+    )
+    const patch = mockUpdateAdapter.mock.calls[0][1]
+    expect(patch.settings.connectedUser).toEqual({ openId: "ou_owner" })
+    expect(patch.settings.connectedScopes).toBeUndefined()
+    expect(patch.settings.authorizedUsers[ALICE].openId).toBe("ou_alice")
+    expect(reconcileLarkConnection).toHaveBeenCalledWith("lk-1", ALICE)
+  })
+
+  it("refuses a link opened by someone else before writing anything", async () => {
+    const state = buildLarkOAuthState("lk-1", "forwarded")
+    primePending(state, BOB)
+    mockGetAdapter.mockResolvedValueOnce(makeAdapterRow())
+    mockHttp.mockResolvedValueOnce(tokenV2Response()).mockResolvedValueOnce(userInfoResponse())
+    await expect(handleLarkOAuth("code", { state })).rejects.toThrow("lark_auth_wrong_person")
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: "authorize" })
+    )
+    expect(mockUpdateAdapter).not.toHaveBeenCalled()
+  })
+
+  it("cannot revive a link issued before that person's authorization changed", async () => {
     const state = buildLarkOAuthState("lk-1", "pre-revoke")
-    primePending(state)
+    primePending(state, ALICE)
     mockGetAdapter.mockResolvedValue(makeAdapterRow())
     ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValueOnce({
       authorizationEpoch: "revoked-epoch",
@@ -350,36 +398,5 @@ describe("handleLarkOAuth — cross-window token reads", () => {
     expect(connectorsLarkUserAuth).not.toHaveBeenCalledWith(
       expect.objectContaining({ action: "authorize" })
     )
-  })
-
-  it("reads the host token again after another authorization", async () => {
-    mockKeyringGet.mockImplementation(async (_id: string, cred: string) =>
-      cred === "appId"
-        ? "cli_test123"
-        : cred === "appSecret"
-          ? "secret_456"
-          : cred === "user_token"
-            ? "u-access-OLD"
-            : null
-    )
-    // Read once before the authorization, as another window may have done.
-    await expect(getUserAccessToken("lk-1")).resolves.toBe("u-access-OLD")
-
-    const state = buildLarkOAuthState("lk-1", "nonce-1")
-    primePending(state)
-    mockGetAdapter.mockResolvedValue(makeAdapterRow())
-    mockHttp.mockResolvedValueOnce(tokenV2Response()).mockResolvedValueOnce(userInfoResponse())
-
-    await handleLarkOAuth("code-1", { state })
-
-    // The keyring now holds what the exchange wrote.
-    expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "authorize", accessToken: "u-access-789" })
-    )
-    mockKeyringGet.mockImplementation(async (_id: string, cred: string) =>
-      cred === "user_token" ? "u-access-789" : null
-    )
-
-    await expect(getUserAccessToken("lk-1")).resolves.toBe("u-access-789")
   })
 })

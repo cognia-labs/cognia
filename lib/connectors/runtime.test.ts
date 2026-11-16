@@ -2393,7 +2393,7 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
     expect(
       await admitPersonalCredential(
         { sessionId: origin!.sessionId, executionRunId: foreignId },
-        { source: "github-user" }
+        { source: "github-user", person: { kind: "local-person" } }
       )
     ).toMatchObject({ ok: true })
     const { transport } = await import("@/lib/tauri")
@@ -2403,7 +2403,10 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
     const { z } = await import("zod")
     const tool = jest.fn(
       async (_args: unknown, context: import("@/lib/skills/built-in/types").BuiltInSkillContext) =>
-        admitPersonalCredential(context, { source: "github-user" })
+        admitPersonalCredential(context, {
+          source: "github-user",
+          person: { kind: "local-person" },
+        })
     )
     registerBuiltInSkill({
       id: "recovery.identity",
@@ -2445,7 +2448,7 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
         const attemptId = `${origin!.id}:attempt:tool-recovery-attempt`
         attemptAdmission = await admitPersonalCredential(
           { sessionId, executionRunId: attemptId },
-          { source: "github-user" }
+          { source: "github-user", person: { kind: "local-person" } }
         )
         toolResponse = await handlePluginToolExec({
           type: "plugin_tool_exec",
@@ -2706,11 +2709,16 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
         displayName: "Owner",
       },
       messageId: "owner-recovery-message",
+      // The principal registry resolved the sender: the turn is delegated.
+      channelData: { resolvedPrincipal: { principalId: "p-owner", accountId: "acc" } },
     })
+    const owner = { openId: "ou_owner", authorizationEpoch: "owner-epoch" }
+    const { createHash } = await import("node:crypto")
     await putInstance("adapter_lark", {
       type: "lark",
       settings: {
-        connectedUser: { openId: "ou_owner", authorizationEpoch: "owner-epoch" },
+        connectedUser: owner,
+        authorizedUsers: { [createHash("sha256").update("ou_owner").digest("hex")]: owner },
       },
     } as never)
     jest.mocked(connectorsLarkUserAuth).mockResolvedValue({
@@ -2736,6 +2744,7 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
       makeEvent({
         ...event,
         channelData: {
+          ...event.channelData,
           recoveryIntent: "continue_safely",
           dispatchIntent: "steer-replay",
           recoveryAnchor: { ...anchor, attemptId: "owner-recovery-attempt" },
@@ -2750,13 +2759,19 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
     const deliveries = await getDb().executionRuns.where("kind").equals("job").toArray()
     const delivery = deliveries.find((run) => run.parentRunId === resumed.id)!
     expect(delivery).toMatchObject({
-      actingIdentity: { rootRunId: origin!.id, trigger: "requester" },
+      actingIdentity: {
+        rootRunId: origin!.id,
+        trigger: "requester",
+        lane: "delegated",
+        actingPrincipal: { remoteUserId: "ou_owner" },
+      },
     })
-    const { getUserAccessToken } = await import("@/lib/auth-providers/feishu/auth")
+    const { admitLarkUserAuthorization } =
+      await import("@/lib/auth-providers/feishu/cli/acting-identity")
     const context = { sessionId: resumed.sessionId!, executionRunId: delivery.id, delivery: true }
-    expect(await getUserAccessToken("adapter_lark", { ...context, larkContext: context })).toBe(
-      "owner-token"
-    )
+    expect(await admitLarkUserAuthorization("adapter_lark", context)).toMatchObject({
+      accessToken: "owner-token",
+    })
     const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
     const unrelated = await startToolExecutionRun(session!.id, {
       localAuthorization: LOCAL_PERSON_RUN,
@@ -2790,17 +2805,17 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
       trigger: "child",
     })
     const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
-    expect(await admitPersonalCredential(unprovenContext, { source: "github-user" })).toMatchObject(
-      {
-        ok: false,
-      }
-    )
     expect(
-      await getUserAccessToken("adapter_lark", {
-        ...unprovenContext,
-        larkContext: unprovenContext,
+      await admitPersonalCredential(unprovenContext, {
+        source: "github-user",
+        person: { kind: "local-person" },
       })
-    ).toBeNull()
+    ).toMatchObject({
+      ok: false,
+    })
+    await expect(admitLarkUserAuthorization("adapter_lark", unprovenContext)).rejects.toThrow(
+      "personal_access_refused"
+    )
   })
 
   it("audits a bounded freeze timeout before enqueueing the independent final reply", async () => {

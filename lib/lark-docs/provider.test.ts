@@ -3,7 +3,12 @@ jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
   larkConnectionAdapter: jest.fn(),
   // The real fetcher binds what it read to the connection it read through.
   resolveLarkConnection: jest.fn(async (id: string) => ({ id, revision: 1 })),
+  // The real fetcher admits the person whose authorization the principal names.
+  larkActingKey: jest.fn(),
+  larkAuthorizedPerson: jest.fn(),
 }))
+// The connector's signed-in account is the Host owner a direct UI read acts as.
+jest.mock("@/lib/execution/personal-sink", () => ({ readHostPersonContext: jest.fn() }))
 jest.mock("@/lib/tauri/transport-instance", () => ({
   localTransport: { subscribe: jest.fn(() => jest.fn()) },
   transport: { subscribe: jest.fn(() => jest.fn()) },
@@ -18,7 +23,13 @@ jest.mock("@/lib/twin/ingest/lark-doc-fetcher", () => ({
 }))
 
 import { LarkApiError } from "@cognia/feishu-protocol"
-import { listLarkConnections, larkConnectionAdapter } from "@/lib/auth-providers/feishu/host-auth"
+import { createHash } from "node:crypto"
+import {
+  listLarkConnections,
+  larkAuthorizedPerson,
+  larkConnectionAdapter,
+} from "@/lib/auth-providers/feishu/host-auth"
+import { readHostPersonContext } from "@/lib/execution/personal-sink"
 import { ConnectionRevisionChanged } from "@/lib/plugin/auth/connection-manager"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 jest.mock("@/lib/plugin/auth/connection-manager", () => ({
@@ -53,6 +64,16 @@ interface StubLarkApi {
   post?: (path: string, body?: unknown) => Promise<unknown>
 }
 
+const OWNER = {
+  kind: "platform",
+  platform: "lark",
+  adapterId: ADAPTER,
+  remoteUserId: "ou_owner",
+} as const
+const OWNER_KEY = createHash("sha256").update(OWNER.remoteUserId).digest("hex")
+const MEMBER = { ...OWNER, remoteUserId: "ou_member" } as const
+const MEMBER_KEY = createHash("sha256").update(MEMBER.remoteUserId).digest("hex")
+
 /** Run the provider's callback against a stubbed API, like the real harness does. */
 function runWith(api: StubLarkApi) {
   const stub: StubLarkApi = {
@@ -64,8 +85,19 @@ function runWith(api: StubLarkApi) {
     },
     ...api,
   }
-  withAuthMock.mockImplementation(async (_opts: unknown, fn: (a: LarkAuthedApi) => unknown) =>
-    fn(stub as unknown as LarkAuthedApi)
+  withAuthMock.mockImplementation(
+    async (
+      opts: { adapterId: string },
+      fn: (
+        a: LarkAuthedApi,
+        account: { adapterId: string; displayName: string; connection: unknown }
+      ) => unknown
+    ) =>
+      fn(stub as unknown as LarkAuthedApi, {
+        adapterId: opts.adapterId,
+        displayName: "Acme",
+        connection,
+      })
   )
 }
 
@@ -76,7 +108,12 @@ const connection = {
   revision: 1,
   scopes: ["search:docs:read"],
   status: "connected",
-  hostMetadata: { adapterId: ADAPTER, authorizationEpoch: "native-a" },
+  hostMetadata: {
+    adapterId: ADAPTER,
+    authorizationEpoch: "native-a",
+    principal: OWNER_KEY,
+    person: OWNER,
+  },
 }
 beforeEach(() => {
   jest.clearAllMocks()
@@ -84,8 +121,14 @@ beforeEach(() => {
   ;(larkConnectionAdapter as jest.Mock).mockImplementation(async (_ref, revision) => {
     if (revision !== undefined && revision !== 1)
       throw new ConnectionRevisionChanged(ACCOUNT, revision, 1)
-    return { connection, adapterId: ADAPTER }
+    return { connection, adapterId: ADAPTER, principal: OWNER_KEY }
   })
+  jest.mocked(readHostPersonContext).mockResolvedValue({ connectedOwners: [OWNER] })
+  jest
+    .mocked(larkAuthorizedPerson)
+    .mockImplementation(async (_adapterId, principal) =>
+      principal === OWNER_KEY ? OWNER : principal === MEMBER_KEY ? MEMBER : undefined
+    )
 })
 
 describe("larkDocsProvider — shape", () => {
@@ -132,7 +175,7 @@ describe("larkDocsProvider — shape", () => {
     controller.abort()
     await new Promise<void>((resolve) => setImmediate(resolve))
     const releasedBeforeSnapshot = settled
-    finish({ connection, adapterId: ADAPTER })
+    finish({ connection, adapterId: ADAPTER, principal: OWNER_KEY })
     expect(await observed).toMatchObject({ name: "AbortError" })
     expect(releasedBeforeSnapshot).toBe(true)
   })
@@ -144,7 +187,7 @@ describe("larkDocsProvider — shape", () => {
       let snapshots = 0
       ;(larkConnectionAdapter as jest.Mock).mockImplementation(async () => {
         if (++snapshots === 2) queueMicrotask(() => queueMicrotask(() => controller.abort()))
-        return { connection, adapterId: ADAPTER }
+        return { connection, adapterId: ADAPTER, principal: OWNER_KEY }
       })
       fetchDocMock.mockResolvedValue({ title: "Doc", text: "must not publish" })
       withAuthMock.mockResolvedValue([])
@@ -419,6 +462,7 @@ describe("larkDocsProvider.fetch — documents", () => {
       "doxcn1",
       expect.objectContaining({
         adapterId: ADAPTER,
+        principal: OWNER_KEY,
         expectedAuthorizationEpoch: "native-a",
         maxResponseBytes: 10 * 1024 * 1024,
       })
@@ -486,6 +530,78 @@ describe("larkDocsProvider.fetch — documents", () => {
         }
       )
     ).rejects.toMatchObject({ name: "DocsProviderError", code: "noPermission" })
+  })
+})
+
+describe("larkDocsProvider — per-person authorization", () => {
+  const LOCAL = {
+    localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+  }
+
+  it("reads and searches with the connection's own person", async () => {
+    runWith({ post: async () => ({ docs_entities: [] }) })
+    await larkDocsProvider.search!("q", { credentialContext: LOCAL, accountId: ACCOUNT, limit: 5 })
+    fetchDocMock.mockResolvedValue({ title: "Spec", text: "body" })
+    await larkDocsProvider.fetch(
+      { providerId: "lark", kind: "doc", id: "doxcn1", title: "Spec" },
+      { credentialContext: LOCAL, accountId: ACCOUNT }
+    )
+    expect(withAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({ adapterId: ADAPTER, principal: OWNER_KEY, identity: "user" }),
+      expect.any(Function)
+    )
+    expect(fetchDocMock).toHaveBeenCalledWith(
+      "doxcn1",
+      expect.objectContaining({ adapterId: ADAPTER, principal: OWNER_KEY })
+    )
+  })
+
+  it("refuses a connection that names no person before any personal read", async () => {
+    const anonymous = {
+      ...connection,
+      hostMetadata: { adapterId: ADAPTER, authorizationEpoch: "native-a", principal: OWNER_KEY },
+    }
+    ;(larkConnectionAdapter as jest.Mock).mockResolvedValue({
+      connection: anonymous,
+      adapterId: ADAPTER,
+      principal: OWNER_KEY,
+    })
+    await expect(
+      larkDocsProvider.fetch(
+        { providerId: "lark", kind: "doc", id: "doc", title: "Doc" },
+        { credentialContext: LOCAL, accountId: ACCOUNT }
+      )
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+    await expect(
+      larkDocsProvider.search!("q", { credentialContext: LOCAL, accountId: ACCOUNT, limit: 5 })
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+    expect(withAuthMock).not.toHaveBeenCalled()
+    expect(fetchDocMock).not.toHaveBeenCalled()
+  })
+
+  it("does not let the Host owner read through another person's authorization", async () => {
+    const members = {
+      ...connection,
+      hostMetadata: {
+        adapterId: ADAPTER,
+        authorizationEpoch: "native-b",
+        principal: MEMBER_KEY,
+        person: MEMBER,
+      },
+    }
+    ;(larkConnectionAdapter as jest.Mock).mockResolvedValue({
+      connection: members,
+      adapterId: ADAPTER,
+      principal: MEMBER_KEY,
+    })
+    await expect(
+      larkDocsProvider.fetch(
+        { providerId: "lark", kind: "doc", id: "doc", title: "Doc" },
+        { credentialContext: LOCAL, accountId: ACCOUNT }
+      )
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+    expect(withAuthMock).not.toHaveBeenCalled()
+    expect(fetchDocMock).not.toHaveBeenCalled()
   })
 })
 

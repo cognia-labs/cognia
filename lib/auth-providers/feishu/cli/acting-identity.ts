@@ -1,12 +1,17 @@
-/** Shared ownership check for CLI skills and the adapter's user-token HTTP path. */
-import { admitPersonalCredential } from "@/lib/execution/personal-credential"
+/**
+ * Personal Lark access for built-in skills, the adapter's user-token HTTP path
+ * and the lark-cli bridge (ADR-0243 phase 4): a call uses the authorization of
+ * the person the run acts as, admitted by the kernel's single admission point.
+ */
+import {
+  admitPersonalCredential,
+  type PersonalCredentialContext,
+} from "@/lib/execution/personal-credential"
 import enSkillMessages from "@/i18n/messages/en/skills.json"
 import { currentLocale } from "@/lib/i18n/runtime-translator"
-import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import {
   resolveBuiltInSkillRunScope,
   resolveBuiltInSkillSessionBinding,
-  resolveBuiltInSkillTurnActors,
 } from "@/lib/skills/built-in/context"
 import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
@@ -15,32 +20,23 @@ import {
   snapshotActingAuthority,
   resolveRunActingIdentity,
 } from "@/lib/execution/acting-authority"
-
 import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
+import { loggers } from "@cognia/logging"
+import { larkActingPerson } from "../host-auth"
 
-export interface VerifiedLarkUserAuthorization {
+/** One person's token, captured with its epoch in a single Host snapshot. */
+export interface LarkUserAuthorization {
+  /** Whose authorization this is (`larkUserKey`). */
+  principal: string
   accessToken: string
   authorizationEpoch: string
 }
 
-const authorizationPeople = new WeakMap<VerifiedLarkUserAuthorization, PrincipalRefV1>()
-/** Only the Host verification that issued this exact token snapshot can name its person. */
-export function verifiedLarkAuthorizationPerson(
-  authorization: VerifiedLarkUserAuthorization
-): PrincipalRefV1 | undefined {
-  return authorizationPeople.get(authorization)
-}
-
 export class LarkActingIdentityError extends Error {
-  readonly reason = "sender_not_token_owner" as const
+  readonly reason = "personal_access_refused" as const
 
-  constructor(owner?: string, hint = enSkillMessages.actingIdentity.personalAccessPhases) {
-    super(
-      (owner
-        ? `sender_not_token_owner: this Lark action runs with ${owner}'s personal authorization; only ${owner} can use it from chat.`
-        : "sender_not_token_owner: cannot verify that every IM sender owns this Lark personal authorization.") +
-        ` ${hint}`
-    )
+  constructor(hint = enSkillMessages.actingIdentity.personalAccessRule) {
+    super(`personal_access_refused: this run cannot use a Lark personal authorization. ${hint}`)
     this.name = "LarkActingIdentityError"
   }
 }
@@ -58,159 +54,109 @@ export async function resolveLarkRunIdentity(ctx: BuiltInSkillContext) {
 /** Literal catalog message, shared by the HTTP gate and user-only CLI calls. */
 export async function larkPersonalAccessHint(): Promise<string> {
   return (await currentLocale()) === "zh-CN"
-    ? (await import("@/i18n/messages/zh-CN/skills.json")).actingIdentity.personalAccessPhases
-    : enSkillMessages.actingIdentity.personalAccessPhases
+    ? (await import("@/i18n/messages/zh-CN/skills.json")).actingIdentity.personalAccessRule
+    : enSkillMessages.actingIdentity.personalAccessRule
 }
 
-export async function verifyLarkImOwnerAuthorization(
-  adapterId: string,
-  ctx?: BuiltInSkillContext
-): Promise<VerifiedLarkUserAuthorization | undefined> {
-  const hint = await larkPersonalAccessHint()
-  const refusal = (owner?: string) => new LarkActingIdentityError(owner, hint)
-  if (!ctx) throw refusal()
-  const authoritySnapshot = snapshotActingAuthority(ctx.sessionId, ctx.executionRunId)
-  try {
-    const { binding, personalLane, personalRunOnly, rootSessionId } =
-      await resolveBuiltInSkillSessionBinding(
-        ctx.hitlBypass ? (ctx.imAuthoritySessionId ?? ctx.sessionId) : ctx.sessionId
-      )
-    // A plugin invocation cannot borrow the host's current desktop or IM run.
-    if (ctx.outboundAuthorization?.kind === "plugin") throw refusal()
-    if (!binding) {
-      // Never trust ctx.personalLane or treat a missing IM binding as consent.
-      if (!personalRunOnly && personalLane !== "local-session") throw refusal()
-      const identity = await resolveLarkRunIdentity(ctx)
-      if (identity?.trigger !== "local" || identity.authorizingPrincipal?.kind !== "local-person")
-        throw refusal()
-      return
-    }
-    // Event actors never become requesters, even if the sender owns this token.
-    const identity = await resolveLarkRunIdentity(ctx)
-    if (
-      !identity ||
-      identity.lane === "service" ||
-      (identity.trigger !== "requester" && identity.trigger !== "local")
-    )
-      throw refusal()
-    // open_ids are app-scoped: another platform or adapter cannot prove ownership.
-    if (binding.platform !== "lark" || binding.adapterId !== adapterId || !binding.conversationKey)
-      throw refusal()
-    const adapter = await getAdapterInstance(adapterId)
-    const connected = adapter?.settings.connectedUser
-    const owner =
-      connected && typeof connected === "object"
-        ? (connected as {
-            openId?: unknown
-            unionId?: unknown
-            name?: unknown
-            authorizationEpoch?: unknown
-          })
-        : undefined
-    const ownerName = typeof owner?.name === "string" ? owner.name : undefined
-    if (
-      adapter?.type !== "lark" ||
-      !adapter.enabled ||
-      typeof owner?.openId !== "string" ||
-      !owner.openId.trim()
-    )
-      throw refusal(ownerName)
-    // Only the host's verified Confirm callback can replace the current run's actors.
-    // Otherwise refresh the job view so a newly steered sender cannot use stale context.
-    const deliverySenders =
-      ctx.delivery && ctx.executionRunId
-        ? identity.requesters.map((principal) =>
-            principal.kind === "platform" &&
-            principal.platform === "lark" &&
-            principal.adapterId === adapterId
-              ? {
-                  remoteUserId: principal.remoteUserId,
-                  ...(principal.unionId ? { unionId: principal.unionId } : {}),
-                }
-              : undefined
-          )
-        : undefined
-    if (deliverySenders?.some((sender) => !sender)) throw refusal(ownerName)
-    const senders = deliverySenders
-      ? deliverySenders.filter((sender): sender is NonNullable<typeof sender> => !!sender)
-      : ctx.hitlBypass
-        ? (ctx.actingSenders ?? "unknown")
-        : (await resolveBuiltInSkillTurnActors(binding.conversationKey, adapterId, rootSessionId))
-            .actingSenders
-    if (
-      senders === "unknown" ||
-      senders.length === 0 ||
-      senders.some(
-        (sender) =>
-          sender.remoteUserId !== owner.openId ||
-          (sender.unionId !== undefined &&
-            typeof owner.unionId === "string" &&
-            sender.unionId !== owner.unionId)
-      )
-    )
-      throw refusal(ownerName)
-    // The native token publication precedes the separate connectedUser write.
-    void authoritySnapshot
-      .then((seen) => {
-        if (seen) return observeActingAuthority(seen.runId, seen.revision, "lark-personal-token")
-      })
-      .catch(() => undefined)
-    // Never combine metadata for one authorization with another one's token.
-    const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
-    if (!snapshot.configured || !snapshot.accessToken || !snapshot.authorizationEpoch)
-      throw refusal(ownerName)
-    if (owner.authorizationEpoch !== undefined) {
-      if (
-        typeof owner.authorizationEpoch !== "string" ||
-        owner.authorizationEpoch !== snapshot.authorizationEpoch
-      )
-        throw refusal(ownerName)
-    } else if (snapshot.accountLabel !== (ownerName || owner.openId)) {
-      throw refusal(ownerName)
-    }
-    const authorization = {
-      accessToken: snapshot.accessToken,
-      authorizationEpoch: snapshot.authorizationEpoch,
-    }
-    authorizationPeople.set(authorization, {
-      kind: "platform",
-      platform: "lark",
-      adapterId,
-      remoteUserId: owner.openId,
-      ...(typeof owner.unionId === "string" ? { unionId: owner.unionId } : {}),
-    })
-    return authorization
-  } catch (err) {
-    if (err instanceof LarkActingIdentityError) throw err
-    throw refusal()
+/** The admission context of a built-in skill call. */
+export function larkSkillCredentialContext(ctx: BuiltInSkillContext): PersonalCredentialContext {
+  const scope = resolveBuiltInSkillRunScope(ctx)
+  return {
+    sessionId: scope.sessionId,
+    executionRunId: scope.runId,
+    ...(ctx.delivery ? { delivery: true } : {}),
   }
 }
 
-/** All personal Lark consumers share the Host credential choke point. */
+/**
+ * The acting person's own Lark authorization, admitted and marked. Throws
+ * `LarkActingIdentityError` when the run may use nobody's; `undefined` when
+ * the person it may use has not authorized the adapter.
+ */
+export async function admitLarkUserAuthorization(
+  adapterId: string,
+  credentialContext: PersonalCredentialContext | undefined
+): Promise<LarkUserAuthorization | undefined> {
+  const authoritySnapshot = credentialContext?.sessionId
+    ? snapshotActingAuthority(credentialContext.sessionId, credentialContext.executionRunId)
+    : undefined
+  const refusal = async () => new LarkActingIdentityError(await larkPersonalAccessHint())
+  // An identity that cannot be read is nobody's, as the kernel admission treats it.
+  const acting = await larkActingPerson(adapterId, credentialContext).catch(() => undefined)
+  if (!acting) throw await refusal()
+  const admission = await admitPersonalCredential(credentialContext, {
+    source: "lark-user",
+    person: acting.person,
+  })
+  if (!admission.ok) throw await refusal()
+  void authoritySnapshot
+    ?.then((seen) => {
+      if (seen) return observeActingAuthority(seen.runId, seen.revision, "lark-personal-token")
+    })
+    .catch(() => undefined)
+  const principal = acting.key
+  const snapshot = principal
+    ? await connectorsLarkUserAuth({ action: "snapshot", adapterId, principal })
+    : undefined
+  if (
+    !principal ||
+    !snapshot?.configured ||
+    !snapshot.accessToken ||
+    !snapshot.authorizationEpoch
+  ) {
+    // A requester who never authorized gets their own link, privately.
+    if (acting.person.kind === "platform")
+      await offerLink(adapterId, acting.person, credentialContext, authoritySnapshot)
+    return
+  }
+  return {
+    principal,
+    accessToken: snapshot.accessToken,
+    authorizationEpoch: snapshot.authorizationEpoch,
+  }
+}
+
+/** Hand the acting requester an authorization link as a delivery of their turn. */
+async function offerLink(
+  adapterId: string,
+  person: PrincipalRefV1,
+  credentialContext: PersonalCredentialContext | undefined,
+  authoritySnapshot: ReturnType<typeof snapshotActingAuthority> | undefined
+): Promise<void> {
+  const sessionId = credentialContext?.sessionId
+  const executionRunId = credentialContext?.executionRunId ?? (await authoritySnapshot)?.runId
+  if (!sessionId || !executionRunId) return
+  const { binding } = await resolveBuiltInSkillSessionBinding(sessionId)
+  if (!binding?.conversationKey || binding.adapterId !== adapterId) return
+  const { offerDelegatedAuthorization } = await import("@/lib/connectors/delegated-authorization")
+  // A link that cannot be issued (no relay registered) leaves the plain refusal.
+  await offerDelegatedAuthorization({
+    adapterId,
+    conversationKey: binding.conversationKey,
+    executionRunId,
+    person,
+  }).catch((error: unknown) =>
+    loggers.network.warn("[lark] authorization link not delivered", {
+      adapterId,
+      reason: error instanceof Error ? error.message : String(error),
+    })
+  )
+}
+
+/** `admitLarkUserAuthorization` for a built-in skill call. */
 export async function assertLarkActingIdentity(
   adapterId: string,
   ctx?: BuiltInSkillContext
-): Promise<VerifiedLarkUserAuthorization | undefined> {
-  const scope = ctx ? resolveBuiltInSkillRunScope(ctx) : undefined
-  const decision = await admitPersonalCredential(
-    scope
-      ? {
-          sessionId: scope.sessionId,
-          executionRunId: scope.runId,
-          larkContext: ctx,
-          ...(ctx?.delivery ? { delivery: true } : {}),
-        }
-      : undefined,
-    { source: "lark-user", person: adapterId }
-  )
-  if (!decision.ok) {
-    if (decision.cause instanceof LarkActingIdentityError) throw decision.cause
-    throw new LarkActingIdentityError(undefined, await larkPersonalAccessHint())
-  }
-  if (decision.authorization) return decision.authorization
-  // A local-person run still captures token+epoch atomically. Never fall back
-  // to a separately read user_token after the admission decision.
-  const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
-  if (!snapshot.configured || !snapshot.accessToken || !snapshot.authorizationEpoch) return
-  return { accessToken: snapshot.accessToken, authorizationEpoch: snapshot.authorizationEpoch }
+): Promise<LarkUserAuthorization | undefined> {
+  const refusal = async () => new LarkActingIdentityError(await larkPersonalAccessHint())
+  // A plugin invocation cannot borrow the host's current desktop or IM run.
+  if (!ctx || ctx.outboundAuthorization?.kind === "plugin") throw await refusal()
+  // A session a plugin, Bot or sync created is no personal desktop lane,
+  // whatever run it carries; only its IM binding can make it a person's.
+  const lane = await resolveBuiltInSkillSessionBinding(
+    ctx.hitlBypass ? (ctx.imAuthoritySessionId ?? ctx.sessionId) : ctx.sessionId
+  ).catch(() => undefined)
+  if (!lane || (!lane.binding && !lane.personalRunOnly && lane.personalLane !== "local-session"))
+    throw await refusal()
+  return admitLarkUserAuthorization(adapterId, larkSkillCredentialContext(ctx))
 }

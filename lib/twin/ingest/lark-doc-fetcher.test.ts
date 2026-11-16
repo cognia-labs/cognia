@@ -12,7 +12,12 @@ import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
 import { inspect } from "node:util"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
-import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
+import { createHash } from "node:crypto"
+import {
+  larkActingKey,
+  larkAuthorizedPerson,
+  resolveLarkConnection,
+} from "@/lib/auth-providers/feishu/host-auth"
 import { resolveKeptCopySource } from "@/lib/docs-providers/kept-copy-source"
 
 jest.mock("@/lib/docs-providers/registry", () => ({
@@ -52,7 +57,17 @@ describe("kept source authority", () => {
       identityKey: "same",
       revision: 2,
       status: "connected",
-      hostMetadata: { adapterId: "restored-adapter", authorizationEpoch: "twin-fixture" },
+      hostMetadata: {
+        adapterId: "restored-adapter",
+        authorizationEpoch: "twin-fixture",
+        principal: RESTORED_KEY,
+        person: {
+          kind: "platform",
+          platform: "lark",
+          adapterId: "restored-adapter",
+          remoteUserId: "ou_restored",
+        },
+      },
     }
     await getDb().authConnections.put(connection as never)
     jest.mocked(resolveLarkConnection).mockResolvedValue(connection as never)
@@ -92,7 +107,9 @@ describe("kept source authority", () => {
       accountBinding: { accountId: "restored", authorizationEpoch: "2" },
       text: "Kept body",
     })
-    expect(resolveLarkConnection).toHaveBeenCalledWith("restored-adapter", undefined, {
+    // The restored connection names whose authorization the kept copy reads with.
+    expect(larkAuthorizedPerson).toHaveBeenCalledWith("restored-adapter", RESTORED_KEY)
+    expect(resolveLarkConnection).toHaveBeenCalledWith("restored-adapter", RESTORED_KEY, {
       localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
     })
   })
@@ -153,13 +170,44 @@ jest.mock("@/lib/auth-providers/feishu/cli/exec-lark-cli", () => ({ execLarkCli:
 
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
-jest.mock("@/lib/auth-providers/feishu/host-auth", () => ({
-  resolveLarkConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
+// One authorization per person (ADR-0243 phase 4): keys are the hex SHA-256 of
+// the open_id. The owner signed in on both adapters; the member only authorized.
+jest.mock("@/lib/auth-providers/feishu/host-auth", () => {
+  const { createHash } = jest.requireActual("node:crypto")
+  const people = Object.fromEntries(
+    ["ou_owner", "ou_restored", "ou_member"].map((openId) => [
+      createHash("sha256").update(openId).digest("hex"),
+      openId,
+    ])
+  )
+  return {
+    resolveLarkConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
+    larkActingKey: jest.fn(async () => createHash("sha256").update("ou_owner").digest("hex")),
+    larkAuthorizedPerson: jest.fn(async (adapterId: string, principal: string) =>
+      people[principal]
+        ? { kind: "platform", platform: "lark", adapterId, remoteUserId: people[principal] }
+        : undefined
+    ),
+  }
+})
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readHostPersonContext: jest.fn(async () => ({
+    connectedOwners: [
+      { kind: "platform", platform: "lark", adapterId: "cai_test1", remoteUserId: "ou_owner" },
+      {
+        kind: "platform",
+        platform: "lark",
+        adapterId: "restored-adapter",
+        remoteUserId: "ou_restored",
+      },
+    ],
+  })),
 }))
 jest.mock("@/lib/plugin/auth/connection-manager", () => {
   const manager = {
     getConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
-    getCredentials: jest.fn(async () => ({ accessToken: await getUserAccessTokenMock(ADAPTER) })),
+    getCredentials: jest.fn(async () => ({ accessToken: await mockHostUserToken(ADAPTER) })),
   }
   return {
     ...jest.requireActual("@/lib/plugin/auth/connection-manager"),
@@ -177,7 +225,6 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 }))
 jest.mock("@/lib/auth-providers/feishu/auth", () => ({
   ...jest.requireActual("@/lib/auth-providers/feishu/auth"),
-  getUserAccessToken: jest.fn(),
   getTenantAccessToken: jest.fn(),
   refreshUserToken: jest.fn(),
   clearTokenCache: jest.fn(),
@@ -187,22 +234,23 @@ import { isTauri } from "@/lib/tauri"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
-import {
-  getTenantAccessToken,
-  getUserAccessToken,
-  refreshUserToken,
-} from "@/lib/auth-providers/feishu/auth"
+import { getTenantAccessToken, refreshUserToken } from "@/lib/auth-providers/feishu/auth"
 
 const isTauriMock = isTauri as jest.Mock
 const getAdapterInstanceMock = getAdapterInstance as jest.Mock
 const keyringGetMock = connectorsKeyringGet as jest.Mock
-const getUserAccessTokenMock = getUserAccessToken as jest.Mock
+/** The token the Host holds for the acting person; the connection manager hands it out. */
+const mockHostUserToken = jest.fn()
 const getTenantAccessTokenMock = getTenantAccessToken as jest.Mock
 const refreshUserTokenMock = refreshUserToken as jest.Mock
 
 const DOCX_URL = "https://acme.feishu.cn/docx/doxcnAbCdEfGh1234567890"
 const WIKI_URL = "https://acme.feishu.cn/wiki/wikcnAbCdEfGh123456789"
 const ADAPTER = "cai_test1"
+const personKey = (openId: string) => createHash("sha256").update(openId).digest("hex")
+const OWNER_KEY = personKey("ou_owner")
+const RESTORED_KEY = personKey("ou_restored")
+const MEMBER_KEY = personKey("ou_member")
 
 it("never starts CLI execution when cancelled during its lazy import", async () => {
   const { execLarkCli } = jest.requireMock("@/lib/auth-providers/feishu/cli/exec-lark-cli")
@@ -228,7 +276,9 @@ it.each(["api", "cli"] as const)(
   async (channel) => {
     let cancelled = 0
     let settled = 0
-    for (let depth = 0; depth <= 32; depth++) {
+    // Probe abort points from the first transport call until one lands after
+    // the read settled; the per-person admission checks add continuations.
+    for (let depth = 0; depth <= 32 || (settled === 0 && depth <= 512); depth++) {
       const controller = new AbortController()
       let pendingAtAbort = false
       let started = false
@@ -345,7 +395,7 @@ beforeEach(() => {
   ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockImplementation(async () => ({
     configured: true,
     authorizationEpoch: "twin-fixture",
-    accessToken: await getUserAccessTokenMock(ADAPTER),
+    accessToken: await mockHostUserToken(ADAPTER),
   }))
   isTauriMock.mockReturnValue(true)
   getAdapterInstanceMock.mockResolvedValue({
@@ -357,7 +407,7 @@ beforeEach(() => {
   keyringGetMock.mockImplementation(async (_id: string, cred: string) =>
     cred === "appId" ? "cli_app" : cred === "appSecret" ? "sec" : null
   )
-  getUserAccessTokenMock.mockResolvedValue("user-token")
+  mockHostUserToken.mockResolvedValue("user-token")
   getTenantAccessTokenMock.mockResolvedValue("tenant-token")
 })
 
@@ -441,7 +491,7 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       adapterId: ADAPTER,
       channel: "api",
     })
-    expect(resolveLarkConnection).toHaveBeenCalledWith(ADAPTER, undefined, {
+    expect(resolveLarkConnection).toHaveBeenCalledWith(ADAPTER, OWNER_KEY, {
       localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
     })
     expect(getConnectionManager().getCredentials).toHaveBeenCalledWith("host-ref", {
@@ -508,7 +558,7 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
       return ok({ document: { title: "T" } })
     })
     refreshUserTokenMock.mockResolvedValue("user-token-2")
-    getUserAccessTokenMock
+    mockHostUserToken
       .mockResolvedValueOnce("user-token") // presence check
       .mockResolvedValueOnce("user-token") // first attempt
       .mockResolvedValue("user-token-2") // after refresh
@@ -524,7 +574,7 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
   })
 
   it("requires the connected user's authorization for document fetch", async () => {
-    getUserAccessTokenMock.mockResolvedValue(null)
+    mockHostUserToken.mockResolvedValue(null)
     const http = makeHttp([])
     await expectCode(
       fetchLarkDocAsRawSource(DOCX_URL, {
@@ -697,7 +747,7 @@ describe("fetchLarkDocAsRawSource — api channel edge branches", () => {
   })
 
   it("maps a persistent 401 on the tenant path to larkNotAuthorized", async () => {
-    getUserAccessTokenMock.mockResolvedValue(null)
+    mockHostUserToken.mockResolvedValue(null)
     const http = makeHttp([["/", larkFail(401, 99991663)]])
     await expectCode(
       fetchLarkDocAsRawSource(DOCX_URL, {
@@ -1122,6 +1172,105 @@ it.each(["api", "cli"] as const)(
     expect(httpImpl).not.toHaveBeenCalled()
   }
 )
+
+describe("per-person authorization", () => {
+  const LOCAL = {
+    localAuthorization: jest.requireActual("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
+  }
+  const docHttp = () =>
+    makeHttp([
+      ["/raw_content", ok({ content: "Person body" })],
+      ["/documents/", ok({ document: { title: "Person doc" } })],
+    ])
+
+  it.each(["api", "cli"] as const)(
+    "refuses %s reads when the acting person never authorized the adapter",
+    async (channel) => {
+      jest.mocked(larkAuthorizedPerson).mockResolvedValueOnce(undefined)
+      const execImpl = jest.fn()
+      const httpImpl = docHttp()
+      await expectCode(
+        fetchLarkDocAsRawSource(DOCX_URL, {
+          adapterId: ADAPTER,
+          credentialContext: LOCAL,
+          channel,
+          execImpl,
+          httpImpl,
+        }),
+        "larkNotAuthorized"
+      )
+      expect(larkAuthorizedPerson).toHaveBeenCalledWith(ADAPTER, OWNER_KEY)
+      expect(resolveLarkConnection).not.toHaveBeenCalled()
+      expect(execImpl).not.toHaveBeenCalled()
+      expect(httpImpl).not.toHaveBeenCalled()
+    }
+  )
+
+  it("refuses when the run acts as nobody who can hold an authorization here", async () => {
+    jest.mocked(larkActingKey).mockResolvedValueOnce(undefined)
+    const httpImpl = docHttp()
+    await expectCode(
+      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, credentialContext: LOCAL, httpImpl }),
+      "larkNotAuthorized"
+    )
+    expect(larkAuthorizedPerson).not.toHaveBeenCalled()
+    expect(httpImpl).not.toHaveBeenCalled()
+  })
+
+  it("does not admit the Host owner through another person's authorization", async () => {
+    const httpImpl = docHttp()
+    await expectCode(
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        adapterId: ADAPTER,
+        principal: MEMBER_KEY,
+        credentialContext: LOCAL,
+        httpImpl,
+      }),
+      "larkNotAuthorized"
+    )
+    expect(larkActingKey).not.toHaveBeenCalled()
+    expect(httpImpl).not.toHaveBeenCalled()
+  })
+
+  it("passes an explicit principal on to the api channel's harness", async () => {
+    const httpImpl = docHttp()
+    await expect(
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        adapterId: ADAPTER,
+        principal: OWNER_KEY,
+        credentialContext: LOCAL,
+        httpImpl,
+      })
+    ).resolves.toMatchObject({
+      text: "Person body",
+      accountBinding: { accountId: "host-ref", authorizationEpoch: "1" },
+    })
+    expect(larkActingKey).not.toHaveBeenCalled()
+    expect(resolveLarkConnection).toHaveBeenCalledWith(ADAPTER, OWNER_KEY, LOCAL)
+    expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "snapshot", adapterId: ADAPTER, principal: OWNER_KEY })
+    )
+  })
+
+  it("resolves the acting person's connection before and after a cli read", async () => {
+    const execImpl = jest.fn(async () => ({
+      status: "ok" as const,
+      adapterId: ADAPTER,
+      data: "cli body",
+    }))
+    await expect(
+      fetchLarkDocAsRawSource(DOCX_URL, {
+        adapterId: ADAPTER,
+        credentialContext: LOCAL,
+        channel: "cli",
+        execImpl,
+      })
+    ).resolves.toMatchObject({ text: "cli body", channel: "cli" })
+    expect(resolveLarkConnection).toHaveBeenCalledTimes(2)
+    for (const call of jest.mocked(resolveLarkConnection).mock.calls)
+      expect(call).toEqual([ADAPTER, OWNER_KEY, LOCAL])
+  })
+})
 
 // Reset the isolated module graph only after the tests that share the original Host symbol.
 it("maps a failing dynamic import to larkCliUnavailable", async () => {

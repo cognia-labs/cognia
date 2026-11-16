@@ -51,9 +51,11 @@ async function assertLarkAuthorization(opts: DocsProviderCallOptions) {
     )
   )
   throwIfRequestAborted(opts.signal)
+  const person = resolved.connection.hostMetadata?.person
+  if (!person) throw new DocsProviderError("notAuthorized")
   const decision = await admitPersonalCredential(opts.credentialContext, {
     source: "lark-user",
-    person: resolved.adapterId,
+    person,
   })
   if (!decision.ok) throw new DocsProviderError("notAuthorized")
   return resolved
@@ -123,12 +125,13 @@ export const larkDocsProvider: DocsProvider = {
 
   async search(query: string, opts: DocsProviderSearchOptions): Promise<RemoteDocRef[]> {
     try {
-      const { connection, adapterId } = await assertLarkAuthorization(opts)
+      const { connection, adapterId, principal } = await assertLarkAuthorization(opts)
       opts = { ...opts, expectedAuthorizationEpoch: String(connection.revision) }
       throwIfRequestAborted(opts.signal)
       const refs = await withLarkAuthedApi(
         {
           adapterId,
+          principal,
           credentialContext: opts.credentialContext,
           identity: "user",
           expectedAuthorizationEpoch: connection.hostMetadata!.authorizationEpoch,
@@ -158,7 +161,7 @@ export const larkDocsProvider: DocsProvider = {
         opts.accountId,
         opts.expectedAuthorizationEpoch ?? ref.accountBinding?.authorizationEpoch
       )
-      const { connection, adapterId } = await assertLarkAuthorization(opts)
+      const { connection, adapterId, principal } = await assertLarkAuthorization(opts)
       opts = { ...opts, expectedAuthorizationEpoch: String(connection.revision) }
       throwIfRequestAborted(opts.signal)
       let bodyRef = ref
@@ -166,6 +169,7 @@ export const larkDocsProvider: DocsProvider = {
       const apiOptions = {
         identity: "user" as const,
         adapterId,
+        principal,
         expectedAuthorizationEpoch: connection.hostMetadata!.authorizationEpoch,
         credentialContext: opts.credentialContext,
         signal: opts.signal,
@@ -183,6 +187,7 @@ export const larkDocsProvider: DocsProvider = {
       if (bodyRef.kind === "doc") {
         const fetched = await fetchLarkDocAsRawSource(docInputFor(bodyRef), {
           adapterId,
+          principal,
           expectedAuthorizationEpoch: connection.hostMetadata!.authorizationEpoch,
           credentialContext: opts.credentialContext,
           signal: opts.signal,

@@ -122,34 +122,17 @@ export function fetchLarkUserInfo(accessToken: string, brand?: FeishuBrand): Pro
 }
 
 // ---------------------------------------------------------------------------
-// User access token — send-as-user path (ADR-0009 v41 / A4 completion)
+// Per-person user access tokens (ADR-0009, ADR-0243 phase 4)
 //
-// `oauth-handler.ts` persists `user_token` + `user_refresh_token` in the
-// keyring after the OAuth exchange. Until now nothing read them. These helpers
-// resolve + silently refresh the user access token so the adapter's `send()`
-// can act on behalf of the connected user (opt-in via `settings.sendAsUser`).
+// `oauth-handler.ts` publishes each person's `user_token.<key>` +
+// `user_refresh_token.<key>` after the OAuth exchange (ADR-0243 phase 4).
+// These helpers resolve + silently refresh one person's user access token;
+// the adapter's `send()` acts as the connected user (opt-in via
+// `settings.sendAsUser`) only for that person's own turns.
 // ---------------------------------------------------------------------------
 
 /**
- * Read the host-owned token on every call. A renderer-local cold-read cache
- * cannot observe another window's reauthorization or credential revocation.
- */
-export async function getUserAccessToken(
-  adapterId: string,
-  credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
-): Promise<string | null> {
-  const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
-  const admission = await admitPersonalCredential(credentialContext, {
-    source: "lark-user",
-    person: adapterId,
-  })
-  if (!admission.ok) return null
-  const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
-  return snapshot.configured && snapshot.authorizationEpoch ? (snapshot.accessToken ?? null) : null
-}
-
-/**
- * Refresh the user access token for `adapterId` using the persisted
+ * Refresh one person's user access token on `adapterId` using their persisted
  * `user_refresh_token` via the v2 token endpoint (`client_id` + `client_secret`
  * in the body — no tenant token needed). Conditionally publishes the rotated
  * pair through the existing host keyring authority.
@@ -160,6 +143,8 @@ export async function refreshUserToken(opts: {
   credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   connectionAuthorization?: import("@/lib/plugin/auth/connection-manager").HostConnectionCredentialAuthorization
   adapterId: string
+  /** Whose authorization (`larkUserKey`) to refresh. */
+  principal: string
   appId: string
   appSecret: string
   expectedAuthorizationEpoch?: string
@@ -172,14 +157,21 @@ export async function refreshUserToken(opts: {
       await import("@/lib/plugin/auth/connection-manager")
     await assertHostConnectionCredentialAuthorization(opts.connectionAuthorization, opts.adapterId)
   } else {
+    const { larkAuthorizedPerson } = await import("./host-auth")
+    const person = await larkAuthorizedPerson(opts.adapterId, opts.principal)
+    if (!person) throw new Error("lark_auth_stale")
     const admission = await admitPersonalCredential(opts.credentialContext, {
       source: "lark-user",
-      person: opts.adapterId,
+      person,
     })
     if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
   }
   const captured = await withRequestAbort(opts.signal, () =>
-    connectorsLarkUserAuth({ action: "snapshot", adapterId: opts.adapterId })
+    connectorsLarkUserAuth({
+      action: "snapshot",
+      adapterId: opts.adapterId,
+      principal: opts.principal,
+    })
   )
   throwIfRequestAborted(opts.signal)
   if (
@@ -206,6 +198,7 @@ export async function refreshUserToken(opts: {
       const { markLarkNeedsReauth } = await import("./host-auth")
       await markLarkNeedsReauth(
         opts.adapterId,
+        opts.principal,
         captured.authorizationEpoch,
         captured.refreshRevision
       )
@@ -218,6 +211,7 @@ export async function refreshUserToken(opts: {
     const committed = await connectorsLarkUserAuth({
       action: "refresh",
       adapterId: opts.adapterId,
+      principal: opts.principal,
       expectedAuthorizationEpoch: captured.authorizationEpoch,
       expectedRefreshRevision: captured.refreshRevision,
       accessToken: tokens.accessToken,
@@ -225,14 +219,18 @@ export async function refreshUserToken(opts: {
     })
     if (!committed.accessToken) throw new Error("lark_auth_stale")
     const { reconcileLarkConnection } = await import("./host-auth")
-    await reconcileLarkConnection(opts.adapterId, {
+    await reconcileLarkConnection(opts.adapterId, opts.principal, {
       expiresAt: new Date(Date.now() + tokens.expiresInSec * 1000).toISOString(),
       onlyExisting: true,
     })
     return committed.accessToken
   } catch (error) {
     if (!String(error).includes("lark_auth_stale")) throw error
-    const current = await connectorsLarkUserAuth({ action: "snapshot", adapterId: opts.adapterId })
+    const current = await connectorsLarkUserAuth({
+      action: "snapshot",
+      adapterId: opts.adapterId,
+      principal: opts.principal,
+    })
     // A concurrent refresh of the same authorization may have won. A changed
     // account/authorization must never be silently substituted or overwritten.
     if (current.authorizationEpoch === captured.authorizationEpoch && current.accessToken)

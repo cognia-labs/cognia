@@ -1,7 +1,7 @@
 {
   "actingIdentity": {
     "confirmedSkillTitle": "已确认的技能：{skillId}",
-    "personalAccessPhases": "Bot 和 plugin turn 的个人访问需要 phase 4 的 per-person access 或 phase 5 的 bound-person access（ADR-0243 phases 4 and 5）。"
+    "personalAccessRule": "飞书个人访问需要开启身份注册表，并由本人授权此连接；事件、Bot 和插件触发的运行不会获得个人访问。"
   },
   "ai": {
     "accept": "采用",

@@ -32,8 +32,8 @@ export const larkContribution: ConnectorVendorContribution = {
     families: ["lark.base", "lark.calendar", "lark.doc", "lark.sheets", "lark.task", "lark.wiki"],
     load: () => import("./builtin-skills"),
   },
-  // The user whose authorization the adapter carries, as the personal
-  // credential check reads it (`auth-providers/feishu/cli/acting-identity.ts`).
+  // The account the connector is signed in as (the owner): who a run's
+  // requester must be for an owner-only decision (ADR-0243 3C, D12).
   ownerPrincipal: (row) => {
     const connected = row.settings.connectedUser as
       { openId?: unknown; unionId?: unknown } | undefined
@@ -42,6 +42,16 @@ export const larkContribution: ConnectorVendorContribution = {
       remoteUserId: connected.openId,
       ...(typeof connected.unionId === "string" ? { unionId: connected.unionId } : {}),
     }
+  },
+  delegatedCredentials: {
+    stateFor: async (row, person) =>
+      (await import("./delegated-credentials")).larkDelegatedState(row, person),
+    beginAuthorization: async (row, person) =>
+      (await import("./delegated-credentials")).beginLarkDelegatedAuthorization(row, person),
+    list: async (row) =>
+      (await import("./delegated-credentials")).listLarkDelegatedAuthorizations(row),
+    revoke: async (row, person) =>
+      (await import("./delegated-credentials")).revokeLarkDelegatedAuthorization(row, person),
   },
   buildAdapter: async (row) => (await import("./build")).buildLarkAdapter(row),
   loadIdentityProbe: async () => (await import("./whoami")).probeBotIdentity,

@@ -166,7 +166,10 @@ it("persists the headless person-agent reply with its Host-held run marks", asyn
         LOCAL_PERSON_RUN as typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
     })
     expect(
-      await admitPersonalCredential({ executionRunId: run.id }, { source: "mcp-oauth" })
+      await admitPersonalCredential(
+        { executionRunId: run.id },
+        { source: "mcp-oauth", person: { kind: "local-person" } }
+      )
     ).toMatchObject({ ok: true })
     await captured!.writeMessage("s1", {
       id: "assistant-persist-marks",

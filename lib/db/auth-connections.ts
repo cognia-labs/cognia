@@ -4,6 +4,7 @@ import type {
   AuthConnectionStatus,
   AuthPrincipalKind,
 } from "@cognia/plugin-contract/types/plugin/plugin-auth"
+import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import { getDb } from "./schema"
 
 /** Device-local metadata only. Tokens must never enter Dexie or account sync. */
@@ -32,6 +33,17 @@ export interface AuthConnectionRow {
   /** Host-only binding to Rust-owned credentials. Never projected to plugins or synced. */
   hostMetadata?: {
     adapterId: string
+    /**
+     * Which person's authorization on the adapter this row is, for a provider
+     * that holds one per person (Lark, ADR-0243 phase 4: `larkUserKey`).
+     * Absent for a provider with one authorization per adapter.
+     */
+    principal?: string
+    /**
+     * The person the authorization belongs to, as personal admission names
+     * them. Absent: the local person's own sign-in.
+     */
+    person?: PrincipalRefV1
     authorizationEpoch: string
     credentialVersion?: string
     bot: boolean

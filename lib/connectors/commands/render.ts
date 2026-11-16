@@ -44,6 +44,7 @@ export const COMMAND_DESCRIPTIONS: Record<ControlCommandName, { zh: string; en: 
   schedule: { zh: "创建或关闭定时任务", en: "create or stop a scheduled task" },
   handoff: { zh: "把委派任务交给人", en: "hand a delegated task to a person" },
   delegate: { zh: "把进行中的任务转为委派", en: "promote a running task to a delegation" },
+  auth: { zh: "授权或撤销使用你自己的账号", en: "authorize or revoke use of your own account" },
 }
 
 /** The commands `/commands` lists, in its order, with their usage. */
@@ -61,6 +62,7 @@ const COMMAND_HELP: Array<{ name: ControlCommandName; usage: string }> = [
   { name: "team", usage: "/team <名称|off>" },
   { name: "delegate", usage: "/delegate [标题]" },
   { name: "handoff", usage: "/handoff [姓名] | back [备注]" },
+  { name: "auth", usage: "/auth | /auth revoke" },
   { name: "workflow", usage: "/workflow <名称|id|off>" },
   { name: "goal", usage: "/goal <目标|status|pause|resume|stop>" },
   { name: "agent", usage: "/agent status|off|verify" },

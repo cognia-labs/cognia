@@ -362,13 +362,13 @@ describe("outbound-jobs", () => {
       await expect(
         admitPersonalCredential(
           { executionRunId: `execution:job:outbound:${row.id}`, delivery: true },
-          { source: "lark-user" }
+          { source: "lark-user", person: { kind: "local-person" } }
         )
       ).resolves.toMatchObject({ ok: true })
       await expect(
         admitPersonalCredential(
           { executionRunId: `execution:job:outbound:${row.id}` },
-          { source: "github-user" }
+          { source: "github-user", person: { kind: "local-person" } }
         )
       ).resolves.toMatchObject({ ok: false })
     })

@@ -562,9 +562,22 @@ export interface AdapterInstanceRow {
    * Dexie bump.
    */
   outboundRecipients?: OutboundRecipientGrant[]
+  /**
+   * Whose credentials this bot account's turns use (ADR-0243 §3): absent or
+   * `delegated`, a requester's turn acts as that requester with their own
+   * authorization; `service`, every turn runs on the app's service
+   * credentials. Recorded on each run when it is admitted and never changed
+   * on it afterwards. Written only by `setAdapterCredentialLane` from a
+   * person's edit in the connection's settings; plugin and paired-device
+   * patches drop it. Non-indexed additive, so no Dexie bump.
+   */
+  credentialLane?: AdapterCredentialLane
   createdAt: number
   updatedAt: number
 }
+
+/** The lane a bot account's turns run in (`AdapterInstanceRow.credentialLane`). */
+export type AdapterCredentialLane = "delegated" | "service"
 
 export type OutboundJobStatus =
   "pending" | "sending" | "sent" | "failed" | "deadlettered" | "delivery_unknown"

@@ -15,6 +15,7 @@ import {
   deleteAdapterInstance,
   setAdapterInstanceOwner,
   setAdapterOutboundRecipients,
+  setAdapterCredentialLane,
 } from "./adapter-instances"
 import {
   completeAdapterInstanceCreate,
@@ -484,6 +485,60 @@ describe("the recipient list (ADR-0239)", () => {
     try {
       await setAdapterOutboundRecipients(local.id, [grant(local.id)])
       expect(configure).toHaveBeenCalledWith(local.id, { outboundRecipients: [grant(local.id)] })
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe("the credential lane (ADR-0243)", () => {
+  it("is written by its own writer, with the section audit", async () => {
+    const row = await createAdapterInstance(baseInput())
+    expect(row).not.toHaveProperty("credentialLane")
+    await setAdapterCredentialLane(row.id, "service")
+    expect((await getAdapterInstance(row.id))?.credentialLane).toBe("service")
+    const audit = await getDb().connectorAudit.where("adapterId").equals(row.id).toArray()
+    expect(audit[0].fields).toMatchObject({
+      section: "credentialLane",
+      changedKeys: ["credentialLane"],
+      source: "settings",
+    })
+    await setAdapterCredentialLane(row.id, "delegated")
+    expect((await getAdapterInstance(row.id))?.credentialLane).toBe("delegated")
+    await expect(setAdapterCredentialLane("missing", "service")).rejects.toThrow("not found")
+  })
+
+  it("cannot be set by a create, a patch or a section", async () => {
+    const created = await createAdapterInstance({
+      ...baseInput(),
+      credentialLane: "service",
+    } as never)
+    expect(created).not.toHaveProperty("credentialLane")
+    await updateAdapterInstance(created.id, { credentialLane: "service" } as never)
+    await updateAdapterConfigSection(created.id, "connection", {
+      muted: true,
+      credentialLane: "service",
+    } as never)
+    const stored = await getAdapterInstance(created.id)
+    expect(stored?.credentialLane).toBeUndefined()
+    expect(stored?.muted).toBe(true)
+  })
+
+  it("is never set from a paired shell", async () => {
+    const local = await createAdapterInstance(baseInput())
+    const configure = jest.fn(async () => undefined)
+    const restore = setAdapterInstanceRemoteWriter({
+      applies: () => true,
+      create: jest.fn(),
+      configure,
+      remove: jest.fn(),
+      completeCreate: jest.fn(),
+    } as unknown as AdapterInstanceRemoteWriter)
+    try {
+      await expect(setAdapterCredentialLane(local.id, "service")).rejects.toThrow(
+        "credential_lane_host_only"
+      )
+      expect(configure).not.toHaveBeenCalled()
     } finally {
       restore()
     }

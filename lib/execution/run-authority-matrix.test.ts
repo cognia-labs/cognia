@@ -2796,7 +2796,12 @@ it("a typed desktop turn offers its OAuth HTTP server before acceptance while re
         LOCAL_PERSON_RUN,
         branch
       )
-      expect(await admitPersonalCredential(context, { source: "mcp-oauth" })).toMatchObject({
+      expect(
+        await admitPersonalCredential(context, {
+          source: "mcp-oauth",
+          person: { kind: "local-person" },
+        })
+      ).toMatchObject({
         ok: true,
       })
       expect(context).not.toHaveProperty("executionRunId")

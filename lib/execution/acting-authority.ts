@@ -15,6 +15,8 @@ import { readResolvedPrincipal } from "./resolved-principal"
 import {
   absorbRequester,
   mergePersonalMarks,
+  samePerson,
+  type CredentialLaneV1,
 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import { getDb } from "@/lib/db/schema"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
@@ -187,11 +189,21 @@ export async function startToolExecutionRun(
           originRoot.actingIdentity.trigger === "local") &&
         originRoot.actingIdentity.lane !== "service" &&
         (origin?.sessionId === sessionId || origin?.sessionId === confirmation.rootSessionId)
+      // A delegated origin stays delegated only when its own person confirms.
+      const originActing =
+        originRoot?.actingIdentity?.lane === "delegated"
+          ? originRoot.actingIdentity.actingPrincipal
+          : undefined
+      const delegatedAs =
+        confirmation && originActing && samePerson(originActing, confirmation.requester)
+          ? originActing
+          : undefined
       const metadata = confirmation
         ? requesterReplay
           ? recordedRunMetadata("requester", {
               runId: id,
               requesters: [confirmation.requester],
+              ...(delegatedAs ? { lane: "delegated" as const, actingPrincipal: delegatedAs } : {}),
               authority: inheritableRunAuthority(origin?.authority),
             })
           : recordedRunMetadata("external-event", {
@@ -470,6 +482,11 @@ export function recordedRunMetadata(
     parent?: Pick<ExecutionRun, "actingIdentity" | "authority" | "personalMarks"> &
       Partial<Pick<ExecutionRun, "id">>
     requesters?: PrincipalRefV1[]
+    /**
+     * A root's credential lane, fixed at admission (ADR-0243 §3). The
+     * `delegated` lane acts as `actingPrincipal`; absent is `legacy`.
+     */
+    lane?: Exclude<CredentialLaneV1, "legacy" | "bound-person">
     actingPrincipal?: PrincipalRefV1
     authorizingPrincipal?: PrincipalRefV1
     eventActors?: PrincipalRefV1[]
@@ -487,7 +504,7 @@ export function recordedRunMetadata(
     : {
         schemaVersion: 1,
         ...(options.runId ? { rootRunId: options.runId } : {}),
-        lane: "legacy",
+        lane: options.lane ?? "legacy",
         trigger,
         requesters: options.requesters ?? [],
         authorityRevision: 0,

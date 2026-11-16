@@ -369,13 +369,14 @@ it.each(["member", undefined, "forged"])(
     expect(
       await admitPersonalCredential(
         { sessionId: "session-1", executionRunId: run!.id },
-        { source: "lark-user" }
+        { source: "lark-user", person: { kind: "local-person" } }
       )
     ).toMatchObject({ ok: false })
-    const { getUserAccessToken } = await import("@/lib/auth-providers/feishu/auth")
+    const { admitLarkUserAuthorization } =
+      await import("@/lib/auth-providers/feishu/cli/acting-identity")
     await expect(
-      getUserAccessToken("owner-lark", { sessionId: "session-1", executionRunId: run!.id })
-    ).resolves.toBeNull()
+      admitLarkUserAuthorization("owner-lark", { sessionId: "session-1", executionRunId: run!.id })
+    ).rejects.toThrow("personal_access_refused")
   }
 )
 

@@ -24,6 +24,7 @@ import {
 import { getDb } from "@/lib/db/schema"
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -477,7 +478,7 @@ export async function assertIntegrationJobCredential(
     return
   const admission = await admitPersonalCredential(jobCredentialContext(job.id), {
     source: account.providerId.startsWith("github") ? "github-user" : "integration-user",
-    person: account.id,
+    person: LOCAL_PERSON,
   })
   if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
 }
@@ -595,7 +596,7 @@ async function defaultAuthenticatedRequest<T>(
       return
     const admission = await admitPersonalCredential(credentialContext, {
       source: account.providerId.startsWith("github") ? "github-user" : "integration-user",
-      person: account.id,
+      person: LOCAL_PERSON,
     })
     if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
   }

@@ -1,5 +1,11 @@
+import { createHash } from "node:crypto"
 import { LarkApiError } from "@cognia/feishu-protocol"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
+import {
+  admitPersonalCredential,
+  PersonalCredentialRefusedError,
+} from "@/lib/execution/personal-credential"
+import { assertHostConnectionCredentialAuthorization } from "@/lib/plugin/auth/connection-manager"
 import {
   connectorsHttpRequest,
   connectorsKeyringGet,
@@ -13,20 +19,43 @@ import {
   exchangeCodeForUserAccessToken,
   refreshUserAccessToken,
   fetchLarkUserInfo,
-  getUserAccessToken,
   refreshUserToken,
 } from "./auth"
 import { withUserTokenRefresh } from "./auth-retry"
+import { larkAuthorizedPerson, markLarkNeedsReauth, reconcileLarkConnection } from "./host-auth"
 
 const mockHttp = connectorsHttpRequest as jest.Mock
 const mockKeyringGet = connectorsKeyringGet as jest.Mock
 const mockKeyringSet = connectorsKeyringSet as jest.Mock
+const mockLarkUserAuth = connectorsLarkUserAuth as jest.Mock
+const mockAdmit = admitPersonalCredential as jest.Mock
+const mockAssertConnection = assertHostConnectionCredentialAuthorization as jest.Mock
+const mockAuthorizedPerson = larkAuthorizedPerson as jest.Mock
+const mockMarkNeedsReauth = markLarkNeedsReauth as jest.Mock
+const mockReconcile = reconcileLarkConnection as jest.Mock
+
+/** `larkUserKey(openId)`: the key a person's authorization is stored under. */
+const keyOf = (openId: string) => createHash("sha256").update(openId).digest("hex")
+const ALICE = keyOf("ou_alice")
+const BOB = keyOf("ou_bob")
 
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
   connectorsKeyringGet: jest.fn(),
   connectorsKeyringSet: jest.fn(),
   connectorsLarkUserAuth: jest.fn(),
+}))
+jest.mock("@/lib/execution/personal-credential", () => ({
+  ...jest.requireActual("@/lib/execution/personal-credential"),
+  admitPersonalCredential: jest.fn(),
+}))
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({
+  assertHostConnectionCredentialAuthorization: jest.fn(),
+}))
+jest.mock("./host-auth", () => ({
+  larkAuthorizedPerson: jest.fn(),
+  markLarkNeedsReauth: jest.fn(),
+  reconcileLarkConnection: jest.fn(),
 }))
 
 function makeTokenResponse(token = "t-test-tat-123", expire = 7200, code = 0) {
@@ -349,129 +378,244 @@ describe("fetchLarkUserInfo", () => {
   })
 })
 
-describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
+describe("refreshUserToken (send-as-user, one person's authorization)", () => {
+  /** Each person's Host authorization on `lark-u`, by `larkUserKey`. */
+  let people: Record<string, Record<string, unknown>>
+
   beforeEach(() => {
     mockHttp.mockReset()
     mockKeyringGet.mockReset()
     mockKeyringSet.mockReset()
-    ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockImplementation(async (input) =>
-      input.action === "snapshot"
-        ? {
-            configured: true,
-            accessToken: (await mockKeyringGet(input.adapterId, "user_token")) ?? "user-a",
-            authorizationEpoch: "auth-a",
-            refreshToken: await mockKeyringGet(input.adapterId, "user_refresh_token"),
-            refreshRevision: "refresh-a",
-          }
-        : { authorizationEpoch: "auth-a", accessToken: input.accessToken }
-    )
+    mockAdmit.mockReset().mockImplementation(async (_context, credential) => ({
+      ok: true,
+      source: credential.source,
+      person: credential.person,
+    }))
+    mockAuthorizedPerson
+      .mockReset()
+      .mockImplementation(async (adapterId: string, principal: string) =>
+        principal === ALICE
+          ? { kind: "platform", platform: "lark", adapterId, remoteUserId: "ou_alice" }
+          : principal === BOB
+            ? { kind: "platform", platform: "lark", adapterId, remoteUserId: "ou_bob" }
+            : undefined
+      )
+    mockMarkNeedsReauth.mockReset().mockResolvedValue(undefined)
+    mockReconcile.mockReset().mockResolvedValue(undefined)
+    mockAssertConnection.mockReset().mockResolvedValue(undefined)
+    people = {
+      [ALICE]: {
+        configured: true,
+        accessToken: "alice-access",
+        authorizationEpoch: "alice-epoch",
+        refreshToken: "alice-refresh",
+        refreshRevision: "alice-revision",
+      },
+      [BOB]: {
+        configured: true,
+        accessToken: "bob-access",
+        authorizationEpoch: "bob-epoch",
+        refreshToken: "bob-refresh",
+        refreshRevision: "bob-revision",
+      },
+    }
+    mockLarkUserAuth.mockReset().mockImplementation(async (input) => {
+      const current = people[input.principal] ?? { configured: false, accessToken: null }
+      if (input.action === "snapshot") return current
+      people[input.principal] = {
+        ...current,
+        accessToken: input.accessToken,
+        refreshToken: input.refreshToken,
+      }
+      return people[input.principal]
+    })
     clearTokenCache("cli_app", "secret")
   })
 
-  it("returns null when no user token is stored", async () => {
-    mockKeyringGet.mockResolvedValue(null)
-    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValueOnce({ configured: false })
-    expect(await getUserAccessToken("lark-u", { localAuthorization: LOCAL_PERSON_RUN })).toBeNull()
-  })
-
-  it("rechecks the host token so another window can replace the authorization", async () => {
-    mockKeyringGet.mockResolvedValue("u-stored")
-    expect(await getUserAccessToken("lark-u", { localAuthorization: LOCAL_PERSON_RUN })).toBe(
-      "u-stored"
-    )
-    expect(await getUserAccessToken("lark-u", { localAuthorization: LOCAL_PERSON_RUN })).toBe(
-      "u-stored"
-    )
-    expect(connectorsLarkUserAuth).toHaveBeenCalledTimes(2)
-  })
+  const refreshAlice = (overrides: Partial<Parameters<typeof refreshUserToken>[0]> = {}) =>
+    refreshUserToken({
+      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
+      adapterId: "lark-u",
+      principal: ALICE,
+      appId: "cli_app",
+      appSecret: "secret",
+      ...overrides,
+    })
 
   it("refreshes via the refresh token (v2) and persists the rotated pair", async () => {
-    mockKeyringGet.mockImplementation(async (_id: string, cred: string) =>
-      cred === "user_refresh_token" ? "old-refresh" : null
-    )
     // A single v2 token-endpoint call — no tenant token needed anymore.
     mockHttp.mockResolvedValueOnce(
       makeTokenV2Response({ accessToken: "u-new-access", refreshToken: "u-new-refresh" })
     )
 
-    const token = await refreshUserToken({
-      credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
-      adapterId: "lark-u",
-      appId: "cli_app",
-      appSecret: "secret",
-    })
+    await expect(refreshAlice()).resolves.toBe("u-new-access")
 
-    expect(token).toBe("u-new-access")
-    // Rotated tokens persisted back to the keyring.
-    expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
+    expect(JSON.parse(mockHttp.mock.calls[0][0].body)).toMatchObject({
+      grant_type: "refresh_token",
+      refresh_token: "alice-refresh",
+    })
+    // Rotated tokens published through the Host, for this person only.
+    expect(mockLarkUserAuth).toHaveBeenCalledWith({
+      action: "refresh",
+      adapterId: "lark-u",
+      principal: ALICE,
+      expectedAuthorizationEpoch: "alice-epoch",
+      expectedRefreshRevision: "alice-revision",
+      accessToken: "u-new-access",
+      refreshToken: "u-new-refresh",
+    })
+    expect(mockKeyringSet).not.toHaveBeenCalled()
+    expect(mockReconcile).toHaveBeenCalledWith("lark-u", ALICE, {
+      expiresAt: expect.any(String),
+      onlyExisting: true,
+    })
+  })
+
+  it("admits the person whose authorization it refreshes", async () => {
+    mockHttp.mockResolvedValueOnce(makeTokenV2Response({}))
+    await refreshAlice()
+    expect(mockAuthorizedPerson).toHaveBeenCalledWith("lark-u", ALICE)
+    expect(mockAdmit).toHaveBeenCalledWith(
+      { localAuthorization: LOCAL_PERSON_RUN },
+      {
+        source: "lark-user",
+        person: {
+          kind: "platform",
+          platform: "lark",
+          adapterId: "lark-u",
+          remoteUserId: "ou_alice",
+        },
+      }
+    )
+  })
+
+  it("refuses a person who never authorized this adapter before reading any token", async () => {
+    await expect(refreshAlice({ principal: keyOf("ou_stranger") })).rejects.toThrow(
+      "lark_auth_stale"
+    )
+    expect(mockAdmit).not.toHaveBeenCalled()
+    expect(mockLarkUserAuth).not.toHaveBeenCalled()
+    expect(mockHttp).not.toHaveBeenCalled()
+  })
+
+  it("refuses when the run may not use that person's credential", async () => {
+    mockAdmit.mockResolvedValueOnce({
+      ok: false,
+      source: "lark-user",
+      reason: "owner-not-verified",
+    })
+    await expect(refreshAlice()).rejects.toBeInstanceOf(PersonalCredentialRefusedError)
+    expect(mockLarkUserAuth).not.toHaveBeenCalled()
+    expect(mockHttp).not.toHaveBeenCalled()
+  })
+
+  it("takes a Host connection authorization instead of a personal admission", async () => {
+    mockHttp.mockResolvedValueOnce(makeTokenV2Response({ accessToken: "via-connection" }))
+    const connectionAuthorization = {} as NonNullable<
+      Parameters<typeof refreshUserToken>[0]["connectionAuthorization"]
+    >
+    await expect(
+      refreshAlice({ credentialContext: undefined, connectionAuthorization })
+    ).resolves.toBe("via-connection")
+    expect(mockAssertConnection).toHaveBeenCalledWith(connectionAuthorization, "lark-u")
+    expect(mockAdmit).not.toHaveBeenCalled()
+    expect(mockAuthorizedPerson).not.toHaveBeenCalled()
+  })
+
+  it("refreshes one person's authorization without touching another's", async () => {
+    mockHttp.mockResolvedValueOnce(
+      makeTokenV2Response({ accessToken: "bob-rotated", refreshToken: "bob-refresh-2" })
+    )
+    await expect(refreshAlice({ principal: BOB })).resolves.toBe("bob-rotated")
+
+    expect(JSON.parse(mockHttp.mock.calls[0][0].body).refresh_token).toBe("bob-refresh")
+    for (const [input] of mockLarkUserAuth.mock.calls) expect(input.principal).toBe(BOB)
+    expect(mockLarkUserAuth).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "refresh",
-        expectedAuthorizationEpoch: "auth-a",
-        expectedRefreshRevision: "refresh-a",
-        accessToken: "u-new-access",
-        refreshToken: "u-new-refresh",
+        principal: BOB,
+        expectedAuthorizationEpoch: "bob-epoch",
+        expectedRefreshRevision: "bob-revision",
       })
     )
-    expect(mockKeyringSet).not.toHaveBeenCalled()
-    // A subsequent read uses the authoritative host value.
-    mockKeyringGet.mockResolvedValue("u-new-access")
-    mockKeyringGet.mockClear()
-    expect(await getUserAccessToken("lark-u", { localAuthorization: LOCAL_PERSON_RUN })).toBe(
-      "u-new-access"
+    expect(people[ALICE]).toMatchObject({
+      accessToken: "alice-access",
+      refreshToken: "alice-refresh",
+    })
+    expect(mockReconcile).toHaveBeenCalledWith("lark-u", BOB, expect.anything())
+    expect(mockReconcile).not.toHaveBeenCalledWith("lark-u", ALICE, expect.anything())
+  })
+
+  it("marks only that person's authorization for reauth when Lark rejects the grant", async () => {
+    mockHttp.mockResolvedValueOnce(
+      makeTokenV2Response({
+        code: 20037,
+        error: "invalid_grant",
+        errorDescription: "refresh token expired",
+      })
     )
-    expect(mockKeyringGet).toHaveBeenCalledWith("lark-u", "user_token")
+    await expect(refreshAlice()).rejects.toThrow(/refresh token expired/)
+    expect(mockMarkNeedsReauth).toHaveBeenCalledTimes(1)
+    expect(mockMarkNeedsReauth).toHaveBeenCalledWith(
+      "lark-u",
+      ALICE,
+      "alice-epoch",
+      "alice-revision"
+    )
+    expect(mockLarkUserAuth).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: "refresh" })
+    )
   })
 
   it("throws when there is no refresh token to use", async () => {
-    mockKeyringGet.mockResolvedValue(null)
-    await expect(
-      refreshUserToken({
-        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
-        adapterId: "lark-u",
-        appId: "cli_app",
-        appSecret: "secret",
-      })
-    ).rejects.toThrow(/no refresh token/)
+    people[ALICE] = { ...people[ALICE], refreshToken: null }
+    await expect(refreshAlice()).rejects.toThrow(/no refresh token/)
+    expect(mockHttp).not.toHaveBeenCalled()
+  })
+
+  it("refuses a replaced authorization when the caller pinned an epoch", async () => {
+    await expect(refreshAlice({ expectedAuthorizationEpoch: "older-epoch" })).rejects.toThrow(
+      "lark_auth_stale"
+    )
+    expect(mockHttp).not.toHaveBeenCalled()
   })
 
   it("does not refresh a revoked access identity even if its refresh token remains", async () => {
-    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
+    people[ALICE] = {
       configured: true,
       authorizationEpoch: "revoked",
       accessToken: null,
       refreshToken: "still-stored",
       refreshRevision: "revision-a",
-    })
-    await expect(
-      refreshUserToken({
-        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
-        adapterId: "lark-u",
-        appId: "app",
-        appSecret: "secret",
-      })
-    ).rejects.toThrow(/lark_auth_stale|authorization-unavailable/)
+    }
+    await expect(refreshAlice({ appId: "app" })).rejects.toThrow(
+      /lark_auth_stale|authorization-unavailable/
+    )
     expect(mockHttp).not.toHaveBeenCalled()
+  })
+
+  it("returns a concurrent refresh of the same authorization that won the race", async () => {
+    mockHttp.mockResolvedValueOnce(makeTokenV2Response({ accessToken: "lost-race" }))
+    mockLarkUserAuth.mockImplementation(async (input) => {
+      if (input.action === "refresh") throw new Error("lark_auth_stale")
+      return mockLarkUserAuth.mock.calls.length > 1
+        ? { ...people[ALICE], accessToken: "won-race" }
+        : people[ALICE]
+    })
+    await expect(refreshAlice()).resolves.toBe("won-race")
   })
 
   it("saves an already-dispatched refresh pair even if its caller aborts", async () => {
     const controller = new AbortController()
-    mockKeyringGet.mockResolvedValue("old-refresh")
     mockHttp.mockImplementation(async () => {
       controller.abort()
       return makeTokenV2Response({ accessToken: "rotated-access", refreshToken: "rotated-refresh" })
     })
-    await expect(
-      refreshUserToken({
-        credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
-        adapterId: "lark-u",
-        appId: "app",
-        appSecret: "secret",
-        signal: controller.signal,
-      })
-    ).resolves.toBe("rotated-access")
-    expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
+    await expect(refreshAlice({ signal: controller.signal })).resolves.toBe("rotated-access")
+    expect(mockLarkUserAuth).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "refresh",
+        principal: ALICE,
         accessToken: "rotated-access",
         refreshToken: "rotated-refresh",
       })
@@ -488,7 +632,7 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
         refreshToken: "refresh-a",
         refreshRevision: "revision-a",
       }
-      ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => state)
+      mockLarkUserAuth.mockImplementation(async () => state)
       const request = jest.fn(async () => {
         state = { ...state, authorizationEpoch: "auth-replaced", accessToken }
         throw new LarkApiError({ status: 401, code: 99991677, message: "old request rejected" })
@@ -497,6 +641,7 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
         withUserTokenRefresh(
           {
             adapterId: "lark-u",
+            principal: ALICE,
             appId: "app",
             appSecret: "secret",
             credentialContext: { localAuthorization: LOCAL_PERSON_RUN },
@@ -506,7 +651,7 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
       ).rejects.toThrow(/lark_auth_stale|authorization-unavailable/)
       expect(request).toHaveBeenCalledTimes(1)
       expect(mockHttp).not.toHaveBeenCalled()
-      expect(connectorsLarkUserAuth).not.toHaveBeenCalledWith(
+      expect(mockLarkUserAuth).not.toHaveBeenCalledWith(
         expect.objectContaining({ action: "refresh" })
       )
     }

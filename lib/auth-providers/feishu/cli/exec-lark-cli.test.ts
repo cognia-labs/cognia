@@ -63,14 +63,14 @@ describe("execLarkCli — happy path", () => {
   it("threads the complete skill context to authentication", async () => {
     jest.mocked(resolveLarkAuth).mockResolvedValueOnce({
       ok: false,
-      reason: "sender_not_token_owner",
+      reason: "personal_access_refused",
       adapterId: "lark-1",
-      message: "sender_not_token_owner",
+      message: "personal_access_refused",
     })
     const context = { sessionId: "im-session", actingSenders: "unknown" as const }
     const result = await execLarkCli({ args: ["calendar", "+agenda"], context })
     expect(resolveLarkAuth).toHaveBeenCalledWith(expect.objectContaining({ context }))
-    expect(result).toMatchObject({ status: "error", message: "sender_not_token_owner" })
+    expect(result).toMatchObject({ status: "error", message: "personal_access_refused" })
     expect(mockProcessRunner).not.toHaveBeenCalled()
   })
   it("parses JSON stdout and returns ok", async () => {
@@ -303,14 +303,14 @@ it.each([
 ])("requires the personal refusal for user-only command %s %s", async (...args) => {
   jest.mocked(resolveLarkAuth).mockResolvedValueOnce({
     ok: false,
-    reason: "sender_not_token_owner",
+    reason: "personal_access_refused",
     adapterId: "lark-1",
-    message: "Personal access requires ADR-0243 phases 4 and 5.",
+    message: "Personal Lark access needs the principal registry.",
   })
   await expect(execLarkCli({ args, context: { sessionId: "bot-topic" } })).resolves.toMatchObject({
     status: "error",
     reason: "auth_unavailable",
-    message: expect.stringContaining("phases 4 and 5"),
+    message: expect.stringContaining("principal registry"),
   })
   expect(resolveLarkAuth).toHaveBeenLastCalledWith(expect.objectContaining({ identity: "user" }))
   expect(mockProcessRunner).not.toHaveBeenCalled()
@@ -320,7 +320,7 @@ it("forwards direct Host ingest admission to the shared auth bridge", async () =
   const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
   jest.mocked(resolveLarkAuth).mockResolvedValueOnce({
     ok: false,
-    reason: "sender_not_token_owner",
+    reason: "personal_access_refused",
     message: "refused",
     adapterId: "a",
   })
@@ -328,4 +328,17 @@ it("forwards direct Host ingest admission to the shared auth bridge", async () =
   expect(resolveLarkAuth).toHaveBeenLastCalledWith(
     expect.objectContaining({ adapterId: "a", credentialContext })
   )
+})
+
+it("refuses a user-only command forced onto the bot identity without authenticating", async () => {
+  jest.mocked(resolveLarkAuth).mockClear()
+  await expect(
+    execLarkCli({ args: ["docs", "+search"], identity: "bot", context: { sessionId: "s1" } })
+  ).resolves.toEqual({
+    status: "error",
+    reason: "auth_unavailable",
+    message: expect.stringMatching(/^personal_access_refused: .*principal registry/),
+  })
+  expect(resolveLarkAuth).not.toHaveBeenCalled()
+  expect(mockProcessRunner).not.toHaveBeenCalled()
 })

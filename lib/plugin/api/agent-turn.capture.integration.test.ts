@@ -715,7 +715,7 @@ it.each([
         execLarkCli({ args: ["docs", "+search", "--query", "review"], context: { sessionId: id } })
       ).resolves.toMatchObject({
         status: "error",
-        message: expect.stringMatching(/phases 4 and 5/i),
+        message: expect.stringMatching(/principal registry/i),
       })
       listener!({
         type: "event",

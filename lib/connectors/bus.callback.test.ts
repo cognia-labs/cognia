@@ -664,6 +664,18 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
         updatedAt: 1,
         ...recordedRunMetadata(origin === "requester" ? "requester" : "external-event", {
           runId: original,
+          // The owner's own delegated turn (ADR-0243 phase 4).
+          ...(origin === "requester"
+            ? {
+                lane: "delegated" as const,
+                actingPrincipal: {
+                  kind: "platform" as const,
+                  platform: "lark",
+                  adapterId: "adp_tg",
+                  remoteUserId: "owner",
+                },
+              }
+            : {}),
         }),
       })
       const identities: unknown[] = []
@@ -729,7 +741,7 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
           origin !== "requester"
         )
         if (origin !== "requester")
-          expect(audit.some((row) => row.message?.includes("sender_not_token_owner"))).toBe(true)
+          expect(audit.some((row) => row.message?.includes("personal_access_refused"))).toBe(true)
       } finally {
         __resetSharedBuiltInSkillRegistry()
       }

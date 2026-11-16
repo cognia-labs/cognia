@@ -38,6 +38,7 @@ import { ControlCommands } from "../../forms/control-commands"
 import { AiBindingDefaults } from "../../forms/ai-binding-defaults"
 import { AdapterBehaviorDefaults } from "../../forms/adapter-behavior-defaults"
 import { AdapterTriggerPolicy } from "../../forms/adapter-trigger-policy"
+import { AdapterDelegatedAuthorizations } from "../../forms/adapter-delegated-authorizations"
 import { AdapterOutboundRecipients } from "../../forms/adapter-outbound-recipients"
 import { SlaEscalationDefaults } from "../../forms/sla-escalation-defaults"
 import { AdapterPermissions } from "../../forms/adapter-permissions"
@@ -137,6 +138,10 @@ export function ConfigDetail({ row }: ConfigDetailProps) {
        * (ADR-0239). Beside the trigger policy: that one decides when the bot
        * answers, this one whom it may message on its own. */}
       <AdapterOutboundRecipients adapterId={row.id} />
+
+      {/* Whose account this bot's turns use and who authorized it (ADR-0243
+       * phase 4). Renders only for a platform with per-person authorizations. */}
+      <AdapterDelegatedAuthorizations adapterId={row.id} />
 
       {/* Bot-wide response SLA + escalation chain defaults (slice 1B). */}
       <h3 className="pt-2 text-sm font-semibold">{t("sections.slaEscalation")}</h3>

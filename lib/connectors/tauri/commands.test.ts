@@ -14,6 +14,7 @@ it("routes epoch-fenced Lark disconnect and notifies credential consumers only a
   const input = {
     action: "disconnect" as const,
     adapterId: "lark-disconnect",
+    principal: "c".repeat(64),
     expectedAuthorizationEpoch: "epoch",
   }
   const validate = new Ajv({ strict: false }).compile(
@@ -21,6 +22,7 @@ it("routes epoch-fenced Lark disconnect and notifies credential consumers only a
   )
   expect(validate({ input })).toBe(true)
   expect(validate({ input: { action: "disconnect", adapterId: "lark-disconnect" } })).toBe(false)
+  expect(validate({ input: { ...input, principal: "ou_raw_open_id" } })).toBe(false)
   const changed = jest.fn()
   const stop = onCredentialsRotated(changed)
   try {
@@ -157,7 +159,7 @@ const mockInvoke = invoke as jest.Mock
 const mockProfile = detectHostProfile as jest.Mock
 
 it("routes Lark authorization transitions to the owning native host", async () => {
-  const input = { action: "snapshot" as const, adapterId: "lark-a" }
+  const input = { action: "snapshot" as const, adapterId: "lark-a", principal: "d".repeat(64) }
   mockInvoke.mockResolvedValueOnce({ authorizationEpoch: "epoch-a", configured: true })
   await expect(connectorsLarkUserAuth(input)).resolves.toMatchObject({
     authorizationEpoch: "epoch-a",

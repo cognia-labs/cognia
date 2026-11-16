@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { LarkApiError } from "@cognia/feishu-protocol"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/execution/acting-authority", () => ({
@@ -8,13 +9,23 @@ import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
 jest.mock("./host-auth", () => ({
   resolveLarkConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
+  larkActingKey: jest.fn(),
+  larkAuthorizedPerson: jest.fn(),
 }))
+/** The user access token the Host currently holds for the person's connection. */
+const mockHostUserToken = jest.fn()
 jest.mock("@/lib/plugin/auth/connection-manager", () => ({
   ...jest.requireActual("@/lib/plugin/auth/connection-manager"),
   getConnectionManager: () => ({
     getConnection: jest.fn(async () => ({ id: "host-ref", revision: 1 })),
-    getCredentials: async () => ({ accessToken: await getUserAccessTokenMock(ADAPTER) }),
+    getCredentials: async () => ({ accessToken: await mockHostUserToken() }),
   }),
+}))
+/** The Host's verified connected owners; admission itself stays real. */
+const mockConnectedOwners = jest.fn()
+jest.mock("@/lib/execution/personal-sink", () => ({
+  ...jest.requireActual("@/lib/execution/personal-sink"),
+  readHostPersonContext: async () => ({ connectedOwners: mockConnectedOwners() }),
 }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
@@ -33,7 +44,6 @@ jest.mock("./auth", () => {
       issuer: "https://accounts.feishu.cn",
       apiBase: "https://open.feishu.cn",
     }),
-    getUserAccessToken: jest.fn(),
     getTenantAccessToken,
     getTenantToken: getTenantAccessToken,
     refreshUserToken: jest.fn(),
@@ -48,8 +58,9 @@ import {
   connectorsLarkUserAuth,
   type TauriHttpRequest,
 } from "@/lib/connectors/tauri/commands"
-import { getTenantAccessToken, getUserAccessToken, refreshUserToken } from "./auth"
+import { getTenantAccessToken, refreshUserToken } from "./auth"
 import { LARK_API_BASE, LarkAccessError, withLarkAuthedApi } from "./authed-api"
+import { larkActingKey, larkAuthorizedPerson, resolveLarkConnection } from "./host-auth"
 import { readLarkSpreadsheet } from "@/lib/lark-docs/sheets"
 import { readLarkBitable } from "@/lib/lark-docs/bitable"
 import { inspect } from "node:util"
@@ -57,11 +68,20 @@ import { inspect } from "node:util"
 const isTauriMock = isTauri as jest.Mock
 const getAdapterInstanceMock = getAdapterInstance as jest.Mock
 const keyringGetMock = connectorsKeyringGet as jest.Mock
-const getUserAccessTokenMock = getUserAccessToken as jest.Mock
 const getTenantAccessTokenMock = getTenantAccessToken as jest.Mock
 const refreshUserTokenMock = refreshUserToken as jest.Mock
 
 const ADAPTER = "cai_authed"
+/** `larkUserKey(openId)`: whose authorization a call names. */
+const keyOf = (openId: string) => createHash("sha256").update(openId).digest("hex")
+const ADA = keyOf("ou_ada")
+const BOB = keyOf("ou_bob")
+const personOf = (openId: string) => ({
+  kind: "platform" as const,
+  platform: "lark" as const,
+  adapterId: ADAPTER,
+  remoteUserId: openId,
+})
 
 it("refuses user identity without admission before reading or dispatching a personal token", async () => {
   const http = jest.fn()
@@ -71,7 +91,7 @@ it("refuses user identity without admission before reading or dispatching a pers
     )
   ).rejects.toMatchObject({ code: "notAuthorized" })
   expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
-  expect(getUserAccessToken).not.toHaveBeenCalled()
+  expect(mockHostUserToken).not.toHaveBeenCalled()
   expect(http).not.toHaveBeenCalled()
 })
 
@@ -101,8 +121,16 @@ beforeEach(() => {
   ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => ({
     configured: true,
     authorizationEpoch: "epoch-a",
-    accessToken: await getUserAccessTokenMock(ADAPTER),
+    accessToken: await mockHostUserToken(),
   }))
+  // Ada signed the connector in; a local run acts as her.
+  mockConnectedOwners.mockReturnValue([personOf("ou_ada")])
+  jest.mocked(larkActingKey).mockResolvedValue(ADA)
+  jest
+    .mocked(larkAuthorizedPerson)
+    .mockImplementation(async (_adapterId, principal) =>
+      principal === ADA ? personOf("ou_ada") : principal === BOB ? personOf("ou_bob") : undefined
+    )
   isTauriMock.mockReturnValue(true)
   getAdapterInstanceMock.mockResolvedValue({
     id: ADAPTER,
@@ -113,7 +141,7 @@ beforeEach(() => {
   keyringGetMock.mockImplementation(async (_id: string, key: string) =>
     key === "appId" ? "cli_app" : "secret"
   )
-  getUserAccessTokenMock.mockResolvedValue("uat-default")
+  mockHostUserToken.mockResolvedValue("uat-default")
   getTenantAccessTokenMock.mockResolvedValue("tat-1")
 })
 
@@ -178,7 +206,7 @@ describe("withLarkAuthedApi — pre-flight", () => {
   it.each([undefined, "epoch-a"])(
     "fences revocation during pagination even with expected epoch %s",
     async (expectedAuthorizationEpoch) => {
-      getUserAccessTokenMock.mockResolvedValue("user-a")
+      mockHostUserToken.mockResolvedValue("user-a")
       let state = {
         configured: true,
         authorizationEpoch: "epoch-a",
@@ -236,7 +264,7 @@ describe("withLarkAuthedApi — pre-flight", () => {
   it("does not start refresh after cancellation while the post-response authorization promise unwinds", async () => {
     const controller = new AbortController()
     let responseReceived = false
-    getUserAccessTokenMock.mockResolvedValue("user-a")
+    mockHostUserToken.mockResolvedValue("user-a")
     ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => {
       if (responseReceived) queueMicrotask(() => queueMicrotask(() => controller.abort()))
       return { configured: true, authorizationEpoch: "epoch-a", accessToken: "user-a" }
@@ -266,7 +294,7 @@ describe("withLarkAuthedApi — pre-flight", () => {
   it.each(["sheet", "bitable"])(
     "stops the real multi-section %s reader after caller cancellation",
     async (kind) => {
-      getUserAccessTokenMock.mockResolvedValue("user-a")
+      mockHostUserToken.mockResolvedValue("user-a")
       const controller = new AbortController()
       let finish!: (value: ReturnType<typeof ok>) => void
       let markStarted!: () => void
@@ -309,7 +337,7 @@ describe("withLarkAuthedApi — pre-flight", () => {
   )
 
   it("discards an in-flight response after reauthorization without refreshing or falling back to the bot", async () => {
-    getUserAccessTokenMock.mockResolvedValue("old-user")
+    mockHostUserToken.mockResolvedValue("old-user")
     const impl = jest.fn(async () => {
       ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
         configured: true,
@@ -454,7 +482,7 @@ describe("withLarkAuthedApi — pre-flight", () => {
 
 describe("withLarkAuthedApi — identity order", () => {
   it("prefers the connected user so document ACLs apply as that user", async () => {
-    getUserAccessTokenMock.mockResolvedValue("uat-1")
+    mockHostUserToken.mockResolvedValue("uat-1")
     const { impl, calls } = makeHttp([ok({ n: 1 })])
     await withLarkAuthedApi(
       {
@@ -481,12 +509,12 @@ describe("withLarkAuthedApi — identity order", () => {
       (api) => api.get("/open-apis/x")
     )
     expect(calls[0].headers?.Authorization).toBe("Bearer tat-1")
-    expect(getUserAccessTokenMock).not.toHaveBeenCalled()
+    expect(mockHostUserToken).not.toHaveBeenCalled()
     expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
   })
 
   it("refuses missing user authorization without fetching a tenant token", async () => {
-    getUserAccessTokenMock.mockResolvedValue(null)
+    mockHostUserToken.mockResolvedValue(null)
     const { impl } = makeHttp([])
     await expect(
       withLarkAuthedApi(
@@ -504,7 +532,7 @@ describe("withLarkAuthedApi — identity order", () => {
   })
 
   it("does not fall back to the bot on an unrelated user-identity failure", async () => {
-    getUserAccessTokenMock.mockResolvedValue("uat-1")
+    mockHostUserToken.mockResolvedValue("uat-1")
     const { impl } = makeHttp([{ status: 403, body: JSON.stringify({ code: 1254302, msg: "no" }) }])
     await expect(
       withLarkAuthedApi(
@@ -523,7 +551,7 @@ describe("withLarkAuthedApi — identity order", () => {
 
 describe("withLarkAuthedApi — explicit user identity", () => {
   it("maps any refresh failure to the existing notAuthorized code", async () => {
-    getUserAccessTokenMock.mockResolvedValue("uat-dead")
+    mockHostUserToken.mockResolvedValue("uat-dead")
     refreshUserTokenMock.mockRejectedValueOnce(new Error("oauth/token refresh rejected"))
     const { impl } = makeHttp([{ status: 401, body: JSON.stringify({ code: 99991663 }) }])
     await expect(
@@ -540,7 +568,7 @@ describe("withLarkAuthedApi — explicit user identity", () => {
     expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
   })
   it("refuses up front when no user is connected", async () => {
-    getUserAccessTokenMock.mockResolvedValue(null)
+    mockHostUserToken.mockResolvedValue(null)
     const { impl } = makeHttp([])
     await expect(
       withLarkAuthedApi(
@@ -557,7 +585,7 @@ describe("withLarkAuthedApi — explicit user identity", () => {
   })
 
   it("never silently downgrades to the bot after the user token dies", async () => {
-    getUserAccessTokenMock.mockResolvedValue("uat-dead")
+    mockHostUserToken.mockResolvedValue("uat-dead")
     refreshUserTokenMock.mockResolvedValue("uat-dead")
     const { impl } = makeHttp([
       { status: 401, body: JSON.stringify({ code: 99991663, msg: "invalid" }) },
@@ -578,7 +606,7 @@ describe("withLarkAuthedApi — explicit user identity", () => {
   })
 
   it("uses the user identity normally when one is connected", async () => {
-    getUserAccessTokenMock.mockResolvedValue("uat-1")
+    mockHostUserToken.mockResolvedValue("uat-1")
     const { impl, calls } = makeHttp([ok({ n: 1 })])
     await withLarkAuthedApi(
       {
@@ -669,7 +697,11 @@ describe("withLarkAuthedApi — requests", () => {
       },
       async (_api, acct) => acct
     )
-    expect(seen).toEqual({ adapterId: ADAPTER, displayName: "Acme Feishu" })
+    expect(seen).toEqual({
+      adapterId: ADAPTER,
+      displayName: "Acme Feishu",
+      connection: { id: "host-ref", revision: 1 },
+    })
   })
 
   it("routes failures through mapError when one is supplied", async () => {
@@ -775,3 +807,147 @@ it("does not observe a user-identity call as tenant data", async () => {
   )
   expect(observeTenantServiceData).not.toHaveBeenCalled()
 })
+
+describe("withLarkAuthedApi — whose authorization", () => {
+  const local = { localAuthorization: LOCAL_PERSON_RUN } as const
+
+  it("uses the run's acting person by default and hands back their connection", async () => {
+    mockHostUserToken.mockResolvedValue("uat-ada")
+    const { impl, calls } = makeHttp([ok({})])
+    const account = await withLarkAuthedApi(
+      { credentialContext: local, adapterId: ADAPTER, identity: "user", httpImpl: impl },
+      async (api, acct) => {
+        await api.get("/open-apis/x")
+        return acct
+      }
+    )
+    expect(larkActingKey).toHaveBeenCalledWith(ADAPTER, local)
+    expect(resolveLarkConnection).toHaveBeenCalledWith(ADAPTER, ADA, local)
+    expect(larkAuthorizedPerson).toHaveBeenCalledWith(ADAPTER, ADA)
+    expect(account.connection).toEqual({ id: "host-ref", revision: 1 })
+    expect(calls[0].headers?.Authorization).toBe("Bearer uat-ada")
+    expect(connectorsLarkUserAuth).toHaveBeenCalled()
+    for (const [input] of jest.mocked(connectorsLarkUserAuth).mock.calls)
+      expect(input).toEqual({ action: "snapshot", adapterId: ADAPTER, principal: ADA })
+  })
+
+  // ADR-0243 scenario 6: a person revokes while their run is parked between calls.
+  it("refuses the next call after the person's authorization is revoked mid-run", async () => {
+    mockHostUserToken.mockResolvedValue("uat-ada")
+    const { impl, calls } = makeHttp([ok({}), ok({})])
+    await expect(
+      withLarkAuthedApi(
+        { credentialContext: local, adapterId: ADAPTER, identity: "user", httpImpl: impl },
+        async (api) => {
+          await api.get("/open-apis/first")
+          jest.mocked(larkAuthorizedPerson).mockResolvedValue(undefined)
+          await api.get("/open-apis/second")
+        }
+      )
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+    expect(calls.map((call) => call.url)).toEqual([expect.stringContaining("/open-apis/first")])
+  })
+
+  it("uses an explicitly named person's authorization instead of the acting default", async () => {
+    // Bob is the Host's verified owner here, so the local person acts as Bob.
+    mockConnectedOwners.mockReturnValue([personOf("ou_bob")])
+    mockHostUserToken.mockResolvedValue("uat-bob")
+    const { impl, calls } = makeHttp([ok({})])
+    await withLarkAuthedApi(
+      {
+        credentialContext: local,
+        adapterId: ADAPTER,
+        principal: BOB,
+        identity: "user",
+        httpImpl: impl,
+      },
+      (api) => api.get("/open-apis/x")
+    )
+    expect(larkActingKey).not.toHaveBeenCalled()
+    expect(resolveLarkConnection).toHaveBeenCalledWith(ADAPTER, BOB, local)
+    expect(calls[0].headers?.Authorization).toBe("Bearer uat-bob")
+    for (const [input] of jest.mocked(connectorsLarkUserAuth).mock.calls)
+      expect(input.principal).toBe(BOB)
+  })
+
+  it("refuses another person's authorization for a run that does not act as them", async () => {
+    const { impl } = makeHttp([])
+    await expect(
+      withLarkAuthedApi(
+        {
+          credentialContext: local,
+          adapterId: ADAPTER,
+          principal: BOB,
+          identity: "user",
+          httpImpl: impl,
+        },
+        (api) => api.get("/open-apis/x")
+      )
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+    expect(mockHostUserToken).not.toHaveBeenCalled()
+    expect(impl).not.toHaveBeenCalled()
+    expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["an acting person with no authorization here", () => larkActingKeyMock(undefined)],
+    ["a person who never authorized this adapter", () => larkActingKeyMock(keyOf("ou_stranger"))],
+  ])("refuses %s without reading a token or falling back to the bot", async (_label, arrange) => {
+    arrange()
+    const { impl } = makeHttp([])
+    await expect(
+      withLarkAuthedApi(
+        { credentialContext: local, adapterId: ADAPTER, identity: "user", httpImpl: impl },
+        (api) => api.get("/open-apis/x")
+      )
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+    expect(mockHostUserToken).not.toHaveBeenCalled()
+    expect(impl).not.toHaveBeenCalled()
+    expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
+  })
+
+  it("refreshes the same person's authorization after a rejected user token", async () => {
+    mockHostUserToken.mockResolvedValue("uat-old")
+    refreshUserTokenMock.mockResolvedValue("uat-new")
+    const { impl } = makeHttp([
+      { status: 401, body: JSON.stringify({ code: 99991677, msg: "expired" }) },
+      ok({ n: 1 }),
+    ])
+    await expect(
+      withLarkAuthedApi(
+        { credentialContext: local, adapterId: ADAPTER, identity: "user", httpImpl: impl },
+        (api) => api.get("/open-apis/x")
+      )
+    ).resolves.toEqual({ n: 1 })
+    expect(refreshUserTokenMock).toHaveBeenCalledTimes(1)
+    expect(refreshUserTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterId: ADAPTER,
+        principal: ADA,
+        credentialContext: local,
+        expectedAuthorizationEpoch: "epoch-a",
+      })
+    )
+  })
+
+  it("names nobody's authorization for the bot identity", async () => {
+    const { impl } = makeHttp([ok({})])
+    const account = await withLarkAuthedApi(
+      { credentialContext: local, adapterId: ADAPTER, identity: "bot", httpImpl: impl },
+      async (api, acct) => {
+        await api.get("/open-apis/x")
+        return acct
+      }
+    )
+    expect(account).toEqual({ adapterId: ADAPTER, displayName: "Acme Feishu" })
+    expect(larkActingKey).not.toHaveBeenCalled()
+    expect(resolveLarkConnection).not.toHaveBeenCalled()
+    expect(larkAuthorizedPerson).not.toHaveBeenCalled()
+  })
+})
+
+function larkActingKeyMock(key: string | undefined) {
+  jest.mocked(larkActingKey).mockResolvedValue(key)
+}

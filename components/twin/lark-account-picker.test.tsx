@@ -7,6 +7,7 @@ jest.mock("@/lib/db/adapter-instances", () => ({
 }))
 
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
+import { larkUserKey } from "@/lib/auth-providers/feishu/user-key"
 
 const listMock = listAdapterInstancesByType as jest.Mock
 
@@ -44,9 +45,15 @@ describe("LarkAccountPicker", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith("cai_solo"))
   })
 
-  it("lists accounts with the connected user's name and picks on click", async () => {
+  it("lists accounts with the authorized owner's name and picks on click", async () => {
+    const alice = { openId: "ou_1", name: "Alice" }
     listMock.mockResolvedValue([
-      larkRow("cai_a", { settings: { connectedUser: { openId: "ou_1", name: "Alice" } } }),
+      larkRow("cai_a", {
+        settings: {
+          connectedUser: alice,
+          authorizedUsers: { [await larkUserKey("ou_1")]: alice },
+        },
+      }),
       larkRow("cai_b"),
     ])
     const onChange = jest.fn()
@@ -66,6 +73,18 @@ describe("LarkAccountPicker", () => {
     render(<LarkAccountPicker value="cai_a" onChange={() => {}} />)
 
     expect(await screen.findByTestId("twin-lark-picker-app-only")).toBeInTheDocument()
+  })
+
+  it("treats a sign-in without an authorization record as app-only", async () => {
+    listMock.mockResolvedValue([
+      larkRow("cai_a", { settings: { connectedUser: { openId: "ou_1", name: "Alice" } } }),
+      larkRow("cai_b"),
+    ])
+    render(<LarkAccountPicker value="cai_a" onChange={() => {}} />)
+
+    expect(await screen.findByTestId("twin-lark-picker-app-only")).toBeInTheDocument()
+    expect(screen.getByRole("combobox", { name: /account/i })).toHaveTextContent("Lark cai_a")
+    expect(screen.getByRole("combobox", { name: /account/i })).not.toHaveTextContent("Alice")
   })
 
   it("does not auto-select when multiple accounts exist", async () => {

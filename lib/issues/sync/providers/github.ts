@@ -17,6 +17,7 @@
 
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
 import { HOST_BACKGROUND } from "@/lib/plugin/core/invocation-identity"
@@ -186,7 +187,7 @@ export async function resolveGithubSyncReadClient(
       !(
         await admitPersonalCredential(credentialContext, {
           source: "github-user",
-          person: account.id,
+          person: LOCAL_PERSON,
         })
       ).ok
     )

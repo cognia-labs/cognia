@@ -38,7 +38,7 @@ import {
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 import { getTenantToken } from "./auth"
 import type { AuthConnectionRow } from "@/lib/db/auth-connections"
-import { resolveLarkConnection } from "./host-auth"
+import { larkActingKey, larkAuthorizedPerson, resolveLarkConnection } from "./host-auth"
 import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
 import { withTatRefresh, withUserTokenRefresh } from "./auth-retry"
 
@@ -81,6 +81,8 @@ type LarkWriteMethod = "POST" | "PATCH" | "PUT" | "DELETE"
 export interface LarkAuthedApiAccount {
   adapterId: string
   displayName: string
+  /** The person's connection row the user identity resolved to (user identity only). */
+  connection?: AuthConnectionRow
 }
 
 export interface WithLarkAuthedApiOptions {
@@ -89,6 +91,12 @@ export interface WithLarkAuthedApiOptions {
   sessionId?: string
   /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
   adapterId: string
+  /**
+   * Whose authorization (`larkUserKey`) the user identity uses. Callers that
+   * hold a person's connection pass its principal; otherwise it is the run's
+   * acting person (`larkActingKey`).
+   */
+  principal?: string
   expectedAuthorizationEpoch?: string
   signal?: AbortSignal
   maxResponseBytes?: number
@@ -113,6 +121,12 @@ export async function withLarkAuthedApi<T>(
     throw new LarkAccessError("notAuthorized")
   const result = await withRequestAbort(opts.signal, async () => {
     let authorizationEpoch = opts.expectedAuthorizationEpoch
+    const credentialContext =
+      opts.credentialContext ?? (opts.sessionId ? { sessionId: opts.sessionId } : undefined)
+    const principal =
+      opts.identity === "user"
+        ? (opts.principal ?? (await larkActingKey(opts.adapterId, credentialContext)))
+        : undefined
     const assertCurrent = async () => {
       throwIfRequestAborted(opts.signal)
       if (opts.identity === "bot") return
@@ -122,14 +136,17 @@ export async function withLarkAuthedApi<T>(
           .catch(() => {
             throw new LarkAccessError("notAuthorized")
           })
-      const admission = await admitPersonalCredential(
-        opts.credentialContext ?? (opts.sessionId ? { sessionId: opts.sessionId } : undefined),
-        { source: "lark-user", person: opts.adapterId }
-      )
+      const person = principal && (await larkAuthorizedPerson(opts.adapterId, principal))
+      if (!principal || !person) throw new LarkAccessError("notAuthorized")
+      const admission = await admitPersonalCredential(credentialContext, {
+        source: "lark-user",
+        person,
+      })
       if (!admission.ok) throw new LarkAccessError("notAuthorized")
       const current = await connectorsLarkUserAuth({
         action: "snapshot",
         adapterId: opts.adapterId,
+        principal,
       }).catch(() => {
         throwIfRequestAborted(opts.signal)
         throw new LarkAccessError("notAuthorized")
@@ -156,11 +173,7 @@ export async function withLarkAuthedApi<T>(
     }
     const connection: AuthConnectionRow | undefined =
       opts.identity === "user"
-        ? await resolveLarkConnection(
-            opts.adapterId,
-            undefined,
-            opts.credentialContext ?? (opts.sessionId ? { sessionId: opts.sessionId } : undefined)
-          ).catch(() => {
+        ? await resolveLarkConnection(opts.adapterId, principal, credentialContext).catch(() => {
             throw new LarkAccessError("notAuthorized", row.displayName)
           })
         : undefined
@@ -215,14 +228,14 @@ export async function withLarkAuthedApi<T>(
     const account: LarkAuthedApiAccount = {
       adapterId: opts.adapterId,
       displayName: row.displayName,
+      ...(connection ? { connection } : {}),
     }
     const rethrow = (err: unknown): never => {
       throw opts.mapError ? opts.mapError(err, row.displayName) : err
     }
 
     const ctx = {
-      credentialContext:
-        opts.credentialContext ?? (opts.sessionId ? { sessionId: opts.sessionId } : undefined),
+      credentialContext,
       adapterId: opts.adapterId,
       appId,
       appSecret,
@@ -231,14 +244,11 @@ export async function withLarkAuthedApi<T>(
       ...(row.settings?.brand === "lark" ? { brand: "lark" as const } : {}),
     }
     if (opts.identity === "user") {
+      if (!principal) throw new LarkAccessError("notAuthorized", row.displayName)
       let userToken: string | null
       try {
         userToken = (
-          await getConnectionManager().getCredentials(connection!.id, {
-            credentialContext:
-              opts.credentialContext ??
-              (opts.sessionId ? { sessionId: opts.sessionId } : undefined),
-          })
+          await getConnectionManager().getCredentials(connection!.id, { credentialContext })
         ).accessToken
       } catch {
         throw new LarkAccessError("notAuthorized", row.displayName)
@@ -247,7 +257,7 @@ export async function withLarkAuthedApi<T>(
       if (!userToken) throw new LarkAccessError("notAuthorized", row.displayName)
       let lastCallError: unknown
       try {
-        return await withUserTokenRefresh(ctx, async (token) => {
+        return await withUserTokenRefresh({ ...ctx, principal }, async (token) => {
           await assertCurrent()
           throwIfRequestAborted(opts.signal)
           try {

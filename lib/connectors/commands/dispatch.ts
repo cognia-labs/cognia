@@ -68,6 +68,7 @@ import {
 import { parseControlCommand, isReadonlyCommand } from "./parse"
 import { handleGoalCommand } from "./goal"
 import { handleDelegateCommand } from "./delegate"
+import { handleAuthCommand } from "./auth"
 import { handleHandoffCommand } from "./handoff"
 import { handleScheduleCommand, type ScheduleCommandScheduler } from "./schedule"
 import * as R from "./render"
@@ -938,6 +939,12 @@ export async function maybeHandleControlCommand(
     case "delegate": {
       const handleDelegate = deps.handleDelegate ?? handleDelegateCommand
       await handleDelegate({ event, arg, reply: replyFixed })
+      return true
+    }
+
+    case "auth": {
+      // The link is the sender's own, in their own direct chat (`commands/auth.ts`).
+      await handleAuthCommand({ event, arg, adapterRow, reply: replyFixed })
       return true
     }
 

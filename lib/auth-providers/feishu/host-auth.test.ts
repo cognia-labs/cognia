@@ -1,4 +1,5 @@
 /** @jest-environment jsdom */
+import { createHash } from "node:crypto"
 import { larkDeployment } from "@cognia/feishu-protocol"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
@@ -22,10 +23,19 @@ import {
 import { getPlugin } from "@/lib/db/plugins"
 import {
   reconcileLarkConnection,
+  reconcileLarkAdapter,
   resolveLarkConnection,
   authorizeLarkConnection,
   assertLarkIdentityAvailable,
   startLarkHostAuth,
+  markLarkNeedsReauth,
+  larkConnectionAdapter,
+  larkOwner,
+  larkOwnerKey,
+  larkAuthorizedPerson,
+  larkActingPerson,
+  larkActingKey,
+  listLarkConnections,
 } from "./host-auth"
 import { beginLarkOAuth } from "./oauth-begin"
 import { openUrl } from "@/lib/native/opener"
@@ -80,7 +90,49 @@ const credentialContext = { localAuthorization: LOCAL_PERSON_RUN } as const
 const fixture = createDbTestFixture()
 beforeAll(fixture.initialize)
 afterAll(fixture.dispose)
-let state: Awaited<ReturnType<typeof connectorsLarkUserAuth>>
+type LarkUserAuthState = Awaited<ReturnType<typeof connectorsLarkUserAuth>>
+/** `larkUserKey(openId)`: the key a person's authorization is stored under. */
+const keyOf = (openId: string) => createHash("sha256").update(openId).digest("hex")
+/** Ada signed the connector in (the owner); Bob authorized it too. */
+const ADA = keyOf("ou_ada")
+const BOB = keyOf("ou_bob")
+const ADA_USER = { openId: "ou_ada", tenantKey: "tenant", authorizationEpoch: "epoch-1" }
+const BOB_USER = { openId: "ou_bob", tenantKey: "tenant", authorizationEpoch: "bob-epoch-1" }
+const BOB_STATE: LarkUserAuthState = {
+  configured: true,
+  authorizationEpoch: "bob-epoch-1",
+  accessToken: "bob-user-token",
+  refreshToken: "bob-refresh",
+  refreshRevision: "bob-r1",
+  accountLabel: "Bob",
+  scopes: ["search:docs:read"],
+}
+const UNCONFIGURED: LarkUserAuthState = {
+  configured: false,
+  authorizationEpoch: "none",
+  accessToken: null,
+  refreshToken: null,
+  refreshRevision: null,
+  accountLabel: null,
+  scopes: [],
+}
+/** Ada's Host authorization. */
+let state: LarkUserAuthState
+/** Everyone else's, by key. */
+let others: Record<string, LarkUserAuthState>
+const authOf = (principal: string) =>
+  principal === ADA ? state : (others[principal] ?? UNCONFIGURED)
+const setAuth = (principal: string, next: LarkUserAuthState) => {
+  if (principal === ADA) state = next
+  else others[principal] = next
+}
+/** Bob authorizes the adapter alongside Ada. */
+async function addBob() {
+  others[BOB] = { ...BOB_STATE }
+  await getDb().adapterInstances.update("adapter", {
+    [`settings.authorizedUsers.${BOB}`]: BOB_USER,
+  })
+}
 beforeEach(async () => {
   await fixture.restore()
   __resetAuthRegistryForTesting()
@@ -96,22 +148,24 @@ beforeEach(async () => {
     accountLabel: "Ada",
     scopes: ["search:docs:read"],
   }
+  others = {}
   jest.mocked(connectorsLarkUserAuth).mockImplementation(async (input) => {
+    const current = authOf(input.principal)
     if (input.action === "disconnect")
-      state = {
-        ...state,
+      setAuth(input.principal, {
+        ...current,
         accessToken: null,
         refreshToken: null,
         authorizationEpoch: "disconnected",
-      }
+      })
     if (input.action === "refresh")
-      state = {
-        ...state,
+      setAuth(input.principal, {
+        ...current,
         accessToken: input.accessToken,
         refreshToken: input.refreshToken,
-        refreshRevision: "native-r2",
-      }
-    return { ...state }
+        refreshRevision: `${current.refreshRevision}-rotated`,
+      })
+    return { ...authOf(input.principal) }
   })
   jest
     .mocked(connectorsKeyringGet)
@@ -131,14 +185,19 @@ beforeEach(async () => {
     type: "lark",
     enabled: true,
     displayName: "Work",
-    settings: {
-      connectedUser: { openId: "ou_ada", tenantKey: "tenant", authorizationEpoch: "epoch-1" },
-    },
+    settings: { connectedUser: ADA_USER, authorizedUsers: { [ADA]: ADA_USER } },
   } as never)
 })
 
+/** Moves Ada's authorization (both her record and the owner record) to `epoch`. */
+const stampAdaEpoch = (epoch: string) =>
+  getDb().adapterInstances.update("adapter", {
+    "settings.connectedUser.authorizationEpoch": epoch,
+    [`settings.authorizedUsers.${ADA}.authorizationEpoch`]: epoch,
+  })
+
 it("injects the Lark credential for an auth.feishu consumer only under its own grant", async () => {
-  const row = (await reconcileLarkConnection("adapter"))!
+  const row = (await reconcileLarkConnection("adapter", ADA))!
   const consumerApi = createAuthConnectionsAPI("business", () => true)
   const selected = await consumerApi.get({ service: "auth.feishu", scopes: [] })
   expect(selected).toMatchObject({ ref: row.id, providerId: "lark", principalKind: "user" })
@@ -206,13 +265,10 @@ it("injects the Lark credential for an auth.feishu consumer only under its own g
       headers: { "content-type": "application/json" },
     })
   )
-  const response = await authenticatedIntegrationRequest(
-    "business",
-    account.id,
-    url,
-    undefined,
-    credentialContext
-  )
+  // A raw request is admitted as a background Host service request (the
+  // personal sink refuses an unverified direct-UI context for an unknown
+  // audience); the grant alone decides whether the credential is injected.
+  const response = await authenticatedIntegrationRequest("business", account.id, url)
   expect(response.data).toEqual({ items: [] })
   const headers = new Headers(jest.mocked(proxyFetch).mock.calls[0][1]?.headers)
   expect(headers.get("authorization")).toBe("Bearer private-user-token")
@@ -220,7 +276,7 @@ it("injects the Lark credential for an auth.feishu consumer only under its own g
 })
 
 it("reconciles real identity idempotently, follows epochs, and changes only credentialRevision on refresh", async () => {
-  const first = (await reconcileLarkConnection("adapter"))!
+  const first = (await reconcileLarkConnection("adapter", ADA))!
   expect(first).toMatchObject({
     providerId: "lark",
     ownerPluginId: null,
@@ -233,17 +289,20 @@ it("reconciles real identity idempotently, follows epochs, and changes only cred
     principalKind: "user",
     revision: 1,
     credentialRevision: 1,
-    hostMetadata: { adapterId: "adapter", bot: true },
+    hostMetadata: {
+      adapterId: "adapter",
+      principal: ADA,
+      person: { kind: "platform", platform: "lark", adapterId: "adapter", remoteUserId: "ou_ada" },
+      bot: true,
+    },
   })
-  expect(await reconcileLarkConnection("adapter")).toEqual(first)
+  expect(await reconcileLarkConnection("adapter", ADA)).toEqual(first)
   state.refreshRevision = "native-r2"
-  const refreshed = (await reconcileLarkConnection("adapter"))!
+  const refreshed = (await reconcileLarkConnection("adapter", ADA))!
   expect(refreshed).toMatchObject({ id: first.id, revision: 1, credentialRevision: 2 })
   state.authorizationEpoch = "epoch-2"
-  await getDb().adapterInstances.update("adapter", {
-    "settings.connectedUser.authorizationEpoch": "epoch-2",
-  })
-  expect(await reconcileLarkConnection("adapter")).toMatchObject({
+  await stampAdaEpoch("epoch-2")
+  expect(await reconcileLarkConnection("adapter", ADA)).toMatchObject({
     id: first.id,
     revision: 2,
     credentialRevision: 2,
@@ -257,7 +316,7 @@ it("reconciles real identity idempotently, follows epochs, and changes only cred
 it.each(["task", "bitable"] as const)(
   "resolves %s sync through the connection, preserves resources/watermarks, and refuses disconnected reads and writes",
   async (kind) => {
-    const row = (await reconcileLarkConnection("adapter"))!
+    const row = (await reconcileLarkConnection("adapter", ADA))!
     const provider =
       kind === "task" ? createLarkTaskSyncProvider() : createLarkBitableSyncProvider()
     const resource =
@@ -335,20 +394,62 @@ it.each(["task", "bitable"] as const)(
 )
 
 it("uses the deployment issuer and resolves legacy tenant identity through user_info", async () => {
-  await getDb().adapterInstances.update("adapter", { settings: { brand: "lark" } })
+  await getDb().adapterInstances.update("adapter", {
+    settings: {
+      brand: "lark",
+      connectedUser: { openId: "ou_ada" },
+      authorizedUsers: { [ADA]: { openId: "ou_ada" } },
+    },
+  })
   jest.mocked(connectorsHttpRequest).mockResolvedValue({
     status: 200,
     headers: {},
-    body: JSON.stringify({ code: 0, data: { open_id: "ou_lark", tenant_key: "lark-tenant" } }),
+    body: JSON.stringify({ code: 0, data: { open_id: "ou_ada", tenant_key: "lark-tenant" } }),
   })
-  expect(await reconcileLarkConnection("adapter", { credentialContext })).toMatchObject({
+  expect(await reconcileLarkConnection("adapter", ADA, { credentialContext })).toMatchObject({
     issuer: "https://accounts.larksuite.com",
     tenantId: "lark-tenant",
-    principalId: "ou_lark",
+    principalId: "ou_ada",
   })
   expect(connectorsHttpRequest).toHaveBeenCalledWith(
     expect.objectContaining({ url: "https://open.larksuite.com/open-apis/authen/v1/user_info" })
   )
+  // The hydrated identity is written back to the person's record and the owner record.
+  const settings = (await getDb().adapterInstances.get("adapter"))!.settings
+  expect(settings.authorizedUsers).toEqual({
+    [ADA]: expect.objectContaining({ tenantKey: "lark-tenant", authorizationEpoch: "epoch-1" }),
+  })
+  expect(settings.connectedUser).toMatchObject({ openId: "ou_ada", tenantKey: "lark-tenant" })
+})
+
+it("refuses a token whose user_info names a different person than the authorization", async () => {
+  await getDb().adapterInstances.update("adapter", {
+    settings: {
+      connectedUser: { openId: "ou_ada" },
+      authorizedUsers: { [ADA]: { openId: "ou_ada" } },
+    },
+  })
+  jest.mocked(connectorsHttpRequest).mockResolvedValue({
+    status: 200,
+    headers: {},
+    body: JSON.stringify({ code: 0, data: { open_id: "ou_mallory", tenant_key: "tenant" } }),
+  })
+  await expect(
+    reconcileLarkConnection("adapter", ADA, { credentialContext })
+  ).rejects.toMatchObject({ name: "ConnectionUnavailableError", reason: "identity-unavailable" })
+  expect(await listAuthConnections("lark")).toEqual([])
+})
+
+it("publishes nothing for an authorization with no record of who it belongs to", async () => {
+  others[BOB] = { ...BOB_STATE }
+  await expect(
+    reconcileLarkConnection("adapter", BOB, { credentialContext })
+  ).rejects.toMatchObject({
+    name: "ConnectionUnavailableError",
+    reason: "identity-unavailable",
+  })
+  expect(connectorsHttpRequest).not.toHaveBeenCalled()
+  expect(await listAuthConnections("lark")).toEqual([])
 })
 
 it.each(["missing-tenant", "old-epoch"])(
@@ -356,9 +457,12 @@ it.each(["missing-tenant", "old-epoch"])(
   async (legacy) => {
     await getDb().adapterInstances.update("adapter", {
       settings: {
-        connectedUser: {
-          openId: "ou_ada",
-          ...(legacy === "old-epoch" ? { tenantKey: "tenant", authorizationEpoch: "old" } : {}),
+        connectedUser: { openId: "ou_ada" },
+        authorizedUsers: {
+          [ADA]: {
+            openId: "ou_ada",
+            ...(legacy === "old-epoch" ? { tenantKey: "tenant", authorizationEpoch: "old" } : {}),
+          },
         },
       },
     })
@@ -367,7 +471,7 @@ it.each(["missing-tenant", "old-epoch"])(
       headers: {},
       body: JSON.stringify({ code: 0, data: { open_id: "ou_ada", tenant_key: "tenant" } }),
     })
-    await expect(reconcileLarkConnection("adapter")).rejects.toMatchObject({
+    await expect(reconcileLarkConnection("adapter", ADA)).rejects.toMatchObject({
       name: "PersonalCredentialRefusedError",
     })
     await expect(larkDocsProvider.listAccounts()).resolves.toEqual([])
@@ -416,7 +520,7 @@ it("admits local-person Twin ingest through the real Host connection and refuses
 })
 
 it("tombstones token clearing and disconnect, keeps captured copies, and drops a deleted adapter's connection", async () => {
-  const row = (await reconcileLarkConnection("adapter"))!
+  const row = (await reconcileLarkConnection("adapter", ADA))!
   expect(await larkDocsProvider.listAccounts()).toEqual([
     { id: row.id, label: "Ada", authorizationEpoch: "1", searchable: true },
   ])
@@ -434,21 +538,22 @@ it("tombstones token clearing and disconnect, keeps captured copies, and drops a
   expect(connectorsLarkUserAuth).toHaveBeenCalledWith({
     action: "disconnect",
     adapterId: "adapter",
+    principal: ADA,
     expectedAuthorizationEpoch: "epoch-1",
   })
   expect((await listAuthConnections("lark"))[0].status).toBe("tombstoned")
   expect(await resolveKeptCopySource(provenance)).toBe("source-disconnected")
-  await expect(resolveLarkConnection("adapter")).rejects.toMatchObject({
+  await expect(resolveLarkConnection("adapter", ADA)).rejects.toMatchObject({
     name: "ConnectionUnavailableError",
   })
   await getDb().adapterInstances.delete("adapter")
-  await reconcileLarkConnection("adapter")
+  await reconcileLarkConnection("adapter", ADA)
   expect(await listAuthConnections("lark")).toEqual([])
   expect(await getDb().remoteDocumentConnections.count()).toBe(1)
 })
 
 it("orders snapshot reads with other windows so a stale token clearing cannot tombstone a newer reauthorization", async () => {
-  const row = (await reconcileLarkConnection("adapter"))!
+  const row = (await reconcileLarkConnection("adapter", ADA))!
   state = { ...state, accessToken: null, refreshToken: null }
   // A snapshot reply reflects native state when it is READ, and may arrive late.
   let openGate!: () => void
@@ -469,7 +574,7 @@ it("orders snapshot reads with other windows so a stale token clearing cannot to
   const otherWindowEntered = new Promise<void>((resolve) => (entered = resolve))
   let release!: () => void
   const otherWindow = withAuthLock(
-    "cognia-auth-provider:lark:reconcile:adapter",
+    `cognia-auth-provider:lark:reconcile:adapter:${ADA}`,
     async () => {
       entered()
       await new Promise<void>((resolve) => (release = resolve))
@@ -477,7 +582,7 @@ it("orders snapshot reads with other windows so a stale token clearing cannot to
     "provider-reconcile"
   )
   await otherWindowEntered
-  const stale = reconcileLarkConnection("adapter")
+  const stale = reconcileLarkConnection("adapter", ADA)
   try {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(snapshotReads()).toBe(readsBefore)
@@ -487,11 +592,7 @@ it("orders snapshot reads with other windows so a stale token clearing cannot to
       accessToken: "private-user-token-2",
       refreshToken: "private-refresh-2",
     }
-    await getDb().adapterInstances.update("adapter", {
-      settings: {
-        connectedUser: { openId: "ou_ada", tenantKey: "tenant", authorizationEpoch: "epoch-2" },
-      },
-    } as never)
+    await stampAdaEpoch("epoch-2")
     await getConnectionManager().reconcileHostConnection(
       "lark",
       {
@@ -504,6 +605,13 @@ it("orders snapshot reads with other windows so a stale token clearing cannot to
       },
       {
         adapterId: "adapter",
+        principal: ADA,
+        person: {
+          kind: "platform",
+          platform: "lark",
+          adapterId: "adapter",
+          remoteUserId: "ou_ada",
+        },
         authorizationEpoch: "epoch-2",
         credentialVersion: "native-r1",
         bot: true,
@@ -522,7 +630,7 @@ it("orders snapshot reads with other windows so a stale token clearing cannot to
   })
 })
 it("marks invalid_grant needs-reauth and does not silently restore it on reconciliation", async () => {
-  const row = (await reconcileLarkConnection("adapter"))!
+  const row = (await reconcileLarkConnection("adapter", ADA))!
   jest.mocked(connectorsHttpRequest).mockResolvedValue({
     status: 400,
     headers: {},
@@ -532,11 +640,12 @@ it("marks invalid_grant needs-reauth and does not silently restore it on reconci
     refreshUserToken({
       credentialContext,
       adapterId: "adapter",
+      principal: ADA,
       appId: "cli_app",
       appSecret: "secret",
     })
   ).rejects.toMatchObject({ code: "invalid_grant" })
-  expect(await reconcileLarkConnection("adapter")).toMatchObject({
+  expect(await reconcileLarkConnection("adapter", ADA)).toMatchObject({
     id: row.id,
     status: "needs-reauth",
     revision: 1,
@@ -549,7 +658,7 @@ it("marks invalid_grant needs-reauth and does not silently restore it on reconci
 })
 
 it("exposes auth.feishu to a declared consumer, and refuses a second provider's identical lineage without changing Lark", async () => {
-  const row = (await reconcileLarkConnection("adapter"))!
+  const row = (await reconcileLarkConnection("adapter", ADA))!
   expect(await connectionAccess("business", () => {}).visible(row, "auth.feishu")).toBe(true)
   const provider = {
     id: "feishu-alternative",
@@ -589,9 +698,9 @@ it("exposes auth.feishu to a declared consumer, and refuses a second provider's 
 })
 
 it("tombstones native token clearing and restores the same identity only after a new epoch", async () => {
-  const row = (await reconcileLarkConnection("adapter"))!
+  const row = (await reconcileLarkConnection("adapter", ADA))!
   state.accessToken = null
-  await reconcileLarkConnection("adapter")
+  await reconcileLarkConnection("adapter", ADA)
   expect((await listAuthConnections())[0]).toMatchObject({
     id: row.id,
     status: "tombstoned",
@@ -600,10 +709,8 @@ it("tombstones native token clearing and restores the same identity only after a
   state.accessToken = "reauthorized-token"
   state.authorizationEpoch = "epoch-2"
   state.refreshRevision = "native-r2"
-  await getDb().adapterInstances.update("adapter", {
-    "settings.connectedUser.authorizationEpoch": "epoch-2",
-  })
-  expect(await reconcileLarkConnection("adapter")).toMatchObject({
+  await stampAdaEpoch("epoch-2")
+  expect(await reconcileLarkConnection("adapter", ADA)).toMatchObject({
     id: row.id,
     status: "connected",
     revision: 3,
@@ -611,7 +718,9 @@ it("tombstones native token clearing and restores the same identity only after a
 })
 
 it("uses the native refresh coordinator and changes credentialRevision without changing connection revision", async () => {
-  const row = (await reconcileLarkConnection("adapter", { expiresAt: "2000-01-01T00:00:00Z" }))!
+  const row = (await reconcileLarkConnection("adapter", ADA, {
+    expiresAt: "2000-01-01T00:00:00Z",
+  }))!
   jest.mocked(connectorsHttpRequest).mockResolvedValue({
     status: 200,
     headers: {},
@@ -632,6 +741,7 @@ it("uses the native refresh coordinator and changes credentialRevision without c
   expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
     expect.objectContaining({
       action: "refresh",
+      principal: ADA,
       expectedAuthorizationEpoch: "epoch-1",
       expectedRefreshRevision: "native-r1",
     })
@@ -639,7 +749,7 @@ it("uses the native refresh coordinator and changes credentialRevision without c
 })
 
 it("binds adapter reauthorization to the existing Host identity and revision", async () => {
-  const row = (await reconcileLarkConnection("adapter"))!
+  const row = (await reconcileLarkConnection("adapter", ADA))!
   jest.mocked(beginLarkOAuth).mockResolvedValue({
     authorizeUrl: "https://accounts.feishu.cn/authorize?state=reconnect",
     state: "reconnect",
@@ -649,6 +759,8 @@ it("binds adapter reauthorization to the existing Host identity and revision", a
   expect(beginLarkOAuth).toHaveBeenCalledWith(
     expect.objectContaining({
       adapterId: "adapter",
+      // A reconnect is the same person signing in again.
+      issuedTo: ADA,
       connection: { ref: row.id, revision: row.revision },
       extraScopes: row.scopes.join(" "),
     })
@@ -706,4 +818,151 @@ it("disposes an event registration that completes after runtime shutdown", async
   const unlisten = jest.fn()
   complete(unlisten)
   await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1))
+})
+
+describe("one authorization per person (ADR-0243 phase 4)", () => {
+  const rowsByPrincipal = async () =>
+    Object.fromEntries(
+      (await listAuthConnections("lark")).map((row) => [row.hostMetadata!.principal!, row])
+    )
+
+  it("names the owner, each authorized person, and whose authorization a local run uses", async () => {
+    await addBob()
+    const adaPerson = {
+      kind: "platform",
+      platform: "lark",
+      adapterId: "adapter",
+      remoteUserId: "ou_ada",
+    }
+    expect(await larkOwner("adapter")).toEqual({ key: ADA, person: adaPerson })
+    expect(await larkOwnerKey("adapter")).toBe(ADA)
+    expect(await larkAuthorizedPerson("adapter", BOB)).toEqual({
+      ...adaPerson,
+      remoteUserId: "ou_bob",
+    })
+    expect(await larkAuthorizedPerson("adapter", keyOf("ou_stranger"))).toBeUndefined()
+    // A local run is the local person's, whose authorization is the owner's.
+    expect(await larkActingPerson("adapter", credentialContext)).toEqual({
+      key: ADA,
+      person: { kind: "local-person" },
+    })
+    expect(await larkActingKey("adapter", credentialContext)).toBe(ADA)
+    // Nobody signed in: the local person, who has no authorization here.
+    await getDb().adapterInstances.update("adapter", { "settings.connectedUser": undefined })
+    expect(await larkOwner("adapter")).toBeUndefined()
+    expect(await larkActingPerson("adapter", credentialContext)).toEqual({
+      person: { kind: "local-person" },
+    })
+    expect(await larkActingKey("adapter", credentialContext)).toBeUndefined()
+  })
+
+  it("keeps a separate connection row per person and reconciles every one of them", async () => {
+    await addBob()
+    await listLarkConnections()
+    const rows = await rowsByPrincipal()
+    expect(Object.keys(rows).sort()).toEqual([ADA, BOB].sort())
+    expect(rows[ADA]).toMatchObject({ principalId: "ou_ada", status: "connected" })
+    expect(rows[BOB]).toMatchObject({
+      principalId: "ou_bob",
+      accountLabel: "Bob",
+      status: "connected",
+      hostMetadata: {
+        adapterId: "adapter",
+        principal: BOB,
+        person: {
+          kind: "platform",
+          platform: "lark",
+          adapterId: "adapter",
+          remoteUserId: "ou_bob",
+        },
+        authorizationEpoch: "bob-epoch-1",
+      },
+    })
+    expect(rows[ADA].id).not.toBe(rows[BOB].id)
+    expect(await larkConnectionAdapter(rows[BOB].id)).toEqual({
+      connection: expect.objectContaining({ id: rows[BOB].id }),
+      adapterId: "adapter",
+      principal: BOB,
+    })
+    expect((await resolveLarkConnection("adapter", BOB)).id).toBe(rows[BOB].id)
+    await expect(resolveLarkConnection("adapter", undefined)).rejects.toMatchObject({
+      name: "ConnectionUnavailableError",
+      reason: "unavailable",
+    })
+    // Every snapshot named the person it read.
+    for (const [input] of jest.mocked(connectorsLarkUserAuth).mock.calls)
+      expect([ADA, BOB]).toContain(input.principal)
+  })
+
+  it("gives the local person's UI the owner's token, never another person's", async () => {
+    await addBob()
+    await reconcileLarkAdapter("adapter")
+    const rows = await rowsByPrincipal()
+    await expect(
+      getConnectionManager().getCredentials(rows[ADA].id, { credentialContext })
+    ).resolves.toMatchObject({ accessToken: "private-user-token" })
+    await expect(
+      getConnectionManager().getCredentials(rows[BOB].id, { credentialContext })
+    ).rejects.toMatchObject({ name: "PersonalCredentialRefusedError" })
+  })
+
+  it("disconnects one person's authorization and leaves the other's connected", async () => {
+    await addBob()
+    await reconcileLarkAdapter("adapter")
+    const rows = await rowsByPrincipal()
+    await getConnectionManager().disconnect(rows[BOB].id, { revoke: true })
+    expect(connectorsLarkUserAuth).toHaveBeenCalledWith({
+      action: "disconnect",
+      adapterId: "adapter",
+      principal: BOB,
+      expectedAuthorizationEpoch: "bob-epoch-1",
+    })
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: "disconnect", principal: ADA })
+    )
+    await reconcileLarkAdapter("adapter")
+    const after = await rowsByPrincipal()
+    expect(after[BOB].status).toBe("tombstoned")
+    expect(after[ADA]).toMatchObject({ id: rows[ADA].id, status: "connected", revision: 1 })
+    expect(state.accessToken).toBe("private-user-token")
+  })
+
+  it("refreshes one person's expiring authorization without touching another's", async () => {
+    await addBob()
+    const bob = (await reconcileLarkConnection("adapter", BOB))!
+    const ada = (await reconcileLarkConnection("adapter", ADA, {
+      expiresAt: "2000-01-01T00:00:00Z",
+    }))!
+    jest.mocked(connectorsHttpRequest).mockResolvedValue({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        access_token: "refreshed",
+        refresh_token: "rotated",
+        expires_in: 7200,
+      }),
+    })
+    await expect(
+      getConnectionManager().getCredentials(ada.id, { credentialContext })
+    ).resolves.toMatchObject({ accessToken: "refreshed" })
+    const refreshes = jest
+      .mocked(connectorsLarkUserAuth)
+      .mock.calls.filter(([input]) => input.action === "refresh")
+    expect(refreshes).toHaveLength(1)
+    expect(refreshes[0][0]).toMatchObject({ principal: ADA, expectedRefreshRevision: "native-r1" })
+    expect(others[BOB]).toEqual(BOB_STATE)
+    expect((await rowsByPrincipal())[BOB]).toEqual(bob)
+  })
+
+  it("marks only the rejected person's authorization as needing reauthorization", async () => {
+    await addBob()
+    await reconcileLarkAdapter("adapter")
+    // A late rejection of an authorization Bob has since replaced changes nothing.
+    await markLarkNeedsReauth("adapter", BOB, "bob-epoch-0", "bob-r1")
+    expect((await rowsByPrincipal())[BOB].status).toBe("connected")
+    await markLarkNeedsReauth("adapter", BOB, "bob-epoch-1", "bob-r1")
+    const rows = await rowsByPrincipal()
+    expect(rows[BOB].status).toBe("needs-reauth")
+    expect(rows[ADA].status).toBe("connected")
+  })
 })

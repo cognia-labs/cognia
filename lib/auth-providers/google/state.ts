@@ -1,5 +1,6 @@
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -118,7 +119,10 @@ export async function googleState(
         admission.lineageId
       )
     } else {
-      const decision = await admitPersonalCredential(admission, { source: "google-docs" })
+      const decision = await admitPersonalCredential(admission, {
+        source: "google-docs",
+        person: LOCAL_PERSON,
+      })
       if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
     }
   }

@@ -82,7 +82,8 @@ export function addressesUs(event: NormalizedInboundEvent): boolean {
   return event.mentions.selfMentioned || isReplyToSelf(event)
 }
 
-function isPrivateConversation(event: NormalizedInboundEvent): boolean {
+/** A direct chat with one person, including a topic opened inside one. */
+export function isPrivateConversation(event: NormalizedInboundEvent): boolean {
   return (
     event.channel.kind === "private" ||
     (event.platform === "lark" &&

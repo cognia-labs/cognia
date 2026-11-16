@@ -39,6 +39,7 @@ import type { EscalationPolicy } from "@/types/connectors/escalation"
 import type { MessageSegment } from "@/types/connectors/segment"
 import type { ConnectorCallbackBindingRow } from "@/types/connectors/interaction"
 export type {
+  AdapterCredentialLane,
   AdapterImplMetadata,
   AdapterInstanceRow,
   AdapterPluginProvenance,

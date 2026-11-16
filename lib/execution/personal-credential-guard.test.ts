@@ -202,7 +202,6 @@ const ENTRIES = new Set([
   "githubReadAccountsFor",
   "resolveGithubReadTokenForRepo",
   "ghCliToken",
-  "verifyLarkImOwnerAuthorization",
   "withUserTokenRefresh",
   "refreshUserToken",
   "connectorsLarkUserAuth",
@@ -347,7 +346,7 @@ const REVIEWED: Record<string, string[]> = {
     "resolveGithubReadToken",
     "resolveGithubReadTokenForRepo",
   ],
-  "lib/connectors/adapter-registry.ts": ["keyring-user-token", "keyring-user-token"],
+  "lib/connectors/adapter-registry.ts": ["keyring-user-token"],
   "lib/auth-providers/feishu/auth-retry.ts": ["connectorsLarkUserAuth", "refreshUserToken"],
   "lib/auth-providers/feishu/authed-api.ts": [
     "connectorsLarkUserAuth",
@@ -355,12 +354,14 @@ const REVIEWED: Record<string, string[]> = {
     "withUserTokenRefresh",
   ],
   "lib/connectors/adapters/lark/http.ts": ["withUserTokenRefresh"],
+  // A person's delegated authorization state and revoke (ADR-0243 phase 4):
+  // snapshots read only whether it is configured and its epoch; revoke
+  // disconnects at that epoch. No token leaves this file.
+  "lib/connectors/adapters/lark/delegated-credentials.ts":
+    Array<string>(3).fill("connectorsLarkUserAuth"),
+  // Send-as-user: only the connected owner's own turns (ADR-0243 D12).
   "lib/connectors/adapters/lark/index.ts": [
     "connectorsLarkUserAuth",
-    "getUserAccessToken",
-    "getUserAccessToken",
-    "getUserAccessToken",
-    "withUserTokenRefresh",
     "withUserTokenRefresh",
     "withUserTokenRefresh",
   ],
@@ -368,13 +369,9 @@ const REVIEWED: Record<string, string[]> = {
   // person's explicit account-setup protocol. The native wrapper is an exit,
   // not an exemption for additional callers.
   "lib/connectors/tauri/commands.ts": ["native-lark-user-auth"],
-  "lib/auth-providers/feishu/auth.ts": Array<string>(4).fill("connectorsLarkUserAuth"),
+  "lib/auth-providers/feishu/auth.ts": Array<string>(3).fill("connectorsLarkUserAuth"),
   "lib/auth-providers/feishu/oauth-begin.ts": ["connectorsLarkUserAuth"],
-  "lib/auth-providers/feishu/oauth-handler.ts": [
-    "connectorsLarkUserAuth",
-    "connectorsLarkUserAuth",
-    "connectorsLarkUserAuth",
-  ],
+  "lib/auth-providers/feishu/oauth-handler.ts": Array<string>(4).fill("connectorsLarkUserAuth"),
   // The driver releases user OAuth only with the manager's opaque, per-request
   // authorization. Metadata/epoch reconciliation and disconnect remain internal;
   // legacy user_info hydration separately calls admitPersonalCredential.
@@ -383,11 +380,8 @@ const REVIEWED: Record<string, string[]> = {
     "refreshUserToken",
     "registerHostAuthProviderService",
   ],
-  "lib/auth-providers/feishu/cli/acting-identity.ts": [
-    "connectorsLarkUserAuth",
-    "connectorsLarkUserAuth",
-  ],
-  "lib/auth-providers/feishu/cli/auth-bridge.ts": ["connectorsLarkUserAuth", "getCredentials"],
+  "lib/auth-providers/feishu/cli/acting-identity.ts": ["connectorsLarkUserAuth"],
+  "lib/auth-providers/feishu/cli/auth-bridge.ts": ["getCredentials"],
   "lib/google-docs/provider.ts": ["getCredentials", "listGoogleConnections"],
   "lib/auth-providers/google/host-auth.ts": [
     "createGoogleDeviceAuthorization",
@@ -411,10 +405,6 @@ const REVIEWED: Record<string, string[]> = {
   ],
   "plugins/feishu-calendar/src/index.ts": ["connection-ref-authenticated-request"],
   "plugins/feishu-calendar/src/connection.ts": ["connection-ref-authenticated-request"],
-  "lib/execution/personal-credential.ts": [
-    "verifyLarkImOwnerAuthorization",
-    "verifyLarkImOwnerAuthorization",
-  ],
   // Auth connection credentials are exposed only by the admitted Host request
   // and builtin Issue Loop; the manager's legacy adapter inherits that decision.
   "lib/integrations/action-runner.ts": [

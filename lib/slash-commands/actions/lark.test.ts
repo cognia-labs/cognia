@@ -7,12 +7,11 @@ import "fake-indexeddb/auto"
 import "@/lib/skills/built-in"
 import { dispatchLarkSubcommand, parseLarkArgs } from "./lark"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
-import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
+import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/connectors/tauri/commands", () => ({
-  connectorsKeyringGet: jest.fn(async (_id: string, key: string) =>
-    key === "user_token" ? "private-token" : "app-credential"
-  ),
+  connectorsKeyringGet: jest.fn(async () => "app-credential"),
+  connectorsLarkUserAuth: jest.fn(),
 }))
 jest.mock("@/lib/skills/built-in/lark/capabilities", () => ({
   ...jest.requireActual("@/lib/skills/built-in/lark/capabilities"),
@@ -108,7 +107,7 @@ describe("dispatchLarkSubcommand", () => {
     expect(automated?.actingIdentity?.trigger).toBe("external-event")
   })
 
-  it("refuses a non-owner in an IM-bound session through the actual auth gate", async () => {
+  it("runs a non-delegated IM-bound session as the app, never with a personal token", async () => {
     const binding = { platform: "lark", adapterId: "a1", conversationKey: "lark:a1:chat" }
     await getDb().sessions.put({ id: "im-session", platformBinding: binding } as never)
     await getDb().adapterInstances.put({
@@ -126,12 +125,8 @@ describe("dispatchLarkSubcommand", () => {
       event: { sender: { remoteUserId: "other" } },
       receivedAt: 1,
     } as never)
-    const result = await dispatchLarkSubcommand({ argv: "agenda", sessionId: "im-session" })
-    expect(result.system).toContain("sender_not_token_owner")
-    expect(result.system).toContain("Alice")
-    expect(
-      jest.mocked(connectorsKeyringGet).mock.calls.some(([, key]) => key === "user_token")
-    ).toBe(false)
+    await dispatchLarkSubcommand({ argv: "agenda", sessionId: "im-session" })
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
   })
   it("returns a parse_error system block on bad argv", async () => {
     const r = await dispatchLarkSubcommand({ argv: "", sessionId: "s_x" })

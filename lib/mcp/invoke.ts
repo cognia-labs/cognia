@@ -92,11 +92,11 @@ export async function invokeMcpTool(
   const server = await getServer(serverId)
   if (!server) throw new McpServerNotFoundError(serverId)
   if (input.authProvider) {
-    const { admitPersonalCredential, PersonalCredentialRefusedError } =
+    const { admitPersonalCredential, LOCAL_PERSON, PersonalCredentialRefusedError } =
       await import("@/lib/execution/personal-credential")
     const decision = await admitPersonalCredential(input.credentialContext, {
       source: "mcp-oauth",
-      person: server.id,
+      person: LOCAL_PERSON,
     })
     if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
   }

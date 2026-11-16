@@ -174,14 +174,18 @@ export function createLarkBitableSyncProvider(
           ) => {
             const resource = binding.resource
             if (resource.kind !== "lark-bitable") throw new Error("Invalid Lark binding")
-            const { resolveLarkConnection, larkConnectionAdapter } =
+            const { larkActingKey, resolveLarkConnection, larkConnectionAdapter } =
               await import("@/lib/auth-providers/feishu/host-auth")
             const restored = binding.connectionRef
               ? await larkConnectionAdapter(binding.connectionRef)
               : undefined
             const connection =
               restored?.connection ??
-              (await resolveLarkConnection(resource.adapterId, undefined, credentialContext))
+              (await resolveLarkConnection(
+                resource.adapterId,
+                await larkActingKey(resource.adapterId, credentialContext),
+                credentialContext
+              ))
             if (restored) binding.resource = { ...resource, adapterId: restored.adapterId }
             const epoch = connection.hostMetadata?.authorizationEpoch
             if (!epoch) throw new Error("Lark authorization epoch unavailable")

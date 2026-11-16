@@ -6,7 +6,7 @@
  * and `enabled` columns are indexed for the bus boot list.
  */
 
-import type { AdapterInstanceRow } from "./connector-types"
+import type { AdapterCredentialLane, AdapterInstanceRow } from "./connector-types"
 import type { PlatformKind } from "@/types/connectors/platform-kind"
 import { getDb } from "./schema"
 import { recordTombstones } from "./tombstones"
@@ -47,8 +47,13 @@ export async function createAdapterInstance(
   const {
     owner: _owner,
     outboundRecipients: _recipients,
+    credentialLane: _lane,
     ...fields
-  } = input as AdapterInstanceInput & { owner?: ItemOwner; outboundRecipients?: unknown }
+  } = input as AdapterInstanceInput & {
+    owner?: ItemOwner
+    outboundRecipients?: unknown
+    credentialLane?: unknown
+  }
   const row: AdapterInstanceRow = {
     id: options.id ?? newId(),
     ...fields,
@@ -92,6 +97,11 @@ function writesRecipientList(key: string): boolean {
   return key === "outboundRecipients" || key.startsWith("outboundRecipients.")
 }
 
+/** Whether a patch key writes a field only a person's own edit may set. */
+function writesPersonOnlyField(key: string): boolean {
+  return writesRecipientList(key) || key === "credentialLane"
+}
+
 /**
  * The recipient list has its own writer ({@link setAdapterOutboundRecipients}).
  * The type keeps it out of a patch; a caller that casts past it (a plugin's
@@ -100,9 +110,9 @@ function writesRecipientList(key: string): boolean {
  * are dropped too.
  */
 function withoutRecipientList(patch: AdapterInstancePatch): AdapterInstancePatch {
-  if (!Object.keys(patch).some(writesRecipientList)) return patch
+  if (!Object.keys(patch).some(writesPersonOnlyField)) return patch
   return Object.fromEntries(
-    Object.entries(patch).filter(([key]) => !writesRecipientList(key))
+    Object.entries(patch).filter(([key]) => !writesPersonOnlyField(key))
   ) as AdapterInstancePatch
 }
 
@@ -175,6 +185,8 @@ export type AdapterConfigSection =
   | "promotion"
   /** The recipients unattended deliveries may reach (ADR-0239). */
   | "outboundRecipients"
+  /** Whose credentials its turns use (ADR-0243). */
+  | "credentialLane"
 
 export type AdapterConfigSource =
   | "settings"
@@ -248,6 +260,41 @@ export async function setAdapterOutboundRecipients(
     { outboundRecipients: recipients.map((grant) => ({ ...grant })) },
     source
   )
+}
+
+/**
+ * Set whose credentials this bot account's turns use (ADR-0243 §3). Only a
+ * person's edit in this Host's connection settings calls it: a paired device
+ * cannot (the lane decides whose authorization a turn may use, so it is not
+ * a remote configuration), and runs already admitted keep the lane they
+ * recorded.
+ */
+export async function setAdapterCredentialLane(
+  id: string,
+  lane: AdapterCredentialLane
+): Promise<void> {
+  if (hostWriter()) throw new Error("credential_lane_host_only")
+  const db = getDb()
+  await db.transaction("rw", db.adapterInstances, db.connectorAudit, async () => {
+    await assertInstanceRunsHere(id)
+    const updated = await db.adapterInstances.update(id, {
+      credentialLane: lane,
+      updatedAt: Date.now(),
+    })
+    if (updated === 0) throw new Error(`Adapter instance not found: ${id}`)
+    await db.connectorAudit.add({
+      id: crypto.randomUUID(),
+      adapterId: id,
+      kind: "adapter.config_changed",
+      at: Date.now(),
+      fields: {
+        scope: "adapter",
+        section: "credentialLane",
+        changedKeys: ["credentialLane"],
+        source: "settings",
+      },
+    })
+  })
 }
 
 /**

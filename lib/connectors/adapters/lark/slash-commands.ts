@@ -53,6 +53,7 @@ const ICONS: Record<ControlCommandName, string> = {
   schedule: "ai-reminder_outlined",
   handoff: "raisehand_outlined",
   delegate: "sent_outlined",
+  auth: "member_outlined",
 }
 
 export interface LarkSlashCommandDescription {

@@ -1,5 +1,6 @@
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -58,7 +59,7 @@ async function hostRequest<T>(
 ): Promise<{ status: number; data: T }> {
   const admission = await admitPersonalCredential(credentialContext, {
     source: "github-user",
-    person: account.id,
+    person: LOCAL_PERSON,
   })
   if (!admission.ok) throw new PersonalCredentialRefusedError(admission)
   const provider = getProvider(account.providerId)

@@ -104,7 +104,8 @@ export const PORTABLE_ADAPTER_FIELDS = [
  * What stays behind, and why: identity and timestamps belong to the row; the
  * public URL is this machine's address; the rest is what a running adapter
  * learned about its platform, which the host's adapter learns afresh when it
- * starts, and the two ownership fields describe this machine's copy.
+ * starts, the two ownership fields describe this machine's copy, and the
+ * credential lane is set by a person on the host itself.
  */
 export const LOCAL_ADAPTER_FIELDS = [
   "id",
@@ -123,6 +124,9 @@ export const LOCAL_ADAPTER_FIELDS = [
   "selfIdentity",
   "owner",
   "provenance",
+  // Whose credentials its turns use (ADR-0243): a person sets it on the host
+  // that runs the bot, where their authorizations live; it never travels.
+  "credentialLane",
 ] as const satisfies readonly (keyof AdapterInstanceRow)[]
 
 type ClassifiedField =

@@ -1,6 +1,6 @@
 "use client"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
-import { admitPersonalCredential } from "@/lib/execution/personal-credential"
+import { admitPersonalCredential, LOCAL_PERSON } from "@/lib/execution/personal-credential"
 
 /**
  * GitHub backup destination card (Settings → Data). Configures the private
@@ -64,7 +64,7 @@ async function loadAuthSessions(): Promise<GithubAuthSessionOption[]> {
       if (providerId !== "github-app" || provider.pluginId !== null) {
         const decision = await admitPersonalCredential(
           { localAuthorization: LOCAL_PERSON_RUN },
-          { source: "github-user" }
+          { source: "github-user", person: LOCAL_PERSON }
         )
         if (!decision.ok) return []
       }

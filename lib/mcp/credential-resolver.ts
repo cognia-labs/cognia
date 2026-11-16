@@ -1,5 +1,6 @@
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -42,7 +43,7 @@ export async function resolveMcpRuntimeCredential(
   const assertAdmitted = async () => {
     const decision = await admitPersonalCredential(deps.credentialContext, {
       source: "mcp-oauth",
-      person: server.id,
+      person: LOCAL_PERSON,
     })
     if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
   }
@@ -53,7 +54,7 @@ export async function resolveMcpRuntimeCredential(
   const refreshSkewMs = deps.refreshSkewMs ?? 60_000
   const decision = await admitPersonalCredential(deps.credentialContext, {
     source: "mcp-oauth",
-    person: server.id,
+    person: LOCAL_PERSON,
   })
   if (!decision.ok) {
     // Status contains no bearer. An unknown status must not offer an OAuth-only

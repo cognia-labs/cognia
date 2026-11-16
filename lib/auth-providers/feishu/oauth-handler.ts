@@ -7,21 +7,25 @@
  *
  *   1. Parse the adapterId out of the state (state encodes both adapter scope
  *      + entropy via `buildLarkOAuthState`).
- *   2. Load the durable pending authorization (PKCE `code_verifier` + the exact
- *      `redirect_uri` used at authorize) and re-validate `state` against it —
- *      the CSRF check that survives an app restart. The record was written by
- *      `oauth-begin.ts` in THIS process, on either host.
+ *   2. Load the durable pending authorization `state` names (PKCE
+ *      `code_verifier` + the exact `redirect_uri` used at authorize) — the
+ *      CSRF check that survives an app restart. The record was written by
+ *      `oauth-begin.ts` in THIS process, on either host, and says whom it may
+ *      authorize: one person for a delegated link, anyone for the owner's
+ *      sign-in from settings.
  *   3. Look up the AdapterInstanceRow + decrypt the app secret from the OS
  *      keyring.
  *   4. Swap the OAuth code for a user access token + refresh token via the v2
  *      token endpoint (`exchangeCodeForUserAccessToken`; client_secret in body,
  *      no tenant token needed).
- *   5. Resolve the connected user's identity (`fetchLarkUserInfo`).
- *   6. Persist tokens in the keyring under `<adapterId>:user_token` +
- *      `<adapterId>:user_refresh_token` so the adapter's send loop can opt-into
- *      the user-scope path for future API calls.
- *   7. Stamp the connected-user metadata onto AdapterInstanceRow.settings so
- *      the Adapters tab can render "Connected as <Name>", and clear the pending.
+ *   5. Resolve who signed in (`fetchLarkUserInfo`). A link issued to someone
+ *      else is refused here, before any token is stored (ADR-0243 phase 4);
+ *      the Host refuses it again when it publishes.
+ *   6. Publish the tokens as that person's authorization on the adapter
+ *      (`user_token.<key>` + `user_refresh_token.<key>`, `larkUserKey`).
+ *   7. Record them in `settings.authorizedUsers`, and for the owner's sign-in
+ *      also as `settings.connectedUser`, so the Adapters tab can render
+ *      "Connected as <Name>".
  *
  * Designed to be re-entrant: a second invocation with the same code is a
  * no-op (Lark rejects re-use) — the keyring write is idempotent because
@@ -34,6 +38,7 @@ import { emitCredentialsRotated } from "@/lib/connectors/credentials-events"
 import { recordGrantedScopes, type ConnectedScopes } from "@/lib/connectors/oauth-scope-audit"
 import { exchangeCodeForUserAccessToken, fetchLarkUserInfo } from "./auth"
 import { getLarkOAuthPending } from "./oauth-pending"
+import { larkAuthorizedUsers, larkUserCredentials, larkUserKey } from "./user-key"
 
 // ---------------------------------------------------------------------------
 // State encoding: `lark:<adapterId>:<nonce>`
@@ -80,6 +85,8 @@ export interface LarkConnectedUser {
   avatarUrl?: string
   email?: string
   enterpriseEmail?: string
+  /** Wall-clock ms this authorization was granted. */
+  authorizedAtMs?: number
   /** Wall-clock ms at which the access token expires. */
   expiresAtMs: number
   /** Wall-clock ms at which the refresh token expires. */
@@ -100,10 +107,13 @@ export interface HandleLarkOAuthDeps {
  *   - state malformed,
  *   - the adapter row isn't found,
  *   - app secret isn't in the keyring,
- *   - Lark's tenant-token or OIDC endpoints return a non-zero code.
+ *   - Lark's tenant-token or OIDC endpoints return a non-zero code,
+ *   - the pending sign-in was issued to someone other than who signed in
+ *     (`lark_auth_wrong_person`).
  *
- * On success the user tokens land in keyring + `AdapterInstanceRow.settings`
- * gets a `connectedUser` field.
+ * On success the person's tokens land in the Host store and their record in
+ * `AdapterInstanceRow.settings.authorizedUsers`; the owner's sign-in also
+ * replaces `connectedUser`.
  */
 export async function handleLarkOAuth(
   code: string,
@@ -124,11 +134,6 @@ export async function handleLarkOAuth(
     throw new Error(`Lark OAuth: adapter ${adapterId} is not a Lark adapter (type=${adapter.type})`)
   }
 
-  const captured = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
-
-  // ── Step 2: pull credentials from keyring (appId + appSecret both live in
-  // the OS keyring — settings never carries them; the adapter runtime resolves
-  // them the same way) ───────────────────────────────────────────────────
   const appId = ((await connectorsKeyringGet(adapterId, "appId")) ?? "").trim()
   if (!appId) {
     throw new Error(
@@ -142,44 +147,51 @@ export async function handleLarkOAuth(
     )
   }
 
-  // ── Step 3: durable pending — CSRF re-check + PKCE verifier + redirect_uri
-  const pending = await getLarkOAuthPending(adapterId)
-  if (!pending || pending.state !== deps.state) {
+  const pending = await getLarkOAuthPending(adapterId, deps.state)
+  if (!pending) {
     throw new Error(
       "Lark OAuth: no matching pending authorization (session expired or state tampered) — retry Connect"
     )
   }
-
-  if (pending.authorizationEpoch !== captured.authorizationEpoch) {
+  // A delegated link fences on its person's epoch before the code is spent.
+  if (
+    "principal" in pending &&
+    (
+      await connectorsLarkUserAuth({
+        action: "snapshot",
+        adapterId,
+        principal: pending.principal,
+      })
+    ).authorizationEpoch !== pending.authorizationEpoch
+  ) {
     throw new Error("lark_auth_stale")
   }
-  // ── Step 4: exchange the code for a user token (v2), then resolve identity
+  const brand = adapter.settings.brand === "lark" ? "lark" : "feishu"
   const tokens = await exchangeCodeForUserAccessToken({
-    brand: adapter.settings.brand === "lark" ? "lark" : "feishu",
+    brand,
     code,
     appId,
     appSecret,
     redirectUri: pending.redirectUri,
     codeVerifier: pending.codeVerifier,
   })
-  const userInfo = await fetchLarkUserInfo(
-    tokens.accessToken,
-    adapter.settings.brand === "lark" ? "lark" : "feishu"
-  )
+  const userInfo = await fetchLarkUserInfo(tokens.accessToken, brand)
+  const principal = await larkUserKey(userInfo.openId)
+  // Only the person a link was issued to may complete it.
+  if ("principal" in pending && pending.principal !== principal)
+    throw new Error("lark_auth_wrong_person")
   const { assertLarkIdentityAvailable, reconcileLarkConnection } = await import("./host-auth")
-  await assertLarkIdentityAvailable(
-    adapterId,
-    appId,
-    userInfo,
-    adapter.settings.brand === "lark" ? "lark" : "feishu",
-    pending.connection
-  )
+  await assertLarkIdentityAvailable(adapterId, appId, userInfo, brand, pending.connection)
 
-  // ── Step 5: persist tokens in keyring ──────────────────────────────────
+  const captured =
+    "principal" in pending
+      ? { authorizationEpoch: pending.authorizationEpoch }
+      : await connectorsLarkUserAuth({ action: "snapshot", adapterId, principal })
   const authorization = await connectorsLarkUserAuth({
     action: "authorize",
     adapterId,
-    expectedAuthorizationEpoch: pending.authorizationEpoch,
+    principal,
+    expectedAuthorizationEpoch: captured.authorizationEpoch,
     pendingState: deps.state,
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
@@ -188,7 +200,6 @@ export async function handleLarkOAuth(
   })
   if (!authorization.authorizationEpoch) throw new Error("lark_auth_stale")
 
-  // ── Step 6: stamp connected-user metadata ─────────────────────────────
   const now = Date.now()
   const connectedUser: LarkConnectedUser = {
     openId: userInfo.openId,
@@ -199,30 +210,39 @@ export async function handleLarkOAuth(
     avatarUrl: userInfo.avatarUrl,
     email: userInfo.email,
     enterpriseEmail: userInfo.enterpriseEmail,
+    authorizedAtMs: now,
     expiresAtMs: now + tokens.expiresInSec * 1000,
     refreshExpiresAtMs: now + tokens.refreshExpiresInSec * 1000,
   }
-  // Persist the granted scopes (and audit a change vs the prior grant) so the
-  // Connections detail can show what this adapter was authorized for.
-  const { connectedScopes } = await recordGrantedScopes({
-    adapterId,
-    raw: tokens.scope,
-    previous: adapter.settings.connectedScopes as ConnectedScopes | undefined,
-    now,
-  })
+  // The owner's sign-in from settings says who the connector is signed in as
+  // and which scopes it holds, and so does the owner's own reconnect; every
+  // other person's scopes stay with their authorization in the Host store.
+  const signsInOwner =
+    !("principal" in pending) ||
+    (adapter.settings.connectedUser as LarkConnectedUser | undefined)?.openId === userInfo.openId
+  const owner = !signsInOwner
+    ? {}
+    : {
+        connectedUser,
+        connectedScopes: (
+          await recordGrantedScopes({
+            adapterId,
+            raw: tokens.scope,
+            previous: adapter.settings.connectedScopes as ConnectedScopes | undefined,
+            now,
+          })
+        ).connectedScopes,
+      }
   await updateAdapterInstance(adapterId, {
-    settings: { ...adapter.settings, connectedUser, connectedScopes },
+    settings: {
+      ...adapter.settings,
+      authorizedUsers: { ...larkAuthorizedUsers(adapter.settings), [principal]: connectedUser },
+      ...owner,
+    },
     credentialsRef: {
       ...adapter.credentialsRef,
       accounts: Array.from(
-        new Set([
-          ...adapter.credentialsRef.accounts,
-          // Mirror the keyring credential names so anyone auditing the
-          // adapter row can see which entries point into the OS keyring
-          // without grepping the platform-specific OAuth handler.
-          "user_token",
-          "user_refresh_token",
-        ])
+        new Set([...adapter.credentialsRef.accounts, ...larkUserCredentials(principal)])
       ),
     },
   })
@@ -232,7 +252,7 @@ export async function handleLarkOAuth(
   emitCredentialsRotated(adapterId)
 
   try {
-    await reconcileLarkConnection(adapterId)
+    await reconcileLarkConnection(adapterId, principal)
   } catch (error) {
     // A competing provider can win the identity slot after the preflight.
     // Roll back only the authorization this callback actually published.
@@ -241,6 +261,7 @@ export async function handleLarkOAuth(
       await connectorsLarkUserAuth({
         action: "disconnect",
         adapterId,
+        principal,
         expectedAuthorizationEpoch: authorization.authorizationEpoch,
       })
     throw error

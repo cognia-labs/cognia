@@ -25,6 +25,7 @@ import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { MessageSegment } from "@/types/connectors/segment"
 import type { RunProjectionSnapshot } from "@/types/execution/run"
 import type { IdentityPrincipalLinks } from "@/types/modules/ports/identity-principal-links"
+import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type { BuiltInSkillAvailability } from "@/lib/skills/built-in/types"
 import type { AvatarSource, PlatformAvatarTarget } from "./platform-avatar"
@@ -32,6 +33,38 @@ import type { StatusView } from "./commands/render"
 import type { ApprovalCardState } from "./hitl/approval-card-state"
 import type { PrincipalResolution, ResolvePrincipalInput } from "./principal/resolve"
 import { CONNECTOR_VENDORS } from "./adapters/_vendors"
+
+/** Whether a person has authorized an adapter to use their own account. */
+export type DelegatedCredentialState =
+  { status: "authorized"; epoch: string } | { status: "needs-authorization" }
+
+/** One person's own authorization on an adapter, as the settings list shows it. */
+export interface DelegatedAuthorization {
+  person: PrincipalRefV1
+  /** The platform's display name for the person, when it gave one. */
+  name?: string
+  /** Wall-clock ms the authorization was granted. */
+  authorizedAt?: number
+}
+
+/**
+ * Per-person authorizations on one adapter (ADR-0243 phase 4, the delegated
+ * lane): a run uses its acting person's own credential, and each person
+ * authorizes and revokes only their own.
+ */
+export interface DelegatedCredentials {
+  /** Whether `person` has authorized `row`. */
+  stateFor(row: AdapterInstanceRow, person: PrincipalRefV1): Promise<DelegatedCredentialState>
+  /**
+   * Start an authorization only `person` can complete; the link to deliver
+   * to them privately. Throws a short reason when no link can be issued.
+   */
+  beginAuthorization(row: AdapterInstanceRow, person: PrincipalRefV1): Promise<string>
+  /** Everyone who authorized `row`. */
+  list(row: AdapterInstanceRow): Promise<DelegatedAuthorization[]>
+  /** Forget `person`'s authorization; their next request refuses. */
+  revoke(row: AdapterInstanceRow, person: PrincipalRefV1): Promise<void>
+}
 
 /** Something a contribution started that the runtime stops on teardown. */
 export interface ConnectorVendorService {
@@ -162,6 +195,11 @@ export interface ConnectorVendorContribution {
    * no requester on this platform is the owner.
    */
   ownerPrincipal?(row: AdapterInstanceRow): { remoteUserId: string; unionId?: string } | null
+  /**
+   * Per-person authorizations for the delegated lane. Without it the
+   * platform has none, so only the local person gets personal access.
+   */
+  readonly delegatedCredentials?: DelegatedCredentials
   /**
    * What a sign-in, a sign-out and a profile takeover do to this vendor's
    * principals (`ports/identity-principal-links.ts`).

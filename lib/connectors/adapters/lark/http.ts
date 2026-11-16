@@ -5,8 +5,9 @@
  * `createLarkAdapter` (index.ts) — deliberately untouched. This module is the
  * exported equivalent for code that needs authenticated Lark calls OUTSIDE
  * the factory closure (chat-management.ts), reusing the same building blocks:
- * `connectorsHttpRequest` (Rust CORS-bypass bridge), `getTenantAccessToken` /
- * `getUserAccessToken`, `withTatRefresh` / `withUserTokenRefresh`, and
+ * `connectorsHttpRequest` (Rust CORS-bypass bridge), `getTenantToken`, the
+ * acting person's authorization (`assertLarkActingIdentity`),
+ * `withTatRefresh` / `withUserTokenRefresh`, and
  * `LarkApiError`. Adds `PUT` (chat update needs it; the closures never did).
  */
 
@@ -16,9 +17,11 @@ import { LarkApiError, extractLarkCode, isLarkPermissionDenied } from "@cognia/f
 import { getTenantToken } from "@/lib/auth-providers/feishu/auth"
 import { withTatRefresh, withUserTokenRefresh } from "@/lib/auth-providers/feishu/auth-retry"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
-import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
+import {
+  assertLarkActingIdentity,
+  larkSkillCredentialContext,
+} from "@/lib/auth-providers/feishu/cli/acting-identity"
 import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
-import { resolveBuiltInSkillRunScope } from "@/lib/skills/built-in/context"
 
 const LARK_API_BASE = "https://open.feishu.cn/open-apis"
 
@@ -101,25 +104,18 @@ export async function larkUserRequest(
   context?: BuiltInSkillContext
 ): Promise<unknown | null> {
   const verified = await assertLarkActingIdentity(adapterId, context)
-  const userToken = verified?.accessToken
-  if (!userToken) return null
-  const scope = context ? resolveBuiltInSkillRunScope(context) : undefined
+  if (!verified) return null
   let firstAttempt = true
   return withUserTokenRefresh(
     {
       adapterId,
+      principal: verified.principal,
       ...creds,
-      expectedAuthorizationEpoch: verified?.authorizationEpoch,
-      credentialContext: scope
-        ? {
-            sessionId: scope.sessionId,
-            executionRunId: scope.runId,
-            larkContext: context,
-          }
-        : undefined,
+      expectedAuthorizationEpoch: verified.authorizationEpoch,
+      credentialContext: context ? larkSkillCredentialContext(context) : undefined,
     },
     (token) => {
-      const requestToken = verified && firstAttempt ? verified.accessToken : token
+      const requestToken = firstAttempt ? verified.accessToken : token
       firstAttempt = false
       return rawRequest(method, urlPath, body, requestToken)
     }

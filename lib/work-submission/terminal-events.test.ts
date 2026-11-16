@@ -594,7 +594,10 @@ it("persists marked assistant and tool-bearing output on the headless HostState 
         LOCAL_PERSON_RUN as typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
     })
     expect(
-      await admitPersonalCredential({ executionRunId: run.id }, { source: "google-docs" })
+      await admitPersonalCredential(
+        { executionRunId: run.id },
+        { source: "google-docs", person: { kind: "local-person" } }
+      )
     ).toMatchObject({ ok: true })
     bindToolCallRun("headless-marked", run.id, run.id, "attempt")
     let handler: ((event: ClaudeEvent) => void) | undefined

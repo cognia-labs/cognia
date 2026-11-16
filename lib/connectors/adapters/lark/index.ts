@@ -2,7 +2,6 @@ import { extractLarkCode, LARK_PERMISSION_CODES, LarkApiError } from "@cognia/fe
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   admitPersonalCredential,
-  PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
 import type { AdapterSendOptions } from "@/types/connectors/adapter"
@@ -80,11 +79,8 @@ import {
   serializeUrgent,
   sniffReceiveId,
 } from "./serialize"
-import {
-  fetchLarkUserInfo,
-  getTenantToken,
-  getUserAccessToken,
-} from "@/lib/auth-providers/feishu/auth"
+import { fetchLarkUserInfo, getTenantToken } from "@/lib/auth-providers/feishu/auth"
+import { larkOwner } from "@/lib/auth-providers/feishu/host-auth"
 import { withTatRefresh, withUserTokenRefresh } from "@/lib/auth-providers/feishu/auth-retry"
 import { createLarkChatManagement } from "./chat-management"
 import { resolveLarkMediaKeys } from "./upload"
@@ -174,6 +170,12 @@ const LARK_INFORMATIONAL_EVENTS: ReadonlySet<string> = new Set([
  *   - 5xx                    → platform_5xx, retryable
  *   - non-LarkApiError (Rust bridge / fetch failures) → network, retryable
  */
+/** The connected account's authorization an owner's reply goes out with. */
+interface LarkUserSendIdentity {
+  principal: string
+  authorizationEpoch: string
+}
+
 class LarkUserIdentityUnavailableError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
@@ -317,39 +319,37 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     return { appId, appSecret }
   }
 
+  /**
+   * The connected account's authorization a reply goes out with, when it goes
+   * out as them: only on their own turns (ADR-0243 D12). Any other turn
+   * replies as the bot, the transport identity. On the owner's turn an
+   * unusable authorization stops delivery; it never falls back to the bot.
+   */
   async function requireUserSendIdentity(
     creds: {
       appId: string
       appSecret: string
     },
     credentialContext?: PersonalCredentialContext
-  ): Promise<string | undefined> {
+  ): Promise<LarkUserSendIdentity | undefined> {
     if (opts.sendAsUser !== true) return
-    const admission = await admitPersonalCredential(credentialContext, {
-      source: "lark-user",
-      person: opts.id,
-    })
-    if (!admission.ok)
-      throw new LarkUserIdentityUnavailableError(
-        new PersonalCredentialRefusedError(admission).message
-      )
-    const token = await getUserAccessToken(opts.id, credentialContext).catch(() => null)
-    if (!token) {
+    const owner = await larkOwner(opts.id)
+    if (!owner) {
       throw new LarkUserIdentityUnavailableError(
         "Lark send-as-user requires reconnecting the user identity"
       )
     }
+    const admission = await admitPersonalCredential(credentialContext, {
+      source: "lark-user",
+      person: owner.person,
+    })
+    if (!admission.ok) return
     try {
       return await withUserTokenRefresh(
-        {
-          adapterId: opts.id,
-          ...creds,
-          credentialContext,
-          expectedAuthorizationEpoch: admission.authorization?.authorizationEpoch,
-        },
-        async (current, epoch) => {
+        { adapterId: opts.id, principal: owner.key, ...creds, credentialContext },
+        async (current, authorizationEpoch) => {
           await fetchLarkUserInfo(current)
-          return epoch
+          return { principal: owner.key, authorizationEpoch }
         }
       )
     } catch {
@@ -405,8 +405,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     urlPath: string,
     body?: unknown,
     reqOpts?: {
-      asUser?: boolean
-      expectedAuthorizationEpoch?: string
+      asUser?: LarkUserSendIdentity
       credentialContext?: PersonalCredentialContext
     }
   ): Promise<unknown> {
@@ -416,20 +415,13 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     // token is present, refreshing it once on invalidation. Identity is an
     // authorization boundary: never silently downgrade to the bot.
     if (reqOpts?.asUser) {
-      const userToken = await getUserAccessToken(opts.id, reqOpts.credentialContext).catch(
-        () => null
-      )
-      if (!userToken) {
-        throw new LarkUserIdentityUnavailableError(
-          "Lark send-as-user requires reconnecting the user identity"
-        )
-      }
       try {
         return await withUserTokenRefresh(
           {
             adapterId: opts.id,
+            principal: reqOpts.asUser.principal,
             ...creds,
-            expectedAuthorizationEpoch: reqOpts.expectedAuthorizationEpoch,
+            expectedAuthorizationEpoch: reqOpts.asUser.authorizationEpoch,
             credentialContext: reqOpts.credentialContext,
           },
           async (tok) => {
@@ -872,16 +864,20 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     // before media upload so an expired user binding cannot upload bytes
     // under the bot and only then fail the user-authored message send.
     const creds = await resolveCredentials()
-    const expectedAuthorizationEpoch = !editMessageId
+    const sendIdentity = !editMessageId
       ? await requireUserSendIdentity(creds, credentialContext)
       : undefined
     const assertSendIdentity = async () => {
-      if (expectedAuthorizationEpoch === undefined) return
-      const current = await connectorsLarkUserAuth({ action: "snapshot", adapterId: opts.id })
+      if (!sendIdentity) return
+      const current = await connectorsLarkUserAuth({
+        action: "snapshot",
+        adapterId: opts.id,
+        principal: sendIdentity.principal,
+      })
       if (
         !current.configured ||
         !current.accessToken ||
-        current.authorizationEpoch !== expectedAuthorizationEpoch
+        current.authorizationEpoch !== sendIdentity.authorizationEpoch
       ) {
         throw new LarkUserIdentityUnavailableError(
           "Lark send-as-user identity changed during media preparation"
@@ -917,15 +913,15 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       const resolvedSegments = await withTatRefresh(creds, "transport", () =>
         resolveLarkMediaKeys(segments, {
           getAccessToken:
-            expectedAuthorizationEpoch === undefined
+            sendIdentity === undefined
               ? getTat
               : () => guardedMedia(() => getTenantToken(creds, "transport")),
           uploadFile:
-            expectedAuthorizationEpoch === undefined
+            sendIdentity === undefined
               ? undefined
               : (args) => guardedMedia(() => connectorsLarkUploadFile(args)),
           uploadImage:
-            expectedAuthorizationEpoch === undefined
+            sendIdentity === undefined
               ? undefined
               : (args) => guardedMedia(() => connectorsLarkUploadImage(args)),
           uploadCache,
@@ -936,17 +932,16 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
         ? await serializeEditAsync(editMessageId, prepared, opts.id)
         : await serializeOutboundAsync(prepared, opts.id)
       const urlPath = call.url.replace(LARK_API_BASE, "")
-      // Replies are the identity-bearing path — send as the connected user when
-      // opted in. Edits / deletes / reactions stay on the bot identity (they act
-      // on bot-owned messages such as live-activity / progress cards).
-      const asUser = !editMessageId && opts.sendAsUser === true
+      // Replies are the identity-bearing path — the owner's own replies go
+      // out as them when opted in. Edits / deletes / reactions stay on the bot
+      // identity (they act on bot-owned messages such as live-activity cards).
+      const asUser = editMessageId ? undefined : sendIdentity
       // Only a new message the bot sent to a receive id lands where that id
       // points (a person's open id: the bot's single chat with them); a reply
       // lands in its parent's chat, and a user-sent one in the user's chat.
       botCreated = !asUser && urlPath.startsWith("/im/v1/messages?receive_id_type=")
       return (await doRequest("transport", call.method, urlPath, call.payload, {
-        asUser,
-        expectedAuthorizationEpoch,
+        ...(asUser ? { asUser } : {}),
         credentialContext,
       })) as {
         data?: { message_id?: string; chat_id?: string }
@@ -997,11 +992,6 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
           sessionId: identity.sessionId,
           executionRunId: identity.runId,
           delivery: true,
-          larkContext: {
-            sessionId: identity.sessionId,
-            executionRunId: identity.runId,
-            delivery: true,
-          },
         }
       : sendOptions?.localAuthorization === LOCAL_PERSON_RUN
         ? { localAuthorization: LOCAL_PERSON_RUN }
@@ -1445,27 +1435,22 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
    * its chat is a single chat (`chat_mode: "p2p"`, `GET /im/v1/chats/:id`)
    * whose person is this one: the message's sender, or else whoever wrote in
    * the chat (its history). Another person's single chat, or a group, is
-   * elsewhere. Those chat checks hold only for what the bot itself read (a
-   * chat it is in), never for a lookup made as the connected person.
+   * elsewhere. Every lookup is the bot's own, so a chat it reads is one it
+   * is in; no person's authorization is borrowed to place a message.
    *
    * When Lark will not show the bot the message although the bot may be in
    * its chat (the app lacks `im:message.group_msg`, needed to read a group
    * message that does not mention the bot, or the message is hidden from
-   * the bot), the lookup is asked again as the person connected to the bot
-   * (`user_access_token`, the send-as-user identity), if one is: where a
-   * message is does not depend on who reads it. Any other refusal is final:
-   * the bot is not in the message's chat or the message was deleted, so Lark
-   * would refuse the reply or edit too.
+   * the bot), the route is unknown and the gap is logged once. Any other
+   * refusal is final too: the bot is not in the message's chat or the
+   * message was deleted, so Lark would refuse the reply or edit as well.
    *
    * A message never changes chat, so lookups are cached. A failure Lark
    * would let a send retry (network, 5xx, rate limit) throws, so the host
    * places the message again before it sends; any other answer is final.
    */
   const LOOKUP_CACHE_LIMIT = 512
-  const messageFacts = new Map<
-    string,
-    { chatId: string; senderOpenId?: string; readByBot: boolean }
-  >()
+  const messageFacts = new Map<string, { chatId: string; senderOpenId?: string }>()
   const chatModes = new Map<string, string>()
   function remember<V>(cache: Map<string, V>, key: string, value: V): V {
     if (cache.size >= LOOKUP_CACHE_LIMIT) {
@@ -1475,28 +1460,20 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     cache.set(key, value)
     return value
   }
-  /**
-   * `undefined` when Lark gives a final no; throws when it could not be
-   * asked. `asBot` tells whether the bot read it: only what the bot sees is
-   * a chat the bot is in. `botOnly` never asks as the connected person.
-   */
+  /** `undefined` when Lark gives a final no; throws when it could not be asked. */
   async function lookup<T>(
     path: string,
-    read: (resp: unknown) => T | undefined,
-    botOnly = false
-  ): Promise<{ value: T; asBot: boolean } | undefined> {
+    read: (resp: unknown) => T | undefined
+  ): Promise<T | undefined> {
     try {
-      const value = read(await doRequest("service-data", "GET", path))
-      return value === undefined ? undefined : { value, asBot: true }
+      return read(await doRequest("service-data", "GET", path))
     } catch (err) {
       if (larkOutboundError(err).retryable) throw err
-      if (botOnly || !hiddenFromBot(err)) return undefined
-      noteHiddenFromBot(err)
+      if (hiddenFromBot(err)) noteHiddenFromBot(err)
+      return undefined
     }
-    const value = await lookupAsPerson(path, read)
-    return value === undefined ? undefined : { value, asBot: false }
   }
-  /** Lark refused the bot a read it might grant the connected person. */
+  /** Lark refused the bot a read the app's scopes or the message hide from it. */
   function hiddenFromBot(err: unknown): err is LarkApiError {
     return (
       err instanceof LarkApiError &&
@@ -1513,37 +1490,6 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       "[lark] the bot cannot read a message a plugin replies to or edits; grant the app im:message.group_msg so the host can place it",
       { id: opts.id, code: err.code }
     )
-  }
-  /** The same lookup as the connected person; `undefined` without one. */
-  async function lookupAsPerson<T>(path: string, read: (resp: unknown) => T | undefined) {
-    // Route discovery has no Host-verified executing run. Never borrow the
-    // connected person's authorization merely because the bot cannot read it.
-    const credentialContext = { executionRunId: "" }
-    const token = await getUserAccessToken(opts.id, credentialContext).catch(() => null)
-    if (!token) return undefined
-    // A transport failure of the lookup itself is retried later like the
-    // bot's; a token that cannot be refreshed is no answer (the person must
-    // reconnect).
-    let transportFailure: unknown
-    try {
-      const creds = await resolveCredentials()
-      const resp = await withUserTokenRefresh(
-        { adapterId: opts.id, ...creds, credentialContext },
-        async (current) => {
-          try {
-            return await sendHttp("GET", path, undefined, current)
-          } catch (err) {
-            if (!(err instanceof LarkApiError)) transportFailure = err
-            throw err
-          }
-        }
-      )
-      return read(resp)
-    } catch (err) {
-      if (err === transportFailure) throw err
-      if (err instanceof LarkApiError && larkOutboundError(err).retryable) throw err
-      return undefined
-    }
   }
   async function messageFactsOf(messageId: string) {
     const cached = messageFacts.get(messageId)
@@ -1568,23 +1514,16 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
           : {}),
       }
     })
-    return found
-      ? remember(messageFacts, messageId, { ...found.value, readByBot: found.asBot })
-      : undefined
+    return found ? remember(messageFacts, messageId, found) : undefined
   }
   async function chatModeOf(chatId: string) {
     const cached = chatModes.get(chatId)
     if (cached) return cached
-    // As the bot only: a single chat the bot reads is one it is in.
-    const mode = await lookup(
-      `/im/v1/chats/${encodeURIComponent(chatId)}`,
-      (resp) => {
-        const value = (resp as { data?: { chat_mode?: unknown } } | null)?.data?.chat_mode
-        return typeof value === "string" && value ? value : undefined
-      },
-      true
-    )
-    return mode ? remember(chatModes, chatId, mode.value) : undefined
+    const mode = await lookup(`/im/v1/chats/${encodeURIComponent(chatId)}`, (resp) => {
+      const value = (resp as { data?: { chat_mode?: unknown } } | null)?.data?.chat_mode
+      return typeof value === "string" && value ? value : undefined
+    })
+    return mode ? remember(chatModes, chatId, mode) : undefined
   }
   /**
    * The person of a single chat: its only non-bot member, read from who
@@ -1617,12 +1556,10 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
               item.sender.id
           )?.sender?.id
           return { writer, next: data?.has_more ? data.page_token : undefined }
-        },
-        // As the bot only: the chat must be one the bot is in.
-        true
+        }
       )
-      if (found?.value.writer) return remember(chatPeople, chatId, found.value.writer)
-      pageToken = found?.value.next
+      if (found?.writer) return remember(chatPeople, chatId, found.writer)
+      pageToken = found?.next
       if (!pageToken) return undefined
     }
     return undefined
@@ -1643,9 +1580,6 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     // has one single chat with each person.
     const landed = evidence?.landedChatIds ?? []
     if (landed.includes(facts.chatId)) return "within"
-    // Read as the connected person, the message may be in the person's own
-    // single chat with someone else: only a chat the bot read is the bot's.
-    if (!facts.readByBot) return "unknown"
     const mode = await chatModeOf(facts.chatId)
     if (!mode) return "unknown"
     // A group or topic chat is never the bot's single chat with the person.

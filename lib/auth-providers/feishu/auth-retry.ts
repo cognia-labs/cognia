@@ -60,6 +60,8 @@ export interface UserTokenRefreshContext {
   brand?: "feishu" | "lark"
   credentialContext?: import("@/lib/execution/personal-credential").PersonalCredentialContext
   adapterId: string
+  /** Whose authorization (`larkUserKey`) the call uses. */
+  principal: string
   appId: string
   appSecret: string
   expectedAuthorizationEpoch?: string
@@ -78,7 +80,11 @@ export async function withUserTokenRefresh<T>(
 ): Promise<T> {
   const capture = async (expectedEpoch?: string) => {
     const current = await withRequestAbort(ctx.signal, () =>
-      connectorsLarkUserAuth({ action: "snapshot", adapterId: ctx.adapterId })
+      connectorsLarkUserAuth({
+        action: "snapshot",
+        adapterId: ctx.adapterId,
+        principal: ctx.principal,
+      })
     )
     throwIfRequestAborted(ctx.signal)
     if (

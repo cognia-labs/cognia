@@ -2268,5 +2268,22 @@
     "save": "Save",
     "saved": "Connector saved",
     "unregistered": "No enabled plugin provides the “{kind}” connector any more. Its settings are kept, but it cannot start until the plugin is enabled again."
+  },
+  "delegatedAuthorizations": {
+    "title": "Personal authorizations",
+    "laneLabel": "Act as each requester",
+    "laneDelegatedHelp": "Each person's request uses the account they authorized themselves; someone who has not authorized gets a sign-in link.",
+    "laneServiceHelp": "Every turn uses the app's own access; nobody's personal account is used.",
+    "laneHostOnly": "Only this connector's Host can change this.",
+    "laneSaved": "Saved",
+    "laneFailed": "Could not save: {reason}",
+    "peopleLabel": "Authorized people",
+    "empty": "Nobody has authorized this bot yet. A person sends /auth in a direct chat with it.",
+    "authorizedAt": "Authorized {when}",
+    "revoke": "Revoke",
+    "revokeAria": "Revoke {name}'s authorization",
+    "revoked": "Authorization revoked",
+    "revokeFailed": "Could not revoke: {reason}",
+    "registryNote": "Personal access needs the principal registry turned on; with it off only you have personal access."
   }
 }

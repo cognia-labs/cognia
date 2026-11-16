@@ -404,16 +404,21 @@ export interface LarkUserAuthState {
   scopes: string[]
 }
 
-interface LarkUserAuthCommit {
+/** One person's authorization on one adapter (`larkUserKey` names the person). */
+interface LarkUserAuthTarget {
   adapterId: string
+  principal: string
+}
+
+interface LarkUserAuthCommit extends LarkUserAuthTarget {
   expectedAuthorizationEpoch: string
   accessToken: string
   refreshToken: string
 }
 
 export type LarkUserAuthInput =
-  | { action: "snapshot"; adapterId: string }
-  | { action: "disconnect"; adapterId: string; expectedAuthorizationEpoch: string }
+  | (LarkUserAuthTarget & { action: "snapshot" })
+  | (LarkUserAuthTarget & { action: "disconnect"; expectedAuthorizationEpoch: string })
   | (LarkUserAuthCommit & {
       action: "authorize"
       pendingState: string

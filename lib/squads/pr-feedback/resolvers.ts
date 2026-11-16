@@ -16,6 +16,7 @@
 
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
 import { gitDefaultBranch, gitRemotes } from "@/lib/git/commands"
@@ -134,7 +135,15 @@ export async function ghCliToken(
   host: GithubHost = GITHUB_DOT_COM,
   credentialContext?: PersonalCredentialContext
 ): Promise<string | null> {
-  if (!(await admitPersonalCredential(credentialContext, { source: "github-user" })).ok) return null
+  if (
+    !(
+      await admitPersonalCredential(credentialContext, {
+        source: "github-user",
+        person: LOCAL_PERSON,
+      })
+    ).ok
+  )
+    return null
   let command = "gh auth token"
   if (!isGithubDotCom(host)) {
     if (!HOSTNAME_RE.test(host.id)) return null

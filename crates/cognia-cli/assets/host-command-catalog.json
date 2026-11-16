@@ -20107,11 +20107,16 @@
                   },
                   "adapterId": {
                     "type": "string"
+                  },
+                  "principal": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
                   }
                 },
                 "required": [
                   "action",
-                  "adapterId"
+                  "adapterId",
+                  "principal"
                 ],
                 "additionalProperties": false
               },
@@ -20124,6 +20129,10 @@
                   "adapterId": {
                     "type": "string"
                   },
+                  "principal": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
                   "expectedAuthorizationEpoch": {
                     "type": "string"
                   }
@@ -20131,6 +20140,7 @@
                 "required": [
                   "action",
                   "adapterId",
+                  "principal",
                   "expectedAuthorizationEpoch"
                 ],
                 "additionalProperties": false
@@ -20143,6 +20153,10 @@
                   },
                   "adapterId": {
                     "type": "string"
+                  },
+                  "principal": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
                   },
                   "expectedAuthorizationEpoch": {
                     "type": "string"
@@ -20166,6 +20180,7 @@
                 "required": [
                   "action",
                   "adapterId",
+                  "principal",
                   "expectedAuthorizationEpoch",
                   "accessToken",
                   "refreshToken",
@@ -20181,6 +20196,10 @@
                   },
                   "adapterId": {
                     "type": "string"
+                  },
+                  "principal": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
                   },
                   "expectedAuthorizationEpoch": {
                     "type": "string"
@@ -20198,6 +20217,7 @@
                 "required": [
                   "action",
                   "adapterId",
+                  "principal",
                   "expectedAuthorizationEpoch",
                   "accessToken",
                   "refreshToken",
@@ -112595,5 +112615,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "df7cb91c2fd4297eb60fe17e0f36c6f25b2e96040552e7f80a60cafb47897eb2"
+  "catalogHash": "9057d76c1bd4e12848f92586b5eb3139e3028fcead2479b3d75d136c6d2cdd8a"
 }

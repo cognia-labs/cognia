@@ -75,11 +75,14 @@ export function withIssueLarkApi<T>(
   fn: (api: LarkAuthedApi) => Promise<T>,
   signal?: AbortSignal,
   expectedAuthorizationEpoch?: string,
-  credentialContext?: PersonalCredentialContext
+  credentialContext?: PersonalCredentialContext,
+  /** Whose authorization; defaults to the run's acting person. */
+  principal?: string
 ): Promise<T> {
   return withLarkAuthedApi(
     {
       adapterId,
+      ...(principal ? { principal } : {}),
       identity: "user",
       credentialContext,
       signal,
@@ -137,7 +140,14 @@ export async function withIssueLarkBindingApi<T>(
   }
   const result = await (options.withApi
     ? options.withApi(adapterId, guarded, options.credentialContext)
-    : withIssueLarkApi(adapterId, guarded, options.signal, epoch, options.credentialContext))
+    : withIssueLarkApi(
+        adapterId,
+        guarded,
+        options.signal,
+        epoch,
+        options.credentialContext,
+        source?.hostMetadata?.principal
+      ))
   await assertCurrent()
   return result
 }

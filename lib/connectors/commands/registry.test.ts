@@ -6,6 +6,7 @@ describe("control command registry", () => {
     expect(CONTROL_COMMAND_SPECS.map((s) => s.name).sort()).toEqual(
       [
         "agent",
+        "auth",
         "automation",
         "character",
         "commands",
@@ -36,7 +37,8 @@ describe("control command registry", () => {
 
   it("derives the readonly set parse.ts used to hardcode", () => {
     expect([...READONLY_COMMANDS].sort()).toEqual(
-      ["commands", "dir", "help", "sessions", "status", "tasks"].sort()
+      // `/auth` acts on the sender's own authorization alone (ADR-0243 phase 4).
+      ["auth", "commands", "dir", "help", "sessions", "status", "tasks"].sort()
     )
   })
 

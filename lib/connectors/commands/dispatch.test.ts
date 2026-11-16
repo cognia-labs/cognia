@@ -585,6 +585,21 @@ describe("maybeHandleControlCommand", () => {
     expect(h.enqueued[0].text).toContain("delegate")
   })
 
+  // `/auth` reaches its handler (ADR-0243 phase 4); a platform without
+  // per-person authorizations refuses with the reason (Lark: `auth.test.ts`).
+  it("routes /auth to the sender's own authorization", async () => {
+    const h = harness({ active: session("s1") })
+    await maybeHandleControlCommand(
+      makeEvent({ plainText: "/auth" }),
+      makeAdapter(),
+      undefined,
+      RESOLVED,
+      h.deps
+    )
+    expect(h.patches).toHaveLength(0)
+    expect(h.enqueued[0].text).toContain("no per-person authorization")
+  })
+
   it("sets approvalMode via /mode yolo", async () => {
     const h = harness({ active: session("s1") })
     await maybeHandleControlCommand(

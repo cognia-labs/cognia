@@ -30,7 +30,11 @@ import {
 import { parseLarkDocUrl, type LarkDocRef, type LarkDocRefKind } from "@cognia/feishu-protocol"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
-import { resolveLarkConnection } from "@/lib/auth-providers/feishu/host-auth"
+import {
+  larkActingKey,
+  larkAuthorizedPerson,
+  resolveLarkConnection,
+} from "@/lib/auth-providers/feishu/host-auth"
 import type { DocsProviderAccountBinding } from "@/lib/docs-providers/types"
 import type { RemoteDocumentProvenanceV1 } from "@/lib/docs-providers/document-provenance"
 import {
@@ -137,6 +141,8 @@ export interface FetchLarkDocOptions {
   sourceProvenance?: RemoteDocumentProvenanceV1 | KeptCopySourceReference
   /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
   adapterId: string
+  /** Whose authorization (`larkUserKey`); defaults to the run's acting person. */
+  principal?: string
   expectedAuthorizationEpoch?: string
   signal?: AbortSignal
   maxResponseBytes?: number
@@ -167,18 +173,24 @@ export async function fetchLarkDocAsRawSource(
     opts = {
       ...opts,
       adapterId: restored.hostMetadata.adapterId,
+      ...(restored.hostMetadata.principal ? { principal: restored.hostMetadata.principal } : {}),
       expectedAuthorizationEpoch: restored.hostMetadata.authorizationEpoch,
     }
   const ref = parseLarkDocUrl(urlOrToken, opts.kind)
   if (!ref) throw new LarkIngestError("larkInvalidUrl")
 
   try {
+    const principal =
+      opts.principal ?? (await larkActingKey(opts.adapterId, opts.credentialContext))
+    const person = principal && (await larkAuthorizedPerson(opts.adapterId, principal))
+    if (!principal || !person) throw new LarkIngestError("larkNotAuthorized")
     const { admitPersonalCredential } = await import("@/lib/execution/personal-credential")
     const decision = await admitPersonalCredential(opts.credentialContext, {
       source: "lark-user",
-      person: opts.adapterId,
+      person,
     })
     if (!decision.ok) throw new LarkIngestError("larkNotAuthorized")
+    opts = { ...opts, principal }
     const result =
       (opts.channel ?? "api") === "cli"
         ? await withRequestAbort(opts.signal, () => fetchViaCli(urlOrToken, ref, opts))
@@ -214,6 +226,7 @@ async function fetchViaApi(
     return await withLarkAuthedApi(
       {
         adapterId: opts.adapterId,
+        ...(opts.principal ? { principal: opts.principal } : {}),
         identity: "user",
         credentialContext: opts.credentialContext,
         httpImpl: opts.httpImpl,
@@ -222,12 +235,8 @@ async function fetchViaApi(
         expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
         maxResponseBytes: opts.maxResponseBytes ?? MAX_REMOTE_DOC_RESPONSE_BYTES,
       },
-      async (api) => {
-        const connection = await resolveLarkConnection(
-          opts.adapterId,
-          undefined,
-          opts.credentialContext
-        )
+      async (api, { connection }) => {
+        if (!connection) throw new LarkAccessError("notAuthorized")
         const result = await readDoc(api, input, ref, opts.adapterId)
         return {
           ...result,
@@ -385,7 +394,11 @@ async function fetchViaCli(
   // itself, so every ref kind goes through the same subcommand.
   let result: Awaited<ReturnType<ExecLarkCliLike>>
   throwIfRequestAborted(opts.signal)
-  const connection = await resolveLarkConnection(opts.adapterId, undefined, opts.credentialContext)
+  const connection = await resolveLarkConnection(
+    opts.adapterId,
+    opts.principal,
+    opts.credentialContext
+  )
   throwIfRequestAborted(opts.signal)
   try {
     result = await exec({
@@ -410,7 +423,11 @@ async function fetchViaCli(
     throw new LarkIngestError("larkNetwork", { reason: result.message })
   }
 
-  const current = await resolveLarkConnection(opts.adapterId, undefined, opts.credentialContext)
+  const current = await resolveLarkConnection(
+    opts.adapterId,
+    opts.principal,
+    opts.credentialContext
+  )
   if (current.id !== connection.id || current.revision !== connection.revision)
     throw new LarkIngestError("larkNotAuthorized")
   throwIfRequestAborted(opts.signal)

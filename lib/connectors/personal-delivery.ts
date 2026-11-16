@@ -193,8 +193,12 @@ export async function narrowPersonalDelivery(
       }
     }
   }
-  // Private redirection is available only to a Host-verified connected owner.
-  if (!host.connectedOwners.some((owner) => samePersonForHost(owner, reachable, host)))
+  // A direct message reaches the marked person of this adapter themself (their
+  // own data in their own turn, ADR-0243 phase 4) or the Host-verified owner.
+  if (
+    reachable !== person &&
+    !host.connectedOwners.some((owner) => samePersonForHost(owner, reachable, host))
+  )
     return undefined
   if (adapter.meta.type === "lark") {
     if (!/^ou_[A-Za-z0-9_-]+$/.test(reachable.remoteUserId)) return undefined

@@ -4,9 +4,16 @@
  */
 import { LOCAL_PERSON_RUN, resolveRunActingIdentity, type LocalPersonRun } from "./acting-authority"
 import { markPersonalCredential } from "./personal-marks"
-import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
-import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
-import type { VerifiedLarkUserAuthorization } from "@/lib/auth-providers/feishu/cli/acting-identity"
+import { readHostPersonContext } from "./personal-sink"
+import { samePersonForHost } from "./personal-visibility"
+import {
+  samePerson,
+  type ActingIdentityV1,
+  type PrincipalRefV1,
+} from "@cognia/plugin-contract/types/execution/acting-identity"
+
+/** The Host's own person: the owner of every desktop sign-in. */
+export const LOCAL_PERSON = { kind: "local-person" } as const satisfies PrincipalRefV1
 
 export type PersonalCredentialSource =
   | "lark-user"
@@ -27,7 +34,6 @@ export interface PersonalCredentialContext {
   personalEgressBlocked?: true
   /** Host UI entries only. Never populate from plugin/tool/IPC arguments. */
   localAuthorization?: LocalPersonRun
-  larkContext?: BuiltInSkillContext
   /** Host delivery of this exact persisted run, including its terminal reply. */
   delivery?: boolean
   /**
@@ -44,16 +50,10 @@ export type PersonalCredentialRefusal =
   | "multiple-requesters"
   | "trigger-not-personal"
   | "owner-not-verified"
-  | "authorization-unavailable"
   | "external-engine"
   | "mark-unavailable"
 export type PersonalCredentialDecision =
-  | {
-      ok: true
-      source: PersonalCredentialSource
-      person?: string
-      authorization?: VerifiedLarkUserAuthorization
-    }
+  | { ok: true; source: PersonalCredentialSource; person: PrincipalRefV1 }
   | {
       ok: false
       source: PersonalCredentialSource
@@ -68,9 +68,36 @@ export class PersonalCredentialRefusedError extends Error {
   }
 }
 
+/** Sources a Host delivery of a finished run still uses: its reply goes out as the person. */
+const DELIVERY_SOURCES: ReadonlySet<PersonalCredentialSource> = new Set(["lark-user"])
+
+/**
+ * The person whose own credentials this run may use: the acting principal of
+ * a delegated requester or schedule run, or the local person of a local or
+ * schedule run they authorized. Every other run uses nobody's.
+ */
+function runPerson(identity: ActingIdentityV1): PrincipalRefV1 | undefined {
+  if (
+    identity.trigger !== "requester" &&
+    identity.trigger !== "local" &&
+    identity.trigger !== "schedule"
+  )
+    return undefined
+  if (identity.lane === "delegated") return identity.actingPrincipal
+  if (identity.trigger !== "requester" && identity.authorizingPrincipal?.kind === "local-person")
+    return identity.authorizingPrincipal
+  return undefined
+}
+
+/**
+ * Admit `credential.person`'s own credential for this context, or refuse.
+ * The person is whoever the credential belongs to; it is admitted only when
+ * the run (or the direct Host UI action) acts as that same person, and the
+ * run is then marked with them.
+ */
 export async function admitPersonalCredential(
   context: PersonalCredentialContext | undefined,
-  credential: { source: PersonalCredentialSource; person?: string }
+  credential: { source: PersonalCredentialSource; person: PrincipalRefV1 }
 ): Promise<PersonalCredentialDecision> {
   const refuse = (
     reason: PersonalCredentialRefusal,
@@ -93,69 +120,33 @@ export async function admitPersonalCredential(
         ? await resolveRunActingIdentity(
             context?.sessionId,
             context?.executionRunId,
-            credential.source === "lark-user" && context?.delivery ? { delivery: true } : undefined
+            context?.delivery && DELIVERY_SOURCES.has(credential.source)
+              ? { delivery: true }
+              : undefined
           )
         : undefined
-    const admit = async (
-      authorization?: VerifiedLarkUserAuthorization
-    ): Promise<PersonalCredentialDecision> => {
-      if (identity && context) {
-        const local =
-          (identity.trigger === "local" || identity.trigger === "schedule") &&
-          identity.authorizingPrincipal?.kind === "local-person"
-        const person: PrincipalRefV1 | undefined = direct
-          ? { kind: "local-person" }
-          : local
-            ? identity.authorizingPrincipal
-            : authorization
-              ? (
-                  await import("@/lib/auth-providers/feishu/cli/acting-identity")
-                ).verifiedLarkAuthorizationPerson(authorization)
-              : undefined
-        if (!person) return refuse("owner-not-verified")
-        try {
-          await markPersonalCredential(context, identity, person, credential.source)
-        } catch (cause) {
-          return refuse("mark-unavailable", cause)
-        }
-      }
-      return { ok: true, ...credential, ...(authorization ? { authorization } : {}) }
-    }
-    if (!direct) {
+    let acting: PrincipalRefV1 | undefined
+    if (direct) acting = LOCAL_PERSON
+    else {
       if (!identity) return refuse("missing-identity")
       if (identity.lane === "service") return refuse("service-lane")
       if (identity.requesters.length > 1) return refuse("multiple-requesters")
-      const local =
-        (identity.trigger === "local" || identity.trigger === "schedule") &&
-        identity.authorizingPrincipal?.kind === "local-person"
-      if (!local) {
-        if (
-          credential.source !== "lark-user" ||
-          !credential.person ||
-          !context?.larkContext ||
-          (identity.trigger !== "requester" && identity.trigger !== "local")
-        )
-          return refuse("trigger-not-personal")
-        const { verifyLarkImOwnerAuthorization } =
-          await import("@/lib/auth-providers/feishu/cli/acting-identity")
-        const authorization = await verifyLarkImOwnerAuthorization(
-          credential.person,
-          context.larkContext
-        )
-        if (!authorization) return refuse("owner-not-verified")
-        return await admit(authorization)
-      }
-      if (credential.source === "lark-user" && credential.person && context?.larkContext) {
-        const { verifyLarkImOwnerAuthorization } =
-          await import("@/lib/auth-providers/feishu/cli/acting-identity")
-        const authorization = await verifyLarkImOwnerAuthorization(
-          credential.person,
-          context.larkContext
-        )
-        if (authorization) return await admit(authorization)
+      acting = runPerson(identity)
+      if (!acting) return refuse("trigger-not-personal")
+    }
+    if (
+      !samePerson(acting, credential.person) &&
+      !samePersonForHost(acting, credential.person, await readHostPersonContext())
+    )
+      return refuse("owner-not-verified")
+    if (identity && context) {
+      try {
+        await markPersonalCredential(context, identity, acting, credential.source)
+      } catch (cause) {
+        return refuse("mark-unavailable", cause)
       }
     }
-    return await admit()
+    return { ok: true, source: credential.source, person: acting }
   } catch (cause) {
     return refuse("owner-not-verified", cause)
   }

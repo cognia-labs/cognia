@@ -68,6 +68,52 @@ it("checks the captured identity again before invoking a write callback", async 
   )
 })
 
+it("reads with the authorization of the person the captured source row names", async () => {
+  const principal = "a".repeat(64)
+  const source = {
+    id: "A",
+    identityKey: "person-A",
+    revision: 1,
+    hostMetadata: {
+      adapterId: "adapter-A",
+      authorizationEpoch: "epoch-A",
+      principal,
+      person: { kind: "platform", platform: "lark", adapterId: "adapter-A", remoteUserId: "ou_a" },
+    },
+  } as never
+  jest.mocked(assertIssueSyncSource).mockResolvedValue(source)
+  jest
+    .mocked(withLarkAuthedApi)
+    .mockImplementationOnce(async (_opts, fn) => fn({} as never, {} as never))
+  await expect(
+    withIssueLarkBindingApi(
+      { resource: { kind: "lark-tasklist", adapterId: "old" } } as never,
+      async () => "read"
+    )
+  ).resolves.toBe("read")
+  expect(withLarkAuthedApi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      adapterId: "adapter-A",
+      principal,
+      expectedAuthorizationEpoch: "epoch-A",
+      identity: "user",
+    }),
+    expect.any(Function)
+  )
+})
+
+it("leaves the principal to the run's acting person without a captured source row", async () => {
+  jest.mocked(assertIssueSyncSource).mockResolvedValue(undefined as never)
+  jest
+    .mocked(withLarkAuthedApi)
+    .mockImplementationOnce(async (_opts, fn) => fn({} as never, {} as never))
+  await withIssueLarkBindingApi(
+    { resource: { kind: "lark-tasklist", adapterId: "cai_1" } } as never,
+    async () => "read"
+  )
+  expect(jest.mocked(withLarkAuthedApi).mock.calls.at(-1)![0]).not.toHaveProperty("principal")
+})
+
 it.each([
   [429, {}, { "Retry-After": "120", "x-ogw-ratelimit-reset": "99" }, 120_000],
   [200, { code: 99991400 }, { "x-ogw-ratelimit-reset": "45" }, 45_000],

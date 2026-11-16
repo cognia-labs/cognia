@@ -938,34 +938,49 @@ it("keeps deferred jobs on the exact root after their origin completes and check
   await finishToolExecutionRun(origin.id)
   const { admitPersonalCredential } = await import("./personal-credential")
   expect(
-    await admitPersonalCredential({ executionRunId: origin.id }, { source: "github-user" })
+    await admitPersonalCredential(
+      { executionRunId: origin.id },
+      { source: "github-user", person: { kind: "local-person" } }
+    )
   ).toMatchObject({ ok: false })
   expect(
-    await admitPersonalCredential({ executionRunId: job.id }, { source: "github-user" })
+    await admitPersonalCredential(
+      { executionRunId: job.id },
+      { source: "github-user", person: { kind: "local-person" } }
+    )
   ).toMatchObject({ ok: true })
   expect(job.actingIdentity?.rootRunId).toBe(origin.id)
   await recordAbsorbedRequester(origin.id, principal)
   expect(
-    await admitPersonalCredential({ executionRunId: job.id }, { source: "github-user" })
+    await admitPersonalCredential(
+      { executionRunId: job.id },
+      { source: "github-user", person: { kind: "local-person" } }
+    )
   ).toMatchObject({ ok: false, reason: "multiple-requesters" })
 })
 it("admits an explicit standalone local run but refuses session mismatch, missing roots and terminal runs", async () => {
   const run = await startToolExecutionRun(undefined, { localAuthorization: LOCAL_PERSON_RUN })
   const { admitPersonalCredential } = await import("./personal-credential")
   expect(
-    await admitPersonalCredential({ executionRunId: run.id }, { source: "github-user" })
+    await admitPersonalCredential(
+      { executionRunId: run.id },
+      { source: "github-user", person: { kind: "local-person" } }
+    )
   ).toMatchObject({ ok: true })
   expect(
     await admitPersonalCredential(
       { executionRunId: run.id, sessionId: "other" },
-      { source: "github-user" }
+      { source: "github-user", person: { kind: "local-person" } }
     )
   ).toMatchObject({ ok: false })
   await getDb().executionRuns.update(run.id, {
     actingIdentity: { ...run.actingIdentity!, rootRunId: "missing" },
   })
   expect(
-    await admitPersonalCredential({ executionRunId: run.id }, { source: "github-user" })
+    await admitPersonalCredential(
+      { executionRunId: run.id },
+      { source: "github-user", person: { kind: "local-person" } }
+    )
   ).toMatchObject({ ok: false })
 })
 it("cannot mint local job authority from an unknown or mismatched parent plus a Host symbol", async () => {
@@ -1020,7 +1035,10 @@ it.each(["schedule", "service"] as const)(
     })
     const { admitPersonalCredential } = await import("./personal-credential")
     expect(
-      await admitPersonalCredential({ executionRunId: run.id }, { source: "lark-user" })
+      await admitPersonalCredential(
+        { executionRunId: run.id },
+        { source: "lark-user", person: { kind: "local-person" } }
+      )
     ).toMatchObject({ ok: false })
   }
 )

@@ -44492,9 +44492,13 @@ paths:
                           const: snapshot
                         adapterId:
                           type: string
+                        principal:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
                       required:
                         - action
                         - adapterId
+                        - principal
                       additionalProperties: false
                     - type: object
                       properties:
@@ -44502,11 +44506,15 @@ paths:
                           const: disconnect
                         adapterId:
                           type: string
+                        principal:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
                         expectedAuthorizationEpoch:
                           type: string
                       required:
                         - action
                         - adapterId
+                        - principal
                         - expectedAuthorizationEpoch
                       additionalProperties: false
                     - type: object
@@ -44515,6 +44523,9 @@ paths:
                           const: authorize
                         adapterId:
                           type: string
+                        principal:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
                         expectedAuthorizationEpoch:
                           type: string
                         accessToken:
@@ -44530,6 +44541,7 @@ paths:
                       required:
                         - action
                         - adapterId
+                        - principal
                         - expectedAuthorizationEpoch
                         - accessToken
                         - refreshToken
@@ -44541,6 +44553,9 @@ paths:
                           const: refresh
                         adapterId:
                           type: string
+                        principal:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
                         expectedAuthorizationEpoch:
                           type: string
                         accessToken:
@@ -44552,6 +44567,7 @@ paths:
                       required:
                         - action
                         - adapterId
+                        - principal
                         - expectedAuthorizationEpoch
                         - accessToken
                         - refreshToken

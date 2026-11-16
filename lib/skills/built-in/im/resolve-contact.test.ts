@@ -8,7 +8,7 @@ import { getSharedBuiltInSkillRegistry } from "../registry"
 import "./resolve-contact"
 import { resolveChatCapableAdapter } from "./_helpers"
 import { createLarkChatManagement } from "@/lib/connectors/adapters/lark/chat-management"
-import { getUserAccessToken } from "@/lib/auth-providers/feishu/auth"
+import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 
 jest.mock("@/lib/db/schema", () => ({
   getDb: () => ({
@@ -26,12 +26,9 @@ jest.mock("@/lib/db/adapter-instances", () => ({
     settings: { connectedUser: { openId: "owner" } },
   }),
 }))
-jest.mock("../context", () => ({
-  resolveBuiltInSkillTurnActors: async () => ({ actingSenders: [{ remoteUserId: "other" }] }),
-}))
-jest.mock("@/lib/auth-providers/feishu/auth", () => ({
-  getUserAccessToken: jest.fn(),
-  getTenantAccessToken: jest.fn(),
+jest.mock("@/lib/connectors/tauri/commands", () => ({
+  ...jest.requireActual("@/lib/connectors/tauri/commands"),
+  connectorsLarkUserAuth: jest.fn(),
 }))
 
 const mResolve = resolveChatCapableAdapter as jest.Mock
@@ -56,16 +53,16 @@ beforeEach(() => {
 })
 
 describe("im.resolve_contact", () => {
-  it("refuses a non-owner IM name search through the real adapter path before reading a token", async () => {
+  it("refuses an IM name search outside the delegated lane before reading a token", async () => {
     const adapter = createLarkChatManagement("a1", async () => ({
       appId: "app",
       appSecret: "secret",
     }))
     mResolve.mockResolvedValue({ adapterId: "a1", platform: "lark", adapter })
     await expect(skill().execute({ query: "Alice" }, { sessionId: "s" })).rejects.toMatchObject({
-      reason: "sender_not_token_owner",
+      reason: "personal_access_refused",
     })
-    expect(getUserAccessToken).not.toHaveBeenCalled()
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
   })
   it("schema refuses an empty request (no emails/phones/query)", () => {
     expect(skill().inputSchema.safeParse({}).success).toBe(false)

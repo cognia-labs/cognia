@@ -25,6 +25,7 @@ import { getDb } from "@/lib/db/schema"
 import { createKeyringStore, type KeyringStore } from "@/lib/credentials/keyring-store"
 import {
   admitPersonalCredential,
+  LOCAL_PERSON,
   PersonalCredentialRefusedError,
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
@@ -140,7 +141,10 @@ export async function getGithubBackupToken(
   credentialContext?: PersonalCredentialContext
 ): Promise<string | null> {
   const assertPersonal = async () => {
-    const decision = await admitPersonalCredential(credentialContext, { source: "github-user" })
+    const decision = await admitPersonalCredential(credentialContext, {
+      source: "github-user",
+      person: LOCAL_PERSON,
+    })
     if (!decision.ok) throw new PersonalCredentialRefusedError(decision)
   }
   if (credential.kind === "keyring") {

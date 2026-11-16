@@ -9,7 +9,7 @@
  * connectors server (`/oauth/docs/google/callback`).
  */
 
-import { admitPersonalCredential } from "@/lib/execution/personal-credential"
+import { admitPersonalCredential, LOCAL_PERSON } from "@/lib/execution/personal-credential"
 import { clampDocText } from "@/lib/docs-providers/limits"
 import {
   assertRemoteDocBinding,
@@ -93,7 +93,7 @@ async function context(opts: DocsProviderCallOptions): Promise<BoundGoogleContex
   throwIfGoogleRequestAborted(signal)
   const admission = await admitPersonalCredential(opts.credentialContext, {
     source: "google-docs",
-    person: opts.accountId,
+    person: LOCAL_PERSON,
   })
   if (!admission.ok) throw new DocsProviderError("notAuthorized")
   if (opts.accountId === GOOGLE_ACCOUNT_ID) {

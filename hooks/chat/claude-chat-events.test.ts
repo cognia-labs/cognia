@@ -2094,7 +2094,10 @@ it.each([false, true])(
           LOCAL_PERSON_RUN as typeof import("@/lib/execution/acting-authority").LOCAL_PERSON_RUN,
       })
       expect(
-        await admitPersonalCredential({ executionRunId: run.id }, { source: "google-docs" })
+        await admitPersonalCredential(
+          { executionRunId: run.id },
+          { source: "google-docs", person: { kind: "local-person" } }
+        )
       ).toMatchObject({ ok: true })
       bindToolCallRun(sessionId, run.id, run.id, "attempt")
       useChatStore.getState().clear()

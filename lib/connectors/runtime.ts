@@ -118,6 +118,7 @@ import { tryBuildMemoryDeps } from "@/lib/memory/runtime/build-deps"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import { connectorVendor } from "@/lib/connectors/vendor-contribution"
+import { connectorTurnLane } from "./credential-lane"
 import { buildSteerPayload, steerBlocksOf } from "@/lib/chat/steer"
 import { deliveryTargetFromEvent } from "@/types/connectors/event"
 import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"
@@ -2464,6 +2465,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               runId: executionRunId,
               parent: verifiedRecoveryParent,
               requesters: [connectorRequester(event)],
+              ...connectorTurnLane(adapterRow, event),
             }),
             ...(verifiedRecoveryParent ? { parentRunId: verifiedRecoveryParent.id } : {}),
             kind: "agent-turn",

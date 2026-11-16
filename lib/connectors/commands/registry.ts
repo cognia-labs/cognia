@@ -33,6 +33,7 @@ export type ControlCommandName =
   | "schedule"
   | "handoff"
   | "delegate"
+  | "auth"
 
 export interface ControlCommandSpec {
   name: ControlCommandName
@@ -85,6 +86,9 @@ export const CONTROL_COMMAND_SPECS: readonly ControlCommandSpec[] = [
   // Same reasoning: a menu item for a verb that only means something while
   // work is in flight would be a menu item that usually fails.
   { name: "delegate", readonly: false, nativeExposed: false, usage: "/delegate [title]" },
+  // Read-only for the gate: it changes only the sender's own authorization,
+  // so a person who may not reconfigure the bot can still manage their own.
+  { name: "auth", readonly: true, nativeExposed: false, usage: "/auth | /auth revoke" },
 ]
 
 /** Specs published to platform-native slash manifests. */

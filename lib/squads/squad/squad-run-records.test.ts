@@ -118,13 +118,13 @@ describe("createSquadRunRecords", () => {
       expect(
         await admitPersonalCredential(
           { executionRunId: result.executionRunId },
-          { source: "github-user" }
+          { source: "github-user", person: { kind: "local-person" } }
         )
       ).toMatchObject({ ok: true })
       expect(
         await admitPersonalCredential(
           { executionRunId: result.executionRunId, sessionId: "unrelated" },
-          { source: "github-user" }
+          { source: "github-user", person: { kind: "local-person" } }
         )
       ).toMatchObject({ ok: false, reason: "missing-identity" })
       await getDb().sessions.put({

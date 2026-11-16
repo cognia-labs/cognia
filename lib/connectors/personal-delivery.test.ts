@@ -161,6 +161,24 @@ it("uses a verified owner's direct message when ephemeral is unavailable, stripp
   expect(narrowed?.request.metadata.resultCard).toEqual({ runId: "retained-run" })
 })
 
+it("direct-messages the marked person of this adapter themself, never another adapter's", async () => {
+  const a = adapter(false)
+  await marked()
+  const alice = {
+    kind: "platform" as const,
+    platform: "lark" as const,
+    adapterId: "bot",
+    remoteUserId: "ou_alice",
+  }
+  const narrowed = await narrowPersonalDelivery(a, key, request(), alice)
+  expect(narrowed?.conversationKey).toBe("lark:bot:ou_alice")
+  expect(narrowed?.request.conversationRef.channelId).toBe("ou_alice")
+  expect(narrowed?.request.segments).toEqual(request().segments)
+  expect(
+    await narrowPersonalDelivery(a, key, request(), { ...alice, adapterId: "other-bot" })
+  ).toBeUndefined()
+})
+
 it("withholds without an addressable owner and sends only a fixed notice", async () => {
   const a = adapter(false)
   const context = await marked(false)

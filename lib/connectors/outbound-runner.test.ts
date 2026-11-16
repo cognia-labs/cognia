@@ -3116,7 +3116,7 @@ it("delivers a recovered owner attempt with the exact inherited root despite rep
         executionRunId: options?.executionIdentity?.runId ?? "",
         delivery: true,
       },
-      { source: "lark-user" }
+      { source: "lark-user", person: { kind: "local-person" } }
     )
     return decision.ok
       ? { ok: true, platformMessageId: "owner-sent" }
@@ -3157,9 +3157,14 @@ describe("round 5: personal outbound producer identity", () => {
     identity: "local" | "owner" | "unverified",
     id = "personal-producer"
   ) {
+    const owner = { openId: "ou_owner", authorizationEpoch: "owner-epoch" }
+    const { createHash } = await import("node:crypto")
     await seedInstance(id, {
       type: "lark",
-      settings: { connectedUser: { openId: "ou_owner", authorizationEpoch: "owner-epoch" } },
+      settings: {
+        connectedUser: owner,
+        authorizedUsers: { [createHash("sha256").update("ou_owner").digest("hex")]: owner },
+      },
     })
     const conversationKey = `lark:${id}:oc_target`
     const conversationRef = { platform: "lark" as const, adapterId: id, chatId: "oc_target" }
@@ -3190,6 +3195,12 @@ describe("round 5: personal outbound producer identity", () => {
     const originSessionId = identity === "local" ? `desktop-${id}` : sessionId
     if (originSessionId !== sessionId)
       await getDb().sessions.put({ id: originSessionId, updatedAt: Date.now() } as never)
+    const ownerPrincipal = {
+      kind: "platform" as const,
+      platform: "lark",
+      adapterId: id,
+      remoteUserId: "ou_owner",
+    }
     const { recordedRunMetadata } = await import("@/lib/execution/acting-authority")
     const { createExecutionRun } = await import("@/lib/db/execution-runs")
     const originId = `execution:agent:${id}`
@@ -3214,27 +3225,27 @@ describe("round 5: personal outbound producer identity", () => {
               }
             : identity === "owner"
               ? {
-                  requesters: [
-                    {
-                      kind: "platform" as const,
-                      platform: "lark",
-                      adapterId: id,
-                      remoteUserId: "ou_owner",
-                    },
-                  ],
+                  // The owner's own IM turn, delegated as them (ADR-0243 phase 4).
+                  lane: "delegated" as const,
+                  actingPrincipal: ownerPrincipal,
+                  requesters: [ownerPrincipal],
                 }
               : {}),
         }
       ),
     })
-    const { getUserAccessToken } = await import("@/lib/auth-providers/feishu/auth")
+    const { admitLarkUserAuthorization } =
+      await import("@/lib/auth-providers/feishu/cli/acting-identity")
     const adapter = makeAdapter(id, async (_request, options) => {
       const context = {
         sessionId: options?.executionIdentity?.sessionId,
         executionRunId: options?.executionIdentity?.runId ?? "",
         delivery: true,
       }
-      const token = await getUserAccessToken(id, { ...context, larkContext: context as never })
+      const token = await admitLarkUserAuthorization(id, context).then(
+        (authorization) => authorization?.accessToken,
+        () => undefined
+      )
       return token === "owner-token"
         ? { ok: true, platformMessageId: "personal-sent" }
         : { ok: false, error: { code: "identity_refused", message: "refused", retryable: false } }
@@ -3247,7 +3258,7 @@ describe("round 5: personal outbound producer identity", () => {
   }
 
   it.each(["owner", "unverified", "unknown", "child"] as const)(
-    "delivers a dispatcher HITL card only with its verified %s execution",
+    "delivers a dispatcher HITL card as the owner only on their own %s execution",
     async (identity) => {
       const fixture = await setupPersonalDelivery(
         identity === "unverified" ? "unverified" : "owner",
@@ -3257,6 +3268,12 @@ describe("round 5: personal outbound producer identity", () => {
       const { connectorsHttpRequest } = await import("./tauri/commands")
       const http = jest.mocked(connectorsHttpRequest)
       http.mockReset().mockImplementation(async ({ url }) => {
+        if (url.includes("tenant_access_token"))
+          return {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({ code: 0, tenant_access_token: "bot-token", expire: 7200 }),
+          }
         if (!url.includes("/authen/v1/user_info") && !url.includes("/im/v1/messages"))
           throw new Error(`Unexpected Lark request: ${url}`)
         return {
@@ -3331,20 +3348,23 @@ describe("round 5: personal outbound producer identity", () => {
         await finishToolExecutionRun(fixture.originId)
         if (identity === "child") await finishToolExecutionRun(executionRunId)
         await runOnce(new Map([[fixture.adapter.id, fixture.adapter]]))
-        const admitted = identity === "owner" || identity === "child"
+        // The owner's own turn replies as them; any other goes out as the
+        // bot (ADR-0243 D12), never as the owner.
+        const owners = identity === "owner" || identity === "child"
         expect(await getDb().outboundQueue.get(job.id)).toMatchObject({
-          status: admitted ? "sent" : "deadlettered",
-          ...(admitted ? { platformMessageId: "confirmation-sent" } : {}),
+          status: "sent",
+          platformMessageId: "confirmation-sent",
         })
         expect(await getDb().executionRuns.get(`execution:job:outbound:${job.id}`)).toMatchObject({
           parentRunId: executionRunId,
-          status: admitted ? "completed" : "failed",
+          status: "completed",
         })
-        if (admitted) {
-          expect(http).toHaveBeenCalled()
-          for (const [request] of http.mock.calls)
-            expect(request.headers?.Authorization).toBe("Bearer owner-token")
-        } else expect(http).not.toHaveBeenCalled()
+        const sends = http.mock.calls.filter(([request]) => request.url.includes("/im/v1/messages"))
+        expect(sends.length).toBeGreaterThan(0)
+        for (const [request] of sends)
+          expect(request.headers?.Authorization).toBe(
+            owners ? "Bearer owner-token" : "Bearer bot-token"
+          )
       } finally {
         http.mockReset()
         clearSubagentApprovalRoute(sessionId)

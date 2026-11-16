@@ -528,7 +528,7 @@ it("rebuilds AI-SDK history from durable topic rows after runtime loss, excludin
     await cap?.beforeSend?.()
     expect((await resolveRunActingIdentity(id))?.trigger).toBe("external-event")
     await expect(assertLarkActingIdentity("lark-1", { sessionId: id })).rejects.toThrow(
-      /phases 4 and 5/i
+      /principal registry/i
     )
     prepared.push(sendOptions)
     await cap?.onSdkSessionId?.(`sdk-${id}`)
@@ -703,7 +703,7 @@ it("refuses personal access in an actual plugin turn's recorded identity", async
   jest.mocked(runAndCaptureAssistantReply).mockImplementation(async (id) => {
     expect((await resolveRunActingIdentity(id))?.trigger).toBe("external-event")
     await expect(assertLarkActingIdentity("lark-1", { sessionId: id })).rejects.toThrow(
-      /phases 4 and 5/i
+      /principal registry/i
     )
     return {
       text: "Refused personal access",
