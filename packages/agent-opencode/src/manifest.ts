@@ -157,6 +157,7 @@ export const opencodeManifest: AgentIntegrationManifest = Object.freeze({
     {
       id: "opencode",
       match: { kind: "contains", values: ["opencode"] },
+      env: { prefixes: ["OPENCODE_"] },
       stateRoots: [".config/opencode", ".local/share/opencode"],
       isolation: {
         env: {

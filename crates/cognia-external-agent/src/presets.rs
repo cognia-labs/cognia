@@ -120,55 +120,14 @@ const NPX_PACKAGE_ALLOWLIST: &[&str] = &[
     "opencode-ai",
 ];
 
-/// Exact env keys always allowed through.
+/// Exact env keys the host itself passes to every engine. Each engine's own
+/// keys come from its launch descriptor
+/// ([`crate::launch_descriptor::admits_request_env`]).
 const ENV_KEY_ALLOWLIST: &[&str] = &[
     "COGNIA_HERMES_ACP_BOOTSTRAP",
-    "AGY_ACP_FORCE_FILE_STORAGE",
-    "XAI_API_KEY",
-    "GROK_HOME",
-    "GROK_DISABLE_AUTOUPDATER",
-    "GROK_CHANGELOG_OFFLINE",
-    "GROK_TELEMETRY_ENABLED",
-    "GROK_TELEMETRY_TRACE_UPLOAD",
-    "GROK_FEEDBACK_ENABLED",
-    "MINIMAX_DATA_DIR",
-    "MAVIS_DATA_DIR",
-    "MCODE_PROVIDER_API_KEY",
-    "MCODE_LLM_FIRST_EVENT_TIMEOUT_MS",
-    "MCODE_LLM_STREAM_IDLE_TIMEOUT_MS",
     "COGNIA_PORT",
     "COGNIA_PORT_COUNT",
     "PORT",
-    "KIMI_CODE_HOME",
-    "KIMI_CODE_NO_AUTO_UPDATE",
-    "KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT",
-    "KIMI_DISABLE_TELEMETRY",
-    "KIMI_MODEL_NAME",
-    "KIMI_MODEL_PROVIDER_TYPE",
-    "KIMI_MODEL_BASE_URL",
-    "KIMI_MODEL_API_KEY",
-    "KIMI_MODEL_CAPABILITIES",
-    "KIMI_MODEL_DISPLAY_NAME",
-    "KIMI_MODEL_MAX_CONTEXT_SIZE",
-    "KIMI_MODEL_MAX_OUTPUT_SIZE",
-    "KIMI_MODEL_MAX_COMPLETION_TOKENS",
-    "KIMI_MODEL_REASONING_KEY",
-    "KIMI_MODEL_ADAPTIVE_THINKING",
-    "KIMI_MODEL_TEMPERATURE",
-    "KIMI_MODEL_TOP_P",
-    "KIMI_MODEL_THINKING_EFFORT",
-    "KIMI_MODEL_THINKING_KEEP",
-    "KIMI_MCP_STARTUP_TIMEOUT_MS",
-    "KIMI_MCP_TOOL_TIMEOUT_MS",
-    "KIMI_LOOP_MAX_STEPS_PER_TURN",
-    "KIMI_LOOP_MAX_ATTEMPTS_PER_STEP",
-    "CLINE_API_KEY",
-    "CLINE_PROVIDER",
-    "CLINE_MODEL",
-    "CLINE_DIR",
-    "CLINE_NO_AUTO_UPDATE",
-    "QODER_PERSONAL_ACCESS_TOKEN",
-    "QODER_CONFIG_DIR",
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "NO_PROXY",
@@ -182,18 +141,10 @@ const ENV_KEY_ALLOWLIST: &[&str] = &[
     "TZ",
     "NO_COLOR",
     "FORCE_COLOR",
-    // Reviewed Codex ACP controls. INITIAL_AGENT_MODE governs its inner tool
-    // mode; APP_SERVER_LOGS names a directory, still confined by Cognia's sandbox.
-    "NO_BROWSER",
-    "INITIAL_AGENT_MODE",
-    "APP_SERVER_LOGS",
     // Pins the DeepSeek Harness user-data root into Cognia-owned space. Without
     // it DSH falls back to ~/.dsh, where a user-writable cordis.patch.yml can
     // inject plugins and arbitrary JS into a certified composition.
     "DSH_HOME",
-    "MODEL_PROVIDER",
-    "PI_CODING_AGENT_DIR",
-    "PI_CODING_AGENT_SESSION_DIR",
     // Host-consumed task configuration and its one-time gateway lease.
     "COGNIA_GATEWAY_TASK_CONFIG",
     "COGNIA_GATEWAY_TOKEN",
@@ -203,48 +154,16 @@ const ENV_KEY_ALLOWLIST: &[&str] = &[
     "DISABLE_AUTO_UPDATE",
 ];
 
-/// Env key prefixes allowed through (provider credentials + agent config).
+/// Env key families the host itself passes (Cognia-owned runtimes and
+/// handshakes). Each engine's own families come from its launch descriptor.
 const ENV_PREFIX_ALLOWLIST: &[&str] = &[
-    "AUGMENT_",
-    "AUTOHAND_",
-    "CODEBUDDY_",
-    "KILO_",
-    "MISTRAL_",
-    "VIBE_",
-    "MIMOCODE_",
-    "HERMES_",
-    "OMP_",
-    "MUSE_",
-    "AMP_",
-    "ZCODE_",
-    "OPENCLAUDE_",
-    "CONTINUE_",
     "CODEBUFF_",
-    "ROVODEV_",
-    "ANTHROPIC_",
-    "CLAUDE_",
-    "OPENAI_",
-    "CODEX_",
-    "GEMINI_",
-    "GOOGLE_",
-    "OPENCODE_",
-    "CURSOR_",
-    "COPILOT_",
-    "GITHUB_",
-    "GH_",
-    "QWEN_",
-    "KIRO_",
-    "FACTORY_",
-    "DROID_",
-    "DEVIN_",
-    "WINDSURF_",
     "ACP_",
     "COGNIA_AGENT_",
     // DeepSeek Harness: the provider credential plus the composition's own
     // COGNIA_DSH_* inputs (workspace, session root, model, persona). DSH_HOME is
-    // an exact key below — it is a path, not a prefix family.
+    // an exact key above — it is a path, not a prefix family.
     "DEEPSEEK_",
-    "GOOSE_",
     "COGNIA_DSH_",
     // Tool-host handshake for the bundled Cognia Pi extension. Pi has no
     // per-session mcpServers parameter, so the socket path and per-attempt
@@ -449,7 +368,7 @@ impl SpawnPolicy {
         // A remote caller never names sandbox roots: the plugin store whose
         // packages the key points at lives on the desktop, and the key is a
         // host-to-wrapper request, not client input.
-        let dropped = scope_pi_package_env(&config.command, &mut config.env, dropped, true);
+        let dropped = scope_pi_package_env(&config.command, &config.args, &mut config.env, dropped, true);
         Ok(ValidatedSpawn {
             config,
             dropped_env_keys: dropped,
@@ -508,7 +427,7 @@ impl SpawnPolicy {
         let (env, dropped) =
             filter_env_with_additions(std::mem::take(&mut config.env), &self.operator_env);
         config.env = env;
-        let dropped = scope_pi_package_env(&config.command, &mut config.env, dropped, false);
+        let dropped = scope_pi_package_env(&config.command, &config.args, &mut config.env, dropped, false);
         Ok(ValidatedSpawn {
             config,
             dropped_env_keys: dropped,
@@ -895,26 +814,19 @@ fn valid_operator_env(key: &str) -> bool {
         .contains(&upper.as_str())
 }
 
-pub(crate) fn kimi_env_key(key: &str) -> bool {
-    key.starts_with("KIMI_") && ENV_KEY_ALLOWLIST.contains(&key)
-}
-
-/// Plugin Pi package env (ADR-0210) only belongs to a Pi process: the
-/// `COGNIA_PIPKG_*` values and the package-roots request are dropped from any
-/// other command, and the roots request is dropped from every REMOTE spawn.
-/// Applied after the allowlist so an operator addition cannot re-admit them.
+/// Plugin Pi package env (ADR-0210) only belongs to an engine that takes Pi
+/// packages: the `COGNIA_PIPKG_*` values and the package-roots request are
+/// dropped from any other command, and the roots request is dropped from every
+/// REMOTE spawn. Applied after the allowlist so an operator addition cannot
+/// re-admit them.
 fn scope_pi_package_env(
     command: &str,
+    args: &[String],
     env: &mut HashMap<String, String>,
     mut dropped: Vec<String>,
     remote: bool,
 ) -> Vec<String> {
-    let lower = command.trim().to_ascii_lowercase();
-    let base = [".exe", ".cmd", ".bat"]
-        .iter()
-        .find_map(|suffix| lower.strip_suffix(suffix))
-        .unwrap_or(&lower);
-    let is_pi = base == "pi";
+    let is_pi = crate::launch_descriptor::takes_pi_packages(command, args);
     let keys: Vec<String> = env
         .keys()
         .filter(|key| {
@@ -947,7 +859,8 @@ fn filter_env_with_additions(
         let allowed = ENV_KEY_ALLOWLIST.contains(&key.as_str())
             || ENV_PREFIX_ALLOWLIST
                 .iter()
-                .any(|prefix| key.starts_with(prefix));
+                .any(|prefix| key.starts_with(prefix))
+            || crate::launch_descriptor::admits_request_env(&key);
         let host_policy_key = key.eq_ignore_ascii_case(COMMAND_ALLOWLIST_ENV)
             || key.eq_ignore_ascii_case(ENV_ALLOWLIST_ENV);
         if !host_policy_key && (allowed || additions.contains(&key)) {
@@ -2137,11 +2050,11 @@ mod tests {
 
         let (accepted, dropped) = filter_env(env());
         let mut local = accepted;
-        let dropped = scope_pi_package_env("pi", &mut local, dropped, false);
+        let dropped = scope_pi_package_env("pi", &[], &mut local, dropped, false);
         assert!(dropped.is_empty());
         assert!(local.contains_key(crate::sandbox::PI_PACKAGE_ROOTS_ENV));
         let mut local_exe = env();
-        assert!(scope_pi_package_env("PI.EXE", &mut local_exe, vec![], false).is_empty());
+        assert!(scope_pi_package_env("PI.EXE", &[], &mut local_exe, vec![], false).is_empty());
     }
 
     #[test]

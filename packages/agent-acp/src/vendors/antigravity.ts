@@ -17,6 +17,9 @@ export const antigravityAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorPr
   launch: {
     id: "antigravity-acp",
     match: { kind: "base", values: ["agy_acp_server.par", "agy_acp_server"] },
+    env: {
+      keys: ["AGY_ACP_FORCE_FILE_STORAGE"],
+    },
     stateRoots: [".gemini/antigravity-acp", ".gemini/artifacts"],
     // GEMINI_HOME moves only file state; the native keychain accounts stay shared.
     relocation: {

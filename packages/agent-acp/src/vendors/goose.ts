@@ -32,6 +32,9 @@ export const gooseAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
   launch: {
     id: "goose",
     match: { kind: "base", values: ["goose"] },
+    env: {
+      prefixes: ["GOOSE_"],
+    },
     stateRoots: [
       ".config/goose",
       ".local/share/goose",

@@ -72,6 +72,7 @@ export const claudeCodeManifest: AgentIntegrationManifest = Object.freeze({
           "@zed-industries/claude-code-acp",
         ],
       },
+      env: { prefixes: ["ANTHROPIC_", "CLAUDE_"] },
       stateRoots: [".claude", ".claude.json", ".claude.json.backup"],
       fileRoots: [".claude.json", ".claude.json.backup"],
       isolation: {

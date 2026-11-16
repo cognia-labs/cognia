@@ -35,7 +35,7 @@ it("admits Antigravity's file-storage control without trusting a caller-selected
   const env = buildExternalAgentChildEnv(
     { NODE_ENV: "test", ANTIGRAVITY_HARNESS_PATH: "/ambient/unsafe" },
     { AGY_ACP_FORCE_FILE_STORAGE: "1", ANTIGRAVITY_HARNESS_PATH: "/caller/unsafe" },
-    false
+    { command: "agy_acp_server" }
   )
   expect(env.AGY_ACP_FORCE_FILE_STORAGE).toBe("1")
   expect(env.ANTIGRAVITY_HARNESS_PATH).toBeUndefined()
@@ -51,7 +51,7 @@ it("strips DSH host lease identity and secret from every non-DSH environment", (
     const env = buildExternalAgentChildEnv(
       { NODE_ENV: "test", ...proof },
       { ...proof, ...extra },
-      false
+      { command: "codex" }
     )
     expect(env.COGNIA_DSH_PROCESS_LEASE).toBeUndefined()
     expect(env.COGNIA_DSH_PROCESS_LEASE_NONCE).toBeUndefined()
@@ -119,7 +119,7 @@ describe("CLI spawn allowlist", () => {
         NODE_OPTIONS: "--eval evil",
         PYTHONPATH: "/evil",
       },
-      false
+      { command: "codex" }
     )
     expect(env).toMatchObject({
       OPENCLAUDE_HOME: "/owned/openclaude",
@@ -149,7 +149,7 @@ describe("CLI spawn allowlist", () => {
         NODE_OPTIONS: "--import /injected.mjs",
         LD_PRELOAD: "/injected.so",
       },
-      false
+      { command: "codex" }
     )
     expect(env).toMatchObject({
       AUGMENT_SESSION_AUTH: "synthetic-session-json",
@@ -354,18 +354,14 @@ describe("NodeExternalAgentBackend", () => {
         KIMI_CODE_HOME: "/work/state/kimi",
         KIMI_MODEL_API_KEY: "explicit-bot-key",
       },
-      false,
-      false,
-      true
+      { command: "kimi" }
     )
     expect(env.KIMI_CODE_HOME).toBe("/work/state/kimi")
     expect(env.KIMI_MODEL_API_KEY).toBe("explicit-bot-key")
     const noCredential = buildExternalAgentChildEnv(
       { NODE_ENV: "test", KIMI_MODEL_API_KEY: "ambient-host-key" },
       { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/work/state" },
-      false,
-      false,
-      true
+      { command: "kimi" }
     )
     expect(noCredential.KIMI_MODEL_API_KEY).toBeUndefined()
   })
@@ -381,7 +377,8 @@ describe("NodeExternalAgentBackend", () => {
         KIMI_CODE_USER_AGENT: "spoofed",
         KIMI_PLUGIN_ROOT: "/scripts",
         KIMI_BIN_PATH: "/injected",
-      }
+      },
+      { command: "kimi" }
     )
     expect(env).toMatchObject({
       KIMI_MODEL_NAME: "explicit",
@@ -418,7 +415,8 @@ describe("NodeExternalAgentBackend", () => {
           ...reviewed,
           NODE_OPTIONS: "--require=injected.js",
           UNREVIEWED_RUNTIME_OPTION: "blocked",
-        }
+        },
+        { command: "codex" }
       )
     ).toEqual({ NODE_ENV: "test", ...reviewed })
   })
@@ -429,7 +427,7 @@ describe("NodeExternalAgentBackend", () => {
       buildExternalAgentChildEnv(
         { NODE_ENV: "test" },
         { ...reviewed, NODE_OPTIONS: "--require=injected.js", NO_BROWSER: "unrelated" },
-        true
+        { command: "node", managedDsh: true }
       )
     ).toEqual({ NODE_ENV: "production", ...reviewed })
   })
@@ -444,7 +442,8 @@ describe("NodeExternalAgentBackend", () => {
         CLINE_BIN_PATH: "/injected",
         CLINE_DATA_DIR: "/unscoped",
         CLINE_PROVIDER_SETTINGS_PATH: "/credentials",
-      }
+      },
+      { command: "cline" }
     )
     expect(env).toMatchObject({
       CLINE_API_KEY: "synthetic",
@@ -469,7 +468,8 @@ describe("NodeExternalAgentBackend", () => {
         QODER_CONFIG_DIR: "/isolated/qoder",
         QODER_UNRELATED: "blocked",
         NODE_OPTIONS: "--inspect",
-      }
+      },
+      { command: "qoder" }
     )
     expect(env.QODER_PERSONAL_ACCESS_TOKEN).toBe("explicit-fixture")
     expect(env.QODER_CONFIG_DIR).toBe("/isolated/qoder")
@@ -490,21 +490,24 @@ describe("NodeExternalAgentBackend", () => {
         AIDER_LOAD: "commands",
         DEEPSEEK_API_KEY: "fixture-explicit",
       },
-      false,
-      true
+      { command: "aider" }
     )
     expect(env.AIDER_MODEL).toBe("deepseek/test")
     expect(env.AIDER_LOAD).toBeUndefined()
     expect(env.DEEPSEEK_API_KEY).toBe("fixture-explicit")
     expect(
-      buildExternalAgentChildEnv({ NODE_ENV: "test", AIDER_MODEL: "ambient" }, {}, false, true)
-        .AIDER_MODEL
+      buildExternalAgentChildEnv(
+        { NODE_ENV: "test", AIDER_MODEL: "ambient" },
+        {},
+        { command: "aider" }
+      ).AIDER_MODEL
     ).toBeUndefined()
   })
   it("derives writable Bot temp and package caches from the owned runtime state", () => {
     const env = buildExternalAgentChildEnv(
       { TMPDIR: "/ambient/tmp", pnpm_config_store_dir: "/ambient/store", NODE_ENV: "test" },
-      { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/owned/state" }
+      { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/owned/state" },
+      { command: "codex" }
     )
     expect(env).toMatchObject({
       TMPDIR: "/owned/state/tmp",
@@ -524,7 +527,8 @@ describe("NodeExternalAgentBackend", () => {
         {
           COGNIA_BOT_ISOLATION: "1",
           ...(state ? { COGNIA_BOT_STATE_DIR: state } : {}),
-        }
+        },
+        { command: "codex" }
       )
     ).toThrow("Bot isolation requires an owned state directory")
   })
@@ -629,7 +633,8 @@ console.log(JSON.stringify({values, githubTokenPresent: !!process.env.GITHUB_TOK
         GOOSE_PATH_ROOT: "/work/goose-state",
         OPENAI_BASE_URL: "https://api.deepseek.com/v1",
         LD_PRELOAD: "untrusted",
-      }
+      },
+      { command: "goose" }
     )
     expect(env).toMatchObject({
       GOOSE_PROVIDER: "openai",
@@ -646,7 +651,8 @@ console.log(JSON.stringify({values, githubTokenPresent: !!process.env.GITHUB_TOK
   it("preserves Devin authentication inputs without admitting unrelated secrets", () => {
     const env = buildExternalAgentChildEnv(
       { NODE_ENV: "test", DEVIN_API_KEY: "ambient-devin", AWS_SECRET_ACCESS_KEY: "unrelated" },
-      { WINDSURF_API_KEY: "configured-windsurf", DEVIN_MODEL: "swe-2" }
+      { WINDSURF_API_KEY: "configured-windsurf", DEVIN_MODEL: "swe-2" },
+      { command: "devin" }
     )
     expect(env).toMatchObject({
       DEVIN_API_KEY: "ambient-devin",
@@ -678,7 +684,8 @@ console.log(JSON.stringify({values, githubTokenPresent: !!process.env.GITHUB_TOK
         PI_CODING_AGENT_DIR: "/task/pi",
         PI_CODING_AGENT_SESSION_DIR: "/task/pi/sessions",
         PI_UNTRUSTED_OPTION: "blocked",
-      }
+      },
+      { command: "codex" }
     )
 
     expect(env).toMatchObject({
@@ -1597,7 +1604,7 @@ it("keeps the DSH environment isolated from ambient and configured unrelated sec
       NODE_OPTIONS: "--inspect",
       LANG: "en_US.UTF-8",
     },
-    true
+    { command: "node", managedDsh: true }
   )
   expect(env).toEqual({
     NODE_ENV: "production",
@@ -1620,10 +1627,7 @@ it("admits plugin Pi package values under exactly the COGNIA_PIPKG_ prefix (ADR-
       COGNIA_PLUGIN_SECRET: "nope",
       NODE_OPTIONS: "--require evil",
     },
-    false,
-    false,
-    false,
-    true
+    { command: "pi" }
   )
   expect(env.COGNIA_PIPKG_TEX_ENGINE).toBe("lualatex")
   expect(env).not.toHaveProperty("COGNIA_PIPKGX")
@@ -1638,7 +1642,7 @@ it("keeps plugin Pi package env away from every non-Pi agent, from both sources"
     COGNIA_TOOLHOST_PI_PACKAGE_ROOTS: '["/x"]',
     COGNIA_TOOLHOST_TOKEN: "tok",
   }
-  const other = buildExternalAgentChildEnv(ambient, overrides)
+  const other = buildExternalAgentChildEnv(ambient, overrides, { command: "codex" })
   expect(other).not.toHaveProperty("COGNIA_PIPKG_MODE")
   expect(other).not.toHaveProperty("COGNIA_PIPKG_AMBIENT")
   expect(other).not.toHaveProperty("COGNIA_TOOLHOST_PI_PACKAGE_ROOTS")
@@ -1646,14 +1650,18 @@ it("keeps plugin Pi package env away from every non-Pi agent, from both sources"
   expect(other.COGNIA_TOOLHOST_TOKEN).toBe("tok")
 
   // A gateway task merges its overrides wholesale; the Pi scoping still holds.
-  const gatewayOther = buildExternalAgentChildEnv(ambient, {
-    ...overrides,
-    COGNIA_GATEWAY_TASK_HOME: "/task",
-  })
+  const gatewayOther = buildExternalAgentChildEnv(
+    ambient,
+    {
+      ...overrides,
+      COGNIA_GATEWAY_TASK_HOME: "/task",
+    },
+    { command: "codex" }
+  )
   expect(gatewayOther).not.toHaveProperty("COGNIA_PIPKG_MODE")
   expect(gatewayOther).not.toHaveProperty("COGNIA_TOOLHOST_PI_PACKAGE_ROOTS")
 
-  const pi = buildExternalAgentChildEnv(ambient, overrides, false, false, false, true)
+  const pi = buildExternalAgentChildEnv(ambient, overrides, { command: "pi" })
   expect(pi).toMatchObject({
     COGNIA_PIPKG_MODE: "hosted",
     COGNIA_PIPKG_AMBIENT: "a",
@@ -1666,14 +1674,14 @@ it("passes only an explicit managed DeepSeek endpoint", () => {
     buildExternalAgentChildEnv(
       { NODE_ENV: "test", DEEPSEEK_BASE_URL: "https://ambient.invalid" },
       {},
-      true
+      { command: "node", managedDsh: true }
     )
   ).not.toHaveProperty("DEEPSEEK_BASE_URL")
   expect(
     buildExternalAgentChildEnv(
       { NODE_ENV: "test", DEEPSEEK_BASE_URL: "https://ambient.invalid" },
       { DEEPSEEK_BASE_URL: "http://127.0.0.1:9876" },
-      true
+      { command: "node", managedDsh: true }
     )
   ).toEqual({ NODE_ENV: "production", DEEPSEEK_BASE_URL: "http://127.0.0.1:9876" })
 })
@@ -1682,19 +1690,21 @@ describe("Codex wrapper transport hint", () => {
   it("never leaks explicit root hints into the child environment", () => {
     expect(
       buildExternalAgentChildEnv(
-        { NODE_ENV: "test", COGNIA_AGENT_CODEX_WRITABLE_ROOTS: '["/ambient"]' },
+        { NODE_ENV: "test", COGNIA_AGENT_WRITABLE_ROOTS: '["/ambient"]' },
         {
-          COGNIA_AGENT_CODEX_WRITABLE_ROOTS: '["/configured"]',
-          COGNIA_AGENT_CODEX_WRITABLE_CEILING: '["/ceiling"]',
-        }
+          COGNIA_AGENT_WRITABLE_ROOTS: '["/configured"]',
+          COGNIA_AGENT_WRITABLE_CEILING: '["/ceiling"]',
+        },
+        { command: "codex" }
       )
-    ).not.toHaveProperty("COGNIA_AGENT_CODEX_WRITABLE_ROOTS")
+    ).not.toHaveProperty("COGNIA_AGENT_WRITABLE_ROOTS")
     expect(
       buildExternalAgentChildEnv(
         { NODE_ENV: "test" },
-        { COGNIA_AGENT_CODEX_WRITABLE_CEILING: '["/ceiling"]' }
+        { COGNIA_AGENT_WRITABLE_CEILING: '["/ceiling"]' },
+        { command: "codex" }
       )
-    ).not.toHaveProperty("COGNIA_AGENT_CODEX_WRITABLE_CEILING")
+    ).not.toHaveProperty("COGNIA_AGENT_WRITABLE_CEILING")
   })
 })
 
@@ -1729,7 +1739,8 @@ it("passes reviewed MiniMax directory aliases and BYOK without opening arbitrary
       MAVIS_DATA_DIR: "/owned/fallback",
       MCODE_PROVIDER_API_KEY: "synthetic",
       MCODE_BIN_PATH: "/untrusted",
-    }
+    },
+    { command: "mcode" }
   )
   expect(env.MINIMAX_DATA_DIR).toBe("/owned/minimax")
   expect(env.MAVIS_DATA_DIR).toBe("/owned/fallback")
@@ -1754,7 +1765,8 @@ it("preserves exact reviewed Grok controls without allowing arbitrary Grok or xA
         ...reviewed,
         GROK_UNREVIEWED: "blocked",
         XAI_UNREVIEWED: "blocked",
-      }
+      },
+      { command: "grok" }
     )
   ).toEqual({ NODE_ENV: "test", ...reviewed })
 })
@@ -1767,16 +1779,13 @@ it.each([undefined, "explicit-fixture", ""])(
     const isolated = buildExternalAgentChildEnv(
       { NODE_ENV: "test", XAI_API_KEY: "ambient-fixture" },
       overrides,
-      false,
-      false,
-      false,
-      false,
-      true
+      { command: "grok", isolatedState: true }
     )
-    expect(isolated.XAI_API_KEY).toBe(explicit)
+    expect(isolated.XAI_API_KEY).toBe(explicit ?? "")
     const shared = buildExternalAgentChildEnv(
       { NODE_ENV: "test", XAI_API_KEY: "ambient-fixture" },
-      overrides
+      overrides,
+      { command: "grok" }
     )
     expect(shared.XAI_API_KEY).toBe(explicit ?? "ambient-fixture")
   }

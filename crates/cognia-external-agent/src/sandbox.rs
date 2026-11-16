@@ -137,17 +137,17 @@ pub(crate) fn base_command(command: &str) -> String {
 
 /// Host-owned hint transported through the existing spawn configuration.
 /// It is consumed here and never reaches the external agent's environment.
-pub const CODEX_WRITABLE_ROOTS_ENV: &str = "COGNIA_AGENT_CODEX_WRITABLE_ROOTS";
-pub const CODEX_WRITABLE_CEILING_ENV: &str = "COGNIA_AGENT_CODEX_WRITABLE_CEILING";
+pub const EXTRA_WRITABLE_ROOTS_ENV: &str = "COGNIA_AGENT_WRITABLE_ROOTS";
+pub const EXTRA_WRITABLE_CEILING_ENV: &str = "COGNIA_AGENT_WRITABLE_CEILING";
 
 /// Recheck explicit Codex roots against the native filesystem floor. Invalid
 /// entries are dropped with a reason, including symlink aliases of deny roots.
-pub fn codex_extra_writable_roots(config: &ExternalAgentSpawnConfig) -> Vec<PathBuf> {
-    let Some(raw) = config.env.get(CODEX_WRITABLE_ROOTS_ENV) else {
+pub fn extra_writable_roots(config: &ExternalAgentSpawnConfig) -> Vec<PathBuf> {
+    let Some(raw) = config.env.get(EXTRA_WRITABLE_ROOTS_ENV) else {
         return Vec::new();
     };
-    if base_command(&config.command) != "codex" {
-        log::warn!("[sandbox] ignoring Codex writable roots for {}", config.command);
+    if !crate::launch_descriptor::accepts_extra_writable_roots(&config.command, &config.args) {
+        log::warn!("[sandbox] ignoring extra writable roots for {}", config.command);
         return Vec::new();
     }
     let entries = match serde_json::from_str::<Vec<String>>(raw) {
@@ -157,7 +157,7 @@ pub fn codex_extra_writable_roots(config: &ExternalAgentSpawnConfig) -> Vec<Path
             return Vec::new();
         }
     };
-    let ceiling = match config.env.get(CODEX_WRITABLE_CEILING_ENV) {
+    let ceiling = match config.env.get(EXTRA_WRITABLE_CEILING_ENV) {
         None => None,
         Some(raw) => match serde_json::from_str::<Vec<PathBuf>>(raw).ok()
             .and_then(|roots| cognia_exec_sandbox::paths::safe_canonicalize_all(&roots).ok()) {
@@ -244,11 +244,9 @@ pub fn build_sandbox_launcher_args_with_policy(
     } else {
         out.extend(["--readable".into(), home.to_string_lossy().into_owned()]);
     }
-    if base_command(command) == "aider" {
-        for file in aider_implicit_config_paths(Path::new(cwd), home) {
-            out.push("--deny-readable".into());
-            out.push(file.to_string_lossy().into_owned());
-        }
+    for file in crate::launch_descriptor::hidden_files(command, args, Path::new(cwd), home) {
+        out.push("--deny-readable".into());
+        out.push(file.to_string_lossy().into_owned());
     }
     out.extend(sandbox_network_args(policy));
     out.push("--".to_string());
@@ -292,61 +290,6 @@ fn workspace_toolchain_readable_roots(command: &str, home: &Path) -> Vec<PathBuf
         }
     }
     roots
-}
-
-/// Mirrors aiderImplicitConfigPaths in the CLI launcher. Aider searches these
-/// files implicitly, including startup commands and provider .env overrides.
-pub fn aider_implicit_config_paths(cwd: &Path, home: &Path) -> Vec<PathBuf> {
-    let mut roots = vec![home.to_path_buf()];
-    for dir in cwd.ancestors() {
-        if !roots.iter().any(|root| root == dir) {
-            roots.push(dir.to_path_buf());
-        }
-    }
-    let mut files = Vec::new();
-    for root in roots {
-        for name in [
-            ".aider.conf.yml",
-            ".env",
-            ".aider.model.settings.yml",
-            ".aider.model.metadata.json",
-        ] {
-            files.push(root.join(name));
-        }
-    }
-    files.push(home.join(".aider/oauth-keys.env"));
-    files
-}
-
-pub fn is_aider_invocation(command: &str, args: &[String]) -> bool {
-    base_command(command) == "aider"
-        || args
-            .iter()
-            .position(|arg| arg == "--")
-            .and_then(|index| args.get(index + 1))
-            .is_some_and(|target| base_command(target) == "aider")
-}
-
-pub(crate) fn is_kimi_invocation(command: &str, args: &[String]) -> bool {
-    base_command(command) == "kimi"
-        || args
-            .iter()
-            .position(|arg| arg == "--")
-            .and_then(|index| args.get(index + 1))
-            .is_some_and(|target| base_command(target) == "kimi")
-}
-
-pub fn aider_model_env_key(key: &str) -> bool {
-    matches!(
-        key,
-        "AIDER_MODEL"
-            | "AIDER_WEAK_MODEL"
-            | "AIDER_EDITOR_MODEL"
-            | "AIDER_EDIT_FORMAT"
-            | "AIDER_EDITOR_EDIT_FORMAT"
-            | "AIDER_REASONING_EFFORT"
-            | "AIDER_THINKING_TOKENS"
-    )
 }
 
 /// Env key naming plugin Pi package directories (JSON array of absolute paths)
@@ -440,7 +383,7 @@ pub fn pi_package_readable_roots(
         log::warn!("[sandbox] ignoring {PI_PACKAGE_ROOTS_ENV} on a Bot-isolated spawn");
         return Vec::new();
     }
-    if base_command(&config.command) != "pi" {
+    if !crate::launch_descriptor::takes_pi_packages(&config.command, &config.args) {
         log::warn!(
             "[sandbox] ignoring {PI_PACKAGE_ROOTS_ENV} on a non-Pi spawn ({})",
             config.command
@@ -823,7 +766,7 @@ pub fn wrap_with_sandbox(
     let bot_isolation = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
     crate::launch_descriptor::check_private_launch(&config.command, &config.args, bot_isolation)
         .map_err(SandboxError::StateIsolation)?;
-    crate::process::scope_grok_credentials(&mut config);
+    crate::process::blank_private_credentials(&mut config);
     let native_bridge_root = crate::native_bridge::registered_native_bridge_root(&config.command, &config.args).map_err(SandboxError::InvalidPolicy)?;
     let crush_bridge = native_bridge_root.is_some() && config.args.get(1).map(String::as_str) == Some("--cognia-crush-bridge");
     let hermes_probe_root = crate::native_bridge::hermes_probe_state_root(&config.command, &config.args, &config.env, host.agent_state_data_dir().as_deref()).map_err(SandboxError::InvalidPolicy)?;
@@ -911,34 +854,19 @@ pub fn wrap_with_sandbox(
                 host_home.to_string_lossy().into_owned(),
             ],
         );
-        for relative in [
+        let toolchains = [
             ".nvm",
             ".local/bin",
             ".local/share/pnpm",
-            ".local/share/devin/cli/_versions",
             ".bun/bin",
             ".cargo/bin",
             ".rustup/toolchains",
             "Library/pnpm",
-        ] {
-            args.splice(
-                0..0,
-                [
-                    "--readable".to_string(),
-                    host_home.join(relative).to_string_lossy().into_owned(),
-                ],
-            );
-        }
-        if base_command(&config.command) == "qoder" {
-            for relative in [".qoder/entry", ".qoder/bin"] {
-                args.splice(
-                    0..0,
-                    [
-                        "--readable".into(),
-                        host_home.join(relative).to_string_lossy().into_owned(),
-                    ],
-                );
-            }
+        ]
+        .map(|relative| host_home.join(relative));
+        let programs = crate::launch_descriptor::program_roots(&config.command, &config.args, &host_home);
+        for root in toolchains.into_iter().chain(programs) {
+            args.splice(0..0, ["--readable".to_string(), root.to_string_lossy().into_owned()]);
         }
     }
     if config.env.contains_key(crate::gateway_task::PAYLOAD_ENV) {
@@ -963,34 +891,13 @@ pub fn wrap_with_sandbox(
                 args.splice(0..0, ["--readable".into(), root.to_string_lossy().into_owned()]);
             }
         }
-        for relative in [
-            ".codex",
-            ".claude",
-            ".claude.json",
-            ".pi",
-            ".qwen",
-            ".config/opencode",
-            ".local/share/opencode",
-            ".local/share/cognia-agent-tasks",
-            // Kimi Code (and its archived Python CLI), Copilot CLI, Goose and
-            // Aider keep logins and provider settings here; a task uses its own.
-            ".kimi-code",
-            ".grok",
-            ".minimax",
-            ".kimi",
-            ".copilot",
-            ".config/goose",
-            ".local/share/goose",
-            ".local/state/goose",
-            ".aider",
-        ] {
-            args.splice(
-                0..0,
-                [
-                    "--deny-readable".to_string(),
-                    host_home.join(relative).to_string_lossy().into_owned(),
-                ],
-            );
+        // Every engine keeps logins and provider settings in its own roots;
+        // a task uses its own, and never reads another task's.
+        let denied = crate::launch_descriptor::login_roots(&host_home)
+            .into_iter()
+            .chain([host_home.join(".local/share/cognia-agent-tasks")]);
+        for root in denied {
+            args.splice(0..0, ["--deny-readable".to_string(), root.to_string_lossy().into_owned()]);
         }
     }
 
@@ -1028,7 +935,7 @@ pub fn wrap_with_sandbox(
         args.splice(0..0, ["--readable".into(), root.to_string_lossy().into_owned()]);
     }
 
-    for root in codex_extra_writable_roots(&config) {
+    for root in extra_writable_roots(&config) {
         args.splice(0..0, ["--writable".to_string(), root.to_string_lossy().into_owned()]);
     }
 
@@ -1104,8 +1011,8 @@ pub fn wrap_with_sandbox(
         args[target] = resolved.to_string_lossy().into_owned();
         env.insert(companion.env.into(), companion.helper.to_string_lossy().into_owned());
     }
-    env.remove(CODEX_WRITABLE_ROOTS_ENV);
-    env.remove(CODEX_WRITABLE_CEILING_ENV);
+    env.remove(EXTRA_WRITABLE_ROOTS_ENV);
+    env.remove(EXTRA_WRITABLE_CEILING_ENV);
     // Only this host supplies the upstream policy, never the caller's env.
     env.remove(cognia_exec_sandbox::net_proxy::UPSTREAM_POLICY_ENV);
     if config.sandbox_policy.network == SandboxNetworkMode::Allowlist {
@@ -1576,7 +1483,7 @@ mod tests {
     #[test]
     fn codex_explicit_writable_roots_reach_wrapper_and_hint_is_consumed() {
         let mut request = config("codex", &["app-server"], Some("/work"));
-        request.env.insert(CODEX_WRITABLE_ROOTS_ENV.into(),
+        request.env.insert(EXTRA_WRITABLE_ROOTS_ENV.into(),
             serde_json::json!(["/work/extra", "relative", "/", "/etc", "/work/extra"]).to_string());
         let wrapped = wrap_with_sandbox(request, &FakeHost::new("macos")).unwrap();
         let roots: Vec<&str> = wrapped.args.windows(2)
@@ -1586,19 +1493,19 @@ mod tests {
         assert!(!roots.contains(&"relative"));
         assert!(!roots.contains(&"/"));
         assert!(!roots.contains(&"/etc"));
-        assert!(!wrapped.env.contains_key(CODEX_WRITABLE_ROOTS_ENV));
+        assert!(!wrapped.env.contains_key(EXTRA_WRITABLE_ROOTS_ENV));
     }
 
     #[test]
     fn codex_writable_roots_cannot_name_app_data_or_another_runtime() {
         let mut request = config("codex", &[], Some("/work"));
         let app_data = crate::state_isolation::host_agent_state_data_dir().unwrap().join("cognia");
-        request.env.insert(CODEX_WRITABLE_ROOTS_ENV.into(),
+        request.env.insert(EXTRA_WRITABLE_ROOTS_ENV.into(),
             serde_json::json!([app_data.to_string_lossy()]).to_string());
-        assert!(codex_extra_writable_roots(&request).is_empty());
+        assert!(extra_writable_roots(&request).is_empty());
         request.command = "pi".into();
-        request.env.insert(CODEX_WRITABLE_ROOTS_ENV.into(), "[\"/work/extra\"]".into());
-        assert!(codex_extra_writable_roots(&request).is_empty());
+        request.env.insert(EXTRA_WRITABLE_ROOTS_ENV.into(), "[\"/work/extra\"]".into());
+        assert!(extra_writable_roots(&request).is_empty());
     }
 
     #[cfg(unix)]
@@ -1611,13 +1518,13 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, workspace.join("escape")).unwrap();
         let mut request = config("codex", &[], Some("/work"));
-        request.env.insert(CODEX_WRITABLE_ROOTS_ENV.into(),
+        request.env.insert(EXTRA_WRITABLE_ROOTS_ENV.into(),
             serde_json::json!([workspace.join("inside"), workspace.join("escape")]).to_string());
-        request.env.insert(CODEX_WRITABLE_CEILING_ENV.into(),
+        request.env.insert(EXTRA_WRITABLE_CEILING_ENV.into(),
             serde_json::json!([workspace]).to_string());
-        assert_eq!(codex_extra_writable_roots(&request), vec![std::fs::canonicalize(workspace.join("inside")).unwrap()]);
+        assert_eq!(extra_writable_roots(&request), vec![std::fs::canonicalize(workspace.join("inside")).unwrap()]);
         let wrapped = wrap_with_sandbox(request, &FakeHost::new("macos")).unwrap();
-        assert!(!wrapped.env.contains_key(CODEX_WRITABLE_CEILING_ENV));
+        assert!(!wrapped.env.contains_key(EXTRA_WRITABLE_CEILING_ENV));
     }
 
     #[test]
@@ -1651,14 +1558,6 @@ mod tests {
         ] {
             assert!(denied.contains(&file));
         }
-        assert!(is_aider_invocation(
-            "/launcher",
-            &["--".into(), "aider".into()]
-        ));
-        assert!(!is_aider_invocation("pi", &["--mode".into(), "rpc".into()]));
-        assert!(aider_model_env_key("AIDER_MODEL"));
-        assert!(!aider_model_env_key("AIDER_LOAD"));
-        assert!(!aider_model_env_key("AIDER_FILE"));
     }
 
     #[test]

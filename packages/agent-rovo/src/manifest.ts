@@ -34,6 +34,7 @@ export const rovoDevManifest: AgentIntegrationManifest = {
     {
       id: "rovo-dev",
       match: { kind: "base", values: ["acli"] },
+      env: { prefixes: ["ROVODEV_"] },
       stateRoots: [".config/acli", ".rovodev"],
     },
   ],

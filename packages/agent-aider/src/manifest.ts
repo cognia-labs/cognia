@@ -81,6 +81,41 @@ export const aiderManifest: AgentIntegrationManifest = Object.freeze({
   }),
   protocols: [{ protocol: AIDER_CLI_PROTOCOL, semantics: AIDER_CLI_EXECUTION_SEMANTICS }],
   runtimes: AIDER_RUNTIMES,
+  launch: [
+    {
+      id: "aider",
+      match: { kind: "base", values: ["aider"] },
+      // Aider reads AIDER_* settings implicitly; only its reviewed model
+      // contract reaches it.
+      env: {
+        keys: [
+          "AIDER_MODEL",
+          "AIDER_WEAK_MODEL",
+          "AIDER_EDITOR_MODEL",
+          "AIDER_EDIT_FORMAT",
+          "AIDER_EDITOR_EDIT_FORMAT",
+          "AIDER_REASONING_EFFORT",
+          "AIDER_THINKING_TOKENS",
+        ],
+        reviewedPrefixes: ["AIDER_"],
+        // Aider reads every AIDER_* as configuration, including executable
+        // hooks, so only the request's reviewed keys reach it.
+        reviewedRequestOnly: true,
+      },
+      // Aider searches these implicitly, including startup commands and
+      // provider .env overrides.
+      hiddenFiles: {
+        searched: [
+          ".aider.conf.yml",
+          ".env",
+          ".aider.model.settings.yml",
+          ".aider.model.metadata.json",
+        ],
+        home: [".aider/oauth-keys.env"],
+      },
+      loginRoots: [".aider"],
+    },
+  ],
 }) as AgentIntegrationManifest
 
 /**

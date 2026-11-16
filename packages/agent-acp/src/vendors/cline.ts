@@ -13,6 +13,9 @@ export const clineAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
   launch: {
     id: "cline",
     match: { kind: "base", values: ["cline"] },
+    env: {
+      keys: ["CLINE_API_KEY", "CLINE_PROVIDER", "CLINE_MODEL", "CLINE_DIR", "CLINE_NO_AUTO_UPDATE"],
+    },
     stateRoots: [".cline"],
     // ACP branches before upstream's --data-dir setup; --config controls all
     // persisted state, and its early pre-pass reads the first occurrence.

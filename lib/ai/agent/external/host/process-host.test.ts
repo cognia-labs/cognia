@@ -54,22 +54,22 @@ describe("createProcessPlaneHost", () => {
       command: "codex",
       extraWritableRoots: ["/work/extra"],
       writableCeiling: ["/work"],
-      env: { COGNIA_AGENT_CODEX_WRITABLE_ROOTS: '["/"]' },
+      env: { COGNIA_AGENT_WRITABLE_ROOTS: '["/"]' },
     })
     expect(invoke).toHaveBeenCalledWith("spawn_external_agent", {
       config: {
         id: "codex",
         command: "codex",
         env: {
-          COGNIA_AGENT_CODEX_WRITABLE_ROOTS: '["/work/extra"]',
-          COGNIA_AGENT_CODEX_WRITABLE_CEILING: '["/work"]',
+          COGNIA_AGENT_WRITABLE_ROOTS: '["/work/extra"]',
+          COGNIA_AGENT_WRITABLE_CEILING: '["/work"]',
         },
       },
     })
     await createProcessPlaneHost(plane, () => true).spawn({
       id: "other",
       command: "pi",
-      env: { COGNIA_AGENT_CODEX_WRITABLE_ROOTS: '["/"]' },
+      env: { COGNIA_AGENT_WRITABLE_ROOTS: '["/"]' },
     })
     expect(invoke).toHaveBeenLastCalledWith("spawn_external_agent", {
       config: { id: "other", command: "pi", env: {} },

@@ -11,6 +11,9 @@ export const qoderAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
   launch: {
     id: "qoder",
     match: { kind: "base", values: ["qoder"] },
+    env: {
+      keys: ["QODER_PERSONAL_ACCESS_TOKEN", "QODER_CONFIG_DIR"],
+    },
     stateRoots: [".qoder"],
     relocation: {
       env: ["QODER_CONFIG_DIR"],
@@ -22,6 +25,8 @@ export const qoderAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
       env: { QODER_CONFIG_DIR: "qoder" },
       denyReadable: [],
     },
+    // Qoder installs its own program under its login root.
+    programRoots: [".qoder/entry", ".qoder/bin"],
   },
   permissionModes: {
     toNative: (mode) =>

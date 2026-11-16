@@ -37,6 +37,7 @@ export const openClaudeManifest: AgentIntegrationManifest = Object.freeze({
     {
       id: "openclaude",
       match: { kind: "base", values: ["openclaude"] },
+      env: { prefixes: ["OPENCLAUDE_"] },
       stateRoots: [".openclaude", ".openclaude.json"],
       fileRoots: [".openclaude.json"],
       isolation: {

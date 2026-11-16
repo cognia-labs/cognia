@@ -120,6 +120,16 @@ export const codexManifest: AgentIntegrationManifest = Object.freeze({
     {
       id: "codex",
       match: { kind: "contains", values: ["codex"] },
+      env: {
+        keys: ["NO_BROWSER", "INITIAL_AGENT_MODE", "APP_SERVER_LOGS", "MODEL_PROVIDER"],
+        prefixes: ["CODEX_", "OPENAI_"],
+      },
+      extraWritableRoots: true,
+      // The models manager logs these while it refreshes; they are not errors.
+      stderrNoise: [
+        ["codex_models_manager", "failed to load models cache"],
+        ["codex_models_manager", "failed to renew cache"],
+      ],
       stateRoots: [".codex"],
       isolation: {
         env: { CODEX_HOME: "codex" },

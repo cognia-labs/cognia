@@ -10,23 +10,40 @@ import { ACP_VENDOR_PROFILES } from "./vendor-profiles"
 
 /** Plain ACP engines: no vendor profile, no documented home variable. */
 const PLAIN_ACP_ENGINE_LAUNCH: readonly EngineLaunchDescriptor[] = [
-  { id: "gemini", match: { kind: "contains", values: ["gemini"] }, stateRoots: [".gemini"] },
+  {
+    id: "gemini",
+    match: { kind: "contains", values: ["gemini"] },
+    stateRoots: [".gemini"],
+    env: { prefixes: ["GEMINI_", "GOOGLE_"] },
+  },
   {
     id: "qwen",
     match: { kind: "contains", values: ["qwen"] },
     stateRoots: [".qwen"],
+    env: { prefixes: ["QWEN_"] },
     isolation: {
       env: { QWEN_HOME: "qwen", QWEN_RUNTIME_DIR: "qwen-runtime" },
       denyReadable: [".qwen"],
     },
   },
-  { id: "kiro", match: { kind: "contains", values: ["kiro"] }, stateRoots: [".kiro"] },
+  {
+    id: "kiro",
+    match: { kind: "contains", values: ["kiro"] },
+    stateRoots: [".kiro"],
+    env: { prefixes: ["KIRO_"] },
+  },
   {
     id: "factory-droid",
     match: { kind: "contains", values: ["droid", "factory"] },
     stateRoots: [".factory"],
+    env: { prefixes: ["FACTORY_", "DROID_"] },
   },
-  { id: "cursor", match: { kind: "contains", values: ["cursor"] }, stateRoots: [".cursor"] },
+  {
+    id: "cursor",
+    match: { kind: "contains", values: ["cursor"] },
+    stateRoots: [".cursor"],
+    env: { prefixes: ["CURSOR_"] },
+  },
 ]
 
 export const ACP_ENGINE_LAUNCH: readonly EngineLaunchDescriptor[] = [

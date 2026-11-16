@@ -5,7 +5,7 @@ import path from "node:path"
 
 import {
   buildSandboxLauncherArgs,
-  codexExtraWritableRoots,
+  extraWritableRoots,
   bundledLauncherCandidates,
   defaultSandboxRuntime,
   findSandboxLauncher,
@@ -270,15 +270,15 @@ describe("external-agent sandbox launcher", () => {
     const report = jest.spyOn(console, "warn").mockImplementation(() => {})
     try {
       expect(
-        codexExtraWritableRoots({
+        extraWritableRoots({
           id: "codex",
           command: "codex",
           cwd: "/work",
-          env: { COGNIA_AGENT_CODEX_WRITABLE_ROOTS: '["C:/work"]' },
+          env: { COGNIA_AGENT_WRITABLE_ROOTS: '["C:/work"]' },
         })
       ).toEqual([])
       expect(report).toHaveBeenCalledWith(
-        "Ignoring Codex writable root",
+        "Ignoring extra writable root",
         expect.objectContaining({ reason: "an absolute path on this host is required" })
       )
     } finally {
@@ -288,13 +288,13 @@ describe("external-agent sandbox launcher", () => {
 
   it("treats a filesystem-root ceiling as containing safe descendant roots", () => {
     expect(
-      codexExtraWritableRoots({
+      extraWritableRoots({
         id: "codex",
         command: "codex",
         cwd: "/work",
         env: {
-          COGNIA_AGENT_CODEX_WRITABLE_ROOTS: '["/work/extra"]',
-          COGNIA_AGENT_CODEX_WRITABLE_CEILING: '["/"]',
+          COGNIA_AGENT_WRITABLE_ROOTS: '["/work/extra"]',
+          COGNIA_AGENT_WRITABLE_CEILING: '["/"]',
         },
       })
     ).toEqual(["/work/extra"])
@@ -310,21 +310,21 @@ describe("external-agent sandbox launcher", () => {
     const report = jest.spyOn(console, "warn").mockImplementation(() => {})
     try {
       expect(
-        codexExtraWritableRoots({
+        extraWritableRoots({
           id: "codex",
           command: "codex",
           cwd: workspace,
           env: {
-            COGNIA_AGENT_CODEX_WRITABLE_ROOTS: JSON.stringify([
+            COGNIA_AGENT_WRITABLE_ROOTS: JSON.stringify([
               path.join(workspace, "inside"),
               path.join(workspace, "escape"),
             ]),
-            COGNIA_AGENT_CODEX_WRITABLE_CEILING: JSON.stringify([workspace]),
+            COGNIA_AGENT_WRITABLE_CEILING: JSON.stringify([workspace]),
           },
         })
       ).toEqual([fs.realpathSync(path.join(workspace, "inside"))])
       expect(report).toHaveBeenCalledWith(
-        "Ignoring Codex writable root",
+        "Ignoring extra writable root",
         expect.objectContaining({ reason: "outside the canonical session writable ceiling" })
       )
     } finally {
@@ -342,12 +342,7 @@ describe("external-agent sandbox launcher", () => {
           command: "codex",
           cwd: "/work",
           env: {
-            COGNIA_AGENT_CODEX_WRITABLE_ROOTS: JSON.stringify([
-              "/work/extra",
-              "relative",
-              "/etc",
-              "/",
-            ]),
+            COGNIA_AGENT_WRITABLE_ROOTS: JSON.stringify(["/work/extra", "relative", "/etc", "/"]),
           },
         },
         "/home/user"

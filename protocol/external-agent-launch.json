@@ -2,6 +2,36 @@
   "description": "Engine launch descriptors (ADR-0217), generated from the integration packages by scripts/build/gen-external-agent-launch.mjs; edit the descriptor in its package. Both process hosts (crates/cognia-external-agent, cli/src/runtime/external) read this file and name no engine themselves. A launch matches by its target: for `npx <package>` the package, otherwise the executable file name without a Windows suffix, lower-cased.",
   "engines": [
     {
+      "id": "aider",
+      "match": {
+        "kind": "base",
+        "values": ["aider"]
+      },
+      "env": {
+        "keys": [
+          "AIDER_MODEL",
+          "AIDER_WEAK_MODEL",
+          "AIDER_EDITOR_MODEL",
+          "AIDER_EDIT_FORMAT",
+          "AIDER_EDITOR_EDIT_FORMAT",
+          "AIDER_REASONING_EFFORT",
+          "AIDER_THINKING_TOKENS"
+        ],
+        "reviewedPrefixes": ["AIDER_"],
+        "reviewedRequestOnly": true
+      },
+      "hiddenFiles": {
+        "searched": [
+          ".aider.conf.yml",
+          ".env",
+          ".aider.model.settings.yml",
+          ".aider.model.metadata.json"
+        ],
+        "home": [".aider/oauth-keys.env"]
+      },
+      "loginRoots": [".aider"]
+    },
+    {
       "id": "claude-code",
       "match": {
         "kind": "target",
@@ -13,6 +43,9 @@
           "@anthropic-ai/claude-code",
           "@zed-industries/claude-code-acp"
         ]
+      },
+      "env": {
+        "prefixes": ["ANTHROPIC_", "CLAUDE_"]
       },
       "stateRoots": [".claude", ".claude.json", ".claude.json.backup"],
       "fileRoots": [".claude.json", ".claude.json.backup"],
@@ -30,6 +63,15 @@
         "kind": "contains",
         "values": ["codex"]
       },
+      "env": {
+        "keys": ["NO_BROWSER", "INITIAL_AGENT_MODE", "APP_SERVER_LOGS", "MODEL_PROVIDER"],
+        "prefixes": ["CODEX_", "OPENAI_"]
+      },
+      "extraWritableRoots": true,
+      "stderrNoise": [
+        ["codex_models_manager", "failed to load models cache"],
+        ["codex_models_manager", "failed to renew cache"]
+      ],
       "stateRoots": [".codex"],
       "isolation": {
         "env": {
@@ -44,6 +86,9 @@
       "match": {
         "kind": "contains",
         "values": ["opencode"]
+      },
+      "env": {
+        "prefixes": ["OPENCODE_"]
       },
       "stateRoots": [".config/opencode", ".local/share/opencode"],
       "isolation": {
@@ -63,6 +108,10 @@
         "kind": "base",
         "values": ["pi"]
       },
+      "env": {
+        "keys": ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"]
+      },
+      "piPackages": true,
       "stateRoots": [".pi"],
       "isolation": {
         "env": {
@@ -77,6 +126,9 @@
       "match": {
         "kind": "base",
         "values": ["openclaude"]
+      },
+      "env": {
+        "prefixes": ["OPENCLAUDE_"]
       },
       "stateRoots": [".openclaude", ".openclaude.json"],
       "fileRoots": [".openclaude.json"],
@@ -106,6 +158,9 @@
         "kind": "base",
         "values": ["cn"]
       },
+      "env": {
+        "prefixes": ["CONTINUE_"]
+      },
       "stateRoots": [".continue"]
     },
     {
@@ -114,6 +169,9 @@
         "kind": "base",
         "values": ["acli"]
       },
+      "env": {
+        "prefixes": ["ROVODEV_"]
+      },
       "stateRoots": [".config/acli", ".rovodev"]
     },
     {
@@ -121,6 +179,9 @@
       "match": {
         "kind": "base",
         "values": ["agy_acp_server.par", "agy_acp_server"]
+      },
+      "env": {
+        "keys": ["AGY_ACP_FORCE_FILE_STORAGE"]
       },
       "stateRoots": [".gemini/antigravity-acp", ".gemini/artifacts"],
       "relocation": {
@@ -146,6 +207,15 @@
         "kind": "base",
         "values": ["mcode"]
       },
+      "env": {
+        "keys": [
+          "MINIMAX_DATA_DIR",
+          "MAVIS_DATA_DIR",
+          "MCODE_PROVIDER_API_KEY",
+          "MCODE_LLM_FIRST_EVENT_TIMEOUT_MS",
+          "MCODE_LLM_STREAM_IDLE_TIMEOUT_MS"
+        ]
+      },
       "stateRoots": [".minimax"],
       "relocation": {
         "env": ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"],
@@ -167,6 +237,34 @@
       "match": {
         "kind": "base",
         "values": ["kimi"]
+      },
+      "env": {
+        "keys": [
+          "KIMI_CODE_HOME",
+          "KIMI_CODE_NO_AUTO_UPDATE",
+          "KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT",
+          "KIMI_DISABLE_TELEMETRY",
+          "KIMI_MODEL_NAME",
+          "KIMI_MODEL_PROVIDER_TYPE",
+          "KIMI_MODEL_BASE_URL",
+          "KIMI_MODEL_API_KEY",
+          "KIMI_MODEL_CAPABILITIES",
+          "KIMI_MODEL_DISPLAY_NAME",
+          "KIMI_MODEL_MAX_CONTEXT_SIZE",
+          "KIMI_MODEL_MAX_OUTPUT_SIZE",
+          "KIMI_MODEL_MAX_COMPLETION_TOKENS",
+          "KIMI_MODEL_REASONING_KEY",
+          "KIMI_MODEL_ADAPTIVE_THINKING",
+          "KIMI_MODEL_TEMPERATURE",
+          "KIMI_MODEL_TOP_P",
+          "KIMI_MODEL_THINKING_EFFORT",
+          "KIMI_MODEL_THINKING_KEEP",
+          "KIMI_MCP_STARTUP_TIMEOUT_MS",
+          "KIMI_MCP_TOOL_TIMEOUT_MS",
+          "KIMI_LOOP_MAX_STEPS_PER_TURN",
+          "KIMI_LOOP_MAX_ATTEMPTS_PER_STEP"
+        ],
+        "reviewedPrefixes": ["KIMI_"]
       },
       "stateRoots": [".kimi-code"],
       "relocation": {
@@ -191,6 +289,15 @@
       "match": {
         "kind": "base",
         "values": ["cline"]
+      },
+      "env": {
+        "keys": [
+          "CLINE_API_KEY",
+          "CLINE_PROVIDER",
+          "CLINE_MODEL",
+          "CLINE_DIR",
+          "CLINE_NO_AUTO_UPDATE"
+        ]
       },
       "stateRoots": [".cline"],
       "relocation": {
@@ -221,6 +328,9 @@
         "kind": "contains",
         "values": ["copilot"]
       },
+      "env": {
+        "prefixes": ["COPILOT_", "GITHUB_", "GH_"]
+      },
       "stateRoots": [".copilot", ".cache/copilot"],
       "isolation": {
         "env": {
@@ -235,6 +345,9 @@
       "match": {
         "kind": "base",
         "values": ["qoder"]
+      },
+      "env": {
+        "keys": ["QODER_PERSONAL_ACCESS_TOKEN", "QODER_CONFIG_DIR"]
       },
       "stateRoots": [".qoder"],
       "relocation": {
@@ -252,13 +365,17 @@
         },
         "sharedRoots": [".qoder"],
         "denyReadable": []
-      }
+      },
+      "programRoots": [".qoder/entry", ".qoder/bin"]
     },
     {
       "id": "goose",
       "match": {
         "kind": "base",
         "values": ["goose"]
+      },
+      "env": {
+        "prefixes": ["GOOSE_"]
       },
       "stateRoots": [
         ".config/goose",
@@ -300,6 +417,18 @@
         "kind": "base",
         "values": ["grok"]
       },
+      "env": {
+        "keys": [
+          "XAI_API_KEY",
+          "GROK_HOME",
+          "GROK_DISABLE_AUTOUPDATER",
+          "GROK_CHANGELOG_OFFLINE",
+          "GROK_TELEMETRY_ENABLED",
+          "GROK_TELEMETRY_TRACE_UPLOAD",
+          "GROK_FEEDBACK_ENABLED"
+        ],
+        "privateBlank": ["XAI_API_KEY"]
+      },
       "stateRoots": [".grok"],
       "relocation": {
         "env": ["GROK_HOME"],
@@ -324,13 +453,20 @@
         "kind": "base",
         "values": ["devin"]
       },
-      "stateRoots": [".config/devin", ".local/share/devin", ".cache/devin"]
+      "env": {
+        "prefixes": ["DEVIN_", "WINDSURF_"]
+      },
+      "stateRoots": [".config/devin", ".local/share/devin", ".cache/devin"],
+      "programRoots": [".local/share/devin/cli/_versions"]
     },
     {
       "id": "auggie",
       "match": {
         "kind": "base",
         "values": ["auggie"]
+      },
+      "env": {
+        "prefixes": ["AUGMENT_"]
       },
       "stateRoots": [".augment"]
     },
@@ -340,6 +476,9 @@
         "kind": "base",
         "values": ["autohand"]
       },
+      "env": {
+        "prefixes": ["AUTOHAND_"]
+      },
       "stateRoots": [".autohand"]
     },
     {
@@ -347,6 +486,9 @@
       "match": {
         "kind": "base",
         "values": ["codebuddy"]
+      },
+      "env": {
+        "prefixes": ["CODEBUDDY_"]
       },
       "stateRoots": [".codebuddy"]
     },
@@ -364,6 +506,9 @@
         "kind": "base",
         "values": ["kilo"]
       },
+      "env": {
+        "prefixes": ["KILO_"]
+      },
       "stateRoots": [".config/kilo", ".local/share/kilo", ".local/state/kilo", ".cache/kilo"]
     },
     {
@@ -371,6 +516,9 @@
       "match": {
         "kind": "base",
         "values": ["vibe-acp"]
+      },
+      "env": {
+        "prefixes": ["MISTRAL_", "VIBE_"]
       },
       "stateRoots": [".vibe"],
       "isolation": {
@@ -390,6 +538,9 @@
       "match": {
         "kind": "base",
         "values": ["mimo"]
+      },
+      "env": {
+        "prefixes": ["MIMOCODE_"]
       },
       "stateRoots": [
         ".config/mimocode",
@@ -425,6 +576,9 @@
         "kind": "base",
         "values": ["hermes"]
       },
+      "env": {
+        "prefixes": ["HERMES_"]
+      },
       "stateRoots": [".hermes"],
       "isolation": {
         "env": {
@@ -444,6 +598,9 @@
         "kind": "base",
         "values": ["omp"]
       },
+      "env": {
+        "prefixes": ["OMP_"]
+      },
       "stateRoots": [".omp"]
     },
     {
@@ -451,6 +608,9 @@
       "match": {
         "kind": "base",
         "values": ["muse-acp"]
+      },
+      "env": {
+        "prefixes": ["MUSE_"]
       },
       "stateRoots": [".config/muse", ".local/state/muse-acp"]
     },
@@ -460,6 +620,9 @@
         "kind": "base",
         "values": ["amp-acp"]
       },
+      "env": {
+        "prefixes": ["AMP_"]
+      },
       "stateRoots": [".config/amp", ".local/share/amp", ".local/state/amp-acp"]
     },
     {
@@ -467,6 +630,9 @@
       "match": {
         "kind": "base",
         "values": ["zcode-acp"]
+      },
+      "env": {
+        "prefixes": ["ZCODE_"]
       },
       "stateRoots": [".zcode", ".zcode-acp"]
     },
@@ -476,7 +642,10 @@
         "kind": "contains",
         "values": ["gemini"]
       },
-      "stateRoots": [".gemini"]
+      "stateRoots": [".gemini"],
+      "env": {
+        "prefixes": ["GEMINI_", "GOOGLE_"]
+      }
     },
     {
       "id": "qwen",
@@ -485,6 +654,9 @@
         "values": ["qwen"]
       },
       "stateRoots": [".qwen"],
+      "env": {
+        "prefixes": ["QWEN_"]
+      },
       "isolation": {
         "env": {
           "QWEN_HOME": "qwen",
@@ -500,7 +672,10 @@
         "kind": "contains",
         "values": ["kiro"]
       },
-      "stateRoots": [".kiro"]
+      "stateRoots": [".kiro"],
+      "env": {
+        "prefixes": ["KIRO_"]
+      }
     },
     {
       "id": "factory-droid",
@@ -508,7 +683,10 @@
         "kind": "contains",
         "values": ["droid", "factory"]
       },
-      "stateRoots": [".factory"]
+      "stateRoots": [".factory"],
+      "env": {
+        "prefixes": ["FACTORY_", "DROID_"]
+      }
     },
     {
       "id": "cursor",
@@ -516,7 +694,10 @@
         "kind": "contains",
         "values": ["cursor"]
       },
-      "stateRoots": [".cursor"]
+      "stateRoots": [".cursor"],
+      "env": {
+        "prefixes": ["CURSOR_"]
+      }
     },
     {
       "id": "npx",

@@ -67,11 +67,6 @@ pub trait ExternalAgentEventSink: Send + Sync + 'static {
 /// codex-internal transient, not an external-agent failure, so it is demoted to
 /// DEBUG; every other stderr line stays at WARN. The line is still forwarded to
 /// the sink verbatim, so UI events are unaffected.
-fn is_transient_codex_noise(line: &str) -> bool {
-    line.contains("codex_models_manager")
-        && (line.contains("failed to load models cache") || line.contains("failed to renew cache"))
-}
-
 /// How an agent's stdout is delivered to the renderer.
 ///
 /// Mirrors `ExternalAgentStdoutFraming` in
@@ -408,7 +403,7 @@ impl ExternalAgentProcessManager {
         }
 
         config = crate::native_bridge::harden_process_launch(config)?;
-        scope_grok_credentials(&mut config);
+        blank_private_credentials(&mut config);
         crate::launch_descriptor::apply_platform_args(&config.command, &mut config.args, std::env::consts::OS);
         crate::launch_descriptor::check_private_launch(
             &config.command,
@@ -515,23 +510,7 @@ impl ExternalAgentProcessManager {
         if protected_siwc {
             configure_siwc_environment(&mut cmd);
         }
-        if crate::sandbox::is_aider_invocation(&config.command, &config.args) {
-            for (key, _) in std::env::vars_os() {
-                if key.to_string_lossy().starts_with("AIDER_") {
-                    cmd.env_remove(key);
-                }
-            }
-            config.env.retain(|key, _| {
-                !key.starts_with("AIDER_") || crate::sandbox::aider_model_env_key(key)
-            });
-        }
-        if crate::sandbox::is_kimi_invocation(&config.command, &config.args) {
-            configure_kimi_environment(
-                &mut cmd,
-                &mut config,
-                std::env::vars_os().map(|(key, _)| key),
-            );
-        }
+        review_engine_environment(&mut cmd, &mut config, std::env::vars_os().map(|(key, _)| key));
         cmd.env_remove(crate::devin_mcp_config::PAYLOAD_ENV);
         cmd.env_remove(crate::devin_mcp_config::WRAPPED_ENV);
         // The state key is a request to this host, never child input — not
@@ -708,7 +687,7 @@ impl ExternalAgentProcessManager {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                if is_transient_codex_noise(&line) {
+                if crate::launch_descriptor::is_stderr_noise(&line) {
                     log::debug!("External agent {} stderr (transient): {}", stderr_id, line);
                 } else {
                     log::warn!("External agent {} stderr: {}", stderr_id, line);
@@ -940,40 +919,39 @@ impl ExternalAgentProcessManager {
     }
 }
 
-/// Private Grok state starts signed out unless this configuration supplies a key.
-/// Called before the sandbox/state-root wrappers consume the isolation request.
-/// An explicit empty value also opts out of the host credential.
-pub(crate) fn scope_grok_credentials(config: &mut ExternalAgentSpawnConfig) {
-    let grok = std::path::Path::new(&config.command)
-        .file_stem()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|name| name.eq_ignore_ascii_case("grok"));
-    let private = config
-        .env
-        .contains_key(crate::state_isolation::AGENT_STATE_KEY_ENV)
-        || config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
-    if grok && private {
-        config.env.entry("XAI_API_KEY".into()).or_default();
-    }
+fn private_launch(config: &ExternalAgentSpawnConfig) -> bool {
+    config.env.contains_key(crate::state_isolation::AGENT_STATE_KEY_ENV)
+        || config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1")
 }
 
-/// Native Kimi accepts environment hooks for OAuth, identity and executable paths.
-/// Preserve only its reviewed model/runtime contract; Bot credentials are explicit.
-fn configure_kimi_environment(
+/// A private launch starts without the host's credentials for its engine
+/// unless the configuration supplies them; an explicit empty value opts out
+/// too. Called before the sandbox and state-root wrappers consume the
+/// isolation request.
+pub(crate) fn blank_private_credentials(config: &mut ExternalAgentSpawnConfig) {
+    let private = private_launch(config);
+    let (command, args) = (config.command.clone(), config.args.clone());
+    crate::launch_descriptor::blank_private_credentials(&command, &args, &mut config.env, private);
+}
+
+/// Keep each engine's reviewed env families to their reviewed keys: from the
+/// request always, and from the host outside a private launch.
+fn review_engine_environment(
     command: &mut Command,
     config: &mut ExternalAgentSpawnConfig,
     ambient_keys: impl IntoIterator<Item = std::ffi::OsString>,
 ) {
-    let bot = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
+    let private = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
+    let (engine, engine_args) = crate::launch_descriptor::unwrapped(&config.command, &config.args);
+    let (engine, engine_args) = (engine.to_string(), engine_args.to_vec());
     for key in ambient_keys {
-        let name = key.to_string_lossy();
-        if name.starts_with("KIMI_") && (bot || !crate::presets::kimi_env_key(&name)) {
+        if crate::launch_descriptor::reviewed_env_refused(&engine, &engine_args, &key.to_string_lossy(), true, private) {
             command.env_remove(key);
         }
     }
-    config
-        .env
-        .retain(|key, _| !key.starts_with("KIMI_") || crate::presets::kimi_env_key(key));
+    config.env.retain(|key, _| {
+        !crate::launch_descriptor::reviewed_env_refused(&engine, &engine_args, key, false, private)
+    });
 }
 
 /// A tenant's execution, or any execution on a multi-tenant Host, never runs
@@ -1233,7 +1211,7 @@ mod tests {
                 if let Some(value) = explicit {
                     config.env.insert("XAI_API_KEY".into(), value.into());
                 }
-                scope_grok_credentials(&mut config);
+                blank_private_credentials(&mut config);
                 let mut command = Command::new("fixture");
                 command.env("XAI_API_KEY", "ambient-fixture");
                 command.envs(&config.env);
@@ -1251,11 +1229,21 @@ mod tests {
         }
     }
 
+    fn removed_env(command: &Command) -> Vec<String> {
+        command
+            .as_std()
+            .get_envs()
+            .filter_map(|(key, value)| value.is_none().then_some(key.to_string_lossy().into_owned()))
+            .collect()
+    }
+
     #[test]
     fn kimi_environment_filters_ambient_identity_hooks_and_bot_credentials() {
         for bot in [false, true] {
             let mut command = Command::new("fixture");
             let mut config = echo_config("kimi-env");
+            config.command = crate::sandbox::launcher_file_name(std::env::consts::OS).into();
+            config.args = vec!["--".into(), "kimi".into(), "acp".into()];
             config.env.extend([
                 ("KIMI_CODE_HOME".into(), "/owned/kimi".into()),
                 ("KIMI_MODEL_API_KEY".into(), "explicit-fixture".into()),
@@ -1264,7 +1252,7 @@ mod tests {
             if bot {
                 config.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
             }
-            configure_kimi_environment(
+            review_engine_environment(
                 &mut command,
                 &mut config,
                 [
@@ -1276,15 +1264,7 @@ mod tests {
                 ]
                 .map(std::ffi::OsString::from),
             );
-            let removed: Vec<_> = command
-                .as_std()
-                .get_envs()
-                .filter_map(|(key, value)| {
-                    value
-                        .is_none()
-                        .then_some(key.to_string_lossy().into_owned())
-                })
-                .collect();
+            let removed = removed_env(&command);
             for key in ["KIMI_OAUTH_HOST", "KIMI_CODE_USER_AGENT", "KIMI_BIN_PATH"] {
                 assert!(removed.contains(&key.to_string()));
             }
@@ -1293,15 +1273,38 @@ mod tests {
             assert_eq!(config.env["KIMI_MODEL_API_KEY"], "explicit-fixture");
             assert!(!config.env.contains_key("KIMI_OAUTH_HOST"));
         }
-        assert!(crate::sandbox::is_kimi_invocation("kimi", &["acp".into()]));
-        assert!(crate::sandbox::is_kimi_invocation(
-            "/launcher",
-            &["--".into(), "kimi".into(), "acp".into()]
-        ));
-        assert!(!crate::sandbox::is_kimi_invocation(
-            "qoder",
-            &["acp".into()]
-        ));
+    }
+
+    #[test]
+    fn aider_takes_reviewed_settings_from_the_request_only() {
+        let mut command = Command::new("fixture");
+        let mut config = echo_config("aider-env");
+        config.command = "aider".into();
+        config.env.extend([
+            ("AIDER_MODEL".into(), "deepseek/test".into()),
+            ("AIDER_LOAD".into(), "commands".into()),
+        ]);
+        review_engine_environment(
+            &mut command,
+            &mut config,
+            ["AIDER_MODEL", "AIDER_LOAD"].map(std::ffi::OsString::from),
+        );
+        let removed = removed_env(&command);
+        assert!(removed.contains(&"AIDER_MODEL".to_string()));
+        assert!(removed.contains(&"AIDER_LOAD".to_string()));
+        assert_eq!(config.env["AIDER_MODEL"], "deepseek/test");
+        assert!(!config.env.contains_key("AIDER_LOAD"));
+    }
+
+    #[test]
+    fn other_engines_keep_their_environment_unreviewed() {
+        let mut command = Command::new("fixture");
+        let mut config = echo_config("codex-env");
+        config.command = "codex".into();
+        config.env.insert("KIMI_OAUTH_HOST".into(), "unrelated".into());
+        review_engine_environment(&mut command, &mut config, ["AIDER_MODEL"].map(std::ffi::OsString::from));
+        assert!(removed_env(&command).is_empty());
+        assert!(config.env.contains_key("KIMI_OAUTH_HOST"));
     }
     use super::*;
 
@@ -1335,38 +1338,6 @@ mod tests {
     #[cfg(unix)]
     fn noop_sink() -> Arc<dyn ExternalAgentEventSink> {
         Arc::new(CollectorSink::default())
-    }
-
-    #[test]
-    fn transient_codex_cache_noise_is_demoted() {
-        // The exact stderr line codex-cli 0.144.4 emits when a stale-schema
-        // models_cache.json is loaded before the TTL refetch heals it.
-        let missing_field = "2026-07-17T07:54:38.169956Z ERROR codex_models_manager::cache: \
-             failed to load models cache: missing field `supports_reasoning_summaries` \
-             at line 88 column 5";
-        assert!(is_transient_codex_noise(missing_field));
-
-        // The TTL-renewal variant (openai/codex #30864).
-        let renew = "ERROR codex_models_manager::manager: failed to renew cache TTL. \
-             EOF while parsing a value at line 1 column 0";
-        assert!(is_transient_codex_noise(renew));
-    }
-
-    #[test]
-    fn genuine_stderr_stays_a_warning() {
-        // Real agent errors must NOT be demoted.
-        assert!(!is_transient_codex_noise(
-            "ERROR codex_core::client: 401 Unauthorized: invalid API key"
-        ));
-        assert!(!is_transient_codex_noise(
-            "panicked at 'index out of bounds'"
-        ));
-        assert!(!is_transient_codex_noise(""));
-        // A models-manager line that is not a cache load/renew transient still
-        // warns — the two conditions are ANDed, not ORed.
-        assert!(!is_transient_codex_noise(
-            "ERROR codex_models_manager::foo: something else entirely"
-        ));
     }
 
     #[test]

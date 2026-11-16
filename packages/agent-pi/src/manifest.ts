@@ -81,6 +81,8 @@ export const piManifest: AgentIntegrationManifest = Object.freeze({
     {
       id: "pi",
       match: { kind: "base", values: ["pi"] },
+      env: { keys: ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"] },
+      piPackages: true,
       stateRoots: [".pi"],
       isolation: {
         env: { PI_CODING_AGENT_DIR: "pi" },

@@ -33,9 +33,13 @@ import {
 import { toolHostRuntimeDir } from "../../agent/tool-host/protocol"
 import { SANDBOX_SUPPORTED_PLATFORMS } from "@/lib/ai/agent/external/policy/security-policy"
 import {
+  acceptsExtraWritableRoots,
   checkPrivateLaunch,
   companionFor,
   engineTemp,
+  hiddenFiles,
+  loginRoots,
+  programRoots,
   relocatedState,
   withPlatformArgs,
   type RelocatedState,
@@ -147,10 +151,13 @@ export function sandboxSupportsPlatform(platform: NodeJS.Platform = process.plat
   return (SANDBOX_SUPPORTED_PLATFORMS as readonly string[]).includes(platform)
 }
 
-/** Mirror the native wrapper's validation of the host-owned Codex hint. */
-export function codexExtraWritableRoots(config: NodeExternalAgentSpawnConfig): string[] {
-  const raw = config.env?.COGNIA_AGENT_CODEX_WRITABLE_ROOTS
-  if (raw === undefined || config.command !== "codex") return []
+/**
+ * Mirror the native wrapper's validation of the host-owned writable-roots
+ * hint, honoured only by an engine whose descriptor accepts it.
+ */
+export function extraWritableRoots(config: NodeExternalAgentSpawnConfig): string[] {
+  const raw = config.env?.COGNIA_AGENT_WRITABLE_ROOTS
+  if (raw === undefined || !acceptsExtraWritableRoots(config.command, config.args ?? [])) return []
   let requested: string[]
   try {
     const value: unknown = JSON.parse(raw)
@@ -158,11 +165,11 @@ export function codexExtraWritableRoots(config: NodeExternalAgentSpawnConfig): s
       throw new Error("expected paths")
     requested = value
   } catch {
-    console.warn("Ignoring malformed Codex writable roots")
+    console.warn("Ignoring malformed extra writable roots")
     return []
   }
   const report = (root: string, reason: string) =>
-    console.warn("Ignoring Codex writable root", { root, reason })
+    console.warn("Ignoring extra writable root", { root, reason })
   const canonicalize = (root: string): string => {
     let ancestor = root
     const tail: string[] = []
@@ -173,7 +180,7 @@ export function codexExtraWritableRoots(config: NodeExternalAgentSpawnConfig): s
     return path.join(fs.realpathSync(ancestor), ...tail)
   }
   let ceiling: string[] | undefined
-  const rawCeiling = config.env?.COGNIA_AGENT_CODEX_WRITABLE_CEILING
+  const rawCeiling = config.env?.COGNIA_AGENT_WRITABLE_CEILING
   if (rawCeiling !== undefined) {
     try {
       const value: unknown = JSON.parse(rawCeiling)
@@ -185,7 +192,7 @@ export function codexExtraWritableRoots(config: NodeExternalAgentSpawnConfig): s
       }
       ceiling = value.map(canonicalize)
     } catch {
-      console.warn("Ignoring Codex writable roots: invalid session writable ceiling")
+      console.warn("Ignoring extra writable roots: invalid session writable ceiling")
       return []
     }
   }
@@ -339,7 +346,7 @@ export function buildSandboxLauncherArgs(
   const effectiveHome = taskHome ?? homedir
   const writable = [
     config.cwd,
-    ...codexExtraWritableRoots(config),
+    ...extraWritableRoots(config),
     ...(crushBridge
       ? policyAgentStateWritableRoots("crush", []).map((root) => path.join(homedir, root))
       : []),
@@ -365,9 +372,10 @@ export function buildSandboxLauncherArgs(
     ...[nativeBridgeRoot, hermesProbeRoot]
       .filter((root): root is string => !!root)
       .flatMap((root) => ["--readable", root]),
-    ...(config.command === "aider"
-      ? aiderImplicitConfigPaths(config.cwd, homedir).flatMap((file) => ["--deny-readable", file])
-      : []),
+    ...hiddenFiles(config.command, config.args ?? [], config.cwd, homedir).flatMap((file) => [
+      "--deny-readable",
+      file,
+    ]),
     ...(isolation && !botIsolation && !taskHome
       ? isolation.denyReadable.flatMap((root) => ["--deny-readable", root])
       : []),
@@ -377,16 +385,17 @@ export function buildSandboxLauncherArgs(
           "--deny-readable",
           homedir,
           ...[
-            ".nvm",
-            ".local/bin",
-            ".local/share/pnpm",
-            ".local/share/devin/cli/_versions",
-            ".bun/bin",
-            ".cargo/bin",
-            ".rustup/toolchains",
-            "Library/pnpm",
-            ...(config.command === "qoder" ? [".qoder/entry", ".qoder/bin"] : []),
-          ].flatMap((relative) => ["--readable", path.join(homedir, relative)]),
+            ...[
+              ".nvm",
+              ".local/bin",
+              ".local/share/pnpm",
+              ".bun/bin",
+              ".cargo/bin",
+              ".rustup/toolchains",
+              "Library/pnpm",
+            ].map((relative) => path.join(homedir, relative)),
+            ...programRoots(config.command, config.args ?? [], homedir),
+          ].flatMap((root) => ["--readable", root]),
         ]
       : []),
     "--cwd",
@@ -409,27 +418,12 @@ export function buildSandboxLauncherArgs(
     ...(taskHome
       ? [
           ...(config.sandboxPolicy?.readableScope === "workspace" ? [] : ["--readable", homedir]),
+          // Every engine keeps logins and provider settings in its own roots;
+          // a task uses its own, and never reads another task's.
           ...[
-            ".codex",
-            ".claude",
-            ".claude.json",
-            ".pi",
-            ".qwen",
-            ".config/opencode",
-            ".local/share/opencode",
-            ".local/share/cognia-agent-tasks",
-            // Kimi Code (and its archived Python CLI), Copilot CLI, Goose and
-            // Aider keep logins and provider settings here; a task uses its own.
-            ".kimi-code",
-            ".grok",
-            ".minimax",
-            ".kimi",
-            ".copilot",
-            ".config/goose",
-            ".local/share/goose",
-            ".local/state/goose",
-            ".aider",
-          ].flatMap((relative) => ["--deny-readable", path.join(homedir, relative)]),
+            ...loginRoots(homedir),
+            path.join(homedir, ".local/share/cognia-agent-tasks"),
+          ].flatMap((root) => ["--deny-readable", root]),
         ]
       : []),
     ...(config.sandboxPolicy?.network === "off"
@@ -498,25 +492,6 @@ export function workspaceToolchainReadableRoots(command: string, home: string): 
     }
   }
   return [...roots]
-}
-
-/** Aider searches cwd, Git ancestors and home even with explicit --config.
- * Hide that implicit configuration so startup commands, extra files and .env
- * cannot replace Cognia's explicit prompt, policies or provider credentials. */
-export function aiderImplicitConfigPaths(cwd: string, home: string): string[] {
-  const roots = new Set([home])
-  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
-    roots.add(dir)
-    if (dir === path.dirname(dir)) break
-  }
-  return [
-    ...[...roots].flatMap((root) =>
-      [".aider.conf.yml", ".env", ".aider.model.settings.yml", ".aider.model.metadata.json"].map(
-        (name) => path.join(root, name)
-      )
-    ),
-    path.join(home, ".aider/oauth-keys.env"),
-  ]
 }
 
 /** The launch's relocated state root, resolved against its own home and private state. */

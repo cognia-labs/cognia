@@ -12,6 +12,12 @@ import { resolveWorkspacePortEnv } from "../workspace-port-env"
 import { deleteGatewayTask, gatewayRuntimeEnvironment, prepareGatewayTask } from "./gateway-task"
 import { devinOwnedConfigRoot, prepareDevinMcpConfig } from "./devin-mcp-config"
 import {
+  admitsRequestEnv,
+  privateBlankCredentials,
+  reviewedEnvRefused,
+  takesPiPackages,
+} from "./launch-descriptor"
+import {
   applyStateIsolation,
   defaultStateIsolationHost,
   hostAgentStateDataDir,
@@ -146,58 +152,10 @@ const CHANNEL = {
 // (`pnpm audit:agent-capabilities`). No second copy lives here.
 const BINARY_ALLOWLIST: ReadonlySet<string> = new Set(EXTERNAL_AGENT_BINARY_ALLOWLIST)
 const NPX_ALLOWLIST: ReadonlySet<string> = new Set(EXTERNAL_AGENT_NPX_ALLOWLIST)
+// Env the host itself passes to every engine. Each engine's own keys and
+// families come from its launch descriptor (`admitsRequestEnv`).
 const CONFIG_ENV_KEYS = new Set([
   "COGNIA_HERMES_ACP_BOOTSTRAP",
-  "AGY_ACP_FORCE_FILE_STORAGE",
-  "XAI_API_KEY",
-  "GROK_HOME",
-  "GROK_DISABLE_AUTOUPDATER",
-  "GROK_CHANGELOG_OFFLINE",
-  "GROK_TELEMETRY_ENABLED",
-  "GROK_TELEMETRY_TRACE_UPLOAD",
-  "GROK_FEEDBACK_ENABLED",
-  "MINIMAX_DATA_DIR",
-  "MAVIS_DATA_DIR",
-  "MCODE_PROVIDER_API_KEY",
-  "MCODE_LLM_FIRST_EVENT_TIMEOUT_MS",
-  "MCODE_LLM_STREAM_IDLE_TIMEOUT_MS",
-  "KIMI_CODE_HOME",
-  "KIMI_CODE_NO_AUTO_UPDATE",
-  "KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT",
-  "KIMI_DISABLE_TELEMETRY",
-  "KIMI_MODEL_NAME",
-  "KIMI_MODEL_PROVIDER_TYPE",
-  "KIMI_MODEL_BASE_URL",
-  "KIMI_MODEL_API_KEY",
-  "KIMI_MODEL_CAPABILITIES",
-  "KIMI_MODEL_DISPLAY_NAME",
-  "KIMI_MODEL_MAX_CONTEXT_SIZE",
-  "KIMI_MODEL_MAX_OUTPUT_SIZE",
-  "KIMI_MODEL_MAX_COMPLETION_TOKENS",
-  "KIMI_MODEL_REASONING_KEY",
-  "KIMI_MODEL_ADAPTIVE_THINKING",
-  "KIMI_MODEL_TEMPERATURE",
-  "KIMI_MODEL_TOP_P",
-  "KIMI_MODEL_THINKING_EFFORT",
-  "KIMI_MODEL_THINKING_KEEP",
-  "KIMI_MCP_STARTUP_TIMEOUT_MS",
-  "KIMI_MCP_TOOL_TIMEOUT_MS",
-  "KIMI_LOOP_MAX_STEPS_PER_TURN",
-  "KIMI_LOOP_MAX_ATTEMPTS_PER_STEP",
-  "CLINE_API_KEY",
-  "CLINE_PROVIDER",
-  "CLINE_MODEL",
-  "CLINE_DIR",
-  "CLINE_NO_AUTO_UPDATE",
-  "QODER_PERSONAL_ACCESS_TOKEN",
-  "QODER_CONFIG_DIR",
-  "AIDER_MODEL",
-  "AIDER_WEAK_MODEL",
-  "AIDER_EDITOR_MODEL",
-  "AIDER_EDIT_FORMAT",
-  "AIDER_EDITOR_EDIT_FORMAT",
-  "AIDER_REASONING_EFFORT",
-  "AIDER_THINKING_TOKENS",
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "NO_PROXY",
@@ -211,17 +169,10 @@ const CONFIG_ENV_KEYS = new Set([
   "TZ",
   "NO_COLOR",
   "FORCE_COLOR",
-  // Reviewed Codex ACP controls; log paths remain inside the launcher scope.
-  "NO_BROWSER",
-  "INITIAL_AGENT_MODE",
-  "APP_SERVER_LOGS",
   // Pins the DeepSeek Harness user-data root into Cognia-owned space; without
   // it DSH falls back to ~/.dsh, where a user-writable cordis.patch.yml can
   // inject plugins and arbitrary JS into a certified composition.
   "DSH_HOME",
-  "MODEL_PROVIDER",
-  "PI_CODING_AGENT_DIR",
-  "PI_CODING_AGENT_SESSION_DIR",
 ])
 const RUNTIME_ENV_KEYS = new Set([
   "PATH",
@@ -260,45 +211,12 @@ const RUNTIME_ENV_KEYS = new Set([
   "DISABLE_AUTO_UPDATE",
 ])
 const CONFIG_ENV_PREFIXES = [
-  "AUGMENT_",
-  "AUTOHAND_",
-  "CODEBUDDY_",
-  "KILO_",
-  "MISTRAL_",
-  "VIBE_",
-  "MIMOCODE_",
-  "HERMES_",
-  "OMP_",
-  "MUSE_",
-  "AMP_",
-  "ZCODE_",
-  "OPENCLAUDE_",
-  "CONTINUE_",
   "CODEBUFF_",
-  "ROVODEV_",
-  "ANTHROPIC_",
-  "CLAUDE_",
-  "OPENAI_",
-  "CODEX_",
-  "GEMINI_",
-  "GOOGLE_",
-  "OPENCODE_",
-  "CURSOR_",
-  "COPILOT_",
-  "GITHUB_",
-  "GH_",
-  "QWEN_",
-  "KIRO_",
-  "FACTORY_",
-  "DROID_",
-  "DEVIN_",
-  "WINDSURF_",
   "ACP_",
   "COGNIA_AGENT_",
   // DeepSeek Harness: the provider credential plus the composition's own
   // COGNIA_DSH_* inputs (workspace, session root, model, persona).
   "DEEPSEEK_",
-  "GOOSE_",
   "COGNIA_DSH_",
   // The tool-host handshake (socket path + per-attempt token + server name).
   // ACP agents never needed this because the token goes to the MCP bridge they
@@ -445,8 +363,8 @@ export function botRuntimeEnvironment(
 
 /**
  * Plugin Pi package env (ADR-0210) belongs to a Pi process only: the
- * `COGNIA_PIPKG_*` values and the package-roots request never reach another
- * agent. Mirrors `scope_pi_package_env` in
+ * `COGNIA_PIPKG_*` values and the package-roots request never reach an
+ * engine that does not take them. Mirrors `scope_pi_package_env` in
  * crates/cognia-external-agent/src/presets.rs.
  */
 function isPiPackageOnlyKey(key: string): boolean {
@@ -457,16 +375,36 @@ function isDshHostProofKey(key: string): boolean {
   return key === "COGNIA_DSH_PROCESS_LEASE" || key === "COGNIA_DSH_PROCESS_LEASE_NONCE"
 }
 
+function admittedConfigKey(key: string): boolean {
+  return (
+    !DANGEROUS_ENV.test(key) &&
+    (CONFIG_ENV_KEYS.has(key) ||
+      CONFIG_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)) ||
+      admitsRequestEnv(key))
+  )
+}
+
+const WRITABLE_REQUEST_ENV = new Set([
+  "COGNIA_AGENT_WRITABLE_ROOTS",
+  "COGNIA_AGENT_WRITABLE_CEILING",
+])
+
+/** What the child env depends on besides the env itself. */
+export interface ChildEnvLaunch {
+  command: string
+  args?: readonly string[]
+  /** `node <launcher> <composition>` under the managed DSH runtime home. */
+  managedDsh?: boolean
+  /** The launch runs with a private state root (ADR-0216). */
+  isolatedState?: boolean
+}
+
 export function buildExternalAgentChildEnv(
   ambient: NodeJS.ProcessEnv,
   overrides: Record<string, string> | undefined,
-  managedDsh = false,
-  aider = false,
-  kimi = false,
-  pi = false,
-  isolateGrokCredentials = false
+  launch: ChildEnvLaunch
 ): NodeJS.ProcessEnv {
-  if (managedDsh) {
+  if (launch.managedDsh) {
     const inherited = new Set([
       "PATH",
       "LANG",
@@ -493,10 +431,11 @@ export function buildExternalAgentChildEnv(
       ),
     }
   }
+  const args = launch.args ?? []
+  const pi = takesPiPackages(launch.command, args)
   if (overrides?.COGNIA_GATEWAY_TASK_HOME) {
     const env = { ...gatewayRuntimeEnvironment(ambient), ...overrides }
-    delete env.COGNIA_AGENT_CODEX_WRITABLE_ROOTS
-    delete env.COGNIA_AGENT_CODEX_WRITABLE_CEILING
+    for (const key of WRITABLE_REQUEST_ENV) delete env[key]
     delete env.COGNIA_GATEWAY_TASK_HOME
     delete env.COGNIA_GATEWAY_TASK_CONFIG
     delete env.COGNIA_DSH_PROCESS_LEASE
@@ -504,42 +443,23 @@ export function buildExternalAgentChildEnv(
     if (!pi) for (const key of Object.keys(env)) if (isPiPackageOnlyKey(key)) delete env[key]
     return env
   }
+  const bot = overrides?.COGNIA_BOT_ISOLATION === "1"
+  const blanked = bot || launch.isolatedState ? privateBlankCredentials(launch.command, args) : []
   const env: NodeJS.ProcessEnv = { NODE_ENV: ambient.NODE_ENV ?? "production" }
   for (const [key, value] of Object.entries(ambient)) {
-    if (isDshHostProofKey(key)) continue
-    if (
-      key === "COGNIA_AGENT_CODEX_WRITABLE_ROOTS" ||
-      key === "COGNIA_AGENT_CODEX_WRITABLE_CEILING"
-    )
-      continue
-    if (isolateGrokCredentials && key === "XAI_API_KEY") continue
+    if (isDshHostProofKey(key) || WRITABLE_REQUEST_ENV.has(key) || blanked.includes(key)) continue
     if (!pi && isPiPackageOnlyKey(key)) continue
-    if (aider && key.startsWith("AIDER_")) continue
-    if (kimi && overrides?.COGNIA_BOT_ISOLATION === "1" && key.startsWith("KIMI_")) continue
-    if (
-      !DANGEROUS_ENV.test(key) &&
-      (RUNTIME_ENV_KEYS.has(key) ||
-        CONFIG_ENV_KEYS.has(key) ||
-        CONFIG_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)))
-    ) {
+    if (reviewedEnvRefused(launch.command, args, key, true, bot)) continue
+    if (RUNTIME_ENV_KEYS.has(key) ? !DANGEROUS_ENV.test(key) : admittedConfigKey(key))
       env[key] = value
-    }
   }
   for (const [key, value] of Object.entries(overrides ?? {})) {
-    if (isDshHostProofKey(key)) continue
-    if (
-      key === "COGNIA_AGENT_CODEX_WRITABLE_ROOTS" ||
-      key === "COGNIA_AGENT_CODEX_WRITABLE_CEILING"
-    )
-      continue
+    if (isDshHostProofKey(key) || WRITABLE_REQUEST_ENV.has(key)) continue
     if (!pi && isPiPackageOnlyKey(key)) continue
-    if (
-      !DANGEROUS_ENV.test(key) &&
-      (CONFIG_ENV_KEYS.has(key) || CONFIG_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)))
-    ) {
-      env[key] = value
-    }
+    if (reviewedEnvRefused(launch.command, args, key, false, bot)) continue
+    if (admittedConfigKey(key)) env[key] = value
   }
+  for (const key of blanked) env[key] ??= ""
   Object.assign(env, botRuntimeEnvironment(overrides))
   return env
 }
@@ -814,16 +734,12 @@ export class NodeExternalAgentBackend {
     }
     this.emit(CHANNEL.spawn, { agentId: config.id, status: "starting" })
     this.emit(CHANNEL.state, { agentId: config.id, state: "Starting" })
-    const env = buildExternalAgentChildEnv(
-      process.env,
-      config.env,
-      isDshLauncherInvocation(config.args ?? [], this.dataRoot),
-      config.command === "aider",
-      config.command === "kimi",
-      baseCommand(config.command) === "pi",
-      baseCommand(config.command) === "grok" &&
-        (stateIsolation !== null || config.env?.COGNIA_BOT_ISOLATION === "1")
-    )
+    const env = buildExternalAgentChildEnv(process.env, config.env, {
+      command: config.command,
+      args: config.args,
+      managedDsh: isDshLauncherInvocation(config.args ?? [], this.dataRoot),
+      isolatedState: stateIsolation !== null,
+    })
     // The isolated homes are host-resolved, so they are applied after the
     // user-input filter (which drops e.g. XDG_DATA_HOME from the request).
     if (stateIsolation) Object.assign(env, stateIsolation.env)

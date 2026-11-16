@@ -43,26 +43,32 @@ function rejectUnmediatedMandatoryApprovals(
   }
 }
 
-export const auggieAcpProfile: AcpVendorProfile = Object.freeze({
+export const auggieAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "auggie",
   label: "Auggie",
   commandNames: ["auggie"],
   launch: {
     id: "auggie",
     match: { kind: "base", values: ["auggie"] },
+    env: {
+      prefixes: ["AUGMENT_"],
+    },
     stateRoots: [".augment"],
   },
   permissionModes: brokerModes("default", "default"),
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Auggie"),
   launchEnv: { AUGMENT_DISABLE_AUTO_UPDATE: "1" },
 })
-export const autohandCodeAcpProfile: AcpVendorProfile = Object.freeze({
+export const autohandCodeAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "autohand-code",
   label: "Autohand Code",
   commandNames: ["autohand"],
   launch: {
     id: "autohand-code",
     match: { kind: "base", values: ["autohand"] },
+    env: {
+      prefixes: ["AUTOHAND_"],
+    },
     stateRoots: [".autohand"],
   },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Autohand Code"),
@@ -70,13 +76,16 @@ export const autohandCodeAcpProfile: AcpVendorProfile = Object.freeze({
   reapplySessionMode: true,
   terminalAuth: { methodId: "autohand-setup", args: ["--setup"] },
 })
-export const codebuddyAcpProfile: AcpVendorProfile = Object.freeze({
+export const codebuddyAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "codebuddy",
   label: "CodeBuddy",
   commandNames: ["codebuddy"],
   launch: {
     id: "codebuddy",
     match: { kind: "base", values: ["codebuddy"] },
+    env: {
+      prefixes: ["CODEBUDDY_"],
+    },
     stateRoots: [".codebuddy"],
   },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("CodeBuddy"),
@@ -87,7 +96,7 @@ export const codebuddyAcpProfile: AcpVendorProfile = Object.freeze({
   // Upstream explicitly treats this flag as a permission bypass.
   launchEnv: { CODEBUDDY_IS_SANDBOX: "", CODEBUDDY_SUBAGENT_PERMISSION_MODE: "ignore" },
 })
-export const commandCodeAcpProfile: AcpVendorProfile = Object.freeze({
+export const commandCodeAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "command-code",
   label: "Command Code",
   commandNames: ["cmdc", "commandcode", "command-code"],
@@ -102,26 +111,32 @@ export const commandCodeAcpProfile: AcpVendorProfile = Object.freeze({
   sseMcpServersUnsupported:
     "Command Code does not accept legacy SSE MCP servers; use streamable HTTP",
 })
-export const kilocodeAcpProfile: AcpVendorProfile = Object.freeze({
+export const kilocodeAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "kilocode",
   label: "Kilo Code",
   commandNames: ["kilo"],
   launch: {
     id: "kilocode",
     match: { kind: "base", values: ["kilo"] },
+    env: {
+      prefixes: ["KILO_"],
+    },
     stateRoots: [".config/kilo", ".local/share/kilo", ".local/state/kilo", ".cache/kilo"],
   },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Kilo Code"),
   permissionModes: brokerModes("build"),
   reapplySessionMode: true,
 })
-export const mistralVibeAcpProfile: AcpVendorProfile = Object.freeze({
+export const mistralVibeAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "mistral-vibe",
   label: "Mistral Vibe",
   commandNames: ["vibe-acp"],
   launch: {
     id: "mistral-vibe",
     match: { kind: "base", values: ["vibe-acp"] },
+    env: {
+      prefixes: ["MISTRAL_", "VIBE_"],
+    },
     stateRoots: [".vibe"],
     isolation: {
       env: { VIBE_HOME: "vibe" },
@@ -134,13 +149,16 @@ export const mistralVibeAcpProfile: AcpVendorProfile = Object.freeze({
   permissionModes: brokerModes("ask", "ask"),
   reapplySessionMode: true,
 })
-export const mimoCodeAcpProfile: AcpVendorProfile = Object.freeze({
+export const mimoCodeAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "mimo-code",
   label: "MiMo Code",
   commandNames: ["mimo"],
   launch: {
     id: "mimo-code",
     match: { kind: "base", values: ["mimo"] },
+    env: {
+      prefixes: ["MIMOCODE_"],
+    },
     stateRoots: [
       ".config/mimocode",
       ".local/share/mimocode",
@@ -164,13 +182,16 @@ export const mimoCodeAcpProfile: AcpVendorProfile = Object.freeze({
   terminalAuth: { methodId: "opencode-login", command: "mimo", args: ["auth", "login"] },
   launchEnv: { MIMOCODE_ENABLE_QUESTION_TOOL: "0" },
 })
-export const hermesAgentAcpProfile: AcpVendorProfile = Object.freeze({
+export const hermesAgentAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "hermes-agent",
   label: "Hermes Agent",
   commandNames: ["hermes", "hermes-acp"],
   launch: {
     id: "hermes-agent",
     match: { kind: "base", values: ["hermes"] },
+    env: {
+      prefixes: ["HERMES_"],
+    },
     stateRoots: [".hermes"],
     isolation: {
       env: { HERMES_HOME: "hermes" },
@@ -194,13 +215,16 @@ export const hermesAgentAcpProfile: AcpVendorProfile = Object.freeze({
   // A transport exit only detaches the ACP viewer from Hermes' gateway.
   cancelAcknowledgementTimeoutMs: 10000,
 })
-export const ohMyPiAcpProfile: AcpVendorProfile = Object.freeze({
+export const ohMyPiAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "oh-my-pi",
   label: "oh-my-pi",
   commandNames: ["omp"],
   launch: {
     id: "oh-my-pi",
     match: { kind: "base", values: ["omp"] },
+    env: {
+      prefixes: ["OMP_"],
+    },
     stateRoots: [".omp"],
   },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("oh-my-pi"),
@@ -208,13 +232,16 @@ export const ohMyPiAcpProfile: AcpVendorProfile = Object.freeze({
   reapplySessionMode: true,
   requiresGuardedClientPorts: true,
 })
-export const museAcpProfile: AcpVendorProfile = Object.freeze({
+export const museAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "muse",
   label: "Muse Code",
   commandNames: ["muse-acp"],
   launch: {
     id: "muse",
     match: { kind: "base", values: ["muse-acp"] },
+    env: {
+      prefixes: ["MUSE_"],
+    },
     stateRoots: [".config/muse", ".local/state/muse-acp"],
   },
   permissionModes: brokerModes("default", "default"),
@@ -235,6 +262,9 @@ export const ampAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   launch: {
     id: "amp",
     match: { kind: "base", values: ["amp-acp"] },
+    env: {
+      prefixes: ["AMP_"],
+    },
     stateRoots: [".config/amp", ".local/share/amp", ".local/state/amp-acp"],
   },
   launchEnv: { AMP_ACP_CONTINUE_LATEST: "0", AMP_ACP_TRANSPORT: "cli" },
@@ -270,13 +300,16 @@ export const ampAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
     usageReport: "turn",
   },
 })
-export const zcodeAcpProfile: AcpVendorProfile = Object.freeze({
+export const zcodeAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "zcode",
   label: "ZCode",
   commandNames: ["zcode-acp"],
   launch: {
     id: "zcode",
     match: { kind: "base", values: ["zcode-acp"] },
+    env: {
+      prefixes: ["ZCODE_"],
+    },
     stateRoots: [".zcode", ".zcode-acp"],
   },
   permissionModes: brokerModes("default", "plan", [

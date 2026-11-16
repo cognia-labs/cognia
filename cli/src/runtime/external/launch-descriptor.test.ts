@@ -4,10 +4,18 @@ import os from "node:os"
 import path from "node:path"
 
 import {
+  acceptsExtraWritableRoots,
+  admitsRequestEnv,
   checkPrivateLaunch,
   companionFor,
   engineTemp,
+  hiddenFiles,
+  loginRoots,
+  privateBlankCredentials,
+  programRoots,
   relocatedState,
+  reviewedEnvRefused,
+  takesPiPackages,
   withPlatformArgs,
   type RelocationInput,
 } from "./launch-descriptor"
@@ -145,4 +153,59 @@ describe("companionFor", () => {
       fs.rmSync(release, { recursive: true, force: true })
     }
   })
+})
+
+describe("engine environment", () => {
+  it("admits the keys and families some engine reads", () => {
+    expect(admitsRequestEnv("GOOSE_MODEL")).toBe(true)
+    expect(admitsRequestEnv("XAI_API_KEY")).toBe(true)
+    expect(admitsRequestEnv("AWS_SECRET_ACCESS_KEY")).toBe(false)
+  })
+
+  it("keeps reviewed families to their reviewed keys", () => {
+    expect(reviewedEnvRefused("kimi", [], "KIMI_OAUTH_HOST", false, false)).toBe(true)
+    expect(reviewedEnvRefused("kimi", [], "KIMI_MODEL_NAME", false, true)).toBe(false)
+    expect(reviewedEnvRefused("kimi", [], "KIMI_MODEL_NAME", true, false)).toBe(false)
+    expect(reviewedEnvRefused("kimi", [], "KIMI_MODEL_NAME", true, true)).toBe(true)
+    expect(reviewedEnvRefused("aider", [], "AIDER_MODEL", true, false)).toBe(true)
+    expect(reviewedEnvRefused("aider", [], "AIDER_MODEL", false, false)).toBe(false)
+    expect(reviewedEnvRefused("codex", [], "KIMI_OAUTH_HOST", false, false)).toBe(false)
+  })
+
+  it("names the credentials a private launch blanks", () => {
+    expect(privateBlankCredentials("grok", [])).toEqual(["XAI_API_KEY"])
+    expect(privateBlankCredentials("codex", [])).toEqual([])
+  })
+})
+
+describe("engine files", () => {
+  it("hides searched files in home and every ancestor of the working directory", () => {
+    const files = hiddenFiles("aider", [], "/work/repo", "/home/dev")
+    for (const file of [
+      "/home/dev/.aider.conf.yml",
+      "/work/repo/.env",
+      "/work/.aider.conf.yml",
+      "/.env",
+      "/home/dev/.aider/oauth-keys.env",
+    ])
+      expect(files).toContain(file)
+    expect(hiddenFiles("codex", [], "/work", "/home/dev")).toEqual([])
+  })
+
+  it("resolves program and login roots under home", () => {
+    expect(programRoots("qoder", [], "/home/dev")).toEqual([
+      "/home/dev/.qoder/entry",
+      "/home/dev/.qoder/bin",
+    ])
+    const logins = loginRoots("/home/dev")
+    expect(logins).toContain("/home/dev/.aider")
+    expect(logins).toContain("/home/dev/.codex")
+  })
+})
+
+it("reads engine feature flags", () => {
+  expect(acceptsExtraWritableRoots("codex", [])).toBe(true)
+  expect(acceptsExtraWritableRoots("goose", [])).toBe(false)
+  expect(takesPiPackages("pi", [])).toBe(true)
+  expect(takesPiPackages("codex", [])).toBe(false)
 })

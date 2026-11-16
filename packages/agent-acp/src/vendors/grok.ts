@@ -197,6 +197,18 @@ export const grokAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>(
   launch: {
     id: "grok",
     match: { kind: "base", values: ["grok"] },
+    env: {
+      keys: [
+        "XAI_API_KEY",
+        "GROK_HOME",
+        "GROK_DISABLE_AUTOUPDATER",
+        "GROK_CHANGELOG_OFFLINE",
+        "GROK_TELEMETRY_ENABLED",
+        "GROK_TELEMETRY_TRACE_UPLOAD",
+        "GROK_FEEDBACK_ENABLED",
+      ],
+      privateBlank: ["XAI_API_KEY"],
+    },
     stateRoots: [".grok"],
     relocation: {
       env: ["GROK_HOME"],

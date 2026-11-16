@@ -34,6 +34,7 @@ export const continueDevManifest: AgentIntegrationManifest = {
     {
       id: "continue-dev",
       match: { kind: "base", values: ["cn"] },
+      env: { prefixes: ["CONTINUE_"] },
       stateRoots: [".continue"],
     },
   ],

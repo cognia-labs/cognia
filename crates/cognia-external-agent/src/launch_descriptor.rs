@@ -135,6 +135,29 @@ pub struct PlatformArgs {
     pub win32: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineEnvironment {
+    #[serde(default)]
+    pub keys: Vec<String>,
+    #[serde(default)]
+    pub prefixes: Vec<String>,
+    #[serde(default)]
+    pub reviewed_prefixes: Vec<String>,
+    #[serde(default)]
+    pub reviewed_request_only: bool,
+    #[serde(default)]
+    pub private_blank: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HiddenFiles {
+    #[serde(default)]
+    pub searched: Vec<String>,
+    #[serde(default)]
+    pub home: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineLaunchDescriptor {
@@ -152,6 +175,20 @@ pub struct EngineLaunchDescriptor {
     pub private_launch_unsupported: Option<String>,
     #[serde(default)]
     pub platform_args: PlatformArgs,
+    #[serde(default)]
+    pub env: EngineEnvironment,
+    #[serde(default)]
+    pub hidden_files: HiddenFiles,
+    #[serde(default)]
+    pub program_roots: Vec<String>,
+    #[serde(default)]
+    pub login_roots: Vec<String>,
+    #[serde(default)]
+    pub stderr_noise: Vec<Vec<String>>,
+    #[serde(default)]
+    pub extra_writable_roots: bool,
+    #[serde(default)]
+    pub pi_packages: bool,
 }
 
 #[derive(Deserialize)]
@@ -575,6 +612,138 @@ pub fn engine_temp(
     }
 }
 
+/// The engine a sandbox launcher runs: the command after `--` when `command`
+/// is the launcher itself, otherwise the launch as given.
+pub fn unwrapped<'a>(command: &'a str, args: &'a [String]) -> (&'a str, &'a [String]) {
+    if base_command(command) == base_command(crate::sandbox::launcher_file_name(std::env::consts::OS)) {
+        if let Some(index) = args.iter().position(|arg| arg == "--") {
+            if let Some(target) = args.get(index + 1) {
+                return (target.as_str(), &args[index + 2..]);
+            }
+        }
+    }
+    (command, args)
+}
+
+/// Whether any engine reads this request env key, so the host admits it.
+pub fn admits_request_env(key: &str) -> bool {
+    descriptors().iter().any(|descriptor| {
+        descriptor.env.keys.iter().any(|known| known == key)
+            || descriptor.env.prefixes.iter().any(|prefix| key.starts_with(prefix.as_str()))
+    })
+}
+
+/// Whether a key of one of the launch's reviewed env families must not reach
+/// the engine: an unreviewed key always, and a host key in a private launch
+/// or when the engine takes them from the request only.
+pub fn reviewed_env_refused(
+    command: &str,
+    args: &[String],
+    key: &str,
+    from_host: bool,
+    private: bool,
+) -> bool {
+    descriptors_for(command, args).iter().any(|descriptor| {
+        descriptor
+            .env
+            .reviewed_prefixes
+            .iter()
+            .any(|prefix| key.starts_with(prefix.as_str()))
+            && (!descriptor.env.keys.iter().any(|known| known == key)
+                || (from_host && (private || descriptor.env.reviewed_request_only)))
+    })
+}
+
+/// In a private launch, set each credential the engine would otherwise find
+/// on the host to empty, unless the request sets it.
+pub fn blank_private_credentials(
+    command: &str,
+    args: &[String],
+    env: &mut std::collections::HashMap<String, String>,
+    private: bool,
+) {
+    if !private {
+        return;
+    }
+    for descriptor in descriptors_for(command, args) {
+        for key in &descriptor.env.private_blank {
+            env.entry(key.clone()).or_default();
+        }
+    }
+}
+
+/// Files the engine reads implicitly that the sandbox hides: each searched
+/// name in the home directory and every ancestor of `cwd`, then the
+/// home-relative ones.
+pub fn hidden_files(command: &str, args: &[String], cwd: &Path, home: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for descriptor in descriptors_for(command, args) {
+        let hidden = &descriptor.hidden_files;
+        if !hidden.searched.is_empty() {
+            let mut roots = vec![home.to_path_buf()];
+            for dir in cwd.ancestors() {
+                if !roots.iter().any(|root| root == dir) {
+                    roots.push(dir.to_path_buf());
+                }
+            }
+            for root in &roots {
+                for name in &hidden.searched {
+                    push_unique(&mut files, root.join(name));
+                }
+            }
+        }
+        for relative in &hidden.home {
+            push_unique(&mut files, home.join(relative));
+        }
+    }
+    files
+}
+
+/// The engine's own installed program roots under `home`, read-only.
+pub fn program_roots(command: &str, args: &[String], home: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for descriptor in descriptors_for(command, args) {
+        for relative in &descriptor.program_roots {
+            push_unique(&mut roots, home.join(relative));
+        }
+    }
+    roots
+}
+
+/// Every engine's logins and provider settings under `home`: the roots a
+/// private launch hides plus each engine's other login roots. A launch that
+/// is not the owner's own reads none of them.
+pub fn login_roots(home: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for descriptor in descriptors() {
+        let isolated = descriptor.isolation.iter().flat_map(|isolation| &isolation.deny_readable);
+        for relative in isolated.chain(&descriptor.login_roots) {
+            push_unique(&mut roots, home.join(relative));
+        }
+    }
+    roots
+}
+
+/// Whether a stderr line is noise some engine is known to print.
+pub fn is_stderr_noise(line: &str) -> bool {
+    descriptors().iter().any(|descriptor| {
+        descriptor
+            .stderr_noise
+            .iter()
+            .any(|parts| parts.iter().all(|part| line.contains(part.as_str())))
+    })
+}
+
+/// Whether the launched engine honours per-launch writable roots.
+pub fn accepts_extra_writable_roots(command: &str, args: &[String]) -> bool {
+    descriptors_for(command, args).iter().any(|descriptor| descriptor.extra_writable_roots)
+}
+
+/// Whether plugin Pi packages (ADR-0210) may be mounted into the launched engine.
+pub fn takes_pi_packages(command: &str, args: &[String]) -> bool {
+    descriptors_for(command, args).iter().any(|descriptor| descriptor.pi_packages)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -977,5 +1146,80 @@ mod tests {
             Some(PathBuf::from("/state/goose/state/tmp"))
         );
         assert_eq!(engine_temp("codex", &[], &env, home, false), None);
+    }
+
+    #[test]
+    fn a_sandbox_launcher_is_unwrapped_to_the_engine_it_runs() {
+        let launcher = crate::sandbox::launcher_file_name(std::env::consts::OS);
+        let wrapped = args(&["--policy", "p", "--", "kimi", "acp"]);
+        assert_eq!(unwrapped(launcher, &wrapped), ("kimi", &wrapped[4..]));
+        let plain = args(&["--", "kimi"]);
+        assert_eq!(unwrapped("qoder", &plain), ("qoder", &plain[..]));
+    }
+
+    #[test]
+    fn engine_env_is_admitted_and_reviewed_families_keep_to_their_keys() {
+        assert!(admits_request_env("GOOSE_MODEL"));
+        assert!(admits_request_env("XAI_API_KEY"));
+        assert!(!admits_request_env("AWS_SECRET_ACCESS_KEY"));
+        assert!(reviewed_env_refused("kimi", &[], "KIMI_OAUTH_HOST", false, false));
+        assert!(!reviewed_env_refused("kimi", &[], "KIMI_MODEL_NAME", true, false));
+        assert!(reviewed_env_refused("kimi", &[], "KIMI_MODEL_NAME", true, true));
+        assert!(!reviewed_env_refused("kimi", &[], "KIMI_MODEL_NAME", false, true));
+        assert!(reviewed_env_refused("aider", &[], "AIDER_MODEL", true, false));
+        assert!(!reviewed_env_refused("aider", &[], "AIDER_MODEL", false, false));
+        assert!(reviewed_env_refused("aider", &[], "AIDER_LOAD", false, false));
+        assert!(!reviewed_env_refused("codex", &[], "KIMI_OAUTH_HOST", false, false));
+    }
+
+    #[test]
+    fn a_private_launch_blanks_the_engine_s_host_credentials_unless_set() {
+        let mut env = std::collections::HashMap::new();
+        blank_private_credentials("grok", &[], &mut env, false);
+        assert!(env.is_empty());
+        blank_private_credentials("grok", &[], &mut env, true);
+        assert_eq!(env["XAI_API_KEY"], "");
+        env.insert("XAI_API_KEY".into(), "explicit".into());
+        blank_private_credentials("grok", &[], &mut env, true);
+        assert_eq!(env["XAI_API_KEY"], "explicit");
+    }
+
+    #[test]
+    fn engine_files_resolve_under_home_and_the_working_directory() {
+        let home = Path::new("/home/dev");
+        let files = hidden_files("aider", &[], Path::new("/work/repo"), home);
+        for file in ["/home/dev/.aider.conf.yml", "/work/repo/.env", "/work/.aider.conf.yml", "/.env", "/home/dev/.aider/oauth-keys.env"] {
+            assert!(files.contains(&PathBuf::from(file)), "{file}");
+        }
+        assert!(hidden_files("codex", &[], Path::new("/work"), home).is_empty());
+        assert_eq!(
+            program_roots("qoder", &[], home),
+            [home.join(".qoder/entry"), home.join(".qoder/bin")]
+        );
+        let logins = login_roots(home);
+        assert!(logins.contains(&home.join(".aider")));
+        assert!(logins.contains(&home.join(".codex")));
+    }
+
+    #[test]
+    fn known_engine_stderr_noise_is_recognised_and_real_errors_are_not() {
+        assert!(is_stderr_noise(
+            "2026-07-17T07:54:38Z ERROR codex_models_manager::cache: failed to load models cache: \
+             missing field `supports_reasoning_summaries` at line 88 column 5"
+        ));
+        assert!(is_stderr_noise(
+            "ERROR codex_models_manager::manager: failed to renew cache TTL. EOF while parsing"
+        ));
+        assert!(!is_stderr_noise("ERROR codex_core::client: 401 Unauthorized: invalid API key"));
+        assert!(!is_stderr_noise("ERROR codex_models_manager::foo: something else entirely"));
+        assert!(!is_stderr_noise(""));
+    }
+
+    #[test]
+    fn engine_feature_flags_follow_the_descriptor() {
+        assert!(accepts_extra_writable_roots("codex", &[]));
+        assert!(!accepts_extra_writable_roots("goose", &[]));
+        assert!(takes_pi_packages("pi", &[]));
+        assert!(!takes_pi_packages("codex", &[]));
     }
 }

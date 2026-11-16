@@ -10,6 +10,9 @@ export const copilotAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfil
   launch: {
     id: "copilot-cli",
     match: { kind: "contains", values: ["copilot"] },
+    env: {
+      prefixes: ["COPILOT_", "GITHUB_", "GH_"],
+    },
     stateRoots: [".copilot", ".cache/copilot"],
     isolation: {
       env: { COPILOT_HOME: "copilot" },

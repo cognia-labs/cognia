@@ -177,14 +177,14 @@ pub async fn spawn(
             state_key(local_account_id, connection_id, &lease.host_id),
         ),
         (
-            sandbox::CODEX_WRITABLE_ROOTS_ENV.into(),
+            sandbox::EXTRA_WRITABLE_ROOTS_ENV.into(),
             serde_json::to_string(&input.extra_writable_roots)
                 .map_err(|_| "siwc_invalid_launch")?,
         ),
     ]);
     if let Some(ceiling) = input.writable_ceiling {
         env.insert(
-            sandbox::CODEX_WRITABLE_CEILING_ENV.into(),
+            sandbox::EXTRA_WRITABLE_CEILING_ENV.into(),
             serde_json::to_string(&ceiling).map_err(|_| "siwc_invalid_launch")?,
         );
     }

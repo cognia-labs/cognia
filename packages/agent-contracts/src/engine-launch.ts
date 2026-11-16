@@ -92,6 +92,32 @@ export interface EngineCompanionExecutable {
   env: string
 }
 
+/** The engine's own environment, beyond what the host passes to every engine. */
+export interface EngineEnvironment {
+  /** Request env keys the engine reads; the host admits them. */
+  keys?: readonly string[]
+  /** Request env key families the engine reads; the host admits them. */
+  prefixes?: readonly string[]
+  /**
+   * Families the engine also reads implicitly (identity, OAuth or executable
+   * hooks). Only `keys` of them reach it: from the request, and from the host
+   * outside a private launch.
+   */
+  reviewedPrefixes?: readonly string[]
+  /** The host's own keys of the reviewed families never reach the engine, even outside a private launch. */
+  reviewedRequestOnly?: boolean
+  /** Credentials set empty in a private launch unless the request sets them, so the engine cannot find the host's. */
+  privateBlank?: readonly string[]
+}
+
+/** Files the engine reads implicitly, which the sandbox hides. */
+export interface EngineHiddenFiles {
+  /** Searched for in the home directory and every ancestor of the working directory. */
+  searched?: readonly string[]
+  /** Home-relative. */
+  home?: readonly string[]
+}
+
 export interface EngineLaunchDescriptor {
   /** Runtime family id, for diagnostics. */
   id: string
@@ -112,6 +138,29 @@ export interface EngineLaunchDescriptor {
    * already names the flag (the text before `=`).
    */
   platformArgs?: Readonly<Partial<Record<"linux" | "darwin" | "win32", readonly string[]>>>
+  env?: EngineEnvironment
+  hiddenFiles?: EngineHiddenFiles
+  /**
+   * Home-relative read-only roots holding the engine's own installed program,
+   * readable even where the home is not (a Bot launch).
+   */
+  programRoots?: readonly string[]
+  /**
+   * Home-relative roots with the engine's logins or provider settings that its
+   * `stateRoots` and isolation do not already name. A launch that is not the
+   * owner's own (a gateway task) never reads them.
+   */
+  loginRoots?: readonly string[]
+  /** Stderr lines that are expected noise: each entry lists substrings that must all appear. */
+  stderrNoise?: readonly (readonly string[])[]
+  /**
+   * The engine honours the per-launch writable roots its adapter asks for
+   * (`AgentProcessSpawnSpec.extraWritableRoots`), which the host validates
+   * against the session ceiling before granting.
+   */
+  extraWritableRoots?: boolean
+  /** Plugin Pi packages (ADR-0210) may be mounted into this engine read-only. */
+  piPackages?: boolean
 }
 
 /** The command without directory or Windows executable suffix, lower-cased. */

@@ -41,7 +41,7 @@ function relativePathError(path: string): string | null {
 
 function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
   const at = `launch descriptor "${descriptor.id}"`
-  const { isolation, relocation, temp, companion } = descriptor
+  const { isolation, relocation, temp, companion, env } = descriptor
   if (descriptor.match.values.length === 0) errors.push(`${at}: match has no values`)
   const paths: [string, readonly (string | undefined)[] | undefined][] = [
     ["stateRoots", descriptor.stateRoots],
@@ -54,6 +54,10 @@ function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
     ["relocation.temp", [relocation?.temp]],
     ["temp.home", [temp?.home]],
     ["temp.isolated.path", [temp?.isolated?.path]],
+    ["hiddenFiles.home", descriptor.hiddenFiles?.home],
+    ["hiddenFiles.searched", descriptor.hiddenFiles?.searched],
+    ["programRoots", descriptor.programRoots],
+    ["loginRoots", descriptor.loginRoots],
   ]
   for (const [field, list] of paths) {
     for (const path of list ?? []) {
@@ -81,10 +85,25 @@ function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
     ...(relocation?.env ?? []),
     ...Object.keys(relocation?.setEnv ?? {}),
     ...(companion ? [companion.env] : []),
+    ...(env?.keys ?? []),
+    ...(env?.privateBlank ?? []),
   ]
   for (const key of envKeys) {
     if (!ENV_KEY.test(key) || LOADER_ENV.test(key))
       errors.push(`${at}: env key "${key}" is not an env name a descriptor may set`)
+  }
+  for (const prefix of [...(env?.prefixes ?? []), ...(env?.reviewedPrefixes ?? [])]) {
+    if (!/^[A-Z][A-Z0-9_]*_$/.test(prefix) || LOADER_ENV.test(prefix))
+      errors.push(`${at}: env prefix "${prefix}" is not an env family a descriptor may admit`)
+  }
+  if (env?.reviewedRequestOnly && !env.reviewedPrefixes?.length)
+    errors.push(`${at}: env.reviewedRequestOnly needs reviewedPrefixes`)
+  for (const name of descriptor.hiddenFiles?.searched ?? []) {
+    if (name.includes("/")) errors.push(`${at}: searched file "${name}" is not a file name`)
+  }
+  for (const line of descriptor.stderrNoise ?? []) {
+    if (line.length === 0 || line.some((part) => !part))
+      errors.push(`${at}: a stderr noise entry needs nonempty substrings`)
   }
   for (const flag of [...(relocation?.args?.flags ?? []), ...(relocation?.refusedArgs ?? [])]) {
     if (!FLAG.test(flag)) errors.push(`${at}: flag "${flag}" is not a long option`)

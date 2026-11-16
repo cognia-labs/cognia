@@ -234,3 +234,99 @@ export function engineTemp(
   }
   return path.join(home, ...temp.home.split("/"))
 }
+
+const matching = (command: string, args: readonly string[]) =>
+  descriptorsFor(ENGINE_LAUNCH_DESCRIPTORS, command, args)
+
+/** Whether any engine reads this request env key, so the host admits it. */
+export function admitsRequestEnv(key: string): boolean {
+  return ENGINE_LAUNCH_DESCRIPTORS.some(
+    ({ env }) => env?.keys?.includes(key) || env?.prefixes?.some((prefix) => key.startsWith(prefix))
+  )
+}
+
+/**
+ * Whether a key of one of the launch's reviewed env families must not reach
+ * the engine: an unreviewed key always, and a host key in a private launch
+ * or when the engine takes them from the request only.
+ */
+export function reviewedEnvRefused(
+  command: string,
+  args: readonly string[],
+  key: string,
+  fromHost: boolean,
+  isPrivate: boolean
+): boolean {
+  return matching(command, args).some(
+    ({ env }) =>
+      env?.reviewedPrefixes?.some((prefix) => key.startsWith(prefix)) &&
+      (!env.keys?.includes(key) || (fromHost && (isPrivate || env.reviewedRequestOnly === true)))
+  )
+}
+
+/** The credentials a private launch sets empty unless its request sets them. */
+export function privateBlankCredentials(command: string, args: readonly string[]): string[] {
+  return matching(command, args).flatMap(({ env }) => env?.privateBlank ?? [])
+}
+
+/**
+ * Files the engine reads implicitly that the sandbox hides: each searched name
+ * in the home directory and every ancestor of `cwd`, then the home-relative ones.
+ */
+export function hiddenFiles(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  home: string
+): string[] {
+  const files = new Set<string>()
+  for (const { hiddenFiles: hidden } of matching(command, args)) {
+    if (hidden?.searched?.length) {
+      const roots = new Set([home])
+      for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+        roots.add(dir)
+        if (dir === path.dirname(dir)) break
+      }
+      for (const root of roots) for (const name of hidden.searched) files.add(path.join(root, name))
+    }
+    for (const relative of hidden?.home ?? []) files.add(path.join(home, ...relative.split("/")))
+  }
+  return [...files]
+}
+
+/** The engine's own installed program roots under `home`, read-only. */
+export function programRoots(command: string, args: readonly string[], home: string): string[] {
+  return [
+    ...new Set(
+      matching(command, args).flatMap(({ programRoots: roots }) =>
+        (roots ?? []).map((relative) => path.join(home, ...relative.split("/")))
+      )
+    ),
+  ]
+}
+
+/**
+ * Every engine's logins and provider settings under `home`: the roots a
+ * private launch hides plus each engine's other login roots. A launch that is
+ * not the owner's own reads none of them.
+ */
+export function loginRoots(home: string): string[] {
+  return [
+    ...new Set(
+      ENGINE_LAUNCH_DESCRIPTORS.flatMap((descriptor) => [
+        ...(descriptor.isolation?.denyReadable ?? []),
+        ...(descriptor.loginRoots ?? []),
+      ]).map((relative) => path.join(home, ...relative.split("/")))
+    ),
+  ]
+}
+
+/** Whether the launched engine honours per-launch writable roots. */
+export function acceptsExtraWritableRoots(command: string, args: readonly string[]): boolean {
+  return matching(command, args).some((descriptor) => descriptor.extraWritableRoots)
+}
+
+/** Whether plugin Pi packages (ADR-0210) may be mounted into the launched engine. */
+export function takesPiPackages(command: string, args: readonly string[]): boolean {
+  return matching(command, args).some((descriptor) => descriptor.piPackages)
+}
