@@ -42,7 +42,7 @@ export interface AgentTurnOperationCompletion {
       import("@cognia/agent-config-types").SendOptions,
       "model" | "provider" | "turnId"
     >
-    usage?: import("@/lib/claude/adapter").UsageInfo
+    usage?: import("@/lib/chat/sdk-message-adapter").UsageInfo
   }
 }
 

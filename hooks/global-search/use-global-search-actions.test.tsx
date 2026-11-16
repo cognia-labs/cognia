@@ -98,7 +98,7 @@ jest.mock("@/components/ai-elements/conversation", () => ({
 jest.mock("@/lib/chat/cross-session-jump", () => ({
   jumpToSessionMessage: (...a: unknown[]) => jump(...a),
 }))
-jest.mock("@/lib/claude/guild", () => ({
+jest.mock("@/lib/chat/session-guild", () => ({
   guildFromSession: (s: { teamId?: string }) =>
     s.teamId ? { kind: "team", teamId: s.teamId } : { kind: "dm" },
 }))

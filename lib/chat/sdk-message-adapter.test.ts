@@ -21,7 +21,7 @@ import {
   mergeProjectHistorySourcesIntoLastAssistant,
   mergeTwinSourcesIntoLastAssistant,
   resetStreamingToolInputs,
-} from "./adapter"
+} from "./sdk-message-adapter"
 import type { SourcesPart, SourcesPartItem } from "@/lib/chat/parts-extensions"
 import type {
   BetaMessage,

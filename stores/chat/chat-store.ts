@@ -24,8 +24,8 @@ import {
 } from "@/lib/automation/computer-use-pip"
 import { resolveRootSessionId } from "@/lib/ai/agent/team/root-session"
 import { useApprovalJournalStore, toPersistedApproval } from "@/stores/agent/approval-journal-store"
-import { IDLE_TIMING, nextRunTiming, type RunTiming } from "@/lib/claude/run-status"
-import { nextToolTimestamps } from "@/lib/claude/run-record"
+import { IDLE_TIMING, nextRunTiming, type RunTiming } from "@/lib/chat/run-status"
+import { nextToolTimestamps } from "@/lib/chat/run-record"
 import { useMemo, useSyncExternalStore } from "react"
 import {
   chatTurnOutcomeOf,
@@ -232,7 +232,7 @@ export interface SessionChatSlice {
    * that lands that way never reaches this queue at all. Entries pile up here
    * when there is no live lane (any non-Anthropic provider, or a team turn) or
    * when the running query already closed its input, and are replayed as one
-   * fresh framed turn once the turn settles. See `lib/claude/steer.ts` and
+   * fresh framed turn once the turn settles. See `lib/chat/steer.ts` and
    * `lib/chat/steer-runtime.ts`.
    *
    * Each entry's `id` is mirrored on its transcript message as

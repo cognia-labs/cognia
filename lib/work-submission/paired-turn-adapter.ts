@@ -167,7 +167,7 @@ export async function admitPairedChatTurn(
       const { commitMessageDelta } = await import("@/lib/db/messages")
       await commitMessageDelta(id, { upserts: [message] })
     })
-  const { makeUserMessage } = await import("@/lib/claude/adapter")
+  const { makeUserMessage } = await import("@/lib/chat/sdk-message-adapter")
   const userMessage = makeUserMessage(prompt, messageId)
 
   const submissionId = pairedTurnSubmissionId(runId)

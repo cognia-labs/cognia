@@ -23,7 +23,7 @@
  */
 
 import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 
 /** Far more turns than can be in flight or queued at once. */
 export const MAX_CLAIMED_TURNS = 1024

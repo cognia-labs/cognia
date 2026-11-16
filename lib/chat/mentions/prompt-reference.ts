@@ -40,7 +40,7 @@ import { promptPreambleOfParts, stripPromptPreambleFromParts } from "@/lib/chat/
 import { resolveMessageSpeaker, type SpeakerSource } from "@/lib/chat/speaker"
 import { messagePermalinkQuery } from "@/lib/chat/message-permalink"
 import { selectionTitleFor } from "@/lib/chat/selection/selection-text"
-import { stripSteerPrefix } from "@/lib/claude/steer"
+import { stripSteerPrefix } from "@/lib/chat/steer"
 import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 
 /** Longest a prompt runs as its own row title before it is elided. */

@@ -120,7 +120,7 @@ import { whenSeeded } from "@/lib/db/schema"
 import { openSessionForReading } from "@/lib/chat/unread-marker"
 import { listCharacters } from "@/lib/db/characters"
 import { getTeam } from "@/lib/db/teams"
-import { guildFromSession } from "@/lib/claude/guild"
+import { guildFromSession } from "@/lib/chat/session-guild"
 import { isChatHomeActive } from "@/lib/shell/guild-session-sync"
 import { resolveConversationGroupBy } from "@/lib/chat/conversation-grouping"
 import {

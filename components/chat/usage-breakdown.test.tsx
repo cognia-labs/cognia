@@ -3,7 +3,7 @@
  */
 import { render, screen } from "@testing-library/react"
 
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import { UsageBreakdown } from "./usage-breakdown"
 
 describe("UsageBreakdown", () => {

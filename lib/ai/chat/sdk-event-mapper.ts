@@ -1,5 +1,5 @@
 // Translate Vercel AI SDK stream events into the SDKMessage shapes that
-// `lib/claude/adapter.ts` (`applySdkEvent`) consumes. This is the renderer-side
+// `lib/chat/sdk-message-adapter.ts` (`applySdkEvent`) consumes. This is the renderer-side
 // TypeScript port of `sidecar/dispatch/event-adapter.mjs`: the standalone
 // (BYOK) mobile chat engine runs `streamText` in the webview and feeds its
 // `fullStream` events through this mapper, so every downstream consumer — the

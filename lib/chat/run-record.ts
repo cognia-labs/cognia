@@ -10,7 +10,7 @@ import type { ToolUIPart, UIMessage } from "ai"
 import { countCompletedTodos, parseTodoInput, type TodoEntry } from "@/lib/chat/todos"
 import { describeToolResult, type ToolResultDescriptor } from "@/lib/chat/tool-result-summary"
 import { isSubagentPart, type SubagentPart } from "@/lib/chat/parts-extensions"
-import { RUNNING_TOOL_STATES, type RunStatus, type RunTiming } from "@/lib/claude/run-status"
+import { RUNNING_TOOL_STATES, type RunStatus, type RunTiming } from "@/lib/chat/run-status"
 
 /** TodoWrite renders as the Plan section, never as a generic tool row. */
 const TODO_TOOL_TYPES = new Set(["tool-TodoWrite", "tool-mcp__cognia-tools__TodoWrite"])

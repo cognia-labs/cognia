@@ -142,7 +142,7 @@ export function createProductionRoomDeps(opts: ProductionRoomDepsOptions = {}): 
       applySdkSubagentBridge: (event, teamSessionId) => {
         // Guarded and lazy, exactly as the hook loaded it: a bridge throw must
         // never break the room loop, and the module is renderer-heavy.
-        void import("@/lib/claude/sdk-subagent-bridge")
+        void import("@/lib/chat/sdk-subagent-bridge")
           .then(({ applySdkSubagentBridge }) => applySdkSubagentBridge(event, teamSessionId))
           .catch((err) => console.warn("sdkSubagentBridge (room) failed", err))
       },

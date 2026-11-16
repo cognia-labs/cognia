@@ -61,7 +61,7 @@ import {
   renameSdkSession,
   tagSdkSession,
 } from "@/lib/ai/agent/execution/claude-session-api"
-import { applySdkEvent } from "@/lib/claude/adapter"
+import { applySdkEvent } from "@/lib/chat/sdk-message-adapter"
 import {
   clearSessionSdkLink,
   listSessions as listChatSessions,

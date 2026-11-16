@@ -199,7 +199,7 @@ it("pins each Host producer and every canonical persistence form to marking", ()
       "bindPersonalMessageRun(messageId, runIds)",
       'automatedTurnMetadata("background-result")',
     ],
-    "lib/claude/adapter.ts": ["remoteDocumentPersonalMarks(manifest)"],
+    "lib/chat/sdk-message-adapter.ts": ["remoteDocumentPersonalMarks(manifest)"],
     "lib/connectors/runtime.ts": [
       "personalMarkVersion: 1",
       "bindPersonalMessageRun(row.id, executionRunId)",

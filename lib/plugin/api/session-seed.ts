@@ -44,7 +44,7 @@ export async function startSeededSession(
   if (seedUserMessage?.trim()) {
     const [{ persistMessages }, { makeUserMessage }] = await Promise.all([
       import("@/lib/db/messages"),
-      import("@/lib/claude/adapter"),
+      import("@/lib/chat/sdk-message-adapter"),
     ])
     // A plugin seeded it, not the person (ADR-0239).
     const seeded = makeUserMessage(seedUserMessage) as UIMessage

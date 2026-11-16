@@ -2,7 +2,7 @@
  * Turn an artifact/canvas tool RESULT into the chat part that renders it.
  *
  * This replaces two copies of a near-identical function that both read the
- * model's `tool_use` INPUT instead (`lib/claude/adapter.ts` and
+ * model's `tool_use` INPUT instead (`lib/chat/sdk-message-adapter.ts` and
  * `lib/ai/agent/external/session/event-to-parts.ts`). Reading the input was the bug:
  * a `tool_use` block is seen before the tool has run, so the id in it is
  * whatever the model guessed — and `createArtifact` mints its own. The part

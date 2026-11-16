@@ -3,7 +3,7 @@
  * message log — no Dexie schema, no persistence.
  *
  * The sidecar emits a `compact_boundary` system event which the adapter
- * (`lib/claude/adapter.ts:appendCompactBoundary`) projects into a `system`-role
+ * (`lib/chat/sdk-message-adapter.ts:appendCompactBoundary`) projects into a `system`-role
  * `UIMessage` carrying a single `compact-boundary` part
  * ({@link CompactBoundaryPartData}). That part already carries `preTokens` /
  * `postTokens`, so the token delta is on the wire; when a path omits them we
@@ -24,7 +24,7 @@ import {
   isCompactBoundaryMessage,
 } from "@/components/chat/message-parts/compact-boundary-part"
 import { tokensInWindow } from "@/lib/usage/context-usage"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 
 /**
  * One contiguous stretch of conversation between compaction boundaries.

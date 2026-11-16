@@ -47,7 +47,7 @@ jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   sendPrompt: (...a: unknown[]) => sendPromptMock(...(a as [string, ...unknown[]])),
 }))
 
-jest.mock("@/lib/claude/adapter", () => ({
+jest.mock("@/lib/chat/sdk-message-adapter", () => ({
   applySdkEvent: jest.fn(() => ({ messages: [], turnComplete: false })),
   contentPreview: (c: unknown) => (typeof c === "string" ? c : "preview"),
   makeUserMessage: jest.fn((c: unknown) => ({
@@ -74,7 +74,7 @@ jest.mock("@/lib/db/session-usage", () => ({
 }))
 
 const applySdkSubagentBridgeMock = jest.fn()
-jest.mock("@/lib/claude/sdk-subagent-bridge", () => ({
+jest.mock("@/lib/chat/sdk-subagent-bridge", () => ({
   applySdkSubagentBridge: (...args: unknown[]) => applySdkSubagentBridgeMock(...args),
   __resetSdkSubagentBridge: () => {},
 }))
@@ -1253,7 +1253,7 @@ describe("useTeamChat — send coverage", () => {
       provider: "anthropic",
       routingPlan,
     } as never)
-    const { applySdkEvent } = jest.requireMock("@/lib/claude/adapter") as {
+    const { applySdkEvent } = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
       applySdkEvent: jest.Mock
     }
     applySdkEvent.mockImplementationOnce(() => ({
@@ -1311,7 +1311,7 @@ describe("useTeamChat — send coverage", () => {
   })
 
   it("preserves attachment provenance on the optimistic team user message", async () => {
-    const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+    const { makeUserMessage } = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
       makeUserMessage: jest.Mock
     }
     const manifest = [{ filename: "notes.txt", mediaType: "text/plain", kind: "document" as const }]
@@ -1829,7 +1829,7 @@ describe("useTeamChat — event handler coverage", () => {
   })
 
   it("event type: persists new messages to active session", async () => {
-    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/claude/adapter")
+    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/chat/sdk-message-adapter")
     const newMsg = { id: "a1", role: "assistant", parts: [{ type: "text", text: "hi" }] }
     ;(applySdkEventMock as jest.Mock).mockReturnValueOnce({
       messages: [newMsg],
@@ -1871,7 +1871,7 @@ describe("useTeamChat — event handler coverage", () => {
       applySdkEvent: applySdkEventMock,
       mergeMemorySourcesIntoLastAssistant: mergeMock,
       mergeWebSearchSourcesIntoLastAssistant: mergeWebMock,
-    } = jest.requireMock("@/lib/claude/adapter")
+    } = jest.requireMock("@/lib/chat/sdk-message-adapter")
     const memoryContext = {
       retrievedMemories: [{ id: "m1", type: "semantic", text: "fact", score: 0.9 }],
       proceduralCount: 0,
@@ -1937,7 +1937,7 @@ describe("useTeamChat — event handler coverage", () => {
   })
 
   it("event type: bumps unread for inactive sessions with new assistant message", async () => {
-    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/claude/adapter")
+    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/chat/sdk-message-adapter")
     const newMsg = { id: "a2", role: "assistant", parts: [{ type: "text", text: "bg" }] }
     ;(applySdkEventMock as jest.Mock).mockReturnValueOnce({
       messages: [newMsg],
@@ -1996,7 +1996,7 @@ describe("useTeamChat — event handler coverage", () => {
   })
 
   it("event type: no-op when nextMessages === teamMsgs (no change)", async () => {
-    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/claude/adapter")
+    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/chat/sdk-message-adapter")
     const existing = chatState.messages as unknown[]
     // Return the same reference → no change
     ;(applySdkEventMock as jest.Mock).mockReturnValueOnce({
@@ -2029,7 +2029,7 @@ describe("useTeamChat — event handler coverage", () => {
     // Exercise postProcessText: run a full supervisor 2-round sequence where
     // round 2 emits an SDK event with a new assistant message.
     // Round 1 produces dispatches → worker replies → round 2 runs with postProcessText.
-    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/claude/adapter")
+    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/chat/sdk-message-adapter")
     stripDispatchesMock.mockImplementation((s: string) =>
       s.replace(/<dispatch>.*?<\/dispatch>/g, "")
     )
@@ -2319,7 +2319,7 @@ describe("useTeamChat — error path branches", () => {
 
     // Make the (coalesced) mid-stream persistMessages throw — the debounced
     // writer owns the failure and logs it; the event handler never rejects.
-    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/claude/adapter")
+    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/chat/sdk-message-adapter")
     const newMsg = { id: "err-msg", role: "assistant", parts: [{ type: "text", text: "x" }] }
     ;(applySdkEventMock as jest.Mock).mockReturnValueOnce({
       messages: [newMsg],
@@ -2355,7 +2355,7 @@ describe("useTeamChat — error path branches", () => {
 
     // The seal path (`result` present) awaits persistMessages directly, so a
     // rejection there surfaces through the handler's catch.
-    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/claude/adapter")
+    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/chat/sdk-message-adapter")
     const newMsg = { id: "err-msg-2", role: "assistant", parts: [{ type: "text", text: "x" }] }
     ;(applySdkEventMock as jest.Mock).mockReturnValueOnce({
       messages: [newMsg],
@@ -2770,7 +2770,7 @@ describe("useTeamChat — content helpers", () => {
   })
 
   it("event type: existing messages are not re-tagged by withMetadata", async () => {
-    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/claude/adapter")
+    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/chat/sdk-message-adapter")
     // Return a messages array that includes an EXISTING message (in existingIds)
     const existingMsg = {
       id: "exist-1",
@@ -3144,7 +3144,7 @@ describe("useTeamChat — content helpers", () => {
   })
 
   it("postProcessText: non-text parts are passed through unchanged", async () => {
-    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/claude/adapter")
+    const { applySdkEvent: applySdkEventMock } = jest.requireMock("@/lib/chat/sdk-message-adapter")
     stripDispatchesMock.mockImplementation((s: string) => s)
 
     let emitTeamEvent: ((evt: unknown) => void) | null = null

@@ -16,7 +16,7 @@ import {
   __injectReadyForTesting,
   __resetSidecarInfoForTesting,
   useSidecarInfo,
-} from "./sidecar-info"
+} from "./use-sidecar-info"
 
 beforeEach(() => {
   __resetSidecarInfoForTesting()

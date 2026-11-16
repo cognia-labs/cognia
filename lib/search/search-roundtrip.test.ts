@@ -11,7 +11,7 @@ jest.mock("@cognia/web-search/search-type-router", () => ({
   routeSearch: (...args: unknown[]) => routeSearchMock(...args),
 }))
 
-import { mergeWebSearchSourcesIntoLastAssistant } from "@/lib/claude/adapter"
+import { mergeWebSearchSourcesIntoLastAssistant } from "@/lib/chat/sdk-message-adapter"
 import { wrapUntrustedContent } from "@/lib/web/untrusted-content"
 import { searchWithSettings } from "./configured-search-core"
 

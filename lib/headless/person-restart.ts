@@ -16,7 +16,7 @@
 
 import type { UIMessage } from "ai"
 
-import type { SessionNoticePartData } from "@/lib/claude/adapter"
+import type { SessionNoticePartData } from "@/lib/chat/sdk-message-adapter"
 import { commitMessageDelta } from "@/lib/db/messages"
 import { getDb } from "@/lib/db/schema"
 import type { HostRestartRecovery } from "@/lib/sync/host-state-service"

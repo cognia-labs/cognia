@@ -8,7 +8,7 @@
  * hook unit test that stubs `applySdkEvent` AND the chat-store), this test keeps
  * BOTH real:
  *
- *   - `@/lib/claude/adapter`  → real `applySdkEvent` folds SDK events to bubbles
+ *   - `@/lib/chat/sdk-message-adapter`  → real `applySdkEvent` folds SDK events to bubbles
  *   - `@/stores/chat`         → real Zustand store holds the session messages
  *
  * What we fake:
@@ -98,8 +98,8 @@ jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
 }))
 
 // ---- side channels that would otherwise hit Dexie / an LLM ----------------
-// NB: `@/lib/claude/adapter` is intentionally NOT mocked — real fold.
-jest.mock("@/lib/claude/sdk-subagent-bridge", () => ({
+// NB: `@/lib/chat/sdk-message-adapter` is intentionally NOT mocked — real fold.
+jest.mock("@/lib/chat/sdk-subagent-bridge", () => ({
   applySdkSubagentBridge: jest.fn(),
   __resetSdkSubagentBridge: () => {},
 }))

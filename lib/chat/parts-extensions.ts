@@ -80,7 +80,7 @@ export function isA2UIPart(part: unknown): part is A2UIPart {
 import type { SubAgentStatus, SubAgentToolCall } from "@/types/agent/sub-agent"
 
 /**
- * SubagentPart — emitted by `lib/claude/subagent-bridge.ts` whenever the
+ * SubagentPart — emitted by `lib/chat/subagent-bridge.ts` whenever the
  * runtime store receives a SubAgent event. The renderer subscribes to the
  * runtime store for live `progress` / `logs` updates; this part carries
  * just the stable identity bits + status snapshot used for sort/group.
@@ -485,7 +485,7 @@ export function isToolUseSummaryPart(part: unknown): part is ToolUseSummaryPart 
  * A single MCP tool-result content block, preserved verbatim from the Agent
  * SDK so the chat renderer can show images / embedded resources / audio
  * instead of a stringified base64 wall. Attached to a `tool-*` part as
- * `mcpContent` by `lib/claude/adapter.ts` whenever a tool result carries a
+ * `mcpContent` by `lib/chat/sdk-message-adapter.ts` whenever a tool result carries a
  * non-text block. The flattened string `output` is kept alongside for
  * back-compat with messages persisted before this field existed.
  *

@@ -22,7 +22,7 @@
 
 import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
 import type { Character, PermissionRequestEvent, SendOptions } from "@cognia/agent-config-types"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type {
   CaptureStreamEvent,
   RunAndCaptureResult,

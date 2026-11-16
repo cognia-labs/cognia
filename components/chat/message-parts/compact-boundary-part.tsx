@@ -2,7 +2,7 @@
 
 // Renders the divider the SDK emits when it compacts the conversation context
 // (manual `/compact` or the automatic threshold). The adapter
-// (`lib/claude/adapter.ts:appendCompactBoundary`) projects the SDK
+// (`lib/chat/sdk-message-adapter.ts:appendCompactBoundary`) projects the SDK
 // `compact_boundary` system message into a `system`-role UIMessage carrying a
 // single `compact-boundary` part; the message list swaps this marker in for
 // the normal `MessageRenderer` so it shows no avatar / actions / usage chrome.
@@ -18,7 +18,7 @@ import type { UIMessage } from "ai"
 
 import { useChatStore } from "@/stores/chat"
 import { restoreSession } from "@/lib/ai/agent/execution/sidecar-client"
-import { getUndoSnapshot, hasUndoSnapshot, clearUndoSnapshot } from "@/lib/claude/compaction-undo"
+import { getUndoSnapshot, hasUndoSnapshot, clearUndoSnapshot } from "@/lib/chat/compaction-undo"
 import { OpticalArchiveDialog } from "./optical-archive-dialog"
 import {
   computeCompactionTokenDeltas,

@@ -320,7 +320,7 @@ jest.mock("@/lib/context-workbench/provider-payload", () => ({
     }),
 }))
 
-jest.mock("@/lib/claude/adapter", () => ({
+jest.mock("@/lib/chat/sdk-message-adapter", () => ({
   applySdkEvent: jest.fn(() => ({ messages: [], turnComplete: false })),
   contentPreview: (c: unknown) => (typeof c === "string" ? c : "preview"),
   makeUserMessage: jest.fn((c: unknown) => ({
@@ -339,7 +339,7 @@ jest.mock("@/lib/memory/run-turn-memory", () => ({
 }))
 
 const applySdkSubagentBridgeMock = jest.fn()
-jest.mock("@/lib/claude/sdk-subagent-bridge", () => ({
+jest.mock("@/lib/chat/sdk-subagent-bridge", () => ({
   applySdkSubagentBridge: (...args: unknown[]) => applySdkSubagentBridgeMock(...args),
   __resetSdkSubagentBridge: () => {},
 }))
@@ -3164,7 +3164,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("preserves attachment provenance on the optimistic user message", async () => {
-    const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+    const { makeUserMessage } = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
       makeUserMessage: jest.Mock
     }
     const manifest = [{ filename: "notes.txt", mediaType: "text/plain", kind: "document" as const }]
@@ -3252,7 +3252,7 @@ describe("useClaudeChat — actions", () => {
     ]
 
     it("swaps a native video for its storyboard when the resolved route cannot take video", async () => {
-      const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+      const { makeUserMessage } = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
         makeUserMessage: jest.Mock
       }
       // The suite's default route: no provider, i.e. the Claude Agent SDK.
@@ -3759,7 +3759,7 @@ describe("useClaudeChat — actions", () => {
       useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
       checkDelegationMock.mockReturnValue({ shouldDelegate: false })
       if (kind === "plan") {
-        const adapterMock = jest.requireMock("@/lib/claude/adapter") as {
+        const adapterMock = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
           applySdkEvent: jest.Mock
         }
         adapterMock.applySdkEvent.mockReturnValueOnce({
@@ -6863,7 +6863,7 @@ describe("useClaudeChat — actions", () => {
         { id: "streamed", role: "assistant", parts: [{ type: "text", text: "partial" }] },
       ]
       jest
-        .requireMock("@/lib/claude/adapter")
+        .requireMock("@/lib/chat/sdk-message-adapter")
         .applySdkEvent.mockReturnValueOnce({ messages, turnComplete: false })
       await act(async () => {
         _messageCallback?.({ type: "event", sessionId: "sess-1", event: { type: "assistant" } })
@@ -6965,7 +6965,7 @@ describe("useClaudeChat — actions", () => {
     // The original keeps its own tail via `tagEditSibling`, but the reply the
     // RESEND produces must hang off the replacement too — otherwise flipping
     // the navigator back to the original shows the new answer under it.
-    const adapterMock = jest.requireMock("@/lib/claude/adapter") as {
+    const adapterMock = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
       applySdkEvent: jest.Mock
     }
     chatState.messages = [
@@ -7948,7 +7948,7 @@ describe("useClaudeChat — native vector backend branch", () => {
 })
 
 describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
-  const adapterMock = jest.requireMock("@/lib/claude/adapter") as {
+  const adapterMock = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
     applySdkEvent: jest.Mock
     extractUsage: jest.Mock
   }
@@ -9086,7 +9086,9 @@ describe("useClaudeChat — agent-trace wiring (Phase B4)", () => {
 })
 
 describe("useClaudeChat — concurrent sessions", () => {
-  const adapterMock = jest.requireMock("@/lib/claude/adapter") as { applySdkEvent: jest.Mock }
+  const adapterMock = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
+    applySdkEvent: jest.Mock
+  }
 
   it.each([true, false])(
     "merges ingress at a queued frame commit while honoring its generation guard (%s)",
@@ -10680,8 +10682,10 @@ describe("attachment source persistence before dispatch", () => {
         syncCursor: 0,
       },
     })
-    const realMakeUserMessage = jest.requireActual("@/lib/claude/adapter").makeUserMessage
-    const adapter = jest.requireMock("@/lib/claude/adapter") as { makeUserMessage: jest.Mock }
+    const realMakeUserMessage = jest.requireActual("@/lib/chat/sdk-message-adapter").makeUserMessage
+    const adapter = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
+      makeUserMessage: jest.Mock
+    }
     adapter.makeUserMessage
       .mockImplementationOnce(realMakeUserMessage)
       .mockImplementationOnce(realMakeUserMessage)
@@ -11207,7 +11211,7 @@ describe("useClaudeChat — @agent turn routing", () => {
       )
       // The manifest reaches the row builder, which makes the file a card again
       // rather than showing its text as what the user typed.
-      const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+      const { makeUserMessage } = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
         makeUserMessage: jest.Mock
       }
       expect(makeUserMessage).toHaveBeenCalledWith(
@@ -11316,7 +11320,7 @@ describe("useClaudeChat — @agent turn routing", () => {
         `${REPORT}\n\n${QUESTION}`,
         expect.objectContaining({ agentId: "codex-1" })
       )
-      const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+      const { makeUserMessage } = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
         makeUserMessage: jest.Mock
       }
       expect(makeUserMessage).toHaveBeenCalledWith(
@@ -11790,7 +11794,7 @@ describe("useClaudeChat — @agent turn routing", () => {
       ]
       /** Lands one SDK frame that appends assistant `id` to the session. */
       async function landReply(id: string): Promise<Row | undefined> {
-        const adapterMock = jest.requireMock("@/lib/claude/adapter") as {
+        const adapterMock = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
           applySdkEvent: jest.Mock
         }
         adapterMock.applySdkEvent.mockReturnValueOnce({
@@ -11948,7 +11952,7 @@ describe("useClaudeChat — @agent turn routing", () => {
     describe("a reply the send writes itself takes the armed slot", () => {
       /** Lands one SDK frame that appends assistant `id` to the session. */
       async function landReply(id: string): Promise<Row | undefined> {
-        const adapterMock = jest.requireMock("@/lib/claude/adapter") as {
+        const adapterMock = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
           applySdkEvent: jest.Mock
         }
         adapterMock.applySdkEvent.mockReturnValueOnce({
@@ -12400,7 +12404,7 @@ describe("useClaudeChat — @agent turn routing", () => {
       executeOnExternalAgentMock.mockResolvedValue({ success: false, error: "spawn failed" })
       // Every user message the send path builds gets its own id here, so the
       // row the edit appended and anything a re-issue builds are told apart.
-      const adapter = jest.requireMock("@/lib/claude/adapter") as {
+      const adapter = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
         makeUserMessage: jest.Mock
         applySdkEvent: jest.Mock
       }
@@ -12511,7 +12515,7 @@ describe("durable background result admission", () => {
   })
   it("keeps the reserved message and run identity when the delivery is accepted", async () => {
     acceptChatTurnMock.mockResolvedValueOnce({ submissionId: "work:background-delivery-test" })
-    const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+    const { makeUserMessage } = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
       makeUserMessage: jest.Mock
     }
     makeUserMessage.mockImplementationOnce((content: string, id: string) => ({
@@ -13146,7 +13150,7 @@ it("durably accepts a real window background turn and acknowledges replay withou
   bindChatTurnContextMock.mockImplementation((input) =>
     actual.bindChatTurnContext(input, { loadKey: async () => new Uint8Array(32).fill(11) })
   )
-  const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+  const { makeUserMessage } = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
     makeUserMessage: jest.Mock
   }
   makeUserMessage.mockImplementationOnce((content: string, id: string) => ({
@@ -13456,7 +13460,7 @@ it.each(["hook-block", "resolver-throw", "provider-cap", "feature-throw"])(
       claimChatTurnForDispatchMock.mockImplementation((runId) =>
         actual.claimChatTurnForDispatch(runId, Date.now(), deps)
       )
-      const { makeUserMessage } = jest.requireMock("@/lib/claude/adapter") as {
+      const { makeUserMessage } = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
         makeUserMessage: jest.Mock
       }
       makeUserMessage.mockImplementationOnce((content: string, id: string) => ({

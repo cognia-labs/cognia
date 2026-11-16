@@ -6,7 +6,7 @@ import {
   resolveAutoCompactThreshold,
   shouldAutoCompact,
 } from "./auto-compact"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 
 /** Usage that fills `frac` of a 1000-token window via inputTokens. */
 function usageAt(frac: number): UsageInfo {

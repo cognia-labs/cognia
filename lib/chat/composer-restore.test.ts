@@ -3,7 +3,7 @@ import type { UIMessage } from "ai"
 jest.mock("@/lib/db/session-assets", () => ({ getSessionAsset: jest.fn() }))
 
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
-import { STEER_PREFIX } from "@/lib/claude/steer"
+import { STEER_PREFIX } from "@/lib/chat/steer"
 import {
   composerRestoreFromMessage,
   isEmptyComposerRestore,

@@ -1,4 +1,4 @@
-import { guildFromSession } from "./guild"
+import { guildFromSession } from "./session-guild"
 
 test("returns DM guild for null/undefined session", () => {
   expect(guildFromSession(null)).toEqual({ kind: "dm" })

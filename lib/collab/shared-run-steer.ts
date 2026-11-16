@@ -22,7 +22,7 @@
  */
 
 import type { SendContent, SessionEvent } from "@cognia/agent-config-types"
-import { steerTextOf } from "@/lib/claude/steer"
+import { steerTextOf } from "@/lib/chat/steer"
 import {
   registerRemoteSessionSteerLane,
   steerRun,

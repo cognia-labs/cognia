@@ -64,7 +64,7 @@ const NOT_CALL_SITES = new Set([
   "cli/src/api/generated/command-index.ts",
   // Switches on an Agent SDK message subtype that happens to share the
   // `plugin_install` spelling; it never invokes the host.
-  "lib/claude/adapter.ts",
+  "lib/chat/sdk-message-adapter.ts",
 ])
 
 /** Plugin rows written without any host command at all. */

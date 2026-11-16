@@ -15,7 +15,7 @@ jest.mock("@/lib/chat/start-session", () => ({
 jest.mock("@/lib/db/messages", () => ({
   persistMessages: (...a: unknown[]) => persistMessages(...(a as [])),
 }))
-jest.mock("@/lib/claude/adapter", () => ({
+jest.mock("@/lib/chat/sdk-message-adapter", () => ({
   makeUserMessage: (t: string) => makeUserMessage(t),
 }))
 

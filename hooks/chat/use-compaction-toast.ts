@@ -3,7 +3,7 @@
 // Surfaces a toast when the conversation is compacted, gated on the
 // `showCompressionNotification` setting (CompressionSettings). The compaction
 // boundary already arrives as a `compact-boundary` UIMessage part (projected by
-// `lib/claude/adapter.ts:appendCompactBoundary`); this hook watches the message
+// `lib/chat/sdk-message-adapter.ts:appendCompactBoundary`); this hook watches the message
 // list for a NEWLY-appeared boundary and notifies once per boundary.
 
 import { useEffect, useRef } from "react"

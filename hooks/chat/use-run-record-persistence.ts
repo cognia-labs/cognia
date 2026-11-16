@@ -21,8 +21,8 @@
 import { useEffect } from "react"
 
 import { useChatStore } from "@/stores/chat"
-import { IDLE_TIMING } from "@/lib/claude/run-status"
-import { deriveRunRecord, toRunStatus } from "@/lib/claude/run-record"
+import { IDLE_TIMING } from "@/lib/chat/run-status"
+import { deriveRunRecord, toRunStatus } from "@/lib/chat/run-record"
 import { pruneRunRecords, runRecordRowFromView, upsertRunRecord } from "@/lib/db/run-records"
 
 const PERSIST_DEBOUNCE_MS = 400

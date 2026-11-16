@@ -753,7 +753,7 @@ async function reserveTurnBudget(
     ...(budget.tokens !== undefined ? { tokens: budget.tokens } : {}),
     ...(budget.deadlineAt !== undefined ? { deadlineAt: budget.deadlineAt } : {}),
   }
-  const { extractUsage } = await import("@/lib/claude/adapter")
+  const { extractUsage } = await import("@/lib/chat/sdk-message-adapter")
   let usage: import("@/lib/execution/run-budget-rail").MeteredUsage | undefined
   let executorId: string | undefined
   const interrupt = () =>

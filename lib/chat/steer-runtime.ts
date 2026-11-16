@@ -29,7 +29,7 @@ import {
   stripSteerPrefix,
   type SteerMessageMeta,
   type SteerState,
-} from "@/lib/claude/steer"
+} from "@/lib/chat/steer"
 import { persistMessages } from "@/lib/db/messages"
 import type { MessageReplyTo, SendContent, SendOptions } from "@cognia/agent-config-types"
 import type { UIMessage } from "ai"

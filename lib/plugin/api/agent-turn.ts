@@ -57,7 +57,7 @@ import {
 } from "@/lib/chat/transcript/revision-events"
 import { registerCaptureResponder } from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
-import { applySdkEvent, sdkMediaPart, type UsageInfo } from "@/lib/claude/adapter"
+import { applySdkEvent, sdkMediaPart, type UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import { applyExternalAgentEventToParts } from "@/lib/ai/agent/external/session/event-to-parts"
 import type { UIMessage } from "ai"
 import type { A2UIPart, SourcesPart } from "@/lib/chat/parts-extensions"

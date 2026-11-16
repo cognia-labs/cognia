@@ -9,7 +9,7 @@
  * unit-tested without a live session.
  */
 import { computeContextWindowUsage } from "@/lib/usage/context-usage"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 
 /** Default fill fraction at which auto-compaction fires (matches the gauge's ┊). */
 export const DEFAULT_AUTO_COMPACT_THRESHOLD = 0.85

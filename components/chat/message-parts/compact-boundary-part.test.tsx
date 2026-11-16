@@ -9,7 +9,7 @@ import {
   registerUndoSnapshot,
   hasUndoSnapshot,
   __resetUndoRegistryForTesting,
-} from "@/lib/claude/compaction-undo"
+} from "@/lib/chat/compaction-undo"
 
 // Wrapped, not replaced, so a test can count calls to the real function.
 jest.mock("@/lib/usage/compaction-metrics", () => {

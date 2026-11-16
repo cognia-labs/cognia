@@ -1,6 +1,6 @@
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { SelectedGuild } from "@/stores/ui"
-import { guildFromSession } from "@/lib/claude/guild"
+import { guildFromSession } from "@/lib/chat/session-guild"
 
 /**
  * Keeps the desktop chat pane's active session in lockstep with the selected

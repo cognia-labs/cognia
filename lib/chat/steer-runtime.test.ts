@@ -99,7 +99,7 @@ import {
 } from "./steer-runtime"
 import { __resetSteerForTesting, steerRun } from "@/lib/execution/steer"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
-import { steerMetaOf, type SteerState } from "@/lib/claude/steer"
+import { steerMetaOf, type SteerState } from "@/lib/chat/steer"
 import {
   composeTurnText,
   promptPreambleOfParts,

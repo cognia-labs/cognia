@@ -83,7 +83,7 @@ let mockAdapterTurnComplete = true
 
 // applySdkEvent — append a synthetic assistant message with a controllable
 // completion marker so revision reconciliation can be tested independently.
-jest.mock("@/lib/claude/adapter", () => ({
+jest.mock("@/lib/chat/sdk-message-adapter", () => ({
   applySdkEvent: (messages: unknown[]) => ({
     messages: [...messages, { id: "a1", role: "assistant", parts: [] }],
     turnComplete: mockAdapterTurnComplete,

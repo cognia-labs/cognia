@@ -1,6 +1,6 @@
 /**
  * Per-message usage + cost rows. Captured each time the SDK delivers a
- * `result` event by `lib/claude/adapter.ts:applyResultMessage`. The row's
+ * `result` event by `lib/chat/sdk-message-adapter.ts:applyResultMessage`. The row's
  * primary key is `messageId` (the Anthropic assistant message id), which
  * is unique across all sessions, so the writer is naturally idempotent —
  * re-applying the same result event overwrites in place.
@@ -11,7 +11,7 @@
  * captures per-turn data the SDK itself reports.
  */
 
-import { extractUsage, type UsageInfo } from "@/lib/claude/adapter"
+import { extractUsage, type UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { SDKResultMessage } from "@cognia/agent-config-types"
 import { getDb } from "./schema"
 import { commitUsageRow } from "@/lib/usage/usage-ledger"

@@ -28,7 +28,7 @@ export type { OpticalCompactionOptions } from "../../shared/wire/optical-options
 
 /**
  * Rides the compaction event to the renderer, which archives the frames
- * (`lib/claude/optical-archive-persist.ts`).
+ * (`lib/chat/optical-archive-persist.ts`).
  */
 export interface OpticalCompactionMeta {
   frameCount: number

@@ -30,7 +30,7 @@
 import type { SendContent } from "@cognia/agent-config-types"
 import type { AutomatedTurnProducer } from "@cognia/agent-config-types/automated-turn"
 import { getExecutionRun, listChildExecutionRuns, listExecutionRuns } from "@/lib/db/execution-runs"
-import { steerTextOf } from "@/lib/claude/steer"
+import { steerTextOf } from "@/lib/chat/steer"
 import { isLiveRunStatus } from "./run-status"
 import { steerDisposition, type DerivedSteerSource, type SteerOrigin } from "./steer-queue"
 import type { SteerDegradedReason } from "./run-control"

@@ -31,7 +31,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
 import { HOVER_REVEAL_CONTROL_BASE_CLASS } from "@/lib/ui/hover-reveal"
-import { resolveSteerDisplayState, steerMetaOf, stripSteerPrefix } from "@/lib/claude/steer"
+import { resolveSteerDisplayState, steerMetaOf, stripSteerPrefix } from "@/lib/chat/steer"
 import {
   commitPendingSteerEdit,
   discardPendingSteer,

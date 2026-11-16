@@ -43,7 +43,7 @@ import {
   type ToolActivityChildOptions,
 } from "@/components/chat/message-parts/tool-activity-group"
 import { ToolCallRow } from "@/components/chat/message-parts/tool-call-row"
-import { toToolActivityEntries } from "@/lib/claude/subagent-tool-parts"
+import { toToolActivityEntries } from "@/lib/chat/subagent-tool-parts"
 import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { cancelSubagentRun } from "@/lib/ai/agent/execution/delegation/cancel-subagent"

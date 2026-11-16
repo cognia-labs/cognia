@@ -5,7 +5,7 @@ import { act, renderHook } from "@testing-library/react"
 import type { UIMessage } from "ai"
 
 import { useLastTurnElapsedMs } from "./use-last-turn-elapsed"
-import { IDLE_TIMING } from "@/lib/claude/run-status"
+import { IDLE_TIMING } from "@/lib/chat/run-status"
 import { makeSessionSlice, useChatStore, type SessionChatSlice } from "@/stores/chat"
 
 const SID = "s1"

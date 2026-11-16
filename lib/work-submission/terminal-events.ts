@@ -2,7 +2,7 @@ import { personChatCapability } from "@/lib/headless/person-chat"
 import type { UIMessage } from "ai"
 import type { ClaudeEvent, SDKMessage, SDKResultMessage } from "@cognia/agent-config-types"
 
-import { applySdkEvent } from "@/lib/claude/adapter"
+import { applySdkEvent } from "@/lib/chat/sdk-message-adapter"
 import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import { listMessages, persistMessages } from "@/lib/db/messages"
 import { resultUsageRow, type recordResultUsage } from "@/lib/db/session-usage"

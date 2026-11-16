@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { listUsageForSession, type SessionUsageRow } from "@/lib/db/session-usage"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import { UNKNOWN_COST, aggregateByModel } from "@/lib/usage/session-analytics"
 import { summarizeSpend } from "@/lib/usage/usage-report"
 import {

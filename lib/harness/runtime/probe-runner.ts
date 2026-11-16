@@ -34,7 +34,7 @@ import type {
   RunAndCaptureOptions,
   RunAndCaptureResult,
 } from "@/lib/ai/agent/execution/capture-types"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { SurfaceUsageInput } from "@/lib/db/session-usage"
 import type {
   HarnessBlockedAction,

@@ -8,7 +8,7 @@
  * conversation's FileSpace — is previewed inside Files.
  */
 
-import { guildFromSession } from "@/lib/claude/guild"
+import { guildFromSession } from "@/lib/chat/session-guild"
 import { getSession } from "@/lib/db/sessions"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useChatStore } from "@/stores/chat"

@@ -481,7 +481,7 @@ export function createAgentRpcHostStateDispatcher(
             )
             if (prompt.manifest?.length) {
               const [{ makeUserMessage }, { commitMessageDelta }] = await Promise.all([
-                import("@/lib/claude/adapter"),
+                import("@/lib/chat/sdk-message-adapter"),
                 import("@/lib/db/messages"),
               ])
               const message = makeUserMessage(

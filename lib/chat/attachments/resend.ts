@@ -1,7 +1,7 @@
 /**
  * A sent user turn, rebuilt from its transcript row so it can be sent again.
  *
- * `makeUserMessage` (`lib/claude/adapter.ts`) turns every attachment block into
+ * `makeUserMessage` (`lib/chat/sdk-message-adapter.ts`) turns every attachment block into
  * a `file` part. An extracted document, an audio transcript or an image's OCR
  * keeps its text. An image keeps its bytes: a data URL, or a `cognia-media:`
  * reference once the row is stored. Every part a video produced carries the

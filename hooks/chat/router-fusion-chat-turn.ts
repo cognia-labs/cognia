@@ -19,7 +19,7 @@ import type { UIMessage } from "ai"
 import type { CogniaDiagnostic } from "@cognia/diagnostics"
 import type { AppSettings, RouterFusionRunStamp } from "@cognia/agent-config-types"
 
-import { stripSteerPrefix } from "@/lib/claude/steer"
+import { stripSteerPrefix } from "@/lib/chat/steer"
 import { commitMessageDelta } from "@/lib/db/messages"
 import { toDiagnostic } from "@/lib/diagnostics/to-diagnostic"
 import { chatTurnPerformance } from "@/lib/perf/chat-turn-performance"

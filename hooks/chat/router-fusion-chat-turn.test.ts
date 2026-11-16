@@ -3,7 +3,7 @@ import type { UIMessage } from "ai"
 import type { RouterFusionRunStamp, RouterFusionRunSummary } from "@cognia/agent-config-types"
 import type { CogniaDiagnostic } from "@cognia/diagnostics"
 
-import { STEER_PREFIX } from "@/lib/claude/steer"
+import { STEER_PREFIX } from "@/lib/chat/steer"
 import {
   RouterFusionInfrastructureError,
   RouterFusionRefusalError,

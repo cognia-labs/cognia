@@ -62,7 +62,7 @@ jest.mock("dexie-react-hooks", () => ({
 const sidecarInfoRef = {
   current: { ready: false } as { ready: boolean; sdkVersion?: string; sidecarVersion?: string },
 }
-jest.mock("@/lib/claude/sidecar-info", () => ({
+jest.mock("@/hooks/agent/use-sidecar-info", () => ({
   useSidecarInfo: () => sidecarInfoRef.current,
 }))
 jest.mock("@/lib/slash-commands/builtin", () => ({

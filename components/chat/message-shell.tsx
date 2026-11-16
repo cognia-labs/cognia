@@ -10,7 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Spinner } from "@/components/ui/spinner"
 import { ChatLinkOptionsProvider } from "@/components/chat/markdown/chat-link-options"
 import { useTranscriptHasMultipleAgents } from "@/components/chat/transcript-agents-context"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { ResolvedMessageDisplayOptions } from "@/lib/chat/message-display"
 import type { MessageDisplayMetadataOptions } from "@/types/appearance"
 import { assistantBubbleClass, messageCardClass } from "@/lib/chat/message-bubble"

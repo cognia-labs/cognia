@@ -1,7 +1,7 @@
 "use client"
 
 // gap3 — spec-driven renderer for a third-party MCP tool result that carries
-// structured content blocks (preserved by `lib/claude/adapter.ts` onto the
+// structured content blocks (preserved by `lib/chat/sdk-message-adapter.ts` onto the
 // part as `mcpContent`). Walks the blocks and renders each by kind — text as
 // markdown, images/audio inline, embedded resources as text/code or a
 // download — instead of dumping a stringified base64 wall. Falls back to the

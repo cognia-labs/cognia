@@ -37,7 +37,7 @@ import { toDiagnostic } from "@/lib/diagnostics/to-diagnostic"
 import { createDiagnostic } from "@cognia/diagnostics"
 import type { TurnRoute } from "@/lib/chat/turn-route/types"
 import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
-import { makeUserMessage } from "@/lib/claude/adapter"
+import { makeUserMessage } from "@/lib/chat/sdk-message-adapter"
 import type {
   ApprovalDecision,
   ApprovalResponseOptions,

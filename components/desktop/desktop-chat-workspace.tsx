@@ -52,7 +52,7 @@ import { useUIStore } from "@/stores/ui"
 import { openSessionForReading } from "@/lib/chat/unread-marker"
 import { branchWholeConversation } from "@/lib/chat/branch-whole-conversation"
 import { useSessionRunStatusMap } from "@/hooks/chat/use-session-run-status-map"
-import { guildFromSession } from "@/lib/claude/guild"
+import { guildFromSession } from "@/lib/chat/session-guild"
 import { resolveConversationGroupBy } from "@/lib/chat/conversation-grouping"
 import {
   needsCrossWorkspaceSessions,

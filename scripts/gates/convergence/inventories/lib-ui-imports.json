@@ -278,7 +278,7 @@
       "typeOnly": false
     },
     {
-      "key": "lib/claude/subagent-tool-parts.ts",
+      "key": "lib/chat/subagent-tool-parts.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

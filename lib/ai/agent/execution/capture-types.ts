@@ -14,7 +14,7 @@ import type { CanonicalAgentEvent } from "@cognia/agent-config-types/agent-execu
 import type { CaptureStreamEvent } from "@cognia/plugin-contract/lib/claude/run-and-capture"
 
 import type { ApproveToolAttribution } from "@/lib/ai/agent/execution/sidecar-client"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { ExecutionLeaseInfo } from "@/lib/execution/types"
 import type {
   ExplicitFusionTurnInput,

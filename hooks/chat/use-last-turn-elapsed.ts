@@ -26,8 +26,8 @@
 import { useEffect, useMemo, useState } from "react"
 import type { UIMessage } from "ai"
 
-import { toRunStatus } from "@/lib/claude/run-record"
-import { activeElapsedMs, lastTurnElapsedMs } from "@/lib/claude/run-status"
+import { toRunStatus } from "@/lib/chat/run-record"
+import { activeElapsedMs, lastTurnElapsedMs } from "@/lib/chat/run-status"
 import { useChatStore } from "@/stores/chat"
 
 interface SettledTurn {

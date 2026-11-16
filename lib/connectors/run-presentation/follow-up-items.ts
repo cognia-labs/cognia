@@ -13,11 +13,7 @@
 
 import type { RunControlAction, RunProjectionSnapshot } from "@/types/execution/run"
 import { safeStableActivityId } from "@/lib/execution/run-activity"
-import {
-  IM_STEER_PREFIX_EN,
-  IM_STEER_PREFIX_ZH,
-  IM_STEER_PREFIX_ZH_ASCII,
-} from "@/lib/claude/steer"
+import { IM_STEER_PREFIX_EN, IM_STEER_PREFIX_ZH, IM_STEER_PREFIX_ZH_ASCII } from "@/lib/chat/steer"
 import type { FollowUpControlItem } from "@/lib/connectors/follow-up-control"
 
 export const RUN_ACTION_LABEL_EN: Record<RunControlAction, string> = {
@@ -54,7 +50,7 @@ export const RUN_ACTION_LABEL_ZH: Record<RunControlAction, string> = {
  * the registration: buttons are one-shot, but a person redirecting work says
  * several things over the life of one run.
  *
- * The prefixes themselves are the steer text rules in `lib/claude/steer.ts`.
+ * The prefixes themselves are the steer text rules in `lib/chat/steer.ts`.
  */
 
 export interface FollowUpMatch {

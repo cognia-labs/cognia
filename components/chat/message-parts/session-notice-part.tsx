@@ -1,7 +1,7 @@
 "use client"
 
 // Renders non-conversational "session notice" markers the adapter projects from
-// SDK control events (`lib/claude/adapter.ts:appendSessionNotice`):
+// SDK control events (`lib/chat/sdk-message-adapter.ts:appendSessionNotice`):
 //   • permission-denied — a tool auto-denied without an interactive prompt
 //     (classifier / dontAsk / deny rule); surfaced so the user sees WHY a tool
 //     didn't run instead of only an is_error tool_result.

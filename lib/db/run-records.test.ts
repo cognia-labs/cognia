@@ -10,7 +10,7 @@ import {
   runRecordRowFromView,
   type RunRecordRow,
 } from "./run-records"
-import type { RunRecordView } from "@/lib/claude/run-record"
+import type { RunRecordView } from "@/lib/chat/run-record"
 import { getDb } from "./schema"
 
 function row(sessionId: string, runId: number, startedAt: number): RunRecordRow {

@@ -29,7 +29,7 @@ import {
 import { runAndCaptureAssistantReply as defaultCapture } from "@/lib/ai/agent/execution/run-and-capture"
 import { type CaptureStreamEvent, RunAndCaptureError } from "@/lib/ai/agent/execution/capture-types"
 import { closeSession as defaultCloseSession } from "@/lib/ai/agent/execution/sidecar-client"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { McpServer, SendOptions } from "@cognia/agent-config-types"
 import type { PluginToolManifestEntry } from "@/lib/plugin/bridge/sidecar-tools-bridge"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"

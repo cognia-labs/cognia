@@ -4,7 +4,7 @@
  * Given the previously-observed status of a run and its next status, decide
  * which toast (if any) to surface. Keeping this pure lets the React toaster
  * stay a thin liveQuery → toast shim and makes the transition matrix unit-
- * testable. Mirrors the module-helper style of `lib/claude/over-budget-toast.ts`.
+ * testable. Mirrors the module-helper style of `lib/chat/over-budget-toast.ts`.
  */
 
 import type { RunStatus } from "@/types/workflow/visual"

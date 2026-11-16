@@ -25,7 +25,12 @@ const part = (
 const entries: ToolActivityGroupEntry[] = [
   {
     key: "e1",
-    part: part("tool-Read", "output-available", { file_path: "/app/lib/claude/adapter.ts" }, "ok"),
+    part: part(
+      "tool-Read",
+      "output-available",
+      { file_path: "/app/lib/chat/sdk-message-adapter.ts" },
+      "ok"
+    ),
   },
   {
     key: "e2",

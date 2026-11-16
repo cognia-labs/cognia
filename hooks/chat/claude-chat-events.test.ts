@@ -66,8 +66,8 @@ const applySdkEventMock = jest.fn()
 const mergeWebSearchSourcesMock = jest.fn((messages: unknown, _context?: unknown) => messages)
 const mergeProjectHistorySourcesMock = jest.fn((messages: unknown, _evidence?: unknown) => messages)
 
-jest.mock("@/lib/claude/adapter", () => {
-  const actual = jest.requireActual("@/lib/claude/adapter")
+jest.mock("@/lib/chat/sdk-message-adapter", () => {
+  const actual = jest.requireActual("@/lib/chat/sdk-message-adapter")
   return {
     ...actual,
     applySdkEvent: (...args: unknown[]) => applySdkEventMock(...args),

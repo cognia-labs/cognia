@@ -127,7 +127,7 @@ async function bumpTranscriptRevision(
  * Per-session snapshot of the last *committed* persist: message id →
  * `{ ref, createdAt }`. `ref` is the in-memory `UIMessage` object reference at
  * the time it was written. The streaming adapter keeps object references stable
- * for messages that didn't change (`lib/claude/adapter.ts`), so ref-equality
+ * for messages that didn't change (`lib/chat/sdk-message-adapter.ts`), so ref-equality
  * against this snapshot cleanly tells `persistMessages` which rows are
  * unchanged and can be skipped — turning a per-event O(n) full-table rewrite
  * into O(changed rows). It also caches `createdAt` so steady-state streaming

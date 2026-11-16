@@ -1,7 +1,7 @@
 // Core `TodoWrite` tool for the ai-sdk path.
 //
 // The name is EXACTLY "TodoWrite" on purpose: the renderer derives UI part
-// types as `tool-${name}` (lib/claude/adapter.ts) and special-cases
+// types as `tool-${name}` (lib/chat/sdk-message-adapter.ts) and special-cases
 // `tool-TodoWrite` with the task-list card (components/chat/
 // message-renderer.tsx parseTodoInput). Matching the Anthropic SDK's native
 // tool name means the SAME card renders both paths with zero renderer work.

@@ -944,7 +944,7 @@ it("gates the full external side-chat prompt while leaving the typed transcript 
 })
 
 it("uses the Host user-message constructor for staged personal attachment marks", () => {
-  const { makeUserMessage } = jest.requireActual("@/lib/claude/adapter")
+  const { makeUserMessage } = jest.requireActual("@/lib/chat/sdk-message-adapter")
   const message = makeUserMessage([{ type: "text", text: "document body" }], "controller-doc", [
     {
       kind: "text",

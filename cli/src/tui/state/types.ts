@@ -19,7 +19,7 @@ import type {
   CapturePermissionDecision,
   RunAndCaptureResult,
 } from "@/lib/ai/agent/execution/capture-types"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { RunStepView, RunUsageTotals } from "../runtime/workflow-run-fold"
 import type { RateLimitSnapshot } from "../format/rate-limits"
 export type NativeAgentRateLimits = Record<

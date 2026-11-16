@@ -118,7 +118,7 @@ import { tryBuildMemoryDeps } from "@/lib/memory/runtime/build-deps"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import { connectorVendor } from "@/lib/connectors/vendor-contribution"
-import { buildSteerPayload, steerBlocksOf } from "@/lib/claude/steer"
+import { buildSteerPayload, steerBlocksOf } from "@/lib/chat/steer"
 import { deliveryTargetFromEvent } from "@/types/connectors/event"
 import { automatedTurnMetadata } from "@cognia/agent-config-types/automated-turn"
 import { automatedRoomTurnOf } from "./room/automated-room-turn"
@@ -618,7 +618,7 @@ export type RunAndCaptureFn = (
    * that don't surface usage keep compiling; the runtime only reads it to
    * close the connector turn's root trace span with LLM accounting.
    */
-  usage?: import("@/lib/claude/adapter").UsageInfo
+  usage?: import("@/lib/chat/sdk-message-adapter").UsageInfo
   sdkSessionId?: string
 }>
 

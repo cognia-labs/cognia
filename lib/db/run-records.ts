@@ -8,7 +8,7 @@
  * Snapshots are written (debounced) by `hooks/chat/use-run-record-persistence`.
  */
 import type { TodoEntry } from "@/lib/chat/todos"
-import type { RunRecordStatus, RunRecordView } from "@/lib/claude/run-record"
+import type { RunRecordStatus, RunRecordView } from "@/lib/chat/run-record"
 import type { SubAgentStatus } from "@/types/agent/sub-agent"
 import { getDb } from "./schema"
 

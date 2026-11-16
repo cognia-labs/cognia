@@ -56,7 +56,7 @@ import type {
 import { applyExternalAgentEventToParts } from "@/lib/ai/agent/external/session/event-to-parts"
 import type { CanonicalAgentEvent } from "@cognia/agent-config-types/agent-execution"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
-import { extractUsage, sdkMediaPart, type UsageInfo } from "@/lib/claude/adapter"
+import { extractUsage, sdkMediaPart, type UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import { runChatMiddlewareChain } from "@/lib/plugin/messaging/chat-middleware/runner"
 import { hasInterceptors } from "@/lib/plugin/interceptors"
 import { isChatMiddlewareExecutionEnabled } from "@/lib/plugin/messaging/chat-middleware/feature-flag"

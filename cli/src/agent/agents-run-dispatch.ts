@@ -28,7 +28,7 @@ import { runCliSubagent } from "./subagent-runner"
 /**
  * What the `/agents` controller's `dispatchAgent` seam expects back. The `usage`
  * here is the controller's `{ totalTokens }` shape (NOT the runner's richer
- * {@link import("@/lib/claude/adapter").UsageInfo}); `rejection` is never set —
+ * {@link import("@/lib/chat/sdk-message-adapter").UsageInfo}); `rejection` is never set —
  * single-level CLI dispatch has no nesting guard — and is present only so the
  * type structurally matches the seam.
  */

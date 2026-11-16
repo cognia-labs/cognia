@@ -18,7 +18,7 @@
  */
 
 import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
-import { frameSteer } from "@/lib/claude/steer"
+import { frameSteer } from "@/lib/chat/steer"
 import { formatTokens } from "../format/usage"
 import type { ActivityKind, TuiAction } from "../state/types"
 

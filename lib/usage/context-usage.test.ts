@@ -13,7 +13,7 @@ import {
   tokensInWindow,
 } from "./context-usage"
 import { externalTokenUsageToUsageInfo, usageInfoFromUsageBlock } from "./usage-info"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import { getBuiltInProviderCatalog } from "@cognia/provider-types/built-in-provider-catalog"
 
 function asUiMessage(role: UIMessage["role"], metadata?: Record<string, unknown>): UIMessage {

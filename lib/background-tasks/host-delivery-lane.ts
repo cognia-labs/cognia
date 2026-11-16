@@ -115,7 +115,7 @@ export async function runHostAutomatedTurn(
   const accepted = await deps.existingSubmission(runId)
   if (accepted?.sessionId === sessionId) return true
 
-  const { makeUserMessage } = await import("@/lib/claude/adapter")
+  const { makeUserMessage } = await import("@/lib/chat/sdk-message-adapter")
   const { automatedTurnMetadata } = await import("@cognia/agent-config-types/automated-turn")
   const row = makeUserMessage(text, deliveryId)
   row.metadata = {

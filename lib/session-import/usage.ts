@@ -18,7 +18,7 @@
 // billing totals and the daily rollup, while a session's own report can still
 // show them, labelled.
 
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
 

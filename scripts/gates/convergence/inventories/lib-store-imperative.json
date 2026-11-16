@@ -1296,7 +1296,7 @@
       ]
     },
     {
-      "key": "lib/claude/sdk-subagent-bridge.ts",
+      "key": "lib/chat/sdk-subagent-bridge.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

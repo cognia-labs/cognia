@@ -35,7 +35,7 @@ import {
   type RunSteerEngine,
   type SteerOutcome,
 } from "./steer"
-import { steerTextOf } from "@/lib/claude/steer"
+import { steerTextOf } from "@/lib/chat/steer"
 
 /**
  * The action exists in the vocabulary but this run kind cannot perform it.

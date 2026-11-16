@@ -79,7 +79,7 @@ export const DORMANT_HOOK_HANDLER_FIELDS: readonly string[] = [
 /**
  * Structured payload for the synthetic `hook-notice` message part / marker.
  * Canonical home for the type so both the adapter that builds it
- * (`lib/claude/adapter.ts`) and the renderer that displays it
+ * (`lib/chat/sdk-message-adapter.ts`) and the renderer that displays it
  * (`components/chat/message-parts/hook-notice-part.tsx`) share one definition.
  * Lives here (a zero-import module) to avoid pulling the adapter into the
  * client bundle through the renderer.

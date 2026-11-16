@@ -18,7 +18,7 @@ import { useShallow } from "zustand/react/shallow"
 import { SessionCostBadge } from "@/components/chat/session-cost-badge"
 import { useChatStore } from "@/stores/chat"
 import { getLatestUsage } from "@/lib/usage/context-usage"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { UIMessage } from "ai"
 
 interface Props {

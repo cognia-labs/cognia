@@ -2,7 +2,7 @@
  * Helpers for surfacing token / context-window usage in the UI.
  *
  * The Claude Agent SDK delivers usage numbers on a result message; the
- * adapter at `lib/claude/adapter.ts` already attaches them as
+ * adapter at `lib/chat/sdk-message-adapter.ts` already attaches them as
  * `metadata.usage` (shape = `UsageInfo`) on the most recent assistant
  * message. The composer's bottom toolbar reads from there.
  *
@@ -21,7 +21,7 @@
 
 import type { UIMessage } from "ai"
 import type { SdkContextUsage } from "@cognia/agent-config-types"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { ContextLevel } from "@cognia/plugin-contract/lib/claude/usage"
 export type { ContextLevel } from "@cognia/plugin-contract/lib/claude/usage"
 

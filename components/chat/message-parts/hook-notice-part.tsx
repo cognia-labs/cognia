@@ -2,7 +2,7 @@
 
 // Renders the synthetic "hook notice" markers the adapter projects from the
 // Rust hook runtime's `hook_fire` system event
-// (`lib/claude/adapter.ts:appendHookNotice`). A consequential lifecycle hook —
+// (`lib/chat/sdk-message-adapter.ts:appendHookNotice`). A consequential lifecycle hook —
 // one that blocked an action, injected context, or warned — shows as a compact
 // single-line row with a left status-colour bar, expanding to reveal the reason,
 // injected-context summary, and any warnings. No-op fires never reach here (the
@@ -63,7 +63,7 @@ const OUTCOME_STYLES: Record<HookNoticePartData["outcome"], OutcomeStyle> = {
 
 /**
  * Message-level marker — the built-in agent projects a hook fire as a whole
- * `role:"system"` message (see `lib/claude/adapter.ts:appendHookNotice`), routed
+ * `role:"system"` message (see `lib/chat/sdk-message-adapter.ts:appendHookNotice`), routed
  * here by `message-list.tsx`. Delegates to the shared row.
  */
 export function HookNoticeMarker({ message }: { message: UIMessage }) {

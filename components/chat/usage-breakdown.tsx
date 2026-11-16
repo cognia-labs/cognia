@@ -11,7 +11,7 @@
 
 import { useTranslations } from "next-intl"
 
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 
 export function UsageBreakdown({ usage }: { usage: UsageInfo }) {
   const t = useTranslations("chat.message")

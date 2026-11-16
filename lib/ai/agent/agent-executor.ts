@@ -41,7 +41,7 @@ import {
 } from "@cognia/agent-config-types/agent-capability-grant"
 import { resolveAgentModel } from "@/lib/agent/agent-profile-policy"
 import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { DispatchContext } from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import { buildJsonInstruction, parseStructured } from "@/lib/workflow/nodes/ai/structured"

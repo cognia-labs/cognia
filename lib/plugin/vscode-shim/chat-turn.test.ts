@@ -17,7 +17,7 @@ import {
   resolveVscodeChatParticipant,
   __resetChatRegistryForTesting,
 } from "./chat-participant-registry"
-import { applySdkEvent } from "@/lib/claude/adapter"
+import { applySdkEvent } from "@/lib/chat/sdk-message-adapter"
 import {
   participantHistory,
   participantPrompt,

@@ -171,7 +171,7 @@ import { CheckIcon as AnimatedCheckIcon } from "@/components/ui/check"
 import { QuoteCardDialog } from "@/components/share/quote-card-dialog"
 import { toast } from "sonner"
 import type { ToolUIPart, UIMessage } from "ai"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import { UsageBreakdown } from "@/components/chat/usage-breakdown"
 import type { Character } from "@cognia/agent-config-types"
 import React, {

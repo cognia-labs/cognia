@@ -39,7 +39,7 @@ import { isCapabilityUsable } from "@cognia/agent-config-types/external-agent-ca
 import { isCogniaProjectedTool } from "@/lib/ai/agent/external/policy/tool-preapproval"
 import type { UnlistenFn } from "@tauri-apps/api/event"
 import { persistMessageSessionAssets } from "@/lib/db/session-assets"
-import { makeUserMessage } from "@/lib/claude/adapter"
+import { makeUserMessage } from "@/lib/chat/sdk-message-adapter"
 import { clearProjectHistoryEvidence } from "@/lib/chat/history-evidence-registry"
 import { toast } from "sonner"
 import { closeOpenToolParts } from "@/lib/chat/phantom-run"
@@ -78,9 +78,9 @@ import { deriveAllowRuleFromApproval } from "@/lib/ai/agent/execution/permission
 import { setToolRule } from "@/lib/ai/agent/execution/permissions/ruleset-edit"
 import { getLoopRuntime } from "@/lib/loop/runtime"
 import { renderLoopIterationMessage } from "@/lib/loop/prompts"
-import { notifyDroppedCapabilityOnce } from "@/lib/claude/dropped-capability-toast"
-import { notifyOverBudgetOnce } from "@/lib/claude/over-budget-toast"
-import { steerBlocksOf, steerTextOf, type SteerMessageMeta } from "@/lib/claude/steer"
+import { notifyDroppedCapabilityOnce } from "@/lib/chat/dropped-capability-toast"
+import { notifyOverBudgetOnce } from "@/lib/chat/over-budget-toast"
+import { steerBlocksOf, steerTextOf, type SteerMessageMeta } from "@/lib/chat/steer"
 import {
   appendSteerMessage,
   installChatSessionSteerLane,
@@ -354,7 +354,7 @@ import {
   selectSessionSubagents,
   applySubagentsToMessages,
   subagentSignature,
-} from "@/lib/claude/subagent-bridge"
+} from "@/lib/chat/subagent-bridge"
 import { useSettingsStore } from "@/stores/settings"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useExternalAgentStore } from "@/stores/agent"

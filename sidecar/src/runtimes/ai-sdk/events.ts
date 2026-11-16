@@ -20,7 +20,7 @@ import type {
   TranslatedEvent,
 } from "./events-types.ts"
 // Translate Vercel AI SDK stream events into the SDKMessage shapes that
-// `lib/claude/adapter.ts` consumes. Keeping this in one module is the core
+// `lib/chat/sdk-message-adapter.ts` consumes. Keeping this in one module is the core
 // of the multi-provider port — everything downstream of the sidecar stays
 // unchanged because the wire shape is preserved.
 //
@@ -195,7 +195,7 @@ export function createEventAdapter(ctx: EventAdapterContext) {
   // Text / reasoning deltas are emitted as `stream_event` partial-message frames
   // (the same shape the Anthropic `includePartialMessages` path uses) instead of
   // a full assistant snapshot per delta. The renderer's `applyStreamEvent`
-  // (`lib/claude/adapter.ts`) seeds an in-progress assistant message on
+  // (`lib/chat/sdk-message-adapter.ts`) seeds an in-progress assistant message on
   // `message_start` and grows it on each `content_block_delta`; a later full
   // `assistant` snapshot (block boundary or `sealAssistant()` at leg end) replaces
   // it by id. This turns the previous O(n²) "re-serialize the whole textBuf per

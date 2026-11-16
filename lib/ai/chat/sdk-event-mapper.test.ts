@@ -1,5 +1,5 @@
 import { createSdkEventMapper, shapeToolResultContent } from "./sdk-event-mapper"
-import { applySdkEvent } from "@/lib/claude/adapter"
+import { applySdkEvent } from "@/lib/chat/sdk-message-adapter"
 import { convertToModelMessages, streamText } from "ai"
 import { completedStreamModel } from "@/lib/ai/webview-stream-fixtures"
 

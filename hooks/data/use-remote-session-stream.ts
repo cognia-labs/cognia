@@ -28,7 +28,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { UIMessage } from "ai"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { applySdkEvent } from "@/lib/claude/adapter"
+import { applySdkEvent } from "@/lib/chat/sdk-message-adapter"
 import {
   approveTool,
   interruptSession,

@@ -15,7 +15,7 @@
  * carried beside it. A user row is rebuilt from content alone on several paths
  * that cannot carry extra metadata — the steer queue, a shared collaboration
  * publish, a turn a paired phone hands to its Host — and every one of those
- * would otherwise lose the boundary. `lib/claude/steer.ts` made the same choice
+ * would otherwise lose the boundary. `lib/chat/steer.ts` made the same choice
  * for its model-only prefix. The nonce is what keeps a referenced document that
  * happens to contain the closing tag from ending the block early.
  *

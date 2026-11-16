@@ -7,7 +7,7 @@
  * occupancy) so accounting readers do not pull the model-window table.
  */
 
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 
 /**
  * Map an external agent's turn accounting onto the renderer's {@link UsageInfo}.

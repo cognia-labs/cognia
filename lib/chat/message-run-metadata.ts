@@ -265,7 +265,7 @@ export function attachRunMetadataToLastAssistant(
  * Attach a turn's token accounting to the newest assistant message.
  *
  * The built-in sidecar lane gets `metadata.usage` from the SDK `result` event
- * (`lib/claude/adapter.ts`); the external-agent lane had no equivalent, so its
+ * (`lib/chat/sdk-message-adapter.ts`); the external-agent lane had no equivalent, so its
  * turns reached the transcript with no usage at all and every consumer — the
  * context indicator, the session cost, `/context` — read them as a session that
  * had spent nothing. Merges rather than replaces, so a partially-populated

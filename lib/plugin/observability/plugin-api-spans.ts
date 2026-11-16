@@ -10,7 +10,7 @@
  * fail" had no answer anywhere in the product.
  *
  * Rides `/logs` → Traces rather than a new panel, mirroring the `hook_audit`
- * span in `lib/claude/adapter.ts` — same shape, same reasoning.
+ * span in `lib/chat/sdk-message-adapter.ts` — same shape, same reasoning.
  *
  * **Only out-of-process runtimes are traced.** An in-renderer TypeScript
  * plugin's `ctx.*` call is a function call on the same stack the caller can

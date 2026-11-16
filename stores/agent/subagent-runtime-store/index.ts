@@ -14,7 +14,7 @@
  *  - `subAgents` — a read model of subagent runs, not persisted. Live
  *    progress (logs, tool calls, streamed text, usage, the result detail)
  *    comes from the two engines' events: `lib/ai/agent/execution/delegation/dispatch-runtime.ts`
- *    for `dispatch_agent` and `lib/claude/sdk-subagent-bridge.ts` for the SDK
+ *    for `dispatch_agent` and `lib/chat/sdk-subagent-bridge.ts` for the SDK
  *    `Task` tool. The status of a run that has an `execution:job:<id>` row is
  *    that row's (ADR-0252 §2), kept in `runs` by the run projection
  *    (`./run-projection.ts`): what an engine reports stands only for an entry

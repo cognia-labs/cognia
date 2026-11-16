@@ -1,7 +1,7 @@
 /**
  * Smart content preview for instant title display.
  *
- * `contentPreview` in `lib/claude/adapter.ts` slices the first N characters
+ * `contentPreview` in `lib/chat/sdk-message-adapter.ts` slices the first N characters
  * of any text content — good enough for prose, but terrible for messages
  * that start with code fences, JSON objects, or markdown headings followed
  * by code. This module extracts the first natural-language fragment by
@@ -19,7 +19,7 @@ const OPENING_FENCE_RE = /^```[^\n]*\n/
 
 /**
  * Extract plain text from SendContent (string or text-part array).
- * Same logic as `contentPreview` in `lib/claude/adapter.ts` but without
+ * Same logic as `contentPreview` in `lib/chat/sdk-message-adapter.ts` but without
  * truncation — the caller truncates after smart extraction.
  */
 function extractText(content: SendContent): string {

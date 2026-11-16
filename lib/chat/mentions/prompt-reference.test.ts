@@ -5,7 +5,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { putChatSearchText } from "@/lib/db/chat-search-text"
 import { invalidateResidentCorpus } from "@/lib/chat/search/engine"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
-import { frameSteer } from "@/lib/claude/steer"
+import { frameSteer } from "@/lib/chat/steer"
 import { ENTITY_MENTION_RESULT_LIMIT } from "./entity-sources"
 import { REFERENCE_PREAMBLE_OMITTED_NOTE } from "./message-reference"
 import {

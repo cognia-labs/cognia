@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs"
 
 import { SessionCostBadge } from "./session-cost-badge"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 
 // Per-session cost / token badge for the chat header. The collapsed badge shows
 // in-memory totals; the popover enriches it with the persisted per-model split

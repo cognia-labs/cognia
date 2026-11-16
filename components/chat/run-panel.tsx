@@ -79,7 +79,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { MOBILE_SPRING, mobileTransition, useReducedMotionTransition } from "@/lib/ui/motion"
-import { steerMetaOf } from "@/lib/claude/steer"
+import { steerMetaOf } from "@/lib/chat/steer"
 import { commitPendingSteerEdit, discardPendingSteer } from "@/lib/chat/steer-runtime"
 import { resolveDragEnd } from "@/lib/chat/attachments/reorder"
 import { cn } from "@/lib/utils"
@@ -101,8 +101,8 @@ import {
   formatRunElapsed,
   selectActiveToolLines,
   selectRunningSubagentChip,
-} from "@/lib/claude/run-status"
-import { deriveRunRecord, toRunStatus } from "@/lib/claude/run-record"
+} from "@/lib/chat/run-status"
+import { deriveRunRecord, toRunStatus } from "@/lib/chat/run-record"
 import { getLatestUsage } from "@/lib/usage/context-usage"
 import { useSettingsStore } from "@/stores/settings"
 import {

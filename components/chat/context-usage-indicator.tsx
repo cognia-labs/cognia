@@ -53,7 +53,7 @@ import {
   resolveContextBreakdown,
   type AutoCompactionPolicy,
 } from "@/lib/usage/context-breakdown"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import {
   AUTO_COMPACT_FRACTION,
   getLatestRunProviderId,

@@ -43,7 +43,7 @@ import type {
   AgentHookContext,
   LifecycleHookFirer,
 } from "@/lib/ai/agent/execution/hooks/lifecycle-firer"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import type { ExitReason, Goal, GoalStatus } from "@/types/goal"
 import { isTerminalGoalStatus, statusForExit } from "@/types/goal"
 import { appendGoalEvent, getGoal, updateGoal } from "@/lib/db/goals"

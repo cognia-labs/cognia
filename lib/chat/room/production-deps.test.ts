@@ -79,7 +79,7 @@ jest.mock("@/lib/ai/providers/provider-attempt-options", () => ({
   applyProviderAttemptLimits: (...args: unknown[]) => applyProviderAttemptLimits(...(args as [])),
 }))
 const applySdkSubagentBridge = jest.fn()
-jest.mock("@/lib/claude/sdk-subagent-bridge", () => ({
+jest.mock("@/lib/chat/sdk-subagent-bridge", () => ({
   applySdkSubagentBridge: (...args: unknown[]) => applySdkSubagentBridge(...(args as [])),
 }))
 

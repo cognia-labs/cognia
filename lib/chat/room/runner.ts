@@ -56,7 +56,7 @@ import {
   mergeProjectKnowledgeSourcesIntoLastAssistant,
   mergeTwinSourcesIntoLastAssistant,
   mergeWebSearchSourcesIntoLastAssistant,
-} from "@/lib/claude/adapter"
+} from "@/lib/chat/sdk-message-adapter"
 import { shouldGenerateTitle, isPlaceholderTitle } from "@/lib/ai/generation/run-title-task"
 import { markTitleFailed, clearTitleRetry } from "@/lib/ai/generation/title-retry"
 import { writeAutoSessionTitle } from "@/lib/chat/session-title-writes"
@@ -129,7 +129,7 @@ import {
   decodeSubSession,
   isImRoomMemberSessionId,
 } from "@/lib/ai/agent/team/session-id"
-import { steerBlocksOf, steerTextOf, type SteerMessageMeta } from "@/lib/claude/steer"
+import { steerBlocksOf, steerTextOf, type SteerMessageMeta } from "@/lib/chat/steer"
 import {
   senderIdOf,
   tagBranchSiblings,

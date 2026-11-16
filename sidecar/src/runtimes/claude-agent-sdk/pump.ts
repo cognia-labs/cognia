@@ -115,7 +115,7 @@ export function startAnthropicPump({
         // `ANTHROPIC_BASE_URL` — never reached the caller at all.
         //
         // The desktop adapter has always treated `result` as the end of the
-        // turn (`turnComplete: true` in `lib/claude/adapter.ts`); this makes
+        // turn (`turnComplete: true` in `lib/chat/sdk-message-adapter.ts`); this makes
         // the sidecar say the same thing to everyone else.
         if (evt?.type === "result") {
           state.outstandingPrompts -= 1

@@ -21,7 +21,7 @@ import {
   mergeProjectKnowledgeSourcesIntoLastAssistant,
   mergeTwinSourcesIntoLastAssistant,
   mergeWebSearchSourcesIntoLastAssistant,
-} from "@/lib/claude/adapter"
+} from "@/lib/chat/sdk-message-adapter"
 import { createDiagnostic } from "@cognia/diagnostics"
 import { toDiagnostic } from "@/lib/diagnostics/to-diagnostic"
 import { getGoalRuntime } from "@/lib/goal/runtime"
@@ -1375,7 +1375,7 @@ export async function handleEvent(
           // Bridge SDK-native subagents (the `opts.agents` / Task-tool path used by
           // workflow-editor and direct chat) into the runtime store so they render
           // in the chat subagent tree alongside `dispatch_agent` runs.
-          const { applySdkSubagentBridge } = await import("@/lib/claude/sdk-subagent-bridge")
+          const { applySdkSubagentBridge } = await import("@/lib/chat/sdk-subagent-bridge")
           const handle = getExecutionHandle(sessionId)
           if (handle) applySdkSubagentBridge(env.event, sessionId, handle)
           else applySdkSubagentBridge(env.event, sessionId)

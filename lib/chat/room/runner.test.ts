@@ -32,7 +32,7 @@ import type { CogniaDiagnostic } from "@cognia/diagnostics"
 import type { ChatStatus, SteerEntry } from "@/stores/chat"
 import type { MemberStatus } from "@/stores/ui"
 
-jest.mock("@/lib/claude/adapter", () => {
+jest.mock("@/lib/chat/sdk-message-adapter", () => {
   type Msg = { id: string; role: string; parts: unknown[]; metadata?: Record<string, unknown> }
   let userSeq = 0
   const identity = (messages: Msg[]) => messages

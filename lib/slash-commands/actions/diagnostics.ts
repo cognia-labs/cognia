@@ -13,7 +13,7 @@ import { getCrashLoggingDiagnostics } from "@/lib/native/crash-reports"
 import { getNativeLoggingReadiness } from "@/lib/native/native-logging"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
-import type { UsageInfo } from "@/lib/claude/adapter"
+import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import {
   AUTO_COMPACT_FRACTION,
   computeContextWindowUsage,
