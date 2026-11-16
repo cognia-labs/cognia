@@ -148,6 +148,8 @@ pub struct EngineEnvironment {
     pub reviewed_request_only: bool,
     #[serde(default)]
     pub private_blank: Vec<String>,
+    #[serde(default)]
+    pub secret: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -783,6 +785,30 @@ pub fn mcp_config_file(command: &str, args: &[String]) -> Option<(&'static str, 
     })
 }
 
+/// Whether `key` selects an engine's state root: one of its relocation or
+/// isolation env keys. The XDG Base Directory keys are the platform's, not an
+/// engine's.
+pub fn is_state_env(key: &str) -> bool {
+    !key.starts_with("XDG_")
+        && descriptors().iter().any(|descriptor| {
+            descriptor
+                .relocation
+                .iter()
+                .any(|relocation| relocation.env.iter().any(|known| known == key))
+                || descriptor
+                    .isolation
+                    .iter()
+                    .any(|isolation| isolation.env.0.iter().any(|(known, _)| known == key))
+        })
+}
+
+/// Whether `key` carries an engine's credentials without a name that says so.
+pub fn is_secret_env(key: &str) -> bool {
+    descriptors()
+        .iter()
+        .any(|descriptor| descriptor.env.secret.iter().any(|known| known == key))
+}
+
 /// Whether plugin Pi packages (ADR-0210) may be mounted into the launched engine.
 pub fn takes_pi_packages(command: &str, args: &[String]) -> bool {
     descriptors_for(command, args).iter().any(|descriptor| descriptor.pi_packages)
@@ -1265,5 +1291,16 @@ mod tests {
         assert!(!accepts_extra_writable_roots("goose", &[]));
         assert!(takes_pi_packages("pi", &[]));
         assert!(!takes_pi_packages("codex", &[]));
+    }
+
+    #[test]
+    fn state_and_secret_env_come_from_the_descriptors() {
+        for key in ["CODEX_HOME", "GROK_HOME", "GEMINI_HOME", "KIMI_CODE_HOME", "PI_CODING_AGENT_DIR"] {
+            assert!(is_state_env(key), "{key}");
+        }
+        assert!(!is_state_env("XDG_DATA_HOME"));
+        assert!(!is_state_env("OPENAI_API_KEY"));
+        assert!(is_secret_env("OPENCODE_CONFIG_CONTENT"));
+        assert!(!is_secret_env("OPENCODE_MODEL"));
     }
 }

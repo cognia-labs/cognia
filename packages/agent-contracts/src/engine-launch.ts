@@ -108,6 +108,12 @@ export interface EngineEnvironment {
   reviewedRequestOnly?: boolean
   /** Credentials set empty in a private launch unless the request sets them, so the engine cannot find the host's. */
   privateBlank?: readonly string[]
+  /**
+   * Keys whose value carries credentials, or a configuration holding them,
+   * without a name that says so. The host keeps them out of process listings
+   * and refuses them from a tenant's spawn.
+   */
+  secret?: readonly string[]
 }
 
 /** Files the engine reads implicitly, which the sandbox hides. */

@@ -111,9 +111,11 @@ impl CredentialDelivery {
             } else if credential_env_name(name) || {
                 let name = name.to_ascii_uppercase();
                 name.contains("CONFIG") || name.ends_with("_JSON") || name.contains("CREDENTIAL")
-                    || name.ends_with("_AUTH") || matches!(name.as_str(), "COGNIA_ENGINE_MCP_SERVERS"
-                        | "COGNIA_GATEWAY_RUNTIME_ENV" | "CODEX_HOME" | "GEMINI_HOME" | "GROK_HOME"
-                        | "KIMI_CODE_HOME" | "CLINE_DIR" | "PI_CODING_AGENT_DIR")
+                    || name.ends_with("_AUTH")
+                    || matches!(name.as_str(), "COGNIA_ENGINE_MCP_SERVERS" | "COGNIA_GATEWAY_RUNTIME_ENV")
+                    // An engine's state root holds its logins.
+                    || crate::launch_descriptor::is_state_env(&name)
+                    || crate::launch_descriptor::is_secret_env(&name)
             } {
                 return Self::InjectedEnv;
             }

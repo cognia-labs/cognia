@@ -292,7 +292,7 @@
     "audit:docs-links": "node scripts/gates/check-docs-links.mjs",
     "audit:e2e-governance": "node scripts/gates/check-e2e-governance.mjs",
     "audit:e2e-governance:test": "node --test scripts/gates/check-e2e-governance.test.mjs",
-    "audit:external-agent-launch": "node scripts/build/gen-external-agent-launch.mjs --check",
+    "audit:external-agent-launch": "node scripts/build/gen-external-agent-launch.mjs --check && node scripts/gates/check-engine-launch-hosts.mjs",
     "audit:external-agent-runtimes": "node scripts/build/gen-external-agent-runtimes.mjs --check && node scripts/gates/check-external-agent-runtimes.mjs",
     "audit:external-agent-runtimes:test": "node --test scripts/gates/check-external-agent-runtimes.test.mjs",
     "gen:external-agent-launch": "node scripts/build/gen-external-agent-launch.mjs",

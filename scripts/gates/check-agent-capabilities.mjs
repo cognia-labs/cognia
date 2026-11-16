@@ -7,25 +7,23 @@
  *   • `protocol/agent-capabilities.json` — what each external protocol can do.
  *     Read by the renderer, the CLI, the TUI and the execution resolver.
  *   • `protocol/external-agent-security-policy.json` — what Cognia is willing
- *     to launch. Read directly by TypeScript, and MIRRORED as compiled-in
- *     literals by `crates/cognia-external-agent` (a security allowlist must not
- *     depend on parsing a file at runtime).
+ *     to launch. Read directly by TypeScript, and compiled into
+ *     `crates/cognia-external-agent` with `include_str!` (a security allowlist
+ *     must not depend on a file at runtime).
  *
- * The Rust half is the reason this gate exists. Before it, the only thing
- * binding the two languages was a comment asking future readers to "keep the
- * two in union", and they had already drifted in three ways at once: Rust
- * refused the `claude-agent-acp` binary the `claude-code` preset actually
- * spawns, carried a `cline` entry no preset references, and neither side gave
- * OpenCode a writable state root.
+ * Rust once mirrored the allowlist as literals bound to the policy only by a
+ * comment, and the two drifted in three ways at once: Rust refused the
+ * `claude-agent-acp` binary the `claude-code` preset actually spawns, carried a
+ * `cline` entry no preset references, and neither side gave OpenCode a writable
+ * state root. Both hosts now read the policy itself.
  *
  * What is checked:
  *   1. capability manifest — schema, completeness, evidence discipline;
  *   2. capability manifest ⇄ the TS capability vocabulary;
  *   3. capability manifest ⇄ the protocols `manager.ts` actually registers;
- *   4. security policy ⇄ Rust `BINARY_ALLOWLIST` / `NPX_PACKAGE_ALLOWLIST`;
- *   5. every allowlisted binary is reachable from a shipped preset;
- *   6. the standalone CLI's Node backend builds its spawn allowlist from the
- *      policy constants instead of carrying a literal copy (ADR-0217).
+ *   4. every allowlisted binary is reachable from a shipped preset;
+ *   5. the Rust presets and the standalone CLI's Node backend read the policy
+ *      instead of carrying a literal copy (ADR-0217).
  *
  * Engine state roots and isolation are not mirrored: both hosts read the
  * generated `protocol/external-agent-launch.json` (`pnpm audit:external-agent-launch`).
@@ -67,13 +65,6 @@ const stripComments = (block) => block.replace(/\/\*[\s\S]*?\*\//g, "").replace(
 /** Every `"…"` string literal in a block, comments removed. */
 export function stringsIn(block) {
   return [...stripComments(block).matchAll(/"([^"]+)"/g)].map((m) => m[1])
-}
-
-/** The array body of `const NAME: &[&str] = &[ … ];` in a Rust source. */
-export function rustStrArray(source, name) {
-  const body = source.match(new RegExp(`const ${name}: &\\[&str\\] = &\\[([\\s\\S]*?)\\n\\];`))?.[1]
-  if (body === undefined) throw new Error(`${name} not found`)
-  return stringsIn(body)
 }
 
 /** The v2 capability ids, from the frozen `AGENT_CAPABILITY_IDS` list. */
@@ -286,38 +277,28 @@ export function checkCliAllowlistSource(source) {
   return errors
 }
 
-/** @returns {string[]} errors */
-export function checkSecurityPolicyParity(
-  policy,
-  rustPresets,
-  commands,
-  bundledCommands = new Set()
-) {
+/**
+ * The Rust presets admit what the policy admits, compiled in from the policy
+ * file itself rather than mirrored as literals.
+ * @returns {string[]} errors
+ */
+export function checkRustAllowlistSource(source) {
   const errors = []
-
-  const compare = (label, fromJson, fromRust) => {
-    const json = new Set(fromJson)
-    const rust = new Set(fromRust)
-    for (const value of json) {
-      if (!rust.has(value))
-        errors.push(`${label}: "${value}" is in ${SECURITY_POLICY} but not in Rust`)
-    }
-    for (const value of rust) {
-      if (!json.has(value))
-        errors.push(`${label}: "${value}" is in Rust but not in ${SECURITY_POLICY}`)
-    }
-  }
-
-  compare(
-    "binaryAllowlist",
-    policy.binaryAllowlist.commands,
-    rustStrArray(rustPresets, "BINARY_ALLOWLIST")
+  const code = stripComments(source)
+  if (
+    !/include_str!\(\s*"\.\.\/\.\.\/\.\.\/protocol\/external-agent-security-policy\.json"\s*\)/.test(
+      code
+    )
   )
-  compare(
-    "npxPackageAllowlist",
-    policy.npxPackageAllowlist.packages,
-    rustStrArray(rustPresets, "NPX_PACKAGE_ALLOWLIST")
-  )
+    errors.push(`${RUST_PRESETS}: the spawn allowlist must be compiled in from ${SECURITY_POLICY}`)
+  if (/const\s+(?:BINARY|NPX\w*)_ALLOWLIST\s*:/.test(code))
+    errors.push(`${RUST_PRESETS}: a literal allowlist duplicates ${SECURITY_POLICY}`)
+  return errors
+}
+
+/** @returns {string[]} errors */
+export function checkSecurityPolicyReachability(policy, commands, bundledCommands = new Set()) {
+  const errors = []
 
   // A binary that neither a preset spawns nor `manualOnly` justifies is attack
   // surface the headless RPC exposes and no Cognia code path can ask for —
@@ -390,13 +371,13 @@ export function runChecks() {
   errors.push(...bundles.errors)
   errors.push(...checkCapabilityManifest(manifest, vocabulary, registered))
   errors.push(
-    ...checkSecurityPolicyParity(
+    ...checkSecurityPolicyReachability(
       policy,
-      read(RUST_PRESETS),
       presetCommands(read(ECOSYSTEM_TS), read(PRESETS_TS)),
       bundles.commands
     )
   )
+  errors.push(...checkRustAllowlistSource(read(RUST_PRESETS)))
   errors.push(...checkCliAllowlistSource(read(CLI_BACKEND_TS)))
 
   return errors
@@ -409,7 +390,7 @@ if (process.argv[1] && process.argv[1].endsWith("check-agent-capabilities.mjs"))
     for (const error of errors) console.error(`  • ${error}`)
     console.error(
       "\n  protocol/agent-capabilities.json and protocol/external-agent-security-policy.json\n" +
-        "  are the sources. Update them first, then the Rust literals that mirror them.\n"
+        "  are the sources; both hosts read them.\n"
     )
     process.exit(1)
   }

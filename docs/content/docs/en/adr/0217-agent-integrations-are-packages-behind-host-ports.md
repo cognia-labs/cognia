@@ -391,6 +391,30 @@ The pinned Codex catalog and its license/notice have one source under `packages/
 
 Reverse gates cover manager preset/runtime discriminators and aliases, protected configuration facades, the CLI catalog re-export and returned Devin parsers. Installed-consumer checks import the new entries in ESM/CJS, check NodeNext declarations and prove their data-only closure. Shared-tree Docker context checks can use an isolated review index so the user's real index remains untouched.
 
+### 2026-11-16: the process hosts stop knowing engines
+
+Each engine package declares an `EngineLaunchDescriptor` (`packages/agent-contracts/src/engine-launch.ts`) next to its runtime rows: in its `AgentIntegrationManifest.launch` or, for an ACP vendor, its `AcpVendorProfile.launch`. `pnpm gen:external-agent-launch` writes them into `protocol/external-agent-launch.json`. The Rust host compiles the table in with `include_str!` (`launch_descriptor.rs`); the CLI host imports it (`cli/src/runtime/external/launch-descriptor.ts`). A spawn request never carries a descriptor. The host looks one up from the launch's command and arguments, so a remote client cannot widen what a descriptor grants.
+
+The vocabulary is closed, and each field is one generic primitive per host:
+
+- state roots, file roots and the ADR-0216 isolation;
+- relocations (env keys and flags in the engine's own precedence, refused flags, a default, writable sub-paths, temp, fixed switches), temp directories, a companion executable bound to the engine's release, platform arguments, and engines that cannot run a private launch;
+- the env an engine reads: keys and families the host admits; reviewed families that only their reviewed keys reach (with `reviewedRequestOnly`, never from the host); credentials a private launch blanks; secrets kept out of process listings and refused from a tenant;
+- files the engine reads implicitly, which the sandbox hides; read-only program roots; login roots a gateway task never reads; stderr noise; per-launch writable roots; plugin Pi packages;
+- `mcpConfigFile`, for an engine that reads MCP servers only from its own files: the host writes the session's servers into a private copy of its configuration root (`mcp_config_file.rs`, `mcp-config-file.ts`). Devin declares it. The three `devin-mcp-config` modules are deleted, the payload env is `COGNIA_ENGINE_MCP_SERVERS`, and the 2026-11-02 placement of Devin's parsing in ACP is superseded.
+
+A descriptor relocates and narrows. The hosts' own invariants (writable scope, loader-env denial, the admission allowlist) bound every descriptor, and `buildEngineLaunchTable` refuses one a host could not apply safely. The Rust presets compile the security policy in instead of mirroring it, and `audit:agent-capabilities` checks that they do.
+
+Where the two hosts' copies disagreed, one rule now holds on both:
+
+- a gateway task never takes the host's own state selection;
+- a private relocation stays inside its own state physically as well as lexically;
+- Antigravity gets its Linux argument from either host;
+- a private Grok launch blanks the host credential on the CLI too;
+- the CLI resolves a Windows command's extension as the desktop does.
+
+`audit:external-agent-launch` also runs `scripts/gates/check-engine-launch-hosts.mjs`, which fails when production code in `crates/cognia-external-agent` or `cli/src/runtime/external` spells out an engine: its id, a command, a declared key or an env family. Cognia-owned runtimes keep their registered modules: the native bridges (Codebuff, Crush, Hermes), the DeepSeek Harness runtime and the gateway task. The plan is `docs/plans/2026-11-16-engine-launch-descriptors.md`.
+
 ## Consequences
 
 - **Reuse:** a host gets an integration by implementing the ports it uses. The DSH, Codex,

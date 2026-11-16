@@ -288,6 +288,30 @@ Kimi 删除后的列表协调由 package 提供的 `AgentRuntimePolicy.createSes
 
 反向门禁覆盖 manager 的 preset/runtime 判别及别名、受保护的配置 facade、CLI catalog 重导出和回流的 Devin parser。安装包消费检查覆盖新增入口的 ESM/CJS、NodeNext 声明和 data-only 加载闭包；共享工作区可通过独立 review index 验证 Docker 输入，保留用户真实 index。
 
+### 2026-11-16：进程主机不再认识具体引擎
+
+每个引擎 package 在运行时行旁边声明一个 `EngineLaunchDescriptor`（`packages/agent-contracts/src/engine-launch.ts`）：写在它的 `AgentIntegrationManifest.launch` 里，ACP 厂商则写在 `AcpVendorProfile.launch` 里。`pnpm gen:external-agent-launch` 把它们写入 `protocol/external-agent-launch.json`。Rust 主机用 `include_str!` 编译进这张表（`launch_descriptor.rs`），CLI 主机直接导入（`cli/src/runtime/external/launch-descriptor.ts`）。spawn 请求从不携带描述符，主机按启动命令和参数自行查找，所以远程客户端无法扩大描述符授予的范围。
+
+词汇是封闭的，每个字段在每个主机上都是一个通用原语：
+
+- 状态根、文件根和 ADR-0216 的隔离；
+- 状态迁移（按引擎自身优先级排列的 env 键和参数、拒绝的参数、默认值、可写子路径、临时目录、固定开关）、临时目录、绑定到引擎发行目录的伴随可执行文件、平台参数，以及无法私有启动的引擎；
+- 引擎读取的 env：主机放行的键和前缀族；只放行已审查键的审查族（设 `reviewedRequestOnly` 时从不取主机的值）；私有启动置空的凭据；不出现在进程列表、也拒绝来自租户的 secret；
+- 引擎隐式读取、由沙箱隐藏的文件；只读的程序根；网关任务从不读取的登录根；stderr 噪声；按启动授予的可写根；插件 Pi 包；
+- `mcpConfigFile`：只从自身文件读取 MCP 服务器的引擎，由主机把会话的服务器写入其配置根的私有副本（`mcp_config_file.rs`、`mcp-config-file.ts`）。Devin 声明了它。三个 `devin-mcp-config` 模块已删除，载荷 env 为 `COGNIA_ENGINE_MCP_SERVERS`，2026-11-02 把 Devin 解析放进 ACP 的安排就此取代。
+
+描述符只能迁移和收窄。主机自身的不变量（可写范围、加载器 env 拒绝、准入白名单）约束每一个描述符，`buildEngineLaunchTable` 会拒绝主机无法安全执行的描述符。Rust presets 直接编译进安全策略，不再镜像一份字面量，`audit:agent-capabilities` 检查这一点。
+
+两个主机副本原先不一致的地方，现在两边执行同一条规则：
+
+- 网关任务从不采用主机自身的状态目录选择；
+- 私有状态迁移在物理路径和字面路径上都留在自己的状态内；
+- Antigravity 的 Linux 参数由任一主机补上；
+- CLI 上的私有 Grok 启动同样置空主机凭据；
+- CLI 解析 Windows 命令扩展名的方式与桌面端一致。
+
+`audit:external-agent-launch` 同时运行 `scripts/gates/check-engine-launch-hosts.mjs`：`crates/cognia-external-agent` 或 `cli/src/runtime/external` 的生产代码一旦写出某个引擎的 id、命令、声明的键或 env 前缀族就失败。Cognia 自有的运行时保留各自注册的模块：原生桥（Codebuff、Crush、Hermes）、DeepSeek Harness 运行时和网关任务。计划见 `docs/plans/2026-11-16-engine-launch-descriptors.md`。
+
 ## 后果
 
 - **复用：**主机只要实现集成所用的端口就能使用它。DSH、Codex、Aider、Pi、OpenCode、A2A 和 ACP 适配器不再导入应用代码。

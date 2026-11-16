@@ -3,14 +3,14 @@ import { test } from "node:test"
 
 import {
   checkCapabilityManifest,
-  checkSecurityPolicyParity,
+  checkRustAllowlistSource,
+  checkSecurityPolicyReachability,
   declaredExecutableProtocols,
   externalOnlyCapabilityIds,
   presetCommands,
   bundledPresetCommands,
   registeredProtocols,
   runChecks,
-  rustStrArray,
   specCapabilityIds,
   stringsIn,
   checkCliAllowlistSource,
@@ -27,11 +27,6 @@ test("stringsIn ignores ids quoted inside comments", () => {
     "real",
   `
   assert.deepEqual(stringsIn(block), ["real"])
-})
-
-test("rustStrArray reads a &[&str] literal", () => {
-  const source = `const BINARY_ALLOWLIST: &[&str] = &[\n    "a",\n    // "b" is gone\n    "c",\n];\n`
-  assert.deepEqual(rustStrArray(source, "BINARY_ALLOWLIST"), ["a", "c"])
 })
 
 test("registeredProtocols reads the manager's register() calls, not its comments", () => {
@@ -142,14 +137,6 @@ test("a manifest row for an unregistered protocol fails", () => {
   assert.ok(errors.some((e) => /row for "acp", which .* registers no adapter/.test(e)))
 })
 
-const RUST_PRESETS = `
-const BINARY_ALLOWLIST: &[&str] = &[
-    "codex",
-];
-const NPX_PACKAGE_ALLOWLIST: &[&str] = &[
-    "pi-acp",
-];
-`
 function policy(overrides = {}) {
   return {
     binaryAllowlist: { commands: ["codex"], manualOnly: {} },
@@ -158,26 +145,31 @@ function policy(overrides = {}) {
   }
 }
 
-test("parity passes when the two languages agree", () => {
-  const errors = checkSecurityPolicyParity(policy(), RUST_PRESETS, new Set(["codex"]))
-  assert.deepEqual(errors, [])
+test("reachability passes when every allowlisted binary has a preset", () => {
+  assert.deepEqual(checkSecurityPolicyReachability(policy(), new Set(["codex"])), [])
 })
 
-test("a binary Rust allows but the policy does not is caught", () => {
-  // This is the `cline` shape: an entry that existed only in the Rust literal.
-  const rust = RUST_PRESETS.replace('    "codex",', '    "codex",\n    "cline",')
-  const errors = checkSecurityPolicyParity(policy(), rust, new Set(["codex"]))
-  assert.ok(errors.some((e) => /"cline" is in Rust but not in/.test(e)))
+test("the Rust presets must compile the policy in instead of mirroring it", () => {
+  const reads = `static P: X = LazyLock::new(|| serde_json::from_str(include_str!(
+        "../../../protocol/external-agent-security-policy.json"
+    )));`
+  assert.deepEqual(checkRustAllowlistSource(reads), [])
+  assert.ok(
+    checkRustAllowlistSource('const BINARY_ALLOWLIST: &[&str] = &["codex"];').some((e) =>
+      /must be compiled in/.test(e)
+    )
+  )
+  assert.ok(
+    checkRustAllowlistSource(`${reads}\nconst NPX_PACKAGE_ALLOWLIST: &[&str] = &["x"];`).some((e) =>
+      /literal allowlist duplicates/.test(e)
+    )
+  )
 })
 
-test("a preset command Rust refuses is caught", () => {
+test("a preset command the policy refuses is caught", () => {
   // This is the `claude-agent-acp` shape: the shipped preset spawns a binary
   // the policy never allowlisted, so every headless spawn was refused.
-  const errors = checkSecurityPolicyParity(
-    policy(),
-    RUST_PRESETS,
-    new Set(["codex", "claude-agent-acp"])
-  )
+  const errors = checkSecurityPolicyReachability(policy(), new Set(["codex", "claude-agent-acp"]))
   assert.ok(errors.some((e) => /"claude-agent-acp" is not allowlisted/.test(e)))
 })
 
@@ -185,8 +177,7 @@ test("a binary no preset spawns needs a written reason", () => {
   const unjustified = policy({
     binaryAllowlist: { commands: ["codex", "mystery"], manualOnly: {} },
   })
-  const rust = RUST_PRESETS.replace('    "codex",', '    "codex",\n    "mystery",')
-  const errors = checkSecurityPolicyParity(unjustified, rust, new Set(["codex"]))
+  const errors = checkSecurityPolicyReachability(unjustified, new Set(["codex"]))
   assert.ok(errors.some((e) => /"mystery" is reachable from no shipped preset/.test(e)))
 })
 
@@ -194,8 +185,7 @@ test("a manualOnly reason that explains nothing is rejected", () => {
   const thin = policy({
     binaryAllowlist: { commands: ["codex", "mystery"], manualOnly: { mystery: "because" } },
   })
-  const rust = RUST_PRESETS.replace('    "codex",', '    "codex",\n    "mystery",')
-  const errors = checkSecurityPolicyParity(thin, rust, new Set(["codex"]))
+  const errors = checkSecurityPolicyReachability(thin, new Set(["codex"]))
   assert.ok(errors.some((e) => /must actually explain why/.test(e)))
 })
 
@@ -206,7 +196,7 @@ test("a stale manualOnly row is caught", () => {
       manualOnly: { gone: "a long-since-removed binary that no longer appears anywhere" },
     },
   })
-  const errors = checkSecurityPolicyParity(stale, RUST_PRESETS, new Set(["codex"]))
+  const errors = checkSecurityPolicyReachability(stale, new Set(["codex"]))
   assert.ok(errors.some((e) => /stale entry "gone"/.test(e)))
 })
 
@@ -278,7 +268,7 @@ test("bundled Node exceptions require the exact Codebuff source contract", () =>
   }
   assert.equal(bundledPresetCommands(source, "", policy()).errors.length, 1)
   assert.ok(
-    checkSecurityPolicyParity(policy(), RUST_PRESETS, new Set(["node"])).some((error) =>
+    checkSecurityPolicyReachability(policy(), new Set(["node"])).some((error) =>
       error.includes('preset command "node"')
     )
   )

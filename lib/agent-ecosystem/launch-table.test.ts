@@ -100,6 +100,7 @@ describe("buildEngineLaunchTable", () => {
     refuse({ env: { prefixes: ["CODEX"] } }, /not an env family/)
     refuse({ env: { prefixes: ["DYLD_"] } }, /not an env family/)
     refuse({ env: { keys: ["NODE_OPTIONS"] } }, /not an env name/)
+    refuse({ env: { secret: ["LD_PRELOAD"] } }, /not an env name/)
     refuse({ env: { reviewedRequestOnly: true } }, /needs reviewedPrefixes/)
     refuse({ hiddenFiles: { searched: ["a/b"] } }, /not a file name/)
     refuse({ stderrNoise: [["ok", ""]] }, /nonempty substrings/)

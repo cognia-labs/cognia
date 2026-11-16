@@ -290,10 +290,10 @@ impl ExternalAgentProcess {
             .filter(|(key, _)| {
                 let name = key.to_ascii_uppercase();
                 !crate::spawn_authority::credential_env_name(&name)
+                    && !crate::launch_descriptor::is_secret_env(&name)
                     && !matches!(
                         name.as_str(),
-                        "OPENCODE_CONFIG_CONTENT"
-                            | "COGNIA_TOOLHOST_PI_MCP_SERVERS"
+                        "COGNIA_TOOLHOST_PI_MCP_SERVERS"
                             | "COGNIA_DSH_MCP_SERVERS"
                             | "COGNIA_DSH_MCP_CONFIGS"
                             | "COGNIA_GATEWAY_TASK_CONFIG"

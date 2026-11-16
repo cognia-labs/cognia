@@ -157,7 +157,8 @@ export const opencodeManifest: AgentIntegrationManifest = Object.freeze({
     {
       id: "opencode",
       match: { kind: "contains", values: ["opencode"] },
-      env: { prefixes: ["OPENCODE_"] },
+      // The config content carries the provider's API key.
+      env: { prefixes: ["OPENCODE_"], secret: ["OPENCODE_CONFIG_CONTENT"] },
       stateRoots: [".config/opencode", ".local/share/opencode"],
       isolation: {
         env: {

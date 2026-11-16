@@ -92,6 +92,23 @@ describe("resolveProbeExecutable", () => {
     const name = process.execPath.slice(process.execPath.lastIndexOf("/") + 1)
     expect(resolveProbeExecutable(name, { ...runtime, env: { PATH: dir } })).toBe(process.execPath)
   })
+
+  it("on Windows tries each PATHEXT extension in place of the command's own", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-win-"))
+    try {
+      fs.writeFileSync(path.join(dir, "server.exe"), "", { mode: 0o755 })
+      const windows = { ...runtime, platform: "win32" as const, home: undefined }
+      expect(
+        resolveProbeExecutable("server.par", { ...windows, env: { PATH: dir, PATHEXT: "EXE" } })
+      ).toBe(path.join(dir, "server.exe"))
+      fs.writeFileSync(path.join(dir, "server.par"), "", { mode: 0o755 })
+      expect(
+        resolveProbeExecutable("server.par", { ...windows, env: { PATH: dir, PATHEXT: ".EXE" } })
+      ).toBe(path.join(dir, "server.par"))
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 let probeBin: string

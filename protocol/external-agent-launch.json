@@ -88,7 +88,8 @@
         "values": ["opencode"]
       },
       "env": {
-        "prefixes": ["OPENCODE_"]
+        "prefixes": ["OPENCODE_"],
+        "secret": ["OPENCODE_CONFIG_CONTENT"]
       },
       "stateRoots": [".config/opencode", ".local/share/opencode"],
       "isolation": {

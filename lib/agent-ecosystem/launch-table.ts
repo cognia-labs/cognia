@@ -90,6 +90,7 @@ function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
     ...(companion ? [companion.env] : []),
     ...(env?.keys ?? []),
     ...(env?.privateBlank ?? []),
+    ...(env?.secret ?? []),
     ...(mcpConfigFile ? [mcpConfigFile.rootEnv] : []),
   ]
   for (const key of envKeys) {

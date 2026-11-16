@@ -80,13 +80,22 @@ export function resolveProbeExecutable(
     return fs.existsSync(trimmed) ? trimmed : null
   }
 
-  const extensions =
-    runtime.platform === "win32" ? (runtime.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""]
-  const bareCommand =
-    runtime.platform === "win32" && trimmed === "agy_acp_server.par" ? "agy_acp_server" : trimmed
+  // As the desktop resolves (`command_resolver.rs`): the name itself, then on
+  // Windows the name with each PATHEXT extension in place of its own.
+  const names =
+    runtime.platform === "win32"
+      ? [
+          trimmed,
+          ...(runtime.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+            .split(";")
+            .map((extension) => extension.trim().replace(/^\./, "").toLowerCase())
+            .filter(Boolean)
+            .map((extension) => `${path.parse(trimmed).name}.${extension}`),
+        ]
+      : [trimmed]
   for (const dir of agentSearchDirs(runtime)) {
-    for (const extension of extensions) {
-      const candidate = path.join(dir, `${bareCommand}${extension}`)
+    for (const name of names) {
+      const candidate = path.join(dir, name)
       try {
         fs.accessSync(candidate, fs.constants.X_OK)
         return candidate

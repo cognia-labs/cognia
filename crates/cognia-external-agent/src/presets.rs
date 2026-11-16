@@ -49,76 +49,43 @@ const MAX_OPERATOR_CONFIG_BYTES: usize = 8192;
 const MAX_OPERATOR_ENTRIES: usize = 64;
 const MAX_OPERATOR_NAME_BYTES: usize = 128;
 
-/// Bare binary names an external-agent spawn may execute (ADR-0048/0049
-/// ecosystem; resolution itself goes through `command_resolver`).
-///
-/// Mirrors `binaryAllowlist.commands` in
-/// `protocol/external-agent-security-policy.json`, which the TypeScript
-/// launcher consumes directly. The two are kept in step by
-/// `pnpm audit:agent-capabilities` rather than by a comment: a security
-/// default allowlist stays compiled in; operator additions are a separate gate, and
-/// the last time the two were only linked by a comment they drifted in both
-/// directions at once.
-const BINARY_ALLOWLIST: &[&str] = &[
-    "claude",
-    // The `claude-code` preset spawns THIS bare binary
-    // (`ecosystem-adapters.ts`), not the npx package. Its absence meant every
-    // headless spawn of a shipped preset was refused by policy.
-    "claude-agent-acp",
-    "claude-code-acp",
-    "codex",
-    "codex-acp",
-    "opencode",
-    "cursor-agent",
-    "gemini",
-    "agy_acp_server.par",
-    "agy_acp_server",
-    "qwen",
-    "copilot",
-    "kiro-cli",
-    "droid",
-    "devin",
-    "cline",
-    "qoder",
-    "kimi",
-    "mcode",
-    "goose",
-    "grok",
-    "aider",
-    "auggie",
-    "autohand",
-    "codebuddy",
-    "commandcode",
-    "kilo",
-    "vibe-acp",
-    "mimo",
-    "hermes",
-    "omp",
-    "muse-acp",
-    "amp-acp",
-    "zcode-acp",
-    "openclaude",
-    "crush",
-    "cn",
-    "acli",
-    // Pi's own binary, driven natively over `pi --mode rpc` (ADR-0119).
-    "pi",
-];
+/// The security policy (`protocol/external-agent-security-policy.json`), the
+/// one the TypeScript launcher reads too: the bare binary names an
+/// external-agent spawn may execute (ADR-0048/0049 ecosystem; resolution
+/// itself goes through `command_resolver`) and the packages `npx [-y|--yes]
+/// <package>` may run. It is compiled in, so the default allowlist never
+/// depends on a file at runtime; operator additions are a separate gate.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SecurityPolicy {
+    binary_allowlist: BinaryAllowlist,
+    npx_package_allowlist: NpxPackageAllowlist,
+}
 
-/// Packages `npx` may execute (`npx [-y|--yes] <package> …`).
-///
-/// Mirrors `npxPackageAllowlist.packages` in
-/// `protocol/external-agent-security-policy.json`; see [`BINARY_ALLOWLIST`].
-const NPX_PACKAGE_ALLOWLIST: &[&str] = &[
-    "@agentclientprotocol/claude-agent-acp",
-    "@zed-industries/claude-code-acp",
-    "@zed-industries/codex-acp",
-    "@agentclientprotocol/codex-acp",
-    "@anthropic-ai/claude-code",
-    "@google/gemini-cli",
-    "@qwen-code/qwen-code",
-    "opencode-ai",
-];
+#[derive(serde::Deserialize)]
+struct BinaryAllowlist {
+    commands: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct NpxPackageAllowlist {
+    packages: Vec<String>,
+}
+
+static SECURITY_POLICY: std::sync::LazyLock<SecurityPolicy> = std::sync::LazyLock::new(|| {
+    serde_json::from_str(include_str!(
+        "../../../protocol/external-agent-security-policy.json"
+    ))
+    .expect("protocol/external-agent-security-policy.json parses")
+});
+
+fn binary_allowlisted(base: &str) -> bool {
+    SECURITY_POLICY.binary_allowlist.commands.iter().any(|name| name == base)
+}
+
+fn npx_package_allowlisted(package: &str) -> bool {
+    SECURITY_POLICY.npx_package_allowlist.packages.iter().any(|name| name == package)
+}
 
 /// Exact env keys the host itself passes to every engine. Each engine's own
 /// keys come from its launch descriptor
@@ -476,7 +443,7 @@ impl SpawnPolicy {
         if self.operator_commands.iter().any(|name| name == trimmed) {
             return Ok(());
         }
-        if BINARY_ALLOWLIST.contains(&base) {
+        if binary_allowlisted(base) {
             return Ok(());
         }
         if base == "npx" {
@@ -574,7 +541,7 @@ impl SpawnPolicy {
 fn validate_npx_args(args: &[String]) -> Result<(), PolicyViolation> {
     let package = args.iter().find(|a| !a.starts_with('-'));
     match package {
-        Some(pkg) if NPX_PACKAGE_ALLOWLIST.contains(&pkg.as_str()) => Ok(()),
+        Some(pkg) if npx_package_allowlisted(pkg) => Ok(()),
         Some(pkg) => Err(PolicyViolation(format!(
             "npx package {pkg:?} is not in the allowlist"
         ))),
@@ -800,20 +767,13 @@ fn valid_operator_env(key: &str) -> bool {
             "BASHOPTS",
             "GLOBIGNORE",
             "PSMODULEANALYSISCACHEPATH",
-            "CLAUDE_CONFIG_DIR",
-            "CODEX_HOME",
             "DSH_HOME",
-            "CLINE_DIR",
-            "QODER_CONFIG_DIR",
-            "KIMI_CODE_HOME",
-            "PI_CODING_AGENT_DIR",
-            "PI_CODING_AGENT_SESSION_DIR",
-            "GOOSE_PATH_ROOT",
             "GOOGLE_APPLICATION_CREDENTIALS",
             "AWS_SHARED_CREDENTIALS_FILE",
             "AWS_CONFIG_FILE",
         ]
         .contains(&upper.as_str())
+        && !crate::launch_descriptor::is_state_env(&upper)
 }
 
 /// Plugin Pi package env (ADR-0210) only belongs to an engine that takes Pi
@@ -1508,7 +1468,9 @@ mod tests {
 
     #[test]
     fn installed_acp_defaults_are_allowlisted() {
-        assert!(BINARY_ALLOWLIST.contains(&"mcode"));
+        assert!(binary_allowlisted("mcode"));
+        assert!(npx_package_allowlisted("opencode-ai"));
+        assert!(!binary_allowlisted("bash"));
         let (_tmp, p) = policy(false);
         for command in ["codex-acp", "gemini", "qwen"] {
             assert!(p.validate(config(command, &["--acp"])).is_ok());
