@@ -363,7 +363,27 @@ interface ItemList {
   emptyMessage: string
 }
 
-export const ComposerPopover = forwardRef<ComposerPopoverHandle, Props>(function ComposerPopover(
+/**
+ * The composer's completion panel (`@`, `/`, `#`, `!`, `@lark:` …).
+ *
+ * Mounted only while a trigger is open. The panel's body holds its searches
+ * (remote documents, entity mentions, workspace files), the list it derives
+ * and a virtualizer: about twenty hooks, and the composer re-renders on every
+ * keystroke. Rendered unconditionally, all of them ran for every character
+ * typed with no panel in sight. With no trigger there is nothing to complete
+ * and nothing to fade out (the closed panel had no items to show), so the
+ * shell returns before any of them. The handle the composer drives with ↑/↓,
+ * Tab and Enter exists exactly while the panel does; the composer only calls
+ * it with a trigger open.
+ */
+export const ComposerPopover = memo(
+  forwardRef<ComposerPopoverHandle, Props>(function ComposerPopover(props, ref) {
+    if (!props.trigger) return null
+    return <ComposerPopoverPanel ref={ref} {...props} />
+  })
+)
+
+const ComposerPopoverPanel = forwardRef<ComposerPopoverHandle, Props>(function ComposerPopoverPanel(
   {
     trigger,
     cwd,

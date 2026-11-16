@@ -3581,11 +3581,16 @@ function ComposerInner(props: InnerProps) {
           with a height cap. Restored attachments, an active goal, an open loop
           and the plan-mode banner could otherwise push the input off the
           bottom of the screen. Each band still animates its own height inside
-          it. (Staged attachments live INSIDE the card — `contextRow`.) */}
+          it. (Staged attachments live INSIDE the card — `contextRow`.)
+          The cap is a share of the VISIBLE height: with the soft keyboard up,
+          `vh` still measures the whole layout viewport, so 40vh could fill most
+          of what is left above the keyboard. `--visual-viewport-height` is set
+          only while the keyboard is open (`lib/capacitor/keyboard-viewport.ts`)
+          and the cap falls back to 40vh otherwise. */}
         <div
           role="region"
           aria-label={t("contextRegion")}
-          className="max-h-[40vh] overflow-y-auto overscroll-contain"
+          className="max-h-[calc(var(--visual-viewport-height,100vh)*0.4)] overflow-y-auto overscroll-contain"
         >
           {pendingLaunchSpec ? (
             <TemplateLaunchDiffBar
@@ -3860,13 +3865,17 @@ function ComposerInner(props: InnerProps) {
 
         <PluginExtensionSlot point="chat.input.below" className="px-1 pt-1 empty:hidden" />
 
-        <SaveAsTemplateDialog
-          open={saveTemplateOpen}
-          body={textValue}
-          launchSpec={currentLaunchSpec}
-          onOpenChange={setSaveTemplateOpen}
-          onSave={saveCurrentAsTemplate}
-        />
+        {/* Mounted only while open: it takes the draft as its body, so a
+            closed dialog rendered again on every keystroke. */}
+        {saveTemplateOpen ? (
+          <SaveAsTemplateDialog
+            open
+            body={textValue}
+            launchSpec={currentLaunchSpec}
+            onOpenChange={setSaveTemplateOpen}
+            onSave={saveCurrentAsTemplate}
+          />
+        ) : null}
 
         <TemplateParamPopover
           paramId={activeParamId}
@@ -4118,7 +4127,7 @@ function ComposerCapabilityMenu({
 
 // --- Outer component ------------------------------------------------------
 
-export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
+const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
   {
     session,
     status: paneStatus,
@@ -4324,15 +4333,23 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   )
   const bestOfNCount =
     bestOfNChoice && bestOfNChoice.sessionId === session?.id ? bestOfNChoice.n : null
-  const bestOfNControl =
-    session?.kind === "direct" && !session.platformBinding
-      ? {
-          value: bestOfNCount,
-          disabled,
-          onChange: (n: 2 | 3 | 4 | null) =>
-            setBestOfNChoice(n ? { sessionId: session.id, n } : null),
-        }
-      : undefined
+  // A stable object and callback, so the memoized toolbar is not re-rendered
+  // by a Composer render that changed neither.
+  const bestOfNSessionId =
+    session?.kind === "direct" && !session.platformBinding ? session.id : null
+  const bestOfNControl = useMemo(
+    () =>
+      bestOfNSessionId
+        ? {
+            value: bestOfNCount,
+            disabled,
+            onChange: (n: 2 | 3 | 4 | null) =>
+              setBestOfNChoice(n ? { sessionId: bestOfNSessionId, n } : null),
+          }
+        : undefined,
+    [bestOfNSessionId, bestOfNCount, disabled]
+  )
+  const openProviderSettings = useCallback(() => onOpenSettings("api-key"), [onOpenSettings])
   const [bestOfNStart, setBestOfNStart] = useState<{
     prepared: PreparedBestOfN
     resolve(value: boolean): void
@@ -5184,7 +5201,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                             variant={
                               skin.toolbarLayout === "detached" ? "embedded" : skin.toolbarLayout
                             }
-                            onOpenProviderSettings={() => onOpenSettings("api-key")}
+                            onOpenProviderSettings={openProviderSettings}
                           />
                         ) : null}
                       </>
@@ -5197,7 +5214,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                   bestOfN={bestOfNControl}
                   session={session ?? null}
                   status={status}
-                  onOpenProviderSettings={() => onOpenSettings("api-key")}
+                  onOpenProviderSettings={openProviderSettings}
                 />
               )}
               <HelperHints onOpenCheatsheet={() => setCheatsheetOpen(true)} />
@@ -5277,3 +5294,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     </div>
   )
 })
+
+/**
+ * Memoized: a chat pane re-renders on streamed tokens and run status, and the
+ * Composer re-rendered with it — `ComposerInner`'s ~3,000 lines and the
+ * toolbar's layout reads — though nothing it was given had changed. Its own
+ * state and store subscriptions still update it.
+ */
+export const Composer = memo(ComposerWithRef)

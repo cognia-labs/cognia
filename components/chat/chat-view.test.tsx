@@ -440,6 +440,25 @@ describe("ChatPane shared blocking capabilities", () => {
       activityInComposer: false,
     })
   })
+  // The Composer is memoized; a pane render must hand it the same props when
+  // nothing it shows changed, even with fresh handlers from the pane's parent.
+  it("hands the Composer stable handlers and run strip across pane renders", () => {
+    const first = makeProps()
+    const view = render(<ChatPane {...first} />)
+    const before = mockComposerProps.at(-1)!
+    const next = makeProps()
+    view.rerender(<ChatPane {...next} />)
+    const after = mockComposerProps.at(-1)!
+    for (const key of ["onStartNewSession", "onOpenSettings", "onStop", "runStatus"]) {
+      expect(after[key]).toBe(before[key])
+    }
+    // Stable, but calling through to the handler of the latest render.
+    ;(after.onStop as () => void)()
+    ;(after.onOpenSettings as (tab: string) => void)("api-key")
+    expect(next.onStop).toHaveBeenCalledTimes(1)
+    expect(first.onStop).not.toHaveBeenCalled()
+    expect(next.onOpenSettings).toHaveBeenCalledWith("api-key")
+  })
   it("exposes approval and plan continuation without any host gate callbacks", () => {
     mockPaneRuntime.ownsDecisions = true
     mockPlanDockProps.length = 0

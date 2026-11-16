@@ -46,7 +46,7 @@
 import { AgentTeamIcon } from "@/components/mobile/mobile-spot-icon"
 import { WebGlobalStatusInline, WebSessionStatus } from "@/components/shell/web-status"
 import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/ai/provider-default-model"
-import { useRef, type ReactNode } from "react"
+import { memo, useRef, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { MoreHorizontalIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -104,7 +104,12 @@ interface BottomToolbarProps {
   bestOfN?: BestOfNChoiceProps
 }
 
-export function BottomToolbar({
+/**
+ * Memoized: the Composer re-renders on its own state (a run's status, a
+ * session change) and with it this row, whose fold reads layout. With stable
+ * props from the Composer it renders only when one of them changed.
+ */
+export const BottomToolbar = memo(function BottomToolbar({
   session,
   status,
   variant = "default",
@@ -137,7 +142,7 @@ export function BottomToolbar({
       bestOfN={bestOfN}
     />
   )
-}
+})
 
 function GenericBottomToolbar({
   session,

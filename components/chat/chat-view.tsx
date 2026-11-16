@@ -700,6 +700,52 @@ function ChatPaneContent({
     [afterFullHistory, boundId, onSend, restoreIfArchived]
   )
 
+  // Stable handlers for the memoized Composer. Inline arrows here gave it new
+  // props on every pane render, which re-rendered the whole Composer and its
+  // toolbar for a pane change that was none of theirs.
+  const composerStartNewSession = useStableCallback(() => onCreate())
+  const composerOpenSettings = useStableCallback((tab?: string) => onOpenSettings(tab))
+  const composerStop = useStableCallback(() => void onStop())
+  const runSteerNow = useStableCallback(() => void steerNow?.())
+  const runSteerFlush = useStableCallback(() => void steerFlush?.())
+  const hasSteerNow = steerNow !== undefined
+  const hasSteerFlush = steerFlush !== undefined
+  const conversationKey = activeSession?.platformBinding?.conversationKey
+  // The live run strip (timer / tool count / steer queue). Docked onto the
+  // composer's top edge by the composer itself so it reads as part of the input
+  // card; interrupting is the composer's own Stop button (and Esc), not a tap
+  // on the strip. Self-hides when idle with no queue and nothing to replay.
+  // Memoized with its inputs: an element built in render is a new prop each
+  // time, which is all it took to defeat the Composer's memo.
+  const composerRunStatus = useMemo(() => {
+    const bar = (
+      <RunStatusBar
+        sessionId={boundId}
+        conversationKey={conversationKey}
+        onSteerNow={hasSteerNow ? runSteerNow : undefined}
+        onSteerFlush={hasSteerFlush ? runSteerFlush : undefined}
+      />
+    )
+    return runtimeStrip || showHistoryWait ? (
+      <>
+        {runtimeStrip}
+        {showHistoryWait ? <HistoryWaitStrip /> : null}
+        {bar}
+      </>
+    ) : (
+      bar
+    )
+  }, [
+    boundId,
+    conversationKey,
+    hasSteerFlush,
+    hasSteerNow,
+    runSteerFlush,
+    runSteerNow,
+    runtimeStrip,
+    showHistoryWait,
+  ])
+
   const pendingDispatchRef = useRef<string | null>(null)
   useEffect(() => {
     if (!boundId || status !== "idle" || messagesLoading || activeSession?.kind === "subagent") {
@@ -937,10 +983,10 @@ function ChatPaneContent({
                   {...(isMobileShell ? {} : { defaultSkin: "dense" as const })}
                   placeholderHints={heroHints}
                   session={null}
-                  onStartNewSession={() => onCreate()}
-                  onOpenSettings={(tab) => onOpenSettings(tab)}
+                  onStartNewSession={composerStartNewSession}
+                  onOpenSettings={composerOpenSettings}
                   onSend={onHeroSend}
-                  onStop={() => void onStop()}
+                  onStop={composerStop}
                   disabled={composerDisabled}
                   toolbar={welcomeComposerToolbar}
                   routing={heroRouting}
@@ -961,19 +1007,6 @@ function ChatPaneContent({
   //
   // `subagent` sessions (ADR-0062) are read-only imported inner transcripts —
   // no composer at all (they have no continuation path).
-  // The live run strip (timer / tool count / steer queue). Docked onto the
-  // composer's top edge by the composer itself so it reads as part of the input
-  // card; interrupting is the composer's own Stop button (and Esc), not a tap
-  // on the strip. Self-hides when idle with no queue and nothing to replay.
-  const runStatusBar = (
-    <RunStatusBar
-      sessionId={boundId}
-      conversationKey={activeSession.platformBinding?.conversationKey}
-      onSteerNow={steerNow ? () => void steerNow() : undefined}
-      onSteerFlush={steerFlush ? () => void steerFlush() : undefined}
-    />
-  )
-
   const composerEl =
     activeSession?.kind === "subagent" ? null : (
       // Dev-only Profiler; the chat-surface benchmark counts Composer commits
@@ -982,10 +1015,10 @@ function ChatPaneContent({
         <Composer
           ref={setComposerRef}
           session={activeSession}
-          onStartNewSession={() => onCreate()}
-          onOpenSettings={(tab) => onOpenSettings(tab)}
+          onStartNewSession={composerStartNewSession}
+          onOpenSettings={composerOpenSettings}
           onSend={handleSend}
-          onStop={() => void onStop()}
+          onStop={composerStop}
           status={status}
           // Platform delivery does not consume an AI stream slot. For local chat,
           // the concurrent-stream cap blocks the composer (this pane isn't
@@ -996,17 +1029,7 @@ function ChatPaneContent({
           disabled={(atCapacity && !activeSession.platformBinding) || composerDisabled}
           disabledPlaceholder={composerDisabled ? composerDisabledPlaceholder : undefined}
           workflowMention={workflowMention}
-          runStatus={
-            runtimeStrip || showHistoryWait ? (
-              <>
-                {runtimeStrip}
-                {showHistoryWait ? <HistoryWaitStrip /> : null}
-                {runStatusBar}
-              </>
-            ) : (
-              runStatusBar
-            )
-          }
+          runStatus={composerRunStatus}
         />
       </PerfBoundary>
     )
