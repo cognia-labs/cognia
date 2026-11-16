@@ -31,11 +31,11 @@ import {
   registeredHermesProbeStateRoot,
 } from "./native-bridges"
 import { toolHostRuntimeDir } from "../../agent/tool-host/protocol"
+import { SANDBOX_SUPPORTED_PLATFORMS } from "@/lib/ai/agent/external/policy/security-policy"
 import {
-  SANDBOX_SUPPORTED_PLATFORMS,
+  agentStateFileRoots as policyAgentStateFileRoots,
   agentStateWritableRoots as policyAgentStateWritableRoots,
-  isAgentStateFileRoot,
-} from "@/lib/ai/agent/external/policy/security-policy"
+} from "@/lib/ai/agent/external/policy/engine-launch"
 
 /** Base name of the launcher binary built from `crates/cognia-automation`. */
 const LAUNCHER_BASE_NAME = "cognia-external-agent-launcher"
@@ -744,14 +744,22 @@ function agentStateWritableRoots(
     .filter((root) => !shared.has(root))
 }
 
+/** The policy's file roots for this launch, absolute. */
+function policyFileRoots(config: NodeExternalAgentSpawnConfig, homedir: string): Set<string> {
+  return new Set(
+    policyAgentStateFileRoots(config.command, config.args ?? []).map((root) =>
+      path.join(homedir, ...root.split("/"))
+    )
+  )
+}
+
 function agentStateDirectoryRoots(
   config: NodeExternalAgentSpawnConfig,
   homedir: string,
   isolation: StateIsolationPlan | null
 ): string[] {
-  return agentStateWritableRoots(config, homedir, isolation).filter(
-    (root) => !isAgentStateFileRoot(root)
-  )
+  const files = policyFileRoots(config, homedir)
+  return agentStateWritableRoots(config, homedir, isolation).filter((root) => !files.has(root))
 }
 
 function agentStateFileRoots(
@@ -759,9 +767,8 @@ function agentStateFileRoots(
   homedir: string,
   isolation: StateIsolationPlan | null
 ): string[] {
-  return agentStateWritableRoots(config, homedir, isolation).filter((root) =>
-    isAgentStateFileRoot(root)
-  )
+  const files = policyFileRoots(config, homedir)
+  return agentStateWritableRoots(config, homedir, isolation).filter((root) => files.has(root))
 }
 
 /** The real host runtime. Exported so its fs shims are directly testable — as an

@@ -77,6 +77,17 @@ export const piManifest: AgentIntegrationManifest = Object.freeze({
     memoryAgentId: "pi",
   }),
   protocols: [{ protocol: PI_RPC_PROTOCOL, semantics: PI_RPC_EXECUTION_SEMANTICS }],
+  launch: [
+    {
+      id: "pi",
+      match: { kind: "base", values: ["pi"] },
+      stateRoots: [".pi"],
+      isolation: {
+        env: { PI_CODING_AGENT_DIR: "pi" },
+        denyReadable: [".pi"],
+      },
+    },
+  ],
   runtimes: PI_RUNTIMES,
 }) as AgentIntegrationManifest
 

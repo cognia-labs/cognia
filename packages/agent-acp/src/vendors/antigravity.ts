@@ -14,6 +14,11 @@ export const antigravityAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorPr
   id: "antigravity-acp",
   label: "Antigravity",
   commandNames: ["agy_acp_server.par", "agy_acp_server"],
+  launch: {
+    id: "antigravity-acp",
+    match: { kind: "base", values: ["agy_acp_server.par", "agy_acp_server"] },
+    stateRoots: [".gemini/antigravity-acp", ".gemini/artifacts"],
+  },
   systemPromptNamespace: "antigravity",
   reapplySessionMode: true,
   permissionModes: {

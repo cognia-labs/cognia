@@ -30,6 +30,13 @@ export const crushManifest: AgentIntegrationManifest = {
     memoryAgentId: null,
   },
   protocols: [{ protocol: CRUSH_PROTOCOL, semantics: CRUSH_EXECUTION_SEMANTICS }],
+  launch: [
+    {
+      id: "crush",
+      match: { kind: "base", values: ["crush"] },
+      stateRoots: [".config/crush", ".local/share/crush", ".local/state/crush", ".cache/crush"],
+    },
+  ],
   runtimes: [
     {
       runtimeId: "crush",

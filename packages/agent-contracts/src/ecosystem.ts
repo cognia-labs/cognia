@@ -13,6 +13,7 @@
  * so adding an ecosystem edits its own package and that one list.
  */
 
+import type { EngineLaunchDescriptor } from "./engine-launch"
 import type { ExternalAgentCapabilityMatrix } from "./external-agent-capability"
 import type { ExternalAgentRuntimeCatalogEntry } from "./external-agent-lifecycle"
 import type { AgentExecutionSemantics } from "./semantics"
@@ -98,6 +99,13 @@ export interface AgentIntegrationManifest {
    * may only be removed by pinning the launch.
    */
   unpinnedLaunchWaivers?: Readonly<Record<string, string>>
+  /**
+   * What the process host needs to launch this package's engines. The host's
+   * generator writes them into its launch table (Cognia:
+   * `protocol/external-agent-launch.json`); like `runtimes`, declaring one
+   * grants nothing the host's own invariants forbid.
+   */
+  launch?: readonly EngineLaunchDescriptor[]
 }
 
 /** The semantics a preset runs with under one protocol integration. */

@@ -57,8 +57,10 @@ on 2026-10-05 found that the configurations were not actually separate:
 
 ### The state root
 
-`protocol/external-agent-security-policy.json` gains `agentStateIsolation.rules`: per
-runtime, which home variables to set (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
+Each engine's launch descriptor carries an `isolation` entry (originally
+`agentStateIsolation.rules` in `protocol/external-agent-security-policy.json`; since
+2026-11-16 declared in the engine's package and generated into
+`protocol/external-agent-launch.json`, ADR-0217): per runtime, which home variables to set (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
 `QWEN_HOME` …), which shared roots exist and which to deny reading. Supported:
 codex, claude, qwen, pi, kimi, cline, qoder, copilot, opencode, goose. A runtime without a
 rule (gemini, devin, kiro, droid, cursor, aider, dsh) cannot be isolated: an

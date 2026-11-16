@@ -18,7 +18,8 @@
 
 import type { ExternalAgentConfig } from "@/types/agent/external-agent"
 
-import { agentStateWritableRoots, baseCommandName } from "../policy/security-policy"
+import { agentStateWritableRoots } from "../policy/engine-launch"
+import { baseCommandName } from "../policy/security-policy"
 import { presetFamilyOf } from "./agent-binding"
 import { externalAgentPresetIdOf } from "./preset-identity"
 

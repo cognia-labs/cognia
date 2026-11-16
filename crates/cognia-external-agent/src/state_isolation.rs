@@ -18,11 +18,8 @@
 //!
 //! The key itself never reaches the child.
 //!
-//! The rule table mirrors `agentStateIsolation.rules` in
-//! `protocol/external-agent-security-policy.json`, as compiled-in literals for
-//! the same reason [`crate::sandbox::agent_state_writable_roots`] mirrors its
-//! table: a security policy must not depend on parsing a file at runtime.
-//! `pnpm audit:agent-capabilities` fails when the two disagree.
+//! Which engines can be isolated, and how, is each engine's launch descriptor
+//! ([`crate::launch_descriptor`]); this module names no engine.
 //!
 //! A launch that already owns a private home — a Bot-isolated spawn
 //! (`COGNIA_BOT_ISOLATION=1`) or a gateway task (`COGNIA_GATEWAY_TASK_CONFIG`)
@@ -39,135 +36,8 @@ use crate::process::ExternalAgentSpawnConfig;
 /// `lib/ai/agent/external/policy/security-policy.ts`.
 pub const AGENT_STATE_KEY_ENV: &str = "COGNIA_AGENT_STATE_KEY";
 
-/// How a rule's `values` are compared, exactly as `agentStateWritableRoots`
-/// resolves them: `Contains` against the launch target (the npx package when
-/// the command is `npx`), `Base` against the bare command, `Target` equal to
-/// the launch target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IsolationMatch {
-    Contains,
-    Base,
-    Target,
-}
-
-/// One row of `agentStateIsolation.rules`.
-#[derive(Debug, Clone, Copy)]
-pub struct AgentStateIsolationRule {
-    pub match_kind: IsolationMatch,
-    pub values: &'static [&'static str],
-    /// Env key → path relative to the configuration's state root.
-    pub env: &'static [(&'static str, &'static str)],
-    /// Home-relative default state roots the isolated launch must not write.
-    pub shared_roots: &'static [&'static str],
-    /// Home-relative roots the isolated launch must not read.
-    pub deny_readable: &'static [&'static str],
-}
-
-/// Mirrors `agentStateIsolation.rules` in
-/// `protocol/external-agent-security-policy.json`, row for row and in order.
-/// Only documented home variables are listed; a runtime with no row cannot be
-/// isolated and its isolated launch is refused.
-pub const AGENT_STATE_ISOLATION_RULES: &[AgentStateIsolationRule] = &[
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Base,
-        values: &["grok"],
-        env: &[("GROK_HOME", "grok")],
-        shared_roots: &[".grok"],
-        deny_readable: &[".grok"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Contains,
-        values: &["codex"],
-        env: &[("CODEX_HOME", "codex")],
-        shared_roots: &[".codex"],
-        deny_readable: &[".codex"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Target,
-        values: &["claude", "claude-agent-acp", "claude-code-acp", "@agentclientprotocol/claude-agent-acp", "@anthropic-ai/claude-code", "@zed-industries/claude-code-acp"],
-        env: &[("CLAUDE_CONFIG_DIR", "claude")],
-        shared_roots: &[".claude", ".claude.json", ".claude.json.backup"],
-        deny_readable: &[".claude", ".claude.json", ".claude.json.backup"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Contains,
-        values: &["qwen"],
-        env: &[("QWEN_HOME", "qwen"), ("QWEN_RUNTIME_DIR", "qwen-runtime")],
-        shared_roots: &[".qwen"],
-        deny_readable: &[".qwen"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Base,
-        values: &["pi"],
-        env: &[("PI_CODING_AGENT_DIR", "pi")],
-        shared_roots: &[".pi"],
-        deny_readable: &[".pi"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Base,
-        values: &["mcode"],
-        env: &[
-            ("MINIMAX_DATA_DIR", "minimax"),
-            ("MAVIS_DATA_DIR", "minimax"),
-        ],
-        shared_roots: &[".minimax"],
-        deny_readable: &[".minimax"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Base,
-        values: &["kimi"],
-        env: &[("KIMI_CODE_HOME", "kimi")],
-        shared_roots: &[".kimi-code"],
-        deny_readable: &[".kimi-code", ".kimi"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Base,
-        values: &["cline"],
-        env: &[("CLINE_DIR", "cline")],
-        shared_roots: &[".cline"],
-        deny_readable: &[".cline"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Base,
-        values: &["qoder"],
-        env: &[("QODER_CONFIG_DIR", "qoder")],
-        shared_roots: &[".qoder"],
-        deny_readable: &[],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Contains,
-        values: &["copilot"],
-        env: &[("COPILOT_HOME", "copilot")],
-        shared_roots: &[".copilot"],
-        deny_readable: &[".copilot"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Contains,
-        values: &["opencode"],
-        env: &[
-            ("OPENCODE_CONFIG_DIR", "config/opencode"),
-            ("XDG_DATA_HOME", "data"),
-            ("XDG_STATE_HOME", "state"),
-            ("XDG_CACHE_HOME", "cache"),
-        ],
-        shared_roots: &[".config/opencode", ".local/share/opencode"],
-        deny_readable: &[".config/opencode", ".local/share/opencode"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Base,
-        values: &["goose"],
-        env: &[("GOOSE_PATH_ROOT", "goose")],
-        shared_roots: &[".config/goose", ".local/share/goose", ".local/state/goose", "Library/Application Support/Block/goose"],
-        deny_readable: &[".config/goose", ".local/share/goose", ".local/state/goose", "Library/Application Support/Block/goose"],
-    },
-    AgentStateIsolationRule { match_kind: IsolationMatch::Base, values: &["openclaude"], env: &[("OPENCLAUDE_CONFIG_DIR", "openclaude")], shared_roots: &[".openclaude", ".openclaude.json"], deny_readable: &[".openclaude", ".openclaude.json"] },
-    AgentStateIsolationRule { match_kind: IsolationMatch::Base, values: &["vibe-acp"], env: &[("VIBE_HOME", "vibe")], shared_roots: &[".vibe"], deny_readable: &[".vibe"] },
-    AgentStateIsolationRule { match_kind: IsolationMatch::Base, values: &["mimo"], env: &[("MIMOCODE_HOME", "mimocode")], shared_roots: &[".config/mimocode", ".local/share/mimocode", ".local/state/mimocode", ".cache/mimocode"], deny_readable: &[".config/mimocode", ".local/share/mimocode", ".local/state/mimocode", ".cache/mimocode"] },
-    AgentStateIsolationRule { match_kind: IsolationMatch::Base, values: &["hermes"], env: &[("HERMES_HOME", "hermes")], shared_roots: &[".hermes"], deny_readable: &[".hermes"] },
-];
-
-/// The merged isolation rule for one launch. Several matching rows merge (a
-/// target naming two families gets both homes); a later row wins an env key.
+/// The merged isolation for one launch. Several matching descriptors merge (a
+/// target naming two families gets both homes); a later one wins an env key.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolvedAgentStateIsolation {
     /// Env key → root-relative path, in rule order.
@@ -272,72 +142,30 @@ pub fn agent_state_root(data_dir: &Path, key: &str) -> PathBuf {
     data_dir.join("cognia").join("external-agents").join(key)
 }
 
-/// Strip a Windows executable suffix and lower-case, as both launchers do.
-fn base_command(command: &str) -> String {
-    let lower = command.trim().to_ascii_lowercase();
-    for suffix in [".exe", ".cmd", ".bat"] {
-        if let Some(stripped) = lower.strip_suffix(suffix) {
-            return stripped.to_string();
-        }
-    }
-    lower
-}
-
-/// `npx <package>` runs the package, so the state belongs to the package.
-fn launch_target(command: &str, args: &[String]) -> (String, String) {
-    let base = base_command(command);
-    let target = if base == "npx" {
-        args.iter()
-            .find(|arg| !arg.starts_with('-'))
-            .cloned()
-            .unwrap_or_else(|| base.clone())
-    } else {
-        base.clone()
-    };
-    (base, target)
-}
-
-fn rule_matches(rule: &AgentStateIsolationRule, base: &str, target: &str) -> bool {
-    match rule.match_kind {
-        IsolationMatch::Contains => rule.values.iter().any(|value| target.contains(value)),
-        IsolationMatch::Target => rule.values.contains(&target),
-        IsolationMatch::Base => rule.values.contains(&base),
-    }
-}
-
-/// The isolation rule for a launch, or `None` when the runtime has no
-/// documented home variable and so cannot be isolated. Same semantics as
-/// `agentStateIsolationFor` in the TypeScript policy accessor.
+/// The isolation for a launch, or `None` when no matching engine documents a
+/// home variable and so the launch cannot be isolated. Same semantics as
+/// `agentStateIsolationFor` in `lib/ai/agent/external/policy/engine-launch.ts`.
 pub fn isolation_rule_for(command: &str, args: &[String]) -> Option<ResolvedAgentStateIsolation> {
-    let normalized = base_command(command);
-    let isolation_command = if normalized.rsplit(['/', '\\']).next() == Some("goose") {
-        "goose"
-    } else {
-        command
-    };
-    let (base, target) = launch_target(isolation_command, args);
     let mut resolved: Option<ResolvedAgentStateIsolation> = None;
-    for rule in AGENT_STATE_ISOLATION_RULES {
-        if !rule_matches(rule, &base, &target) {
-            continue;
-        }
+    for isolation in crate::launch_descriptor::descriptors_for(command, args)
+        .into_iter()
+        .filter_map(|descriptor| descriptor.isolation.as_ref())
+    {
         let merged = resolved.get_or_insert_with(Default::default);
-        for (key, relative) in rule.env {
+        for (key, relative) in &isolation.env.0 {
             match merged.env.iter_mut().find(|(existing, _)| existing == key) {
-                Some(entry) => entry.1 = (*relative).to_string(),
-                None => merged
-                    .env
-                    .push(((*key).to_string(), (*relative).to_string())),
+                Some(entry) => entry.1 = relative.clone(),
+                None => merged.env.push((key.clone(), relative.clone())),
             }
         }
-        for root in rule.shared_roots {
-            if !merged.shared_roots.iter().any(|existing| existing == root) {
-                merged.shared_roots.push((*root).to_string());
+        for root in &isolation.shared_roots {
+            if !merged.shared_roots.contains(root) {
+                merged.shared_roots.push(root.clone());
             }
         }
-        for root in rule.deny_readable {
-            if !merged.deny_readable.iter().any(|existing| existing == root) {
-                merged.deny_readable.push((*root).to_string());
+        for root in &isolation.deny_readable {
+            if !merged.deny_readable.contains(root) {
+                merged.deny_readable.push(root.clone());
             }
         }
     }
@@ -714,55 +542,6 @@ mod tests {
             kimi.deny_readable,
             vec![".kimi-code".to_string(), ".kimi".into()]
         );
-    }
-
-    /// The compiled-in table must be the policy file, row for row. The gate
-    /// checks the same thing from the other side; this keeps `cargo test`
-    /// honest on its own.
-    #[test]
-    fn compiled_table_matches_the_security_policy_file() {
-        let policy: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../protocol/external-agent-security-policy.json"
-        ))
-        .expect("policy parses");
-        let rules = policy["agentStateIsolation"]["rules"]
-            .as_array()
-            .expect("rules array");
-        assert_eq!(rules.len(), AGENT_STATE_ISOLATION_RULES.len());
-        for (json, rust) in rules.iter().zip(AGENT_STATE_ISOLATION_RULES) {
-            let kind = match rust.match_kind {
-                IsolationMatch::Contains => "contains",
-                IsolationMatch::Base => "base",
-                IsolationMatch::Target => "target",
-            };
-            assert_eq!(json["match"], kind);
-            let strings = |value: &serde_json::Value| -> Vec<String> {
-                value
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|item| item.as_str().unwrap().to_string())
-                    .collect()
-            };
-            assert_eq!(strings(&json["values"]), rust.values.to_vec());
-            assert_eq!(strings(&json["sharedRoots"]), rust.shared_roots.to_vec());
-            assert_eq!(strings(&json["denyReadable"]), rust.deny_readable.to_vec());
-            let env: Vec<(String, String)> = json["env"]
-                .as_object()
-                .unwrap()
-                .iter()
-                .map(|(key, value)| (key.clone(), value.as_str().unwrap().to_string()))
-                .collect();
-            let mut expected: Vec<(String, String)> = rust
-                .env
-                .iter()
-                .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect();
-            let mut actual = env;
-            expected.sort();
-            actual.sort();
-            assert_eq!(actual, expected);
-        }
     }
 
     #[test]

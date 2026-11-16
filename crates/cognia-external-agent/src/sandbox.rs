@@ -15,9 +15,9 @@
 //!
 //! This module is the Rust port of the TypeScript launcher wrapper. The two are
 //! deliberately duplicated rather than shared — the desktop cannot call into
-//! the CLI's Node code — so the writable-root tables below and
-//! `agentStateWritableRoots` in that file must stay in union. A root present in
-//! one and missing from the other silently costs an agent its credential store.
+//! the CLI's Node code. Both read each engine's state roots from the same
+//! generated launch table ([`crate::launch_descriptor`]), so a root cannot be
+//! present in one and missing from the other.
 //!
 //! What this module does NOT do is confine the working directory to the
 //! workspaces root the way [`crate::presets::SpawnPolicy`] does. That
@@ -29,6 +29,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::launch_descriptor::{state_file_roots, state_writable_roots};
 use super::process::{ExternalAgentSpawnConfig, ExternalAgentSandboxPolicy, SandboxNetworkMode, SandboxReadableScope};
 
 /// Explicit launcher override. Same variable the CLI honours, so a developer
@@ -142,145 +143,6 @@ pub(crate) fn base_command(command: &str) -> String {
     lower
 }
 
-/// Home-relative state directories the agent must be able to write.
-///
-/// Mirrors `agentStateWritableRoots.rules` in
-/// `protocol/external-agent-security-policy.json`, which the TypeScript
-/// launcher (`cli/src/runtime/external/sandbox-launcher.ts`) now consumes
-/// directly. `pnpm audit:agent-capabilities` fails when the two disagree —
-/// while the only link was a "keep the two in union" comment, both sides
-/// silently lacked an OpenCode rule, so `opencode serve` ran with its session
-/// store outside the sandbox scope and resume started over every time.
-pub fn agent_state_writable_roots(command: &str, args: &[String], home: &Path) -> Vec<PathBuf> {
-    let base = base_command(command);
-    // `npx <package>` runs the package, so the state dir belongs to the
-    // package, not to npx.
-    let npx_package = if base == "npx" {
-        args.iter().find(|arg| !arg.starts_with('-')).cloned()
-    } else {
-        None
-    };
-    let target = npx_package.unwrap_or_else(|| base.clone());
-
-    let mut roots = Vec::new();
-    if target.contains("codex") {
-        roots.push(home.join(".codex"));
-    }
-    if ["claude", "claude-agent-acp", "claude-code-acp", "@agentclientprotocol/claude-agent-acp", "@anthropic-ai/claude-code", "@zed-industries/claude-code-acp"].contains(&target.as_str()) {
-        roots.push(home.join(".claude"));
-        roots.push(home.join(".claude.json"));
-        roots.push(home.join(".claude.json.backup"));
-    }
-    if target.contains("gemini") {
-        roots.push(home.join(".gemini"));
-    }
-    if super::command_resolver::is_antigravity_acp_command(command) {
-        roots.push(home.join(".gemini/antigravity-acp"));
-        roots.push(home.join(".gemini/artifacts"));
-    }
-    if target.contains("qwen") {
-        roots.push(home.join(".qwen"));
-    }
-    // Pi's session store, for the native binary the pi-rpc adapter drives
-    // (ADR-0119). Matched on `base` rather than `contains` because "copilot"
-    // contains "pi". Without this root Pi cannot persist a session, so
-    // `--session-id` resume silently starts fresh.
-    if base == "pi" {
-        roots.push(home.join(".pi"));
-    }
-    if base == "mcode" {
-        roots.push(home.join(".minimax"));
-    }
-    if base == "grok" {
-        roots.push(home.join(".grok"));
-    }
-    if base == "kimi" {
-        roots.push(home.join(".kimi-code"));
-    }
-    if base == "cline" {
-        roots.push(home.join(".cline"));
-    }
-    if base == "qoder" {
-        roots.push(home.join(".qoder"));
-    }
-    // Native ACP products retain separate account/session roots inside the process sandbox.
-    match base.as_str() {
-        "openclaude" => { roots.push(home.join(".openclaude")); roots.push(home.join(".openclaude.json")); }
-        "crush" => { roots.push(home.join(".config/crush")); roots.push(home.join(".local/share/crush")); roots.push(home.join(".local/state/crush")); roots.push(home.join(".cache/crush")); }
-        "cn" => roots.push(home.join(".continue")),
-        "acli" => { roots.push(home.join(".config/acli")); roots.push(home.join(".rovodev")); }
-        "auggie" => roots.push(home.join(".augment")),
-        "autohand" => roots.push(home.join(".autohand")),
-        "codebuddy" => roots.push(home.join(".codebuddy")),
-        "commandcode" => roots.push(home.join(".commandcode")),
-        "kilo" => {
-            roots.push(home.join(".config/kilo"));
-            roots.push(home.join(".local/share/kilo"));
-            roots.push(home.join(".local/state/kilo"));
-            roots.push(home.join(".cache/kilo"));
-        }
-        "vibe-acp" => roots.push(home.join(".vibe")),
-        "mimo" => {
-            roots.push(home.join(".config/mimocode"));
-            roots.push(home.join(".local/share/mimocode"));
-            roots.push(home.join(".local/state/mimocode"));
-            roots.push(home.join(".cache/mimocode"));
-        }
-        "hermes" => roots.push(home.join(".hermes")),
-        "omp" => roots.push(home.join(".omp")),
-        "muse-acp" => {
-            roots.push(home.join(".config/muse"));
-            roots.push(home.join(".local/state/muse-acp"));
-        }
-        "amp-acp" => {
-            roots.push(home.join(".config/amp"));
-            roots.push(home.join(".local/share/amp"));
-            roots.push(home.join(".local/state/amp-acp"));
-        }
-        "zcode-acp" => {
-            roots.push(home.join(".zcode"));
-            roots.push(home.join(".zcode-acp"));
-        }
-        _ => {}
-    }
-    if base.rsplit(['/', '\\']).next() == Some("goose") {
-        roots.push(home.join(".config/goose"));
-        roots.push(home.join(".local/share/goose"));
-        roots.push(home.join(".local/state/goose"));
-        roots.push(home.join("Library/Application Support/Block/goose"));
-    }
-    if base == "devin" {
-        roots.push(home.join(".config").join("devin"));
-        roots.push(home.join(".local").join("share").join("devin"));
-        roots.push(home.join(".cache").join("devin"));
-    }
-    if target.contains("copilot") {
-        roots.push(home.join(".copilot"));
-        roots.push(home.join(".cache").join("copilot"));
-    }
-    if target.contains("kiro") {
-        roots.push(home.join(".kiro"));
-    }
-    if target.contains("droid") || target.contains("factory") {
-        roots.push(home.join(".factory"));
-    }
-    if target.contains("cursor") {
-        roots.push(home.join(".cursor"));
-    }
-    if target.contains("opencode") {
-        // OpenCode is XDG-style on every platform (see
-        // `crates/cognia-agent-state/src/session_import.rs`): the config lives
-        // under `~/.config/opencode` and the session database under
-        // `~/.local/share/opencode`.
-        roots.push(home.join(".config").join("opencode"));
-        roots.push(home.join(".local").join("share").join("opencode"));
-    }
-    if base == "npx" {
-        roots.push(home.join(".npm"));
-    }
-    roots
-}
-
 /// Host-owned hint transported through the existing spawn configuration.
 /// It is consumed here and never reaches the external agent's environment.
 pub const CODEX_WRITABLE_ROOTS_ENV: &str = "COGNIA_AGENT_CODEX_WRITABLE_ROOTS";
@@ -338,16 +200,6 @@ pub fn codex_extra_writable_roots(config: &ExternalAgentSpawnConfig) -> Vec<Path
     accepted
 }
 
-/// `.claude.json` and friends are files; everything else is a directory.
-/// Pre-creating them matters because a sandbox scope naming a path that does
-/// not exist is not the same as one naming an empty file.
-fn is_state_file_root(root: &Path) -> bool {
-    root.file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.starts_with(".claude.json") || name.starts_with(".openclaude.json"))
-        .unwrap_or(false)
-}
-
 /// Narrow host directory exposed inside the sandbox for the tool-host socket.
 ///
 /// Port of `toolHostRuntimeDir` (cli/src/agent/tool-host/protocol.ts). Linux
@@ -384,7 +236,7 @@ pub fn build_sandbox_launcher_args_with_policy(
     policy: &ExternalAgentSandboxPolicy,
 ) -> Vec<String> {
     let mut writable = vec![PathBuf::from(cwd)];
-    writable.extend(agent_state_writable_roots(command, args, home));
+    writable.extend(state_writable_roots(command, args, home));
     writable.push(tool_host_dir.to_path_buf());
 
     let mut out = vec!["--cwd".to_string(), cwd.to_string()];
@@ -1298,6 +1150,8 @@ pub fn wrap_with_sandbox(
     let antigravity_root = antigravity_config_root(&config, &home)?;
     let additional_home = additional_native_home(&config, &home)?;
     let tool_host_dir = tool_host_runtime_dir(&host.temp_dir(), host.uid());
+    let state_command = if crush_bridge { "crush" } else { config.command.as_str() };
+    let file_roots = state_file_roots(state_command, &config.args, &home);
     for root in additional_home.as_ref().map(|(_, root)| root.clone()).or_else(|| cline_root.clone())
         .or_else(|| qoder_root.clone())
         .or_else(|| kimi_root.clone())
@@ -1305,7 +1159,7 @@ pub fn wrap_with_sandbox(
         .or_else(|| minimax_root.clone())
         .or_else(|| antigravity_root.clone())
         .map(|root| vec![root])
-        .unwrap_or_else(|| agent_state_writable_roots(if crush_bridge { "crush" } else { &config.command }, &config.args, &home))
+        .unwrap_or_else(|| state_writable_roots(state_command, &config.args, &home))
     {
         // An isolated launch must not (re)create the user's own login roots.
         if isolation
@@ -1314,7 +1168,7 @@ pub fn wrap_with_sandbox(
         {
             continue;
         }
-        if is_state_file_root(&root) {
+        if file_roots.contains(&root) {
             host.ensure_file(&root);
         } else {
             host.ensure_dir(&root);
@@ -1468,7 +1322,7 @@ pub fn wrap_with_sandbox(
     }
 
     if crush_bridge {
-        for root in agent_state_writable_roots("crush", &[], &home) {
+        for root in state_writable_roots("crush", &[], &home) {
             args.splice(0..0, ["--writable".into(), root.to_string_lossy().into_owned()]);
         }
     }
@@ -1576,7 +1430,7 @@ pub fn wrap_with_sandbox(
         }
     }
     if let Some((key, root)) = additional_home {
-        for shared in agent_state_writable_roots(&config.command, &config.args, &home) {
+        for shared in state_writable_roots(&config.command, &config.args, &home) {
             drop_writable(&mut args, &shared);
         }
         host.ensure_dir(&root);
@@ -1772,8 +1626,8 @@ mod tests {
     #[test]
     fn additional_native_state_is_separate_and_relocated_without_shared_grants() {
         let home = Path::new("/home/dev");
-        assert_eq!(agent_state_writable_roots("openclaude", &[], home), vec![home.join(".openclaude"), home.join(".openclaude.json")]);
-        assert!(!agent_state_writable_roots("not-claude", &[], home).contains(&home.join(".claude")));
+        assert_eq!(state_writable_roots("openclaude", &[], home), vec![home.join(".openclaude"), home.join(".openclaude.json")]);
+        assert!(!state_writable_roots("not-claude", &[], home).contains(&home.join(".claude")));
         for (command, key, shared) in [("openclaude", "OPENCLAUDE_CONFIG_DIR", ".openclaude"), ("vibe-acp", "VIBE_HOME", ".vibe"), ("mimo", "MIMOCODE_HOME", ".local/share/mimocode"), ("hermes", "HERMES_HOME", ".hermes")] {
             let mut cfg = config(command, &[], Some("/workspace"));
             cfg.env.insert(key.into(), "/owned/native".into());
@@ -1789,12 +1643,12 @@ mod tests {
     #[test]
     fn antigravity_grants_only_its_owned_state_and_artifact_subtrees() {
         for command in ["agy_acp_server.par", "agy_acp_server.exe"] {
-            assert_eq!(agent_state_writable_roots(command, &[], Path::new("/home/dev")), [
+            assert_eq!(state_writable_roots(command, &[], Path::new("/home/dev")), [
                 PathBuf::from("/home/dev/.gemini/antigravity-acp"),
                 PathBuf::from("/home/dev/.gemini/artifacts"),
             ]);
         }
-        assert!(agent_state_writable_roots("agy", &[], Path::new("/home/dev")).is_empty());
+        assert!(state_writable_roots("agy", &[], Path::new("/home/dev")).is_empty());
     }
 
     #[test]
@@ -2266,10 +2120,10 @@ mod tests {
         assert!(!pairs(&wrapped.args, "--writable").contains(&"/home/dev/.grok"));
         assert!(!pairs(&wrapped.args, "--writable").contains(&"/tmp/sessions"));
         assert_eq!(
-            agent_state_writable_roots("grok", &[], Path::new("/home/dev")),
+            state_writable_roots("grok", &[], Path::new("/home/dev")),
             [PathBuf::from("/home/dev/.grok")]
         );
-        assert!(agent_state_writable_roots("not-grok", &[], Path::new("/home/dev")).is_empty());
+        assert!(state_writable_roots("not-grok", &[], Path::new("/home/dev")).is_empty());
     }
 
     #[test]
@@ -2313,7 +2167,7 @@ mod tests {
 
     #[test]
     fn pi_gets_its_session_store_as_a_writable_root() {
-        let roots = agent_state_writable_roots("pi", &[], Path::new("/home/dev"));
+        let roots = state_writable_roots("pi", &[], Path::new("/home/dev"));
         assert_eq!(roots, vec![PathBuf::from("/home/dev/.pi")]);
     }
 
@@ -2413,7 +2267,7 @@ mod tests {
                 .any(|pair| pair == ["--writable", "/home/dev/.kimi-code"]));
         }
         assert_eq!(
-            agent_state_writable_roots("kimi", &[], Path::new("/home/dev")),
+            state_writable_roots("kimi", &[], Path::new("/home/dev")),
             vec![PathBuf::from("/home/dev/.kimi-code")]
         );
     }
@@ -2463,7 +2317,7 @@ mod tests {
         assert_eq!(wrapped.env["TMPDIR"], "/work/state/tmp");
         assert_eq!(wrapped.env["CLINE_NO_AUTO_UPDATE"], "1");
         assert_eq!(
-            agent_state_writable_roots("cline", &[], Path::new("/home/dev")),
+            state_writable_roots("cline", &[], Path::new("/home/dev")),
             vec![PathBuf::from("/home/dev/.cline")]
         );
     }
@@ -2495,7 +2349,7 @@ mod tests {
     fn qoder_custom_state_is_scoped_without_writing_the_default_login_root() {
         let home = Path::new("/home/dev");
         assert_eq!(
-            agent_state_writable_roots("qoder", &["--acp".into()], home),
+            state_writable_roots("qoder", &["--acp".into()], home),
             vec![home.join(".qoder")]
         );
         let mut input = config(
@@ -2560,7 +2414,7 @@ mod tests {
     fn goose_gets_its_config_data_and_state_on_both_unix_platforms() {
         let home = Path::new("/home/dev");
         assert_eq!(
-            agent_state_writable_roots("goose", &["acp".into()], home),
+            state_writable_roots("goose", &["acp".into()], home),
             vec![
                 home.join(".config/goose"),
                 home.join(".local/share/goose"),
@@ -2569,7 +2423,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            agent_state_writable_roots("npx", &["-y".into(), "goose-adapter".into()], home),
+            state_writable_roots("npx", &["-y".into(), "goose-adapter".into()], home),
             vec![home.join(".npm")]
         );
     }
@@ -2577,12 +2431,12 @@ mod tests {
     #[test]
     fn devin_gets_its_config_sessions_and_cache_without_matching_other_commands() {
         assert_eq!(
-            agent_state_writable_roots("mcode", &["acp".into()], Path::new("/home/dev")),
+            state_writable_roots("mcode", &["acp".into()], Path::new("/home/dev")),
             vec![PathBuf::from("/home/dev/.minimax")]
         );
-        assert!(agent_state_writable_roots("not-mcode", &[], Path::new("/home/dev")).is_empty());
+        assert!(state_writable_roots("not-mcode", &[], Path::new("/home/dev")).is_empty());
         assert_eq!(
-            agent_state_writable_roots("devin", &["acp".into()], Path::new("/home/dev")),
+            state_writable_roots("devin", &["acp".into()], Path::new("/home/dev")),
             vec![
                 PathBuf::from("/home/dev/.config/devin"),
                 PathBuf::from("/home/dev/.local/share/devin"),
@@ -2590,7 +2444,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            agent_state_writable_roots(
+            state_writable_roots(
                 "npx",
                 &["-y".into(), "devin-adapter".into()],
                 Path::new("/home/dev"),
@@ -2604,7 +2458,7 @@ mod tests {
         // Vehicle is Qwen because it is still launched through npx; `pi-acp`,
         // which this used to use, was removed with the ACP bridge (ADR-0119).
         let args = vec!["-y".to_string(), "@qwen-code/qwen-code".to_string()];
-        let roots = agent_state_writable_roots("npx", &args, Path::new("/home/dev"));
+        let roots = state_writable_roots("npx", &args, Path::new("/home/dev"));
         assert!(roots.contains(&PathBuf::from("/home/dev/.qwen")));
         assert!(roots.contains(&PathBuf::from("/home/dev/.npm")));
     }
@@ -2615,13 +2469,13 @@ mod tests {
     #[test]
     fn pi_state_root_does_not_leak_to_an_npx_package_containing_pi() {
         let args = vec!["-y".to_string(), "pi-acp".to_string()];
-        let roots = agent_state_writable_roots("npx", &args, Path::new("/home/dev"));
+        let roots = state_writable_roots("npx", &args, Path::new("/home/dev"));
         assert!(!roots.contains(&PathBuf::from("/home/dev/.pi")));
     }
 
     #[test]
     fn windows_suffix_is_stripped_before_matching() {
-        let roots = agent_state_writable_roots("Codex.EXE", &[], Path::new("/home/dev"));
+        let roots = state_writable_roots("Codex.EXE", &[], Path::new("/home/dev"));
         assert_eq!(roots, vec![PathBuf::from("/home/dev/.codex")]);
     }
 
@@ -2630,7 +2484,7 @@ mod tests {
         // Neither launcher had an OpenCode rule, so `opencode serve` ran with
         // its session database outside the sandbox scope: writes failed
         // silently and `--session-id` resume started over every time.
-        let roots = agent_state_writable_roots("opencode", &[], Path::new("/home/dev"));
+        let roots = state_writable_roots("opencode", &[], Path::new("/home/dev"));
         assert_eq!(
             roots,
             vec![
@@ -2644,17 +2498,8 @@ mod tests {
     fn copilot_does_not_inherit_pis_state_directory() {
         // "copilot" contains "pi", which is why the Pi rule matches the exact
         // target rather than a substring.
-        let roots = agent_state_writable_roots("copilot", &[], Path::new("/home/dev"));
+        let roots = state_writable_roots("copilot", &[], Path::new("/home/dev"));
         assert!(!roots.contains(&PathBuf::from("/home/dev/.pi")));
-    }
-
-    #[test]
-    fn claude_json_roots_are_files_not_directories() {
-        assert!(is_state_file_root(Path::new("/home/dev/.claude.json")));
-        assert!(is_state_file_root(Path::new(
-            "/home/dev/.claude.json.backup"
-        )));
-        assert!(!is_state_file_root(Path::new("/home/dev/.claude")));
     }
 
     #[test]

@@ -10,6 +10,15 @@ export const kimiAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>(
   id: "kimi",
   label: "Kimi",
   commandNames: ["kimi"],
+  launch: {
+    id: "kimi",
+    match: { kind: "base", values: ["kimi"] },
+    stateRoots: [".kimi-code"],
+    isolation: {
+      env: { KIMI_CODE_HOME: "kimi" },
+      denyReadable: [".kimi-code", ".kimi"],
+    },
+  },
   permissionModes: {
     toNative: (mode) =>
       mode === "plan" ? "plan" : mode === "bypassPermissions" ? "yolo" : "default",

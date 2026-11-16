@@ -3,7 +3,6 @@ import { test } from "node:test"
 
 import {
   checkCapabilityManifest,
-  checkIsolationParity,
   checkSecurityPolicyParity,
   declaredExecutableProtocols,
   externalOnlyCapabilityIds,
@@ -11,8 +10,6 @@ import {
   bundledPresetCommands,
   registeredProtocols,
   runChecks,
-  rustIsolationRules,
-  rustStateRoots,
   rustStrArray,
   specCapabilityIds,
   stringsIn,
@@ -35,18 +32,6 @@ test("stringsIn ignores ids quoted inside comments", () => {
 test("rustStrArray reads a &[&str] literal", () => {
   const source = `const BINARY_ALLOWLIST: &[&str] = &[\n    "a",\n    // "b" is gone\n    "c",\n];\n`
   assert.deepEqual(rustStrArray(source, "BINARY_ALLOWLIST"), ["a", "c"])
-})
-
-test("rustStateRoots flattens a home.join chain into a relative path", () => {
-  const source = `
-pub fn agent_state_writable_roots(command: &str) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    roots.push(home.join(".codex"));
-    roots.push(home.join(".local").join("share").join("opencode"));
-    roots
-}
-`
-  assert.deepEqual([...rustStateRoots(source)].sort(), [".codex", ".local/share/opencode"])
 })
 
 test("registeredProtocols reads the manager's register() calls, not its comments", () => {
@@ -165,33 +150,23 @@ const NPX_PACKAGE_ALLOWLIST: &[&str] = &[
     "pi-acp",
 ];
 `
-const RUST_SANDBOX = `
-pub fn agent_state_writable_roots(command: &str) -> Vec<PathBuf> {
-    roots.push(home.join(".codex"));
-    roots
-}
-`
-
 function policy(overrides = {}) {
   return {
     binaryAllowlist: { commands: ["codex"], manualOnly: {} },
     npxPackageAllowlist: { packages: ["pi-acp"] },
-    agentStateWritableRoots: {
-      rules: [{ match: "contains", values: ["codex"], roots: [".codex"] }],
-    },
     ...overrides,
   }
 }
 
 test("parity passes when the two languages agree", () => {
-  const errors = checkSecurityPolicyParity(policy(), RUST_PRESETS, RUST_SANDBOX, new Set(["codex"]))
+  const errors = checkSecurityPolicyParity(policy(), RUST_PRESETS, new Set(["codex"]))
   assert.deepEqual(errors, [])
 })
 
 test("a binary Rust allows but the policy does not is caught", () => {
   // This is the `cline` shape: an entry that existed only in the Rust literal.
   const rust = RUST_PRESETS.replace('    "codex",', '    "codex",\n    "cline",')
-  const errors = checkSecurityPolicyParity(policy(), rust, RUST_SANDBOX, new Set(["codex"]))
+  const errors = checkSecurityPolicyParity(policy(), rust, new Set(["codex"]))
   assert.ok(errors.some((e) => /"cline" is in Rust but not in/.test(e)))
 })
 
@@ -201,29 +176,9 @@ test("a preset command Rust refuses is caught", () => {
   const errors = checkSecurityPolicyParity(
     policy(),
     RUST_PRESETS,
-    RUST_SANDBOX,
     new Set(["codex", "claude-agent-acp"])
   )
   assert.ok(errors.some((e) => /"claude-agent-acp" is not allowlisted/.test(e)))
-})
-
-test("a state root only one language grants is caught", () => {
-  // This is the OpenCode shape, in the direction where the policy leads.
-  const withOpencode = policy({
-    agentStateWritableRoots: {
-      rules: [
-        { match: "contains", values: ["codex"], roots: [".codex"] },
-        { match: "contains", values: ["opencode"], roots: [".local/share/opencode"] },
-      ],
-    },
-  })
-  const errors = checkSecurityPolicyParity(
-    withOpencode,
-    RUST_PRESETS,
-    RUST_SANDBOX,
-    new Set(["codex"])
-  )
-  assert.ok(errors.some((e) => /".local\/share\/opencode" is in .* but not in Rust/.test(e)))
 })
 
 test("a binary no preset spawns needs a written reason", () => {
@@ -231,7 +186,7 @@ test("a binary no preset spawns needs a written reason", () => {
     binaryAllowlist: { commands: ["codex", "mystery"], manualOnly: {} },
   })
   const rust = RUST_PRESETS.replace('    "codex",', '    "codex",\n    "mystery",')
-  const errors = checkSecurityPolicyParity(unjustified, rust, RUST_SANDBOX, new Set(["codex"]))
+  const errors = checkSecurityPolicyParity(unjustified, rust, new Set(["codex"]))
   assert.ok(errors.some((e) => /"mystery" is reachable from no shipped preset/.test(e)))
 })
 
@@ -240,7 +195,7 @@ test("a manualOnly reason that explains nothing is rejected", () => {
     binaryAllowlist: { commands: ["codex", "mystery"], manualOnly: { mystery: "because" } },
   })
   const rust = RUST_PRESETS.replace('    "codex",', '    "codex",\n    "mystery",')
-  const errors = checkSecurityPolicyParity(thin, rust, RUST_SANDBOX, new Set(["codex"]))
+  const errors = checkSecurityPolicyParity(thin, rust, new Set(["codex"]))
   assert.ok(errors.some((e) => /must actually explain why/.test(e)))
 })
 
@@ -251,7 +206,7 @@ test("a stale manualOnly row is caught", () => {
       manualOnly: { gone: "a long-since-removed binary that no longer appears anywhere" },
     },
   })
-  const errors = checkSecurityPolicyParity(stale, RUST_PRESETS, RUST_SANDBOX, new Set(["codex"]))
+  const errors = checkSecurityPolicyParity(stale, RUST_PRESETS, new Set(["codex"]))
   assert.ok(errors.some((e) => /stale entry "gone"/.test(e)))
 })
 
@@ -264,100 +219,6 @@ test("presetCommands reads command literals from both preset sources", () => {
   // The DSH presets carry an EMPTY command until the installer fills it in;
   // treating "" as a preset command would demand an allowlist entry for it.
   assert.ok(!commands.has(""))
-})
-
-const RUST_ISOLATION = `
-pub const AGENT_STATE_ISOLATION_RULES: &[AgentStateIsolationRule] = &[
-    // A comment quoting "notarule" is never part of a row.
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Contains,
-        values: &["codex"],
-        env: &[("CODEX_HOME", "codex")],
-        shared_roots: &[".codex"],
-        deny_readable: &[".codex"],
-    },
-    AgentStateIsolationRule {
-        match_kind: IsolationMatch::Base,
-        values: &["qoder"],
-        env: &[("QODER_CONFIG_DIR", "qoder"), ("XDG_DATA_HOME", "data")],
-        shared_roots: &[".qoder"],
-        deny_readable: &[],
-    },
-];
-`
-
-function isolationPolicy(rules) {
-  return {
-    agentStateIsolation: {
-      rules: rules ?? [
-        {
-          match: "contains",
-          values: ["codex"],
-          env: { CODEX_HOME: "codex" },
-          sharedRoots: [".codex"],
-          denyReadable: [".codex"],
-        },
-        {
-          match: "base",
-          values: ["qoder"],
-          // Key order in the JSON object does not matter.
-          env: { XDG_DATA_HOME: "data", QODER_CONFIG_DIR: "qoder" },
-          sharedRoots: [".qoder"],
-          denyReadable: [],
-        },
-      ],
-    },
-  }
-}
-
-test("rustIsolationRules reads every row in the policy file's shape", () => {
-  assert.deepEqual(rustIsolationRules(RUST_ISOLATION), [
-    {
-      match: "contains",
-      values: ["codex"],
-      env: { CODEX_HOME: "codex" },
-      sharedRoots: [".codex"],
-      denyReadable: [".codex"],
-    },
-    {
-      match: "base",
-      values: ["qoder"],
-      env: { QODER_CONFIG_DIR: "qoder", XDG_DATA_HOME: "data" },
-      sharedRoots: [".qoder"],
-      denyReadable: [],
-    },
-  ])
-})
-
-test("isolation parity passes when the two languages agree", () => {
-  assert.deepEqual(checkIsolationParity(isolationPolicy(), RUST_ISOLATION), [])
-})
-
-test("an isolation env mapping only one language has is caught", () => {
-  const rows = isolationPolicy().agentStateIsolation.rules
-  rows[0] = { ...rows[0], env: { CODEX_HOME: "codex-elsewhere" } }
-  const errors = checkIsolationParity(isolationPolicy(rows), RUST_ISOLATION)
-  assert.ok(errors.some((e) => /agentStateIsolation rule 0/.test(e)))
-})
-
-test("a deny-readable root only one language hides is caught", () => {
-  const rows = isolationPolicy().agentStateIsolation.rules
-  rows[1] = { ...rows[1], denyReadable: [".qoder"] }
-  const errors = checkIsolationParity(isolationPolicy(rows), RUST_ISOLATION)
-  assert.ok(errors.some((e) => /agentStateIsolation rule 1/.test(e)))
-})
-
-test("a missing isolation row is caught", () => {
-  const rows = isolationPolicy().agentStateIsolation.rules.slice(0, 1)
-  const errors = checkIsolationParity(isolationPolicy(rows), RUST_ISOLATION)
-  assert.ok(errors.some((e) => /has 1 rule\(s\), Rust has 2/.test(e)))
-})
-
-test("a policy without an isolation table fails rather than passing vacuously", () => {
-  assert.deepEqual(checkIsolationParity({}, RUST_ISOLATION), [
-    "agentStateIsolation: protocol/external-agent-security-policy.json has no rules array",
-  ])
-  assert.throws(() => rustIsolationRules("const NOTHING: u8 = 0;"), /not found/)
 })
 
 const CLI_DERIVED = `
@@ -417,8 +278,8 @@ test("bundled Node exceptions require the exact Codebuff source contract", () =>
   }
   assert.equal(bundledPresetCommands(source, "", policy()).errors.length, 1)
   assert.ok(
-    checkSecurityPolicyParity(policy(), RUST_PRESETS, RUST_SANDBOX, new Set(["node"])).some(
-      (error) => error.includes('preset command "node"')
+    checkSecurityPolicyParity(policy(), RUST_PRESETS, new Set(["node"])).some((error) =>
+      error.includes('preset command "node"')
     )
   )
 })

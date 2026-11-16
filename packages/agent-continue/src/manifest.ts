@@ -30,6 +30,13 @@ export const continueDevManifest: AgentIntegrationManifest = {
     memoryAgentId: null,
   },
   protocols: [{ protocol: CONTINUE_PROTOCOL, semantics: CONTINUE_EXECUTION_SEMANTICS }],
+  launch: [
+    {
+      id: "continue-dev",
+      match: { kind: "base", values: ["cn"] },
+      stateRoots: [".continue"],
+    },
+  ],
   runtimes: [
     {
       runtimeId: "continue-dev",

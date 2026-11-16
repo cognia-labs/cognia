@@ -10,6 +10,15 @@ export const clineAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
   id: "cline",
   label: "Cline",
   commandNames: ["cline"],
+  launch: {
+    id: "cline",
+    match: { kind: "base", values: ["cline"] },
+    stateRoots: [".cline"],
+    isolation: {
+      env: { CLINE_DIR: "cline" },
+      denyReadable: [".cline"],
+    },
+  },
   permissionModes: {
     toNative: (mode) => (mode === "plan" ? "plan" : "act"),
     toCanonical: (nativeMode, current) => {

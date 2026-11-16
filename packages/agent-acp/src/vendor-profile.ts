@@ -20,6 +20,7 @@ import type {
   ExternalAgentConfig,
   ExternalAgentTokenUsage,
 } from "@cognia/agent-contracts/external-agent"
+import type { EngineLaunchDescriptor } from "@cognia/agent-contracts/engine-launch"
 
 /** How a vendor names permission modes on the wire. */
 export interface AcpVendorPermissionModes {
@@ -80,6 +81,8 @@ export interface AcpVendorProfile {
   reapplySessionMode?: boolean
   /** Environment forced at launch, over the configuration's own values. */
   launchEnv?: Readonly<Record<string, string>>
+  /** What the process host needs to launch this engine (ADR-0217); written into `protocol/external-agent-launch.json`. */
+  launch?: EngineLaunchDescriptor
   /** Reject configuration authority the vendor cannot enforce before starting its process. */
   validateConfiguration?(config: ExternalAgentConfig): void
   /** Reject vendor config switches that would escape the host's execution boundary. */

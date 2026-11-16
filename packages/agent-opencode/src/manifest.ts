@@ -153,6 +153,22 @@ export const opencodeManifest: AgentIntegrationManifest = Object.freeze({
     { protocol: OPENCODE_V2_PROTOCOL, semantics: OPENCODE_V2_EXECUTION_SEMANTICS },
     { protocol: OPENCODE_SERVER_PROTOCOL, semantics: OPENCODE_SERVER_EXECUTION_SEMANTICS },
   ],
+  launch: [
+    {
+      id: "opencode",
+      match: { kind: "contains", values: ["opencode"] },
+      stateRoots: [".config/opencode", ".local/share/opencode"],
+      isolation: {
+        env: {
+          OPENCODE_CONFIG_DIR: "config/opencode",
+          XDG_DATA_HOME: "data",
+          XDG_STATE_HOME: "state",
+          XDG_CACHE_HOME: "cache",
+        },
+        denyReadable: [".config/opencode", ".local/share/opencode"],
+      },
+    },
+  ],
   runtimes: OPENCODE_RUNTIMES,
 }) as AgentIntegrationManifest
 

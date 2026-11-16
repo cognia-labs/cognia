@@ -1,4 +1,4 @@
-import { agentStateIsolationFor } from "../policy/security-policy"
+import { agentStateIsolationFor } from "../policy/engine-launch"
 import type { ExternalAgentConfig } from "@cognia/agent-contracts/external-agent"
 import {
   externalAgentDuplicateInput as duplicate,

@@ -20,49 +20,11 @@ import POLICY from "@/protocol/external-agent-security-policy.json"
 
 export type SandboxPlatform = "darwin" | "linux" | "win32" | string
 
-export interface AgentStateRootRule {
-  /**
-   * `contains` — substring of the resolved target.
-   * `target` — the resolved target equals one of `values`.
-   * `base` — the base command equals one of `values`.
-   *
-   * Pi needs the exact forms: "copilot" contains "pi".
-   */
-  match: "contains" | "target" | "base"
-  values: string[]
-  roots: string[]
-}
-
-/**
- * How one runtime family's own state moves into a configuration's private root
- * (ADR-0216). `env` maps a home variable to a path relative to the root;
- * `sharedRoots` are the home-relative writable grants the private root replaces
- * under the sandbox; `denyReadable` are the home-relative paths the sandbox
- * hides so the CLI cannot fall back to the user's own login.
- */
-export interface AgentStateIsolationRule {
-  match: AgentStateRootRule["match"]
-  values: string[]
-  env: Record<string, string>
-  sharedRoots: string[]
-  denyReadable: string[]
-}
-
-/** The merged rule for one launch target. */
-export interface ResolvedAgentStateIsolation {
-  env: Record<string, string>
-  sharedRoots: string[]
-  denyReadable: string[]
-}
-
 interface RawPolicy {
   version: number
   sandbox: { supportedPlatforms: string[]; reasonKey: string }
   binaryAllowlist: { commands: string[] }
   npxPackageAllowlist: { packages: string[] }
-  agentStateWritableRoots: { rules: AgentStateRootRule[] }
-  agentStateIsolation: { rules: AgentStateIsolationRule[] }
-  fileRoots: { prefixes: string[] }
 }
 
 const policy = POLICY as unknown as RawPolicy
@@ -80,14 +42,6 @@ export const EXTERNAL_AGENT_BINARY_ALLOWLIST: readonly string[] = policy.binaryA
 
 /** Packages `npx` may execute. */
 export const EXTERNAL_AGENT_NPX_ALLOWLIST: readonly string[] = policy.npxPackageAllowlist.packages
-
-export const AGENT_STATE_ROOT_RULES: readonly AgentStateRootRule[] =
-  policy.agentStateWritableRoots.rules
-
-export const AGENT_STATE_FILE_ROOT_PREFIXES: readonly string[] = policy.fileRoots.prefixes
-
-export const AGENT_STATE_ISOLATION_RULES: readonly AgentStateIsolationRule[] =
-  policy.agentStateIsolation.rules
 
 /**
  * The env variable a configuration sets to ask its spawn backend for a private
@@ -139,72 +93,4 @@ export function baseCommandName(command: string): string {
     .replace(/\.(?:exe|cmd|bat)$/i, "")
   // Goose is system-owned; runtime discovery may return its absolute executable.
   return /(?:^|[\\/])goose$/.test(base) ? "goose" : base
-}
-
-/**
- * The state directories an agent must be able to write, home-relative.
- *
- * `npx <package>` runs the package, so the state belongs to the package rather
- * than to npx — which is why the target and the base command are two different
- * inputs to the match.
- */
-export function agentStateWritableRoots(command: string, args: readonly string[] = []): string[] {
-  const { base, target } = launchTarget(command, args)
-
-  const roots: string[] = []
-  for (const rule of AGENT_STATE_ROOT_RULES) {
-    if (ruleMatches(rule, base, target)) {
-      for (const root of rule.roots) if (!roots.includes(root)) roots.push(root)
-    }
-  }
-  return roots
-}
-
-function launchTarget(command: string, args: readonly string[]): { base: string; target: string } {
-  const base = baseCommandName(command)
-  const npxPackage = base === "npx" ? args.find((arg) => !arg.startsWith("-")) : undefined
-  return { base, target: npxPackage ?? base }
-}
-
-function ruleMatches(
-  rule: { match: AgentStateRootRule["match"]; values: string[] },
-  base: string,
-  target: string
-): boolean {
-  return rule.match === "contains"
-    ? rule.values.some((value) => target.includes(value))
-    : rule.match === "target"
-      ? rule.values.includes(target)
-      : rule.values.includes(base)
-}
-
-/**
- * The isolation rule for a launch, or `null` when the runtime has no
- * documented home variable and so cannot be isolated. Several matching rules
- * merge (a target naming two families gets both homes).
- */
-export function agentStateIsolationFor(
-  command: string,
-  args: readonly string[] = []
-): ResolvedAgentStateIsolation | null {
-  const { base, target } = launchTarget(command, args)
-  let resolved: ResolvedAgentStateIsolation | null = null
-  for (const rule of AGENT_STATE_ISOLATION_RULES) {
-    if (!ruleMatches(rule, base, target)) continue
-    resolved ??= { env: {}, sharedRoots: [], denyReadable: [] }
-    Object.assign(resolved.env, rule.env)
-    for (const root of rule.sharedRoots) {
-      if (!resolved.sharedRoots.includes(root)) resolved.sharedRoots.push(root)
-    }
-    for (const root of rule.denyReadable) {
-      if (!resolved.denyReadable.includes(root)) resolved.denyReadable.push(root)
-    }
-  }
-  return resolved
-}
-
-/** Is this root a file (pre-created with `open`) rather than a directory? */
-export function isAgentStateFileRoot(root: string): boolean {
-  const name = root.split("/").pop() ?? root
-  return AGENT_STATE_FILE_ROOT_PREFIXES.some((prefix) => name.startsWith(prefix))
 }

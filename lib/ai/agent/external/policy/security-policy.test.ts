@@ -1,20 +1,9 @@
 import {
-  AGENT_STATE_ROOT_RULES,
   EXTERNAL_AGENT_BINARY_ALLOWLIST,
   EXTERNAL_AGENT_NPX_ALLOWLIST,
-  agentStateWritableRoots,
-  agentStateIsolationFor,
   baseCommandName,
   externalAgentSandboxSupportsPlatform,
-  isAgentStateFileRoot,
 } from "./security-policy"
-
-it("recognizes resolved Goose executables for private state without matching unrelated binaries", () => {
-  for (const command of ["goose", "/opt/bin/goose", "C:\\Tools\\goose.exe"]) {
-    expect(agentStateIsolationFor(command)?.env).toEqual({ GOOSE_PATH_ROOT: "goose" })
-  }
-  expect(agentStateIsolationFor("/opt/not-goose")).toBeNull()
-})
 
 describe("sandbox platform gate", () => {
   it("allows exactly the platforms with a real sandbox", () => {
@@ -84,146 +73,11 @@ describe("allowlists", () => {
   })
 })
 
-describe("agentStateWritableRoots", () => {
-  it("keeps new ACP state in the correct vendor roots instead of their ancestors' accounts", () => {
-    expect(agentStateWritableRoots("omp")).toEqual([".omp"])
-    expect(agentStateWritableRoots("mimo")).toEqual([
-      ".config/mimocode",
-      ".local/share/mimocode",
-      ".local/state/mimocode",
-      ".cache/mimocode",
-    ])
-    expect(agentStateWritableRoots("kilo")).toEqual([
-      ".config/kilo",
-      ".local/share/kilo",
-      ".local/state/kilo",
-      ".cache/kilo",
-    ])
-    expect(agentStateWritableRoots("muse-acp")).toEqual([".config/muse", ".local/state/muse-acp"])
-    expect(agentStateWritableRoots("zcode-acp")).toEqual([".zcode", ".zcode-acp"])
-    expect(agentStateWritableRoots("not-omp")).toEqual([])
-    expect(agentStateWritableRoots("not-mimo")).toEqual([])
-  })
-  it("grants Qoder only its documented config root", () => {
-    expect(EXTERNAL_AGENT_BINARY_ALLOWLIST).toContain("cline")
-    expect(agentStateWritableRoots("cline", ["--acp"])).toEqual([".cline"])
-    expect(EXTERNAL_AGENT_BINARY_ALLOWLIST).toContain("qoder")
-    expect(agentStateWritableRoots("qoder", ["--acp"])).toEqual([".qoder"])
-    expect(agentStateWritableRoots("npx", ["-y", "qoder-adapter"])).toEqual([".npm"])
-  })
-
-  it("allows Goose state on macOS and Linux only for the actual binary", () => {
-    expect(EXTERNAL_AGENT_BINARY_ALLOWLIST).toContain("goose")
-    expect(agentStateWritableRoots("goose", ["acp"])).toEqual([
-      ".config/goose",
-      ".local/share/goose",
-      ".local/state/goose",
-      "Library/Application Support/Block/goose",
-    ])
-    expect(agentStateWritableRoots("npx", ["-y", "goose-adapter"])).toEqual([".npm"])
-  })
-
-  it("gives only the Devin binary its config, sessions, and cache roots", () => {
-    expect(agentStateWritableRoots("devin", ["acp"])).toEqual([
-      ".config/devin",
-      ".local/share/devin",
-      ".cache/devin",
-    ])
-    expect(agentStateWritableRoots("npx", ["-y", "devin-adapter"])).toEqual([".npm"])
-  })
-
-  it("resolves an npx launch to the PACKAGE's state, not npx's", () => {
-    const roots = agentStateWritableRoots("npx", ["-y", "@zed-industries/codex-acp"])
-    expect(roots).toContain(".codex")
-    expect(roots).toContain(".npm")
-  })
-
-  it("gives OpenCode its state roots", () => {
-    // Neither launcher had an OpenCode rule, so `opencode serve` ran with its
-    // session store outside the sandbox scope and resume started over.
-    const roots = agentStateWritableRoots("opencode")
-    expect(roots).toEqual([".config/opencode", ".local/share/opencode"])
-  })
-
-  it("does not hand copilot Pi's state directory", () => {
-    // "copilot" contains "pi", which is why the Pi rule matches exactly rather
-    // than by substring.
-    expect(agentStateWritableRoots("copilot")).not.toContain(".pi")
-    expect(agentStateWritableRoots("pi")).toContain(".pi")
-    // And an npx package merely containing "pi" gets nothing: the rule matches
-    // the BASE command, so the removed bridge cannot reach Pi's session store.
-    expect(agentStateWritableRoots("npx", ["-y", "pi-acp"])).not.toContain(".pi")
-  })
-
-  it("strips a Windows executable suffix", () => {
-    expect(baseCommandName("Codex.EXE")).toBe("codex")
-    expect(agentStateWritableRoots("codex.cmd")).toContain(".codex")
-  })
-
-  it("marks the claude json files as files, not directories", () => {
-    expect(isAgentStateFileRoot(".claude.json")).toBe(true)
-    expect(isAgentStateFileRoot(".claude.json.backup")).toBe(true)
-    expect(isAgentStateFileRoot(".claude")).toBe(false)
-    expect(isAgentStateFileRoot(".local/share/opencode")).toBe(false)
-  })
-
-  it("declares every rule with a supported match kind", () => {
-    for (const rule of AGENT_STATE_ROOT_RULES) {
-      expect(["contains", "target", "base"]).toContain(rule.match)
-      expect(rule.values.length).toBeGreaterThan(0)
-      expect(rule.roots.length).toBeGreaterThan(0)
-    }
-  })
+it("strips a Windows executable suffix for admission", () => {
+  expect(baseCommandName("Codex.EXE")).toBe("codex")
 })
 
-it("allows the installed ACP binaries and retains their writable state roots", () => {
-  for (const command of ["codex-acp", "gemini", "qwen"]) {
+it("admits the binaries with their own launch descriptors", () => {
+  for (const command of ["cline", "qoder", "goose", "codex-acp", "gemini", "qwen", "mcode", "grok"])
     expect(EXTERNAL_AGENT_BINARY_ALLOWLIST).toContain(command)
-    expect(agentStateWritableRoots(command)).not.toEqual([])
-  }
-})
-
-it("confines MiniMax state to its documented root and isolates both directory aliases", () => {
-  expect(EXTERNAL_AGENT_BINARY_ALLOWLIST).toContain("mcode")
-  expect(agentStateWritableRoots("mcode", ["acp"])).toEqual([".minimax"])
-  expect(agentStateWritableRoots("not-mcode")).toEqual([])
-  expect(agentStateIsolationFor("mcode", ["acp"])).toMatchObject({
-    env: { MINIMAX_DATA_DIR: "minimax", MAVIS_DATA_DIR: "minimax" },
-    sharedRoots: [".minimax"],
-    denyReadable: [".minimax"],
-  })
-})
-
-it("scopes Grok state by its exact executable and documented home", () => {
-  expect(EXTERNAL_AGENT_BINARY_ALLOWLIST).toContain("grok")
-  expect(agentStateWritableRoots("grok")).toEqual([".grok"])
-  expect(agentStateWritableRoots("not-grok")).toEqual([])
-  expect(agentStateIsolationFor("grok")).toEqual({
-    env: { GROK_HOME: "grok" },
-    sharedRoots: [".grok"],
-    denyReadable: [".grok"],
-  })
-})
-
-it("keeps OpenClaude credentials separate from Claude Code, including private state", () => {
-  expect(agentStateWritableRoots("openclaude", [])).toEqual([".openclaude", ".openclaude.json"])
-  expect(agentStateIsolationFor("openclaude")?.env).toEqual({ OPENCLAUDE_CONFIG_DIR: "openclaude" })
-  for (const command of ["claude", "claude-agent-acp", "claude-code-acp"])
-    expect(agentStateIsolationFor(command)?.env).toEqual({ CLAUDE_CONFIG_DIR: "claude" })
-  expect(agentStateIsolationFor("not-claude-agent")).toBeNull()
-  expect(agentStateWritableRoots("not-claude-agent", [])).not.toContain(".claude")
-})
-
-it.each([
-  ["vibe-acp", "VIBE_HOME", "vibe"],
-  ["mimo", "MIMOCODE_HOME", "mimocode"],
-  ["hermes", "HERMES_HOME", "hermes"],
-])("relocates %s only through its documented home variable", (command, key, leaf) => {
-  expect(agentStateIsolationFor(command)?.env).toEqual({ [key]: leaf })
-})
-
-it("recognizes OpenClaude global config files as files rather than state directories", () => {
-  expect(isAgentStateFileRoot(".openclaude.json")).toBe(true)
-  expect(isAgentStateFileRoot(".openclaude.json.backup")).toBe(true)
-  expect(isAgentStateFileRoot(".openclaude")).toBe(false)
 })

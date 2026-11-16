@@ -33,6 +33,18 @@ export const openClaudeManifest: AgentIntegrationManifest = Object.freeze({
     memoryAgentId: null,
   },
   protocols: [{ protocol: OPENCLAUDE_PROTOCOL, semantics: OPENCLAUDE_EXECUTION_SEMANTICS }],
+  launch: [
+    {
+      id: "openclaude",
+      match: { kind: "base", values: ["openclaude"] },
+      stateRoots: [".openclaude", ".openclaude.json"],
+      fileRoots: [".openclaude.json"],
+      isolation: {
+        env: { OPENCLAUDE_CONFIG_DIR: "openclaude" },
+        denyReadable: [".openclaude", ".openclaude.json"],
+      },
+    },
+  ],
   runtimes: [
     {
       runtimeId: "openclaude",

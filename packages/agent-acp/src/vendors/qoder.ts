@@ -8,6 +8,15 @@ export const qoderAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
   id: "qoder",
   label: "Qoder",
   commandNames: ["qoder"],
+  launch: {
+    id: "qoder",
+    match: { kind: "base", values: ["qoder"] },
+    stateRoots: [".qoder"],
+    isolation: {
+      env: { QODER_CONFIG_DIR: "qoder" },
+      denyReadable: [],
+    },
+  },
   permissionModes: {
     toNative: (mode) =>
       mode === "acceptEdits"

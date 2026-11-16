@@ -58,5 +58,27 @@ export const claudeCodeManifest: AgentIntegrationManifest = Object.freeze({
     memoryAgentId: "claude-code",
   }),
   protocols: [],
+  launch: [
+    {
+      id: "claude-code",
+      match: {
+        kind: "target",
+        values: [
+          "claude",
+          "claude-agent-acp",
+          "claude-code-acp",
+          "@agentclientprotocol/claude-agent-acp",
+          "@anthropic-ai/claude-code",
+          "@zed-industries/claude-code-acp",
+        ],
+      },
+      stateRoots: [".claude", ".claude.json", ".claude.json.backup"],
+      fileRoots: [".claude.json", ".claude.json.backup"],
+      isolation: {
+        env: { CLAUDE_CONFIG_DIR: "claude" },
+        denyReadable: [".claude", ".claude.json", ".claude.json.backup"],
+      },
+    },
+  ],
   runtimes: CLAUDE_CODE_RUNTIMES,
 }) as AgentIntegrationManifest

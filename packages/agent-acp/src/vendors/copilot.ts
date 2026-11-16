@@ -7,6 +7,16 @@ export const copilotAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfil
   id: "copilot-cli",
   label: "GitHub Copilot CLI",
   commandNames: ["copilot"],
+  launch: {
+    id: "copilot-cli",
+    match: { kind: "contains", values: ["copilot"] },
+    stateRoots: [".copilot", ".cache/copilot"],
+    isolation: {
+      env: { COPILOT_HOME: "copilot" },
+      sharedRoots: [".copilot"],
+      denyReadable: [".copilot"],
+    },
+  },
   permissionModes: {
     // Autopilot also changes execution behavior. Even bypass stays in Agent mode;
     // Cognia's broker can grant requests without enabling native allow-all.

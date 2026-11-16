@@ -29,6 +29,25 @@ export const gooseAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
   id: "goose",
   label: "Goose",
   commandNames: ["goose"],
+  launch: {
+    id: "goose",
+    match: { kind: "base", values: ["goose"] },
+    stateRoots: [
+      ".config/goose",
+      ".local/share/goose",
+      ".local/state/goose",
+      "Library/Application Support/Block/goose",
+    ],
+    isolation: {
+      env: { GOOSE_PATH_ROOT: "goose" },
+      denyReadable: [
+        ".config/goose",
+        ".local/share/goose",
+        ".local/state/goose",
+        "Library/Application Support/Block/goose",
+      ],
+    },
+  },
   // Saved sessions retain their native mode; launch env alone cannot restore approvals.
   reapplySessionMode: true,
   clientCapabilitiesMeta: { goose: { customNotifications: true } },

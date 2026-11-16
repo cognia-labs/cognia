@@ -1,13 +1,13 @@
 import { resolveIsolatedTerminalEnv } from "./isolated-terminal-env"
 import { getExternalAgentStateRootInfo } from "./state-root"
-import { agentStateIsolationFor } from "../policy/security-policy"
+import { agentStateIsolationFor } from "../policy/engine-launch"
 import type { ExternalAgentConfig } from "@/types/agent/external-agent"
 
 jest.mock("./state-root", () => ({ getExternalAgentStateRootInfo: jest.fn() }))
-jest.mock("../policy/security-policy", () => ({
-  ...jest.requireActual("../policy/security-policy"),
+jest.mock("../policy/engine-launch", () => ({
+  ...jest.requireActual("../policy/engine-launch"),
   agentStateIsolationFor: jest.fn(
-    jest.requireActual("../policy/security-policy").agentStateIsolationFor
+    jest.requireActual("../policy/engine-launch").agentStateIsolationFor
   ),
 }))
 const rootInfo = jest.mocked(getExternalAgentStateRootInfo)
@@ -25,7 +25,7 @@ beforeEach(() => {
   rootInfo.mockReset().mockResolvedValue({ path: "/state/pi-one", exists: false, bytes: 0 })
   isolationRule
     .mockReset()
-    .mockImplementation(jest.requireActual("../policy/security-policy").agentStateIsolationFor)
+    .mockImplementation(jest.requireActual("../policy/engine-launch").agentStateIsolationFor)
 })
 
 it.each<Partial<ExternalAgentConfig>>([

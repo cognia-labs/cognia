@@ -1,5 +1,6 @@
 import type { ExternalAgentConfig } from "@/types/agent/external-agent"
-import { AGENT_STATE_KEY_ENV, agentStateIsolationFor } from "../policy/security-policy"
+import { agentStateIsolationFor } from "../policy/engine-launch"
+import { AGENT_STATE_KEY_ENV } from "../policy/security-policy"
 import {
   applyStateIsolation,
   isStateIsolated,

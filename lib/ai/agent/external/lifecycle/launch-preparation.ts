@@ -22,11 +22,8 @@ import type { KeyringStore } from "@/lib/credentials/keyring-store"
 import { ExternalAgentLifecycleError } from "@/types/agent/external-agent-lifecycle"
 import type { ExternalAgentConfig } from "@/types/agent/external-agent"
 
-import {
-  AGENT_STATE_KEY_ENV,
-  AGENT_STATE_KEY_PATTERN,
-  agentStateIsolationFor,
-} from "../policy/security-policy"
+import { agentStateIsolationFor } from "../policy/engine-launch"
+import { AGENT_STATE_KEY_ENV, AGENT_STATE_KEY_PATTERN } from "../policy/security-policy"
 import {
   EXTERNAL_AGENT_KEYRING_NAMESPACE,
   applyResolvedCredentials,

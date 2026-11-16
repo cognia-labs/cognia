@@ -19,6 +19,11 @@ export const devinAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
   id: "devin",
   label: "Devin",
   commandNames: ["devin"],
+  launch: {
+    id: "devin",
+    match: { kind: "base", values: ["devin"] },
+    stateRoots: [".config/devin", ".local/share/devin", ".cache/devin"],
+  },
   permissionModes: {
     toNative: (mode) => DEVIN_PERMISSION_MODES[mode] ?? mode,
     toCanonical: (nativeMode, current) => {

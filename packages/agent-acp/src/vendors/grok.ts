@@ -194,6 +194,15 @@ export const grokAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>(
   id: "grok",
   label: "Grok Build",
   commandNames: ["grok"],
+  launch: {
+    id: "grok",
+    match: { kind: "base", values: ["grok"] },
+    stateRoots: [".grok"],
+    isolation: {
+      env: { GROK_HOME: "grok" },
+      denyReadable: [".grok"],
+    },
+  },
   promptUsage,
   elicitationExtensions: {
     "_x.ai/ask_user_question": {

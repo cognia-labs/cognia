@@ -116,6 +116,17 @@ export const codexManifest: AgentIntegrationManifest = Object.freeze({
   protocols: [
     { protocol: CODEX_APP_SERVER_PROTOCOL, semantics: CODEX_APP_SERVER_EXECUTION_SEMANTICS },
   ],
+  launch: [
+    {
+      id: "codex",
+      match: { kind: "contains", values: ["codex"] },
+      stateRoots: [".codex"],
+      isolation: {
+        env: { CODEX_HOME: "codex" },
+        denyReadable: [".codex"],
+      },
+    },
+  ],
   runtimes: CODEX_RUNTIMES,
 }) as AgentIntegrationManifest
 

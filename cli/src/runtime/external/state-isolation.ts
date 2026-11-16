@@ -20,10 +20,10 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
+import { agentStateIsolationFor } from "@/lib/ai/agent/external/policy/engine-launch"
 import {
   AGENT_STATE_KEY_ENV,
   AGENT_STATE_KEY_PATTERN,
-  agentStateIsolationFor,
 } from "@/lib/ai/agent/external/policy/security-policy"
 
 /** The spawn-config fields isolation reads and rewrites. */

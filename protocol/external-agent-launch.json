@@ -1,0 +1,441 @@
+{
+  "description": "Engine launch descriptors (ADR-0217), generated from the integration packages by scripts/build/gen-external-agent-launch.mjs; edit the descriptor in its package. Both process hosts (crates/cognia-external-agent, cli/src/runtime/external) read this file and name no engine themselves. A launch matches by its target: for `npx <package>` the package, otherwise the executable file name without a Windows suffix, lower-cased.",
+  "engines": [
+    {
+      "id": "claude-code",
+      "match": {
+        "kind": "target",
+        "values": [
+          "claude",
+          "claude-agent-acp",
+          "claude-code-acp",
+          "@agentclientprotocol/claude-agent-acp",
+          "@anthropic-ai/claude-code",
+          "@zed-industries/claude-code-acp"
+        ]
+      },
+      "stateRoots": [".claude", ".claude.json", ".claude.json.backup"],
+      "fileRoots": [".claude.json", ".claude.json.backup"],
+      "isolation": {
+        "env": {
+          "CLAUDE_CONFIG_DIR": "claude"
+        },
+        "sharedRoots": [".claude", ".claude.json", ".claude.json.backup"],
+        "denyReadable": [".claude", ".claude.json", ".claude.json.backup"]
+      }
+    },
+    {
+      "id": "codex",
+      "match": {
+        "kind": "contains",
+        "values": ["codex"]
+      },
+      "stateRoots": [".codex"],
+      "isolation": {
+        "env": {
+          "CODEX_HOME": "codex"
+        },
+        "sharedRoots": [".codex"],
+        "denyReadable": [".codex"]
+      }
+    },
+    {
+      "id": "opencode",
+      "match": {
+        "kind": "contains",
+        "values": ["opencode"]
+      },
+      "stateRoots": [".config/opencode", ".local/share/opencode"],
+      "isolation": {
+        "env": {
+          "OPENCODE_CONFIG_DIR": "config/opencode",
+          "XDG_DATA_HOME": "data",
+          "XDG_STATE_HOME": "state",
+          "XDG_CACHE_HOME": "cache"
+        },
+        "sharedRoots": [".config/opencode", ".local/share/opencode"],
+        "denyReadable": [".config/opencode", ".local/share/opencode"]
+      }
+    },
+    {
+      "id": "pi",
+      "match": {
+        "kind": "base",
+        "values": ["pi"]
+      },
+      "stateRoots": [".pi"],
+      "isolation": {
+        "env": {
+          "PI_CODING_AGENT_DIR": "pi"
+        },
+        "sharedRoots": [".pi"],
+        "denyReadable": [".pi"]
+      }
+    },
+    {
+      "id": "openclaude",
+      "match": {
+        "kind": "base",
+        "values": ["openclaude"]
+      },
+      "stateRoots": [".openclaude", ".openclaude.json"],
+      "fileRoots": [".openclaude.json"],
+      "isolation": {
+        "env": {
+          "OPENCLAUDE_CONFIG_DIR": "openclaude"
+        },
+        "sharedRoots": [".openclaude", ".openclaude.json"],
+        "denyReadable": [".openclaude", ".openclaude.json"]
+      }
+    },
+    {
+      "id": "crush",
+      "match": {
+        "kind": "base",
+        "values": ["crush"]
+      },
+      "stateRoots": [".config/crush", ".local/share/crush", ".local/state/crush", ".cache/crush"]
+    },
+    {
+      "id": "continue-dev",
+      "match": {
+        "kind": "base",
+        "values": ["cn"]
+      },
+      "stateRoots": [".continue"]
+    },
+    {
+      "id": "rovo-dev",
+      "match": {
+        "kind": "base",
+        "values": ["acli"]
+      },
+      "stateRoots": [".config/acli", ".rovodev"]
+    },
+    {
+      "id": "antigravity-acp",
+      "match": {
+        "kind": "base",
+        "values": ["agy_acp_server.par", "agy_acp_server"]
+      },
+      "stateRoots": [".gemini/antigravity-acp", ".gemini/artifacts"]
+    },
+    {
+      "id": "minimax-code",
+      "match": {
+        "kind": "base",
+        "values": ["mcode"]
+      },
+      "stateRoots": [".minimax"],
+      "isolation": {
+        "env": {
+          "MINIMAX_DATA_DIR": "minimax",
+          "MAVIS_DATA_DIR": "minimax"
+        },
+        "sharedRoots": [".minimax"],
+        "denyReadable": [".minimax"]
+      }
+    },
+    {
+      "id": "kimi",
+      "match": {
+        "kind": "base",
+        "values": ["kimi"]
+      },
+      "stateRoots": [".kimi-code"],
+      "isolation": {
+        "env": {
+          "KIMI_CODE_HOME": "kimi"
+        },
+        "sharedRoots": [".kimi-code"],
+        "denyReadable": [".kimi-code", ".kimi"]
+      }
+    },
+    {
+      "id": "cline",
+      "match": {
+        "kind": "base",
+        "values": ["cline"]
+      },
+      "stateRoots": [".cline"],
+      "isolation": {
+        "env": {
+          "CLINE_DIR": "cline"
+        },
+        "sharedRoots": [".cline"],
+        "denyReadable": [".cline"]
+      }
+    },
+    {
+      "id": "copilot-cli",
+      "match": {
+        "kind": "contains",
+        "values": ["copilot"]
+      },
+      "stateRoots": [".copilot", ".cache/copilot"],
+      "isolation": {
+        "env": {
+          "COPILOT_HOME": "copilot"
+        },
+        "sharedRoots": [".copilot"],
+        "denyReadable": [".copilot"]
+      }
+    },
+    {
+      "id": "qoder",
+      "match": {
+        "kind": "base",
+        "values": ["qoder"]
+      },
+      "stateRoots": [".qoder"],
+      "isolation": {
+        "env": {
+          "QODER_CONFIG_DIR": "qoder"
+        },
+        "sharedRoots": [".qoder"],
+        "denyReadable": []
+      }
+    },
+    {
+      "id": "goose",
+      "match": {
+        "kind": "base",
+        "values": ["goose"]
+      },
+      "stateRoots": [
+        ".config/goose",
+        ".local/share/goose",
+        ".local/state/goose",
+        "Library/Application Support/Block/goose"
+      ],
+      "isolation": {
+        "env": {
+          "GOOSE_PATH_ROOT": "goose"
+        },
+        "sharedRoots": [
+          ".config/goose",
+          ".local/share/goose",
+          ".local/state/goose",
+          "Library/Application Support/Block/goose"
+        ],
+        "denyReadable": [
+          ".config/goose",
+          ".local/share/goose",
+          ".local/state/goose",
+          "Library/Application Support/Block/goose"
+        ]
+      }
+    },
+    {
+      "id": "grok",
+      "match": {
+        "kind": "base",
+        "values": ["grok"]
+      },
+      "stateRoots": [".grok"],
+      "isolation": {
+        "env": {
+          "GROK_HOME": "grok"
+        },
+        "sharedRoots": [".grok"],
+        "denyReadable": [".grok"]
+      }
+    },
+    {
+      "id": "devin",
+      "match": {
+        "kind": "base",
+        "values": ["devin"]
+      },
+      "stateRoots": [".config/devin", ".local/share/devin", ".cache/devin"]
+    },
+    {
+      "id": "auggie",
+      "match": {
+        "kind": "base",
+        "values": ["auggie"]
+      },
+      "stateRoots": [".augment"]
+    },
+    {
+      "id": "autohand-code",
+      "match": {
+        "kind": "base",
+        "values": ["autohand"]
+      },
+      "stateRoots": [".autohand"]
+    },
+    {
+      "id": "codebuddy",
+      "match": {
+        "kind": "base",
+        "values": ["codebuddy"]
+      },
+      "stateRoots": [".codebuddy"]
+    },
+    {
+      "id": "command-code",
+      "match": {
+        "kind": "base",
+        "values": ["commandcode"]
+      },
+      "stateRoots": [".commandcode"]
+    },
+    {
+      "id": "kilocode",
+      "match": {
+        "kind": "base",
+        "values": ["kilo"]
+      },
+      "stateRoots": [".config/kilo", ".local/share/kilo", ".local/state/kilo", ".cache/kilo"]
+    },
+    {
+      "id": "mistral-vibe",
+      "match": {
+        "kind": "base",
+        "values": ["vibe-acp"]
+      },
+      "stateRoots": [".vibe"],
+      "isolation": {
+        "env": {
+          "VIBE_HOME": "vibe"
+        },
+        "sharedRoots": [".vibe"],
+        "denyReadable": [".vibe"]
+      }
+    },
+    {
+      "id": "mimo-code",
+      "match": {
+        "kind": "base",
+        "values": ["mimo"]
+      },
+      "stateRoots": [
+        ".config/mimocode",
+        ".local/share/mimocode",
+        ".local/state/mimocode",
+        ".cache/mimocode"
+      ],
+      "isolation": {
+        "env": {
+          "MIMOCODE_HOME": "mimocode"
+        },
+        "sharedRoots": [
+          ".config/mimocode",
+          ".local/share/mimocode",
+          ".local/state/mimocode",
+          ".cache/mimocode"
+        ],
+        "denyReadable": [
+          ".config/mimocode",
+          ".local/share/mimocode",
+          ".local/state/mimocode",
+          ".cache/mimocode"
+        ]
+      }
+    },
+    {
+      "id": "hermes-agent",
+      "match": {
+        "kind": "base",
+        "values": ["hermes"]
+      },
+      "stateRoots": [".hermes"],
+      "isolation": {
+        "env": {
+          "HERMES_HOME": "hermes"
+        },
+        "sharedRoots": [".hermes"],
+        "denyReadable": [".hermes"]
+      }
+    },
+    {
+      "id": "oh-my-pi",
+      "match": {
+        "kind": "base",
+        "values": ["omp"]
+      },
+      "stateRoots": [".omp"]
+    },
+    {
+      "id": "muse",
+      "match": {
+        "kind": "base",
+        "values": ["muse-acp"]
+      },
+      "stateRoots": [".config/muse", ".local/state/muse-acp"]
+    },
+    {
+      "id": "amp",
+      "match": {
+        "kind": "base",
+        "values": ["amp-acp"]
+      },
+      "stateRoots": [".config/amp", ".local/share/amp", ".local/state/amp-acp"]
+    },
+    {
+      "id": "zcode",
+      "match": {
+        "kind": "base",
+        "values": ["zcode-acp"]
+      },
+      "stateRoots": [".zcode", ".zcode-acp"]
+    },
+    {
+      "id": "gemini",
+      "match": {
+        "kind": "contains",
+        "values": ["gemini"]
+      },
+      "stateRoots": [".gemini"]
+    },
+    {
+      "id": "qwen",
+      "match": {
+        "kind": "contains",
+        "values": ["qwen"]
+      },
+      "stateRoots": [".qwen"],
+      "isolation": {
+        "env": {
+          "QWEN_HOME": "qwen",
+          "QWEN_RUNTIME_DIR": "qwen-runtime"
+        },
+        "sharedRoots": [".qwen"],
+        "denyReadable": [".qwen"]
+      }
+    },
+    {
+      "id": "kiro",
+      "match": {
+        "kind": "contains",
+        "values": ["kiro"]
+      },
+      "stateRoots": [".kiro"]
+    },
+    {
+      "id": "factory-droid",
+      "match": {
+        "kind": "contains",
+        "values": ["droid", "factory"]
+      },
+      "stateRoots": [".factory"]
+    },
+    {
+      "id": "cursor",
+      "match": {
+        "kind": "contains",
+        "values": ["cursor"]
+      },
+      "stateRoots": [".cursor"]
+    },
+    {
+      "id": "npx",
+      "match": {
+        "kind": "base",
+        "values": ["npx"]
+      },
+      "stateRoots": [".npm"]
+    }
+  ]
+}

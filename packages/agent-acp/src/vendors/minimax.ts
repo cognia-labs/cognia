@@ -5,6 +5,15 @@ export const minimaxAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfil
   id: "minimax-code",
   label: "MiniMax Code",
   commandNames: ["mcode"],
+  launch: {
+    id: "minimax-code",
+    match: { kind: "base", values: ["mcode"] },
+    stateRoots: [".minimax"],
+    isolation: {
+      env: { MINIMAX_DATA_DIR: "minimax", MAVIS_DATA_DIR: "minimax" },
+      denyReadable: [".minimax"],
+    },
+  },
   permissionModes: {
     toNative: (mode) => {
       if (mode === "acceptEdits" || mode === "dontAsk")

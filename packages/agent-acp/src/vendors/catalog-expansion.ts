@@ -47,6 +47,11 @@ export const auggieAcpProfile: AcpVendorProfile = Object.freeze({
   id: "auggie",
   label: "Auggie",
   commandNames: ["auggie"],
+  launch: {
+    id: "auggie",
+    match: { kind: "base", values: ["auggie"] },
+    stateRoots: [".augment"],
+  },
   permissionModes: brokerModes("default", "default"),
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Auggie"),
   launchEnv: { AUGMENT_DISABLE_AUTO_UPDATE: "1" },
@@ -55,6 +60,11 @@ export const autohandCodeAcpProfile: AcpVendorProfile = Object.freeze({
   id: "autohand-code",
   label: "Autohand Code",
   commandNames: ["autohand"],
+  launch: {
+    id: "autohand-code",
+    match: { kind: "base", values: ["autohand"] },
+    stateRoots: [".autohand"],
+  },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Autohand Code"),
   permissionModes: brokerModes("default"),
   reapplySessionMode: true,
@@ -64,6 +74,11 @@ export const codebuddyAcpProfile: AcpVendorProfile = Object.freeze({
   id: "codebuddy",
   label: "CodeBuddy",
   commandNames: ["codebuddy"],
+  launch: {
+    id: "codebuddy",
+    match: { kind: "base", values: ["codebuddy"] },
+    stateRoots: [".codebuddy"],
+  },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("CodeBuddy"),
   // Upstream plan inherits the preceding native policy. Cognia's plan broker
   // therefore runs against default rather than inheriting a native bypass.
@@ -76,6 +91,11 @@ export const commandCodeAcpProfile: AcpVendorProfile = Object.freeze({
   id: "command-code",
   label: "Command Code",
   commandNames: ["cmdc", "commandcode", "command-code"],
+  launch: {
+    id: "command-code",
+    match: { kind: "base", values: ["commandcode"] },
+    stateRoots: [".commandcode"],
+  },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Command Code"),
   permissionModes: brokerModes("default"),
   reapplySessionMode: true,
@@ -86,6 +106,11 @@ export const kilocodeAcpProfile: AcpVendorProfile = Object.freeze({
   id: "kilocode",
   label: "Kilo Code",
   commandNames: ["kilo"],
+  launch: {
+    id: "kilocode",
+    match: { kind: "base", values: ["kilo"] },
+    stateRoots: [".config/kilo", ".local/share/kilo", ".local/state/kilo", ".cache/kilo"],
+  },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Kilo Code"),
   permissionModes: brokerModes("build"),
   reapplySessionMode: true,
@@ -94,6 +119,15 @@ export const mistralVibeAcpProfile: AcpVendorProfile = Object.freeze({
   id: "mistral-vibe",
   label: "Mistral Vibe",
   commandNames: ["vibe-acp"],
+  launch: {
+    id: "mistral-vibe",
+    match: { kind: "base", values: ["vibe-acp"] },
+    stateRoots: [".vibe"],
+    isolation: {
+      env: { VIBE_HOME: "vibe" },
+      denyReadable: [".vibe"],
+    },
+  },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Mistral Vibe"),
   // v3 modes are agent names, and no native plan agent is advertised.
   permissionModes: brokerModes("ask", "ask"),
@@ -103,6 +137,25 @@ export const mimoCodeAcpProfile: AcpVendorProfile = Object.freeze({
   id: "mimo-code",
   label: "MiMo Code",
   commandNames: ["mimo"],
+  launch: {
+    id: "mimo-code",
+    match: { kind: "base", values: ["mimo"] },
+    stateRoots: [
+      ".config/mimocode",
+      ".local/share/mimocode",
+      ".local/state/mimocode",
+      ".cache/mimocode",
+    ],
+    isolation: {
+      env: { MIMOCODE_HOME: "mimocode" },
+      denyReadable: [
+        ".config/mimocode",
+        ".local/share/mimocode",
+        ".local/state/mimocode",
+        ".cache/mimocode",
+      ],
+    },
+  },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("MiMo Code"),
   permissionModes: brokerModes("build"),
   reapplySessionMode: true,
@@ -113,6 +166,15 @@ export const hermesAgentAcpProfile: AcpVendorProfile = Object.freeze({
   id: "hermes-agent",
   label: "Hermes Agent",
   commandNames: ["hermes", "hermes-acp"],
+  launch: {
+    id: "hermes-agent",
+    match: { kind: "base", values: ["hermes"] },
+    stateRoots: [".hermes"],
+    isolation: {
+      env: { HERMES_HOME: "hermes" },
+      denyReadable: [".hermes"],
+    },
+  },
   permissionModes: brokerModes("default", "default"),
   reapplySessionMode: true,
   validateConfiguration: (
@@ -133,6 +195,11 @@ export const ohMyPiAcpProfile: AcpVendorProfile = Object.freeze({
   id: "oh-my-pi",
   label: "oh-my-pi",
   commandNames: ["omp"],
+  launch: {
+    id: "oh-my-pi",
+    match: { kind: "base", values: ["omp"] },
+    stateRoots: [".omp"],
+  },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("oh-my-pi"),
   permissionModes: brokerModes("default"),
   reapplySessionMode: true,
@@ -142,6 +209,11 @@ export const museAcpProfile: AcpVendorProfile = Object.freeze({
   id: "muse",
   label: "Muse Code",
   commandNames: ["muse-acp"],
+  launch: {
+    id: "muse",
+    match: { kind: "base", values: ["muse-acp"] },
+    stateRoots: [".config/muse", ".local/state/muse-acp"],
+  },
   permissionModes: brokerModes("default", "default"),
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Muse Code"),
   terminalAuth: { methodId: "muse-login", command: "muse", args: ["login"] },
@@ -157,6 +229,11 @@ export const ampAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "amp",
   label: "Amp",
   commandNames: ["amp-acp"],
+  launch: {
+    id: "amp",
+    match: { kind: "base", values: ["amp-acp"] },
+    stateRoots: [".config/amp", ".local/share/amp", ".local/state/amp-acp"],
+  },
   launchEnv: { AMP_ACP_CONTINUE_LATEST: "0", AMP_ACP_TRANSPORT: "cli" },
   validateConfiguration: (config) => {
     if (config.requireApprovalFor?.length)
@@ -194,6 +271,11 @@ export const zcodeAcpProfile: AcpVendorProfile = Object.freeze({
   id: "zcode",
   label: "ZCode",
   commandNames: ["zcode-acp"],
+  launch: {
+    id: "zcode",
+    match: { kind: "base", values: ["zcode-acp"] },
+    stateRoots: [".zcode", ".zcode-acp"],
+  },
   permissionModes: brokerModes("default", "plan", [
     "default",
     "acceptEdits",

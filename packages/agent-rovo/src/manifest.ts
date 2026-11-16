@@ -30,6 +30,13 @@ export const rovoDevManifest: AgentIntegrationManifest = {
     memoryAgentId: null,
   },
   protocols: [{ protocol: ROVO_PROTOCOL, semantics: ROVO_EXECUTION_SEMANTICS }],
+  launch: [
+    {
+      id: "rovo-dev",
+      match: { kind: "base", values: ["acli"] },
+      stateRoots: [".config/acli", ".rovodev"],
+    },
+  ],
   runtimes: [
     {
       runtimeId: "rovo-dev",
