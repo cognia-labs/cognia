@@ -32,7 +32,7 @@
   "shareCard": "Share as card",
   "shareDialogTitle": "Share via",
   "shareFailed": "Share failed: {message}",
-  "shareUnsupported": "Sharing isn't supported on this device.",
+  "shareCopiedFallback": "Sharing isn't available here, so the message was copied to the clipboard.",
   "stopReading": "Stop reading",
   "title": "Message",
   "truncate": "Delete from here"

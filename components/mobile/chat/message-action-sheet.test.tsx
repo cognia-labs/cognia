@@ -6,11 +6,11 @@ import { NextIntlClientProvider } from "next-intl"
 import type { UIMessage } from "ai"
 
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
-import { MessageActionSheet, extractPlainText } from "./message-action-sheet"
+import { MessageActionSheet } from "./message-action-sheet"
 
 jest.mock("@/lib/capacitor/share", () => ({
   __esModule: true,
-  share: jest.fn(),
+  shareContent: jest.fn(),
 }))
 
 jest.mock("sonner", () => ({
@@ -123,12 +123,12 @@ jest.mock("@/components/chat/branch-navigator", () => ({
   BranchNavigator: () => <div data-testid="branch-navigator" />,
 }))
 
-import { share } from "@/lib/capacitor/share"
+import { shareContent } from "@/lib/capacitor/share"
 import { toast } from "sonner"
 import { __resetPortsForTesting, __setPortForTesting } from "@/lib/modules/ports"
 import type { SpeechPort } from "@/types/modules/ports/speech"
 
-const mockShare = share as jest.Mock
+const mockShare = shareContent as jest.Mock
 const mockToastSuccess = toast.success as jest.Mock
 const mockToastError = toast.error as jest.Mock
 const speech = {
@@ -149,7 +149,7 @@ const messages = {
       share: "Share…",
       shareCard: "Share as card",
       shareDialogTitle: "Share via",
-      shareUnsupported: "Sharing isn't supported on this device.",
+      shareCopiedFallback: "Sharing isn't available here, so the message was copied to the clipboard.",
       shareFailed: "Share failed: {message}",
       branch: "Branch conversation",
       regenerate: "Regenerate reply",
@@ -203,66 +203,6 @@ function makeMessage(text: string): UIMessage {
     parts: [{ type: "text", text }],
   } as UIMessage
 }
-
-describe("extractPlainText", () => {
-  it("joins text parts with newlines", () => {
-    const msg = {
-      id: "x",
-      role: "user",
-      parts: [
-        { type: "text", text: "first" },
-        { type: "text", text: "second" },
-      ],
-    } as UIMessage
-    expect(extractPlainText(msg)).toBe("first\nsecond")
-  })
-
-  it("includes reasoning parts", () => {
-    const msg = {
-      id: "x",
-      role: "assistant",
-      parts: [
-        { type: "reasoning", text: "thinking" },
-        { type: "text", text: "answer" },
-      ],
-    } as UIMessage
-    expect(extractPlainText(msg)).toBe("thinking\nanswer")
-  })
-
-  it("skips tool and file parts", () => {
-    const msg = {
-      id: "x",
-      role: "assistant",
-      parts: [
-        { type: "tool-search", input: {} },
-        { type: "file", url: "data:..." },
-        { type: "text", text: "hello" },
-      ],
-    } as UIMessage
-    expect(extractPlainText(msg)).toBe("hello")
-  })
-
-  it("returns empty string for an empty parts array", () => {
-    const msg = { id: "x", role: "assistant", parts: [] } as UIMessage
-    expect(extractPlainText(msg)).toBe("")
-  })
-
-  it("returns the typed text without the composer's context envelope", () => {
-    // Copy, quote, share, read-aloud and the edit draft all read this. Each of
-    // them wants the user's words; the envelope is a snapshot attached for the
-    // model, and read aloud or pasted it would be someone else's document.
-    const { text } = composeTurnText(
-      "typed words",
-      [{ kind: "references", text: "SECRET SNAPSHOT" }],
-      { nonce: "abcdef0123" }
-    )
-    const msg = { id: "x", role: "user", parts: [{ type: "text", text }] } as UIMessage
-    const out = extractPlainText(msg)
-    expect(out).toBe("typed words")
-    expect(out).not.toContain("SECRET SNAPSHOT")
-    expect(out).not.toContain("cognia_context_")
-  })
-})
 
 describe("MessageActionSheet", () => {
   beforeEach(() => {
@@ -481,19 +421,67 @@ describe("MessageActionSheet", () => {
     await waitFor(() => {
       expect(mockShare).toHaveBeenCalledWith({
         text: "greetings",
+        files: [],
         dialogTitle: "Share via",
       })
     })
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
-  it("toasts on share unsupported", async () => {
+  it("copies the message and says so where sharing is unavailable", async () => {
     mockShare.mockResolvedValue({ kind: "unsupported" })
-    renderSheet(makeMessage("greetings"), jest.fn())
+    const onOpenChange = jest.fn()
+    renderSheet(makeMessage("greetings"), onOpenChange)
     fireEvent.click(screen.getByTestId("message-action-share"))
     await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith("Sharing isn't supported on this device.")
+      expect(mockToastSuccess).toHaveBeenCalledWith(
+        "Sharing isn't available here, so the message was copied to the clipboard."
+      )
     })
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("greetings")
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it("hands over the same text as desktop: typed words, no reasoning or context envelope", async () => {
+    const { text } = composeTurnText(
+      "typed words",
+      [{ kind: "references", text: "SECRET SNAPSHOT" }],
+      { nonce: "abcdef0123" }
+    )
+    const message = {
+      id: "m1",
+      role: "assistant",
+      parts: [
+        { type: "reasoning", text: "private thinking" },
+        { type: "text", text },
+      ],
+    } as UIMessage
+    renderSheet(message, jest.fn())
+    fireEvent.click(screen.getByTestId("message-action-copy"))
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("typed words"))
+    const handler = jest.fn()
+    window.addEventListener("cognia:composer-append", handler)
+    renderSheet(message, jest.fn())
+    fireEvent.click(screen.getAllByTestId("message-action-quote").at(-1)!)
+    window.removeEventListener("cognia:composer-append", handler)
+    const quoted = (handler.mock.calls[0][0] as CustomEvent<{ text: string }>).detail.text
+    expect(quoted).toBe("> typed words\n\n")
+  })
+
+  it("shares an image-only message with its image, as desktop does", async () => {
+    mockShare.mockResolvedValue({ kind: "shared" })
+    const message = {
+      id: "m1",
+      role: "assistant",
+      parts: [{ type: "file", mediaType: "image/png", filename: "shot.png", url: "data:image/png;base64,iVBORw0KGgo=" }],
+    } as UIMessage
+    renderSheet(message, jest.fn())
+    expect(screen.getByTestId("message-action-share")).not.toBeDisabled()
+    fireEvent.click(screen.getByTestId("message-action-share"))
+    await waitFor(() => expect(mockShare).toHaveBeenCalled())
+    const [{ files, text }] = mockShare.mock.calls[0] as [{ files: File[]; text?: string }]
+    expect(files.map((file) => file.name)).toEqual(["shot.png"])
+    expect(text).toBe("shot.png")
   })
 
   it("does not toast on cancelled share", async () => {

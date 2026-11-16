@@ -3,6 +3,8 @@ import type { UIMessage } from "ai"
 import { decodeDataUrl } from "@/lib/utils/image-bytes"
 import { renderSafeInlineMarkdown } from "@/lib/export/html/safe-inline-markdown"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
+import { videoAttachmentInfoOfPart } from "@/lib/chat/attachments/video/attachment-info"
+import { shareContent, type ShareOutcome } from "@/lib/capacitor/share"
 
 export interface MessageShareContent {
   plainText: string
@@ -41,6 +43,67 @@ export async function writeMessageToClipboard(content: MessageShareContent): Pro
   }
 }
 
+/**
+ * What the user typed: the text parts, without the context envelope the
+ * composer put in front of them and without a video's description, which is
+ * what the model read, not what the user wrote. Edit, quote, resend and read
+ * aloud hand this over, on every shell. Reasoning is never part of it.
+ */
+export function messageTypedText(message: UIMessage): string {
+  return stripPromptPreambleFromParts(message.parts)
+    .filter((p): p is { type: "text"; text: string } => (p as { type?: string }).type === "text")
+    .filter((p) => videoAttachmentInfoOfPart(p) === null)
+    .map((p) => p.text)
+    .join("\n\n")
+}
+
+/**
+ * Copy a message: rich (HTML beside plain text) when it carries more than its
+ * typed text, such as images or sources, plain otherwise. `writePlain` is the
+ * shell's own text clipboard, used for plain copies and when the rich write is
+ * not available. `rich` says which one landed, for the "copied with media"
+ * feedback.
+ */
+export async function copyMessageContent(
+  content: MessageShareContent,
+  typedText: string,
+  writePlain: (text: string) => Promise<boolean>
+): Promise<{ ok: boolean; rich: boolean }> {
+  if (!content.hasContent) return { ok: false, rich: false }
+  if (content.plainText !== typedText && (await writeMessageToClipboard(content))) {
+    return { ok: true, rich: true }
+  }
+  return { ok: await writePlain(content.plainText), rich: false }
+}
+
+export type MessageShareResult =
+  { kind: "shared" | "cancelled" | "copied" } | { kind: "failed"; message?: string }
+
+/**
+ * Share a message through the shell's share sheet, images included. Where
+ * there is no share surface for it, hand it over through the clipboard instead
+ * (`copied`), so the caller never reports a share that did not happen.
+ */
+export async function shareMessageContent(
+  content: MessageShareContent,
+  options: {
+    dialogTitle?: string
+    share?: (opts: Parameters<typeof shareContent>[0]) => Promise<ShareOutcome>
+  } = {}
+): Promise<MessageShareResult> {
+  if (!content.hasContent) return { kind: "failed" }
+  const files = content.shareFiles
+  const text = files.length > 0 ? content.nativeShareText : content.plainText
+  const out = await (options.share ?? shareContent)({
+    ...(text.trim() ? { text } : {}),
+    files,
+    ...(options.dialogTitle ? { dialogTitle: options.dialogTitle } : {}),
+  })
+  if (out.kind === "shared" || out.kind === "cancelled") return { kind: out.kind }
+  if (out.kind === "error") return { kind: "failed", message: out.message }
+  return (await writeMessageToClipboard(content)) ? { kind: "copied" } : { kind: "failed" }
+}
+
 interface FilePart {
   type: "file"
   url?: string
@@ -68,7 +131,7 @@ export function buildMessageShareContent(message: UIMessage): MessageShareConten
   const parts = stripPromptPreambleFromParts(message.parts)
   const hasContent = parts.some((part) =>
     part.type === "text"
-      ? Boolean((part as { text?: string }).text)
+      ? Boolean((part as { text?: string }).text) && videoAttachmentInfoOfPart(part) === null
       : part.type === "file" || part.type === "source-url" || part.type === "source-document"
   )
   let prepared: MessageShareContent | undefined
@@ -103,6 +166,8 @@ function materializeMessageShareContent(
   // composer put in front of it (`lib/chat/prompt-preamble.ts`).
   for (const part of parts) {
     if (part.type === "text") {
+      // A video's description is the model's reading of it, not message text.
+      if (videoAttachmentInfoOfPart(part) !== null) continue
       const text = (part as { text?: string }).text ?? ""
       if (text) {
         plainParts.push(text)

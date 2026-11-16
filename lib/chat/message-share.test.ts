@@ -1,7 +1,13 @@
 import type { UIMessage } from "ai"
 
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
-import { buildMessageShareContent, writeMessageToClipboard } from "./message-share"
+import {
+  buildMessageShareContent,
+  copyMessageContent,
+  messageTypedText,
+  shareMessageContent,
+  writeMessageToClipboard,
+} from "./message-share"
 
 describe("buildMessageShareContent", () => {
   it("materializes files from an immutable transcript without mutating its parts", () => {
@@ -196,5 +202,161 @@ describe("buildMessageShareContent", () => {
 
     await expect(writeMessageToClipboard(content)).resolves.toBe(true)
     expect(writeText).toHaveBeenCalledWith("hello")
+  })
+})
+
+const videoDescription = {
+  type: "text" as const,
+  text: "[video demo.mp4: storyboard of 3 frames]",
+  videoAttachment: {
+    groupId: "att-1",
+    filename: "demo.mp4",
+    sourceMediaType: "video/mp4",
+    kind: "video",
+    durationSec: 42,
+    width: 1920,
+    height: 1080,
+    delivery: "storyboard",
+    strategy: "scene",
+    range: null,
+    frameTimes: [2, 8.5, 20],
+    engine: "browser",
+  },
+}
+
+describe("messageTypedText", () => {
+  it("is the typed text only: no reasoning, envelope or video description", () => {
+    const { text } = composeTurnText("typed words", [{ kind: "references", text: "SNAPSHOT" }], {
+      nonce: "abcdef0123",
+    })
+    const message = {
+      id: "m",
+      role: "user",
+      parts: [
+        { type: "reasoning", text: "thinking" },
+        { type: "text", text },
+        videoDescription,
+        { type: "text", text: "second" },
+      ],
+    } as UIMessage
+    expect(messageTypedText(message)).toBe("typed words\n\nsecond")
+  })
+})
+
+describe("buildMessageShareContent and a video description", () => {
+  it("leaves the model's reading of a video out of what is copied or shared", () => {
+    const message = {
+      id: "m",
+      role: "user",
+      parts: [videoDescription, { type: "text", text: "what happens here?" }],
+    } as UIMessage
+    expect(buildMessageShareContent(message).plainText).toBe("what happens here?")
+    const only = { id: "v", role: "user", parts: [videoDescription] } as UIMessage
+    expect(buildMessageShareContent(only).hasContent).toBe(false)
+  })
+})
+
+/** The page's clipboard for one test; `undefined` takes it away. */
+function setClipboard(clipboard: Partial<Clipboard> | undefined) {
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard } })
+}
+
+describe("copyMessageContent", () => {
+  const plain = { id: "p", role: "assistant", parts: [{ type: "text", text: "hi" }] } as UIMessage
+  const withImage = {
+    id: "i",
+    role: "assistant",
+    parts: [
+      { type: "text", text: "look" },
+      { type: "file", url: "https://x.test/a.png", mediaType: "image/png", filename: "a.png" },
+    ],
+  } as UIMessage
+
+  afterEach(() => setClipboard(undefined))
+
+  it("copies plain text through the shell's clipboard when that is all there is", async () => {
+    const writePlain = jest.fn(async () => true)
+    await expect(
+      copyMessageContent(buildMessageShareContent(plain), "hi", writePlain)
+    ).resolves.toEqual({
+      ok: true,
+      rich: false,
+    })
+    expect(writePlain).toHaveBeenCalledWith("hi")
+  })
+
+  it("copies rich content when the message carries more than its text", async () => {
+    const write = jest.fn(async () => undefined)
+    setClipboard({ write })
+    Object.defineProperty(globalThis, "ClipboardItem", {
+      configurable: true,
+      value: class {
+        constructor(_entries: Record<string, Blob>) {}
+      },
+    })
+    const writePlain = jest.fn(async () => true)
+    const out = await copyMessageContent(buildMessageShareContent(withImage), "look", writePlain)
+    expect(out).toEqual({ ok: true, rich: true })
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(writePlain).not.toHaveBeenCalled()
+  })
+
+  it("falls back to the plain clipboard where the rich write is unavailable", async () => {
+    const writePlain = jest.fn(async () => true)
+    const content = buildMessageShareContent(withImage)
+    const out = await copyMessageContent(content, "look", writePlain)
+    expect(out).toEqual({ ok: true, rich: false })
+    expect(writePlain).toHaveBeenCalledWith(content.plainText)
+  })
+
+  it("copies nothing for a message with no content", async () => {
+    const writePlain = jest.fn(async () => true)
+    const empty = { id: "e", role: "assistant", parts: [] } as UIMessage
+    expect(await copyMessageContent(buildMessageShareContent(empty), "", writePlain)).toEqual({
+      ok: false,
+      rich: false,
+    })
+    expect(writePlain).not.toHaveBeenCalled()
+  })
+})
+
+describe("shareMessageContent", () => {
+  const message = {
+    id: "s",
+    role: "assistant",
+    parts: [{ type: "text", text: "hey" }],
+  } as UIMessage
+
+  afterEach(() => setClipboard(undefined))
+
+  it("passes the outcome of the share sheet through", async () => {
+    for (const kind of ["shared", "cancelled"] as const) {
+      const share = jest.fn(async () => ({ kind }))
+      await expect(
+        shareMessageContent(buildMessageShareContent(message), { share, dialogTitle: "Via" })
+      ).resolves.toEqual({ kind })
+      expect(share).toHaveBeenCalledWith({ text: "hey", files: [], dialogTitle: "Via" })
+    }
+    const failing = jest.fn(async () => ({ kind: "error" as const, message: "boom" }))
+    await expect(
+      shareMessageContent(buildMessageShareContent(message), { share: failing })
+    ).resolves.toEqual({ kind: "failed", message: "boom" })
+  })
+
+  it("hands the message to the clipboard where there is no share surface", async () => {
+    const writeText = jest.fn(async () => undefined)
+    setClipboard({ writeText })
+    const share = jest.fn(async () => ({ kind: "unsupported" as const }))
+    await expect(
+      shareMessageContent(buildMessageShareContent(message), { share })
+    ).resolves.toEqual({ kind: "copied" })
+    expect(writeText).toHaveBeenCalledWith("hey")
+  })
+
+  it("fails when neither a share surface nor a clipboard is there", async () => {
+    const share = jest.fn(async () => ({ kind: "unsupported" as const }))
+    await expect(
+      shareMessageContent(buildMessageShareContent(message), { share })
+    ).resolves.toEqual({ kind: "failed" })
   })
 })

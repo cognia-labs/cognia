@@ -65,7 +65,6 @@ import {
   collectMessageVideoAttachments,
   MessageVideoAttachmentCard,
 } from "@/components/chat/renderers/message-video-attachment-card"
-import { videoAttachmentInfoOfPart } from "@/lib/chat/attachments/video/attachment-info"
 import { MessageImageCollectionProvider } from "@/components/chat/renderers/message-image-collection"
 import { PluginSurface } from "@/components/plugins/plugin-surface"
 import { UnknownPartCard } from "@/components/chat/message-parts/unknown-part-card"
@@ -113,11 +112,7 @@ import { userBubbleClass } from "@/lib/chat/message-bubble"
 import { buildReplyTo, readReplyTo } from "@/lib/chat/reply-to"
 import { ReplyToQuote } from "@/components/chat/message-parts/reply-to-quote"
 import { PromptPreambleCard } from "@/components/chat/message-parts/prompt-preamble-card"
-import {
-  locatePromptPreamble,
-  readPromptPreambleSummary,
-  stripPromptPreambleFromParts,
-} from "@/lib/chat/prompt-preamble"
+import { locatePromptPreamble, readPromptPreambleSummary } from "@/lib/chat/prompt-preamble"
 import { MessageReactionAdd, MessageReactionPills } from "@/components/chat/message-reactions"
 import type { AgentFlowMode } from "@/types/appearance"
 import type { ResolvedMessageDisplayOptions } from "@/lib/chat/message-display"
@@ -175,7 +170,6 @@ import { useEditYieldsToOtherSurfaces } from "@/hooks/chat/use-edit-yields-to-ot
 import { CheckIcon as AnimatedCheckIcon } from "@/components/ui/check"
 import { QuoteCardDialog } from "@/components/share/quote-card-dialog"
 import { toast } from "sonner"
-import { shareContent } from "@/lib/capacitor/share"
 import type { ToolUIPart, UIMessage } from "ai"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import { UsageBreakdown } from "@/components/chat/usage-breakdown"
@@ -203,7 +197,12 @@ import { ReadAloudButton } from "./read-aloud-button"
 import { TaskUpdateRow } from "@/components/tasks/task-update-row"
 import { COPY_FEEDBACK_MS, useCopy } from "@/hooks/ui/use-copy"
 import { useShowKeyboardHints } from "@/hooks/ui/use-pointer"
-import { buildMessageShareContent, writeMessageToClipboard } from "@/lib/chat/message-share"
+import {
+  buildMessageShareContent,
+  copyMessageContent,
+  messageTypedText,
+  shareMessageContent,
+} from "@/lib/chat/message-share"
 import { resolveMessageActionCommands } from "@/lib/chat/message-action-commands"
 import { loggers } from "@cognia/logging"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
@@ -610,7 +609,7 @@ function MessageRendererInner({
   }, [message.id, message.parts, messageVideoAttachments, t])
 
   // Plain text of the message, for the "share as card" action + gate.
-  const messageText = useMemo(() => extractText(message), [message])
+  const messageText = useMemo(() => messageTypedText(message), [message])
   const messageShareContent = useMemo(() => buildMessageShareContent(message), [message])
   /**
    * The parameters this turn was written from, when it came from a template.
@@ -707,7 +706,7 @@ function MessageRendererInner({
 
   const startEdit = () => {
     if (isWithdrawn) return
-    setDraft(extractText(message))
+    setDraft(messageTypedText(message))
     setEditing(true)
   }
 
@@ -742,12 +741,8 @@ function MessageRendererInner({
   }
 
   const handleCopy = useCallback(async () => {
-    if (!messageShareContent.hasContent) return
-    const needsRichClipboard = messageShareContent.plainText !== messageText
-    const ok = needsRichClipboard
-      ? await writeMessageToClipboard(messageShareContent)
-      : await copy(messageShareContent.plainText)
-    if (ok && needsRichClipboard) {
+    const { ok, rich } = await copyMessageContent(messageShareContent, messageText, copy)
+    if (ok && rich) {
       setRichCopied(true)
       window.setTimeout(() => setRichCopied(false), COPY_FEEDBACK_MS)
     }
@@ -768,42 +763,28 @@ function MessageRendererInner({
   }, [branchSessionId, message.id, copy])
 
   const handleShare = useCallback(async () => {
-    if (!messageShareContent.hasContent) return
-    // `shareContent` owns the platform split: the Capacitor WebView has no
-    // `navigator.share`, so on the phone it goes through the native share
-    // sheet (images staged as cache files) instead of silently doing nothing.
-    const files = messageShareContent.shareFiles
-    const text =
-      files.length > 0 ? messageShareContent.nativeShareText : messageShareContent.plainText
-    const out = await shareContent({ ...(text.trim() ? { text } : {}), files })
+    // `shareMessageContent` owns the platform split (the Capacitor WebView has
+    // no `navigator.share`, so the phone goes through the native sheet with
+    // images staged as cache files) and the clipboard fallback.
+    const out = await shareMessageContent(messageShareContent)
     if (out.kind === "cancelled") return
-    if (out.kind === "shared") {
-      setShared(true)
-      window.setTimeout(() => setShared(false), COPY_FEEDBACK_MS)
-      return
-    }
-    if (out.kind === "error") {
-      loggers.chat.warn("share failed", { err: out.message })
+    if (out.kind === "failed") {
+      if (out.message) loggers.chat.warn("share failed", { err: out.message })
       toast.error(t("shareFailed"))
       return
     }
-    // No share surface for this content here: hand it over through the
-    // clipboard, and say so, rather than flashing "Shared!" for a share that
-    // never happened.
-    if (await writeMessageToClipboard(messageShareContent)) {
-      setShared(true)
-      window.setTimeout(() => setShared(false), COPY_FEEDBACK_MS)
-      toast.success(t("shareCopiedFallback"))
-    } else {
-      toast.error(t("shareFailed"))
-    }
+    setShared(true)
+    window.setTimeout(() => setShared(false), COPY_FEEDBACK_MS)
+    // No share surface for this content here: say it went to the clipboard
+    // rather than flashing "Shared!" for a share that never happened.
+    if (out.kind === "copied") toast.success(t("shareCopiedFallback"))
   }, [messageShareContent, t])
 
   const handBack = useCallback(
     async (submit: boolean) => {
       const target = submit ? asideTargetSessionId : handBackTargetId
       if (!target) return
-      const content = extractText(message).trim()
+      const content = messageTypedText(message).trim()
       if (!content) return
       const text = `${content
         .split("\n")
@@ -912,7 +893,7 @@ function MessageRendererInner({
 
   const handleQuote = useCallback(() => {
     if (!branchSessionId) return
-    const content = extractText(message).trim()
+    const content = messageTypedText(message).trim()
     if (!content) return
     const text = `${content
       .split("\n")
@@ -1420,7 +1401,7 @@ function MessageRendererInner({
                     <MessageAction
                       tooltip={t("resendTooltip")}
                       label={t("resendLabel")}
-                      onClick={() => void onEditResend(message.id, extractText(message))}
+                      onClick={() => void onEditResend(message.id, messageTypedText(message))}
                       disabled={actionCommand("resend")?.disabled}
                       data-testid="message-resend"
                     >
@@ -1492,7 +1473,7 @@ function MessageRendererInner({
                   {hasActionCommand("readAloud") && (
                     <ReadAloudButton
                       messageId={message.id}
-                      text={extractText(message)}
+                      text={messageTypedText(message)}
                       character={speaker ?? directCharacter ?? null}
                     />
                   )}
@@ -1763,7 +1744,7 @@ function MessageRendererInner({
                   <MessageAction
                     tooltip={t("resendTooltip")}
                     label={t("resendLabel")}
-                    onClick={() => void onEditResend(message.id, extractText(message))}
+                    onClick={() => void onEditResend(message.id, messageTypedText(message))}
                     disabled={actionCommand("resend")?.disabled}
                     data-testid="message-resend"
                   >
@@ -1850,7 +1831,7 @@ function MessageRendererInner({
                 {message.role === "assistant" && ttsEnabled && (
                   <ReadAloudButton
                     messageId={message.id}
-                    text={extractText(message)}
+                    text={messageTypedText(message)}
                     character={speaker ?? directCharacter ?? null}
                   />
                 )}
@@ -2071,20 +2052,6 @@ function highlightMentions(
   }
   if (last < text.length) out.push(text.slice(last))
   return out.length > 0 ? out : [text]
-}
-
-function extractText(message: UIMessage): string {
-  return (
-    // Edit, quote, bring-back, read-aloud and forward all hand over what the
-    // user typed; the context envelope is the app's framing for the model.
-    stripPromptPreambleFromParts(message.parts)
-      .filter((p): p is { type: "text"; text: string } => (p as { type?: string }).type === "text")
-      // A video's description is what the model read, not what the user wrote:
-      // it must not come back into an edit, a quote or a copy.
-      .filter((p) => videoAttachmentInfoOfPart(p) === null)
-      .map((p) => p.text)
-      .join("\n\n")
-  )
 }
 
 function shouldHideMessagePart(

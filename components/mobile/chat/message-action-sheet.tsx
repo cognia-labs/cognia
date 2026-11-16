@@ -61,7 +61,6 @@ import {
 } from "@/components/ui/drawer"
 import { useBackDismiss } from "@/hooks/ui/use-back-dismiss"
 import { useReadAloudStatus } from "@/hooks/chat/use-read-aloud-status"
-import { share } from "@/lib/capacitor/share"
 import { notify, selectionFeedback } from "@/lib/capacitor/haptics"
 import { buildMessagePermalink } from "@/lib/chat/message-permalink"
 import { writeClipboardText } from "@/lib/tauri/clipboard"
@@ -82,7 +81,12 @@ import { QuoteCardDialog } from "@/components/share/quote-card-dialog"
 import { TruncateFromDialog } from "@/components/chat/truncate-from-dialog"
 import { RestorePointDialog } from "@/components/chat/restore-point-dialog"
 import { runMetadataOf } from "@/lib/chat/message-run-metadata"
-import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
+import {
+  buildMessageShareContent,
+  copyMessageContent,
+  messageTypedText,
+  shareMessageContent,
+} from "@/lib/chat/message-share"
 import { MessageTextSelectionSheet } from "./message-text-selection-sheet"
 
 export interface MessageActionSheetProps {
@@ -169,7 +173,11 @@ export function MessageActionSheet({
     isLoading: readAloudLoading,
   } = useReadAloudStatus(message?.id ?? "")
 
-  const text = message ? extractPlainText(message) : ""
+  // What the user typed, for quote, edit, resend and read-aloud; copy and
+  // share hand over the whole message (images, sources) as desktop does.
+  const text = message ? messageTypedText(message) : ""
+  const shareable = useMemo(() => (message ? buildMessageShareContent(message) : null), [message])
+  const canShare = shareable?.hasContent ?? false
   // Per-message token/cost — on desktop this lives in the hover-only action bar
   // (unreachable on touch), so surface it here as a non-interactive footer.
   const usage = (message?.metadata as { usage?: UsageInfo } | undefined)?.usage
@@ -191,7 +199,7 @@ export function MessageActionSheet({
     () =>
       resolveMessageActionCommands({
         role: message?.role ?? "system",
-        hasContent: Boolean(text),
+        hasContent: canShare,
         hasSession: Boolean(branchSessionId),
         canEdit: Boolean(onEditResend),
         canRegenerate: Boolean(onRegenerate),
@@ -212,7 +220,7 @@ export function MessageActionSheet({
       onRegenerate,
       onSelect,
       readAloudAvailable,
-      text,
+      canShare,
       ttsEnabled,
     ]
   )
@@ -242,10 +250,14 @@ export function MessageActionSheet({
   }
 
   const onCopy = async () => {
-    if (!text) return
+    if (!shareable?.hasContent) return
     setBusy(true)
     try {
-      await writeClipboardText(text)
+      // The plain write throws on failure, which the catch below reports.
+      await copyMessageContent(shareable, text, async (plain) => {
+        await writeClipboardText(plain)
+        return true
+      })
       void notify("success")
       toast.success(t("copySuccess"))
       onOpenChange(false)
@@ -351,19 +363,19 @@ export function MessageActionSheet({
   }
 
   const onShare = async () => {
-    if (!text) return
+    if (!shareable?.hasContent) return
     setBusy(true)
     try {
-      const out = await share({ text, dialogTitle: t("shareDialogTitle") })
-      if (out.kind === "shared") {
+      // The same share as desktop: images go along, and where there is no
+      // share surface the message goes to the clipboard, said so.
+      const out = await shareMessageContent(shareable, { dialogTitle: t("shareDialogTitle") })
+      if (out.kind === "shared" || out.kind === "copied") {
         void notify("success")
+        if (out.kind === "copied") toast.success(t("shareCopiedFallback"))
         onOpenChange(false)
-      } else if (out.kind === "unsupported") {
+      } else if (out.kind === "failed") {
         void notify("error")
-        toast.error(t("shareUnsupported"))
-      } else if (out.kind === "error") {
-        void notify("error")
-        toast.error(t("shareFailed", { message: out.message }))
+        toast.error(t("shareFailed", { message: out.message ?? "" }))
       }
       // cancelled — silent.
     } finally {
@@ -452,7 +464,7 @@ export function MessageActionSheet({
             icon={<AnimatedActionIcon icon={AnimatedCopyIcon} size={16} />}
             label={t("copy")}
             onClick={onCopy}
-            disabled={busy || !text}
+            disabled={busy || !canShare}
             testid="message-action-copy"
           />
           {commandById.has("selectText") && (
@@ -484,7 +496,7 @@ export function MessageActionSheet({
             icon={<Share2Icon className="size-4" />}
             label={t("share")}
             onClick={onShare}
-            disabled={busy || !text}
+            disabled={busy || !canShare}
             testid="message-action-share"
           />
           {commandById.has("shareCard") && (
@@ -743,23 +755,4 @@ function Row({ icon, label, onClick, disabled, testid }: RowProps) {
       <span className="flex-1">{label}</span>
     </Button>
   )
-}
-
-/**
- * Concatenate every text/reasoning fragment in a UIMessage into plain
- * text. Skips tool blocks and binary parts since the user can't paste
- * those into a clipboard or another app meaningfully.
- */
-export function extractPlainText(message: UIMessage): string {
-  const out: string[] = []
-  // Copy, quote, share, read-aloud and the edit draft all want the typed text,
-  // not the context envelope the composer put in front of it.
-  for (const part of stripPromptPreambleFromParts(message.parts ?? [])) {
-    const type = (part as { type?: string }).type
-    if (type === "text" || type === "reasoning") {
-      const text = (part as { text?: string }).text ?? ""
-      if (text) out.push(text)
-    }
-  }
-  return out.join("\n").trim()
 }
