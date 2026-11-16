@@ -184,7 +184,7 @@ export function listChangedFiles(base, exec = (command, args) => execaSync(comma
 export const DEPENDENCY_SMOKE_TESTS = [
   "lib/db/messages.test.ts",
   "lib/work-submission/chat-adapter.test.ts",
-  "lib/claude/sidecar-wire-contract.test.ts",
+  "lib/ai/agent/execution/sidecar-wire-contract.test.ts",
   "lib/ai/operations/handlers/ai-sdk-surface.test.ts",
   "components/chat/markdown-renderer.test.tsx",
   "components/chat/markdown-renderer.heavy.test.ts",
