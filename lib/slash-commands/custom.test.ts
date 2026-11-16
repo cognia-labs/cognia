@@ -38,6 +38,18 @@ jest.mock("@/lib/tauri/transport-routing", () => ({
   isRemoteHostActive: () => mockRemoteHostActive(),
 }))
 
+// The Host a bound conversation names. Opened once per scan, then closed.
+const mockClose = jest.fn()
+const mockOpenOrigin = jest.fn(async (origin: unknown) => ({
+  origin,
+  transport: { call: jest.fn() },
+  assertCurrent: () => undefined,
+  close: mockClose,
+}))
+jest.mock("@/lib/task-workspace/origin", () => ({
+  openTaskWorkspaceOrigin: (origin: unknown) => mockOpenOrigin(origin),
+}))
+
 import {
   GlobalScopeUnavailableError,
   applyTemplate,
@@ -273,6 +285,55 @@ describe("loadCustomSlashCommands while driving a remote Host", () => {
     mockedInvoke.mockResolvedValue([raw("mine", "user")])
     expect((await loadCustomSlashCommands(null)).map((c) => c.name)).toEqual(["mine"])
     expect(mockedListWorkspace).not.toHaveBeenCalled()
+  })
+})
+
+describe("loadCustomSlashCommands for a conversation bound to a Host", () => {
+  const hostB = { kind: "remote" as const, hostId: "host-b", accountId: "acct" }
+
+  beforeEach(() => {
+    mockOpenOrigin.mockClear()
+    mockClose.mockClear()
+  })
+
+  it("reads the bound Host's workspace even while the desktop drives another", async () => {
+    mockRemoteHostActive.mockReturnValue(true)
+    mockedInvoke.mockResolvedValue([])
+    mockedListWorkspace.mockResolvedValue([
+      { name: "deploy", description: "B deploy", scope: "project", template: "d" },
+    ])
+
+    const out = await loadCustomSlashCommands("/local/path", {
+      origin: hostB,
+      workspaceRoot: "/srv/b/api",
+    })
+
+    expect(mockOpenOrigin).toHaveBeenCalledWith(hostB)
+    // The Host's recorded workspace, not this window's cwd, and the opened
+    // authority's deps rather than the active route's.
+    expect(mockedListWorkspace).toHaveBeenCalledWith(
+      "/srv/b/api",
+      expect.objectContaining({ walk: expect.any(Function), readFile: expect.any(Function) })
+    )
+    expect(mockClose).toHaveBeenCalledTimes(1)
+    expect(out.map((command) => command.name)).toEqual(["deploy"])
+  })
+
+  it("closes the Host authority when the scan fails", async () => {
+    mockedInvoke.mockResolvedValue([])
+    mockedListWorkspace.mockRejectedValue(new Error("Host offline"))
+    await expect(
+      loadCustomSlashCommands(null, { origin: hostB, workspaceRoot: "/srv/b/api" })
+    ).resolves.toEqual([])
+    expect(mockClose).toHaveBeenCalledTimes(1)
+  })
+
+  it("scans this machine for a conversation bound here, even while driving a Host", async () => {
+    mockRemoteHostActive.mockReturnValue(true)
+    mockedInvoke.mockResolvedValue([])
+    await loadCustomSlashCommands("/repo", { origin: { kind: "local" } })
+    expect(mockedInvoke).toHaveBeenCalledWith("slash_commands_scan", { cwd: "/repo" })
+    expect(mockOpenOrigin).not.toHaveBeenCalled()
   })
 })
 

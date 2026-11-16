@@ -24,6 +24,9 @@
 
 import matter from "gray-matter"
 
+import type { RawWorkspaceEntry } from "@/lib/files/types"
+import type { TaskWorkspaceAuthority } from "@/lib/task-workspace/origin"
+
 import type {
   ProjectCommandDir,
   WorkspaceCustomCommand,
@@ -83,6 +86,39 @@ const DEFAULT_DEPS: WorkspaceCommandDeps = {
     const { deleteWorkspaceEntry } = await import("@/lib/files/workspace-fs")
     await deleteWorkspaceEntry(root, relPath)
   },
+}
+
+/**
+ * The read half of the deps, bound to one opened Host. The defaults follow
+ * whichever Host this window drives right now; a conversation bound to a
+ * different Host must read that one, through the authority it was opened on.
+ * Every call re-checks the authority, so a Host switch mid-scan fails the scan
+ * instead of mixing two Hosts' commands.
+ */
+export function workspaceCommandReadDeps(
+  target: Pick<TaskWorkspaceAuthority, "transport" | "assertCurrent">
+): Pick<WorkspaceCommandDeps, "walk" | "readFile"> {
+  return {
+    walk: async (root, relPath) => {
+      target.assertCurrent()
+      const raw = await target.transport.call<{ entries: RawWorkspaceEntry[] }>(
+        "fs_walk_workspace",
+        { root, relPath, includeIgnored: true, maxEntries: WORKSPACE_COMMAND_MAX_FILES }
+      )
+      target.assertCurrent()
+      return { entries: raw.entries.map((e) => ({ relPath: e.rel_path, isDir: e.is_dir })) }
+    },
+    readFile: async (root, relPath, maxBytes) => {
+      target.assertCurrent()
+      const content = await target.transport.call<string>("fs_read_workspace_file", {
+        root,
+        relPath,
+        maxBytes,
+      })
+      target.assertCurrent()
+      return content
+    },
+  }
 }
 
 function resolveDeps(deps: Partial<WorkspaceCommandDeps>): WorkspaceCommandDeps {

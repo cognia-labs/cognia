@@ -17,6 +17,7 @@ import {
   listWorkspaceCustomCommands,
   parseWorkspaceCommandFile,
   saveWorkspaceCustomCommand,
+  workspaceCommandReadDeps,
   workspaceCommandRelPath,
   type WorkspaceCommandDeps,
 } from "./custom-workspace"
@@ -240,5 +241,60 @@ describe("default dependencies", () => {
     )
     await deleteWorkspaceCustomCommand({ root: "/repo", name: "a" })
     expect(deleteWorkspaceEntry as jest.Mock).toHaveBeenCalledWith("/repo", ".claude/commands/a.md")
+  })
+})
+
+describe("workspaceCommandReadDeps", () => {
+  function hostTarget(calls: Record<string, unknown>) {
+    const call = jest.fn(async (command: string) => calls[command])
+    const assertCurrent = jest.fn()
+    return { target: { transport: { call } as never, assertCurrent }, call, assertCurrent }
+  }
+
+  it("lists one Host's commands through the authority it was opened on", async () => {
+    const { target, call, assertCurrent } = hostTarget({
+      fs_walk_workspace: {
+        entries: [
+          { rel_path: ".claude/commands/deploy.md", absolute_path: "/x", is_dir: false, size: 1 },
+          { rel_path: ".claude/commands/git", absolute_path: "/y", is_dir: true, size: 0 },
+        ],
+      },
+      fs_read_workspace_file: "---\ndescription: Ship it\n---\nDeploy now",
+    })
+
+    const out = await listWorkspaceCustomCommands("/srv/api", workspaceCommandReadDeps(target))
+
+    expect(out).toEqual([
+      expect.objectContaining({ name: "deploy", description: "Ship it", template: "Deploy now" }),
+    ])
+    expect(call).toHaveBeenCalledWith("fs_walk_workspace", {
+      root: "/srv/api",
+      relPath: ".claude/commands",
+      includeIgnored: true,
+      maxEntries: 200,
+    })
+    expect(call).toHaveBeenCalledWith("fs_read_workspace_file", {
+      root: "/srv/api",
+      relPath: ".claude/commands/deploy.md",
+      maxBytes: WORKSPACE_COMMAND_MAX_BYTES,
+    })
+    // Never the window's active route.
+    expect(walkWorkspace as jest.Mock).not.toHaveBeenCalledWith("/srv/api", expect.anything())
+    expect(assertCurrent).toHaveBeenCalled()
+  })
+
+  it("drops a read whose Host changed while it was in flight", async () => {
+    const { target, assertCurrent } = hostTarget({
+      fs_read_workspace_file: "Deploy now",
+    })
+    const deps = workspaceCommandReadDeps(target)
+    assertCurrent
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error("Workspace Host connection changed")
+      })
+    await expect(deps.readFile("/srv/api", ".claude/commands/a.md", 10)).rejects.toThrow(
+      /connection changed/
+    )
   })
 })

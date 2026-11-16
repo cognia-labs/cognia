@@ -217,6 +217,7 @@ import { setRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
 import { getCommandDescriptor } from "@/lib/tauri/command-descriptors"
 import { runInTerminalDock } from "@/lib/terminal/run-in-dock"
 import type { ChatSession } from "@cognia/agent-config-types"
+import { loadCustomSlashCommands } from "@/lib/slash-commands/custom"
 import type { Project } from "@/types"
 import { useComposerKeyboardAvoidance } from "./composer/use-composer-keyboard-avoidance"
 import { useCameraRecovery } from "@/hooks/use-camera-recovery"
@@ -1058,6 +1059,49 @@ describe("Composer — IME composition keys", () => {
     const { onStop, textarea } = renderComposer("streaming")
     fireEvent.keyDown(textarea, { key: "Escape" })
     expect(onStop).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("Composer — custom slash commands follow the session's Host", () => {
+  function renderWith(session: ChatSession) {
+    const Wrapper = withAdapter(makeAdapter())
+    render(
+      <Wrapper>
+        <Composer
+          session={session}
+          onStartNewSession={async () => undefined}
+          onOpenSettings={() => undefined}
+          onSend={async () => undefined}
+          onStop={async () => undefined}
+        />
+      </Wrapper>
+    )
+  }
+
+  it("asks the bound Host for its recorded workspace's commands", async () => {
+    const load = loadCustomSlashCommands as jest.Mock
+    load.mockClear()
+    renderWith({
+      ...mkSession(),
+      hostBinding: {
+        origin: { kind: "remote", hostId: "host-b", accountId: "acct" },
+        workspaceRoot: "/srv/b/api",
+      },
+    })
+    await act(async () => {})
+    expect(load.mock.lastCall?.[1]).toEqual({
+      origin: { kind: "remote", hostId: "host-b", accountId: "acct" },
+      workspaceRoot: "/srv/b/api",
+    })
+  })
+
+  it("leaves an unbound conversation to the active route", async () => {
+    const load = loadCustomSlashCommands as jest.Mock
+    load.mockClear()
+    renderWith(mkSession())
+    await act(async () => {})
+    expect(load).toHaveBeenCalled()
+    expect(load.mock.lastCall?.[1]).toBeNull()
   })
 })
 

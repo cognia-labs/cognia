@@ -980,17 +980,43 @@ function ComposerInner(props: InnerProps) {
   const applyPreset = useApplyPreset()
 
   // --- Per-cwd custom slash commands ------------------------------------
-  // Re-read when the desktop switches which Host it drives, not only when the
-  // path changes: two Hosts can share a path and hold different commands.
+  // A conversation bound to a Host reads that Host's commands, whichever one
+  // the desktop drives now. An unbound one follows the active route, so it is
+  // re-read when the desktop switches Hosts, not only when the path changes:
+  // two Hosts can share a path and hold different commands.
   const activeRemoteHost = useSyncExternalStore(
     subscribeActiveRemoteTransport,
     getActiveRemoteTransport,
     () => null
   )
-  const customCommandKey = useMemo(() => ({ cwd, host: activeRemoteHost }), [cwd, activeRemoteHost])
+  const hostBinding = props.session?.hostBinding
+  const boundOrigin = hostBinding?.origin
+  const boundHostId = boundOrigin?.kind === "remote" ? boundOrigin.hostId : null
+  const boundAccountId = boundOrigin?.kind === "remote" ? boundOrigin.accountId : undefined
+  const boundRoot = hostBinding?.workspaceRoot
+  const hasBinding = boundOrigin !== undefined
+  const customCommandKey = useMemo(
+    () => ({
+      cwd,
+      host: hasBinding ? null : activeRemoteHost,
+      binding: !hasBinding
+        ? null
+        : {
+            origin: boundHostId
+              ? {
+                  kind: "remote" as const,
+                  hostId: boundHostId,
+                  ...(boundAccountId ? { accountId: boundAccountId } : {}),
+                }
+              : { kind: "local" as const },
+            ...(boundRoot ? { workspaceRoot: boundRoot } : {}),
+          },
+    }),
+    [cwd, activeRemoteHost, hasBinding, boundHostId, boundAccountId, boundRoot]
+  )
   useEffect(() => {
     let cancelled = false
-    void loadCustomSlashCommands(customCommandKey.cwd).then((list) => {
+    void loadCustomSlashCommands(customCommandKey.cwd, customCommandKey.binding).then((list) => {
       if (!cancelled) setCustomCommandScan({ key: customCommandKey, list })
     })
     return () => {

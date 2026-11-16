@@ -20,6 +20,7 @@
 
 import { invoke } from "@tauri-apps/api/core"
 import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
+import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
 import type { SlashCommand, SlashScope } from "./builtin"
 import { applyTemplate } from "./builtin"
 import {
@@ -27,6 +28,7 @@ import {
   deleteWorkspaceCustomCommand,
   listWorkspaceCustomCommands,
   saveWorkspaceCustomCommand,
+  workspaceCommandReadDeps,
   type ProjectCommandDir,
 } from "./custom-workspace"
 
@@ -94,11 +96,21 @@ export function projectCommandDirOf(originDir: string | null | undefined): Proje
  * commands from this machine's `~/.claude/commands` (a command is a prompt
  * template expanded here before sending, so the user's own library still
  * applies). Project wins a name clash, as it does in the scanner.
+ *
+ * A conversation already bound to a Host (`binding`, its `hostBinding`) reads
+ * that Host whichever one this window drives now: the commands offered are the
+ * ones its turns run against. A conversation bound here reads this machine even
+ * while the desktop drives a remote Host. Without a binding (settings, plugins,
+ * a conversation that has not sent yet) the active route decides, as above.
  */
 export async function loadCustomSlashCommands(
-  cwd: string | null | undefined
+  cwd: string | null | undefined,
+  binding?: { origin: TaskWorkspaceOrigin; workspaceRoot?: string } | null
 ): Promise<CustomSlashCommand[]> {
-  if (isRemoteHostActive()) return loadForRemoteHost(cwd)
+  if (binding?.origin.kind === "remote") {
+    return loadForRemoteHost(binding.workspaceRoot ?? cwd, binding.origin)
+  }
+  if (!binding && isRemoteHostActive()) return loadForRemoteHost(cwd)
   try {
     const raw = await invoke<RawCommand[]>("slash_commands_scan", {
       cwd: cwd ?? null,
@@ -123,7 +135,25 @@ export async function loadCustomSlashCommands(
   }
 }
 
-async function loadForRemoteHost(cwd: string | null | undefined): Promise<CustomSlashCommand[]> {
+/** Project commands of the workspace at `root` on the Host `origin` names. */
+async function listOnOrigin(
+  root: string,
+  origin: Extract<TaskWorkspaceOrigin, { kind: "remote" }>
+): Promise<CustomSlashCommand[]> {
+  const { openTaskWorkspaceOrigin } = await import("@/lib/task-workspace/origin")
+  // One opened authority for the whole scan, not one connection per file.
+  const target = await openTaskWorkspaceOrigin(origin)
+  try {
+    return await listWorkspaceCustomCommands(root, workspaceCommandReadDeps(target))
+  } finally {
+    target.close()
+  }
+}
+
+async function loadForRemoteHost(
+  cwd: string | null | undefined,
+  origin?: Extract<TaskWorkspaceOrigin, { kind: "remote" }>
+): Promise<CustomSlashCommand[]> {
   const [userScope, projectScope] = await Promise.all([
     // `cwd: null` keeps the local scanner to the user-global directory.
     invoke<RawCommand[]>("slash_commands_scan", { cwd: null }).then(
@@ -136,12 +166,14 @@ async function loadForRemoteHost(cwd: string | null | undefined): Promise<Custom
       }
     ),
     cwd
-      ? listWorkspaceCustomCommands(cwd).catch((err: unknown) => {
-          if (typeof window !== "undefined") {
-            console.debug("loadCustomSlashCommands Host workspace scan skipped:", err)
+      ? (origin ? listOnOrigin(cwd, origin) : listWorkspaceCustomCommands(cwd)).catch(
+          (err: unknown) => {
+            if (typeof window !== "undefined") {
+              console.debug("loadCustomSlashCommands Host workspace scan skipped:", err)
+            }
+            return [] as CustomSlashCommand[]
           }
-          return [] as CustomSlashCommand[]
-        })
+        )
       : Promise.resolve([] as CustomSlashCommand[]),
   ])
   const byName = new Map<string, CustomSlashCommand>()
