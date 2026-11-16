@@ -255,7 +255,7 @@
     "lib/claude/build-options.ts": {
       "bareAccountId": 10
     },
-    "lib/claude/env-resolver.ts": {
+    "lib/ai/agent/execution/account-environment.ts": {
       "bareAccountId": 13
     },
     "lib/claude/ipc.ts": {

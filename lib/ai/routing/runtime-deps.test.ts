@@ -5,7 +5,7 @@
  * (the `75de5d7a` refactor). Each getter here MUST reflect a live store mutation.
  */
 
-import { buildRoutingRuntimeAdapters } from "./routing-runtime-deps"
+import { buildRoutingRuntimeAdapters } from "./runtime-deps"
 import { useHealthMetricsStore } from "@/stores/settings/health-metrics-store"
 import { useCircuitBreakerStore } from "@/stores/settings/circuit-breaker-store"
 import { useProviderCostMirrorStore } from "@/stores/settings/provider-cost-mirror-store"

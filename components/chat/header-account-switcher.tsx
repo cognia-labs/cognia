@@ -19,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { updateSession } from "@/lib/db/sessions"
-import { subscriptionAccountProviderFor } from "@/lib/claude/env-resolver"
+import { subscriptionAccountProviderFor } from "@/lib/ai/agent/execution/account-environment"
 import { useAccounts, useSubscriptionProviders } from "@/lib/subscription/core/hooks"
 import { useSettingsStore } from "@/stores/settings"
 import type { AccountSummary, ProviderId } from "@/types/subscription"

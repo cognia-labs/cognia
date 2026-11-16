@@ -364,7 +364,7 @@ async function modelBridge(
   } else if (payload.accountId != null) {
     const accountId = requiredString(payload.accountId)
     const { resolveSubscriptionProviderCredential } =
-      await import("@/lib/claude/provider-attempt-options")
+      await import("@/lib/ai/providers/provider-attempt-options")
     const credential = await resolveSubscriptionProviderCredential(providerId, settings, accountId)
     if (!credential) throw new Error("gateway_bridge_credentials_unavailable")
     transientSettings = {

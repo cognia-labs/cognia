@@ -157,8 +157,8 @@ jest.mock("@cognia/provider-routing/build-preview-engine", () => ({
 jest.mock("@/stores/settings", () => ({
   useSettingsStore: { getState: () => mockLiveSettingsState },
 }))
-jest.mock("@/lib/claude/provider-attempt-options", () => ({
-  ...jest.requireActual("@/lib/claude/provider-attempt-options"),
+jest.mock("@/lib/ai/providers/provider-attempt-options", () => ({
+  ...jest.requireActual("@/lib/ai/providers/provider-attempt-options"),
   resolveProviderAttemptOptions: (...args: unknown[]) => mockResolveProviderAttemptOptions(...args),
 }))
 jest.mock("@cognia/redact", () => ({

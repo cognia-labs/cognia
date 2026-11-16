@@ -23,7 +23,7 @@
     "A:lib/mcp/builtin/runtime-context.ts",
     "A:lib/ai/agent/execution/hooks/trust-sync.ts",
     "A:lib/fleet/claude-code-hooks.ts",
-    "A:lib/claude/settings.ts",
+    "A:lib/ai/agent/execution/claude-settings.ts",
     "A:lib/cli-bridge/detect-cli.ts",
     "A:lib/cli-bridge/download-release.ts",
     "A:lib/cli-bridge/home.ts",

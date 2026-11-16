@@ -1,5 +1,5 @@
 import type { AgentReadResult } from "@/lib/claude/ipc"
-import type { EffectiveSettings } from "@/lib/claude/settings"
+import type { EffectiveSettings } from "@/lib/ai/agent/execution/claude-settings"
 import { settingsFromClaudeCode } from "./adapters/claude-code"
 import { settingsFromCodex } from "./adapters/codex"
 import { settingsFromOpencode } from "./adapters/opencode"
@@ -16,7 +16,7 @@ async function defaultDeps(): Promise<SettingsImportPreviewDeps> {
   const [{ useSettingsStore }, ipc, claudeSettings] = await Promise.all([
     import("@/stores/settings/settings-store"),
     import("@/lib/claude/ipc"),
-    import("@/lib/claude/settings"),
+    import("@/lib/ai/agent/execution/claude-settings"),
   ])
   return {
     currentSettings: () => useSettingsStore.getState().settings ?? {},

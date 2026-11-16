@@ -135,7 +135,7 @@ jest.mock("@/components/ui/select", () => ({
 }))
 
 const mockSubscribe = jest.fn()
-jest.mock("@/lib/claude/settings", () => ({
+jest.mock("@/lib/ai/agent/execution/claude-settings", () => ({
   subscribeClaudeSettings: (...args: unknown[]) => mockSubscribe(...args),
 }))
 

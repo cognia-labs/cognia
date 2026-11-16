@@ -13,7 +13,7 @@ jest.mock("next-intl", () => ({
 
 const mockReadUser = jest.fn()
 const mockWriteUser = jest.fn()
-jest.mock("@/lib/claude/settings", () => ({
+jest.mock("@/lib/ai/agent/execution/claude-settings", () => ({
   readClaudeUserSettings: () => mockReadUser(),
   writeClaudeUserSettings: (p: unknown) => mockWriteUser(p),
 }))

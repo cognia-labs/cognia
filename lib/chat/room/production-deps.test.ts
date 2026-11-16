@@ -73,7 +73,7 @@ jest.mock("@/lib/policy/action-review/chat-tool-channel", () => ({
 jest.mock("@/lib/usage/compaction-metrics", () => ({ pendingRecoveryPhase: jest.fn(() => 2) }))
 const resolveProviderAttemptOptions = jest.fn(async () => ({ concurrentLimit: 3 }))
 const applyProviderAttemptLimits = jest.fn(() => ({}))
-jest.mock("@/lib/claude/provider-attempt-options", () => ({
+jest.mock("@/lib/ai/providers/provider-attempt-options", () => ({
   resolveProviderAttemptOptions: (...args: unknown[]) =>
     resolveProviderAttemptOptions(...(args as [])),
   applyProviderAttemptLimits: (...args: unknown[]) => applyProviderAttemptLimits(...(args as [])),

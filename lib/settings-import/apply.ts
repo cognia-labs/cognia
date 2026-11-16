@@ -1,5 +1,5 @@
 import type { AppSettings } from "@cognia/agent-config-types"
-import type { ClaudeSettings } from "@/lib/claude/settings"
+import type { ClaudeSettings } from "@/lib/ai/agent/execution/claude-settings"
 import {
   sanitizeImportedToolRules,
   settingsImportSafetyWarning,
@@ -24,7 +24,7 @@ export interface ApplySettingsImportResult {
 async function defaultDeps(): Promise<ApplySettingsImportDeps> {
   const [{ useSettingsStore }, claudeSettings] = await Promise.all([
     import("@/stores/settings/settings-store"),
-    import("@/lib/claude/settings"),
+    import("@/lib/ai/agent/execution/claude-settings"),
   ])
   return {
     currentSettings: () => useSettingsStore.getState().settings ?? {},

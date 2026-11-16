@@ -4,7 +4,7 @@
  * Mobile Hooks page (ADR-0056, decision D6 — desktop-bound section, read-only
  * on mobile). User / project / local lifecycle hooks live in
  * `.claude/settings.json` and are read + written through the desktop Rust
- * runtime (`lib/claude/settings`), which has no mobile counterpart — so the
+ * runtime (`lib/ai/agent/execution/claude-settings`), which has no mobile counterpart — so the
  * phone cannot read the user's configured hooks and editing stays "manage on
  * desktop".
  *

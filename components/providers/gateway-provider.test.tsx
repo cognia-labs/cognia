@@ -59,7 +59,7 @@ jest.mock("@/lib/gateway/decide", () => ({
 // Subscription enrich is a no-op pass-through in these tests (returns the
 // base snapshot); the resolver itself is covered in snapshot-publisher.test.
 const mockVaultCredential = jest.fn().mockResolvedValue(null)
-jest.mock("@/lib/claude/provider-attempt-options", () => ({
+jest.mock("@/lib/ai/providers/provider-attempt-options", () => ({
   resolveSubscriptionProviderCredential: (...args: unknown[]) => mockVaultCredential(...args),
 }))
 

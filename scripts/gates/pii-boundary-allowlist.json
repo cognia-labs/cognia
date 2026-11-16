@@ -92,7 +92,7 @@
     "protection": "No outbound model payload is emitted here."
   },
   {
-    "file": "lib/claude/routing-runtime-deps.ts",
+    "file": "lib/ai/routing/runtime-deps.ts",
     "boundaries": ["@cognia/provider-embedding/embedding"],
     "reason": "Routing uses the shared embedding adapter.",
     "protection": "Routing queries are user-authored; local candidate metadata is application-owned."

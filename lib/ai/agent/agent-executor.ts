@@ -795,7 +795,7 @@ async function runToolEnabledStandalone(
         if (!next || !appSettings) throw error
         candidate = next
         const { resolveProviderAttemptOptions, applyProviderAttemptLimits } =
-          await import("@/lib/claude/provider-attempt-options")
+          await import("@/lib/ai/providers/provider-attempt-options")
         const resolvedAttempt = await resolveProviderAttemptOptions(
           next.providerId,
           appSettings,
@@ -1211,7 +1211,7 @@ export async function runCompletionRail(
         model: candidate.modelId,
       })
       const { buildProviderAttemptModelParams } =
-        await import("@/lib/claude/provider-attempt-options")
+        await import("@/lib/ai/providers/provider-attempt-options")
       const modelParams = buildProviderAttemptModelParams(candidate.providerId, candidate.modelId, {
         ...liveSettings,
         providerSettings,

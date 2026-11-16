@@ -16,7 +16,7 @@ jest.mock("@/lib/ai/agent/execution/host-environment", () => ({
 const mockTauri = jest.fn(() => false)
 const mockNativeSettings = jest.fn()
 jest.mock("@/lib/tauri", () => ({ isTauri: () => mockTauri() }))
-jest.mock("@/lib/claude/settings", () => ({
+jest.mock("@/lib/ai/agent/execution/claude-settings", () => ({
   readClaudeEffectiveSettings: () => mockNativeSettings(),
 }))
 const mockHookPlugins = jest.fn((): string[] => [])

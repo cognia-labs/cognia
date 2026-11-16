@@ -254,7 +254,7 @@ export async function prepareExternalAgentGatewayRoute(
     import("@/stores/settings"),
     import("@/stores/account/account-store"),
     import("@/lib/gateway/snapshot-publisher"),
-    import("@/lib/claude/provider-attempt-options"),
+    import("@/lib/ai/providers/provider-attempt-options"),
   ])
   const settings = useSettingsStore.getState().settings
   if (!settings) throw new Error("Cognia provider settings are unavailable")

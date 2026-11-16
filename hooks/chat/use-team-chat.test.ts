@@ -91,8 +91,8 @@ jest.mock("@/lib/claude/build-options", () => ({
 const resolveProviderAttemptOptionsMock = jest.fn().mockResolvedValue({
   providerCredentials: { apiKey: "fallback-key", protocol: "openai" },
 })
-jest.mock("@/lib/claude/provider-attempt-options", () => ({
-  ...jest.requireActual("@/lib/claude/provider-attempt-options"),
+jest.mock("@/lib/ai/providers/provider-attempt-options", () => ({
+  ...jest.requireActual("@/lib/ai/providers/provider-attempt-options"),
   resolveProviderAttemptOptions: (...args: unknown[]) => resolveProviderAttemptOptionsMock(...args),
 }))
 

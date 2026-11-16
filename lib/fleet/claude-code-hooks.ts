@@ -6,7 +6,7 @@
  * built-ins (merged at runtime for cognia-run sessions), fleet hooks must be
  * present in the file so Claude Code instances the user launches in any
  * terminal execute them. Install/uninstall go through the single settings
- * writer (`lib/claude/settings.ts` read → patch `hooks` → write full payload)
+ * writer (`lib/ai/agent/execution/claude-settings.ts` read → patch `hooks` → write full payload)
  * — never a second ad-hoc writer.
  *
  * Every installed handler is recognizable by the managed command prefix (the
@@ -21,7 +21,7 @@ import {
   readClaudeUserSettings,
   writeClaudeUserSettings,
   type ClaudeSettings,
-} from "@/lib/claude/settings"
+} from "@/lib/ai/agent/execution/claude-settings"
 import { invoke } from "@tauri-apps/api/core"
 
 /** One fleet hook contribution: event + forwarding mode. */

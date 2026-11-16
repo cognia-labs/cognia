@@ -289,7 +289,7 @@ const BUILTIN_SETTINGS_NAV: NavItem[] = [
     group: "models",
     icon: ArrowLeftRightIcon,
     // Claude Code CLI config on the execution host. Pinned to the desktop for
-    // now: `lib/ccswitch/client.ts` and `lib/claude/settings.ts` still import
+    // now: `lib/ccswitch/client.ts` and `lib/ai/agent/execution/claude-settings.ts` still import
     // `invoke` from `@tauri-apps/api/core` (host-parity Class A) and would
     // throw on any other host — lift the pin when they move onto the seam.
     requires: ["shell"],
@@ -450,7 +450,7 @@ const BUILTIN_SETTINGS_NAV: NavItem[] = [
     group: "authoring",
     icon: WebhookIcon,
     // Agent lifecycle hooks run in the sidecar on the execution host. Pinned
-    // to the desktop until `lib/claude/settings.ts` (raw `invoke`, host-parity
+    // to the desktop until `lib/ai/agent/execution/claude-settings.ts` (raw `invoke`, host-parity
     // Class A) moves onto the transport seam.
     requires: ["sidecar"],
     profiles: ["desktop"],

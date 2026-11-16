@@ -34,7 +34,7 @@ import { shouldUseHostLlmClient } from "@/lib/ai/host-llm-client"
 import { testHostProviderConnection } from "@/lib/ai/providers/host-connection"
 import { getRuntimeTargetScopeKey } from "@/lib/runtime/runtime-target-context"
 
-import { resolveSubscriptionProviderCredential } from "@/lib/claude/provider-attempt-options"
+import { resolveSubscriptionProviderCredential } from "@/lib/ai/providers/provider-attempt-options"
 import { subscribeSubscriptionChanged } from "@/lib/subscription/core/subscription-events"
 import { sha256Hex } from "@/lib/share/hash"
 import type { AppSettings } from "@cognia/agent-config-types"

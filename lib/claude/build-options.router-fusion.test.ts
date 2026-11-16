@@ -139,7 +139,7 @@ jest.mock("@/lib/db/adapter-instances", () => ({
 // ADR-0028 — env-resolver bridges the renderer to the Rust per-account env
 // builder. Mock both helpers so resolveSendOptions exercises the integration
 // path without a real Tauri transport.
-jest.mock("@/lib/claude/env-resolver", () => ({
+jest.mock("@/lib/ai/agent/execution/account-environment", () => ({
   resolveAccountId: jest.fn(),
   resolveAccountEnv: jest.fn(),
   resolveProxyEnv: jest.fn(),
@@ -149,7 +149,9 @@ jest.mock("@/lib/claude/env-resolver", () => ({
   // point of the wrapper and what the external-runtime cases below rely on.
   resolveAccountEnvForExternalRuntime: jest.fn(
     async (providerId: string, accountId: string | null) => {
-      const { resolveAccountEnv } = jest.requireMock("@/lib/claude/env-resolver") as {
+      const { resolveAccountEnv } = jest.requireMock(
+        "@/lib/ai/agent/execution/account-environment"
+      ) as {
         resolveAccountEnv: jest.Mock
       }
       try {
@@ -318,7 +320,11 @@ jest.mock("@/lib/router-fusion/routing/llm-classifier", () => {
   }
 })
 
-import { resolveAccountEnv, resolveAccountId, resolveProxyEnv } from "@/lib/claude/env-resolver"
+import {
+  resolveAccountEnv,
+  resolveAccountId,
+  resolveProxyEnv,
+} from "@/lib/ai/agent/execution/account-environment"
 import { listEnabledSkillsByIds, listSkillsByIds, recordSkillUsage } from "@/lib/db/skills"
 import { buildMcpServerMapResolved, listEnabledMcpServers } from "@/lib/db/mcp-servers"
 import { useAgentRuntimeStore } from "@/stores/agent"

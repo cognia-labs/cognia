@@ -29,7 +29,7 @@ jest.mock("@/lib/db/session-usage", () => ({
   recordSurfaceUsage: jest.fn(async () => null),
   swallowUsageWrite: (promise: Promise<unknown>) => void promise.catch(() => {}),
 }))
-jest.mock("@/lib/claude/provider-attempt-options", () => ({
+jest.mock("@/lib/ai/providers/provider-attempt-options", () => ({
   resolveSubscriptionProviderCredential: jest.fn(),
 }))
 jest.mock("@/lib/runtime/streaming-fetch", () => ({
@@ -46,7 +46,7 @@ const providers = jest.requireMock("@/lib/ai/provider-consumption")
 const ledger = jest.requireMock("@/lib/ai/ledgered-model-call")
 const usage = jest.requireMock("@/lib/db/session-usage").recordSurfaceUsage as jest.Mock
 const generate = jest.requireMock("ai").generateText as jest.Mock
-const credential = jest.requireMock("@/lib/claude/provider-attempt-options")
+const credential = jest.requireMock("@/lib/ai/providers/provider-attempt-options")
   .resolveSubscriptionProviderCredential as jest.Mock
 const context = {
   requestId: "request-1",

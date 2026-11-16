@@ -44,7 +44,7 @@ import {
   resolveAccountEnvForExternalRuntime,
   resolveAccountId,
   resolveProxyEnv,
-} from "@/lib/claude/env-resolver"
+} from "@/lib/ai/agent/execution/account-environment"
 import { resolveSandboxEnabled, resolveSandboxSessionBinding } from "@/lib/sandbox/binding"
 import { resolveHostTaskPlacement } from "@/lib/sandbox/host-task-placement"
 import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
@@ -211,7 +211,7 @@ import { BRIEF_MODE_PROMPT } from "@/lib/agent/prompts/brief-mode"
 import {
   resolveProviderAttemptOptions,
   applyProviderAttemptLimits,
-} from "./provider-attempt-options"
+} from "@/lib/ai/providers/provider-attempt-options"
 import type { AgentCompositionSelectionV1 } from "@cognia/agent-config-types/agent-composition"
 import {
   applyCapabilityIdDelta,

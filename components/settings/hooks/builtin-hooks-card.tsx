@@ -22,7 +22,10 @@ import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/sonner"
 import { cn } from "@/lib/utils"
-import { readClaudeUserSettings, writeClaudeUserSettings } from "@/lib/claude/settings"
+import {
+  readClaudeUserSettings,
+  writeClaudeUserSettings,
+} from "@/lib/ai/agent/execution/claude-settings"
 import {
   BUILTIN_HOOKS,
   isBuiltinHookEnabled,

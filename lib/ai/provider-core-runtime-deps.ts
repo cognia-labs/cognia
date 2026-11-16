@@ -22,7 +22,7 @@
  *
  * The boot-time `ProviderCoreRuntimeInitializer` installs this exactly once;
  * `lib/headless/runtimes/initializers.ts` does the same for the headless brain
- * host. Mirrors `lib/claude/routing-runtime-deps.ts`.
+ * host. Mirrors `lib/ai/routing/runtime-deps.ts`.
  */
 
 import type { ProviderCoreRuntimeAdapters } from "@cognia/provider-core/providers/runtime-adapters"

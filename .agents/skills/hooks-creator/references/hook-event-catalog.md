@@ -42,7 +42,7 @@ TS bridge `lib/ai/agent/external/agent-hooks.ts`, and for the **goal judge** and
 | Event | Source | Notes |
 |---|---|---|
 | `InstructionsLoaded` | `lib/claude/build-options.ts resolveSendOptions` (renderer) | fire-and-forget observational, after the system prompt assembles |
-| `ConfigChange` | `lib/claude/settings.ts` user/project/local writers | fires after a successful settings write, with `{scope}` |
+| `ConfigChange` | `lib/ai/agent/execution/claude-settings.ts` user/project/local writers | fires after a successful settings write, with `{scope}` |
 | `PreCompact` | CLI `App` `compact` effect | just before the context window is trimmed |
 | `CwdChanged` | CLI `App` `addDir` effect | after `/add-dir` changes the agent's readable roots |
 

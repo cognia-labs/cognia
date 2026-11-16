@@ -10,7 +10,7 @@ import {
   resolveAccountEnvForExternalRuntime,
   resolveAccountId,
   resolveProxyEnv,
-} from "./env-resolver"
+} from "./account-environment"
 import type { AppSettings, Character, ChatSession } from "@cognia/agent-config-types"
 
 jest.mock("@/lib/tauri", () => ({

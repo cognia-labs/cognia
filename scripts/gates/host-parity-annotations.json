@@ -303,7 +303,7 @@
     },
     "lib/background-tasks": {
       "classification": "unmigrated",
-      "note": "redispatch.ts reads Claude settings hooks through `readClaudeEffectiveSettings` only on `isTauri()`. On a brain `nativeLifecycleHooks` stays \"uninspected-host\", so every recovery record is stamped non-idempotent and auto-resume is more conservative than needed. Reading the brain's own settings is host-neutral work behind the Tauri-only lib/claude/settings path; it degrades safely but is not physical."
+      "note": "redispatch.ts reads Claude settings hooks through `readClaudeEffectiveSettings` only on `isTauri()`. On a brain `nativeLifecycleHooks` stays \"uninspected-host\", so every recovery record is stamped non-idempotent and auto-resume is more conservative than needed. Reading the brain's own settings is host-neutral work behind the Tauri-only lib/ai/agent/execution/claude-settings path; it degrades safely but is not physical."
     },
     "lib/best-of-n": {
       "classification": "unmigrated",

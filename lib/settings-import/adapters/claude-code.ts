@@ -1,4 +1,4 @@
-import type { ClaudeSettings } from "@/lib/claude/settings"
+import type { ClaudeSettings } from "@/lib/ai/agent/execution/claude-settings"
 import type { Ruleset } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"
 import { settingsDraft, type SettingsImportDraft, type SettingsSnapshot } from "../types"
 

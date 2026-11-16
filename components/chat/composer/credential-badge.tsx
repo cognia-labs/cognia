@@ -38,7 +38,7 @@ import {
 import { resolveAppDefaultModel } from "@/lib/ai/app-default-model"
 import { credentialsRequiredByImport } from "@/lib/ai/agent/external/lifecycle/credentials"
 import { useCharacter } from "@/lib/data-hooks/context"
-import { resolveAccountId } from "@/lib/claude/env-resolver"
+import { resolveAccountId } from "@/lib/ai/agent/execution/account-environment"
 
 interface Props {
   session?: ChatSession | null

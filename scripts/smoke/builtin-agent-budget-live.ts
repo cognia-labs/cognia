@@ -565,7 +565,7 @@ async function runRepositoryCheckpointAcceptance() {
       "search-env: trace the actual grep file-tool process path and workspace.portEnv empty-overlay handling; do not assume an independent search RPC exists. Locate the exact empty-object guard in sidecar/src/platform/process/exec.ts and quote it verbatim as SOURCE_FACT in the final answer.",
       "execution-budget: establish Explore/Plan inheritance and existing explicit timeout/idle/cancel protections from cli/src/agent/subagent-runner.ts. Stay within built-in agent execution, not external-agent transports.",
       "continuation: establish budget-stop evidence and resume from cli/src/agent/subagent-dispatch.ts and lib/claude/run-and-capture.ts.",
-      "compaction: establish explicit/default output reservation, progress merge and publication safety from lib/claude/provider-attempt-options.ts, sidecar/src/context/progress-checkpoint.ts and sidecar/src/runtimes/ai-sdk/compaction.ts. Inspect relevant co-located assertions for load-bearing claims; never claim tests were run.",
+      "compaction: establish explicit/default output reservation, progress merge and publication safety from lib/ai/providers/provider-attempt-options.ts, sidecar/src/context/progress-checkpoint.ts and sidecar/src/runtimes/ai-sdk/compaction.ts. Inspect relevant co-located assertions for load-bearing claims; never claim tests were run.",
     ].join("\n\n")
     const prompt =
       agent.id === "Explore"
@@ -646,7 +646,7 @@ async function runRepositoryCompactionAcceptance() {
     "cli/src/runtime/workspace-port-env.ts",
     "cli/src/agent/subagent-runner.ts",
     "cli/src/agent/subagent-dispatch.ts",
-    "lib/claude/provider-attempt-options.ts",
+    "lib/ai/providers/provider-attempt-options.ts",
     "lib/ai/agent/execution/compact-instructions.ts",
     "sidecar/src/context/compaction.ts",
     "sidecar/src/runtimes/ai-sdk/compaction.ts",

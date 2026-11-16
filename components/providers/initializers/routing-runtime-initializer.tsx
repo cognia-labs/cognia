@@ -27,7 +27,7 @@ import { useEffect, useRef } from "react"
 
 import { setProviderRoutingRuntimeAdapters } from "@cognia/provider-routing/runtime-adapters"
 import { setModelPricingResolver } from "@cognia/provider-core/providers/model-pricing"
-import { buildRoutingRuntimeAdapters } from "@/lib/claude/routing-runtime-deps"
+import { buildRoutingRuntimeAdapters } from "@/lib/ai/routing/runtime-deps"
 import { resolveModelPricingUsd } from "@/lib/usage/pricing"
 
 export function RoutingRuntimeInitializer() {

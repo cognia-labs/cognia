@@ -111,7 +111,7 @@ export function createProductionRoomDeps(opts: ProductionRoomDepsOptions = {}): 
       runTitleTask: (args) => runTitleTask(args as never),
       resolveProviderAttemptOptions: async (providerId, settings, modelId, previousOptions) => {
         const { resolveProviderAttemptOptions, applyProviderAttemptLimits } =
-          await import("@/lib/claude/provider-attempt-options")
+          await import("@/lib/ai/providers/provider-attempt-options")
         const attempt = await resolveProviderAttemptOptions(
           providerId,
           settings,

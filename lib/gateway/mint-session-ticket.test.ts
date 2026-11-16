@@ -93,7 +93,7 @@ jest.mock("./host-task-lease", () => ({
   acquireHostTaskLease: (...args: unknown[]) => hostLeaseMock(...args),
 }))
 const credentialMock = jest.fn()
-jest.mock("@/lib/claude/provider-attempt-options", () => ({
+jest.mock("@/lib/ai/providers/provider-attempt-options", () => ({
   resolveSubscriptionProviderCredential: (...args: unknown[]) => credentialMock(...args),
 }))
 

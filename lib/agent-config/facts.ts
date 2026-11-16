@@ -21,7 +21,10 @@
 
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 
-import { readClaudeEffectiveSettings, type ClaudeSettings } from "@/lib/claude/settings"
+import {
+  readClaudeEffectiveSettings,
+  type ClaudeSettings,
+} from "@/lib/ai/agent/execution/claude-settings"
 import { resolveInstructionsConfig } from "@/lib/agents/instructions/types"
 import { listRules } from "@/lib/ai/agent/execution/permissions/ruleset-edit"
 import type { Ruleset, ToolRules } from "@cognia/plugin-contract/lib/claude/permissions/ruleset"

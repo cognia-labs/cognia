@@ -883,7 +883,7 @@ export async function buildEnrichedGatewaySnapshot(
   ] = await Promise.all([
     import("@/lib/subscription/core/provider-registry"),
     import("@/types/subscription/opencode"),
-    import("@/lib/claude/provider-attempt-options"),
+    import("@/lib/ai/providers/provider-attempt-options"),
     import("@/lib/subscription/core/transport"),
     import("@/lib/subscription/limits/store"),
   ])

@@ -13,7 +13,7 @@ import {
   type ClaudeSettings,
   type ClaudeSettingsChangedEvent,
   type EffectiveSettings,
-} from "./settings"
+} from "./claude-settings"
 
 jest.mock("@/lib/ai/agent/execution/hooks/lifecycle-firer", () => ({
   defaultLifecycleFirer: jest.fn(async () => null),

@@ -77,7 +77,8 @@ export async function captureBackgroundDispatchRecovery(input: {
     environment.pairedHost || environment.isHeadlessHost ? "uninspected-host" : null
   if (isTauri()) {
     try {
-      const { readClaudeEffectiveSettings } = await import("@/lib/claude/settings")
+      const { readClaudeEffectiveSettings } =
+        await import("@/lib/ai/agent/execution/claude-settings")
       const native = await readClaudeEffectiveSettings(input.caller.cwd)
       nativeLifecycleHooks = [native.user, native.project, native.local]
         .flatMap((layer) => Object.values(layer?.hooks ?? {}))

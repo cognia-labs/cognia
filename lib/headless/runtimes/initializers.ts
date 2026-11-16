@@ -303,7 +303,7 @@ registerHeadlessRuntime({
     const [{ setProviderRoutingRuntimeAdapters }, { buildRoutingRuntimeAdapters }] =
       await Promise.all([
         import("@cognia/provider-routing/runtime-adapters"),
-        import("@/lib/claude/routing-runtime-deps"),
+        import("@/lib/ai/routing/runtime-deps"),
       ])
     setProviderRoutingRuntimeAdapters(buildRoutingRuntimeAdapters())
   },

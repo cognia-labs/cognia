@@ -36,7 +36,7 @@ import { loggers } from "@cognia/logging"
 import { getAllProviders } from "@cognia/provider-types/provider"
 import { getSubscriptionProvider } from "@/lib/subscription/core/provider-registry"
 import { hostProviderKey } from "@/lib/host-secrets/provider-key-store"
-import { resolveAccountId } from "@/lib/claude/env-resolver"
+import { resolveAccountId } from "@/lib/ai/agent/execution/account-environment"
 import { ccswitchApiKeyEnv } from "@/lib/ccswitch/provider"
 import {
   remoteHostKeyedProviders,

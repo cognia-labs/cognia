@@ -28,8 +28,11 @@ import { isSiwcRoutingProvider } from "@cognia/provider-routing/build-preview-en
 import {
   applyProviderAttemptLimits,
   resolveProviderAttemptOptions,
-} from "./provider-attempt-options"
-import { resolveAccountId, subscriptionAccountProviderFor } from "./env-resolver"
+} from "@/lib/ai/providers/provider-attempt-options"
+import {
+  resolveAccountId,
+  subscriptionAccountProviderFor,
+} from "@/lib/ai/agent/execution/account-environment"
 import { switchChatLeaseProvider } from "@/lib/execution/chat-lease"
 import {
   abortRouterFusionSend,

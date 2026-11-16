@@ -531,7 +531,7 @@ async function runToolEnabled(
         if (!next || !appSettings) throw error
         candidate = next
         const { resolveProviderAttemptOptions, applyProviderAttemptLimits } =
-          await import("@/lib/claude/provider-attempt-options")
+          await import("@/lib/ai/providers/provider-attempt-options")
         const resolvedAttempt = await resolveProviderAttemptOptions(
           next.providerId,
           appSettings,

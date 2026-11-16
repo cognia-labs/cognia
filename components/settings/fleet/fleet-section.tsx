@@ -77,7 +77,7 @@ import {
   type OpencodeStatus,
   type OpencodeOutboxStatus,
 } from "@/lib/tauri/fleet"
-import { subscribeClaudeSettings } from "@/lib/claude/settings"
+import { subscribeClaudeSettings } from "@/lib/ai/agent/execution/claude-settings"
 import {
   CLAUDE_CODE_RELATED,
   RelatedSectionsStrip,

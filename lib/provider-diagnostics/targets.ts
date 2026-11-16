@@ -5,7 +5,7 @@ import type { ProviderDiagnosticCapability } from "@cognia/provider-types"
 import {
   resolveProviderAttemptOptions,
   type ProviderAttemptOptions,
-} from "@/lib/claude/provider-attempt-options"
+} from "@/lib/ai/providers/provider-attempt-options"
 
 import { PROVIDER_DIAGNOSTIC_EMBEDDING_VALUES, PROVIDER_DIAGNOSTIC_TEXT_PROMPT } from "./benchmark"
 import type { ResolvedProviderDiagnosticTarget } from "./service"

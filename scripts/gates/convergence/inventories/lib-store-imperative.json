@@ -1206,7 +1206,7 @@
       ]
     },
     {
-      "key": "lib/claude/env-resolver.ts",
+      "key": "lib/ai/agent/execution/account-environment.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [
@@ -1242,7 +1242,7 @@
       ]
     },
     {
-      "key": "lib/claude/provider-attempt-options.ts",
+      "key": "lib/ai/providers/provider-attempt-options.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [
@@ -1280,7 +1280,7 @@
       ]
     },
     {
-      "key": "lib/claude/routing-runtime-deps.ts",
+      "key": "lib/ai/routing/runtime-deps.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

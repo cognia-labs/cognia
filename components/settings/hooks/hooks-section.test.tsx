@@ -102,7 +102,7 @@ const mockWriteUser = jest.fn()
 const mockWriteProject = jest.fn()
 const mockWriteLocal = jest.fn()
 
-jest.mock("@/lib/claude/settings", () => ({
+jest.mock("@/lib/ai/agent/execution/claude-settings", () => ({
   readClaudeUserSettings: () => mockReadUser(),
   readClaudeProjectSettings: (cwd: string) => mockReadProject(cwd),
   readClaudeLocalSettings: (cwd: string) => mockReadLocal(cwd),

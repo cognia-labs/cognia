@@ -145,12 +145,14 @@ const resolveProviderAttemptOptionsMock = jest.fn()
 const applyProviderAttemptLimitsMock = jest.fn(
   (
     ...args: Parameters<
-      (typeof import("@/lib/claude/provider-attempt-options"))["applyProviderAttemptLimits"]
+      (typeof import("@/lib/ai/providers/provider-attempt-options"))["applyProviderAttemptLimits"]
     >
   ) =>
-    jest.requireActual("@/lib/claude/provider-attempt-options").applyProviderAttemptLimits(...args)
+    jest
+      .requireActual("@/lib/ai/providers/provider-attempt-options")
+      .applyProviderAttemptLimits(...args)
 )
-jest.mock("@/lib/claude/provider-attempt-options", () => ({
+jest.mock("@/lib/ai/providers/provider-attempt-options", () => ({
   resolveProviderAttemptOptions: (...a: Parameters<typeof resolveProviderAttemptOptionsMock>) =>
     resolveProviderAttemptOptionsMock(...a),
   applyProviderAttemptLimits: (...a: Parameters<typeof applyProviderAttemptLimitsMock>) =>

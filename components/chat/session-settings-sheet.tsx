@@ -88,7 +88,7 @@ import {
 } from "@/lib/presets/apply-to-session"
 import { groupPresets } from "@/lib/presets/group-presets"
 import { useCredentialStatus } from "@/hooks/chat/use-credential-status"
-import { resolveAccountId } from "@/lib/claude/env-resolver"
+import { resolveAccountId } from "@/lib/ai/agent/execution/account-environment"
 import { resolveAppDefaultModel } from "@/lib/ai/app-default-model"
 import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/session-models"
 import { HeaderAccountSwitcher } from "./header-account-switcher"

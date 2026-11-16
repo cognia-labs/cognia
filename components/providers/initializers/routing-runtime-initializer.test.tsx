@@ -19,7 +19,7 @@ jest.mock("@cognia/provider-core/providers/model-pricing", () => ({
 jest.mock("@/lib/usage/pricing", () => ({
   resolveModelPricingUsd: (...a: unknown[]) => resolveModelPricingUsdMock(...a),
 }))
-jest.mock("@/lib/claude/routing-runtime-deps", () => ({
+jest.mock("@/lib/ai/routing/runtime-deps", () => ({
   buildRoutingRuntimeAdapters: () => builtAdapters,
 }))
 jest.mock("@/lib/ai/agent/execution/certification-store", () => ({

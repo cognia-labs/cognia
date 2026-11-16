@@ -84,7 +84,7 @@ jest.mock("@cognia/provider-core/providers/model-discovery", () => ({
 }))
 
 const subscriptionCredential = jest.fn()
-jest.mock("@/lib/claude/provider-attempt-options", () => ({
+jest.mock("@/lib/ai/providers/provider-attempt-options", () => ({
   resolveSubscriptionProviderCredential: (...args: unknown[]) => subscriptionCredential(...args),
 }))
 jest.mock("@/lib/share/hash", () => ({

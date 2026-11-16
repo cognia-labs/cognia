@@ -24,7 +24,7 @@ jest.mock("@tauri-apps/api/core", () => ({
 
 const readUserMock = jest.fn()
 const writeUserMock = jest.fn()
-jest.mock("@/lib/claude/settings", () => ({
+jest.mock("@/lib/ai/agent/execution/claude-settings", () => ({
   readClaudeUserSettings: (...args: unknown[]) => readUserMock(...args),
   writeClaudeUserSettings: (...args: unknown[]) => writeUserMock(...args),
 }))

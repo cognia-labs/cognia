@@ -4,7 +4,7 @@
  * HooksSection — settings panel for the `hooks` block of `~/.claude/settings.json`.
  *
  * Phase 5 of the ClaudeCode 完整化 plan. Three scopes (User / Project / Local)
- * map onto the three reader/writer pairs in `lib/claude/settings.ts`. Within
+ * map onto the three reader/writer pairs in `lib/ai/agent/execution/claude-settings.ts`. Within
  * a scope, the panel groups every `HookEvent` by lifecycle category from the
  * shared `lib/ai/agent/execution/hooks/event-catalog.ts` (the single source of truth shared
  * with the chat hook-notice row). Each event hosts a list of `HookGroup` editors.
@@ -60,7 +60,7 @@ import {
   writeClaudeProjectSettings,
   writeClaudeLocalSettings,
   type ClaudeSettings,
-} from "@/lib/claude/settings"
+} from "@/lib/ai/agent/execution/claude-settings"
 import type { HookEvent, HookGroup, HooksConfig } from "@/lib/ai/agent/execution/hooks/types"
 import {
   knownHookRuntimeCapabilities,
