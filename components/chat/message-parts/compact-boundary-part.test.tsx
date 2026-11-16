@@ -11,6 +11,11 @@ import {
   __resetUndoRegistryForTesting,
 } from "@/lib/claude/compaction-undo"
 
+// Wrapped, not replaced, so a test can count calls to the real function.
+jest.mock("@/lib/usage/compaction-metrics", () => {
+  const actual = jest.requireActual("@/lib/usage/compaction-metrics")
+  return { ...actual, deriveContextPhases: jest.fn(actual.deriveContextPhases) }
+})
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, params?: Record<string, unknown>) =>
     params ? `${key}:${JSON.stringify(params)}` : key,
@@ -36,6 +41,7 @@ let mockStoreState: {
   activeSessionId: string | null
   replaceMessages: jest.Mock
   messages: UIMessage[]
+  sessions?: Record<string, { messages: UIMessage[] }>
 }
 jest.mock("@/stores/chat", () => ({
   useChatStore: Object.assign((sel: (s: unknown) => unknown) => sel(mockStoreState), {
@@ -118,6 +124,39 @@ describe("CompactBoundaryMarker", () => {
     expect(screen.getByTestId("compact-effectiveness")).toHaveTextContent(
       'effectiveness:{"pct":75}'
     )
+  })
+
+  it("reads its own conversation's transcript in a pane that is not focused", () => {
+    const msg = {
+      ...boundary({ preTokens: 1000, postTokens: 250 }, "b1"),
+      metadata: { sessionId: "pane-2" },
+    } as UIMessage
+    const assistant = {
+      id: "a1",
+      role: "assistant",
+      parts: [{ type: "text", text: "hi" }],
+      metadata: { usage: { inputTokens: 1000, outputTokens: 0 } },
+    } as unknown as UIMessage
+    // The focused conversation holds nothing about this boundary.
+    mockStoreState.messages = []
+    mockStoreState.sessions = { "pane-2": { messages: [assistant, msg] } }
+    render(<CompactBoundaryMarker message={msg} />)
+    expect(screen.getByTestId("compact-phase")).toHaveTextContent('phase:{"turn":1}')
+  })
+
+  it("walks a transcript once for all of its markers", async () => {
+    const { deriveContextPhases } = await import("@/lib/usage/compaction-metrics")
+    jest.mocked(deriveContextPhases).mockClear()
+    const first = boundary({ preTokens: 100, postTokens: 50 }, "b1")
+    const second = boundary({ preTokens: 100, postTokens: 50 }, "b2")
+    mockStoreState.messages = [first, second]
+    render(
+      <>
+        <CompactBoundaryMarker message={first} />
+        <CompactBoundaryMarker message={second} />
+      </>
+    )
+    expect(deriveContextPhases).toHaveBeenCalledTimes(1)
   })
 
   it("omits the effectiveness label when nothing was reclaimed", () => {

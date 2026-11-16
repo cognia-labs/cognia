@@ -5,6 +5,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ChatSession } from "@cognia/agent-config-types"
 import { useChatViewportStore } from "@/stores/chat/chat-viewport-store"
 
+// Wrapped, not replaced, so a test can count calls to the real function.
+jest.mock("@/lib/collab/shared-room-catch-up", () => {
+  const actual = jest.requireActual("@/lib/collab/shared-room-catch-up")
+  return { ...actual, catchUpLines: jest.fn(actual.catchUpLines) }
+})
 jest.mock("next-intl", () => ({
   useLocale: () => mockLocale,
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
@@ -139,6 +144,14 @@ describe("SharedRoomCatchUpCard", () => {
     rerender(<SharedRoomCatchUpCard sessionId="local" messages={messages} firstUnreadId="m1" />)
     fireEvent.click(screen.getByRole("button", { name: "dismiss" }))
     expect(container).toBeEmptyDOMElement()
+  })
+
+  it("does not read the transcript outside a shared room", async () => {
+    const { catchUpLines } = await import("@/lib/collab/shared-room-catch-up")
+    jest.mocked(catchUpLines).mockClear()
+    mockSession = { id: "plain" } as ChatSession
+    render(<SharedRoomCatchUpCard sessionId="local" messages={messages} firstUnreadId="m1" />)
+    expect(catchUpLines).not.toHaveBeenCalled()
   })
 
   it("answers in the reader's language", async () => {

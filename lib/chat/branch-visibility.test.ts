@@ -30,11 +30,10 @@ describe("resolveBranchWinners", () => {
 })
 
 describe("visibleThread", () => {
-  it("keeps rows without branch metadata and returns them unchanged", () => {
+  it("hands back the same list when nothing is branched", () => {
+    // Selectors and memos downstream keep their identity across frames.
     const rows = [row("u1", "user"), row("a1", "assistant")]
-    const out = visibleThread(rows, {})
-    expect(out).toEqual(rows)
-    expect(out[0]).toBe(rows[0])
+    expect(visibleThread(rows, {})).toBe(rows)
   })
 
   it("shows the winner at the first sibling's position", () => {

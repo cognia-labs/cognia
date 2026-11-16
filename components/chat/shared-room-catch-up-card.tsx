@@ -45,6 +45,8 @@ export function catchUpLanguage(locale: string): string {
   return locale.toLowerCase().startsWith("zh") ? "简体中文" : "English"
 }
 
+const NO_LINES: ReturnType<typeof catchUpLines> = []
+
 export function SharedRoomCatchUpCard({
   sessionId,
   messages,
@@ -61,13 +63,19 @@ export function SharedRoomCatchUpCard({
     [sessionId],
     undefined
   )
-  const lines = useMemo(() => catchUpLines(messages, firstUnreadId), [messages, firstUnreadId])
+  // Outside a shared room the card never shows: do not walk the transcript
+  // on every streamed frame to find that out.
+  const shared = Boolean(session?.collaboration)
+  const lines = useMemo(
+    () => (shared ? catchUpLines(messages, firstUnreadId) : NO_LINES),
+    [shared, messages, firstUnreadId]
+  )
   const [state, setState] = useState<CardState>({ kind: "idle" })
   const [dismissed, setDismissed] = useState(false)
   const [missing, setMissing] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
-  if (!session?.collaboration || dismissed || !offersCatchUp(lines)) return null
+  if (!shared || dismissed || !offersCatchUp(lines)) return null
 
   const run = async () => {
     const abort = new AbortController()

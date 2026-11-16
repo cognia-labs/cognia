@@ -1,4 +1,10 @@
 import type { UIMessage } from "ai"
+
+// Wrapped, not replaced, so a test can count calls to the real function.
+jest.mock("@/lib/inbox/extract-plain-text", () => {
+  const actual = jest.requireActual("@/lib/inbox/extract-plain-text")
+  return { ...actual, extractPlainText: jest.fn(actual.extractPlainText) }
+})
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
 import {
   buildMessageSearchIndex,
@@ -119,5 +125,22 @@ describe("stepHitIndex", () => {
 
   it("resolves the only hit from an unset current index", () => {
     expect(stepHitIndex(-1, 1, 1)).toBe(0)
+  })
+})
+
+describe("buildMessageSearchIndex caching", () => {
+  it("derives each message's text once and again only for a replaced message", async () => {
+    const { extractPlainText } = await import("@/lib/inbox/extract-plain-text")
+    const a = { id: "a", role: "user", parts: [{ type: "text", text: "Alpha" }] } as UIMessage
+    const b = { id: "b", role: "assistant", parts: [{ type: "text", text: "Be" }] } as UIMessage
+    expect(buildMessageSearchIndex([a, b]).map((entry) => entry.text)).toEqual(["alpha", "be"])
+    jest.mocked(extractPlainText).mockClear()
+    // A streamed frame: the old row is the same object, the reply is new.
+    const grown = { ...b, parts: [{ type: "text", text: "Beta" }] } as UIMessage
+    expect(buildMessageSearchIndex([a, grown]).map((entry) => entry.text)).toEqual([
+      "alpha",
+      "beta",
+    ])
+    expect(extractPlainText).toHaveBeenCalledTimes(1)
   })
 })

@@ -10,7 +10,7 @@
 // When the generic-path compaction captured an undo snapshot, an "Undo" action
 // is offered while the snapshot is still live (in-memory, this session only).
 
-import { useMemo, useState } from "react"
+import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { ImageIcon, ScissorsIcon, Undo2Icon } from "lucide-react"
 import { toast } from "sonner"
@@ -27,6 +27,42 @@ import {
 } from "@/lib/usage/compaction-metrics"
 
 const compactNum = new Intl.NumberFormat("en-US", { notation: "compact" })
+
+interface BoundaryMetric {
+  turnLabel: number
+  effectiveness: number
+}
+
+const NO_MESSAGES: UIMessage[] = []
+
+/**
+ * Turn label and effectiveness of every boundary in one transcript, computed
+ * once per transcript array. Every marker in the list reads the same entry, so
+ * N markers walk the transcript once per frame, not N times.
+ */
+const metricsByTranscript = new WeakMap<UIMessage[], Map<string, BoundaryMetric>>()
+
+function boundaryMetrics(messages: UIMessage[]): Map<string, BoundaryMetric> {
+  const cached = metricsByTranscript.get(messages)
+  if (cached) return cached
+  const deltas = indexDeltasByBoundary(computeCompactionTokenDeltas(messages))
+  const metrics = new Map<string, BoundaryMetric>()
+  for (const phase of deriveContextPhases(messages)) {
+    // The first phase a boundary opens is the one its label names.
+    if (!phase.boundaryId || metrics.has(phase.boundaryId)) continue
+    metrics.set(phase.boundaryId, {
+      turnLabel: phase.turnLabel,
+      effectiveness: deltas.get(phase.boundaryId)?.effectiveness ?? 0,
+    })
+  }
+  for (const [boundaryId, delta] of deltas) {
+    if (!metrics.has(boundaryId)) {
+      metrics.set(boundaryId, { turnLabel: 0, effectiveness: delta.effectiveness ?? 0 })
+    }
+  }
+  metricsByTranscript.set(messages, metrics)
+  return metrics
+}
 
 export interface CompactBoundaryPartData {
   type: "compact-boundary"
@@ -61,17 +97,19 @@ export function CompactBoundaryMarker({ message }: { message: UIMessage }) {
   const part = message.parts[0] as unknown as CompactBoundaryPartData
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const replaceMessages = useChatStore((s) => s.replaceMessages)
-  const messages = useChatStore((s) => s.messages)
+  // The marker's own conversation, which in a split pane or the dock is not
+  // the focused one.
+  const ownSessionId = (message.metadata as { sessionId?: unknown } | undefined)?.sessionId
+  const messages = useChatStore((s) =>
+    typeof ownSessionId === "string" && ownSessionId !== s.activeSessionId
+      ? (s.sessions[ownSessionId]?.messages ?? NO_MESSAGES)
+      : s.messages
+  )
   const [undoing, setUndoing] = useState(false)
   const [viewingFrames, setViewingFrames] = useState(false)
 
   // Turn label + effectiveness for THIS boundary, derived from the transcript.
-  const metric = useMemo(() => {
-    const delta = indexDeltasByBoundary(computeCompactionTokenDeltas(messages)).get(message.id)
-    const phase = deriveContextPhases(messages).find((p) => p.boundaryId === message.id)
-    if (!delta && !phase) return undefined
-    return { turnLabel: phase?.turnLabel ?? 0, effectiveness: delta?.effectiveness ?? 0 }
-  }, [messages, message.id])
+  const metric = boundaryMetrics(messages).get(message.id)
 
   const detail =
     part.preTokens !== undefined && part.postTokens !== undefined

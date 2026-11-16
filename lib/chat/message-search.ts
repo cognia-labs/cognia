@@ -63,13 +63,24 @@ function countOccurrences(haystack: string, needle: string): number {
  * nothing (rather than everything, which would make "next hit" meaningless).
  */
 export function buildMessageSearchIndex(messages: UIMessage[]): MessageSearchIndexEntry[] {
-  return messages.map((message, index) => ({
-    id: message.id,
-    index,
-    // Find-in-conversation matches what is shown in the bubble, which no longer
-    // includes the composer's context envelope.
-    text: extractPlainText(stripPromptPreambleFromParts(message.parts)).toLowerCase(),
-  }))
+  return messages.map((message, index) => ({ id: message.id, index, text: searchText(message) }))
+}
+
+/**
+ * Lower-cased search text per message object. Messages are replaced, never
+ * edited in place, so a streamed frame re-derives only the rows it changed;
+ * an open find bar no longer re-extracts the whole transcript per token.
+ */
+const searchTextCache = new WeakMap<UIMessage, string>()
+
+function searchText(message: UIMessage): string {
+  const cached = searchTextCache.get(message)
+  if (cached !== undefined) return cached
+  // Find-in-conversation matches what is shown in the bubble, which no longer
+  // includes the composer's context envelope.
+  const text = extractPlainText(stripPromptPreambleFromParts(message.parts)).toLowerCase()
+  searchTextCache.set(message, text)
+  return text
 }
 
 export function findIndexedMessageHits(

@@ -26,6 +26,11 @@ function branchMeta(m: BranchedMessage): BranchMetadata {
   return (m.metadata ?? {}) as BranchMetadata
 }
 
+function isBranched(m: BranchedMessage): boolean {
+  const { branchGroupId, branchOwnerId } = branchMeta(m)
+  return branchGroupId !== undefined || branchOwnerId !== undefined
+}
+
 /**
  * The sibling that should be visible for each `branchGroupId`.
  *
@@ -98,6 +103,9 @@ export function visibleThread<T extends BranchedMessage>(
   messages: readonly T[],
   activeBranchByGroup: Record<string, string>
 ): T[] {
+  // Most conversations never branch: hand the same list back, so selectors
+  // and memos downstream keep their identity across streamed frames.
+  if (!messages.some(isBranched)) return messages as T[]
   const winners = resolveBranchWinners(messages, activeBranchByGroup)
   const byId = new Map<string, T>()
   for (const m of messages) byId.set(m.id, m)
