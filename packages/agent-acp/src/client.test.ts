@@ -3409,12 +3409,17 @@ describe("AcpClientAdapter — current terminal wire shape", () => {
     // after the local session is gone; it cannot be pruned into a stop proof.
     await expect(a.confirmSessionProcessesStopped("s")).resolves.toBe(false)
   })
-  it("rejects direct terminal delegation from a strictly isolated Bot", async () => {
+  it("rejects direct terminal delegation from an isolated agent", async () => {
     mockIsTauri.mockReturnValue(true)
     const a = new AcpClientAdapter(acpDeps())
     ;(a as unknown as { _config: ExternalAgentConfig })._config = {
       ...stdioConfig(),
-      process: { command: "devin", env: { COGNIA_BOT_ISOLATION: "1" } },
+      process: {
+        command: "devin",
+        env: {
+          COGNIA_ENGINE_PROFILE: JSON.stringify({ kind: "isolated", key: "bot-1", reason: "bot" }),
+        },
+      },
     }
     seedSession(a, "s", "acceptEdits")
     await expect(
@@ -3424,7 +3429,7 @@ describe("AcpClientAdapter — current terminal wire shape", () => {
         args: ["-c", "env"],
         cwd: "/work",
       })
-    ).rejects.toThrow("inside their isolated agent process")
+    ).rejects.toThrow("must execute inside its own process")
     expect(mockTerminalCreate).not.toHaveBeenCalled()
   })
   it("converts ACP env entries to the native terminal map", async () => {
@@ -3955,10 +3960,15 @@ describe("AcpClientAdapter — JsonRpcPeer integration over stdio", () => {
     await adapter.disconnect()
   })
 
-  it("advertises owned file access but no ambient terminal or terminal auth for a Bot", async () => {
+  it("advertises owned file access but no ambient terminal or terminal auth for an isolated agent", async () => {
     const { adapter, sent, connected } = connectWithStdio({
       ...stdioConfig(),
-      process: { command: "devin", env: { COGNIA_BOT_ISOLATION: "1" } },
+      process: {
+        command: "devin",
+        env: {
+          COGNIA_ENGINE_PROFILE: JSON.stringify({ kind: "isolated", key: "bot-1", reason: "bot" }),
+        },
+      },
     })
     await connected
     const capabilities = (

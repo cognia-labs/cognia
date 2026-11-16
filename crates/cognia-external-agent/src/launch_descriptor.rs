@@ -200,12 +200,6 @@ pub struct ProjectConfig {
     pub files: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct PrivateCopy {
-    pub home: String,
-    pub state: String,
-}
-
 /// An engine that reads its MCP servers only from its configuration files
 /// (`EngineMcpConfigFile`); `crate::mcp_config_file` interprets it.
 #[derive(Debug, Clone, Deserialize)]
@@ -220,8 +214,6 @@ pub struct McpConfigFile {
     pub project: ProjectConfig,
     pub private_keep: Vec<String>,
     pub private_set: serde_json::Map<String, serde_json::Value>,
-    #[serde(default)]
-    pub private_copy: Vec<PrivateCopy>,
 }
 
 #[derive(Deserialize)]
@@ -340,7 +332,7 @@ pub fn check_private_launch(command: &str, args: &[String], private: bool) -> Re
         descriptor.private_launch_unsupported.as_ref()
     }) {
         Some((descriptor, reason)) => Err(format!(
-            "{} cannot run a private launch: {reason}",
+            "engine_isolation_unsupported: {} cannot run a private launch: {reason}",
             descriptor.id
         )),
         None => Ok(()),

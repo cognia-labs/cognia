@@ -19,7 +19,9 @@ use cognia_exec_sandbox::types::NetworkPolicy;
 struct Args {
     scope: LaunchScope,
     target: Vec<String>,
-    bot_isolation: bool,
+    /// An isolated launch (ADR-0243 3C): no helper socket and no keychain IPC.
+    /// Its environment is built by the process host that starts this launcher.
+    isolated: bool,
 }
 
 fn parse_args(raw: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -30,7 +32,7 @@ fn parse_args(raw: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut denied_readable = Vec::new();
     let mut network = NetworkPolicy::Off;
     let mut restrict_readable = false;
-    let mut bot_isolation = false;
+    let mut isolated = false;
 
     while let Some(arg) = iter.next() {
         if arg == "--" {
@@ -49,7 +51,7 @@ fn parse_args(raw: impl IntoIterator<Item = String>) -> Result<Args, String> {
                     restrict_readable,
                 },
                 target,
-                bot_isolation,
+                isolated,
             });
         }
         match arg.as_str() {
@@ -77,7 +79,7 @@ fn parse_args(raw: impl IntoIterator<Item = String>) -> Result<Args, String> {
                     hosts.push(host);
                 }
             }
-            "--bot-isolation" => bot_isolation = true,
+            "--isolated" => isolated = true,
             other => return Err(format!("unknown argument: {other}")),
         }
     }
@@ -133,7 +135,7 @@ fn render_macos_launch(args: &Args, proxy_port: Option<u16>) -> Result<Vec<Strin
         Some(port) => cognia_exec_sandbox::launcher::sandbox_exec_proxy_prefix(&args.scope, port),
         None => sandbox_exec_prefix(&args.scope),
     };
-    if args.bot_isolation {
+    if args.isolated {
         // SQLite and executable loaders canonicalize ancestor directories.
         // Permit metadata, while file contents beneath denied HOME stay hidden.
         launch[2].push_str("(allow file-read-metadata)\n");
@@ -174,25 +176,20 @@ fn render_launch(_args: &Args) -> Result<Vec<String>, String> {
 }
 
 #[cfg(unix)]
-fn exec_launch(launch: Vec<String>, bot_isolation: bool) -> Result<(), String> {
+fn exec_launch(launch: Vec<String>) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
 
     let (program, args) = launch
         .split_first()
         .ok_or_else(|| "sandbox renderer returned an empty command".to_string())?;
-    let mut command = std::process::Command::new(program);
-    command.args(args);
-    if bot_isolation {
-        command.env_clear().envs(bot_environment(std::env::vars()));
-    }
-    let error = command.exec();
+    let error = std::process::Command::new(program).args(args).exec();
     Err(format!(
         "failed to exec sandbox launcher {program}: {error}"
     ))
 }
 
 #[cfg(not(unix))]
-fn exec_launch(_launch: Vec<String>, _bot_isolation: bool) -> Result<(), String> {
+fn exec_launch(_launch: Vec<String>) -> Result<(), String> {
     Err("stdio-preserving sandbox exec is unavailable on this platform".into())
 }
 
@@ -218,7 +215,7 @@ fn run() -> Result<i32, String> {
     if std::env::var("COGNIA_EXTERNAL_AGENT_LAUNCHER_DEBUG").as_deref() == Ok("1") {
         eprintln!("external-agent sandbox launch: {launch:?}");
     }
-    exec_launch(launch, args.bot_isolation)?;
+    exec_launch(launch)?;
     Ok(0)
 }
 
@@ -330,9 +327,6 @@ impl AgentSupervisor {
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
-        if self.args.bot_isolation {
-            command.env_clear().envs(bot_environment(std::env::vars()));
-        }
         Ok(command)
     }
 
@@ -348,7 +342,7 @@ impl AgentSupervisor {
         self.proxy = Some(proxy);
         let launch = render_macos_launch(&self.args, Some(port))?;
         let mut command = self.command(&launch)?;
-        // Apply these last, after inherited or bot-filtered caller values.
+        // Apply these last, over the environment the process host built.
         command.envs(cognia_exec_sandbox::net_bridge::relay_environment(port));
         self.command = Some(command);
         Ok(())
@@ -572,72 +566,6 @@ impl Supervision for AgentSupervisor {
         }
         failure.map_or(Ok(()), Err)
     }
-}
-
-/// The Bot agent receives its model credential, never ambient GitHub/SSH or
-/// interpreter injection credentials. Git's global helper configuration is
-/// disabled independently of filesystem confinement.
-fn bot_environment(
-    env: impl IntoIterator<Item = (String, String)>,
-) -> std::collections::BTreeMap<String, String> {
-    let mut result: std::collections::BTreeMap<_, _> = env
-        .into_iter()
-        .filter(|(key, _)| {
-            matches!(
-                key.as_str(),
-                "PATH"
-                    | "COGNIA_PORT"
-                    | "COGNIA_PORT_COUNT"
-                    | "PORT"
-                    | "HOME"
-                    | "USER"
-                    | "LOGNAME"
-                    | "SHELL"
-                    | "LANG"
-                    | "LC_ALL"
-                    | "LC_CTYPE"
-                    | "TZ"
-                    | "TERM"
-                    | "TMPDIR"
-                    | "TMP"
-                    | "TEMP"
-                    | "XDG_CONFIG_HOME"
-                    | "XDG_DATA_HOME"
-                    | "XDG_CACHE_HOME"
-                    | "XDG_STATE_HOME"
-                    | "SSL_CERT_FILE"
-                    | "SSL_CERT_DIR"
-                    | "NODE_EXTRA_CA_CERTS"
-                    | "HTTP_PROXY"
-                    | "HTTPS_PROXY"
-                    | "NO_PROXY"
-                    | "http_proxy"
-                    | "https_proxy"
-                    | "no_proxy"
-                    | "MINIMAX_DATA_DIR"
-                    | "MAVIS_DATA_DIR"
-                    | "MCODE_PROVIDER_API_KEY"
-                    | "DEVIN_API_KEY"
-                    | "DEVIN_TOKEN"
-                    | "DEVIN_BASE_URL"
-                    | "DISABLE_AUTO_UPDATE"
-                    | "NO_COLOR"
-                    | "FORCE_COLOR"
-                    | "NVM_BIN"
-                    | "NVM_DIR"
-                    | "PNPM_HOME"
-                    | "BUN_INSTALL"
-                    | "npm_config_cache"
-                    | "npm_config_store_dir"
-                    | "pnpm_config_store_dir"
-                    | "pnpm_config_cache_dir"
-            )
-        })
-        .collect();
-    result.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
-    result.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
-    result.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
-    result
 }
 
 fn main() {
@@ -867,7 +795,7 @@ mod tests {
     fn macos_allowlist_profile_and_environment_do_not_allow_direct_egress() {
         let args = parse_args(
             [
-                "--bot-isolation",
+                "--isolated",
                 "--cwd",
                 "/tmp/work",
                 "--network-allow",
@@ -892,20 +820,6 @@ mod tests {
                 assert_eq!(value, "http://127.0.0.1:32101");
             }
         }
-    }
-
-    #[test]
-    fn bot_environment_keeps_exact_workspace_port_keys() {
-        let env = bot_environment([
-            ("COGNIA_PORT".into(), "41000".into()),
-            ("COGNIA_PORT_COUNT".into(), "10".into()),
-            ("PORT".into(), "41000".into()),
-            ("COGNIA_UNREVIEWED".into(), "secret".into()),
-        ]);
-        assert_eq!(env["PORT"], "41000");
-        assert_eq!(env["COGNIA_PORT"], "41000");
-        assert_eq!(env["COGNIA_PORT_COUNT"], "10");
-        assert!(!env.contains_key("COGNIA_UNREVIEWED"));
     }
 
     use super::*;
@@ -961,34 +875,10 @@ mod tests {
     }
 
     #[test]
-    fn bot_scope_scrubs_publication_credentials_and_injection_hooks() {
-        let env = bot_environment(
-            [
-                ("GH_TOKEN", "secret"),
-                ("GITHUB_TOKEN", "secret"),
-                ("SSH_AUTH_SOCK", "/socket"),
-                ("NODE_OPTIONS", "--require bad"),
-                ("DEVIN_API_KEY", "model-only"),
-                ("MINIMAX_DATA_DIR", "/owned/minimax"),
-                ("MAVIS_DATA_DIR", "/owned/minimax"),
-                ("MCODE_PROVIDER_API_KEY", "synthetic"),
-                ("PATH", "/bin"),
-                ("XDG_CONFIG_HOME", "/isolated/config"),
-            ]
-            .map(|(key, value)| (key.into(), value.into())),
-        );
-        for key in ["GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "NODE_OPTIONS"] {
-            assert!(!env.contains_key(key));
-        }
-        assert_eq!(env["DEVIN_API_KEY"], "model-only");
-        assert_eq!(env["MINIMAX_DATA_DIR"], "/owned/minimax");
-        assert_eq!(env["MAVIS_DATA_DIR"], "/owned/minimax");
-        assert_eq!(env["MCODE_PROVIDER_API_KEY"], "synthetic");
-        assert_eq!(env["GIT_CONFIG_GLOBAL"], "/dev/null");
-        assert_eq!(env["GIT_TERMINAL_PROMPT"], "0");
+    fn parses_the_isolated_flag() {
         let args = parse_args(
             [
-                "--bot-isolation",
+                "--isolated",
                 "--cwd",
                 "/work",
                 "--deny-readable",
@@ -1001,43 +891,14 @@ mod tests {
             .map(str::to_string),
         )
         .unwrap();
-        assert!(args.bot_isolation);
-    }
-
-    #[test]
-    fn bot_scope_retains_owned_temp_and_package_cache_environment_only() {
-        let entries = [
-            ("TMPDIR", "/work/state/tmp"),
-            ("TMP", "/work/state/tmp"),
-            ("TEMP", "/work/state/tmp"),
-            ("npm_config_cache", "/work/state/cache/npm"),
-            ("npm_config_store_dir", "/work/state/cache/pnpm-store"),
-            ("pnpm_config_store_dir", "/work/state/cache/pnpm-store"),
-            ("pnpm_config_cache_dir", "/work/state/cache/pnpm"),
-        ];
-        let env = bot_environment(
-            entries
-                .into_iter()
-                .chain([
-                    ("npm_config_userconfig", "/private/credentials"),
-                    ("NODE_OPTIONS", "--require injected.js"),
-                    ("GITHUB_TOKEN", "private"),
-                ])
-                .map(|(key, value)| (key.into(), value.into())),
-        );
-        for (key, value) in entries {
-            assert_eq!(env[key], value);
-        }
-        for key in ["npm_config_userconfig", "NODE_OPTIONS", "GITHUB_TOKEN"] {
-            assert!(!env.contains_key(key));
-        }
+        assert!(args.isolated);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn bot_scope_blocks_keychain_ipc() {
+    fn an_isolated_scope_blocks_keychain_ipc() {
         let args = parse_args(
-            ["--bot-isolation", "--cwd", "/tmp", "--", "/usr/bin/true"]
+            ["--isolated", "--cwd", "/tmp", "--", "/usr/bin/true"]
                 .into_iter()
                 .map(str::to_string),
         )

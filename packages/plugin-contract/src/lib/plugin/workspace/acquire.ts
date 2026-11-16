@@ -23,8 +23,6 @@ export interface PluginWorkspaceHandle {
   /** Host-issued ownership identity for isolated Bot workspaces. */
   id?: string
   runId?: string
-  /** Host-owned runtime state outside the repository, for isolated Bot sessions. */
-  runtimeStateRoot?: string
   /** Set when the checkout came from a remote. */
   remote?: { host: string; owner: string; repo: string; url: string; ref?: string }
   /** True when the checkout is ours to delete. */

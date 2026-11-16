@@ -74,7 +74,7 @@
     "envConflict": "此智能体加载的两个包把同一设置设为了不同的值。请从智能体中移除其中一个。",
     "piVersion": "此包需要 Pi {version} 或更新版本；当前主机为 {installed}。",
     "resolutionFailed": "无法加载此包。",
-    "botIsolation": "Bot 隔离的智能体无法加载插件 Pi 包：包所在的文件夹位于主目录中，而隔离会隐藏主目录。",
+    "isolatedLaunch": "隔离运行的智能体无法加载插件 Pi 包：包所在的文件夹位于主目录中，而隔离会隐藏主目录。",
     "symlinksCreated": "准备步骤创建了符号链接（{path}），而 Cognia 拒绝加载包含链接的插件。需要插件作者提供不创建链接的准备步骤。"
   },
   "picker": {

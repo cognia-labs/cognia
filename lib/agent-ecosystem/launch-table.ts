@@ -59,8 +59,6 @@ function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
     ["programRoots", descriptor.programRoots],
     ["loginRoots", descriptor.loginRoots],
     ["mcpConfigFile.rootDefault", [mcpConfigFile?.rootDefault]],
-    ["mcpConfigFile.privateCopy.home", mcpConfigFile?.privateCopy?.map((copy) => copy.home)],
-    ["mcpConfigFile.privateCopy.state", mcpConfigFile?.privateCopy?.map((copy) => copy.state)],
   ]
   for (const [field, list] of paths) {
     for (const path of list ?? []) {

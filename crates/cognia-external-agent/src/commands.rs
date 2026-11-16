@@ -143,13 +143,16 @@ pub async fn external_agent_state_root_info(
 }
 
 /// Delete an isolated configuration's private state root (its logins,
-/// sessions and settings). Removing a root that does not exist succeeds.
+/// sessions and settings), or with `isolated` an isolated launch's (ADR-0243
+/// 3C). Removing a root that does not exist succeeds.
 #[tauri::command]
-pub async fn external_agent_state_root_remove(key: String) -> Result<(), String> {
+pub async fn external_agent_state_root_remove(key: String, isolated: bool) -> Result<(), String> {
     let data_dir = host_state_data_dir()?;
-    tokio::task::spawn_blocking(move || crate::state_isolation::remove_state_root(&data_dir, &key))
-        .await
-        .map_err(|error| format!("state root removal failed: {error}"))?
+    tokio::task::spawn_blocking(move || {
+        crate::state_isolation::remove_state_root(&data_dir, &key, isolated)
+    })
+    .await
+    .map_err(|error| format!("state root removal failed: {error}"))?
 }
 
 fn host_state_data_dir() -> Result<std::path::PathBuf, String> {

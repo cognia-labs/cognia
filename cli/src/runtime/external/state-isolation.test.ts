@@ -3,12 +3,14 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
+import { engineLaunchProfileEnv } from "@cognia/agent-contracts/engine-launch-profile"
+
 import {
   agentStateDataDir,
   agentStateRoot,
   applyStateIsolation,
   hostAgentStateDataDir,
-  launchOwnsPrivateHome,
+  isolatedStateRoot,
   removeStateRoot,
   stateKeyValid,
   stateRootInfo,
@@ -177,20 +179,43 @@ describe("agent state isolation (CLI host)", () => {
     expect(fs.existsSync(path.join(data, "cognia"))).toBe(false)
   })
 
-  it.each([
-    [{ COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/state" }],
-    [{ COGNIA_GATEWAY_TASK_CONFIG: "{}" }],
-    [{ COGNIA_GATEWAY_TASK_HOME: "/task" }],
-  ])("a launch with its own private home ignores the key (%j)", (owner) => {
+  it.each([[{ COGNIA_GATEWAY_TASK_CONFIG: "{}" }], [{ COGNIA_GATEWAY_TASK_HOME: "/task" }]])(
+    "a gateway task owns its home and ignores the key (%j)",
+    (owner) => {
+      const { host: h, data } = host()
+      const { config, plan } = applyStateIsolation(
+        { id: "x", command: "codex", env: { [KEY]: "c", ...owner } },
+        h
+      )
+      expect(plan).toBeNull()
+      expect(config.env).toEqual(owner)
+      expect(fs.existsSync(path.join(data, "cognia"))).toBe(false)
+    }
+  )
+
+  it("gives an isolated launch its profile's root over the configuration's", () => {
     const { host: h, data } = host()
-    expect(launchOwnsPrivateHome(owner)).toBe(true)
-    const { config, plan } = applyStateIsolation(
-      { id: "x", command: "codex", env: { [KEY]: "c", ...owner } },
+    const profile = engineLaunchProfileEnv({ kind: "isolated", key: "bot-1", reason: "bot" })
+    const root = isolatedStateRoot(data, "bot-1")
+    const codex = applyStateIsolation(
+      { id: "x", command: "codex", env: { [KEY]: "c", ...profile } },
       h
     )
-    expect(plan).toBeNull()
-    expect(config.env).toEqual(owner)
-    expect(fs.existsSync(path.join(data, "cognia"))).toBe(false)
+    expect(codex.plan?.root).toBe(root)
+    expect(codex.config.env).toEqual({ ...profile, CODEX_HOME: path.join(root, "codex") })
+    expect(fs.existsSync(path.join(data, "cognia/external-agents"))).toBe(false)
+    // An engine without an isolation rule still gets the root alone.
+    const devin = applyStateIsolation({ id: "x", command: "devin", args: ["acp"], env: profile }, h)
+    expect(devin.plan).toEqual({ root, env: {}, sharedRoots: [], denyReadable: [] })
+    // A gateway task keeps its engine's state in its own home.
+    const task = applyStateIsolation(
+      { id: "x", command: "codex", env: { ...profile, COGNIA_GATEWAY_TASK_HOME: "/task" } },
+      h
+    )
+    expect(task.plan).toEqual({ root, env: {}, sharedRoots: [], denyReadable: [] })
+    expect(() =>
+      applyStateIsolation({ id: "x", command: "codex", env: { COGNIA_ENGINE_PROFILE: "{}" } }, h)
+    ).toThrow("Invalid COGNIA_ENGINE_PROFILE")
   })
 
   it("refuses a state directory that a previous run swapped for a symlink", () => {
@@ -211,7 +236,7 @@ describe("agent state isolation (CLI host)", () => {
       exists: false,
       bytes: 0,
     })
-    expect(() => removeStateRoot("cfg", h)).not.toThrow()
+    expect(() => removeStateRoot("cfg", false, h)).not.toThrow()
     const root = path.join(data, "cognia/external-agents/cfg")
     fs.mkdirSync(path.join(root, "codex/sessions"), { recursive: true })
     fs.writeFileSync(path.join(root, "codex/auth.json"), "0123456789")
@@ -219,7 +244,7 @@ describe("agent state isolation (CLI host)", () => {
     expect(stateRootInfo("cfg", h)).toEqual({ path: root, exists: true, bytes: 13 })
     const sibling = path.join(data, "cognia/external-agents/other")
     fs.mkdirSync(sibling)
-    removeStateRoot("cfg", h)
+    removeStateRoot("cfg", false, h)
     expect(fs.existsSync(root)).toBe(false)
     expect(fs.existsSync(sibling)).toBe(true)
 
@@ -227,11 +252,18 @@ describe("agent state isolation (CLI host)", () => {
     fs.mkdirSync(outside)
     fs.writeFileSync(path.join(outside, "keep"), "x")
     fs.symlinkSync(outside, root)
-    removeStateRoot("cfg", h)
+    removeStateRoot("cfg", false, h)
     expect(fs.existsSync(path.join(outside, "keep"))).toBe(true)
     expect(() => fs.lstatSync(root)).toThrow()
     expect(() => stateRootInfo("../x", h)).toThrow("invalid agent state key")
-    expect(() => removeStateRoot("", h)).toThrow("invalid agent state key")
+    expect(() => removeStateRoot("", false, h)).toThrow("invalid agent state key")
+
+    // An isolated launch's root is removed by its own key, apart.
+    const isolated = isolatedStateRoot(data, "other")
+    fs.mkdirSync(isolated, { recursive: true })
+    removeStateRoot("other", true, h)
+    expect(fs.existsSync(isolated)).toBe(false)
+    expect(fs.existsSync(sibling)).toBe(true)
   })
 
   describe("sandbox launcher scope", () => {
@@ -390,11 +422,14 @@ describe("agent state isolation (CLI host)", () => {
       await expect(
         backend.invoke("external_agent_state_root_info", { key: "cfg" })
       ).resolves.toEqual({ path: root, exists: true, bytes: 5 })
-      await backend.invoke("external_agent_state_root_remove", { key: "cfg" })
+      await backend.invoke("external_agent_state_root_remove", { key: "cfg", isolated: false })
       expect(fs.existsSync(root)).toBe(false)
       await expect(
-        backend.invoke("external_agent_state_root_remove", { key: "../x" })
+        backend.invoke("external_agent_state_root_remove", { key: "../x", isolated: false })
       ).rejects.toThrow("invalid agent state key")
+      await expect(
+        backend.invoke("external_agent_state_root_remove", { key: "cfg" })
+      ).rejects.toThrow("needs isolated")
     })
   })
 })

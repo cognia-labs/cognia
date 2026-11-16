@@ -41,9 +41,6 @@ export const devinAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
       },
       privateKeep: ["version", "devin.org_id"],
       privateSet: { "shell.setup_complete": true },
-      privateCopy: [
-        { home: ".local/share/devin/credentials.toml", state: "data/devin/credentials.toml" },
-      ],
     },
   },
   permissionModes: {

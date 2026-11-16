@@ -12,6 +12,7 @@ import path from "node:path"
 
 import type { EngineMcpConfigFile } from "@cognia/agent-contracts/engine-launch"
 import { ENGINE_MCP_SERVERS_ENV } from "@cognia/agent-contracts/engine-launch"
+import { isIsolatedLaunch } from "@cognia/agent-contracts/engine-launch-profile"
 
 import { mcpConfigFile } from "./launch-descriptor"
 import type { NodeExternalAgentSpawnConfig } from "./node-backend"
@@ -289,22 +290,7 @@ export function prepareMcpConfigFile(
   const injected = injectedServers(id, raw)
   assertNoProjectCollision(id, file, config.cwd ?? process.cwd(), new Set(Object.keys(injected)))
   const original = runtime.hostEnv[file.rootEnv] || path.join(runtime.home, file.rootDefault)
-  const isPrivate = config.env?.COGNIA_BOT_ISOLATION === "1"
-  if (isPrivate) {
-    const state = config.env?.COGNIA_BOT_STATE_DIR
-    if (!state || !path.isAbsolute(state))
-      throw new Error("Bot isolation requires an owned state directory")
-    for (const copy of file.privateCopy ?? []) {
-      const source = path.join(runtime.home, copy.home)
-      const destination = path.join(state, copy.state)
-      if (!fs.existsSync(source) || fs.existsSync(destination)) continue
-      if (!fs.lstatSync(source).isFile())
-        throw new Error(`${id} sign-in file must be a regular file`)
-      fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 })
-      fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL)
-      fs.chmodSync(destination, 0o600)
-    }
-  }
+  const isPrivate = isIsolatedLaunch(config.env)
   if (!path.isAbsolute(original)) throw new Error(`${id} ${file.rootEnv} must be absolute`)
   const root = fs.realpathSync(fs.mkdtempSync(path.join(runtime.temp, "cognia-mcp-config-")))
   fs.chmodSync(root, 0o700)

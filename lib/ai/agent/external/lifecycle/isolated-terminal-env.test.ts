@@ -38,7 +38,13 @@ it.each<Partial<ExternalAgentConfig>>([
   { process: { command: "unknown-runtime" } },
   { metadata: { cogniaGatewayTask: true } },
   {
-    process: { command: "pi", env: { COGNIA_BOT_ISOLATION: "1", COGNIA_AGENT_STATE_KEY: "stale" } },
+    process: {
+      command: "pi",
+      env: {
+        COGNIA_ENGINE_PROFILE: JSON.stringify({ kind: "isolated", key: "bot-1", reason: "bot" }),
+        COGNIA_AGENT_STATE_KEY: "stale",
+      },
+    },
   },
 ])("returns shared without reading a root for %j", async (patch) => {
   await expect(resolveIsolatedTerminalEnv({ ...config, ...patch })).resolves.toEqual({
@@ -65,6 +71,7 @@ it.each([
 it("maps every environment key from the policy, overriding no caller data", async () => {
   isolationRule.mockReturnValue({
     env: { HOME_A: "a", HOME_B: "b" },
+    setEnv: {},
     sharedRoots: [],
     denyReadable: [],
   })

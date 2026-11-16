@@ -3395,20 +3395,25 @@ describe("PiRpcClientAdapter — plugin Pi packages", () => {
     })
   })
 
-  it("refuses packages for a Bot-isolated agent before resolving anything", async () => {
+  it("refuses packages for an isolated agent before resolving anything", async () => {
     const host = createFakeHost()
     const resolver = jest.fn(async () => [LATEX])
     const adapter = new PiRpcClientAdapter(piDeps(host, { resolvePiPackages: resolver }))
     const connecting = adapter.connect({
       ...config,
-      process: { ...config.process!, env: { COGNIA_BOT_ISOLATION: "1" } },
+      process: {
+        ...config.process!,
+        env: {
+          COGNIA_ENGINE_PROFILE: JSON.stringify({ kind: "isolated", key: "bot-1", reason: "bot" }),
+        },
+      },
       metadata: { piExtensionPolicy: "isolated", piPackages: [LATEX.ref] },
     })
     await Promise.resolve()
     host.emitVersion(host.spawns[0].id, PI_CERTIFIED_VERSION)
     await connecting
     await expect(adapter.createSession({ cwd: "/w" })).rejects.toMatchObject({
-      code: "bot-isolation",
+      code: "isolated-launch",
     })
     expect(resolver).not.toHaveBeenCalled()
   })

@@ -36917,7 +36917,6 @@
     "piPackages": {
       "errors": {
         "binaryMissing": "本机未找到 {program}。请安装后重试。",
-        "botIsolation": "Bot 隔离的智能体无法加载插件 Pi 包：包所在的文件夹位于主目录中，而隔离会隐藏主目录。",
         "declined": "准备步骤未获批准。",
         "desktopOnly": "仅在桌面应用中可用。",
         "doubleLoad": "此包也已安装在此智能体会加载的 Pi 范围中，会被加载两次。请把智能体切换为隔离策略，或从 Pi 中移除该包。",
@@ -36925,6 +36924,7 @@
         "executionFailed": "操作失败。",
         "exitCode": "准备步骤（{program}）以退出码 {code} 结束。",
         "invalidPath": "此包声明的路径位于插件文件夹之外。",
+        "isolatedLaunch": "隔离运行的智能体无法加载插件 Pi 包：包所在的文件夹位于主目录中，而隔离会隐藏主目录。",
         "markerMissing": "准备步骤已结束，但没有生成其标记文件。",
         "needsPrepare": "请先运行准备步骤。",
         "noPrepare": "此包没有准备步骤。",

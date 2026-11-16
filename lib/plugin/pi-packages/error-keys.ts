@@ -34,7 +34,7 @@ export const PI_PACKAGE_ERROR_KEYS: Readonly<Record<string, string>> = {
   // Hosted session start (PiPackageUnavailableError in pi-rpc-client.ts)
   "env-conflict": "envConflict",
   "pi-version": "piVersion",
-  "bot-isolation": "botIsolation",
+  "isolated-launch": "isolatedLaunch",
 }
 
 /** The message key for `code`, or `fallback` for a code this table does not know. */

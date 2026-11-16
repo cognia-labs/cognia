@@ -1,3 +1,4 @@
+import { isIsolatedLaunch } from "@cognia/agent-contracts/engine-launch-profile"
 import {
   createExternalAgentUiState,
   reduceExternalAgentUiState,
@@ -1039,18 +1040,18 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         ? (metadata.acpPreviewFeatures as AcpPreviewEnablement)
         : undefined
     const host = this.hostCapabilities()
-    const botIsolation = this._config?.process?.env?.COGNIA_BOT_ISOLATION === "1"
+    const isolated = isIsolatedLaunch(this._config?.process?.env)
     const durableInteraction =
       host.elicitation.durableInteraction || metadata?.acpDurableInteractionController === true
     return resolveAcpFeatureProfile({
       role: "client",
       host: {
         ...host,
-        // The native Devin process already runs inside the Bot sandbox. Never
-        // delegate commands to the generic host terminal outside that boundary.
-        terminal: host.terminal && !botIsolation,
+        // An isolated engine already runs inside its sandbox. Never delegate
+        // commands to the generic host terminal outside that boundary.
+        terminal: host.terminal && !isolated,
         fs: { read: this.files.available, write: this.files.available },
-        terminalAuth: host.terminal && !botIsolation && this._config?.transport === "stdio",
+        terminalAuth: host.terminal && !isolated && this._config?.transport === "stdio",
         elicitation: {
           form: host.elicitation.form || durableInteraction,
           url: host.elicitation.url || durableInteraction,
@@ -4774,8 +4775,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
   private async handleTerminalCreate(
     params: AcpTerminalCreateParams
   ): Promise<{ terminalId: string }> {
-    if (this._config?.process?.env?.COGNIA_BOT_ISOLATION === "1") {
-      throw new Error("Bot commands must execute inside their isolated agent process")
+    if (isIsolatedLaunch(this._config?.process?.env)) {
+      throw new Error("An isolated agent's commands must execute inside its own process")
     }
     if (!this.terminals.available) {
       throw new Error("Terminal support requires the Tauri desktop environment")

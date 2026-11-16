@@ -21,6 +21,7 @@
  *   frames the bytes itself (see `pi-rpc-peer.ts`).
  */
 
+import { isIsolatedLaunch } from "@cognia/agent-contracts/engine-launch-profile"
 import { defineAdapterExtension } from "@cognia/agent-contracts/adapter-extension"
 import { withPiSubagentExtensions } from "./subagent-models"
 import type {
@@ -1252,15 +1253,15 @@ export class PiRpcClientAdapter extends BaseProtocolAdapter {
     refs: string[],
     cwd: string | undefined
   ): Promise<SessionPackages> {
-    // Bot isolation hides the user's home from the sandbox, and the plugin
-    // store lives under it; the desktop wrapper therefore refuses to mount any
+    // An isolated launch hides the user's home from the sandbox, and the
+    // plugin store lives under it; the wrapper therefore refuses to mount any
     // package root for such a spawn. Say so here, instead of letting Pi fail
     // to find the extension file after the process is already up.
-    if (this._config?.process?.env?.COGNIA_BOT_ISOLATION === "1") {
+    if (isIsolatedLaunch(this._config?.process?.env)) {
       throw new PiPackageUnavailableError(
         refs[0],
-        "bot-isolation",
-        "Bot-isolated agents cannot load plugin Pi packages: the plugin store lives under the hidden home directory."
+        "isolated-launch",
+        "Isolated agents cannot load plugin Pi packages: the plugin store lives under the hidden home directory."
       )
     }
     let resolved: PiHostedPackage[]
@@ -2970,7 +2971,7 @@ export class PiExtensionHandshakeError extends Error {
  * session does not start. `code` says why: `not-found` (plugin missing or
  * disabled), `not-on-disk`, `invalid-path`, `not-hosted`, `not-prepared`,
  * `workspace-required`, `double-load` (also installed in a Pi scope this
- * session loads), `env-conflict`, `pi-version`, `bot-isolation` or
+ * session loads), `env-conflict`, `pi-version`, `isolated-launch` or
  * `resolution-failed`. The English `message` is diagnostic detail; surfaces
  * show the localized message for `code` (`lib/plugin/pi-packages/error-keys.ts`).
  */

@@ -106,10 +106,10 @@ entry is also dropped, with a logged reason, when the part below that root
 names a protected path, when it is or contains a forbidden readable root (in
 every spelling, including `/private/var` and `/private/tmp`), or when it lies
 under any `--deny-readable` root the wrapper emits — the launcher re-opens a
-readable nested under a deny, so a Bot-isolated home, a gateway task's deny
-list and the task-home parent all stay closed. A Bot-isolated agent therefore
-cannot load plugin packages, and the adapter refuses that start with
-`bot-isolation` instead of letting Pi miss the file. A value typed into the
+readable nested under a deny, so an isolated launch's home (ADR-0243 3C), a
+gateway task's deny list and the task-home parent all stay closed. An isolated
+agent therefore cannot load plugin packages, and the adapter refuses that start
+with `isolated-launch` instead of letting Pi miss the file. A value typed into the
 agent's own env is discarded; only resolved packages set it. Pi deduplicates extensions by
 canonical path, so an extension inside the package directory loads once even
 when the same package is also installed into the scope the session reads. A

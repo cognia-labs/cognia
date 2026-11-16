@@ -11,11 +11,15 @@ import { admitsRequestEnv } from "./launch-descriptor"
 
 /**
  * - `owner`: the local person's own run.
+ * - `isolated`: an isolated launch (`COGNIA_ENGINE_PROFILE`): the essentials
+ *   and the session keys that carry no credential. Its state, temp and cache
+ *   roots come from its private state root, and it always runs with
+ *   {@link ISOLATED_SET}.
  * - `essential`: a brokered launch (a gateway task), which gets its home and
  *   credentials from the Host.
  * - `none`: a runtime that builds its whole environment itself (DSH).
  */
-export type LaunchInheritance = "owner" | "essential" | "none"
+export type LaunchInheritance = "owner" | "isolated" | "essential" | "none"
 
 /** Loader and injection keys, refused from every source. */
 const DANGEROUS_ENV =
@@ -27,7 +31,11 @@ const ESSENTIAL = new Set(TABLE.essentialKeys.map(normal))
 const OWNER = new Set(
   [...TABLE.essentialKeys, ...TABLE.sessionKeys, ...TABLE.ownerKeys].map(normal)
 )
+const ISOLATED = new Set([...TABLE.essentialKeys, ...TABLE.isolatedKeys].map(normal))
 const CONFIG = new Set(TABLE.configKeys)
+
+/** The fixed env every isolated launch runs with, over its request env. */
+export const ISOLATED_SET: Readonly<Record<string, string>> = TABLE.isolatedSet
 
 export function isDangerousEnvKey(key: string): boolean {
   return DANGEROUS_ENV.test(key)
@@ -55,9 +63,11 @@ export function inheritedEnvironment(
     const kept =
       inheritance === "essential"
         ? ESSENTIAL.has(normal(key))
-        : OWNER.has(normal(key)) ||
-          TABLE.ownerPrefixes.some((prefix) => key.startsWith(prefix)) ||
-          admitsRequestKey(key)
+        : inheritance === "isolated"
+          ? ISOLATED.has(normal(key))
+          : OWNER.has(normal(key)) ||
+            TABLE.ownerPrefixes.some((prefix) => key.startsWith(prefix)) ||
+            admitsRequestKey(key)
     if (kept) inherited[key] = value
   }
   return inherited

@@ -13,6 +13,11 @@ pub enum Inheritance {
     /// the person's SSH agent and model-provider credentials, the host's
     /// configuration keys and the keys an engine's descriptor admits.
     Owner,
+    /// An isolated launch ([`crate::launch_profile::LaunchProfile::Isolated`]):
+    /// runtime essentials and the session keys that carry no credential. Its
+    /// state, temp and cache roots come from its private state root, and it
+    /// always runs with [`isolated_set`].
+    Isolated,
     /// A brokered launch (a gateway task, SIWC), which gets its home and
     /// credentials from the Host: runtime essentials only.
     Essential,
@@ -51,6 +56,9 @@ pub fn inherited(
             if listed(&table.essential_keys, key) {
                 return true;
             }
+            if inheritance == Inheritance::Isolated {
+                return listed(&table.isolated_keys, key);
+            }
             inheritance == Inheritance::Owner
                 && (listed(&table.session_keys, key)
                     || listed(&table.owner_keys, key)
@@ -59,6 +67,14 @@ pub fn inherited(
                     || crate::launch_descriptor::admits_request_env(key))
         })
         .collect()
+}
+
+/// The fixed env every isolated launch runs with, over its request env.
+pub fn isolated_set() -> impl Iterator<Item = (&'static str, &'static str)> {
+    crate::presets::launch_environment_table()
+        .isolated_set
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
 }
 
 #[cfg(test)]
@@ -114,6 +130,17 @@ mod tests {
     fn a_brokered_launch_keeps_essentials_and_a_self_built_one_nothing() {
         assert_eq!(keys(Inheritance::Essential), ["PATH", "SYSTEMROOT"]);
         assert!(keys(Inheritance::None).is_empty());
+    }
+
+    #[test]
+    fn an_isolated_launch_keeps_no_credential_helper_socket_or_owner_root() {
+        assert_eq!(
+            keys(Inheritance::Isolated),
+            ["HOME", "HTTPS_PROXY", "PATH", "SYSTEMROOT"]
+        );
+        assert!(
+            isolated_set().any(|(key, value)| key == "GIT_CONFIG_GLOBAL" && value == "/dev/null")
+        );
     }
 
     #[cfg(unix)]

@@ -37,6 +37,9 @@ export interface ExternalAgentLaunchEnvironment {
   /** The owner's own run only: the person's SSH agent and model-provider credentials. */
   ownerKeys: readonly string[]
   ownerPrefixes: readonly string[]
+  /** An isolated launch: session keys that carry no credential, and its fixed values. */
+  isolatedKeys: readonly string[]
+  isolatedSet: Readonly<Record<string, string>>
   /** Host-owned keys a request may set, which the owner's own run also inherits. */
   configKeys: readonly string[]
   configPrefixes: readonly string[]

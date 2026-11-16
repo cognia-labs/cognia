@@ -1,3 +1,4 @@
+import { engineLaunchProfileEnv } from "@cognia/agent-contracts/engine-launch-profile"
 import type { KeyringStore } from "@/lib/credentials/keyring-store"
 import { ExternalAgentLifecycleError } from "@/types/agent/external-agent-lifecycle"
 import type { ExternalAgentConfig } from "@/types/agent/external-agent"
@@ -82,7 +83,10 @@ describe("stateIsolationBlockReason", () => {
     expect(stateIsolationBlockReason(gateway)).toBeNull()
     const bot = config({
       stateIsolation: "isolated",
-      process: { command: "goose", env: { COGNIA_BOT_ISOLATION: "1" } },
+      process: {
+        command: "goose",
+        env: engineLaunchProfileEnv({ kind: "isolated", key: "bot-1", reason: "bot" }),
+      },
     })
     expect(stateIsolationBlockReason(bot)).toBeNull()
   })

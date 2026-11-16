@@ -22,6 +22,8 @@ import type { KeyringStore } from "@/lib/credentials/keyring-store"
 import { ExternalAgentLifecycleError } from "@/types/agent/external-agent-lifecycle"
 import type { ExternalAgentConfig } from "@/types/agent/external-agent"
 
+import { isIsolatedLaunch } from "@cognia/agent-contracts/engine-launch-profile"
+
 import { agentStateIsolationFor } from "../policy/engine-launch"
 import { AGENT_STATE_KEY_ENV, AGENT_STATE_KEY_PATTERN } from "../policy/security-policy"
 import {
@@ -64,8 +66,8 @@ export function stateIsolationBlockReason(config: ExternalAgentConfig): string |
 function stateIsolationApplies(config: ExternalAgentConfig): boolean {
   if (config.transport !== "stdio" || !config.process?.command) return false
   if (config.metadata?.cogniaGatewayTask) return false
-  if (config.process.env?.COGNIA_BOT_ISOLATION === "1") return false
-  return true
+  // An isolated launch's private root is its profile's, never its configuration's.
+  return !isIsolatedLaunch(config.process.env)
 }
 
 /**

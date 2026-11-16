@@ -1,11 +1,11 @@
 import { validateExternalAgentSandboxPolicy } from "@cognia/agent-contracts"
+import { isIsolatedLaunch } from "@cognia/agent-contracts/engine-launch-profile"
 import { resolveAgentSearchPath } from "./agent-path"
 import { resolveProbeExecutable } from "./version-probe"
 import { validateCodexWritableRoots } from "@cognia/agent-codex/app-server-client"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { spawnSync } from "node:child_process"
 
 import {
   bundledCandidates,
@@ -17,8 +17,8 @@ import {
 } from "../native-binary"
 
 import {
-  botRuntimeEnvironment,
   isDshLauncherInvocation,
+  isolatedRuntimeEnvironment,
   type ExternalAgentLaunch,
   type NodeExternalAgentSpawnConfig,
 } from "./node-backend"
@@ -61,8 +61,6 @@ export interface SandboxLauncherRuntime {
   ensureFile?: (candidate: string) => void
   /** True when running from a repo checkout, which unlocks the build hint. */
   isDevCheckout?: () => boolean
-  /** Probe only the selected host launcher; never execute a target command. */
-  supportsBotIsolation?: (launcher: string) => boolean
 }
 
 /** Platform-correct launcher filename. `platform` is a parameter so the Windows
@@ -120,23 +118,17 @@ export function findSandboxLauncher(
   return findNativeBinary(runtime.candidates, runtime.isExecutable)
 }
 
-/** An omitted target keeps this a parser-only capability check, before any sandbox or agent starts. */
-export function launcherSupportsBotIsolation(launcher: string): boolean {
-  try {
-    const probe = spawnSync(launcher, ["--bot-isolation"], {
-      encoding: "utf8",
-      timeout: 5_000,
-      maxBuffer: 16_384,
-      env: { PATH: process.env.PATH, NODE_ENV: process.env.NODE_ENV ?? "production" },
-    })
-    return (
-      !probe.error &&
-      probe.status === 1 &&
-      probe.stderr.trim() === "cognia-external-agent-launcher: missing -- target separator"
-    )
-  } catch {
-    return false
-  }
+/**
+ * An isolated launch's private state root (`COGNIA_ENGINE_PROFILE`, ADR-0243
+ * 3C): the root the backend resolved for it, its whole writable scope.
+ */
+function privateStateOf(
+  config: NodeExternalAgentSpawnConfig,
+  isolation: StateIsolationPlan | null
+): string | undefined {
+  if (!isIsolatedLaunch(config.env)) return undefined
+  if (!isolation) throw new Error("an isolated launch needs its own private state root")
+  return isolation.root
 }
 
 /**
@@ -314,8 +306,9 @@ function managedDshSandboxRoots(config: NodeExternalAgentSpawnConfig) {
  * `isolation` is the configuration's private state root (ADR-0216), resolved
  * by the backend. When present the root is writable, the runtime's shared
  * default roots leave the writable set and every `denyReadable` root is
- * hidden, so the CLI cannot fall back to the user's own login. Bot and
- * gateway launches never carry one: both already own a private home.
+ * hidden, so the CLI cannot fall back to the user's own login. An isolated
+ * launch's plan is its private state root, its whole writable scope under a
+ * home it cannot read; a gateway task owns its home and never has one.
  */
 export function buildSandboxLauncherArgs(
   config: NodeExternalAgentSpawnConfig,
@@ -332,14 +325,11 @@ export function buildSandboxLauncherArgs(
     config.env,
     hostAgentStateDataDir()
   )
-  // A private launch's relocation is checked even though its bot state is
+  const privateState = privateStateOf(config, isolation)
+  // A private launch's relocation is checked even though its private state is
   // already its whole writable scope.
-  launchRelocation(config, homedir)
+  launchRelocation(config, homedir, privateState)
   const taskHome = config.env?.COGNIA_GATEWAY_TASK_HOME
-  const botIsolation = config.env?.COGNIA_BOT_ISOLATION === "1"
-  const botState = config.env?.COGNIA_BOT_STATE_DIR
-  if (botIsolation && (!botState || !path.isAbsolute(botState)))
-    throw new Error("Bot isolation requires an owned state directory")
   if (hermesProbeRoot)
     config = { ...config, sandboxPolicy: { ...config.sandboxPolicy, readableScope: "workspace" } }
   if (!config.cwd) throw new Error("external-agent sandbox requires a working directory")
@@ -352,12 +342,12 @@ export function buildSandboxLauncherArgs(
       : []),
     ...(managedDsh
       ? managedDsh.state
-      : botIsolation
-        ? [botState!]
+      : privateState
+        ? [privateState]
         : taskHome
           ? [taskHome]
           : agentStateWritableRoots(config, homedir, isolation)),
-    ...(isolation && !managedDsh && !botIsolation && !taskHome ? [isolation.root] : []),
+    ...(isolation && !managedDsh && !privateState && !taskHome ? [isolation.root] : []),
     toolHostRuntimeDir(),
   ]
   const mcpOverlay = mcpConfigOverlayOf(config)
@@ -376,12 +366,12 @@ export function buildSandboxLauncherArgs(
       "--deny-readable",
       file,
     ]),
-    ...(isolation && !botIsolation && !taskHome
+    ...(isolation && !privateState && !taskHome
       ? isolation.denyReadable.flatMap((root) => ["--deny-readable", root])
       : []),
-    ...(config.env?.COGNIA_BOT_ISOLATION === "1"
+    ...(privateState
       ? [
-          "--bot-isolation",
+          "--isolated",
           "--deny-readable",
           homedir,
           ...[
@@ -401,7 +391,7 @@ export function buildSandboxLauncherArgs(
     "--cwd",
     config.cwd,
     ...writable.flatMap((root) => ["--writable", root]),
-    ...(!botIsolation
+    ...(!privateState
       ? config.sandboxPolicy?.readableScope === "workspace"
         ? [
             "--workspace-readable",
@@ -495,7 +485,8 @@ export function workspaceToolchainReadableRoots(command: string, home: string): 
 /** The launch's relocated state root, resolved against its own home and private state. */
 export function launchRelocation(
   config: NodeExternalAgentSpawnConfig,
-  homedir: string
+  homedir: string,
+  privateState?: string
 ): RelocatedState | undefined {
   const taskHome = config.env?.COGNIA_GATEWAY_TASK_HOME
   return relocatedState({
@@ -504,8 +495,7 @@ export function launchRelocation(
     env: config.env ?? {},
     cwd: config.cwd,
     home: taskHome ?? homedir,
-    privateBase:
-      config.env?.COGNIA_BOT_ISOLATION === "1" ? config.env.COGNIA_BOT_STATE_DIR : undefined,
+    privateBase: privateState,
     hostEnvApplies: taskHome === undefined,
   })
 }
@@ -529,7 +519,7 @@ function agentStateWritableRoots(
   if (managedDsh) return managedDsh.state
   if (registeredNativeBridgeId(config.command, config.args ?? []) === "crush-http")
     return policyAgentStateWritableRoots("crush", []).map((root) => path.join(homedir, root))
-  const relocated = launchRelocation(config, homedir)
+  const relocated = launchRelocation(config, homedir, privateStateOf(config, isolation))
   if (relocated) return relocated.writable
   // An isolated launch writes its own root instead of the shared login roots.
   const shared = new Set(isolation?.sharedRoots ?? [])
@@ -604,8 +594,8 @@ export async function resolveSandboxedExternalAgentLaunch(
       env: { ...config.env, HERMES_HOME: path.join(hermesHelperRoot, "hermes") },
       sandboxPolicy: { ...config.sandboxPolicy, readableScope: "workspace" },
     }
-  const isPrivate = config.env?.COGNIA_BOT_ISOLATION === "1"
-  checkPrivateLaunch(config.command, config.args ?? [], isPrivate)
+  const privateState = privateStateOf(config, isolation)
+  checkPrivateLaunch(config.command, config.args ?? [], privateState !== undefined)
   const companion = companionFor(config.command, (command) => resolveProbeExecutable(command))
   config = {
     ...config,
@@ -617,28 +607,16 @@ export async function resolveSandboxedExternalAgentLaunch(
       sandboxLauncherUnavailableMessage(config.command, runtime.isDevCheckout?.() ?? false)
     )
   }
-  if (
-    config.env?.COGNIA_BOT_ISOLATION === "1" &&
-    !(runtime.supportsBotIsolation ?? launcherSupportsBotIsolation)(launcher)
-  ) {
-    throw new Error(
-      `BOT_ISOLATION_LAUNCHER_UNSUPPORTED: Selected launcher ${launcher} does not support Bot isolation. ` +
-        "Rebuild or reinstall the external-agent launcher and set COGNIA_EXTERNAL_AGENT_LAUNCHER to that executable."
-    )
-  }
   for (const root of agentStateDirectoryRoots(config, runtime.homedir, isolation))
     runtime.ensureDir?.(root)
-  const botRuntime = botRuntimeEnvironment(config.env)
-  if (config.env?.COGNIA_BOT_ISOLATION === "1") {
-    runtime.ensureDir?.(config.env.COGNIA_BOT_STATE_DIR)
-    for (const root of new Set(Object.values(botRuntime))) runtime.ensureDir?.(root)
-  }
+  for (const root of new Set(Object.values(isolatedRuntimeEnvironment(privateState ?? null))))
+    runtime.ensureDir?.(root)
   let env: Record<string, string> | undefined = hermesHelperRoot
     ? { HERMES_HOME: path.join(hermesHelperRoot, "hermes"), HERMES_TUI_GATEWAY_URL: "" }
     : undefined
   if (registeredNativeBridgeId(config.command, config.args ?? []) === "crush-http")
     env = { TMPDIR: toolHostRuntimeDir(), TMP: toolHostRuntimeDir(), TEMP: toolHostRuntimeDir() }
-  const relocated = launchRelocation(config, runtime.homedir)
+  const relocated = launchRelocation(config, runtime.homedir, privateState)
   if (relocated) {
     for (const root of [relocated.root, ...relocated.writable]) runtime.ensureDir?.(root)
     env = { ...env, ...relocated.env }
@@ -652,7 +630,7 @@ export async function resolveSandboxedExternalAgentLaunch(
         config.env?.COGNIA_GATEWAY_TASK_HOME ?? runtime.homedir,
         isolation !== null
       )
-  if (temp && !isPrivate) {
+  if (temp && !privateState) {
     runtime.ensureDir?.(temp)
     env = { ...env, TMPDIR: temp, TMP: temp, TEMP: temp }
   }

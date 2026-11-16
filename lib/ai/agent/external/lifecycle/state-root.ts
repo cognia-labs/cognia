@@ -3,8 +3,10 @@
  *
  * An `isolated` external-agent configuration keeps its logins, sessions and
  * settings under `<data_dir>/cognia/external-agents/<configId>` on the machine
- * that runs it. The spawn backends create that root; these two calls let the
- * lifecycle report its size and delete it with the configuration.
+ * that runs it, and an isolated launch (ADR-0243 3C) its own under
+ * `<data_dir>/cognia/isolated-agents/<key>`. The spawn backends create those
+ * roots; these calls let the lifecycle report a configuration's size and
+ * delete either root with what owns it.
  *
  * Both commands are local-only (`external_agent_state_root_info` /
  * `external_agent_state_root_remove`, target `client` in
@@ -73,6 +75,17 @@ export async function getExternalAgentStateRootInfo(
  */
 export async function removeExternalAgentStateRoot(configId: string): Promise<boolean> {
   if (!AGENT_STATE_KEY_PATTERN.test(configId) || !ownsLocalStateRoots()) return false
-  await agentInvoke<void>(STATE_ROOT_REMOVE_COMMAND, { key: configId })
+  await agentInvoke<void>(STATE_ROOT_REMOVE_COMMAND, { key: configId, isolated: false })
+  return true
+}
+
+/**
+ * Delete an isolated launch's private state root
+ * (`<data_dir>/cognia/isolated-agents/<key>`, ADR-0243 3C) once its transient
+ * instance is gone. Same answers as {@link removeExternalAgentStateRoot}.
+ */
+export async function removeIsolatedStateRoot(key: string): Promise<boolean> {
+  if (!ownsLocalStateRoots()) return false
+  await agentInvoke<void>(STATE_ROOT_REMOVE_COMMAND, { key, isolated: true })
   return true
 }

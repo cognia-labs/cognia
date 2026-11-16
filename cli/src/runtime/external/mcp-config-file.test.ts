@@ -2,6 +2,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { engineLaunchProfileEnv } from "@cognia/agent-contracts/engine-launch-profile"
 import {
   ENGINE_MCP_SERVERS_ENV,
   injectedServers,
@@ -69,7 +70,7 @@ describe("engine MCP configuration files", () => {
     }
   )
 
-  it("copies only Devin credentials into Bot state and excludes inherited publication MCPs", () => {
+  it("copies no native login into an isolated launch and excludes inherited publication MCPs", () => {
     write(".local/share/devin/credentials.toml", 'token = "model-token"')
     write(
       ".config/devin/config.json",
@@ -79,20 +80,26 @@ describe("engine MCP configuration files", () => {
       })
     )
     write(".config/gh/hosts.yml", "github secret")
-    const state = path.join(home, "bot-state")
+    const state = path.join(home, "isolated-state")
     const prepared = prepareMcpConfigFile(
       {
         ...config(),
-        env: { ...config().env, COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: state },
+        env: {
+          ...config().env,
+          ...engineLaunchProfileEnv({ kind: "isolated", key: "bot-1", reason: "bot" }),
+        },
       },
       runtime()
     )
     expect(read(prepared.root!).mcpServers.github).toBeUndefined()
     expect(fs.existsSync(path.join(prepared.root!, "gh"))).toBe(false)
-    expect(fs.readFileSync(path.join(state, "data/devin/credentials.toml"), "utf8")).toBe(
-      'token = "model-token"'
-    )
-    const args = buildSandboxLauncherArgs(prepared.config, home)
+    expect(fs.existsSync(path.join(prepared.root!, "credentials.toml"))).toBe(false)
+    const args = buildSandboxLauncherArgs(prepared.config, home, {
+      root: state,
+      env: {},
+      sharedRoots: [],
+      denyReadable: [],
+    })
     expect(args.filter((_, i) => args[i - 1] === "--readable")).not.toContain(
       path.join(home, ".config")
     )

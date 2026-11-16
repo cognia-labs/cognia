@@ -1,3 +1,4 @@
+import { engineLaunchProfileEnv } from "@cognia/agent-contracts/engine-launch-profile"
 import { UNDECLARED_EXECUTION_SEMANTICS } from "@cognia/agent-contracts/semantics"
 // Authority storage is exercised with real IndexedDB in run-authority.test.ts.
 jest.mock("@/lib/execution/run-authority", () => ({
@@ -69,6 +70,10 @@ const appendCanonicalEnvelopesMock = jest.fn(
   async (_runId: string, _envelopes: Array<{ event: { kind: string } }>) => 1
 )
 
+const mockRemoveIsolatedStateRoot = jest.fn(async (_key: string) => true)
+jest.mock("./lifecycle/state-root", () => ({
+  removeIsolatedStateRoot: (key: string) => mockRemoveIsolatedStateRoot(key),
+}))
 jest.mock("@/lib/ai/agent/recovery/canonical-log", () => ({
   appendCanonicalEnvelopes: (...args: unknown[]) =>
     appendCanonicalEnvelopesMock(...(args as [string, Array<{ event: { kind: string } }>])),
@@ -1525,6 +1530,21 @@ describe("addAgent / removeAgent / connect", () => {
     await m.addAgent(buildBaseConfig())
     await m.removeAgent("agent-1")
     expect(m.getAgent("agent-1")).toBeUndefined()
+    expect(mockRemoveIsolatedStateRoot).not.toHaveBeenCalled()
+  })
+
+  it("removeAgent deletes an isolated instance's private state root", async () => {
+    const m = freshManager()
+    await m.addAgent(
+      buildBaseConfig({
+        process: {
+          command: "devin",
+          env: engineLaunchProfileEnv({ kind: "isolated", key: "bot-1", reason: "bot" }),
+        },
+      })
+    )
+    await m.removeAgent("agent-1")
+    expect(mockRemoveIsolatedStateRoot).toHaveBeenCalledWith("bot-1")
   })
 
   it("disconnect followed by reconnect re-establishes connection", async () => {

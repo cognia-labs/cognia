@@ -11,6 +11,10 @@ import { pluginHasApiPermission } from "./permission-api"
 import { redactText } from "@cognia/redact"
 import { assertNoLeakingPii } from "./plugin-pii-gate"
 import { DEFAULT_EXTERNAL_AGENT_RETRY_CONFIG } from "@/types/agent/external-agent"
+import {
+  ENGINE_PROFILE_ENV,
+  engineLaunchProfileEnv,
+} from "@cognia/agent-contracts/engine-launch-profile"
 import { updateBotInstallation } from "@/lib/db/bot-installations"
 import { resolveOwnedBotAuthority } from "@/lib/bot/policy/run-authority"
 import {
@@ -271,8 +275,10 @@ async function dispatchPluginExternalAgent(
     })
     throw new Error(message)
   }
+  // An engine that cannot run privately, or a host that cannot confine it,
+  // leaves the installation to be set up with another agent or host.
   const failSessionSetup = (error: unknown): Promise<never> => {
-    if (error instanceof Error && error.message.includes("BOT_ISOLATION_LAUNCHER_UNSUPPORTED"))
+    if (error instanceof Error && error.message.includes("engine_isolation_unsupported"))
       return needsSetup(error.message)
     return Promise.reject(error)
   }
@@ -293,8 +299,6 @@ async function dispatchPluginExternalAgent(
       )
   }
   await requireModeAuthority()
-  if (!workspace.runtimeStateRoot)
-    throw new Error("Bot execution requires an isolated runtime state directory")
   // The model lane is the installation's, chosen by the user on the Host; the
   // plugin can name a model but never the route its traffic takes.
   const route = ownedWorkspace.binding.installation.executionRoute
@@ -358,6 +362,9 @@ async function dispatchPluginExternalAgent(
       (options.sessionId && checkpoint.sessionId !== options.sessionId))
   )
     throw new Error("Run session identity cannot change during replay")
+  // One isolated instance per Bot agent, its private state keyed by its id.
+  const botProfile = (agentId: string) =>
+    engineLaunchProfileEnv({ kind: "isolated", key: agentId, reason: "bot" })
   const ownTransientAgent = (agentId: string) => {
     const assertOwnedAgent = () => {
       const instance = manager.getAgent(agentId)
@@ -365,8 +372,8 @@ async function dispatchPluginExternalAgent(
         !agentId.startsWith("bot-") ||
         (instance &&
           (instance.config.process?.cwd !== workspace.root ||
-            instance.config.process.env?.COGNIA_BOT_ISOLATION !== "1" ||
-            instance.config.process.env.COGNIA_BOT_STATE_DIR !== workspace.runtimeStateRoot))
+            instance.config.process.env?.[ENGINE_PROFILE_ENV] !==
+              botProfile(agentId)[ENGINE_PROFILE_ENV]))
       )
         throw new Error("External agent does not belong to this isolated Bot workspace")
       return instance
@@ -421,8 +428,7 @@ async function dispatchPluginExternalAgent(
               cwd: workspace.root,
               env: {
                 ...config.process.env,
-                COGNIA_BOT_ISOLATION: "1",
-                COGNIA_BOT_STATE_DIR: workspace.runtimeStateRoot!,
+                ...botProfile(agentId),
                 DISABLE_AUTO_UPDATE: "1",
               },
             }

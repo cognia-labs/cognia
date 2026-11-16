@@ -1,5 +1,10 @@
 /** @jest-environment node */
-import { admitsRequestKey, inheritedEnvironment, isDangerousEnvKey } from "./launch-environment"
+import {
+  ISOLATED_SET,
+  admitsRequestKey,
+  inheritedEnvironment,
+  isDangerousEnvKey,
+} from "./launch-environment"
 
 const ambient = {
   PATH: "/usr/bin",
@@ -28,6 +33,15 @@ describe("inheritedEnvironment", () => {
       CODEX_HOME: "/Users/owner/.codex",
       HTTPS_PROXY: "http://proxy",
     })
+  })
+
+  it("gives an isolated launch no credential, helper socket or owner root", () => {
+    expect(inheritedEnvironment(ambient, "isolated")).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/Users/owner",
+      HTTPS_PROXY: "http://proxy",
+    })
+    expect(ISOLATED_SET.GIT_CONFIG_GLOBAL).toBe("/dev/null")
   })
 
   it("gives a brokered launch the essentials only, and a self-built one nothing", () => {

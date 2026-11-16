@@ -31,7 +31,7 @@ export function checkPrivateLaunch(command: string, args: readonly string[], isP
   const descriptor = firstWith(command, args, "privateLaunchUnsupported")
   if (descriptor)
     throw new Error(
-      `${descriptor.id} cannot run a private launch: ${descriptor.privateLaunchUnsupported}`
+      `engine_isolation_unsupported: ${descriptor.id} cannot run a private launch: ${descriptor.privateLaunchUnsupported}`
     )
 }
 

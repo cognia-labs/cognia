@@ -3,11 +3,13 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createHash } from "node:crypto"
+import { engineLaunchProfileEnv } from "@cognia/agent-contracts/engine-launch-profile"
 import { fileURLToPath } from "node:url"
 import { resolveWorkspacePortEnv } from "../workspace-port-env"
 import { removeDshRuntime } from "./dsh-installer"
 import * as nativeBridges from "./native-bridges"
 import * as sandboxLauncher from "./sandbox-launcher"
+import { isolatedStateRoot } from "./state-isolation"
 
 jest.mock("../workspace-port-env", () => ({ resolveWorkspacePortEnv: jest.fn(async () => ({})) }))
 jest.mock("./native-bridges", () => {
@@ -85,6 +87,8 @@ function nextEvent<T>(
     })
   })
 }
+
+const PROFILE = { kind: "isolated", key: "bot-1", reason: "bot" } as const
 
 describe("Pi capability root lookup", () => {
   it("returns host vendor roots, including the relocated Pi directory", async () => {
@@ -275,14 +279,19 @@ describe("NodeExternalAgentBackend", () => {
     }
   })
   it.each([false, true])(
-    "applies trusted ports after filters and launcher overrides (Bot %s)",
-    async (bot) => {
+    "applies trusted ports after filters and launcher overrides (isolated %s)",
+    async (isolated) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-port-env-"))
       const cwd = fs.realpathSync(root)
       const trusted = { COGNIA_PORT: "41000", COGNIA_PORT_COUNT: "10", PORT: "41000" }
       jest.mocked(resolveWorkspacePortEnv).mockResolvedValueOnce(trusted)
       const backend = new NodeExternalAgentBackend({
         workspacesRoot: root,
+        stateIsolationHost: {
+          platform: "linux",
+          homedir: path.join(root, "home"),
+          env: { XDG_DATA_HOME: path.join(root, "data") },
+        },
         resolveLaunch: async () => ({
           command: process.execPath,
           args: [
@@ -302,9 +311,7 @@ describe("NodeExternalAgentBackend", () => {
             cwd,
             env: {
               PORT: "9999",
-              ...(bot
-                ? { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: path.join(root, "state") }
-                : {}),
+              ...(isolated ? engineLaunchProfileEnv(PROFILE) : {}),
             },
           },
         })
@@ -345,23 +352,19 @@ describe("NodeExternalAgentBackend", () => {
     }
   })
 
-  it("does not inherit Kimi host model credentials into an isolated Bot", () => {
+  it("does not inherit Kimi host model credentials into an isolated launch", () => {
+    const isolatedLaunch = { command: "kimi", stateIsolation: { root: "/state", isolated: true } }
     const env = buildExternalAgentChildEnv(
       { NODE_ENV: "test", KIMI_MODEL_API_KEY: "ambient-host-key", KIMI_CODE_HOME: "/host/kimi" },
-      {
-        COGNIA_BOT_ISOLATION: "1",
-        COGNIA_BOT_STATE_DIR: "/work/state",
-        KIMI_CODE_HOME: "/work/state/kimi",
-        KIMI_MODEL_API_KEY: "explicit-bot-key",
-      },
-      { command: "kimi" }
+      { KIMI_CODE_HOME: "/state/kimi", KIMI_MODEL_API_KEY: "explicit-bot-key" },
+      isolatedLaunch
     )
-    expect(env.KIMI_CODE_HOME).toBe("/work/state/kimi")
+    expect(env.KIMI_CODE_HOME).toBe("/state/kimi")
     expect(env.KIMI_MODEL_API_KEY).toBe("explicit-bot-key")
     const noCredential = buildExternalAgentChildEnv(
       { NODE_ENV: "test", KIMI_MODEL_API_KEY: "ambient-host-key" },
-      { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/work/state" },
-      { command: "kimi" }
+      {},
+      isolatedLaunch
     )
     expect(noCredential.KIMI_MODEL_API_KEY).toBeUndefined()
   })
@@ -503,34 +506,43 @@ describe("NodeExternalAgentBackend", () => {
       ).AIDER_MODEL
     ).toBeUndefined()
   })
-  it("derives writable Bot temp and package caches from the owned runtime state", () => {
+  it("gives an isolated launch its own temp and caches, no owner credential and no Git helpers", () => {
     const env = buildExternalAgentChildEnv(
-      { TMPDIR: "/ambient/tmp", pnpm_config_store_dir: "/ambient/store", NODE_ENV: "test" },
-      { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/owned/state" },
-      { command: "codex" }
+      {
+        TMPDIR: "/ambient/tmp",
+        pnpm_config_store_dir: "/ambient/store",
+        NODE_ENV: "test",
+        HOME: "/Users/owner",
+        SSH_AUTH_SOCK: "/tmp/agent.sock",
+        OPENAI_API_KEY: "owner-provider",
+        CODEX_HOME: "/Users/owner/.codex",
+        XDG_CONFIG_HOME: "/Users/owner/.config",
+      },
+      { AWS_SECRET_ACCESS_KEY: "not-admitted" },
+      { command: "codex", stateIsolation: { root: "/owned/state", isolated: true } }
     )
     expect(env).toMatchObject({
+      HOME: "/Users/owner",
       TMPDIR: "/owned/state/tmp",
       TMP: "/owned/state/tmp",
       TEMP: "/owned/state/tmp",
+      XDG_DATA_HOME: "/owned/state/data",
       npm_config_cache: "/owned/state/cache/npm",
       npm_config_store_dir: "/owned/state/cache/pnpm-store",
       pnpm_config_store_dir: "/owned/state/cache/pnpm-store",
       pnpm_config_cache_dir: "/owned/state/cache/pnpm",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_TERMINAL_PROMPT: "0",
     })
-  })
-
-  it.each([undefined, "relative/state"])("rejects an invalid owned state directory %s", (state) => {
-    expect(() =>
-      buildExternalAgentChildEnv(
-        { NODE_ENV: "test" },
-        {
-          COGNIA_BOT_ISOLATION: "1",
-          ...(state ? { COGNIA_BOT_STATE_DIR: state } : {}),
-        },
-        { command: "codex" }
-      )
-    ).toThrow("Bot isolation requires an owned state directory")
+    for (const key of [
+      "SSH_AUTH_SOCK",
+      "OPENAI_API_KEY",
+      "CODEX_HOME",
+      "XDG_CONFIG_HOME",
+      "AWS_SECRET_ACCESS_KEY",
+    ])
+      expect(env[key]).toBeUndefined()
   })
 
   const nativeBotTest =
@@ -538,7 +550,10 @@ describe("NodeExternalAgentBackend", () => {
   nativeBotTest("launches a real confined child with writable owned caches and temp", async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cognia-bot-cache-launch-")))
     const workspace = path.join(root, "checkout")
-    const state = path.join(root, "state")
+    const state = isolatedStateRoot(
+      path.join(root, "home", "Library", "Application Support"),
+      PROFILE.key
+    )
     fs.mkdirSync(workspace)
     const stub = path.join(workspace, "stub-acp-agent.mjs")
     const keys = [
@@ -555,9 +570,17 @@ describe("NodeExternalAgentBackend", () => {
       `import fs from "node:fs"; import path from "node:path";
 const values = Object.fromEntries(${JSON.stringify(keys)}.map(key => [key, process.env[key]]));
 for (const [key, value] of Object.entries(values)) fs.writeFileSync(path.join(value, key + ".txt"), "fixture");
-console.log(JSON.stringify({values, githubTokenPresent: !!process.env.GITHUB_TOKEN, botStatePresent: !!process.env.COGNIA_BOT_STATE_DIR}));`
+console.log(JSON.stringify({values, githubTokenPresent: !!process.env.GITHUB_TOKEN, profilePresent: !!process.env.COGNIA_ENGINE_PROFILE}));`
     )
-    const backend = new NodeExternalAgentBackend({ workspacesRoot: root, allowSmokeAgent: true })
+    const backend = new NodeExternalAgentBackend({
+      workspacesRoot: root,
+      allowSmokeAgent: true,
+      stateIsolationHost: {
+        platform: "darwin",
+        homedir: path.join(root, "home"),
+        env: {},
+      },
+    })
     const stdout: string[] = []
     const stderr: string[] = []
     backend.listen<{ data: string }>("external-agent://stdout", (event) => stdout.push(event.data))
@@ -570,11 +593,7 @@ console.log(JSON.stringify({values, githubTokenPresent: !!process.env.GITHUB_TOK
           command: "node",
           args: [stub],
           cwd: workspace,
-          env: {
-            COGNIA_BOT_ISOLATION: "1",
-            COGNIA_BOT_STATE_DIR: state,
-            GITHUB_TOKEN: "fixture-not-a-secret",
-          },
+          env: { ...engineLaunchProfileEnv(PROFILE), GITHUB_TOKEN: "fixture-not-a-secret" },
         },
       })
       await exited
@@ -582,7 +601,7 @@ console.log(JSON.stringify({values, githubTokenPresent: !!process.env.GITHUB_TOK
       expect(stdout).toHaveLength(1)
       const result = JSON.parse(stdout[0])
       expect(result.githubTokenPresent).toBe(false)
-      expect(result.botStatePresent).toBe(false)
+      expect(result.profilePresent).toBe(false)
       for (const key of keys) {
         expect(result.values[key]).toMatch(new RegExp(`^${state}/`))
         expect(fs.readFileSync(path.join(result.values[key], `${key}.txt`), "utf8")).toBe("fixture")
@@ -1780,7 +1799,7 @@ it.each([undefined, "explicit-fixture", ""])(
     const isolated = buildExternalAgentChildEnv(
       { NODE_ENV: "test", XAI_API_KEY: "ambient-fixture" },
       overrides,
-      { command: "grok", isolatedState: true }
+      { command: "grok", stateIsolation: { root: "/state", isolated: false } }
     )
     expect(isolated.XAI_API_KEY).toBe(explicit ?? "")
     const shared = buildExternalAgentChildEnv(

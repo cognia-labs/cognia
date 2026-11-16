@@ -117,7 +117,6 @@ export async function acquireBotWorkspace(
   await completeBotRunStep(spec.runId, allocationStep, { id, spec })
   const segments = ["bot-runs", id]
   const destination = await deps.repoCacheDir(segments)
-  const runtimeStateRoot = await deps.repoCacheDir(["bot-runs", `${id}-state`])
   const repository = binding.repository
   if (!repository) throw new Error("Bot integration repository scope is missing")
   // Clone through the account the installation is bound to, on that account's
@@ -162,7 +161,6 @@ export async function acquireBotWorkspace(
     runId: spec.runId,
     root,
     origin: "bot-run",
-    runtimeStateRoot,
     ephemeral: true,
     headRef,
     remote: { host: access.host.id, owner, repo, url, ref: spec.ref },

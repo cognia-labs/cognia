@@ -21,12 +21,10 @@
 //! Which engines can be isolated, and how, is each engine's launch descriptor
 //! ([`crate::launch_descriptor`]); this module names no engine.
 //!
-//! A launch that already owns a private home — a Bot-isolated spawn
-//! (`COGNIA_BOT_ISOLATION=1`) or a gateway task (`COGNIA_GATEWAY_TASK_CONFIG`)
-//! — ignores the key: both already keep every runtime's state out of the
-//! user's roots, and layering a second home on top would only fight them.
+//! An isolated launch ([`crate::launch_profile`]) takes its root from its
+//! profile instead, under `<data_dir>/cognia/isolated-agents/`; a gateway
+//! task (`COGNIA_GATEWAY_TASK_CONFIG`) owns its home and ignores the key.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::process::ExternalAgentSpawnConfig;
@@ -180,12 +178,6 @@ pub fn isolation_rule_for(command: &str, args: &[String]) -> Option<ResolvedAgen
     resolved
 }
 
-/// Does this launch already run under a private home of its own?
-pub fn launch_owns_private_home(env: &HashMap<String, String>) -> bool {
-    env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1")
-        || env.contains_key(crate::gateway_task::PAYLOAD_ENV)
-}
-
 /// Drop the state key without applying it. For launches whose confinement
 /// is not this host's process table (a runtime-environment container, a
 /// container or Kubernetes exec backend): the child cannot see the host's
@@ -260,28 +252,54 @@ fn ensure_private_dir(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Apply the configuration's state root to a spawn config.
+/// Apply the launch's private state root to a spawn config.
 ///
+/// - An isolated launch ([`crate::launch_profile::LaunchProfile::Isolated`]):
+///   its root is the profile's ([`crate::launch_profile::isolated_state_root`])
+///   and any configuration key is removed and ignored. The engine's isolation
+///   rule maps its homes inside the root when it has one; without one, or for
+///   a gateway task, whose engine state lives in the task's home, the plan
+///   carries the root alone, which the sandbox relocates the platform's
+///   state, cache and temp roots into.
+/// - A gateway task owns its home: the key is removed and ignored, `Ok(None)`.
 /// - No key: `Ok(None)`, nothing changes.
-/// - A launch that owns a private home ([`launch_owns_private_home`]): the
-///   key is removed and ignored, `Ok(None)`.
 /// - Otherwise the key is removed and must be valid, the runtime must have a
 ///   rule (`state isolation unsupported for <command>`), and `data_dir` must
-///   be known. The root and every mapped subdirectory are created owner-only
-///   and the mapping is inserted into the env, replacing any caller value.
+///   be known.
 ///
-/// `home` is the host home the plan's shared and denied roots are joined to.
+/// The root and every mapped subdirectory are created owner-only and the
+/// mapping is inserted into the env, replacing any caller value. `home` is
+/// the host home the plan's shared and denied roots are joined to.
 pub fn apply_state_isolation(
     config: &mut ExternalAgentSpawnConfig,
     data_dir: Option<&Path>,
     home: &Path,
 ) -> Result<Option<IsolationPlan>, String> {
-    let Some(key) = config.env.remove(AGENT_STATE_KEY_ENV) else {
+    let configured = config.env.remove(AGENT_STATE_KEY_ENV);
+    let profile = crate::launch_profile::LaunchProfile::of(&config.env)?;
+    let data_dir = || {
+        data_dir.filter(|dir| dir.is_absolute()).ok_or_else(|| {
+            "state isolation needs this host's per-user data directory, which could not be determined"
+                .to_string()
+        })
+    };
+    let gateway_task = config.env.contains_key(crate::gateway_task::PAYLOAD_ENV);
+    if let crate::launch_profile::LaunchProfile::Isolated { key, .. } = &profile {
+        let root = crate::launch_profile::isolated_state_root(data_dir()?, key);
+        // A gateway task keeps its engine's state in its own home.
+        let rule = if gateway_task {
+            ResolvedAgentStateIsolation::default()
+        } else {
+            isolation_rule_for(&config.command, &config.args).unwrap_or_default()
+        };
+        return apply_rule(config, rule, root, home).map(Some);
+    }
+    let Some(key) = configured else {
         return Ok(None);
     };
-    if launch_owns_private_home(&config.env) {
+    if gateway_task {
         log::info!(
-            "[state-isolation] {}: launch already owns a private home; ignoring {AGENT_STATE_KEY_ENV}",
+            "[state-isolation] {}: a gateway task owns its home; ignoring {AGENT_STATE_KEY_ENV}",
             config.id
         );
         return Ok(None);
@@ -293,14 +311,19 @@ pub fn apply_state_isolation(
     }
     let rule = isolation_rule_for(&config.command, &config.args)
         .ok_or_else(|| format!("state isolation unsupported for {}", config.command))?;
-    let data_dir = data_dir.filter(|dir| dir.is_absolute()).ok_or_else(|| {
-        "state isolation needs this host's per-user data directory, which could not be determined"
-            .to_string()
-    })?;
+    let root = agent_state_root(data_dir()?, &key);
+    apply_rule(config, rule, root, home).map(Some)
+}
+
+fn apply_rule(
+    config: &mut ExternalAgentSpawnConfig,
+    rule: ResolvedAgentStateIsolation,
+    root: PathBuf,
+    home: &Path,
+) -> Result<IsolationPlan, String> {
     if !home.is_absolute() {
         return Err("state isolation needs an absolute home directory".into());
     }
-    let root = agent_state_root(data_dir, &key);
     ensure_private_dir(&root)?;
     for (env_key, relative) in &rule.env {
         let mut path = root.clone();
@@ -315,7 +338,7 @@ pub fn apply_state_isolation(
     for (key, value) in &rule.set_env {
         config.env.insert(key.clone(), value.clone());
     }
-    Ok(Some(IsolationPlan {
+    Ok(IsolationPlan {
         shared_roots: rule
             .shared_roots
             .iter()
@@ -327,7 +350,7 @@ pub fn apply_state_isolation(
             .map(|relative| home.join(relative))
             .collect(),
         root,
-    }))
+    })
 }
 
 fn tree_bytes(path: &Path) -> u64 {
@@ -360,13 +383,19 @@ pub fn state_root_info(data_dir: &Path, key: &str) -> Result<AgentStateRootInfo,
     })
 }
 
-/// Delete a configuration's state root. A missing root is not an error; a
-/// root that is a symlink loses only the link, never its target.
-pub fn remove_state_root(data_dir: &Path, key: &str) -> Result<(), String> {
+/// Delete a configuration's state root, or with `isolated` an isolated
+/// launch's ([`crate::launch_profile::isolated_state_root`]). A missing root
+/// is not an error; a root that is a symlink loses only the link, never its
+/// target.
+pub fn remove_state_root(data_dir: &Path, key: &str, isolated: bool) -> Result<(), String> {
     if !state_key_valid(key) {
         return Err("invalid agent state key".into());
     }
-    let root = agent_state_root(data_dir, key);
+    let root = if isolated {
+        crate::launch_profile::isolated_state_root(data_dir, key)
+    } else {
+        agent_state_root(data_dir, key)
+    };
     let result = match std::fs::symlink_metadata(&root) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => Err(error),
@@ -694,22 +723,76 @@ mod tests {
     }
 
     #[test]
-    fn bot_and_gateway_launches_keep_their_own_home_and_drop_the_key() {
+    fn a_gateway_task_keeps_its_own_home_and_drops_the_key() {
         let data = tempfile::tempdir().unwrap();
-        for owner in [
-            ("COGNIA_BOT_ISOLATION", "1"),
-            (crate::gateway_task::PAYLOAD_ENV, "{}"),
-        ] {
-            let mut input = config("codex", &[], &[(AGENT_STATE_KEY_ENV, "cfg"), owner]);
-            assert_eq!(
-                apply_state_isolation(&mut input, Some(data.path()), Path::new("/home/dev"))
-                    .unwrap(),
-                None
-            );
-            assert!(!input.env.contains_key(AGENT_STATE_KEY_ENV));
-            assert!(!input.env.contains_key("CODEX_HOME"));
-        }
+        let mut input = config(
+            "codex",
+            &[],
+            &[
+                (AGENT_STATE_KEY_ENV, "cfg"),
+                (crate::gateway_task::PAYLOAD_ENV, "{}"),
+            ],
+        );
+        assert_eq!(
+            apply_state_isolation(&mut input, Some(data.path()), Path::new("/home/dev")).unwrap(),
+            None
+        );
+        assert!(!input.env.contains_key(AGENT_STATE_KEY_ENV));
+        assert!(!input.env.contains_key("CODEX_HOME"));
         assert!(!data.path().join("cognia").exists());
+    }
+
+    #[test]
+    fn an_isolated_launch_takes_its_profiles_root_over_the_configurations() {
+        let data = tempfile::tempdir().unwrap();
+        let profile = r#"{"kind":"isolated","key":"bot-1","reason":"bot"}"#;
+        let mut codex = config(
+            "codex",
+            &[],
+            &[
+                (AGENT_STATE_KEY_ENV, "cfg"),
+                (crate::launch_profile::ENGINE_PROFILE_ENV, profile),
+            ],
+        );
+        let plan = apply_state_isolation(&mut codex, Some(data.path()), Path::new("/home/dev"))
+            .unwrap()
+            .unwrap();
+        let root = data.path().join("cognia/isolated-agents/bot-1");
+        assert_eq!(plan.root, root);
+        assert_eq!(
+            codex.env["CODEX_HOME"],
+            root.join("codex").to_string_lossy()
+        );
+        assert!(!codex.env.contains_key(AGENT_STATE_KEY_ENV));
+        assert!(!data.path().join("cognia/external-agents").exists());
+
+        // An engine without an isolation rule still gets the root alone.
+        let mut devin = config(
+            "devin",
+            &["acp"],
+            &[(crate::launch_profile::ENGINE_PROFILE_ENV, profile)],
+        );
+        let plan = apply_state_isolation(&mut devin, Some(data.path()), Path::new("/home/dev"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.root, root);
+        assert!(plan.shared_roots.is_empty() && plan.deny_readable.is_empty());
+
+        let mut malformed = config(
+            "codex",
+            &[],
+            &[(crate::launch_profile::ENGINE_PROFILE_ENV, "{}")],
+        );
+        assert!(
+            apply_state_isolation(&mut malformed, Some(data.path()), Path::new("/home/dev"))
+                .is_err()
+        );
+        let mut no_dir = config(
+            "devin",
+            &["acp"],
+            &[(crate::launch_profile::ENGINE_PROFILE_ENV, profile)],
+        );
+        assert!(apply_state_isolation(&mut no_dir, None, Path::new("/home/dev")).is_err());
     }
 
     #[cfg(unix)]
@@ -744,7 +827,7 @@ mod tests {
             PathBuf::from(&info.path),
             agent_state_root(data.path(), "cfg")
         );
-        remove_state_root(data.path(), "cfg").expect("missing root is fine");
+        remove_state_root(data.path(), "cfg", false).expect("missing root is fine");
 
         let root = agent_state_root(data.path(), "cfg");
         std::fs::create_dir_all(root.join("codex/sessions")).unwrap();
@@ -757,13 +840,19 @@ mod tests {
         assert_eq!(json["exists"], true);
         assert_eq!(json["bytes"], 13);
 
-        remove_state_root(data.path(), "cfg").unwrap();
+        remove_state_root(data.path(), "cfg", false).unwrap();
         assert!(!root.exists());
         // A sibling configuration's root is untouched.
         let sibling = agent_state_root(data.path(), "other");
         std::fs::create_dir_all(&sibling).unwrap();
-        remove_state_root(data.path(), "cfg").unwrap();
+        remove_state_root(data.path(), "cfg", false).unwrap();
         assert!(sibling.exists());
+
+        // An isolated launch's root is removed by its own key, apart.
+        let isolated = crate::launch_profile::isolated_state_root(data.path(), "other");
+        std::fs::create_dir_all(&isolated).unwrap();
+        remove_state_root(data.path(), "other", true).unwrap();
+        assert!(!isolated.exists() && sibling.exists());
     }
 
     #[cfg(unix)]
@@ -777,7 +866,7 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), &root).unwrap();
         // Info does not follow the link either.
         assert!(state_root_info(data.path(), "cfg").unwrap().exists);
-        remove_state_root(data.path(), "cfg").unwrap();
+        remove_state_root(data.path(), "cfg", false).unwrap();
         assert!(outside.path().join("keep").exists());
         assert!(std::fs::symlink_metadata(&root).is_err());
     }
@@ -786,7 +875,7 @@ mod tests {
     fn info_and_remove_refuse_invalid_keys() {
         let data = tempfile::tempdir().unwrap();
         assert!(state_root_info(data.path(), "../x").is_err());
-        assert!(remove_state_root(data.path(), "").is_err());
-        assert!(remove_state_root(data.path(), "a/b").is_err());
+        assert!(remove_state_root(data.path(), "", false).is_err());
+        assert!(remove_state_root(data.path(), "a/b", false).is_err());
     }
 }

@@ -72,6 +72,8 @@ pub(crate) struct LaunchEnvironmentTable {
     pub session_keys: Vec<String>,
     pub owner_keys: Vec<String>,
     pub owner_prefixes: Vec<String>,
+    pub isolated_keys: Vec<String>,
+    pub isolated_set: std::collections::BTreeMap<String, String>,
     pub config_keys: Vec<String>,
     pub config_prefixes: Vec<String>,
 }
@@ -114,8 +116,8 @@ pub(crate) fn host_config_env(key: &str) -> bool {
 }
 
 /// Request keys the host consumes itself: the workspace port, the gateway
-/// task and its lease, an engine's MCP servers, the Bot state and the update
-/// switch. Host configuration keys come from the security policy
+/// task and its lease, an engine's MCP servers, the launch profile and the
+/// update switch. Host configuration keys come from the security policy
 /// ([`host_config_env`]) and each engine's own keys from its launch descriptor
 /// ([`crate::launch_descriptor::admits_request_env`]).
 const HOST_CONTROL_ENV: &[&str] = &[
@@ -125,8 +127,7 @@ const HOST_CONTROL_ENV: &[&str] = &[
     "COGNIA_GATEWAY_TASK_CONFIG",
     "COGNIA_GATEWAY_TOKEN",
     "COGNIA_ENGINE_MCP_SERVERS",
-    "COGNIA_BOT_ISOLATION",
-    "COGNIA_BOT_STATE_DIR",
+    crate::launch_profile::ENGINE_PROFILE_ENV,
     "DISABLE_AUTO_UPDATE",
 ];
 
@@ -205,7 +206,9 @@ impl SpawnPolicy {
     fn validate_sandbox_policy(&self, config: &ExternalAgentSpawnConfig, remote: bool) -> Result<(), PolicyViolation> {
         use crate::process::SandboxNetworkMode;
         config.sandbox_policy.validate().map_err(PolicyViolation)?;
-        if !remote && config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) != Some("1") { return Ok(()); }
+        if !remote && !crate::launch_profile::isolated(&config.env) {
+            return Ok(());
+        }
         let request = &config.sandbox_policy;
         let permitted = match (self.network_ceiling.network, request.network) {
             (_, SandboxNetworkMode::Off) | (SandboxNetworkMode::Full, _) => true,
@@ -310,7 +313,7 @@ impl SpawnPolicy {
         crate::mcp_config_file::validate_target(&config.command, &config.args, &config.env)
             .map_err(PolicyViolation)?;
         config.cwd = Some(self.validate_cwd(config.cwd.as_deref())?);
-        validate_bot_runtime_state(&config)?;
+        crate::launch_profile::LaunchProfile::of(&config.env).map_err(PolicyViolation)?;
         let (env, dropped) =
             filter_env_with_additions(std::mem::take(&mut config.env), &self.operator_env);
         config.env = env;
@@ -372,7 +375,7 @@ impl SpawnPolicy {
                     .to_string(),
             ),
         };
-        validate_bot_runtime_state(&config)?;
+        crate::launch_profile::LaunchProfile::of(&config.env).map_err(PolicyViolation)?;
         let (env, dropped) =
             filter_env_with_additions(std::mem::take(&mut config.env), &self.operator_env);
         config.env = env;
@@ -567,50 +570,6 @@ fn is_dsh_launcher_invocation(args: &[String], data_root: &Path) -> bool {
         == Some(root)
 }
 
-/// Keep allowlisted env keys; drop everything else (default-deny — this is
-/// what keeps `LD_PRELOAD`/`DYLD_*`/`NODE_OPTIONS` out). Returns the kept
-/// map and the dropped key names for the audit record.
-/// Preserve the isolation request through native env filtering only when the
-/// runtime state is the checkout's dedicated sibling, never an arbitrary root.
-fn validate_bot_runtime_state(config: &ExternalAgentSpawnConfig) -> Result<(), PolicyViolation> {
-    let isolation = config.env.get("COGNIA_BOT_ISOLATION");
-    let state = config.env.get("COGNIA_BOT_STATE_DIR");
-    if isolation.is_none() && state.is_none() {
-        return Ok(());
-    }
-    if isolation.map(String::as_str) != Some("1") {
-        return Err(PolicyViolation(
-            "Bot isolation must be explicitly enabled".into(),
-        ));
-    }
-    let cwd = Path::new(
-        config
-            .cwd
-            .as_deref()
-            .ok_or_else(|| PolicyViolation("Bot isolation requires a checkout".into()))?,
-    );
-    let name = cwd
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| PolicyViolation("Bot checkout has no directory name".into()))?;
-    let parent = cwd
-        .parent()
-        .ok_or_else(|| PolicyViolation("Bot checkout has no parent".into()))?;
-    let expected = parent.join(format!("{name}-state"));
-    let state = Path::new(
-        state.ok_or_else(|| PolicyViolation("Bot isolation requires runtime state".into()))?,
-    );
-    if state != expected
-        || state.is_symlink()
-        || (state.exists() && state.canonicalize().ok().as_ref() != Some(&expected))
-    {
-        return Err(PolicyViolation(
-            "Bot runtime state must be the checkout's dedicated sibling".into(),
-        ));
-    }
-    Ok(())
-}
-
 fn parse_operator_list(
     variable: &str,
     raw: Result<String, std::env::VarError>,
@@ -791,6 +750,9 @@ fn filter_env(env: HashMap<String, String>) -> (HashMap<String, String>, Vec<Str
     filter_env_with_additions(env, &[])
 }
 
+/// Keep allowlisted env keys; drop everything else (default-deny — this is
+/// what keeps `LD_PRELOAD`/`DYLD_*`/`NODE_OPTIONS` out). Returns the kept
+/// map and the dropped key names for the audit record.
 fn filter_env_with_additions(
     env: HashMap<String, String>,
     additions: &[String],
@@ -1167,19 +1129,22 @@ mod tests {
     }
 
     #[test]
-    fn bot_runtime_isolation_survives_native_policy_filtering() {
+    fn the_launch_profile_survives_policy_filtering_and_a_malformed_one_refuses() {
         let (tmp, policy) = policy(false);
         let checkout = tmp.path().join("workspaces/run");
         std::fs::create_dir_all(&checkout).unwrap();
-        let checkout = checkout.canonicalize().unwrap();
         let mut request = config("devin", &["acp"]);
-        request.cwd = Some(checkout.to_string_lossy().into_owned());
-        request
-            .env
-            .insert("COGNIA_BOT_ISOLATION".into(), "1".into());
+        request.cwd = Some(
+            checkout
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let profile = r#"{"kind":"isolated","key":"bot-1","reason":"bot"}"#;
         request.env.insert(
-            "COGNIA_BOT_STATE_DIR".into(),
-            format!("{}-state", checkout.display()),
+            crate::launch_profile::ENGINE_PROFILE_ENV.into(),
+            profile.into(),
         );
         for validated in [
             policy.validate(request.clone()).unwrap(),
@@ -1189,43 +1154,17 @@ mod tests {
                 validated
                     .config
                     .env
-                    .get("COGNIA_BOT_ISOLATION")
+                    .get(crate::launch_profile::ENGINE_PROFILE_ENV)
                     .map(String::as_str),
-                Some("1")
-            );
-            assert_eq!(
-                validated.config.env.get("COGNIA_BOT_STATE_DIR"),
-                request.env.get("COGNIA_BOT_STATE_DIR")
+                Some(profile)
             );
         }
         request.env.insert(
-            "COGNIA_BOT_STATE_DIR".into(),
-            tmp.path().to_string_lossy().into_owned(),
+            crate::launch_profile::ENGINE_PROFILE_ENV.into(),
+            r#"{"kind":"isolated","key":"../other","reason":"bot"}"#.into(),
         );
         assert!(policy.validate(request.clone()).is_err());
-        assert!(policy.validate_desktop(request.clone()).is_err());
-        request.env.remove("COGNIA_BOT_ISOLATION");
-        assert!(policy.validate(request).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn bot_runtime_state_rejects_a_symlink_to_another_run() {
-        let (tmp, policy) = policy(false);
-        let checkout = tmp.path().join("workspaces/run");
-        std::fs::create_dir_all(&checkout).unwrap();
-        let checkout = checkout.canonicalize().unwrap();
-        std::os::unix::fs::symlink(tmp.path(), format!("{}-state", checkout.display())).unwrap();
-        let mut request = config("devin", &["acp"]);
-        request.cwd = Some(checkout.to_string_lossy().into_owned());
-        request
-            .env
-            .insert("COGNIA_BOT_ISOLATION".into(), "1".into());
-        request.env.insert(
-            "COGNIA_BOT_STATE_DIR".into(),
-            format!("{}-state", checkout.display()),
-        );
-        assert!(policy.validate(request).is_err());
+        assert!(policy.validate_desktop(request).is_err());
     }
 
     // ── Policy matrix: command ───────────────────────────────────────────────

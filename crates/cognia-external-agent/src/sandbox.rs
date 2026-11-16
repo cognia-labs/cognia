@@ -255,7 +255,7 @@ pub fn build_sandbox_launcher_args_with_policy(
     out
 }
 
-/// Policy flags are deliberately independent of platform and bot isolation.
+/// Policy flags are deliberately independent of platform and isolation.
 fn sandbox_network_args(policy: &ExternalAgentSandboxPolicy) -> Vec<String> {
     match policy.network {
         SandboxNetworkMode::Full => vec!["--network".into()],
@@ -352,7 +352,7 @@ fn forbidden_readable_spellings() -> Vec<PathBuf> {
 ///   - it is not, and is not under or above, a forbidden readable root
 ///     (`/var`, `/run`, `/tmp`, … in every spelling);
 ///   - it is not nested under any `--deny-readable` root the wrapper emits
-///     (Bot-isolated home, gateway-task deny list, the task-home parent): the
+///     (an isolated launch's home, gateway-task deny list, the task-home parent): the
 ///     launcher re-opens a readable nested under a deny, so emitting one would
 ///     undo that deny;
 ///   - it is not, and is not under or above, a `--writable` root the wrapper
@@ -364,9 +364,9 @@ fn forbidden_readable_spellings() -> Vec<PathBuf> {
 ///     (The stronger option is binding an `O_PATH | O_NOFOLLOW` descriptor
 ///     with bubblewrap's `--ro-bind-fd`, which the launcher does not do today.)
 ///
-/// A Bot-isolated spawn (`COGNIA_BOT_ISOLATION=1`) gets no package roots at
+/// An isolated launch ([`crate::launch_profile`]) gets no package roots at
 /// all — whatever the plugin store's location, even outside the hidden home
-/// (`XDG_DATA_HOME`) — matching ADR-0210 and the adapter's `bot-isolation`
+/// (`XDG_DATA_HOME`) — matching ADR-0210 and the adapter's `isolated-launch`
 /// refusal.
 ///
 /// Every dropped entry, and an unparseable value, is logged with its reason.
@@ -379,8 +379,8 @@ pub fn pi_package_readable_roots(
     let Some(raw) = config.env.get(PI_PACKAGE_ROOTS_ENV) else {
         return Vec::new();
     };
-    if config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1") {
-        log::warn!("[sandbox] ignoring {PI_PACKAGE_ROOTS_ENV} on a Bot-isolated spawn");
+    if crate::launch_profile::isolated(&config.env) {
+        log::warn!("[sandbox] ignoring {PI_PACKAGE_ROOTS_ENV} on an isolated spawn");
         return Vec::new();
     }
     if !crate::launch_descriptor::takes_pi_packages(&config.command, &config.args) {
@@ -763,8 +763,10 @@ pub fn wrap_with_sandbox(
     crate::dsh_runtime::normalize_managed_launch(&mut config).map_err(SandboxError::InvalidPolicy)?;
     crate::launch_descriptor::apply_platform_args(&config.command, &mut config.args, host.os());
     config.sandbox_policy.validate().map_err(SandboxError::InvalidPolicy)?;
-    let bot_isolation = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
-    crate::launch_descriptor::check_private_launch(&config.command, &config.args, bot_isolation)
+    let isolated = crate::launch_profile::LaunchProfile::of(&config.env)
+        .map_err(SandboxError::StateIsolation)?
+        .is_isolated();
+    crate::launch_descriptor::check_private_launch(&config.command, &config.args, isolated)
         .map_err(SandboxError::StateIsolation)?;
     crate::process::blank_private_credentials(&mut config);
     let native_bridge_root = crate::native_bridge::registered_native_bridge_root(&config.command, &config.args).map_err(SandboxError::InvalidPolicy)?;
@@ -779,13 +781,15 @@ pub fn wrap_with_sandbox(
         crate::state_isolation::apply_state_isolation(&mut config, host.agent_state_data_dir().as_deref(), &host_home).map_err(SandboxError::StateIsolation)?
     };
 
-    let bot_state = config
-        .env
-        .get("COGNIA_BOT_STATE_DIR")
-        .filter(|_| bot_isolation)
-        .map(PathBuf::from);
-    if bot_isolation && !bot_state.as_deref().is_some_and(Path::is_absolute) {
-        return Err(SandboxError::MissingCwd);
+    // An isolated launch's whole writable scope is its profile's state root.
+    let private_state = isolation
+        .as_ref()
+        .filter(|_| isolated)
+        .map(|plan| plan.root.clone());
+    if isolated && private_state.is_none() {
+        return Err(SandboxError::StateIsolation(
+            "an isolated launch needs its own private state root".into(),
+        ));
     }
     let relocated = crate::launch_descriptor::relocated_state(
         &crate::launch_descriptor::RelocationInput {
@@ -794,7 +798,7 @@ pub fn wrap_with_sandbox(
             env: &config.env,
             cwd: config.cwd.as_deref(),
             home: &home,
-            private_base: bot_state.as_deref(),
+            private_base: private_state.as_deref(),
             host_env_applies: !config.env.contains_key(crate::gateway_task::PAYLOAD_ENV),
         },
         |key| std::env::var(key).ok(),
@@ -823,8 +827,7 @@ pub fn wrap_with_sandbox(
     }
     host.ensure_dir(&tool_host_dir);
 
-    let mut args = if let Some(state) = &bot_state {
-        host.ensure_dir(state);
+    let mut args = if let Some(state) = &private_state {
         vec![
             "--cwd".into(),
             cwd.clone(),
@@ -841,15 +844,15 @@ pub fn wrap_with_sandbox(
     } else {
         build_sandbox_launcher_args_with_policy(&config.command, &config.args, &cwd, &home, &tool_host_dir, &config.sandbox_policy)
     };
-    if bot_isolation {
+    if isolated {
         let separator = args.iter().position(|arg| arg == "--").expect("target separator");
         args.splice(separator..separator, sandbox_network_args(&config.sandbox_policy));
-        // The launcher owns env/keychain confinement too. An old launcher
-        // rejects this flag instead of silently running with a weaker policy.
+        // The launcher denies helper sockets and keychain IPC too; the
+        // process table builds the isolated env.
         args.splice(
             0..0,
             [
-                "--bot-isolation".to_string(),
+                "--isolated".to_string(),
                 "--deny-readable".to_string(),
                 host_home.to_string_lossy().into_owned(),
             ],
@@ -901,10 +904,11 @@ pub fn wrap_with_sandbox(
         }
     }
 
-    // A private state root replaces the runtime's shared default roots. Bot
-    // and gateway launches never get here with a plan: both own a private
-    // home already and `apply_state_isolation` ignores the key for them.
-    if let Some(plan) = &isolation {
+    // A configuration's private state root replaces the runtime's shared
+    // default roots. An isolated launch's root is already its whole writable
+    // scope, under a home it cannot read; a gateway task owns its home and
+    // never has a plan.
+    if let Some(plan) = isolation.as_ref().filter(|_| !isolated) {
         for shared in &plan.shared_roots {
             drop_writable(&mut args, shared);
         }
@@ -1040,7 +1044,7 @@ pub fn wrap_with_sandbox(
         host.ensure_dir(&state.root);
         for root in &state.writable {
             host.ensure_dir(root);
-            if !bot_isolation {
+            if !isolated {
                 args.splice(0..0, ["--writable".into(), root.to_string_lossy().into_owned()]);
             }
         }
@@ -1050,14 +1054,13 @@ pub fn wrap_with_sandbox(
         Some(state) => state.temp.clone(),
         None => crate::launch_descriptor::engine_temp(&config.command, &config.args, &config.env, &home, isolation.is_some()),
     };
-    if let Some(temp) = temp.filter(|_| !bot_isolation) {
+    if let Some(temp) = temp.filter(|_| !isolated) {
         host.ensure_dir(&temp);
         for key in ["TMPDIR", "TMP", "TEMP"] {
             env.insert(key.into(), temp.to_string_lossy().into_owned());
         }
     }
-    if bot_isolation {
-        let state = Path::new(&config.env["COGNIA_BOT_STATE_DIR"]);
+    if let Some(state) = &private_state {
         for (key, relative) in [
             ("XDG_DATA_HOME", "data"),
             ("XDG_CACHE_HOME", "cache"),
@@ -1142,15 +1145,17 @@ mod tests {
 
 
     #[test]
-    fn antigravity_bot_wrapper_refuses_even_when_file_storage_is_requested() {
-        let host = FakeHost::new("macos");
+    fn an_isolated_antigravity_wrapper_refuses_even_when_file_storage_is_requested() {
+        let data = tempfile::tempdir().unwrap();
+        let host = isolated_host(data.path());
         let mut request = config("agy_acp_server.par", &[], Some("/work/project"));
-        request.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
+        isolate(&mut request);
         request.env.insert("AGY_ACP_FORCE_FILE_STORAGE".into(), "1".into());
         let error = wrap_with_sandbox(request, &host).unwrap_err();
         assert_eq!(error.reason_code(), "state_isolation_failed");
         assert!(error.to_string().contains("native keychain accounts are shared"));
         assert!(host.dirs.borrow().is_empty());
+        assert!(!data.path().join("cognia").exists());
     }
 
     #[cfg(unix)]
@@ -1261,29 +1266,57 @@ mod tests {
 
     /// The desktop wrapper and a container never both apply, and a placement
     /// nothing will route is wrapped because it falls back to this host.
+    #[cfg(unix)]
     #[test]
-    fn sandbox_policy_modes_platforms_and_bot_isolation() {
+    fn sandbox_policy_modes_platforms_and_isolation() {
         for os in ["macos", "linux", "windows"] {
             for mode in [SandboxNetworkMode::Full, SandboxNetworkMode::Allowlist, SandboxNetworkMode::Off] {
-                for bot in [false, true] {
+                for isolated in [false, true] {
                     for readable_scope in [SandboxReadableScope::Home, SandboxReadableScope::Workspace] {
-                        let host = FakeHost::new(os);
+                        let data = tempfile::tempdir().unwrap();
+                        let host = FakeHost {
+                            os: os.into(),
+                            ..isolated_host(data.path())
+                        };
                         let mut cfg = config("codex", &[], Some("/work/project"));
                         cfg.sandbox_policy = ExternalAgentSandboxPolicy {
                             network: mode, allowed_hosts: vec!["api.example.com".into(), "*.example.org".into()], readable_scope,
                         };
-                        if bot {
-                            cfg.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
-                            cfg.env.insert("COGNIA_BOT_STATE_DIR".into(), "/work/state".into());
+                        if isolated {
+                            isolate(&mut cfg);
                         }
                         let wrapped = wrap_with_sandbox(cfg, &host);
                         if os == "windows" { assert!(matches!(wrapped, Err(SandboxError::UnsupportedPlatform(_)))); continue; }
                         let args = wrapped.unwrap().args;
-                        assert_eq!(args.iter().any(|arg| arg == "--network"), mode == SandboxNetworkMode::Full);
-                        assert_eq!(args.windows(2).filter(|pair| pair[0] == "--network-allow").count(), if mode == SandboxNetworkMode::Allowlist { 2 } else { 0 });
-                        assert_eq!(args.windows(2).any(|pair| pair == ["--readable", "/home/dev"]), !bot && readable_scope == SandboxReadableScope::Home);
-                        assert_eq!(args.iter().any(|arg| arg == "--workspace-readable"), !bot && readable_scope == SandboxReadableScope::Workspace);
-                        if bot { assert!(args.windows(2).any(|pair| pair == ["--deny-readable", "/home/dev"])); }
+                        assert_eq!(
+                            args.iter().any(|arg| arg == "--network"),
+                            mode == SandboxNetworkMode::Full
+                        );
+                        assert_eq!(
+                            args.windows(2)
+                                .filter(|pair| pair[0] == "--network-allow")
+                                .count(),
+                            if mode == SandboxNetworkMode::Allowlist {
+                                2
+                            } else {
+                                0
+                            }
+                        );
+                        assert_eq!(
+                            args.windows(2)
+                                .any(|pair| pair == ["--readable", "/home/dev"]),
+                            !isolated && readable_scope == SandboxReadableScope::Home
+                        );
+                        assert_eq!(
+                            args.iter().any(|arg| arg == "--workspace-readable"),
+                            !isolated && readable_scope == SandboxReadableScope::Workspace
+                        );
+                        assert_eq!(args.iter().any(|arg| arg == "--isolated"), isolated);
+                        if isolated {
+                            assert!(args
+                                .windows(2)
+                                .any(|pair| pair == ["--deny-readable", "/home/dev"]));
+                        }
                     }
                 }
             }
@@ -1620,20 +1653,20 @@ mod tests {
     }
 
     #[test]
-    fn grok_bot_rejects_empty_and_escaping_state_before_provisioning() {
+    fn an_isolated_grok_launchs_home_is_its_root_whatever_the_request_selects() {
         for selected in ["", "   ", "/work/state/../escape", "/home/dev/.grok"] {
-            let host = FakeHost::new("macos");
+            let data = tempfile::tempdir().unwrap();
+            let host = isolated_host(data.path());
+            let root = crate::launch_profile::isolated_state_root(data.path(), "bot-1");
             let mut input = config("grok", &["agent", "--no-leader", "stdio"], Some("/work"));
-            input.env.extend([
-                ("COGNIA_BOT_ISOLATION".into(), "1".into()),
-                ("COGNIA_BOT_STATE_DIR".into(), "/work/state".into()),
-                ("GROK_HOME".into(), selected.into()),
-            ]);
-            assert!(matches!(
-                wrap_with_sandbox(input, &host),
-                Err(SandboxError::InvalidStateRoot(_))
-            ));
-            assert!(host.dirs.borrow().is_empty());
+            isolate(&mut input);
+            input.env.insert("GROK_HOME".into(), selected.into());
+            let wrapped = wrap_with_sandbox(input, &host).unwrap();
+            assert!(
+                Path::new(&wrapped.env["GROK_HOME"]).starts_with(&root),
+                "{selected}"
+            );
+            assert!(!wrapped.args.iter().any(|arg| arg == "/home/dev/.grok"));
         }
     }
 
@@ -1645,32 +1678,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn kimi_bot_rejects_symlinked_state_escape_before_directory_provisioning() {
-        let owned = tempfile::tempdir().unwrap();
+    fn an_isolated_kimi_launch_refuses_a_symlinked_home_in_its_root() {
+        let data = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(outside.path(), owned.path().join("escape")).unwrap();
-        let host = FakeHost::new("macos");
+        let host = isolated_host(data.path());
+        let root = crate::launch_profile::isolated_state_root(data.path(), "bot-1");
+        let mut probe = config("kimi", &["acp"], Some("/work"));
+        isolate(&mut probe);
+        let home = wrap_with_sandbox(probe, &host).unwrap().env["KIMI_CODE_HOME"].clone();
+        assert!(Path::new(&home).starts_with(&root));
+        std::fs::remove_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(outside.path(), &home).unwrap();
         let mut input = config("kimi", &["acp"], Some("/work"));
-        input.env.extend([
-            ("COGNIA_BOT_ISOLATION".into(), "1".into()),
-            (
-                "COGNIA_BOT_STATE_DIR".into(),
-                owned.path().to_string_lossy().into_owned(),
-            ),
-            (
-                "KIMI_CODE_HOME".into(),
-                owned
-                    .path()
-                    .join("escape/new")
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-        ]);
+        isolate(&mut input);
         assert!(matches!(
             wrap_with_sandbox(input, &host),
-            Err(SandboxError::InvalidStateRoot(_))
+            Err(SandboxError::StateIsolation(_))
         ));
-        assert!(host.dirs.borrow().is_empty());
     }
 
     #[test]
@@ -1696,16 +1720,14 @@ mod tests {
                 assert!(!wrapped.args.iter().any(|arg| arg == "/home/dev/.minimax"));
             }
         }
+        let data = tempfile::tempdir().unwrap();
+        let root = crate::launch_profile::isolated_state_root(data.path(), "bot-1");
         let mut input = config("mcode", &["acp"], Some("/work"));
-        input.env = HashMap::from([
-            ("COGNIA_BOT_ISOLATION".into(), "1".into()),
-            ("COGNIA_BOT_STATE_DIR".into(), "/owned".into()),
-            ("MINIMAX_DATA_DIR".into(), "/outside".into()),
-        ]);
-        assert!(matches!(
-            wrap_with_sandbox(input, &host),
-            Err(SandboxError::InvalidStateRoot(_))
-        ));
+        input.env = HashMap::from([("MINIMAX_DATA_DIR".into(), "/outside".into())]);
+        isolate(&mut input);
+        let wrapped = wrap_with_sandbox(input, &isolated_host(data.path())).unwrap();
+        assert!(Path::new(&wrapped.env["MINIMAX_DATA_DIR"]).starts_with(&root));
+        assert!(!wrapped.args.iter().any(|arg| arg == "/outside"));
     }
 
     #[test]
@@ -1745,31 +1767,22 @@ mod tests {
     }
 
     #[test]
-    fn kimi_bot_rejects_empty_and_escaping_state_and_retains_owned_temp() {
-        let host = FakeHost::new("macos");
+    fn an_isolated_kimi_launch_keeps_its_home_and_temp_in_its_root() {
         for selected in ["", "   ", "/work/state/../escape", "/home/dev/.kimi-code"] {
+            let data = tempfile::tempdir().unwrap();
+            let root = crate::launch_profile::isolated_state_root(data.path(), "bot-1");
             let mut input = config("kimi", &["acp"], Some("/work"));
-            input.env.extend([
-                ("COGNIA_BOT_ISOLATION".into(), "1".into()),
-                ("COGNIA_BOT_STATE_DIR".into(), "/work/state".into()),
-                ("KIMI_CODE_HOME".into(), selected.into()),
-            ]);
-            assert!(matches!(
-                wrap_with_sandbox(input, &host),
-                Err(SandboxError::InvalidStateRoot(_))
-            ));
+            isolate(&mut input);
+            input.env.insert("KIMI_CODE_HOME".into(), selected.into());
+            let wrapped = wrap_with_sandbox(input, &isolated_host(data.path())).unwrap();
+            assert!(
+                Path::new(&wrapped.env["KIMI_CODE_HOME"]).starts_with(&root),
+                "{selected}"
+            );
+            // A private launch's temp is always its own state's.
+            assert_eq!(wrapped.env["TMPDIR"], root.join("tmp").to_string_lossy());
+            assert!(!wrapped.args.iter().any(|arg| arg == "/home/dev/.kimi-code"));
         }
-        let mut input = config("kimi", &["acp"], Some("/work"));
-        input.env.extend([
-            ("COGNIA_BOT_ISOLATION".into(), "1".into()),
-            ("COGNIA_BOT_STATE_DIR".into(), "/work/state".into()),
-            ("KIMI_CODE_HOME".into(), "/work/state/kimi".into()),
-        ]);
-        let wrapped = wrap_with_sandbox(input, &host).unwrap();
-        assert_eq!(wrapped.env["KIMI_CODE_HOME"], "/work/state/kimi");
-        // A private launch's temp is always its own state's.
-        assert_eq!(wrapped.env["TMPDIR"], "/work/state/tmp");
-        assert!(!wrapped.args.iter().any(|arg| arg == "/home/dev/.kimi-code"));
     }
 
     #[test]
@@ -1795,18 +1808,17 @@ mod tests {
         );
     }
     #[test]
-    fn cline_bot_cannot_escape_owned_state_or_use_ignored_data_flag() {
-        let host = FakeHost::new("macos");
+    fn an_isolated_cline_keeps_its_state_in_its_root_and_never_takes_the_ignored_data_flag() {
+        let data = tempfile::tempdir().unwrap();
+        let root = crate::launch_profile::isolated_state_root(data.path(), "bot-1");
         let mut input = config("cline", &["--acp"], Some("/work"));
-        input.env.extend([
-            ("COGNIA_BOT_ISOLATION".into(), "1".into()),
-            ("COGNIA_BOT_STATE_DIR".into(), "/work/state".into()),
-            ("CLINE_DIR".into(), "/work/state/../escape".into()),
-        ]);
-        assert!(matches!(
-            wrap_with_sandbox(input, &host),
-            Err(SandboxError::InvalidStateRoot(_))
-        ));
+        isolate(&mut input);
+        input
+            .env
+            .insert("CLINE_DIR".into(), "/work/state/../escape".into());
+        let wrapped = wrap_with_sandbox(input, &isolated_host(data.path())).unwrap();
+        assert!(Path::new(&wrapped.env["CLINE_DIR"]).starts_with(&root));
+        let host = FakeHost::new("macos");
         let input = config(
             "cline",
             &["--acp", "--data-dir", "/work/state"],
@@ -1847,29 +1859,25 @@ mod tests {
     }
 
     #[test]
-    fn qoder_bot_config_cannot_escape_owned_state() {
+    fn an_isolated_qoder_config_stays_in_its_root() {
+        let data = tempfile::tempdir().unwrap();
+        let root = crate::launch_profile::isolated_state_root(data.path(), "bot-1");
         let mut input = config("qoder", &["--acp"], Some("/work"));
-        input.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
-        input
-            .env
-            .insert("COGNIA_BOT_STATE_DIR".into(), "/work/state".into());
+        isolate(&mut input);
         input
             .env
             .insert("QODER_CONFIG_DIR".into(), "/work/state/../outside".into());
-        assert!(matches!(
-            wrap_with_sandbox(input, &FakeHost::new("macos")),
-            Err(SandboxError::InvalidStateRoot(_))
-        ));
+        let wrapped = wrap_with_sandbox(input, &isolated_host(data.path())).unwrap();
+        assert!(Path::new(&wrapped.env["QODER_CONFIG_DIR"]).starts_with(&root));
     }
 
     #[test]
-    fn qoder_bot_exposes_host_programs_without_the_login_root() {
+    fn an_isolated_qoder_sees_host_programs_without_the_login_root() {
+        let data = tempfile::tempdir().unwrap();
+        let root = crate::launch_profile::isolated_state_root(data.path(), "bot-1");
         let mut input = config("qoder", &["--acp"], Some("/work"));
-        input.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
-        input
-            .env
-            .insert("COGNIA_BOT_STATE_DIR".into(), "/work/state".into());
-        let wrapped = wrap_with_sandbox(input, &FakeHost::new("macos")).unwrap();
+        isolate(&mut input);
+        let wrapped = wrap_with_sandbox(input, &isolated_host(data.path())).unwrap();
         for root in ["/home/dev/.qoder/entry", "/home/dev/.qoder/bin"] {
             assert!(wrapped
                 .args
@@ -1880,7 +1888,7 @@ mod tests {
             .args
             .windows(2)
             .any(|pair| pair == ["--readable", "/home/dev/.qoder"]));
-        assert_eq!(wrapped.env["QODER_CONFIG_DIR"], "/work/state/.qoder");
+        assert!(Path::new(&wrapped.env["QODER_CONFIG_DIR"]).starts_with(&root));
     }
 
     #[test]
@@ -2321,10 +2329,10 @@ mod tests {
             .any(|pair| pair[0] == "--readable" && Path::new(&pair[1]) == pkg));
     }
 
-    /// L3: Bot isolation mounts no package roots, even when the plugin store
+    /// L3: An isolated launch mounts no package roots, even when the plugin store
     /// sits OUTSIDE the hidden home (an absolute `XDG_DATA_HOME`).
     #[test]
-    fn pi_package_roots_are_never_mounted_for_a_bot_isolated_spawn() {
+    fn pi_package_roots_are_never_mounted_for_an_isolated_spawn() {
         let fx = PiRootsFixture::new();
         let xdg = fx.dir("xdg-data");
         let store =
@@ -2338,19 +2346,16 @@ mod tests {
             pi_package_readable_roots(&cfg, Some(&store), &[], &[]),
             vec![pkg.clone()]
         );
-        cfg.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
+        isolate(&mut cfg);
         assert!(pi_package_readable_roots(&cfg, Some(&store), &[], &[]).is_empty());
 
         // And through the wrapper, where nothing else would have denied it.
         let host = FakeHost {
             plugin_root: Some(store.clone()),
             home: Some(fx.dir("home")),
+            state_data_dir: Some(fx.dir("data")),
             ..FakeHost::new("linux")
         };
-        cfg.env.insert(
-            "COGNIA_BOT_STATE_DIR".into(),
-            fx.dir("bot-state").display().to_string(),
-        );
         let wrapped = wrap_with_sandbox(cfg, &host).unwrap();
         assert!(!wrapped
             .args
@@ -2386,14 +2391,11 @@ mod tests {
         let modes: Vec<(&str, HashMap<String, String>)> = vec![
             ("default", HashMap::new()),
             (
-                "bot",
-                HashMap::from([
-                    ("COGNIA_BOT_ISOLATION".to_string(), "1".to_string()),
-                    (
-                        "COGNIA_BOT_STATE_DIR".to_string(),
-                        fx.dir("bot-state").display().to_string(),
-                    ),
-                ]),
+                "isolated",
+                HashMap::from([(
+                    crate::launch_profile::ENGINE_PROFILE_ENV.to_string(),
+                    PROFILE.to_string(),
+                )]),
             ),
             (
                 "gateway",
@@ -2409,6 +2411,7 @@ mod tests {
                 let host = FakeHost {
                     plugin_root: store_override.clone().or(Some(store.clone())),
                     home: Some(home.clone()),
+                    state_data_dir: Some(fx.dir("data")),
                     ..FakeHost::new("macos")
                 };
                 let candidate = if store_override.is_some() {
@@ -2446,8 +2449,8 @@ mod tests {
                 match (mode, store_override.is_some()) {
                     // Default mode: the package is mounted.
                     ("default", _) => assert_eq!(added, vec![candidate.display().to_string()]),
-                    // Bot isolation denies the whole home; the store is under it.
-                    ("bot", _) => assert!(added.is_empty(), "{mode}"),
+                    // An isolated launch denies the whole home; the store is under it.
+                    ("isolated", _) => assert!(added.is_empty(), "{mode}"),
                     // A gateway task denies the task-home parent.
                     ("gateway", true) => assert!(added.is_empty(), "{mode}"),
                     ("gateway", false) => {
@@ -2491,21 +2494,18 @@ mod tests {
     }
 
     #[test]
-    fn bot_launch_hides_home_and_uses_owned_state() {
-        let host = FakeHost::new("macos");
+    fn an_isolated_launch_hides_home_and_uses_its_private_state() {
+        let data = tempfile::tempdir().unwrap();
+        let host = isolated_host(data.path());
+        let root = crate::launch_profile::isolated_state_root(data.path(), "bot-1");
         let mut original = config("devin", &["acp"], Some("/work/project"));
-        original
-            .env
-            .insert("COGNIA_BOT_ISOLATION".into(), "1".into());
-        original
-            .env
-            .insert("COGNIA_BOT_STATE_DIR".into(), "/work/state".into());
+        isolate(&mut original);
         original.env.insert("TMPDIR".into(), "/ambient/tmp".into());
         original
             .env
             .insert("pnpm_config_store_dir".into(), "/ambient/store".into());
         let wrapped = wrap_with_sandbox(original, &host).unwrap();
-        assert!(wrapped.args.iter().any(|arg| arg == "--bot-isolation"));
+        assert!(wrapped.args.iter().any(|arg| arg == "--isolated"));
         assert!(wrapped
             .args
             .windows(2)
@@ -2518,29 +2518,32 @@ mod tests {
             .args
             .windows(2)
             .any(|pair| pair == ["--writable", "/home/dev/.local/share/devin"]));
-        assert_eq!(wrapped.env["XDG_DATA_HOME"], "/work/state/data");
+        assert_eq!(
+            pairs(&wrapped.args, "--writable")[0],
+            root.to_string_lossy()
+        );
+        let under = |relative: &str| root.join(relative).to_string_lossy().into_owned();
+        assert_eq!(wrapped.env["XDG_DATA_HOME"], under("data"));
         for key in ["TMPDIR", "TMP", "TEMP"] {
-            assert_eq!(wrapped.env[key], "/work/state/tmp");
+            assert_eq!(wrapped.env[key], under("tmp"));
         }
-        assert_eq!(wrapped.env["npm_config_cache"], "/work/state/cache/npm");
+        assert_eq!(wrapped.env["npm_config_cache"], under("cache/npm"));
         assert_eq!(
             wrapped.env["npm_config_store_dir"],
-            "/work/state/cache/pnpm-store"
+            under("cache/pnpm-store")
         );
         assert_eq!(
             wrapped.env["pnpm_config_store_dir"],
-            "/work/state/cache/pnpm-store"
+            under("cache/pnpm-store")
         );
-        assert_eq!(
-            wrapped.env["pnpm_config_cache_dir"],
-            "/work/state/cache/pnpm"
-        );
+        assert_eq!(wrapped.env["pnpm_config_cache_dir"], under("cache/pnpm"));
         for directory in ["tmp", "cache/npm", "cache/pnpm-store", "cache/pnpm"] {
-            assert!(host
-                .dirs
-                .borrow()
-                .contains(&PathBuf::from("/work/state").join(directory)));
+            assert!(host.dirs.borrow().contains(&root.join(directory)));
         }
+        // The profile reaches the process table, which drops it before the child.
+        assert!(wrapped
+            .env
+            .contains_key(crate::launch_profile::ENGINE_PROFILE_ENV));
     }
 
     #[test]
@@ -2626,6 +2629,15 @@ mod tests {
     }
 
     // ── Per-configuration state roots (ADR-0216) ────────────────────────────
+
+    const PROFILE: &str = r#"{"kind":"isolated","key":"bot-1","reason":"bot"}"#;
+
+    fn isolate(config: &mut ExternalAgentSpawnConfig) {
+        config.env.insert(
+            crate::launch_profile::ENGINE_PROFILE_ENV.into(),
+            PROFILE.into(),
+        );
+    }
 
     fn isolated_host(data: &Path) -> FakeHost {
         FakeHost {
@@ -2824,27 +2836,26 @@ mod tests {
     }
 
     #[test]
-    fn bot_isolation_wins_over_a_state_key() {
+    fn an_isolated_launch_takes_its_profiles_root_over_a_state_key() {
         let data = tempfile::tempdir().unwrap();
         let host = isolated_host(data.path());
+        let root = crate::launch_profile::isolated_state_root(data.path(), "bot-1");
         let mut original = config("codex", &[], Some("/work/project"));
         original.env.insert(
             crate::state_isolation::AGENT_STATE_KEY_ENV.into(),
             "cfg".into(),
         );
-        original
-            .env
-            .insert("COGNIA_BOT_ISOLATION".into(), "1".into());
-        original
-            .env
-            .insert("COGNIA_BOT_STATE_DIR".into(), "/work/state".into());
+        isolate(&mut original);
         let wrapped = wrap_with_sandbox(original, &host).unwrap();
         assert!(!wrapped
             .env
             .contains_key(crate::state_isolation::AGENT_STATE_KEY_ENV));
-        assert!(!wrapped.env.contains_key("CODEX_HOME"));
-        assert!(pairs(&wrapped.args, "--writable").contains(&"/work/state"));
-        assert!(!data.path().join("cognia").exists());
+        assert_eq!(
+            wrapped.env["CODEX_HOME"],
+            root.join("codex").to_string_lossy()
+        );
+        assert!(pairs(&wrapped.args, "--writable").contains(&root.to_string_lossy().as_ref()));
+        assert!(!data.path().join("cognia/external-agents").exists());
     }
 
     #[test]

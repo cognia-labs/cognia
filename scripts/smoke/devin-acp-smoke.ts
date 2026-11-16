@@ -11,7 +11,9 @@ import { randomBytes } from "node:crypto"
 import os from "node:os"
 import { spawnSync } from "node:child_process"
 
+import { engineLaunchProfileEnv } from "@cognia/agent-contracts/engine-launch-profile"
 import { selectCliAgentWorkspace } from "@/cli/src/runtime/external/host-branch"
+import { removeStateRoot } from "@/cli/src/runtime/external/state-isolation"
 import type { DevinAcpAdapter } from "@cognia/agent-acp/devin-adapter"
 import {
   createAcpClientAdapter,
@@ -141,23 +143,20 @@ async function main(): Promise<void> {
   const originalCwd = fs.realpathSync(process.cwd())
   const scratch = fs.realpathSync(fs.mkdtempSync(path.join(originalCwd, ".smoke-devin-acp-")))
   const botIsolation = process.env.COGNIA_DEVIN_BOT_ISOLATION_SMOKE === "1"
-  const runtimeState = botIsolation
-    ? fs.realpathSync(fs.mkdtempSync(path.join(originalCwd, ".smoke-devin-bot-state-")))
-    : undefined
+  const agentId = `devin-smoke-${randomBytes(6).toString("hex")}`
   const token = `fixture-${randomBytes(8).toString("hex")}`
   fs.writeFileSync(path.join(scratch, "input.txt"), `${token}\n`, { mode: 0o600 })
   fs.writeFileSync(path.join(scratch, "package.json"), '{"type":"module"}\n')
   const config = createAgentFromPreset("devin", {
-    id: `devin-smoke-${randomBytes(6).toString("hex")}`,
+    id: agentId,
     process: {
       command: "devin",
       args: ["acp"],
       cwd: scratch,
-      ...(runtimeState
+      ...(botIsolation
         ? {
             env: {
-              COGNIA_BOT_ISOLATION: "1",
-              COGNIA_BOT_STATE_DIR: runtimeState,
+              ...engineLaunchProfileEnv({ kind: "isolated", key: agentId, reason: "bot" }),
               DISABLE_AUTO_UPDATE: "1",
             },
           }
@@ -191,7 +190,7 @@ async function main(): Promise<void> {
         const probe = spawnSync(
           launcher,
           [
-            "--bot-isolation",
+            "--isolated",
             "--cwd",
             scratch,
             "--deny-readable",
@@ -483,7 +482,7 @@ console.log('BOT_FIXTURE_PASS');\n`
     await bounded(adapter.disconnect(), 10_000, "disconnect").catch(() => undefined)
     selectCliAgentWorkspace(originalCwd)
     fs.rmSync(scratch, { recursive: true, force: true })
-    if (runtimeState) fs.rmSync(runtimeState, { recursive: true, force: true })
+    if (botIsolation) removeStateRoot(agentId, true)
   }
 }
 

@@ -303,29 +303,7 @@ pub fn prepare(
     };
     let injected = injected(id, raw)?;
     let cwd = config.cwd.as_deref().ok_or_else(|| invalid(id))?;
-    let private = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
-    if private {
-        let state = config
-            .env
-            .get("COGNIA_BOT_STATE_DIR")
-            .filter(|value| Path::new(value).is_absolute())
-            .ok_or("Bot isolation requires an owned state directory")?;
-        for copy in &file.private_copy {
-            let source = home.join(&copy.home);
-            let destination = Path::new(state).join(&copy.state);
-            if source.exists() && !destination.exists() {
-                if !fs::symlink_metadata(&source)
-                    .map_err(|_| format!("Cannot inspect {id} sign-in file"))?
-                    .is_file()
-                {
-                    return Err(format!("{id} sign-in file must be a regular file"));
-                }
-                fs::create_dir_all(destination.parent().ok_or_else(|| invalid(id))?)
-                    .map_err(|_| format!("Cannot prepare the Bot's {id} sign-in"))?;
-                copy_private(id, &source, &destination, &mut (0, 0), &mut HashSet::new())?;
-            }
-        }
-    }
+    let private = crate::launch_profile::isolated(&config.env);
     project_collisions(id, file, Path::new(cwd), &injected)?;
     let original = host_root(&file.root_env)
         .filter(|value| !value.as_os_str().is_empty())
@@ -479,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn bot_configuration_copies_only_model_credentials_and_drops_inherited_mcp() {
+    fn an_isolated_configuration_drops_inherited_mcp_and_copies_no_native_login() {
         let home = tempfile::tempdir().unwrap();
         write(
             home.path(),
@@ -492,12 +470,10 @@ mod tests {
             r#"{"version":2,"devin":{"org_id":"org","token":"secret"},"agent":{"model":"m"},"mcpServers":{"github":{"command":"gh","env":{"GH_TOKEN":"secret"}}}}"#,
         );
         write(home.path(), ".config/gh/hosts.yml", "secret");
-        let state = home.path().join("bot-state");
         let mut input = config(home.path(), payload("safe-host-tool"));
-        input.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
         input.env.insert(
-            "COGNIA_BOT_STATE_DIR".into(),
-            state.to_string_lossy().into_owned(),
+            crate::launch_profile::ENGINE_PROFILE_ENV.into(),
+            r#"{"kind":"isolated","key":"bot-1","reason":"bot"}"#.into(),
         );
         let guard = prepare(&mut input, home.path(), home.path(), |_| None)
             .unwrap()
@@ -512,10 +488,7 @@ mod tests {
             serde_json::json!({"version":2,"devin":{"org_id":"org"},"shell":{"setup_complete":true}})
         );
         assert!(!guard.path().join("gh").exists());
-        assert_eq!(
-            fs::read_to_string(state.join("data/devin/credentials.toml")).unwrap(),
-            "token = 'model-only'"
-        );
+        assert!(!guard.path().join("credentials.toml").exists());
         assert!(!input
             .args
             .windows(2)

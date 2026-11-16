@@ -121,9 +121,5 @@ describe("buildEngineLaunchTable", () => {
     refuse({ mcpConfigFile: { ...mcpConfigFile, rootEnv: "LD_PRELOAD" } }, /not an env name/)
     refuse({ mcpConfigFile: { ...mcpConfigFile, rootDefault: "/etc" } }, /relative path/)
     refuse({ mcpConfigFile: { ...mcpConfigFile, privateKeep: ["a..b"] } }, /empty segment/)
-    refuse(
-      { mcpConfigFile: { ...mcpConfigFile, privateCopy: [{ home: "../x", state: "x" }] } },
-      /must not contain/
-    )
   })
 })

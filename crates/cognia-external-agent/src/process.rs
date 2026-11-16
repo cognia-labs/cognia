@@ -396,13 +396,27 @@ impl ExternalAgentProcessManager {
         }
 
         config = crate::native_bridge::harden_process_launch(config)?;
+        let isolated = crate::launch_profile::LaunchProfile::of(&config.env)?.is_isolated();
+        {
+            let (engine, engine_args) =
+                crate::launch_descriptor::unwrapped(&config.command, &config.args);
+            crate::launch_descriptor::check_private_launch(engine, engine_args, isolated)?;
+            // An isolated launch is confined by this host's sandbox launcher,
+            // which hides the home and holds its private state root; a launch
+            // that reaches this process table unwrapped has neither.
+            if isolated && engine == config.command {
+                return Err(
+                    "engine_isolation_unsupported: an isolated launch needs this host's sandbox"
+                        .into(),
+                );
+            }
+        }
         blank_private_credentials(&mut config);
-        crate::launch_descriptor::apply_platform_args(&config.command, &mut config.args, std::env::consts::OS);
-        crate::launch_descriptor::check_private_launch(
+        crate::launch_descriptor::apply_platform_args(
             &config.command,
-            &config.args,
-            config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1"),
-        )?;
+            &mut config.args,
+            std::env::consts::OS,
+        );
 
         // A private state root (ADR-0216) is honoured by every route that
         // reaches this process table. The desktop sandbox wrapper normally
@@ -503,18 +517,22 @@ impl ExternalAgentProcessManager {
         // gateway task get their credentials from the Host, so inherited
         // OPENAI/CODEX credentials, shell startup hooks and proxy destinations
         // cannot compete with them; the managed DSH launcher validates its
-        // runtime home before importing plugins and inherits nothing.
+        // runtime home before importing plugins and inherits nothing. Any
+        // other isolated launch keeps no credential, helper socket or owner root.
         let protected_siwc = config.env.contains_key("COGNIA_AGENT_SIWC_CAPABILITY");
         let dsh_runtime_home = config.env.get("COGNIA_DSH_RUNTIME_HOME").cloned();
         let inheritance = if dsh_runtime_home.is_some() {
             crate::launch_environment::Inheritance::None
         } else if managed_gateway || protected_siwc {
             crate::launch_environment::Inheritance::Essential
+        } else if isolated {
+            crate::launch_environment::Inheritance::Isolated
         } else {
             crate::launch_environment::Inheritance::Owner
         };
         let mut ambient = crate::launch_environment::inherited(inheritance, std::env::vars_os());
-        review_engine_environment(&mut config, &mut ambient);
+        review_engine_environment(&mut config, &mut ambient, isolated);
+        config.env.remove(crate::launch_profile::ENGINE_PROFILE_ENV);
         cmd.env_clear().envs(ambient);
         if let Some(runtime_home) = dsh_runtime_home {
             config.env.retain(|key, _| {
@@ -561,6 +579,9 @@ impl ExternalAgentProcessManager {
         // Set environment variables
         for (key, value) in &config.env {
             cmd.env(key, value);
+        }
+        if isolated {
+            cmd.envs(crate::launch_environment::isolated_set());
         }
         // Resolve after all request filtering, including the env_clear gateway
         // and DSH paths. Allocation failure refuses the process creation.
@@ -914,7 +935,7 @@ impl ExternalAgentProcessManager {
 
 fn private_launch(config: &ExternalAgentSpawnConfig) -> bool {
     config.env.contains_key(crate::state_isolation::AGENT_STATE_KEY_ENV)
-        || config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1")
+        || crate::launch_profile::isolated(&config.env)
 }
 
 /// A private launch starts without the host's credentials for its engine
@@ -932,8 +953,8 @@ pub(crate) fn blank_private_credentials(config: &mut ExternalAgentSpawnConfig) {
 fn review_engine_environment(
     config: &mut ExternalAgentSpawnConfig,
     inherited: &mut Vec<(String, std::ffi::OsString)>,
+    private: bool,
 ) {
-    let private = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
     let (engine, engine_args) = crate::launch_descriptor::unwrapped(&config.command, &config.args);
     let (engine, engine_args) = (engine.to_string(), engine_args.to_vec());
     inherited.retain(|(key, _)| {
@@ -994,13 +1015,52 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn antigravity_bot_isolation_refuses_before_spawning_or_reading_keychain() {
+    async fn an_isolated_antigravity_launch_refuses_before_spawning_or_reading_keychain() {
         let manager = ExternalAgentProcessManager::new();
         let mut request = echo_config("antigravity-bot");
-        request.command = "agy_acp_server.par".into();
-        request.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
-        let error = manager.spawn(request, Arc::new(CollectorSink::default())).await.unwrap_err();
-        assert!(error.contains("native keychain accounts are shared"));
+        request.command = crate::sandbox::launcher_file_name(std::env::consts::OS).into();
+        request.args = vec!["--".into(), "agy_acp_server.par".into()];
+        request.env.insert(
+            crate::launch_profile::ENGINE_PROFILE_ENV.into(),
+            PROFILE.into(),
+        );
+        let error = manager
+            .spawn(request, Arc::new(CollectorSink::default()))
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("native keychain accounts are shared"),
+            "{error}"
+        );
+        assert!(manager.list().await.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_isolated_launch_outside_the_sandbox_refuses_and_a_malformed_profile_too() {
+        let manager = ExternalAgentProcessManager::new();
+        let mut request = echo_config("isolated-unwrapped");
+        request.env.insert(
+            crate::launch_profile::ENGINE_PROFILE_ENV.into(),
+            PROFILE.into(),
+        );
+        let error = manager
+            .spawn(request.clone(), Arc::new(CollectorSink::default()))
+            .await
+            .unwrap_err();
+        assert!(
+            error.starts_with("engine_isolation_unsupported:"),
+            "{error}"
+        );
+        request.env.insert(
+            crate::launch_profile::ENGINE_PROFILE_ENV.into(),
+            "{}".into(),
+        );
+        let error = manager
+            .spawn(request, Arc::new(CollectorSink::default()))
+            .await
+            .unwrap_err();
+        assert!(error.contains("invalid COGNIA_ENGINE_PROFILE"), "{error}");
         assert!(manager.list().await.is_empty());
     }
 
@@ -1179,14 +1239,14 @@ mod tests {
     fn grok_private_credentials_mask_ambient_keys_but_preserve_explicit_values() {
         for isolation in [
             None,
-            Some(crate::state_isolation::AGENT_STATE_KEY_ENV),
-            Some("COGNIA_BOT_ISOLATION"),
+            Some((crate::state_isolation::AGENT_STATE_KEY_ENV, "cfg")),
+            Some((crate::launch_profile::ENGINE_PROFILE_ENV, PROFILE)),
         ] {
             for explicit in [None, Some("explicit-fixture"), Some("")] {
                 let mut config = echo_config("grok-env");
                 config.command = "grok".into();
-                if let Some(key) = isolation {
-                    config.env.insert(key.into(), "1".into());
+                if let Some((key, value)) = isolation {
+                    config.env.insert(key.into(), value.into());
                 }
                 if let Some(value) = explicit {
                     config.env.insert("XAI_API_KEY".into(), value.into());
@@ -1228,9 +1288,6 @@ mod tests {
                 ("KIMI_MODEL_API_KEY".into(), "explicit-fixture".into()),
                 ("KIMI_OAUTH_HOST".into(), "unreviewed".into()),
             ]);
-            if bot {
-                config.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
-            }
             let mut ambient = inherited(&[
                 "KIMI_CODE_HOME",
                 "KIMI_MODEL_API_KEY",
@@ -1238,7 +1295,7 @@ mod tests {
                 "KIMI_CODE_USER_AGENT",
                 "KIMI_BIN_PATH",
             ]);
-            review_engine_environment(&mut config, &mut ambient);
+            review_engine_environment(&mut config, &mut ambient, bot);
             let kept = names(&ambient);
             for key in ["KIMI_OAUTH_HOST", "KIMI_CODE_USER_AGENT", "KIMI_BIN_PATH"] {
                 assert!(!kept.contains(&key));
@@ -1259,7 +1316,7 @@ mod tests {
             ("AIDER_LOAD".into(), "commands".into()),
         ]);
         let mut ambient = inherited(&["AIDER_MODEL", "AIDER_LOAD"]);
-        review_engine_environment(&mut config, &mut ambient);
+        review_engine_environment(&mut config, &mut ambient, false);
         assert!(ambient.is_empty());
         assert_eq!(config.env["AIDER_MODEL"], "deepseek/test");
         assert!(!config.env.contains_key("AIDER_LOAD"));
@@ -1271,11 +1328,13 @@ mod tests {
         config.command = "codex".into();
         config.env.insert("KIMI_OAUTH_HOST".into(), "unrelated".into());
         let mut ambient = inherited(&["AIDER_MODEL"]);
-        review_engine_environment(&mut config, &mut ambient);
+        review_engine_environment(&mut config, &mut ambient, false);
         assert_eq!(names(&ambient), ["AIDER_MODEL"]);
         assert!(config.env.contains_key("KIMI_OAUTH_HOST"));
     }
     use super::*;
+
+    const PROFILE: &str = r#"{"kind":"isolated","key":"bot-1","reason":"bot"}"#;
 
     /// Test sink that records everything the process emits. Only the
     /// process-spawning tests (gated to unix, which has `cat`/`true`) use it.

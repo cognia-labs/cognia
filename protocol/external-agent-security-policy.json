@@ -89,7 +89,7 @@
     }
   },
   "launchEnvironment": {
-    "note": "What a launch inherits from the Host's own environment, by mode (ADR-0243 3C). Every launch inherits `essentialKeys`. The owner's own run also inherits `sessionKeys`, `ownerKeys`, `ownerPrefixes`, `configKeys`, `configPrefixes` and the keys an engine's launch descriptor admits. A brokered launch (a gateway task, SIWC) inherits `essentialKeys` only, and the DeepSeek Harness runtime nothing. No mode inherits a COGNIA_* key or a loader key from the Host: Cognia's own keys reach a launch only through its request. A request may set `configKeys`, `configPrefixes` and the descriptor-admitted keys.",
+    "note": "What a launch inherits from the Host's own environment, by mode (ADR-0243 3C). Every launch inherits `essentialKeys`. The owner's own run also inherits `sessionKeys`, `ownerKeys`, `ownerPrefixes`, `configKeys`, `configPrefixes` and the keys an engine's launch descriptor admits. An isolated launch (`COGNIA_ENGINE_PROFILE`) also inherits `isolatedKeys` only, none of which carries a credential, and always runs with `isolatedSet`; its state, temp and cache roots come from its own private state root. A brokered launch (a gateway task, SIWC) inherits `essentialKeys` only, and the DeepSeek Harness runtime nothing. No mode inherits a COGNIA_* key or a loader key from the Host: Cognia's own keys reach a launch only through its request. A request may set `configKeys`, `configPrefixes` and the descriptor-admitted keys.",
     "essentialKeys": [
       "PATH",
       "LANG",
@@ -179,6 +179,31 @@
       "MOONSHOT_",
       "DASHSCOPE_"
     ],
+    "isolatedKeys": [
+      "HOME",
+      "USER",
+      "LOGNAME",
+      "SHELL",
+      "TZ",
+      "NO_COLOR",
+      "FORCE_COLOR",
+      "DISABLE_AUTO_UPDATE",
+      "NVM_BIN",
+      "NVM_DIR",
+      "PNPM_HOME",
+      "BUN_INSTALL",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "no_proxy"
+    ],
+    "isolatedSet": {
+      "GIT_CONFIG_GLOBAL": "/dev/null",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_TERMINAL_PROMPT": "0"
+    },
     "configKeys": [
       "COGNIA_HERMES_ACP_BOOTSTRAP",
       "HTTP_PROXY",
@@ -211,7 +236,8 @@
       "DSH_HOME": "Pins the DeepSeek Harness user-data root into Cognia-owned space. Without it DSH falls back to ~/.dsh, where a user-writable cordis.patch.yml can inject plugins and arbitrary JS into a certified composition.",
       "DEEPSEEK_": "DeepSeek Harness: the provider credential plus the composition's own COGNIA_DSH_* inputs (workspace, session root, model, persona). DSH_HOME is an exact key: it is a path, not a family.",
       "COGNIA_TOOLHOST_": "The tool-host handshake (socket path, per-attempt token, server name) for the bundled Cognia Pi extension, which has no per-session mcpServers parameter. The broker's authorize() remains the permission authority (ADR-0119).",
-      "COGNIA_PIPKG_": "Plugin Pi package values (ADR-0210), read only by a cooperating extension a plugin ships and the user opted an agent into. Values come from the plugin's manifest literals, its own configuration or the session workspace path, never from the model; the dedicated prefix keeps a plugin from reaching NODE_OPTIONS, LD_PRELOAD or a provider credential."
+      "COGNIA_PIPKG_": "Plugin Pi package values (ADR-0210), read only by a cooperating extension a plugin ships and the user opted an agent into. Values come from the plugin's manifest literals, its own configuration or the session workspace path, never from the model; the dedicated prefix keeps a plugin from reaching NODE_OPTIONS, LD_PRELOAD or a provider credential.",
+      "isolatedSet": "An isolated launch never reaches the person's Git configuration, credential helpers or a terminal prompt, whatever its sandbox lets it read."
     }
   }
 }

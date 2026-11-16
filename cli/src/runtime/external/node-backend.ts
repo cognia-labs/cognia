@@ -2,6 +2,7 @@ import {
   validateExternalAgentSandboxPolicy,
   type ExternalAgentProcessSandboxPolicy,
 } from "@cognia/agent-contracts"
+import { isIsolatedLaunch } from "@cognia/agent-contracts/engine-launch-profile"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { EventEmitter } from "node:events"
 import fs from "node:fs"
@@ -12,7 +13,7 @@ import { resolveWorkspacePortEnv } from "../workspace-port-env"
 import { deleteGatewayTask, gatewayRuntimeEnvironment, prepareGatewayTask } from "./gateway-task"
 import { mcpConfigOverlayOf, prepareMcpConfigFile } from "./mcp-config-file"
 import { privateBlankCredentials, reviewedEnvRefused, takesPiPackages } from "./launch-descriptor"
-import { admitsRequestKey, inheritedEnvironment } from "./launch-environment"
+import { ISOLATED_SET, admitsRequestKey, inheritedEnvironment } from "./launch-environment"
 import {
   applyStateIsolation,
   defaultStateIsolationHost,
@@ -250,14 +251,13 @@ function validateCwd(root: string, requested?: string): string {
   return canonical
 }
 
-/** Shared by child environment construction and sandbox directory provisioning. */
-export function botRuntimeEnvironment(
-  overrides: Record<string, string> | undefined
-): Record<string, string> {
-  if (overrides?.COGNIA_BOT_ISOLATION !== "1") return {}
-  const state = overrides.COGNIA_BOT_STATE_DIR
-  if (!state || !path.isAbsolute(state))
-    throw new Error("Bot isolation requires an owned state directory")
+/**
+ * An isolated launch's state, cache and temp roots, under its private state
+ * root. Shared by child environment construction and sandbox directory
+ * provisioning.
+ */
+export function isolatedRuntimeEnvironment(privateState: string | null): Record<string, string> {
+  if (!privateState) return {}
   return Object.fromEntries(
     Object.entries({
       XDG_DATA_HOME: "data",
@@ -270,7 +270,7 @@ export function botRuntimeEnvironment(
       npm_config_store_dir: "cache/pnpm-store",
       pnpm_config_store_dir: "cache/pnpm-store",
       pnpm_config_cache_dir: "cache/pnpm",
-    }).map(([key, relative]) => [key, path.join(state, relative)])
+    }).map(([key, relative]) => [key, path.join(privateState, relative)])
   )
 }
 
@@ -299,8 +299,8 @@ export interface ChildEnvLaunch {
   args?: readonly string[]
   /** `node <launcher> <composition>` under the managed DSH runtime home. */
   managedDsh?: boolean
-  /** The launch runs with a private state root (ADR-0216). */
-  isolatedState?: boolean
+  /** The launch's private state root (ADR-0216), and whether it is an isolated launch's. */
+  stateIsolation?: { root: string; isolated: boolean } | null
 }
 
 export function buildExternalAgentChildEnv(
@@ -347,21 +347,25 @@ export function buildExternalAgentChildEnv(
     if (!pi) for (const key of Object.keys(env)) if (isPiPackageOnlyKey(key)) delete env[key]
     return env
   }
-  const bot = overrides?.COGNIA_BOT_ISOLATION === "1"
-  const blanked = bot || launch.isolatedState ? privateBlankCredentials(launch.command, args) : []
+  const isolated = launch.stateIsolation?.isolated === true
+  const blanked = launch.stateIsolation ? privateBlankCredentials(launch.command, args) : []
   const env: NodeJS.ProcessEnv = { NODE_ENV: ambient.NODE_ENV ?? "production" }
-  for (const [key, value] of Object.entries(inheritedEnvironment(ambient, "owner"))) {
-    if (blanked.includes(key) || reviewedEnvRefused(launch.command, args, key, true, bot)) continue
+  for (const [key, value] of Object.entries(
+    inheritedEnvironment(ambient, isolated ? "isolated" : "owner")
+  )) {
+    if (blanked.includes(key) || reviewedEnvRefused(launch.command, args, key, true, isolated))
+      continue
     env[key] = value
   }
   for (const [key, value] of Object.entries(overrides ?? {})) {
     if (isDshHostProofKey(key) || WRITABLE_REQUEST_ENV.has(key)) continue
     if (!pi && isPiPackageOnlyKey(key)) continue
-    if (reviewedEnvRefused(launch.command, args, key, false, bot)) continue
+    if (reviewedEnvRefused(launch.command, args, key, false, isolated)) continue
     if (admitsRequestKey(key)) env[key] = value
   }
   for (const key of blanked) env[key] ??= ""
-  Object.assign(env, botRuntimeEnvironment(overrides))
+  if (isolated)
+    Object.assign(env, isolatedRuntimeEnvironment(launch.stateIsolation!.root), ISOLATED_SET)
   return env
 }
 
@@ -528,7 +532,9 @@ export class NodeExternalAgentBackend {
       }
       case "external_agent_state_root_remove": {
         const { removeStateRoot } = await import("./state-isolation")
-        removeStateRoot(String(args.key), this.stateIsolationHost)
+        if (typeof args.isolated !== "boolean")
+          throw new Error("external_agent_state_root_remove needs isolated")
+        removeStateRoot(String(args.key), args.isolated, this.stateIsolationHost)
         return undefined as T
       }
       case "dsh_runtime_remove": {
@@ -639,7 +645,10 @@ export class NodeExternalAgentBackend {
       command: config.command,
       args: config.args,
       managedDsh: isDshLauncherInvocation(config.args ?? [], this.dataRoot),
-      isolatedState: stateIsolation !== null,
+      stateIsolation: stateIsolation && {
+        root: stateIsolation.root,
+        isolated: isIsolatedLaunch(config.env),
+      },
     })
     // The isolated homes are host-resolved, so they are applied after the
     // user-input filter (which drops e.g. XDG_DATA_HOME from the request).

@@ -75,12 +75,12 @@ Each profile launches as follows.
   - _isolated / personal_: today's `bot_environment` rules (no helpers, `GIT_CONFIG_GLOBAL=/dev/null`) plus the request env, filtered. Model credentials arrive only from the Host (§5).
   - The SIWC, managed-gateway and DSH env special cases become profile inputs to the same function. They are not separate `env_clear` sites.
 - **Sandbox** (`sandbox.rs` wrap and the launcher): _isolated / personal_ use the Bot's confinement:
-  - private state root `<data>/cognia/external-agents/iso/<key>`, the single location (the checkout-sibling `-state` directory goes away);
+  - private state root `<data>/cognia/isolated-agents/<key>`, the single location (the checkout-sibling `-state` directory goes away). It sits beside the configurations' `external-agents/<id>` roots rather than under them, so no configuration id can name it; `external_agent_state_root_remove { key, isolated: true }` deletes it when the instance is removed;
   - home unreadable except the toolchain list;
   - securityd IPC denied;
   - outbound unix sockets limited to the tool host.
 - **CLI** (`cli/src/runtime/external/node-backend.ts`, `sandbox-launcher.ts`): the same function in TS. Engine knowledge comes from the descriptors both hosts already read (`protocol/external-agent-launch.json`): the owner allowlist is the host-owned runtime and config keys plus `admitsRequestEnv`, exactly as the CLI's `buildExternalAgentChildEnv` builds it today.
-- **Engines that cannot run privately** are refused for `isolated` and `personal` with `engine_isolation_unsupported`: a descriptor without `isolation`, or one that declares `privateLaunchUnsupported` (Antigravity's shared keychain, already enforced by `check_private_launch` / `checkPrivateLaunch`).
+- **Engines that cannot run privately** are refused for `isolated` and `personal` with `engine_isolation_unsupported`: one that declares `privateLaunchUnsupported` (Antigravity's shared keychain, enforced by `check_private_launch` / `checkPrivateLaunch`), and any isolated launch that reaches a process table unwrapped by this host's sandbox. An engine whose descriptor declares an `isolation` rule gets its homes mapped inside the private root; one without a rule (Devin) gets the root alone, with the platform's data, cache, state and temp roots relocated into it under a home it cannot read, so it starts signed out instead of being refused.
 
 ### 4. The personal profile and the broker
 
@@ -156,6 +156,8 @@ Not proven by tests, owed as a desktop smoke:
 ## Phasing inside 3C
 
 1. One launch environment per host (done): `launchEnvironment` in `protocol/external-agent-security-policy.json`, interpreted by `crates/cognia-external-agent/src/launch_environment.rs` and `cli/src/runtime/external/launch-environment.ts`. Every spawn's child starts from it in one of three modes: owner (desktop now matches the CLI), essential (gateway task, SIWC) or none (DSH). No mode inherits a `COGNIA_*` or loader key from the Host. The contract type and the profile derivation moved to phase 2, where the manager produces the profile and both hosts enforce it, so neither ships unwired.
-2. The profile contract and derivation, and the isolated profile replacing Bot isolation (instances, state root, sandbox, refusal), plus non-owner chat turns. The Bot launcher's own `bot_environment` folds into the isolated mode of the same table.
+2. Split in two commits, each wired end to end:
+   - **2a (done)**: the profile contract (`packages/agent-contracts/src/engine-launch-profile.ts`, Rust `launch_profile.rs`), the isolated profile replacing Bot isolation in both hosts (private state root from the key, `apply_state_isolation` / `applyStateIsolation` applying the engine's rule inside it, sandbox confinement, `Inheritance::Isolated` with `isolatedKeys` / `isolatedSet` in the policy table, refusal outside the sandbox), the launcher's `--isolated` confinement flag without its own env allowlist, Bot runs asking for `isolated/bot` keyed by their agent id, and the root deleted on `removeAgent`. Removed: `COGNIA_BOT_ISOLATION` / `COGNIA_BOT_STATE_DIR`, `validate_bot_runtime_state`, `launch_owns_private_home` / `launchOwnsPrivateHome`, the launcher's `bot_environment` and `--bot-isolation` with the CLI's capability probe, `PluginWorkspaceHandle.runtimeStateRoot`, and `EngineMcpConfigFile.privateCopy`.
+   - **2b**: `engineLaunchProfile(identity, options)` and the manager's transient `<agentId>:iso:<key>` instances for non-owner chat turns.
 3. The personal profile: gateway + allowlist + broker checks + `admitPersonalCredential` lease; Codex fence removed.
 4. ADR implementation status, docs and changeset.

@@ -161,8 +161,6 @@ export interface EngineMcpConfigFile {
   privateKeep: readonly string[]
   /** Dotted paths a private launch sets in the settings file. */
   privateSet: Readonly<Record<string, string | number | boolean>>
-  /** Files a private launch copies once from home into its own state, which the engine needs to sign in. */
-  privateCopy?: readonly Readonly<{ home: string; state: string }>[]
 }
 
 export interface EngineLaunchDescriptor {

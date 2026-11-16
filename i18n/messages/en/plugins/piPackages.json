@@ -74,7 +74,7 @@
     "envConflict": "Two packages this agent loads set the same setting to different values. Remove one of them from the agent.",
     "piVersion": "This package needs Pi {version} or newer; this host runs {installed}.",
     "resolutionFailed": "The package couldn't be loaded.",
-    "botIsolation": "Bot-isolated agents can't load plugin Pi packages: the package folder lives in your home directory, which isolation hides.",
+    "isolatedLaunch": "Isolated agents can't load plugin Pi packages: the package folder lives in your home directory, which isolation hides.",
     "symlinksCreated": "The prepare step created a symbolic link ({path}), and Cognia refuses to load plugins that contain links. The plugin author needs a prepare step that installs without links."
   },
   "picker": {

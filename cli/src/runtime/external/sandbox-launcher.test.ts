@@ -11,15 +11,27 @@ import {
   findSandboxLauncher,
   isDevCheckout,
   launcherName,
-  launcherSupportsBotIsolation,
   launchRelocation,
   resolveSandboxedExternalAgentLaunch,
   sandboxLauncherUnavailableMessage,
   sandboxSupportsPlatform,
   workspaceToolchainReadableRoots,
 } from "./sandbox-launcher"
+import { engineLaunchProfileEnv } from "@cognia/agent-contracts/engine-launch-profile"
+
 import { toolHostRuntimeDir } from "../../agent/tool-host/protocol"
 import { checkPrivateLaunch } from "./launch-descriptor"
+import type { StateIsolationPlan } from "./state-isolation"
+
+const ISOLATED = engineLaunchProfileEnv({ kind: "isolated", key: "bot-1", reason: "bot" })
+
+/** The plan the backend resolves for an isolated launch: its private state root alone. */
+const privateState = (root: string): StateIsolationPlan => ({
+  root,
+  env: {},
+  sharedRoots: [],
+  denyReadable: [],
+})
 
 describe("external-agent sandbox launcher", () => {
   it("grants managed DSH native state writes and host lease reads without control writes", async () => {
@@ -72,17 +84,23 @@ describe("external-agent sandbox launcher", () => {
           root
         )
       ).toThrow(/managed|environment|lease/i)
-      const alternateEnvironments: Record<string, string>[] = [
-        { COGNIA_GATEWAY_TASK_HOME: path.join(root, "tasks", "gateway-task") },
-        { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: path.join(root, "bots", "bot-state") },
+      const taskHome = path.join(root, "tasks", "gateway-task")
+      const isolatedState = path.join(root, "isolated", "bot-1")
+      const alternates: [Record<string, string>, StateIsolationPlan | null, string][] = [
+        [{ COGNIA_GATEWAY_TASK_HOME: taskHome }, null, taskHome],
+        [ISOLATED, privateState(isolatedState), isolatedState],
       ]
-      for (const env of alternateEnvironments) {
-        const args = buildSandboxLauncherArgs({ ...config, env: { ...config.env, ...env } }, root)
+      for (const [env, isolation, own] of alternates) {
+        const args = buildSandboxLauncherArgs(
+          { ...config, env: { ...config.env, ...env } },
+          root,
+          isolation
+        )
         const writes = args.filter((_, i) => args[i - 1] === "--writable")
         expect(writes).toEqual(
           expect.arrayContaining([config.env.DSH_HOME, config.env.COGNIA_DSH_SESSION_ROOT])
         )
-        expect(writes).not.toContain(env.COGNIA_GATEWAY_TASK_HOME ?? env.COGNIA_BOT_STATE_DIR)
+        expect(writes).not.toContain(own)
       }
       expect(() => buildSandboxLauncherArgs({ ...config, cwd: root }, root)).toThrow(
         /control|runtime|writable/i
@@ -95,7 +113,7 @@ describe("external-agent sandbox launcher", () => {
     }
   })
 
-  it("resolves Antigravity's native home and refuses shared-keychain Bot isolation", () => {
+  it("resolves Antigravity's native home and refuses a shared-keychain isolated launch", () => {
     expect(
       launchRelocation(
         {
@@ -144,11 +162,9 @@ describe("external-agent sandbox launcher", () => {
       expect(launch.args[launch.args.indexOf("--") + 1]).toBe(fs.realpathSync(server))
       await expect(
         resolveSandboxedExternalAgentLaunch(
-          {
-            ...config,
-            env: { ...config.env, COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: root },
-          },
-          { ...runtime, supportsBotIsolation: () => true }
+          { ...config, env: { ...config.env, ...ISOLATED } },
+          runtime,
+          privateState(root)
         )
       ).rejects.toThrow(/keychain/)
       for (const args of [[], ["--uid="], ["--uid", ""]]) {
@@ -187,7 +203,7 @@ describe("external-agent sandbox launcher", () => {
     }
   })
 
-  it("mirrors native policy modes across platforms and bot isolation", async () => {
+  it("mirrors native policy modes across platforms and isolation", async () => {
     for (const platform of ["darwin", "linux", "win32"] as const) {
       for (const network of ["full", "allowlist", "off"] as const) {
         for (const bot of [false, true]) {
@@ -201,19 +217,20 @@ describe("external-agent sandbox launcher", () => {
                 allowedHosts: ["api.example.com", "*.example.org"],
                 readableScope,
               },
-              env: bot
-                ? { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/work/state" }
-                : ({} as Record<string, string>),
+              env: bot ? ISOLATED : ({} as Record<string, string>),
             }
-            const promise = resolveSandboxedExternalAgentLaunch(config, {
-              platform,
-              homedir: "/home/dev",
-              candidates: ["/launcher"],
-              isExecutable: () => true,
-              ensureDir: () => {},
-              ensureFile: () => {},
-              supportsBotIsolation: () => true,
-            })
+            const promise = resolveSandboxedExternalAgentLaunch(
+              config,
+              {
+                platform,
+                homedir: "/home/dev",
+                candidates: ["/launcher"],
+                isExecutable: () => true,
+                ensureDir: () => {},
+                ensureFile: () => {},
+              },
+              bot ? privateState("/work/state") : null
+            )
             if (platform === "win32") {
               await expect(promise).rejects.toThrow()
               continue
@@ -358,7 +375,7 @@ describe("external-agent sandbox launcher", () => {
     }
   })
 
-  it("rejects a Kimi Bot home symlink outside its owned state before provisioning", async () => {
+  it("rejects an isolated Kimi home symlink outside its private state before provisioning", async () => {
     const owned = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-owned-"))
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-outside-"))
     const ensureDir = jest.fn()
@@ -370,20 +387,16 @@ describe("external-agent sandbox launcher", () => {
             id: "kimi",
             command: "kimi",
             cwd: "/work",
-            env: {
-              COGNIA_BOT_ISOLATION: "1",
-              COGNIA_BOT_STATE_DIR: owned,
-              KIMI_CODE_HOME: path.join(owned, "escape/new"),
-            },
+            env: { ...ISOLATED, KIMI_CODE_HOME: path.join(owned, "escape/new") },
           },
           {
             platform: "darwin",
             homedir: "/home/user",
             candidates: ["/launcher"],
             isExecutable: () => true,
-            supportsBotIsolation: () => true,
             ensureDir,
-          }
+          },
+          privateState(owned)
         )
       ).rejects.toThrow("inside the launch's own state")
       expect(ensureDir).not.toHaveBeenCalled()
@@ -450,7 +463,7 @@ describe("external-agent sandbox launcher", () => {
   })
 
   it.each(["", "   ", "/work/state/../escape", "/home/user/.kimi-code"])(
-    "rejects unsafe Kimi Bot home %p",
+    "rejects an unsafe isolated Kimi home %p",
     (selected) => {
       expect(() =>
         buildSandboxLauncherArgs(
@@ -458,19 +471,16 @@ describe("external-agent sandbox launcher", () => {
             id: "kimi",
             command: "kimi",
             cwd: "/work",
-            env: {
-              COGNIA_BOT_ISOLATION: "1",
-              COGNIA_BOT_STATE_DIR: "/work/state",
-              KIMI_CODE_HOME: selected,
-            },
+            env: { ...ISOLATED, KIMI_CODE_HOME: selected },
           },
-          "/home/user"
+          "/home/user",
+          privateState("/work/state")
         )
       ).toThrow(/^kimi /)
     }
   )
 
-  it("keeps Kimi Bot state separate from host subscription credentials", async () => {
+  it("keeps isolated Kimi state separate from host subscription credentials", async () => {
     const previous = process.env.KIMI_CODE_HOME
     delete process.env.KIMI_CODE_HOME
     try {
@@ -479,15 +489,15 @@ describe("external-agent sandbox launcher", () => {
           id: "kimi",
           command: "kimi",
           cwd: "/work",
-          env: { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/work/state" },
+          env: ISOLATED,
         },
         {
           platform: "darwin",
           homedir: "/home/user",
           candidates: ["/launcher"],
           isExecutable: () => true,
-          supportsBotIsolation: () => true,
-        }
+        },
+        privateState("/work/state")
       )
       expect(launch.env?.KIMI_CODE_HOME).toBe("/work/state/.kimi-code")
       expect(launch.args).not.toContain("/home/user/.kimi-code")
@@ -533,20 +543,17 @@ describe("external-agent sandbox launcher", () => {
     ).toThrow(/^cline /)
   })
 
-  it("refuses Cline state outside a Bot's owned root", () => {
+  it("refuses Cline state outside an isolated launch's private root", () => {
     expect(() =>
       buildSandboxLauncherArgs(
         {
           id: "cline",
           command: "cline",
           cwd: "/work",
-          env: {
-            COGNIA_BOT_ISOLATION: "1",
-            COGNIA_BOT_STATE_DIR: "/work/state",
-            CLINE_DIR: "/work/state/../escape",
-          },
+          env: { ...ISOLATED, CLINE_DIR: "/work/state/../escape" },
         },
-        "/home/user"
+        "/home/user",
+        privateState("/work/state")
       )
     ).toThrow("inside the launch's own state")
   })
@@ -582,39 +589,31 @@ describe("external-agent sandbox launcher", () => {
     expect(ensureDir).toHaveBeenCalledWith(root)
   })
 
-  it("refuses a Qoder config root outside isolated Bot state", async () => {
+  it("refuses a Qoder config root outside an isolated launch's private state", async () => {
     await expect(
       resolveSandboxedExternalAgentLaunch(
         {
           id: "qoder",
           command: "qoder",
           cwd: "/work",
-          env: {
-            COGNIA_BOT_ISOLATION: "1",
-            COGNIA_BOT_STATE_DIR: "/work/state",
-            QODER_CONFIG_DIR: "/work/state/../outside",
-          },
+          env: { ...ISOLATED, QODER_CONFIG_DIR: "/work/state/../outside" },
         },
         {
           platform: "darwin",
           homedir: "/home/user",
           candidates: ["/launcher"],
           isExecutable: () => true,
-          supportsBotIsolation: () => true,
-        }
+        },
+        privateState("/work/state")
       )
     ).rejects.toThrow("inside the launch's own state")
   })
 
-  it("exposes only Qoder program directories from the host home to an isolated Bot", () => {
+  it("exposes only Qoder program directories from the host home to an isolated launch", () => {
     const args = buildSandboxLauncherArgs(
-      {
-        id: "qoder-bot",
-        command: "qoder",
-        cwd: "/work",
-        env: { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/work/state" },
-      },
-      "/home/user"
+      { id: "qoder-bot", command: "qoder", cwd: "/work", env: ISOLATED },
+      "/home/user",
+      privateState("/work/state")
     )
     const readable = args.filter((_, index) => args[index - 1] === "--readable")
     expect(readable).toContain("/home/user/.qoder/entry")
@@ -735,24 +734,18 @@ describe("external-agent sandbox launcher", () => {
     )
   })
 
-  it("provisions all Bot environment directories without adding writable roots", async () => {
+  it("provisions all isolated environment directories without adding writable roots", async () => {
     const ensureDir = jest.fn()
     const launch = await resolveSandboxedExternalAgentLaunch(
-      {
-        id: "bot-cache",
-        command: "devin",
-        args: ["acp"],
-        cwd: "/work/repo",
-        env: { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/work/state" },
-      },
+      { id: "bot-cache", command: "devin", args: ["acp"], cwd: "/work/repo", env: ISOLATED },
       {
         platform: "darwin",
         homedir: "/home/user",
         candidates: ["/launcher"],
         isExecutable: () => true,
-        supportsBotIsolation: () => true,
         ensureDir,
-      }
+      },
+      privateState("/work/state")
     )
     for (const relative of [
       "data",
@@ -770,18 +763,13 @@ describe("external-agent sandbox launcher", () => {
     expect(writable).toEqual(["/work/repo", "/work/state", toolHostRuntimeDir()])
   })
 
-  it("requires Bot isolation and keeps ambient home out of readable and writable roots", () => {
+  it("confines an isolated launch and keeps ambient home out of readable and writable roots", () => {
     const args = buildSandboxLauncherArgs(
-      {
-        id: "bot",
-        command: "devin",
-        args: ["acp"],
-        cwd: "/work/repo",
-        env: { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/work/state" },
-      },
-      "/home/user"
+      { id: "bot", command: "devin", args: ["acp"], cwd: "/work/repo", env: ISOLATED },
+      "/home/user",
+      privateState("/work/state")
     )
-    expect(args).toContain("--bot-isolation")
+    expect(args).toContain("--isolated")
     expect(
       args.slice(args.indexOf("--deny-readable"), args.indexOf("--deny-readable") + 2)
     ).toEqual(["--deny-readable", "/home/user"])
@@ -792,10 +780,10 @@ describe("external-agent sandbox launcher", () => {
     expect(writeRoots).not.toContain("/home/user/.local/share/devin")
     expect(() =>
       buildSandboxLauncherArgs(
-        { id: "bot", command: "devin", cwd: "/work", env: { COGNIA_BOT_ISOLATION: "1" } },
+        { id: "bot", command: "devin", cwd: "/work", env: ISOLATED },
         "/home/user"
       )
-    ).toThrow("owned state")
+    ).toThrow("needs its own private state root")
   })
   it("does not trust caller-supplied XDG paths as Devin writable capabilities", () => {
     const args = buildSandboxLauncherArgs(
@@ -1057,56 +1045,6 @@ describe("external-agent sandbox launcher", () => {
 })
 
 describe("sandbox readiness reporting", () => {
-  it("probes Bot support without a target and rejects old or broken launchers", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-launcher-capability-"))
-    const launcher = path.join(root, "launcher")
-    try {
-      fs.writeFileSync(
-        launcher,
-        '#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = --bot-isolation ] || exit 2\nprintf "%s\\n" "cognia-external-agent-launcher: missing -- target separator" >&2\nexit 1\n',
-        { mode: 0o700 }
-      )
-      expect(launcherSupportsBotIsolation(launcher)).toBe(true)
-      fs.writeFileSync(
-        launcher,
-        '#!/bin/sh\nprintf "%s\\n" "cognia-external-agent-launcher: unknown argument: --bot-isolation" >&2\nexit 1\n'
-      )
-      expect(launcherSupportsBotIsolation(launcher)).toBe(false)
-      fs.writeFileSync(launcher, "#!/bin/sh\nexit 0\n")
-      expect(launcherSupportsBotIsolation(launcher)).toBe(false)
-      expect(launcherSupportsBotIsolation(path.join(root, "missing"))).toBe(false)
-      expect(launcherSupportsBotIsolation(null as never)).toBe(false)
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it("refuses a stale selected launcher before provisioning and does not silently switch binaries", async () => {
-    const supportsBotIsolation = jest.fn(() => false)
-    const ensureDir = jest.fn()
-    await expect(
-      resolveSandboxedExternalAgentLaunch(
-        {
-          id: "bot",
-          command: "devin",
-          cwd: "/work/repo",
-          env: { COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/work/state" },
-        },
-        {
-          platform: "darwin",
-          homedir: "/home/user",
-          candidates: ["/stale", "/fresh"],
-          isExecutable: () => true,
-          supportsBotIsolation,
-          ensureDir,
-        }
-      )
-    ).rejects.toThrow("BOT_ISOLATION_LAUNCHER_UNSUPPORTED")
-    expect(supportsBotIsolation).toHaveBeenCalledTimes(1)
-    expect(supportsBotIsolation).toHaveBeenCalledWith("/stale")
-    expect(ensureDir).not.toHaveBeenCalled()
-  })
-
   it("reports the first executable candidate, or nothing", () => {
     expect(
       findSandboxLauncher({
@@ -1231,7 +1169,7 @@ it.each([
   }
 )
 
-it("refuses MiniMax Bot state escape before creating a directory", async () => {
+it("refuses an isolated MiniMax state escape before creating a directory", async () => {
   const ensureDir = jest.fn()
   await expect(
     resolveSandboxedExternalAgentLaunch(
@@ -1240,11 +1178,7 @@ it("refuses MiniMax Bot state escape before creating a directory", async () => {
         command: "mcode",
         args: ["acp"],
         cwd: "/work",
-        env: {
-          COGNIA_BOT_ISOLATION: "1",
-          COGNIA_BOT_STATE_DIR: "/owned",
-          MINIMAX_DATA_DIR: "/outside",
-        },
+        env: { ...ISOLATED, MINIMAX_DATA_DIR: "/outside" },
       },
       {
         platform: "darwin",
@@ -1252,8 +1186,8 @@ it("refuses MiniMax Bot state escape before creating a directory", async () => {
         candidates: ["/launcher"],
         isExecutable: () => true,
         ensureDir,
-        supportsBotIsolation: () => true,
-      }
+      },
+      privateState("/owned")
     )
   ).rejects.toThrow("inside the launch's own state")
   expect(ensureDir).not.toHaveBeenCalled()
@@ -1296,7 +1230,7 @@ it.each([
 })
 
 it.each(["", "   ", "/work/state/../escape", "/home/user/.grok"])(
-  "rejects an invalid Grok Bot home before provisioning: %s",
+  "rejects an invalid isolated Grok home before provisioning: %s",
   async (selected) => {
     const ensureDir = jest.fn()
     await expect(
@@ -1305,20 +1239,16 @@ it.each(["", "   ", "/work/state/../escape", "/home/user/.grok"])(
           id: "grok",
           command: "grok",
           cwd: "/work",
-          env: {
-            COGNIA_BOT_ISOLATION: "1",
-            COGNIA_BOT_STATE_DIR: "/work/state",
-            GROK_HOME: selected,
-          },
+          env: { ...ISOLATED, GROK_HOME: selected },
         },
         {
           platform: "darwin",
           homedir: "/home/user",
           candidates: ["/launcher"],
           isExecutable: () => true,
-          supportsBotIsolation: () => true,
           ensureDir,
-        }
+        },
+        privateState("/work/state")
       )
     ).rejects.toThrow(/^grok /)
     expect(ensureDir).not.toHaveBeenCalled()
@@ -1352,13 +1282,7 @@ it.each([
       /nonempty/
     )
     expect(() =>
-      launchRelocation(
-        {
-          ...config,
-          env: { ...config.env, COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/bot" },
-        },
-        "/home/me"
-      )
+      launchRelocation({ ...config, env: { ...config.env, ...ISOLATED } }, "/home/me", "/bot")
     ).toThrow(/own state/)
   }
 )

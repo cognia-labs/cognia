@@ -1,3 +1,4 @@
+import { readEngineLaunchProfile } from "@cognia/agent-contracts/engine-launch-profile"
 import { runPluginExternalAgent } from "./external-agent-api"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { pluginHasApiPermission } from "./permission-api"
@@ -127,7 +128,6 @@ const workspace: PluginWorkspaceHandle = {
   id: "workspace",
   runId: "run",
   root: "/isolated",
-  runtimeStateRoot: "/run-state",
   origin: "bot-run",
   ephemeral: true,
 }
@@ -903,14 +903,15 @@ it("validates legacy caller input and preserves failed or cancelled legacy resul
   ).toBe("cancelled")
 })
 
-it("refuses missing runtime isolation and foreign explicit replay sessions", async () => {
-  await expect(
-    runPluginExternalAgent("plugin", "devin", "fix", {
-      ...options,
-      workspace: { ...workspace, runtimeStateRoot: undefined },
-    })
-  ).rejects.toThrow("isolated runtime")
+it("launches each Bot agent isolated under its own key and refuses foreign explicit replay sessions", async () => {
   await runPluginExternalAgent("plugin", "devin", "fix", options)
+  const added = mockManager.addAgent.mock.calls[0][0]
+  expect(readEngineLaunchProfile(added.process.env)).toEqual({
+    kind: "isolated",
+    key: added.id,
+    reason: "bot",
+  })
+  expect(added.id).toMatch(/^bot-/)
   await expect(
     runPluginExternalAgent("plugin", "devin", "fix", { ...options, sessionId: "foreign" })
   ).rejects.toThrow("identity")
@@ -966,7 +967,7 @@ it("does not turn transient runtime probe failures into permanent setup state", 
 })
 
 it.each(["addAgent", "createSession", "resumeSession"] as const)(
-  "marks an unsupported Bot launcher needs_setup during %s without dispatch or a result checkpoint",
+  "marks an engine that cannot run isolated needs_setup during %s without dispatch or a result checkpoint",
   async (operation) => {
     if (operation === "resumeSession") {
       await runPluginExternalAgent("plugin", "devin", "fix issue", options)
@@ -974,10 +975,10 @@ it.each(["addAgent", "createSession", "resumeSession"] as const)(
       mockManager.execute.mockClear()
     }
     mockManager[operation].mockRejectedValueOnce(
-      new Error("BOT_ISOLATION_LAUNCHER_UNSUPPORTED: Rebuild the selected launcher")
+      new Error("engine_isolation_unsupported: an isolated launch needs this host's sandbox")
     )
     await expect(runPluginExternalAgent("plugin", "devin", "fix issue", options)).rejects.toThrow(
-      "Rebuild the selected launcher"
+      "needs this host's sandbox"
     )
     expect(updateBotInstallation).toHaveBeenCalledWith(
       "installation",

@@ -11,6 +11,7 @@ jest.mock("../agent-transport", () => ({
 import {
   getExternalAgentStateRootInfo,
   removeExternalAgentStateRoot,
+  removeIsolatedStateRoot,
   STATE_ROOT_INFO_COMMAND,
   STATE_ROOT_REMOVE_COMMAND,
 } from "./state-root"
@@ -69,7 +70,20 @@ describe("external agent state root client", () => {
     restore = local()
     agentInvoke.mockResolvedValue(undefined)
     await expect(removeExternalAgentStateRoot("c1")).resolves.toBe(true)
-    expect(agentInvoke).toHaveBeenCalledWith(STATE_ROOT_REMOVE_COMMAND, { key: "c1" })
+    expect(agentInvoke).toHaveBeenCalledWith(STATE_ROOT_REMOVE_COMMAND, {
+      key: "c1",
+      isolated: false,
+    })
+  })
+
+  it("removes an isolated launch's root by its key", async () => {
+    restore = local()
+    agentInvoke.mockResolvedValue(undefined)
+    await expect(removeIsolatedStateRoot("bot-1")).resolves.toBe(true)
+    expect(agentInvoke).toHaveBeenCalledWith(STATE_ROOT_REMOVE_COMMAND, {
+      key: "bot-1",
+      isolated: true,
+    })
   })
 
   it("propagates a host failure instead of reporting a delete that did not happen", async () => {
@@ -102,6 +116,7 @@ describe("external agent state root client", () => {
     }
     await expect(getExternalAgentStateRootInfo("c1")).resolves.toBeNull()
     await expect(removeExternalAgentStateRoot("c1")).resolves.toBe(false)
+    await expect(removeIsolatedStateRoot("bot-1")).resolves.toBe(false)
     expect(agentInvoke).not.toHaveBeenCalled()
   })
 

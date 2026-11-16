@@ -128,12 +128,11 @@ it("preserves local Git excludes and skips rewriting an already provisioned chec
   jest.mocked(writeWorkspaceFile).mockImplementation(async (_root, _path, content) => {
     excludes = content
   })
-  const handle = await acquireBotWorkspace("plugin", spec, deps)
+  await acquireBotWorkspace("plugin", spec, deps)
   expect(excludes).toContain("# existing\n/user-cache/\n")
   expect(excludes).toContain("/.pnpm-store/\n/.jest-cache/\n/node_modules/.cache/\n")
   await acquireBotWorkspace("plugin", spec, deps)
   expect(writeWorkspaceFile).toHaveBeenCalledTimes(1)
-  expect(handle.runtimeStateRoot).not.toBe(handle.root)
 })
 
 it("creates missing excludes and refuses incomplete or unsafe existing Git metadata", async () => {

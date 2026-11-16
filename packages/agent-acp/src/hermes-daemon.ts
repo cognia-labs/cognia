@@ -4,6 +4,7 @@
  * accepted as execution ownership. Native sessions share this owned gateway
  * while each ACP viewer keeps its own protocol connection.
  */
+import { isIsolatedLaunch } from "@cognia/agent-contracts/engine-launch-profile"
 import type { AcpClientDeps } from "./client"
 import type { AgentLaunchEnvironmentResolver, AgentProcessHost } from "@cognia/agent-contracts/host"
 import type { ExternalAgentConfig } from "@cognia/agent-contracts/external-agent"
@@ -277,7 +278,7 @@ export function createHermesControlledDaemonHost(deps: HermesControlledDaemonDep
         "Hermes controlled mode requires the native hermes executable with acp and the default profile"
       )
     if (
-      process.env?.COGNIA_BOT_ISOLATION ||
+      isIsolatedLaunch(process.env) ||
       process.env?.COGNIA_GATEWAY_TASK_CONFIG ||
       process.env?.COGNIA_GATEWAY_TASK_HOME
     )

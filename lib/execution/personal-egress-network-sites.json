@@ -566,19 +566,6 @@
       ]
     },
     {
-      "key": "cli/src/runtime/external/sandbox-launcher.ts::launcherSupportsBotIsolation>probe::process::a6fbe4541b45:1",
-      "file": "cli/src/runtime/external/sandbox-launcher.ts",
-      "owner": "launcherSupportsBotIsolation>probe",
-      "kind": "process",
-      "primitive": "node:child_process:spawnSync => spawnSync",
-      "line": 114,
-      "lexicalGate": null,
-      "classification": "host-system",
-      "authority": "cli/src/runtime/external/sandbox-launcher.ts#launcherSupportsBotIsolation>probe",
-      "reason": "Launcher parser-only --bot-isolation capability probe without a target command; no agent/tool content is started.",
-      "basis": ["cli/src/runtime/external/sandbox-launcher.ts#launcherSupportsBotIsolation>probe"]
-    },
-    {
       "key": "cli/src/runtime/sandbox/os-sandbox-exec.ts::realSpawn::process::a5bfebf4765d:1",
       "file": "cli/src/runtime/sandbox/os-sandbox-exec.ts",
       "owner": "realSpawn",

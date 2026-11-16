@@ -91,6 +91,7 @@ import {
   executionSemanticsOf,
   requiresReconnectAfterCancel,
 } from "@cognia/agent-contracts/semantics"
+import { readEngineLaunchProfile } from "@cognia/agent-contracts/engine-launch-profile"
 import { supportsModelCatalog } from "@cognia/agent-contracts/adapter"
 import type { AdapterExtension } from "@cognia/agent-contracts/adapter-extension"
 import {
@@ -3032,6 +3033,7 @@ export class ExternalAgentManager {
    * Remove an external agent
    */
   async removeAgent(agentId: string): Promise<void> {
+    const profile = readEngineLaunchProfile(this.instances.get(agentId)?.config.process?.env)
     for (const task of [...this.gatewayTasks.values()]) {
       if (task.parentId === agentId) await task.release()
     }
@@ -3061,6 +3063,11 @@ export class ExternalAgentManager {
     this.sessionCatalogs.get(agentId)?.clear()
     this.sessionCatalogs.delete(agentId)
     this.capabilityCommandSignatures.delete(agentId)
+    // A transient isolated instance owns its private state root.
+    if (profile.kind === "isolated") {
+      const { removeIsolatedStateRoot } = await import("./lifecycle/state-root")
+      await removeIsolatedStateRoot(profile.key)
+    }
 
     externalAgentManagerLogger.info("Removed external agent", { agentId })
   }
