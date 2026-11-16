@@ -29,7 +29,7 @@ jest.mock("@/components/ui/sonner", () => ({
 }))
 
 const cancelSubagentRun = jest.fn()
-jest.mock("@/lib/claude/agents/cancel-subagent", () => ({
+jest.mock("@/lib/ai/agent/execution/delegation/cancel-subagent", () => ({
   cancelSubagentRun: (...a: unknown[]) => cancelSubagentRun(...a),
 }))
 

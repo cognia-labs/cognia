@@ -304,7 +304,7 @@ async function runToolEnabled(
   // Bind this ephemeral session to the teammate's identity so host-routed
   // team-collaboration tools (`../collaboration-tools.ts`) know who is calling.
   const { registerTeamDispatchContext, clearTeamDispatchContext, clearResolvedPermissionCeiling } =
-    await import("@/lib/claude/agents/dispatch-context-registry")
+    await import("@/lib/ai/agent/execution/delegation/dispatch-context-registry")
   registerTeamDispatchContext(session.id, {
     teamId: teamCtx.teamId,
     teammateId: teammate.id,

@@ -11,7 +11,7 @@ import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution
  * - `dispatchSubagentAsChildRun` is `dispatchSubagent` as a child run
  *   (ADR-0252 §3): the plugin API, the managed IDE broker and the external
  *   bridge start subagents through it, so each run has its `executionRuns`
- *   row. `dispatch_agent` launches its own (`lib/claude/agents/dispatch-run.ts`)
+ *   row. `dispatch_agent` launches its own (`lib/ai/agent/execution/delegation/dispatch-run.ts`)
  *   and calls `dispatchSubagent` as its engine.
  * - `runTeam` runs an Agent Team headlessly as a `squad` child run through
  *   `launchChildRun`, which starts it through the one Squad launch seam.
@@ -42,7 +42,7 @@ import {
   envelopeForBudgetExhausted,
   envelopeForRejection,
   normalizeDispatchBudgetResult,
-} from "@/lib/claude/agents/dispatch-error"
+} from "@/lib/ai/agent/execution/delegation/dispatch-error"
 import type { SpanSurface } from "@/types/agent-trace/span"
 
 /** Generate a run id (app code — Date.now/randomUUID are allowed here). */
@@ -433,7 +433,7 @@ async function isDispatchAllowedByPolicy(subagentId: string): Promise<boolean> {
   try {
     const [{ getSettings }, { isSubagentDispatchAllowed }] = await Promise.all([
       import("@/lib/db/settings"),
-      import("@/lib/claude/agents/subagent-dispatch-policy"),
+      import("@/lib/ai/agent/execution/delegation/subagent-dispatch-policy"),
     ])
     const settings = await getSettings()
     return isSubagentDispatchAllowed(settings?.agentPermissions?.subagentRules, subagentId)

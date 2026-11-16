@@ -71,7 +71,7 @@ import { createSquadRunRecords } from "@/lib/squads/squad/squad-run-records"
 import { encodeRemoteWorkerPolicy } from "@/lib/squads/workers/remote-worker-policy"
 import { enforceExternalRunAuthority } from "@/lib/ai/agent/external/policy/run-authority"
 import { createCreatorTurnRunner } from "@/lib/creator/agent-turn-runner"
-import { startDispatchRun } from "@/lib/claude/agents/dispatch-run"
+import { startDispatchRun } from "@/lib/ai/agent/execution/delegation/dispatch-run"
 import { acceptDelegation } from "./delegation"
 import { runPluginAgentTurn } from "@/lib/plugin/api/agent-turn"
 import { runPluginAgent, runPluginAgentStreamed } from "@/lib/plugin/agent-sdk/run"
@@ -1918,7 +1918,7 @@ it("dispatch applies a character surface without recording it as descendant auth
     description: "Child",
     prompt: "Work",
   })
-  const { resolveCaller } = await import("@/lib/claude/agents/dispatch-run")
+  const { resolveCaller } = await import("@/lib/ai/agent/execution/delegation/dispatch-run")
   const result = await startDispatchRun({
     subagentId: "surface-child",
     prompt: "Work",
@@ -2391,7 +2391,7 @@ it("team subagent selection applies to the run without becoming a descendant cap
 
 it("a side chat applies parent surface permission but inherits only the parent's explicit run caps", async () => {
   const { recordResolvedPermissionCeiling, clearResolvedPermissionCeiling } =
-    await import("@/lib/claude/agents/dispatch-context-registry")
+    await import("@/lib/ai/agent/execution/delegation/dispatch-context-registry")
   recordResolvedPermissionCeiling(session.id, {
     permissionMode: "plan",
     allowedTools: ["A"],
@@ -2611,7 +2611,7 @@ it.each([false, true])(
 
 it("journal recovery reapplies the prior effective caps at the real dispatch options builder", async () => {
   const { registerSubagent } = await import("@/lib/plugin/registries/subagent-registry")
-  const { resolveCaller } = await import("@/lib/claude/agents/dispatch-run")
+  const { resolveCaller } = await import("@/lib/ai/agent/execution/delegation/dispatch-run")
   registerSubagent("r13-recovery", {
     id: "r13-recovery",
     name: "Recovery",

@@ -39,7 +39,7 @@ import {
 } from "./subagent-dispatch"
 import type { AgentSummary } from "./discover-agents"
 import type { PluginToolExecRequest } from "@/lib/plugin/bridge/agent-tool-types"
-import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/claude/agents/dispatch-agent-tool"
+import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"
 import { DEFAULT_RESOLVED_CONFIG } from "../config/schema"
 import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
 import { createPermissionGate } from "./permission-gate"

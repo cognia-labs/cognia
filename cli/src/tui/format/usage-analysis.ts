@@ -7,7 +7,7 @@
  * reducer already accumulates. The report labels it as such so the numbers are
  * never mistaken for a subscription-wide breakdown.
  */
-import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/claude/agents/dispatch-agent-tool"
+import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"
 
 import type { ToolStat } from "../state/types"
 

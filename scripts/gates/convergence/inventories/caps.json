@@ -527,10 +527,10 @@
       "segment": "business"
     },
     {
-      "key": "lib/claude/agents/dispatch-run.ts#loadNesting::try/maxConcurrent",
+      "key": "lib/ai/agent/execution/delegation/dispatch-run.ts#loadNesting::try/maxConcurrent",
       "owner": "lib/claude",
-      "note": "loadNesting normalizes the global subagentNesting policy at lib/claude/agents/dispatch-run.ts:132; resolveDispatchWidth at lib/claude/agents/dispatch-agent-handler.ts:51 applies positive values to one dispatch fan-out, with a finite token budget further forcing serial dispatch.",
-      "file": "lib/claude/agents/dispatch-run.ts",
+      "note": "loadNesting normalizes the global subagentNesting policy at lib/ai/agent/execution/delegation/dispatch-run.ts:132; resolveDispatchWidth at lib/ai/agent/execution/delegation/dispatch-agent-handler.ts:51 applies positive values to one dispatch fan-out, with a finite token budget further forcing serial dispatch.",
+      "file": "lib/ai/agent/execution/delegation/dispatch-run.ts",
       "symbol": "loadNesting::try/maxConcurrent",
       "value": null,
       "line": 138,
@@ -1677,37 +1677,37 @@
       "reason": "initBrowserAttachmentUpload forwards the maximum attachment count at lib/browser-companion/attachments.ts:163; beginAttachmentUpload counts unconsumed staged files at lib/db/session-attachment-uploads.ts:224, not running download or model work."
     },
     {
-      "key": "lib/claude/agents/dispatch-run.ts#loadNesting::catch/maxConcurrent",
+      "key": "lib/ai/agent/execution/delegation/dispatch-run.ts#loadNesting::catch/maxConcurrent",
       "owner": "lib/claude",
-      "file": "lib/claude/agents/dispatch-run.ts",
+      "file": "lib/ai/agent/execution/delegation/dispatch-run.ts",
       "symbol": "loadNesting::catch/maxConcurrent",
       "value": 0,
       "line": 146,
       "language": "typescript",
       "evidence": "b13c0f191f5b689b",
-      "reason": "The catch fallback maxConcurrent=0 at lib/claude/agents/dispatch-run.ts:140 means unlimited fan-out; resolveDispatchWidth returns Infinity for zero at lib/claude/agents/dispatch-agent-handler.ts:51, so this fallback does not impose a cap."
+      "reason": "The catch fallback maxConcurrent=0 at lib/ai/agent/execution/delegation/dispatch-run.ts:140 means unlimited fan-out; resolveDispatchWidth returns Infinity for zero at lib/ai/agent/execution/delegation/dispatch-agent-handler.ts:51, so this fallback does not impose a cap."
     },
     {
-      "key": "lib/claude/agents/dispatch-run.ts#resolveCaller::default/maxConcurrent",
+      "key": "lib/ai/agent/execution/delegation/dispatch-run.ts#resolveCaller::default/maxConcurrent",
       "owner": "lib/claude",
-      "file": "lib/claude/agents/dispatch-run.ts",
+      "file": "lib/ai/agent/execution/delegation/dispatch-run.ts",
       "symbol": "resolveCaller::default/maxConcurrent",
       "value": null,
       "line": 229,
       "language": "typescript",
       "evidence": "c25b80e1cf497697",
-      "reason": "resolveCaller copies settings.maxConcurrent into the root caller context at lib/claude/agents/dispatch-run.ts:223; the loadNesting policy is already kept and resolveDispatchWidth at lib/claude/agents/dispatch-agent-handler.ts:51 is its consumer."
+      "reason": "resolveCaller copies settings.maxConcurrent into the root caller context at lib/ai/agent/execution/delegation/dispatch-run.ts:223; the loadNesting policy is already kept and resolveDispatchWidth at lib/ai/agent/execution/delegation/dispatch-agent-handler.ts:51 is its consumer."
     },
     {
-      "key": "lib/claude/agents/dispatch-run.ts#resolveCaller::if(ctx)/maxConcurrent",
+      "key": "lib/ai/agent/execution/delegation/dispatch-run.ts#resolveCaller::if(ctx)/maxConcurrent",
       "owner": "lib/claude",
-      "file": "lib/claude/agents/dispatch-run.ts",
+      "file": "lib/ai/agent/execution/delegation/dispatch-run.ts",
       "symbol": "resolveCaller::if(ctx)/maxConcurrent",
       "value": null,
       "line": 215,
       "language": "typescript",
       "evidence": "c25b80e1cf497697",
-      "reason": "The nested caller context copies the same global settings.maxConcurrent at lib/claude/agents/dispatch-run.ts:209; it introduces no independent value beyond the kept loadNesting policy consumed by resolveDispatchWidth."
+      "reason": "The nested caller context copies the same global settings.maxConcurrent at lib/ai/agent/execution/delegation/dispatch-run.ts:209; it introduces no independent value beyond the kept loadNesting policy consumed by resolveDispatchWidth."
     },
     {
       "key": "lib/connectors/outbound-runner.ts#MAX_ACTIVE_PLATFORM_SENDS",

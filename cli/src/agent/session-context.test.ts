@@ -8,7 +8,7 @@ import { createCliContextAssembler, prependTextBlock, twinContextBlock } from ".
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from "../config/schema"
 import { CliDbSnapshotError } from "../db/bootstrap"
 import type { AgentSummary } from "./discover-agents"
-import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/claude/agents/dispatch-agent-tool"
+import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"
 import { LOAD_SKILL_RESOURCE_TOOL_NAME, LOAD_SKILL_TOOL_NAME } from "./skill-load-tool"
 import type { BuiltAttachmentContent } from "./attachments/build"
 import type { TwinContextResult } from "../twin/context-client"

@@ -28,7 +28,7 @@ import { createSubAgentNode } from "@/lib/ai/agent/execution/delegation/subagent
 import {
   registerSubagentCancellation,
   unregisterSubagentRun,
-} from "@/lib/claude/agents/subagent-cancel-registry"
+} from "@/lib/ai/agent/execution/delegation/subagent-cancel-registry"
 import type {
   SDKMessage,
   SDKTaskStartedMessage,

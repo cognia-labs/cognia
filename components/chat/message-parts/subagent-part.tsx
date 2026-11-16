@@ -46,7 +46,7 @@ import { ToolCallRow } from "@/components/chat/message-parts/tool-call-row"
 import { toToolActivityEntries } from "@/lib/claude/subagent-tool-parts"
 import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
-import { cancelSubagentRun } from "@/lib/claude/agents/cancel-subagent"
+import { cancelSubagentRun } from "@/lib/ai/agent/execution/delegation/cancel-subagent"
 import { cn, formatDurationShort } from "@/lib/utils"
 
 /** Sub-agent run status → the shared status-dot colour language. */

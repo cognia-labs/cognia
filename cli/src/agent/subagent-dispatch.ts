@@ -24,9 +24,9 @@ import {
   type NormalizedDispatch,
   collectWithTimeout,
   renderCollectPending,
-} from "@/lib/claude/agents/dispatch-agent-tool"
-import { runDispatchFanout } from "@/lib/claude/agents/dispatch-core"
-import { normalizeDispatchBudgetResult } from "@/lib/claude/agents/dispatch-error"
+} from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"
+import { runDispatchFanout } from "@/lib/ai/agent/execution/delegation/dispatch-core"
+import { normalizeDispatchBudgetResult } from "@/lib/ai/agent/execution/delegation/dispatch-error"
 import type { PluginToolManifestEntry } from "@/lib/plugin/bridge/sidecar-tools-bridge"
 import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
 import {

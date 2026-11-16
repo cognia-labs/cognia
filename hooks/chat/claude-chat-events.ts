@@ -67,7 +67,7 @@ import {
   jobExitFromSettledFrame,
   outboxRecordFromJobExit,
 } from "@/lib/background-tasks/job-settlement"
-import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
+import { getSubagentApprovalRoute } from "@/lib/ai/agent/execution/delegation/subagent-approval-routes"
 import { resolveRootSessionId } from "@/lib/ai/agent/team/root-session"
 import { approveTool, toolResultDecision } from "@/lib/ai/agent/execution/sidecar-client"
 import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"

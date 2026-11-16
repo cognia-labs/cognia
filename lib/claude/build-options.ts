@@ -56,14 +56,17 @@ import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import {
   getResolvedPermissionCeiling,
   recordResolvedPermissionCeiling,
-} from "@/lib/claude/agents/dispatch-context-registry"
+} from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import { getSession } from "@/lib/db/sessions"
 import { compositionForSession, runtimeRefForSession } from "@/stores/agent/agent-runtime-store"
 import { resolveSessionAsideRuntimeWithAgent } from "@/lib/context-workbench/session-aside-runtime"
 import type { AgentRuntimeRef } from "@/lib/ai/agent/runtime-catalog/types"
 import { adaptPermissionMode } from "@/lib/ai/agent/external/policy/permission-modes"
 import { clampSandboxPolicy } from "@/lib/sandbox/policy-bridge"
-import { DISPATCH_AGENT_TOOL_NAME, TASK_TOOL_NAME } from "@/lib/claude/agents/dispatch-agent-tool"
+import {
+  DISPATCH_AGENT_TOOL_NAME,
+  TASK_TOOL_NAME,
+} from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"
 import { runtimeFromLegacy } from "@/lib/ai/agent/execution/legacy-mapping"
 // Router + Fusion (ADR-0188 D37): only the zero-cost gate is imported here;
 // everything behind it is loaded dynamically once the chat switch is on.
@@ -858,7 +861,7 @@ export interface BuildOptionsContext {
    * never gets BOTH the uncontrolled SDK Task tool and our `dispatch_agent`, and
    * (b) exposes the `dispatch_agent` host tool only while `depth < maxDepth`.
    */
-  dispatchContext?: import("@/lib/claude/agents/dispatch-context-registry").DispatchContext
+  dispatchContext?: import("@/lib/ai/agent/execution/delegation/dispatch-context-registry").DispatchContext
   /**
    * True when this run is a dispatched subagent (set by `dispatchSubagent` →
    * `executeAgent`). A dispatched run WITHOUT a `dispatchContext` is a leaf
@@ -1055,7 +1058,7 @@ async function listDispatchAgentAvailable(
   try {
     const [{ resolveDispatchableSubagents }, { isSubagentDispatchAllowed }] = await Promise.all([
       import("@/lib/agent/builtin-catalog/projection"),
-      import("@/lib/claude/agents/subagent-dispatch-policy"),
+      import("@/lib/ai/agent/execution/delegation/subagent-dispatch-policy"),
     ])
     return resolveDispatchableSubagents()
       .filter((x) => isSubagentDispatchAllowed(rules, x.id))

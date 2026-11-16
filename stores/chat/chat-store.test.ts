@@ -430,7 +430,7 @@ describe("useChatStore", () => {
 
     it("re-buckets a dispatched-subagent ask into its parent chat session", async () => {
       const { registerSubagentApprovalRoute, __clearAllSubagentApprovalRoutesForTesting } =
-        await import("@/lib/claude/agents/subagent-approval-routes")
+        await import("@/lib/ai/agent/execution/delegation/subagent-approval-routes")
       __clearAllSubagentApprovalRoutesForTesting()
       registerSubagentApprovalRoute("eph-1", {
         parentSessionId: "s1",
@@ -463,7 +463,7 @@ describe("useChatStore", () => {
 
     it("buckets a nested subagent's ask under the root, not its ephemeral parent", async () => {
       const { registerSubagentApprovalRoute, __clearAllSubagentApprovalRoutesForTesting } =
-        await import("@/lib/claude/agents/subagent-approval-routes")
+        await import("@/lib/ai/agent/execution/delegation/subagent-approval-routes")
       __clearAllSubagentApprovalRoutesForTesting()
       registerSubagentApprovalRoute("eph-grandchild", {
         parentSessionId: "eph-child",

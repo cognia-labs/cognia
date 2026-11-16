@@ -6,7 +6,7 @@ import "fake-indexeddb/auto"
 
 import { applySdkSubagentBridge, __resetSdkSubagentBridge } from "./sdk-subagent-bridge"
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
-import { requestCancelSubagentRun } from "./agents/subagent-cancel-registry"
+import { requestCancelSubagentRun } from "@/lib/ai/agent/execution/delegation/subagent-cancel-registry"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { SDKTaskStartedMessage } from "@cognia/agent-config-types"
 

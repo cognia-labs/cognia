@@ -45,7 +45,10 @@ import {
 } from "@/lib/ai/agent/execution/contributions/tool-contributions"
 import type { DeclaredModuleTool } from "@/lib/modules/tool-declarations"
 import { ASK_USER_TOOL_NAME } from "@/lib/ai/agent/execution/ask-user-tool"
-import { DISPATCH_AGENT_TOOL_NAME, TASK_TOOL_NAME } from "@/lib/claude/agents/dispatch-agent-tool"
+import {
+  DISPATCH_AGENT_TOOL_NAME,
+  TASK_TOOL_NAME,
+} from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"
 import { isWebBuiltinTool, runWebBuiltinTool, type WebToolRunDeps } from "@/lib/web/agent-tools"
 import {
   isSkillBuiltinTool,
@@ -634,7 +637,8 @@ async function runPluginToolExec(
     // `dispatchSubagent` lives. Threads depth/cycle/budget via the session's
     // registered dispatch context.
     if (request.name === DISPATCH_AGENT_TOOL_NAME || request.name === TASK_TOOL_NAME) {
-      const { runDispatchAgentTool } = await import("@/lib/claude/agents/dispatch-agent-handler")
+      const { runDispatchAgentTool } =
+        await import("@/lib/ai/agent/execution/delegation/dispatch-agent-handler")
       const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
       const executionRunId =
         toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? ""

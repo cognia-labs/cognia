@@ -47,7 +47,7 @@ const updateBackgroundTaskRecord = jest.fn(async () => undefined)
 jest.mock("@/lib/agent/builtin-catalog/projection", () => ({
   getDispatchableSubagentDef: (...args: unknown[]) => getDispatchableSubagentDef(...(args as [])),
 }))
-jest.mock("@/lib/claude/agents/dispatch-run", () => ({
+jest.mock("@/lib/ai/agent/execution/delegation/dispatch-run", () => ({
   resolveCaller: (...args: unknown[]) => resolveCaller(...(args as [])),
   startDispatchRun: (...args: unknown[]) => startDispatchRun(...(args as [])),
 }))

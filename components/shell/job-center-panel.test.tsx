@@ -30,7 +30,7 @@ jest.mock("@/lib/background-tasks/redispatch", () => ({
 // through `cancelSubagentRun`, any other child through `cancelChildRun`.
 const cancelSubagentRun = jest.fn()
 const cancelChildRun = jest.fn()
-jest.mock("@/lib/claude/agents/cancel-subagent", () => ({
+jest.mock("@/lib/ai/agent/execution/delegation/cancel-subagent", () => ({
   cancelSubagentRun: (...args: unknown[]) => cancelSubagentRun(...args),
   cancelChildRun: (...args: unknown[]) => cancelChildRun(...args),
 }))

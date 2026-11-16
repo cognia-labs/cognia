@@ -449,4 +449,4 @@ describe("host fan-out approval card copy", () => {
 import {
   recordResolvedPermissionCeiling,
   clearResolvedPermissionCeiling,
-} from "@/lib/claude/agents/dispatch-context-registry"
+} from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"

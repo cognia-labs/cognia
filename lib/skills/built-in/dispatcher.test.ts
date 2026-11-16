@@ -40,7 +40,7 @@ import { waitFor } from "@testing-library/react"
 import {
   registerSubagentApprovalRoute,
   clearSubagentApprovalRoute,
-} from "@/lib/claude/agents/subagent-approval-routes"
+} from "@/lib/ai/agent/execution/delegation/subagent-approval-routes"
 import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
 import {
   resolveApproval,

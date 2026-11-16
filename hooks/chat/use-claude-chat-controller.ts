@@ -8224,7 +8224,7 @@ export function useClaudeChat() {
         // are keyed by session id and kept alive across a turn's multiple
         // dispatch_agent calls, so teardown is the only safe release point.
         const { releaseDispatchStateForSession } =
-          await import("@/lib/claude/agents/dispatch-agent-handler")
+          await import("@/lib/ai/agent/execution/delegation/dispatch-agent-handler")
         releaseDispatchStateForSession(sessionId)
       }
     },

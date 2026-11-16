@@ -9,7 +9,7 @@
  * fs-injected: the plan store's reader is passed through so routing unit-tests
  * without disk.
  */
-import { normalizeDispatchBudgetResult } from "@/lib/claude/agents/dispatch-error"
+import { normalizeDispatchBudgetResult } from "@/lib/ai/agent/execution/delegation/dispatch-error"
 import { recordCliIncompleteForegroundRun } from "../../agent/subagent-background-tasks"
 import { readTranscript, type TranscriptEntry } from "../../agent/transcript"
 import { prepareCliPersonalMessages } from "../../agent/personal-history"

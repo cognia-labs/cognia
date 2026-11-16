@@ -1,5 +1,5 @@
 import type { SideEffectClass } from "@cognia/agent"
-import type { ResolvedCaller } from "@/lib/claude/agents/dispatch-run"
+import type { ResolvedCaller } from "@/lib/ai/agent/execution/delegation/dispatch-run"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { startLeaseHeartbeat } from "@/lib/runtime/lease-heartbeat"
 

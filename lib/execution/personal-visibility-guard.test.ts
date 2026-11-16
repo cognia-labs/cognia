@@ -157,7 +157,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/chat/turn-route/history.ts":
     "buildHandoffContext:1;prepareHandoffContext:1;preparePersonalHistory:1",
   "lib/chat/working-set.ts": "stored-message-read:1",
-  "lib/claude/agents/dispatch-agent-handler.ts": "preparePersonalDerivedHistory:1",
+  "lib/ai/agent/execution/delegation/dispatch-agent-handler.ts": "preparePersonalDerivedHistory:1",
   "lib/claude/build-options.ts":
     "preparePersonalDerivedHistory:1;preparePersonalHistory:2;resume:forkFromSessionId:2;resume:forkedFromSdkSessionId:6;resume:resumeSessionId:2;resume:sdkSessionId:4;withPersonalMemoryVisibility:1;withPersonalRerankerVisibility:1",
   "lib/ai/agent/execution/sidecar-client.ts":
@@ -823,7 +823,7 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "preparePersonalHistory",
     "preparePersonalDerivedHistory",
   ],
-  "lib/claude/agents/dispatch-agent-handler.ts": ["preparePersonalDerivedHistory"],
+  "lib/ai/agent/execution/delegation/dispatch-agent-handler.ts": ["preparePersonalDerivedHistory"],
   "lib/squads/team-run-context.ts": ["preparePersonalDerivedHistory"],
   "lib/squads/memory/shared-memory-orchestrator.ts": [
     "preparePersonalDerivedHistory",

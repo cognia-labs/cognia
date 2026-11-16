@@ -17,7 +17,7 @@ import { personalSinkContextForRun, type PersonalSinkContext } from "@/lib/execu
  * (opt-in), with
  * {@link TEAM_MESSAGING_PROTOCOL} as their instructions, and binds every call
  * to the teammate that issued it through the per-session team-dispatch
- * registry (`lib/claude/agents/dispatch-context-registry.ts`).
+ * registry (`lib/ai/agent/execution/delegation/dispatch-context-registry.ts`).
  *
  * Every orchestrator call is reused verbatim — this module is pure glue:
  * argument shaping + identity binding + JSON-safe results for the model. The
@@ -40,7 +40,7 @@ import type {
   ToolCallContext,
   ToolSurfaceContext,
 } from "@/lib/modules/manifest-types"
-import { getTeamDispatchContext } from "@/lib/claude/agents/dispatch-context-registry"
+import { getTeamDispatchContext } from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import type { TwinKnowledgeHit } from "./teammate/twin-context"
 import {
   canSendMessage,

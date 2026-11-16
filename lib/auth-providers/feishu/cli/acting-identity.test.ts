@@ -38,7 +38,7 @@ import { larkUserRequest } from "@/lib/connectors/adapters/lark/http"
 import {
   registerSubagentApprovalRoute,
   __clearAllSubagentApprovalRoutesForTesting,
-} from "@/lib/claude/agents/subagent-approval-routes"
+} from "@/lib/ai/agent/execution/delegation/subagent-approval-routes"
 
 const sessionGet = jest.fn()
 const runGet = jest.fn()

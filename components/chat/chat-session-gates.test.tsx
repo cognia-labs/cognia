@@ -10,7 +10,7 @@ const companionShell = jest.fn(() => false)
 const mockCancelSubagent = jest.fn<Promise<void>, unknown[]>(async () => undefined)
 let mockApprovalResponse: (decision: string) => void
 let mockElicitationResponse: (response: unknown) => Promise<void>
-jest.mock("@/lib/claude/agents/cancel-subagent", () => ({
+jest.mock("@/lib/ai/agent/execution/delegation/cancel-subagent", () => ({
   cancelSubagentRun: (...args: unknown[]) => mockCancelSubagent(...args),
 }))
 jest.mock("@/lib/chat/room/runner-host", () => ({

@@ -15,7 +15,7 @@
  */
 
 import type { BackgroundTaskJournalRecord, BackgroundDispatchRecovery } from "./registry-core"
-import type { ResolvedCaller } from "@/lib/claude/agents/dispatch-run"
+import type { ResolvedCaller } from "@/lib/ai/agent/execution/delegation/dispatch-run"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { computeStableDigest } from "@/lib/ai/agent/execution/fingerprint"
 import { getDb } from "@/lib/db/schema"
@@ -161,7 +161,7 @@ export async function redispatchBackgroundRun(
 
   const [{ getDispatchableSubagentDef }, { resolveCaller, startDispatchRun }] = await Promise.all([
     import("@/lib/agent/builtin-catalog/projection"),
-    import("@/lib/claude/agents/dispatch-run"),
+    import("@/lib/ai/agent/execution/delegation/dispatch-run"),
   ])
   if (!getDispatchableSubagentDef(record.subagentId)) {
     return {

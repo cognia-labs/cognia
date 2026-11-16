@@ -20,7 +20,10 @@ import type {
 import { collectRendererBackgroundResult } from "@/lib/background-tasks/renderer-subagent-registry"
 import { isSettledOutboxKind } from "@/lib/background-tasks/squad-handoff-outbox"
 import { redispatchBackgroundRun } from "@/lib/background-tasks/redispatch"
-import { cancelChildRun, cancelSubagentRun } from "@/lib/claude/agents/cancel-subagent"
+import {
+  cancelChildRun,
+  cancelSubagentRun,
+} from "@/lib/ai/agent/execution/delegation/cancel-subagent"
 import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 import { resolveScheduledTaskNames } from "@/lib/scheduler/task-processes"
 import { clearSettledBackgroundTasks, listBackgroundTaskRecords } from "@/lib/db/background-tasks"

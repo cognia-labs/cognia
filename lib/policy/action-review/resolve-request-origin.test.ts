@@ -6,7 +6,7 @@ import type { StoredMessage } from "@cognia/agent-config-types"
 import {
   __clearAllSubagentApprovalRoutesForTesting,
   registerSubagentApprovalRoute,
-} from "@/lib/claude/agents/subagent-approval-routes"
+} from "@/lib/ai/agent/execution/delegation/subagent-approval-routes"
 import { subSessionId } from "@/lib/ai/agent/team/session-id"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"

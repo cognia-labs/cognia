@@ -3118,7 +3118,7 @@ it.each(["direct", "team", "workflow"] as const)(
     mockStartTeamRunFromIM.mockClear()
     mockStartWorkflowFromIM.mockClear()
     const { getResolvedPermissionCeiling } =
-      await import("@/lib/claude/agents/dispatch-context-registry")
+      await import("@/lib/ai/agent/execution/delegation/dispatch-context-registry")
     await callHandler(makeEvent({ conversationKey: key }), "ai-run", RESOLVED, "queued-ceiling", {
       adapter: acceptedAdapter,
       override: { ...currentOverride, authority: "plan", allowScheduleTools: false },

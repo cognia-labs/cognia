@@ -1,7 +1,7 @@
 /**
  * `PluginDispatchErrorEnvelope` → {@link CogniaDiagnostic} inputs.
  *
- * `lib/claude/agents/dispatch-error.ts` already does the hard part: it decides
+ * `lib/ai/agent/execution/delegation/dispatch-error.ts` already does the hard part: it decides
  * whether a subagent dispatch died from an abort, a sidecar exit, a guard
  * refusal, or a provider fault, and it re-uses the provider classifier for the
  * last of those. Its output was only ever rendered *to the model*

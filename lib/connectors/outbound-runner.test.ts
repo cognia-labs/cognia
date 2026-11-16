@@ -3281,7 +3281,7 @@ describe("round 5: personal outbound producer identity", () => {
       await import("@/lib/skills/built-in/im/broadcast")
       const { runBuiltInSkill } = await import("@/lib/skills/built-in/dispatcher")
       const { registerSubagentApprovalRoute, clearSubagentApprovalRoute } =
-        await import("@/lib/claude/agents/subagent-approval-routes")
+        await import("@/lib/ai/agent/execution/delegation/subagent-approval-routes")
       let executionRunId = identity === "unknown" ? "missing-run" : fixture.originId
       let sessionId = fixture.sessionId
       if (identity === "child") {
@@ -3405,7 +3405,7 @@ describe("round 5: personal outbound producer identity", () => {
         executionRunId: fixture.originId,
       }
       const { registerSubagentApprovalRoute, clearSubagentApprovalRoute } =
-        await import("@/lib/claude/agents/subagent-approval-routes")
+        await import("@/lib/ai/agent/execution/delegation/subagent-approval-routes")
       if (identity === "child") {
         const { startJobExecutionRun } = await import("@/lib/execution/acting-authority")
         const child = await startJobExecutionRun("producer-child", context)

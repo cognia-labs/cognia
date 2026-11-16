@@ -63,7 +63,7 @@
       "symbol": "setRendererBackgroundSettleListener",
       "module": "lib/background-tasks/renderer-subagent-registry.ts",
       "owner": "components/providers/initializers/background-task-initializer.tsx",
-      "note": "pending:phase 2 \"The brain can run background dispatch_agent subagents (lib/plugin/bridge/agent-tool-dispatch.ts -> lib/claude/agents/dispatch-agent-handler.ts -> renderer-subagent-registry).\"",
+      "note": "pending:phase 2 \"The brain can run background dispatch_agent subagents (lib/plugin/bridge/agent-tool-dispatch.ts -> lib/ai/agent/execution/delegation/dispatch-agent-handler.ts -> renderer-subagent-registry).\"",
       "evidence": "9a6f0dde7bc1ee0e",
       "pendingPhase": "phase 2"
     },

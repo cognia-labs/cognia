@@ -8,7 +8,7 @@ import {
 import {
   __clearAllSubagentApprovalRoutesForTesting,
   registerSubagentApprovalRoute,
-} from "@/lib/claude/agents/subagent-approval-routes"
+} from "@/lib/ai/agent/execution/delegation/subagent-approval-routes"
 import { subSessionId } from "@/lib/ai/agent/team/session-id"
 import { recordActionReviewReceipt } from "@/lib/db/action-review-receipts"
 import { getDb } from "@/lib/db/schema"

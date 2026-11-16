@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils"
 import { useFlowMotion } from "@/components/chat/motion/motion-reveal"
 import { STAGGER_CHILD, STAGGER_CONTAINER } from "@/lib/ui/motion"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
-import { cancelSubagentRun } from "@/lib/claude/agents/cancel-subagent"
+import { cancelSubagentRun } from "@/lib/ai/agent/execution/delegation/cancel-subagent"
 import { SUB_AGENT_STATUS_CONFIG } from "@/types/agent/sub-agent"
 import type { SubAgent } from "@/types/agent/sub-agent"
 

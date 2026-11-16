@@ -77,7 +77,7 @@ import {
 import {
   registerTeamDispatchContext,
   clearTeamDispatchContext,
-} from "@/lib/claude/agents/dispatch-context-registry"
+} from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import { createSkillLoadContext, releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
 import type { Skill } from "@cognia/agent-config-types"
 import {
@@ -1671,7 +1671,9 @@ describe("handlePluginToolExec — Task alias for dispatch_agent", () => {
     "routes %s with its exact execution run to the dispatch-agent handler",
     async (name) => {
       const runDispatchAgentTool = jest.fn().mockResolvedValue("subagent result")
-      jest.doMock("@/lib/claude/agents/dispatch-agent-handler", () => ({ runDispatchAgentTool }))
+      jest.doMock("@/lib/ai/agent/execution/delegation/dispatch-agent-handler", () => ({
+        runDispatchAgentTool,
+      }))
 
       const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
         await import("./agent-tool-dispatch")
@@ -1704,7 +1706,9 @@ describe("handlePluginToolExec — Task alias for dispatch_agent", () => {
 
   it("keeps an unknown correlated dispatch run unverified", async () => {
     const runDispatchAgentTool = jest.fn().mockResolvedValue("subagent result")
-    jest.doMock("@/lib/claude/agents/dispatch-agent-handler", () => ({ runDispatchAgentTool }))
+    jest.doMock("@/lib/ai/agent/execution/delegation/dispatch-agent-handler", () => ({
+      runDispatchAgentTool,
+    }))
     const { handlePluginToolExec: freshHandle, __setPluginToolResolverForTesting: freshSet } =
       await import("./agent-tool-dispatch")
     freshSet({ getTool: () => undefined })

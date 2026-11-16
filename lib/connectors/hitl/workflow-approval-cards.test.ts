@@ -5,7 +5,7 @@ import { serializeOutboundAsync as serializeTelegram } from "../adapters/telegra
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getSettings } from "@/lib/db/settings"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { getResolvedPermissionCeiling } from "@/lib/claude/agents/dispatch-context-registry"
+import { getResolvedPermissionCeiling } from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
 import type { ConversationDeliveryTarget } from "@/types/connectors/event"
 import { recordCallbackBinding } from "../adapters/_shared/a2ui-mapper"
@@ -31,7 +31,7 @@ jest.mock("../adapters/_shared/a2ui-mapper", () => ({
   ...jest.requireActual("../adapters/_shared/a2ui-mapper"),
   recordCallbackBinding: jest.fn(),
 }))
-jest.mock("@/lib/claude/agents/dispatch-context-registry", () => ({
+jest.mock("@/lib/ai/agent/execution/delegation/dispatch-context-registry", () => ({
   getResolvedPermissionCeiling: jest.fn(),
 }))
 // Exercise host copy without the global React next-intl mock.

@@ -49,7 +49,10 @@ import { bindCliSessionHostRuntime } from "./cli-host-runtime"
 import { makeConfiguredCliPluginToolHandle } from "./configured-plugin-tool-handle"
 import { subscribePluginToolDispatch } from "../plugin/plugin-tool-dispatch"
 import { registerCliSkillLoadContext, releaseCliSkillLoadContext } from "./skill-load-tool"
-import { DISPATCH_AGENT_TOOL_NAME, TASK_TOOL_NAME } from "@/lib/claude/agents/dispatch-agent-tool"
+import {
+  DISPATCH_AGENT_TOOL_NAME,
+  TASK_TOOL_NAME,
+} from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"
 
 /**
  * Nesting seam handed down by the dispatch handler when the child is allowed to

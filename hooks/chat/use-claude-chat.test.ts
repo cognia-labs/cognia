@@ -1194,7 +1194,7 @@ import { recordChatCanonicalEvents } from "@/lib/chat/canonical-sink"
 import {
   clearSubagentApprovalRoute,
   registerSubagentApprovalRoute,
-} from "@/lib/claude/agents/subagent-approval-routes"
+} from "@/lib/ai/agent/execution/delegation/subagent-approval-routes"
 import { answerChatApproval, stopChatTurn } from "./chat-control-bridge"
 import {
   AgentExecutionHandleProvider,

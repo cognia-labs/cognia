@@ -13,7 +13,7 @@ import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting
 import {
   registerTeamDispatchContext,
   clearTeamDispatchContext,
-} from "@/lib/claude/agents/dispatch-context-registry"
+} from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import {
   createSquadRunRecords,
   findLiveSquadRun,

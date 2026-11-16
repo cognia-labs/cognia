@@ -9,7 +9,7 @@ import {
   buildDispatchAgentManifestEntries,
   type PluginToolManifestEntry,
 } from "./sidecar-tools-bridge"
-import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/claude/agents/dispatch-agent-tool"
+import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"
 import { usePluginStore } from "@/stores/plugin-runtime"
 import type { Plugin, PluginTool } from "@/types/plugin"
 

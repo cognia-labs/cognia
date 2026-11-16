@@ -18,7 +18,7 @@
  */
 
 import * as personalSinkHost from "@/lib/execution/personal-sink"
-import { getResolvedPermissionCeiling } from "@/lib/claude/agents/dispatch-context-registry"
+import { getResolvedPermissionCeiling } from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
 import {
   WF_FANOUT_APPROVE_PREFIX,

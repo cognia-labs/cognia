@@ -23,7 +23,7 @@
 
 import { decodeSubSession } from "@/lib/ai/agent/team/session-id"
 
-import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
+import { getSubagentApprovalRoute } from "@/lib/ai/agent/execution/delegation/subagent-approval-routes"
 
 /** Deeper than any dispatch nesting the settings allow; a cycle guard, not a limit. */
 const MAX_HOPS = 32

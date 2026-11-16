@@ -71,7 +71,7 @@ jest.mock("@/components/chat/message-parts/tool-call-row", () => ({
 }))
 
 const cancelSubagentRun = jest.fn()
-jest.mock("@/lib/claude/agents/cancel-subagent", () => ({
+jest.mock("@/lib/ai/agent/execution/delegation/cancel-subagent", () => ({
   cancelSubagentRun: (...a: unknown[]) => cancelSubagentRun(...a),
 }))
 

@@ -7,7 +7,7 @@ import {
   createUnattendedPark,
   type UnattendedPark,
 } from "@/lib/ai/agent/execution/permissions/unattended-park"
-import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
+import { getSubagentApprovalRoute } from "@/lib/ai/agent/execution/delegation/subagent-approval-routes"
 import { assertPersonalSink } from "@/lib/execution/personal-sink"
 /**
  * Built-in skill dispatcher (ADR-0026).

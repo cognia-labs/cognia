@@ -10,7 +10,7 @@ import {
 import {
   clearTeamDispatchContext,
   registerTeamDispatchContext,
-} from "@/lib/claude/agents/dispatch-context-registry"
+} from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 
 function surfaceCtx(selfInvokeTools: Record<string, boolean>): ToolSurfaceContext {
   return {

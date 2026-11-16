@@ -67,7 +67,7 @@ export interface ChildRunBackgroundRegistration {
 /**
  * An agent run the caller drives itself, because how it runs is the caller's
  * own policy: `dispatch_agent`'s retries, subtree budget, deadline, approval
- * route and Job Center journal (`lib/claude/agents/dispatch-run.ts`). The
+ * route and Job Center journal (`lib/ai/agent/execution/delegation/dispatch-run.ts`). The
  * launcher still writes the row, links the parent, settles the row from the
  * returned outcome and records the dispatch; a stop aborts `signal`. It
  * applies no grant: the caller resolved the run's configuration itself.

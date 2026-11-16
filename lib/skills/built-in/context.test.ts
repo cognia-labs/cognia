@@ -5,8 +5,8 @@ const mockRunGet = jest.fn()
 const mockTeamGet = jest.fn()
 const mockTeamRunGet = jest.fn()
 const mockTeamContext = jest.fn()
-jest.mock("@/lib/claude/agents/dispatch-context-registry", () => ({
-  ...jest.requireActual("@/lib/claude/agents/dispatch-context-registry"),
+jest.mock("@/lib/ai/agent/execution/delegation/dispatch-context-registry", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/delegation/dispatch-context-registry"),
   getTeamDispatchContext: (...args: unknown[]) => mockTeamContext(...args),
 }))
 const mockListRuns = jest.fn()
@@ -64,7 +64,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 import {
   registerSubagentApprovalRoute,
   __clearAllSubagentApprovalRoutesForTesting,
-} from "@/lib/claude/agents/subagent-approval-routes"
+} from "@/lib/ai/agent/execution/delegation/subagent-approval-routes"
 
 beforeEach(() => {
   jest.clearAllMocks()

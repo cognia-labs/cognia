@@ -1145,7 +1145,7 @@
       ]
     },
     {
-      "key": "lib/claude/agents/cancel-subagent.ts",
+      "key": "lib/ai/agent/execution/delegation/cancel-subagent.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [
@@ -1156,7 +1156,7 @@
       ]
     },
     {
-      "key": "lib/claude/agents/dispatch-runtime.ts",
+      "key": "lib/ai/agent/execution/delegation/dispatch-runtime.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

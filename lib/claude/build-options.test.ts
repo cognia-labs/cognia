@@ -41,7 +41,7 @@ jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
   recordRunAuthority: jest.fn(async () => undefined),
 }))
-import * as dispatchContextRegistry from "@/lib/claude/agents/dispatch-context-registry"
+import * as dispatchContextRegistry from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import { enforceRunAuthorityOnSendOptions } from "@/lib/execution/run-authority"
 // Mock every database / store / agent-mode dependency so build-options can be
 // exercised as a pure function. We never want to touch Dexie or Zustand here.
@@ -7174,7 +7174,7 @@ describe("desktop-independent DI seams (standalone CLI)", () => {
       getResolvedPermissionCeiling,
       __clearAllDispatchContextsForTesting,
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-    } = require("@/lib/claude/agents/dispatch-context-registry")
+    } = require("@/lib/ai/agent/execution/delegation/dispatch-context-registry")
 
     beforeEach(() => {
       __clearAllDispatchContextsForTesting()

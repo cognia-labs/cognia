@@ -741,7 +741,7 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
     const { runBuiltInSkill } = await import("@/lib/skills/built-in/dispatcher")
     const { resolveBuiltInSkillContext } = await import("@/lib/skills/built-in/context")
     const { registerSubagentApprovalRoute, clearSubagentApprovalRoute } =
-      await import("@/lib/claude/agents/subagent-approval-routes")
+      await import("@/lib/ai/agent/execution/delegation/subagent-approval-routes")
     const { z } = await import("zod")
     __resetSharedBuiltInSkillRegistry()
     await seedUnguardedAdapter()

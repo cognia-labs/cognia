@@ -1097,7 +1097,7 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
     cancelAgent: (agentId: string) => {
       void Promise.all([
         import("@/lib/ai/agent/background-agent-manager"),
-        import("@/lib/claude/agents/cancel-subagent"),
+        import("@/lib/ai/agent/execution/delegation/cancel-subagent"),
       ])
         .then(async ([{ getBackgroundAgentManager }, { cancelChildRun }]) => {
           // Only an agent the Job Center tracks, as before: the one stop below

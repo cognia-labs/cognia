@@ -30,7 +30,7 @@ import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest
 import {
   clearTeamDispatchContext,
   registerTeamDispatchContext,
-} from "@/lib/claude/agents/dispatch-context-registry"
+} from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 import { filterSharedMemoryEntriesForRun } from "@/lib/squads/memory/shared-memory-orchestrator"
 

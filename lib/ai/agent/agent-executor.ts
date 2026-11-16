@@ -42,7 +42,7 @@ import {
 import { resolveAgentModel } from "@/lib/agent/agent-profile-policy"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
 import type { UsageInfo } from "@/lib/claude/adapter"
-import type { DispatchContext } from "@/lib/claude/agents/dispatch-context-registry"
+import type { DispatchContext } from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import { buildJsonInstruction, parseStructured } from "@/lib/workflow/nodes/ai/structured"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
@@ -568,7 +568,7 @@ async function runToolEnabledStandalone(
     import("@/lib/db/settings"),
     import("@/lib/claude/build-options"),
     import("@/lib/claude/run-and-capture"),
-    import("@/lib/claude/agents/dispatch-context-registry"),
+    import("@/lib/ai/agent/execution/delegation/dispatch-context-registry"),
   ])
 
   // Persistent-session mode (Package D): reuse an existing ChatSession and do
@@ -612,7 +612,7 @@ async function runToolEnabledStandalone(
   // permission ask re-buckets into the parent session (no race window).
   if (config.approvalRoute) {
     const { registerSubagentApprovalRoute } =
-      await import("@/lib/claude/agents/subagent-approval-routes")
+      await import("@/lib/ai/agent/execution/delegation/subagent-approval-routes")
     registerSubagentApprovalRoute(session.id, config.approvalRoute)
   }
   try {
@@ -873,7 +873,7 @@ async function runToolEnabledStandalone(
       // Clear AFTER the run settles; the drain's `permission_interrupted` for
       // orphaned asks re-buckets via the store's requestId fallback scan, so a
       // cleared route never strands the interrupt marker.
-      void import("@/lib/claude/agents/subagent-approval-routes")
+      void import("@/lib/ai/agent/execution/delegation/subagent-approval-routes")
         .then(({ clearSubagentApprovalRoute }) => clearSubagentApprovalRoute(session.id))
         .catch(() => undefined)
     }

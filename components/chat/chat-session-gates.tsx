@@ -46,8 +46,8 @@ export function ChatSessionGates({
           approval && useChatStore.getState().clearApproval(approval.requestId, sessionId)
         }
         onCancelRun={(runId) => {
-          void import("@/lib/claude/agents/cancel-subagent").then(({ cancelSubagentRun }) =>
-            cancelSubagentRun(runId)
+          void import("@/lib/ai/agent/execution/delegation/cancel-subagent").then(
+            ({ cancelSubagentRun }) => cancelSubagentRun(runId)
           )
         }}
       />

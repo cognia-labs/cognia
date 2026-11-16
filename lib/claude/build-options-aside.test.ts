@@ -27,7 +27,7 @@ import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
 import {
   __clearAllDispatchContextsForTesting,
   recordResolvedPermissionCeiling,
-} from "@/lib/claude/agents/dispatch-context-registry"
+} from "@/lib/ai/agent/execution/delegation/dispatch-context-registry"
 
 jest.mock("@/stores/agent/agent-runtime-store", () => ({
   ...jest.requireActual("@/stores/agent/agent-runtime-store"),

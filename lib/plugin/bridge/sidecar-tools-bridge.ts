@@ -20,7 +20,7 @@ import { buildAskUserManifestEntry } from "@/lib/ai/agent/execution/ask-user-too
 import {
   buildDispatchAgentManifestEntry,
   type DispatchAgentAvailableSubagent,
-} from "@/lib/claude/agents/dispatch-agent-tool"
+} from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"
 
 /**
  * Slack added to a tool's resolved resilience budget when it becomes the
