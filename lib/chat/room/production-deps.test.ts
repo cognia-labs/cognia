@@ -16,7 +16,7 @@ const ipc = {
 jest.mock("@/lib/policy/action-review/plan-tool-call", () => ({
   planOutboundAsk: jest.fn(async () => ({ answered: true })),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   sendPrompt: (...args: unknown[]) => ipc.sendPrompt(...(args as [])),
   interruptSession: (...args: unknown[]) => ipc.interruptSession(...(args as [])),
   closeSession: (...args: unknown[]) => ipc.closeSession(...(args as [])),

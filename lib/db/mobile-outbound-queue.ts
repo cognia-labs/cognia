@@ -199,7 +199,7 @@ export async function enqueueHostStateIntentIfAvailable(
   if (!target) return null
   const { local, db, assertActive, scope } = target
   if (input.action.kind === "approval.respond" && input.sessionId) {
-    const { peekRemoteApprovalContext } = await import("@/lib/claude/ipc")
+    const { peekRemoteApprovalContext } = await import("@/lib/ai/agent/execution/sidecar-client")
     assertActive()
     // The Host bound this pending ask to its original authenticated caller.
     // Enqueueing it lets Brain's service caller answer with that caller's

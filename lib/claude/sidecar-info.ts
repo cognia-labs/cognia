@@ -11,7 +11,7 @@
 "use client"
 
 import { useSyncExternalStore } from "react"
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import type { ReadyEvent } from "@cognia/agent-config-types"
 import { isTauri } from "@/lib/tauri"
 

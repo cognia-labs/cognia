@@ -45,7 +45,7 @@ async function runOnDesktopRemoteRoute<T>(
     })
   } finally {
     if (dispatched) {
-      const { closeSession } = await import("@/lib/claude/ipc")
+      const { closeSession } = await import("@/lib/ai/agent/execution/sidecar-client")
       await closeSession(sessionId).catch((error: unknown) => {
         log.warn("Host utility session close failed", {
           sessionId,

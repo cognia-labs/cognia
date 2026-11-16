@@ -1325,7 +1325,7 @@ fn bind_reservation_origin(mut args: Value, origin_device_id: &str) -> Value {
 
 /// The Router + Fusion envelope a refused reservation answer returns, from the
 /// registry's reason. Same `{ ok: false, error }` shape the brain's verdicts
-/// use, so the answering renderer (`callReserveDecision` in `lib/claude/ipc.ts`)
+/// use, so the answering renderer (`callReserveDecision` in `lib/ai/agent/execution/sidecar-client.ts`)
 /// learns that nothing reached the sidecar.
 fn reservation_answer_refusal(reason: &str) -> Value {
     let (status, code, message) = match reason {

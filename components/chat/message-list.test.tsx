@@ -250,8 +250,8 @@ jest.mock("@/lib/db/messages", () => ({
 }))
 
 const desktopDeleteMock = jest.fn(async (_sid: string, _mid: string) => undefined)
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
   deleteMessage: (sid: string, mid: string) => desktopDeleteMock(sid, mid),
 }))
 

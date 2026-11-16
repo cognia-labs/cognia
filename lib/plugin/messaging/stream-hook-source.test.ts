@@ -1,9 +1,9 @@
 import { bindToolCallRun } from "@/lib/execution/acting-authority"
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import { getPluginEventHooks } from "./hooks-system"
 import { installStreamHookSource } from "./stream-hook-source"
 import type { ClaudeEvent } from "@cognia/agent-config-types"
-jest.mock("@/lib/claude/ipc", () => ({ onClaudeMessage: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({ onClaudeMessage: jest.fn() }))
 jest.mock("./hooks-system", () => {
   const hooks = {
     dispatchStreamStart: jest.fn(),

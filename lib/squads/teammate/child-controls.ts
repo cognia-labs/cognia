@@ -49,7 +49,7 @@ export function externalSessionControl(
   }
 }
 
-/** The sidecar session surface (`lib/claude/ipc`). */
+/** The sidecar session surface (`lib/ai/agent/execution/sidecar-client`). */
 export interface SidecarSessionControls {
   steerSession(sessionId: string, message: string, sourceMessageId?: string): Promise<unknown>
   interruptSession(sessionId: string): Promise<void>

@@ -2417,7 +2417,7 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
       inputSchema: z.object({}),
       execute: tool,
     })
-    const { sendPrompt, closeSession } = await import("@/lib/claude/ipc")
+    const { sendPrompt, closeSession } = await import("@/lib/ai/agent/execution/sidecar-client")
     const nativeListeners = new Set<(event: unknown) => void>()
     const transportSubscribe = jest
       .spyOn(transport, "subscribe")

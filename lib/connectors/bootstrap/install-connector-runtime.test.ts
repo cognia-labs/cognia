@@ -45,7 +45,7 @@ jest.mock("@/lib/connectors/runtime", () => ({
 }))
 
 const mockSteerSession = jest.fn().mockResolvedValue({ accepted: true })
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   steerSession: (...args: unknown[]) => mockSteerSession(...args),
 }))
 

@@ -38,7 +38,7 @@ export async function withHostUtilitySession<T>(
     import("@/lib/sync/host-state-service"),
     import("@/lib/runtime/runtime-snapshot-store"),
     import("@/lib/tauri"),
-    import("@/lib/claude/ipc"),
+    import("@/lib/ai/agent/execution/sidecar-client"),
   ])
   assertCurrent()
   signal.throwIfAborted()

@@ -14,9 +14,11 @@ jest.mock("@/lib/claude/plugin-tool-dispatch-bridge", () => ({
       .subscribePluginToolDispatchBridge(...args),
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
-  sessionControl: jest.fn(jest.requireActual("@/lib/claude/ipc").sessionControl),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
+  sessionControl: jest.fn(
+    jest.requireActual("@/lib/ai/agent/execution/sidecar-client").sessionControl
+  ),
   steerSession: jest.fn(async () => ({ accepted: true })),
 }))
 
@@ -52,7 +54,7 @@ import type { UnifiedTurnParams, UnifiedTurnResult } from "../runtime/unified-ru
 
 import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
 import { createAgentRuntimeService } from "./runtime-service"
-import * as claudeIpc from "@/lib/claude/ipc"
+import * as claudeIpc from "@/lib/ai/agent/execution/sidecar-client"
 import type { AgentRpcServiceContext } from "./server"
 import { createAgentRpcServer } from "./server"
 import type { RecordingProxy, RecordedFixture } from "../../eval/replay/recording-proxy"

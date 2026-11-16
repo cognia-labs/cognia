@@ -12,7 +12,7 @@ import type { SendOptions } from "@cognia/agent-config-types"
 
 const sendPromptMock = jest.fn<Promise<void>, unknown[]>()
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   sendPrompt: (...args: unknown[]) => sendPromptMock(...args),
 }))
 

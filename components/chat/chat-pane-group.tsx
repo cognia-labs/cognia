@@ -16,7 +16,7 @@ import type { RecentSessionEntry } from "./empty-state"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { useChatStore } from "@/stores/chat"
 import type { ChatSession, SendContent } from "@cognia/agent-config-types"
-import type { RewindFilesResult } from "@/lib/claude/ipc"
+import type { RewindFilesResult } from "@/lib/ai/agent/execution/sidecar-client"
 import type { ChatTemplateRun } from "@/lib/chat/template/run"
 
 export interface ChatPaneGroupProps {

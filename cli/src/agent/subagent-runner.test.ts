@@ -28,7 +28,9 @@ jest.mock("@/lib/claude/run-and-capture", () => ({
     a2uiSurfaceOrder: [],
   })),
 }))
-jest.mock("@/lib/claude/ipc", () => ({ closeSession: jest.fn(async () => undefined) }))
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  closeSession: jest.fn(async () => undefined),
+}))
 jest.mock("../plugin/plugin-tool-dispatch", () => ({
   subscribePluginToolDispatch: jest.fn(async () => jest.fn()),
 }))
@@ -858,7 +860,9 @@ describe("runCliSubagent", () => {
   })
 
   it("falls back to the live sidecar collaborators (and defaultMintId) when deps are not injected", async () => {
-    const ipc = jest.requireMock("@/lib/claude/ipc") as { closeSession: jest.Mock }
+    const ipc = jest.requireMock("@/lib/ai/agent/execution/sidecar-client") as {
+      closeSession: jest.Mock
+    }
     const cap = jest.requireMock("@/lib/claude/run-and-capture") as {
       runAndCaptureAssistantReply: jest.Mock
     }

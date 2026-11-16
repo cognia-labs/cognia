@@ -1319,48 +1319,48 @@
       "evidence": "6c8518dea1249601"
     },
     {
-      "key": "components/providers/plugin-tool-dispatch-provider.tsx#sendPluginHookResponse@lib/claude/ipc.ts",
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#sendPluginHookResponse@lib/ai/agent/execution/sidecar-client.ts",
       "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
       "symbol": "sendPluginHookResponse",
-      "module": "lib/claude/ipc.ts",
+      "module": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
-      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:70 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:70 (lib/ai/agent/execution/sidecar-client.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
       "evidence": "3b9ea5f7b71bc056"
     },
     {
-      "key": "components/providers/plugin-tool-dispatch-provider.tsx#sendProtocolAdapterMessage@lib/claude/ipc.ts",
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#sendProtocolAdapterMessage@lib/ai/agent/execution/sidecar-client.ts",
       "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
       "symbol": "sendProtocolAdapterMessage",
-      "module": "lib/claude/ipc.ts",
+      "module": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
-      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:106 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:106 (lib/ai/agent/execution/sidecar-client.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
       "evidence": "6e716694f3c52634"
     },
     {
-      "key": "components/providers/plugin-tool-dispatch-provider.tsx#subscribePluginHookExec@lib/claude/ipc.ts",
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#subscribePluginHookExec@lib/ai/agent/execution/sidecar-client.ts",
       "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
       "symbol": "subscribePluginHookExec",
-      "module": "lib/claude/ipc.ts",
+      "module": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
-      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:64 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:64 (lib/ai/agent/execution/sidecar-client.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
       "evidence": "a9d2a69706727ada"
     },
     {
-      "key": "components/providers/plugin-tool-dispatch-provider.tsx#subscribeProtocolAdapterCancel@lib/claude/ipc.ts",
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#subscribeProtocolAdapterCancel@lib/ai/agent/execution/sidecar-client.ts",
       "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
       "symbol": "subscribeProtocolAdapterCancel",
-      "module": "lib/claude/ipc.ts",
+      "module": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
-      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:142 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:142 (lib/ai/agent/execution/sidecar-client.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
       "evidence": "e5e7213edfbb773b"
     },
     {
-      "key": "components/providers/plugin-tool-dispatch-provider.tsx#subscribeProtocolAdapterExec@lib/claude/ipc.ts",
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#subscribeProtocolAdapterExec@lib/ai/agent/execution/sidecar-client.ts",
       "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
       "symbol": "subscribeProtocolAdapterExec",
-      "module": "lib/claude/ipc.ts",
+      "module": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
-      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:104 (lib/claude/ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:104 (lib/ai/agent/execution/sidecar-client.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
       "evidence": "180da6feaef9aaa1"
     },
     {

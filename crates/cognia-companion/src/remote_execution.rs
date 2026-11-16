@@ -2844,13 +2844,13 @@ mod tests {
     /// Update them by re-reading that call site, never by relaxing the schema.
     #[test]
     fn real_client_payloads_pass_the_enforced_input_contract() {
-        // lib/claude/ipc.ts:80 — sendPrompt
+        // lib/ai/agent/execution/sidecar-client.ts — sendPrompt
         let cases: &[(&str, Value)] = &[
             (
                 "agent_send",
                 json!({ "sessionId": "session-a", "prompt": "hello", "options": {} }),
             ),
-            // lib/claude/ipc.ts:672 — approveTool
+            // lib/ai/agent/execution/sidecar-client.ts — approveTool
             (
                 "agent_resolve_permission",
                 json!({

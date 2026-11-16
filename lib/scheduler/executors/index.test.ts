@@ -6,7 +6,7 @@
  * handlers into the task scheduler. The chat-style runner is the bulk of the
  * surface here: it plumbs the same `resolveSendOptions` pipeline that the
  * interactive composer uses, with the payload's capability knobs passed in as
- * a grant, before handing off to `lib/claude/ipc.sendPrompt`.
+ * a grant, before handing off to `sendPrompt` (`lib/ai/agent/execution/sidecar-client.ts`).
  */
 
 // Host gating goes through `lib/scheduler/host-support` → `lib/platform/detect`
@@ -46,7 +46,7 @@ const ensureSidecarReadyMock = jest.fn(async () => ({ ready: true }))
 jest.mock("@/lib/native/local-runtime", () => ({
   ensureSidecarReady: () => ensureSidecarReadyMock(),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   sendPrompt: (sessionId: string, prompt: string, options?: unknown, delivery?: unknown) => {
     promptDeliveryMock(delivery)
     return sendPromptMock(sessionId, prompt, options)

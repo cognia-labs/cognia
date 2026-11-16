@@ -9,7 +9,7 @@ import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
  * headless brain, the mobile shell and a plain browser and fails with a
  * structured `unsupported-on-host` reason where the host lacks a capability.
  *
- *   - chat            → drives a Claude session via lib/claude/ipc.sendPrompt,
+ *   - chat            → drives a Claude session via sidecar-client sendPrompt,
  *                       feeding the SAME `resolveSendOptions` pipeline the
  *                       interactive composer uses (character / agent mode /
  *                       skills / allowed tools / MCP / built-in tools / …).
@@ -96,7 +96,12 @@ import { executePlanTask } from "./plan-executor"
 import { executeBotTask } from "./bot-executor"
 import { executeBackgroundCommandTask, executeMonitorTask } from "./background-job-executor"
 import { executeScript } from "../script-executor"
-import { sendPrompt, onClaudeMessage, interruptSession, approveTool } from "@/lib/claude/ipc"
+import {
+  sendPrompt,
+  onClaudeMessage,
+  interruptSession,
+  approveTool,
+} from "@/lib/ai/agent/execution/sidecar-client"
 import { ensureSidecarReady } from "@/lib/native/local-runtime"
 import {
   createUnattendedPermissionResponder,
@@ -1006,7 +1011,7 @@ async function runChatPrompt(
     // may already serve another turn, so its loop is never closed here.
     void delivery
       .catch(() => undefined)
-      .then(() => import("@/lib/claude/ipc"))
+      .then(() => import("@/lib/ai/agent/execution/sidecar-client"))
       .then(({ closeSession }) => closeSession(sessionId))
       .catch(() => undefined)
   }

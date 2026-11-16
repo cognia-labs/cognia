@@ -13,7 +13,7 @@ import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-in
 // This is the implementation of the P4 follow-up TODO that previously
 // lived in `hooks/chat/use-claude-chat.ts`.
 
-import { sendPrompt } from "@/lib/claude/ipc"
+import { sendPrompt } from "@/lib/ai/agent/execution/sidecar-client"
 import { createDiagnostic } from "@cognia/diagnostics"
 import { dispatchDiagnostic } from "@/lib/diagnostics/bus"
 import { useChatStore, type LastSendCacheEntry } from "@/stores/chat"

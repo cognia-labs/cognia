@@ -18,8 +18,8 @@ import { awaitSquadRunSettlement } from "@/lib/squads/squad/watch-squad-run"
 import type { AgentTeam } from "@/types/agent/agent-team"
 
 const mockLiveSidecarSessions = jest.fn<Promise<ReadonlySet<string> | undefined>, []>()
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
 }))
 jest.mock("@/lib/native/local-runtime", () => ({
   ...jest.requireActual("@/lib/native/local-runtime"),

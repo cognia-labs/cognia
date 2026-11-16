@@ -9,14 +9,14 @@ jest.mock("@/lib/runtime/runtime-snapshot-store", () => ({
   })),
 }))
 jest.mock("@/lib/tauri", () => ({ transport: {} }))
-jest.mock("@/lib/claude/ipc", () => ({ closeSession: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({ closeSession: jest.fn() }))
 
 import {
   awaitHostStateIntentSettlement,
   enqueueHostStateIntentIfAvailable,
 } from "@/lib/db/mobile-outbound-queue"
 import { hydrateHostStateSession } from "@/lib/sync/host-state-service"
-import { closeSession } from "@/lib/claude/ipc"
+import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
 import { withHostUtilitySession } from "./host-utility-session"
 

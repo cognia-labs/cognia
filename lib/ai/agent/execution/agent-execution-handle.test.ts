@@ -1,5 +1,5 @@
 import type { ResolvedAgentExecutionSpec } from "@cognia/agent-config-types/agent-execution"
-import * as claudeIpc from "@/lib/claude/ipc"
+import * as claudeIpc from "@/lib/ai/agent/execution/sidecar-client"
 
 import {
   AgentCapabilityError,

@@ -184,7 +184,7 @@ export function createBestOfNExecution(): BestOfNExecution {
         import("@/lib/db/settings"),
         import("@/lib/claude/build-options"),
         import("@/lib/claude/run-and-capture"),
-        import("@/lib/claude/ipc"),
+        import("@/lib/ai/agent/execution/sidecar-client"),
         import("@/lib/db/session-usage"),
       ])
       const character = await getCharacter(candidate.agent.agentId)
@@ -553,7 +553,7 @@ export function createBestOfNExecution(): BestOfNExecution {
       }
     },
     async stop(group) {
-      const { interruptSession } = await import("@/lib/claude/ipc")
+      const { interruptSession } = await import("@/lib/ai/agent/execution/sidecar-client")
       await Promise.all(
         group.candidates
           .filter((candidate) =>

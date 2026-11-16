@@ -122,7 +122,7 @@ jest.mock("@/lib/db/schema", () => ({
 }))
 
 const closeSessionIpcMock = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: (id: string) => closeSessionIpcMock(id),
 }))
 

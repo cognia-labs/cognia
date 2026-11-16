@@ -16,7 +16,7 @@
  * Shaped after `lib/mcp/log-bridge.ts`, which does the same for `mcp_log`.
  */
 
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import { isAgentTraceSpanEvent, type AgentTraceSpanEvent } from "@cognia/agent-config-types"
 import { emitFinishedSpan, providerNameFromId } from "@cognia/agent-trace"
 import type { AgentTraceSpan, SpanOperationName } from "@/types/agent-trace/span"

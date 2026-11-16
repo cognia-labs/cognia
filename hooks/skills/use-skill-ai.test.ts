@@ -13,7 +13,7 @@ const onClaudeUnsub = jest.fn()
 const sendPromptMock = jest.fn().mockResolvedValue(undefined)
 const closeSessionMock = jest.fn().mockResolvedValue(undefined)
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   onClaudeMessage: jest.fn(async (cb: (evt: unknown) => void) => {
     onMessageCallback = cb
     return onClaudeUnsub

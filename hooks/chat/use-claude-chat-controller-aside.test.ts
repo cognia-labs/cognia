@@ -45,8 +45,8 @@ jest.mock("./claude-chat-send-options", () => ({
     contentSafety: { injectionProtection: false },
   })),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
   onClaudeMessage: jest.fn(async () => () => {}),
   turnsRunOnPairedHost: jest.fn(() => false),
 }))

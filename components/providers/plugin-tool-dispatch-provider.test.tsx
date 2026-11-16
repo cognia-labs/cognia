@@ -1,6 +1,6 @@
 import { render, waitFor } from "@testing-library/react"
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   subscribePluginToolExec: jest.fn(),
   sendPluginToolResponse: jest.fn(),
   subscribePluginHookExec: jest.fn().mockResolvedValue(() => {}),
@@ -41,7 +41,7 @@ import {
   subscribeProtocolAdapterExec,
   subscribeProtocolAdapterCancel,
   sendProtocolAdapterMessage,
-} from "@/lib/claude/ipc"
+} from "@/lib/ai/agent/execution/sidecar-client"
 import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
 import { handlePluginHookExec } from "@/lib/plugin/messaging/agent-hook-ipc"
 import { dispatchProtocolAdapterExec } from "@/lib/plugin/bridge/protocol-adapter-ipc"

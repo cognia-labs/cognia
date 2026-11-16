@@ -3,7 +3,7 @@
 /**
  * Live in-session MCP client health for the active chat session, driven by the
  * Claude Agent SDK's `mcpServerStatus()` control method (see
- * `lib/claude/ipc.ts:getSessionMcpStatus`). Complements the per-server
+ * `lib/ai/agent/execution/sidecar-client.ts:getSessionMcpStatus`). Complements the per-server
  * config-time sidecar discovery: that asks "is this config valid?"; this
  * shows "what the running agent session actually sees right now" — including the
  * in-process cognia / a2ui / plugin servers that have no `McpServer` row — and
@@ -35,7 +35,7 @@ import {
   getSessionMcpStatus,
   reconnectSessionMcpServer,
   toggleSessionMcpServer,
-} from "@/lib/claude/ipc"
+} from "@/lib/ai/agent/execution/sidecar-client"
 import type { SdkMcpServerStatus } from "@cognia/agent-config-types"
 import { mcpServerLogsHref, useMcpServerLogs } from "@/hooks/mcp/use-mcp-server-logs"
 

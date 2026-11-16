@@ -30,7 +30,7 @@ import {
   capturedTurnOf,
 } from "@/lib/policy/action-review/captured-turns"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
-import type { approveTool } from "./ipc"
+import type { approveTool } from "@/lib/ai/agent/execution/sidecar-client"
 import type { AppSettings, ClaudeEvent, PermissionRequestEvent } from "@cognia/agent-config-types"
 import { __resetFusionScopesForTesting } from "@/lib/router-fusion/gate/explicit-run"
 import {
@@ -86,11 +86,11 @@ const subscribeAgentEventsMock = jest.fn()
 const subscribeRouteMock = jest.fn()
 const interruptRouteMock = jest.fn()
 const settleRouteMock = jest.fn()
-jest.mock("./execution-route", () => ({
-  ...jest.requireActual("./execution-route"),
+jest.mock("@/lib/ai/agent/execution/execution-route", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/execution-route"),
   settleSessionExecutionRoute: (...args: unknown[]) => settleRouteMock(...args),
 }))
-jest.mock("./ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   // A delivery hint is forwarded only when given, so the many three-argument
   // call assertions keep describing the default send.
   sendPrompt: (sessionId: string, prompt: unknown, options?: unknown, delivery?: unknown) =>
@@ -3244,7 +3244,9 @@ describe("durable local executor stop evidence", () => {
     async (mode) => {
       const { createDurableTeamCoordinator } = await import("@/lib/squads/durable/durable-runtime")
       const { beginDurableDispatch } = await import("@/lib/squads/durable/durable-dispatch")
-      const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
+      const ipc = jest.requireActual<typeof import("@/lib/ai/agent/execution/sidecar-client")>(
+        "@/lib/ai/agent/execution/sidecar-client"
+      )
       const { transport } = await import("@/lib/tauri")
       const coordinator = createDurableTeamCoordinator()
       const team = {
@@ -3375,7 +3377,9 @@ describe("durable local executor stop evidence", () => {
   it.each(["before-receipt", "after-receipt"] as const)(
     "does not prove an in-flight native send stopped on exit; waits for runtime disposal %s",
     async (end) => {
-      const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
+      const ipc = jest.requireActual<typeof import("@/lib/ai/agent/execution/sidecar-client")>(
+        "@/lib/ai/agent/execution/sidecar-client"
+      )
       const { transport } = await import("@/lib/tauri")
       let accept!: () => void
       let dispatched!: () => void
@@ -3442,7 +3446,9 @@ describe("durable local executor stop evidence", () => {
   )
 
   it("cancels pending admission before proving a pre-acceptance sidecar exit", async () => {
-    const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
+    const ipc = jest.requireActual<typeof import("@/lib/ai/agent/execution/sidecar-client")>(
+      "@/lib/ai/agent/execution/sidecar-client"
+    )
     const { transport } = await import("@/lib/tauri")
     let release!: () => void
     let entered!: () => void
@@ -3497,7 +3503,9 @@ describe("durable local executor stop evidence", () => {
       const { beginDurableDispatch } = await import("@/lib/squads/durable/durable-dispatch")
       const { controlDurableRun } = await import("@/lib/squads/durable/durable-control")
       const { transport } = await import("@/lib/tauri")
-      const ipc = jest.requireActual<typeof import("./ipc")>("./ipc")
+      const ipc = jest.requireActual<typeof import("@/lib/ai/agent/execution/sidecar-client")>(
+        "@/lib/ai/agent/execution/sidecar-client"
+      )
       const coordinator = createDurableTeamCoordinator()
       const team = {
         id: "never-started-team",

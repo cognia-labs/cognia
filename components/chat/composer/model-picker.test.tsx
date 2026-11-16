@@ -54,8 +54,8 @@ jest.mock("@/lib/platform/capabilities", () => {
 const mockHostProfile = detectHostProfile as jest.MockedFunction<typeof detectHostProfile>
 const mockSetSessionModel = jest.fn(async (..._a: unknown[]): Promise<void> => undefined)
 const mockCloseSession = jest.fn(async (..._a: unknown[]): Promise<void> => undefined)
-jest.mock("@/lib/claude/ipc", () => {
-  const actual = jest.requireActual("@/lib/claude/ipc")
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => {
+  const actual = jest.requireActual("@/lib/ai/agent/execution/sidecar-client")
   return {
     ...actual,
     setSessionModel: (...a: unknown[]) => mockSetSessionModel(...a),

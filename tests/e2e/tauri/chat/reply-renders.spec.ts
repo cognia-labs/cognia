@@ -3,7 +3,7 @@
  * rendered assistant bubble.
  *
  * This is the single most important product path and had ZERO automated
- * coverage before this spec: the web specs stub `@/lib/claude/ipc`, the
+ * coverage before this spec: the web specs stub `@/lib/ai/agent/execution/sidecar-client`, the
  * Jest "main-flow" integration test hand-fakes the SDK event shapes, and the
  * other Tauri chat spec asserts only a workflow run row (never an assistant
  * reply). Here the REAL sidecar is spawned by Rust on `agent_send`, runs the

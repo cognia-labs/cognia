@@ -69,7 +69,7 @@ import {
 } from "@/lib/background-tasks/job-settlement"
 import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
 import { resolveRootSessionId } from "@/lib/ai/agent/team/root-session"
-import { approveTool, toolResultDecision } from "@/lib/claude/ipc"
+import { approveTool, toolResultDecision } from "@/lib/ai/agent/execution/sidecar-client"
 import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 import { releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
 import { attachTwinProvenanceToLastAssistant } from "@/lib/twin/export-provenance"

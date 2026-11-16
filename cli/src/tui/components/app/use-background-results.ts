@@ -11,7 +11,7 @@ import {
   outboxRecordFromJobExit,
 } from "@/lib/background-tasks/job-settlement"
 import { WakeLimiter } from "@/lib/background-tasks/wake-policy"
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import {
   listPendingCliBackgroundDeliveries,
   markCliBackgroundDelivery,

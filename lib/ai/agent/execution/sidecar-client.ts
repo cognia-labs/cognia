@@ -76,7 +76,7 @@ import {
   resolveApproval as resolveLocalApproval,
 } from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { stableHash } from "@/lib/notifications/result/materiality"
-import { abortPluginToolCallsForSession } from "./plugin-tool-dispatch-bridge"
+import { abortPluginToolCallsForSession } from "@/lib/claude/plugin-tool-dispatch-bridge"
 
 const SIDECAR_EVENT = "claude://message"
 /** Canonical agent-event channel (ADR-0090 Phase 3). */
@@ -753,7 +753,7 @@ async function reserveTurnBudget(
     ...(budget.tokens !== undefined ? { tokens: budget.tokens } : {}),
     ...(budget.deadlineAt !== undefined ? { deadlineAt: budget.deadlineAt } : {}),
   }
-  const { extractUsage } = await import("./adapter")
+  const { extractUsage } = await import("@/lib/claude/adapter")
   let usage: import("@/lib/execution/run-budget-rail").MeteredUsage | undefined
   let executorId: string | undefined
   const interrupt = () =>

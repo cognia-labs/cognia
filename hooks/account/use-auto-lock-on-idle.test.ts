@@ -30,7 +30,7 @@ jest.mock("@/stores/chat/chat-store", () => ({
 }))
 
 const interruptSessionMock = jest.fn<Promise<void>, [string]>()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   interruptSession: (sessionId: string) => interruptSessionMock(sessionId),
 }))
 

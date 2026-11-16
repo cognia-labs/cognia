@@ -3,7 +3,7 @@
 // `../builtin.ts`.
 
 import type { SlashContext } from "../builtin"
-import { compactSession } from "@/lib/claude/ipc"
+import { compactSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { hasApiKey, hasOauthBearer } from "@/lib/ai/providers/sidecar-credentials"
 import { getSidecarStatus } from "@/lib/native/local-runtime"
 import { getSession } from "@/lib/db/sessions"

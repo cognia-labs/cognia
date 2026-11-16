@@ -19,7 +19,7 @@ jest.mock("@cognia/logging", () => ({
 }))
 
 const onClaudeMessage = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   onClaudeMessage: (...args: unknown[]) => onClaudeMessage(...args),
 }))
 

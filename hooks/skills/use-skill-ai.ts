@@ -2,7 +2,7 @@
 
 import { useCallback, useRef } from "react"
 import { resolveSendOptions } from "@/lib/claude/build-options"
-import { closeSession, onClaudeMessage, sendPrompt } from "@/lib/claude/ipc"
+import { closeSession, onClaudeMessage, sendPrompt } from "@/lib/ai/agent/execution/sidecar-client"
 import { isTauri } from "@/lib/tauri"
 import { buildAiSystemPrompt, buildAiUserPrompt, type AiIntent } from "@/lib/skills/ai-prompts"
 import { useSettingsStore } from "@/stores/settings"

@@ -240,7 +240,7 @@ import { useSyncExternalStore } from "react"
 import { PerfBoundary } from "@/lib/perf"
 import { useAgentFileAutoFollow } from "@/hooks/agent/use-agent-file-auto-follow"
 import { CheckpointAction } from "@/components/chat/checkpoint-action"
-import type { RewindFilesResult } from "@/lib/claude/ipc"
+import type { RewindFilesResult } from "@/lib/ai/agent/execution/sidecar-client"
 
 /**
  * Reveal policy for a control group that is hidden until hover.

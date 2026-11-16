@@ -6,13 +6,13 @@ import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { getWorkSubmission } from "@/lib/db/work-submissions"
 
 import { acceptWorkSubmission, bindWorkExecutionContext } from "./service"
-import { TranscriptRuntimeRecoveryError } from "@/lib/claude/ipc"
+import { TranscriptRuntimeRecoveryError } from "@/lib/ai/agent/execution/sidecar-client"
 import { createStoredChatDispatch } from "./stored-chat-dispatch"
 import type { WorkAttachmentRefV1 } from "@cognia/agent-config-types/work-submission"
 
 const mockSendPrompt = jest.fn(async (..._args: unknown[]) => undefined)
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   sendPrompt: (...args: unknown[]) => mockSendPrompt(...args),
   // The transport's real module re-enters this mock through the plugin bridge.
   // Keep its typed error at the mocked transport boundary without loading IPC.

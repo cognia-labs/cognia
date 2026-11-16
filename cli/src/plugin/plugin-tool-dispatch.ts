@@ -8,7 +8,7 @@
  * resolves the tool in the live plugin registry and executes it — the SAME path
  * the desktop uses) and write the result back with `sendPluginToolResponse`.
  *
- * Reuses `lib/claude/ipc` + `lib/plugin/bridge/agent-tool-dispatch` verbatim over the CLI's
+ * Reuses `lib/ai/agent/execution/sidecar-client` + `lib/plugin/bridge/agent-tool-dispatch` verbatim over the CLI's
  * StdioTransport (already installed by the sidecar bootstrap). The subscribe /
  * handle / send seams are injectable so the wiring unit-tests without a sidecar.
  */
@@ -16,7 +16,10 @@ import {
   subscribePluginToolDispatchBridge,
   type PluginToolDispatchBridgeDeps,
 } from "@/lib/claude/plugin-tool-dispatch-bridge"
-import { subscribePluginHookExec, sendPluginHookResponse } from "@/lib/claude/ipc"
+import {
+  subscribePluginHookExec,
+  sendPluginHookResponse,
+} from "@/lib/ai/agent/execution/sidecar-client"
 import { handlePluginHookExec } from "@/lib/plugin/messaging/agent-hook-ipc"
 import { loggers } from "@cognia/logging"
 import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"

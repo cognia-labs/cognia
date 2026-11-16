@@ -4,7 +4,7 @@ import type { AgentTraceSpanEvent, ClaudeEvent } from "@cognia/agent-config-type
 const listeners: Array<(evt: ClaudeEvent) => void> = []
 const unlistenMock = jest.fn()
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   onClaudeMessage: (fn: (evt: ClaudeEvent) => void) => {
     listeners.push(fn)
     return Promise.resolve(unlistenMock)

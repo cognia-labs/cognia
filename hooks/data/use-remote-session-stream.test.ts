@@ -47,13 +47,13 @@ const sendPromptMock = jest.fn().mockResolvedValue(undefined)
 const interruptMock = jest.fn().mockResolvedValue(undefined)
 const approveToolMock = jest.fn().mockResolvedValue(undefined)
 const enqueueHostStateIntentMock = jest.fn().mockResolvedValue(null)
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   rememberRemoteApprovalContext: jest.fn(),
   sendPrompt: (...a: unknown[]) => sendPromptMock(...a),
   interruptSession: (...a: unknown[]) => interruptMock(...a),
   approveTool: (...a: unknown[]) => approveToolMock(...a),
 }))
-import { rememberRemoteApprovalContext } from "@/lib/claude/ipc"
+import { rememberRemoteApprovalContext } from "@/lib/ai/agent/execution/sidecar-client"
 const withdrawUnsentMock = jest.fn().mockResolvedValue([])
 jest.mock("@/lib/db/mobile-outbound-queue", () => ({
   enqueueHostStateIntentIfAvailable: (...args: unknown[]) => enqueueHostStateIntentMock(...args),

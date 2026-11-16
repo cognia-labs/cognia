@@ -14,7 +14,7 @@ jest.mock("@/lib/db/execution-runs", () => ({
         (!query.kinds || query.kinds.includes(run.kind))
     ),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   steerSession: (...args: unknown[]) => mockSteerSession(...args),
 }))
 

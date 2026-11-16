@@ -2,7 +2,7 @@
 import type { AgentEventEnvelope } from "@cognia/agent-config-types/agent-execution"
 
 const subscribeAgentEventsMock = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   subscribeAgentEvents: (...a: unknown[]) => subscribeAgentEventsMock(...a),
 }))
 const journalListeners = new Set<(envelopes: readonly AgentEventEnvelope[]) => void>()

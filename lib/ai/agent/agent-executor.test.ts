@@ -35,8 +35,10 @@ import { createSession, getSession, deleteSession, setSdkSessionId } from "@/lib
 import { getSettings } from "@/lib/db/settings"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
-import { closeSession } from "@/lib/claude/ipc"
-jest.mock("@/lib/claude/ipc", () => ({ closeSession: jest.fn(async () => undefined) }))
+import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  closeSession: jest.fn(async () => undefined),
+}))
 import { buildRoutingEngine } from "@cognia/provider-routing/build-preview-engine"
 import {
   abortableStreamModel,

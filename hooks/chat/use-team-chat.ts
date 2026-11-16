@@ -36,7 +36,7 @@ import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { toDiagnostic } from "@/lib/diagnostics/to-diagnostic"
 import { createDiagnostic } from "@cognia/diagnostics"
 import type { TurnRoute } from "@/lib/chat/turn-route/types"
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import { makeUserMessage } from "@/lib/claude/adapter"
 import type {
   ApprovalDecision,

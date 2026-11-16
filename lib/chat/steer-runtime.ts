@@ -7,7 +7,7 @@
  * are two delivery lanes, and this module owns the bookkeeping for both:
  *
  *  • **live** — the Anthropic sidecar accepts a message into the running
- *    query's streaming input (`lib/claude/ipc.ts` `steerSession`). The turn is
+ *    query's streaming input (`lib/ai/agent/execution/sidecar-client.ts` `steerSession`). The turn is
  *    never restarted and nothing is discarded.
  *  • **queued** — every other provider/phase (and Anthropic once that query
  *    closed its input) holds the message here and replays it as a fresh,

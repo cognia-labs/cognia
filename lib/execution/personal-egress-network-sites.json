@@ -2737,65 +2737,65 @@
       ]
     },
     {
-      "key": "lib/claude/ipc.ts::interruptSession::network::a47e5d7967c4:1",
-      "file": "lib/claude/ipc.ts",
+      "key": "lib/ai/agent/execution/sidecar-client.ts::interruptSession::network::a47e5d7967c4:1",
+      "file": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "interruptSession",
       "kind": "network",
       "primitive": "transport.call",
       "line": 673,
       "lexicalGate": null,
       "classification": "host-system",
-      "authority": "lib/claude/ipc.ts#interruptSession",
+      "authority": "lib/ai/agent/execution/sidecar-client.ts#interruptSession",
       "reason": "Interrupt only cancels an existing engine/session; fixed control command carries no arbitrary egress content.",
-      "basis": ["lib/claude/ipc.ts#interruptSession"]
+      "basis": ["lib/ai/agent/execution/sidecar-client.ts#interruptSession"]
     },
     {
-      "key": "lib/claude/ipc.ts::compactSession::network::8eb0695c502d:1",
-      "file": "lib/claude/ipc.ts",
+      "key": "lib/ai/agent/execution/sidecar-client.ts::compactSession::network::8eb0695c502d:1",
+      "file": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "compactSession",
       "kind": "network",
       "primitive": "transport.call",
       "line": 701,
       "lexicalGate": null,
       "classification": "host-system",
-      "authority": "lib/claude/ipc.ts#compactSession; lib/claude/ipc.ts#assertPersonalControlVisibility",
+      "authority": "lib/ai/agent/execution/sidecar-client.ts#compactSession; lib/ai/agent/execution/sidecar-client.ts#assertPersonalControlVisibility",
       "reason": "Compaction is an engine context/model control operation; current visibility/control-content checks precede its fixed IPC command.",
       "basis": [
-        "lib/claude/ipc.ts#compactSession",
-        "lib/claude/ipc.ts#assertPersonalControlVisibility"
+        "lib/ai/agent/execution/sidecar-client.ts#compactSession",
+        "lib/ai/agent/execution/sidecar-client.ts#assertPersonalControlVisibility"
       ]
     },
     {
-      "key": "lib/claude/ipc.ts::sidecarRoundTrip::network::df15e87929b2:1",
-      "file": "lib/claude/ipc.ts",
+      "key": "lib/ai/agent/execution/sidecar-client.ts::sidecarRoundTrip::network::df15e87929b2:1",
+      "file": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "sidecarRoundTrip",
       "kind": "network",
       "primitive": "transport.call",
       "line": 885,
       "lexicalGate": null,
       "classification": "host-system",
-      "authority": "lib/claude/ipc.ts#sidecarRoundTrip; lib/claude/ipc.ts#sessionControlRequest; lib/ai/agent/execution/claude-session-api.ts#sessionApi; lib/claude/ipc.ts#steerSession; lib/ai/agent/execution/agent-execution-handle.ts#createAgentExecutionHandle",
+      "authority": "lib/ai/agent/execution/sidecar-client.ts#sidecarRoundTrip; lib/ai/agent/execution/sidecar-client.ts#sessionControlRequest; lib/ai/agent/execution/claude-session-api.ts#sessionApi; lib/ai/agent/execution/sidecar-client.ts#steerSession; lib/ai/agent/execution/agent-execution-handle.ts#createAgentExecutionHandle",
       "reason": "sidecarRoundTrip is used only by sessionControlRequest and sessionApi for SDK control/session-history operations. Prompt steering is the fixed model channel: steerSession validates deep PII/content and personal visibility, and beforeDispatch rechecks steer visibility. Other callers are UI/CLI SDK controls, not run-tool dispatch.",
       "basis": [
-        "lib/claude/ipc.ts#sidecarRoundTrip",
-        "lib/claude/ipc.ts#sessionControlRequest",
+        "lib/ai/agent/execution/sidecar-client.ts#sidecarRoundTrip",
+        "lib/ai/agent/execution/sidecar-client.ts#sessionControlRequest",
         "lib/ai/agent/execution/claude-session-api.ts#sessionApi",
-        "lib/claude/ipc.ts#steerSession",
+        "lib/ai/agent/execution/sidecar-client.ts#steerSession",
         "lib/ai/agent/execution/agent-execution-handle.ts#createAgentExecutionHandle"
       ]
     },
     {
-      "key": "lib/claude/ipc.ts::callReserveDecision>answer::network::13603ec4a5a5:1",
-      "file": "lib/claude/ipc.ts",
+      "key": "lib/ai/agent/execution/sidecar-client.ts::callReserveDecision>answer::network::13603ec4a5a5:1",
+      "file": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "callReserveDecision>answer",
       "kind": "network",
       "primitive": "transport.call",
       "line": 1533,
       "lexicalGate": null,
       "classification": "host-system",
-      "authority": "lib/claude/ipc.ts#callReserveDecision>answer",
+      "authority": "lib/ai/agent/execution/sidecar-client.ts#callReserveDecision>answer",
       "reason": "Router/Fusion reserve allow/deny response completes an already parked reservation; it is fixed control-plane traffic.",
-      "basis": ["lib/claude/ipc.ts#callReserveDecision>answer"]
+      "basis": ["lib/ai/agent/execution/sidecar-client.ts#callReserveDecision>answer"]
     },
     {
       "key": "lib/native/agent-config.ts::readProjectMcpConfig::network::cb032dabce4c:1",

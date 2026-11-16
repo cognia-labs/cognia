@@ -1,6 +1,6 @@
 import { toolCallEgressRunId } from "@/lib/execution/acting-authority"
 import type { PersonalCredentialContext } from "@/lib/execution/personal-credential"
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import type { ClaudeEvent } from "@cognia/agent-config-types"
 import { getPluginEventHooks } from "./hooks-system"
 

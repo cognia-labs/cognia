@@ -53,7 +53,7 @@ import {
 } from "@/lib/chat/restore-point"
 import { getCodeAdoptionTurnForMessage } from "@/lib/code-adoption/persist"
 import { getTaskPatchSet, undoTaskWorkspace } from "@/lib/task-workspace/client"
-import type { RewindFilesResult } from "@/lib/claude/ipc"
+import type { RewindFilesResult } from "@/lib/ai/agent/execution/sidecar-client"
 import { selectVisibleMessages, useChatStore } from "@/stores/chat"
 
 export interface RestorePointDialogProps {

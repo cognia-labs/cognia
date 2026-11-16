@@ -1,4 +1,6 @@
-jest.mock("@/lib/claude/ipc", () => ({ callReserveDecision: jest.fn(async () => undefined) }))
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  callReserveDecision: jest.fn(async () => undefined),
+}))
 
 import type { ClaudeEvent } from "@cognia/agent-config-types"
 

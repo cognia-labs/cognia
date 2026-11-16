@@ -60,7 +60,7 @@ import { useEffect, useRef } from "react"
 
 import { unlocksWithoutPrompt } from "@/lib/accounts/desktop-local-account"
 import { isAccountGateForced } from "@/lib/accounts/dev-auto-unlock"
-import { interruptSession } from "@/lib/claude/ipc"
+import { interruptSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-role"
 import { useAccountStore } from "@/stores/account/account-store"
 import { useChatStore } from "@/stores/chat/chat-store"

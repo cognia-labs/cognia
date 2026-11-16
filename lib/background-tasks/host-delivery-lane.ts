@@ -229,7 +229,7 @@ async function defaultTurnDeps(): Promise<HostAutomatedTurnDeps> {
         await Promise.all([
           import("@/hooks/chat/claude-chat-send-options"),
           import("@/lib/chat/transcript/revision-events"),
-          import("@/lib/claude/ipc"),
+          import("@/lib/ai/agent/execution/sidecar-client"),
         ])
       await withTranscriptRuntimeLock(sessionId, async () => {
         const prepared = await prepareTranscriptRuntimeSend(sessionId, options, {

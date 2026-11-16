@@ -88,7 +88,7 @@ jest.mock("@/lib/squads/durable/durable-control", () => ({
 const mockSteerSession = jest.fn(async (_sessionId: string, _prompt: unknown) => ({
   accepted: true as const,
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   steerSession: (...args: unknown[]) =>
     mockSteerSession(...(args as Parameters<typeof mockSteerSession>)),
 }))

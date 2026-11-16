@@ -1,6 +1,6 @@
 import type { SendContent, SendOptions } from "@cognia/agent-config-types"
 
-import { sendPrompt, TranscriptRuntimeRecoveryError } from "@/lib/claude/ipc"
+import { sendPrompt, TranscriptRuntimeRecoveryError } from "@/lib/ai/agent/execution/sidecar-client"
 import { getWorkSubmissionBundle, type WorkSubmissionRow } from "@/lib/db/work-submissions"
 import { abortRouterFusionSend, prepareRouterFusionSend } from "@/lib/router-fusion/gate/chat-send"
 import { enforceCostBudget, isCostBudgetConfigured } from "@/lib/usage/cost-budget-gate"

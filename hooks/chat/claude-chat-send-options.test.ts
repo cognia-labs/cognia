@@ -15,7 +15,10 @@ import { getSession, updateSession } from "@/lib/db/sessions"
 import { listMessages } from "@/lib/db/messages"
 import { invalidateTranscriptRuntime } from "@/lib/chat/transcript/revision-events"
 import { getDb } from "@/lib/db/schema"
-import { sessionControl, mcpRuntimeConfigurationMatches } from "@/lib/claude/ipc"
+import {
+  sessionControl,
+  mcpRuntimeConfigurationMatches,
+} from "@/lib/ai/agent/execution/sidecar-client"
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { getSettings } from "@/lib/db/settings"
 import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
@@ -55,7 +58,7 @@ jest.mock("@/stores/agent/agent-runtime-store", () => ({
   runtimeRefForSession: jest.fn(() => ({ kind: "builtin" })),
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   sessionControl: jest.fn(),
   mcpRuntimeConfigurationMatches: jest.fn(() => true),
 }))

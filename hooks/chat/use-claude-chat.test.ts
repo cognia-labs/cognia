@@ -219,7 +219,7 @@ jest.mock("@/lib/policy/action-review/chat-tool-channel", () => {
   }
 })
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   mcpRuntimeConfigurationMatches: jest.fn(() => true),
   approveTool: (...a: unknown[]) => approveToolMock(...a),
   closeSession: (id: string) => closeSessionIpcMock(id),

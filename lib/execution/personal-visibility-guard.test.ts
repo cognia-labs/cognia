@@ -160,7 +160,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/claude/agents/dispatch-agent-handler.ts": "preparePersonalDerivedHistory:1",
   "lib/claude/build-options.ts":
     "preparePersonalDerivedHistory:1;preparePersonalHistory:2;resume:forkFromSessionId:2;resume:forkedFromSdkSessionId:6;resume:resumeSessionId:2;resume:sdkSessionId:4;withPersonalMemoryVisibility:1;withPersonalRerankerVisibility:1",
-  "lib/claude/ipc.ts":
+  "lib/ai/agent/execution/sidecar-client.ts":
     "listMessages:1;preparePersonalHistory:1;resume:expectedRuntimeSessionId:2;resume:forkFromSessionId:1;resume:initialConversation:6;resume:resumeSessionId:1",
   "lib/ai/agent/execution/permissions/command-judge.ts": "complete:1",
   "lib/claude/run-and-capture.ts":
@@ -578,7 +578,7 @@ function digestComparisonCount(text: string): number {
 it("requires an actual digest comparison before retaining each engine's opaque memory", () => {
   const engines = [
     "hooks/chat/claude-chat-send-options.ts",
-    "lib/claude/ipc.ts",
+    "lib/ai/agent/execution/sidecar-client.ts",
     "hooks/chat/use-claude-chat-controller.ts",
     "cli/src/agent/session-runner.ts",
     "cli/src/agent/external-agent-session.ts",
@@ -717,7 +717,7 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "buildPersonalAsideContext",
     "personalVisibilityDigest",
   ],
-  "lib/claude/ipc.ts": [
+  "lib/ai/agent/execution/sidecar-client.ts": [
     "preparePersonalHistory",
     "assertPersonalVisibilityDigest",
     "personalVisibilityDigest",

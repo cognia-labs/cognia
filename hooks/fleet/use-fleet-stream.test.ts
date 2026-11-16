@@ -15,7 +15,7 @@ jest.mock("@/lib/tauri/fleet", () => ({
 }))
 
 const canonicalUnlistenMock = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   subscribeAgentEvents: () => Promise.resolve(canonicalUnlistenMock),
 }))
 

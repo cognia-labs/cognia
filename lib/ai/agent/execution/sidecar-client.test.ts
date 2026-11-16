@@ -15,7 +15,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { createExecutionRun, listExecutionRunEvents } from "@/lib/db/execution-runs"
 import { getDb } from "@/lib/db/schema"
 import { getActionReviewReceipt } from "@/lib/db/action-review-receipts"
-import { abortPluginToolCallsForSession } from "./plugin-tool-dispatch-bridge"
+import { abortPluginToolCallsForSession } from "@/lib/claude/plugin-tool-dispatch-bridge"
 import { __resetChatToolReviewsForTesting } from "@/lib/policy/action-review/chat-tool-channel"
 import {
   __resetAuthorizedToolCallsForTesting,
@@ -24,7 +24,9 @@ import {
 } from "@/lib/policy/action-review/authorized-tool-calls"
 
 const mockRecordToolAuthorizationGovernance = jest.fn().mockResolvedValue("decision-1")
-jest.mock("./plugin-tool-dispatch-bridge", () => ({ abortPluginToolCallsForSession: jest.fn() }))
+jest.mock("@/lib/claude/plugin-tool-dispatch-bridge", () => ({
+  abortPluginToolCallsForSession: jest.fn(),
+}))
 const mockReportGovernanceProjectionFailure = jest.fn().mockResolvedValue(undefined)
 jest.mock("@/lib/governance/producers/tool-authorization", () => ({
   recordToolAuthorizationGovernance: (...args: unknown[]) =>
@@ -109,7 +111,7 @@ import {
   steerSession,
   subscribePluginToolExec,
   updateMessage,
-} from "./ipc"
+} from "./sidecar-client"
 import {
   ExecutionRouteChangedError,
   IDLE_ROUTE_RETENTION_MS,
@@ -1891,7 +1893,8 @@ describe("getMessagesBySession", () => {
       nextPageToken: "bzoxNTA",
     }
     callSpy.mockResolvedValueOnce(response)
-    const { getMessagesBySession } = require("./ipc") as typeof import("./ipc")
+    const { getMessagesBySession } =
+      require("./sidecar-client") as typeof import("./sidecar-client")
     const page = await getMessagesBySession("s1", { pageSize: 50, pageToken: "bzoxMDA" })
     expect(page).toEqual(response)
     expect(page.items[0]).toEqual(
@@ -1906,7 +1909,8 @@ describe("getMessagesBySession", () => {
 
   it("works without pagination args", async () => {
     callSpy.mockResolvedValueOnce({ items: [], total: 0 })
-    const { getMessagesBySession } = require("./ipc") as typeof import("./ipc")
+    const { getMessagesBySession } =
+      require("./sidecar-client") as typeof import("./sidecar-client")
     await getMessagesBySession("s1")
     expect(callSpy).toHaveBeenCalledWith("message_get_by_session", {
       session_id: "s1",
@@ -1917,7 +1921,8 @@ describe("getMessagesBySession", () => {
 describe("sendMessageFromMobile", () => {
   it("forwards session_id / content / role and returns the result", async () => {
     callSpy.mockResolvedValueOnce({ ok: true, messageId: "m-new" })
-    const { sendMessageFromMobile } = require("./ipc") as typeof import("./ipc")
+    const { sendMessageFromMobile } =
+      require("./sidecar-client") as typeof import("./sidecar-client")
     const result = await sendMessageFromMobile("s1", "hello", "user")
     expect(result).toEqual({ ok: true, messageId: "m-new" })
     expect(callSpy).toHaveBeenCalledWith("message_send", {
@@ -1929,7 +1934,8 @@ describe("sendMessageFromMobile", () => {
 
   it("omits role when caller doesn't pass it", async () => {
     callSpy.mockResolvedValueOnce({ ok: true })
-    const { sendMessageFromMobile } = require("./ipc") as typeof import("./ipc")
+    const { sendMessageFromMobile } =
+      require("./sidecar-client") as typeof import("./sidecar-client")
     await sendMessageFromMobile("s1", "hello")
     expect(callSpy).toHaveBeenCalledWith("message_send", {
       session_id: "s1",
@@ -2215,7 +2221,7 @@ it("refuses a desktop dispatch without restarting a capture-owned engine", async
 })
 
 it("tracks credential maps only after dispatch and forgets them on close", async () => {
-  const { mcpRuntimeConfigurationMatches } = await import("./ipc")
+  const { mcpRuntimeConfigurationMatches } = await import("./sidecar-client")
   const options = {
     transcriptInvalidationId: "own-generation",
     mcpServers: {

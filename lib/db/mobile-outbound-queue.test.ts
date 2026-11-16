@@ -1,7 +1,10 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
-import { forgetRemoteApprovalContext, rememberRemoteApprovalContext } from "@/lib/claude/ipc"
+import {
+  forgetRemoteApprovalContext,
+  rememberRemoteApprovalContext,
+} from "@/lib/ai/agent/execution/sidecar-client"
 
 import { AccountContentCipher, activateAccountContentCipher } from "@/lib/accounts/content-cipher"
 import { LEGACY_MIXED_TARGET_ID } from "@/lib/runtime/target-registry"

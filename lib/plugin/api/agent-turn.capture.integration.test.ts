@@ -14,7 +14,7 @@ import {
   withTranscriptRuntimeLock,
 } from "@/lib/chat/transcript/revision-events"
 import { resolveSendOptions } from "@/lib/claude/build-options"
-import { onClaudeMessage, sendPrompt, closeSession } from "@/lib/claude/ipc"
+import { onClaudeMessage, sendPrompt, closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { runPluginAgentTurn } from "./agent-turn"
 import { prepareTranscriptRuntimeSend } from "@/hooks/chat/claude-chat-send-options"
 import { handleEvent } from "@/hooks/chat/claude-chat-events"
@@ -55,8 +55,8 @@ jest.mock("@/lib/db/characters", () => ({
 jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: jest.fn(async () => ({ cwd: "/repo", provider: "anthropic" })),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
   onClaudeMessage: jest.fn(),
   sendPrompt: jest.fn(),
   closeSession: jest.fn(async () => {}),

@@ -15,7 +15,7 @@
  *     assistant turns / tool calls render with the existing chat components.
  *     Seeded from the synced-down Dexie history for the initial paint.
  *  3. Exposes **control** actions — send a follow-up, interrupt, and resolve a
- *     pending tool-use approval — through the shared `lib/claude/ipc.ts`
+ *     pending tool-use approval — through the shared `lib/ai/agent/execution/sidecar-client.ts`
  *     surface (`agent_send` / `agent_interrupt` / `agent_resolve_permission`), which
  *     routes to the host sidecar via the companion transport.
  *
@@ -34,7 +34,7 @@ import {
   interruptSession,
   rememberRemoteApprovalContext,
   sendPrompt,
-} from "@/lib/claude/ipc"
+} from "@/lib/ai/agent/execution/sidecar-client"
 import { isRemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 import type {
   ApprovalDecision,

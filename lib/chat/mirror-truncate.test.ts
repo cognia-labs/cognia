@@ -1,5 +1,5 @@
 const deleteMessageMock = jest.fn().mockResolvedValue(undefined)
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   deleteMessage: (...a: unknown[]) => deleteMessageMock(...a),
 }))
 

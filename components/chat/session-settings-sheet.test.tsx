@@ -11,7 +11,7 @@ jest.mock("@/hooks/chat/use-credential-status", () => ({
   useCredentialStatus: jest.fn(() => ({ keyOk: true, plan: null })),
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: jest.fn(async () => undefined),
 }))
 
@@ -121,7 +121,7 @@ import { render, screen, fireEvent, waitFor, act, within } from "@testing-librar
 import userEvent from "@testing-library/user-event"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import { isTauri } from "@/lib/tauri"
-import { closeSession } from "@/lib/claude/ipc"
+import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { branchSessionAtMessage } from "@/lib/chat/branch-session"
 
 const mockOpenDialog = openDialog as unknown as jest.Mock

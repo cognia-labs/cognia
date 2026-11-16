@@ -10,7 +10,7 @@
  * its authority keeps it.
  */
 
-import type { ApproveToolAttribution } from "@/lib/claude/ipc"
+import type { ApproveToolAttribution } from "@/lib/ai/agent/execution/sidecar-client"
 import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
 import { getDb } from "@/lib/db/schema"
 

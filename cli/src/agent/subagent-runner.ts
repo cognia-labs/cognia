@@ -31,7 +31,7 @@ import {
   RunAndCaptureError,
   type CaptureStreamEvent,
 } from "@/lib/claude/run-and-capture"
-import { closeSession as defaultCloseSession } from "@/lib/claude/ipc"
+import { closeSession as defaultCloseSession } from "@/lib/ai/agent/execution/sidecar-client"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import type { McpServer, SendOptions } from "@cognia/agent-config-types"
 import type { PluginToolManifestEntry } from "@/lib/plugin/bridge/sidecar-tools-bridge"

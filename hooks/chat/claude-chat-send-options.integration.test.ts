@@ -6,11 +6,11 @@ import {
   recordAbsorbedRequester,
   startToolExecutionRun,
 } from "@/lib/execution/acting-authority"
-import { closeSession } from "@/lib/claude/ipc"
+import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { preparePersonalSteer, prepareTranscriptRuntimeSend } from "./claude-chat-send-options"
 import { asideContextForRegenerate, buildPersonalAsideContext } from "./use-claude-chat-controller"
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: jest.fn(async () => undefined),
   mcpRuntimeConfigurationMatches: jest.fn(() => true),
   sessionControl: jest.fn(async () => ({ retained: false })),

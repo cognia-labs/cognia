@@ -10,7 +10,7 @@ jest.mock("@/lib/chat/room/runner-host", () => ({
 
 let sidecarHandler: ((evt: unknown) => void) | null = null
 const unlisten = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   onClaudeMessage: async (handler: (evt: unknown) => void) => {
     sidecarHandler = handler
     return unlisten

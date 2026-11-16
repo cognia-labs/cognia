@@ -34,7 +34,7 @@ export async function start(): Promise<() => void> {
     import("@/lib/jobs/background-jobs"),
     import("@/lib/tauri/events"),
     import("@/lib/tauri/resync-coordinator"),
-    import("@/lib/claude/ipc"),
+    import("@/lib/ai/agent/execution/sidecar-client"),
     import("@/lib/db/sessions"),
     import("@/lib/db/work-submissions"),
     import("@/lib/db/schema"),

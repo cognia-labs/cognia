@@ -3,7 +3,7 @@
 /**
  * Fetches the Claude Agent SDK's authoritative context-window usage for the
  * active session via the live `getContextUsage()` control method (see
- * `lib/claude/ipc.ts:getSessionContextUsage`). The SDK knows the TRUE window
+ * `lib/ai/agent/execution/sidecar-client.ts:getSessionContextUsage`). The SDK knows the TRUE window
  * size and a per-category token breakdown (system-prompt sections, MCP tools,
  * memory files, agents, skills) that the renderer-side estimate in
  * `lib/usage/context-usage.ts` can't compute.
@@ -19,7 +19,7 @@ import {
   agentHostAvailable,
   resolveAgentExecutionEnvironment,
 } from "@/lib/ai/agent/execution/host-environment"
-import { getSessionContextUsage } from "@/lib/claude/ipc"
+import { getSessionContextUsage } from "@/lib/ai/agent/execution/sidecar-client"
 import type { SdkContextUsage } from "@cognia/agent-config-types"
 import { useChatStore, useSessionStatus } from "@/stores/chat"
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"

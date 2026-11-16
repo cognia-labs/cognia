@@ -3,7 +3,7 @@
  */
 
 const closeSessionMock = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: (id: string) => closeSessionMock(id),
 }))
 

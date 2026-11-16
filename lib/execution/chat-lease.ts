@@ -25,7 +25,7 @@ import type {
   ExecutionLegKind,
 } from "./types"
 import { useChatStore } from "@/stores/chat"
-import { interruptSession } from "@/lib/claude/ipc"
+import { interruptSession } from "@/lib/ai/agent/execution/sidecar-client"
 
 interface HeldChatLease {
   lease: ExecutionLease

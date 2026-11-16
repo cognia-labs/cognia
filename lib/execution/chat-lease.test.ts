@@ -10,9 +10,9 @@ import {
 } from "./chat-lease"
 import { ExecutionBroker, __resetExecutionBrokerForTesting, getExecutionBroker } from "./broker"
 import { useChatStore } from "@/stores/chat"
-import { interruptSession } from "@/lib/claude/ipc"
+import { interruptSession } from "@/lib/ai/agent/execution/sidecar-client"
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   interruptSession: jest.fn().mockResolvedValue(undefined),
 }))
 

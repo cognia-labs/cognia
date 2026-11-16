@@ -12,7 +12,7 @@ import { resolveForToolCall } from "../../../sidecar/src/policy/permission/resol
 
 const handlePluginToolExec = jest.fn()
 const requestLocalToolApproval = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   requestLocalToolApproval: (...args: unknown[]) => requestLocalToolApproval(...args),
 }))
 jest.mock("@/lib/plugin/bridge/agent-tool-dispatch", () => ({

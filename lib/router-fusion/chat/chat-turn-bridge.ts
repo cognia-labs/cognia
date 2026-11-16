@@ -27,7 +27,7 @@ import type {
 import { ProviderRoutingEngine, createMappingRegistry } from "@cognia/provider-routing"
 import { buildRoutingEngineDeps } from "@cognia/provider-routing/build-preview-engine"
 import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
-import { callReserveDecision } from "@/lib/claude/ipc"
+import { callReserveDecision } from "@/lib/ai/agent/execution/sidecar-client"
 import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
 import { waitForDecision, type ApprovalKey } from "@/lib/runtime/approval-bus"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"

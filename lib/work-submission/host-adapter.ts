@@ -308,7 +308,7 @@ export async function claimHostStateChatTurnForDispatch(
 
 async function abortSubmissionSession(submission: WorkSubmissionRow): Promise<void> {
   if (!submission.sessionId) return
-  const { interruptSession } = await import("@/lib/claude/ipc")
+  const { interruptSession } = await import("@/lib/ai/agent/execution/sidecar-client")
   await interruptSession(submission.sessionId)
 }
 

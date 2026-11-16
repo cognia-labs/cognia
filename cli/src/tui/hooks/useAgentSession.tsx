@@ -10,7 +10,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { transport } from "@/lib/tauri"
-import { compactSession } from "@/lib/claude/ipc"
+import { compactSession } from "@/lib/ai/agent/execution/sidecar-client"
 import {
   createAgentExecutionHandle,
   FrozenModelBindingError,

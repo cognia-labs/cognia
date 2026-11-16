@@ -102,7 +102,7 @@ import { SingleExportTrigger } from "@/components/chat/dialogs/single-export-tri
 import { ClearConversationTrigger } from "@/components/chat/dialogs/clear-conversation-trigger"
 import { isTauri } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
-import { closeSession } from "@/lib/claude/ipc"
+import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { branchWholeConversation } from "@/lib/chat/branch-whole-conversation"
 import { useChatStore, useComposerEphemeralSkillIds } from "@/stores/chat"
 import { useProjectStore } from "@/stores/project/project-store"

@@ -193,7 +193,7 @@ const eslintConfig = defineConfig([
     files: [
       "stores/canvas/index.test.ts",
       "stores/chat/chat-store.test.ts",
-      "lib/claude/ipc.test.ts",
+      "lib/ai/agent/execution/sidecar-client.test.ts",
       "components/chat/message-renderer.test.tsx",
       // Project-editor component tests flatten Radix primitives via
       // `require("react")` inside jest.mock factories (hoisting-safe idiom).

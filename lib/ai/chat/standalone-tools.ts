@@ -35,7 +35,7 @@ import { loggers } from "@cognia/logging"
 
 import type { ClaudeEvent, SendOptions } from "@cognia/agent-config-types"
 import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
-import { requestLocalToolApproval } from "@/lib/claude/ipc"
+import { requestLocalToolApproval } from "@/lib/ai/agent/execution/sidecar-client"
 import {
   resolvePermissionDetailed,
   type PermissionVerdict,

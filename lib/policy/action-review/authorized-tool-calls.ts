@@ -29,7 +29,7 @@
  * call is no longer running, and a delivery that still claims it is planned
  * like any other.
  *
- * Leaf module: type imports only, so `lib/claude/ipc.ts`, the chat-tool
+ * Leaf module: type imports only, so `lib/ai/agent/execution/sidecar-client.ts`, the chat-tool
  * channel and the gateway can all import it statically.
  */
 

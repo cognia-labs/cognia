@@ -589,7 +589,9 @@ async function runToolEnabled(
     if (onExecutorStarted) {
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        const close = (await import("@/lib/claude/ipc")).closeSession(session.id)
+        const close = (await import("@/lib/ai/agent/execution/sidecar-client")).closeSession(
+          session.id
+        )
         await Promise.race([
           close.then(() => Promise.all(executorStops)),
           new Promise<void>((resolve) => {
@@ -2227,15 +2229,17 @@ export async function dispatchTeammate(
                   sidecarSessionControl(
                     {
                       steerSession: async (id, message, sourceMessageId) =>
-                        (await import("@/lib/claude/ipc")).steerSession(
+                        (await import("@/lib/ai/agent/execution/sidecar-client")).steerSession(
                           id,
                           message,
                           sourceMessageId
                         ),
                       interruptSession: async (id) =>
-                        (await import("@/lib/claude/ipc")).interruptSession(id),
+                        (await import("@/lib/ai/agent/execution/sidecar-client")).interruptSession(
+                          id
+                        ),
                       closeSession: async (id) =>
-                        (await import("@/lib/claude/ipc")).closeSession(id),
+                        (await import("@/lib/ai/agent/execution/sidecar-client")).closeSession(id),
                     },
                     sessionId
                   ),

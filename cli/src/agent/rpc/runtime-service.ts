@@ -37,7 +37,7 @@ import {
   setSessionMode,
   setSessionModel,
   steerSession,
-} from "@/lib/claude/ipc"
+} from "@/lib/ai/agent/execution/sidecar-client"
 
 import type { ResolvedConfig } from "../../config/schema"
 import type { PermissionResponder } from "../permission-gate"

@@ -18,7 +18,7 @@ import {
   isAgentExecutionFlagEnabled,
   subscribeToAgentExecutionFlags,
 } from "@/lib/ai/agent/execution/feature-flags"
-import type { RewindFilesResult } from "@/lib/claude/ipc"
+import type { RewindFilesResult } from "@/lib/ai/agent/execution/sidecar-client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 

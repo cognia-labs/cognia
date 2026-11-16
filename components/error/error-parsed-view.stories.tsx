@@ -31,7 +31,7 @@ export const StackTrace: Story = {
       "TypeError: Cannot read properties of undefined (reading 'id')",
       "    at resolveSession (lib/chat/branch-session.ts:88:21)",
       "    at async onConfirm (components/chat/branch-dialog.tsx:111:23)",
-      "    at async dispatch (lib/claude/ipc.ts:204:5)",
+      "    at async dispatch (lib/ai/agent/execution/sidecar-client.ts:204:5)",
     ].join("\n"),
   },
 }

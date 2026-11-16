@@ -20,7 +20,7 @@ import {
   subscribeProtocolAdapterExec,
   subscribeProtocolAdapterCancel,
   sendProtocolAdapterMessage,
-} from "@/lib/claude/ipc"
+} from "@/lib/ai/agent/execution/sidecar-client"
 import { subscribePluginToolDispatchBridge } from "@/lib/claude/plugin-tool-dispatch-bridge"
 import { canProxyRemoteToolCall } from "@/lib/ai/agent/execution/controller-tool-proxy"
 import { dispatchProtocolAdapterExec } from "@/lib/plugin/bridge/protocol-adapter-ipc"

@@ -173,7 +173,7 @@ export async function projectActionReviewSettled(
 
   try {
     // Imported lazily, with the retention constant, so this module stays
-    // Dexie-free at load. It is reached from `lib/claude/ipc` and the chat
+    // Dexie-free at load. It is reached from `lib/ai/agent/execution/sidecar-client` and the chat
     // hooks; a static `lib/db/*` import there would pull the whole schema into
     // every one of their test suites and into the first-paint graph.
     const { recordActionReviewReceipt, ACTION_REVIEW_RETENTION_DAYS } =

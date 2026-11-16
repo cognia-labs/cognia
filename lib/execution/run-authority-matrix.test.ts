@@ -103,7 +103,7 @@ import type { SendOptions, Character, ChatSession, AppSettings } from "@cognia/a
 import type { ExecutionRun, RunAuthorityV1 } from "@/types/execution/run"
 import type { StepExecutionContext, VisualWorkflow, WorkflowRunRow } from "@/types/workflow/visual"
 import { setTransport, transport as originalTransport } from "@/lib/tauri/transport-instance"
-import { __resetSessionExecutionRoutesForTests } from "@/lib/claude/execution-route"
+import { __resetSessionExecutionRoutesForTests } from "@/lib/ai/agent/execution/execution-route"
 
 const transportBeforeMatrix = originalTransport
 const modelSends: Array<{ sessionId: string; options: SendOptions }> = []
@@ -1097,7 +1097,7 @@ const families = [
       await startDirectChatExecutionRun(input)
       try {
         await (
-          await import("@/lib/claude/ipc")
+          await import("@/lib/ai/agent/execution/sidecar-client")
         ).sendPrompt(session.id, "Perform the task.", options)
       } finally {
         await finishDirectChatExecutionRun(session.id, "completed")
@@ -1154,7 +1154,9 @@ const families = [
       const options = await build(run.id, thread)
       await startDirectChatExecutionRun(input)
       try {
-        await (await import("@/lib/claude/ipc")).sendPrompt(thread.id, "Perform the task.", options)
+        await (
+          await import("@/lib/ai/agent/execution/sidecar-client")
+        ).sendPrompt(thread.id, "Perform the task.", options)
       } finally {
         await finishDirectChatExecutionRun(thread.id, "completed")
       }
@@ -1650,7 +1652,7 @@ it.each(postResolveFamilies)(
             }
             const runner = new RoomRunner(deps, createStoreRoomSinks())
             const unlisten = await (
-              await import("@/lib/claude/ipc")
+              await import("@/lib/ai/agent/execution/sidecar-client")
             ).onClaudeMessage((event) => runner.handleEvent(event))
             try {
               await runner.send("Perform the task.", {

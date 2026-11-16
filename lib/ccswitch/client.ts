@@ -1,4 +1,4 @@
-// Tauri IPC wrappers for CCSwitch. Pattern matches `lib/claude/ipc.ts`:
+// Tauri IPC wrappers for CCSwitch. Pattern matches `lib/ai/agent/execution/sidecar-client.ts`:
 // each function `ensureTauri()`s and forwards through `invoke()`.
 //
 // All five commands are read-only on CCSwitch's database. The status command

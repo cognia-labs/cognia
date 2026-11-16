@@ -12,7 +12,7 @@
  * provider decision is re-resolved during recovery.
  */
 
-import { interruptSession } from "@/lib/claude/ipc"
+import { interruptSession } from "@/lib/ai/agent/execution/sidecar-client"
 
 import { startWorkOutboxRunner, type Unsubscribe, type WorkOutboxDeps } from "./outbox-runner"
 import { createStoredChatDispatch } from "./stored-chat-dispatch"

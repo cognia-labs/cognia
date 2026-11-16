@@ -14,7 +14,7 @@ import {
 import type { SessionUsageTotals } from "@/lib/usage/context-usage"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
-import { compactSession } from "@/lib/claude/ipc"
+import { compactSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { ChatScopeProvider } from "@/components/chat/chat-scope-provider"
 
 // Echo translation keys (with params appended) so assertions stay stable.
@@ -23,7 +23,7 @@ jest.mock("next-intl", () => ({
     params ? `${key}:${JSON.stringify(params)}` : key,
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   compactSession: jest.fn().mockResolvedValue(undefined),
 }))
 

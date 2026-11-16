@@ -254,7 +254,7 @@ async function steerSidecarSession(
   sessionId: string,
   request: SteerRequest
 ): Promise<SteerOutcome> {
-  const { steerSession } = await import("@/lib/claude/ipc")
+  const { steerSession } = await import("@/lib/ai/agent/execution/sidecar-client")
   try {
     // `steerSession` runs its own renderer-side PII gate and throws rather
     // than sending — the gate is relied on, not re-implemented, and its

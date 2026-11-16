@@ -289,7 +289,7 @@ export async function createCompanionRun(
   }
   // The person's own words, and the conversation they continue, leave this
   // host for the models the router picks: the gate a chat send passes applies
-  // (`lib/claude/ipc.ts`), over the transcript as well as the new message.
+  // (`lib/ai/agent/execution/sidecar-client.ts`), over the transcript as well as the new message.
   if (!hasNoLeakingPiiDeep([...context, message])) {
     return {
       ok: false,

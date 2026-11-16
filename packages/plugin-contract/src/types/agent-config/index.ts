@@ -1547,7 +1547,7 @@ export interface ToolResultReviewEvent {
 // response round-trip over the SAME `claude://message` channel: the renderer
 // fires `claude_session_control` (fire-and-forget) and the sidecar replies with
 // a `control_response` event correlated by `requestId`. Mirrors the
-// `permission_request` / `plugin_tool_exec` round-trips. See `lib/claude/ipc.ts`.
+// `permission_request` / `plugin_tool_exec` round-trips. See `lib/ai/agent/execution/sidecar-client.ts`.
 
 /** Identity of a live AI-SDK loop, read through the existing control channel. */
 export type RuntimeSessionStatus =

@@ -10,7 +10,7 @@ import type {
 } from "@/lib/plugin/bridge/agent-tool-types"
 import { runAskUser, useAskUserStore } from "@/stores/agent/ask-user-store"
 
-jest.mock("./ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   subscribePluginToolExec: jest.fn(),
   sendPluginToolResponse: jest.fn(),
 }))

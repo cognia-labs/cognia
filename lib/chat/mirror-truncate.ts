@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db/schema"
-import { deleteMessage } from "@/lib/claude/ipc"
+import { deleteMessage } from "@/lib/ai/agent/execution/sidecar-client"
 
 /**
  * Mobile-only mirror for the chat truncate paths (mobile completeness

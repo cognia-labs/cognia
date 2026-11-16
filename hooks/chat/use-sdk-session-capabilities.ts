@@ -3,7 +3,7 @@
 /**
  * Fetches the Claude Agent SDK's account-/session-authoritative model and
  * slash-command lists for the active session via the live `supportedModels()`
- * and `supportedCommands()` control methods (see `lib/claude/ipc.ts`).
+ * and `supportedCommands()` control methods (see `lib/ai/agent/execution/sidecar-client.ts`).
  *
  * cognia owns its own composer slash menu and multi-provider model catalog —
  * this does NOT replace them. It surfaces what the running SDK session actually
@@ -27,7 +27,7 @@ import {
   getSessionSupportedCommands,
   getSessionSupportedModels,
   subscribeAgentEvents,
-} from "@/lib/claude/ipc"
+} from "@/lib/ai/agent/execution/sidecar-client"
 import type { SdkModelInfo, SdkSlashCommand } from "@cognia/agent-config-types"
 import { useChatStore } from "@/stores/chat"
 

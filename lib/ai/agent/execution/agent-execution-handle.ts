@@ -1,7 +1,7 @@
 // AgentExecutionHandle (ADR-0090 Phase 3, plan §3.5).
 //
 // Capability-gated command facade over the existing sidecar IPC
-// (`lib/claude/ipc.ts` — this is a FACADE, not a second IPC layer). Every
+// (`lib/ai/agent/execution/sidecar-client.ts` — this is a FACADE, not a second IPC layer). Every
 // command carries an idempotency `commandId` the host dedupes on, unsupported
 // operations throw a typed `AgentCapabilityError` BEFORE any IPC, and
 // `setModel` accepts only models frozen into the spec's bindings.
@@ -23,7 +23,7 @@ import type {
   AgentExtensionReloadResult,
 } from "@cognia/agent-contracts/session-operations"
 
-import * as ipc from "@/lib/claude/ipc"
+import * as ipc from "@/lib/ai/agent/execution/sidecar-client"
 import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 import { isCapabilityProtocolFailure } from "./capability-health"
 import type { AgentSessionControlPort } from "./agent-session-control-port"

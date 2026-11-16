@@ -6,7 +6,7 @@
  */
 import type { SendOptions, SessionApiMethod } from "@cognia/agent-config-types"
 
-import { sidecarRoundTrip } from "@/lib/claude/ipc"
+import { sidecarRoundTrip } from "@/lib/ai/agent/execution/sidecar-client"
 
 // ---- Session-level SDK functions (the `session_api` frame) ----------------
 //

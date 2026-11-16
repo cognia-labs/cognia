@@ -15,8 +15,8 @@ jest.mock("@/lib/execution/personal-visibility", () => ({
 import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 
 import { dispatchTeammate, ExternalRuntimeUnavailableError } from "./dispatch-teammate"
-import { closeSession } from "@/lib/claude/ipc"
-jest.mock("@/lib/claude/ipc", () => ({
+import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: jest.fn(async () => undefined),
 }))
 jest.mock("@/lib/execution/acting-authority", () => ({

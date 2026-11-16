@@ -6,7 +6,7 @@ import { useStore } from "zustand"
 
 import { LocalAccountRegistry } from "@/lib/accounts/account-db"
 import type { LocalAccountRecord } from "@/lib/accounts/account-types"
-import { interruptSession } from "@/lib/claude/ipc"
+import { interruptSession } from "@/lib/ai/agent/execution/sidecar-client"
 import {
   registerRuntimeTargetCleanup,
   stopRuntimeTargetSubscriptions,
@@ -46,7 +46,7 @@ jest.mock("@/stores/settings", () => ({
 jest.mock("@/stores/chat/chat-store", () => ({
   useChatStore: { getState: () => ({ sessions: { turn_alpha: { status: "streaming" } } }) },
 }))
-jest.mock("@/lib/claude/ipc", () => ({ interruptSession: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({ interruptSession: jest.fn() }))
 jest.mock("@/lib/accounts/password-client", () => ({
   verifyPassword: jest.fn(async () => true),
   unbindLocalAccount: jest.fn(async () => {}),

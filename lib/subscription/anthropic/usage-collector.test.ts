@@ -12,7 +12,7 @@ import {
 import type { UsageSnapshot } from "@/types/subscription"
 
 const onClaudeMessageMock = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   onClaudeMessage: (...args: unknown[]) => onClaudeMessageMock(...args),
 }))
 

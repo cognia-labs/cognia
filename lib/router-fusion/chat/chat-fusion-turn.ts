@@ -242,7 +242,7 @@ export async function startChatFusionTurn(
   }
   prepared.delete(input.stamp.runId)
   // The conversation leaves this device for models the router chose: it passes
-  // the same gate a direct send does (`lib/claude/ipc.ts`) before anything is
+  // the same gate a direct send does (`lib/ai/agent/execution/sidecar-client.ts`) before anything is
   // stored or reserved.
   if (!hasNoLeakingPiiDeep(input.messages)) return { kind: "refused", code: "PII_BLOCKED" }
   const selected = route.route

@@ -11,7 +11,9 @@ jest.mock("@/lib/db/schema", () => ({
 jest.mock("@/lib/usage/cost-budget-runtime", () => ({
   readCostBudgetSpend: async () => ({ dayUsd: 0.9, monthUsd: 0.9 }),
 }))
-jest.mock("@/lib/claude/ipc", () => ({ callReserveDecision: jest.fn(async () => undefined) }))
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  callReserveDecision: jest.fn(async () => undefined),
+}))
 // The reseal's routing is `route-chat-turn`'s own subject; here we drive its
 // outcomes so the bridge's gate check, lane rule, stamp swap and fault handling
 // are what actually runs.

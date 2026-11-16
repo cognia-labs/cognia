@@ -195,7 +195,7 @@ export async function invalidateTranscriptRuntime(sessionId: string): Promise<vo
   const { isStandaloneChatMode } = await import("@/lib/runtime/standalone-mode")
   if (isStandaloneChatMode()) return
   const [{ closeSession }, { getDb }, { updateSession }] = await Promise.all([
-    import("@/lib/claude/ipc"),
+    import("@/lib/ai/agent/execution/sidecar-client"),
     import("@/lib/db/schema"),
     import("@/lib/db/sessions"),
   ])

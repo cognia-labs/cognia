@@ -4,7 +4,7 @@
 // leaves the old path as it was.
 
 const mockApproveTool = jest.fn(async (..._args: unknown[]) => {})
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   approveTool: (...args: unknown[]) => mockApproveTool(...args),
 }))
 const mockPlanOutboundAsk = jest.fn()

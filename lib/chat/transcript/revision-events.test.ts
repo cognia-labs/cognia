@@ -97,7 +97,7 @@ jest.mock("@/lib/db/sessions", () => ({
   updateSession: (...args: unknown[]) => updateSession(...args),
   getSession: (...args: unknown[]) => sessionGet(...args),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: (...args: unknown[]) => closeSession(...args),
 }))
 jest.mock("@/lib/runtime/standalone-mode", () => ({ isStandaloneChatMode: () => standalone() }))

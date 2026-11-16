@@ -3,7 +3,7 @@ import type { UIMessage } from "ai"
 import type { ClaudeEvent, SDKMessage, SDKResultMessage } from "@cognia/agent-config-types"
 
 import { applySdkEvent } from "@/lib/claude/adapter"
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import { listMessages, persistMessages } from "@/lib/db/messages"
 import { resultUsageRow, type recordResultUsage } from "@/lib/db/session-usage"
 import { getSession } from "@/lib/db/sessions"

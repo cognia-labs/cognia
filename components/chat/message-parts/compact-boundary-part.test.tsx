@@ -23,7 +23,7 @@ jest.mock("sonner", () => ({
 }))
 
 const restoreSessionMock = jest.fn().mockResolvedValue(undefined)
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   restoreSession: (...args: unknown[]) => restoreSessionMock(...args),
 }))
 

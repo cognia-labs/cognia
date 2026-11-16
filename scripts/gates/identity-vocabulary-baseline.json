@@ -258,7 +258,7 @@
     "lib/ai/agent/execution/account-environment.ts": {
       "bareAccountId": 13
     },
-    "lib/claude/ipc.ts": {
+    "lib/ai/agent/execution/sidecar-client.ts": {
       "bareAccountId": 1
     },
     "lib/codeserver/remote-relay.ts": {

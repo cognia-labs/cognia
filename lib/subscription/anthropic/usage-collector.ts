@@ -10,7 +10,7 @@
 //   recordUsageSnapshot()      — write a snapshot directly. The active probe
 //                                loop calls this with source="probe".
 
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import { getDb } from "@/lib/db/schema"
 
 import type { SubscriptionUsageRow, UsageSnapshot, UsageSource } from "@/types/subscription"

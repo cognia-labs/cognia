@@ -8,8 +8,8 @@ import type {
 } from "@/lib/plugin/bridge/agent-tool-types"
 import { sandboxSessionRuntime } from "@/lib/sandbox/session-runtime"
 
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
   subscribePluginHookExec: jest.fn(async () => () => {}),
 }))
 
@@ -211,7 +211,9 @@ describe("subscribePluginToolDispatch", () => {
 
 describe("CLI lifecycle hook round trips", () => {
   it("routes parent and child hooks once, acknowledges no contributors and preserves plugin decisions", async () => {
-    let callback!: Parameters<typeof import("@/lib/claude/ipc").subscribePluginHookExec>[0]
+    let callback!: Parameters<
+      typeof import("@/lib/ai/agent/execution/sidecar-client").subscribePluginHookExec
+    >[0]
     const unlisten = jest.fn()
     const subscribe = jest.fn(async (cb: typeof callback) => {
       callback = cb
@@ -264,7 +266,9 @@ describe("CLI lifecycle hook round trips", () => {
   })
 
   it("reports a throwing hook and rolls back tools if hook subscription fails", async () => {
-    let callback!: Parameters<typeof import("@/lib/claude/ipc").subscribePluginHookExec>[0]
+    let callback!: Parameters<
+      typeof import("@/lib/ai/agent/execution/sidecar-client").subscribePluginHookExec
+    >[0]
     const send = jest.fn(async () => {})
     const stop = await subscribePluginToolDispatch({
       subscribe: async () => () => {},
@@ -310,7 +314,9 @@ describe("CLI lifecycle hook round trips", () => {
 })
 
 it("retains in-flight hook ownership across the last owner's teardown and remount", async () => {
-  let callback!: Parameters<typeof import("@/lib/claude/ipc").subscribePluginHookExec>[0]
+  let callback!: Parameters<
+    typeof import("@/lib/ai/agent/execution/sidecar-client").subscribePluginHookExec
+  >[0]
   let complete!: (result: { result: null }) => void
   const pending = new Promise<{ result: null }>((resolve) => {
     complete = resolve

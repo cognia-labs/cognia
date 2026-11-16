@@ -22,7 +22,7 @@ import { useCharacters } from "@/lib/data-hooks/context"
 import { onTransportChange, transport } from "@/lib/tauri/transport-instance"
 import { TranscriptTimelineSurface } from "./transcript-timeline-surface"
 import { RefusedHostMessages } from "./refused-host-messages"
-import type { RewindFilesResult } from "@/lib/claude/ipc"
+import type { RewindFilesResult } from "@/lib/ai/agent/execution/sidecar-client"
 import { useMessageDisplay } from "@/hooks/chat/use-message-display"
 import type { MessageDisplayPreferences } from "@/types/appearance"
 

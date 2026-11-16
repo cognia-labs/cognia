@@ -12,7 +12,7 @@
  *   - `@/stores/chat`         → real Zustand store holds the session messages
  *
  * What we fake:
- *   - `@/lib/claude/ipc`      → `sendPrompt` (assert the agent_send call) and
+ *   - `@/lib/ai/agent/execution/sidecar-client`      → `sendPrompt` (assert the agent_send call) and
  *                               `onClaudeMessage` (capture the handler so we can
  *                               inject fake `claude://message` events ourselves)
  *   - DB / goal / loop / plugin-bus / external-agent → no-op side channels that
@@ -87,8 +87,8 @@ const sendPromptMock = jest.fn().mockResolvedValue(undefined)
 const approveToolMock = jest.fn().mockResolvedValue(undefined)
 const toolResultDecisionMock = jest.fn().mockResolvedValue(undefined)
 
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
   approveTool: (...a: unknown[]) => approveToolMock(...a),
   closeSession: jest.fn().mockResolvedValue(undefined),
   interruptSession: jest.fn().mockResolvedValue(undefined),

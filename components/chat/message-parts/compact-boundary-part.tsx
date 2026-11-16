@@ -17,7 +17,7 @@ import { toast } from "sonner"
 import type { UIMessage } from "ai"
 
 import { useChatStore } from "@/stores/chat"
-import { restoreSession } from "@/lib/claude/ipc"
+import { restoreSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { getUndoSnapshot, hasUndoSnapshot, clearUndoSnapshot } from "@/lib/claude/compaction-undo"
 import { OpticalArchiveDialog } from "./optical-archive-dialog"
 import {

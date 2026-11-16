@@ -36,7 +36,7 @@ import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { decideAgentTurn, transformModelStreamPart } from "@/lib/plugin/interceptors/consumers"
-import { requestLocalToolApproval } from "@/lib/claude/ipc"
+import { requestLocalToolApproval } from "@/lib/ai/agent/execution/sidecar-client"
 import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 
 import { resolveStandaloneProvider } from "./resolve-standalone-provider"

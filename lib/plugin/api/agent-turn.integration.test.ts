@@ -14,7 +14,7 @@ import { resolveRunActingIdentity, recordedRunMetadata } from "@/lib/execution/a
 import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { finishToolExecutionRun } from "@/lib/execution/acting-authority"
-import { closeSession } from "@/lib/claude/ipc"
+import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { runPluginAgentTurn } from "./agent-turn"
 import type { SendOptions } from "@cognia/agent-config-types"
 
@@ -27,8 +27,8 @@ jest.mock("@/lib/claude/run-and-capture", () => ({
   RunAndCaptureError: jest.requireActual("@/lib/claude/run-and-capture").RunAndCaptureError,
   runAndCaptureAssistantReply: jest.fn(),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
   sessionControl: async () => null,
   closeSession: jest.fn(async () => {}),
 }))

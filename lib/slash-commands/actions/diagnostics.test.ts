@@ -6,7 +6,7 @@ jest.mock("@/lib/ai/providers/sidecar-credentials", () => ({
   hasApiKey: jest.fn(),
   hasOauthBearer: jest.fn(),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   compactSession: jest.fn(),
 }))
 jest.mock("@/lib/tauri", () => ({
@@ -37,7 +37,7 @@ jest.mock("@/lib/native/native-logging", () => ({
 import { handleStatus, handleCost, handleContext, handleDoctor, handleCompact } from "./diagnostics"
 import { getCrashLoggingDiagnostics } from "@/lib/native/crash-reports"
 import { getNativeLoggingReadiness } from "@/lib/native/native-logging"
-import { compactSession } from "@/lib/claude/ipc"
+import { compactSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { hasApiKey, hasOauthBearer } from "@/lib/ai/providers/sidecar-credentials"
 import { getSidecarStatus } from "@/lib/native/local-runtime"
 import { isTauri } from "@/lib/tauri"

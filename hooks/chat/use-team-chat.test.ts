@@ -39,7 +39,7 @@ const approveToolMock = jest.fn(async (..._args: unknown[]) => undefined)
 const onClaudeUnsub = jest.fn()
 const onClaudeMessageMock = jest.fn(async (_cb: (evt: unknown) => void) => onClaudeUnsub)
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   approveTool: (...a: unknown[]) => approveToolMock(...a),
   closeSession: (id: string) => closeSessionIpcMock(id),
   interruptSession: (id: string) => interruptSessionMock(id),

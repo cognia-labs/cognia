@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: jest.fn(async () => {}),
   mcpRuntimeConfigurationMatches: jest.fn(() => true),
   sessionControl: jest.fn(async () => null),

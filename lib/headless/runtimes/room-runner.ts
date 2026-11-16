@@ -22,7 +22,7 @@
  */
 
 import { getHostRoomRunner } from "@/lib/chat/room/runner-host"
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import { publishHostEvent } from "@/lib/companion/host-event-publisher"
 import { useUIStore, type MemberStatus } from "@/stores/ui"
 import { registerHeadlessRuntime } from "../registry"

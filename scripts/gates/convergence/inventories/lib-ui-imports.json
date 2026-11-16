@@ -254,7 +254,7 @@
       "typeOnly": false
     },
     {
-      "key": "lib/claude/ipc.ts",
+      "key": "lib/ai/agent/execution/sidecar-client.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

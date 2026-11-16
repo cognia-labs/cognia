@@ -44,7 +44,7 @@ jest.mock("@/lib/tauri/resync-coordinator", () => ({
     register: (...args: unknown[]) => resyncRegister(...(args as [])),
   },
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   onClaudeMessage: async (handler: (event: ClaudeEvent) => void) => {
     frameHandler = handler
     return unlistenFrames

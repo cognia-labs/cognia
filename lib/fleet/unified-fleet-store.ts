@@ -7,7 +7,7 @@ import {
   subscribeCanonicalAppends,
 } from "@/lib/ai/agent/recovery/canonical-log"
 import { redactAgentEventEnvelope } from "@/lib/ai/agent/execution/event-envelope"
-import { subscribeAgentEvents } from "@/lib/claude/ipc"
+import { subscribeAgentEvents } from "@/lib/ai/agent/execution/sidecar-client"
 import { isTauri } from "@/lib/tauri"
 import type { TauriEventStore } from "@/lib/tauri/event-store"
 import { acpFleetProjection } from "./acp-fleet-projection"

@@ -92,8 +92,8 @@ jest.mock("@/lib/connectors/runtime", () => ({
   insertInboundMessage: jest.fn(),
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
   onClaudeMessage: async () => () => {},
 }))
 

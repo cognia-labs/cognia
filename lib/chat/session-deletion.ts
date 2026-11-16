@@ -1,5 +1,5 @@
 import { loggers } from "@cognia/logging"
-import { closeSession } from "@/lib/claude/ipc"
+import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { bulkDeleteSessions, type SessionPersistenceScope } from "@/lib/db/sessions"
 import { announceFileSpaceSessionsChanged } from "@/lib/filespace/lifecycle"
 import { emitSystemBusEvent, SystemEvents } from "@/lib/plugin/messaging/message-bus"

@@ -26,7 +26,7 @@ jest.mock("@/lib/platform/capabilities", () => ({
 }))
 
 const getSessionContextUsage = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   getSessionContextUsage: (...a: unknown[]) => getSessionContextUsage(...a),
 }))
 

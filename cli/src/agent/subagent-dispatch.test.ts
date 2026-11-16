@@ -83,7 +83,9 @@ jest.mock("@/lib/claude/run-and-capture", () => ({
     resultSubtype: "success",
   })),
 }))
-jest.mock("@/lib/claude/ipc", () => ({ closeSession: jest.fn(async () => undefined) }))
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  closeSession: jest.fn(async () => undefined),
+}))
 
 const agent = (id: string, description = ""): AgentSummary => ({
   id,
@@ -954,7 +956,9 @@ describe("end-to-end: handle → handler → real runCliSubagent", () => {
     const cap = jest.requireMock("@/lib/claude/run-and-capture") as {
       runAndCaptureAssistantReply: jest.Mock
     }
-    const ipc = jest.requireMock("@/lib/claude/ipc") as { closeSession: jest.Mock }
+    const ipc = jest.requireMock("@/lib/ai/agent/execution/sidecar-client") as {
+      closeSession: jest.Mock
+    }
     cap.runAndCaptureAssistantReply.mockClear()
     ipc.closeSession.mockClear()
 

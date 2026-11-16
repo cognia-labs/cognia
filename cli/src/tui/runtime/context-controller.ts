@@ -1,5 +1,5 @@
 /** Open a detailed snapshot, with a bounded optional live SDK breakdown. */
-import { getSessionContextUsage } from "@/lib/claude/ipc"
+import { getSessionContextUsage } from "@/lib/ai/agent/execution/sidecar-client"
 import type { SdkContextUsage } from "@cognia/agent-config-types"
 import type { UsageInfo } from "@/lib/claude/adapter"
 

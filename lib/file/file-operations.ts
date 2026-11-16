@@ -164,7 +164,7 @@ export async function renameFile(fromPath: string, toPath: string): Promise<void
 
 /**
  * Create a directory. Defaults to recursive (mkdir -p) so parent directories
- * are created as needed — matching `ensureDir` in `lib/claude/ipc.ts`.
+ * are created as needed — matching `ensureDir` in `lib/ai/agent/execution/sidecar-client.ts`.
  * Tauri-only.
  */
 export async function createDir(

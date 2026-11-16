@@ -17,7 +17,7 @@ import type {
   ClaudeEvent,
   LedgerBypassedEvent,
 } from "@cognia/agent-config-types"
-import { callReserveDecision } from "@/lib/claude/ipc"
+import { callReserveDecision } from "@/lib/ai/agent/execution/sidecar-client"
 
 import { recordFusionFault } from "./breaker"
 import { toInfrastructureFault } from "./faults"

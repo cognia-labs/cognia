@@ -15,7 +15,7 @@
 // (lib/subscription/anthropic/usage-collector.ts): a single `onClaudeMessage`
 // subscription returning an async unsubscribe.
 
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import { isMcpLogEvent, type McpLogEvent } from "@cognia/agent-config-types"
 import { loggers } from "@cognia/logging"
 

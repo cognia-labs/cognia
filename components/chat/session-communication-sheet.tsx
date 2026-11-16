@@ -47,7 +47,7 @@ import {
   type SessionPeerMessageStatus,
 } from "@/lib/db/session-peer-messages"
 import { listSessions, updateSession } from "@/lib/db/sessions"
-import { closeSession, interruptSession } from "@/lib/claude/ipc"
+import { closeSession, interruptSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { revealSpawnedTask } from "@/lib/tasks/spawn-task-dispatch"
 import { useChatStore } from "@/stores/chat"
 

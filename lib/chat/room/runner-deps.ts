@@ -31,7 +31,7 @@ import type { MemberStatus } from "@/stores/ui"
 import type { ApplyMemoryContextDeps } from "@/lib/memory/runtime/apply-memory-context"
 import type { TwinDepsForBuild } from "@/lib/twin/runtime/build-deps"
 import type { BuildOptionsContext } from "@/lib/claude/build-options"
-import type { ApproveToolAttribution } from "@/lib/claude/ipc"
+import type { ApproveToolAttribution } from "@/lib/ai/agent/execution/sidecar-client"
 import type { CogniaDiagnostic } from "@cognia/diagnostics"
 import type {
   preparePersonalHistory,

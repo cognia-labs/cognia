@@ -887,7 +887,7 @@ async function runToolEnabledStandalone(
     if (!persistent) {
       // The one-shot runtime must reap its tools too; deleting its DB row is
       // not executor-stop evidence. Persistent conversations keep their loop.
-      void import("@/lib/claude/ipc")
+      void import("@/lib/ai/agent/execution/sidecar-client")
         .then(({ closeSession }) => closeSession(session.id))
         .catch(() => undefined)
       // Join the cascade before callers can close or replace the turn database.

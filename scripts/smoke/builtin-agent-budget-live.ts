@@ -33,7 +33,7 @@ import {
 import { getCliBackgroundRecord } from "@/cli/src/agent/subagent-background-tasks"
 import { ensureCliDb } from "@/cli/src/db/bootstrap"
 import { createPermissionGate } from "@/cli/src/agent/permission-gate"
-import { onClaudeMessage } from "@/lib/claude/ipc"
+import { onClaudeMessage } from "@/lib/ai/agent/execution/sidecar-client"
 import { frameResumePrompt } from "@/lib/background-tasks/completion-delivery"
 import { resolveSendOptions, type BuildOptionsContext } from "@/lib/claude/build-options"
 import { parseProgressCheckpoint } from "@/sidecar/src/context/progress-checkpoint"

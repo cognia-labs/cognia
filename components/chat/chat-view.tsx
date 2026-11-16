@@ -79,7 +79,7 @@ import {
 import { useSettingsStore } from "@/stores/settings"
 import { useCharacter } from "@/lib/data-hooks/context"
 import type { Character, ChatSession, SendContent } from "@cognia/agent-config-types"
-import type { RewindFilesResult } from "@/lib/claude/ipc"
+import type { RewindFilesResult } from "@/lib/ai/agent/execution/sidecar-client"
 import { ChatScopeProvider } from "@/components/chat/chat-scope-provider"
 import { SessionSummaryStageHost } from "@/components/context-workbench/session-summary-card/session-summary-trigger"
 import { useTitleBarProjectionScope } from "@/components/shell/title-bar-outlets"

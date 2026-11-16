@@ -1,7 +1,9 @@
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => false), transport: {} }))
 jest.mock("@/lib/tauri/transport-companion", () => ({ loadCompanionConfig: jest.fn() }))
 jest.mock("@/lib/claude/run-and-capture", () => ({ runAndCaptureAssistantReply: jest.fn() }))
-jest.mock("@/lib/claude/ipc", () => ({ closeSession: jest.fn().mockResolvedValue(undefined) }))
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  closeSession: jest.fn().mockResolvedValue(undefined),
+}))
 jest.mock("@cognia/redact", () => ({ hasNoLeakingPiiDeep: jest.fn(() => true) }))
 jest.mock("@/lib/db/mobile-outbound-queue", () => ({
   enqueueHostStateIntentIfAvailable: jest.fn(async (input) => ({ id: input.actionId })),
@@ -18,7 +20,7 @@ jest.mock("@/lib/runtime/runtime-snapshot-store", () => ({
 
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
-import { closeSession } from "@/lib/claude/ipc"
+import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { isTauri } from "@/lib/tauri"
 import { loadCompanionConfig } from "@/lib/tauri/transport-companion"
 import {

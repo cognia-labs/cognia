@@ -38,7 +38,7 @@ import { ScissorsIcon } from "lucide-react"
 import { toast } from "sonner"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
-import { compactSession } from "@/lib/claude/ipc"
+import { compactSession } from "@/lib/ai/agent/execution/sidecar-client"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { SdkContextUsage } from "@cognia/agent-config-types"
@@ -597,7 +597,7 @@ export function ContextRing({ fraction, muted }: { fraction: number; muted?: boo
 /**
  * "Compact now" action shown in the context hover card. Routes a manual
  * compaction control message to the sidecar (works on both send paths —
- * `lib/claude/ipc.ts:compactSession`). Disabled with no active session or an
+ * `lib/ai/agent/execution/sidecar-client.ts:compactSession`). Disabled with no active session or an
  * empty window (nothing to compact). Exported so it is unit-testable without
  * driving the Radix hover card open in jsdom.
  *

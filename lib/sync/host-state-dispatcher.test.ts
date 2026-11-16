@@ -35,7 +35,7 @@ jest.mock("@/hooks/chat/claude-chat-send-options", () => ({
 }))
 
 const sendPromptMock = jest.fn(async () => undefined)
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   sendPrompt: (...args: unknown[]) => (sendPromptMock as (...a: unknown[]) => unknown)(...args),
 }))
 

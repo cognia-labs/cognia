@@ -11,7 +11,7 @@ import {
   sessionControl,
   setSessionModel,
   setSessionMode,
-} from "./ipc"
+} from "./sidecar-client"
 
 const TAURI_KEY = "__TAURI_INTERNALS__"
 function setTauri(on: boolean) {

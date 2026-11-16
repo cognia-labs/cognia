@@ -150,7 +150,7 @@ async function denyThroughChannel(
     await handle.resolvePermission(requestId, "deny", { message: SUPERSEDED_MESSAGE })
     return
   }
-  const { approveTool } = await import("@/lib/claude/ipc")
+  const { approveTool } = await import("@/lib/ai/agent/execution/sidecar-client")
   // A new instruction replaced the question; nobody refused the call, so it
   // fences nothing (ADR-0239).
   await approveTool(sessionId, requestId, "deny", SUPERSEDED_MESSAGE, undefined, undefined, {

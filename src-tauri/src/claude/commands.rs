@@ -148,7 +148,7 @@ pub async fn claude_set_mode(
 /// Drive a live SDK `Query` control method on a session. Fire-and-forget over
 /// stdin — the sidecar replies asynchronously with a `control_response` event
 /// (correlated by `request_id`) that the renderer settles via
-/// `lib/claude/ipc.ts:sessionControl`. Rejects an unknown method before it can
+/// `lib/ai/agent/execution/sidecar-client.ts:sessionControl`. Rejects an unknown method before it can
 /// reach the sidecar.
 #[tauri::command]
 pub async fn claude_session_control(
@@ -164,7 +164,7 @@ pub async fn claude_session_control(
 
 /// Call a session-level SDK function. Fire-and-forget over stdin — the sidecar
 /// replies asynchronously with a `session_api_response` event (correlated by
-/// `request_id`) that the renderer settles via `lib/claude/ipc.ts:sessionApi`.
+/// `request_id`) that the renderer settles via `lib/ai/agent/execution/claude-session-api.ts:sessionApi`.
 ///
 /// Unlike [`claude_session_control`] this spawns the sidecar if it is not
 /// already up: these calls are the only way to reach a session's transcripts,

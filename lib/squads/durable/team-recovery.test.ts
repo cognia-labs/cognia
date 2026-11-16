@@ -17,8 +17,8 @@ import { createDurableTeamCoordinator } from "./durable-runtime"
 import { controlSquadRun } from "./durable-control"
 import { startSquadRun } from "../squad/start-squad-run"
 
-jest.mock("@/lib/claude/ipc", () => ({
-  ...jest.requireActual("@/lib/claude/ipc"),
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-client"),
 }))
 jest.mock("@/lib/native/local-runtime", () => ({
   ...jest.requireActual("@/lib/native/local-runtime"),

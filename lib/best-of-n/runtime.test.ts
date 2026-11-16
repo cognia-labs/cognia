@@ -79,7 +79,7 @@ jest.mock("@/lib/claude/build-options", () => ({
 jest.mock("@/lib/claude/run-and-capture", () => ({
   runAndCaptureAssistantReply: (...args: unknown[]) => run(...args),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   interruptSession: jest.fn(),
   closeSession: jest.fn(async () => undefined),
 }))
@@ -132,7 +132,7 @@ jest.mock("@/lib/execution/agent-team-bridge", () => ({
 }))
 import { bestOfNTeam, candidateRowTitle, createBestOfNExecution } from "./runtime"
 import { BestOfNCandidateStoppedError, candidateGrant } from "./core"
-import { interruptSession, closeSession } from "@/lib/claude/ipc"
+import { interruptSession, closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import {
   __resetClaimedTurnUsageForTesting,
   isTurnUsageClaimed,

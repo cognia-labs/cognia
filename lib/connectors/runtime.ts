@@ -662,7 +662,7 @@ type DirectReplyOutcome =
   | { kind: "halted" }
 
 async function closeSidecarSession(sessionId: string): Promise<void> {
-  const { closeSession } = await import("@/lib/claude/ipc")
+  const { closeSession } = await import("@/lib/ai/agent/execution/sidecar-client")
   await closeSession(sessionId)
 }
 

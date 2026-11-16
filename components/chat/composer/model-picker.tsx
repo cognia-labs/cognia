@@ -36,7 +36,7 @@ import {
   resolveAgentExecutionEnvironment,
 } from "@/lib/ai/agent/execution/host-environment"
 import { useOptionalChatScope } from "@/components/chat/chat-scope-provider"
-import { setSessionModel, closeSession } from "@/lib/claude/ipc"
+import { setSessionModel, closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 import type {
   ChatSession,
   ExternalAgentCogniaModelBinding,

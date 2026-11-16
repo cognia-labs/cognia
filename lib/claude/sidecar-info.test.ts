@@ -3,7 +3,7 @@
 import { renderHook, act } from "@testing-library/react"
 
 const onClaudeMessageMock = jest.fn()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   onClaudeMessage: (cb: (evt: unknown) => void) => onClaudeMessageMock(cb),
 }))
 

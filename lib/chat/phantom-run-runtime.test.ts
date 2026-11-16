@@ -21,7 +21,7 @@ import {
   probeHostStateRun,
 } from "./phantom-run-runtime"
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   interruptSession: jest.fn().mockResolvedValue(undefined),
 }))
 

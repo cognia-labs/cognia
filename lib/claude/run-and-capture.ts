@@ -40,12 +40,12 @@ import {
   approveTool,
   toolResultDecision,
   type ApproveToolAttribution,
-} from "./ipc"
+} from "@/lib/ai/agent/execution/sidecar-client"
 import {
   captureExecutionRoute,
   settleSessionExecutionRoute,
   type ExecutionRoute,
-} from "./execution-route"
+} from "@/lib/ai/agent/execution/execution-route"
 import type {
   ApprovalDecision,
   ClaudeEvent,
@@ -130,7 +130,7 @@ export async function subscribeCaptureFromEnvelopes(
   ] = await Promise.all([
     import("@/lib/ai/agent/execution/feature-flags"),
     import("@/lib/ai/agent/execution/event-envelope"),
-    import("./ipc"),
+    import("@/lib/ai/agent/execution/sidecar-client"),
   ])
   if (
     !options?.onCanonicalEvent &&
@@ -621,7 +621,7 @@ export interface RunAndCaptureOptions {
   /**
    * Set by a host that keeps its own durable transcript and restores provider
    * history itself (the CLI). The send then skips the app's Dexie transcript
-   * preparation, which only knows app sessions. See `sendPrompt` in `./ipc`.
+   * preparation, which only knows app sessions. See `sendPrompt` in `@/lib/ai/agent/execution/sidecar-client`.
    */
   transcriptRuntime?: "host-owned"
 }

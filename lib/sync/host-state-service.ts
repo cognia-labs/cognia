@@ -396,7 +396,7 @@ export function createAgentRpcHostStateDispatcher(
             ] = await Promise.all([
               import("@/lib/db/sessions"),
               import("@/hooks/chat/claude-chat-send-options"),
-              import("@/lib/claude/ipc"),
+              import("@/lib/ai/agent/execution/sidecar-client"),
             ])
             const session = await getSession(sessionId)
             if (!session) throw new Error("host_state_session_not_found")
@@ -669,7 +669,7 @@ export function createAgentRpcHostStateDispatcher(
         if (dependencies.abort) {
           await dependencies.abort(sessionId, action.actionId)
         } else {
-          const { interruptSession } = await import("@/lib/claude/ipc")
+          const { interruptSession } = await import("@/lib/ai/agent/execution/sidecar-client")
           await interruptSession(sessionId, { commandId: action.actionId })
         }
         break
@@ -683,7 +683,10 @@ export function createAgentRpcHostStateDispatcher(
           )
         } else {
           const [{ transport }, { peekRemoteApprovalContext, forgetRemoteApprovalContext }] =
-            await Promise.all([import("@/lib/tauri"), import("@/lib/claude/ipc")])
+            await Promise.all([
+              import("@/lib/tauri"),
+              import("@/lib/ai/agent/execution/sidecar-client"),
+            ])
           const remoteExecutionContext = peekRemoteApprovalContext(
             sessionId,
             action.action.requestId

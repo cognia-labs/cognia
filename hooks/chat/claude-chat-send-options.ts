@@ -43,7 +43,10 @@ import { materializeMessageMedia } from "@/lib/chat/media/normalize-message-medi
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
 import { withReplyContextLines } from "@/lib/chat/reply-to"
 import { invalidateTranscriptRuntime } from "@/lib/chat/transcript/revision-events"
-import { sessionControl, mcpRuntimeConfigurationMatches } from "@/lib/claude/ipc"
+import {
+  sessionControl,
+  mcpRuntimeConfigurationMatches,
+} from "@/lib/ai/agent/execution/sidecar-client"
 import type { RuntimeSessionStatus } from "@cognia/agent-config-types"
 import { renderBranchSeed } from "@/lib/chat/branch-session"
 import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/session-models"

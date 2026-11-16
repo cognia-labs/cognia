@@ -4,11 +4,16 @@
  * headless brain and the `room_send` RPC arm construct one runner the same
  * way. Nothing here is React or store bound, which is the whole point.
  *
- * Tests that mock a module by specifier (`jest.mock("@/lib/claude/ipc")`)
+ * Tests that mock a module by specifier (`jest.mock("@/lib/ai/agent/execution/sidecar-client")`)
  * keep working through this file, because it imports the same specifiers.
  */
 
-import { approveTool, closeSession, interruptSession, sendPrompt } from "@/lib/claude/ipc"
+import {
+  approveTool,
+  closeSession,
+  interruptSession,
+  sendPrompt,
+} from "@/lib/ai/agent/execution/sidecar-client"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import {
   preparePersonalHistory,

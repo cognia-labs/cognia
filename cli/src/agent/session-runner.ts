@@ -29,7 +29,7 @@ import {
 import {
   closeSession as defaultCloseSession,
   setSessionMode as defaultSetSessionMode,
-} from "@/lib/claude/ipc"
+} from "@/lib/ai/agent/execution/sidecar-client"
 import type { SendOptions } from "@cognia/agent-config-types"
 import type { AgentEventEnvelope } from "@cognia/agent-config-types/agent-execution"
 import type { ResolvedAgentExecutionSpec } from "@cognia/agent-config-types/agent-execution"

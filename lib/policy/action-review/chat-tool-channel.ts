@@ -2,7 +2,7 @@
  * The `chat-tool` channel's projection — the largest approval producer, and
  * one that wrote no `ActionReviewReceipt` at all before this.
  *
- * Two seams, both in `lib/claude/ipc.ts`:
+ * Two seams, both in `lib/ai/agent/execution/sidecar-client.ts`:
  *
  * - `onClaudeMessage` sees every `permission_request` and calls
  *   {@link openChatToolReview}, which is where the tool name, arguments and

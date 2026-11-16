@@ -137,7 +137,7 @@ import {
   sendPrompt,
   setSessionModel,
   turnsRunOnPairedHost,
-} from "@/lib/claude/ipc"
+} from "@/lib/ai/agent/execution/sidecar-client"
 import { recordChatToolApprovalDecision } from "@/lib/policy/action-review/chat-tool-channel"
 import { recordChatCanonicalEvents } from "@/lib/chat/canonical-sink"
 import { isEmbeddedSession } from "@/lib/chat/session-exposure"
