@@ -18,7 +18,6 @@ jest.mock("@/lib/shell/exec", () => ({
   executeShell: jest.fn(),
   formatShellResult: jest.fn(),
 }))
-jest.mock("@/lib/files/memory", () => ({ appendMemory: jest.fn() }))
 const listWorkspaceDir = jest.fn(async () => [] as unknown[])
 const readWorkspaceFile = jest.fn(async () => "")
 jest.mock("@/lib/files/workspace-fs", () => ({

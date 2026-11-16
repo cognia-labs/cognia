@@ -119,9 +119,6 @@ jest.mock("@tauri-apps/api/event", () => ({
 jest.mock("@tauri-apps/api/core", () => ({
   invoke: jest.fn(async () => null),
 }))
-jest.mock("@/lib/files/memory", () => ({
-  appendMemory: jest.fn(),
-}))
 // The attachment dispatch pipeline (token counting / PII / oversize) pulls in
 // heavy deps irrelevant to composer logic tests. Stub it so a send reaches the
 // `onSend` prop cleanly.
@@ -157,6 +154,10 @@ jest.mock("@/components/inbox/inbox-composer-actions-host", () => ({
 // Platform is the gate for the mobile (Capacitor) Claude-style layout. Default
 // to "web" so the existing tests keep the desktop/web responsive layout.
 jest.mock("@/hooks/use-platform", () => ({ usePlatform: jest.fn(() => "web") }))
+jest.mock("@/lib/agents/instructions/append-memory", () => ({
+  ...jest.requireActual("@/lib/agents/instructions/append-memory"),
+  appendInstructionMemory: jest.fn(async () => "/repo/AGENTS.md"),
+}))
 // Pass-through spy: the composer's half of soft-keyboard avoidance.
 jest.mock("./composer/use-composer-keyboard-avoidance", () => {
   const actual = jest.requireActual("./composer/use-composer-keyboard-avoidance")
@@ -218,6 +219,10 @@ import { getCommandDescriptor } from "@/lib/tauri/command-descriptors"
 import { runInTerminalDock } from "@/lib/terminal/run-in-dock"
 import type { ChatSession } from "@cognia/agent-config-types"
 import { loadCustomSlashCommands } from "@/lib/slash-commands/custom"
+import {
+  appendInstructionMemory,
+  InstructionMemoryError,
+} from "@/lib/agents/instructions/append-memory"
 import type { Project } from "@/types"
 import { useComposerKeyboardAvoidance } from "./composer/use-composer-keyboard-avoidance"
 import { useCameraRecovery } from "@/hooks/use-camera-recovery"
@@ -1102,6 +1107,81 @@ describe("Composer — custom slash commands follow the session's Host", () => {
     await act(async () => {})
     expect(load).toHaveBeenCalled()
     expect(load.mock.lastCall?.[1]).toBeNull()
+  })
+})
+
+describe("Composer — # file memory", () => {
+  function renderAt(session: ChatSession) {
+    const Wrapper = withAdapter(makeAdapter())
+    render(
+      <Wrapper>
+        <Composer
+          session={session}
+          onStartNewSession={async () => undefined}
+          onOpenSettings={() => undefined}
+          onSend={async () => undefined}
+          onStop={async () => undefined}
+        />
+      </Wrapper>
+    )
+    return screen.getByRole("textbox") as HTMLTextAreaElement
+  }
+
+  async function pickProjectFile(textarea: HTMLTextAreaElement) {
+    const value = "#use pnpm"
+    await act(async () => {
+      fireEvent.change(textarea, {
+        target: { value, selectionStart: value.length, selectionEnd: value.length },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    // Rows: two store scopes, then project file, then user file.
+    await waitFor(() => expect(screen.queryAllByRole("listitem")).toHaveLength(4))
+    for (const key of ["ArrowDown", "ArrowDown", "Enter"]) {
+      await act(async () => {
+        fireEvent.keyDown(textarea, { key })
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      })
+    }
+  }
+
+  beforeEach(() => {
+    mockUsePlatform.mockReturnValue("tauri")
+    jest.mocked(appendInstructionMemory).mockClear()
+  })
+  afterEach(() => mockUsePlatform.mockReturnValue("web"))
+
+  it("appends to the instruction file the conversation's turns load", async () => {
+    const textarea = renderAt(mkSession({ workingDir: "/repo" }))
+    await pickProjectFile(textarea)
+    await waitFor(() =>
+      expect(appendInstructionMemory).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: "project", text: "use pnpm", cwd: "/repo" })
+      )
+    )
+    await waitFor(() => expect(textarea).toHaveValue(""))
+  })
+
+  it("shows the refusal and keeps the line", async () => {
+    jest
+      .mocked(appendInstructionMemory)
+      .mockRejectedValueOnce(new InstructionMemoryError("instructions-off"))
+    const textarea = renderAt(mkSession({ workingDir: "/repo" }))
+    await pickProjectFile(textarea)
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("fileError.instructions-off"))
+    expect(textarea).toHaveValue("#use pnpm")
+  })
+
+  it("does not write this disk for a conversation on a remote Host", async () => {
+    const textarea = renderAt(
+      mkSession({
+        workingDir: "/repo",
+        hostBinding: { origin: { kind: "remote", hostId: "host-b" }, workspaceRoot: "/srv/b" },
+      })
+    )
+    await pickProjectFile(textarea)
+    expect(appendInstructionMemory).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith("remoteHost")
   })
 })
 

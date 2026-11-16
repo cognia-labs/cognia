@@ -32,7 +32,6 @@ jest.mock("@/lib/shell/exec", () => ({
   executeShell: jest.fn(),
   formatShellResult: jest.fn(),
 }))
-jest.mock("@/lib/files/memory", () => ({ appendMemory: jest.fn() }))
 jest.mock("@/lib/telemetry/events/track-event", () => ({ trackEvent: jest.fn(async () => true) }))
 jest.mock("./composer/voice-controls", () => ({ VoiceControls: () => null }))
 jest.mock("@/hooks/use-platform", () => ({ usePlatform: jest.fn(() => "web") }))

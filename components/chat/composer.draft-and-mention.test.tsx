@@ -19,9 +19,6 @@ jest.mock("@/lib/shell/exec", () => ({
   executeShell: jest.fn(),
   formatShellResult: jest.fn(),
 }))
-jest.mock("@/lib/files/memory", () => ({
-  appendMemory: jest.fn(),
-}))
 jest.mock("./composer/voice-controls", () => ({
   VoiceControls: () => null,
 }))

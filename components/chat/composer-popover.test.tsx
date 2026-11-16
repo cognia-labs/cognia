@@ -283,6 +283,23 @@ describe("ComposerPopover — reference modes", () => {
     expect(screen.getByText("No shell host")).toBeInTheDocument()
   })
 
+  it("says why the file memory rows are unavailable", () => {
+    const view = mount("memory", { memoryFilesAccess: "remote-host" }, "Remember this")
+    // The two store rows keep the preview; the two file rows give the reason.
+    expect(screen.getAllByText("Remember this")).toHaveLength(2)
+    expect(screen.getAllByText(/remoteHost/)).toHaveLength(2)
+    view.unmount()
+    mount("memory", {}, "Remember this")
+    // A surface that does not say never offers a file write.
+    expect(screen.getAllByText(/desktopOnly/)).toHaveLength(2)
+  })
+
+  it("offers the file memory rows where the loaded files are reachable", () => {
+    mount("memory", { memoryFilesAccess: "available" }, "Remember this")
+    expect(screen.getAllByText("Remember this")).toHaveLength(4)
+    expect(screen.queryByText(/desktopOnly|remoteHost/)).toBeNull()
+  })
+
   it("renders entity results, selects the right reference, and surfaces read errors", () => {
     const candidate = {
       entityKind: "issue" as const,

@@ -20,7 +20,6 @@ jest.mock("@/lib/shell/exec", () => ({
   executeShell: jest.fn(),
   formatShellResult: jest.fn(),
 }))
-jest.mock("@/lib/files/memory", () => ({ appendMemory: jest.fn() }))
 const videoHandler = jest.fn()
 jest.mock("@/lib/slash-commands/actions/video", () => ({
   VIDEO_COMMAND_PARAMS: [],

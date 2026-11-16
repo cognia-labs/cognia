@@ -105,10 +105,11 @@ import { commandArgumentOptions, hasSlashCompletion } from "./composer/slash-com
 import {
   COMPOSER_MEMORY_TARGETS,
   isMemoryTargetAvailable,
+  memoryFilesUnavailableKey,
+  type MemoryFilesAccess,
   memoryTargetKey,
   type ComposerMemoryTarget,
 } from "@/lib/chat/memory-target"
-import { usePlatform } from "@/hooks/use-platform"
 import { loggers } from "@cognia/logging"
 import {
   AgentMentionRow,
@@ -155,8 +156,10 @@ export type PopoverItem =
       kind: "memory"
       target: ComposerMemoryTarget
       preview: string
-      /** False when the shell can't perform this write (file scopes off desktop). */
+      /** False when this window can't perform this write (see `MemoryFilesAccess`). */
       available: boolean
+      /** The `chat.composer.memory` key saying why, when unavailable. */
+      unavailableKey?: "desktopOnly" | "remoteHost"
     }
   /**
    * A route target: `@claude`, `@codex` or a Squad member. Offered only for
@@ -321,6 +324,12 @@ interface Props {
    * outside the general chat composer, which leaves every source unscoped.
    */
   entityContext?: EntityMentionContext
+  /**
+   * Whether the two `#` file rows can write the instruction files the
+   * conversation's turns load (`resolveMemoryFilesAccess`). Defaults to
+   * unavailable, so a surface that does not say never offers a file write.
+   */
+  memoryFilesAccess?: MemoryFilesAccess
   /** Recently-used command names (newest first) for the empty-query view. */
   recentCommands?: readonly string[]
   /** Pinned command names (pin order) for the empty-query view + pin toggles. */
@@ -377,6 +386,7 @@ export const ComposerPopover = forwardRef<ComposerPopoverHandle, Props>(function
     onDismiss,
     shellCompletions,
     shellEmptyMessage,
+    memoryFilesAccess = "desktop-only",
   },
   ref
 ) {
@@ -400,9 +410,6 @@ export const ComposerPopover = forwardRef<ComposerPopoverHandle, Props>(function
     query: trigger?.kind === "entity" ? trigger.query : "",
     context: entityContext ?? {},
   })
-  // File-scoped memory writes go through a Tauri command, so the two CLAUDE.md
-  // rows are inert off the desktop shell.
-  const isDesktop = usePlatform() === "tauri"
   const [highlight, setHighlight] = useState(0)
   const [slashSearch, setSlashSearch] = useState<string | null>(null)
   // The async file-search produces an `ItemList` over time; for slash, memory
@@ -588,7 +595,10 @@ export const ComposerPopover = forwardRef<ComposerPopoverHandle, Props>(function
           kind: "memory" as const,
           target,
           preview,
-          available: isMemoryTargetAvailable(target, isDesktop),
+          available: isMemoryTargetAvailable(target, memoryFilesAccess),
+          ...(isMemoryTargetAvailable(target, memoryFilesAccess)
+            ? {}
+            : { unavailableKey: memoryFilesUnavailableKey(memoryFilesAccess) ?? "desktopOnly" }),
         })),
         loading: false,
         error: null,
@@ -802,7 +812,7 @@ export const ComposerPopover = forwardRef<ComposerPopoverHandle, Props>(function
     fileList,
     t,
     tMemory,
-    isDesktop,
+    memoryFilesAccess,
     tAgent,
     routeOptions,
     chatAgents,
@@ -1774,7 +1784,7 @@ const ItemRow = memo(function ItemRow({
           {tMemory(`targetLabel.${memoryTargetKey(item.target)}`)}
         </span>
         <span className="ml-auto truncate text-xs text-muted-foreground">
-          {item.available ? item.preview : tMemory("desktopOnly")}
+          {item.available ? item.preview : tMemory(item.unavailableKey ?? "desktopOnly")}
         </span>
       </>
     )

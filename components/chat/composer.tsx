@@ -57,6 +57,9 @@ import {
   type ChatStatus as StoreChatStatus,
 } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
+import { useProjectStore } from "@/stores/project/project-store"
+import { resolveSessionWorkspace } from "@/lib/workspace/session-workspace"
+import { allRootPaths } from "@/lib/workspace/roots"
 import { formatSearchResultsForLLM } from "@/lib/search/search-service"
 import { searchWithAppSettings } from "@/lib/search/configured-search"
 import { resolveWebAccess } from "@/lib/chat/web-access"
@@ -274,8 +277,10 @@ import { pillDeleteRange } from "./composer-pill-delete"
 import { runSegments, type CommandError } from "@/lib/slash-commands/run-segments"
 import {
   isMemoryTargetAvailable,
+  memoryFilesUnavailableKey,
   memoryTargetKey,
   parseMemoryTargetKey,
+  resolveMemoryFilesAccess,
   type ComposerMemoryTarget,
 } from "@/lib/chat/memory-target"
 import { useComposerCommandStore } from "@/stores/chat/composer-command-store"
@@ -298,7 +303,6 @@ import { useShellJobCopy } from "./shell-job/use-shell-job-copy"
 import { runInTerminalDock } from "@/lib/terminal/run-in-dock"
 import { terminalAvailable } from "@/lib/terminal/pick-transport"
 import { detectInteractiveCommand } from "@/lib/ai/agent/execution/permissions/interactive-command"
-import { appendMemory } from "@/lib/files/memory"
 // `rememberFact` is imported lazily at its call site, not here: it pulls in the
 // Dexie session schema and the redaction package, which every composer test
 // otherwise has to mock just to render the box.
@@ -1014,6 +1018,13 @@ function ComposerInner(props: InnerProps) {
     }),
     [cwd, activeRemoteHost, hasBinding, boundHostId, boundAccountId, boundRoot]
   )
+  // `#` file memory writes the instruction files this conversation's turns
+  // load, which this window reaches only when those turns run here.
+  const memoryFilesAccess = resolveMemoryFilesAccess({
+    isDesktop,
+    boundOrigin: customCommandKey.binding?.origin,
+    drivingRemoteHost: activeRemoteHost !== null,
+  })
   useEffect(() => {
     let cancelled = false
     void loadCustomSlashCommands(customCommandKey.cwd, customCommandKey.binding).then((list) => {
@@ -1903,8 +1914,8 @@ function ComposerInner(props: InnerProps) {
           toast.error(tMemory("needsLine"))
           return
         }
-        if (!isMemoryTargetAvailable(item.target, isDesktop)) {
-          toast.error(tMemory("desktopOnly"))
+        if (!isMemoryTargetAvailable(item.target, memoryFilesAccess)) {
+          toast.error(tMemory(memoryFilesUnavailableKey(memoryFilesAccess) ?? "desktopOnly"))
           return
         }
         const ok = await props.onSubmitMemory(item.target, text)
@@ -1949,7 +1960,7 @@ function ComposerInner(props: InnerProps) {
     },
     [
       trigger,
-      isDesktop,
+      memoryFilesAccess,
       textInput,
       addReferencedPath,
       insertReplacement,
@@ -2366,15 +2377,16 @@ function ComposerInner(props: InnerProps) {
         } else {
           // Bare `#note` + Enter repeats the last destination instead of
           // demanding a popover pick every single time. The availability guard
-          // matters here as much as on the pick path: a target chosen on the
-          // desktop shell can be replayed in the browser, where the CLAUDE.md
-          // file scopes have no Tauri command behind them.
+          // matters here as much as on the pick path: a file target chosen in a
+          // local conversation can be replayed in the browser, or in one whose
+          // turns run on a remote Host, where this window cannot reach the
+          // instruction files they load.
           const remembered = parseMemoryTargetKey(
             useComposerCommandStore.getState().lastMemoryTargetKey
           )
           if (!remembered) toast.info(tMemory("pickScope"))
-          else if (!isMemoryTargetAvailable(remembered, isDesktop)) {
-            toast.error(tMemory("desktopOnly"))
+          else if (!isMemoryTargetAvailable(remembered, memoryFilesAccess)) {
+            toast.error(tMemory(memoryFilesUnavailableKey(memoryFilesAccess) ?? "desktopOnly"))
           } else await props.onSubmitMemory(remembered, modeLine)
         }
       }
@@ -2539,7 +2551,7 @@ function ComposerInner(props: InnerProps) {
     tCommands,
     tMemory,
     tBestOfN,
-    isDesktop,
+    memoryFilesAccess,
     attachments,
     staged,
     props,
@@ -3906,6 +3918,7 @@ function ComposerInner(props: InnerProps) {
           onDismiss={dismissPopover}
           shellCompletions={shell.completions}
           shellEmptyMessage={shellEmptyMessage}
+          memoryFilesAccess={memoryFilesAccess}
         />
 
         <CommandParamForm
@@ -4598,15 +4611,38 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
         return false
       }
       try {
-        // Project memory is written at <cwd>/CLAUDE.md — confine the write to
-        // the working dir so a stray cwd can't escape it. User scope ignores it.
-        const path = await appendMemory(target.scope, text, cwd, cwd ? [cwd] : null)
+        // The instruction file this conversation's next turn loads, found by
+        // the send path's own discovery over the same roots and settings.
+        const [{ appendInstructionMemory }, { resolveCharacterById }] = await Promise.all([
+          import("@/lib/agents/instructions/append-memory"),
+          import("@/lib/db/characters"),
+        ])
+        const { projects, activeProjectId } = useProjectStore.getState()
+        const workspace = resolveSessionWorkspace(session, projects, activeProjectId)
+        const character = session?.characterId
+          ? await resolveCharacterById(session.characterId)
+          : undefined
+        const path = await appendInstructionMemory({
+          scope: target.scope,
+          text,
+          cwd,
+          roots: workspace ? allRootPaths(workspace) : cwd ? [cwd] : [],
+          config:
+            character?.instructionsOverride ?? useSettingsStore.getState().settings?.instructions,
+        })
         noteUsed()
         toast.success(tMemory("appended", { path }))
         return true
       } catch (err) {
         loggers.chat.error("memory append failed", err, { scope: target.scope, cwd })
-        toast.error(err instanceof Error ? err.message : tMemory("failed"))
+        const { InstructionMemoryError } = await import("@/lib/agents/instructions/append-memory")
+        toast.error(
+          err instanceof InstructionMemoryError
+            ? tMemory(`fileError.${err.reason}`)
+            : err instanceof Error
+              ? err.message
+              : tMemory("failed")
+        )
         return false
       }
     },

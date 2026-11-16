@@ -35,7 +35,6 @@
     "A:lib/desktop/menu-actions.ts",
     "A:lib/external-bridge/orchestration-ipc.ts",
     "A:lib/files/allowed-roots-sync.ts",
-    "A:lib/files/memory.ts",
     "A:lib/files/workspace-watch.ts",
     "A:lib/identity/host-person.ts",
     "A:lib/keyring/index.ts",

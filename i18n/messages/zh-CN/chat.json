@@ -655,10 +655,19 @@
       "desktopOnly": "文件记忆仅在桌面应用中可用。",
       "emptyPreview": "（开始输入 memory 内容）",
       "failed": "写入 memory 失败",
+      "fileError": {
+        "empty": "请在 # 后输入要写入 memory 的内容。",
+        "instructions-off": "指令文件加载已关闭，写入的内容不会被任何对话读取。",
+        "global-off": "全局指令文件已关闭，写入的内容不会被任何对话读取。",
+        "no-workspace": "当前会话没有可写入项目记忆的工作目录。",
+        "no-home": "无法确定用户主目录。",
+        "conflict": "写入时指令文件一直在变化，请重试。"
+      },
       "needsLine": "请在 # 后输入要写入 memory 的内容。",
       "panelTitle": "追加到 memory",
       "pickScope": "请在弹层中选择「项目 memory」或「用户 memory」以保存。",
       "projectLabel": "项目 memory",
+      "remoteHost": "会话在远程 Host 上运行时暂不支持文件记忆，请选择全局记忆或工作区记忆。",
       "scope": {
         "global": "全局记忆",
         "workspace": "工作区记忆"

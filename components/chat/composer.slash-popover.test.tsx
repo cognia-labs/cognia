@@ -48,7 +48,6 @@ jest.mock("@/lib/shell/exec", () => ({
   executeShell: jest.fn(),
   formatShellResult: jest.fn(),
 }))
-jest.mock("@/lib/files/memory", () => ({ appendMemory: jest.fn() }))
 // `@prompt:` reads Dexie through this module, whose own suite covers that. Here
 // only the composer's half: which key does what with the row.
 jest.mock("@/lib/chat/mentions/prompt-reference", () => ({

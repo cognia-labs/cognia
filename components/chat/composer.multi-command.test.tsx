@@ -20,7 +20,6 @@ jest.mock("@/lib/shell/exec", () => ({
   executeShell: jest.fn(),
   formatShellResult: jest.fn(),
 }))
-jest.mock("@/lib/files/memory", () => ({ appendMemory: jest.fn() }))
 jest.mock("@/lib/telemetry/events/track-event", () => ({
   trackEvent: (...args: unknown[]) => trackEvent(...(args as [])),
 }))

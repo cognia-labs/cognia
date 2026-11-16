@@ -25,7 +25,6 @@ jest.mock("@/lib/search/search-service", () => ({
   formatSearchResultsForLLM: jest.fn(),
 }))
 jest.mock("@/lib/shell/exec", () => ({ executeShell: jest.fn(), formatShellResult: jest.fn() }))
-jest.mock("@/lib/files/memory", () => ({ appendMemory: jest.fn() }))
 // Stubbed for cost, not correctness: see composer.attachments.test.tsx.
 jest.mock("./composer/attach-menu", () => ({ ComposerAttachMenu: () => null }))
 jest.mock("./composer/voice-controls", () => ({ VoiceControls: () => null }))

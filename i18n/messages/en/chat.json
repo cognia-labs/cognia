@@ -655,10 +655,19 @@
       "desktopOnly": "File-backed memory is available in the desktop app.",
       "emptyPreview": "(start typing the memory line)",
       "failed": "Memory write failed",
+      "fileError": {
+        "empty": "Type the memory line after #.",
+        "instructions-off": "Instruction files are turned off, so no turn would read this line.",
+        "global-off": "The global instruction file is turned off, so no turn would read this line.",
+        "no-workspace": "This conversation has no working directory to write project memory to.",
+        "no-home": "The home directory could not be found.",
+        "conflict": "The instruction file kept changing while writing. Try again."
+      },
       "needsLine": "Type the memory line after #.",
       "panelTitle": "Append to memory",
       "pickScope": "Pick Project or User memory in the popover to save.",
       "projectLabel": "Project memory",
+      "remoteHost": "File memory isn't available yet when the conversation runs on a remote Host. Pick global or workspace memory.",
       "scope": {
         "global": "global memory",
         "workspace": "workspace memory"
