@@ -15,9 +15,15 @@
  */
 
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
+import { LarkApiError } from "@cognia/feishu-protocol"
 import type { ConversationDeliveryTarget } from "@/types/connectors/event"
-import type { RoomMemberRead, RoomMemberReadOptions } from "@/types/connectors/room-members"
+import type {
+  RoomMember,
+  RoomMemberRead,
+  RoomMemberReadOptions,
+} from "@/types/connectors/room-members"
 import { collectRoomMemberPages } from "../_shared/room-member-pages"
+import { ChatManagementScopeError } from "@/types/connectors/chat-management"
 import type {
   ChatMembersInput,
   ChatMembersResult,
@@ -48,12 +54,21 @@ export interface LarkChatManagement {
 /** Lark's largest member page. */
 const LARK_MEMBER_PAGE_SIZE = 100
 
+interface LarkMemberEntry {
+  member_id?: string
+  name?: string
+}
+
 interface LarkMemberPage {
   data?: {
-    items?: Array<{ member_id?: string; name?: string }>
+    items?: LarkMemberEntry[]
+    users?: LarkMemberEntry[]
+    bots?: LarkMemberEntry[]
     has_more?: boolean
     page_token?: string
-    member_total?: number
+    user_total?: number
+    bot_total?: number
+    truncations?: unknown[]
   }
 }
 
@@ -156,6 +171,8 @@ export function createLarkChatManagement(
 
     async readRoomMembers(target, options) {
       const chatId = target.address.containerId
+      const membersPath = `/im/v1/chats/${encodeURIComponent(chatId)}/members`
+      options.signal?.throwIfAborted()
       // The owner is not marked on the member list. One read of the chat
       // names it; a bot that cannot read the chat still lists its members.
       const ownerId = await tenantCall(
@@ -166,36 +183,81 @@ export function createLarkChatManagement(
       )
         .then((parsed) => (parsed as { data?: { owner_id?: string } } | null)?.data?.owner_id)
         .catch(() => undefined)
-      // Lark lists people only; the bots in a chat are not on this list.
-      return collectRoomMemberPages(async (pageToken) => {
+      const toMembers = (items: LarkMemberEntry[], isBot = false): RoomMember[] =>
+        items.flatMap((item) =>
+          typeof item.member_id === "string" && item.member_id
+            ? [
+                {
+                  remoteUserId: item.member_id,
+                  ...(typeof item.name === "string" && item.name ? { displayName: item.name } : {}),
+                  role: item.member_id === ownerId ? "owner" : "member",
+                  ...(isBot ? { isBot: true } : {}),
+                },
+              ]
+            : []
+        )
+      let legacy = false
+      let incomplete = false
+      let total: number | undefined
+      const read = await collectRoomMemberPages(async (pageToken) => {
         const query = new URLSearchParams({
           member_id_type: "open_id",
           page_size: String(Math.min(LARK_MEMBER_PAGE_SIZE, Math.max(1, options.maxMembers))),
           ...(pageToken ? { page_token: pageToken } : {}),
         })
-        const parsed = (await tenantCall(
-          resolveCreds,
-          "im:chat.members:read",
-          "GET",
-          `/im/v1/chats/${encodeURIComponent(chatId)}/members?${query.toString()}`
-        )) as LarkMemberPage | null
+        const readPage = async (path: string) =>
+          (await tenantCall(
+            resolveCreds,
+            "im:chat.members:read",
+            "GET",
+            `${path}?${query.toString()}`
+          )) as LarkMemberPage | null
+        const parsed = legacy
+          ? await readPage(membersPath)
+          : await readPage(`${membersPath}/list`).catch((error: unknown) => {
+              // Some apps and deployments only support the users-only endpoint.
+              const unavailable =
+                error instanceof ChatManagementScopeError ||
+                (error instanceof LarkApiError && error.status === 404)
+              if (pageToken || !unavailable) throw error
+              options.signal?.throwIfAborted()
+              legacy = true
+              return readPage(membersPath)
+            })
+        options.signal?.throwIfAborted()
         const data = parsed?.data
+        if (!data) throw new Error("Lark member list returned no data")
+        const nextCursor = data.has_more ? data.page_token : undefined
+        incomplete ||= Boolean(
+          data.truncations?.length || (data.has_more && (!nextCursor || nextCursor === pageToken))
+        )
+        const { user_total: users, bot_total: bots } = data
+        if (
+          typeof users === "number" &&
+          Number.isSafeInteger(users) &&
+          users >= 0 &&
+          typeof bots === "number" &&
+          Number.isSafeInteger(bots) &&
+          bots >= 0
+        ) {
+          total = users + bots
+        }
         return {
-          members: (data?.items ?? []).flatMap((item) =>
-            item.member_id
-              ? [
-                  {
-                    remoteUserId: item.member_id,
-                    ...(item.name ? { displayName: item.name } : {}),
-                    role: item.member_id === ownerId ? ("owner" as const) : ("member" as const),
-                  },
-                ]
-              : []
-          ),
-          ...(data?.has_more && data.page_token ? { nextCursor: data.page_token } : {}),
-          ...(typeof data?.member_total === "number" ? { total: data.member_total } : {}),
+          members: legacy
+            ? toMembers(data.items ?? [])
+            : [...toMembers(data.users ?? []), ...toMembers(data.bots ?? [], true)],
+          ...(nextCursor ? { nextCursor } : {}),
+          ...(!legacy && total !== undefined ? { total } : {}),
         }
       }, options)
+      if (!legacy && !incomplete && read.tier === "full") return read
+      return {
+        tier: "partial",
+        members: read.members,
+        ...(!legacy && total !== undefined && total > read.members.length
+          ? { memberCount: total }
+          : {}),
+      }
     },
 
     async resolveContacts(input: LarkResolveContactsInput): Promise<ContactCandidate[]> {

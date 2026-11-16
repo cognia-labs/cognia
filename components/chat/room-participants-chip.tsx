@@ -55,6 +55,7 @@ import {
 } from "@/lib/chat/room/participants"
 import { MAX_ROSTER_PARTICIPANTS } from "@/lib/chat/room-roster"
 import type { SpeakerSource } from "@/lib/chat/speaker"
+import { roomRosterForDisplay } from "@/lib/connectors/room-roster"
 import { deterministicColor, type AvatarSubject } from "@/lib/ui/avatar"
 import { cn } from "@/lib/utils"
 import { useChatStore } from "@/stores/chat"
@@ -97,7 +98,8 @@ export function RoomParticipantsChip({
   const override = useConversationOverride(
     kind === "im" ? session.platformBinding?.conversationKey : null
   )
-  const imRoster = override?.roomRoster ?? null
+  const platform = session.platformBinding?.platform
+  const storedRoster = override?.roomRoster
   const messages = useChatStore((state) => state.sessions[session.id]?.messages)
   const memberActivity = useUIStore((state) => state.memberActivity)
 
@@ -112,11 +114,21 @@ export function RoomParticipantsChip({
         members,
         roles,
         memberships,
-        imRoster,
+        imRoster: roomRosterForDisplay(platform, storedRoster) ?? null,
         messages: (messages ?? []) as unknown as readonly SpeakerSource[],
         activityFor: (id) => memberActivity[`${session.id}::${id}`],
       }),
-    [kind, members, roles, memberships, imRoster, messages, memberActivity, session.id]
+    [
+      kind,
+      members,
+      roles,
+      memberships,
+      platform,
+      storedRoster,
+      messages,
+      memberActivity,
+      session.id,
+    ]
   )
 
   // A partial IM roster may list fewer people than the room holds; the count

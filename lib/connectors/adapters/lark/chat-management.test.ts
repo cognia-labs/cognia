@@ -212,21 +212,32 @@ describe("readRoomMembers (ADR-0177 batch 4)", () => {
     refreshedAt: 1,
   } as never
 
-  it("pages the chat's members by open_id and marks the owner", async () => {
+  it("pages users and silent bots by open_id and marks the owner", async () => {
     mTenant.mockImplementation(async (_creds, _method, path: string) => {
       if (!path.includes("/members")) return { code: 0, data: { owner_id: "ou_b" } }
       return path.includes("page_token=t2")
-        ? { code: 0, data: { items: [{ member_id: "ou_c" }], has_more: false, member_total: 3 } }
+        ? {
+            code: 0,
+            data: {
+              users: [],
+              bots: [{ member_id: "ou_bot", name: "Helper" }],
+              has_more: false,
+              user_total: 2,
+              bot_total: 1,
+            },
+          }
         : {
             code: 0,
             data: {
-              items: [
+              users: [
                 { member_id: "ou_a", name: "Ann" },
                 { member_id: "ou_b", name: "Ben" },
               ],
               has_more: true,
               page_token: "t2",
-              member_total: 3,
+              bots: [],
+              user_total: 2,
+              bot_total: 1,
             },
           }
     })
@@ -235,21 +246,60 @@ describe("readRoomMembers (ADR-0177 batch 4)", () => {
       members: [
         { remoteUserId: "ou_a", displayName: "Ann", role: "member" },
         { remoteUserId: "ou_b", displayName: "Ben", role: "owner" },
-        { remoteUserId: "ou_c", role: "member" },
+        { remoteUserId: "ou_bot", displayName: "Helper", role: "member", isBot: true },
       ],
     })
     const paths = mTenant.mock.calls.map((call) => call[2] as string)
     expect(paths[0]).toBe("/im/v1/chats/oc_1?user_id_type=open_id")
-    expect(paths[1]).toContain("/im/v1/chats/oc_1/members?")
+    expect(paths[1]).toContain("/im/v1/chats/oc_1/members/list?")
     expect(paths[1]).toContain("member_id_type=open_id")
     expect(paths[1]).toContain("page_size=100")
     expect(paths[2]).toContain("page_token=t2")
     expect(mTenant.mock.calls.every((call) => call[4] === "service-data")).toBe(true)
   })
 
+  it("keeps a server-truncated list partial even when the reported totals match", async () => {
+    mTenant.mockResolvedValueOnce({ code: 0, data: {} }).mockResolvedValueOnce({
+      code: 0,
+      data: {
+        users: [{ member_id: "ou_a" }],
+        bots: [],
+        user_total: 1,
+        bot_total: 0,
+        has_more: false,
+        truncations: [{ member_type: "user", limit: 1 }],
+      },
+    })
+    await expect(mgmt.readRoomMembers(target, { maxMembers: 10 })).resolves.toEqual({
+      tier: "partial",
+      members: [{ remoteUserId: "ou_a", role: "member" }],
+    })
+  })
+
+  it("keeps the combined total when the caller's limit stops pagination", async () => {
+    mTenant.mockResolvedValueOnce({ code: 0, data: {} }).mockResolvedValueOnce({
+      code: 0,
+      data: {
+        users: [{ member_id: "ou_a" }],
+        bots: [],
+        user_total: 12,
+        bot_total: 3,
+        has_more: true,
+        page_token: "t2",
+      },
+    })
+    await expect(mgmt.readRoomMembers(target, { maxMembers: 1 })).resolves.toEqual({
+      tier: "partial",
+      members: [{ remoteUserId: "ou_a", role: "member" }],
+      memberCount: 15,
+    })
+    expect(mTenant).toHaveBeenCalledTimes(2)
+  })
+
   it("still lists members when the chat itself cannot be read, and names the members scope on refusal", async () => {
     mTenant
       .mockRejectedValueOnce(new LarkApiError({ status: 403, code: null, message: "forbidden" }))
+      .mockRejectedValueOnce(new LarkApiError({ status: 404, code: null, message: "missing" }))
       .mockResolvedValueOnce({
         code: 0,
         data: { items: [{ member_id: "ou_a" }], has_more: false, member_total: 40 },
@@ -257,13 +307,14 @@ describe("readRoomMembers (ADR-0177 batch 4)", () => {
     await expect(mgmt.readRoomMembers(target, { maxMembers: 1 })).resolves.toEqual({
       tier: "partial",
       members: [{ remoteUserId: "ou_a", role: "member" }],
-      memberCount: 40,
     })
-    expect(mTenant.mock.calls[1][2]).toContain("page_size=1")
+    expect(mTenant.mock.calls[2][2]).toContain("/members?")
+    expect(mTenant.mock.calls[2][2]).toContain("page_size=1")
 
     mTenant.mockReset()
     mTenant
       .mockResolvedValueOnce({ code: 0, data: {} })
+      .mockRejectedValueOnce(new LarkApiError({ status: 200, code: 99991672, message: "denied" }))
       .mockRejectedValueOnce(new LarkApiError({ status: 200, code: 99991672, message: "denied" }))
     const err = await mgmt.readRoomMembers(target, { maxMembers: 10 }).catch((e) => e)
     expect(err).toBeInstanceOf(ChatManagementScopeError)

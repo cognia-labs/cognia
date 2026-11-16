@@ -16,7 +16,7 @@
  * {@link ROOM_ROSTER_RETRY_MS}.
  */
 
-import type { ConversationOverrideRow } from "@/lib/db/connector-types"
+import type { ConversationOverrideRow, ConversationRoomRoster } from "@/lib/db/connector-types"
 import { hasCapability } from "@/types/connectors/capability"
 import type { PlatformAdapter } from "@/types/connectors/adapter"
 import type { ConversationDeliveryTarget } from "@/types/connectors/event"
@@ -30,6 +30,8 @@ export const ROOM_ROSTER_RETRY_MS = 30 * 60 * 1000
 export const ROOM_ROSTER_MAX_MEMBERS = 500
 /** A read that has not answered by then is abandoned. */
 export const ROOM_ROSTER_READ_TIMEOUT_MS = 15_000
+/** Roster reads with channel-scoped counts, Lark bots, and effective Matrix roles. */
+export const ROOM_ROSTER_REVISION = 1
 
 export type RoomRosterRefreshOutcome = "skipped" | "read" | "failed"
 
@@ -60,13 +62,35 @@ export function __setRoomRosterDepsForTesting(next: Partial<RoomRosterDeps> | nu
 
 const inflight = new Map<string, Promise<RoomRosterRefreshOutcome>>()
 
+function usesLegacyRoster(platform: string | undefined, roster: ConversationRoomRoster): boolean {
+  return (
+    (roster.revision ?? 0) < ROOM_ROSTER_REVISION &&
+    (platform === "discord" || platform === "lark" || platform === "matrix")
+  )
+}
+
+/** Old snapshots still contain useful names, but their completeness or totals can be wrong. */
+export function roomRosterForDisplay(
+  platform: string | undefined,
+  roster: ConversationRoomRoster | undefined
+): ConversationRoomRoster | undefined {
+  if (!roster || !usesLegacyRoster(platform, roster)) return roster
+  if (platform === "discord" || platform === "lark") {
+    // Discord counted the entire guild. Lark counted only human members.
+    return { tier: "partial", members: roster.members, readAt: roster.readAt }
+  }
+  return roster
+}
+
 /** Whether the roster on this row is due for a read at `now`. */
 export function roomRosterReadDue(
   override: Pick<ConversationOverrideRow, "roomRoster" | "roomRosterAttemptAt"> | null | undefined,
-  now: number
+  now: number,
+  platform?: string
 ): boolean {
-  const readAt = override?.roomRoster?.readAt
-  if (readAt !== undefined && now - readAt < ROOM_ROSTER_TTL_MS) return false
+  const roster = override?.roomRoster
+  if (roster && !usesLegacyRoster(platform, roster) && now - roster.readAt < ROOM_ROSTER_TTL_MS)
+    return false
   const attemptAt = override?.roomRosterAttemptAt
   if (attemptAt !== undefined && now - attemptAt < ROOM_ROSTER_RETRY_MS) return false
   return true
@@ -104,7 +128,8 @@ export function refreshRoomRoster(
   const running = inflight.get(conversationKey)
   if (running) return running
   const now = deps.now()
-  if (!roomRosterReadDue(input.override, now)) return Promise.resolve("skipped")
+  if (!roomRosterReadDue(input.override, now, target.address.platform))
+    return Promise.resolve("skipped")
   const job = readAndStore(adapter, input, now).finally(() => inflight.delete(conversationKey))
   inflight.set(conversationKey, job)
   return job
@@ -135,6 +160,7 @@ async function readAndStore(
           ? { memberCount: read.memberCount }
           : {}),
         readAt: deps.now(),
+        revision: ROOM_ROSTER_REVISION,
       },
       roomRosterAttemptAt: now,
     })

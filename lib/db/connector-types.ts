@@ -619,6 +619,8 @@ export interface ConversationRoomRoster {
   /** The whole room's size when the platform said and it exceeds `members`. */
   memberCount?: number
   readAt: number
+  /** Version of the adapter semantics used to produce this cached roster. */
+  revision?: number
 }
 
 export type ConnectorConversationActivationStatus = "inactive" | "active"

@@ -5,10 +5,12 @@ import type { RoomMemberRead } from "@/types/connectors/room-members"
 import {
   ROOM_ROSTER_MAX_MEMBERS,
   ROOM_ROSTER_RETRY_MS,
+  ROOM_ROSTER_REVISION,
   ROOM_ROSTER_TTL_MS,
   __setRoomRosterDepsForTesting,
   canReadRoomMembers,
   refreshRoomRoster,
+  roomRosterForDisplay,
   roomRosterReadDue,
 } from "./room-roster"
 
@@ -60,7 +62,18 @@ describe("roomRosterReadDue", () => {
   it("waits out a fresh roster and a recent attempt", () => {
     expect(roomRosterReadDue(null, NOW)).toBe(true)
     expect(
-      roomRosterReadDue({ roomRoster: { tier: "full", members: [], readAt: NOW - 1 } }, NOW)
+      roomRosterReadDue(
+        {
+          roomRoster: {
+            tier: "full",
+            members: [],
+            readAt: NOW - 1,
+            revision: ROOM_ROSTER_REVISION,
+          },
+        },
+        NOW,
+        "lark"
+      )
     ).toBe(false)
     expect(
       roomRosterReadDue(
@@ -70,6 +83,45 @@ describe("roomRosterReadDue", () => {
     ).toBe(true)
     expect(roomRosterReadDue({ roomRosterAttemptAt: NOW - 1 }, NOW)).toBe(false)
     expect(roomRosterReadDue({ roomRosterAttemptAt: NOW - ROOM_ROSTER_RETRY_MS }, NOW)).toBe(true)
+  })
+
+  it.each(["discord", "lark", "matrix"])(
+    "refreshes stale semantics for %s without bypassing retry backoff",
+    (platform) => {
+      const roomRoster = { tier: "full" as const, members: [], readAt: NOW - 1 }
+      expect(roomRosterReadDue({ roomRoster }, NOW, platform)).toBe(true)
+      expect(roomRosterReadDue({ roomRoster, roomRosterAttemptAt: NOW - 1 }, NOW, platform)).toBe(
+        false
+      )
+      expect(roomRosterReadDue({ roomRoster }, NOW, "telegram")).toBe(false)
+    }
+  )
+})
+
+describe("roomRosterForDisplay", () => {
+  it.each(["discord", "lark"])(
+    "keeps %s legacy members without asserting a room total",
+    (platform) => {
+      const roster = {
+        tier: "partial" as const,
+        members: [{ remoteUserId: "1" }],
+        memberCount: 10_000,
+        readAt: NOW,
+      }
+      expect(roomRosterForDisplay(platform, roster)).toEqual({
+        tier: "partial",
+        members: roster.members,
+        readAt: NOW,
+      })
+      expect(roomRosterForDisplay("telegram", roster)).toBe(roster)
+    }
+  )
+
+  it("downgrades a legacy Lark full list and preserves a refreshed list", () => {
+    const roster = { tier: "full" as const, members: [{ remoteUserId: "1" }], readAt: NOW }
+    expect(roomRosterForDisplay("lark", roster)?.tier).toBe("partial")
+    const refreshed = { ...roster, revision: ROOM_ROSTER_REVISION }
+    expect(roomRosterForDisplay("lark", refreshed)).toBe(refreshed)
   })
 })
 
@@ -95,6 +147,7 @@ describe("refreshRoomRoster", () => {
             tier: "full",
             members: [{ remoteUserId: "ou_1", displayName: "Ann", role: "owner" }],
             readAt: NOW,
+            revision: ROOM_ROSTER_REVISION,
           },
           roomRosterAttemptAt: NOW,
         },
@@ -112,6 +165,7 @@ describe("refreshRoomRoster", () => {
       members: [],
       memberCount: 42,
       readAt: NOW,
+      revision: ROOM_ROSTER_REVISION,
     })
     const many = Array.from({ length: ROOM_ROSTER_MAX_MEMBERS + 2 }, (_, i) => ({
       remoteUserId: `u${i}`,
@@ -140,7 +194,11 @@ describe("refreshRoomRoster", () => {
     ).resolves.toBe("skipped")
     await expect(refreshRoomRoster(input(undefined))).resolves.toBe("skipped")
     await expect(
-      refreshRoomRoster(input(a, { roomRoster: { tier: "full", members: [], readAt: NOW } }))
+      refreshRoomRoster(
+        input(a, {
+          roomRoster: { tier: "full", members: [], readAt: NOW, revision: ROOM_ROSTER_REVISION },
+        })
+      )
     ).resolves.toBe("skipped")
     expect(a.readRoomMembers).not.toHaveBeenCalled()
     expect(w.writes).toEqual([])

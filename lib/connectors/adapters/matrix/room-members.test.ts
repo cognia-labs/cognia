@@ -44,6 +44,82 @@ describe("readMatrixRoomMembers", () => {
     })
   })
 
+  it.each([0, 50])(
+    "honors default %i, explicit overrides, and every v12 creator",
+    async (users_default) => {
+      const request = jest.fn(async (_method: "GET", path: string) => {
+        if (path.endsWith("/joined_members")) {
+          return {
+            joined: { "@creator:hs": {}, "@other:hs": {}, "@default:hs": {}, "@low:hs": {} },
+          }
+        }
+        if (path.endsWith("/state/m.room.create?format=event")) {
+          return {
+            type: "m.room.create",
+            sender: "@creator:hs",
+            content: { room_version: "12", additional_creators: ["@other:hs"] },
+          }
+        }
+        return { users_default, users: { "@low:hs": 0 } }
+      })
+      await expect(readMatrixRoomMembers(request, "!r:hs", { maxMembers: 10 })).resolves.toEqual({
+        tier: "full",
+        members: [
+          { remoteUserId: "@creator:hs", role: "admin" },
+          { remoteUserId: "@other:hs", role: "admin" },
+          { remoteUserId: "@default:hs", role: users_default === 50 ? "admin" : "member" },
+          { remoteUserId: "@low:hs", role: "member" },
+        ],
+      })
+    }
+  )
+
+  it.each([404, 403])(
+    "uses the legacy creator default only when the power levels event is absent (%i)",
+    async (status) => {
+      const request = jest.fn(async (_method: "GET", path: string) => {
+        if (path.endsWith("/joined_members"))
+          return { joined: { "@creator:hs": {}, "@peer:hs": {} } }
+        // Older servers may return only content even when format=event was requested.
+        if (path.endsWith("/state/m.room.create?format=event")) return { creator: "@creator:hs" }
+        throw Object.assign(new Error("Cannot read power levels"), { status })
+      })
+      await expect(readMatrixRoomMembers(request, "!r:hs", { maxMembers: 10 })).resolves.toEqual({
+        tier: "full",
+        members: [
+          { remoteUserId: "@creator:hs", role: status === 404 ? "admin" : "member" },
+          { remoteUserId: "@peer:hs", role: "member" },
+        ],
+      })
+    }
+  )
+
+  it("reads the v11 creation sender from bounded room state on older homeservers", async () => {
+    const request = jest.fn(async (_method: "GET", path: string) => {
+      if (path.endsWith("/joined_members")) return { joined: { "@creator:hs": {}, "@peer:hs": {} } }
+      if (path.endsWith("/state/m.room.create?format=event")) return { room_version: "11" }
+      if (path.endsWith("/state")) {
+        return [{ type: "m.room.create", sender: "@creator:hs", content: { room_version: "11" } }]
+      }
+      throw Object.assign(new Error("No power levels event"), { status: 404 })
+    })
+    await expect(readMatrixRoomMembers(request, "!r:hs", { maxMembers: 10 })).resolves.toEqual({
+      tier: "full",
+      members: [
+        { remoteUserId: "@creator:hs", role: "admin" },
+        { remoteUserId: "@peer:hs", role: "member" },
+      ],
+    })
+    expect(request).toHaveBeenCalledWith(
+      "GET",
+      "/_matrix/client/v3/rooms/!r%3Ahs/state",
+      undefined,
+      {
+        maxResponseBytes: MATRIX_ROSTER_MAX_RESPONSE_BYTES,
+      }
+    )
+  })
+
   it("fails when the member list itself cannot be read", async () => {
     const request = jest.fn(async () => {
       throw new Error("M_FORBIDDEN")

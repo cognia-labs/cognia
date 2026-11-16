@@ -41,6 +41,7 @@ jest.mock("@/stores/chat", () => ({
 }))
 
 import type { Character, ChatSession } from "@cognia/agent-config-types"
+import { ROOM_ROSTER_REVISION } from "@/lib/connectors/room-roster"
 
 import { useUIStore } from "@/stores/ui"
 import { RoomParticipantsChip } from "./room-participants-chip"
@@ -220,6 +221,7 @@ describe("RoomParticipantsChip", () => {
           { remoteUserId: "ou_cy", displayName: "Cy" },
         ],
         readAt: 1,
+        revision: ROOM_ROSTER_REVISION,
       },
     }
     mockMessages = [
@@ -254,6 +256,7 @@ describe("RoomParticipantsChip", () => {
         members: [{ remoteUserId: "1", displayName: "Admin", role: "admin" }],
         memberCount: 240,
         readAt: 1,
+        revision: ROOM_ROSTER_REVISION,
       },
     }
     const user = userEvent.setup({ delay: null })
@@ -271,10 +274,10 @@ describe("RoomParticipantsChip", () => {
     expect(screen.getByText("roles.admin")).toBeInTheDocument()
   })
 
-  it("says a cut list is partial without inventing a size", async () => {
+  it("shows a legacy Lark list as partial without inventing a size", async () => {
     mockOverride = {
       roomRoster: {
-        tier: "partial",
+        tier: "full",
         members: [{ remoteUserId: "a" }, { remoteUserId: "b", displayName: "Bo" }],
         readAt: 1,
       },
@@ -282,6 +285,34 @@ describe("RoomParticipantsChip", () => {
     const user = userEvent.setup({ delay: null })
     render(<RoomParticipantsChip session={larkGroup()} />)
     await user.click(screen.getByTestId("room-participants-chip"))
+    expect(await screen.findByTestId("room-participants-partial")).toHaveTextContent("partialOnly")
+  })
+
+  it("does not display a legacy Discord guild count on a channel", async () => {
+    mockOverride = {
+      roomRoster: {
+        tier: "partial",
+        members: [{ remoteUserId: "owner", role: "owner" }],
+        memberCount: 10_000,
+        readAt: 1,
+      },
+    }
+    mockMessages = [imTurn("pid_speaker", "Speaker")]
+    const user = userEvent.setup({ delay: null })
+    render(
+      <RoomParticipantsChip
+        session={session({
+          platformBinding: {
+            platform: "discord",
+            conversationKey: "discord:a1:channel",
+            scopeKind: "group",
+          } as never,
+        })}
+      />
+    )
+    const chip = screen.getByTestId("room-participants-chip")
+    expect(chip).toHaveAttribute("aria-label", 'participants:{"count":2}')
+    await user.click(chip)
     expect(await screen.findByTestId("room-participants-partial")).toHaveTextContent("partialOnly")
   })
 })
