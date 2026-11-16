@@ -723,3 +723,31 @@ it("R11 deleted branch parents refuse derived history without caching the refusa
   await expect(personalEgressFenced(composite)).resolves.toBe(true)
   expect(hasPersonalEgressSnapshot(composite)).toBe(false)
 })
+
+it("names the people every producer's marks carry, and nobody when one cannot be verified", async () => {
+  const { personalEgressMarkedPeople } = await import("./personal-egress")
+  const { bindPersonalOperationSources } = await import("./personal-operation")
+  const member = {
+    kind: "platform" as const,
+    platform: "lark" as const,
+    adapterId: "a1",
+    remoteUserId: "ou_m",
+  }
+  const a = await startToolExecutionRun("people-a", { localAuthorization: LOCAL_PERSON_RUN })
+  const b = await startToolExecutionRun("people-b", { localAuthorization: LOCAL_PERSON_RUN })
+  await addPersonalMarksToRun({ executionRunId: a.id }, [
+    { person: member, source: "lark-user", markedAt: 1 },
+  ])
+  const composite = bindPersonalOperationSources({}, [
+    { executionRunId: a.id },
+    { executionRunId: b.id },
+  ])
+  await expect(personalEgressMarkedPeople(composite)).resolves.toEqual([member])
+  await expect(personalEgressMarkedPeople({ executionRunId: b.id })).resolves.toEqual([])
+  await expect(
+    personalEgressMarkedPeople({ executionRunId: "missing-run" })
+  ).resolves.toBeUndefined()
+  await expect(
+    personalEgressMarkedPeople({ executionRunId: a.id, personalEgressBlocked: true } as never)
+  ).resolves.toBeUndefined()
+})

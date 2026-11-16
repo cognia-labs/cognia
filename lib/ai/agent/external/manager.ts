@@ -556,9 +556,11 @@ export class ExternalAgentManager {
 
   /**
    * Whether this execution carries personal content and so must launch
-   * `personal` (ADR-0243 3C): the owner's turn as a Cognia gateway task
-   * whose only network is the Host's own services. Anyone else's marked turn
-   * is refused, as is one on an agent with no Cognia model.
+   * `personal` (ADR-0243 3C): the owner's turn, or on an isolated instance a
+   * delegated requester's turn carrying only their own content (phase 4), as
+   * a Cognia gateway task whose only network is the Host's own services.
+   * Anyone else's marked turn is refused, as is one on an agent with no
+   * Cognia model.
    */
   private async personalLaunch(
     agentId: string,
@@ -572,8 +574,12 @@ export class ExternalAgentManager {
     const profile = readEngineLaunchProfile(config?.process?.env)
     // The marked turn's own gateway task.
     if (profile.kind === "personal") return true
-    if (profile.kind === "isolated" || !config || !gatewayBindingFor(config, options))
-      throw new PersonalEgressDeniedError()
+    if (!config || !gatewayBindingFor(config, options)) throw new PersonalEgressDeniedError()
+    if (profile.kind === "isolated") {
+      const { delegatedOwnPersonalTurn } = await import("./policy/launch-profile")
+      if (!(await delegatedOwnPersonalTurn(personalEgressOptionsSource(options), personalContext)))
+        throw new PersonalEgressDeniedError()
+    }
     return true
   }
 

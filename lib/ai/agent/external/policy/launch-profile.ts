@@ -22,6 +22,7 @@
 
 import {
   principalKey,
+  samePerson,
   type ActingIdentityV1,
   type PrincipalRefV1,
 } from "@cognia/plugin-contract/types/execution/acting-identity"
@@ -42,7 +43,8 @@ export interface EngineLaunchProfileInput {
 
 /**
  * `owner` or `isolated`. `personal` is the manager's, for a marked owner turn
- * it runs as a gateway task.
+ * (or a delegated requester's own, `delegatedOwnPersonalTurn`) it runs as a
+ * gateway task.
  */
 export async function engineLaunchProfile(
   input: EngineLaunchProfileInput
@@ -82,4 +84,27 @@ async function isOwner(requester: PrincipalRefV1): Promise<boolean> {
   if (requester.kind !== "platform") return false
   const { platformRequesterIsOwner } = await import("@/lib/chat/conversation-channel")
   return platformRequesterIsOwner(requester)
+}
+
+/**
+ * Whether an isolated execution's personal content is only its own
+ * requester's (ADR-0243 phase 4): a run on the delegated lane, asked by
+ * exactly the person it acts as, whose every mark names that person. Such a
+ * turn launches `personal` like the owner's; anyone else's marked turn on an
+ * isolated instance is refused.
+ */
+export async function delegatedOwnPersonalTurn(
+  run: PersonalEgressContext | undefined,
+  personal: PersonalEgressContext
+): Promise<boolean> {
+  const runId = externalRunAuthorityId(run)
+  if (!runId) return false
+  const { resolveRunActingIdentity } = await import("@/lib/execution/acting-authority")
+  const identity = await resolveRunActingIdentity(undefined, runId)
+  const acting = identity?.lane === "delegated" ? identity.actingPrincipal : undefined
+  if (!acting || identity?.requesters.length !== 1 || !samePerson(identity.requesters[0]!, acting))
+    return false
+  const { personalEgressMarkedPeople } = await import("@/lib/execution/personal-egress")
+  const people = await personalEgressMarkedPeople(personal)
+  return !!people && people.length > 0 && people.every((person) => samePerson(person, acting))
 }

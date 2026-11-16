@@ -2,6 +2,7 @@
 import { normalizeCogniaModelBinding } from "@cognia/agent-contracts/external-agent"
 import type { ExternalAgentConfig } from "@cognia/agent-contracts/external-agent"
 import type { ExternalAgentRuntimeCatalogEntry } from "@cognia/agent-contracts/external-agent-lifecycle"
+import { ENGINE_PROFILE_ENV } from "@cognia/agent-contracts/engine-launch-profile"
 import type {
   GatewayRuntimeConfig,
   GatewayRuntimeProfile,
@@ -296,6 +297,9 @@ function customizationEnvironment(
         "COGNIA_TOOLHOST_SOCKET",
         "COGNIA_TOOLHOST_TOKEN",
         "COGNIA_TOOLHOST_SERVER",
+        // The source's launch profile (an isolated instance's, ADR-0243 3C);
+        // the Host sets the task's own.
+        ENGINE_PROFILE_ENV,
         ...(rules.routeOwned ?? []),
       ].includes(key) ||
       rules.routeOwnedPrefixes?.some((prefix) => key.startsWith(prefix))

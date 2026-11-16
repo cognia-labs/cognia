@@ -78,8 +78,11 @@ const mockEngineLaunchProfile = jest.fn(
     kind: "owner",
   })
 )
+const mockDelegatedOwnPersonalTurn = jest.fn(async (_run: unknown, _personal: unknown) => false)
 jest.mock("./policy/launch-profile", () => ({
   engineLaunchProfile: (input: unknown) => mockEngineLaunchProfile(input),
+  delegatedOwnPersonalTurn: (run: unknown, personal: unknown) =>
+    mockDelegatedOwnPersonalTurn(run, personal),
 }))
 const mockRemoveIsolatedStateRoot = jest.fn(async (_key: string) => true)
 jest.mock("./lifecycle/state-root", () => ({
@@ -4476,6 +4479,56 @@ describe("Cognia gateway task lifecycle", () => {
       restorePlane()
     }
   })
+
+  // ADR-0243 phase 4: a delegated requester's own content runs like the owner's.
+  it.each([
+    [true, "launches a personal task"],
+    [false, "refuses"],
+  ])(
+    "on an isolated instance, a marked turn whose content is only its requester's: %s %s",
+    async (own) => {
+      const { manager, restorePlane } = prepare()
+      const connected = jest.spyOn(MockAdapter.prototype, "connect")
+      const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+      mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
+      mockDelegatedOwnPersonalTurn.mockResolvedValueOnce(own)
+      try {
+        const source = managedConfig()
+        source.process!.env = engineLaunchProfileEnv({
+          kind: "isolated",
+          key: "k-member",
+          reason: "requester",
+        })
+        await manager.addAgent(source)
+        const turn = bindPersonalEgressOptions(
+          { context: { custom: { chatSessionId: "member-chat" } } },
+          { executionRunId: "member-run" }
+        )
+        if (own) {
+          await manager.execute("managed", "my calendar", turn)
+          const child = connected.mock.calls
+            .map(([config]) => config)
+            .find((config) => config.metadata?.cogniaGatewayTask)!
+          expect(JSON.parse(child.process!.env!.COGNIA_ENGINE_PROFILE!)).toMatchObject({
+            kind: "personal",
+          })
+        } else {
+          await expect(manager.execute("managed", "my calendar", turn)).rejects.toMatchObject({
+            code: "personal-egress-denied",
+          })
+          expect(mockGatewayMint).not.toHaveBeenCalled()
+        }
+        expect(mockDelegatedOwnPersonalTurn).toHaveBeenCalledWith(
+          { executionRunId: "member-run" },
+          expect.anything()
+        )
+      } finally {
+        mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+        connected.mockRestore()
+        restorePlane()
+      }
+    }
+  )
 
   it("keeps an unmarked owner turn on the configured task launch", async () => {
     const { manager, restorePlane } = prepare()

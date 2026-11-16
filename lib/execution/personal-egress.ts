@@ -20,6 +20,7 @@ import {
   personalTaintDependencies,
 } from "./personal-sink"
 import { PERSONAL_EGRESS_DENIAL } from "@cognia/plugin-contract/types/execution/personal-egress"
+import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import type { PersonalEgressToolOwner } from "@cognia/plugin-contract/types/execution/personal-egress"
 import { personalEgressToolDenied } from "@cognia/plugin-contract/types/execution/personal-egress"
 
@@ -330,6 +331,43 @@ export async function personalContentExposed(context: PersonalEgressContext): Pr
     // A producer changed during another read. Re-read its positive evidence
     // before handing over content, without treating invalidation as exposure.
   }
+}
+
+/**
+ * The people whose content an execution carries, read from every producer
+ * (ADR-0243 phase 4: whether a delegated turn holds only its own person's
+ * content). `undefined` when a source is blocked or cannot be verified.
+ */
+export async function personalEgressMarkedPeople(
+  context: PersonalEgressContext
+): Promise<PrincipalRefV1[] | undefined> {
+  const people: PrincipalRefV1[] = []
+  const pending: object[] = [context]
+  const seen = new Set<object>()
+  while (pending.length) {
+    const source = pending.pop()!
+    if (seen.has(source)) continue
+    seen.add(source)
+    if ("personalEgressBlocked" in source && source.personalEgressBlocked === true) return undefined
+    const producers =
+      personalOperationSources(source) ??
+      ("personalSources" in source && Array.isArray(source.personalSources)
+        ? source.personalSources
+        : undefined)
+    if (producers) {
+      pending.push(...producers)
+      continue
+    }
+    const taint = await readRunPersonalTaint(
+      personalSinkContextForRun(
+        source as PersonalEgressContext,
+        "Opaque egress has no Host execution provenance"
+      )
+    )
+    if (!taint.verified) return undefined
+    people.push(...taint.marks.map((mark) => mark.person))
+  }
+  return people
 }
 
 export async function assertPersonalEgress(context: PersonalEgressContext): Promise<void> {

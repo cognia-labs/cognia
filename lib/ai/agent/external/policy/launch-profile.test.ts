@@ -3,12 +3,16 @@ import type {
   ActingIdentityV1,
   PrincipalRefV1,
 } from "@cognia/plugin-contract/types/execution/acting-identity"
-import { engineLaunchProfile } from "./launch-profile"
+import { delegatedOwnPersonalTurn, engineLaunchProfile } from "./launch-profile"
 
 const mockResolveRunActingIdentity = jest.fn()
 const mockPlatformRequesterIsOwner = jest.fn()
 jest.mock("@/lib/execution/acting-authority", () => ({
   resolveRunActingIdentity: (...args: unknown[]) => mockResolveRunActingIdentity(...args),
+}))
+const mockMarkedPeople = jest.fn()
+jest.mock("@/lib/execution/personal-egress", () => ({
+  personalEgressMarkedPeople: (context: unknown) => mockMarkedPeople(context),
 }))
 jest.mock("@/lib/chat/conversation-channel", () => ({
   platformRequesterIsOwner: (requester: unknown) => mockPlatformRequesterIsOwner(requester),
@@ -118,5 +122,44 @@ describe("engineLaunchProfile", () => {
     expect(await key(identity({ rootRunId: "run-other", requesters: [member] }))).not.toBe(root)
     // Without a recorded root the run itself is the scope.
     expect(await key(identity({ rootRunId: undefined, requesters: [member] }))).not.toBe(root)
+  })
+})
+
+describe("delegatedOwnPersonalTurn (ADR-0243 phase 4)", () => {
+  const personal = { executionRunId: "run-1" }
+  const delegated = identity({ requesters: [member], actingPrincipal: member })
+  async function ownTurn(found: ActingIdentityV1 | undefined, people?: PrincipalRefV1[]) {
+    mockResolveRunActingIdentity.mockResolvedValueOnce(found)
+    mockMarkedPeople.mockResolvedValueOnce(people)
+    return delegatedOwnPersonalTurn(run, personal)
+  }
+
+  it("holds for a delegated requester whose every mark names them", async () => {
+    await expect(ownTurn(delegated, [member, { ...member, unionId: "on_m" }])).resolves.toBe(true)
+    expect(mockMarkedPeople).toHaveBeenCalledWith(personal)
+  })
+
+  it("fails for another person's content, unverified marks, or none", async () => {
+    await expect(ownTurn(delegated, [member, owner])).resolves.toBe(false)
+    await expect(ownTurn(delegated, undefined)).resolves.toBe(false)
+    await expect(ownTurn(delegated, [])).resolves.toBe(false)
+  })
+
+  it("fails off the delegated lane, for several requesters, or a run that acts as someone else", async () => {
+    await expect(
+      ownTurn(identity({ lane: "service", requesters: [member] }), [member])
+    ).resolves.toBe(false)
+    await expect(
+      ownTurn(identity({ requesters: [member, owner], actingPrincipal: member }), [member])
+    ).resolves.toBe(false)
+    await expect(
+      ownTurn(identity({ requesters: [owner], actingPrincipal: member }), [member])
+    ).resolves.toBe(false)
+    await expect(ownTurn(undefined, [member])).resolves.toBe(false)
+  })
+
+  it("fails without a Host run", async () => {
+    await expect(delegatedOwnPersonalTurn(undefined, personal)).resolves.toBe(false)
+    expect(mockResolveRunActingIdentity).not.toHaveBeenCalled()
   })
 })

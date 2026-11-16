@@ -52,9 +52,14 @@ it("assembles a registered recipe only after validating the route and arguments"
     taskId: "task",
     files: { "recipe.json": "{}" },
   })
+  // An isolated instance's own launch profile is the Host's; the task gets its own.
+  input.config.process!.env = { COGNIA_ENGINE_PROFILE: '{"kind":"isolated"}' }
+  expect(tools.buildGatewayTaskConfig(input).config.process?.env).not.toHaveProperty(
+    "COGNIA_ENGINE_PROFILE"
+  )
   input.config.process!.args = ["--api-key", "unapproved"]
   expect(() => tools.buildGatewayTaskConfig(input)).toThrow(/Unsupported/)
-  expect(project).toHaveBeenCalledTimes(1)
+  expect(project).toHaveBeenCalledTimes(2)
 })
 it("preserves public gateway session encoding and rejects malformed task ids", () => {
   const binding = { providerId: "p", modelId: "m", accountId: "a" }
