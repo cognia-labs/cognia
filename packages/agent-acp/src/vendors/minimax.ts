@@ -9,6 +9,13 @@ export const minimaxAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfil
     id: "minimax-code",
     match: { kind: "base", values: ["mcode"] },
     stateRoots: [".minimax"],
+    // MiniMax resolves its first nonempty directory alias before ~/.minimax.
+    relocation: {
+      env: ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"],
+      skipEmpty: true,
+      default: ".minimax",
+      temp: "tmp",
+    },
     isolation: {
       env: { MINIMAX_DATA_DIR: "minimax", MAVIS_DATA_DIR: "minimax" },
       denyReadable: [".minimax"],

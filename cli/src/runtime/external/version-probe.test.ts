@@ -14,9 +14,9 @@ jest.mock("@/lib/ai/agent/external/config/install-catalog", () => {
 })
 
 import type { AgentPathRuntime } from "./agent-path"
+import { companionFor } from "./launch-descriptor"
 import {
-  antigravityBundle,
-  antigravityBundleDigest,
+  companionBundleDigest,
   isPackageRunner,
   normalizeProbeNodeEnv,
   probeRuntimeVersion,
@@ -143,16 +143,18 @@ describe("probeRuntimeVersion", () => {
       home: probeBin,
       env: { PATH: probeBin },
     }
-    expect(() => antigravityBundle(server, runtime)).toThrow(/localharness_external/)
+    const bundle = () => companionFor(server, (command) => resolveProbeExecutable(command, runtime))
+    expect(bundle).toThrow(/localharness_external/)
     fs.writeFileSync(helper, "helper-v1", { mode: 0o755 })
-    const first = antigravityBundle(server, runtime)!
-    const firstDigest = await antigravityBundleDigest(first)
-    expect(first.harnessPath).toBe(fs.realpathSync(helper))
+    const first = bundle()!
+    const firstDigest = await companionBundleDigest(first)
+    expect(first.helperPath).toBe(fs.realpathSync(helper))
+    expect(first.engine).toBe("antigravity-acp")
     fs.writeFileSync(helper, "helper-v2")
-    expect(await antigravityBundleDigest(antigravityBundle(server, runtime)!)).not.toBe(firstDigest)
+    expect(await companionBundleDigest(bundle()!)).not.toBe(firstDigest)
     fs.unlinkSync(helper)
     fs.symlinkSync(server, helper)
-    expect(() => antigravityBundle(server, runtime)).toThrow(/localharness_external/)
+    expect(bundle).toThrow(/localharness_external/)
   })
   beforeEach(() => {
     probeBin = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-version-probe-"))

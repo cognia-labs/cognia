@@ -103,14 +103,17 @@ describe("agentStateFileRoots", () => {
 
 describe("agentStateIsolationFor", () => {
   it("recognizes resolved Goose executables without matching unrelated binaries", () => {
-    for (const command of ["goose", "/opt/bin/goose", "C:\\Tools\\goose.exe"])
+    for (const command of ["goose", "/opt/bin/goose", "C:\\Tools\\goose.exe"]) {
       expect(agentStateIsolationFor(command)?.env).toEqual({ GOOSE_PATH_ROOT: "goose" })
+      expect(agentStateIsolationFor(command)?.setEnv).toEqual({ GOOSE_DISABLE_KEYRING: "1" })
+    }
     expect(agentStateIsolationFor("/opt/not-goose")).toBeNull()
   })
 
   it("isolates both MiniMax directory aliases", () => {
     expect(agentStateIsolationFor("mcode", ["acp"])).toEqual({
       env: { MINIMAX_DATA_DIR: "minimax", MAVIS_DATA_DIR: "minimax" },
+      setEnv: {},
       sharedRoots: [".minimax"],
       denyReadable: [".minimax"],
     })
@@ -119,6 +122,7 @@ describe("agentStateIsolationFor", () => {
   it("scopes Grok by its documented home", () => {
     expect(agentStateIsolationFor("grok")).toEqual({
       env: { GROK_HOME: "grok" },
+      setEnv: {},
       sharedRoots: [".grok"],
       denyReadable: [".grok"],
     })
@@ -127,6 +131,7 @@ describe("agentStateIsolationFor", () => {
   it("replaces only Copilot's login root, leaving its cache shared", () => {
     expect(agentStateIsolationFor("copilot")).toEqual({
       env: { COPILOT_HOME: "copilot" },
+      setEnv: {},
       sharedRoots: [".copilot"],
       denyReadable: [".copilot"],
     })

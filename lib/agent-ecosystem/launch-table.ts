@@ -27,6 +27,9 @@ export const ENGINE_LAUNCH_TABLE_DESCRIPTION =
   "the package, otherwise the executable file name without a Windows suffix, lower-cased."
 
 const ENV_KEY = /^[A-Z][A-Z0-9_]*$/
+/** Loader and injection keys no descriptor may set, whatever it is for. */
+const LOADER_ENV = /^(?:LD_|DYLD_|NODE_OPTIONS$|GCONV_PATH$|GIT_CONFIG_|HOSTALIASES$|NLSPATH$)/
+const FLAG = /^--[a-z][a-z0-9-]*$/
 
 function relativePathError(path: string): string | null {
   if (path === "" || path.startsWith("/") || path.startsWith("~") || path.includes("\\"))
@@ -38,16 +41,23 @@ function relativePathError(path: string): string | null {
 
 function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
   const at = `launch descriptor "${descriptor.id}"`
+  const { isolation, relocation, temp, companion } = descriptor
   if (descriptor.match.values.length === 0) errors.push(`${at}: match has no values`)
-  const paths: [string, readonly string[] | undefined][] = [
+  const paths: [string, readonly (string | undefined)[] | undefined][] = [
     ["stateRoots", descriptor.stateRoots],
     ["fileRoots", descriptor.fileRoots],
-    ["isolation.sharedRoots", descriptor.isolation?.sharedRoots],
-    ["isolation.denyReadable", descriptor.isolation?.denyReadable],
-    ["isolation.env", descriptor.isolation && Object.values(descriptor.isolation.env)],
+    ["isolation.sharedRoots", isolation?.sharedRoots],
+    ["isolation.denyReadable", isolation?.denyReadable],
+    ["isolation.env", isolation && Object.values(isolation.env)],
+    ["relocation.default", [relocation?.default]],
+    ["relocation.writable", relocation?.writable],
+    ["relocation.temp", [relocation?.temp]],
+    ["temp.home", [temp?.home]],
+    ["temp.isolated.path", [temp?.isolated?.path]],
   ]
   for (const [field, list] of paths) {
     for (const path of list ?? []) {
+      if (path === undefined) continue
       const problem = relativePathError(path)
       if (problem) errors.push(`${at}: ${field} "${path}" ${problem}`)
     }
@@ -56,14 +66,37 @@ function validate(descriptor: EngineLaunchDescriptor, errors: string[]): void {
   for (const file of descriptor.fileRoots ?? []) {
     if (!stateRoots.has(file)) errors.push(`${at}: file root "${file}" is not a state root`)
   }
-  for (const root of descriptor.isolation?.sharedRoots ?? []) {
+  for (const root of isolation?.sharedRoots ?? []) {
     if (!stateRoots.has(root)) errors.push(`${at}: shared root "${root}" is not a state root`)
   }
-  for (const key of Object.keys(descriptor.isolation?.env ?? {})) {
-    if (!ENV_KEY.test(key)) errors.push(`${at}: isolation env key "${key}" is not an env name`)
-  }
-  if (descriptor.isolation && Object.keys(descriptor.isolation.env).length === 0)
+  if (isolation && Object.keys(isolation.env).length === 0)
     errors.push(`${at}: isolation maps no env key into the private root`)
+  if (relocation && relocation.env.length === 0 && !relocation.args)
+    errors.push(`${at}: relocation names no env key or flag`)
+  if (temp?.isolated && !(isolation && temp.isolated.env in isolation.env))
+    errors.push(`${at}: temp.isolated.env "${temp.isolated.env}" is not an isolation env key`)
+  const envKeys = [
+    ...Object.keys(isolation?.env ?? {}),
+    ...Object.keys(isolation?.setEnv ?? {}),
+    ...(relocation?.env ?? []),
+    ...Object.keys(relocation?.setEnv ?? {}),
+    ...(companion ? [companion.env] : []),
+  ]
+  for (const key of envKeys) {
+    if (!ENV_KEY.test(key) || LOADER_ENV.test(key))
+      errors.push(`${at}: env key "${key}" is not an env name a descriptor may set`)
+  }
+  for (const flag of [...(relocation?.args?.flags ?? []), ...(relocation?.refusedArgs ?? [])]) {
+    if (!FLAG.test(flag)) errors.push(`${at}: flag "${flag}" is not a long option`)
+  }
+  if (companion && !/^[A-Za-z0-9._-]+$/.test(companion.sibling))
+    errors.push(`${at}: companion "${companion.sibling}" is not a file name`)
+  for (const args of Object.values(descriptor.platformArgs ?? {})) {
+    for (const arg of args) {
+      if (!FLAG.test(arg.split("=")[0]))
+        errors.push(`${at}: platform argument "${arg}" is not a long option`)
+    }
+  }
 }
 
 function normalize(descriptor: EngineLaunchDescriptor): EngineLaunchDescriptor {
@@ -73,6 +106,7 @@ function normalize(descriptor: EngineLaunchDescriptor): EngineLaunchDescriptor {
     ...(isolation && {
       isolation: {
         env: isolation.env,
+        ...(isolation.setEnv && { setEnv: isolation.setEnv }),
         sharedRoots: isolation.sharedRoots ?? descriptor.stateRoots ?? [],
         denyReadable: isolation.denyReadable,
       },

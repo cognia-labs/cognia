@@ -14,6 +14,17 @@ export const clineAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
     id: "cline",
     match: { kind: "base", values: ["cline"] },
     stateRoots: [".cline"],
+    // ACP branches before upstream's --data-dir setup; --config controls all
+    // persisted state, and its early pre-pass reads the first occurrence.
+    relocation: {
+      env: ["CLINE_DIR"],
+      args: { flags: ["--config"], pick: "first" },
+      refusedArgs: ["--data-dir"],
+      trim: true,
+      default: ".cline",
+      temp: "tmp",
+      setEnv: { CLINE_NO_AUTO_UPDATE: "1" },
+    },
     isolation: {
       env: { CLINE_DIR: "cline" },
       denyReadable: [".cline"],

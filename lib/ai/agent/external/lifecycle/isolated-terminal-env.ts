@@ -33,8 +33,11 @@ export async function resolveIsolatedTerminalEnv(
   const base = root.path.replace(/[\\/]+$/, "")
   return {
     kind: "isolated",
-    env: Object.fromEntries(
-      Object.entries(rule.env).map(([key, directory]) => [key, `${base}${separator}${directory}`])
-    ),
+    env: {
+      ...Object.fromEntries(
+        Object.entries(rule.env).map(([key, directory]) => [key, `${base}${separator}${directory}`])
+      ),
+      ...rule.setEnv,
+    },
   }
 }

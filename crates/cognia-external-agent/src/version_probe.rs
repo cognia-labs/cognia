@@ -70,7 +70,7 @@ pub struct RuntimeVersionProbe {
     pub output: Option<String>,
     /// The executable that was actually run, after PATH resolution.
     pub executable_path: Option<String>,
-    /// SHA-256 of that executable, or the Antigravity server/helper composite
+    /// SHA-256 of that executable, or the engine/companion composite
     /// identity. Absent for package runners, where the
     /// resolved file is `npx`, not the runtime — recording npx's digest as the
     /// runtime's identity would make every unpinned runtime look stable while
@@ -187,19 +187,19 @@ fn digest_of(path: &PathBuf, cancelled: &AtomicBool) -> Option<String> {
     digest_reader(std::fs::File::open(path).ok()?, cancelled)
 }
 
-/// Antigravity executes a companion from the same release. Consent must bind
-/// both byte sequences, not merely the ACP wrapper that starts the companion.
+/// An engine with a companion executes it from the same release. Consent must
+/// bind both byte sequences, not merely the wrapper that starts the companion.
 fn runtime_digest_of(
     program: &PathBuf,
-    helper: Option<&PathBuf>,
+    companion: Option<&crate::launch_descriptor::Companion>,
     cancelled: &AtomicBool,
 ) -> Option<String> {
     let server_digest = digest_of(program, cancelled)?;
-    match helper {
+    match companion {
         None => Some(server_digest),
-        Some(helper) => {
-            let helper_digest = digest_of(helper, cancelled)?;
-            let identity = format!("antigravity-acp-v1\n{server_digest}\n{helper_digest}\n");
+        Some(companion) => {
+            let helper_digest = digest_of(&companion.helper, cancelled)?;
+            let identity = format!("{}-v1\n{server_digest}\n{helper_digest}\n", companion.engine);
             Some(hex::encode(Sha256::digest(identity.as_bytes())))
         }
     }
@@ -263,8 +263,8 @@ pub async fn probe_runtime_version(runtime_id: &str) -> Result<RuntimeVersionPro
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancel_on_drop = CancelIdentityOnDrop(cancelled.clone());
     let identity = tokio::task::spawn_blocking(move || -> Result<_, String> {
-        let helper = super::command_resolver::antigravity_harness_path(&resolved)?;
-        let path = if helper.is_some() {
+        let companion = crate::launch_descriptor::companion_for(&resolved)?;
+        let path = if companion.is_some() {
             resolved.canonicalize().map_err(|error| error.to_string())?
         } else {
             resolved
@@ -272,9 +272,9 @@ pub async fn probe_runtime_version(runtime_id: &str) -> Result<RuntimeVersionPro
         let digest = if is_package_runner(command) {
             None
         } else {
-            runtime_digest_of(&path, helper.as_ref(), &cancelled)
+            runtime_digest_of(&path, companion.as_ref(), &cancelled)
         };
-        Ok((path.to_string_lossy().into_owned(), helper, digest))
+        Ok((path.to_string_lossy().into_owned(), companion, digest))
     });
     let identity_result =
         match tokio::time::timeout(Duration::from_millis(spec.timeout_ms), identity).await {
@@ -286,7 +286,7 @@ pub async fn probe_runtime_version(runtime_id: &str) -> Result<RuntimeVersionPro
                 spec.timeout_ms
             )),
         };
-    let (executable_path, antigravity_helper, executable_digest) = match identity_result {
+    let (executable_path, companion, executable_digest) = match identity_result {
         Ok(identity) => identity,
         Err(detail) => {
             return Ok(RuntimeVersionProbe {
@@ -300,8 +300,8 @@ pub async fn probe_runtime_version(runtime_id: &str) -> Result<RuntimeVersionPro
     drop(cancel_on_drop);
 
     let mut cmd = tokio::process::Command::new(&executable_path);
-    if let Some(helper) = antigravity_helper {
-        cmd.env("ANTIGRAVITY_HARNESS_PATH", helper);
+    if let Some(companion) = companion {
+        cmd.env(companion.env, companion.helper);
     }
     cmd.args(&spec.args)
         .stdin(std::process::Stdio::null())
@@ -553,7 +553,12 @@ mod tests {
         std::fs::write(&server, "server-v1").unwrap();
         std::fs::write(&helper, "helper-v1").unwrap();
         let cancelled = AtomicBool::new(false);
-        let before = runtime_digest_of(&server, Some(&helper), &cancelled).unwrap();
+        let companion = crate::launch_descriptor::Companion {
+            engine: "antigravity-acp",
+            env: "ANTIGRAVITY_HARNESS_PATH",
+            helper: helper.clone(),
+        };
+        let before = runtime_digest_of(&server, Some(&companion), &cancelled).unwrap();
         let identity = format!(
             "antigravity-acp-v1\n{}\n{}\n",
             digest_of(&server, &cancelled).unwrap(),
@@ -562,11 +567,11 @@ mod tests {
         assert_eq!(before, hex::encode(Sha256::digest(identity.as_bytes())));
         std::fs::write(&helper, "helper-v2").unwrap();
         assert_ne!(
-            runtime_digest_of(&server, Some(&helper), &cancelled).unwrap(),
+            runtime_digest_of(&server, Some(&companion), &cancelled).unwrap(),
             before
         );
         std::fs::remove_file(&helper).unwrap();
-        assert!(runtime_digest_of(&server, Some(&helper), &cancelled).is_none());
+        assert!(runtime_digest_of(&server, Some(&companion), &cancelled).is_none());
     }
 
     #[test]

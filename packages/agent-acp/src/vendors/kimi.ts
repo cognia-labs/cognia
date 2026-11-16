@@ -14,6 +14,12 @@ export const kimiAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>(
     id: "kimi",
     match: { kind: "base", values: ["kimi"] },
     stateRoots: [".kimi-code"],
+    relocation: {
+      env: ["KIMI_CODE_HOME"],
+      default: ".kimi-code",
+      temp: "tmp",
+      setEnv: { KIMI_CODE_NO_AUTO_UPDATE: "1", KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT: "0" },
+    },
     isolation: {
       env: { KIMI_CODE_HOME: "kimi" },
       denyReadable: [".kimi-code", ".kimi"],

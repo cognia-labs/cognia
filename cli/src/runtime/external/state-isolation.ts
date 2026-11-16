@@ -194,8 +194,7 @@ export function applyStateIsolation<T extends StateIsolationSpawnConfig>(
     mapped[envKey] = dir
   }
   const underHome = (relative: string) => path.join(host.homedir, ...relative.split("/"))
-  // Goose otherwise reads the shared OS keyring despite relocating its files.
-  if ("GOOSE_PATH_ROOT" in mapped) mapped.GOOSE_DISABLE_KEYRING = "1"
+  Object.assign(mapped, rule.setEnv)
   return {
     config: { ...config, env: { ...env, ...mapped } },
     plan: {

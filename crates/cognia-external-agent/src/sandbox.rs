@@ -48,13 +48,10 @@ pub enum SandboxError {
     MissingCwd,
     /// No home directory to derive agent state roots from.
     MissingHome,
-    InvalidQoderConfigDir,
     InvalidPolicy(String),
-    InvalidClineConfigDir,
-    InvalidKimiConfigDir,
-    InvalidGrokConfigDir,
-    InvalidMiniMaxConfigDir,
-    InvalidAntigravityConfigDir,
+    /// An engine's relocated state root is empty, unscopable, or leaves the
+    /// launch's own state ([`crate::launch_descriptor::relocated_state`]).
+    InvalidStateRoot(String),
     /// The configuration asked for a private state root
     /// ([`crate::state_isolation`]) and it could not be provided. Refusing is
     /// the only safe answer: launching anyway would hand the agent the user's
@@ -93,12 +90,7 @@ impl std::fmt::Display for SandboxError {
                  before starting a session."
             ),
             Self::InvalidPolicy(reason) => write!(f, "Invalid external-agent sandbox policy: {reason}"),
-            Self::InvalidClineConfigDir => write!(f, "Cline ACP requires a nonempty --config or CLINE_DIR inside the Bot state directory when isolated; --data-dir is unsupported in ACP."),
-            Self::InvalidMiniMaxConfigDir => write!(f, "MiniMax state directory must stay inside the Bot state directory when isolated."),
-            Self::InvalidAntigravityConfigDir => write!(f, "Antigravity ACP Gemini home must be nonempty and stay inside the Bot state directory when isolated."),
-            Self::InvalidGrokConfigDir => write!(f, "Grok state directory must be nonempty and stay inside the Bot state directory when isolated."),
-            Self::InvalidKimiConfigDir => write!(f, "Kimi state directory must be nonempty and stay inside the Bot state directory when isolated."),
-            Self::InvalidQoderConfigDir => write!(f, "Qoder config directory must be nonempty and stay inside the Bot state directory when isolated."),
+            Self::InvalidStateRoot(reason) => write!(f, "{reason}"),
             Self::MissingHome => write!(
                 f,
                 "The external-agent sandbox could not determine this user's home directory."
@@ -710,300 +702,6 @@ pub fn find_sandbox_launcher(host: &dyn SandboxHost) -> Option<PathBuf> {
         .find(|candidate| host.is_executable(candidate))
 }
 
-fn qoder_config_root(
-    config: &ExternalAgentSpawnConfig,
-    home: &Path,
-) -> Result<Option<PathBuf>, SandboxError> {
-    if base_command(&config.command) != "qoder" {
-        return Ok(None);
-    }
-    let mut selected = config
-        .env
-        .get("QODER_CONFIG_DIR")
-        .cloned()
-        .or_else(|| std::env::var("QODER_CONFIG_DIR").ok());
-    let mut args = config.args.iter();
-    while let Some(arg) = args.next() {
-        if arg == "--config-dir" {
-            selected = Some(args.next().cloned().unwrap_or_default());
-        } else if let Some(value) = arg.strip_prefix("--config-dir=") {
-            selected = Some(value.into());
-        }
-    }
-    let bot = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
-    let base = if bot {
-        config
-            .env
-            .get("COGNIA_BOT_STATE_DIR")
-            .map(PathBuf::from)
-            .ok_or(SandboxError::InvalidQoderConfigDir)?
-    } else {
-        home.to_path_buf()
-    };
-    if !base.is_absolute() {
-        return Err(SandboxError::InvalidQoderConfigDir);
-    }
-    let root = match selected {
-        Some(value) if value.trim().is_empty() => return Err(SandboxError::InvalidQoderConfigDir),
-        Some(value) => {
-            let path = PathBuf::from(value);
-            if path.is_absolute() {
-                path
-            } else {
-                Path::new(config.cwd.as_deref().ok_or(SandboxError::MissingCwd)?).join(path)
-            }
-        }
-        None => base.join(".qoder"),
-    };
-    let mut normalized = PathBuf::new();
-    for component in root.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            std::path::Component::CurDir => {}
-            component => normalized.push(component.as_os_str()),
-        }
-    }
-    if bot && !normalized.starts_with(&base) {
-        return Err(SandboxError::InvalidQoderConfigDir);
-    }
-    Ok(Some(normalized))
-}
-
-fn cline_config_root(
-    config: &ExternalAgentSpawnConfig,
-    home: &Path,
-) -> Result<Option<PathBuf>, SandboxError> {
-    if base_command(&config.command) != "cline" {
-        return Ok(None);
-    }
-    if config
-        .args
-        .iter()
-        .any(|arg| arg == "--data-dir" || arg.starts_with("--data-dir="))
-    {
-        return Err(SandboxError::InvalidClineConfigDir);
-    }
-    let mut selected = config
-        .env
-        .get("CLINE_DIR")
-        .cloned()
-        .or_else(|| std::env::var("CLINE_DIR").ok());
-    let mut args = config.args.iter();
-    while let Some(arg) = args.next() {
-        if arg == "--config" {
-            selected = Some(args.next().cloned().unwrap_or_default());
-            break;
-        } else if let Some(value) = arg.strip_prefix("--config=") {
-            selected = Some(value.into());
-            break;
-        }
-    }
-    let bot = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
-    let base = if bot {
-        config
-            .env
-            .get("COGNIA_BOT_STATE_DIR")
-            .map(PathBuf::from)
-            .ok_or(SandboxError::InvalidClineConfigDir)?
-    } else {
-        home.to_path_buf()
-    };
-    if !base.is_absolute() {
-        return Err(SandboxError::InvalidClineConfigDir);
-    }
-    let root = match selected {
-        Some(value) if value.trim().is_empty() => return Err(SandboxError::InvalidClineConfigDir),
-        Some(value) => {
-            let path = PathBuf::from(value.trim());
-            if path.is_absolute() {
-                path
-            } else {
-                Path::new(config.cwd.as_deref().ok_or(SandboxError::MissingCwd)?).join(path)
-            }
-        }
-        None => base.join(".cline"),
-    };
-    let mut normalized = PathBuf::new();
-    for component in root.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            std::path::Component::CurDir => {}
-            component => normalized.push(component.as_os_str()),
-        }
-    }
-    if bot && !normalized.starts_with(&base) {
-        return Err(SandboxError::InvalidClineConfigDir);
-    }
-    Ok(Some(normalized))
-}
-
-fn grok_config_root(
-    config: &ExternalAgentSpawnConfig,
-    home: &Path,
-) -> Result<Option<PathBuf>, SandboxError> {
-    if base_command(&config.command) != "grok" {
-        return Ok(None);
-    }
-    let selected = config.env.get("GROK_HOME").cloned().or_else(|| {
-        // A gateway task already owns its home; never inherit the host login.
-        (!config.env.contains_key(crate::gateway_task::PAYLOAD_ENV))
-            .then(|| std::env::var("GROK_HOME").ok())
-            .flatten()
-    });
-    native_state_root(
-        config,
-        home,
-        selected,
-        ".grok",
-        SandboxError::InvalidGrokConfigDir,
-    )
-}
-
-fn kimi_config_root(
-    config: &ExternalAgentSpawnConfig,
-    home: &Path,
-) -> Result<Option<PathBuf>, SandboxError> {
-    if base_command(&config.command) != "kimi" {
-        return Ok(None);
-    }
-    let selected = config
-        .env
-        .get("KIMI_CODE_HOME")
-        .cloned()
-        .or_else(|| std::env::var("KIMI_CODE_HOME").ok());
-    native_state_root(
-        config,
-        home,
-        selected,
-        ".kimi-code",
-        SandboxError::InvalidKimiConfigDir,
-    )
-}
-
-fn minimax_config_root(
-    config: &ExternalAgentSpawnConfig,
-    home: &Path,
-) -> Result<Option<PathBuf>, SandboxError> {
-    if base_command(&config.command) != "mcode" {
-        return Ok(None);
-    }
-    let selected = ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"]
-        .iter()
-        .filter_map(|key| {
-            config
-                .env
-                .get(*key)
-                .cloned()
-                .or_else(|| std::env::var(key).ok())
-        })
-        .find(|value| !value.trim().is_empty());
-    native_state_root(
-        config,
-        home,
-        selected,
-        ".minimax",
-        SandboxError::InvalidMiniMaxConfigDir,
-    )
-}
-
-fn native_state_root(
-    config: &ExternalAgentSpawnConfig,
-    home: &Path,
-    selected: Option<String>,
-    default_directory: &str,
-    invalid: SandboxError,
-) -> Result<Option<PathBuf>, SandboxError> {
-    let bot = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
-    let base = if bot {
-        config
-            .env
-            .get("COGNIA_BOT_STATE_DIR")
-            .map(PathBuf::from)
-            .ok_or(invalid.clone())?
-    } else {
-        home.to_path_buf()
-    };
-    if !base.is_absolute() {
-        return Err(invalid.clone());
-    }
-    let root = match selected {
-        Some(value) if value.trim().is_empty() => return Err(invalid.clone()),
-        Some(value) => {
-            let path = PathBuf::from(value);
-            if path.is_absolute() {
-                path
-            } else {
-                Path::new(config.cwd.as_deref().ok_or(SandboxError::MissingCwd)?).join(path)
-            }
-        }
-        None => base.join(default_directory),
-    };
-    let mut normalized = PathBuf::new();
-    for component in root.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                if normalized.parent().is_some() {
-                    normalized.pop();
-                }
-            }
-            std::path::Component::CurDir => {}
-            component => normalized.push(component.as_os_str()),
-        }
-    }
-    if bot && !normalized.starts_with(&base) {
-        return Err(invalid.clone());
-    }
-    if bot {
-        let physical_base = cognia_exec_sandbox::paths::safe_canonicalize(&base)
-            .map_err(|_| invalid.clone())?;
-        let physical_root = cognia_exec_sandbox::paths::safe_canonicalize(&normalized)
-            .map_err(|_| invalid.clone())?;
-        if !physical_root.starts_with(&physical_base) {
-            return Err(invalid.clone());
-        }
-    }
-    Ok(Some(normalized))
-}
-
-/// Native home overrides replace shared write grants instead of adding authority.
-fn additional_native_home(config: &ExternalAgentSpawnConfig, home: &Path) -> Result<Option<(&'static str, PathBuf)>, SandboxError> {
-    let (key, default) = match base_command(&config.command).as_str() {
-        "openclaude" => ("OPENCLAUDE_CONFIG_DIR", ".openclaude"),
-        "vibe-acp" => ("VIBE_HOME", ".vibe"),
-        "mimo" => ("MIMOCODE_HOME", ".local/share/mimocode"),
-        "hermes" => ("HERMES_HOME", ".hermes"),
-        _ => return Ok(None),
-    };
-    let selected = config.env.get(key).cloned().or_else(|| std::env::var(key).ok());
-    // Without a relocation, preserve native XDG/global-file defaults.
-    if selected.is_none() { return Ok(None); }
-    let root = native_state_root(config, home, selected, default,
-        SandboxError::InvalidPolicy(format!("{key} must be nonempty and remain inside owned Bot state when isolated")))?;
-    Ok(root.map(|root| (key, root)))
-}
-
-fn antigravity_config_root(
-    config: &ExternalAgentSpawnConfig,
-    home: &Path,
-) -> Result<Option<PathBuf>, SandboxError> {
-    if !super::command_resolver::is_antigravity_acp_command(&config.command) {
-        return Ok(None);
-    }
-    let selected = config.env.get("GEMINI_HOME").cloned()
-        .or_else(|| std::env::var("GEMINI_HOME").ok())
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            if value == "~" { home.to_string_lossy().into_owned() }
-            else if let Some(relative) = value.strip_prefix("~/") { home.join(relative).to_string_lossy().into_owned() }
-            else { value }
-        });
-    native_state_root(config, home, selected, ".gemini", SandboxError::InvalidAntigravityConfigDir)
-}
-
 /// Remove every `--writable <root>` pair naming exactly `root`.
 fn drop_writable(args: &mut Vec<String>, root: &Path) {
     let root = root.to_string_lossy();
@@ -1120,15 +818,11 @@ pub fn wrap_with_sandbox(
 
     let mut config = config;
     crate::dsh_runtime::normalize_managed_launch(&mut config).map_err(SandboxError::InvalidPolicy)?;
-    super::command_resolver::configure_antigravity_platform_args(
-        &config.command, &mut config.args, host.os(),
-    );
+    crate::launch_descriptor::apply_platform_args(&config.command, &mut config.args, host.os());
     config.sandbox_policy.validate().map_err(SandboxError::InvalidPolicy)?;
-    if super::command_resolver::is_antigravity_acp_command(&config.command)
-        && config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1")
-    {
-        return Err(SandboxError::StateIsolation("Antigravity ACP Bot isolation is unavailable: its native keychain accounts are shared".into()));
-    }
+    let bot_isolation = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
+    crate::launch_descriptor::check_private_launch(&config.command, &config.args, bot_isolation)
+        .map_err(SandboxError::StateIsolation)?;
     crate::process::scope_grok_credentials(&mut config);
     let native_bridge_root = crate::native_bridge::registered_native_bridge_root(&config.command, &config.args).map_err(SandboxError::InvalidPolicy)?;
     let crush_bridge = native_bridge_root.is_some() && config.args.get(1).map(String::as_str) == Some("--cognia-crush-bridge");
@@ -1142,23 +836,33 @@ pub fn wrap_with_sandbox(
         crate::state_isolation::apply_state_isolation(&mut config, host.agent_state_data_dir().as_deref(), &host_home).map_err(SandboxError::StateIsolation)?
     };
 
-    let minimax_root = minimax_config_root(&config, &home)?;
-    let kimi_root = kimi_config_root(&config, &home)?;
-    let grok_root = grok_config_root(&config, &home)?;
-    let cline_root = cline_config_root(&config, &home)?;
-    let qoder_root = qoder_config_root(&config, &home)?;
-    let antigravity_root = antigravity_config_root(&config, &home)?;
-    let additional_home = additional_native_home(&config, &home)?;
+    let bot_state = config
+        .env
+        .get("COGNIA_BOT_STATE_DIR")
+        .filter(|_| bot_isolation)
+        .map(PathBuf::from);
+    if bot_isolation && !bot_state.as_deref().is_some_and(Path::is_absolute) {
+        return Err(SandboxError::MissingCwd);
+    }
+    let relocated = crate::launch_descriptor::relocated_state(
+        &crate::launch_descriptor::RelocationInput {
+            command: &config.command,
+            args: &config.args,
+            env: &config.env,
+            cwd: config.cwd.as_deref(),
+            home: &home,
+            private_base: bot_state.as_deref(),
+            host_env_applies: !config.env.contains_key(crate::gateway_task::PAYLOAD_ENV),
+        },
+        |key| std::env::var(key).ok(),
+    )
+    .map_err(SandboxError::InvalidStateRoot)?;
     let tool_host_dir = tool_host_runtime_dir(&host.temp_dir(), host.uid());
     let state_command = if crush_bridge { "crush" } else { config.command.as_str() };
     let file_roots = state_file_roots(state_command, &config.args, &home);
-    for root in additional_home.as_ref().map(|(_, root)| root.clone()).or_else(|| cline_root.clone())
-        .or_else(|| qoder_root.clone())
-        .or_else(|| kimi_root.clone())
-        .or_else(|| grok_root.clone())
-        .or_else(|| minimax_root.clone())
-        .or_else(|| antigravity_root.clone())
-        .map(|root| vec![root])
+    for root in relocated
+        .as_ref()
+        .map(|state| state.writable.clone())
         .unwrap_or_else(|| state_writable_roots(state_command, &config.args, &home))
     {
         // An isolated launch must not (re)create the user's own login roots.
@@ -1176,19 +880,13 @@ pub fn wrap_with_sandbox(
     }
     host.ensure_dir(&tool_host_dir);
 
-    let bot_isolation = config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1");
-    let mut args = if bot_isolation {
-        let state = config
-            .env
-            .get("COGNIA_BOT_STATE_DIR")
-            .filter(|value| Path::new(value).is_absolute())
-            .ok_or(SandboxError::MissingCwd)?;
-        host.ensure_dir(Path::new(state));
+    let mut args = if let Some(state) = &bot_state {
+        host.ensure_dir(state);
         vec![
             "--cwd".into(),
             cwd.clone(),
             "--writable".into(),
-            state.clone(),
+            state.to_string_lossy().into_owned(),
             "--writable".into(),
             tool_host_dir.to_string_lossy().into_owned(),
             "--".into(),
@@ -1388,25 +1086,23 @@ pub fn wrap_with_sandbox(
         // The private socket child stays in an already mounted, short host temp scope.
         for key in ["TMPDIR", "TMP", "TEMP"] { env.insert(key.into(), tool_host_dir.to_string_lossy().into_owned()); }
     }
-    if let Some(root) = antigravity_root {
-        for relative in ["antigravity-acp", "artifacts"] {
-            drop_writable(&mut args, &home.join(".gemini").join(relative));
-            let state = root.join(relative);
-            host.ensure_dir(&state);
-            if !bot_isolation {
-                args.splice(0..0, ["--writable".into(), state.to_string_lossy().into_owned()]);
-            }
-        }
-        env.insert("GEMINI_HOME".into(), root.to_string_lossy().into_owned());
-        let server = super::command_resolver::resolve_command_path(&config.command)
-            .ok_or_else(|| SandboxError::InvalidPolicy("Antigravity ACP server is not installed".into()))?;
-        let helper = super::command_resolver::antigravity_harness_path(&server)
-            .map_err(SandboxError::InvalidPolicy)?
-            .ok_or_else(|| SandboxError::InvalidPolicy("Invalid Antigravity ACP server".into()))?;
-        let resolved = server.canonicalize().map_err(|error| SandboxError::InvalidPolicy(error.to_string()))?;
+    let program = super::command_resolver::resolve_command_path(&config.command);
+    if let Some(companion) = program
+        .as_deref()
+        .map(crate::launch_descriptor::companion_for)
+        .transpose()
+        .map_err(SandboxError::InvalidPolicy)?
+        .flatten()
+    {
+        // The helper belongs to the release it sits beside: launch that
+        // release's canonical executable, never a caller-chosen alias.
+        let resolved = program
+            .expect("a companion was found for a resolved program")
+            .canonicalize()
+            .map_err(|error| SandboxError::InvalidPolicy(error.to_string()))?;
         let target = args.iter().position(|arg| arg == "--").expect("target separator") + 1;
         args[target] = resolved.to_string_lossy().into_owned();
-        env.insert("ANTIGRAVITY_HARNESS_PATH".into(), helper.to_string_lossy().into_owned());
+        env.insert(companion.env.into(), companion.helper.to_string_lossy().into_owned());
     }
     env.remove(CODEX_WRITABLE_ROOTS_ENV);
     env.remove(CODEX_WRITABLE_CEILING_ENV);
@@ -1429,133 +1125,25 @@ pub fn wrap_with_sandbox(
             );
         }
     }
-    if let Some((key, root)) = additional_home {
+    if let Some(state) = &relocated {
+        // The relocated root replaces the engine's shared state roots.
         for shared in state_writable_roots(&config.command, &config.args, &home) {
             drop_writable(&mut args, &shared);
         }
-        host.ensure_dir(&root);
-        if !bot_isolation { args.splice(0..0, ["--writable".into(), root.to_string_lossy().into_owned()]); }
-        env.insert(key.into(), root.to_string_lossy().into_owned());
-        let temp = root.join("tmp");
-        host.ensure_dir(&temp);
-        for key in ["TMPDIR", "TMP", "TEMP"] { env.insert(key.into(), temp.to_string_lossy().into_owned()); }
-    }
-    if let Some(root) = minimax_root {
-        drop_writable(&mut args, &home.join(".minimax"));
-        host.ensure_dir(&root);
-        if !bot_isolation {
-            args.splice(
-                0..0,
-                ["--writable".into(), root.to_string_lossy().into_owned()],
-            );
-        }
-        let temp = root.join("tmp");
-        host.ensure_dir(&temp);
-        for key in ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"] {
-            env.insert(key.into(), root.to_string_lossy().into_owned());
-        }
-        for key in ["TMPDIR", "TMP", "TEMP"] {
-            env.insert(key.into(), temp.to_string_lossy().into_owned());
-        }
-    }
-    if let Some(root) = grok_root {
-        drop_writable(&mut args, &home.join(".grok"));
-        host.ensure_dir(&root);
-        if !bot_isolation {
-            args.splice(
-                0..0,
-                ["--writable".into(), root.to_string_lossy().into_owned()],
-            );
-        }
-        env.insert("GROK_HOME".into(), root.to_string_lossy().into_owned());
-        env.insert("GROK_DISABLE_AUTOUPDATER".into(), "1".into());
-        env.insert("GROK_CHANGELOG_OFFLINE".into(), "1".into());
-        // Keep sessions and file-lock fallbacks within the selected state root.
-        // Do not grant shared /tmp/sessions or /tmp/grok-file-lock-* paths.
-        let temp = root.join("tmp");
-        host.ensure_dir(&temp);
-        for key in ["TMPDIR", "TMP", "TEMP"] {
-            env.insert(key.into(), temp.to_string_lossy().into_owned());
-        }
-    }
-    if let Some(root) = &kimi_root {
-        let default_root = home.join(".kimi-code").to_string_lossy().into_owned();
-        while let Some(index) = args
-            .windows(2)
-            .position(|pair| pair[0] == "--writable" && pair[1] == default_root)
-        {
-            args.drain(index..index + 2);
-        }
-        host.ensure_dir(root);
-        if !bot_isolation {
-            args.splice(
-                0..0,
-                ["--writable".into(), root.to_string_lossy().into_owned()],
-            );
-        }
-        env.insert("KIMI_CODE_HOME".into(), root.to_string_lossy().into_owned());
-        env.insert("KIMI_CODE_NO_AUTO_UPDATE".into(), "1".into());
-        env.insert("KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT".into(), "0".into());
-    }
-    if let Some(root) = cline_root {
-        let default_root = home.join(".cline").to_string_lossy().into_owned();
-        while let Some(index) = args
-            .windows(2)
-            .position(|pair| pair[0] == "--writable" && pair[1] == default_root)
-        {
-            args.drain(index..index + 2);
-        }
-        host.ensure_dir(&root);
-        args.splice(
-            0..0,
-            ["--writable".into(), root.to_string_lossy().into_owned()],
-        );
-        env.insert("CLINE_DIR".into(), root.to_string_lossy().into_owned());
-        env.insert("CLINE_NO_AUTO_UPDATE".into(), "1".into());
-        if !bot_isolation {
-            let temp = root.join("tmp");
-            host.ensure_dir(&temp);
-            for key in ["TMPDIR", "TMP", "TEMP"] {
-                env.insert(key.into(), temp.to_string_lossy().into_owned());
+        host.ensure_dir(&state.root);
+        for root in &state.writable {
+            host.ensure_dir(root);
+            if !bot_isolation {
+                args.splice(0..0, ["--writable".into(), root.to_string_lossy().into_owned()]);
             }
         }
+        env.extend(state.env.iter().cloned());
     }
-
-    if let Some(root) = qoder_root {
-        // A custom configuration root must not also grant writes to the CLI login root.
-        let default_root = home.join(".qoder").to_string_lossy().into_owned();
-        while let Some(index) = args
-            .windows(2)
-            .position(|pair| pair[0] == "--writable" && pair[1] == default_root)
-        {
-            args.drain(index..index + 2);
-        }
-        host.ensure_dir(&root);
-        args.splice(
-            0..0,
-            ["--writable".into(), root.to_string_lossy().into_owned()],
-        );
-        env.insert(
-            "QODER_CONFIG_DIR".into(),
-            root.to_string_lossy().into_owned(),
-        );
-        if !bot_isolation {
-            let temp = root.join("tmp");
-            host.ensure_dir(&temp);
-            for key in ["TMPDIR", "TMP", "TEMP"] {
-                env.insert(key.into(), temp.to_string_lossy().into_owned());
-            }
-        }
-    }
-    if base_command(&config.command).rsplit(['/', '\\']).next() == Some("goose") && !bot_isolation
-    {
-        // Goose creates platform-extension temp files while opening a session.
-        // Keep them under an existing scoped write root, not ambient macOS temp.
-        let temp = if isolation.is_some() {
-            Path::new(&config.env["GOOSE_PATH_ROOT"]).join("state/tmp")
-        } else {
-            home.join(".local/state/goose/tmp")
-        };
+    let temp = match &relocated {
+        Some(state) => state.temp.clone(),
+        None => crate::launch_descriptor::engine_temp(&config.command, &config.args, &config.env, &home, isolation.is_some()),
+    };
+    if let Some(temp) = temp.filter(|_| !bot_isolation) {
         host.ensure_dir(&temp);
         for key in ["TMPDIR", "TMP", "TEMP"] {
             env.insert(key.into(), temp.to_string_lossy().into_owned());
@@ -1582,13 +1170,6 @@ pub fn wrap_with_sandbox(
     }
     if env.contains_key(crate::devin_mcp_config::PAYLOAD_ENV) {
         env.insert(crate::devin_mcp_config::WRAPPED_ENV.into(), "1".into());
-    }
-    if let Some(root) = &kimi_root {
-        let temp = root.join("tmp");
-        host.ensure_dir(&temp);
-        for key in ["TMPDIR", "TMP", "TEMP"] {
-            env.insert(key.into(), temp.to_string_lossy().into_owned());
-        }
     }
     if let Some((runtime, _)) = &managed_dsh {
         let target = args
@@ -1631,12 +1212,13 @@ mod tests {
         for (command, key, shared) in [("openclaude", "OPENCLAUDE_CONFIG_DIR", ".openclaude"), ("vibe-acp", "VIBE_HOME", ".vibe"), ("mimo", "MIMOCODE_HOME", ".local/share/mimocode"), ("hermes", "HERMES_HOME", ".hermes")] {
             let mut cfg = config(command, &[], Some("/workspace"));
             cfg.env.insert(key.into(), "/owned/native".into());
-            assert_eq!(additional_native_home(&cfg, home).unwrap(), Some((key, PathBuf::from("/owned/native"))));
             let wrapped = wrap_with_sandbox(cfg.clone(), &FakeHost::new("macos")).unwrap();
             assert!(!wrapped.args.contains(&home.join(shared).to_string_lossy().into_owned()));
+            assert!(wrapped.args.windows(2).any(|pair| pair == ["--writable", "/owned/native"]));
             assert_eq!(wrapped.env.get(key).map(String::as_str), Some("/owned/native"));
+            assert_eq!(wrapped.env["TMPDIR"], "/owned/native/tmp");
             cfg.env.insert(key.into(), "".into());
-            assert!(additional_native_home(&cfg, home).is_err());
+            assert!(matches!(wrap_with_sandbox(cfg, &FakeHost::new("macos")), Err(SandboxError::InvalidStateRoot(_))));
         }
     }
 
@@ -1651,15 +1233,6 @@ mod tests {
         assert!(state_writable_roots("agy", &[], Path::new("/home/dev")).is_empty());
     }
 
-    #[test]
-    fn antigravity_explicit_home_uses_the_existing_native_state_boundary() {
-        let mut request = config("agy_acp_server.par", &[], Some("/work/project"));
-        request.env.insert("GEMINI_HOME".into(), "state".into());
-        assert_eq!(antigravity_config_root(&request, Path::new("/home/dev")).unwrap(), Some(PathBuf::from("/work/project/state")));
-        request.env.insert("COGNIA_BOT_ISOLATION".into(), "1".into());
-        request.env.insert("COGNIA_BOT_STATE_DIR".into(), "/work/bot-state".into());
-        assert!(matches!(antigravity_config_root(&request, Path::new("/home/dev")), Err(SandboxError::InvalidAntigravityConfigDir)));
-    }
 
     #[test]
     fn antigravity_bot_wrapper_refuses_even_when_file_storage_is_requested() {
@@ -2159,7 +1732,7 @@ mod tests {
             ]);
             assert!(matches!(
                 wrap_with_sandbox(input, &host),
-                Err(SandboxError::InvalidGrokConfigDir)
+                Err(SandboxError::InvalidStateRoot(_))
             ));
             assert!(host.dirs.borrow().is_empty());
         }
@@ -2196,7 +1769,7 @@ mod tests {
         ]);
         assert!(matches!(
             wrap_with_sandbox(input, &host),
-            Err(SandboxError::InvalidKimiConfigDir)
+            Err(SandboxError::InvalidStateRoot(_))
         ));
         assert!(host.dirs.borrow().is_empty());
     }
@@ -2232,7 +1805,7 @@ mod tests {
         ]);
         assert!(matches!(
             wrap_with_sandbox(input, &host),
-            Err(SandboxError::InvalidMiniMaxConfigDir)
+            Err(SandboxError::InvalidStateRoot(_))
         ));
     }
 
@@ -2284,7 +1857,7 @@ mod tests {
             ]);
             assert!(matches!(
                 wrap_with_sandbox(input, &host),
-                Err(SandboxError::InvalidKimiConfigDir)
+                Err(SandboxError::InvalidStateRoot(_))
             ));
         }
         let mut input = config("kimi", &["acp"], Some("/work"));
@@ -2295,7 +1868,8 @@ mod tests {
         ]);
         let wrapped = wrap_with_sandbox(input, &host).unwrap();
         assert_eq!(wrapped.env["KIMI_CODE_HOME"], "/work/state/kimi");
-        assert_eq!(wrapped.env["TMPDIR"], "/work/state/kimi/tmp");
+        // A private launch's temp is always its own state's.
+        assert_eq!(wrapped.env["TMPDIR"], "/work/state/tmp");
         assert!(!wrapped.args.iter().any(|arg| arg == "/home/dev/.kimi-code"));
     }
 
@@ -2332,7 +1906,7 @@ mod tests {
         ]);
         assert!(matches!(
             wrap_with_sandbox(input, &host),
-            Err(SandboxError::InvalidClineConfigDir)
+            Err(SandboxError::InvalidStateRoot(_))
         ));
         let input = config(
             "cline",
@@ -2341,7 +1915,7 @@ mod tests {
         );
         assert!(matches!(
             wrap_with_sandbox(input, &host),
-            Err(SandboxError::InvalidClineConfigDir)
+            Err(SandboxError::InvalidStateRoot(_))
         ));
     }
 
@@ -2385,7 +1959,7 @@ mod tests {
             .insert("QODER_CONFIG_DIR".into(), "/work/state/../outside".into());
         assert!(matches!(
             wrap_with_sandbox(input, &FakeHost::new("macos")),
-            Err(SandboxError::InvalidQoderConfigDir)
+            Err(SandboxError::InvalidStateRoot(_))
         ));
     }
 

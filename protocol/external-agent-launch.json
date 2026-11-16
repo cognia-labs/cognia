@@ -86,6 +86,10 @@
         },
         "sharedRoots": [".openclaude", ".openclaude.json"],
         "denyReadable": [".openclaude", ".openclaude.json"]
+      },
+      "relocation": {
+        "env": ["OPENCLAUDE_CONFIG_DIR"],
+        "temp": "tmp"
       }
     },
     {
@@ -118,7 +122,23 @@
         "kind": "base",
         "values": ["agy_acp_server.par", "agy_acp_server"]
       },
-      "stateRoots": [".gemini/antigravity-acp", ".gemini/artifacts"]
+      "stateRoots": [".gemini/antigravity-acp", ".gemini/artifacts"],
+      "relocation": {
+        "env": ["GEMINI_HOME"],
+        "skipEmpty": true,
+        "expandTilde": true,
+        "default": ".gemini",
+        "writable": ["antigravity-acp", "artifacts"],
+        "temp": "antigravity-acp/tmp"
+      },
+      "companion": {
+        "sibling": "localharness_external",
+        "env": "ANTIGRAVITY_HARNESS_PATH"
+      },
+      "privateLaunchUnsupported": "its native keychain accounts are shared",
+      "platformArgs": {
+        "linux": ["--uid="]
+      }
     },
     {
       "id": "minimax-code",
@@ -127,6 +147,12 @@
         "values": ["mcode"]
       },
       "stateRoots": [".minimax"],
+      "relocation": {
+        "env": ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"],
+        "skipEmpty": true,
+        "default": ".minimax",
+        "temp": "tmp"
+      },
       "isolation": {
         "env": {
           "MINIMAX_DATA_DIR": "minimax",
@@ -143,6 +169,15 @@
         "values": ["kimi"]
       },
       "stateRoots": [".kimi-code"],
+      "relocation": {
+        "env": ["KIMI_CODE_HOME"],
+        "default": ".kimi-code",
+        "temp": "tmp",
+        "setEnv": {
+          "KIMI_CODE_NO_AUTO_UPDATE": "1",
+          "KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT": "0"
+        }
+      },
       "isolation": {
         "env": {
           "KIMI_CODE_HOME": "kimi"
@@ -158,6 +193,20 @@
         "values": ["cline"]
       },
       "stateRoots": [".cline"],
+      "relocation": {
+        "env": ["CLINE_DIR"],
+        "args": {
+          "flags": ["--config"],
+          "pick": "first"
+        },
+        "refusedArgs": ["--data-dir"],
+        "trim": true,
+        "default": ".cline",
+        "temp": "tmp",
+        "setEnv": {
+          "CLINE_NO_AUTO_UPDATE": "1"
+        }
+      },
       "isolation": {
         "env": {
           "CLINE_DIR": "cline"
@@ -188,6 +237,15 @@
         "values": ["qoder"]
       },
       "stateRoots": [".qoder"],
+      "relocation": {
+        "env": ["QODER_CONFIG_DIR"],
+        "args": {
+          "flags": ["--config-dir"],
+          "pick": "last"
+        },
+        "default": ".qoder",
+        "temp": "tmp"
+      },
       "isolation": {
         "env": {
           "QODER_CONFIG_DIR": "qoder"
@@ -212,6 +270,9 @@
         "env": {
           "GOOSE_PATH_ROOT": "goose"
         },
+        "setEnv": {
+          "GOOSE_DISABLE_KEYRING": "1"
+        },
         "sharedRoots": [
           ".config/goose",
           ".local/share/goose",
@@ -224,6 +285,13 @@
           ".local/state/goose",
           "Library/Application Support/Block/goose"
         ]
+      },
+      "temp": {
+        "home": ".local/state/goose/tmp",
+        "isolated": {
+          "env": "GOOSE_PATH_ROOT",
+          "path": "state/tmp"
+        }
       }
     },
     {
@@ -233,6 +301,15 @@
         "values": ["grok"]
       },
       "stateRoots": [".grok"],
+      "relocation": {
+        "env": ["GROK_HOME"],
+        "default": ".grok",
+        "temp": "tmp",
+        "setEnv": {
+          "GROK_DISABLE_AUTOUPDATER": "1",
+          "GROK_CHANGELOG_OFFLINE": "1"
+        }
+      },
       "isolation": {
         "env": {
           "GROK_HOME": "grok"
@@ -302,6 +379,10 @@
         },
         "sharedRoots": [".vibe"],
         "denyReadable": [".vibe"]
+      },
+      "relocation": {
+        "env": ["VIBE_HOME"],
+        "temp": "tmp"
       }
     },
     {
@@ -332,6 +413,10 @@
           ".local/state/mimocode",
           ".cache/mimocode"
         ]
+      },
+      "relocation": {
+        "env": ["MIMOCODE_HOME"],
+        "temp": "tmp"
       }
     },
     {
@@ -347,6 +432,10 @@
         },
         "sharedRoots": [".hermes"],
         "denyReadable": [".hermes"]
+      },
+      "relocation": {
+        "env": ["HERMES_HOME"],
+        "temp": "tmp"
       }
     },
     {

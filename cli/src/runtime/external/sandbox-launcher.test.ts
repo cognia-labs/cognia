@@ -4,8 +4,6 @@ import os from "node:os"
 import path from "node:path"
 
 import {
-  antigravityConfigRoot,
-  additionalNativeHome,
   buildSandboxLauncherArgs,
   codexExtraWritableRoots,
   bundledLauncherCandidates,
@@ -14,12 +12,14 @@ import {
   isDevCheckout,
   launcherName,
   launcherSupportsBotIsolation,
+  launchRelocation,
   resolveSandboxedExternalAgentLaunch,
   sandboxLauncherUnavailableMessage,
   sandboxSupportsPlatform,
   workspaceToolchainReadableRoots,
 } from "./sandbox-launcher"
 import { toolHostRuntimeDir } from "../../agent/tool-host/protocol"
+import { checkPrivateLaunch } from "./launch-descriptor"
 
 describe("external-agent sandbox launcher", () => {
   it("grants managed DSH native state writes and host lease reads without control writes", async () => {
@@ -97,17 +97,17 @@ describe("external-agent sandbox launcher", () => {
 
   it("resolves Antigravity's native home and refuses shared-keychain Bot isolation", () => {
     expect(
-      antigravityConfigRoot(
-        { id: "agy", command: "agy_acp_server.par", env: { GEMINI_HOME: "~/custom-gemini" } },
+      launchRelocation(
+        {
+          id: "agy",
+          command: "agy_acp_server.par",
+          cwd: "/work",
+          env: { GEMINI_HOME: "~/custom-gemini" },
+        },
         "/home/me"
-      )
+      )?.root
     ).toBe("/home/me/custom-gemini")
-    expect(() =>
-      antigravityConfigRoot(
-        { id: "agy", command: "agy_acp_server.par", env: { COGNIA_BOT_ISOLATION: "1" } },
-        "/home/me"
-      )
-    ).toThrow(/Keychain/)
+    expect(() => checkPrivateLaunch("agy_acp_server.par", [], true)).toThrow(/keychain/)
   })
   it("launches the canonical Antigravity bundle with a host-owned helper and narrow state roots", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-launch-"))
@@ -150,7 +150,7 @@ describe("external-agent sandbox launcher", () => {
           },
           { ...runtime, supportsBotIsolation: () => true }
         )
-      ).rejects.toThrow(/Keychain/)
+      ).rejects.toThrow(/keychain/)
       for (const args of [[], ["--uid="], ["--uid", ""]]) {
         const linux = await resolveSandboxedExternalAgentLaunch(
           { ...config, args },
@@ -390,7 +390,7 @@ describe("external-agent sandbox launcher", () => {
             ensureDir,
           }
         )
-      ).rejects.toThrow("inside the Bot state")
+      ).rejects.toThrow("inside the launch's own state")
       expect(ensureDir).not.toHaveBeenCalled()
       expect(fs.existsSync(path.join(outside, "new"))).toBe(false)
     } finally {
@@ -471,7 +471,7 @@ describe("external-agent sandbox launcher", () => {
           },
           "/home/user"
         )
-      ).toThrow(/Kimi/)
+      ).toThrow(/^kimi /)
     }
   )
 
@@ -535,7 +535,7 @@ describe("external-agent sandbox launcher", () => {
   ])("refuses ineffective or empty Cline selectors: %s", (...args) => {
     expect(() =>
       buildSandboxLauncherArgs({ id: "cline", command: "cline", cwd: "/work", args }, "/home/user")
-    ).toThrow(/Cline/)
+    ).toThrow(/^cline /)
   })
 
   it("refuses Cline state outside a Bot's owned root", () => {
@@ -553,7 +553,7 @@ describe("external-agent sandbox launcher", () => {
         },
         "/home/user"
       )
-    ).toThrow("inside the Bot state")
+    ).toThrow("inside the launch's own state")
   })
 
   it.each([
@@ -608,7 +608,7 @@ describe("external-agent sandbox launcher", () => {
           supportsBotIsolation: () => true,
         }
       )
-    ).rejects.toThrow("inside the Bot state")
+    ).rejects.toThrow("inside the launch's own state")
   })
 
   it("exposes only Qoder program directories from the host home to an isolated Bot", () => {
@@ -634,7 +634,7 @@ describe("external-agent sandbox launcher", () => {
         { id: "qoder", command: "qoder", cwd: "/work", args: ["--config-dir"] },
         "/home/user"
       )
-    ).toThrow("must not be empty")
+    ).toThrow("must be nonempty")
   })
 
   it("hides implicit Aider config and dotenv files in home, cwd and Git ancestors", () => {
@@ -1260,7 +1260,7 @@ it("refuses MiniMax Bot state escape before creating a directory", async () => {
         supportsBotIsolation: () => true,
       }
     )
-  ).rejects.toThrow("inside the Bot")
+  ).rejects.toThrow("inside the launch's own state")
   expect(ensureDir).not.toHaveBeenCalled()
 })
 
@@ -1325,7 +1325,7 @@ it.each(["", "   ", "/work/state/../escape", "/home/user/.grok"])(
           ensureDir,
         }
       )
-    ).rejects.toThrow(/Grok/)
+    ).rejects.toThrow(/^grok /)
     expect(ensureDir).not.toHaveBeenCalled()
   }
 )
@@ -1345,22 +1345,26 @@ it.each([
       cwd: "/workspace",
       env: { [key]: "/owned/native" },
     }
-    expect(additionalNativeHome(config, "/home/me")).toEqual({ key, root: "/owned/native" })
+    expect(launchRelocation(config, "/home/me")).toMatchObject({
+      root: "/owned/native",
+      env: { [key]: "/owned/native" },
+      temp: "/owned/native/tmp",
+    })
     const args = buildSandboxLauncherArgs(config, "/home/me")
     expect(args).toEqual(expect.arrayContaining(["--writable", "/owned/native"]))
     expect(args).not.toContain(`/home/me/${defaultRoot}`)
-    expect(() => additionalNativeHome({ ...config, env: { [key]: "" } }, "/home/me")).toThrow(
-      /empty/
+    expect(() => launchRelocation({ ...config, env: { [key]: "" } }, "/home/me")).toThrow(
+      /nonempty/
     )
     expect(() =>
-      additionalNativeHome(
+      launchRelocation(
         {
           ...config,
           env: { ...config.env, COGNIA_BOT_ISOLATION: "1", COGNIA_BOT_STATE_DIR: "/bot" },
         },
         "/home/me"
       )
-    ).toThrow(/Bot state/)
+    ).toThrow(/own state/)
   }
 )
 

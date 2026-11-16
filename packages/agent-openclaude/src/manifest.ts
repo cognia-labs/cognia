@@ -43,6 +43,7 @@ export const openClaudeManifest: AgentIntegrationManifest = Object.freeze({
         env: { OPENCLAUDE_CONFIG_DIR: "openclaude" },
         denyReadable: [".openclaude", ".openclaude.json"],
       },
+      relocation: { env: ["OPENCLAUDE_CONFIG_DIR"], temp: "tmp" },
     },
   ],
   runtimes: [

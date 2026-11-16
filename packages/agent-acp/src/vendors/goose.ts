@@ -40,12 +40,20 @@ export const gooseAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
     ],
     isolation: {
       env: { GOOSE_PATH_ROOT: "goose" },
+      // Moving its files alone would still share Goose's OS keyring.
+      setEnv: { GOOSE_DISABLE_KEYRING: "1" },
       denyReadable: [
         ".config/goose",
         ".local/share/goose",
         ".local/state/goose",
         "Library/Application Support/Block/goose",
       ],
+    },
+    // Platform extensions create temp files while a session opens; keep them
+    // under a scoped write root rather than the ambient macOS temp.
+    temp: {
+      home: ".local/state/goose/tmp",
+      isolated: { env: "GOOSE_PATH_ROOT", path: "state/tmp" },
     },
   },
   // Saved sessions retain their native mode; launch env alone cannot restore approvals.

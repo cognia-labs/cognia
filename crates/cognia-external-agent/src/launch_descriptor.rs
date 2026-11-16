@@ -62,10 +62,77 @@ impl<'de> Deserialize<'de> for OrderedEnv {
 pub struct StateIsolation {
     /// Env key → path relative to the private root.
     pub env: OrderedEnv,
+    /// Fixed env an isolated launch needs.
+    #[serde(default)]
+    pub set_env: OrderedEnv,
     /// Home-relative writable roots the private root replaces.
     pub shared_roots: Vec<String>,
     /// Home-relative roots hidden so the engine cannot fall back to the shared login.
     pub deny_readable: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlagPick {
+    First,
+    Last,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelocationArgs {
+    pub flags: Vec<String>,
+    pub pick: FlagPick,
+}
+
+/// Where an engine lets its user move its own state (see the contract,
+/// `packages/agent-contracts/src/engine-launch.ts`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateRelocation {
+    pub env: Vec<String>,
+    pub args: Option<RelocationArgs>,
+    #[serde(default)]
+    pub refused_args: Vec<String>,
+    #[serde(default)]
+    pub skip_empty: bool,
+    #[serde(default)]
+    pub trim: bool,
+    #[serde(default)]
+    pub expand_tilde: bool,
+    pub default: Option<String>,
+    #[serde(default)]
+    pub writable: Vec<String>,
+    pub temp: Option<String>,
+    #[serde(default)]
+    pub set_env: OrderedEnv,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IsolatedTemp {
+    pub env: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TempDirectory {
+    pub home: String,
+    pub isolated: Option<IsolatedTemp>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CompanionExecutable {
+    pub sibling: String,
+    pub env: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlatformArgs {
+    #[serde(default)]
+    pub linux: Vec<String>,
+    #[serde(default)]
+    pub darwin: Vec<String>,
+    #[serde(default)]
+    pub win32: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -79,6 +146,12 @@ pub struct EngineLaunchDescriptor {
     #[serde(default)]
     pub file_roots: Vec<String>,
     pub isolation: Option<StateIsolation>,
+    pub relocation: Option<StateRelocation>,
+    pub temp: Option<TempDirectory>,
+    pub companion: Option<CompanionExecutable>,
+    pub private_launch_unsupported: Option<String>,
+    #[serde(default)]
+    pub platform_args: PlatformArgs,
 }
 
 #[derive(Deserialize)]
@@ -177,6 +250,331 @@ pub fn state_file_roots(command: &str, args: &[String], home: &Path) -> Vec<Path
     roots
 }
 
+/// The first matching descriptor that declares `field`.
+fn first_with<T>(
+    command: &str,
+    args: &[String],
+    field: impl Fn(&'static EngineLaunchDescriptor) -> Option<&'static T>,
+) -> Option<(&'static EngineLaunchDescriptor, &'static T)> {
+    descriptors_for(command, args)
+        .into_iter()
+        .find_map(|descriptor| field(descriptor).map(|value| (descriptor, value)))
+}
+
+/// Refuse a private launch (a Bot run) of an engine that cannot run one.
+pub fn check_private_launch(command: &str, args: &[String], private: bool) -> Result<(), String> {
+    if !private {
+        return Ok(());
+    }
+    match first_with(command, args, |descriptor| {
+        descriptor.private_launch_unsupported.as_ref()
+    }) {
+        Some((descriptor, reason)) => Err(format!(
+            "{} cannot run a private launch: {reason}",
+            descriptor.id
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Append the arguments the engine needs on `os` (Rust's `std::env::consts::OS`
+/// spelling) unless the launch already names the flag.
+pub fn apply_platform_args(command: &str, args: &mut Vec<String>, os: &str) {
+    let Some((_, platform)) =
+        first_with(command, args, |descriptor| Some(&descriptor.platform_args))
+    else {
+        return;
+    };
+    let needed = match os {
+        "linux" => &platform.linux,
+        "macos" => &platform.darwin,
+        "windows" => &platform.win32,
+        _ => return,
+    };
+    for arg in needed {
+        let flag = arg.split('=').next().unwrap_or(arg);
+        let present = args
+            .iter()
+            .any(|existing| existing == flag || existing.starts_with(&format!("{flag}=")));
+        if !present {
+            args.push(arg.clone());
+        }
+    }
+}
+
+/// A helper executable an engine loads from beside its own binary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Companion {
+    pub engine: &'static str,
+    /// Env key that receives the helper's path.
+    pub env: &'static str,
+    pub helper: PathBuf,
+}
+
+/// The companion of the resolved `program`. The helper must be a regular
+/// executable file in the canonical program's own directory.
+pub fn companion_for(program: &Path) -> Result<Option<Companion>, String> {
+    let Some((descriptor, companion)) = first_with(&program.to_string_lossy(), &[], |descriptor| {
+        descriptor.companion.as_ref()
+    }) else {
+        return Ok(None);
+    };
+    let id = &descriptor.id;
+    let canonical = program.canonicalize().map_err(|error| {
+        format!(
+            "Cannot resolve {id} executable {}: {error}",
+            program.display()
+        )
+    })?;
+    let directory = canonical
+        .parent()
+        .ok_or_else(|| format!("{id} executable has no directory"))?;
+    let name = if program
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    {
+        format!("{}.exe", companion.sibling)
+    } else {
+        companion.sibling.clone()
+    };
+    let expected = directory.join(&name);
+    let helper = expected
+        .canonicalize()
+        .map_err(|error| format!("{id} requires its matching sibling {name}: {error}"))?;
+    if helper != expected || !helper.is_file() {
+        return Err(format!(
+            "{id} helper {name} must be a regular file in the engine's own directory"
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if helper
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .permissions()
+            .mode()
+            & 0o111
+            == 0
+        {
+            return Err(format!("{id} helper {name} is not executable"));
+        }
+    }
+    Ok(Some(Companion {
+        engine: descriptor.id.as_str(),
+        env: companion.env.as_str(),
+        helper,
+    }))
+}
+
+/// A launch's state root moved where the engine's own settings put it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelocatedState {
+    pub engine: &'static str,
+    /// The resolved root.
+    pub root: PathBuf,
+    /// What the launch writes: the root, or its declared sub-paths.
+    pub writable: Vec<PathBuf>,
+    pub temp: Option<PathBuf>,
+    /// Env the launch carries: every relocation key set to the root, then the
+    /// relocation's fixed switches.
+    pub env: Vec<(String, String)>,
+}
+
+/// What a relocation is resolved against.
+pub struct RelocationInput<'a> {
+    pub command: &'a str,
+    pub args: &'a [String],
+    pub env: &'a std::collections::HashMap<String, String>,
+    pub cwd: Option<&'a str>,
+    /// The launch's home: the gateway task's own home when it has one.
+    pub home: &'a Path,
+    /// The private state a Bot launch must stay inside.
+    pub private_base: Option<&'a Path>,
+    /// A gateway task never inherits the host's selection.
+    pub host_env_applies: bool,
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                if normalized.parent().is_some() {
+                    normalized.pop();
+                }
+            }
+            std::path::Component::CurDir => {}
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+/// Resolve the launch's relocated state root, or `None` when the engine has
+/// no relocation, or has one without a default and nothing selects it.
+pub fn relocated_state(
+    input: &RelocationInput<'_>,
+    host_env: impl Fn(&str) -> Option<String>,
+) -> Result<Option<RelocatedState>, String> {
+    let Some((descriptor, relocation)) = first_with(input.command, input.args, |descriptor| {
+        descriptor.relocation.as_ref()
+    }) else {
+        return Ok(None);
+    };
+    let id = descriptor.id.as_str();
+    let invalid = || {
+        format!(
+            "{id} state directory must be nonempty and stay inside the launch's own state              when it runs privately"
+        )
+    };
+    if let Some(flag) = relocation.refused_args.iter().find(|flag| {
+        input
+            .args
+            .iter()
+            .any(|arg| arg == *flag || arg.starts_with(&format!("{flag}=")))
+    }) {
+        return Err(format!(
+            "{id} cannot scope {flag}; select its state with {} instead",
+            relocation.env.join(" or ")
+        ));
+    }
+    let mut selected: Option<String> = None;
+    for key in &relocation.env {
+        let value = input
+            .env
+            .get(key)
+            .cloned()
+            .or_else(|| input.host_env_applies.then(|| host_env(key)).flatten());
+        match value {
+            Some(value) if relocation.skip_empty && value.trim().is_empty() => continue,
+            Some(value) => {
+                selected = Some(value);
+                break;
+            }
+            None => {}
+        }
+    }
+    if let Some(args) = &relocation.args {
+        let mut iter = input.args.iter();
+        let mut from_flag: Option<String> = None;
+        while let Some(arg) = iter.next() {
+            let value = if args.flags.iter().any(|flag| flag == arg) {
+                Some(iter.next().cloned().unwrap_or_default())
+            } else {
+                args.flags
+                    .iter()
+                    .find_map(|flag| arg.strip_prefix(&format!("{flag}=")).map(str::to_string))
+            };
+            if let Some(value) = value {
+                from_flag = Some(value);
+                if args.pick == FlagPick::First {
+                    break;
+                }
+            }
+        }
+        if from_flag.is_some() {
+            selected = from_flag;
+        }
+    }
+    let selected = selected.map(|value| {
+        if relocation.trim {
+            value.trim().to_string()
+        } else {
+            value
+        }
+    });
+    if selected
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(invalid());
+    }
+    let selected = selected.map(|value| {
+        if !relocation.expand_tilde {
+            value
+        } else if value == "~" {
+            input.home.to_string_lossy().into_owned()
+        } else if let Some(rest) = value.strip_prefix("~/") {
+            input.home.join(rest).to_string_lossy().into_owned()
+        } else {
+            value
+        }
+    });
+    let base = input.private_base.unwrap_or(input.home);
+    if !base.is_absolute() {
+        return Err(invalid());
+    }
+    let root = match (selected, &relocation.default) {
+        (Some(value), _) => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                Path::new(input.cwd.ok_or_else(|| {
+                    format!("{id} needs a working directory to resolve its state directory")
+                })?)
+                .join(path)
+            }
+        }
+        (None, Some(default)) => base.join(default),
+        (None, None) => return Ok(None),
+    };
+    let root = lexical_normalize(&root);
+    if let Some(private) = input.private_base {
+        if !root.starts_with(private) {
+            return Err(invalid());
+        }
+        let physical_base =
+            cognia_exec_sandbox::paths::safe_canonicalize(private).map_err(|_| invalid())?;
+        let physical_root =
+            cognia_exec_sandbox::paths::safe_canonicalize(&root).map_err(|_| invalid())?;
+        if !physical_root.starts_with(&physical_base) {
+            return Err(invalid());
+        }
+    }
+    let writable = if relocation.writable.is_empty() {
+        vec![root.clone()]
+    } else {
+        relocation
+            .writable
+            .iter()
+            .map(|relative| root.join(relative))
+            .collect()
+    };
+    let mut env: Vec<(String, String)> = relocation
+        .env
+        .iter()
+        .map(|key| (key.clone(), root.to_string_lossy().into_owned()))
+        .collect();
+    env.extend(relocation.set_env.0.iter().cloned());
+    Ok(Some(RelocatedState {
+        engine: id,
+        temp: relocation.temp.as_ref().map(|relative| root.join(relative)),
+        writable,
+        root,
+        env,
+    }))
+}
+
+/// The temp directory of an engine without a relocation: home-relative, or
+/// under the private root an isolation mapped into `env`.
+pub fn engine_temp(
+    command: &str,
+    args: &[String],
+    env: &std::collections::HashMap<String, String>,
+    home: &Path,
+    isolated: bool,
+) -> Option<PathBuf> {
+    let (_, temp) = first_with(command, args, |descriptor| descriptor.temp.as_ref())?;
+    match (&temp.isolated, isolated) {
+        (Some(spec), true) => env
+            .get(&spec.env)
+            .map(|root| Path::new(root).join(&spec.path)),
+        _ => Some(home.join(&temp.home)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +642,340 @@ mod tests {
             vec![home.join(".openclaude.json")]
         );
         assert!(state_file_roots("opencode", &[], home).is_empty());
+    }
+
+    fn executable(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn a_companion_is_bound_to_the_engine_release_and_must_be_executable() {
+        let temp = tempfile::tempdir().unwrap();
+        let server = executable(temp.path(), "agy_acp_server.par");
+        assert!(companion_for(&server)
+            .unwrap_err()
+            .contains("matching sibling"));
+        let helper = executable(temp.path(), "localharness_external");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(companion_for(&server)
+                .unwrap_err()
+                .contains("not executable"));
+            std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            companion_for(&server).unwrap(),
+            Some(Companion {
+                engine: "antigravity-acp",
+                env: "ANTIGRAVITY_HARNESS_PATH",
+                helper: helper.canonicalize().unwrap()
+            })
+        );
+        assert_eq!(companion_for(&temp.path().join("agy")).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_companion_follows_a_symlinked_engine_and_refuses_an_escaping_helper() {
+        use std::os::unix::fs::symlink;
+        let release = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+        let server = executable(release.path(), "agy_acp_server.par");
+        let helper = executable(release.path(), "localharness_external");
+        let alias = install.path().join("agy_acp_server.par");
+        symlink(&server, &alias).unwrap();
+        assert_eq!(
+            companion_for(&alias).unwrap().unwrap().helper,
+            helper.canonicalize().unwrap()
+        );
+        std::fs::remove_file(&helper).unwrap();
+        let outside = executable(install.path(), "outside-helper");
+        symlink(&outside, &helper).unwrap();
+        assert!(companion_for(&server)
+            .unwrap_err()
+            .contains("engine's own directory"));
+    }
+
+    #[test]
+    fn a_windows_engine_selects_the_exe_companion() {
+        let temp = tempfile::tempdir().unwrap();
+        let server = executable(temp.path(), "agy_acp_server.exe");
+        let helper = executable(temp.path(), "localharness_external.exe");
+        assert_eq!(
+            companion_for(&server).unwrap().unwrap().helper,
+            helper.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn platform_args_are_appended_once_and_only_on_their_platform() {
+        let mut launch = vec![];
+        apply_platform_args("agy_acp_server.par", &mut launch, "linux");
+        assert_eq!(launch, ["--uid="]);
+        apply_platform_args("agy_acp_server.par", &mut launch, "linux");
+        assert_eq!(launch, ["--uid="]);
+        let mut explicit = args(&["--uid", "1000"]);
+        apply_platform_args("agy_acp_server.par", &mut explicit, "linux");
+        assert_eq!(explicit, ["--uid", "1000"]);
+        for os in ["macos", "windows"] {
+            let mut launch = vec![];
+            apply_platform_args("agy_acp_server.par", &mut launch, os);
+            assert!(launch.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_private_launch_is_refused_for_an_engine_that_cannot_run_one() {
+        assert!(check_private_launch("agy_acp_server", &[], false).is_ok());
+        assert!(check_private_launch("agy_acp_server", &[], true)
+            .unwrap_err()
+            .contains("keychain"));
+        assert!(check_private_launch("codex", &[], true).is_ok());
+    }
+
+    fn relocate(
+        command: &str,
+        launch: &[&str],
+        env: &[(&str, &str)],
+        host: &[(&str, &str)],
+        private_base: Option<&Path>,
+        host_env_applies: bool,
+    ) -> Result<Option<RelocatedState>, String> {
+        let launch = args(launch);
+        let env: std::collections::HashMap<String, String> = env
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        let host: std::collections::HashMap<String, String> = host
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        relocated_state(
+            &RelocationInput {
+                command,
+                args: &launch,
+                env: &env,
+                cwd: Some("/work"),
+                home: Path::new("/home/dev"),
+                private_base,
+                host_env_applies,
+            },
+            |key| host.get(key).cloned(),
+        )
+    }
+
+    #[test]
+    fn a_relocation_defaults_under_home_and_sets_every_key_and_switch() {
+        let state = relocate("grok", &[], &[], &[], None, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.root, PathBuf::from("/home/dev/.grok"));
+        assert_eq!(state.writable, [PathBuf::from("/home/dev/.grok")]);
+        assert_eq!(state.temp, Some(PathBuf::from("/home/dev/.grok/tmp")));
+        assert_eq!(
+            state.env,
+            [
+                ("GROK_HOME".to_string(), "/home/dev/.grok".to_string()),
+                ("GROK_DISABLE_AUTOUPDATER".into(), "1".into()),
+                ("GROK_CHANGELOG_OFFLINE".into(), "1".into()),
+            ]
+        );
+        let minimax = relocate(
+            "mcode",
+            &[],
+            &[("MINIMAX_DATA_DIR", ""), ("MAVIS_DATA_DIR", "state")],
+            &[],
+            None,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(minimax.root, PathBuf::from("/work/state"));
+        assert_eq!(minimax.env.len(), 2);
+    }
+
+    #[test]
+    fn flags_beat_env_in_the_engine_s_own_order() {
+        let qoder = relocate(
+            "qoder",
+            &["--config-dir", "a", "--config-dir=b"],
+            &[("QODER_CONFIG_DIR", "/env")],
+            &[],
+            None,
+            true,
+        );
+        assert_eq!(qoder.unwrap().unwrap().root, PathBuf::from("/work/b"));
+        let cline = relocate(
+            "cline",
+            &["--config", " a ", "--config=b"],
+            &[],
+            &[],
+            None,
+            true,
+        );
+        assert_eq!(cline.unwrap().unwrap().root, PathBuf::from("/work/a"));
+        assert!(
+            relocate("cline", &["--data-dir", "x"], &[], &[], None, true)
+                .unwrap_err()
+                .contains("--data-dir")
+        );
+        assert!(relocate("qoder", &["--config-dir="], &[], &[], None, true).is_err());
+    }
+
+    #[test]
+    fn the_host_selection_applies_only_outside_a_gateway_task() {
+        let host = [("KIMI_CODE_HOME", "/host/kimi")];
+        assert_eq!(
+            relocate("kimi", &[], &[], &host, None, true)
+                .unwrap()
+                .unwrap()
+                .root,
+            PathBuf::from("/host/kimi")
+        );
+        assert_eq!(
+            relocate("kimi", &[], &[], &host, None, false)
+                .unwrap()
+                .unwrap()
+                .root,
+            PathBuf::from("/home/dev/.kimi-code")
+        );
+        assert_eq!(
+            relocate(
+                "kimi",
+                &[],
+                &[("KIMI_CODE_HOME", "/request/kimi")],
+                &host,
+                None,
+                true
+            )
+            .unwrap()
+            .unwrap()
+            .root,
+            PathBuf::from("/request/kimi")
+        );
+    }
+
+    #[test]
+    fn a_relocation_without_a_default_applies_only_when_selected() {
+        assert_eq!(
+            relocate("openclaude", &[], &[], &[], None, true).unwrap(),
+            None
+        );
+        let state = relocate(
+            "hermes",
+            &[],
+            &[("HERMES_HOME", "/owned/hermes")],
+            &[],
+            None,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            state.env,
+            [("HERMES_HOME".to_string(), "/owned/hermes".to_string())]
+        );
+        assert!(relocate("vibe-acp", &[], &[("VIBE_HOME", " ")], &[], None, true).is_err());
+    }
+
+    #[test]
+    fn a_relocated_root_expands_tilde_and_grants_only_its_declared_sub_paths() {
+        let state = relocate(
+            "agy_acp_server",
+            &[],
+            &[("GEMINI_HOME", "~/g")],
+            &[],
+            None,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(state.root, PathBuf::from("/home/dev/g"));
+        assert_eq!(
+            state.writable,
+            [
+                PathBuf::from("/home/dev/g/antigravity-acp"),
+                PathBuf::from("/home/dev/g/artifacts")
+            ]
+        );
+        assert_eq!(
+            state.temp,
+            Some(PathBuf::from("/home/dev/g/antigravity-acp/tmp"))
+        );
+        // An empty GEMINI_HOME is unset to Antigravity.
+        assert_eq!(
+            relocate(
+                "agy_acp_server",
+                &[],
+                &[("GEMINI_HOME", "")],
+                &[],
+                None,
+                true
+            )
+            .unwrap()
+            .unwrap()
+            .root,
+            PathBuf::from("/home/dev/.gemini")
+        );
+    }
+
+    #[test]
+    fn a_private_launch_keeps_its_relocation_inside_its_own_state() {
+        let private = tempfile::tempdir().unwrap();
+        let base = private.path().canonicalize().unwrap();
+        let inside = relocate("kimi", &[], &[], &[], Some(&base), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(inside.root, base.join(".kimi-code"));
+        let escape = base.join("../elsewhere").to_string_lossy().into_owned();
+        assert!(relocate(
+            "kimi",
+            &[],
+            &[("KIMI_CODE_HOME", escape.as_str())],
+            &[],
+            Some(&base),
+            true
+        )
+        .is_err());
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), base.join("link")).unwrap();
+            let link = base.join("link").to_string_lossy().into_owned();
+            assert!(relocate(
+                "kimi",
+                &[],
+                &[("KIMI_CODE_HOME", link.as_str())],
+                &[],
+                Some(&base),
+                true
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn an_engine_temp_moves_under_its_private_root() {
+        let env: std::collections::HashMap<String, String> =
+            [("GOOSE_PATH_ROOT".to_string(), "/state/goose".to_string())].into();
+        let home = Path::new("/home/dev");
+        assert_eq!(
+            engine_temp("goose", &[], &env, home, false),
+            Some(home.join(".local/state/goose/tmp"))
+        );
+        assert_eq!(
+            engine_temp("goose", &[], &env, home, true),
+            Some(PathBuf::from("/state/goose/state/tmp"))
+        );
+        assert_eq!(engine_temp("codex", &[], &env, home, false), None);
     }
 }

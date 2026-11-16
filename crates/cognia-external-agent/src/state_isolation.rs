@@ -42,6 +42,8 @@ pub const AGENT_STATE_KEY_ENV: &str = "COGNIA_AGENT_STATE_KEY";
 pub struct ResolvedAgentStateIsolation {
     /// Env key → root-relative path, in rule order.
     pub env: Vec<(String, String)>,
+    /// Fixed env the isolated launch carries.
+    pub set_env: Vec<(String, String)>,
     pub shared_roots: Vec<String>,
     pub deny_readable: Vec<String>,
 }
@@ -156,6 +158,12 @@ pub fn isolation_rule_for(command: &str, args: &[String]) -> Option<ResolvedAgen
             match merged.env.iter_mut().find(|(existing, _)| existing == key) {
                 Some(entry) => entry.1 = relative.clone(),
                 None => merged.env.push((key.clone(), relative.clone())),
+            }
+        }
+        for (key, value) in &isolation.set_env.0 {
+            match merged.set_env.iter_mut().find(|(existing, _)| existing == key) {
+                Some(entry) => entry.1 = value.clone(),
+                None => merged.set_env.push((key.clone(), value.clone())),
             }
         }
         for root in &isolation.shared_roots {
@@ -304,8 +312,8 @@ pub fn apply_state_isolation(
             .env
             .insert(env_key.clone(), path.to_string_lossy().into_owned());
     }
-    if config.env.contains_key("GOOSE_PATH_ROOT") && rule.env.iter().any(|(key, _)| key == "GOOSE_PATH_ROOT") {
-        config.env.insert("GOOSE_DISABLE_KEYRING".into(), "1".into());
+    for (key, value) in &rule.set_env {
+        config.env.insert(key.clone(), value.clone());
     }
     Ok(Some(IsolationPlan {
         shared_roots: rule

@@ -27,6 +27,7 @@ import {
   type AgentPathRuntime,
 } from "./agent-path"
 import { hashHex } from "../crypto-hasher"
+import { companionFor, type EngineCompanion } from "./launch-descriptor"
 import {
   nativeBridgeInterpreterEnvironment,
   resolveNativeBridgeInterpreter,
@@ -117,49 +118,16 @@ function digestOf(file: string): string | null {
   }
 }
 
-/** The official ACP release owns both executable files; caller-selected helpers are never trusted. */
-export function antigravityBundle(
-  command: string,
-  runtime: AgentPathRuntime = defaultAgentPathRuntime()
-): { executablePath: string; harnessPath: string } | undefined {
-  const base = path
-    .basename(command)
-    .toLowerCase()
-    .replace(/\.exe$/, "")
-  if (base !== "agy_acp_server.par" && base !== "agy_acp_server") return undefined
-  const resolved = resolveProbeExecutable(command, runtime)
-  if (!resolved) throw new Error("Antigravity ACP server is not installed")
-  const executablePath = fs.realpathSync(resolved)
-  const harnessPath = path.join(
-    path.dirname(executablePath),
-    runtime.platform === "win32" ? "localharness_external.exe" : "localharness_external"
-  )
-  try {
-    if (!fs.lstatSync(harnessPath).isFile() || fs.lstatSync(harnessPath).isSymbolicLink())
-      throw new Error("helper must be a regular file")
-    fs.accessSync(harnessPath, fs.constants.X_OK)
-    fs.accessSync(executablePath, fs.constants.X_OK)
-  } catch {
-    throw new Error(
-      "Antigravity ACP requires an executable localharness_external beside its server"
-    )
-  }
-  return { executablePath, harnessPath }
-}
-
-/** Hash large native releases without blocking the event loop or retaining them in memory. */
-export async function antigravityBundleDigest(bundle: {
-  executablePath: string
-  harnessPath: string
-}): Promise<string> {
+/** An engine that loads a companion binds both byte sequences into its consent identity. */
+export async function companionBundleDigest(companion: EngineCompanion): Promise<string> {
   const hashFile = async (file: string): Promise<string> => {
     const hash = createHash("sha256")
     for await (const chunk of fs.createReadStream(file)) hash.update(chunk)
     return hash.digest("hex")
   }
-  const serverDigest = await hashFile(bundle.executablePath)
-  const helperDigest = await hashFile(bundle.harnessPath)
-  return hashHex("sha256", `antigravity-acp-v1\n${serverDigest}\n${helperDigest}\n`)
+  const serverDigest = await hashFile(companion.executablePath)
+  const helperDigest = await hashFile(companion.helperPath)
+  return hashHex("sha256", `${companion.engine}-v1\n${serverDigest}\n${helperDigest}\n`)
 }
 
 /**
@@ -220,15 +188,14 @@ export async function probeRuntimeVersion(
   // its digest as the runtime's identity would make an unpinned runtime look
   // stable while the package under it changed on every launch.
   let executableDigest: string | null
-  let harnessPath: string | undefined
+  let companion: EngineCompanion | undefined
   try {
-    const bundle = antigravityBundle(entry.systemCommand, runtime)
-    if (bundle) {
-      executablePath = bundle.executablePath
-      harnessPath = bundle.harnessPath
-    }
-    executableDigest = bundle
-      ? await antigravityBundleDigest(bundle)
+    companion = companionFor(entry.systemCommand, (command) =>
+      resolveProbeExecutable(command, runtime)
+    )
+    if (companion) executablePath = companion.executablePath
+    executableDigest = companion
+      ? await companionBundleDigest(companion)
       : isPackageRunner(entry.systemCommand)
         ? null
         : digestOf(executablePath)
@@ -257,7 +224,7 @@ export async function probeRuntimeVersion(
           : runtime.env),
         NODE_ENV: normalizeProbeNodeEnv(runtime.env.NODE_ENV ?? process.env.NODE_ENV),
         PATH: resolveAgentSearchPath(runtime),
-        ...(harnessPath ? { ANTIGRAVITY_HARNESS_PATH: harnessPath } : {}),
+        ...(companion ? { [companion.env]: companion.helperPath } : {}),
       },
       // Own group, so the timeout kill takes the whole tree: `npx` forks
       // `node`, and killing only the parent leaves it running.

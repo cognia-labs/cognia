@@ -18,6 +18,19 @@ export const antigravityAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorPr
     id: "antigravity-acp",
     match: { kind: "base", values: ["agy_acp_server.par", "agy_acp_server"] },
     stateRoots: [".gemini/antigravity-acp", ".gemini/artifacts"],
+    // GEMINI_HOME moves only file state; the native keychain accounts stay shared.
+    relocation: {
+      env: ["GEMINI_HOME"],
+      skipEmpty: true,
+      expandTilde: true,
+      default: ".gemini",
+      writable: ["antigravity-acp", "artifacts"],
+      temp: "antigravity-acp/tmp",
+    },
+    companion: { sibling: "localharness_external", env: "ANTIGRAVITY_HARNESS_PATH" },
+    privateLaunchUnsupported: "its native keychain accounts are shared",
+    // Linux's official ACP Registry launch carries an empty launcher uid.
+    platformArgs: { linux: ["--uid="] },
   },
   systemPromptNamespace: "antigravity",
   reapplySessionMode: true,

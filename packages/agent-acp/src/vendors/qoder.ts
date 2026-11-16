@@ -12,6 +12,12 @@ export const qoderAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>
     id: "qoder",
     match: { kind: "base", values: ["qoder"] },
     stateRoots: [".qoder"],
+    relocation: {
+      env: ["QODER_CONFIG_DIR"],
+      args: { flags: ["--config-dir"], pick: "last" },
+      default: ".qoder",
+      temp: "tmp",
+    },
     isolation: {
       env: { QODER_CONFIG_DIR: "qoder" },
       denyReadable: [],

@@ -1,6 +1,6 @@
 import { validateExternalAgentSandboxPolicy } from "@cognia/agent-contracts"
 import { resolveAgentSearchPath } from "./agent-path"
-import { antigravityBundle } from "./version-probe"
+import { resolveProbeExecutable } from "./version-probe"
 import { validateCodexWritableRoots } from "@cognia/agent-codex/app-server-client"
 import fs from "node:fs"
 import os from "node:os"
@@ -32,6 +32,14 @@ import {
 } from "./native-bridges"
 import { toolHostRuntimeDir } from "../../agent/tool-host/protocol"
 import { SANDBOX_SUPPORTED_PLATFORMS } from "@/lib/ai/agent/external/policy/security-policy"
+import {
+  checkPrivateLaunch,
+  companionFor,
+  engineTemp,
+  relocatedState,
+  withPlatformArgs,
+  type RelocatedState,
+} from "./launch-descriptor"
 import {
   agentStateFileRoots as policyAgentStateFileRoots,
   agentStateWritableRoots as policyAgentStateWritableRoots,
@@ -317,11 +325,9 @@ export function buildSandboxLauncherArgs(
     config.env,
     hostAgentStateDataDir()
   )
-  qoderConfigRoot(config, homedir)
-  clineConfigRoot(config, homedir)
-  kimiConfigRoot(config, homedir)
-  grokConfigRoot(config, homedir)
-  minimaxConfigRoot(config, homedir)
+  // A private launch's relocation is checked even though its bot state is
+  // already its whole writable scope.
+  launchRelocation(config, homedir)
   const taskHome = config.env?.COGNIA_GATEWAY_TASK_HOME
   const botIsolation = config.env?.COGNIA_BOT_ISOLATION === "1"
   const botState = config.env?.COGNIA_BOT_STATE_DIR
@@ -513,194 +519,22 @@ export function aiderImplicitConfigPaths(cwd: string, home: string): string[] {
   ]
 }
 
-/** Keep the documented config override writable without moving or copying CLI credentials. */
-export function qoderConfigRoot(
+/** The launch's relocated state root, resolved against its own home and private state. */
+export function launchRelocation(
   config: NodeExternalAgentSpawnConfig,
   homedir: string
-): string | undefined {
-  if (config.command !== "qoder") return undefined
-  let selected = config.env?.QODER_CONFIG_DIR ?? process.env.QODER_CONFIG_DIR
-  const args = config.args ?? []
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--config-dir") selected = args[++i] ?? ""
-    else if (args[i].startsWith("--config-dir=")) selected = args[i].slice("--config-dir=".length)
-  }
-  if (selected !== undefined && !selected.trim())
-    throw new Error("Qoder config directory must not be empty")
-  const bot = config.env?.COGNIA_BOT_ISOLATION === "1"
-  const botState = config.env?.COGNIA_BOT_STATE_DIR
-  const home = bot ? botState : (config.env?.COGNIA_GATEWAY_TASK_HOME ?? homedir)
-  if (!home || !path.isAbsolute(home)) throw new Error("Qoder requires an absolute state directory")
-  const root = selected ? path.resolve(config.cwd ?? homedir, selected) : path.join(home, ".qoder")
-  if (
-    bot &&
-    (path.relative(home, root).startsWith("..") || path.isAbsolute(path.relative(home, root)))
-  )
-    throw new Error("Qoder config directory must stay inside the Bot state directory")
-  return root
-}
-
-/** ACP branches before upstream --data-dir setup; --config controls all persisted state. */
-export function clineConfigRoot(
-  config: NodeExternalAgentSpawnConfig,
-  homedir: string
-): string | undefined {
-  if (config.command !== "cline") return undefined
-  const args = config.args ?? []
-  if (args.some((arg) => arg === "--data-dir" || arg.startsWith("--data-dir=")))
-    throw new Error("Cline ACP requires --config or CLINE_DIR instead of --data-dir")
-  let selected = config.env?.CLINE_DIR ?? process.env.CLINE_DIR
-  // Upstream's early config pre-pass uses the first occurrence.
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--config" || args[i].startsWith("--config=")) {
-      selected = args[i] === "--config" ? (args[i + 1] ?? "") : args[i].slice("--config=".length)
-      break
-    }
-  }
-  if (selected !== undefined && !selected.trim())
-    throw new Error("Cline config directory must not be empty")
-  const bot = config.env?.COGNIA_BOT_ISOLATION === "1"
-  const home = bot
-    ? config.env?.COGNIA_BOT_STATE_DIR
-    : (config.env?.COGNIA_GATEWAY_TASK_HOME ?? homedir)
-  if (!home || !path.isAbsolute(home)) throw new Error("Cline requires an absolute state directory")
-  const root = selected
-    ? path.resolve(config.cwd ?? homedir, selected.trim())
-    : path.join(home, ".cline")
-  const relative = path.relative(home, root)
-  if (
-    bot &&
-    (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
-  )
-    throw new Error("Cline config directory must stay inside the Bot state directory")
-  return root
-}
-
-/** Grok Build uses its native home; gateway tasks never inherit the host login. */
-export function grokConfigRoot(
-  config: NodeExternalAgentSpawnConfig,
-  homedir: string
-): string | undefined {
-  if (config.command !== "grok") return undefined
-  const selected =
-    config.env?.GROK_HOME ??
-    (config.env?.COGNIA_GATEWAY_TASK_HOME ? undefined : process.env.GROK_HOME)
-  return nativeStateRoot(config, homedir, selected, ".grok", "Grok")
-}
-
-/** Kimi Code resolves its native state home from the environment, relative to cwd. */
-export function kimiConfigRoot(
-  config: NodeExternalAgentSpawnConfig,
-  homedir: string
-): string | undefined {
-  if (config.command !== "kimi") return undefined
-  const selected = config.env?.KIMI_CODE_HOME ?? process.env.KIMI_CODE_HOME
-  return nativeStateRoot(config, homedir, selected, ".kimi-code", "Kimi")
-}
-
-/** MiniMax resolves its first nonempty directory alias before ~/.minimax. */
-export function minimaxConfigRoot(
-  config: NodeExternalAgentSpawnConfig,
-  homedir: string
-): string | undefined {
-  if (config.command !== "mcode") return undefined
-  const selected = ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"]
-    .map((key) => config.env?.[key] ?? process.env[key])
-    .find((value) => value !== undefined && value.trim().length > 0)
-  return nativeStateRoot(config, homedir, selected, ".minimax", "MiniMax")
-}
-
-/** GEMINI_HOME redirects file state only; native Keychain credentials remain shared. */
-export function antigravityConfigRoot(
-  config: NodeExternalAgentSpawnConfig,
-  homedir: string
-): string | undefined {
-  const base = path
-    .basename(config.command)
-    .toLowerCase()
-    .replace(/\.exe$/, "")
-  if (base !== "agy_acp_server.par" && base !== "agy_acp_server") return undefined
-  if (config.env?.COGNIA_BOT_ISOLATION === "1")
-    throw new Error("Antigravity ACP cannot isolate native Keychain credentials for Bot execution")
-  let selected = config.env?.GEMINI_HOME ?? process.env.GEMINI_HOME
-  if (selected === "~") selected = homedir
-  else if (selected?.startsWith("~/")) selected = path.join(homedir, selected.slice(2))
-  return nativeStateRoot(config, homedir, selected || undefined, ".gemini", "Antigravity ACP")
-}
-
-/** Documented native relocation variables, with the same ownership checks as other agents. */
-export function additionalNativeHome(
-  config: NodeExternalAgentSpawnConfig,
-  homedir: string
-): { key: string; root: string } | undefined {
-  const definitions: Record<string, readonly [string, string]> = {
-    openclaude: ["OPENCLAUDE_CONFIG_DIR", ".openclaude"],
-    "vibe-acp": ["VIBE_HOME", ".vibe"],
-    mimo: ["MIMOCODE_HOME", ".local/share/mimocode"],
-    hermes: ["HERMES_HOME", ".hermes"],
-  }
-  const definition =
-    definitions[
-      path
-        .basename(config.command)
-        .replace(/\.exe$/i, "")
-        .toLowerCase()
-    ]
-  if (!definition) return undefined
-  const [key, directory] = definition
-  const selected = config.env?.[key] ?? process.env[key]
-  if (selected === undefined) return undefined
-  return { key, root: nativeStateRoot(config, homedir, selected, directory, key) }
-}
-
-function nativeStateRoot(
-  config: NodeExternalAgentSpawnConfig,
-  homedir: string,
-  selected: string | undefined,
-  defaultDirectory: string,
-  label: string
-): string {
-  if (selected !== undefined && !selected.trim())
-    throw new Error(`${label} state directory must not be empty`)
-  const bot = config.env?.COGNIA_BOT_ISOLATION === "1"
-  const home = bot
-    ? config.env?.COGNIA_BOT_STATE_DIR
-    : (config.env?.COGNIA_GATEWAY_TASK_HOME ?? homedir)
-  if (!home || !path.isAbsolute(home))
-    throw new Error(`${label} requires an absolute state directory`)
-  // Preserve whitespace in nonempty native paths; upstream does not trim these.
-  const root =
-    selected !== undefined
-      ? path.resolve(config.cwd ?? homedir, selected)
-      : path.join(home, defaultDirectory)
-  const relative = path.relative(home, root)
-  if (
-    bot &&
-    (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
-  )
-    throw new Error(`${label} state directory must stay inside the Bot state directory`)
-  if (bot) {
-    const existingPath = (candidate: string): string => {
-      const missing: string[] = []
-      for (let current = candidate; ; current = path.dirname(current)) {
-        try {
-          return path.join(fs.realpathSync(current), ...missing.reverse())
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
-          if (current === path.dirname(current)) return candidate
-          missing.push(path.basename(current))
-        }
-      }
-    }
-    const physicalRelative = path.relative(existingPath(home), existingPath(root))
-    if (
-      physicalRelative === ".." ||
-      physicalRelative.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(physicalRelative)
-    )
-      throw new Error(`${label} state directory must stay inside the Bot state directory`)
-  }
-  return root
+): RelocatedState | undefined {
+  const taskHome = config.env?.COGNIA_GATEWAY_TASK_HOME
+  return relocatedState({
+    command: config.command,
+    args: config.args ?? [],
+    env: config.env ?? {},
+    cwd: config.cwd,
+    home: taskHome ?? homedir,
+    privateBase:
+      config.env?.COGNIA_BOT_ISOLATION === "1" ? config.env.COGNIA_BOT_STATE_DIR : undefined,
+    hostEnvApplies: taskHome === undefined,
+  })
 }
 
 /**
@@ -722,21 +556,8 @@ function agentStateWritableRoots(
   if (managedDsh) return managedDsh.state
   if (registeredNativeBridgeId(config.command, config.args ?? []) === "crush-http")
     return policyAgentStateWritableRoots("crush", []).map((root) => path.join(homedir, root))
-  const additional = additionalNativeHome(config, homedir)
-  if (additional) return [additional.root]
-  const antigravityRoot = antigravityConfigRoot(config, homedir)
-  if (antigravityRoot)
-    return [path.join(antigravityRoot, "antigravity-acp"), path.join(antigravityRoot, "artifacts")]
-  const grokRoot = grokConfigRoot(config, homedir)
-  if (grokRoot) return [grokRoot]
-  const minimaxRoot = minimaxConfigRoot(config, homedir)
-  if (minimaxRoot) return [minimaxRoot]
-  const kimiRoot = kimiConfigRoot(config, homedir)
-  if (kimiRoot) return [kimiRoot]
-  const clineRoot = clineConfigRoot(config, homedir)
-  if (clineRoot) return [clineRoot]
-  const qoderRoot = qoderConfigRoot(config, homedir)
-  if (qoderRoot) return [qoderRoot]
+  const relocated = launchRelocation(config, homedir)
+  if (relocated) return relocated.writable
   // An isolated launch writes its own root instead of the shared login roots.
   const shared = new Set(isolation?.sharedRoots ?? [])
   return policyAgentStateWritableRoots(config.command, config.args ?? [])
@@ -810,16 +631,13 @@ export async function resolveSandboxedExternalAgentLaunch(
       env: { ...config.env, HERMES_HOME: path.join(hermesHelperRoot, "hermes") },
       sandboxPolicy: { ...config.sandboxPolicy, readableScope: "workspace" },
     }
-  const antigravity = antigravityBundle(config.command)
-  if (antigravity)
-    config = {
-      ...config,
-      args:
-        runtime.platform === "linux" &&
-        !(config.args ?? []).some((arg) => arg === "--uid" || arg.startsWith("--uid="))
-          ? ["--uid=", ...(config.args ?? [])]
-          : config.args,
-    }
+  const isPrivate = config.env?.COGNIA_BOT_ISOLATION === "1"
+  checkPrivateLaunch(config.command, config.args ?? [], isPrivate)
+  const companion = companionFor(config.command, (command) => resolveProbeExecutable(command))
+  config = {
+    ...config,
+    args: withPlatformArgs(config.command, config.args ?? [], runtime.platform),
+  }
   const launcher = findSandboxLauncher(runtime)
   if (!launcher) {
     throw new Error(
@@ -842,116 +660,37 @@ export async function resolveSandboxedExternalAgentLaunch(
     runtime.ensureDir?.(config.env.COGNIA_BOT_STATE_DIR)
     for (const root of new Set(Object.values(botRuntime))) runtime.ensureDir?.(root)
   }
-  const qoderRoot = qoderConfigRoot(config, runtime.homedir)
-  if (qoderRoot) runtime.ensureDir?.(qoderRoot)
-  // Goose's platform extensions create temporary files during session/new.
-  // macOS's ambient /var/folders temp root is outside the sandbox write scope.
   let env: Record<string, string> | undefined = hermesHelperRoot
     ? { HERMES_HOME: path.join(hermesHelperRoot, "hermes"), HERMES_TUI_GATEWAY_URL: "" }
     : undefined
-  const antigravityRoot = antigravityConfigRoot(config, runtime.homedir)
-  if (antigravity && antigravityRoot) {
-    const temp = path.join(antigravityRoot, "antigravity-acp", "tmp")
-    runtime.ensureDir?.(temp)
-    env = {
-      GEMINI_HOME: antigravityRoot,
-      ANTIGRAVITY_HARNESS_PATH: antigravity.harnessPath,
-      TMPDIR: temp,
-      TMP: temp,
-      TEMP: temp,
-    }
-  }
   if (registeredNativeBridgeId(config.command, config.args ?? []) === "crush-http")
     env = { TMPDIR: toolHostRuntimeDir(), TMP: toolHostRuntimeDir(), TEMP: toolHostRuntimeDir() }
-  const additional = additionalNativeHome(config, runtime.homedir)
-  if (additional) {
-    const helperRoot = registeredHermesProbeStateRoot(
-      config.command,
-      config.args ?? [],
-      config.env,
-      hostAgentStateDataDir()
-    )
-    const temp = path.join(additional.root, "tmp")
-    if (!helperRoot) runtime.ensureDir?.(temp)
-    env = {
-      [additional.key]: additional.root,
-      ...(!helperRoot ? { TMPDIR: temp, TMP: temp, TEMP: temp } : {}),
-    }
+  const relocated = launchRelocation(config, runtime.homedir)
+  if (relocated) {
+    for (const root of [relocated.root, ...relocated.writable]) runtime.ensureDir?.(root)
+    env = { ...env, ...relocated.env }
   }
-  const grokRoot = grokConfigRoot(config, runtime.homedir)
-  if (grokRoot) {
-    const temp = path.join(grokRoot, "tmp")
+  const temp = relocated
+    ? relocated.temp
+    : engineTemp(
+        config.command,
+        config.args ?? [],
+        config.env ?? {},
+        config.env?.COGNIA_GATEWAY_TASK_HOME ?? runtime.homedir,
+        isolation !== null
+      )
+  if (temp && !isPrivate) {
     runtime.ensureDir?.(temp)
-    env = {
-      GROK_HOME: grokRoot,
-      GROK_DISABLE_AUTOUPDATER: "1",
-      GROK_CHANGELOG_OFFLINE: "1",
-      TMPDIR: temp,
-      TMP: temp,
-      TEMP: temp,
-    }
+    env = { ...env, TMPDIR: temp, TMP: temp, TEMP: temp }
   }
-  const minimaxRoot = minimaxConfigRoot(config, runtime.homedir)
-  if (minimaxRoot) {
-    const temp = path.join(minimaxRoot, "tmp")
-    runtime.ensureDir?.(temp)
-    env = {
-      MINIMAX_DATA_DIR: minimaxRoot,
-      MAVIS_DATA_DIR: minimaxRoot,
-      TMPDIR: temp,
-      TMP: temp,
-      TEMP: temp,
-    }
-  }
-  const kimiRoot = kimiConfigRoot(config, runtime.homedir)
-  if (kimiRoot) {
-    env = {
-      KIMI_CODE_HOME: kimiRoot,
-      KIMI_CODE_NO_AUTO_UPDATE: "1",
-      KIMI_CODE_BACKGROUND_KEEP_ALIVE_ON_EXIT: "0",
-    }
-    const temp = path.join(kimiRoot, "tmp")
-    runtime.ensureDir?.(temp)
-    Object.assign(env, { TMPDIR: temp, TMP: temp, TEMP: temp })
-  }
-  const clineRoot = clineConfigRoot(config, runtime.homedir)
-  if (clineRoot) {
-    env = { CLINE_DIR: clineRoot, CLINE_NO_AUTO_UPDATE: "1" }
-    if (config.env?.COGNIA_BOT_ISOLATION !== "1") {
-      const temp = path.join(clineRoot, "tmp")
-      runtime.ensureDir?.(temp)
-      Object.assign(env, { TMPDIR: temp, TMP: temp, TEMP: temp })
-    }
-  }
-  if (qoderRoot) {
-    env = { QODER_CONFIG_DIR: qoderRoot }
-    if (config.env?.COGNIA_BOT_ISOLATION !== "1") {
-      const temp = path.join(qoderRoot, "tmp")
-      runtime.ensureDir?.(temp)
-      Object.assign(env, { TMPDIR: temp, TMP: temp, TEMP: temp })
-    }
-  }
-  if (
-    /(?:^|[\\/])goose(?:\.exe)?$/i.test(config.command) &&
-    config.env?.COGNIA_BOT_ISOLATION !== "1"
-  ) {
-    const temp =
-      isolation && config.env?.GOOSE_PATH_ROOT
-        ? path.join(config.env.GOOSE_PATH_ROOT, "state/tmp")
-        : path.join(
-            config.env?.COGNIA_GATEWAY_TASK_HOME ?? runtime.homedir,
-            ".local/state/goose/tmp"
-          )
-    runtime.ensureDir?.(temp)
-    env = { TMPDIR: temp, TMP: temp, TEMP: temp }
-  }
+  if (companion) env = { ...env, [companion.env]: companion.helperPath }
   runtime.ensureDir?.(toolHostRuntimeDir())
   for (const root of agentStateFileRoots(config, runtime.homedir, isolation))
     runtime.ensureFile?.(root)
   const args = buildSandboxLauncherArgs(config, runtime.homedir, isolation)
   // Preserve the configured runtime identity while deriving state roots; a
   // system-installed symlink may point at a release executable with another name.
-  if (antigravity) args[args.indexOf("--") + 1] = antigravity.executablePath
+  if (companion) args[args.indexOf("--") + 1] = companion.executablePath
   return {
     command: launcher,
     args,

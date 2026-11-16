@@ -127,6 +127,7 @@ export const mistralVibeAcpProfile: AcpVendorProfile = Object.freeze({
       env: { VIBE_HOME: "vibe" },
       denyReadable: [".vibe"],
     },
+    relocation: { env: ["VIBE_HOME"], temp: "tmp" },
   },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("Mistral Vibe"),
   // v3 modes are agent names, and no native plan agent is advertised.
@@ -155,6 +156,7 @@ export const mimoCodeAcpProfile: AcpVendorProfile = Object.freeze({
         ".cache/mimocode",
       ],
     },
+    relocation: { env: ["MIMOCODE_HOME"], temp: "tmp" },
   },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("MiMo Code"),
   permissionModes: brokerModes("build"),
@@ -174,6 +176,7 @@ export const hermesAgentAcpProfile: AcpVendorProfile = Object.freeze({
       env: { HERMES_HOME: "hermes" },
       denyReadable: [".hermes"],
     },
+    relocation: { env: ["HERMES_HOME"], temp: "tmp" },
   },
   permissionModes: brokerModes("default", "default"),
   reapplySessionMode: true,

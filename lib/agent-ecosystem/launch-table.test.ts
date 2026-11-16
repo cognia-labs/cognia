@@ -74,4 +74,23 @@ describe("buildEngineLaunchTable", () => {
       /shared root ".ssh" is not a state root/
     )
   })
+
+  it("refuses relocations, temps and companions a host could not apply safely", () => {
+    const refuse = (patch: Partial<EngineLaunchDescriptor>, message: RegExp) =>
+      expect(() => buildEngineLaunchTable([], [{ ...codex, ...patch }])).toThrow(message)
+    refuse({ relocation: { env: [] } }, /names no env key or flag/)
+    refuse({ relocation: { env: ["LD_PRELOAD"] } }, /not an env name a descriptor may set/)
+    refuse({ relocation: { env: ["CODEX_HOME"], setEnv: { NODE_OPTIONS: "x" } } }, /NODE_OPTIONS/)
+    refuse(
+      { relocation: { env: ["CODEX_HOME"], args: { flags: ["-c"], pick: "last" } } },
+      /long option/
+    )
+    refuse({ relocation: { env: ["CODEX_HOME"], temp: "../tmp" } }, /must not contain/)
+    refuse(
+      { temp: { home: ".t", isolated: { env: "OTHER_HOME", path: "tmp" } } },
+      /not an isolation env key/
+    )
+    refuse({ companion: { sibling: "../helper", env: "HELPER" } }, /not a file name/)
+    refuse({ platformArgs: { linux: ["uid="] } }, /not a long option/)
+  })
 })

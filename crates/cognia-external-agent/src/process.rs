@@ -409,14 +409,12 @@ impl ExternalAgentProcessManager {
 
         config = crate::native_bridge::harden_process_launch(config)?;
         scope_grok_credentials(&mut config);
-        super::command_resolver::configure_antigravity_platform_args(
-            &config.command, &mut config.args, std::env::consts::OS,
-        );
-        if super::command_resolver::is_antigravity_acp_command(&config.command)
-            && config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1")
-        {
-            return Err("Antigravity ACP Bot isolation is unavailable: its native keychain accounts are shared".into());
-        }
+        crate::launch_descriptor::apply_platform_args(&config.command, &mut config.args, std::env::consts::OS);
+        crate::launch_descriptor::check_private_launch(
+            &config.command,
+            &config.args,
+            config.env.get("COGNIA_BOT_ISOLATION").map(String::as_str) == Some("1"),
+        )?;
 
         // A private state root (ADR-0216) is honoured by every route that
         // reaches this process table. The desktop sandbox wrapper normally
@@ -505,13 +503,13 @@ impl ExternalAgentProcessManager {
         } else {
             None
         };
-        let helper = super::command_resolver::antigravity_harness_path(Path::new(&program))?;
-        let program = if helper.is_some() {
+        let companion = crate::launch_descriptor::companion_for(Path::new(&program))?;
+        let program = if companion.is_some() {
             Path::new(&program).canonicalize().map_err(|error| error.to_string())?.to_string_lossy().into_owned()
         } else { program };
         let mut cmd = Command::new(&program);
-        if let Some(helper) = helper {
-            config.env.insert("ANTIGRAVITY_HARNESS_PATH".into(), helper.to_string_lossy().into_owned());
+        if let Some(companion) = companion {
+            config.env.insert(companion.env.into(), companion.helper.to_string_lossy().into_owned());
         }
         let protected_siwc = config.env.contains_key("COGNIA_AGENT_SIWC_CAPABILITY");
         if protected_siwc {

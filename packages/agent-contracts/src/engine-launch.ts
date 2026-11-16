@@ -29,10 +29,67 @@ export interface EngineLaunchMatch {
 export interface EngineStateIsolation {
   /** Env key -> path relative to the private root. */
   env: Readonly<Record<string, string>>
+  /** Fixed env an isolated launch needs (Goose's keyring switch). */
+  setEnv?: Readonly<Record<string, string>>
   /** Writable state roots the private root replaces; defaults to `stateRoots`. */
   sharedRoots?: readonly string[]
   /** Home-relative paths hidden so the engine cannot fall back to the shared login. */
   denyReadable: readonly string[]
+}
+
+/**
+ * Where an engine lets its user move its own state, described as the engine
+ * resolves it. The host applies the same rules to every relocation: a flag
+ * beats the env keys, a request env value beats the host's (which never
+ * applies to a gateway task), a relative value resolves against the working
+ * directory, and a private launch's root must stay inside its own state.
+ * The resolved root (or its `writable` sub-paths) replaces the engine's
+ * `stateRoots` in the writable set, and every `env` key is set to it.
+ */
+export interface EngineStateRelocation {
+  /** Env keys the engine reads, in its own precedence order. */
+  env: readonly string[]
+  /** Flags that select the root; `pick` follows the engine's own parser. */
+  args?: Readonly<{ flags: readonly string[]; pick: "first" | "last" }>
+  /** Flags whose state the host cannot scope; a launch naming one is refused. */
+  refusedArgs?: readonly string[]
+  /** The engine treats an empty env value as unset; otherwise an empty selection is refused. */
+  skipEmpty?: boolean
+  /** The engine trims the selected value. */
+  trim?: boolean
+  /** The engine expands a leading `~`. */
+  expandTilde?: boolean
+  /**
+   * The root when nothing selects one, relative to the launch's home. Absent:
+   * the relocation applies only when selected, and the declared state roots
+   * stand otherwise.
+   */
+  default?: string
+  /** Writable sub-paths of the root; absent makes the whole root writable. */
+  writable?: readonly string[]
+  /** Root-relative temp directory for TMPDIR, TMP and TEMP. */
+  temp?: string
+  /** Env a relocated launch always carries (update and telemetry switches). */
+  setEnv?: Readonly<Record<string, string>>
+}
+
+/** A temp directory for an engine without a relocation. */
+export interface EngineTempDirectory {
+  /** Relative to the launch's home. */
+  home: string
+  /** Under a private state root: relative to the value of this isolation env key. */
+  isolated?: Readonly<{ env: string; path: string }>
+}
+
+/**
+ * A helper executable the engine loads from beside its own binary. The host
+ * launches the canonical engine executable and passes the helper's path.
+ */
+export interface EngineCompanionExecutable {
+  /** File name in the engine executable's directory (`.exe` added for a Windows engine). */
+  sibling: string
+  /** Env key that receives the helper's absolute path. */
+  env: string
 }
 
 export interface EngineLaunchDescriptor {
@@ -45,6 +102,16 @@ export interface EngineLaunchDescriptor {
   fileRoots?: readonly string[]
   /** Absent: the engine documents no home variable and cannot run with a private state root. */
   isolation?: EngineStateIsolation
+  relocation?: EngineStateRelocation
+  temp?: EngineTempDirectory
+  companion?: EngineCompanionExecutable
+  /** Why the engine cannot run a private launch (a Bot run), which the host then refuses. */
+  privateLaunchUnsupported?: string
+  /**
+   * Arguments the engine needs on one platform, appended unless the launch
+   * already names the flag (the text before `=`).
+   */
+  platformArgs?: Readonly<Partial<Record<"linux" | "darwin" | "win32", readonly string[]>>>
 }
 
 /** The command without directory or Windows executable suffix, lower-cased. */

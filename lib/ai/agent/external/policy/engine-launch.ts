@@ -17,6 +17,8 @@ export const ENGINE_LAUNCH_DESCRIPTORS: readonly EngineLaunchDescriptor[] = (
 /** How a launch's state moves into its private root (ADR-0216), merged over every matching engine. */
 export interface ResolvedAgentStateIsolation {
   env: Record<string, string>
+  /** Fixed env the isolated launch carries. */
+  setEnv: Record<string, string>
   sharedRoots: string[]
   denyReadable: string[]
 }
@@ -56,8 +58,9 @@ export function agentStateIsolationFor(
   let resolved: ResolvedAgentStateIsolation | null = null
   for (const { isolation } of descriptorsFor(ENGINE_LAUNCH_DESCRIPTORS, command, args)) {
     if (!isolation) continue
-    resolved ??= { env: {}, sharedRoots: [], denyReadable: [] }
+    resolved ??= { env: {}, setEnv: {}, sharedRoots: [], denyReadable: [] }
     Object.assign(resolved.env, isolation.env)
+    Object.assign(resolved.setEnv, isolation.setEnv)
     pushUnique(resolved.sharedRoots, isolation.sharedRoots)
     pushUnique(resolved.denyReadable, isolation.denyReadable)
   }

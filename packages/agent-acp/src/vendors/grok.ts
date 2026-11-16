@@ -198,6 +198,13 @@ export const grokAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>(
     id: "grok",
     match: { kind: "base", values: ["grok"] },
     stateRoots: [".grok"],
+    relocation: {
+      env: ["GROK_HOME"],
+      default: ".grok",
+      // Sessions and file-lock fallbacks stay inside the root, not shared /tmp.
+      temp: "tmp",
+      setEnv: { GROK_DISABLE_AUTOUPDATER: "1", GROK_CHANGELOG_OFFLINE: "1" },
+    },
     isolation: {
       env: { GROK_HOME: "grok" },
       denyReadable: [".grok"],
