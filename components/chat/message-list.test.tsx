@@ -2941,6 +2941,55 @@ describe("MessageList — the render window of a short (flow) list", () => {
     expect(container.querySelectorAll("[data-msg-id]")).toHaveLength(30)
   })
 
+  it("keeps revealing in idle time while a reply streams in", () => {
+    // Every streamed frame hands the list a new array. The reveal used to be
+    // re-armed on each one, so it never fired until the reply finished.
+    jest.useFakeTimers()
+    const history = tallMsgs(30)
+    const Wrapper = withAdapter(makeAdapter())
+    const frame = (text: string) => (
+      <Wrapper>
+        <MessageList messages={[...history, assistantMsg("live", text)]} status="streaming" />
+      </Wrapper>
+    )
+    const { container, rerender } = render(frame("a"))
+    for (let step = 0; step < 30; step++) {
+      // A token lands between every idle period.
+      rerender(frame(`a${"b".repeat(step)}`))
+      act(() => {
+        jest.runOnlyPendingTimers()
+      })
+    }
+    expect(container.querySelector('[data-msg-id="fw-0"]')).not.toBeNull()
+  })
+
+  it("registers one jump for the list's lifetime, not one per streamed frame", () => {
+    const history = tallMsgs(30)
+    const Wrapper = withAdapter(makeAdapter())
+    const frame = (text: string) => (
+      <Wrapper>
+        <MessageList
+          paneSessionId="s1"
+          messages={[...history, assistantMsg("live", text)]}
+          status="streaming"
+        />
+      </Wrapper>
+    )
+    const { rerender, unmount } = render(frame("a"))
+    const first = useChatViewportStore.getState().sessionJumps.s1
+    const writes = jest.fn()
+    const stop = useChatViewportStore.subscribe(writes)
+    try {
+      rerender(frame("ab"))
+      rerender(frame("abc"))
+      expect(useChatViewportStore.getState().sessionJumps.s1).toBe(first)
+      expect(writes).not.toHaveBeenCalled()
+    } finally {
+      stop()
+      unmount()
+    }
+  })
+
   it("reveals at once when the reader scrolls near the top", () => {
     const { container, getByRole } = renderList(tallMsgs(30))
     const before = container.querySelectorAll("[data-msg-id]").length

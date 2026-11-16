@@ -24,6 +24,7 @@ import { ConversationTimeline } from "./minimap/conversation-timeline"
 import { shouldMountTimeline } from "./minimap/timeline-visibility"
 import { ActiveTurnPublisher } from "./active-turn-publisher"
 import { useChatViewportStore, type JumpToMessage } from "@/stores/chat/chat-viewport-store"
+import { useStableCallback } from "@/hooks/ui/use-stable-callback"
 import { MessageSearchBar } from "./message-search-bar"
 import type { MessageSearchHit } from "@/lib/chat/message-search"
 import { findMessageAnchor } from "@/lib/chat/message-anchor"
@@ -375,16 +376,16 @@ export function MessageList({
   // An unknown id (the row was deleted, compacted away) falls back to the
   // whole list, which in flow mode is short by definition.
   const floor = virtualize ? 0 : Math.max(0, windowIndex)
-  const revealEarlier = useCallback(
-    (toIndex?: number) => {
-      if (floor <= 0) return
-      const next =
-        toIndex ?? revealedWindowStart(messages, floor, scrollParentRef.current?.clientHeight ?? 0)
-      holdPlaceForPrepend()
-      setWindowStartId(next <= 0 ? null : (messages[next]?.id ?? null))
-    },
-    [floor, messages, holdPlaceForPrepend]
-  )
+  // Stable across streamed frames: it reads the latest messages when called.
+  // Rebuilt per frame, it re-armed the idle reveal below on every token, so
+  // the earlier rows never revealed while a reply was streaming.
+  const revealEarlier = useStableCallback((toIndex?: number) => {
+    if (floor <= 0) return
+    const next =
+      toIndex ?? revealedWindowStart(messages, floor, scrollParentRef.current?.clientHeight ?? 0)
+    holdPlaceForPrepend()
+    setWindowStartId(next <= 0 ? null : (messages[next]?.id ?? null))
+  })
   // Rows were inserted above: keep the reader on what they were reading,
   // before the insertion is painted. Then land a jump that had to reveal its
   // target first (see `jumpToMessage`).
@@ -773,7 +774,11 @@ export function MessageList({
   // `scheduleScrollReconcile` rAF loop that re-targets every frame until the
   // offset is stable. A second corrector would read the library's in-flight
   // scroll as drift and fight it.
-  const jumpToMessage = useCallback<JumpToMessage>(
+  // One identity for the list's lifetime: it reads the latest rows when
+  // called. Rebuilt per streamed frame, it re-registered with the viewport
+  // store (two unregister/register pairs a frame), re-rendering every
+  // subscriber of `jumpToMessage` and `sessionJumps` while a reply streamed.
+  const jumpToMessage: JumpToMessage = useStableCallback<Parameters<JumpToMessage>, boolean>(
     (messageId, index, opts) => {
       const align = opts?.align ?? "center"
       const resolvedIndex = index ?? messages.findIndex((message) => message.id === messageId)
@@ -817,18 +822,7 @@ export function MessageList({
       arriveFrom()
       node.scrollIntoView({ behavior: "smooth", block: align })
       return true
-    },
-    [
-      messages,
-      virtualize,
-      virtualCount,
-      rowVirtualizer,
-      flash,
-      rememberReturn,
-      releaseFollow,
-      floor,
-      revealEarlier,
-    ]
+    }
   )
 
   // Only the primary list publishes: the dock hosts its own per-resource chat
