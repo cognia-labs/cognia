@@ -3,7 +3,7 @@
  */
 import { mapPiEvent, type PiEvent } from "@cognia/agent-pi/rpc-events"
 import { externalAgentEventToCanonicalFallback } from "../../runtime/external/external-event-mapper"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 import {
   CANONICAL_TUI_CLASSIFICATION,

@@ -19,7 +19,7 @@
  * session (or a post-`/clear` session, which gets a fresh id) can never read
  * another session's subagent output even though the registry is process-global.
  */
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import type { AgentEventEnvelope } from "@cognia/agent-config-types/agent-execution"
 
 import { summarizeToolCall } from "../tui/format/tools"

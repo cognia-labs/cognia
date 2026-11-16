@@ -6,7 +6,7 @@ import {
   runManualCompact,
   type RunManualCompactDeps,
 } from "./manual-compact"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 const SESSION = "ses_1"
 

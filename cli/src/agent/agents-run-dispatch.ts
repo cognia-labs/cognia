@@ -16,7 +16,7 @@
  */
 
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 import { type ResolvedConfig } from "../config/schema"
 import { loadMcpServers } from "../mcp/load-mcp-config"

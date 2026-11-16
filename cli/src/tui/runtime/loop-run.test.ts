@@ -1,7 +1,7 @@
 /**
  * @jest-environment node
  */
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import type { Loop } from "@/types/loop"
 import { renderLoopIterationMessage } from "@/lib/loop/prompts"
 import { LoopGoalConflict } from "@/lib/loop/runtime"

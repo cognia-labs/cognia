@@ -29,7 +29,7 @@ import {
   TOOL_ALLOW_REQUEST_PREFIX,
 } from "@/lib/ai/agent/execution/hitl/callback-prefixes"
 import type { PendingOutboundTarget, PermissionRequestEvent } from "@cognia/agent-config-types"
-import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/ai/agent/execution/capture-types"
 import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"

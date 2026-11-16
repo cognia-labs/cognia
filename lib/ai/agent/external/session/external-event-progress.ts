@@ -20,7 +20,7 @@
  * and safe to call from either dispatch path.
  */
 
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import type { ExternalAgentEvent } from "@/types/agent/external-agent"
 
 /**

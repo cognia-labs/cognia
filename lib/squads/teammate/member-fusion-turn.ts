@@ -32,7 +32,7 @@
  */
 
 import type { AgentTeammate } from "@/types/agent/agent-team"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import {
   delegateDeliveryOf,
   fusionActionRequested,

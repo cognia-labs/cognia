@@ -27,7 +27,7 @@ import {
   AGENT_CAPABILITY_GRANT_SCHEMA_VERSION,
   type AgentCapabilityGrantV1,
 } from "@cognia/agent-config-types/agent-capability-grant"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import { guardWorkflowEgress } from "@/lib/workflow/runtime/egress-guard"
 
 export interface AgentTurnParams {

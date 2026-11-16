@@ -18,7 +18,10 @@
  * the sidecar retains provider cancellation and idle protection. Pure + fully
  * injected for tests.
  */
-import { compactBoundaryFromInner, type CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import {
+  type CaptureStreamEvent,
+  compactBoundaryFromInner,
+} from "@/lib/ai/agent/execution/capture-types"
 
 /** Raw sidecar event envelope this runner cares about (a superset is forwarded). */
 interface SidecarEnvelope {

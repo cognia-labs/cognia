@@ -50,7 +50,10 @@ import { prepareCliPersonalHistory } from "./personal-history"
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from "../config/schema"
 import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
 import type { SidecarBootstrap } from "../runtime/bootstrap"
-import { RunAndCaptureError, type RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import {
+  RunAndCaptureError,
+  type RunAndCaptureResult,
+} from "@/lib/ai/agent/execution/capture-types"
 import type { AgentEventEnvelope } from "@cognia/agent-config-types/agent-execution"
 import { getCliSubagentContext } from "./subagent-dispatch"
 import { DISPATCH_AGENT_TOOL_NAME } from "@/lib/ai/agent/execution/delegation/dispatch-agent-tool"

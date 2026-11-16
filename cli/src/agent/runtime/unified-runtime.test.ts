@@ -6,7 +6,7 @@ import type {
   AgentEventEnvelope,
   CanonicalAgentEvent,
 } from "@cognia/agent-config-types/agent-execution"
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 
 import type { ResolvedConfig } from "../../config/schema"
 import type { AgentSession, AgentSessionParams, SendTurnOptions } from "../session-runner"

@@ -27,13 +27,13 @@ import type {
 } from "@cognia/agent-config-types"
 import type { BuildOptionsContext } from "@/lib/claude/build-options"
 import type {
-  CapturePermissionDecision,
   CaptureStreamEvent,
+  CapturePermissionDecision,
   CaptureToolResult,
   CaptureToolResultDecision,
   RunAndCaptureOptions,
   RunAndCaptureResult,
-} from "@/lib/claude/run-and-capture"
+} from "@/lib/ai/agent/execution/capture-types"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import type { SurfaceUsageInput } from "@/lib/db/session-usage"
 import type {

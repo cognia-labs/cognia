@@ -15,7 +15,7 @@
  *
  * CLI is English-only.
  */
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import { CLI_FIX_TESTS_PROMPT } from "@/lib/agent/prompts/cli-prompts"
 import { resolvePrompt } from "@/lib/prompts/resolve"
 import type { PromptResolutionContext } from "@/lib/prompts/types"

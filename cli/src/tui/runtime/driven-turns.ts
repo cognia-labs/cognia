@@ -17,7 +17,7 @@
  * on the steered turn's reply, so the run continues from there.
  */
 
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import { frameSteer } from "@/lib/claude/steer"
 import { formatTokens } from "../format/usage"
 import type { ActivityKind, TuiAction } from "../state/types"

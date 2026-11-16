@@ -5,7 +5,10 @@ import type {
   SendOptions,
 } from "@cognia/agent-config-types"
 import type { BuildOptionsContext } from "@/lib/claude/build-options"
-import type { RunAndCaptureOptions, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type {
+  RunAndCaptureOptions,
+  RunAndCaptureResult,
+} from "@/lib/ai/agent/execution/capture-types"
 import { createToolRuleState } from "../tool-rules"
 import { makeComponents, makeRun, makeTask } from "../test-fixtures"
 import type { IsolationDeps } from "./isolation"

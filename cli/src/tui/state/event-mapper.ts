@@ -3,7 +3,7 @@
  * `onEvent` seam) into reducer actions. Kept pure so the wiring is unit-tested
  * without a live session.
  */
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import { usageInfoFromRecord } from "@/lib/usage/usage-info"
 import {
   isKnownCanonicalAgentEventKind,

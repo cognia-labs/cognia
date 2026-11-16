@@ -72,8 +72,11 @@ const realEnsureCliDb =
 jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: jest.fn(async () => ({ provider: "opencode-go" })),
 }))
+jest.mock("@/lib/ai/agent/execution/capture-types", () => ({
+  RunAndCaptureError: jest.requireActual("@/lib/ai/agent/execution/capture-types")
+    .RunAndCaptureError,
+}))
 jest.mock("@/lib/claude/run-and-capture", () => ({
-  RunAndCaptureError: jest.requireActual("@/lib/claude/run-and-capture").RunAndCaptureError,
   runAndCaptureAssistantReply: jest.fn(async (sessionId: string) => ({
     text: `subagent reply for ${sessionId}`,
     messageId: "m",

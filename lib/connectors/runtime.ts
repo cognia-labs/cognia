@@ -588,14 +588,14 @@ export type RunAndCaptureFn = (
    * can attribute the PII gate + usage telemetry to the right conversation.
    * They are ignored by the raw capture wrapper.
    */
-  cap?: import("@/lib/claude/run-and-capture").RunAndCaptureOptions & {
+  cap?: import("@/lib/ai/agent/execution/capture-types").RunAndCaptureOptions & {
     adapterId?: string
     conversationKey?: string
   }
 ) => Promise<{
   text: string
   messageId: string
-  resultSubtype?: import("@/lib/claude/run-and-capture").RunAndCaptureResult["resultSubtype"]
+  resultSubtype?: import("@/lib/ai/agent/execution/capture-types").RunAndCaptureResult["resultSubtype"]
   /**
    * A2UI surfaces emitted during this turn via the `builtin:a2ui-bridge`
    * MCP tools. Empty for plain-text turns. The runtime projects them into
@@ -2812,7 +2812,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
               .map((permission) => permission.requestId)
           )
           const sourceSendState: { changed: { deleted: boolean } | null } = { changed: null }
-          const cap: import("@/lib/claude/run-and-capture").RunAndCaptureOptions & {
+          const cap: import("@/lib/ai/agent/execution/capture-types").RunAndCaptureOptions & {
             adapterId?: string
             conversationKey?: string
           } = {
@@ -2875,7 +2875,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
                   )
                 })
             },
-            onEvent: (ev: import("@/lib/claude/run-and-capture").CaptureStreamEvent) => {
+            onEvent: (ev: import("@/lib/ai/agent/execution/capture-types").CaptureStreamEvent) => {
               const canonical = canonicalEventFromCaptureEvent(ev)
               void runProducer.onCaptureEvent(ev, Date.now()).catch(() => undefined)
               if (canonical) void persistCanonicalEvent(canonical).catch(() => undefined)

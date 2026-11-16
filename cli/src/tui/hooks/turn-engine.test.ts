@@ -1,8 +1,11 @@
 /**
  * @jest-environment node
  */
-import type { CapturePermissionDecision, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
-import { RunAndCaptureError } from "@/lib/claude/run-and-capture"
+import {
+  type CapturePermissionDecision,
+  type RunAndCaptureResult,
+  RunAndCaptureError,
+} from "@/lib/ai/agent/execution/capture-types"
 import type {
   AgentEventEnvelope,
   CanonicalAgentEvent,

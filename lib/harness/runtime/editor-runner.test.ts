@@ -5,7 +5,7 @@ import type {
   SendOptions,
 } from "@cognia/agent-config-types"
 import type { BuildOptionsContext } from "@/lib/claude/build-options"
-import type { RunAndCaptureOptions } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureOptions } from "@/lib/ai/agent/execution/capture-types"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import { buildContextTree } from "../context-tree"
 import { makeComponents, makeRun, makeRunConfig, makeTask } from "../test-fixtures"

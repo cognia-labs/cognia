@@ -114,9 +114,11 @@ jest.mock("@/lib/db/session-usage", () => ({
   ...jest.requireActual("@/lib/db/session-usage"),
   recordSurfaceUsage: (...a: unknown[]) => recordSurfaceUsage(...a),
 }))
+jest.mock("@/lib/ai/agent/execution/capture-types", () => ({
+  RunAndCaptureError: jest.requireActual("@/lib/ai/agent/execution/capture-types")
+    .RunAndCaptureError,
+}))
 jest.mock("@/lib/claude/run-and-capture", () => ({
-  RunAndCaptureError: jest.requireActual("@/lib/claude/run-and-capture").RunAndCaptureError,
-  // Both real dispatch paths call beforeSend before the engine receives the turn.
   runAndCaptureAssistantReply: async (...a: unknown[]) => {
     await (a[3] as { beforeSend?: () => Promise<void> } | undefined)?.beforeSend?.()
     return (runAndCaptureAssistantReply as (...args: unknown[]) => unknown)(...a)

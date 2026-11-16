@@ -20,7 +20,10 @@
 import type { AgentWorkspaceCaptureReceipt } from "@cognia/agent-config-types/agent-run-result"
 
 import { captureEventFromCanonical } from "@/lib/ai/agent/execution/event-envelope"
-import type { CaptureStreamEvent, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type {
+  CaptureStreamEvent,
+  RunAndCaptureResult,
+} from "@/lib/ai/agent/execution/capture-types"
 
 import type { ResolvedConfig } from "../config/schema"
 import type { PermissionResponder } from "./permission-gate"

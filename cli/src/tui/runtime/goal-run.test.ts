@@ -1,7 +1,7 @@
 /**
  * @jest-environment node
  */
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import type { Goal } from "@/types/goal"
 import { runGoalStreaming, type GoalRunDeps } from "./goal-run"
 import type { TuiAction } from "../state/types"

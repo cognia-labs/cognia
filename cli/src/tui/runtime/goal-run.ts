@@ -19,7 +19,7 @@ import { personalEgressOptionsSource } from "@/lib/execution/personal-egress"
 import type { AppSettings } from "@cognia/agent-config-types"
 import type { Goal } from "@/types/goal"
 import type { LlmClient } from "@/lib/twin/distill/llm"
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import { getGoalRuntime } from "@/lib/goal/runtime"
 import { buildGoalJudgeClient } from "@/lib/goal/judge-client"
 import { handleTurnComplete } from "@/lib/goal/turn-driver"
@@ -149,7 +149,7 @@ export async function runGoalStreaming(objective: string, deps: GoalRunDeps): Pr
   }: {
     text: string
     tokensDelta: number
-    capturedResult?: import("@/lib/claude/run-and-capture").RunAndCaptureResult
+    capturedResult?: import("@/lib/ai/agent/execution/capture-types").RunAndCaptureResult
   }): Promise<DrivenAdvance> => {
     const current = await readGoal(goal.id)
     if (!current) return { kind: "stop", status: "error", summary: "Goal removed mid-run." }

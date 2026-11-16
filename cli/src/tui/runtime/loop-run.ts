@@ -16,7 +16,7 @@
 
 import type { AppSettings } from "@cognia/agent-config-types"
 import type { Loop } from "@/types/loop"
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import { DEFAULT_LOOP_CONFIG, getLoopRuntime, LoopGoalConflict } from "@/lib/loop/runtime"
 import { handleLoopTurnComplete } from "@/lib/loop/turn-driver"
 import { renderLoopIterationMessage } from "@/lib/loop/prompts"

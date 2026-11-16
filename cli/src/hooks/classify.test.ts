@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 import { classifyEvent } from "./classify"
 

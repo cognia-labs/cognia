@@ -1,5 +1,7 @@
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
-import { compactBoundaryFromInner } from "@/lib/claude/run-and-capture"
+import {
+  type CaptureStreamEvent,
+  compactBoundaryFromInner,
+} from "@/lib/ai/agent/execution/capture-types"
 import type { SDKMessage } from "@cognia/agent-config-types"
 import {
   createExecutionRun,

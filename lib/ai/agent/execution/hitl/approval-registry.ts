@@ -15,7 +15,7 @@
  * singleton is the correct shared channel.
  */
 
-import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/ai/agent/execution/capture-types"
 
 /** Default time a permission card waits for a button press before auto-denying. */
 export const DEFAULT_APPROVAL_TTL_MS = 10 * 60 * 1000

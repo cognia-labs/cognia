@@ -66,7 +66,7 @@ import {
   NEEDS_APPROVAL_STATUS,
 } from "@/lib/ai/agent/execution/permissions/unattended-responder"
 import { createUnattendedPark } from "@/lib/ai/agent/execution/permissions/unattended-park"
-import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/ai/agent/execution/capture-types"
 import type { OutboundToolPlannerOptions } from "@/lib/policy/action-review/plan-tool-call"
 import { holdExecutionClock } from "@/lib/scheduler/execution-clock"
 import {

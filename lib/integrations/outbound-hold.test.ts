@@ -1,5 +1,5 @@
 import type { UnattendedParkDeps } from "@/lib/ai/agent/execution/permissions/unattended-park"
-import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/ai/agent/execution/capture-types"
 
 import {
   heldIntegrationJobSessionId,

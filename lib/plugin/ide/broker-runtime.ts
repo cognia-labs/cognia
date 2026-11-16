@@ -104,7 +104,7 @@ const PROVIDER_EVENTS: Partial<Record<PluginIdeProviderDeclaration["kind"], Set<
 
 export interface ManagedIdeAgentInvocationContext {
   signal: AbortSignal
-  onEvent(event: import("@/lib/claude/run-and-capture").CaptureStreamEvent): void
+  onEvent(event: import("@/lib/ai/agent/execution/capture-types").CaptureStreamEvent): void
   requestApproval(
     toolName: string,
     input: Record<string, unknown>

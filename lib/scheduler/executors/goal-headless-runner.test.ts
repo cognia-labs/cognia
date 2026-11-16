@@ -69,7 +69,7 @@ jest.mock("@/lib/scheduler/host-support", () => ({
 }))
 
 import { runGoalLoopHeadless } from "./goal-headless-runner"
-import { RunAndCaptureError } from "@/lib/claude/run-and-capture"
+import { RunAndCaptureError } from "@/lib/ai/agent/execution/capture-types"
 
 const activeGoal = {
   id: "g1",

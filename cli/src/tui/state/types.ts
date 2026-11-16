@@ -15,7 +15,10 @@ import type {
   CanonicalAgentEvent,
 } from "@cognia/agent-config-types/agent-execution"
 import type { AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
-import type { CapturePermissionDecision, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type {
+  CapturePermissionDecision,
+  RunAndCaptureResult,
+} from "@/lib/ai/agent/execution/capture-types"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import type { RunStepView, RunUsageTotals } from "../runtime/workflow-run-fold"
 import type { RateLimitSnapshot } from "../format/rate-limits"

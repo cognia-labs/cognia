@@ -24,7 +24,7 @@ import { loadHooks, type FileReader } from "../../hooks/load-hooks"
 import { hasAnyHookGroup } from "../../hooks/resolve-hooks-config"
 import { runHooks } from "../../hooks/run-hooks"
 import type { HookEvent, HooksConfig } from "../../hooks/types"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import {
   buildBuiltinHookGroups,
   type BuiltinHookOverrides,

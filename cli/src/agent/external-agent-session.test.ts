@@ -80,7 +80,7 @@ import {
   withholdForReaders,
 } from "@cognia/plugin-contract/types/execution/personal-visibility"
 import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
-import { RunAndCaptureError } from "@/lib/claude/run-and-capture"
+import { RunAndCaptureError } from "@/lib/ai/agent/execution/capture-types"
 import * as externalPresets from "@/lib/ai/agent/external/config/presets"
 import { useAskUserStore } from "@/stores/agent/ask-user-store"
 

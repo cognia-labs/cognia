@@ -3,7 +3,7 @@
  */
 import { runFixStreaming, buildFixPrompt, tailOutput, type FixRunDeps } from "./fix-run"
 import type { ShellResult } from "../../agent/run-shell"
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import type { TuiAction } from "../state/types"
 import {
   __setPromptOverrideSnapshotForTests,

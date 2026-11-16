@@ -16,7 +16,7 @@ import {
   isKnownCanonicalAgentEventKind,
 } from "@cognia/agent-config-types/agent-execution"
 
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import { usageInfoFromRecord } from "@/lib/usage/usage-info"
 import { redactText } from "@cognia/redact"
 

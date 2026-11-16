@@ -55,7 +55,7 @@ import {
 import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
 import type { ResolvedConfig } from "../../config/schema"
 import type { CreateSession } from "../hooks/useAgentSession"
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 
 const config: ResolvedConfig = {
   ...DEFAULT_RESOLVED_CONFIG,

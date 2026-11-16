@@ -6,7 +6,7 @@ import {
   summarizeForCard,
   THROTTLE_MS,
 } from "./turn-activity-tracker"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 const T0 = 1_700_000_000_000
 

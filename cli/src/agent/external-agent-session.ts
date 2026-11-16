@@ -69,10 +69,10 @@ import {
   resolvePreferredCodexExecutablePresetId,
 } from "@/lib/ai/agent/external/config/presets"
 import {
+  type CaptureStreamEvent,
   RunAndCaptureError,
   type CapturePermissionDecision,
-  type CaptureStreamEvent,
-} from "@/lib/claude/run-and-capture"
+} from "@/lib/ai/agent/execution/capture-types"
 
 import type { McpServer } from "@cognia/agent-config-types"
 import type { AcpMcpServerConfig } from "@/types/agent/external-agent"

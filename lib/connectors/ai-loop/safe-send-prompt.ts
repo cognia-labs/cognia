@@ -21,12 +21,12 @@
  */
 
 import { hasNoLeakingPii } from "@cognia/redact"
+import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
 import {
   RunAndCaptureError,
-  runAndCaptureAssistantReply,
   type RunAndCaptureOptions,
   type RunAndCaptureResult,
-} from "@/lib/claude/run-and-capture"
+} from "@/lib/ai/agent/execution/capture-types"
 import type { SendContent, SendOptions } from "@cognia/agent-config-types"
 import { appendAudit } from "@/lib/connectors/audit"
 import { recordProviderOutcome } from "@/lib/claude/provider-telemetry"

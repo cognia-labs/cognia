@@ -23,7 +23,10 @@
 import type { AgentCapabilityGrantV1 } from "@cognia/agent-config-types/agent-capability-grant"
 import type { Character, PermissionRequestEvent, SendOptions } from "@cognia/agent-config-types"
 import type { UsageInfo } from "@/lib/claude/adapter"
-import type { CaptureStreamEvent, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type {
+  CaptureStreamEvent,
+  RunAndCaptureResult,
+} from "@/lib/ai/agent/execution/capture-types"
 import type { HarnessEvolutionRun } from "@/types/harness/evolution"
 import type { HarnessComponentsV1 } from "@/types/harness/snapshot"
 import {

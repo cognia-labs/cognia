@@ -1,5 +1,6 @@
 import { bindPersonalMessageRun } from "@/lib/execution/personal-marks"
 import { bindPersonalEgressOptions } from "@/lib/execution/personal-egress"
+import { RunAndCaptureError } from "@/lib/ai/agent/execution/capture-types"
 /**
  * A synchronous, tool-enabled agent turn, run headlessly on a plugin's behalf.
  *
@@ -399,7 +400,7 @@ export async function runPluginAgentTurn(
       ])
     )
     const transcriptCancellation = (message: string) =>
-      Object.assign(new runner.RunAndCaptureError(message, "aborted"), {
+      Object.assign(new RunAndCaptureError(message, "aborted"), {
         terminalCancellation: true as const,
       })
     let pendingOperation: AgentTurnOperationCompletion | undefined
@@ -517,7 +518,7 @@ export async function runPluginAgentTurn(
       let externalParts: UIMessage["parts"] = []
       let projectionError: unknown
       let replyCommitted = false
-      let dispatchCancellation: InstanceType<typeof runner.RunAndCaptureError> | undefined
+      let dispatchCancellation: InstanceType<typeof RunAndCaptureError> | undefined
       // The logical user row must survive unchanged from write to commit. A clear,
       // delete, edit or move in between cancels the turn instead of reviving it.
       const userRowIntact = async () => {
@@ -786,7 +787,7 @@ export async function runPluginAgentTurn(
             result.resultSubtype !== "error_max_turns" &&
             result.resultSubtype !== "error_max_budget_usd"
           )
-            throw new runner.RunAndCaptureError(
+            throw new RunAndCaptureError(
               `session ${sessionId} ended with no assistant text`,
               "no_assistant_text"
             )

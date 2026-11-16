@@ -12,7 +12,7 @@
  * without a bespoke fixture for each.
  */
 import type { PermissionRequestEvent } from "@cognia/agent-config-types"
-import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/ai/agent/execution/capture-types"
 import type { CreateSession } from "../hooks/useAgentSession"
 
 /** One thing the scripted agent does during a turn, in order. */

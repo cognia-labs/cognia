@@ -22,7 +22,7 @@
  * instead, oldest claim first out.
  */
 
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import type { UsageInfo } from "@/lib/claude/adapter"
 
 /** Far more turns than can be in flight or queued at once. */

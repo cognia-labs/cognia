@@ -19,13 +19,13 @@ import {
 import os from "node:os"
 
 import { type BuildOptionsContext } from "@/lib/claude/build-options"
+import { runAndCaptureAssistantReply as defaultCapture } from "@/lib/claude/run-and-capture"
 import {
-  runAndCaptureAssistantReply as defaultCapture,
+  type CaptureStreamEvent,
   RunAndCaptureError,
   type RunAndCapturePartial,
   type RunAndCaptureResult,
-  type CaptureStreamEvent,
-} from "@/lib/claude/run-and-capture"
+} from "@/lib/ai/agent/execution/capture-types"
 import {
   closeSession as defaultCloseSession,
   setSessionMode as defaultSetSessionMode,

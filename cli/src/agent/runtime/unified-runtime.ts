@@ -36,7 +36,7 @@ import type {
   AgentWorkspaceCaptureReceipt,
   AgentWorkspaceCaptureUnavailableReason,
 } from "@cognia/agent-config-types/agent-run-result"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import type { AgentCompositionSelectionV1 } from "@cognia/agent-config-types/agent-composition"
 
 import { resolveHome } from "../../config/load"

@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events"
 
 import { createHookRunner } from "./hook-runner"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 /** A minimal fake child process: emits `close` with the given code next tick. */
 function fakeChild(code: number, stdinData?: string[]) {

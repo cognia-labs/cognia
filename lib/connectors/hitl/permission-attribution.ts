@@ -11,7 +11,7 @@
  */
 
 import type { ApproveToolAttribution } from "@/lib/ai/agent/execution/sidecar-client"
-import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/ai/agent/execution/capture-types"
 import { getDb } from "@/lib/db/schema"
 
 /** `outcome` with the attribution its run's interrupt supports, when it has none. */

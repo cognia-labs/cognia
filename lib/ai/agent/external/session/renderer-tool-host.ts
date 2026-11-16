@@ -6,7 +6,7 @@ import {
 } from "@/lib/ai/agent/execution/sidecar-feature-client"
 import { handlePluginToolExec } from "@/lib/plugin/bridge/agent-tool-dispatch"
 import { dispatchPostToolUse, dispatchPreToolUse } from "@/lib/plugin/messaging/agent-hook-dispatch"
-import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/ai/agent/execution/capture-types"
 import { transport } from "@/lib/tauri"
 import {
   getActiveRemoteTransport,

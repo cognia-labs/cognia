@@ -6,8 +6,12 @@
  * Tested directly with a fake session — abort, error, and the deferred-gate
  * round-trip are all covered without mounting Ink.
  */
-import { RunAndCaptureError } from "@/lib/claude/run-and-capture"
-import type { CapturePermissionDecision, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import {
+  RunAndCaptureError,
+  type CapturePermissionDecision,
+  type RunAndCaptureResult,
+  type CaptureStreamEvent,
+} from "@/lib/ai/agent/execution/capture-types"
 import type { PermissionRequestEvent } from "@cognia/agent-config-types"
 import type { AgentEventEnvelope } from "@cognia/agent-config-types/agent-execution"
 import type { AgentWorkspaceCaptureReceipt } from "@cognia/agent-config-types/agent-run-result"
@@ -24,7 +28,6 @@ import { formatAttachmentNotice } from "../runtime/attachment-notice"
 import type { AttachmentSummary } from "../../agent/session-runner"
 import type { CliDbSnapshotError } from "../../db/bootstrap"
 import type { PermissionResponder } from "../../agent/permission-gate"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
 import type { TuiAction } from "../state/types"
 import { applyCanonicalTaskEnvelope } from "../../agent/subagent-live-output"
 import { isWorkspaceCaptureRefusal, type WorkerTurnCapture } from "../../worker/workspace-client"

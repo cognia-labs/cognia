@@ -20,7 +20,7 @@
  * start promptly; the heartbeat guarantees a "still working" tick on long
  * single-tool turns (a 30s bash command).
  */
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import type { DiffHunk } from "@/types/execution/turn-activity-diff"
 import { extractEditInput, isFileEditTool } from "./diff-producer"
 

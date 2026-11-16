@@ -2,7 +2,7 @@ import {
   bindPersonalEgressOptions,
   type PersonalEgressContext,
 } from "@/lib/execution/personal-egress"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import type {
   ExternalAgentEvent,
   ExternalAgentResult,

@@ -128,7 +128,7 @@ import type { ResolvedConfig } from "../../config/schema"
 import type { CreateSession } from "../hooks/useAgentSession"
 import type { TranscriptEntry, TranscriptFs } from "../../agent/transcript"
 import type { RunShellOpts, ShellResult } from "../../agent/run-shell"
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import type { UsageInfo } from "../state/types"
 import {
   attachLocalHost,

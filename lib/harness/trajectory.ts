@@ -16,7 +16,7 @@
  * the "a failed call returns its error" rule are not re-derived here.
  */
 
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import { isToolPart, projectToolOutputText } from "@/lib/chat/mentions/tool-output-text"
 
 /** Per-observation cap. Harness² requires at least 10k; errors are kept whole up to it too. */

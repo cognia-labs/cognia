@@ -19,7 +19,7 @@
 
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { SubAgent, SubAgentTokenUsage } from "@/types/agent/sub-agent"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 import type { PluginDispatchErrorEnvelope } from "@/types/plugin/plugin-agent-sdk"
 import { createSubAgentNode } from "@/lib/ai/agent/execution/delegation/subagent-projection"
 

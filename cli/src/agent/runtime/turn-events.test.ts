@@ -1,4 +1,4 @@
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 import { createSideEffectTracker } from "./retry"
 import {

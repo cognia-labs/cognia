@@ -1,7 +1,7 @@
 /**
  * @jest-environment node
  */
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import { runDrivenTurns, frameSteer, type DrivenAdvance } from "./driven-turns"
 import type { TuiAction } from "../state/types"
 

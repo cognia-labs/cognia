@@ -3,7 +3,7 @@ import {
   type TeammateProgressMeta,
 } from "./teammate-progress-coalescer"
 import type { AgentTeamEvent } from "@/types/agent/agent-team"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 const META: TeammateProgressMeta = {
   teamId: "team-1",

@@ -21,7 +21,7 @@
 import type { PermissionRequestEvent } from "@cognia/agent-config-types"
 import { TimeoutError, withTimeout } from "@cognia/primitives"
 
-import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/ai/agent/execution/capture-types"
 import type { RunApprovalOrigin } from "@/lib/execution/run-approval-push"
 import type { UnattendedParkOptions } from "@/lib/ai/agent/execution/permissions/unattended-park"
 import type { OutboundTarget } from "@/lib/policy/action-review/outbound-targets"

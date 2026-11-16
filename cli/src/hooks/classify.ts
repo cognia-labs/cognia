@@ -15,7 +15,7 @@
  * Everything here is a pure function of its input so it is exhaustively
  * unit-testable. Returns `null` for events that imply no hook.
  */
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 import type { HookEvent } from "./types"
 

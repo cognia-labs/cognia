@@ -23,7 +23,7 @@
  */
 
 import type { PermissionClass, PermissionRequestEvent } from "@cognia/agent-config-types"
-import type { CapturePermissionDecision } from "@/lib/claude/run-and-capture"
+import type { CapturePermissionDecision } from "@/lib/ai/agent/execution/capture-types"
 import type { RunApprovalOrigin } from "@/lib/execution/run-approval-push"
 import {
   observeActingAuthority,

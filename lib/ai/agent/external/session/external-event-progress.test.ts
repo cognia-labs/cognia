@@ -3,7 +3,7 @@ import {
   pipeExternalEventsToCapture,
 } from "./external-event-progress"
 import type { ExternalAgentEvent } from "@/types/agent/external-agent"
-import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
+import type { CaptureStreamEvent } from "@/lib/ai/agent/execution/capture-types"
 
 const now = new Date()
 

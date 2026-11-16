@@ -4,7 +4,7 @@ import { settingsSections } from "../runtime/settings-sections"
  */
 import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
 import type { ResolvedConfig } from "../../config/schema"
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 
 import { createInitialState } from "./initial"
 import { tuiReducer } from "./reducer"

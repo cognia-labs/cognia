@@ -51,7 +51,10 @@ import {
   permissionChoicesForRequest,
   initialChoiceIndex,
 } from "../components/overlays/PermissionOverlay"
-import type { CapturePermissionDecision, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type {
+  CapturePermissionDecision,
+  RunAndCaptureResult,
+} from "@/lib/ai/agent/execution/capture-types"
 import { resolveCliLoggingConfig } from "../../config/schema"
 import type { ResolvedConfig } from "../../config/schema"
 import type { ThinkingLevel } from "../../config/schema"

@@ -23,8 +23,11 @@ jest.mock("@/lib/db/characters", () => ({
   resolveCharacterById: async () => ({ id: "lecturer", name: "Lecturer" }),
 }))
 jest.mock("@/lib/claude/build-options", () => ({ resolveSendOptions: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/capture-types", () => ({
+  RunAndCaptureError: jest.requireActual("@/lib/ai/agent/execution/capture-types")
+    .RunAndCaptureError,
+}))
 jest.mock("@/lib/claude/run-and-capture", () => ({
-  RunAndCaptureError: jest.requireActual("@/lib/claude/run-and-capture").RunAndCaptureError,
   runAndCaptureAssistantReply: jest.fn(),
 }))
 jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
@@ -352,7 +355,7 @@ it.each(
           _prompt,
           options,
           cap
-        ): Promise<import("@/lib/claude/run-and-capture").RunAndCaptureResult> => {
+        ): Promise<import("@/lib/ai/agent/execution/capture-types").RunAndCaptureResult> => {
           await cap?.beforeSend?.()
           const sdkEvents = [
             {

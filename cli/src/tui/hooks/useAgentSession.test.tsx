@@ -9,8 +9,11 @@ import { appendTranscript, readTranscript } from "../../agent/transcript"
 import type { SendTurnOptions } from "../../agent/session-runner"
 import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
 import type { ResolvedConfig } from "../../config/schema"
-import type { CapturePermissionDecision, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
-import { RunAndCaptureError } from "@/lib/claude/run-and-capture"
+import {
+  type CapturePermissionDecision,
+  type RunAndCaptureResult,
+  RunAndCaptureError,
+} from "@/lib/ai/agent/execution/capture-types"
 import type { HookRunner } from "../runtime/hook-runner"
 import type { TuiAction } from "../state/types"
 import { createCheckpointCapture, type CheckpointCapture } from "../runtime/checkpoint-capture"

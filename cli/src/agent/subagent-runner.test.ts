@@ -6,7 +6,7 @@ import type { PluginToolExecRequest } from "@/lib/plugin/bridge/agent-tool-types
 import { runCliSubagent, type RunCliSubagentDeps } from "./subagent-runner"
 import type { BuildOptionsContext } from "@/lib/claude/build-options"
 import type { SendOptions } from "@cognia/agent-config-types"
-import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
+import type { RunAndCaptureResult } from "@/lib/ai/agent/execution/capture-types"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from "../config/schema"
 import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
@@ -19,8 +19,11 @@ import { loadSkillResourceForSession } from "@/lib/skills/runtime-loader"
 jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: jest.fn(async () => ({ provider: "opencode-go" })),
 }))
+jest.mock("@/lib/ai/agent/execution/capture-types", () => ({
+  RunAndCaptureError: jest.requireActual("@/lib/ai/agent/execution/capture-types")
+    .RunAndCaptureError,
+}))
 jest.mock("@/lib/claude/run-and-capture", () => ({
-  RunAndCaptureError: jest.requireActual("@/lib/claude/run-and-capture").RunAndCaptureError,
   runAndCaptureAssistantReply: jest.fn(async () => ({
     text: "from default capture",
     messageId: "m",
@@ -154,7 +157,7 @@ describe("runCliSubagent", () => {
   })
   it("returns completed evidence from a cancelled child capture and still retires its session", async () => {
     const controller = new AbortController()
-    const { RunAndCaptureError } = jest.requireActual("@/lib/claude/run-and-capture")
+    const { RunAndCaptureError } = jest.requireActual("@/lib/ai/agent/execution/capture-types")
     const deps = { ...setupDeps(), signal: controller.signal }
     deps.capture = async () => {
       controller.abort()
