@@ -9,7 +9,7 @@
 //     typed `CorsUnavailableError` so the UI can degrade to registry-only.
 
 import { isTauri } from "@/lib/tauri"
-import { skillsFetchRemoteJson } from "@/lib/claude/ipc"
+import { skillsFetchRemoteJson } from "@/lib/skills/host-client"
 import { getCapacitorHttp } from "@/lib/connectivity/capacitor-http"
 
 const TIMEOUT_MS = 15_000

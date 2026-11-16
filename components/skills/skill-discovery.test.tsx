@@ -7,7 +7,7 @@ jest.mock("next-intl", () => ({
     vars ? `${key}:${JSON.stringify(vars)}` : key,
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/skills/host-client", () => ({
   skillsScanDir: jest.fn(async () => []),
   skillsScanNative: jest.fn(async () => []),
   skillsScanCodex: jest.fn(async () => []),
@@ -25,7 +25,7 @@ jest.mock("@/lib/tauri", () => ({
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { SkillDiscovery } from "./skill-discovery"
-import { skillsScanCodex, skillsScanCursor, skillsScanOpencode } from "@/lib/claude/ipc"
+import { skillsScanCodex, skillsScanCursor, skillsScanOpencode } from "@/lib/skills/host-client"
 import { isTauri } from "@/lib/tauri"
 
 describe("SkillDiscovery", () => {

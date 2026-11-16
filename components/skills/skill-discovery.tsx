@@ -26,7 +26,7 @@ import {
   skillsScanNative,
   skillsScanOpencode,
   type NativeSkill,
-} from "@/lib/claude/ipc"
+} from "@/lib/skills/host-client"
 import { pickDirectory } from "@/lib/files/file-bridge"
 import { isTauri } from "@/lib/tauri"
 import { parseSkillMarkdown } from "@/lib/skills/markdown-io"

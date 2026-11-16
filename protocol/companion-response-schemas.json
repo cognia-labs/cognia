@@ -7353,7 +7353,7 @@
     },
     "SkillUninstallResult": {
       "type": "object",
-      "x-cognia-wire-source": "lib/claude/ipc.ts skills_uninstall / skills_uninstall_native",
+      "x-cognia-wire-source": "lib/skills/host-client.ts skills_uninstall / skills_uninstall_native",
       "required": ["removed", "directory"],
       "properties": {
         "removed": {

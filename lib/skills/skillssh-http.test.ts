@@ -1,7 +1,7 @@
 jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(() => false),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/skills/host-client", () => ({
   skillsFetchRemoteJson: jest.fn(),
 }))
 jest.mock("@/lib/connectivity/capacitor-http", () => ({
@@ -9,7 +9,7 @@ jest.mock("@/lib/connectivity/capacitor-http", () => ({
 }))
 
 import { isTauri } from "@/lib/tauri"
-import { skillsFetchRemoteJson } from "@/lib/claude/ipc"
+import { skillsFetchRemoteJson } from "@/lib/skills/host-client"
 import { getCapacitorHttp } from "@/lib/connectivity/capacitor-http"
 import {
   CorsUnavailableError,

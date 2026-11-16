@@ -55,7 +55,7 @@ jest.mock("@/lib/skills/markdown-io", () => ({
   nameFromFilename: (s: string) => s,
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/skills/host-client", () => ({
   scanClaudeSkills: jest.fn(async () => []),
 }))
 

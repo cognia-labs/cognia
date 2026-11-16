@@ -1,4 +1,4 @@
-import type { NativeSkill } from "@/lib/claude/ipc"
+import type { NativeSkill } from "@/lib/skills/host-client"
 import type { SessionSummary } from "@/lib/session-import"
 import type { SubagentImportDraft } from "@/lib/agents/subagent-importers"
 import type {
@@ -155,14 +155,14 @@ async function defaultPreviewDeps(): Promise<ArtifactPreviewDeps> {
     },
     previewSubagents: scanSubagents,
     previewSkills: async (vendor) => {
-      const ipc = await import("@/lib/claude/ipc")
+      const hostSkills = await import("@/lib/skills/host-client")
       switch (vendor) {
         case "claude-code":
-          return ipc.skillsScanNative()
+          return hostSkills.skillsScanNative()
         case "codex":
-          return ipc.skillsScanCodex()
+          return hostSkills.skillsScanCodex()
         case "opencode":
-          return ipc.skillsScanOpencode()
+          return hostSkills.skillsScanOpencode()
         case "pi": {
           // Pi discovers skills from the agent-neutral `.agents/skills`
           // convention rather than a Pi-specific directory, so it uses the
@@ -172,7 +172,7 @@ async function defaultPreviewDeps(): Promise<ArtifactPreviewDeps> {
             import("@/lib/agents/instructions/paths"),
           ])
           const home = (await resolveHome()) ?? ""
-          return home ? ipc.skillsScanDir(joinPath(home, ".agents/skills")) : []
+          return home ? hostSkills.skillsScanDir(joinPath(home, ".agents/skills")) : []
         }
       }
       // Exhaustive on purpose. This used to fall through to

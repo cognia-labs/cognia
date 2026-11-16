@@ -16,7 +16,7 @@ jest.mock("@/lib/db/skill-resources", () => ({
   listResourcesForSkill: async () => resourcesRef.current,
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/skills/host-client", () => ({
   skillsScanResources: jest.fn(async () => []),
   skillsScanSecurity: jest.fn(async () => []),
 }))

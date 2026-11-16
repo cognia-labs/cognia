@@ -4,7 +4,11 @@
 // fetched on demand via `skills_fetch_remote_md` (Rust) or `fetch` (web).
 
 import { isTauri } from "@/lib/tauri"
-import { skillsFetchRemoteMd, skillsLoadRegistry, type RegistrySkillEntry } from "@/lib/claude/ipc"
+import {
+  skillsFetchRemoteMd,
+  skillsLoadRegistry,
+  type RegistrySkillEntry,
+} from "@/lib/skills/host-client"
 import type { FetchSkillContent, MarketplaceItem } from "./marketplace-types"
 import type { SkillCategory } from "@cognia/agent-config-types"
 

@@ -13,7 +13,7 @@ const mockRemoteTransport = {
 jest.mock("@/lib/tauri/transport-routing", () => ({
   getActiveRemoteTransport: () => mockRemoteTransport,
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/skills/host-client", () => ({
   skillsBundleUploadAbort: jest.fn(),
   skillsBundleUploadCommit: jest.fn(),
   skillsBundleUploadOpen: jest.fn(),
@@ -53,7 +53,7 @@ jest.mock("@/lib/skills/markdown-io", () => ({
 
 import { pushAllToNative, pullAllFromNative, pushOneToNative, suggestedFilename } from "./sync"
 import { isTauri } from "@/lib/tauri"
-import { skillsCatalogGet, skillsInstallMirrored, skillsScanNative } from "@/lib/claude/ipc"
+import { skillsCatalogGet, skillsInstallMirrored, skillsScanNative } from "@/lib/skills/host-client"
 import {
   bulkImportSkills,
   getSkill,

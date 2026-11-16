@@ -1,4 +1,4 @@
-import type { NativeSkillResource } from "@/lib/claude/ipc"
+import type { NativeSkillResource } from "@/lib/skills/host-client"
 
 // CCSwitch interop types — importable content (MCP servers, prompts, skills).
 // Mirrors the structs serialized by `crates/cognia-ccswitch/src/types.rs`.

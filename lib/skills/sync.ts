@@ -18,7 +18,7 @@ import {
   type NativeSkillResource,
   type SkillBundleUploadHandle,
   type SkillsTarget,
-} from "@/lib/claude/ipc"
+} from "@/lib/skills/host-client"
 import {
   bulkImportSkills,
   getSkill,

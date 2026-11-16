@@ -15,7 +15,11 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
-import { skillsScanResources, skillsScanSecurity, type SkillScanIssue } from "@/lib/claude/ipc"
+import {
+  skillsScanResources,
+  skillsScanSecurity,
+  type SkillScanIssue,
+} from "@/lib/skills/host-client"
 import { listResourcesForSkill } from "@/lib/db/skill-resources"
 import { isTauri } from "@/lib/tauri"
 import type { Skill } from "@cognia/agent-config-types"

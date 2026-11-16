@@ -1,7 +1,7 @@
 jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/skills/host-client", () => ({
   skillsFetchRemoteMd: jest.fn(),
   skillsLoadRegistry: jest.fn(),
 }))
@@ -31,7 +31,7 @@ jest.mock("../../skills-lock.json", () => ({
 
 import { fetchRegistryItems, fetchRegistrySkillContent } from "./marketplace-registry"
 import { isTauri } from "@/lib/tauri"
-import { skillsFetchRemoteMd, skillsLoadRegistry } from "@/lib/claude/ipc"
+import { skillsFetchRemoteMd, skillsLoadRegistry } from "@/lib/skills/host-client"
 import type { MarketplaceItem } from "./marketplace-types"
 
 const mockedIsTauri = isTauri as unknown as jest.Mock
