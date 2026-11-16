@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/select"
 import { useSettingsStore } from "@/stores/settings"
 import type { AppSettings } from "@cognia/agent-config-types"
-import { OUTPUT_STYLE_IDS } from "@/lib/claude/output-styles"
+import { OUTPUT_STYLE_IDS } from "@/lib/ai/agent/execution/output-styles"
 import {
   ADVANCED_MODES,
   permissionRiskMarker,

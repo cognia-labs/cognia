@@ -6,7 +6,7 @@ jest.mock("@/lib/plugin/registries/skill-registry", () => ({
   ...jest.requireActual("@/lib/plugin/registries/skill-registry"),
   listSkillEntries: jest.fn(),
 }))
-jest.mock("@/lib/claude/model-presets", () => ({ modelPresetOptions: jest.fn() }))
+jest.mock("@/lib/ai/providers/anthropic-model-options", () => ({ modelPresetOptions: jest.fn() }))
 jest.mock("./builder-session", () => ({
   writeBuilderDraft: jest.fn(),
   createAgentFromBuilder: jest.fn(),
@@ -18,7 +18,7 @@ import { listSkills } from "@/lib/db/skills"
 import { listMcpServers } from "@/lib/db/mcp-servers"
 import { listKnowledgeBases } from "@/lib/db/knowledge-bases"
 import { listSkillEntries } from "@/lib/plugin/registries/skill-registry"
-import { modelPresetOptions } from "@/lib/claude/model-presets"
+import { modelPresetOptions } from "@/lib/ai/providers/anthropic-model-options"
 import { createAgentFromBuilder, writeBuilderDraft } from "./builder-session"
 import type { DraftCatalogs } from "./draft-ops"
 import { resolveAgentBuilderToolDeps } from "./tool-deps"

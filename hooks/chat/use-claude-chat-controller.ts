@@ -116,7 +116,7 @@ import {
   buildCompletedRunMetadata,
   buildRoutingRunMetadata,
 } from "@/lib/chat/message-run-metadata"
-import { turnAgentStamp } from "@/lib/claude/turn-agent-mode"
+import { turnAgentStamp } from "@/lib/agent/composition/turn-agent-mode"
 import {
   maybeDrainBackgroundResults,
   registerBackgroundReplaySend,

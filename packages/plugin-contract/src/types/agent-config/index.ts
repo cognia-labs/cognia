@@ -3038,7 +3038,7 @@ export interface ChatSession {
   debugMode?: boolean
   /** Per-session override for cognia-next's brief-output mode. */
   briefMode?: boolean
-  /** Per-session output-style override (see lib/claude/output-styles.ts). */
+  /** Per-session output-style override (see lib/ai/agent/execution/output-styles.ts). */
   outputStyle?: string
   /** Free-form instruction used when `outputStyle === "custom"`. */
   customOutputStyle?: string
@@ -7087,7 +7087,7 @@ export interface Character {
   debugMode?: boolean
   /** Per-character default for cognia-next's brief-output mode. */
   briefMode?: boolean
-  /** Per-character default output style (see lib/claude/output-styles.ts). */
+  /** Per-character default output style (see lib/ai/agent/execution/output-styles.ts). */
   outputStyle?: string
   /** Free-form instruction used when `outputStyle === "custom"`. */
   customOutputStyle?: string

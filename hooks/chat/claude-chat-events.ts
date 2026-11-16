@@ -70,7 +70,7 @@ import {
 import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
 import { resolveRootSessionId } from "@/lib/ai/agent/team/root-session"
 import { approveTool, toolResultDecision } from "@/lib/claude/ipc"
-import type { RemoteExecutionContext } from "@/lib/claude/remote-execution"
+import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 import { releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
 import { attachTwinProvenanceToLastAssistant } from "@/lib/twin/export-provenance"
 import {
@@ -106,7 +106,7 @@ import {
   buildRouterFusionRunMetadata,
   buildRoutingRunMetadata,
 } from "@/lib/chat/message-run-metadata"
-import { turnAgentStamp } from "@/lib/claude/turn-agent-mode"
+import { turnAgentStamp } from "@/lib/agent/composition/turn-agent-mode"
 import { type AgentExecutionHandle } from "@/lib/ai/agent/execution/agent-execution-handle"
 import { attachInteractiveGrounding } from "@/lib/rag/chat-grounding"
 import { attachCheckpointCapture, captureCompactionCheckpoint } from "@/lib/rag/compaction-runtime"
@@ -159,7 +159,7 @@ import {
 import type { SendFn } from "./claude-chat-turn-tasks"
 import { closeOpenToolParts, hasOpenToolParts } from "@/lib/chat/phantom-run"
 import { toolCallExecutionRunId, toolCallEgressRunId } from "@/lib/execution/acting-authority"
-import { contextSourcesOf } from "@/lib/claude/context-sources"
+import { contextSourcesOf } from "@/lib/ai/agent/execution/contributions/context-sources"
 
 async function settleChatTranscript(
   sessionId: string,

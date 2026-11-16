@@ -11,7 +11,7 @@
  * active `strategyId` from the compaction settings, looks it up here, and
  * threads the strategy's declarative `{ summaryPrompt, keepRecent, fraction }`
  * into `SendOptions.compaction`. The built-in default (no plugin) lives in
- * `lib/claude/compact-instructions.ts`.
+ * `lib/ai/agent/execution/compact-instructions.ts`.
  */
 
 import type { PluginCompactionStrategyDef } from "../../../types/plugin/plugin-compaction-strategy"

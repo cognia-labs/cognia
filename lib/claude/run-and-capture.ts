@@ -75,7 +75,7 @@ import {
 } from "@/lib/router-fusion/gate/explicit-run"
 import { RouterFusionRefusalError } from "@/lib/router-fusion/gate/faults"
 import type { ExecutionLeaseInfo } from "@/lib/execution/types"
-import type { RemoteExecutionContext } from "./remote-execution"
+import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 import {
   assertExternalRuntimeFeatureSupport,
   isExternalAgentProviderId,

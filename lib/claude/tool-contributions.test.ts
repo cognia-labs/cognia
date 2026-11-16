@@ -25,7 +25,7 @@ import {
 import {
   __resetContextSessionStateForTests,
   replaceContextSessionState,
-} from "./context-session-state"
+} from "@/lib/ai/agent/execution/contributions/context-session-state"
 
 const ctx: ToolSurfaceContext = {
   session: null,

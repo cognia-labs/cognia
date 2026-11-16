@@ -8,7 +8,7 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
 
-jest.mock("@/lib/claude/model-presets", () => ({
+jest.mock("@/lib/ai/providers/anthropic-model-options", () => ({
   // Options carry their own display name now — the catalog's `name` is a
   // proper noun that reads the same in both locales, so there is no i18n key
   // per model id to keep in sync (and four had already gone stale).
@@ -17,6 +17,9 @@ jest.mock("@/lib/claude/model-presets", () => ({
     { id: "claude-opus-4-8", name: "Claude Opus 4.8" },
   ],
   MODEL_PRESET_VALUES: ["claude-sonnet-5", "claude-opus-4-8"],
+}))
+
+jest.mock("@/lib/ai/agent/execution/permissions/mode-options", () => ({
   PERMISSION_MODE_VALUES: ["default", "acceptEdits", "plan", "bypassPermissions"],
 }))
 

@@ -2,7 +2,7 @@
 import { loggers } from "@cognia/logging"
 import type { sendPluginToolResponse, subscribePluginToolExec } from "./ipc"
 import type { PluginToolExecRequest, PluginToolExecResponse } from "./plugin-tool-ipc"
-import type { RemoteExecutionContext } from "./remote-execution"
+import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 
 export interface PluginToolDispatchBridgeDeps {
   sessionId?: string

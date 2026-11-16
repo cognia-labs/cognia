@@ -1,4 +1,4 @@
-import { readContextSessionState } from "@/lib/claude/context-session-state"
+import { readContextSessionState } from "@/lib/ai/agent/execution/contributions/context-session-state"
 import {
   KNOWLEDGE_SESSION_STATE_KEY,
   captureKnowledgeSessionState,

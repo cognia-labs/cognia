@@ -67,7 +67,10 @@ import {
   authorizeOutboundToolCall,
   forgetPlannedOutboundToolCall,
 } from "@/lib/policy/action-review/authorized-tool-calls"
-import { isRemoteExecutionContext, type RemoteExecutionContext } from "./remote-execution"
+import {
+  isRemoteExecutionContext,
+  type RemoteExecutionContext,
+} from "@/lib/ai/agent/execution/remote-execution"
 import {
   isSessionCapturedByOtherTurn,
   awaitApproval as awaitLocalApproval,

@@ -647,7 +647,7 @@ async function runRepositoryCompactionAcceptance() {
     "cli/src/agent/subagent-runner.ts",
     "cli/src/agent/subagent-dispatch.ts",
     "lib/claude/provider-attempt-options.ts",
-    "lib/claude/compact-instructions.ts",
+    "lib/ai/agent/execution/compact-instructions.ts",
     "sidecar/src/context/compaction.ts",
     "sidecar/src/runtimes/ai-sdk/compaction.ts",
     "lib/claude/run-and-capture.ts",

@@ -13,7 +13,7 @@
 import { getCodeAdapterExecutor } from "@cognia/provider-core/providers/protocol-adapter-registry"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import type { CodeAdapterChunk, CodeAdapterRequest } from "@/types/plugin/plugin-protocol-adapter"
-import type { RemoteExecutionContext } from "./remote-execution"
+import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 
 export interface ProtocolAdapterExecEvent {
   sessionId: string

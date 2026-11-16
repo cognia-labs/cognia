@@ -1,9 +1,8 @@
-// Shared enum values for the Claude model picker and permission-mode picker
-// used across settings sections (general, characters, presets/preset-editor).
-// Permission-mode labels are sourced from i18n (`settings.general.permission.*`);
-// model labels are not — see below.
+// Anthropic model choices for the settings pickers (general, characters,
+// presets/preset-editor), derived from the provider catalog. The permission-mode
+// values the same pickers offer live in
+// `lib/ai/agent/execution/permissions/mode-options.ts`.
 
-import type { AppSettings } from "@cognia/agent-config-types"
 import { getBuiltInProviderCatalogEntry } from "@cognia/provider-types/built-in-provider-catalog"
 
 /**
@@ -44,18 +43,3 @@ export const MODEL_PRESET_VALUES: readonly string[] = modelPresetOptions().map(
 )
 
 export type ModelPresetValue = string
-
-// Mirrors the Claude Agent SDK's `PermissionMode` union (sdk 0.3.x:
-// 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'auto').
-// `dontAsk` denies anything not pre-approved without prompting; `auto` uses the
-// SDK's model classifier to approve/deny permission prompts.
-export const PERMISSION_MODE_VALUES: NonNullable<AppSettings["permissionMode"]>[] = [
-  "default",
-  "acceptEdits",
-  "plan",
-  "bypassPermissions",
-  "dontAsk",
-  "auto",
-]
-
-export type PermissionModeValue = (typeof PERMISSION_MODE_VALUES)[number]

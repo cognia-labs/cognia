@@ -7,7 +7,7 @@ import { getGoalRuntime } from "@/lib/goal/runtime"
 import { createProfileDekStore } from "@/lib/rag/profile-dek-store"
 import { storeCompactionCheckpoint } from "@/lib/rag/compaction-checkpoint"
 import type { Goal } from "@/types/goal"
-import { contextSourcesOf } from "@/lib/claude/context-sources"
+import { contextSourcesOf } from "@/lib/ai/agent/execution/contributions/context-sources"
 
 export interface CompactionBoundaryMetadata {
   pre_tokens?: number

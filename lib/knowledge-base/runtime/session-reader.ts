@@ -5,7 +5,7 @@
  * progressive reader over them, as its last send resolution left them. The
  * knowledge-base module's `reader` context contribution (`../context.ts`)
  * hands the state back with its section; the kernel keeps it per conversation
- * (`lib/claude/context-session-state.ts`). This file reads it for the module's
+ * (`lib/ai/agent/execution/contributions/context-session-state.ts`). This file reads it for the module's
  * tools, nested dispatch and the plugin project API, and lets tests and
  * fixtures place one directly.
  *
@@ -14,7 +14,7 @@
 import {
   readContextSessionState,
   replaceContextSessionState,
-} from "@/lib/claude/context-session-state"
+} from "@/lib/ai/agent/execution/contributions/context-session-state"
 import {
   createKnowledgeReader,
   type KnowledgeReader,

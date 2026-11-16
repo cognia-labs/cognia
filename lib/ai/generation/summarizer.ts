@@ -21,7 +21,7 @@ const ROLE_LABEL: Record<string, string> = {
 /**
  * Canonical conversation-summary system prompt. Single source of truth shared
  * by summarize-then-branch (`summarize-material.ts`) and context-window compaction
- * (`lib/claude/compact-instructions.ts` composes its summary prompt from this
+ * (`lib/ai/agent/execution/compact-instructions.ts` composes its summary prompt from this
  * + the active strategy + the user focus). Do not fork the wording; customize
  * it through the Prompt Center, which both consumers resolve.
  */

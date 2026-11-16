@@ -21,7 +21,7 @@ import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { SubAgent, SubAgentTokenUsage } from "@/types/agent/sub-agent"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
 import type { PluginDispatchErrorEnvelope } from "@/types/plugin/plugin-agent-sdk"
-import { createSubAgentNode } from "@/lib/claude/subagent-projection"
+import { createSubAgentNode } from "@/lib/ai/agent/execution/delegation/subagent-projection"
 
 export interface DispatchRunStartParams {
   /** Unique id for this run (also the tree node id). */

@@ -1362,7 +1362,7 @@
       ]
     },
     {
-      "key": "lib/claude/turn-agent-mode.ts",
+      "key": "lib/agent/composition/turn-agent-mode.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

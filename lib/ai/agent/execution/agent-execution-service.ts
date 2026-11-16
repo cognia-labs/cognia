@@ -99,7 +99,7 @@ async function resolveExecution(
       [
         import("@/lib/db/settings"),
         import("@/lib/db/characters"),
-        import("@/lib/claude/turn-agent-mode"),
+        import("@/lib/agent/composition/turn-agent-mode"),
       ]
     )
     const [appSettings, character] = await Promise.all([

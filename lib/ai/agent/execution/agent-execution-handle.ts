@@ -24,7 +24,7 @@ import type {
 } from "@cognia/agent-contracts/session-operations"
 
 import * as ipc from "@/lib/claude/ipc"
-import type { RemoteExecutionContext } from "@/lib/claude/remote-execution"
+import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 import { isCapabilityProtocolFailure } from "./capability-health"
 import type { AgentSessionControlPort } from "./agent-session-control-port"
 

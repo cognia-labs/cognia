@@ -67,7 +67,8 @@ import { AdvancedOverridesSection } from "@/components/settings/character/advanc
 import { AgentRuntimeField } from "@/components/agents/editor/agent-runtime-field"
 import { resolveCharacterVoice } from "@/lib/plugin/character-pack/character-voice"
 import { buildVoiceProfile } from "@/lib/plugin/character-pack/editor-projection"
-import { modelPresetOptions, PERMISSION_MODE_VALUES } from "@/lib/claude/model-presets"
+import { modelPresetOptions } from "@/lib/ai/providers/anthropic-model-options"
+import { PERMISSION_MODE_VALUES } from "@/lib/ai/agent/execution/permissions/mode-options"
 import { createAgentEnvSecretRef, saveAgentEnvSecret } from "@/lib/agent/agent-env-keyring"
 import {
   AGENT_AVATAR_COLORS,

@@ -603,7 +603,8 @@ async function runToolEnabled(
       }
     }
     releaseLiveControl?.()
-    const { forgetContextSessionState } = await import("@/lib/claude/context-session-state")
+    const { forgetContextSessionState } =
+      await import("@/lib/ai/agent/execution/contributions/context-session-state")
     forgetContextSessionState(session.id)
     clearResolvedPermissionCeiling(session.id)
     clearTeamDispatchContext(session.id)

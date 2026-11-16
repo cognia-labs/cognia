@@ -63,7 +63,7 @@ import {
   runAttachmentBuiltinTool,
   type AttachmentToolDeps,
 } from "@/lib/chat/attachments/agent-tools"
-import type { RemoteExecutionContext } from "./remote-execution"
+import type { RemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 
 const PLUGIN_TOOL_RESULT_PII_ERROR = "Plugin tool result blocked by the PII redaction gate"
 

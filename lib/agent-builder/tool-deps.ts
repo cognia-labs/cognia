@@ -12,7 +12,7 @@ import { listMcpServers } from "@/lib/db/mcp-servers"
 import { listKnowledgeBases } from "@/lib/db/knowledge-bases"
 import { listSkillEntries } from "@/lib/plugin/registries/skill-registry"
 import { selectPluginSkills } from "@/hooks/skills/use-plugin-skills"
-import { modelPresetOptions } from "@/lib/claude/model-presets"
+import { modelPresetOptions } from "@/lib/ai/providers/anthropic-model-options"
 import {
   applyDraftPatch,
   type DraftCatalogs,

@@ -34,7 +34,7 @@ import type {
 } from "@/lib/modules/manifest-types"
 import { findDeclaredModuleTool, type DeclaredModuleTool } from "@/lib/modules/tool-declarations"
 import { detectPlatform, isCliHost, isHeadlessHost } from "@/lib/platform/detect"
-import { readContextSessionState } from "./context-session-state"
+import { readContextSessionState } from "@/lib/ai/agent/execution/contributions/context-session-state"
 import type { PermissionVerdict, Ruleset } from "./permissions/ruleset"
 
 /** How long all families together may take to say what a run is offered. */

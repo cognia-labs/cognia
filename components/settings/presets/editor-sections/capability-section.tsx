@@ -17,7 +17,8 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { SettingsCard } from "@/components/settings/common/settings-section"
-import { modelPresetOptions, PERMISSION_MODE_VALUES } from "@/lib/claude/model-presets"
+import { modelPresetOptions } from "@/lib/ai/providers/anthropic-model-options"
+import { PERMISSION_MODE_VALUES } from "@/lib/ai/agent/execution/permissions/mode-options"
 import type { AppSettings, SendOptions } from "@cognia/agent-config-types"
 
 import { EFFORT_LEVELS } from "./constants"

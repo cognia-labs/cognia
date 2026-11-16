@@ -880,7 +880,8 @@ async function runToolEnabledStandalone(
     // Drop the ceiling resolveSendOptions deposited for this run's session id so
     // a re-used ephemeral id never inherits a stale ceiling.
     clearResolvedPermissionCeiling(session.id)
-    const { forgetContextSessionState } = await import("@/lib/claude/context-session-state")
+    const { forgetContextSessionState } =
+      await import("@/lib/ai/agent/execution/contributions/context-session-state")
     forgetContextSessionState(session.id)
     // Ephemeral sessions are torn down; persistent ones survive for resume.
     if (!persistent) {

@@ -2,7 +2,7 @@
  * Resolve an Agent Mode record by id.
  *
  * Extracted from `lib/claude/build-options.ts`, which was its only caller until
- * `lib/claude/turn-agent-mode.ts` needed the same three-source lookup. The
+ * `lib/agent/composition/turn-agent-mode.ts` needed the same three-source lookup. The
  * precedence — built-in registry, then the user's custom modes, then enabled
  * plugin contributions — is the definition of "which record does this id name",
  * and having two copies of it is how the send path and the pickers disagree.

@@ -120,14 +120,14 @@ import type {
 } from "@/lib/db/connector-types"
 import { isInQuietRange } from "@/lib/notifications/policy/quiet-hours"
 import { isOcrToolAllowed } from "@/lib/claude/ocr-tool-gate"
-import { resolveOutputStyleSnippet } from "@/lib/claude/output-styles"
+import { resolveOutputStyleSnippet } from "@/lib/ai/agent/execution/output-styles"
 import {
   COMPACT_HANDOFF_PROMPT,
   POST_COMPACTION_RECOVERY_PROMPT,
   buildPostCompactionRecovery,
   resolveCompaction,
   resolveCompactInstructions,
-} from "@/lib/claude/compact-instructions"
+} from "@/lib/ai/agent/execution/compact-instructions"
 import { getCompactionStrategy } from "@/lib/plugin/registries/compaction-strategy-registry"
 import { loggers } from "@cognia/logging"
 import { startRootTrace, toTraceparent } from "@/lib/agent-trace/trace-context"
@@ -150,7 +150,7 @@ import type { ConnectorMode } from "@/types/connectors/policy"
 import { type AgentModeConfig } from "@/types/agent/agent-mode"
 import { buildAgentModeSessionUpdate } from "@/lib/agent/mode-session-update"
 import { MODE_PROMPT_PASSTHROUGH_VALUES, shippedModePrompt } from "@/lib/agent/modes/built-ins"
-import { resolveTurnAgentMode, resolveTurnAuthority } from "./turn-agent-mode"
+import { resolveTurnAgentMode, resolveTurnAuthority } from "@/lib/agent/composition/turn-agent-mode"
 import {
   resolveAgentEnvironment,
   resolveAgentExecutionPolicy,
@@ -160,7 +160,7 @@ import { loadAgentEnvSecret } from "@/lib/agent/agent-env-keyring"
 import { namespacedA2UIToolNames } from "@cognia/a2ui-core/mcp-tool-schemas"
 import { buildVisualOutputSection } from "@/lib/ai/prompts/visual-output-prompts"
 import { resolveMessageDisplayOptions } from "@/lib/chat/message-display"
-import { finalizeToolSurface } from "@/lib/claude/tool-surface-finalizer"
+import { finalizeToolSurface } from "@/lib/ai/agent/execution/tool-surface-finalizer"
 import {
   createProviderSettingsSnapshot,
   resolveFeatureProvider,
@@ -2784,7 +2784,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   if (Object.keys(contributedContext.sources).length > 0)
     opts.contextSources = contributedContext.sources
   if (session?.id) {
-    const { replaceContextSessionState } = await import("./context-session-state")
+    const { replaceContextSessionState } =
+      await import("@/lib/ai/agent/execution/contributions/context-session-state")
     replaceContextSessionState(session.id, contributedContext.sessionState)
   }
   const systemPrompt = [

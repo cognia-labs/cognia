@@ -24,7 +24,7 @@
 
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import type { SubAgent, SubAgentStatus } from "@/types/agent/sub-agent"
-import { createSubAgentNode } from "@/lib/claude/subagent-projection"
+import { createSubAgentNode } from "@/lib/ai/agent/execution/delegation/subagent-projection"
 import {
   registerSubagentCancellation,
   unregisterSubagentRun,

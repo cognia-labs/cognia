@@ -4,7 +4,7 @@ import { groundAnswer, type GroundingResult, type RetrievalHit } from "@cognia/r
 import type { SendOptions } from "@cognia/agent-config-types"
 
 import type { GroundingPart, SourcesPart, SourcesPartItem } from "@/lib/chat/parts-extensions"
-import { contextSourcesOf } from "@/lib/claude/context-sources"
+import { contextSourcesOf } from "@/lib/ai/agent/execution/contributions/context-sources"
 
 const EVIDENCE_ORIGINS = new Set<SourcesPartItem["origin"]>([
   "twin-rag",

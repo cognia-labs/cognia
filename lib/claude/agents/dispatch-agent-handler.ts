@@ -27,7 +27,7 @@ import { collectRendererBackgroundResult } from "@/lib/background-tasks/renderer
 import { cancelSubagentRun } from "./cancel-subagent"
 import { renderDispatchOutcomeForModel } from "./dispatch-error"
 import { resolveCaller, startDispatchRun, DEFAULT_NESTING_MAX_DEPTH } from "./dispatch-run"
-import { forgetContextSessionState } from "@/lib/claude/context-session-state"
+import { forgetContextSessionState } from "@/lib/ai/agent/execution/contributions/context-session-state"
 import { preparePersonalDerivedHistory } from "@/lib/execution/personal-visibility"
 import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 

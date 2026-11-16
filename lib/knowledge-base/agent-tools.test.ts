@@ -1,5 +1,5 @@
 import { buildTextDocumentStructure } from "@cognia/document/document-structure"
-import { __resetContextSessionStateForTests } from "@/lib/claude/context-session-state"
+import { __resetContextSessionStateForTests } from "@/lib/ai/agent/execution/contributions/context-session-state"
 import type { ToolSurfaceContext } from "@/lib/modules/manifest-types"
 import { createKnowledgeReader } from "./runtime/progressive-reading"
 import { captureKnowledgeSessionState } from "./runtime/session-reader"

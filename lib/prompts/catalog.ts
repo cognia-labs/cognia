@@ -49,7 +49,7 @@ import { WIKI_SYSTEM_VOICE_PROMPT } from "@/lib/wiki/prompts"
 import {
   COMPACT_HANDOFF_PROMPT,
   POST_COMPACTION_RECOVERY_PROMPT,
-} from "@/lib/claude/compact-instructions"
+} from "@/lib/ai/agent/execution/compact-instructions"
 import {
   PLAN_DECOMPOSE_PROMPT,
   PLAN_DECOMPOSE_REQUEST_PROMPT,

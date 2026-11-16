@@ -7792,8 +7792,9 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
   describe("module context contributions (ADR-0250 §14 context amendment)", () => {
     const { __resetContextContributionsForTests } =
       jest.requireActual<typeof import("./context-contributions")>("./context-contributions")
-    const { readContextSessionState } =
-      jest.requireActual<typeof import("./context-session-state")>("./context-session-state")
+    const { readContextSessionState } = jest.requireActual<
+      typeof import("@/lib/ai/agent/execution/contributions/context-session-state")
+    >("@/lib/ai/agent/execution/contributions/context-session-state")
     const contribute = (
       contributions: readonly import("@/lib/modules/manifest-types").ContextContribution[]
     ) =>

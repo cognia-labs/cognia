@@ -150,7 +150,7 @@ import type { ResolvedRoomSettings, RoomTurnRefusal } from "./types"
 import { RoomStreamRegistry, type RoomMessagePatch } from "./runner-streaming"
 import { deriveMemberActivity } from "./member-activity"
 import type { RoomRunnerDeps, RoomRunnerSinks } from "./runner-deps"
-import { contextSourcesOf } from "@/lib/claude/context-sources"
+import { contextSourcesOf } from "@/lib/ai/agent/execution/contributions/context-sources"
 
 /** A running tool with no result after this long stops being reported as the member's activity. */
 export const ACTIVITY_STALE_MS = 90_000

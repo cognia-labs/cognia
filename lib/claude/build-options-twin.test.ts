@@ -45,7 +45,7 @@ async function resolveSendOptions(context: BuildOptionsContext) {
     executionIdentity: { ...context.executionIdentity, runId: run.id },
   })
 }
-import { contextSourcesOf } from "./context-sources"
+import { contextSourcesOf } from "@/lib/ai/agent/execution/contributions/context-sources"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { readTwinInjectLog, __resetTwinInjectLog } from "@/lib/twin/runtime/inject-log"
 import type { Character } from "@cognia/agent-config-types"

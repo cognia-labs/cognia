@@ -30,8 +30,8 @@
  * The caller puts the identity in place of the base system prompt (leaving
  * the persona section out), the slot sections into `systemPrompt`, the tail into the
  * dynamic tail, the sources into `SendOptions.contextSources` (read back with
- * `contextSourcesOf`, `./context-sources.ts`) and the session state into
- * `lib/claude/context-session-state.ts`.
+ * `contextSourcesOf`, `@/lib/ai/agent/execution/contributions/context-sources.ts`) and the session state into
+ * `lib/ai/agent/execution/contributions/context-session-state.ts`.
  */
 
 import { hasNoLeakingPii } from "@cognia/redact"

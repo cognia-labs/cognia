@@ -2,7 +2,7 @@
  * Plugin Compaction Strategy contract (`compaction-strategy` capability).
  *
  * Opens conversation-compaction tuning to plugins. The built-in strategy
- * (`lib/claude/compact-instructions.ts`) composes the canonical summary prompt
+ * (`lib/ai/agent/execution/compact-instructions.ts`) composes the canonical summary prompt
  * + the user's focus; a plugin can contribute an alternative strategy by
  * shipping a `compactionStrategies[]` manifest entry.
  *

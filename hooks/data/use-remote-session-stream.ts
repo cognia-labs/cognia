@@ -35,7 +35,7 @@ import {
   rememberRemoteApprovalContext,
   sendPrompt,
 } from "@/lib/claude/ipc"
-import { isRemoteExecutionContext } from "@/lib/claude/remote-execution"
+import { isRemoteExecutionContext } from "@/lib/ai/agent/execution/remote-execution"
 import type {
   ApprovalDecision,
   ApprovalResponseOptions,
