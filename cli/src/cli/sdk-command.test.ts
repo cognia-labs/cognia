@@ -1,7 +1,7 @@
 jest.mock("../runtime/bootstrap", () => ({
   bootstrapSidecar: jest.fn(async () => ({ shutdown: jest.fn() })),
 }))
-jest.mock("@/lib/claude/ipc", () =>
+jest.mock("@/lib/ai/agent/execution/claude-session-api", () =>
   Object.fromEntries(
     [
       "listSdkSessions",
@@ -145,7 +145,7 @@ it.each([
     "host-sqlite",
   ])
   expect(await sdkCommand(args, { out: state.deps.out })).toBe(0)
-  const mock = jest.requireMock("@/lib/claude/ipc")[method] as jest.Mock
+  const mock = jest.requireMock("@/lib/ai/agent/execution/claude-session-api")[method] as jest.Mock
   expect(mock.mock.calls.at(-1)?.at(-1)).toMatchObject({
     cwd: "/original",
     execution: { hostRef: "headless-agent-host" },

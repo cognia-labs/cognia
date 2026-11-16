@@ -1,10 +1,11 @@
 /** @jest-environment jsdom */
 // Tests for the session-level SDK round-trip (`sessionApi` + the typed
-// wrappers). Same shape as `ipc.control.test.ts` — capture the handler passed
+// wrappers). Same shape as `lib/claude/ipc.control.test.ts` — capture the handler passed
 // to `transport.subscribe` and feed it synthetic events — because both
 // round-trips deliberately share one listener and one pending map.
 
 import { transport } from "@/lib/tauri"
+import { getSessionContextUsage } from "@/lib/claude/ipc"
 import {
   deleteSdkSession,
   forkSdkSession,
@@ -16,8 +17,7 @@ import {
   resolveSdkSettings,
   sessionApi,
   tagSdkSession,
-  getSessionContextUsage,
-} from "./ipc"
+} from "./claude-session-api"
 
 const TAURI_KEY = "__TAURI_INTERNALS__"
 function setTauri(on: boolean) {

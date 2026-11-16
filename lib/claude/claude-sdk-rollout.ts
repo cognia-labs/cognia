@@ -72,7 +72,7 @@ export async function sdkSessionApiOptions(input: {
   sessionId?: string
   surface?: "chat" | "cli"
   environment?: import("@/lib/ai/agent/execution/resolve-agent-execution-spec").AgentExecutionResolveInput["environment"]
-}): Promise<import("./ipc").SdkSessionApiOptions> {
+}): Promise<import("@/lib/ai/agent/execution/claude-session-api").SdkSessionApiOptions> {
   const [
     { getAgentExecutionFlags },
     { resolveAgentExecutionEnvironment },

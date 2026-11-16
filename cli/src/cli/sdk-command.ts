@@ -41,12 +41,12 @@ export interface SdkCommandDeps {
 }
 
 async function defaultDeps(out: OutputSink, args: ParsedArgs): Promise<Required<SdkCommandDeps>> {
-  const [runtime, resolver, flags, bootstrap, ipc] = await Promise.all([
+  const [runtime, resolver, flags, bootstrap, sessionApi] = await Promise.all([
     import("@/lib/ai/agent/execution/capability-snapshot"),
     import("@/lib/ai/agent/execution/resolve-agent-execution-spec"),
     import("@/lib/ai/agent/execution/feature-flags"),
     import("../runtime/bootstrap"),
-    import("@/lib/claude/ipc"),
+    import("@/lib/ai/agent/execution/claude-session-api"),
   ])
   const { sdkSessionApiOptions } = await import("@/lib/claude/claude-sdk-rollout")
   const activeFlags = flags.getAgentExecutionFlags()
@@ -75,17 +75,18 @@ async function defaultDeps(out: OutputSink, args: ParsedArgs): Promise<Required<
       ),
     bootstrap: () => bootstrap.bootstrapSidecar(),
     api: {
-      list: () => ipc.listSdkSessions(undefined, sessionOptions),
-      info: (sessionId) => ipc.getSdkSessionInfo(sessionId, sessionOptions),
-      messages: (sessionId) => ipc.getSdkSessionMessages(sessionId, sessionOptions),
-      subagents: (sessionId) => ipc.listSdkSubagents(sessionId, sessionOptions),
+      list: () => sessionApi.listSdkSessions(undefined, sessionOptions),
+      info: (sessionId) => sessionApi.getSdkSessionInfo(sessionId, sessionOptions),
+      messages: (sessionId) => sessionApi.getSdkSessionMessages(sessionId, sessionOptions),
+      subagents: (sessionId) => sessionApi.listSdkSubagents(sessionId, sessionOptions),
       subagentMessages: (sessionId, agentId) =>
-        ipc.getSdkSubagentMessages(sessionId, agentId, sessionOptions),
-      rename: (sessionId, title) => ipc.renameSdkSession(sessionId, title, sessionOptions),
-      tag: (sessionId, tag) => ipc.tagSdkSession(sessionId, tag, sessionOptions),
-      delete: (sessionId) => ipc.deleteSdkSession(sessionId, sessionOptions),
-      fork: (sessionId) => ipc.forkSdkSession(sessionId, sessionOptions),
-      settings: (cwd) => ipc.resolveSdkSettings(cwd ? { dir: cwd } : undefined, sessionOptions),
+        sessionApi.getSdkSubagentMessages(sessionId, agentId, sessionOptions),
+      rename: (sessionId, title) => sessionApi.renameSdkSession(sessionId, title, sessionOptions),
+      tag: (sessionId, tag) => sessionApi.tagSdkSession(sessionId, tag, sessionOptions),
+      delete: (sessionId) => sessionApi.deleteSdkSession(sessionId, sessionOptions),
+      fork: (sessionId) => sessionApi.forkSdkSession(sessionId, sessionOptions),
+      settings: (cwd) =>
+        sessionApi.resolveSdkSettings(cwd ? { dir: cwd } : undefined, sessionOptions),
     },
   }
 }

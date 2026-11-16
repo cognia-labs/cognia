@@ -2774,12 +2774,12 @@
       "line": 885,
       "lexicalGate": null,
       "classification": "host-system",
-      "authority": "lib/claude/ipc.ts#sidecarRoundTrip; lib/claude/ipc.ts#sessionControlRequest; lib/claude/ipc.ts#sessionApi; lib/claude/ipc.ts#steerSession; lib/ai/agent/execution/agent-execution-handle.ts#createAgentExecutionHandle",
+      "authority": "lib/claude/ipc.ts#sidecarRoundTrip; lib/claude/ipc.ts#sessionControlRequest; lib/ai/agent/execution/claude-session-api.ts#sessionApi; lib/claude/ipc.ts#steerSession; lib/ai/agent/execution/agent-execution-handle.ts#createAgentExecutionHandle",
       "reason": "sidecarRoundTrip is used only by sessionControlRequest and sessionApi for SDK control/session-history operations. Prompt steering is the fixed model channel: steerSession validates deep PII/content and personal visibility, and beforeDispatch rechecks steer visibility. Other callers are UI/CLI SDK controls, not run-tool dispatch.",
       "basis": [
         "lib/claude/ipc.ts#sidecarRoundTrip",
         "lib/claude/ipc.ts#sessionControlRequest",
-        "lib/claude/ipc.ts#sessionApi",
+        "lib/ai/agent/execution/claude-session-api.ts#sessionApi",
         "lib/claude/ipc.ts#steerSession",
         "lib/ai/agent/execution/agent-execution-handle.ts#createAgentExecutionHandle"
       ]

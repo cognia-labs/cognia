@@ -22,7 +22,7 @@ const toastSuccess = jest.fn()
 const clearSessionSdkLink = jest.fn()
 let mockSessionStoreEnabled = true
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/agent/execution/claude-session-api", () => ({
   listSdkSessions: (...args: unknown[]) => listSdkSessions(...args),
   renameSdkSession: (...args: unknown[]) => renameSdkSession(...args),
   deleteSdkSession: (...args: unknown[]) => deleteSdkSession(...args),
