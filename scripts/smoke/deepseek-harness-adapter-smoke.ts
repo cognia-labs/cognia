@@ -26,7 +26,10 @@ import { useAskUserStore } from "@/stores/agent/ask-user-store"
 import type { ResolvedCliSessionContext } from "@/cli/src/agent/session-context"
 import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
 import type { ClaudeEvent, SendOptions, ToolHostEvent } from "@cognia/agent-config-types"
-import { createSidecarFeatureCallClient, callSidecarToolHost } from "@/lib/claude/feature-call"
+import {
+  createSidecarFeatureCallClient,
+  callSidecarToolHost,
+} from "@/lib/ai/agent/execution/sidecar-feature-client"
 import { createRendererToolHost } from "@/lib/ai/agent/external/session/renderer-tool-host"
 
 async function main() {

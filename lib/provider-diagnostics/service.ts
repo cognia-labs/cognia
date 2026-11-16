@@ -11,7 +11,10 @@ import {
   type ProviderDiagnosticsPreferences,
 } from "@cognia/provider-types"
 
-import { createSidecarEmbeddingModel, createSidecarLanguageModel } from "@/lib/claude/feature-call"
+import {
+  createSidecarEmbeddingModel,
+  createSidecarLanguageModel,
+} from "@/lib/ai/providers/sidecar-models"
 
 import {
   PROVIDER_DIAGNOSTIC_EMBEDDING_PROMPT_VERSION,

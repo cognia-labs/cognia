@@ -26,7 +26,7 @@ jest.mock("@/hooks/platform/use-surface-reach", () => ({
 }))
 
 const discoverMcpServerViaSidecar = jest.fn()
-jest.mock("@/lib/claude/feature-call", () => ({
+jest.mock("@/lib/mcp/discovery", () => ({
   discoverMcpServerViaSidecar: (...a: unknown[]) => discoverMcpServerViaSidecar(...a),
 }))
 

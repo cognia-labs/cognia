@@ -26,7 +26,7 @@ import {
   listHistoricalForReader,
   touchMemories,
 } from "@/lib/db/memories"
-import { createBedrockSidecarEmbeddingModel } from "@/lib/claude/feature-call"
+import { createBedrockSidecarEmbeddingModel } from "@/lib/ai/providers/sidecar-models"
 import type { EmbeddingConfig } from "@cognia/provider-embedding/embedding"
 import { isLocalEmbeddingProvider } from "@cognia/rag"
 import { generateSafeEmbedding } from "@/lib/rag/safe-embedding"

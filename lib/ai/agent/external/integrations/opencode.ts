@@ -26,7 +26,7 @@ import {
   type OpenCodeV2Placement,
 } from "@cognia/agent-opencode/v2-launcher"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
-import { discoverOpenCodeV2ViaSidecar } from "@/lib/claude/feature-call"
+import { discoverOpenCodeV2ViaSidecar } from "@/lib/ai/agent/external/integrations/opencode-discovery"
 import { platformStreamingFetch } from "@/lib/network/platform-streaming-fetch"
 import { isCliHost } from "@/lib/platform/detect"
 import { spawnPlacementFor } from "@/lib/sandbox/spawn-placement-registry"

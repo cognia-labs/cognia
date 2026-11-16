@@ -15,8 +15,10 @@ const discovery = jest.requireMock("@cognia/provider-core/providers/model-discov
 jest.mock("@cognia/provider-core/providers/models-dev-sync", () => ({
   getCatalogModelsForProvider: jest.fn(() => []),
 }))
-jest.mock("@/lib/claude/feature-call", () => ({ discoverBedrockModelsViaSidecar: jest.fn() }))
-const featureCall = jest.requireMock("@/lib/claude/feature-call") as {
+jest.mock("@/lib/ai/providers/sidecar-models", () => ({
+  discoverBedrockModelsViaSidecar: jest.fn(),
+}))
+const featureCall = jest.requireMock("@/lib/ai/providers/sidecar-models") as {
   discoverBedrockModelsViaSidecar: jest.Mock
 }
 jest.mock("./http", () => ({ providerRequest: jest.fn() }))

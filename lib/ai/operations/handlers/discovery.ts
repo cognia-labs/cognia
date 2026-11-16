@@ -32,7 +32,7 @@ import {
   type DiscoveredProviderModel,
 } from "@cognia/provider-core/providers/model-discovery"
 import { getCatalogModelsForProvider } from "@cognia/provider-core/providers/models-dev-sync"
-import { discoverBedrockModelsViaSidecar } from "@/lib/claude/feature-call"
+import { discoverBedrockModelsViaSidecar } from "@/lib/ai/providers/sidecar-models"
 import type { ProviderSettingsSnapshot, ResolvedProvider } from "@/lib/ai/provider-consumption"
 import { getSubscriptionProvider } from "@/lib/subscription/core/provider-registry"
 import type { SubscriptionProviderDefinition } from "@/types/subscription/provider-definition"

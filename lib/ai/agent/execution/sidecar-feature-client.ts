@@ -13,18 +13,9 @@ import {
   type FeatureCallCredentials,
   type FeatureCallEvent,
   type FeatureCallRequest,
-  type McpCapabilityCacheRow,
-  type McpServer,
   type ToolHostControl,
 } from "@cognia/agent-config-types"
 
-import {
-  validateOpenCodeV2Discovery,
-  type OpenCodeV2Discovery,
-} from "@cognia/agent-opencode/discovery"
-import { appendMcpAuditLog } from "@/lib/db/mcp-audit-log"
-import { resolveMcpSecrets } from "@/lib/mcp/credentials"
-import { evaluateMcpPolicy } from "@/lib/mcp/policy"
 import { transport } from "@/lib/tauri"
 
 const SIDECAR_EVENT = "claude://message"
@@ -52,7 +43,7 @@ export interface SidecarLanguageModelConfig {
   protocolAdapterSpec?: FeatureCallRequest["protocolAdapterSpec"]
 }
 
-type SidecarEmbeddingModelConfig = SidecarLanguageModelConfig
+export type SidecarEmbeddingModelConfig = SidecarLanguageModelConfig
 
 interface PendingResult {
   kind: "result"
@@ -243,7 +234,11 @@ export function createSidecarFeatureCallClient(deps: FeatureCallDependencies) {
   return { languageModel, embeddingModel, requestResult, dispose }
 }
 
-const defaultClient = createSidecarFeatureCallClient({
+/**
+ * The process-wide feature-call client. Model adapters, discovery calls and
+ * tool-host control share its one correlated listener.
+ */
+export const defaultClient = createSidecarFeatureCallClient({
   call: (command, args) => transport.call(command, args),
   subscribe: (event, handler) => transport.subscribe(event, handler),
   randomUUID: () => crypto.randomUUID(),
@@ -256,194 +251,4 @@ export function callSidecarToolHost(
   requestResult = defaultClient.requestResult
 ): Promise<unknown> {
   return requestResult({ operation, credentials: {}, toolHost })
-}
-
-export function createBedrockSidecarLanguageModel(
-  config: SidecarLanguageModelConfig
-): LanguageModelV3 {
-  return defaultClient.languageModel(config)
-}
-
-/** Generic sidecar-backed model used by provider diagnostics for real streaming. */
-export function createSidecarLanguageModel(config: SidecarLanguageModelConfig): LanguageModelV3 {
-  return defaultClient.languageModel(config)
-}
-
-export function createBedrockSidecarEmbeddingModel(
-  config: SidecarEmbeddingModelConfig
-): EmbeddingModelV3 {
-  return defaultClient.embeddingModel(config)
-}
-
-export function createSidecarEmbeddingModel(config: SidecarEmbeddingModelConfig): EmbeddingModelV3 {
-  return defaultClient.embeddingModel(config)
-}
-
-export interface BedrockDiscoveredModel {
-  id: string
-  name?: string
-  provider?: string
-  supportsVision?: boolean
-  supportsStreaming?: boolean
-}
-
-export async function discoverBedrockModelsViaSidecar(
-  credentials: FeatureCallCredentials,
-  abortSignal?: AbortSignal
-): Promise<BedrockDiscoveredModel[]> {
-  const result = (await defaultClient.requestResult(
-    {
-      operation: "bedrock-discover",
-      providerId: "bedrock",
-      credentials,
-    },
-    abortSignal
-  )) as { models?: BedrockDiscoveredModel[] }
-  return result.models ?? []
-}
-
-export async function discoverOpenCodeV2ViaSidecar(
-  abortSignal?: AbortSignal
-): Promise<OpenCodeV2Discovery> {
-  const result = await defaultClient.requestResult(
-    {
-      operation: "opencode-v2-discover",
-      credentials: {},
-    },
-    abortSignal
-  )
-  return validateOpenCodeV2Discovery(result)
-}
-
-export interface McpDiscoveryResult {
-  ok: boolean
-  toolCount: number
-  tools: McpCapabilityCacheRow["tools"]
-  resources: McpCapabilityCacheRow["resources"]
-  prompts: McpCapabilityCacheRow["prompts"]
-  durationMs: number
-  error?: string
-}
-
-function failedMcpDiscovery(
-  error: unknown,
-  startedAt: number,
-  now = Date.now()
-): McpDiscoveryResult {
-  return {
-    ok: false,
-    toolCount: 0,
-    tools: [],
-    resources: [],
-    prompts: [],
-    durationMs: now - startedAt,
-    error: error instanceof Error ? error.message : String(error),
-  }
-}
-
-function appendMcpAuditSafely(
-  draft: Parameters<typeof appendMcpAuditLog>[0],
-  append: typeof appendMcpAuditLog
-): void {
-  void append(draft).catch(() => undefined)
-}
-
-export interface McpDiscoveryDependencies {
-  requestResult?: typeof defaultClient.requestResult
-  resolveSecrets?: typeof resolveMcpSecrets
-  appendAudit?: typeof appendMcpAuditLog
-  now?: () => number
-}
-
-/** Resolve credentials in the host and discover through the sidecar gateway. */
-export async function discoverMcpServerViaSidecar(
-  server: McpServer,
-  abortSignal?: AbortSignal,
-  dependencies: McpDiscoveryDependencies = {}
-): Promise<McpDiscoveryResult> {
-  const now = dependencies.now ?? (() => Date.now())
-  const requestResult = dependencies.requestResult ?? defaultClient.requestResult
-  const resolveSecrets = dependencies.resolveSecrets ?? resolveMcpSecrets
-  const appendAudit = dependencies.appendAudit ?? appendMcpAuditLog
-  const startedAt = now()
-  const policy = evaluateMcpPolicy({
-    server,
-    surface: "settings",
-    interactive: false,
-  })
-  if (policy.decision !== "allow") {
-    const result = failedMcpDiscovery(new Error(policy.reason), startedAt, now())
-    appendMcpAuditSafely(
-      {
-        ts: startedAt,
-        tool: "capabilities/list",
-        scope: "n/a",
-        allowed: false,
-        latencyMs: result.durationMs,
-        direction: "outbound",
-        phase: "discover",
-        serverId: server.id,
-        executionSurface: "settings",
-        decision: policy.decision,
-        durationMs: result.durationMs,
-        errorCode: "policy-denied",
-      },
-      appendAudit
-    )
-    return result
-  }
-
-  try {
-    const config = await resolveSecrets(server.config)
-    const result = (await requestResult(
-      {
-        operation: "mcp-discover",
-        credentials: {},
-        mcpServer: {
-          id: server.id,
-          name: server.name,
-          transport: server.transport,
-          config,
-        },
-      },
-      abortSignal
-    )) as McpDiscoveryResult
-    appendMcpAuditSafely(
-      {
-        ts: startedAt,
-        tool: "capabilities/list",
-        scope: "n/a",
-        allowed: true,
-        latencyMs: result.durationMs,
-        direction: "outbound",
-        phase: "discover",
-        serverId: server.id,
-        executionSurface: "settings",
-        decision: "allow",
-        durationMs: result.durationMs,
-      },
-      appendAudit
-    )
-    return result
-  } catch (error) {
-    const result = failedMcpDiscovery(error, startedAt, now())
-    appendMcpAuditSafely(
-      {
-        ts: startedAt,
-        tool: "capabilities/list",
-        scope: "n/a",
-        allowed: true,
-        latencyMs: result.durationMs,
-        direction: "outbound",
-        phase: "discover",
-        serverId: server.id,
-        executionSurface: "settings",
-        decision: "allow",
-        durationMs: result.durationMs,
-        errorCode: abortSignal?.aborted ? "aborted" : "discovery-failed",
-      },
-      appendAudit
-    )
-    return result
-  }
 }

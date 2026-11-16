@@ -156,7 +156,7 @@ async function defaultDiscoverBedrock(
   input: ProviderProbeInput,
   signal: AbortSignal
 ): Promise<unknown[]> {
-  const { discoverBedrockModelsViaSidecar } = await import("@/lib/claude/feature-call")
+  const { discoverBedrockModelsViaSidecar } = await import("@/lib/ai/providers/sidecar-models")
   return discoverBedrockModelsViaSidecar(
     {
       protocol: "bedrock",

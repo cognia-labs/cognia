@@ -23,7 +23,7 @@ import { useLiveQuery } from "dexie-react-hooks"
 import { getDb } from "@/lib/db/schema"
 import { isTauri } from "@/lib/tauri"
 import { loggers } from "@cognia/logging"
-import { discoverMcpServerViaSidecar } from "@/lib/claude/feature-call"
+import { discoverMcpServerViaSidecar } from "@/lib/mcp/discovery"
 import { recordMcpCapabilities } from "@/lib/mcp/runtime-gateway"
 import type { McpCapabilityCacheRow, McpServer } from "@cognia/agent-config-types"
 

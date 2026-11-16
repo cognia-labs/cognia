@@ -4,7 +4,7 @@ import { OpenCodeClientAdapter, openCodeServerExtension } from "@cognia/agent-op
 import { OpenCodeV2ClientAdapter, openCodeV2Extension } from "@cognia/agent-opencode/v2-client"
 
 const mockSidecarDiscover = jest.fn()
-jest.mock("@/lib/claude/feature-call", () => ({
+jest.mock("@/lib/ai/agent/external/integrations/opencode-discovery", () => ({
   discoverOpenCodeV2ViaSidecar: (...args: unknown[]) => mockSidecarDiscover(...args),
 }))
 const mockIsCliHost = jest.fn(() => false)

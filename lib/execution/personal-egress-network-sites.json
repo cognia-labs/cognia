@@ -1679,6 +1679,23 @@
       "basis": ["lib/agent-roots/index.ts#resolveUncached>call"]
     },
     {
+      "key": "lib/ai/agent/execution/sidecar-feature-client.ts::defaultClient>call::network::e6d85a9edb83:1",
+      "file": "lib/ai/agent/execution/sidecar-feature-client.ts",
+      "owner": "defaultClient>call",
+      "kind": "network",
+      "primitive": "transport.call",
+      "line": 247,
+      "lexicalGate": null,
+      "classification": "host-system",
+      "authority": "lib/ai/agent/execution/sidecar-feature-client.ts#defaultClient>call; lib/ai/agent/execution/sidecar-feature-client.ts#createSidecarFeatureCallClient; lib/ai/agent/external/session/renderer-tool-host.ts#createRendererToolHost",
+      "reason": "Feature-call RPC is the Host provider/embedding and managed tool-host control channel; it is not a direct arbitrary fetch primitive. Tool execution behind a tool-host lease has separate permission entry.",
+      "basis": [
+        "lib/ai/agent/execution/sidecar-feature-client.ts#defaultClient>call",
+        "lib/ai/agent/execution/sidecar-feature-client.ts#createSidecarFeatureCallClient",
+        "lib/ai/agent/external/session/renderer-tool-host.ts#createRendererToolHost"
+      ]
+    },
+    {
       "key": "lib/ai/agent/external/agent-transport.ts::agentInvoke::network::c59a3472d6c9:1",
       "file": "lib/ai/agent/external/agent-transport.ts",
       "owner": "agentInvoke",
@@ -2717,23 +2734,6 @@
       "reason": "History-reference client issues fixed snapshot/search read RPCs for mention selection; command target is Host history, not model-chosen network endpoint.",
       "basis": [
         "lib/chat/mentions/host-references.ts#createHostHistoryReferenceClient>search>response"
-      ]
-    },
-    {
-      "key": "lib/claude/feature-call.ts::defaultClient>call::network::e6d85a9edb83:1",
-      "file": "lib/claude/feature-call.ts",
-      "owner": "defaultClient>call",
-      "kind": "network",
-      "primitive": "transport.call",
-      "line": 247,
-      "lexicalGate": null,
-      "classification": "host-system",
-      "authority": "lib/claude/feature-call.ts#defaultClient>call; lib/claude/feature-call.ts#createSidecarFeatureCallClient; lib/ai/agent/external/session/renderer-tool-host.ts#createRendererToolHost",
-      "reason": "Feature-call RPC is the Host provider/embedding and managed tool-host control channel; it is not a direct arbitrary fetch primitive. Tool execution behind a tool-host lease has separate permission entry.",
-      "basis": [
-        "lib/claude/feature-call.ts#defaultClient>call",
-        "lib/claude/feature-call.ts#createSidecarFeatureCallClient",
-        "lib/ai/agent/external/session/renderer-tool-host.ts#createRendererToolHost"
       ]
     },
     {

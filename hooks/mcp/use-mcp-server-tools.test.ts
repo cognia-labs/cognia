@@ -13,7 +13,7 @@ jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => mockRows }))
 jest.mock("@/lib/db/schema", () => ({ getDb: () => ({ mcpCapabilityCache: {} }) }))
 
 const discoverMcpServerViaSidecar = jest.fn()
-jest.mock("@/lib/claude/feature-call", () => ({
+jest.mock("@/lib/mcp/discovery", () => ({
   discoverMcpServerViaSidecar: (...a: unknown[]) => discoverMcpServerViaSidecar(...a),
 }))
 

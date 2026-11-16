@@ -52,7 +52,7 @@ jest.mock("@/lib/db/twins", () => ({ listTwins: jest.fn(async () => []) }))
 jest.mock("@/lib/db/knowledge-bases", () => ({
   listKnowledgeBases: jest.fn(async () => [{ id: "kb-1", name: "Product docs" }]),
 }))
-jest.mock("@/lib/claude/feature-call", () => ({ discoverMcpServerViaSidecar: jest.fn() }))
+jest.mock("@/lib/mcp/discovery", () => ({ discoverMcpServerViaSidecar: jest.fn() }))
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
 jest.mock("@/lib/settings/builtin-tools", () => ({ listBuiltinTools: () => [] }))
 jest.mock("@/lib/agent/builtin-catalog/projection", () => ({

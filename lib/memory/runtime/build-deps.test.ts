@@ -22,7 +22,7 @@ jest.mock("@cognia/memory/runtime/provider-embedding-adapter", () => ({
   createProviderEmbeddingAdapter: (...args: unknown[]) =>
     mockCreateProviderEmbeddingAdapter(...args),
 }))
-jest.mock("@/lib/claude/feature-call", () => ({
+jest.mock("@/lib/ai/providers/sidecar-models", () => ({
   createBedrockSidecarEmbeddingModel: jest.fn(() => ({ specificationVersion: "v3" })),
 }))
 jest.mock("@/lib/db/memories", () => ({

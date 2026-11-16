@@ -6,8 +6,8 @@ jest.mock("@/stores/remote-host/remote-host-store", () => ({
     },
   })),
 }))
-jest.mock("@/lib/claude/feature-call", () => ({
-  ...jest.requireActual("@/lib/claude/feature-call"),
+jest.mock("@/lib/ai/agent/execution/sidecar-feature-client", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/sidecar-feature-client"),
   callSidecarToolHost: jest.fn(),
 }))
 jest.mock("@/lib/claude/plugin-tool-ipc", () => ({ handlePluginToolExec: jest.fn() }))
@@ -23,7 +23,7 @@ import {
   isTrustedLocalMcpCredential,
   RENDERER_TOOL_HOST_APPROVAL_PREFIX,
 } from "./renderer-tool-host"
-import { callSidecarToolHost } from "@/lib/claude/feature-call"
+import { callSidecarToolHost } from "@/lib/ai/agent/execution/sidecar-feature-client"
 import { handlePluginToolExec } from "@/lib/claude/plugin-tool-ipc"
 import { transport } from "@/lib/tauri"
 import {

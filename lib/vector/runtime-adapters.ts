@@ -13,7 +13,8 @@ export function buildVectorRuntimeAdapters(): VectorRuntimeAdapters {
   return {
     isTauri,
     async createBedrockEmbeddingModel({ modelId, bedrock }) {
-      const { createBedrockSidecarEmbeddingModel } = await import("@/lib/claude/feature-call")
+      const { createBedrockSidecarEmbeddingModel } =
+        await import("@/lib/ai/providers/sidecar-models")
       return createBedrockSidecarEmbeddingModel({
         modelId,
         providerId: "bedrock",

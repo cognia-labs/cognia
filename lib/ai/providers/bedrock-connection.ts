@@ -7,7 +7,7 @@ import { createFeatureProviderModel, type ResolvedProvider } from "@/lib/ai/prov
 import {
   discoverBedrockModelsViaSidecar,
   type BedrockDiscoveredModel,
-} from "@/lib/claude/feature-call"
+} from "@/lib/ai/providers/sidecar-models"
 
 interface BedrockConnectionDependencies {
   generateText: typeof generateText

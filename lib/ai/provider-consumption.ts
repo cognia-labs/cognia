@@ -54,7 +54,7 @@ import type {
 } from "@cognia/provider-types"
 import { validateBedrockConnectionSettings } from "@cognia/provider-types"
 import { keylessSdkCredential } from "@cognia/provider-types/keyless-credentials"
-import { createBedrockSidecarLanguageModel } from "@/lib/claude/feature-call"
+import { createBedrockSidecarLanguageModel } from "@/lib/ai/providers/sidecar-models"
 import { protectRawAnalysis } from "@/lib/ai/raw-analysis"
 import { createNativeSiwcFetch } from "@/lib/subscription/siwc/native-fetch"
 import { withSiwcStreamingGeneration } from "../../sidecar/src/providers/siwc-language-model"

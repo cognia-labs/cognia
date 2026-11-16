@@ -1,11 +1,11 @@
 import { buildVectorRuntimeAdapters, installVectorRuntimeAdapters } from "./runtime-adapters"
 import { getVectorRuntimeAdapters } from "@cognia/vector/runtime-adapters"
 import { isTauri } from "@/lib/platform/detect"
-import { createBedrockSidecarEmbeddingModel } from "@/lib/claude/feature-call"
+import { createBedrockSidecarEmbeddingModel } from "@/lib/ai/providers/sidecar-models"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
 
 jest.mock("@/lib/platform/detect", () => ({ isTauri: jest.fn() }))
-jest.mock("@/lib/claude/feature-call", () => ({
+jest.mock("@/lib/ai/providers/sidecar-models", () => ({
   createBedrockSidecarEmbeddingModel: jest.fn(() => ({ modelId: "sidecar" })),
 }))
 jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
