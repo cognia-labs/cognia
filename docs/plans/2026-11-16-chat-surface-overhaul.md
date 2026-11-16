@@ -184,36 +184,44 @@ Pure structure, no behaviour change. Mechanical moves first (one commit), splits
 
 Node benches, 2026-11-16, Apple Silicon, shared machine. Load varied between runs (the 50 KB stream p50 read 7.8 ms once and 4.0 ms once), so compare medians of several back-to-back runs.
 
-| `handleEvent` per token          | 200 msgs         | 2,000 msgs        | 5,000 msgs    |
-| -------------------------------- | ---------------- | ----------------- | ------------- |
-| handler p50 / p95 (ms)           | 0.05 / 0.13–0.15 | 2.9–3.7 / 5.0–5.6 | 27.3 / 29.9   |
-| commit p50 (ms)                  | 0.02             | 0.08–0.09         | 0.24          |
-| step 4.1: handler p50 / p95 (ms) | 0.021 / 0.037    | 0.108 / 0.177     | 0.336 / 0.421 |
-| step 4.1: commit p50 (ms)        | 0.025            | 0.081             | 0.209         |
+| `handleEvent` per token          | 200 msgs                  | 2,000 msgs                | 5,000 msgs                |
+| -------------------------------- | ------------------------- | ------------------------- | ------------------------- |
+| handler p50 / p95 (ms)           | 0.05 / 0.13–0.15          | 2.9–3.7 / 5.0–5.6         | 27.3 / 29.9               |
+| commit p50 (ms)                  | 0.02                      | 0.08–0.09                 | 0.24                      |
+| step 4.1: handler p50 / p95 (ms) | 0.021 / 0.037             | 0.108 / 0.177             | 0.336 / 0.421             |
+| step 4.1: commit p50 (ms)        | 0.025                     | 0.081                     | 0.209                     |
+| step 4: handler p50 / p95 (ms)   | 0.020–0.021 / 0.025–0.039 | 0.095–0.099 / 0.154–0.171 | 0.302–0.340 / 0.420–0.506 |
+| step 4: commit p50 (ms)          | 0.018–0.019               | 0.049–0.050               | 0.103–0.108               |
 
-| `StreamingTextPart`                | short (0.5 KB)    | medium (5 KB)     | long (50 KB)       | code (20 KB fence) | CJK (5 KB)        |
-| ---------------------------------- | ----------------- | ----------------- | ------------------ | ------------------ | ----------------- |
-| per-delta p50 / p95 (ms)           | 0.8–0.9 / 1.2–1.3 | 1.1 / 2.3         | 4.0–7.8 / 7.8–14.1 | 2.5–4.3 / 5.8–9.5  | 0.6–0.7 / 1.6–1.7 |
-| p50 first → last quarter (ms)      | flat              | flat              | 1.6→5.7 … 2.3→12.7 | 0.7→4.9 … 1.9→8.6  | flat              |
-| streaming DOM (bytes)              | 50 K              | 521 K             | 4.38 M             | 979 K              | 643 K             |
-| finished `MarkdownRenderer` (ms)   | 0.67              | 8.0–8.1           | 56.0               | 2.8–3.0            | 6.5–6.7           |
-| step 4.4: per-delta p50 / p95      | 0.8–0.9 / 1.1–1.4 | 0.9–1.2 / 1.9–2.5 | 3.2–3.9 / 6.0–8.8  | 0.7–1.3 / 1.9–2.0  | 0.6–0.7 / 1.5–2.1 |
-| step 4.4: p50 first → last quarter | flat              | flat              | 1.5→5.3 … 1.5→7.7  | 0.7→2.0 … 1.2→1.3  | flat              |
-| step 4.4: streaming DOM (bytes)    | 18 K              | 77 K              | 1.15 M             | 979 K              | 51 K              |
+| `StreamingTextPart`                | short (0.5 KB)        | medium (5 KB)         | long (50 KB)          | code (20 KB fence)    | CJK (5 KB)            |
+| ---------------------------------- | --------------------- | --------------------- | --------------------- | --------------------- | --------------------- |
+| per-delta p50 / p95 (ms)           | 0.8–0.9 / 1.2–1.3     | 1.1 / 2.3             | 4.0–7.8 / 7.8–14.1    | 2.5–4.3 / 5.8–9.5     | 0.6–0.7 / 1.6–1.7     |
+| p50 first → last quarter (ms)      | flat                  | flat                  | 1.6→5.7 … 2.3→12.7    | 0.7→4.9 … 1.9→8.6     | flat                  |
+| streaming DOM (bytes)              | 50 K                  | 521 K                 | 4.38 M                | 979 K                 | 643 K                 |
+| finished `MarkdownRenderer` (ms)   | 0.67                  | 8.0–8.1               | 56.0                  | 2.8–3.0               | 6.5–6.7               |
+| step 4.4: per-delta p50 / p95      | 0.8–0.9 / 1.1–1.4     | 0.9–1.2 / 1.9–2.5     | 3.2–3.9 / 6.0–8.8     | 0.7–1.3 / 1.9–2.0     | 0.6–0.7 / 1.5–2.1     |
+| step 4.4: p50 first → last quarter | flat                  | flat                  | 1.5→5.3 … 1.5→7.7     | 0.7→2.0 … 1.2→1.3     | flat                  |
+| step 4.4: streaming DOM (bytes)    | 18 K                  | 77 K                  | 1.15 M                | 979 K                 | 51 K                  |
+| step 4: per-delta p50 / p95        | 0.73–0.81 / 1.19–1.32 | 0.72–0.79 / 1.50–1.71 | 1.88–3.16 / 5.11–5.20 | 0.66–0.84 / 0.90–2.40 | 0.47–0.49 / 0.99–1.08 |
+| step 4: p50 first → last quarter   | flat                  | flat                  | 1.3→3.3 … 1.6→4.2     | 0.6→0.7 … 0.6→1.8     | flat                  |
+| step 4: streaming DOM (bytes)      | 18 K                  | 77 K                  | 1.15 M                | 979 K                 | 51 K                  |
+| step 4: finished (ms)              | 0.6–0.7               | 5.6–6.2               | 34.4–35.7             | 2.4–2.5               | 3.6–3.7               |
 
 Step 4.4 runs on Node 26 (Node 20 lacks the `sessionStorage` global `packages/logging` reads at import); figures are the two settled runs of three, the first being a cold, slower run. Remend still runs over the whole text (0.24 ms at 50 KB, and it is Streamdown's own dependency); the parser instead reuses every block before the tail when only the tail changed, which is what made remend expensive. With ink kept on past `INK_REPLY_LIMIT` (12,000 chars) the 50 KB case reads p50 3.7–3.9 / p95 6.9–7.6 ms and 1.18 MB: ink on the trailing block alone already removed its cost, so the limit is D9's product rule, not a measured cut-off. The 50 KB p50 still grows across the reply; what remains is per-frame work over every block, left for the later steps.
 
 Step 4.7 (Composer render isolation), counted by `components/chat/composer.render-isolation.test.tsx` on the real Composer. 8 keystrokes: the completion panel's hooks ran 12 times before, 0 after (they mount under a trigger only); the closed save-as-template dialog rendered 8 times before, 0 after; the input box renders 8 times both ways (it shows the text); the toolbar 0 both ways. 10 parent renders with unchanged props (a chat pane re-rendering): the Composer box, toolbar, panel hooks and dialog each rendered 10 times before, 0 after. `ChatPaneContent` now passes stable handlers and a memoized run strip, pinned by `chat-view.test.tsx`.
 
-Browser baseline: not recorded yet. The static build refuses to run while other sessions' uncommitted changes to the authoring-kit inputs (`app/globals.css`, `pnpm-lock.yaml`, `packages/plugin-contract/src`) make the working tree differ from the kit pin, and `pnpm dev` runs the same check. It needs those changes committed, or a clean worktree at the pre-fix commit.
+Step 4 re-run (2026-11-17, Node 26, three runs each), the "step 4" rows above. These run in a clean sparse worktree at `1b2910e023`, not in the shared tree: other sessions' uncommitted edits there slow the Markdown bench (among them `components/ai-elements/code-block.tsx` keying the Shiki token cache on the whole code string instead of a 100-char head and tail). Interleaved runs, shared tree vs clean HEAD: 50 KB per-delta p50 2.4–3.6 vs 1.8–2.7 ms, p95 4.2–8.8 vs 3.2–4.6 ms; 20 KB fence last-quarter p50 1.4–5.9 vs 0.7–2.2 ms; finished 50 KB render 55 vs 35 ms. The baseline and the step 4.4 rows were taken in the shared tree with whatever foreign work it held then, so part of the before → after gap in the summary below is that difference rather than this step; the finished render, which step 4 did not target, reads 56 ms at baseline and 35 ms here, which shows its rough size. `handleEvent` is unaffected by the tree (same figures in both).
 
-| Metric                                    | Baseline       | After step 4       | Final |
-| ----------------------------------------- | -------------- | ------------------ | ----- |
-| First transcript paint, 2,000 messages    |                |                    |       |
-| Dropped frames, scripted scroll           |                |                    |       |
-| Commits / renders per streamed token      |                |                    |       |
-| `handleEvent` per event at 2,000 messages | 2.9–3.7 ms p50 | 0.108 ms p50 (4.1) |       |
-| Streaming per-delta p95, 50 KB            | 7.8–14.1 ms    | 6.0–8.8 ms (4.4)   |       |
-| Streaming DOM size, 50 KB                 | 4.38 MB        | 1.15 MB (4.4)      |       |
-| Composer renders per keystroke            | see 4.7 note   | see 4.7 note       |       |
-| JS heap after open / after stream         |                |                    |       |
+Browser baseline: not recorded yet. The static build refuses to run while other sessions' uncommitted changes to the authoring-kit inputs (`app/globals.css`, `pnpm-lock.yaml`, `packages/plugin-contract/src`) make the working tree differ from the kit pin, and `pnpm dev` runs the same check. It needs those changes committed, or a clean worktree at the pre-fix commit. Still the case after step 4 (2026-11-17: `app/globals.css` and nine `packages/plugin-contract/src` files differ), and a full clean worktree plus `prebuild` and a static build does not fit the 16 GB left on the shared machine; the browser rows wait for step 8.
+
+| Metric                                    | Baseline       | After step 4              | Final |
+| ----------------------------------------- | -------------- | ------------------------- | ----- |
+| First transcript paint, 2,000 messages    |                | not run (see above)       |       |
+| Dropped frames, scripted scroll           |                | not run (see above)       |       |
+| Commits / renders per streamed token      |                | not run (see above)       |       |
+| `handleEvent` per event at 2,000 messages | 2.9–3.7 ms p50 | 0.095–0.099 ms p50        |       |
+| Streaming per-delta p95, 50 KB            | 7.8–14.1 ms    | 5.11–5.20 ms (clean HEAD) |       |
+| Streaming DOM size, 50 KB                 | 4.38 MB        | 1.15 MB                   |       |
+| Composer renders per keystroke            | see 4.7 note   | see 4.7 note              |       |
+| JS heap after open / after stream         |                | not run (see above)       |       |
