@@ -15,7 +15,7 @@ jest.mock("@/lib/execution/personal-sink", () => ({
  */
 
 import { runAndCaptureAssistantReply } from "./run-and-capture"
-import { type CaptureStreamEvent, RunAndCaptureError } from "../ai/agent/execution/capture-types"
+import { type CaptureStreamEvent, RunAndCaptureError } from "./capture-types"
 import {
   hasCaptureResponder,
   __resetApprovalRegistryForTesting,

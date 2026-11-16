@@ -22,7 +22,7 @@ jest.mock("@/lib/claude/build-options", () => ({
 jest.mock("@/lib/twin/runtime/build-deps", () => ({
   tryBuildTwinDeps: jest.fn(async () => ({ store: { provider: "test" } })),
 }))
-jest.mock("@/lib/claude/run-and-capture", () => ({
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
   runAndCaptureAssistantReply: jest.fn(async () => ({ text: "captured reply", messageId: "m1" })),
 }))
 jest.mock("@/lib/db/agent-traces", () => ({
@@ -34,7 +34,7 @@ import { defaultChatTargetDeps } from "./chat"
 import { createSession, deleteSession } from "@/lib/db/sessions"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { getSettings } from "@/lib/db/settings"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { queryBySession } from "@/lib/db/agent-traces"
 import type { EvalPersistenceScope } from "@/lib/db/eval-lab"
 

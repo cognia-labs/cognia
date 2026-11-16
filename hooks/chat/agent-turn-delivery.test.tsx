@@ -7,7 +7,7 @@ import { DataAdapterProvider } from "@/lib/data-hooks/context"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getSession } from "@/lib/db/sessions"
 import { listMessages, persistMessages } from "@/lib/db/messages"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { useClaudeChat } from "./use-claude-chat-controller"
 import { useSessions } from "./use-sessions"
 import { runPluginAgentTurn } from "@/lib/plugin/api/agent-turn"
@@ -28,7 +28,7 @@ jest.mock("@/lib/db/characters", () => ({
 jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: async () => ({ cwd: "/repo" }),
 }))
-jest.mock("@/lib/claude/run-and-capture", () => ({
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
   runAndCaptureAssistantReply: jest.fn(async () => ({ text: "Reviewed", messageId: "reply" })),
 }))
 jest.mock("@/lib/ai/agent/execution/permissions/unattended-park", () => ({

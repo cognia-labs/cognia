@@ -19,7 +19,7 @@ import {
 import os from "node:os"
 
 import { type BuildOptionsContext } from "@/lib/claude/build-options"
-import { runAndCaptureAssistantReply as defaultCapture } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply as defaultCapture } from "@/lib/ai/agent/execution/run-and-capture"
 import {
   type CaptureStreamEvent,
   RunAndCaptureError,

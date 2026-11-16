@@ -118,7 +118,7 @@ jest.mock("@/lib/ai/agent/execution/capture-types", () => ({
   RunAndCaptureError: jest.requireActual("@/lib/ai/agent/execution/capture-types")
     .RunAndCaptureError,
 }))
-jest.mock("@/lib/claude/run-and-capture", () => ({
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
   runAndCaptureAssistantReply: async (...a: unknown[]) => {
     await (a[3] as { beforeSend?: () => Promise<void> } | undefined)?.beforeSend?.()
     return (runAndCaptureAssistantReply as (...args: unknown[]) => unknown)(...a)

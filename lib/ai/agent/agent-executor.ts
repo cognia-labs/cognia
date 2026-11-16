@@ -4,7 +4,7 @@
  * Plugins call `executeAgent(prompt, config)` to dispatch a one-shot
  * agent run. cognia-next's authoritative agent execution path is the
  * tool-enabled Claude SDK invocation driven through the Tauri sidecar
- * (`lib/claude/run-and-capture.ts` + `lib/claude/build-options.ts`).
+ * (`lib/ai/agent/execution/run-and-capture.ts` + `lib/claude/build-options.ts`).
  *
  * Two execution channels:
  *  - `channel: "sidecar"` — when `config.toolsEnabled` is set AND the
@@ -567,7 +567,7 @@ async function runToolEnabledStandalone(
     import("@/lib/db/sessions"),
     import("@/lib/db/settings"),
     import("@/lib/claude/build-options"),
-    import("@/lib/claude/run-and-capture"),
+    import("@/lib/ai/agent/execution/run-and-capture"),
     import("@/lib/ai/agent/execution/delegation/dispatch-context-registry"),
   ])
 

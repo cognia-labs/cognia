@@ -281,7 +281,7 @@ async function runToolEnabled(
     import("@/lib/db/sessions"),
     import("@/lib/db/settings"),
     import("@/lib/claude/build-options"),
-    import("@/lib/claude/run-and-capture"),
+    import("@/lib/ai/agent/execution/run-and-capture"),
   ])
 
   // A fresh session per dispatch — the sidecar tracks one in-flight query per

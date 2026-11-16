@@ -1,5 +1,5 @@
 /**
- * The plugin contract's share of `lib/claude/run-and-capture.ts`, which re-exports these.
+ * The plugin contract's share of `lib/ai/agent/execution/run-and-capture.ts`, which re-exports these.
  */
 
 import type { UsageInfo } from "./adapter"

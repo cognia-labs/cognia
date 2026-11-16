@@ -270,7 +270,7 @@ async function productionTurnDeps(): Promise<VerifiedFreshAgentTurnDeps> {
     import("@/lib/db/sessions"),
     import("@/lib/db/settings"),
     import("@/lib/claude/build-options"),
-    import("@/lib/claude/run-and-capture"),
+    import("@/lib/ai/agent/execution/run-and-capture"),
     import("@/lib/db/messages"),
     import("@/lib/git/workspace-diff"),
   ])

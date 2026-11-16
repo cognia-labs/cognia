@@ -34,8 +34,8 @@ jest.mock("@/lib/execution/run-authority", () => {
   }
 })
 
-jest.mock("@/lib/claude/run-and-capture", () => ({
-  ...jest.requireActual("@/lib/claude/run-and-capture"),
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
+  ...jest.requireActual("@/lib/ai/agent/execution/run-and-capture"),
   runAndCaptureAssistantReply: jest.fn(
     async (
       sessionId: string,
@@ -59,7 +59,7 @@ import { getDb, whenSeeded } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { LOCAL_PERSON_RUN, recordedRunMetadata, startToolExecutionRun } from "./acting-authority"
 import { resolveSendOptions } from "@/lib/claude/build-options"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import {
   ensureDirectChatExecutionRun,
   startDirectChatExecutionRun,

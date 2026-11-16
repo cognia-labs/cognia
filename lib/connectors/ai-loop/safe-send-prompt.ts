@@ -21,7 +21,7 @@
  */
 
 import { hasNoLeakingPii } from "@cognia/redact"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import {
   RunAndCaptureError,
   type RunAndCaptureOptions,

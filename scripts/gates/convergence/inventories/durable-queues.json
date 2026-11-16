@@ -3392,7 +3392,7 @@
         "lib/bot/runtime/run.ts#stopBotExecution",
         "lib/bot/runtime/step.ts#createBotStepApi::probeInterrupt",
         "lib/bot/runtime/step.ts#createBotStepApi::waitForApproval",
-        "lib/claude/run-and-capture.ts#capturePermissionAttribution",
+        "lib/ai/agent/execution/run-and-capture.ts#capturePermissionAttribution",
         "lib/connectors/commands/handoff.ts#defaultListPendingInterrupts",
         "lib/execution/control-handlers.ts#installExecutionRunControlHandlers::agent",
         "lib/execution/control-handlers.ts#installExecutionRunControlHandlers::delegation",

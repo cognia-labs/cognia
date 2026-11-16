@@ -43,7 +43,7 @@ import {
   __resetChatMiddlewareFlagForTesting,
 } from "@/lib/plugin/messaging/chat-middleware/feature-flag"
 import { runPluginAgent } from "@/lib/plugin/agent-sdk/run"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { executeAgentTurnFromRenderer } from "@/lib/ai/agent/execution/agent-execution-service"
 import { __resetInterceptorRegistryForTesting } from "@/lib/plugin/interceptors"
 

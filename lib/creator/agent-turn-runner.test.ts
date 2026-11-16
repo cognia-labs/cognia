@@ -17,7 +17,7 @@ const mockRun = jest.fn(
     text: "reply",
   })
 )
-jest.mock("@/lib/claude/run-and-capture", () => ({
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
   runAndCaptureAssistantReply: (...args: unknown[]) =>
     mockRun(...(args as Parameters<typeof mockRun>)),
 }))

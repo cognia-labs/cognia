@@ -7,7 +7,9 @@ jest.mock("@cognia/logging", () => ({
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
 jest.mock("@/lib/platform/web-companion", () => ({ hasWebCompanionTarget: jest.fn(() => false) }))
 jest.mock("@/lib/claude/build-options", () => ({ resolveSendOptions: jest.fn(async () => ({})) }))
-jest.mock("@/lib/claude/run-and-capture", () => ({ runAndCaptureAssistantReply: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
+  runAndCaptureAssistantReply: jest.fn(),
+}))
 jest.mock("@/lib/a2ui/app-generator", () => ({
   generateAppFromDescription: jest.fn(() => ({
     id: "tmpl-1",
@@ -37,7 +39,7 @@ import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
 import { hasNoLeakingPii } from "@cognia/redact"
 import { isTauri } from "@/lib/tauri"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { generateAppFromDescription } from "@/lib/a2ui/app-generator"
 

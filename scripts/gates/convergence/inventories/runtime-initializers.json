@@ -83,7 +83,7 @@
       "symbol": "setChatMiddlewareExecutionEnabled",
       "module": "lib/plugin/messaging/chat-middleware/feature-flag.ts",
       "owner": "components/providers/initializers/chat-middleware-flag-initializer.tsx",
-      "note": "pending:phase 1 \"lib/claude/run-and-capture.ts consults isChatMiddlewareExecutionEnabled on every headless turn the brain runs (scheduler goal runner, bots, Run API).\"",
+      "note": "pending:phase 1 \"lib/ai/agent/execution/run-and-capture.ts consults isChatMiddlewareExecutionEnabled on every headless turn the brain runs (scheduler goal runner, bots, Run API).\"",
       "evidence": "c38fbdd3ccfd6f53",
       "pendingPhase": "phase 1"
     },

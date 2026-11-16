@@ -22,7 +22,7 @@
 
 import { hasNoLeakingPii } from "@cognia/redact"
 
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import type { ChatSession } from "@cognia/agent-config-types"

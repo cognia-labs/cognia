@@ -8,14 +8,16 @@ jest.mock("@/lib/claude/build-options", () => ({
     mcpServers: { a2ui: {} },
   })),
 }))
-jest.mock("@/lib/claude/run-and-capture", () => ({ runAndCaptureAssistantReply: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
+  runAndCaptureAssistantReply: jest.fn(),
+}))
 jest.mock("@/stores/settings", () => ({
   useSettingsStore: { getState: () => ({ settings: { defaultProvider: "anthropic" } }) },
 }))
 
 import { isTauri } from "@/lib/tauri"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import {
   buildHeadlessTurnLlmClient,
   canRunHeadlessTurn,

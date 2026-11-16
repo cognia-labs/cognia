@@ -30,7 +30,7 @@ import type { LlmClient, LlmClientCallOptions } from "@/lib/twin/distill/llm"
 import { isTauri } from "@/lib/tauri"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
 import { resolveSendOptions } from "@/lib/claude/build-options"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { useSettingsStore } from "@/stores/settings"
 
 export interface BuildHeadlessTurnClientArgs {

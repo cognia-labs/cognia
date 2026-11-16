@@ -136,7 +136,7 @@ jest.mock("@/lib/claude/build-options", () => ({
 }))
 
 const runAndCaptureMock = jest.fn()
-jest.mock("@/lib/claude/run-and-capture", () => ({
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
   runAndCaptureAssistantReply: (...a: Parameters<typeof runAndCaptureMock>) =>
     runAndCaptureMock(...a),
 }))

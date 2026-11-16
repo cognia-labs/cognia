@@ -564,7 +564,7 @@ async function runRepositoryCheckpointAcceptance() {
       "Track exactly these original required workstream IDs: search-env, execution-budget, continuation, compaction. Keep completed work completed. Missing exhaustive file coverage is not a new workstream. Finish the requested deliverable once these four questions are answered; state concrete blockers as gaps rather than exploring optional tangents.",
       "search-env: trace the actual grep file-tool process path and workspace.portEnv empty-overlay handling; do not assume an independent search RPC exists. Locate the exact empty-object guard in sidecar/src/platform/process/exec.ts and quote it verbatim as SOURCE_FACT in the final answer.",
       "execution-budget: establish Explore/Plan inheritance and existing explicit timeout/idle/cancel protections from cli/src/agent/subagent-runner.ts. Stay within built-in agent execution, not external-agent transports.",
-      "continuation: establish budget-stop evidence and resume from cli/src/agent/subagent-dispatch.ts and lib/claude/run-and-capture.ts.",
+      "continuation: establish budget-stop evidence and resume from cli/src/agent/subagent-dispatch.ts and lib/ai/agent/execution/run-and-capture.ts.",
       "compaction: establish explicit/default output reservation, progress merge and publication safety from lib/ai/providers/provider-attempt-options.ts, sidecar/src/context/progress-checkpoint.ts and sidecar/src/runtimes/ai-sdk/compaction.ts. Inspect relevant co-located assertions for load-bearing claims; never claim tests were run.",
     ].join("\n\n")
     const prompt =
@@ -650,7 +650,7 @@ async function runRepositoryCompactionAcceptance() {
     "lib/ai/agent/execution/compact-instructions.ts",
     "sidecar/src/context/compaction.ts",
     "sidecar/src/runtimes/ai-sdk/compaction.ts",
-    "lib/claude/run-and-capture.ts",
+    "lib/ai/agent/execution/run-and-capture.ts",
   ]
   for (const agent of [exploreAgent(), planAgent()]) {
     assert.equal(agent.def.maxTurns, undefined, `${agent.id} still has a role cap`)

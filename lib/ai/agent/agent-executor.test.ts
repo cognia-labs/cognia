@@ -34,7 +34,7 @@ import { resolveCharacterById } from "@/lib/db/characters"
 import { createSession, getSession, deleteSession, setSdkSessionId } from "@/lib/db/sessions"
 import { getSettings } from "@/lib/db/settings"
 import { resolveSendOptions } from "@/lib/claude/build-options"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
 jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: jest.fn(async () => undefined),
@@ -151,7 +151,9 @@ jest.mock("@/lib/db/sessions", () => ({
 }))
 jest.mock("@/lib/db/settings", () => ({ getSettings: jest.fn() }))
 jest.mock("@/lib/claude/build-options", () => ({ resolveSendOptions: jest.fn() }))
-jest.mock("@/lib/claude/run-and-capture", () => ({ runAndCaptureAssistantReply: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
+  runAndCaptureAssistantReply: jest.fn(),
+}))
 jest.mock("@cognia/provider-routing/build-preview-engine", () => ({
   applyCircuitBreakerSettings: (...args: unknown[]) => mockApplyCircuitBreakerSettings(...args),
   buildRoutingEngine: jest.fn(() => ({ planRoute: mockPlanRoute })),

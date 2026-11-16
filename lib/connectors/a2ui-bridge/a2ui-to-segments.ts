@@ -2,7 +2,7 @@
  * Extract A2UI surfaces from an assistant response and project them into
  * `MessageSegment.a2ui` segments suitable for `OutboundRequest`.
  *
- * Why this lives here, not in `lib/claude/run-and-capture.ts`: the chat
+ * Why this lives here, not in `lib/ai/agent/execution/run-and-capture.ts`: the chat
  * page consumes A2UI parts as renderer-side React state, but the
  * IM-connector outbound path needs them as transferable message segments.
  * This module bridges the two — given the captured assistant reply, it
@@ -33,7 +33,7 @@ import { isA2UIComputedFields } from "@cognia/a2ui-core/computed"
 /**
  * Minimal shape of a captured assistant reply we need to read. Kept
  * structurally compatible with `CapturedAssistantReply` from
- * `lib/claude/run-and-capture.ts` so we can accept either object directly.
+ * `lib/ai/agent/execution/run-and-capture.ts` so we can accept either object directly.
  */
 export interface AssistantReplyForExtraction {
   /** Plain markdown text portion of the assistant reply. */

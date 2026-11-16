@@ -366,7 +366,7 @@
         "cli/src/tui/runtime/lifecycle-firer.ts#createCliLifecycleFirer",
         "cli/src/tui/runtime/goal-run.ts#runGoalStreaming",
         "cli/src/tui/runtime/driven-turns.ts#runDrivenTurns",
-        "lib/claude/run-and-capture.ts#captureAssistantReplyCore"
+        "lib/ai/agent/execution/run-and-capture.ts#captureAssistantReplyCore"
       ],
       "entry": "cli/src/hooks/run-hooks.ts#runHooks"
     },
@@ -385,7 +385,7 @@
         "cli/src/tui/runtime/lifecycle-firer.ts#createCliLifecycleFirer",
         "cli/src/tui/runtime/goal-run.ts#runGoalStreaming",
         "cli/src/tui/runtime/driven-turns.ts#runDrivenTurns",
-        "lib/claude/run-and-capture.ts#captureAssistantReplyCore"
+        "lib/ai/agent/execution/run-and-capture.ts#captureAssistantReplyCore"
       ],
       "entry": "cli/src/hooks/run-hooks.ts#runHooks"
     },
@@ -12908,7 +12908,7 @@
       "content": "Scheduled external prompt."
     },
     {
-      "file": "lib/claude/run-and-capture.ts",
+      "file": "lib/ai/agent/execution/run-and-capture.ts",
       "binding": "explicit/unique Host run, otherwise an owned Host capture run with source-session marks",
       "content": "No empty run-id fallback."
     }

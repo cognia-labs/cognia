@@ -6,7 +6,7 @@ import * as personalSinkHost from "@/lib/execution/personal-sink"
  * outbound tool before it shows a card, consults an allow list or parks the
  * call: the desktop chat listener (`hooks/chat/claude-chat-events.ts`) and the
  * team room (`lib/chat/room/runner.ts`) through {@link planOutboundAsk}; the
- * headless captures (`lib/claude/run-and-capture.ts`), the scheduler's own
+ * headless captures (`lib/ai/agent/execution/run-and-capture.ts`), the scheduler's own
  * loop and the CLI through {@link answerWithOutboundPolicy}. Each gets the
  * same answer from {@link outboundToolDecision}:
  *

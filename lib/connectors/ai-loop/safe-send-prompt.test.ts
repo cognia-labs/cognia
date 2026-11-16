@@ -14,7 +14,7 @@ import {
   safeSendPrompt,
 } from "./safe-send-prompt"
 
-jest.mock("@/lib/claude/run-and-capture", () => {
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => {
   return {
     __esModule: true,
     RunAndCaptureError: class RunAndCaptureError extends Error {},
@@ -74,7 +74,7 @@ jest.mock("@/lib/task-workspace/run-lease", () => ({
   openWorkspaceBundleTurnLease: jest.fn(),
 }))
 
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { appendAudit } from "@/lib/connectors/audit"
 import { recordProviderOutcome } from "@/lib/claude/provider-telemetry"
 import { recordConnectorUsage, swallowUsageWrite } from "@/lib/db/session-usage"

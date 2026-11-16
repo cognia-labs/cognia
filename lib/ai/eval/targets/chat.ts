@@ -427,7 +427,7 @@ export function defaultChatTargetDeps(scope?: EvalPersistenceScope): ChatTargetD
           import("@/lib/db/sessions"),
           import("@/lib/db/settings"),
           import("@/lib/claude/build-options"),
-          import("@/lib/claude/run-and-capture"),
+          import("@/lib/ai/agent/execution/run-and-capture"),
         ])
       assertActive()
       const ts = Date.now()

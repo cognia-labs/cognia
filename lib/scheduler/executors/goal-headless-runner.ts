@@ -49,7 +49,7 @@ import { isTerminalGoalStatus, type ExitReason, type Goal, type GoalStatus } fro
 import { getGoal } from "@/lib/db/goals"
 import { getSession } from "@/lib/db/sessions"
 import { resolveSendOptions } from "@/lib/claude/build-options"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import {
   RunAndCaptureError,
   type CapturePermissionDecision,

@@ -9,7 +9,7 @@ import { RunAndCaptureError } from "@/lib/ai/agent/execution/capture-types"
  * sidecar with that character's tools and wait for the reply. A plugin that
  * wants the one workflow path that actually edits code had to assemble that
  * from `@/lib/db/characters`, `@/lib/db/sessions`, `@/lib/db/settings`,
- * `@/lib/claude/build-options` and `@/lib/claude/run-and-capture` — five
+ * `@/lib/claude/build-options` and `@/lib/ai/agent/execution/run-and-capture` — five
  * host-private modules, one of which (`getSettings`) hands over the entire
  * settings row including every credential.
  *
@@ -353,7 +353,7 @@ export async function runPluginAgentTurn(
       import("@/lib/db/sessions"),
       import("@/lib/db/settings"),
       import("@/lib/claude/build-options"),
-      import("@/lib/claude/run-and-capture"),
+      import("@/lib/ai/agent/execution/run-and-capture"),
     ])
 
   const character = await resolveCharacterById(request.characterId)

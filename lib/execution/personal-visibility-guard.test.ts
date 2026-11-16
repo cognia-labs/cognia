@@ -163,7 +163,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/ai/agent/execution/sidecar-client.ts":
     "listMessages:1;preparePersonalHistory:1;resume:expectedRuntimeSessionId:2;resume:forkFromSessionId:1;resume:initialConversation:6;resume:resumeSessionId:1",
   "lib/ai/agent/execution/permissions/command-judge.ts": "complete:1",
-  "lib/claude/run-and-capture.ts":
+  "lib/ai/agent/execution/run-and-capture.ts":
     "resume:externalSessionId:1;resume:resumeSessionId:1;resume:sdkSessionId:7",
   "lib/ai/agent/team/primary-router.ts": "complete:1",
   "lib/cli-bridge/handlers/twin-context.ts":
@@ -723,7 +723,10 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "personalVisibilityDigest",
     "assertPersonalControlVisibility",
   ],
-  "lib/claude/run-and-capture.ts": ["prepareTranscriptRuntimeSend", "captureAssistantReplyCore"],
+  "lib/ai/agent/execution/run-and-capture.ts": [
+    "prepareTranscriptRuntimeSend",
+    "captureAssistantReplyCore",
+  ],
   "lib/ai/chat/standalone-engine.ts": [
     "preparePersonalHistory",
     "current.visibilityDigest !== personalHistory.visibilityDigest",

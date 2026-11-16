@@ -503,7 +503,7 @@ export async function defaultProbeRunnerDeps(): Promise<ProbeRunnerDeps> {
       import("@/lib/db/sessions"),
       import("@/lib/db/settings"),
       import("@/lib/claude/build-options"),
-      import("@/lib/claude/run-and-capture"),
+      import("@/lib/ai/agent/execution/run-and-capture"),
       import("@/lib/usage/claimed-turn-usage"),
       import("@/lib/db/session-usage"),
       import("@/lib/db/agent-traces"),

@@ -23,7 +23,7 @@ jest.mock("@/lib/ai/agent/execution/capture-types", () => ({
   RunAndCaptureError: jest.requireActual("@/lib/ai/agent/execution/capture-types")
     .RunAndCaptureError,
 }))
-jest.mock("@/lib/claude/run-and-capture", () => ({
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
   runAndCaptureAssistantReply: jest.fn(async () => ({
     text: "from default capture",
     messageId: "m",
@@ -866,7 +866,7 @@ describe("runCliSubagent", () => {
     const ipc = jest.requireMock("@/lib/ai/agent/execution/sidecar-client") as {
       closeSession: jest.Mock
     }
-    const cap = jest.requireMock("@/lib/claude/run-and-capture") as {
+    const cap = jest.requireMock("@/lib/ai/agent/execution/run-and-capture") as {
       runAndCaptureAssistantReply: jest.Mock
     }
     cap.runAndCaptureAssistantReply.mockClear()

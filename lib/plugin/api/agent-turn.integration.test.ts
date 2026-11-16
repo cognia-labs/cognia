@@ -11,7 +11,7 @@ import { prepareTranscriptRuntimeSend } from "@/hooks/chat/claude-chat-send-opti
 import { hasCaptureResponder } from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 import { resolveRunActingIdentity, recordedRunMetadata } from "@/lib/execution/acting-authority"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { finishToolExecutionRun } from "@/lib/execution/acting-authority"
 import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
@@ -27,7 +27,7 @@ jest.mock("@/lib/ai/agent/execution/capture-types", () => ({
   RunAndCaptureError: jest.requireActual("@/lib/ai/agent/execution/capture-types")
     .RunAndCaptureError,
 }))
-jest.mock("@/lib/claude/run-and-capture", () => ({
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
   runAndCaptureAssistantReply: jest.fn(),
 }))
 jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({

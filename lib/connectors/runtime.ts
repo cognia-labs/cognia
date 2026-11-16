@@ -563,7 +563,7 @@ function isInboundTextPiiSafe(event: NormalizedInboundEvent): boolean {
 
 /**
  * Capture-aware Claude turn driver. Production wires it to
- * `runAndCaptureAssistantReply` from `@/lib/claude/run-and-capture`. Tests
+ * `runAndCaptureAssistantReply` from `@/lib/ai/agent/execution/run-and-capture`. Tests
  * pass a mock returning a deterministic `{ text, messageId }`.
  *
  * The capture wrapper is responsible for: subscribing to the sidecar event
@@ -626,7 +626,7 @@ export interface RuntimeOptions {
   /**
    * Inject the chat-send entry point. Production wires it to
    * `(sessionId, content, options) => runAndCaptureAssistantReply(...)`
-   * from `@/lib/claude/run-and-capture`. Tests pass a mock that resolves
+   * from `@/lib/ai/agent/execution/run-and-capture`. Tests pass a mock that resolves
    * to a deterministic `{ text, messageId }`.
    */
   runAndCapture: RunAndCaptureFn

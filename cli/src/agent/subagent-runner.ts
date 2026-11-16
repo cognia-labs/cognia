@@ -26,7 +26,7 @@ import {
   resolveSendOptions as defaultResolveSendOptions,
   type BuildOptionsContext,
 } from "@/lib/claude/build-options"
-import { runAndCaptureAssistantReply as defaultCapture } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply as defaultCapture } from "@/lib/ai/agent/execution/run-and-capture"
 import { type CaptureStreamEvent, RunAndCaptureError } from "@/lib/ai/agent/execution/capture-types"
 import { closeSession as defaultCloseSession } from "@/lib/ai/agent/execution/sidecar-client"
 import type { UsageInfo } from "@/lib/claude/adapter"

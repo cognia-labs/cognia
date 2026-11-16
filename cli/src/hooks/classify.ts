@@ -2,7 +2,7 @@
  * Pure classification of CLI `CaptureStreamEvent`s into hook lifecycle events.
  *
  * Ported from the relevant arms of `src-tauri/src/hooks/classify.rs`, but against
- * the CLI's `CaptureStreamEvent` shape (from `lib/claude/run-and-capture`) rather
+ * the CLI's `CaptureStreamEvent` shape (from `lib/ai/agent/execution/run-and-capture`) rather
  * than the raw SDK/sidecar `Value`. The CLI stream surfaces a much smaller set of
  * events than the desktop sidecar reader, so only a few map to a hook:
  *

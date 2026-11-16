@@ -183,7 +183,7 @@ export function createBestOfNExecution(): BestOfNExecution {
         import("@/lib/db/characters"),
         import("@/lib/db/settings"),
         import("@/lib/claude/build-options"),
-        import("@/lib/claude/run-and-capture"),
+        import("@/lib/ai/agent/execution/run-and-capture"),
         import("@/lib/ai/agent/execution/sidecar-client"),
         import("@/lib/db/session-usage"),
       ])

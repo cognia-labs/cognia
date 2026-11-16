@@ -76,7 +76,7 @@ jest.mock("@/lib/db/settings", () => ({ getSettings: async () => ({}) }))
 jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: (...args: unknown[]) => resolve(...args),
 }))
-jest.mock("@/lib/claude/run-and-capture", () => ({
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
   runAndCaptureAssistantReply: (...args: unknown[]) => run(...args),
 }))
 jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({

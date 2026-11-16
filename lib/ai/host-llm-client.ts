@@ -8,7 +8,7 @@ import { loggers } from "@cognia/logging"
 import type { SendOptions } from "@cognia/agent-config-types"
 import type { ResolvedProvider } from "./provider-consumption"
 import type { LlmClient, LlmClientCallOptions, LlmUsageSnapshot } from "@/lib/twin/distill/llm"
-import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
+import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
 import { withHostUtilitySession } from "./host-utility-session"
 import {
   getRemoteExecutionHost,

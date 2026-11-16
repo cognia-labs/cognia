@@ -298,7 +298,7 @@
     "components/providers/initializers/chat-middleware-flag-initializer.tsx": {
       "symbols": ["setChatMiddlewareExecutionEnabled"],
       "phase": "phase 1",
-      "reason": "lib/claude/run-and-capture.ts consults isChatMiddlewareExecutionEnabled on every headless turn the brain runs (scheduler goal runner, bots, Run API). Nothing seeds the flag in the brain, so a user who enabled AppSettings.developer.chatMiddlewareExecution gets around-middlewares skipped on brain-hosted turns. The brain needs a runtime that reads the account settings row and keeps the flag in sync."
+      "reason": "lib/ai/agent/execution/run-and-capture.ts consults isChatMiddlewareExecutionEnabled on every headless turn the brain runs (scheduler goal runner, bots, Run API). Nothing seeds the flag in the brain, so a user who enabled AppSettings.developer.chatMiddlewareExecution gets around-middlewares skipped on brain-hosted turns. The brain needs a runtime that reads the account settings row and keeps the flag in sync."
     },
     "components/providers/initializers/code-adoption-tracker-initializer.tsx": {
       "symbols": ["startCodeAdoptionTracker"],

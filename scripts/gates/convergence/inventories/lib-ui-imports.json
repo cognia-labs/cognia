@@ -266,7 +266,7 @@
       "typeOnly": false
     },
     {
-      "key": "lib/claude/run-and-capture.ts",
+      "key": "lib/ai/agent/execution/run-and-capture.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

@@ -34,7 +34,7 @@ jest.mock("@/lib/db/sessions", () => ({ getSession: (...a: unknown[]) => getSess
 jest.mock("@/lib/claude/build-options", () => ({
   resolveSendOptions: (...a: unknown[]) => resolveSendOptionsMock(...a),
 }))
-jest.mock("@/lib/claude/run-and-capture", () => {
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => {
   // Define the error class inside the factory — jest hoists mock factories
   // above module-scope declarations, so an outer class would be uninitialized.
   class FakeRunAndCaptureError extends Error {

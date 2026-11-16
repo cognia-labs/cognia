@@ -76,7 +76,7 @@ jest.mock("@/lib/ai/agent/execution/capture-types", () => ({
   RunAndCaptureError: jest.requireActual("@/lib/ai/agent/execution/capture-types")
     .RunAndCaptureError,
 }))
-jest.mock("@/lib/claude/run-and-capture", () => ({
+jest.mock("@/lib/ai/agent/execution/run-and-capture", () => ({
   runAndCaptureAssistantReply: jest.fn(async (sessionId: string) => ({
     text: `subagent reply for ${sessionId}`,
     messageId: "m",
@@ -956,7 +956,7 @@ describe("makeCliPluginToolHandle", () => {
 
 describe("end-to-end: handle → handler → real runCliSubagent", () => {
   it("runs a real subagent over the (mocked) live sidecar and returns its reply", async () => {
-    const cap = jest.requireMock("@/lib/claude/run-and-capture") as {
+    const cap = jest.requireMock("@/lib/ai/agent/execution/run-and-capture") as {
       runAndCaptureAssistantReply: jest.Mock
     }
     const ipc = jest.requireMock("@/lib/ai/agent/execution/sidecar-client") as {
