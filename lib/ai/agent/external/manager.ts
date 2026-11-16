@@ -91,7 +91,12 @@ import {
   executionSemanticsOf,
   requiresReconnectAfterCancel,
 } from "@cognia/agent-contracts/semantics"
-import { readEngineLaunchProfile } from "@cognia/agent-contracts/engine-launch-profile"
+import {
+  engineLaunchProfileEnv,
+  isIsolatedLaunch,
+  readEngineLaunchProfile,
+  type EngineLaunchProfile,
+} from "@cognia/agent-contracts/engine-launch-profile"
 import { supportsModelCatalog } from "@cognia/agent-contracts/adapter"
 import type { AdapterExtension } from "@cognia/agent-contracts/adapter-extension"
 import {
@@ -518,6 +523,18 @@ export class ExternalAgentManager {
   >()
   private gatewayPreparing = new Set<string>()
   /**
+   * ADR-0243 3C: transient instances that run a configured agent under an
+   * isolated launch profile, `<agentId>:iso:<key>`. A conversation keeps one
+   * per configured agent: another requester set's key retires it, and a
+   * retired instance is removed, with its private state, once no execution
+   * still runs on it. A run without a conversation gets one for that run.
+   */
+  private isolatedInstances = new Map<
+    string,
+    { parentId: string; chatSessionId?: string; executions: number; retired: boolean }
+  >()
+  private isolatedPreparing = new Map<string, Promise<void>>()
+  /**
    * Every config goes through this before an adapter sees it: the config's own
    * keyring secrets and its private state root (ADR-0216). One preparer for
    * every route into `addAgent`, which is what made startup rehydration and the
@@ -535,6 +552,144 @@ export class ExternalAgentManager {
     this.launchPreparer = preparer
   }
 
+  /**
+   * Route an execution whose run is not the owner's own to the isolated
+   * instance its launch profile names (ADR-0243 3C), re-derived on every
+   * execute because a run's requesters only grow. `undefined` runs it here:
+   * the owner's run, an agent that spawns no local process, and an instance
+   * that already carries its launch (a Bot run, an isolated instance, a
+   * gateway task).
+   */
+  private async isolatedExecution(
+    agentId: string,
+    options: PermissionBoundExternalExecutionOptions | undefined,
+    runSource: PersonalEgressContext | undefined
+  ): Promise<
+    | {
+        agentId: string
+        options: PermissionBoundExternalExecutionOptions | undefined
+        release: () => Promise<void>
+      }
+    | undefined
+  > {
+    const source = this.instances.get(agentId)
+    if (
+      !source?.config.process?.command ||
+      this.gatewayTasks.has(agentId) ||
+      isIsolatedLaunch(source.config.process.env)
+    )
+      return undefined
+    const custom = options?.context?.custom
+    const chatSessionId =
+      typeof custom?.chatSessionId === "string" ? custom.chatSessionId : undefined
+    const { engineLaunchProfile } = await import("./policy/launch-profile")
+    const profile = await engineLaunchProfile({
+      context: runSource,
+      ...(chatSessionId ? { chatSessionId } : {}),
+    })
+    if (profile.kind === "owner") return undefined
+    const childId = `${agentId}:iso:${profile.key}`
+    const child = await this.ensureIsolatedInstance(source.config, childId, profile, chatSessionId)
+    child.executions += 1
+    // The key's own state holds every session it may resume; a session id
+    // from another requester set's instance, or the owner's, starts fresh.
+    const requested =
+      options?.sessionId ?? (typeof custom?.sessionId === "string" ? custom.sessionId : undefined)
+    let routed = options
+    if (options && requested !== undefined && !this.holdsSession(childId, requested)) {
+      routed = {
+        ...options,
+        sessionId: undefined,
+        ...(options.context && custom
+          ? { context: { ...options.context, custom: { ...custom, sessionId: undefined } } }
+          : {}),
+      }
+      const bound = personalEgressOptionsSource(options)
+      if (bound) bindPersonalEgressOptions(routed, bound)
+    }
+    let released = false
+    return {
+      agentId: childId,
+      options: routed,
+      release: async () => {
+        if (released) return
+        released = true
+        child.executions -= 1
+        if (
+          child.executions === 0 &&
+          (child.retired || !child.chatSessionId) &&
+          this.isolatedInstances.get(childId) === child
+        )
+          // Teardown never replaces the turn's own outcome.
+          await this.removeAgent(childId).catch((error: unknown) =>
+            externalAgentManagerLogger.warn("Isolated instance teardown failed", {
+              agentId: childId,
+              error: this.normalizeErrorMessage(error),
+            })
+          )
+      },
+    }
+  }
+
+  /** The isolated instance `childId`, made the conversation's current one. */
+  private async ensureIsolatedInstance(
+    config: ExternalAgentConfig,
+    childId: string,
+    profile: Extract<EngineLaunchProfile, { kind: "isolated" }>,
+    chatSessionId: string | undefined
+  ) {
+    // A conversation keeps one isolated instance per configured agent.
+    if (chatSessionId)
+      for (const [id, other] of [...this.isolatedInstances])
+        if (
+          other.parentId === config.id &&
+          other.chatSessionId === chatSessionId &&
+          id !== childId
+        ) {
+          other.retired = true
+          if (other.executions === 0) await this.removeAgent(id)
+        }
+    if (!this.isolatedInstances.has(childId) && !this.isolatedPreparing.has(childId)) {
+      const entry = {
+        parentId: config.id,
+        ...(chatSessionId ? { chatSessionId } : {}),
+        executions: 0,
+        retired: false,
+      }
+      this.isolatedInstances.set(childId, entry)
+      this.isolatedPreparing.set(
+        childId,
+        (async () => {
+          const { spawnPlacementFor, registerSpawnPlacement } =
+            await import("@/lib/sandbox/spawn-placement-registry")
+          const placement = spawnPlacementFor(config.id)
+          if (placement) registerSpawnPlacement(childId, placement)
+          try {
+            await this.addAgent(
+              {
+                ...config,
+                id: childId,
+                process: {
+                  ...config.process!,
+                  env: { ...config.process!.env, ...engineLaunchProfileEnv(profile) },
+                },
+              },
+              { connect: false }
+            )
+          } catch (error) {
+            await this.removeAgent(childId)
+            throw error
+          }
+        })().finally(() => this.isolatedPreparing.delete(childId))
+      )
+    }
+    await this.isolatedPreparing.get(childId)
+    const child = this.isolatedInstances.get(childId)
+    if (!child) throw new Error("External agent was removed during isolated launch preparation")
+    child.retired = false
+    return child
+  }
+
   private async bindSandboxToolHostLeases(
     agentId: string,
     options?: ExternalAgentExecutionOptions
@@ -547,16 +702,34 @@ export class ExternalAgentManager {
     return acquireSpawnToolHostLeases(agentId, placement!.hostedToolHostLeaseIds!)
   }
 
-  private gatewaySessionTarget(
+  /**
+   * The instance that runs a session addressed through its configured agent:
+   * a gateway task by its public id, or an isolated instance that holds it.
+   */
+  private sessionTarget(
     agentId: string,
     sessionId: string
   ): { agentId: string; sessionId: string } {
     const parsed = parseGatewaySessionId(sessionId)
-    if (!parsed) return { agentId, sessionId }
+    if (!parsed) return { agentId: this.sessionOwner(agentId, sessionId), sessionId }
     const childId = `gateway-task-${parsed.taskId}`
     if (this.gatewayTasks.get(childId)?.parentId !== agentId)
       throw new Error("Gateway task is not active")
     return { agentId: childId, sessionId: parsed.nativeSessionId }
+  }
+
+  /** The isolated instance of `agentId` that holds a native session, else `agentId`. */
+  private sessionOwner(agentId: string, sessionId: string): string {
+    for (const [childId, child] of this.isolatedInstances)
+      if (child.parentId === agentId && this.holdsSession(childId, sessionId)) return childId
+    return agentId
+  }
+
+  private holdsSession(agentId: string, sessionId: string): boolean {
+    return Boolean(
+      this.adapters.get(agentId)?.getSession(sessionId) ??
+      this.instances.get(agentId)?.sessions.get(sessionId)
+    )
   }
 
   private async prepareGatewayExecution(
@@ -1127,7 +1300,7 @@ export class ExternalAgentManager {
     sessionId: string,
     response: AcpPermissionResponse
   ): Promise<void> {
-    ;({ agentId, sessionId } = this.gatewaySessionTarget(agentId, sessionId))
+    ;({ agentId, sessionId } = this.sessionTarget(agentId, sessionId))
     const adapter = this.adapters.get(agentId)
     if (!adapter) {
       throw new Error(`Agent not found: ${agentId}`)
@@ -1140,7 +1313,7 @@ export class ExternalAgentManager {
     sessionId: string,
     modeId: AcpPermissionMode
   ): Promise<void> {
-    ;({ agentId, sessionId } = this.gatewaySessionTarget(agentId, sessionId))
+    ;({ agentId, sessionId } = this.sessionTarget(agentId, sessionId))
     const adapter = this.adapters.get(agentId)
     if (!adapter?.setSessionMode) {
       throw new Error("Agent does not support session mode changes")
@@ -1149,7 +1322,7 @@ export class ExternalAgentManager {
   }
 
   private sessionOperationTarget(agentId: string, sessionId: string) {
-    const target = this.gatewaySessionTarget(agentId, sessionId)
+    const target = this.sessionTarget(agentId, sessionId)
     const adapter = this.adapters.get(target.agentId)
     const instance = this.instances.get(target.agentId)
     if (!adapter || !instance) throw new Error(`Agent not found: ${agentId}`)
@@ -1547,7 +1720,7 @@ export class ExternalAgentManager {
    * turn is active — callers fall back to their queue-and-replay path.
    */
   async steerSession(agentId: string, sessionId: string | undefined, text: string): Promise<void> {
-    if (sessionId) ({ agentId, sessionId } = this.gatewaySessionTarget(agentId, sessionId))
+    if (sessionId) ({ agentId, sessionId } = this.sessionTarget(agentId, sessionId))
     const adapter = this.adapters.get(agentId)
     if (!adapter?.steerTurn) {
       throw new Error("Agent does not support steering an active turn")
@@ -1610,7 +1783,7 @@ export class ExternalAgentManager {
     agentId: string,
     sessionId: string
   ): Promise<ExternalAgentCompactionCapability> {
-    ;({ agentId, sessionId } = this.gatewaySessionTarget(agentId, sessionId))
+    ;({ agentId, sessionId } = this.sessionTarget(agentId, sessionId))
     const adapter = this.adapters.get(agentId)
     if (!adapter?.getCompactionCapability) {
       return { status: "unsupported", routes: [], reason: "adapter_unsupported" }
@@ -1623,7 +1796,7 @@ export class ExternalAgentManager {
     sessionId: string,
     options?: ExternalAgentCompactionOptions
   ): Promise<void> {
-    ;({ agentId, sessionId } = this.gatewaySessionTarget(agentId, sessionId))
+    ;({ agentId, sessionId } = this.sessionTarget(agentId, sessionId))
     const adapter = this.adapters.get(agentId)
     if (!adapter?.compactSession) {
       throw new Error("Agent does not support context compaction")
@@ -1636,7 +1809,7 @@ export class ExternalAgentManager {
     agentId: string,
     sessionId: string
   ): Promise<ExternalAgentProviderUndoCapability> {
-    ;({ agentId, sessionId } = this.gatewaySessionTarget(agentId, sessionId))
+    ;({ agentId, sessionId } = this.sessionTarget(agentId, sessionId))
     const adapter = this.adapters.get(agentId)
     if (!adapter?.getProviderUndoCapability) {
       return { status: "unsupported", reason: "adapter_unsupported" }
@@ -1645,7 +1818,7 @@ export class ExternalAgentManager {
   }
 
   async undoLastProviderChange(agentId: string, sessionId: string): Promise<void> {
-    ;({ agentId, sessionId } = this.gatewaySessionTarget(agentId, sessionId))
+    ;({ agentId, sessionId } = this.sessionTarget(agentId, sessionId))
     const adapter = this.adapters.get(agentId)
     if (!adapter?.undoLastProviderChange) {
       throw new Error("Agent does not support provider undo")
@@ -1669,6 +1842,7 @@ export class ExternalAgentManager {
   async setSessionModel(agentId: string, sessionId: string, modelId: string): Promise<void> {
     if (parseGatewaySessionId(sessionId))
       throw new Error("A gateway task's model binding is immutable; start a new task")
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     if (!adapter?.setSessionModel) {
       throw new Error("Agent does not support model selection")
@@ -1680,6 +1854,7 @@ export class ExternalAgentManager {
     agentId: string,
     sessionId: string
   ): AgentCapabilityResult<AcpSessionModelState> {
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     if (!adapter?.getSessionModels) {
       return { status: "unsupported" }
@@ -1716,6 +1891,7 @@ export class ExternalAgentManager {
     agentId: string,
     sessionId: string
   ): Promise<AgentCapabilityResult<ExternalAgentSessionSurface>> {
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     if (!adapter) return { status: "unsupported" }
     if (!adapter.getConfigOptions && !adapter.getSessionModels) return { status: "unsupported" }
@@ -1768,6 +1944,7 @@ export class ExternalAgentManager {
     surface: ExternalAgentModelSurface,
     modelId: string
   ): Promise<void> {
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     if (!adapter) throw new Error("Agent is not connected")
     if (surface.write.kind === "config-option") {
@@ -1881,7 +2058,7 @@ export class ExternalAgentManager {
     value: string | boolean
   ): Promise<AcpConfigOption[]> {
     const managed = parseGatewaySessionId(sessionId)
-    ;({ agentId, sessionId } = this.gatewaySessionTarget(agentId, sessionId))
+    ;({ agentId, sessionId } = this.sessionTarget(agentId, sessionId))
     const adapter = this.adapters.get(agentId)
     if (!adapter?.setConfigOption) {
       throw new Error("Agent does not support config options")
@@ -1904,7 +2081,7 @@ export class ExternalAgentManager {
 
   async respondToElicitation(agentId: string, response: AcpElicitationResponse): Promise<void> {
     if (parseGatewaySessionId(response.requestId)) {
-      const target = this.gatewaySessionTarget(agentId, response.requestId)
+      const target = this.sessionTarget(agentId, response.requestId)
       agentId = target.agentId
       response = { ...response, requestId: target.sessionId }
     }
@@ -1928,6 +2105,7 @@ export class ExternalAgentManager {
    * @see https://agentclientprotocol.com/protocol/session-config-options
    */
   getConfigOptions(agentId: string, sessionId: string): AgentCapabilityResult<AcpConfigOption[]> {
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     if (!adapter?.getConfigOptions) {
       return { status: "unsupported" }
@@ -2033,6 +2211,7 @@ export class ExternalAgentManager {
     sessionId: string,
     options?: SessionCreateOptions
   ): Promise<ExternalAgentSession> {
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     const instance = this.instances.get(agentId)
     if (!adapter?.forkSession || !instance) {
@@ -2113,6 +2292,7 @@ export class ExternalAgentManager {
     sessionId: string,
     options?: SessionCreateOptions
   ): Promise<ExternalAgentSession> {
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     const instance = this.instances.get(agentId)
     if (!adapter?.resumeSession || !instance) {
@@ -2382,6 +2562,7 @@ export class ExternalAgentManager {
       this.instances.get(agentId)?.sessions.delete(sessionId)
       return
     }
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     if (adapter?.deleteSession) {
       await adapter.deleteSession(sessionId)
@@ -3037,6 +3218,8 @@ export class ExternalAgentManager {
     for (const task of [...this.gatewayTasks.values()]) {
       if (task.parentId === agentId) await task.release()
     }
+    for (const [childId, child] of [...this.isolatedInstances])
+      if (child.parentId === agentId) await this.removeAgent(childId)
     const adapter = this.adapters.get(agentId)
     if (adapter) {
       this.intentionalProcessStops.add(agentId)
@@ -3063,6 +3246,8 @@ export class ExternalAgentManager {
     this.sessionCatalogs.get(agentId)?.clear()
     this.sessionCatalogs.delete(agentId)
     this.capabilityCommandSignatures.delete(agentId)
+    if (this.isolatedInstances.delete(agentId))
+      (await import("@/lib/sandbox/spawn-placement-registry")).clearSpawnPlacement(agentId)
     // A transient isolated instance owns its private state root.
     if (profile.kind === "isolated") {
       const { removeIsolatedStateRoot } = await import("./lifecycle/state-root")
@@ -3426,6 +3611,8 @@ export class ExternalAgentManager {
     for (const task of [...this.gatewayTasks.values()]) {
       if (task.parentId === agentId) await task.release()
     }
+    for (const [childId, child] of [...this.isolatedInstances])
+      if (child.parentId === agentId) await this.removeAgent(childId)
     return this.connectionCoordinator.disconnect(
       agentId,
       () => this.disconnectAdapter(agentId),
@@ -4148,6 +4335,7 @@ export class ExternalAgentManager {
       this.instances.get(agentId)?.sessions.delete(sessionId)
       return
     }
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     const instance = this.instances.get(agentId)
 
@@ -4255,8 +4443,7 @@ export class ExternalAgentManager {
   getSession(agentId: string, sessionId: string): ExternalAgentSession | undefined {
     if (parseGatewaySessionId(sessionId))
       return this.instances.get(agentId)?.sessions.get(sessionId)
-    const adapter = this.adapters.get(agentId)
-    return adapter?.getSession(sessionId)
+    return this.adapters.get(this.sessionOwner(agentId, sessionId))?.getSession(sessionId)
   }
 
   // ============================================================================
@@ -4416,13 +4603,23 @@ export class ExternalAgentManager {
     // new content callers add their exact Host run at the dispatch boundary.
     const personalContext = this.executionPersonalSource(agentId, options)
     const { enforceExternalRunAuthority } = await import("./policy/run-authority")
+    const runSource = personalEgressOptionsSource(options)
     const authorityOptions = await enforceExternalRunAuthority(
-      personalEgressOptionsSource(options),
+      runSource,
       options,
       this.instances.get(agentId)?.config
     )
     if (authorityOptions && authorityOptions !== options) {
       options = bindPersonalEgressOptions(authorityOptions, personalContext)
+    }
+    const isolated = await this.isolatedExecution(agentId, options, runSource)
+    if (isolated) {
+      try {
+        yield* this.executeStreamingUnbudgeted(isolated.agentId, prompt, isolated.options, evidence)
+      } finally {
+        await isolated.release()
+      }
+      return
     }
     let releasePersonal = () => {}
     try {
@@ -4941,13 +5138,28 @@ export class ExternalAgentManager {
     // new content callers add their exact Host run at the dispatch boundary.
     const personalContext = this.executionPersonalSource(agentId, options)
     const { enforceExternalRunAuthority } = await import("./policy/run-authority")
+    const runSource = personalEgressOptionsSource(options)
     const authorityOptions = await enforceExternalRunAuthority(
-      personalEgressOptionsSource(options),
+      runSource,
       options,
       this.instances.get(agentId)?.config
     )
     if (authorityOptions && authorityOptions !== options) {
       options = bindPersonalEgressOptions(authorityOptions, personalContext)
+    }
+    const isolated = await this.isolatedExecution(agentId, options, runSource)
+    if (isolated) {
+      try {
+        return await this.executeUnbudgeted(
+          isolated.agentId,
+          prompt,
+          isolated.options,
+          onExecutorStopped,
+          evidence
+        )
+      } finally {
+        await isolated.release()
+      }
     }
     let releasePersonal = () => {}
     try {
@@ -5449,7 +5661,7 @@ export class ExternalAgentManager {
   cancelRetiresSession(agentId: string, sessionId: string): boolean {
     const parsed = parseGatewaySessionId(sessionId)
     if (parsed) return this.gatewayTasks.get(`gateway-task-${parsed.taskId}`)?.parentId === agentId
-    const adapter = this.adapters.get(agentId)
+    const adapter = this.adapters.get(this.sessionOwner(agentId, sessionId))
     return adapter ? requiresReconnectAfterCancel(executionSemanticsOf(adapter)) : false
   }
 
@@ -5463,6 +5675,7 @@ export class ExternalAgentManager {
       if (task?.parentId === agentId) await task.release()
       return
     }
+    agentId = this.sessionOwner(agentId, sessionId)
     const adapter = this.adapters.get(agentId)
     if (adapter) {
       await this.cancelAdapterSession(agentId, sessionId, adapter)
@@ -6260,6 +6473,9 @@ export class ExternalAgentManager {
    * Emit event to listeners
    */
   private emitEvent(agentId: string, event: ExternalAgentEvent): void {
+    // An isolated instance's sessions are its configured agent's to its listeners.
+    const parentId = this.isolatedInstances.get(agentId)?.parentId
+    if (parentId) this.emitEvent(parentId, event)
     const listeners = this.eventListeners.get(agentId)
     if (listeners) {
       for (const listener of listeners) {
@@ -6283,6 +6499,19 @@ export class ExternalAgentManager {
    */
   async dispose(): Promise<void> {
     for (const task of [...this.gatewayTasks.values()]) await task.release()
+    for (const childId of [...this.isolatedInstances.keys()]) {
+      try {
+        await this.removeAgent(childId)
+      } catch (error) {
+        externalAgentManagerLogger.error(
+          "Failed to remove an isolated instance during dispose",
+          error,
+          {
+            agentId: childId,
+          }
+        )
+      }
+    }
     this.stopHealthCheck()
 
     // Disconnect all agents

@@ -32,6 +32,17 @@ export const larkContribution: ConnectorVendorContribution = {
     families: ["lark.base", "lark.calendar", "lark.doc", "lark.sheets", "lark.task", "lark.wiki"],
     load: () => import("./builtin-skills"),
   },
+  // The user whose authorization the adapter carries, as the personal
+  // credential check reads it (`auth-providers/feishu/cli/acting-identity.ts`).
+  ownerPrincipal: (row) => {
+    const connected = row.settings.connectedUser as
+      { openId?: unknown; unionId?: unknown } | undefined
+    if (typeof connected?.openId !== "string" || !connected.openId.trim()) return null
+    return {
+      remoteUserId: connected.openId,
+      ...(typeof connected.unionId === "string" ? { unionId: connected.unionId } : {}),
+    }
+  },
   buildAdapter: async (row) => (await import("./build")).buildLarkAdapter(row),
   loadIdentityProbe: async () => (await import("./whoami")).probeBotIdentity,
   completeOAuth: async (code, state) => {

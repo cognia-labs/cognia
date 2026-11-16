@@ -10,6 +10,7 @@ import { loadPortCollection } from "@/lib/modules/ports"
 import type {
   ConversationChannel,
   ConversationChannelBinding,
+  ConversationPlatformPrincipal,
 } from "@/types/modules/ports/conversation-channel"
 
 /**
@@ -77,6 +78,18 @@ export async function sessionInjectionProtection(sessionId: string): Promise<boo
     adapterId: binding.adapterId,
   })
   return channel ? channel.injectionProtection(binding) : true
+}
+
+/**
+ * Whether a platform requester is this Host's owner, as the channel that
+ * serves their adapter verifies it. `false` when no active channel does.
+ */
+export async function platformRequesterIsOwner(
+  requester: ConversationPlatformPrincipal
+): Promise<boolean> {
+  for (const member of await loadChannels())
+    if (await member.port.requesterIsOwner(requester)) return true
+  return false
 }
 
 async function loadChannels() {

@@ -121,6 +121,17 @@ describe("larkContribution", () => {
     expect(eager).toEqual(["./capability"])
   })
 
+  it("names the connected user as the adapter's owner", () => {
+    expect(
+      larkContribution.ownerPrincipal?.(row({ connectedUser: { openId: "ou_1", unionId: "on_1" } }))
+    ).toEqual({ remoteUserId: "ou_1", unionId: "on_1" })
+    expect(larkContribution.ownerPrincipal?.(row({ connectedUser: { openId: "ou_1" } }))).toEqual({
+      remoteUserId: "ou_1",
+    })
+    expect(larkContribution.ownerPrincipal?.(row({ connectedUser: { openId: " " } }))).toBeNull()
+    expect(larkContribution.ownerPrincipal?.(row())).toBeNull()
+  })
+
   it("delegates adapter construction, the identity probe and OAuth completion", async () => {
     await expect(larkContribution.buildAdapter!(row())).resolves.toEqual({ id: "built" })
     expect(buildLarkAdapter).toHaveBeenCalledWith(row())

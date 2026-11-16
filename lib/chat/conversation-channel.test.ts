@@ -5,6 +5,7 @@ import type { ConversationChannel } from "@/types/modules/ports/conversation-cha
 import {
   askUserInConversation,
   conversationChannelFor,
+  platformRequesterIsOwner,
   recordConversationCallbackBinding,
   sessionInjectionProtection,
 } from "./conversation-channel"
@@ -15,7 +16,8 @@ jest.mock("@/lib/db/sessions", () => ({ getSession: (id: string) => mockGetSessi
 function channel(
   claims: (key: string) => boolean,
   askUser: ConversationChannel["askUser"] = jest.fn(async () => null),
-  recordCallbackBinding: ConversationChannel["recordCallbackBinding"] = jest.fn(async () => false)
+  recordCallbackBinding: ConversationChannel["recordCallbackBinding"] = jest.fn(async () => false),
+  requesterIsOwner: ConversationChannel["requesterIsOwner"] = jest.fn(async () => false)
 ): ConversationChannel {
   return {
     claimsBinding: (binding) => claims(binding.conversationKey),
@@ -36,6 +38,7 @@ function channel(
     removeReaction: jest.fn(),
     deliverNotification: jest.fn(),
     appendAudit: jest.fn(),
+    requesterIsOwner,
   }
 }
 
@@ -185,6 +188,41 @@ describe("recordConversationCallbackBinding", () => {
     __resetPortsForTesting()
     __setPortModulesForTesting([])
     expect(await recordConversationCallbackBinding(binding)).toBe(false)
+  })
+})
+
+describe("platformRequesterIsOwner", () => {
+  const requester = {
+    kind: "platform" as const,
+    platform: "lark",
+    adapterId: "adp_1",
+    remoteUserId: "ou_owner",
+  }
+
+  it("is true once a channel verifies the requester as the owner", async () => {
+    const other = jest.fn(async () => false)
+    const owner = jest.fn(async () => true)
+    __setPortModulesForTesting([
+      moduleProviding("bot", async () => ({
+        port: channel(() => false, undefined, undefined, other),
+      })),
+      moduleProviding("connectors", async () => ({
+        port: channel(() => true, undefined, undefined, owner),
+      })),
+    ])
+    expect(await platformRequesterIsOwner(requester)).toBe(true)
+    expect(other).toHaveBeenCalledWith(requester)
+    expect(owner).toHaveBeenCalledWith(requester)
+  })
+
+  it("is false when no active channel verifies them", async () => {
+    __setPortModulesForTesting([
+      moduleProviding("connectors", async () => ({ port: channel(() => true) })),
+    ])
+    expect(await platformRequesterIsOwner(requester)).toBe(false)
+    __resetPortsForTesting()
+    __setPortModulesForTesting([])
+    expect(await platformRequesterIsOwner(requester)).toBe(false)
   })
 })
 

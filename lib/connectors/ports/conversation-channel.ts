@@ -206,6 +206,25 @@ export const port: ConversationChannel = {
     return deliverNotificationToConversation(input)
   },
 
+  async requesterIsOwner(requester) {
+    // A platform user id is scoped to its app: only the requester's own,
+    // enabled adapter can say whom it is connected as.
+    const [{ getAdapterInstance }, { connectorVendor }] = await Promise.all([
+      import("@/lib/db/adapter-instances"),
+      import("../vendor-contribution"),
+    ])
+    const row = await getAdapterInstance(requester.adapterId)
+    if (!row?.enabled || row.type !== requester.platform) return false
+    const owner = connectorVendor(row.type)?.ownerPrincipal?.(row)
+    return (
+      !!owner &&
+      owner.remoteUserId === requester.remoteUserId &&
+      (requester.unionId === undefined ||
+        owner.unionId === undefined ||
+        requester.unionId === owner.unionId)
+    )
+  },
+
   async appendAudit(entry) {
     const { appendAudit } = await import("../audit")
     await appendAudit({ ...entry, at: Date.now() }).catch(() => undefined)

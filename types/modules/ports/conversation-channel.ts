@@ -33,6 +33,10 @@ import type { PlatformKind } from "@/types/connectors/platform-kind"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import type { NotificationRecord } from "@/types/notifications"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
+import type { PrincipalRefV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
+
+/** A person as a channel's platform names them. */
+export type ConversationPlatformPrincipal = Extract<PrincipalRefV1, { kind: "platform" }>
 
 /** A conversation as a run or session names it. */
 export interface ConversationChannelBinding {
@@ -254,6 +258,13 @@ export interface ConversationChannel {
     record: NotificationRecord
     conversationKey: string
   }): Promise<ConversationNotificationOutcome>
+  /**
+   * Whether a platform requester is the person this Host belongs to: the
+   * account the requester's adapter is connected as. `false` for an adapter
+   * this channel does not serve, a vendor that names no connected account, or
+   * any mismatch.
+   */
+  requesterIsOwner(requester: ConversationPlatformPrincipal): Promise<boolean>
   /** Append a row to the channel's audit log. Best-effort: never throws. */
   appendAudit(entry: {
     adapterId: string

@@ -284,6 +284,40 @@ describe("the IM conversation channel", () => {
     expect(mockRecordCallbackBinding).toHaveBeenCalledTimes(2)
   })
 
+  it("verifies a requester as the account their own enabled adapter is connected as", async () => {
+    const requester = {
+      kind: "platform" as const,
+      platform: "lark",
+      adapterId: "adp_1",
+      remoteUserId: "ou_owner",
+    }
+    const lark = (connectedUser: unknown, extra: Record<string, unknown> = {}) => ({
+      id: "adp_1",
+      type: "lark",
+      enabled: true,
+      settings: { connectedUser },
+      ...extra,
+    })
+    mockGetAdapterInstance.mockResolvedValueOnce(lark({ openId: "ou_owner", unionId: "on_1" }))
+    await expect(port.requesterIsOwner(requester)).resolves.toBe(true)
+    expect(mockGetAdapterInstance).toHaveBeenCalledWith("adp_1")
+    mockGetAdapterInstance.mockResolvedValueOnce(lark({ openId: "ou_owner", unionId: "on_1" }))
+    await expect(port.requesterIsOwner({ ...requester, unionId: "on_1" })).resolves.toBe(true)
+    mockGetAdapterInstance.mockResolvedValueOnce(lark({ openId: "ou_owner", unionId: "on_1" }))
+    await expect(port.requesterIsOwner({ ...requester, unionId: "on_2" })).resolves.toBe(false)
+    mockGetAdapterInstance.mockResolvedValueOnce(lark({ openId: "ou_other" }))
+    await expect(port.requesterIsOwner(requester)).resolves.toBe(false)
+    mockGetAdapterInstance.mockResolvedValueOnce(lark({ openId: "ou_owner" }, { enabled: false }))
+    await expect(port.requesterIsOwner(requester)).resolves.toBe(false)
+    mockGetAdapterInstance.mockResolvedValueOnce(lark({ openId: "ou_owner" }, { type: "slack" }))
+    await expect(port.requesterIsOwner(requester)).resolves.toBe(false)
+    mockGetAdapterInstance.mockResolvedValueOnce(undefined)
+    await expect(port.requesterIsOwner(requester)).resolves.toBe(false)
+    // A vendor that names no connected account has no owner.
+    mockGetAdapterInstance.mockResolvedValueOnce(lark(undefined, { type: "telegram" }))
+    await expect(port.requesterIsOwner({ ...requester, platform: "telegram" })).resolves.toBe(false)
+  })
+
   it("words what the conversation can render once the adapter has learned it", async () => {
     mockBuildCapabilityPromptSection.mockReturnValue("delivered via lark")
     const skills = [{ family: "lark.calendar" }]

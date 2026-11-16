@@ -157,6 +157,12 @@ export interface ConnectorVendorContribution {
     ): Promise<void>
   }
   /**
+   * The account an adapter is connected as: the Host owner's platform
+   * identity, which a requester must match to count as the owner. Without it
+   * no requester on this platform is the owner.
+   */
+  ownerPrincipal?(row: AdapterInstanceRow): { remoteUserId: string; unionId?: string } | null
+  /**
    * What a sign-in, a sign-out and a profile takeover do to this vendor's
    * principals (`ports/identity-principal-links.ts`).
    */

@@ -70,6 +70,17 @@ const appendCanonicalEnvelopesMock = jest.fn(
   async (_runId: string, _envelopes: Array<{ event: { kind: string } }>) => 1
 )
 
+// The derivation is exercised in policy/launch-profile.test.ts.
+const mockEngineLaunchProfile = jest.fn(
+  async (
+    _input: unknown
+  ): Promise<import("@cognia/agent-contracts/engine-launch-profile").EngineLaunchProfile> => ({
+    kind: "owner",
+  })
+)
+jest.mock("./policy/launch-profile", () => ({
+  engineLaunchProfile: (input: unknown) => mockEngineLaunchProfile(input),
+}))
 const mockRemoveIsolatedStateRoot = jest.fn(async (_key: string) => true)
 jest.mock("./lifecycle/state-root", () => ({
   removeIsolatedStateRoot: (key: string) => mockRemoveIsolatedStateRoot(key),
@@ -6454,5 +6465,205 @@ describe("the run budget on the native lane (ADR-0243 3B-2)", () => {
     await manager.addAgent(buildBaseConfig())
     await expect(manager.execute("agent-1", "hi")).resolves.toMatchObject({ success: true })
     expect(finish).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 1 }), true)
+  })
+})
+
+describe("isolated launches for runs that are not the owner's (ADR-0243 3C)", () => {
+  const isolated = (key: string) => ({
+    kind: "isolated" as const,
+    key,
+    reason: "requester" as const,
+  })
+  let adapters: MockAdapter[]
+  let restorePlane: () => void
+
+  /** A mock adapter whose session ids name it, so two instances never share one. */
+  function namedAdapter(name: string): MockAdapter {
+    const adapter = new MockAdapter()
+    const create = adapter.createSession.bind(adapter)
+    adapter.createSession = async (opts?: unknown) => {
+      const session = await create(opts)
+      adapter.sessions.delete(session.id)
+      session.id = `${name}-${session.id}`
+      adapter.sessions.set(session.id, session)
+      return session
+    }
+    return adapter
+  }
+
+  async function prepare() {
+    jest.mocked(checkExternalAgentCommandExists).mockReset().mockResolvedValue(true)
+    restorePlane = __setProcessPlaneDepsForTests({ hasLocalProcessTable: () => true })
+    const manager = freshManager()
+    adapters = []
+    protocolAdapterRegistry.register("acp", () => {
+      const adapter = namedAdapter(`a${adapters.length}`)
+      adapters.push(adapter)
+      return adapter as never
+    })
+    await manager.addAgent(
+      buildBaseConfig({
+        transport: "stdio",
+        process: { command: "claude-agent-acp", env: { KEEP: "1" } },
+      }),
+      { connect: false }
+    )
+    return manager
+  }
+
+  async function turn(chatSessionId?: string, sessionId?: string) {
+    const { bindPersonalEgressOptions } = await import("@/lib/execution/personal-egress")
+    return bindPersonalEgressOptions(
+      {
+        ...(sessionId ? { sessionId } : {}),
+        ...(chatSessionId ? { context: { custom: { chatSessionId } } } : {}),
+      },
+      { executionRunId: "run-1" }
+    )
+  }
+
+  afterEach(() => {
+    restorePlane()
+    mockEngineLaunchProfile.mockReset().mockResolvedValue({ kind: "owner" })
+    mockRemoveIsolatedStateRoot.mockClear()
+    __resetSpawnPlacementsForTests()
+  })
+
+  it("keeps the owner's run on the configured instance", async () => {
+    const manager = await prepare()
+    const result = await manager.execute("agent-1", "hi", await turn("chat-1"))
+    expect(result.sessionId).toMatch(/^a0-/)
+    expect(mockEngineLaunchProfile).toHaveBeenCalledWith({
+      context: { executionRunId: "run-1" },
+      chatSessionId: "chat-1",
+    })
+    expect(manager.getAllAgents().map((agent) => agent.config.id)).toEqual(["agent-1"])
+  })
+
+  it("runs another requester's turn in an isolated instance that resumes its own session", async () => {
+    const manager = await prepare()
+    mockEngineLaunchProfile.mockResolvedValue(isolated("k1"))
+    const placement = { kind: "local" } as unknown as SandboxPlacement
+    registerSpawnPlacement("agent-1", placement)
+    const first = await manager.execute("agent-1", "hi", await turn("chat-1"))
+    const child = manager.getAgent("agent-1:iso:k1")
+    expect(child?.config.process).toMatchObject({
+      command: "claude-agent-acp",
+      env: { KEEP: "1", COGNIA_ENGINE_PROFILE: JSON.stringify(isolated("k1")) },
+    })
+    expect(spawnPlacementFor("agent-1:iso:k1")).toBe(placement)
+    expect(first.sessionId).toMatch(/^a1-/)
+    expect(adapters[0]!.sessions.size).toBe(0)
+    const again = await manager.execute("agent-1", "more", await turn("chat-1", first.sessionId))
+    expect(again.sessionId).toBe(first.sessionId)
+    expect(adapters).toHaveLength(2)
+    // Session operations addressed to the configured agent reach the instance.
+    expect(manager.getSession("agent-1", first.sessionId)).toBeDefined()
+    await manager.cancel("agent-1", first.sessionId)
+    expect(adapters[1]!.cancelImpl).toHaveBeenCalledWith(first.sessionId)
+    expect(adapters[0]!.cancelImpl).not.toHaveBeenCalled()
+  })
+
+  it("gives a second requester a new key and a fresh session, and drops the first's state", async () => {
+    const manager = await prepare()
+    mockEngineLaunchProfile.mockResolvedValue(isolated("k1"))
+    const first = await manager.execute("agent-1", "hi", await turn("chat-1"))
+    mockEngineLaunchProfile.mockResolvedValue(isolated("k2"))
+    const second = await manager.execute("agent-1", "and me", await turn("chat-1", first.sessionId))
+    expect(second.sessionId).toMatch(/^a2-/)
+    expect(second.sessionId).not.toBe(first.sessionId)
+    expect(manager.getAgent("agent-1:iso:k1")).toBeUndefined()
+    expect(mockRemoveIsolatedStateRoot).toHaveBeenCalledWith("k1")
+    expect(manager.getAgent("agent-1:iso:k2")).toBeDefined()
+    // Another conversation keeps its own instance.
+    mockEngineLaunchProfile.mockResolvedValue(isolated("k3"))
+    await manager.execute("agent-1", "elsewhere", await turn("chat-2"))
+    expect(manager.getAgent("agent-1:iso:k2")).toBeDefined()
+    expect(manager.getAgent("agent-1:iso:k3")).toBeDefined()
+  })
+
+  it("keeps a retired instance until its running turn ends", async () => {
+    const manager = await prepare()
+    mockEngineLaunchProfile.mockResolvedValue(isolated("k1"))
+    await manager.execute("agent-1", "warm", await turn("chat-1"))
+    let finish!: () => void
+    adapters[1]!.executeImpl = jest.fn(
+      () =>
+        new Promise<ExternalAgentResult>((resolve) => {
+          finish = () =>
+            resolve({
+              success: true,
+              sessionId: "a1-s_1",
+              finalResponse: "late",
+              messages: [],
+              steps: [],
+              toolCalls: [],
+              duration: 1,
+            })
+        })
+    )
+    const running = manager.execute("agent-1", "slow", await turn("chat-1"))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    mockEngineLaunchProfile.mockResolvedValue(isolated("k2"))
+    await manager.execute("agent-1", "joined", await turn("chat-1"))
+    expect(manager.getAgent("agent-1:iso:k1")).toBeDefined()
+    finish()
+    await expect(running).resolves.toMatchObject({ finalResponse: "late" })
+    expect(manager.getAgent("agent-1:iso:k1")).toBeUndefined()
+    expect(mockRemoveIsolatedStateRoot).toHaveBeenCalledWith("k1")
+  })
+
+  it("runs a run without a conversation once and removes its instance", async () => {
+    const manager = await prepare()
+    mockEngineLaunchProfile.mockResolvedValue({ kind: "isolated", key: "k1", reason: "event" })
+    for await (const _event of manager.executeStreaming("agent-1", "hi", await turn())) {
+      // drain
+    }
+    expect(manager.getAgent("agent-1:iso:k1")).toBeUndefined()
+    expect(mockRemoveIsolatedStateRoot).toHaveBeenCalledWith("k1")
+    expect(adapters[1]!.lastMessage).toBeDefined()
+    expect(adapters[0]!.lastMessage).toBeUndefined()
+    expect(mockEngineLaunchProfile).toHaveBeenCalledWith({ context: { executionRunId: "run-1" } })
+  })
+
+  it("forwards an isolated instance's events to its configured agent's listeners", async () => {
+    const manager = await prepare()
+    mockEngineLaunchProfile.mockResolvedValue(isolated("k1"))
+    await manager.execute("agent-1", "hi", await turn("chat-1"))
+    const events: ExternalAgentEvent[] = []
+    manager.addEventListener("agent-1", (event) => events.push(event))
+    ;(manager as unknown as { emitEvent(id: string, event: ExternalAgentEvent): void }).emitEvent(
+      "agent-1:iso:k1",
+      { type: "commands_update", sessionId: "a1-s_1", commands: [], timestamp: new Date() }
+    )
+    expect(events).toEqual([
+      expect.objectContaining({ type: "commands_update", sessionId: "a1-s_1" }),
+    ])
+  })
+
+  it("removes the isolated instances with their configured agent", async () => {
+    const manager = await prepare()
+    mockEngineLaunchProfile.mockResolvedValue(isolated("k1"))
+    await manager.execute("agent-1", "hi", await turn("chat-1"))
+    await manager.removeAgent("agent-1")
+    expect(manager.getAllAgents()).toEqual([])
+    expect(mockRemoveIsolatedStateRoot).toHaveBeenCalledWith("k1")
+  })
+
+  it("does not derive a profile for an instance that already carries one", async () => {
+    const manager = await prepare()
+    await manager.addAgent(
+      buildBaseConfig({
+        id: "bot-1",
+        transport: "stdio",
+        process: {
+          command: "claude-agent-acp",
+          env: engineLaunchProfileEnv({ kind: "isolated", key: "bot-1", reason: "bot" }),
+        },
+      }),
+      { connect: false }
+    )
+    await manager.execute("bot-1", "hi", await turn("chat-1"))
+    expect(mockEngineLaunchProfile).not.toHaveBeenCalled()
   })
 })

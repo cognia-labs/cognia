@@ -44,21 +44,23 @@ type EngineLaunchProfile =
 type IsolationReason = "bot" | "requester" | "event" | "service"
 ```
 
-`engineLaunchProfile(identity, options)` in `lib/ai/agent/external/policy/launch-profile.ts` is the only producer:
+`engineLaunchProfile({ context, chatSessionId })` in `lib/ai/agent/external/policy/launch-profile.ts` is the only producer. It reads the root acting identity of the execution's Host-bound run (`resolveRunActingIdentity`):
 
-- **owner**: the run's acting identity is the local person. That means the trigger is `local` or `schedule` and the authorizing principal is `local-person`, the run is a direct UI run, or an IM turn whose requester is verified as the owner (the same check `admitPersonalCredential` uses).
+- **owner**: an execution bound to no run (a Host operation the local person started: a direct connect, a model probe); a `local` or `schedule` trigger whose authorizing principal is `local-person` with no other requester (a direct UI run records exactly that); or a `requester` trigger with exactly one requester who is the local person or whom their channel verifies as this Host's owner. The verification is vendor-neutral: `ConversationChannel.requesterIsOwner` (read through `platformRequesterIsOwner` in `lib/chat/conversation-channel.ts`), which the connectors answer from `ConnectorVendorContribution.ownerPrincipal(row)` on the requester's own enabled adapter. Lark names the adapter's `connectedUser`, the account `verifyLarkImOwnerAuthorization` checks; a vendor without the hook has no owner.
 - **personal**: an owner run that needs a personal credential through the broker. It is admitted only when the engine supports the personal profile (§4).
 - **isolated**: everything else. That covers a requester who is not the owner, an event actor, the service lane, more than one requester, and every Bot run. A Bot stops setting `COGNIA_BOT_ISOLATION` itself and asks for `isolated/bot`.
 - A run with no resolvable identity is **isolated**, never owner.
 
-The profile is checked again on every execute (requesters only ever grow), at the same boundary as `enforceExternalRunAuthority` (`manager.ts` `executeUnbudgeted` / `executeStreamingUnbudgeted`).
+The profile is checked again on every execute (requesters only ever grow), right after `enforceExternalRunAuthority` (`manager.ts` `executeUnbudgeted` / `executeStreamingUnbudgeted`), so a refused run never starts an instance. An agent that spawns no local process, a gateway task and an instance that already carries a profile (a Bot run, an isolated instance) are not derived again.
 
 ### 2. One launch instance per profile key
 
 `owner` keeps today's long-lived configured instance. `isolated` and `personal` run in a transient instance derived from the configured agent: `<agentId>:iso:<key>`. This generalises the Bot's `bot-<uuid>` and the gateway's `<agentId>:chat:<chatSessionId>`. The key is:
 
 - **Bot:** the bot run id. Kept as today: one process per run, removed at the end.
-- **Chat session:** `hash(chatSessionId, sorted requester principals)`. The private state survives the session's turns. A new requester set gives a new key, so a resumed engine session never carries one requester's transcript to another; this is the ADR's "resumed engine session after a second requester joins". Idle instances are removed on the existing session cleanup, and their state roots are deleted.
+- **Chat session:** `sha256(["chat", chatSessionId], sorted principal keys of the requesters)`. The private state survives the session's turns. A new requester set gives a new key, so a resumed engine session never carries one requester's transcript to another; this is the ADR's "resumed engine session after a second requester joins". A conversation keeps one isolated instance per configured agent: the new key retires the previous one, which is removed with its state root once no execution still runs on it. A session id the new instance does not hold is dropped, so the turn starts a fresh engine session.
+- **Run without a conversation:** `sha256(["run", rootRunId], requesters)`, one instance for the execution, removed when it ends.
+- Removing or disconnecting the configured agent, and disposing the manager, removes its isolated instances and their state roots. Session operations addressed to the configured agent (permission answers, cancel, steer, model and mode changes, close, delete) reach the instance that holds the session, and the instance's events reach the configured agent's listeners. Conversation lookups (`resolveConversationSessionId`, `liveSessions`) stay per instance, so an owner turn never resumes an isolated session.
 
 ### 3. One enforcement point per runtime
 
@@ -158,6 +160,6 @@ Not proven by tests, owed as a desktop smoke:
 1. One launch environment per host (done): `launchEnvironment` in `protocol/external-agent-security-policy.json`, interpreted by `crates/cognia-external-agent/src/launch_environment.rs` and `cli/src/runtime/external/launch-environment.ts`. Every spawn's child starts from it in one of three modes: owner (desktop now matches the CLI), essential (gateway task, SIWC) or none (DSH). No mode inherits a `COGNIA_*` or loader key from the Host. The contract type and the profile derivation moved to phase 2, where the manager produces the profile and both hosts enforce it, so neither ships unwired.
 2. Split in two commits, each wired end to end:
    - **2a (done)**: the profile contract (`packages/agent-contracts/src/engine-launch-profile.ts`, Rust `launch_profile.rs`), the isolated profile replacing Bot isolation in both hosts (private state root from the key, `apply_state_isolation` / `applyStateIsolation` applying the engine's rule inside it, sandbox confinement, `Inheritance::Isolated` with `isolatedKeys` / `isolatedSet` in the policy table, refusal outside the sandbox), the launcher's `--isolated` confinement flag without its own env allowlist, Bot runs asking for `isolated/bot` keyed by their agent id, and the root deleted on `removeAgent`. Removed: `COGNIA_BOT_ISOLATION` / `COGNIA_BOT_STATE_DIR`, `validate_bot_runtime_state`, `launch_owns_private_home` / `launchOwnsPrivateHome`, the launcher's `bot_environment` and `--bot-isolation` with the CLI's capability probe, `PluginWorkspaceHandle.runtimeStateRoot`, and `EngineMcpConfigFile.privateCopy`.
-   - **2b**: `engineLaunchProfile(identity, options)` and the manager's transient `<agentId>:iso:<key>` instances for non-owner chat turns.
+   - **2b (done)**: `engineLaunchProfile` with the vendor-neutral owner check (`ConversationChannel.requesterIsOwner`, `ConnectorVendorContribution.ownerPrincipal`), and the manager's transient `<agentId>:iso:<key>` instances (§2).
 3. The personal profile: gateway + allowlist + broker checks + `admitPersonalCredential` lease; Codex fence removed.
 4. ADR implementation status, docs and changeset.

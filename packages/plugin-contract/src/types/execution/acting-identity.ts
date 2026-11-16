@@ -192,7 +192,8 @@ export function meetRunAuthority(parent: RunAuthorityV1, child: RunAuthorityV1):
   return result
 }
 
-function principalKey(principal: PrincipalRefV1): string {
+/** One person's identity as a stable string: what `samePerson` compares. */
+export function principalKey(principal: PrincipalRefV1): string {
   switch (principal.kind) {
     case "local-person":
       return JSON.stringify([principal.kind, principal.userId ?? null, principal.accountId ?? null])
