@@ -33,7 +33,7 @@ import {
   approvalActorScope,
   resolveWorkflowTriggerOrigin,
 } from "@/lib/workflow/runtime/trigger-origin"
-import { buildApprovalSurface } from "@/lib/claude/hitl/workflow-approval-surface"
+import { buildApprovalSurface } from "@/lib/ai/agent/execution/hitl/workflow-approval-surface"
 import { createWorkflowWaitEvent, emitWorkflowWaitEvent } from "@/lib/db/workflow-waitpoints"
 
 jest.mock("@/lib/workflow/editor/store-registry", () => ({
@@ -76,7 +76,7 @@ jest.mock("@/lib/workflow/runtime/trigger-origin", () => ({
   approvalActorScope: jest.fn(),
   resolveWorkflowTriggerOrigin: jest.fn(),
 }))
-jest.mock("@/lib/claude/hitl/workflow-approval-surface", () => ({
+jest.mock("@/lib/ai/agent/execution/hitl/workflow-approval-surface", () => ({
   buildApprovalSurface: jest.fn(),
 }))
 jest.mock("@/lib/db/workflow-waitpoints", () => ({

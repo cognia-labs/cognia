@@ -699,7 +699,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     hostBindings: [
       "lib/plugin/bridge/chat-middleware-bridge.ts",
       "lib/plugin/contracts/module-bridge-map.ts",
-      "lib/claude/chat-middleware/registry.ts",
+      "packages/plugin-contract/src/lib/claude/chat-middleware/registry.ts",
     ],
     typescriptSdk: [
       "packages/plugin-sdk/src/define/define-chat-middleware.ts",

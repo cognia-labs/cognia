@@ -2,7 +2,7 @@ import {
   __resetChatMiddlewareRegistryForTesting,
   listAllChatMiddlewares,
   registerChatMiddleware,
-} from "./registry"
+} from "@cognia/plugin-contract/lib/claude/chat-middleware/registry"
 import {
   resolveInterceptorChain,
   __resetInterceptorDispatchForTesting,

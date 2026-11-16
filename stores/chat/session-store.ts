@@ -23,7 +23,7 @@ import {
   updateSession as dbUpdateSession,
 } from "@/lib/db/sessions"
 import { resolveThinkingLevel, thinkingLevelPatch } from "@/lib/ai/thinking-level"
-import { clearActiveComputerUseSettings } from "@/lib/claude/computer-use-active-settings"
+import { clearActiveComputerUseSettings } from "@/lib/plugin/security/computer-use-active-settings"
 import { desktop } from "@/lib/automation/client"
 import { isTauri } from "@/lib/tauri"
 import type { Session, CreateSessionInput, UpdateSessionInput } from "@/types/plugin/_compat"

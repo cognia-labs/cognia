@@ -42,7 +42,7 @@ export interface CallContext {
    * for driving calls so the floating overlay fires. Populated by the
    * computer-use plugin's `execute()` callback from the active
    * character's `requireConsent: true` setting (see
-   * `lib/claude/computer-use-active-settings.ts`).
+   * `lib/plugin/security/computer-use-active-settings.ts`).
    */
   forceTier?: "off" | "whitelist" | "perCall"
   /**

@@ -16,7 +16,10 @@
  */
 
 import * as personalSinkHost from "@/lib/execution/personal-sink"
-import { SKILL_CANCEL_PREFIX, SKILL_INVOKE_PREFIX } from "@/lib/claude/hitl/callback-prefixes"
+import {
+  SKILL_CANCEL_PREFIX,
+  SKILL_INVOKE_PREFIX,
+} from "@/lib/ai/agent/execution/hitl/callback-prefixes"
 import { append as appendAudit } from "@/lib/db/connector-audit"
 import { getDb } from "@/lib/db/schema"
 import { resolveExecutingRun } from "@/lib/execution/acting-authority"

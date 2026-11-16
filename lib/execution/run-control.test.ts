@@ -926,7 +926,8 @@ describe("WP4 interrupt authority", () => {
     const entered = deferred(),
       finish = deferred()
     let effects = 0
-    const { awaitApproval, resolveApproval } = await import("@/lib/claude/hitl/approval-registry")
+    const { awaitApproval, resolveApproval } =
+      await import("@/lib/ai/agent/execution/hitl/approval-registry")
     const waiter = awaitApproval("wp4-session", "wp4-request").then((decision) => {
       effects += 1
       return decision

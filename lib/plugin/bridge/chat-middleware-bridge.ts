@@ -12,7 +12,7 @@
  *
  * NOTE: registration ≠ execution. The runner (`runChatMiddlewareChain`) is
  * invoked from a send call-site gated behind a default-off flag — see
- * `lib/claude/chat-middleware/feature-flag.ts`.
+ * `lib/plugin/messaging/chat-middleware/feature-flag.ts`.
  */
 
 import type { PluginManifest } from "@/types/plugin/plugin"
@@ -29,7 +29,7 @@ import { canRunPythonBackedContribution } from "@/lib/plugin/python/experimental
 import {
   registerChatMiddleware,
   clearChatMiddlewaresForPlugin,
-} from "@/lib/claude/chat-middleware/registry"
+} from "@cognia/plugin-contract/lib/claude/chat-middleware/registry"
 import { loggers } from "@/lib/plugin/core/logger"
 import { resolvePluginPath } from "@/lib/plugin/core/plugin-path"
 import type { RegisterChatMiddlewaresOptions } from "@cognia/plugin-contract/lib/plugin/bridge/chat-middleware-bridge"

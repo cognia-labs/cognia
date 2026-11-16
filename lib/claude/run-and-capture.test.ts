@@ -24,7 +24,7 @@ import {
 import {
   hasCaptureResponder,
   __resetApprovalRegistryForTesting,
-} from "@/lib/claude/hitl/approval-registry"
+} from "@/lib/ai/agent/execution/hitl/approval-registry"
 import {
   __resetCapturedTurnsForTesting,
   capturedTurnOf,
@@ -36,7 +36,7 @@ import { __resetFusionScopesForTesting } from "@/lib/router-fusion/gate/explicit
 import {
   registerChatMiddleware,
   __resetChatMiddlewareRegistryForTesting,
-} from "./chat-middleware/registry"
+} from "@cognia/plugin-contract/lib/claude/chat-middleware/registry"
 import {
   registerInterceptor,
   __resetInterceptorRegistryForTesting,
@@ -44,7 +44,7 @@ import {
 import {
   setChatMiddlewareExecutionEnabled,
   __resetChatMiddlewareFlagForTesting,
-} from "./chat-middleware/feature-flag"
+} from "@/lib/plugin/messaging/chat-middleware/feature-flag"
 import { getExecutionBroker, __resetExecutionBrokerForTesting } from "@/lib/execution/broker"
 
 // ── Mock the IPC layer the wrapper depends on ─────────────────────────────

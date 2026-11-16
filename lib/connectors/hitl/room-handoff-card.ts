@@ -25,7 +25,7 @@ import * as personalSinkHost from "@/lib/execution/personal-sink"
 import {
   ROOM_HANDOFF_CONFIRM_PREFIX,
   ROOM_HANDOFF_DECLINE_PREFIX,
-} from "@/lib/claude/hitl/callback-prefixes"
+} from "@/lib/ai/agent/execution/hitl/callback-prefixes"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
 import type { ConnectorCallbackBindingRow } from "@/types/connectors/interaction"

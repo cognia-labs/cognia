@@ -24,7 +24,7 @@ import {
   DEFAULT_APPROVAL_TTL_MS,
   grantSessionBypass,
   hasSessionBypass,
-} from "@/lib/claude/hitl/approval-registry"
+} from "@/lib/ai/agent/execution/hitl/approval-registry"
 
 export const BUILTIN_SKILL_APPROVAL_PREFIX = "builtin-skill:"
 

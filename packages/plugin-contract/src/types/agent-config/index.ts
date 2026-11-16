@@ -6402,7 +6402,7 @@ export interface DeveloperSettings {
    * Experimental: when `true`, registered plugin chat-middlewares actually run
    * on the send hot path (ADR-0026 §4 §A). Default off — the runner skips
    * `runChatMiddlewareChain` entirely. Rehydrated into the module-level flag
-   * (`lib/claude/chat-middleware/feature-flag.ts`) at boot by
+   * (`lib/plugin/messaging/chat-middleware/feature-flag.ts`) at boot by
    * `ChatMiddlewareFlagInitializer`.
    */
   chatMiddlewareExecution?: boolean

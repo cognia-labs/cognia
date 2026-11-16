@@ -2501,7 +2501,8 @@ describe("remote transcript authority", () => {
 })
 
 it("refuses a desktop dispatch without restarting a capture-owned engine", async () => {
-  const { registerCaptureResponder } = await import("@/lib/claude/hitl/approval-registry")
+  const { registerCaptureResponder } =
+    await import("@/lib/ai/agent/execution/hitl/approval-registry")
   const release = registerCaptureResponder("occupied", "bot-turn", true, true)
   callSpy.mockResolvedValue(undefined)
   try {

@@ -23,7 +23,7 @@ import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/
 import {
   WF_FANOUT_APPROVE_PREFIX,
   WF_FANOUT_CANCEL_PREFIX,
-} from "@/lib/claude/hitl/callback-prefixes"
+} from "@/lib/ai/agent/execution/hitl/callback-prefixes"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { readForResolution } from "@/lib/db/conversation-overrides"
 import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"

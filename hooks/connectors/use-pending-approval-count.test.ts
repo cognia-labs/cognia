@@ -9,7 +9,7 @@ import {
   awaitApproval,
   resolveApproval,
   __resetApprovalRegistryForTesting,
-} from "@/lib/claude/hitl/approval-registry"
+} from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { usePendingApprovalCount } from "./use-pending-approval-count"
 
 beforeEach(() => {

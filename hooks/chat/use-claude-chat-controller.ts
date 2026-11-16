@@ -33,7 +33,7 @@ import {
   isSessionCaptured,
   captureOwnedSessionIds,
   subscribeCaptureOccupancy,
-} from "@/lib/claude/hitl/approval-registry"
+} from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { useTranslations } from "next-intl"
 import { isCapabilityUsable } from "@cognia/agent-config-types/external-agent-capability"
 import { isCogniaProjectedTool } from "@/lib/ai/agent/external/policy/tool-preapproval"
@@ -143,7 +143,7 @@ import { recordChatCanonicalEvents } from "@/lib/chat/canonical-sink"
 import { isEmbeddedSession } from "@/lib/chat/session-exposure"
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
 import { sessionAsideSystemPrompt, resolvedSessionAsideRuntime } from "@/lib/claude/build-options"
-import { clearSessionGrants } from "@/lib/claude/computer-use-session-grants"
+import { clearSessionGrants } from "@/lib/plugin/security/computer-use-session-grants"
 import { releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
 import {
   commitMessageDelta,
@@ -6019,7 +6019,7 @@ export function useClaudeChat() {
                     : handleExternalEvent,
                 onPermissionRequest: async (request, signal) => {
                   const { awaitApproval, hasSessionBypass } =
-                    await import("@/lib/claude/hitl/approval-registry")
+                    await import("@/lib/ai/agent/execution/hitl/approval-registry")
                   if (hasSessionBypass(sessionId, request.toolName)) return { decision: "allow" }
                   if (sendOptions.permissionMode === "auto") {
                     let automatic: { decision: "allow" | "deny"; message?: string } | undefined
@@ -7904,7 +7904,7 @@ export function useClaudeChat() {
           await import("@/lib/ai/agent/external/session/renderer-tool-host")
         if (approval.requestId.startsWith(RENDERER_TOOL_HOST_APPROVAL_PREFIX)) {
           const { resolveApproval, grantSessionBypass } =
-            await import("@/lib/claude/hitl/approval-registry")
+            await import("@/lib/ai/agent/execution/hitl/approval-registry")
           if (decision === "allow_always") grantSessionBypass(approval.sessionId, approval.toolName)
           resolveApproval(approval.sessionId, approval.requestId, { decision })
           await recordChatToolApprovalDecision(approval, decision, outboundGrant)
@@ -7925,7 +7925,8 @@ export function useClaudeChat() {
           if (decision === "allow_always") {
             grantDesktopSkillSessionBypass(approval.sessionId, approval.toolName)
           }
-          const { resolveApproval } = await import("@/lib/claude/hitl/approval-registry")
+          const { resolveApproval } =
+            await import("@/lib/ai/agent/execution/hitl/approval-registry")
           resolveApproval(approval.sessionId, approval.requestId, {
             decision: decision === "deny" ? "deny" : "allow",
           })
@@ -7957,7 +7958,8 @@ export function useClaudeChat() {
             )
             await settingsState.save({ agentPermissions: { ...ap, toolRules: nextRules } })
           }
-          const { resolveApproval } = await import("@/lib/claude/hitl/approval-registry")
+          const { resolveApproval } =
+            await import("@/lib/ai/agent/execution/hitl/approval-registry")
           resolveApproval(approval.sessionId, approval.requestId, {
             decision: decision === "deny" ? "deny" : "allow",
           })
@@ -8089,7 +8091,8 @@ export function useClaudeChat() {
       // honouring a grant.
       if (decision === "allow" || decision === "allow_always") {
         if (!approval.suppressAlwaysAllowRule && isComputerUsePluginToolName(approval.toolName)) {
-          const { recordSessionGrant } = await import("@/lib/claude/computer-use-session-grants")
+          const { recordSessionGrant } =
+            await import("@/lib/plugin/security/computer-use-session-grants")
           recordSessionGrant(approval.sessionId, approval.toolName)
         }
       }
@@ -8212,7 +8215,8 @@ export function useClaudeChat() {
         })
         useChatStore.getState().closeSession(sessionId)
         clearSessionGrants(sessionId)
-        const { clearSessionBypass } = await import("@/lib/claude/hitl/approval-registry")
+        const { clearSessionBypass } =
+          await import("@/lib/ai/agent/execution/hitl/approval-registry")
         clearSessionBypass(sessionId)
         releaseSkillLoadContext(sessionId)
         // Drop this session's nested-dispatch state (budget guard + resolved

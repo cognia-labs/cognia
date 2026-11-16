@@ -2,8 +2,8 @@ import { sanitizeOutboundSegments } from "@cognia/a2ui-core/segment-sanitize"
 import { assistantReplyToSegments, buildA2UISegment, readA2UISurface } from "./a2ui-to-segments"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import { trackInboxEvent } from "@/lib/telemetry/inbox-events"
-import { CALLBACK_PREFIXES } from "@/lib/claude/hitl/callback-prefixes"
-import { buildApprovalSurface } from "@/lib/claude/hitl/workflow-approval-surface"
+import { CALLBACK_PREFIXES } from "@/lib/ai/agent/execution/hitl/callback-prefixes"
+import { buildApprovalSurface } from "@/lib/ai/agent/execution/hitl/workflow-approval-surface"
 jest.mock("@/lib/telemetry/inbox-events", () => ({ trackInboxEvent: jest.fn() }))
 
 const SURFACE: A2UISegmentContent = {

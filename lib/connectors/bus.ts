@@ -3938,7 +3938,7 @@ export class ConnectorBus {
       try {
         const [{ applyToolApprovalCallback }, { resolveApproval }] = await Promise.all([
           import("@/lib/connectors/hitl/tool-approval"),
-          import("@/lib/claude/hitl/approval-registry"),
+          import("@/lib/ai/agent/execution/hitl/approval-registry"),
         ])
         const { granted, resolved } = applyToolApprovalCallback({
           sessionId,
@@ -4146,7 +4146,7 @@ export class ConnectorBus {
       try {
         const [{ applyPlanApprovalCallback }, { resolveApproval }] = await Promise.all([
           import("@/lib/connectors/hitl/plan-approval"),
-          import("@/lib/claude/hitl/approval-registry"),
+          import("@/lib/ai/agent/execution/hitl/approval-registry"),
         ])
         const { approved, resolved } = applyPlanApprovalCallback({
           runId: planRunId,

@@ -384,7 +384,7 @@ export const MODULE_BRIDGE_CAPABILITIES = {
     // `manifest.chatMiddlewares[]` → the
     // chat-middleware registry. Registration always happens; EXECUTION is
     // gated behind a default-off flag at the send call-site
-    // (lib/claude/chat-middleware/feature-flag.ts), so wiring this never
+    // (lib/plugin/messaging/chat-middleware/feature-flag.ts), so wiring this never
     // changes default chat behaviour.
     key: "chat-middleware",
     manifestField: "chatMiddlewares",

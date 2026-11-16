@@ -4,7 +4,7 @@ import { useSettingsStore } from "@/stores/settings"
 import {
   isChatMiddlewareExecutionEnabled,
   __resetChatMiddlewareFlagForTesting,
-} from "@/lib/claude/chat-middleware/feature-flag"
+} from "@/lib/plugin/messaging/chat-middleware/feature-flag"
 
 jest.mock("@/stores/settings", () => {
   let state: { settings: unknown } = { settings: undefined }

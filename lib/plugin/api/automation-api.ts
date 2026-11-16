@@ -25,7 +25,7 @@
 
 import { desktop, type CallContext } from "@/lib/automation/client"
 import { useChatStore } from "@/stores/chat"
-import { getActiveComputerUseSettings } from "@/lib/claude/computer-use-active-settings"
+import { getActiveComputerUseSettings } from "@/lib/plugin/security/computer-use-active-settings"
 import { captureScreenshot } from "@/lib/ui/screenshot"
 import {
   HOST_FALLBACK_RUNTIME_REF,

@@ -60,7 +60,7 @@ jest.mock("@/lib/db", () => ({
   },
 }))
 
-jest.mock("@/lib/claude/computer-use-active-settings", () => ({
+jest.mock("@/lib/plugin/security/computer-use-active-settings", () => ({
   clearActiveComputerUseSettings: jest.fn(),
 }))
 

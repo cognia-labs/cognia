@@ -42,7 +42,10 @@ import {
   clearSubagentApprovalRoute,
 } from "@/lib/claude/agents/subagent-approval-routes"
 import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
-import { resolveApproval, hasPendingApproval } from "@/lib/claude/hitl/approval-registry"
+import {
+  resolveApproval,
+  hasPendingApproval,
+} from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { installExecutionRunControlHandlers } from "@/lib/execution/control-handlers"
 import { executeRunControlCommand } from "@/lib/execution/run-control"
 

@@ -7,7 +7,7 @@ import { pluginExecutionContext } from "@/lib/plugin/core/invocation-identity"
  * Each middleware can inspect/transform the outgoing chat request, short-
  * circuit it, and post-process the response. Safety net (timeout, error
  * isolation, 3-strike circuit breaker) is enforced by the runner in
- * `lib/claude/chat-middleware/runner.ts`.
+ * `lib/plugin/messaging/chat-middleware/runner.ts`.
  *
  * Auto-cleanup on plugin disable is wired through
  * `clearChatMiddlewaresForPlugin(pluginId)` from the registry module.
@@ -21,7 +21,7 @@ import {
   registerChatMiddleware,
   unregisterChatMiddleware,
   type ChatMiddlewareRegistration as _Reg,
-} from "@/lib/claude/chat-middleware/registry"
+} from "@cognia/plugin-contract/lib/claude/chat-middleware/registry"
 import { useChatStore } from "@/stores/chat"
 import { useComposerIntentStore } from "@/stores/chat/composer-intent-store"
 import type { PluginSelectionRef } from "@/types/artifact/artifact"

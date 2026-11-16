@@ -20,11 +20,11 @@ import {
   computeAnthropicBetaHeaders,
   listNativeAnthropicToolEntries,
 } from "@/lib/plugin/registries/native-anthropic-tool-registry"
-import { hasSessionGrant } from "@/lib/claude/computer-use-session-grants"
+import { hasSessionGrant } from "@/lib/plugin/security/computer-use-session-grants"
 import {
   clearActiveComputerUseSettings,
   setActiveComputerUseSettings,
-} from "@/lib/claude/computer-use-active-settings"
+} from "@/lib/plugin/security/computer-use-active-settings"
 import type { Character, SendOptions } from "@cognia/agent-config-types"
 
 /**

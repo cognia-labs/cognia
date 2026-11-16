@@ -54,7 +54,7 @@ import {
   invalidateTranscriptRuntime,
   withTranscriptRuntimeLock,
 } from "@/lib/chat/transcript/revision-events"
-import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
+import { registerCaptureResponder } from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
 import { applySdkEvent, sdkMediaPart, type UsageInfo } from "@/lib/claude/adapter"
 import { applyExternalAgentEventToParts } from "@/lib/ai/agent/external/session/event-to-parts"

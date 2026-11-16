@@ -22,8 +22,8 @@ import {
   sendProtocolAdapterMessage,
 } from "@/lib/claude/ipc"
 import { subscribePluginToolDispatchBridge } from "@/lib/claude/plugin-tool-dispatch-bridge"
-import { canProxyRemoteToolCall } from "@/lib/claude/controller-tool-proxy"
-import { dispatchProtocolAdapterExec } from "@/lib/claude/protocol-adapter-ipc"
+import { canProxyRemoteToolCall } from "@/lib/ai/agent/execution/controller-tool-proxy"
+import { dispatchProtocolAdapterExec } from "@/lib/plugin/bridge/protocol-adapter-ipc"
 import { loggers } from "@cognia/logging"
 
 export function PluginToolDispatchProvider({ children }: { children: React.ReactNode }) {

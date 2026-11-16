@@ -3,11 +3,11 @@
 import { useEffect } from "react"
 
 import { useSettingsStore } from "@/stores/settings"
-import { setChatMiddlewareExecutionEnabled } from "@/lib/claude/chat-middleware/feature-flag"
+import { setChatMiddlewareExecutionEnabled } from "@/lib/plugin/messaging/chat-middleware/feature-flag"
 
 /**
  * Boot-time initializer that rehydrates the chat-middleware execution flag
- * (`lib/claude/chat-middleware/feature-flag.ts`) from persisted settings.
+ * (`lib/plugin/messaging/chat-middleware/feature-flag.ts`) from persisted settings.
  *
  * The flag is a module-level boolean consulted on the send hot path; it must be
  * seeded from `AppSettings.developer.chatMiddlewareExecution` at startup and

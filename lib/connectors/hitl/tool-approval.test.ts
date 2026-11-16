@@ -30,7 +30,7 @@ import {
   grantSessionBypass,
   pendingApprovalCount,
   __resetApprovalRegistryForTesting,
-} from "@/lib/claude/hitl/approval-registry"
+} from "@/lib/ai/agent/execution/hitl/approval-registry"
 import type { PermissionRequestEvent } from "@cognia/agent-config-types"
 import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
 
@@ -546,7 +546,7 @@ it("does not grant session bypass from an already resolved card", () => {
 })
 
 it("keeps existing prefix exports compatible with the shared registry", async () => {
-  const registry = await import("@/lib/claude/hitl/callback-prefixes")
+  const registry = await import("@/lib/ai/agent/execution/hitl/callback-prefixes")
   expect([TOOL_APPROVE_PREFIX, TOOL_DENY_PREFIX, TOOL_ALLOW_SESSION_PREFIX]).toEqual([
     registry.TOOL_APPROVE_PREFIX,
     registry.TOOL_DENY_PREFIX,

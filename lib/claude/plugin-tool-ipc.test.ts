@@ -64,7 +64,7 @@ import {
   recordCallbackBinding,
   resolveCallbackBinding,
 } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
-import { buildApprovalSurface } from "@/lib/claude/hitl/workflow-approval-surface"
+import { buildApprovalSurface } from "@/lib/ai/agent/execution/hitl/workflow-approval-surface"
 import { createWorkflowAuthorAPI } from "@/lib/plugin/api/workflow-author-api"
 import { holdWorkflowDispatchForApproval } from "@/lib/connectors/hitl/workflow-run-approval"
 import type { ProjectHistoryToolDeps } from "@/lib/memory/project-history-tool"

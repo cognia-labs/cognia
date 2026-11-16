@@ -44,7 +44,7 @@ import { matchDispatchRule } from "@/lib/connectors/dispatch-rules"
 import { resolveImEffectiveConfig } from "@/lib/connectors/effective-config"
 import { authorityFromApprovalMode } from "@/lib/connectors/composition/mode-projection"
 import { isBuiltInProviderId } from "@cognia/provider-types/built-in-provider-catalog"
-import { clearSessionBypass } from "@/lib/claude/hitl/approval-registry"
+import { clearSessionBypass } from "@/lib/ai/agent/execution/hitl/approval-registry"
 import {
   closeConnectorConversation,
   getConnectorConversationState,

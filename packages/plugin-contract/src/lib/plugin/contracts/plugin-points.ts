@@ -1208,7 +1208,7 @@ const INTERCEPTOR_POINT_DECLARATIONS: Record<
       // conservative outcome and matches `onChatRequest` today.
       failurePolicy: "fail-open",
     },
-    binding: "lib/claude/chat-middleware/runner.ts:runChatMiddlewareChain",
+    binding: "lib/plugin/messaging/chat-middleware/runner.ts:runChatMiddlewareChain",
     status: "implemented",
     stability: "experimental",
     introducedIn: "0.9.0",
@@ -1231,7 +1231,7 @@ const INTERCEPTOR_POINT_DECLARATIONS: Record<
       // host may only narrow toward, never away from.
       failurePolicy: "fail-open",
     },
-    binding: "lib/claude/chat-middleware/runner.ts:runChatMiddlewareChain",
+    binding: "lib/plugin/messaging/chat-middleware/runner.ts:runChatMiddlewareChain",
     status: "implemented",
     stability: "experimental",
     introducedIn: "0.9.0",
@@ -1528,7 +1528,8 @@ export const RUNTIME_POINT_BINDINGS: Record<CanonicalRuntimePoint, string> = {
     "lib/plugin/api/message-part-renderers.ts:registerMessagePartRenderer",
   "provider.ai-llm": "lib/plugin/bridge/ai-providers-bridge.ts:registerAiProvidersForPlugin",
   "provider.ai-embedding": "lib/plugin/bridge/ai-providers-bridge.ts:registerAiProvidersForPlugin",
-  "chat.middleware": "lib/claude/chat-middleware/registry.ts:registerChatMiddleware",
+  "chat.middleware":
+    "packages/plugin-contract/src/lib/claude/chat-middleware/registry.ts:registerChatMiddleware",
   "modal.mount": "lib/plugin/bridge/modal-mount-bridge.ts:registerModalMountsForPlugin",
   "scheduler.task": "lib/scheduler/executors/plugin-executor.ts (plugin scheduled task)",
   "terminal.completion": "lib/terminal/completion/registry.ts:registerCompletionProvider",

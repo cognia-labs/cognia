@@ -13,7 +13,7 @@ jest.mock("@tauri-apps/api/event", () => ({
 }))
 
 const clearAllSessionGrants = jest.fn()
-jest.mock("@/lib/claude/computer-use-session-grants", () => ({
+jest.mock("@/lib/plugin/security/computer-use-session-grants", () => ({
   clearAllSessionGrants: () => clearAllSessionGrants(),
 }))
 

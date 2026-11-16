@@ -10,7 +10,7 @@ import {
 import {
   __resetApprovalRegistryForTesting,
   resolveApproval,
-} from "@/lib/claude/hitl/approval-registry"
+} from "@/lib/ai/agent/execution/hitl/approval-registry"
 
 /** Short alias — this file resolves a lot of verdicts. */
 const resolve = resolveRealtimeToolVerdict

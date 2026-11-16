@@ -63,7 +63,7 @@ jest.mock("@/lib/collab/shared-run-coordinator", () => ({
 import {
   __resetApprovalRegistryForTesting,
   awaitApproval,
-} from "@/lib/claude/hitl/approval-registry"
+} from "@/lib/ai/agent/execution/hitl/approval-registry"
 import {
   __resetExternalApprovalsForTests,
   registerExternalApproval,

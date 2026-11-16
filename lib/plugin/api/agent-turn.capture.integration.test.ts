@@ -37,11 +37,11 @@ import { z } from "zod"
 import {
   registerChatMiddleware,
   __resetChatMiddlewareRegistryForTesting,
-} from "@/lib/claude/chat-middleware/registry"
+} from "@cognia/plugin-contract/lib/claude/chat-middleware/registry"
 import {
   setChatMiddlewareExecutionEnabled,
   __resetChatMiddlewareFlagForTesting,
-} from "@/lib/claude/chat-middleware/feature-flag"
+} from "@/lib/plugin/messaging/chat-middleware/feature-flag"
 import { runPluginAgent } from "@/lib/plugin/agent-sdk/run"
 import { runAndCaptureAssistantReply } from "@/lib/claude/run-and-capture"
 import { executeAgentTurnFromRenderer } from "@/lib/ai/agent/execution/agent-execution-service"

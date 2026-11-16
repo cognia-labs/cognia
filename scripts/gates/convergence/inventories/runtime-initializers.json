@@ -78,10 +78,10 @@
       "pendingPhase": "phase 1"
     },
     {
-      "key": "components/providers/initializers/chat-middleware-flag-initializer.tsx#setChatMiddlewareExecutionEnabled@lib/claude/chat-middleware/feature-flag.ts",
+      "key": "components/providers/initializers/chat-middleware-flag-initializer.tsx#setChatMiddlewareExecutionEnabled@lib/plugin/messaging/chat-middleware/feature-flag.ts",
       "initializer": "components/providers/initializers/chat-middleware-flag-initializer.tsx",
       "symbol": "setChatMiddlewareExecutionEnabled",
-      "module": "lib/claude/chat-middleware/feature-flag.ts",
+      "module": "lib/plugin/messaging/chat-middleware/feature-flag.ts",
       "owner": "components/providers/initializers/chat-middleware-flag-initializer.tsx",
       "note": "pending:phase 1 \"lib/claude/run-and-capture.ts consults isChatMiddlewareExecutionEnabled on every headless turn the brain runs (scheduler goal runner, bots, Run API).\"",
       "evidence": "c38fbdd3ccfd6f53",
@@ -1049,12 +1049,12 @@
       "evidence": "2e3c1462712b4f6f"
     },
     {
-      "key": "components/providers/initializers/computer-use-kill-switch-initializer.tsx#clearAllSessionGrants@lib/claude/computer-use-session-grants.ts",
+      "key": "components/providers/initializers/computer-use-kill-switch-initializer.tsx#clearAllSessionGrants@lib/plugin/security/computer-use-session-grants.ts",
       "initializer": "components/providers/initializers/computer-use-kill-switch-initializer.tsx",
       "symbol": "clearAllSessionGrants",
-      "module": "lib/claude/computer-use-session-grants.ts",
+      "module": "lib/plugin/security/computer-use-session-grants.ts",
       "owner": "components/providers/initializers/computer-use-kill-switch-initializer.tsx",
-      "reason": "lib/claude/computer-use-session-grants.ts clears renderer permission state after the native kill-switch event; this is a UI consent reset helper, not an independent runtime owner.",
+      "reason": "lib/plugin/security/computer-use-session-grants.ts clears renderer permission state after the native kill-switch event; this is a UI consent reset helper, not an independent runtime owner.",
       "evidence": "f500c9c4b91e767b"
     },
     {
@@ -1292,21 +1292,21 @@
       "evidence": "866ca30e175c06fc"
     },
     {
-      "key": "components/providers/plugin-tool-dispatch-provider.tsx#canProxyRemoteToolCall@lib/claude/controller-tool-proxy.ts",
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#canProxyRemoteToolCall@lib/ai/agent/execution/controller-tool-proxy.ts",
       "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
       "symbol": "canProxyRemoteToolCall",
-      "module": "lib/claude/controller-tool-proxy.ts",
+      "module": "lib/ai/agent/execution/controller-tool-proxy.ts",
       "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
-      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:35 (lib/claude/controller-tool-proxy.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:35 (lib/ai/agent/execution/controller-tool-proxy.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
       "evidence": "81c37a3e55e84254"
     },
     {
-      "key": "components/providers/plugin-tool-dispatch-provider.tsx#dispatchProtocolAdapterExec@lib/claude/protocol-adapter-ipc.ts",
+      "key": "components/providers/plugin-tool-dispatch-provider.tsx#dispatchProtocolAdapterExec@lib/plugin/bridge/protocol-adapter-ipc.ts",
       "initializer": "components/providers/plugin-tool-dispatch-provider.tsx",
       "symbol": "dispatchProtocolAdapterExec",
-      "module": "lib/claude/protocol-adapter-ipc.ts",
+      "module": "lib/plugin/bridge/protocol-adapter-ipc.ts",
       "owner": "components/providers/plugin-tool-dispatch-provider.tsx",
-      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:122 (lib/claude/protocol-adapter-ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
+      "reason": "components/providers/plugin-tool-dispatch-provider.tsx:122 (lib/plugin/bridge/protocol-adapter-ipc.ts): Tauri renderer sidecar event dispatch; the brain counterpart is the registered plugin-tool-dispatch runtime with its own authenticated bridge.",
       "evidence": "b767f6137e855ab7"
     },
     {

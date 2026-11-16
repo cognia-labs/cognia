@@ -49,7 +49,7 @@ import {
   isSessionApiResponseEvent,
 } from "@cognia/agent-config-types"
 import type { PluginToolExecResponse } from "./plugin-tool-ipc"
-import type { ProtocolAdapterExecEvent } from "./protocol-adapter-ipc"
+import type { ProtocolAdapterExecEvent } from "@/lib/plugin/bridge/protocol-adapter-ipc"
 import type { ProtocolAdapterCancelEvent } from "@cognia/agent-config-types"
 import type {
   ActionReviewActorKind,
@@ -76,7 +76,7 @@ import {
   awaitApproval as awaitLocalApproval,
   hasPendingApproval,
   resolveApproval as resolveLocalApproval,
-} from "@/lib/claude/hitl/approval-registry"
+} from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { stableHash } from "@/lib/notifications/result/materiality"
 import { abortPluginToolCallsForSession } from "./plugin-tool-dispatch-bridge"
 

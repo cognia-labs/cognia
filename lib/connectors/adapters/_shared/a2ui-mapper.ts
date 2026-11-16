@@ -19,7 +19,10 @@
  * on platform-specific node shapes only.
  */
 
-import { CALLBACK_PREFIXES, namespacedCallbackAction } from "@/lib/claude/hitl/callback-prefixes"
+import {
+  CALLBACK_PREFIXES,
+  namespacedCallbackAction,
+} from "@/lib/ai/agent/execution/hitl/callback-prefixes"
 import { getDb } from "@/lib/db/schema"
 import type {
   CallbackActorScope,

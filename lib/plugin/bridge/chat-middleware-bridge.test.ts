@@ -5,7 +5,7 @@ import {
 import {
   listAllChatMiddlewares,
   __resetChatMiddlewareRegistryForTesting,
-} from "@/lib/claude/chat-middleware/registry"
+} from "@cognia/plugin-contract/lib/claude/chat-middleware/registry"
 import type { PluginManifest } from "@/types/plugin/plugin"
 import type { ChatMiddleware } from "@/types/plugin/plugin-chat-middleware"
 import { createPythonBackedProxy } from "@/lib/plugin/bridge/_shared/python-backed-proxy"

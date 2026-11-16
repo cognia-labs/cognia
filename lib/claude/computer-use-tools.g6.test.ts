@@ -6,11 +6,11 @@ import { applyComputerUseTools } from "./computer-use-tools"
 import {
   getActiveComputerUseSettings,
   __resetForTesting as resetActiveComputerUseSettings,
-} from "./computer-use-active-settings"
+} from "@/lib/plugin/security/computer-use-active-settings"
 import {
   recordSessionGrant,
   __resetForTesting as resetSessionGrants,
-} from "./computer-use-session-grants"
+} from "@/lib/plugin/security/computer-use-session-grants"
 import type { Character, SendOptions } from "@cognia/agent-config-types"
 
 jest.mock("@/lib/plugin/registries/native-anthropic-tool-registry", () => {

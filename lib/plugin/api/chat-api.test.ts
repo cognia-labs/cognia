@@ -22,7 +22,7 @@ import {
 import {
   __resetChatMiddlewareRegistryForTesting,
   listAllChatMiddlewares,
-} from "@/lib/claude/chat-middleware/registry"
+} from "@cognia/plugin-contract/lib/claude/chat-middleware/registry"
 import type { ChatMiddleware } from "@/types/plugin/plugin-chat-middleware"
 import { clearAllLinkMatchers, getLinkMatcher } from "./link-matchers"
 

@@ -61,7 +61,7 @@ jest.mock("./hitl/tool-approval", () => ({ applyToolApprovalCallback: jest.fn() 
 jest.mock("./hitl/plan-approval", () => ({ applyPlanApprovalCallback: jest.fn() }))
 jest.mock("./hitl/ask-user-question", () => ({ applyAskUserCallback: jest.fn() }))
 jest.mock("./hitl/ask-user-registry", () => ({ getPendingAskUserBySurface: jest.fn() }))
-jest.mock("@/lib/claude/hitl/approval-registry", () => ({ resolveApproval: jest.fn() }))
+jest.mock("@/lib/ai/agent/execution/hitl/approval-registry", () => ({ resolveApproval: jest.fn() }))
 jest.mock("@/lib/connectors/hitl/workflow-approval-handler", () => ({
   handleWorkflowApprovalCallback: jest.fn(),
 }))

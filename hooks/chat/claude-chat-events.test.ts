@@ -142,7 +142,7 @@ jest.mock("@/lib/plugin/messaging/agent-hook-dispatch", () => ({
   dispatchOnAssistantMessage: jest.fn(async (message) => message),
 }))
 
-import { registerCaptureResponder } from "@/lib/claude/hitl/approval-registry"
+import { registerCaptureResponder } from "@/lib/ai/agent/execution/hitl/approval-registry"
 import {
   dispatchPostChatReceive,
   dispatchOnAssistantMessage,

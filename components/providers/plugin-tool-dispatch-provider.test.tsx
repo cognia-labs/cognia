@@ -15,7 +15,7 @@ jest.mock("@/lib/claude/plugin-tool-ipc", () => ({
 jest.mock("@/lib/plugin/messaging/agent-hook-ipc", () => ({
   handlePluginHookExec: jest.fn(),
 }))
-jest.mock("@/lib/claude/protocol-adapter-ipc", () => ({
+jest.mock("@/lib/plugin/bridge/protocol-adapter-ipc", () => ({
   dispatchProtocolAdapterExec: jest.fn().mockResolvedValue(undefined),
 }))
 const mockActiveHostSupportsFeature = jest.fn((_feature?: unknown, _operation?: unknown) => true)
@@ -44,7 +44,7 @@ import {
 } from "@/lib/claude/ipc"
 import { handlePluginToolExec } from "@/lib/claude/plugin-tool-ipc"
 import { handlePluginHookExec } from "@/lib/plugin/messaging/agent-hook-ipc"
-import { dispatchProtocolAdapterExec } from "@/lib/claude/protocol-adapter-ipc"
+import { dispatchProtocolAdapterExec } from "@/lib/plugin/bridge/protocol-adapter-ipc"
 import type { PluginToolExecEvent } from "@cognia/agent-config-types"
 
 const mockSubscribe = subscribePluginToolExec as jest.Mock

@@ -11,7 +11,7 @@ import {
   roomHandoffDeclineActionId,
   roomHandoffPressOf,
 } from "./room-handoff-card"
-import { namespacedCallbackAction } from "@/lib/claude/hitl/callback-prefixes"
+import { namespacedCallbackAction } from "@/lib/ai/agent/execution/hitl/callback-prefixes"
 
 const squads = [
   { id: "sq-1", name: "Builders" },

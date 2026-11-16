@@ -31,7 +31,7 @@ export function ComputerUseKillSwitchInitializer() {
     void (async () => {
       const [{ listen }, { clearAllSessionGrants }] = await Promise.all([
         import("@tauri-apps/api/event"),
-        import("@/lib/claude/computer-use-session-grants"),
+        import("@/lib/plugin/security/computer-use-session-grants"),
       ])
       const u = await listen("automation:kill-switch", () => {
         clearAllSessionGrants()

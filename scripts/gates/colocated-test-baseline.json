@@ -94,8 +94,6 @@
     "lib/ai/providers/openrouter-catalog-sync.ts",
     "lib/appearance/component-style-registry.ts",
     "lib/attention/types.ts",
-    "lib/claude/chat-middleware/feature-flag.ts",
-    "lib/claude/computer-use-active-settings.ts",
     "lib/claude/computer-use-tools.ts",
     "lib/connectivity/lan-classify.ts",
     "lib/data-hooks/context.tsx",

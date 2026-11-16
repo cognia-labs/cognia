@@ -1,5 +1,5 @@
 /**
- * Tests for lib/claude/hitl/approval-registry.ts.
+ * Tests for lib/ai/agent/execution/hitl/approval-registry.ts.
  */
 
 import {

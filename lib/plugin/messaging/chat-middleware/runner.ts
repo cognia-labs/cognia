@@ -50,7 +50,7 @@ import {
   recordMiddlewareFailure,
   recordMiddlewareSuccess,
   type ChatMiddlewareRegistration,
-} from "./registry"
+} from "@cognia/plugin-contract/lib/claude/chat-middleware/registry"
 
 export interface ChatMiddlewareRunReport {
   /** Middlewares that ran successfully (their `fullId`). */
