@@ -445,6 +445,41 @@ describe("startToolHostBroker — host tool execution", () => {
     })
   })
 
+  it("lets a marked run reach only the Host's own read tools", async () => {
+    mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
+    try {
+      const ran: string[] = []
+      const broker = await start({
+        session: sessionContext({
+          pluginTools: [
+            { name: "attachment_read", description: "read", jsonSchema: {}, pluginId: "core" },
+            { name: "send_session_message", description: "send", jsonSchema: {}, pluginId: "core" },
+          ],
+          suppressApprovalForTools: [
+            "mcp__cognia-plugin-tools__attachment_read",
+            "mcp__cognia-plugin-tools__send_session_message",
+          ],
+        }),
+        executionRunId: () => "marked-run",
+        execHostTool: async (name) => {
+          ran.push(name)
+          return { result: "ok" }
+        },
+      })
+      const { c } = await connected(broker, COGNIA_PLUGIN_TOOLS_SERVER)
+      expect(await c.call("exec", { name: "attachment_read", args: {} })).toEqual({
+        result: "ok",
+      })
+      const refused = (await c.call("exec", { name: "send_session_message", args: {} })) as {
+        error: string
+      }
+      expect(refused.error).toMatch(/private content/)
+      expect(ran).toEqual(["attachment_read"])
+    } finally {
+      mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+    }
+  })
+
   it("never executes a host tool the policy refused", async () => {
     let ran = 0
     const broker = await start({

@@ -109,6 +109,35 @@ const HOST_TOOL_OWNERS: Readonly<Record<string, string>> = {
   working_set: "cognia-working-set-builtin",
 }
 
+// Host-owned built-ins that only read.
+const HOST_LOCAL_READS: ReadonlySet<string> = new Set([
+  "list_sessions",
+  "attachment_list",
+  "attachment_search",
+  "attachment_read",
+  "Skill",
+  "load_skill",
+  "load_skill_resource",
+])
+
+/**
+ * Whether a bare tool name is a read the Host owns: a tool its module owns
+ * and declares `effect: "read"`, or one of the Host's read built-ins. These
+ * are the only Host tools a run carrying personal content may call (ADR-0243
+ * 3C §4); every tool host and the dispatcher ask this one question.
+ */
+export function isHostOwnedReadTool(
+  name: string,
+  entries: readonly ModuleToolsEntry[] = MODULE_TOOLS
+): boolean {
+  const owner = toolOwnerBeforePlugin(name, entries)
+  if (!owner) return false
+  const declared = findContributedTool(name, entries)
+  return declared && owner === contributedToolPluginId(declared.module)
+    ? declared.declaration.effect === "read"
+    : HOST_LOCAL_READS.has(name)
+}
+
 /** The owner that precedes plugins; a fallback declaration leaves plugins first. */
 export function toolOwnerBeforePlugin(
   name: string,

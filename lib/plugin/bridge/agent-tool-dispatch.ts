@@ -40,6 +40,7 @@ import {
 import {
   contributedToolPluginId,
   findContributedTool,
+  isHostOwnedReadTool,
   runContributedTool,
   toolOwnerBeforePlugin,
 } from "@/lib/ai/agent/execution/contributions/tool-contributions"
@@ -375,18 +376,7 @@ async function runPluginToolExec(
     request.abortSignal?.throwIfAborted()
     const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
     const { assertPersonalToolEgress } = await import("@/lib/execution/personal-egress")
-    const declared = findContributedTool(request.name)
     const preferredOwner = toolOwnerBeforePlugin(request.name)
-    const hostLocalReads = new Set([
-      "list_sessions",
-      "attachment_list",
-      "attachment_search",
-      "attachment_read",
-      "Skill",
-      "load_skill",
-      "load_skill_resource",
-    ])
-    const moduleOwns = declared && preferredOwner === contributedToolPluginId(declared.module)
     await assertPersonalToolEgress(
       request.name,
       {
@@ -394,9 +384,7 @@ async function runPluginToolExec(
         executionRunId:
           toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId) ?? "",
       },
-      moduleOwns
-        ? declared.declaration.effect === "read"
-        : Boolean(preferredOwner && hostLocalReads.has(request.name)),
+      isHostOwnedReadTool(request.name),
       preferredOwner ? { kind: "host" } : { kind: "unknown" }
     )
     // ── Module-contributed tools (ADR-0250 §14 amendment) ──────────────────

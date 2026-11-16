@@ -30,7 +30,12 @@ export interface PersonalCredentialContext {
   larkContext?: BuiltInSkillContext
   /** Host delivery of this exact persisted run, including its terminal reply. */
   delivery?: boolean
-  /** External engines have no admitted personal broker/isolation in this slice. */
+  /**
+   * The credential would be handed to an external engine process (an MCP
+   * server it connects to itself), so it would leave the Host: always
+   * refused. An engine's personal reads run on the Host through the tool host
+   * instead, gated by the run's marks (ADR-0243 3C §4).
+   */
   externalEngine?: boolean
 }
 export type PersonalCredentialRefusal =

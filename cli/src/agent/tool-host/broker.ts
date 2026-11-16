@@ -288,6 +288,9 @@ export async function startToolHostBroker(params: ToolHostBrokerParams): Promise
     if (!confined.allowed) return { allow: false, reason: String(confined.reason) }
     const full = namespacedFor(server, p.name)
     const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+    const { isHostOwnedReadTool } =
+      await import("@/lib/ai/agent/execution/contributions/tool-contributions")
+    const declaredRead = server === COGNIA_TOOLS_SERVER ? readOnly : isHostOwnedReadTool(p.name)
     const personalDenial = await personalToolDenial(
       full,
       {
@@ -297,7 +300,7 @@ export async function startToolHostBroker(params: ToolHostBrokerParams): Promise
           toolCallExecutionRunId(session.sessionId, session.sendOptions.turnId) ??
           "",
       },
-      readOnly
+      declaredRead
     )
     if (personalDenial) return { allow: false, reason: personalDenial }
     if (isExplicitlyDenied(session.sendOptions, full, p.args))
@@ -355,7 +358,7 @@ export async function startToolHostBroker(params: ToolHostBrokerParams): Promise
           toolCallExecutionRunId(session.sessionId, session.sendOptions.turnId) ??
           "",
       },
-      readOnly
+      declaredRead
     )
     if (afterApproval) return { allow: false, reason: afterApproval }
     return { allow: true, ...(updatedArgs !== undefined ? { updatedArgs } : {}) }

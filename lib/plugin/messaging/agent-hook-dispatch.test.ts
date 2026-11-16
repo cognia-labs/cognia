@@ -331,6 +331,27 @@ it("denies opaque tools before plugin hooks for a marked run", async () => {
   ).toMatchObject({ action: "deny", reason: expect.stringContaining("private content") })
 })
 
+it("lets a marked run call only the Host's own read tools", async () => {
+  mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
+  const run = { executionRunId: "marked-run" }
+  try {
+    for (const name of ["attachment_read", "mcp__cognia-plugin-tools__attachment_read"])
+      expect(await dispatchPreToolUse(name, {}, "marked", undefined, run)).toEqual({
+        action: "allow",
+      })
+    for (const name of [
+      "mcp__cognia-plugin-tools__send_session_message",
+      "mcp__cognia-plugin-tools__web_fetch",
+      "mcp__other__attachment_read",
+    ])
+      expect(await dispatchPreToolUse(name, {}, "marked", undefined, run)).toMatchObject({
+        action: "deny",
+      })
+  } finally {
+    mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
+  }
+})
+
 it("H1: Host approval accepts only engine-proven native Read", async () => {
   mockEgressTaint.mockResolvedValue({ verified: true, marks: [{}] })
   const proof = { engine: "claude-agent-sdk" as const, name: "Read" }

@@ -17,6 +17,7 @@ import {
   collectContributedTools,
   contributedToolPluginId,
   findContributedTool,
+  isHostOwnedReadTool,
   rulesetForTools,
   runContributedTool,
   toolSurfaceHost,
@@ -99,6 +100,33 @@ describe("tool ownership before plugins", () => {
     expect(toolOwnerBeforePlugin("toString", entries)).toBeUndefined()
     entries[0].declare.web_search.precedence = undefined
     expect(toolOwnerBeforePlugin("web_search", entries)).toBe("cognia-owner-builtin")
+  })
+
+  it("counts only a Host-owned read as one a marked run may call", () => {
+    const entries = [
+      crate(family()),
+      entry(
+        "lab",
+        {
+          lab_read: { consent: "allow", effect: "read" },
+          lab_fallback: { consent: "allow", effect: "read", precedence: "fallback" },
+        },
+        family(),
+        "experimental"
+      ),
+    ]
+    expect(isHostOwnedReadTool("crate_list", entries)).toBe(true)
+    expect(isHostOwnedReadTool("crate_tidy", entries)).toBe(false)
+    expect(isHostOwnedReadTool("crate_send", entries)).toBe(false)
+    // A fallback name belongs to a plugin first, an experimental module's is
+    // never routed to it, and a prefixed name is not the module's.
+    expect(isHostOwnedReadTool("lab_fallback", entries)).toBe(false)
+    expect(isHostOwnedReadTool("lab_read", entries)).toBe(false)
+    expect(isHostOwnedReadTool("mcp__cognia-plugin-tools__crate_list", entries)).toBe(false)
+    expect(isHostOwnedReadTool("attachment_read", entries)).toBe(true)
+    expect(isHostOwnedReadTool("send_session_message", entries)).toBe(false)
+    expect(isHostOwnedReadTool("web_fetch", entries)).toBe(false)
+    expect(isHostOwnedReadTool("unclaimed", entries)).toBe(false)
   })
 
   it("matches the existing host manifest names and owner ids", async () => {

@@ -96,12 +96,14 @@ export async function dispatchPreToolUse(
   execution?: PersonalCredentialContext
 ): Promise<PreToolUseResultLike> {
   const { assertPersonalToolEgress } = await import("@/lib/execution/personal-egress")
-  const { findDeclaredModuleTool } = await import("@/lib/modules/tool-declarations")
+  const { bareToolName } = await import("@/lib/modules/tool-declarations")
+  const { isHostOwnedReadTool } =
+    await import("@/lib/ai/agent/execution/contributions/tool-contributions")
   try {
     await assertPersonalToolEgress(
       toolName,
       execution ?? { sessionId },
-      findDeclaredModuleTool(toolName)?.declaration.effect === "read",
+      isHostOwnedReadTool(bareToolName(toolName)),
       nativeTool?.engine === "claude-agent-sdk" &&
         nativeTool.name === toolName &&
         !toolName.startsWith("mcp__")
