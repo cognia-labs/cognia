@@ -15,9 +15,16 @@
 //!   is continuous this yields ≤ 20 sends/s regardless of token rate — at
 //!   100 tok/s that is the ≥ 80 % cut ADR-0127 §5 asks for (33 ms would have
 //!   given ~31 sends/s, −69 %).
-//! - **Same channel only.** A frame for a different channel flushes whatever
-//!   is pending before it is considered, so a batch is always
-//!   `frames[i].event_type == channel` and `seq` is strictly increasing.
+//! - **Any channel.** A batch may hold frames of several channels, in bus
+//!   order, so `seq` is strictly increasing across it. The sidecar sends every
+//!   token twice, raw on `claude://message` and as its canonical envelope on
+//!   `agent://message`, and the two consumers are different (the chat view
+//!   reads the raw stream; HostState, the fleet and the CLI bridge read the
+//!   envelopes). A same-channel rule flushed on every one of those
+//!   alternations, so a streaming reply went out one frame per send. Every
+//!   decoder routes each inner frame by its own channel; the envelope's
+//!   `channel` / `event` is the first frame's, kept only for wire
+//!   compatibility.
 //! - **Control frames flush.** Callers drain the batcher before `ping`,
 //!   `subscribed`, `resync_required` and before closing.
 //! - **A batch of one is a plain frame.** The wire only sees the batch
@@ -71,10 +78,10 @@ impl EventBatcher {
     /// Offer a frame. Returns every batch that must be sent *now*, in order.
     ///
     /// - idle ⇒ `[frame]` is returned immediately and a window opens;
-    /// - window open, same channel as pending (or nothing pending) ⇒ buffered,
-    ///   nothing returned (unless the batch hit [`MAX_BATCH_FRAMES`]);
-    /// - window open, different channel ⇒ the pending batch is returned first
-    ///   and the new frame is buffered behind it.
+    /// - window open ⇒ buffered behind whatever is pending, on any channel;
+    ///   nothing returned unless the batch hit [`MAX_BATCH_FRAMES`] or the
+    ///   frame would take it past [`MAX_BATCH_BYTES`] (then the pending batch
+    ///   is returned first).
     pub fn push(&mut self, frame: EventFrame, now: Instant) -> Vec<Vec<EventFrame>> {
         let mut out = Vec::new();
 
@@ -92,12 +99,8 @@ impl EventBatcher {
         }
 
         let bytes = payload_bytes(&frame);
-        if let Some(last) = self.pending.last() {
-            let channel_changed = last.event_type != frame.event_type;
-            let too_big = self.pending_bytes + bytes > MAX_BATCH_BYTES;
-            if channel_changed || too_big {
-                out.push(self.take_pending());
-            }
+        if !self.pending.is_empty() && self.pending_bytes + bytes > MAX_BATCH_BYTES {
+            out.push(self.take_pending());
         }
         self.pending.push(frame);
         self.pending_bytes += bytes;
@@ -151,21 +154,17 @@ impl EventBatcher {
     }
 }
 
-/// Group an already-ordered replay burst into same-channel runs of at most
-/// [`MAX_BATCH_FRAMES`] frames / [`MAX_BATCH_BYTES`] payload bytes. No timing
-/// involved — replay is sent as fast as the socket accepts it, and batching
-/// only cuts the frame count.
+/// Group an already-ordered replay burst into runs of at most
+/// [`MAX_BATCH_FRAMES`] frames / [`MAX_BATCH_BYTES`] payload bytes, across
+/// channels like the live batcher. No timing involved — replay is sent as
+/// fast as the socket accepts it, and batching only cuts the frame count.
 pub fn chunk_replay(frames: Vec<EventFrame>) -> Vec<Vec<EventFrame>> {
     let mut out: Vec<Vec<EventFrame>> = Vec::new();
     let mut run_bytes = 0usize;
     for frame in frames {
         let bytes = payload_bytes(&frame);
         match out.last_mut() {
-            Some(run)
-                if run.len() < MAX_BATCH_FRAMES
-                    && run_bytes + bytes <= MAX_BATCH_BYTES
-                    && run.last().is_some_and(|f| f.event_type == frame.event_type) =>
-            {
+            Some(run) if run.len() < MAX_BATCH_FRAMES && run_bytes + bytes <= MAX_BATCH_BYTES => {
                 run.push(frame);
                 run_bytes += bytes;
             }
@@ -179,7 +178,8 @@ pub fn chunk_replay(frames: Vec<EventFrame>) -> Vec<Vec<EventFrame>> {
 }
 
 /// WebSocket wire encoding: a single frame is the plain [`EventFrame`]; two or
-/// more become `{"type":"event_batch","channel","seq_from","seq_to","frames"}`.
+/// more become `{"type":"event_batch","channel","seq_from","seq_to","frames"}`,
+/// where `channel` is the first frame's (each inner frame names its own).
 /// The discriminator cannot collide with a channel name — real channels always
 /// contain `://`.
 pub fn encode_ws_batch(batch: &[EventFrame]) -> Result<String, serde_json::Error> {
@@ -354,23 +354,63 @@ mod tests {
     }
 
     #[test]
-    fn a_channel_change_flushes_the_pending_batch_first() {
+    fn frames_of_different_channels_share_a_batch_in_bus_order() {
         let mut b = EventBatcher::new();
         let t0 = Instant::now();
         b.push(frame("claude://message", 1), t0);
-        assert!(b
-            .push(frame("claude://message", 2), t0 + Duration::from_millis(1))
-            .is_empty());
-        assert!(b
-            .push(frame("claude://message", 3), t0 + Duration::from_millis(2))
-            .is_empty());
-        let out = b.push(frame("agent://message", 4), t0 + Duration::from_millis(3));
-        // The claude batch (2,3) is emitted; the agent frame waits for the window.
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].iter().map(|f| f.seq).collect::<Vec<_>>(), vec![2, 3]);
-        assert_eq!(b.pending_len(), 1);
+        for (seq, channel) in [
+            (2, "agent://message"),
+            (3, "claude://message"),
+            (4, "agent://message"),
+        ] {
+            assert!(b
+                .push(frame(channel, seq), t0 + Duration::from_millis(seq))
+                .is_empty());
+        }
+        assert_eq!(b.pending_len(), 3);
         let due = b.take_due(t0 + BATCH_WINDOW).unwrap();
-        assert_eq!(due[0].event_type, "agent://message");
+        assert_eq!(due.iter().map(|f| f.seq).collect::<Vec<_>>(), vec![2, 3, 4]);
+        assert_eq!(
+            due.iter()
+                .map(|f| f.event_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["agent://message", "claude://message", "agent://message"]
+        );
+    }
+
+    /// The sidecar sends each token raw and again as its canonical envelope.
+    /// That alternation must not defeat the window: still ≥ 80 % fewer sends
+    /// at 100 tok/s, 200 frames/s.
+    #[test]
+    fn dual_emitted_tokens_still_cut_sends_by_at_least_80_percent() {
+        let mut b = EventBatcher::new();
+        let t0 = Instant::now();
+        let mut sends = 0usize;
+        let mut frames_out = 0usize;
+        let mut seq = 0u64;
+        for i in 0..100u64 {
+            let now = t0 + Duration::from_millis(i * 10);
+            if let Some(due) = b.take_due(now) {
+                sends += 1;
+                frames_out += due.len();
+            }
+            for channel in ["claude://message", "agent://message"] {
+                seq += 1;
+                for batch in b.push(frame(channel, seq), now) {
+                    sends += 1;
+                    frames_out += batch.len();
+                }
+            }
+        }
+        if let Some(rest) = b.drain() {
+            sends += 1;
+            frames_out += rest.len();
+        }
+        assert_eq!(frames_out, 200, "no frame lost or duplicated");
+        assert!(
+            sends <= 1 + 200 / 10,
+            "expected ≤ 21 sends for 200 frames, got {sends}"
+        );
     }
 
     #[test]
@@ -455,18 +495,16 @@ mod tests {
     }
 
     #[test]
-    fn chunk_replay_groups_same_channel_runs() {
-        let frames = vec![
-            frame("a://x", 1),
-            frame("a://x", 2),
-            frame("b://y", 3),
-            frame("a://x", 4),
-        ];
+    fn chunk_replay_groups_across_channels_up_to_the_frame_cap() {
+        let frames: Vec<_> = (1..=(MAX_BATCH_FRAMES as u64 + 2))
+            .map(|seq| frame(if seq % 2 == 0 { "b://y" } else { "a://x" }, seq))
+            .collect();
         let runs = chunk_replay(frames);
-        assert_eq!(runs.len(), 3);
-        assert_eq!(runs[0].len(), 2);
-        assert_eq!(runs[1].len(), 1);
-        assert_eq!(runs[2].len(), 1);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].len(), MAX_BATCH_FRAMES);
+        assert_eq!(runs[1].len(), 2);
+        let seqs: Vec<u64> = runs.iter().flatten().map(|f| f.seq).collect();
+        assert!(seqs.windows(2).all(|w| w[0] < w[1]), "bus order kept");
     }
 
     #[test]

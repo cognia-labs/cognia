@@ -2159,7 +2159,7 @@ describe("subscribe() — WebSocket frame dispatch", () => {
     expect(handler).toHaveBeenCalledWith({ text: "hi" })
   })
 
-  // ADR-0127 §2: the server may pack consecutive same-channel frames into one
+  // ADR-0127 §2: the server may pack consecutive frames into one
   // `event_batch` envelope; each inner frame runs through the same per-channel
   // seq cursor and handler dispatch as a lone frame.
   it("expands an event_batch envelope in order and honours the seq cursor", () => {
@@ -2196,6 +2196,41 @@ describe("subscribe() — WebSocket frame dispatch", () => {
     // Malformed batch (no frames array) is ignored, not thrown.
     ws.triggerMessage(JSON.stringify({ type: "event_batch", channel: "claude://message" }))
     expect(handler).toHaveBeenCalledTimes(4)
+  })
+
+  // The sidecar sends each token raw and as its canonical envelope, so a batch
+  // interleaves two channels; each frame reaches its own channel's handlers
+  // and advances that channel's cursor, whatever the envelope's `channel`.
+  it("routes each frame of a mixed-channel event_batch by its own channel", () => {
+    transport = new CompanionTransport()
+    const raw = jest.fn()
+    const canonical = jest.fn()
+    transport.subscribe("claude://message", raw)
+    transport.subscribe("agent://message", canonical)
+
+    const ws = MockWebSocket.lastInstance!
+    ws.triggerOpen()
+    ws.triggerMessage(
+      JSON.stringify({
+        type: "event_batch",
+        channel: "claude://message",
+        seq_from: 1,
+        seq_to: 4,
+        frames: [
+          { type: "claude://message", seq: 1, payload: { t: "r1" }, ts_ms: 0 },
+          { type: "agent://message", seq: 2, payload: { t: "e1" }, ts_ms: 0 },
+          { type: "claude://message", seq: 3, payload: { t: "r2" }, ts_ms: 0 },
+          { type: "agent://message", seq: 4, payload: { t: "e2" }, ts_ms: 0 },
+        ],
+      })
+    )
+    expect(raw.mock.calls.map((c) => (c[0] as { t: string }).t)).toEqual(["r1", "r2"])
+    expect(canonical.mock.calls.map((c) => (c[0] as { t: string }).t)).toEqual(["e1", "e2"])
+    // Each channel's cursor moved: a replayed envelope frame is stale.
+    ws.triggerMessage(
+      JSON.stringify({ type: "agent://message", seq: 2, payload: { t: "stale" }, ts_ms: 0 })
+    )
+    expect(canonical).toHaveBeenCalledTimes(2)
   })
 
   it("does not dispatch to a handler for a different channel", () => {

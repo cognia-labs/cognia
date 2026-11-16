@@ -7,10 +7,10 @@
 //! 2. If `since` is too old, the server sends `{"type":"resync_required"}` and
 //!    closes the connection immediately.
 //! 3. Any buffered frames with `seq > since` are replayed in order (grouped
-//!    into same-channel `event_batch` envelopes — see `event_batcher`).
+//!    into `event_batch` envelopes — see `event_batcher`).
 //! 4. New frames are forwarded as JSON text frames as they arrive. Consecutive
-//!    same-channel frames inside a 50 ms window travel as one `event_batch`
-//!    frame (ADR-0127 §2); a lone frame keeps its plain shape.
+//!    frames inside a 50 ms window, on any channel, travel as one
+//!    `event_batch` frame (ADR-0127 §2); a lone frame keeps its plain shape.
 //! 5. A `{"type":"ping"}` heartbeat is sent every 25 seconds.
 //! 6. The server closes the connection if no frame is received from the client
 //!    within 90 seconds (idle timeout).
@@ -423,7 +423,7 @@ async fn handle_socket(
     let ws_presence_guard = WsPresenceGuard::open(&state, &device_id);
     ws_presence_guard.note_replaying();
 
-    // 2. Send replay frames, grouped into same-channel batches.
+    // 2. Send replay frames, grouped into batches (across channels).
     let visible_replay: Vec<EventFrame> = replay
         .into_iter()
         .filter(|frame| {

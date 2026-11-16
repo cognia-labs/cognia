@@ -14,8 +14,8 @@
 //!   over the same data channel.
 //! - **Outbound** (desktop → mobile): the dispatcher subscribes to the
 //!   `EventBus` and forwards every `EventFrame` as a JSON envelope
-//!   `{ kind: "event", event, seq, payload }`. Consecutive same-channel frames
-//!   inside a 50 ms window travel together as
+//!   `{ kind: "event", event, seq, payload }`. Consecutive frames inside a
+//!   50 ms window, on any channel, travel together as
 //!   `{ kind: "event-batch", event, seq_from, seq_to, frames: [...] }`
 //!   (ADR-0127 §2, `companion_api::event_batcher`); a lone frame keeps the
 //!   plain shape. The mobile client tracks per-channel cursors on its end
@@ -100,13 +100,14 @@ pub enum OutboundFrame {
     EventBatch(EventBatchOutbound),
 }
 
-/// ADR-0127 §2: several consecutive same-channel frames in one DataChannel
-/// message. `frames` keeps the per-frame `EventOutbound` shape so the client
-/// can feed each one through its existing single-frame handler.
+/// ADR-0127 §2: several consecutive frames, on any channel, in one
+/// DataChannel message. `frames` keeps the per-frame `EventOutbound` shape so
+/// the client can feed each one through its existing single-frame handler.
 #[derive(Debug, Serialize)]
 pub struct EventBatchOutbound {
     /// Always `"event-batch"`.
     pub kind: &'static str,
+    /// The first frame's channel; each frame in `frames` names its own.
     pub event: String,
     pub seq_from: u64,
     pub seq_to: u64,

@@ -2633,10 +2633,11 @@ export class CompanionTransport implements Transport {
       return
     }
 
-    // ADR-0127 §2: several consecutive same-channel frames in one WS message
-    // — `{ type: "event_batch", channel, seq_from, seq_to, frames: [...] }`.
-    // Each inner frame keeps the plain shape, so it goes through the same
-    // per-channel seq cursor + dispatch as a lone frame. `event_batch` cannot
+    // ADR-0127 §2: several consecutive frames, possibly of several channels,
+    // in one WS message — `{ type: "event_batch", channel, seq_from, seq_to,
+    // frames: [...] }` (`channel` is the first frame's). Each inner frame keeps
+    // the plain shape, so it goes through its own channel's seq cursor +
+    // dispatch as a lone frame. `event_batch` cannot
     // collide with a channel name (real channels always contain `://`).
     if (type === "event_batch") {
       const frames = frame["frames"]

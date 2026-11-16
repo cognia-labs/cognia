@@ -936,6 +936,39 @@ describe("TransportRtc", () => {
     rtc.close()
   })
 
+  // A batch may interleave channels (raw + canonical per token); each frame
+  // goes to its own channel and cursor, whatever the envelope's `event`.
+  it("routes each frame of a mixed-channel event-batch by its own channel", async () => {
+    const { rtc, sig, pcs } = makeRtc()
+    const connect = rtc.connect()
+    await new Promise((r) => setTimeout(r, 5))
+    sig.emitEnvelope(envelope("rtc:answer", { sdp: "x" } as RtcAnswerBody))
+    pcs[0].channels[0].open()
+    await connect
+
+    const raw: unknown[] = []
+    const canonical: unknown[] = []
+    rtc.subscribe("claude://message", (payload) => raw.push(payload))
+    rtc.subscribe("agent://message", (payload) => canonical.push(payload))
+    pcs[0].channels[0].push({
+      kind: "event-batch",
+      event: "claude://message",
+      seq_from: 1,
+      seq_to: 4,
+      frames: [
+        { kind: "event", event: "claude://message", seq: 1, payload: "r1" },
+        { kind: "event", event: "agent://message", seq: 2, payload: "e1" },
+        { kind: "event", event: "claude://message", seq: 3, payload: "r2" },
+        { kind: "event", event: "agent://message", seq: 4, payload: "e2" },
+      ],
+    })
+
+    expect(raw).toEqual(["r1", "r2"])
+    expect(canonical).toEqual(["e1", "e2"])
+    expect(rtc.getSeqCursor()).toEqual({ "claude://message": 3, "agent://message": 4 })
+    rtc.close()
+  })
+
   it("queues remote ICE until the answer has been applied", async () => {
     const { rtc, sig, pcs } = makeRtc()
     void rtc.connect().catch(() => {})

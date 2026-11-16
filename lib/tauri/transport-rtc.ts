@@ -188,9 +188,10 @@ export interface RtcEvent {
 }
 
 /**
- * ADR-0127 §2: several consecutive same-channel events in one DataChannel
- * message. Every inner frame keeps the {@link RtcEvent} shape so it can go
- * through the single-frame path (resync queue + per-channel seq cursor).
+ * ADR-0127 §2: several consecutive events, possibly of several channels, in
+ * one DataChannel message (`event` is the first frame's). Every inner frame
+ * keeps the {@link RtcEvent} shape so it goes through the single-frame path
+ * (resync queue + its own channel's seq cursor).
  */
 export interface RtcEventBatch {
   kind: "event-batch"

@@ -28,7 +28,7 @@ description: "所有聊天轨使用同一合并策略，批量发送 Companion �
 批帧位于 `companion_api/ws.rs` 与 `companion_api/signaling/dispatch.rs` 的每订阅者发送环，**不**在 `EventBus`（进程内 A2A 消费者保持逐帧语义）。规则：
 
 - 窗口 **50 ms** 固定。空闲订阅者的首帧立即发出（首 token 时延不变），其后帧在窗口内累积。（评审时定为 33 ms；实现时改为 50 ms——33 ms 在 100 tok/s 下约 31 次/秒发送（−69%），无法满足 §5 的 −80% 标准；50 ms 稳态 ≤ 20 次/秒。）
-- 只合并**同一 channel 的连续帧**。channel 变化、控制帧（`stream_ready`、`resync_required`、`ping`）或窗口到期均触发 flush。
+- 连续帧**跨 channel** 合并，保持总线顺序（`seq` 严格递增）。控制帧（`stream_ready`、`resync_required`、`ping`）、帧数或字节上限、窗口到期均触发 flush。（2026-11-16 修订：原规则只合并同一 channel 的连续帧，但 sidecar 每个 token 发两份，原始帧走 `claude://message`、规范信封走 `agent://message`，分别给不同的消费者，于是每次交替都会 flush，流式回复退化成一帧一发。各客户端本来就按每个内层帧自己的 channel 分发；信封上的 `channel` / `event` 取第一帧的值。）
 - 回放突发同样批量化。
 - 封套 — WS：`{ "type": "event_batch", "channel", "seq_from", "seq_to", "frames": [EventFrame…] }`（安全，因真实 channel 名总含 `://`）；RTC：`{ "kind": "event-batch", "event", "seq_from", "seq_to", "frames": [...] }`。
 - 客户端（`lib/tauri/transport-companion.ts`、`lib/tauri/transport-rtc.ts`）把批展开进既有的每 channel 单调 seq 游标路径；单帧永远有效（兼容旧服务端）。
