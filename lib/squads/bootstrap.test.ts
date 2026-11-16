@@ -20,6 +20,9 @@ import type { AgentTeam } from "@/types/agent/agent-team"
 const mockLiveSidecarSessions = jest.fn<Promise<ReadonlySet<string> | undefined>, []>()
 jest.mock("@/lib/claude/ipc", () => ({
   ...jest.requireActual("@/lib/claude/ipc"),
+}))
+jest.mock("@/lib/native/local-runtime", () => ({
+  ...jest.requireActual("@/lib/native/local-runtime"),
   getLiveSidecarSessionIds: () => mockLiveSidecarSessions(),
 }))
 

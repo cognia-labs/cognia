@@ -96,13 +96,8 @@ import { executePlanTask } from "./plan-executor"
 import { executeBotTask } from "./bot-executor"
 import { executeBackgroundCommandTask, executeMonitorTask } from "./background-job-executor"
 import { executeScript } from "../script-executor"
-import {
-  sendPrompt,
-  onClaudeMessage,
-  interruptSession,
-  approveTool,
-  ensureSidecarReady,
-} from "@/lib/claude/ipc"
+import { sendPrompt, onClaudeMessage, interruptSession, approveTool } from "@/lib/claude/ipc"
+import { ensureSidecarReady } from "@/lib/native/local-runtime"
 import {
   createUnattendedPermissionResponder,
   needsApprovalSummary,

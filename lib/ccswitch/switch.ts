@@ -2,7 +2,8 @@
 // then independently reported external-agent writes. Pure planning and matching
 // live beside this module and are re-exported as the public interop surface.
 
-import { restartSidecar, setProviderEnv } from "@/lib/claude/ipc"
+import { setProviderEnv } from "@/lib/ai/providers/sidecar-credentials"
+import { restartSidecar } from "@/lib/native/local-runtime"
 import { getSettings } from "@/lib/db/settings"
 import { isTauri } from "@/lib/tauri"
 import { useSettingsStore } from "@/stores/settings/settings-store"

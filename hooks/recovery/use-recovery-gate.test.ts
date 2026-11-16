@@ -23,7 +23,7 @@ jest.mock("@/lib/tauri/recovery", () => ({
 jest.mock("@/lib/recovery/default-probes", () => ({
   createDefaultRecoveryProbes: jest.fn(),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/native/local-runtime", () => ({
   ensureSidecarReady: jest.fn(),
 }))
 jest.mock("@/stores/network-proxy", () => ({
@@ -41,7 +41,7 @@ jest.mock("@/lib/speech/provider-keys", () => ({
 
 const { isTauri } = jest.requireMock("@/lib/tauri")
 const recovery = jest.requireMock("@/lib/tauri/recovery")
-const { ensureSidecarReady } = jest.requireMock("@/lib/claude/ipc")
+const { ensureSidecarReady } = jest.requireMock("@/lib/native/local-runtime")
 const { applyProxyToRust } = jest.requireMock("@/stores/network-proxy")
 const { useSettingsStore } = jest.requireMock("@/stores/settings/settings-store")
 

@@ -16,7 +16,7 @@ jest.mock("@/stores/network-proxy", () => ({
 }))
 
 const restartSidecar = jest.fn<Promise<void>, []>()
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/native/local-runtime", () => ({
   restartSidecar: () => restartSidecar(),
 }))
 

@@ -6,7 +6,7 @@
 // probe outcome. jest.fn lives inside the factory (modules call these at
 // effect time, but defining them inline keeps the TDZ-safe convention used
 // across this repo's mocks).
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/providers/sidecar-credentials", () => ({
   hasApiKey: jest.fn(async () => false),
   hasOauthBearer: jest.fn(async () => false),
 }))
@@ -54,7 +54,7 @@ jest.mock("@/stores/settings/settings-store", () => ({
 import { renderHook, waitFor, act } from "@testing-library/react"
 
 import { useCredentialStatus } from "./use-credential-status"
-import { hasApiKey, hasOauthBearer } from "@/lib/claude/ipc"
+import { hasApiKey, hasOauthBearer } from "@/lib/ai/providers/sidecar-credentials"
 import { getActiveAccount, getAccount, getAccountDetail } from "@/lib/subscription/core/transport"
 import { isTauri } from "@/lib/tauri"
 import {

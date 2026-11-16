@@ -19,7 +19,9 @@ import { startSquadRun } from "../squad/start-squad-run"
 
 jest.mock("@/lib/claude/ipc", () => ({
   ...jest.requireActual("@/lib/claude/ipc"),
-  // These startup fixtures model a fully restarted host, not a WebView reload.
+}))
+jest.mock("@/lib/native/local-runtime", () => ({
+  ...jest.requireActual("@/lib/native/local-runtime"),
   getLiveSidecarSessionIds: async () => new Set<string>(),
 }))
 

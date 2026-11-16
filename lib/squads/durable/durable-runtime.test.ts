@@ -22,7 +22,7 @@ const mockLiveExternalProcesses = jest.fn<Promise<ReadonlySet<string> | undefine
 jest.mock("@/lib/ai/agent/external/agent-transport", () => ({
   getLiveExternalAgentProcessIds: () => mockLiveExternalProcesses(),
 }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/native/local-runtime", () => ({
   getLiveSidecarSessionIds: () => mockLiveSidecarSessions(),
 }))
 

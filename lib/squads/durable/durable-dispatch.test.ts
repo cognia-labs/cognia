@@ -22,6 +22,9 @@ jest.mock("@/lib/ai/agent/external/agent-transport", () => ({
 }))
 jest.mock("@/lib/claude/ipc", () => ({
   ...jest.requireActual("@/lib/claude/ipc"),
+}))
+jest.mock("@/lib/native/local-runtime", () => ({
+  ...jest.requireActual("@/lib/native/local-runtime"),
   getLiveSidecarSessionIds: () => mockLiveSidecarSessions(),
 }))
 

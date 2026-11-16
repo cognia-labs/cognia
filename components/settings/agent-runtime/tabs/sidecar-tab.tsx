@@ -26,7 +26,7 @@ import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 
 import { isTauri } from "@/lib/tauri"
-import { getSidecarStatus, restartSidecar } from "@/lib/claude/ipc"
+import { getSidecarStatus, restartSidecar } from "@/lib/native/local-runtime"
 import { useChatStore } from "@/stores/chat"
 import { getSession, listSessions, updateSession } from "@/lib/db/sessions"
 import { countExposedConversations } from "@/components/settings/agent-runtime/sdk-bound-conversations"

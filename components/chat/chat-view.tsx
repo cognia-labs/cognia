@@ -1071,7 +1071,9 @@ function ChatPaneContent({
               "interrupt-turn": () => void onStop(),
               "reload-app": () => window.location.reload(),
               "restart-sidecar": () => {
-                void import("@/lib/claude/ipc").then(({ restartSidecar }) => restartSidecar())
+                void import("@/lib/native/local-runtime").then(({ restartSidecar }) =>
+                  restartSidecar()
+                )
               },
             }}
             onDismiss={() => boundId && useChatStore.getState().setSessionError(boundId, null)}

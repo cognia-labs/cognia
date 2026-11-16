@@ -29,10 +29,12 @@ jest.mock("@/lib/db/settings", () => ({
   },
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/providers/sidecar-credentials", () => ({
   setApiKey: jest.fn(),
-  restartSidecar: jest.fn(),
   setProviderEnv: jest.fn(),
+}))
+jest.mock("@/lib/native/local-runtime", () => ({
+  restartSidecar: jest.fn(),
 }))
 
 jest.mock("@/lib/tauri", () => ({
@@ -68,11 +70,14 @@ const dbSettings = require("@/lib/db/settings") as {
   addAlwaysAllow: jest.Mock
   removeAlwaysAllow: jest.Mock
 }
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const ipc = require("@/lib/claude/ipc") as {
-  setApiKey: jest.Mock
-  restartSidecar: jest.Mock
-  setProviderEnv: jest.Mock
+const ipc = {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  ...(require("@/lib/ai/providers/sidecar-credentials") as {
+    setApiKey: jest.Mock
+    setProviderEnv: jest.Mock
+  }),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  ...(require("@/lib/native/local-runtime") as { restartSidecar: jest.Mock }),
 }
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const tauri = require("@/lib/tauri") as { isTauri: jest.Mock }

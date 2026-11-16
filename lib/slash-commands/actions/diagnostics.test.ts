@@ -1,8 +1,12 @@
 /** @jest-environment jsdom */
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/native/local-runtime", () => ({
   getSidecarStatus: jest.fn(),
+}))
+jest.mock("@/lib/ai/providers/sidecar-credentials", () => ({
   hasApiKey: jest.fn(),
   hasOauthBearer: jest.fn(),
+}))
+jest.mock("@/lib/claude/ipc", () => ({
   compactSession: jest.fn(),
 }))
 jest.mock("@/lib/tauri", () => ({
@@ -33,7 +37,9 @@ jest.mock("@/lib/native/native-logging", () => ({
 import { handleStatus, handleCost, handleContext, handleDoctor, handleCompact } from "./diagnostics"
 import { getCrashLoggingDiagnostics } from "@/lib/native/crash-reports"
 import { getNativeLoggingReadiness } from "@/lib/native/native-logging"
-import { getSidecarStatus, hasApiKey, hasOauthBearer, compactSession } from "@/lib/claude/ipc"
+import { compactSession } from "@/lib/claude/ipc"
+import { hasApiKey, hasOauthBearer } from "@/lib/ai/providers/sidecar-credentials"
+import { getSidecarStatus } from "@/lib/native/local-runtime"
 import { isTauri } from "@/lib/tauri"
 import { getSession } from "@/lib/db/sessions"
 import { listEnabledMcpServers } from "@/lib/db/mcp-servers"

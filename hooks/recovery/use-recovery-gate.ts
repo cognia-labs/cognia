@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 
 import type { RecoveryBoot, RecoveryStateV1, RecoverySubsystem } from "@cognia/logging"
-import { ensureSidecarReady } from "@/lib/claude/ipc"
+import { ensureSidecarReady } from "@/lib/native/local-runtime"
 import { isTauri } from "@/lib/tauri"
 import { applyProxyToRust } from "@/stores/network-proxy"
 import { useSettingsStore } from "@/stores/settings/settings-store"

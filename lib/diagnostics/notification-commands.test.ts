@@ -21,7 +21,9 @@ jest.mock("@/lib/tauri/opener", () => ({ openExternal: (u: string) => shell.open
 jest.mock("@/lib/tauri/clipboard", () => ({
   writeClipboardText: (t: string) => shell.writeClipboardText(t),
 }))
-jest.mock("@/lib/claude/ipc", () => ({ restartSidecar: () => shell.restartSidecar() }))
+jest.mock("@/lib/native/local-runtime", () => ({
+  restartSidecar: () => shell.restartSidecar(),
+}))
 jest.mock("@/lib/db/notifications", () => ({
   getNotification: (id: string) => shell.getNotification(id),
 }))

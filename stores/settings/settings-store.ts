@@ -69,7 +69,8 @@ import {
   type SkillPanelPrefs,
 } from "@/lib/skills/preferences"
 import { emitSystemBusEvent, SystemEvents } from "@/lib/plugin/messaging/message-bus"
-import { restartSidecar, setApiKey, setProviderEnv } from "@/lib/claude/ipc"
+import { setApiKey, setProviderEnv } from "@/lib/ai/providers/sidecar-credentials"
+import { restartSidecar } from "@/lib/native/local-runtime"
 import { isTauri } from "@/lib/tauri"
 import type {
   CustomSearchSource,

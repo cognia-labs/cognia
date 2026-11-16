@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { restartSidecar } from "@/lib/claude/ipc"
+import { restartSidecar } from "@/lib/native/local-runtime"
 import { NETWORK_PROXY_APPLIED_EVENT } from "@/lib/network/proxy-events"
 import { getProxyRuntimeStatus } from "@/stores/network-proxy"
 import type { ProxyActiveStatus, ProxyOwnerApplication } from "@/types/network/proxy"

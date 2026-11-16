@@ -4,10 +4,12 @@ jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(),
 }))
 
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/ai/providers/sidecar-credentials", () => ({
   hasApiKey: jest.fn(),
-  restartSidecar: jest.fn(),
   setProviderEnv: jest.fn(),
+}))
+jest.mock("@/lib/native/local-runtime", () => ({
+  restartSidecar: jest.fn(),
 }))
 
 jest.mock("@/lib/db/settings", () => ({
@@ -33,7 +35,8 @@ jest.mock("@/lib/subscription/anthropic/discovery", () => ({
   adoptAndActivateDiscoveredAuth: jest.fn(),
 }))
 
-import { restartSidecar, setProviderEnv } from "@/lib/claude/ipc"
+import { setProviderEnv } from "@/lib/ai/providers/sidecar-credentials"
+import { restartSidecar } from "@/lib/native/local-runtime"
 import { saveSettings, getSettings } from "@/lib/db/settings"
 import { isTauri } from "@/lib/tauri"
 

@@ -70,7 +70,7 @@ const defaultDeps: Omit<DiagnosticCommandDeps, "navigate"> = {
     await writeClipboardText(text)
   },
   restartSidecar: async () => {
-    const { restartSidecar } = await import("@/lib/claude/ipc")
+    const { restartSidecar } = await import("@/lib/native/local-runtime")
     await restartSidecar()
   },
   getNotification: async (id) => {

@@ -44,7 +44,7 @@ export function createDefaultRecoveryProbeDeps(): RecoveryProbeDeps {
     },
 
     getSidecarStatus: async () => {
-      const { getSidecarStatus } = await import("@/lib/claude/ipc")
+      const { getSidecarStatus } = await import("@/lib/native/local-runtime")
       return getSidecarStatus()
     },
 

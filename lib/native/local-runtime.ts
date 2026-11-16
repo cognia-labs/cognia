@@ -5,11 +5,16 @@
  * subsystems that most often explain a failed Support session. Raw subsystem
  * error messages, server definitions, plugin paths, and log bodies are never
  * retained here.
+ *
+ * It also owns the local Agent Host lifecycle commands those summaries read:
+ * status, the Rust-owned live-turn registry, start and restart.
  */
 
-import { isTauri } from "@/lib/tauri"
+import { isTauri, transport } from "@/lib/tauri"
 import { detectOsFamily } from "@/lib/platform/os"
 import type { LocalRuntimeDiagnostics } from "@/lib/logging/crash-log"
+import { detectHostProfile } from "@/lib/platform/capabilities"
+import { isRemoteHostActive } from "@/lib/tauri/transport-routing"
 
 export type { LocalRuntimeDiagnostics }
 
@@ -93,10 +98,7 @@ function readWebEnv(): Record<string, unknown> {
 }
 
 const defaultHealthReaders: LocalRuntimeHealthReaders = {
-  readSidecarStatus: async () => {
-    const { getSidecarStatus } = await import("@/lib/claude/ipc")
-    return getSidecarStatus()
-  },
+  readSidecarStatus: () => getSidecarStatus(),
   readSyncStates: async () => {
     const { snapshotSyncStates } = await import("@/lib/sync/companion-sync")
     return snapshotSyncStates()
@@ -206,4 +208,31 @@ export async function getLocalRuntimeDiagnostics(
       isTauri: isTauri(),
     }
   }
+}
+
+export async function getSidecarStatus(): Promise<{ ready: boolean }> {
+  return transport.call<{ ready: boolean }>("claude_sidecar_status")
+}
+
+/** Rust-owned turn registry; missing support, web mode and errors are unknown. */
+export async function getLiveSidecarSessionIds(): Promise<ReadonlySet<string> | undefined> {
+  if (detectHostProfile() !== "desktop" || isRemoteHostActive()) return undefined
+  try {
+    const status = await transport.call<{ liveSessionIds?: unknown }>("agent_status")
+    const ids = status?.liveSessionIds
+    return Array.isArray(ids) && ids.every((id) => typeof id === "string")
+      ? new Set(ids as string[])
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Start the desktop Agent Host and resolve after its ready handshake. */
+export async function ensureSidecarReady(): Promise<{ ready: boolean }> {
+  return transport.call<{ ready: boolean }>("agent_start")
+}
+
+export async function restartSidecar(): Promise<void> {
+  await transport.call("claude_restart_sidecar")
 }

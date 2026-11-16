@@ -15,7 +15,7 @@ import {
 
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 import Dexie from "dexie"
-import { getLiveSidecarSessionIds } from "@/lib/claude/ipc"
+import { getLiveSidecarSessionIds } from "@/lib/native/local-runtime"
 import { getLiveExternalAgentProcessIds } from "@/lib/ai/agent/external/agent-transport"
 import {
   createDurableTeamCoordinator as createCoordinator,

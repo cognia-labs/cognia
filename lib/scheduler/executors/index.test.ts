@@ -43,8 +43,10 @@ const interruptSessionMock = jest.fn(async (..._args: unknown[]) => undefined)
 const closeSessionMock = jest.fn(async (..._args: unknown[]) => undefined)
 const promptDeliveryMock = jest.fn()
 const ensureSidecarReadyMock = jest.fn(async () => ({ ready: true }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/native/local-runtime", () => ({
   ensureSidecarReady: () => ensureSidecarReadyMock(),
+}))
+jest.mock("@/lib/claude/ipc", () => ({
   sendPrompt: (sessionId: string, prompt: string, options?: unknown, delivery?: unknown) => {
     promptDeliveryMock(delivery)
     return sendPromptMock(sessionId, prompt, options)

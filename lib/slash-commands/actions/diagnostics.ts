@@ -3,7 +3,9 @@
 // `../builtin.ts`.
 
 import type { SlashContext } from "../builtin"
-import { compactSession, getSidecarStatus, hasApiKey, hasOauthBearer } from "@/lib/claude/ipc"
+import { compactSession } from "@/lib/claude/ipc"
+import { hasApiKey, hasOauthBearer } from "@/lib/ai/providers/sidecar-credentials"
+import { getSidecarStatus } from "@/lib/native/local-runtime"
 import { getSession } from "@/lib/db/sessions"
 import { listEnabledMcpServers } from "@/lib/db/mcp-servers"
 import { resolveSendOptions } from "@/lib/claude/build-options"

@@ -3547,7 +3547,12 @@ describe("durable local executor stop evidence", () => {
                 ...(phase === "beforeSend" || phase === "sidecar-start"
                   ? {
                       beforeSend: async () => {
-                        if (phase === "sidecar-start") return void (await ipc.ensureSidecarReady())
+                        if (phase === "sidecar-start")
+                          return void (await jest
+                            .requireActual<typeof import("@/lib/native/local-runtime")>(
+                              "@/lib/native/local-runtime"
+                            )
+                            .ensureSidecarReady())
                         throw new Error("source revision changed")
                       },
                     }

@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 
 import { isTauri } from "@/lib/tauri"
-import { hasApiKey, hasOauthBearer } from "@/lib/claude/ipc"
+import { hasApiKey, hasOauthBearer } from "@/lib/ai/providers/sidecar-credentials"
 import { getAccount, getAccountDetail, getActiveAccount } from "@/lib/subscription/core/transport"
 import { subscribeSubscriptionChanged } from "@/lib/subscription/core/subscription-events"
 import { isStandaloneChatMode } from "@/lib/runtime/standalone-mode"

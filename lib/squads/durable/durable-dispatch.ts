@@ -978,7 +978,7 @@ export async function beginDurableDispatch(input: BeginDurableDispatchInput) {
       }
     },
     async bindLocalSidecarSession(sessionId: string): Promise<void> {
-      const { getLiveSidecarSessionIds } = await import("@/lib/claude/ipc")
+      const { getLiveSidecarSessionIds } = await import("@/lib/native/local-runtime")
       const live = await getLiveSidecarSessionIds()
       if (!live?.has(sessionId)) return
       const child = await ownedChild()

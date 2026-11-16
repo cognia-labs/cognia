@@ -93,16 +93,11 @@ import {
   closeSession,
   HOST_OWNED_TRANSCRIPT_CONTROL,
   deleteMessage,
-  ensureSidecarReady,
   compactSession,
-  getSidecarStatus,
-  getLiveSidecarSessionIds,
-  hasApiKey,
   interruptSession,
   listSessions,
   normalizeRewindFilesResult,
   onClaudeMessage,
-  restartSidecar,
   restoreSession,
   sendPluginToolResponse,
   sendPluginHookResponse,
@@ -113,7 +108,6 @@ import {
   sessionControl,
   steerSession,
   subscribePluginToolExec,
-  setApiKey,
   updateMessage,
 } from "./ipc"
 import {
@@ -1222,18 +1216,11 @@ describe("normalizeRewindFilesResult", () => {
 })
 
 describe("web-mode rejection", () => {
-  it("leaves host liveness unknown in web mode", async () => {
-    setTauri(false)
-    await expect(getLiveSidecarSessionIds()).resolves.toBeUndefined()
-    expect(callSpy).not.toHaveBeenCalled()
-  })
   it("transport-routed wrappers reject with the WebStub error when no spy is attached", async () => {
     setTauri(false)
     callSpy.mockRestore()
 
     await expect(sendPrompt("s", "hi")).rejects.toThrow(/tauri-only command from web mode/)
-    await expect(getSidecarStatus()).rejects.toThrow(/tauri-only command from web mode/)
-    await expect(setApiKey(null)).rejects.toThrow(/tauri-only command from web mode/)
   })
 
   it("onClaudeMessage in web mode resolves to a no-op unlistener (M1.5 transport.subscribe contract)", async () => {
@@ -1245,25 +1232,6 @@ describe("web-mode rejection", () => {
     const unlisten = await onClaudeMessage(handler)
     expect(typeof unlisten).toBe("function")
     expect(handler).not.toHaveBeenCalled()
-  })
-})
-
-describe("host-owned sidecar liveness", () => {
-  it.each([["live"], []] as string[][])("reads active sessions from Rust: %j", async (...ids) => {
-    callSpy.mockResolvedValue({ ready: true, liveSessionIds: ids })
-    await expect(getLiveSidecarSessionIds()).resolves.toEqual(new Set(ids))
-    expect(callSpy).toHaveBeenCalledWith("agent_status")
-  })
-  it.each([{}, { ready: true }, { liveSessionIds: [123] }])(
-    "treats missing or invalid support as unknown: %j",
-    async (status) => {
-      callSpy.mockResolvedValue(status)
-      await expect(getLiveSidecarSessionIds()).resolves.toBeUndefined()
-    }
-  )
-  it("treats host errors as unknown", async () => {
-    callSpy.mockRejectedValue(new Error("host disconnected"))
-    await expect(getLiveSidecarSessionIds()).resolves.toBeUndefined()
   })
 })
 
@@ -1709,39 +1677,6 @@ describe("Claude session commands", () => {
       commandId: "close-5",
     })
     expect(callSpy).toHaveBeenCalledTimes(2)
-  })
-
-  it("getSidecarStatus returns the parsed boolean", async () => {
-    callSpy.mockResolvedValueOnce({ ready: true })
-    await expect(getSidecarStatus()).resolves.toEqual({ ready: true })
-  })
-
-  it("ensureSidecarReady starts the Agent Host and returns its ready status", async () => {
-    callSpy.mockResolvedValueOnce({ ready: true })
-    await expect(ensureSidecarReady()).resolves.toEqual({ ready: true })
-    expect(callSpy).toHaveBeenCalledWith("agent_start")
-  })
-
-  it("setApiKey forwards the key (string or null)", async () => {
-    callSpy.mockResolvedValueOnce(undefined)
-    await setApiKey("sk-abc")
-    expect(callSpy).toHaveBeenCalledWith("claude_set_api_key", { key: "sk-abc" })
-
-    callSpy.mockResolvedValueOnce(undefined)
-    await setApiKey(null)
-    expect(callSpy).toHaveBeenCalledWith("claude_set_api_key", { key: null })
-  })
-
-  it("hasApiKey returns the boolean from the command", async () => {
-    callSpy.mockResolvedValueOnce(true)
-    await expect(hasApiKey()).resolves.toBe(true)
-    expect(callSpy).toHaveBeenCalledWith("claude_has_api_key")
-  })
-
-  it("restartSidecar invokes its command", async () => {
-    callSpy.mockResolvedValueOnce(undefined)
-    await restartSidecar()
-    expect(callSpy).toHaveBeenCalledWith("claude_restart_sidecar")
   })
 })
 

@@ -20,7 +20,7 @@ jest.mock("next-intl", () => ({
 }))
 
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
-jest.mock("@/lib/claude/ipc", () => ({
+jest.mock("@/lib/native/local-runtime", () => ({
   getSidecarStatus: (...args: unknown[]) => getSidecarStatusMock(...args),
   restartSidecar: (...args: unknown[]) => restartSidecarMock(...args),
 }))

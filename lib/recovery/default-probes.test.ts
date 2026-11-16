@@ -11,7 +11,9 @@ const pluginsTable = { count: jest.fn(), toArray: jest.fn() }
 jest.mock("@/lib/db/schema", () => ({
   getDb: () => ({ plugins: pluginsTable }),
 }))
-jest.mock("@/lib/claude/ipc", () => ({ getSidecarStatus: jest.fn() }))
+jest.mock("@/lib/native/local-runtime", () => ({
+  getSidecarStatus: jest.fn(),
+}))
 jest.mock("@/lib/db/adapter-instances", () => ({ listAdapterInstances: jest.fn() }))
 jest.mock("@/lib/db/workflows", () => ({ listWorkflows: jest.fn() }))
 jest.mock("@/lib/native/external-agent", () => ({ listExternalAgents: jest.fn() }))
@@ -21,7 +23,7 @@ jest.mock("@/lib/plugin/core/browser-builtin-registry", () => ({
   getBrowserBuiltinRegistry: jest.fn(),
 }))
 
-const { getSidecarStatus } = jest.requireMock("@/lib/claude/ipc")
+const { getSidecarStatus } = jest.requireMock("@/lib/native/local-runtime")
 const { listAdapterInstances } = jest.requireMock("@/lib/db/adapter-instances")
 const { listWorkflows } = jest.requireMock("@/lib/db/workflows")
 const { listExternalAgents } = jest.requireMock("@/lib/native/external-agent")
