@@ -8,7 +8,7 @@ import type { Character } from "@cognia/agent-config-types"
  * persona opening message, so callers can fall through to an empty session.
  *
  * The returned message is a plain assistant turn with a single text part —
- * the same shape `use-claude-chat` produces for streamed replies. It is a
+ * the same shape `use-agent-chat` produces for streamed replies. It is a
  * display-only greeting: it is persisted for continuity but is not replayed
  * to the model as a prior turn (a fresh session starts from the user's first
  * prompt).

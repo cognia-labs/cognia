@@ -29,7 +29,7 @@ import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 import { toast } from "sonner"
 import { ChatPane } from "@/components/chat/chat-view"
-import { useClaudeChat } from "@/hooks/chat/use-claude-chat"
+import { useAgentChat } from "@/hooks/chat/use-agent-chat"
 import {
   createWorkflowEditorSession,
   isWorkflowEditorSessionId,
@@ -84,7 +84,7 @@ export function WorkflowEditorChatTab({
 }) {
   const t = useTranslations("workflowEditor.chat")
   const { session, loading } = useWorkflowEditorSession(workflowId, workflowName)
-  const claude = useClaudeChat()
+  const claude = useAgentChat()
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
 
   // Copilot ⇄ canvas selector: the composer's `@` / `@node:` / `@edge:` picker

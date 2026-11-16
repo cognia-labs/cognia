@@ -17,12 +17,12 @@ let mockStoreState: {
   sessions: Record<string, { status: string }>
 }
 
-jest.mock("@/hooks/chat/use-claude-chat", () => ({
+jest.mock("@/hooks/chat/use-agent-chat", () => ({
   // The hook reads the runtime OPTIONALLY, so that surfaces which merely
   // construct it outside a provider (the artifacts dock body, Storybook) still
   // render. Returning null here is what the "no provider" cases assert on.
-  useOptionalClaudeChat: () => mockRuntime,
-  useClaudeChat: () => mockRuntime,
+  useOptionalAgentChat: () => mockRuntime,
+  useAgentChat: () => mockRuntime,
 }))
 jest.mock("@/stores/chat/chat-store", () => ({
   useChatStore: { getState: () => mockStoreState },
@@ -381,7 +381,7 @@ describe("without a chat runtime provider", () => {
   it("refuses loudly instead of reporting a send that never happened", async () => {
     mockRuntime = null
     const { result } = renderHook(() => useSelectionToChat())
-    await expect(result.current.sendText("hello")).rejects.toThrow(/ClaudeChatRuntimeProvider/)
+    await expect(result.current.sendText("hello")).rejects.toThrow(/AgentChatRuntimeProvider/)
     expect(mockSend).not.toHaveBeenCalled()
   })
 })

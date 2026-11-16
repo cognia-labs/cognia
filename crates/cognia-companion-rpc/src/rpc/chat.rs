@@ -626,7 +626,7 @@ fn require_non_org_namespace(namespace: &str) -> Result<(), (StatusCode, Json<Rp
 ///   expiry and single-use are all checked by `validate_and_consume`.
 /// * **Host-originated** — the desktop composer, an IM connector, the
 ///   scheduler or a brain-driven HostState intent started the turn. No
-///   context exists, the frame was broadcast, and `claude-chat-events.ts`
+///   context exists, the frame was broadcast, and `agent-chat-events.ts`
 ///   routes the prompt to the device holding a *control* attachment on the
 ///   session with the words "the remote … will resolve it via
 ///   `agent_resolve_permission`". That route answered `400 missing

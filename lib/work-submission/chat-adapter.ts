@@ -8,7 +8,7 @@
  *
  * ## The two freeze points, and why they are not one
  *
- * Reading `hooks/chat/use-claude-chat-controller.ts` top to bottom:
+ * Reading `hooks/chat/use-agent-chat-controller.ts` top to bottom:
  *
  *   • `effectiveContent` is final at the Workbench payload gate — after plugin
  *     prompt hooks, pipe rewrites, and redaction. Nothing downstream changes
@@ -264,7 +264,7 @@ export interface SettleChatTurnInput {
 /**
  * Terminal — seal the turn exactly once.
  *
- * Four places in `claude-chat-events.ts` can observe a turn ending. All four
+ * Four places in `agent-chat-events.ts` can observe a turn ending. All four
  * route here, and only the first wins: `writeTranscript` runs for that caller
  * alone, which is what makes a duplicate terminal event unable to produce a
  * duplicate assistant message.
@@ -272,7 +272,7 @@ export interface SettleChatTurnInput {
 /**
  * Seal whichever turn is currently open in a session.
  *
- * The terminal call sites in `claude-chat-events.ts` only carry a session id —
+ * The terminal call sites in `agent-chat-events.ts` only carry a session id —
  * the run id lives in module state inside `direct-chat-run.ts`. Resolving the
  * open submission from the session keeps those call sites unchanged rather
  * than threading a run id through four of them.

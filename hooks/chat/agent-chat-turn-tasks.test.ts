@@ -1,4 +1,4 @@
-import type { SendFn } from "./claude-chat-turn-tasks"
+import type { SendFn } from "./agent-chat-turn-tasks"
 jest.mock("@/lib/execution/personal-visibility", () => ({
   prepareOwnerHistory: jest.fn(async (messages: { id: string }[]) => {
     const { withholdForReaders } = jest.requireActual(
@@ -34,7 +34,7 @@ import {
   extractPlainText,
   renderGoalExitCard,
   runUtilityModelTasks,
-} from "./claude-chat-turn-tasks"
+} from "./agent-chat-turn-tasks"
 import { composeTurnText } from "@/lib/chat/prompt-preamble"
 import { useSettingsStore } from "@/stores/settings"
 import { prepareOwnerHistory } from "@/lib/execution/personal-visibility"

@@ -4,7 +4,7 @@ import { useChatPaneRuntime } from "./use-chat-pane-runtime"
 
 const send = jest.fn(async () => undefined)
 const updateSession = jest.fn<Promise<void>, unknown[]>(async () => undefined)
-jest.mock("./use-claude-chat", () => ({ useClaudeChat: () => ({ send }) }))
+jest.mock("./use-agent-chat", () => ({ useAgentChat: () => ({ send }) }))
 jest.mock("@/lib/db/sessions", () => ({
   updateSession: (...args: unknown[]) => updateSession(...args),
 }))

@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  *
- * Coverage focus: the deterministic action surface of `useClaudeChat`.
+ * Coverage focus: the deterministic action surface of `useAgentChat`.
  * The hook also wires a long-lived sidecar event handler through `onClaudeMessage`
  * — that handler is exercised indirectly via `send` / `respondToApproval`.
  */
@@ -9,10 +9,10 @@ import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { personalVisibilityDigest } from "@cognia/plugin-contract/types/execution/personal-visibility"
-import { applyInstantTitle } from "./claude-chat-turn-tasks"
+import { applyInstantTitle } from "./agent-chat-turn-tasks"
 
-jest.mock("./claude-chat-turn-tasks", () => {
-  const actual = jest.requireActual("./claude-chat-turn-tasks")
+jest.mock("./agent-chat-turn-tasks", () => {
+  const actual = jest.requireActual("./agent-chat-turn-tasks")
   return { ...actual, applyInstantTitle: jest.fn(actual.applyInstantTitle) }
 })
 
@@ -1187,9 +1187,9 @@ import type { RouteContextSnapshot } from "@/lib/chat/turn-route/snapshot"
 import type { TurnRoute } from "@/lib/chat/turn-route/types"
 import { subscribeDiagnostic } from "@/lib/diagnostics/bus"
 import type { AgentTeam, AgentTeammate } from "@/types/agent/agent-team"
-import { useClaudeChat } from "./use-claude-chat-controller"
+import { useAgentChat } from "./use-agent-chat-controller"
 import { persistModelSelection } from "@/lib/chat/model-selection"
-import { HELD_SESSION_APPROVAL_BACKSTOP_MS } from "./claude-chat-events"
+import { HELD_SESSION_APPROVAL_BACKSTOP_MS } from "./agent-chat-events"
 import { recordChatCanonicalEvents } from "@/lib/chat/canonical-sink"
 import {
   clearSubagentApprovalRoute,
@@ -1200,14 +1200,14 @@ import {
   AgentExecutionHandleProvider,
   useAgentExecutionHandleDirectory,
 } from "@/components/providers/agent-execution-handle-provider"
-import { ClaudeChatRuntimeProvider, useClaudeChat as useSharedClaudeChat } from "./use-claude-chat"
+import { AgentChatRuntimeProvider, useAgentChat as useSharedAgentChat } from "./use-agent-chat"
 import {
   hasSessionGrant,
   recordSessionGrant,
   __resetForTesting as resetComputerUseSessionGrants,
 } from "@/lib/plugin/security/computer-use-session-grants"
 
-// The FIRST `renderHook(() => useClaudeChat())` pays for cold-loading the real
+// The FIRST `renderHook(() => useAgentChat())` pays for cold-loading the real
 // hook's module graph — ~4.5s, against a 5s default, while every test after it
 // runs in single-digit milliseconds. That margin is thinner than parallel-worker
 // contention, so the cold test tipped over intermittently and reported as a
@@ -1440,7 +1440,7 @@ afterEach(() => {
   useExternalAgentStore.setState({ delegationRules: [], chatFailurePolicy: "fallback" })
 })
 
-describe("useClaudeChat — actions", () => {
+describe("useAgentChat — actions", () => {
   it("withholds a stored peer's private title and summary before the receiver persists or sends it", async () => {
     await getDb().sessions.put({
       id: "private-peer-sender",
@@ -1464,7 +1464,7 @@ describe("useClaudeChat — actions", () => {
         ? { id, title: "private sender title", createdAt: 1, updatedAt: 1 }
         : receiver
     )
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     const deliver = peerRuntimeMock.mock.calls.at(-1)?.[0].deliver as (
       message: SessionPeerMessageRow
@@ -1500,7 +1500,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("waits for the latest model write and runtime reset before reading and dispatching", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     let finishFirst!: () => void
     let finishLatest!: () => void
@@ -1549,7 +1549,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("does not dispatch while a pending model selection fails", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     let fail!: (error: Error) => void
     const gate = new Promise<void>((_resolve, reject) => {
@@ -1571,7 +1571,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("send() guards against empty string content", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("   ")
@@ -1580,7 +1580,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("records message submission before the provider settles", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", { provider: "anthropic", model: "sonnet" })
@@ -1594,7 +1594,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("send() guards against empty array content", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send([] as never)
@@ -1603,7 +1603,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("send() with text rolls through persist + sendPrompt", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(result.current.send("hello")).resolves.toBe(true)
@@ -1625,7 +1625,7 @@ describe("useClaudeChat — actions", () => {
     acceptChatTurnMock.mockResolvedValueOnce({ submissionId: "work:run-1" })
     bindChatTurnContextMock.mockResolvedValueOnce(true)
     claimChatTurnForDispatchMock.mockResolvedValueOnce("claimed")
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -1671,7 +1671,7 @@ describe("useClaudeChat — actions", () => {
     acceptChatTurnMock.mockResolvedValueOnce({ submissionId: "work:run-1" })
     bindChatTurnContextMock.mockResolvedValueOnce(true)
     claimChatTurnForDispatchMock.mockResolvedValueOnce("owned_elsewhere")
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -1690,7 +1690,7 @@ describe("useClaudeChat — actions", () => {
   it("runs the built-in path when a delegation rule names no agent", async () => {
     getConnectedAgentsMock.mockReturnValue([{ config: { id: "ext-1" } }])
     checkDelegationMock.mockReturnValue({ shouldDelegate: true })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -1730,7 +1730,7 @@ describe("useClaudeChat — actions", () => {
         systemPrompt: "sys",
         contentSafety: { injectionProtection },
       })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       gateWorkbenchProviderPayloadMock.mockImplementationOnce((payload) => ({
         ...(payload as object),
@@ -1781,7 +1781,7 @@ describe("useClaudeChat — actions", () => {
         name: "Pi",
       },
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -1829,7 +1829,7 @@ describe("useClaudeChat — actions", () => {
         name: "Pi",
       },
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -1873,7 +1873,7 @@ describe("useClaudeChat — actions", () => {
 
     it("hands the agent the turn's image beside its prompt, once it says it can see it", async () => {
       useAgentRuntimeStore.setState({ runtimeRef: { kind: "external", agentId: "ext-1" } })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send([pic, { type: "text", text: "what is this?" }], undefined, {
@@ -1898,7 +1898,7 @@ describe("useClaudeChat — actions", () => {
         delivered: [],
         withheld: { reason: "model", count: 1, model: "DeepSeek V4 Pro" },
       } as never)
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send([pic, { type: "text", text: "what is this?" }], undefined, {
@@ -1930,7 +1930,7 @@ describe("useClaudeChat — actions", () => {
           return { success: true, finalResponse: "ok", runId: "r" }
         }
       )
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send([pic, { type: "text", text: "what is this?" }], undefined, {
@@ -1951,7 +1951,7 @@ describe("useClaudeChat — actions", () => {
   it("keeps the legacy send path available when durable acceptance fails", async () => {
     const consoleError = jest.spyOn(console, "error").mockImplementation(() => {})
     acceptChatTurnMock.mockRejectedValueOnce(new Error("ledger unavailable"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -1974,7 +1974,7 @@ describe("useClaudeChat — actions", () => {
       model: "gpt-test",
       providerCredentials,
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -2009,7 +2009,7 @@ describe("useClaudeChat — actions", () => {
     await getDb().workSubmissions.clear()
     await getDb().hostStateChannels.clear()
     enqueueHostStateIntentMock.mockResolvedValueOnce({ id: "action-1", status: "pending" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -2064,7 +2064,7 @@ describe("useClaudeChat — actions", () => {
         id: "action-1",
         status: "pending",
       })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
 
       await act(async () => {
@@ -2085,7 +2085,7 @@ describe("useClaudeChat — actions", () => {
       enqueueHostStateIntentWhenAvailableMock.mockRejectedValueOnce(
         new HostStateChannelUnavailableError()
       )
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
 
       let thrown: unknown
@@ -2110,7 +2110,7 @@ describe("useClaudeChat — actions", () => {
     })
 
     it("refuses a send the intent cannot carry instead of sending it directly", async () => {
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
 
       let thrown: unknown
@@ -2176,7 +2176,7 @@ describe("useClaudeChat — actions", () => {
           id: "action-1",
           status: "pending",
         })
-        const { result } = renderHook(() => useClaudeChat())
+        const { result } = renderHook(() => useAgentChat())
         await flush()
 
         await act(async () => {
@@ -2201,7 +2201,7 @@ describe("useClaudeChat — actions", () => {
 
       it("refuses a file the partition cannot take before uploading anything", async () => {
         const clip = new Blob(["v"], { type: "video/mp4" })
-        const { result } = renderHook(() => useClaudeChat())
+        const { result } = renderHook(() => useAgentChat())
         await flush()
 
         let thrown: unknown
@@ -2235,7 +2235,7 @@ describe("useClaudeChat — actions", () => {
         >("@/lib/companion/member-turn-attachments")
         const failure = new MemberAttachmentUploadError(new Error("socket closed"))
         uploadMemberTurnAttachmentsMock.mockRejectedValueOnce(failure)
-        const { result } = renderHook(() => useClaudeChat())
+        const { result } = renderHook(() => useAgentChat())
         await flush()
 
         let thrown: unknown
@@ -2278,7 +2278,7 @@ describe("useClaudeChat — actions", () => {
         agentId: "built-in",
         agentKind: "in-app",
       }
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello", { model: "sonnet", taskWorkspace })
@@ -2312,7 +2312,7 @@ describe("useClaudeChat — actions", () => {
               release = resolve
             })
         )
-        const { result } = renderHook(() => useClaudeChat())
+        const { result } = renderHook(() => useAgentChat())
         await flush()
         let sending!: Promise<unknown>
         await act(async () => {
@@ -2365,7 +2365,7 @@ describe("useClaudeChat — actions", () => {
         primaryAlias: "/final/alias",
         additionalAliases: [],
       })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello", { model: "sonnet", cwd: "/stale" })
@@ -2412,7 +2412,7 @@ describe("useClaudeChat — actions", () => {
           const bound = await binding(input)
           return { ...bound, acquired, bundle: { ...bound.bundle, flatLayout } }
         })
-        const { result } = renderHook(() => useClaudeChat())
+        const { result } = renderHook(() => useAgentChat())
         await flush()
         await act(async () => {
           await result.current.send("hello", { model: "sonnet" })
@@ -2490,7 +2490,7 @@ describe("useClaudeChat — actions", () => {
         })
         const stop = startCodeAdoptionTracker()
         try {
-          const { result } = renderHook(() => useClaudeChat())
+          const { result } = renderHook(() => useAgentChat())
           await flush()
           await act(async () => {
             await result.current.send("hello", { model: "sonnet", cwd: "/stale" })
@@ -2549,7 +2549,7 @@ describe("useClaudeChat — actions", () => {
             },
           })
         }
-        const { result } = renderHook(() => useClaudeChat())
+        const { result } = renderHook(() => useAgentChat())
         await flush()
         await act(async () => {
           await result.current.send("hello", {
@@ -2568,7 +2568,7 @@ describe("useClaudeChat — actions", () => {
       )
       ensureExecutionPortLeaseMock.mockImplementationOnce(actual.ensureExecutionPortLease)
       getSessionMock.mockResolvedValue({ id: "sess-1", executionContext: localContext })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello", { model: "sonnet", cwd: "/stale" })
@@ -2618,7 +2618,7 @@ describe("useClaudeChat — actions", () => {
         settle: jest.fn(),
       })
 
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello", prebuilt ? options : undefined)
@@ -2694,7 +2694,7 @@ describe("useClaudeChat — actions", () => {
       settle: jest.fn(),
     })
 
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("use the repo skill")
@@ -2731,7 +2731,7 @@ describe("useClaudeChat — actions", () => {
       settle: jest.fn(),
     })
 
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("use the repo skill")
@@ -2767,7 +2767,7 @@ describe("useClaudeChat — actions", () => {
       },
     })
 
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -2798,7 +2798,7 @@ describe("useClaudeChat — actions", () => {
       },
     })
 
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("help")
@@ -2848,7 +2848,7 @@ describe("useClaudeChat — actions", () => {
         executionContext: unmaterializedManagedContext,
       })
 
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello")
@@ -2885,7 +2885,7 @@ describe("useClaudeChat — actions", () => {
         executionContext: { ...unmaterializedManagedContext, environmentId: "env-1" },
       })
 
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello")
@@ -2916,7 +2916,7 @@ describe("useClaudeChat — actions", () => {
           ...(thread ? { projectThread: { parentExecutionRunId: "checkout-coordinator" } } : {}),
         })
 
-        const { result } = renderHook(() => useClaudeChat())
+        const { result } = renderHook(() => useAgentChat())
         await flush()
         await act(async () => {
           await expect(result.current.send("hello")).resolves.toBe(true)
@@ -2977,7 +2977,7 @@ describe("useClaudeChat — actions", () => {
         executionContext: unmaterializedManagedContext,
       })
 
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       let sending: Promise<boolean | void> | undefined
       act(() => {
@@ -3026,7 +3026,7 @@ describe("useClaudeChat — actions", () => {
         executionContext: unmaterializedManagedContext,
       })
 
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       let sending: Promise<boolean | void> | undefined
       act(() => {
@@ -3058,7 +3058,7 @@ describe("useClaudeChat — actions", () => {
         executionContext: unmaterializedManagedContext,
       })
 
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello")
@@ -3090,7 +3090,7 @@ describe("useClaudeChat — actions", () => {
         executionContext: { ...unmaterializedManagedContext, environmentId: "env-1" },
       })
 
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello")
@@ -3146,7 +3146,7 @@ describe("useClaudeChat — actions", () => {
       settle: jest.fn(),
     })
 
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -3168,7 +3168,7 @@ describe("useClaudeChat — actions", () => {
       makeUserMessage: jest.Mock
     }
     const manifest = [{ filename: "notes.txt", mediaType: "text/plain", kind: "document" as const }]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", undefined, { attachmentManifest: manifest })
@@ -3177,7 +3177,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("derives routing attachment kinds from the outgoing content blocks", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send([
@@ -3256,7 +3256,7 @@ describe("useClaudeChat — actions", () => {
         makeUserMessage: jest.Mock
       }
       // The suite's default route: no provider, i.e. the Claude Agent SDK.
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send(nativeContent, undefined, {
@@ -3285,7 +3285,7 @@ describe("useClaudeChat — actions", () => {
         systemPrompt: "sys",
       })
       toastInfo.mockClear()
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send(nativeContent, undefined, {
@@ -3299,7 +3299,7 @@ describe("useClaudeChat — actions", () => {
 
   it("send() routes through the standalone engine (not the sidecar) in BYOK mode", async () => {
     standaloneFlag.value = true
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -3318,7 +3318,7 @@ describe("useClaudeChat — actions", () => {
       visibility: "embedded",
       model: "sonnet",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -3342,7 +3342,7 @@ describe("useClaudeChat — actions", () => {
       visibility: "embedded",
       model: "sonnet",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -3379,7 +3379,7 @@ describe("useClaudeChat — actions", () => {
       captured = args as { signal: AbortSignal }
       await new Promise(() => {}) // never resolves — stays "in flight"
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       void result.current.send("hello")
@@ -3400,7 +3400,7 @@ describe("useClaudeChat — actions", () => {
     const admitted = jest.requireMock("@/lib/execution/direct-chat-run")
       .startDirectChatExecutionRun as jest.Mock
     admitted.mockClear()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("R11 external request")
@@ -3424,7 +3424,7 @@ describe("useClaudeChat — actions", () => {
       tokenUsage: usage,
       duration: 1200,
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -3516,7 +3516,7 @@ describe("useClaudeChat — actions", () => {
     })
     const stop = startCodeAdoptionTracker()
     try {
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("first")
@@ -3561,7 +3561,7 @@ describe("useClaudeChat — actions", () => {
         return { success: true, finalResponse: "done" }
       }
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     await act(async () => {
@@ -3605,7 +3605,7 @@ describe("useClaudeChat — actions", () => {
         return { success: true, finalResponse: "" }
       }
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -3624,7 +3624,7 @@ describe("useClaudeChat — actions", () => {
       typeof import("@cognia/agent-pi/rpc-client")
     >("@cognia/agent-pi/rpc-client")
     executeOnExternalAgentMock.mockRejectedValue(new PiProcessExitedError(1))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -3675,7 +3675,7 @@ describe("useClaudeChat — actions", () => {
       ]
       throw new Error("Request timeout: session/prompt")
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -3725,7 +3725,7 @@ describe("useClaudeChat — actions", () => {
       chatState.clearSteerQueue.mockImplementationOnce(() => {
         chatState.steerQueue = []
       })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       try {
         await act(async () => {
@@ -3789,7 +3789,7 @@ describe("useClaudeChat — actions", () => {
           await flush()
         }
       )
-      const { result, unmount } = renderHook(() => useClaudeChat())
+      const { result, unmount } = renderHook(() => useAgentChat())
       await flush()
       try {
         await act(async () => {
@@ -3809,7 +3809,7 @@ describe("useClaudeChat — actions", () => {
   it("holds an SDK turn's lease through its session_ended steer drain", async () => {
     useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
     checkDelegationMock.mockReturnValue({ shouldDelegate: false })
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     await flush()
     try {
       await act(async () => {
@@ -3847,7 +3847,7 @@ describe("useClaudeChat — actions", () => {
       releaseStop = lock.beginSessionStop("sess-1")
       return lease
     })
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     await flush()
     try {
       await act(async () => {
@@ -3869,7 +3869,7 @@ describe("useClaudeChat — actions", () => {
   it("keeps a joined follow-up on its session when focus moves during admission", async () => {
     useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
     checkDelegationMock.mockReturnValue({ shouldDelegate: false })
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     await flush()
     try {
       await act(async () => {
@@ -3899,7 +3899,7 @@ describe("useClaudeChat — actions", () => {
   it("refuses a follow-up when Stop begins while the cross-window probe is in flight", async () => {
     useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
     checkDelegationMock.mockReturnValue({ shouldDelegate: false })
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     await flush()
     let releaseStop: (() => void) | undefined
     try {
@@ -3926,7 +3926,7 @@ describe("useClaudeChat — actions", () => {
   it("refuses a follow-up into a running turn while another window's Stop is pending", async () => {
     useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
     checkDelegationMock.mockReturnValue({ shouldDelegate: false })
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     await flush()
     try {
       await act(async () => {
@@ -3957,7 +3957,7 @@ describe("useClaudeChat — actions", () => {
           finishInterrupt = resolve
         })
     )
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     await flush()
     try {
       await act(async () => {
@@ -3990,7 +3990,7 @@ describe("useClaudeChat — actions", () => {
   it("completes an in-session plan step that ran on an external agent", async () => {
     useAgentRuntimeStore.setState({ runtimeRef: { kind: "external", agentId: "ext-1" } })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "step done" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("Step 1: do it", undefined, { skipUserAppend: true })
@@ -4009,7 +4009,7 @@ describe("useClaudeChat — actions", () => {
     executeOnExternalAgentMock.mockRejectedValue(
       new LeaseConflictError("agent-process", "Agent pi:s1 is already running")
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("Step 1: do it", undefined, { skipUserAppend: true })
@@ -4025,7 +4025,7 @@ describe("useClaudeChat — actions", () => {
   it("never halts a plan because a manual message failed", async () => {
     useAgentRuntimeStore.setState({ runtimeRef: { kind: "external", agentId: "ext-1" } })
     executeOnExternalAgentMock.mockRejectedValue(new Error("boom"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -4043,7 +4043,7 @@ describe("useClaudeChat — actions", () => {
         holder: "pi:s1",
       })
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -4065,7 +4065,7 @@ describe("useClaudeChat — actions", () => {
         return new Promise<void>((resolve) => (admit = resolve))
       }
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     let sending: Promise<boolean | void> = Promise.resolve()
     await act(async () => {
@@ -4109,7 +4109,7 @@ describe("useClaudeChat — actions", () => {
         throw cancelled
       }
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("never mind")
@@ -4137,7 +4137,7 @@ describe("useClaudeChat — actions", () => {
         return { success: true, finalResponse: "recovered" }
       }
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -4167,7 +4167,7 @@ describe("useClaudeChat — actions", () => {
           return { success: true, finalResponse: "done" }
         }
       )
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       subscribers.forEach((sub) => sub(chatState))
       await act(async () => {
@@ -4211,7 +4211,7 @@ describe("useClaudeChat — actions", () => {
           return { success: true, finalResponse: "done" }
         }
       )
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       subscribers.forEach((sub) => sub(chatState))
       await act(async () => {
@@ -4247,7 +4247,7 @@ describe("useClaudeChat — actions", () => {
         return { success: true, finalResponse: "done" }
       }
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     await act(async () => {
@@ -4311,7 +4311,7 @@ describe("useClaudeChat — actions", () => {
           : []
       )
       executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "continued" })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("continue", undefined, { sessionId: "import:codex:thread-1" })
@@ -4379,7 +4379,7 @@ describe("useClaudeChat — actions", () => {
       },
     ])
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "continued" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("continue", undefined, { sessionId: "import:codex:thread-1" })
@@ -4430,7 +4430,7 @@ describe("useClaudeChat — actions", () => {
       systemPrompt: "sys",
       resumeSessionId: "external-native",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("continue", undefined, { sessionId: id })
@@ -4476,7 +4476,7 @@ describe("useClaudeChat — actions", () => {
           parts: [{ type: "text", text: "Full original requirements" }],
         },
       ])
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("continue", undefined, { sessionId: id })
@@ -4520,7 +4520,7 @@ describe("useClaudeChat — actions", () => {
       { id: "prior", role: "user", parts: [{ type: "text", text: "constraint ".repeat(4000) }] },
     ])
     mockHandoffClient.mockResolvedValueOnce(null)
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(result.current.send("continue", undefined, { sessionId: id })).rejects.toThrow(
@@ -4546,7 +4546,7 @@ describe("useClaudeChat — actions", () => {
     ])
     const complete = jest.fn().mockResolvedValue("Original constraint: Never change production.")
     mockHandoffClient.mockReset().mockResolvedValue({ complete })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(
@@ -4582,7 +4582,7 @@ describe("useClaudeChat — actions", () => {
       importRuntimeBinding: { nativeSessionId: "thread-1", presetId: "codex" },
     })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "continued" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("continue", undefined, { sessionId: "import:codex:thread-1" })
@@ -4605,7 +4605,7 @@ describe("useClaudeChat — actions", () => {
     "rejects explicit external send options %j before hooks and runtime setup",
     async (feature, capability) => {
       useAgentRuntimeStore.setState({ runtimeRef: { kind: "external", agentId: "ext-1" } })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await expect(
@@ -4625,7 +4625,7 @@ describe("useClaudeChat — actions", () => {
 
   it("rejects malformed explicit external options before the prompt hook", async () => {
     useAgentRuntimeStore.setState({ runtimeRef: { kind: "external", agentId: "ext-1" } })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(
@@ -4640,7 +4640,7 @@ describe("useClaudeChat — actions", () => {
   it("settles a delegated turn that requests an unsupported portable feature", async () => {
     getConnectedAgentsMock.mockReturnValue([{ config: { id: "ext-1" } }])
     checkDelegationMock.mockReturnValue({ shouldDelegate: true, targetAgentId: "ext-1" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(
@@ -4673,7 +4673,7 @@ describe("useClaudeChat — actions", () => {
         name: "Pi",
       },
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(
@@ -4691,7 +4691,7 @@ describe("useClaudeChat — actions", () => {
   it("accepts empty portable feature options on the existing external lane", async () => {
     useAgentRuntimeStore.setState({ runtimeRef: { kind: "external", agentId: "ext-1" } })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "ok" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi", {
@@ -4718,7 +4718,7 @@ describe("useClaudeChat — actions", () => {
       providerOverride: `cognia:external-agent:${encodeURIComponent("ext-1")}`,
     })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "ok" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi", undefined, { sessionId: "sess-1" })
@@ -4762,7 +4762,7 @@ describe("useClaudeChat — actions", () => {
         },
       ])
       executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "continued" })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("continue")
@@ -4783,7 +4783,7 @@ describe("useClaudeChat — actions", () => {
       importOwnership: "source-mirror",
     })
     freezeImportedSessionMock.mockRejectedValueOnce(new Error("ownership-write-failed"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(result.current.send("continue")).rejects.toThrow("ownership-write-failed")
@@ -4821,7 +4821,7 @@ describe("useClaudeChat — actions", () => {
       },
     })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "ok" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi", undefined, { sessionId: "sess-1" })
@@ -4854,7 +4854,7 @@ describe("useClaudeChat — actions", () => {
       reason: "blocked",
       detail: "Runtime environments are not enabled on this deployment",
     } as never)
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi", undefined, { sessionId: "sess-1" })
@@ -4889,7 +4889,7 @@ describe("useClaudeChat — actions", () => {
       catalogFingerprint: "catalog-gateway",
       sandboxToolHostLeaseId: "de4120d3-08d6-4610-927d-c0e3933ac987",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi", undefined, { sessionId: "sess-1" })
@@ -4935,7 +4935,7 @@ describe("useClaudeChat — actions", () => {
       finalResponse: "ok",
       sessionId: nativeId,
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("continue", undefined, { sessionId: "sess-1" })
@@ -4969,7 +4969,7 @@ describe("useClaudeChat — actions", () => {
         )
       }
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     let sending: Promise<unknown>
     await act(async () => {
@@ -5002,7 +5002,7 @@ describe("useClaudeChat — actions", () => {
       finalResponse: "ok",
       sessionId: nativeId,
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi", undefined, { sessionId: "sess-1" })
@@ -5041,7 +5041,7 @@ describe("useClaudeChat — actions", () => {
     ]
 
     async function sendOnce(text = "hi") {
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send(text, undefined, { sessionId: "sess-1" })
@@ -5405,7 +5405,7 @@ describe("useClaudeChat — actions", () => {
       providerOverride: `cognia:external-agent:${encodeURIComponent("ext-2")}`,
     })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "ok" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi", undefined, { sessionId: "sess-1" })
@@ -5430,7 +5430,7 @@ describe("useClaudeChat — actions", () => {
       providerOverride: "cognia:external-agent",
     })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "ok" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi", undefined, { sessionId: "sess-1" })
@@ -5453,7 +5453,7 @@ describe("useClaudeChat — actions", () => {
         return { success: true, finalResponse: "done" }
       }
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     chatState.replaceSessionMessages.mockClear()
@@ -5489,7 +5489,7 @@ describe("useClaudeChat — actions", () => {
       finalResponse: "done",
       sessionId: "native-first",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("first")
@@ -5529,7 +5529,7 @@ describe("useClaudeChat — actions", () => {
       close: rendererToolHostCloseMock,
       isCurrentHost: () => current,
     }))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("first")
@@ -5551,7 +5551,7 @@ describe("useClaudeChat — actions", () => {
       finalResponse: "done",
       sessionId: "native-1",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("first")
@@ -5594,7 +5594,7 @@ describe("useClaudeChat — actions", () => {
       finalResponse: "ack",
       sessionId: "native-background",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("/later")
@@ -5618,7 +5618,7 @@ describe("useClaudeChat — actions", () => {
       finalResponse: "ack",
       sessionId: "native-background",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("/later")
@@ -5657,7 +5657,7 @@ describe("useClaudeChat — actions", () => {
         return { success: true, finalResponse: "ack", sessionId: "native-background" }
       }
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     let sending!: Promise<unknown>
     await act(async () => {
@@ -5725,7 +5725,7 @@ describe("useClaudeChat — actions", () => {
         })
         return { success: true, finalResponse: "done", sessionId: "native-tools" }
       })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("read workspace")
@@ -5764,7 +5764,7 @@ describe("useClaudeChat — actions", () => {
     rendererToolHostStartMock
       .mockResolvedValueOnce({ mcpServers: [], catalogFingerprint: "catalog-1" })
       .mockResolvedValueOnce({ mcpServers: [], catalogFingerprint: "catalog-2" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("first")
@@ -5793,7 +5793,7 @@ describe("useClaudeChat — actions", () => {
       reasonCode: "ok",
     })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "delegated done" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     await act(async () => {
@@ -5850,7 +5850,7 @@ describe("useClaudeChat — actions", () => {
       reasonCode: "ok",
     })
     executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "delegated done" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     await act(async () => {
@@ -5881,7 +5881,7 @@ describe("useClaudeChat — actions", () => {
   it("does not delegate when no external agents are connected", async () => {
     getConnectedAgentsMock.mockReturnValue([])
     checkDelegationMock.mockReturnValue({ shouldDelegate: true, targetAgentId: "ext-1" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("refactor this module")
@@ -5895,7 +5895,7 @@ describe("useClaudeChat — actions", () => {
     getConnectedAgentsMock.mockReturnValue([{ config: { id: "ext-1" } }])
     checkDelegationMock.mockReturnValue({ shouldDelegate: true, targetAgentId: "ext-1" })
     executeOnExternalAgentMock.mockResolvedValue({ success: false, error: "spawn failed" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     await act(async () => {
@@ -5910,7 +5910,7 @@ describe("useClaudeChat — actions", () => {
     getConnectedAgentsMock.mockReturnValue([{ config: { id: "ext-1" } }])
     checkDelegationMock.mockReturnValue({ shouldDelegate: true, targetAgentId: "ext-1" })
     executeOnExternalAgentMock.mockResolvedValue({ success: false, error: "spawn failed" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     await act(async () => {
@@ -5940,7 +5940,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("send() updates the title for a new session and marks it machine-set", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("new prompt")
@@ -5958,7 +5958,7 @@ describe("useClaudeChat — actions", () => {
       titleAuto: false,
       model: "sonnet",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("new prompt")
@@ -5971,7 +5971,7 @@ describe("useClaudeChat — actions", () => {
 
   it("send() surfaces error when no active session", async () => {
     chatState.activeSessionId = null
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -5987,7 +5987,7 @@ describe("useClaudeChat — actions", () => {
       allowedTools: ["read"],
       paths: ["/x"],
     }
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -5999,7 +5999,7 @@ describe("useClaudeChat — actions", () => {
 
   it("send() consults the plugin onUserPromptSubmit hook before sending", async () => {
     dispatchUserPromptSubmitMock.mockResolvedValueOnce({ action: "proceed" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -6018,7 +6018,7 @@ describe("useClaudeChat — actions", () => {
       action: "block",
       reason: "policy violation",
     } as never)
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("nope")
@@ -6035,7 +6035,7 @@ describe("useClaudeChat — actions", () => {
       action: "modify",
       modifiedPrompt: "rewritten",
     } as never)
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("original")
@@ -6050,7 +6050,7 @@ describe("useClaudeChat — actions", () => {
       action: "modify",
       additionalContext: "extra system note",
     } as never)
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -6088,7 +6088,7 @@ describe("useClaudeChat — actions", () => {
           }
           throw new Error("network down")
         })
-        const { result } = renderHook(() => useClaudeChat())
+        const { result } = renderHook(() => useAgentChat())
         await flush()
         await act(async () => {
           await result.current.send("hello")
@@ -6112,7 +6112,7 @@ describe("useClaudeChat — actions", () => {
   )
 
   it("stop() interrupts the active session", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.stop()
@@ -6122,7 +6122,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("registers its stop and approval responder for surfaces outside the provider", async () => {
-    const { unmount } = renderHook(() => useClaudeChat())
+    const { unmount } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(stopChatTurn("sess-bg")).resolves.toBe(true)
@@ -6143,7 +6143,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("hands a deny's reason to the model with the refusal on the sidecar lane", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6163,7 +6163,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("never attaches a reason to an allow", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6199,7 +6199,7 @@ describe("useClaudeChat — actions", () => {
 
     it("records an allow for this request as an instruction grant, and a plain allow as once", async () => {
       const record = recordChatToolApprovalDecisionMock
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.respondToApproval(approval, "allow", { forRequest: true })
@@ -6219,7 +6219,7 @@ describe("useClaudeChat — actions", () => {
       const denials = jest.requireActual<
         typeof import("@/lib/ai/agent/execution/permissions/session-denials")
       >("@/lib/ai/agent/execution/permissions/session-denials")
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.respondToApproval(approval, "deny")
@@ -6238,7 +6238,7 @@ describe("useClaudeChat — actions", () => {
   it("follows a HostState deny with its reason, since that answer carries no text", async () => {
     enqueueHostStateIntentMock.mockResolvedValue({ id: "action-1", status: "pending" })
     chatState.status = "streaming"
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6263,7 +6263,7 @@ describe("useClaudeChat — actions", () => {
 
   it("replays the steer queue when a HostState turn settles under its own lease", async () => {
     enqueueHostStateIntentMock.mockResolvedValue({ id: "action-1", status: "pending" })
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     await flush()
     try {
       await act(async () => {
@@ -6293,7 +6293,7 @@ describe("useClaudeChat — actions", () => {
 
   it("stop() durably queues an attached HostState abort instead of direct interrupt", async () => {
     enqueueHostStateIntentMock.mockResolvedValueOnce({ id: "abort-action", status: "pending" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -6337,7 +6337,7 @@ describe("useClaudeChat — actions", () => {
     }
     window.addEventListener("cognia:composer-append", composer)
     try {
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.stop("sess-1")
@@ -6371,7 +6371,7 @@ describe("useClaudeChat — actions", () => {
       messages: [message],
       steerQueue: [followUp],
     }
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.stop("stopping-session")
@@ -6396,7 +6396,7 @@ describe("useClaudeChat — actions", () => {
           acknowledgeInterrupt = resolve
         })
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     let stopPromise: Promise<void> | undefined
@@ -6424,7 +6424,7 @@ describe("useClaudeChat — actions", () => {
 
   it("stop() is a no-op without an active session", async () => {
     chatState.activeSessionId = null
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.stop()
@@ -6433,7 +6433,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("close() forwards to closeSession", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.close("sess-1")
@@ -6445,7 +6445,7 @@ describe("useClaudeChat — actions", () => {
   it("close() clears Computer Use session grants even when sidecar close fails", async () => {
     recordSessionGrant("sess-1", "click_text")
     closeSessionIpcMock.mockRejectedValueOnce(new Error("sidecar unavailable"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -6457,7 +6457,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("respondToApproval (allow): forwards to approveTool", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6476,7 +6476,7 @@ describe("useClaudeChat — actions", () => {
   it.each(["allow", "allow_always"] as const)(
     "respondToApproval preserves structured answers for %s on the direct transport",
     async (decision) => {
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       const updatedInput = { content: { branch: "main" } }
       await act(async () => {
@@ -6499,7 +6499,7 @@ describe("useClaudeChat — actions", () => {
   it("respondToApproval through an execution handle journals the resolution approveTool would have", async () => {
     const resolvePermission = jest.fn(async () => undefined)
     const { result } = renderHook(
-      () => ({ chat: useClaudeChat(), directory: useAgentExecutionHandleDirectory() }),
+      () => ({ chat: useAgentChat(), directory: useAgentExecutionHandleDirectory() }),
       { wrapper: AgentExecutionHandleProvider }
     )
     await flush()
@@ -6532,7 +6532,7 @@ describe("useClaudeChat — actions", () => {
   it("routes a local model-step approval through the local response funnel even with an execution handle", async () => {
     const resolvePermission = jest.fn(async () => undefined)
     const { result } = renderHook(
-      () => ({ chat: useClaudeChat(), directory: useAgentExecutionHandleDirectory() }),
+      () => ({ chat: useAgentChat(), directory: useAgentExecutionHandleDirectory() }),
       { wrapper: AgentExecutionHandleProvider }
     )
     await flush()
@@ -6556,7 +6556,7 @@ describe("useClaudeChat — actions", () => {
 
   it("keeps a manual approval pending when permission dispatch fails", async () => {
     approveToolMock.mockRejectedValueOnce(new Error("sidecar unavailable"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -6573,7 +6573,7 @@ describe("useClaudeChat — actions", () => {
 
   it("respondToApproval queues the attached decision and skips direct approval RPC", async () => {
     enqueueHostStateIntentMock.mockResolvedValueOnce({ id: "approval-action", status: "pending" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -6592,7 +6592,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("respondToApproval records a session grant for OCR visual tools", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6612,7 +6612,7 @@ describe("useClaudeChat — actions", () => {
     const { awaitApproval, hasSessionBypass } =
       await import("@/lib/ai/agent/execution/hitl/approval-registry")
     const pending = awaitApproval("sess-1", "external-tool-host:lease:tool-1")
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6642,7 +6642,7 @@ describe("useClaudeChat — actions", () => {
       await import("@/lib/ai/agent/execution/hitl/approval-registry")
     void resolveApproval
     const pending = awaitApproval("sess-1", "builtin-skill:im.create_chat:x", { ttlMs: 0 })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6667,7 +6667,7 @@ describe("useClaudeChat — actions", () => {
     const pending = awaitApproval("sess-1", requestId, { ttlMs: 0 })
     settingsState.save.mockClear()
     settingsState.toggleAlwaysAllow.mockClear()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -6693,7 +6693,7 @@ describe("useClaudeChat — actions", () => {
   it("SDK suppressed persistent approval never saves a rule from a stale always response", async () => {
     settingsState.save.mockClear()
     settingsState.toggleAlwaysAllow.mockClear()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6713,7 +6713,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("respondToApproval (allow_always) toggles the always-allow list", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6732,7 +6732,7 @@ describe("useClaudeChat — actions", () => {
   it("respondToApproval (allow_always) persists a TARGET-SCOPED rule when a target exists", async () => {
     settingsState.save.mockClear()
     settingsState.toggleAlwaysAllow.mockClear()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6761,7 +6761,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("respondToApproval (deny) forwards deny to approveTool", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.respondToApproval(
@@ -6782,7 +6782,7 @@ describe("useClaudeChat — actions", () => {
       { id: "old-u", role: "user", parts: [{ type: "text", text: "surviving history" }] },
       { id: "old-a", role: "assistant", parts: [{ type: "text", text: "surviving answer" }] },
     ])
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("next")
@@ -6800,7 +6800,7 @@ describe("useClaudeChat — actions", () => {
       { id: "a-1", role: "assistant", parts: [{ type: "text", text: "reply" }] },
     ]
     closeSessionIpcMock.mockRejectedValueOnce(new Error("host close refused"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.editAndResend("u-1", "edited")
@@ -6829,7 +6829,7 @@ describe("useClaudeChat — actions", () => {
         runtimeTranscriptGeneration: "retained-1",
         runtimePersonalVisibilityDigest: EMPTY_VISIBILITY_DIGEST,
       })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       listMessagesMock.mockClear()
       await act(async () => {
@@ -6857,7 +6857,7 @@ describe("useClaudeChat — actions", () => {
       })
     const release = jest.spyOn(SessionCoalescingRegistry.prototype, "release")
     try {
-      const { unmount } = renderHook(() => useClaudeChat())
+      const { unmount } = renderHook(() => useAgentChat())
       await flush()
       const messages = [
         { id: "streamed", role: "assistant", parts: [{ type: "text", text: "partial" }] },
@@ -6903,7 +6903,7 @@ describe("useClaudeChat — actions", () => {
       listMessagesMock.mockResolvedValue([
         { id: "kept", role: "user", parts: [{ type: "text", text: "canonical survivor" }] },
       ])
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("next")
@@ -6930,7 +6930,7 @@ describe("useClaudeChat — actions", () => {
       { id: "u-1", role: "user", parts: [{ type: "text", text: "original" }] },
       { id: "a-1", role: "assistant", parts: [{ type: "text", text: "reply" }] },
     ]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.editAndResend("u-1", "edited")
@@ -6972,7 +6972,7 @@ describe("useClaudeChat — actions", () => {
       { id: "u-1", role: "user", parts: [{ type: "text", text: "original" }] },
       { id: "a-1", role: "assistant", parts: [{ type: "text", text: "reply" }] },
     ]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.editAndResend("u-1", "edited")
@@ -7005,7 +7005,7 @@ describe("useClaudeChat — actions", () => {
 
   it("editAndResend is a no-op when the message is not in the thread", async () => {
     chatState.messages = []
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.editAndResend("gone", "edited")
@@ -7023,7 +7023,7 @@ describe("useClaudeChat — actions", () => {
       { id: "u-1", role: "user", parts: [{ type: "text", text: "original" }] },
       { id: "a-1", role: "assistant", parts: [{ type: "text", text: "reply" }] },
     ]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     persistMessagesMock.mockClear()
     await act(async () => {
@@ -7039,7 +7039,7 @@ describe("useClaudeChat — actions", () => {
 
   it("regenerate is a no-op when there is no user message", async () => {
     chatState.messages = []
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.regenerate()
@@ -7070,7 +7070,7 @@ describe("useClaudeChat — actions", () => {
       ]
       listMessagesMock.mockImplementation(async () => chatState.messages)
       executeOnExternalAgentMock.mockResolvedValue({ success: true, finalResponse: "Continued" })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("Continue the interrupted task", undefined, {
@@ -7107,7 +7107,7 @@ describe("useClaudeChat — actions", () => {
     chatState.messages = [
       { id: "newer", role: "user", parts: [{ type: "text", text: "New work" }] },
     ]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("Continue", undefined, { continuationOf: "old" })
@@ -7128,7 +7128,7 @@ describe("useClaudeChat — actions", () => {
         },
       },
     ]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("Work", undefined, { skipUserAppend: true, bypassDelegation: true })
@@ -7150,7 +7150,7 @@ describe("useClaudeChat — actions", () => {
       { id: "u-1", role: "user", parts: [{ type: "text", text: "hello" }] },
       { id: "a-1", role: "assistant", parts: [{ type: "text", text: "hi" }] },
     ]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     persistMessagesMock.mockClear()
     await act(async () => {
@@ -7168,7 +7168,7 @@ describe("useClaudeChat — actions", () => {
       { id: "u-1", role: "user", parts: [{ type: "text", text: "hello" }] },
       { id: "a-1", role: "assistant", parts: [{ type: "text", text: "hi" }] },
     ]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     isChatTurnQueuedMock.mockReturnValue(true)
     persistMessagesMock.mockClear()
@@ -7185,7 +7185,7 @@ describe("useClaudeChat — actions", () => {
       { id: "u-1", role: "user", parts: [{ type: "text", text: "hello" }] },
       { id: "a-1", role: "assistant", parts: [{ type: "text", text: "hi" }] },
     ]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.regenerate()
@@ -7219,13 +7219,13 @@ describe("useClaudeChat — actions", () => {
 
   it("non-Tauri: skips the message subscription", async () => {
     isTauriMock.mockReturnValue(false)
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     expect(onClaudeMessageMock).not.toHaveBeenCalled()
   })
 
   it("suppresses the global projector only after the interactive subscription succeeds", async () => {
-    const { unmount } = renderHook(() => useClaudeChat())
+    const { unmount } = renderHook(() => useAgentChat())
     await flush()
 
     expect(registerInteractiveWorkSubmissionEventsMock).toHaveBeenCalledTimes(1)
@@ -7238,7 +7238,7 @@ describe("useClaudeChat — actions", () => {
     const consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined)
     onClaudeMessageMock.mockRejectedValueOnce(listenError)
 
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
 
     expect(registerInteractiveWorkSubmissionEventsMock).not.toHaveBeenCalled()
@@ -7253,7 +7253,7 @@ describe("useClaudeChat — actions", () => {
   // ── handleEvent paths (driven through the sidecar message subscription) ──
 
   it("incoming sdk_session_id event persists the SDK conversation id", async () => {
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     expect(_messageCallback).toBeTruthy()
     await act(async () => {
@@ -7267,7 +7267,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("incoming session_ended (no error) completes a tool-only turn", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", { provider: "anthropic", model: "sonnet" })
@@ -7291,7 +7291,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("records a permanent provider failure without exporting its message", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", { provider: "anthropic", model: "sonnet" })
@@ -7318,7 +7318,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("classifies a permanent provider failure without an HTTP status", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", { provider: "anthropic", model: "sonnet" })
@@ -7347,7 +7347,7 @@ describe("useClaudeChat — actions", () => {
   it("command_ack records a dedupe mark and leaves session state untouched", async () => {
     chatState.activeSessionId = "sess-1"
     chatState.openSessionIds = ["sess-1"]
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     chatState.replaceSessionMessages.mockClear()
@@ -7368,7 +7368,7 @@ describe("useClaudeChat — actions", () => {
 
   it("sidecar_exited settles a streaming session with a retryable error", async () => {
     chatState.status = "idle"
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", { provider: "anthropic", model: "sonnet" })
@@ -7398,7 +7398,7 @@ describe("useClaudeChat — actions", () => {
   it("sidecar_exited interrupts a pending approval and does not touch idle sessions", async () => {
     chatState.status = "awaiting_approval"
     chatState.pendingApprovals = [{ requestId: "req-9", sessionId: "sess-1" }]
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       _messageCallback?.({ type: "sidecar_exited" })
@@ -7421,7 +7421,7 @@ describe("useClaudeChat — actions", () => {
 
   it("sidecar_exited leaves an idle session untouched", async () => {
     chatState.status = "idle"
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       _messageCallback?.({ type: "sidecar_exited" })
@@ -7431,7 +7431,7 @@ describe("useClaudeChat — actions", () => {
 
   it("incoming permission_request for an already-allowed tool auto-approves", async () => {
     settingsState.settings.alwaysAllowTools = ["read"]
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     // Mirror the subscriber-driven allow-list refresh that happens on mount.
     settingsSubscribers.forEach((sub) => sub(settingsState))
@@ -7463,7 +7463,7 @@ describe("useClaudeChat — actions", () => {
     ;(settingsState.settings as Record<string, unknown>).agentPermissions = {
       autoApprove: { enabled: true },
     }
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       _messageCallback?.({
@@ -7493,7 +7493,7 @@ describe("useClaudeChat — actions", () => {
     ;(settingsState.settings as Record<string, unknown>).agentPermissions = {
       autoApprove: { enabled: true },
     }
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       _messageCallback?.({
@@ -7523,7 +7523,7 @@ describe("useClaudeChat — actions", () => {
   ] as const)(
     "routes Auto-mode %s decisions to the renderer tool broker",
     async (command, expected) => {
-      const { tryAutoModeDecision } = await import("./claude-chat-events")
+      const { tryAutoModeDecision } = await import("./agent-chat-events")
       ;(settingsState.settings as Record<string, unknown>).agentPermissions = {
         autoApprove: { enabled: true },
       }
@@ -7551,7 +7551,7 @@ describe("useClaudeChat — actions", () => {
   it("surfaces the manual approval dialog when the Auto-mode judge hangs (no-dialog hang guard)", async () => {
     const { runAutoModeForTool } =
       await import("@/lib/ai/agent/execution/permissions/auto-mode-runner")
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     chatState.pushApproval.mockClear()
@@ -7597,7 +7597,7 @@ describe("useClaudeChat — actions", () => {
     chatState.activeSessionId = "sess-other"
     // sess-1 has no open pane → its approval is auto-denied (not surfaced).
     chatState.openSessionIds = ["sess-other"]
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     // Push the active-session change through the subscriber callback so
     // the hook's `activeRef` reflects it without re-rendering.
@@ -7641,7 +7641,7 @@ describe("useClaudeChat — actions", () => {
 
     chatState.activeSessionId = "sess-other"
     chatState.openSessionIds = ["sess-other"]
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     await act(async () => {
@@ -7663,7 +7663,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("bounds a local approval even when its pane closes before the user answers", async () => {
-    renderHook(useClaudeChat)
+    renderHook(useAgentChat)
     await flush()
     jest.useFakeTimers()
     try {
@@ -7705,7 +7705,7 @@ describe("useClaudeChat — actions", () => {
     chatState.activeSessionId = "sess-other"
     chatState.openSessionIds = ["sess-other"]
     chatState.backgroundHolds = { "sess-1": ["project-thread"] }
-    renderHook(useClaudeChat)
+    renderHook(useAgentChat)
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     jest.useFakeTimers()
@@ -7749,7 +7749,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("incoming permission_request for the active session pushes an approval", async () => {
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     await act(async () => {
@@ -7776,7 +7776,7 @@ describe("useClaudeChat — actions", () => {
   })
 
   it("turns a per-call permission_request into a request that can never be always-allowed", async () => {
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     await act(async () => {
@@ -7802,7 +7802,7 @@ describe("useClaudeChat — actions", () => {
   it("never auto-approves a per-call tool from the always-allow list", async () => {
     settingsState.settings.alwaysAllowTools = ["browser_set_files"]
     try {
-      renderHook(() => useClaudeChat())
+      renderHook(() => useAgentChat())
       await flush()
       settingsSubscribers.forEach((sub) => sub(settingsState))
       subscribers.forEach((sub) => sub(chatState))
@@ -7830,7 +7830,7 @@ describe("useClaudeChat — actions", () => {
   it("lets a plugin deny a per-call tool but never approve it through a modify", async () => {
     const preToolUse = jest.requireMock("@/lib/plugin/messaging/agent-hook-dispatch")
       .dispatchPreToolUse as jest.Mock
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     approveToolMock.mockClear()
@@ -7883,7 +7883,7 @@ describe("useClaudeChat — actions", () => {
       backgrounded: false,
     })
     try {
-      renderHook(() => useClaudeChat())
+      renderHook(() => useAgentChat())
       await flush()
       subscribers.forEach((sub) => sub(chatState))
       await act(async () => {
@@ -7912,7 +7912,7 @@ describe("useClaudeChat — actions", () => {
   })
 })
 
-describe("useClaudeChat — native vector backend branch", () => {
+describe("useAgentChat — native vector backend branch", () => {
   const mockNativeStore = { provider: "native" }
 
   beforeEach(() => {
@@ -7931,7 +7931,7 @@ describe("useClaudeChat — native vector backend branch", () => {
   })
 
   it("case 'native' builds a storeConfig with provider=native and calls createVectorStore", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello from native")
@@ -7947,7 +7947,7 @@ describe("useClaudeChat — native vector backend branch", () => {
   })
 })
 
-describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
+describe("useAgentChat — goal loop wiring (ADR-0019)", () => {
   const adapterMock = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
     applySdkEvent: jest.Mock
     extractUsage: jest.Mock
@@ -7980,7 +7980,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
   }
 
   it("records one successful turn outcome at the SDK result boundary", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", { provider: "anthropic", model: "sonnet" })
@@ -8006,7 +8006,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
   })
 
   it("passes the sealed assistant message id to long-term memory extraction", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("remember this")
@@ -8021,7 +8021,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
 
   it("send pauses an active goal on a fresh user message", async () => {
     goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal())
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("steer this way")
@@ -8032,7 +8032,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
 
   it("send does NOT pause on a silent continuation (skipUserAppend)", async () => {
     goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal())
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("keep going", undefined, { skipUserAppend: true })
@@ -8043,7 +8043,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
 
   it("send does NOT pause when there is no active goal", async () => {
     // default getActiveGoalForSession → undefined
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi")
@@ -8057,7 +8057,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       type: "image" as const,
       source: { type: "base64" as const, media_type: "image/png", data: "AAAA" },
     }
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     const webSearchContext = {
       provider: "tavily",
@@ -8078,7 +8078,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
 
   it("shows a steer in the transcript immediately, in the user's own words", async () => {
     chatState.status = "streaming"
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("switch to TypeScript")
@@ -8108,7 +8108,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       attemptIndex: 0,
     }
     steerSessionMock.mockResolvedValue({ accepted: true })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     const webSearchContext = {
       provider: "brave",
@@ -8146,7 +8146,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       },
     ]
     steerSessionMock.mockResolvedValue({ accepted: true })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("actually don't delete anything")
@@ -8179,7 +8179,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     // fresh verdict); this asserts the send path actually calls it.
     chatState.status = "streaming"
     steerSessionMock.mockResolvedValue({ accepted: true })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("change of plan")
@@ -8190,7 +8190,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
   it("persists an attached HostState steer before accepting its optimistic bubble", async () => {
     chatState.status = "streaming"
     enqueueHostStateIntentMock.mockResolvedValueOnce({ id: "steer-action", status: "pending" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -8215,7 +8215,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     chatState.status = "streaming"
     hostStateActionOfferedMock.mockImplementation((kind) => kind !== "turn.steer")
     enqueueHostStateIntentMock.mockResolvedValueOnce({ id: "action-1", status: "pending" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
 
     await act(async () => {
@@ -8236,7 +8236,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
   it("falls back to the queue when the live steer is refused", async () => {
     chatState.status = "streaming"
     steerSessionMock.mockRejectedValue(new Error("input_closed"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("and add tests")
@@ -8259,7 +8259,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       sections: ["references"],
       references: [{ kind: "entity", entityKind: "issue", title: "Broker race" }],
     }
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("follow up on this", undefined, {
@@ -8281,7 +8281,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
   it("keeps an automation's marker on a turn queued for a busy session", async () => {
     chatState.status = "streaming"
     steerSessionMock.mockRejectedValue(new Error("input_closed"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("PR checks failed", undefined, {
@@ -8301,7 +8301,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     chatState.status = "streaming"
     steerSessionMock.mockResolvedValue({ accepted: true })
     const citations = [{ kind: "entity" as const, id: "session:s9", label: "Sprint planning" }]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("check that thread", undefined, { citations })
@@ -8336,7 +8336,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       sections: ["references"],
       references: [{ kind: "entity", entityKind: "session", title: "Sprint planning" }],
     }
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("see this thread", undefined, { citations, promptPreamble })
@@ -8369,7 +8369,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
         syncCursor: 0,
       },
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("nothing cited")
@@ -8396,7 +8396,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
         syncCursor: 0,
       },
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("add the tests first")
@@ -8431,7 +8431,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     window.addEventListener("cognia:shared-request-ai", listener)
     try {
       getSessionMock.mockResolvedValue(room("auto"))
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("what changed?")
@@ -8494,7 +8494,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     toastInfo.mockClear()
     chatState.setSessionDiagnostic.mockClear()
     try {
-      renderHook(() => useClaudeChat())
+      renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         window.dispatchEvent(
@@ -8563,7 +8563,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     await getDb().messages.bulkPut(rows)
     sendPromptMock.mockClear()
     try {
-      renderHook(() => useClaudeChat())
+      renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         window.dispatchEvent(
@@ -8595,7 +8595,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     // refusal path below is what handles the case where there is not.
     chatState.status = "awaiting_approval"
     steerSessionMock.mockResolvedValue({ accepted: true })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("don't use that tool")
@@ -8608,7 +8608,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
   it("still queues an approval-time steer the sidecar refuses", async () => {
     chatState.status = "awaiting_approval"
     steerSessionMock.mockRejectedValue(new Error("input_closed"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("don't use that tool")
@@ -8622,7 +8622,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
 
   it("ignores an empty steer instead of appending a blank bubble", async () => {
     chatState.status = "streaming"
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     chatState.replaceSessionMessages.mockClear()
     await act(async () => {
@@ -8633,7 +8633,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
   })
 
   it("flushSteer is a no-op when the queue is empty", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       result.current.flushSteer("sess-1")
@@ -8659,7 +8659,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
         goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal())
         buildGoalJudgeClientMock.mockReturnValue({ complete: jest.fn() })
         handleTurnCompleteMock.mockResolvedValue({ kind: "continue", userMessage: "go on" })
-        renderHook(() => useClaudeChat())
+        renderHook(() => useAgentChat())
         await flush()
         await driveTurnComplete()
         expect(handleTurnCompleteMock).toHaveBeenCalledWith(
@@ -8714,7 +8714,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     buildGoalJudgeClientMock.mockReturnValue({ complete: jest.fn() })
     // A slow or hung judge: the result handler awaits it after going idle.
     handleTurnCompleteMock.mockImplementation(() => new Promise(() => {}))
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     await flush()
     try {
       await act(async () => {
@@ -8752,7 +8752,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
         })
     )
     const { withSessionTurnLock } = await import("@/lib/execution/session-turn-lock")
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     await flush()
     try {
       await act(async () => {
@@ -8800,7 +8800,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     // Persistent (not Once): `recordResultUsage` consumes one call before the
     // goal block reads it, so both calls must see the same usage.
     adapterMock.extractUsage.mockReturnValue({ inputTokens: 10, outputTokens: 5 })
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await driveTurnComplete()
     expect(handleTurnCompleteMock).toHaveBeenCalledWith(
@@ -8817,7 +8817,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       resultingStatus: "completed",
       reason: "objective satisfied",
     })
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await driveTurnComplete()
     expect(chatState.appendMessage).toHaveBeenCalledWith(
@@ -8832,7 +8832,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
   it("turnComplete with no judge client warns once and pauses", async () => {
     goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal({ id: "g-nojudge" }))
     buildGoalJudgeClientMock.mockReturnValue(null)
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await driveTurnComplete()
     expect(handleTurnCompleteMock).not.toHaveBeenCalled()
@@ -8848,7 +8848,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
     goalRuntimeMock.getActiveGoalForSession.mockResolvedValue(activeGoal({ id: "g-stale" }))
     buildGoalJudgeClientMock.mockReturnValue({ complete: jest.fn() })
     handleTurnCompleteMock.mockResolvedValue({ kind: "stale", reason: "rotated" })
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await driveTurnComplete()
     expect(chatState.appendMessage).not.toHaveBeenCalled()
@@ -8859,7 +8859,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
 
   it("send pauses an active self-paced loop on a fresh user message", async () => {
     loopRuntimeMock.getActiveLoopForSession.mockResolvedValue(activeLoop())
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("steer this way")
@@ -8869,7 +8869,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
 
   it("send does NOT pause an interval loop (scheduler-driven)", async () => {
     loopRuntimeMock.getActiveLoopForSession.mockResolvedValue(activeLoop({ mode: "interval" }))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("just chatting")
@@ -8884,7 +8884,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       userMessage: "loop iteration 2",
       delayMs: 0,
     })
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await driveTurnComplete()
     expect(handleLoopTurnCompleteMock).toHaveBeenCalledWith(
@@ -8915,7 +8915,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       resultingStatus: "completed",
       reason: "report delivered",
     })
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await driveTurnComplete()
     expect(chatState.appendMessage).toHaveBeenCalledWith(
@@ -8932,7 +8932,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       kickoff = cb
       return () => {}
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("First turn")
@@ -8952,7 +8952,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       kickoff = cb
       return () => {}
     })
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     expect(kickoff).not.toBeNull()
     await act(async () => {
@@ -8973,7 +8973,7 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
       kickoff = cb
       return () => {}
     })
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       kickoff?.(activeLoop({ sessionId: "sess-other", safePrompt: "x" }))
@@ -8983,9 +8983,9 @@ describe("useClaudeChat — goal loop wiring (ADR-0019)", () => {
   })
 })
 
-describe("useClaudeChat — agent-trace wiring (Phase B4)", () => {
+describe("useAgentChat — agent-trace wiring (Phase B4)", () => {
   it("send() injects traceId + spanId into the SendOptions echoed to the sidecar", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9001,7 +9001,7 @@ describe("useClaudeChat — agent-trace wiring (Phase B4)", () => {
   })
 
   it("setLastSend caches the trace identifiers so session_ended can finalise the span", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9020,7 +9020,7 @@ describe("useClaudeChat — agent-trace wiring (Phase B4)", () => {
       provider: "tavily",
       results: [{ title: "A", url: "https://a.test", content: "a", score: 1 }],
     }
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", {
@@ -9040,7 +9040,7 @@ describe("useClaudeChat — agent-trace wiring (Phase B4)", () => {
   })
 
   it("preserves a caller-provided spanId instead of generating a new one", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hi", {
@@ -9064,7 +9064,7 @@ describe("useClaudeChat — agent-trace wiring (Phase B4)", () => {
     })
     sendPromptMock.mockRejectedValueOnce(new Error("network down"))
 
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("ping")
@@ -9085,7 +9085,7 @@ describe("useClaudeChat — agent-trace wiring (Phase B4)", () => {
   })
 })
 
-describe("useClaudeChat — concurrent sessions", () => {
+describe("useAgentChat — concurrent sessions", () => {
   const adapterMock = jest.requireMock("@/lib/chat/sdk-message-adapter") as {
     applySdkEvent: jest.Mock
   }
@@ -9113,7 +9113,7 @@ describe("useClaudeChat — concurrent sessions", () => {
       }
       let unmount: (() => void) | undefined
       try {
-        const hook = renderHook(() => useClaudeChat())
+        const hook = renderHook(() => useAgentChat())
         unmount = hook.unmount
         await flush()
         const assistant = {
@@ -9171,7 +9171,7 @@ describe("useClaudeChat — concurrent sessions", () => {
           releasePersist = resolve
         })
     )
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     adapterMock.applySdkEvent.mockReturnValueOnce({
@@ -9199,7 +9199,7 @@ describe("useClaudeChat — concurrent sessions", () => {
     // Focus sess-other; sess-1 is open in another pane and mid-stream.
     chatState.activeSessionId = "sess-other"
     chatState.openSessionIds = ["sess-other", "sess-1"]
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     adapterMock.applySdkEvent.mockReturnValueOnce({
@@ -9228,7 +9228,7 @@ describe("useClaudeChat — concurrent sessions", () => {
       chatState.activeSessionId = "sess-other"
       chatState.openSessionIds = ["sess-other"]
       chatState.otherSlices["sess-1"] = { ...makeSlice(), status: "streaming" }
-      renderHook(useClaudeChat)
+      renderHook(useAgentChat)
       await flush()
       const finalMessages = [
         { id: "a1", role: "assistant", parts: [{ type: "text", text: "done" }] },
@@ -9258,7 +9258,7 @@ describe("useClaudeChat — concurrent sessions", () => {
     chatState.activeSessionId = "sess-other"
     chatState.openSessionIds = ["sess-other"] // sess-1 has no pane
     listMessagesMock.mockResolvedValue([])
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     adapterMock.applySdkEvent.mockReturnValueOnce({
@@ -9283,7 +9283,7 @@ describe("useClaudeChat — concurrent sessions", () => {
     chatState.activeSessionId = "sess-other"
     chatState.openSessionIds = ["sess-other"]
     listMessagesMock.mockReset().mockResolvedValue([])
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     const first = [{ id: "a1", role: "assistant", parts: [{ type: "text", text: "b" }] }]
@@ -9322,7 +9322,7 @@ describe("useClaudeChat — concurrent sessions", () => {
   it("feeds every SDK event to the SDK-native subagent bridge", async () => {
     chatState.activeSessionId = "sess-1"
     chatState.openSessionIds = ["sess-1"]
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     applySdkSubagentBridgeMock.mockClear()
@@ -9345,7 +9345,7 @@ describe("useClaudeChat — concurrent sessions", () => {
   it("skips the bridge block (incl. its getSession read) for stream_event token deltas", async () => {
     chatState.activeSessionId = "sess-1"
     chatState.openSessionIds = ["sess-1"]
-    renderHook(() => useClaudeChat())
+    renderHook(() => useAgentChat())
     await flush()
     subscribers.forEach((sub) => sub(chatState))
     // The first lifecycle frame seeds the generation fence from session
@@ -9379,7 +9379,7 @@ describe("useClaudeChat — concurrent sessions", () => {
 
   it("send() is blocked (no sidecar call) when the concurrency cap is reached", async () => {
     isAtCapacityMock.mockReturnValue(true)
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("blocked")
@@ -9391,7 +9391,7 @@ describe("useClaudeChat — concurrent sessions", () => {
   it("stop(sessionId) interrupts the given session, not just the focused one", async () => {
     chatState.activeSessionId = "sess-other"
     chatState.openSessionIds = ["sess-other", "sess-1"]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.stop("sess-1")
@@ -9405,7 +9405,7 @@ describe("useClaudeChat — concurrent sessions", () => {
   it("send(sessionId) targets the given session's slice", async () => {
     chatState.activeSessionId = "sess-other"
     chatState.openSessionIds = ["sess-other", "sess-1"]
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("to-bg", undefined, { sessionId: "sess-1" })
@@ -9417,7 +9417,7 @@ describe("useClaudeChat — concurrent sessions", () => {
   })
 
   it("close() tears down the session's pane state in the store", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.close("sess-1")
@@ -9427,12 +9427,12 @@ describe("useClaudeChat — concurrent sessions", () => {
   })
 })
 
-describe("useClaudeChat — pre-turn editor flush", () => {
+describe("useAgentChat — pre-turn editor flush", () => {
   it("flushes unsaved editor buffers before the turn reaches the sidecar", async () => {
     // The agent's file tools read the filesystem, so an editor buffer the user
     // edited but never saved is invisible to them: the turn would reason about
     // stale content and its write would clobber that work.
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9446,7 +9446,7 @@ describe("useClaudeChat — pre-turn editor flush", () => {
   })
 
   it("stays quiet when everything flushed cleanly", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9459,7 +9459,7 @@ describe("useClaudeChat — pre-turn editor flush", () => {
     // The turn may not touch those files at all, so blocking would be wrong —
     // but for them disk is not what the user is looking at, and that must be said.
     flushProjectEditorEdits.mockResolvedValue(["/repo/a.ts", "/repo/b.ts"])
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9471,7 +9471,7 @@ describe("useClaudeChat — pre-turn editor flush", () => {
 
   it("does not flush for a send the guards reject", async () => {
     // Empty content never becomes a turn, so nothing should be saved for it.
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("   ")
@@ -9481,7 +9481,7 @@ describe("useClaudeChat — pre-turn editor flush", () => {
   })
 })
 
-describe("useClaudeChat — Squad dispatch", () => {
+describe("useAgentChat — Squad dispatch", () => {
   function squadSession(extra: Record<string, unknown> = {}) {
     getSessionMock.mockResolvedValue({
       id: "sess-1",
@@ -9494,7 +9494,7 @@ describe("useClaudeChat — Squad dispatch", () => {
 
   it("hands the turn to the Squad instead of running a model turn", async () => {
     squadSession()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("ship the thing")
@@ -9523,7 +9523,7 @@ describe("useClaudeChat — Squad dispatch", () => {
 
   it("parents a project-thread Squad to the Host-captured coordinator run", async () => {
     squadSession({ projectThread: { parentExecutionRunId: "coordinator-run" } })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("continue the project")
@@ -9537,7 +9537,7 @@ describe("useClaudeChat — Squad dispatch", () => {
     // Holding is what makes a follow-up queue as steering instead of starting
     // a second Squad over the top of the first.
     squadSession()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("go")
@@ -9552,7 +9552,7 @@ describe("useClaudeChat — Squad dispatch", () => {
 
   it("releases the hold when the watcher reports the run is over", async () => {
     squadSession()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("go")
@@ -9575,7 +9575,7 @@ describe("useClaudeChat — Squad dispatch", () => {
       runId: "run_team_abc123def456",
       squadName: "Research Squad",
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     chatState.replaceSessionMessages.mockClear()
     await act(async () => {
@@ -9611,7 +9611,7 @@ describe("useClaudeChat — Squad dispatch", () => {
   it("falls back to the Squad id when the run could not name it", async () => {
     squadSession()
     startSquadRunMock.mockResolvedValueOnce({ started: true, runId: "run_team_abc123def456" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("go")
@@ -9627,7 +9627,7 @@ describe("useClaudeChat — Squad dispatch", () => {
   it("reports a failed dispatch instead of leaving the session held", async () => {
     squadSession()
     startSquadRunMock.mockResolvedValueOnce({ started: false, reason: "squad_not_found" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("go")
@@ -9643,7 +9643,7 @@ describe("useClaudeChat — Squad dispatch", () => {
   })
 
   it("runs an ordinary turn when the conversation has no Squad", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9657,7 +9657,7 @@ describe("useClaudeChat — Squad dispatch", () => {
     // The override has to point down as well as up, or a Squad-bound
     // conversation could never send a single plain turn.
     squadSession()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", undefined, {
@@ -9671,7 +9671,7 @@ describe("useClaudeChat — Squad dispatch", () => {
 
   it("lets one turn point at a different Squad than the conversation", async () => {
     squadSession()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello", undefined, {
@@ -9692,7 +9692,7 @@ describe("useClaudeChat — Squad dispatch", () => {
 describe("strict chat continuation dispatch", () => {
   it("resolves false at the concurrent cap and still throws when requested", async () => {
     isAtCapacityMock.mockReturnValue(true)
-    const { result } = renderHook(useClaudeChat)
+    const { result } = renderHook(useAgentChat)
     await flush()
     await act(async () => {
       await expect(result.current.send("keep my draft")).resolves.toBe(false)
@@ -9712,7 +9712,7 @@ describe("strict chat continuation dispatch", () => {
         allowed: false,
         blockedBy: [{ scopeKey: "global" }],
       })
-      const { result } = renderHook(useClaudeChat)
+      const { result } = renderHook(useAgentChat)
       await flush()
       await act(async () => {
         const sending = result.current.send("budgeted request", undefined, { throwOnError })
@@ -9735,7 +9735,7 @@ describe("strict chat continuation dispatch", () => {
 
   it("rejects a failed sidecar dispatch after preserving the diagnostic", async () => {
     sendPromptMock.mockRejectedValueOnce(new Error("host offline"))
-    const { result } = renderHook(useClaudeChat)
+    const { result } = renderHook(useAgentChat)
     await flush()
     await act(async () => {
       await expect(
@@ -9750,7 +9750,7 @@ describe("strict chat continuation dispatch", () => {
   })
 
   it.each(["", []])("rejects empty continuation content %j", async (content) => {
-    const { result } = renderHook(useClaudeChat)
+    const { result } = renderHook(useAgentChat)
     await expect(result.current.send(content, undefined, { throwOnError: true })).rejects.toThrow(
       "empty_chat_turn"
     )
@@ -9762,7 +9762,7 @@ describe("strict chat continuation dispatch", () => {
       action: "block",
       reason: "blocked",
     } as never)
-    const { result } = renderHook(useClaudeChat)
+    const { result } = renderHook(useAgentChat)
     await flush()
     await act(async () => {
       await expect(result.current.send("plan", undefined, { throwOnError: true })).rejects.toThrow(
@@ -9794,7 +9794,7 @@ function activeLoop(over: Record<string, unknown> = {}) {
   }
 }
 
-describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
+describe("useAgentChat — Router + Fusion dispatch (ADR-0188)", () => {
   const stamp = { runId: "rf-run-1", providerId: "openai", modelId: "gpt-5" } as NonNullable<
     SendOptions["routerFusion"]
   >
@@ -9812,7 +9812,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
 
   it("[ACC:OFF-02] leaves an unstamped send on the original path, cost ceiling included", async () => {
     isCostBudgetConfiguredMock.mockReturnValue(true)
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9827,7 +9827,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
   })
 
   it("marks a turn a person typed as interactive", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9838,7 +9838,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
   })
 
   it("does not mark a continuation re-send interactive: nobody typed it", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("next iteration", undefined, { skipUserAppend: true })
@@ -9854,7 +9854,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
     resolveSendOptionsMock.mockResolvedValue(stamped)
     const started = { ...stamped, routerFusion: { ...stamp, runId: "rf-run-2" } } as SendOptions
     prepareRouterFusionSendMock.mockResolvedValue({ kind: "send", options: started })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9887,7 +9887,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
     it("builds a turn the Host will take without a seal, and hands it over", async () => {
       hostStateSessionIntentAvailableMock.mockResolvedValue(true)
       enqueueHostStateIntentMock.mockResolvedValueOnce({ id: "action-rf", status: "pending" })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("host-owned")
@@ -9906,7 +9906,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
       // Automatic titles independently probe Host ownership (ADR-0253 D06).
       // Their own suite tests that path; isolate this routing-only assertion.
       jest.mocked(applyInstantTitle).mockResolvedValueOnce(undefined)
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello")
@@ -9922,7 +9922,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
       resolveSendOptionsMock.mockResolvedValue(stamped)
       enqueueHostStateIntentMock.mockResolvedValue({ id: "action-late", status: "pending" })
       prepareRouterFusionSendMock.mockResolvedValue({ kind: "send", options: stamped })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello")
@@ -9936,7 +9936,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
   })
 
   it("routes cached options again as a new run", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("retry", stamped)
@@ -9956,7 +9956,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
       code: "TENANT_BUDGET_EXHAUSTED",
       reasons: ["tenant"],
     } as never)
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -9988,7 +9988,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
         routerFusionBypass: { code: "db_unavailable", justTripped: false },
       },
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -10010,7 +10010,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
       routerFusionBypass: { code: "db_unavailable", justTripped: true },
     }
     prepareRouterFusionSendMock.mockResolvedValue({ kind: "send", options: bypassed })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -10024,7 +10024,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
   it("releases the run when the dispatch itself fails", async () => {
     resolveSendOptionsMock.mockResolvedValue(stamped)
     sendPromptMock.mockRejectedValueOnce(new Error("ipc closed"))
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -10041,7 +10041,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
   })
 
   it("stops granting model calls when the user stops the turn", async () => {
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.stop("sess-1")
@@ -10055,7 +10055,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
         reasons: ["NO_CANDIDATES:alias:powerful"],
       })
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(result.current.send("hello")).rejects.toThrow(
@@ -10093,7 +10093,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
     it("hands a stamped turn to the run instead of the sidecar", async () => {
       isCostBudgetConfiguredMock.mockReturnValue(true)
       resolveSendOptionsMock.mockResolvedValue(fusionOptions)
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("compare the two designs")
@@ -10120,7 +10120,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
 
     it("does not save the message again on a regenerate", async () => {
       resolveSendOptionsMock.mockResolvedValue(fusionOptions)
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("again", undefined, { skipUserAppend: true })
@@ -10132,7 +10132,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
 
     it("drains the steer queue when the run completes and keeps it when the run fails", async () => {
       resolveSendOptionsMock.mockResolvedValue(fusionOptions)
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("compare")
@@ -10190,7 +10190,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
 
     it("replays the queue when an interrupt-and-steer stop settles the run", async () => {
       resolveSendOptionsMock.mockResolvedValue(fusionOptions)
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("compare")
@@ -10228,7 +10228,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
       chatState.status = "streaming"
       fusionChatTurnActiveMock.mockReturnValue(true)
       steerSessionMock.mockResolvedValue({ accepted: true })
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("also check the costs")
@@ -10243,7 +10243,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
     })
 
     it("stops the run on Stop, the session already settled", async () => {
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.stop("sess-1")
@@ -10256,7 +10256,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
     it("stops the run for an interrupt-and-steer and lets its settle replay the queue", async () => {
       chatState.otherSlices["steer-sess"] = { ...makeSlice(), steerQueue: [{ id: "q1" }] }
       fusionChatTurnActiveMock.mockReturnValue(true)
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.interruptAndSteer("steer-sess")
@@ -10273,7 +10273,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
           new RouterFusionInfrastructureError("breaker_tripped", "paused")
         )
       )
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await expect(result.current.send("hello")).rejects.toThrow()
@@ -10291,7 +10291,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
 
   it("stops granting model calls when a steer interrupts the running turn", async () => {
     chatState.otherSlices["steer-sess"] = { ...makeSlice(), steerQueue: [{ id: "q1" }] }
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.interruptAndSteer("steer-sess")
@@ -10307,7 +10307,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
       captured = args as { signal: AbortSignal }
       await new Promise(() => {})
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       void result.current.send("hello")
@@ -10339,7 +10339,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
       status: "streaming",
       steerQueue: [{ id: "q1", text: "next" }],
     }
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.interruptAndSteer("steer-sess")
@@ -10361,7 +10361,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
 
   it("drains a follow-up queued behind a paired-host turn when that turn ends cleanly", async () => {
     enqueueHostStateIntentMock.mockResolvedValueOnce({ id: "action-1", status: "pending" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("host-owned")
@@ -10390,7 +10390,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
 
   it("keeps a paired-host turn's queue and marks it undelivered when the turn fails", async () => {
     enqueueHostStateIntentMock.mockResolvedValueOnce({ id: "action-1", status: "pending" })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("host-owned")
@@ -10457,7 +10457,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
           },
         ],
       }
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.stop("steer-sess")
@@ -10483,7 +10483,7 @@ describe("useClaudeChat — Router + Fusion dispatch (ADR-0188)", () => {
         leaseLost = handler
       },
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("hello")
@@ -10516,7 +10516,7 @@ describe("embedded runtime reachability", () => {
       ...makeSlice(),
       messages: [{ id: "a", role: "assistant", parts: [] }],
     }
-    renderHook(useClaudeChat)
+    renderHook(useAgentChat)
     await flush()
     expect(chatState.replaceMessagesForSession).not.toHaveBeenCalledWith("aside", expect.anything())
     const previous = { ...chatState }
@@ -10539,7 +10539,7 @@ describe("embedded runtime reachability", () => {
   })
 
   it("drains queued deliveries when an embedded pane becomes reachable", async () => {
-    const { rerender } = renderHook(useClaudeChat)
+    const { rerender } = renderHook(useAgentChat)
     await flush()
     backgroundDrainMock.mockClear()
     peerDrainMock.mockClear()
@@ -10557,7 +10557,7 @@ describe("embedded runtime reachability", () => {
     })
     chatState.paneIdsBySession = { aside: ["pane"] }
     chatState.otherSlices.aside = makeSlice()
-    renderHook(useClaudeChat)
+    renderHook(useAgentChat)
     await flush()
     await act(async () =>
       kickoff?.(activeLoop({ sessionId: "aside", safePrompt: "continue aside" }))
@@ -10575,7 +10575,7 @@ describe("embedded runtime reachability", () => {
 
 describe("shared chat runtime", () => {
   it("does not race an IM responder even when capture releases before the event queue drains", async () => {
-    renderHook(useSharedClaudeChat, { wrapper: ClaudeChatRuntimeProvider })
+    renderHook(useSharedAgentChat, { wrapper: AgentChatRuntimeProvider })
     await flush()
     const release = registerCaptureResponder("sess-1", "im-turn", true)
     act(() => {
@@ -10597,20 +10597,20 @@ describe("shared chat runtime", () => {
   it("keeps the controller alive when a consumer unmounts", async () => {
     let hide: () => void = () => {}
     function Consumer() {
-      useSharedClaudeChat()
+      useSharedAgentChat()
       return null
     }
     function Wrapper({ children }: { children: ReactNode }) {
       const [visible, setVisible] = useState(true)
       hide = () => setVisible(false)
       return createElement(
-        ClaudeChatRuntimeProvider,
+        AgentChatRuntimeProvider,
         null,
         children,
         visible ? createElement(Consumer) : null
       )
     }
-    const { unmount, result } = renderHook(useSharedClaudeChat, { wrapper: Wrapper })
+    const { unmount, result } = renderHook(useSharedAgentChat, { wrapper: Wrapper })
     await flush()
     act(hide)
     expect(typeof result.current.send).toBe("function")
@@ -10623,14 +10623,14 @@ describe("shared chat runtime", () => {
   it("rejects missing or nested runtime owners", () => {
     const error = jest.spyOn(console, "error").mockImplementation(() => {})
     try {
-      expect(() => renderHook(useSharedClaudeChat)).toThrow("requires ClaudeChatRuntimeProvider")
+      expect(() => renderHook(useSharedAgentChat)).toThrow("requires AgentChatRuntimeProvider")
       expect(() =>
-        renderHook(useSharedClaudeChat, {
+        renderHook(useSharedAgentChat, {
           wrapper: ({ children }: { children: ReactNode }) =>
             createElement(
-              ClaudeChatRuntimeProvider,
+              AgentChatRuntimeProvider,
               null,
-              createElement(ClaudeChatRuntimeProvider, null, children)
+              createElement(AgentChatRuntimeProvider, null, children)
             ),
         })
       ).toThrow("must be mounted once")
@@ -10640,8 +10640,8 @@ describe("shared chat runtime", () => {
   })
 
   it("shares commands and one sidecar subscription across simultaneous surfaces", async () => {
-    const { result } = renderHook(() => [useSharedClaudeChat(), useSharedClaudeChat()], {
-      wrapper: ClaudeChatRuntimeProvider,
+    const { result } = renderHook(() => [useSharedAgentChat(), useSharedAgentChat()], {
+      wrapper: AgentChatRuntimeProvider,
     })
     await flush()
     expect(onClaudeMessageMock).toHaveBeenCalledTimes(1)
@@ -10655,7 +10655,7 @@ describe("attachment source persistence before dispatch", () => {
     async (status) => {
       chatState.status = status as typeof chatState.status
       persistSessionAssetsMock.mockRejectedValueOnce(new Error("session_asset_quota_exceeded"))
-      const { result } = renderHook(useClaudeChat)
+      const { result } = renderHook(useAgentChat)
       await flush()
       await act(async () => {
         await expect(
@@ -10700,7 +10700,7 @@ describe("attachment source persistence before dispatch", () => {
         return safe as unknown as typeof part
       }),
     }))
-    const { result } = renderHook(useClaudeChat)
+    const { result } = renderHook(useAgentChat)
     await flush()
     await act(async () => {
       await result.current.send(
@@ -10743,7 +10743,7 @@ describe("attachment source persistence before dispatch", () => {
       },
     })
     persistSessionAssetsMock.mockRejectedValueOnce(new Error("source-disk-failed"))
-    const { result } = renderHook(useClaudeChat)
+    const { result } = renderHook(useAgentChat)
     await flush()
     const before = sendSharedSessionMessageMock.mock.calls.length
     await act(async () => {
@@ -10766,7 +10766,7 @@ it("queues attachment text as an attachment and preserves only the user request 
     original,
   }
   const attachment = { type: "text" as const, text: "[Attachment source] extracted report" }
-  const { result } = renderHook(useClaudeChat)
+  const { result } = renderHook(useAgentChat)
   await flush()
   await act(async () => {
     await result.current.send(
@@ -10785,7 +10785,7 @@ it("queues attachment text as an attachment and preserves only the user request 
   )
 })
 
-describe("useClaudeChat — @agent turn routing", () => {
+describe("useAgentChat — @agent turn routing", () => {
   const CLAUDE: TurnRoute = {
     target: { kind: "runtime", runtime: "claude" },
     handle: "claude",
@@ -10878,7 +10878,7 @@ describe("useClaudeChat — @agent turn routing", () => {
     return { extra: diagnostic.meta?.extra, message: diagnostic.message }
   }
   async function mount() {
-    const hook = renderHook(() => useClaudeChat())
+    const hook = renderHook(() => useAgentChat())
     await flush()
     // Only what the send itself writes counts below.
     chatState.replaceSessionMessages.mockClear()
@@ -12471,7 +12471,7 @@ describe("paused project (ADR-0204)", () => {
     const thread = { id: "sess-1", title: "Thread", projectId: "project-1", projectRole: "thread" }
     getSessionMock.mockResolvedValue(thread)
     isProjectRoleSessionPausedMock.mockReturnValue(true)
-    const { result } = renderHook(useClaudeChat)
+    const { result } = renderHook(useAgentChat)
     await flush()
     chatState.replaceSessionMessages.mockClear()
     await act(async () => {
@@ -12524,7 +12524,7 @@ describe("durable background result admission", () => {
       parts: [{ type: "text", text: content }],
     }))
     const onAccepted = jest.fn()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("background output", undefined, {
@@ -12559,7 +12559,7 @@ describe("durable background result admission", () => {
 
   it("does not send an automatic delivery when durable admission is unavailable", async () => {
     const onAccepted = jest.fn()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(
@@ -12580,7 +12580,7 @@ describe("durable background result admission", () => {
       sessionId: "sess-1",
     })
     const onAccepted = jest.fn()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("background output", undefined, {
@@ -12595,7 +12595,7 @@ describe("durable background result admission", () => {
   it("recognizes a Fusion ledger receipt on redelivery without starting another run", async () => {
     fusionDeliveryReceiptMock.mockResolvedValue({ sessionId: "sess-1", runId: "background-fusion" })
     const onAccepted = jest.fn()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("output", undefined, {
@@ -12620,7 +12620,7 @@ describe("durable background result admission", () => {
       duplicate: true,
     })
     const onAccepted = jest.fn()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("private child summary", undefined, {
@@ -12667,7 +12667,7 @@ describe("durable background result admission", () => {
       input.onAccepted?.()
       return "completed"
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send("private child summary", undefined, {
@@ -12698,7 +12698,7 @@ describe("durable background result admission", () => {
   it("does not accept a colliding receipt belonging to another session", async () => {
     receiptRead.mockResolvedValue({ sessionId: "other", runId: "background-mismatch" })
     const onAccepted = jest.fn()
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await expect(
@@ -12753,7 +12753,7 @@ describe("precise external steering ownership", () => {
           return { success: true, finalResponse: "First complete" }
         })
         .mockResolvedValue({ success: true, finalResponse: "Follow-up complete" })
-      const { result, unmount } = renderHook(() => useClaudeChat())
+      const { result, unmount } = renderHook(() => useAgentChat())
       await flush()
       const first = result.current.send("First instruction")
       await running
@@ -12807,7 +12807,7 @@ describe("precise external steering ownership", () => {
           .getState()
           .setSessionRuntimeRef("sess-1", { kind: "external", agentId: "ext-1" })
       }
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await expect(
@@ -12829,7 +12829,7 @@ describe("precise external steering ownership", () => {
     const { setSessionExternalLane } = await import("@/lib/chat/steer-runtime")
     chatState.status = "streaming"
     setSessionExternalLane("sess-1", "ext-1")
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     try {
       await act(async () => {
@@ -12879,7 +12879,7 @@ describe("precise external steering ownership", () => {
           },
         })
       setSessionExternalLane("sess-1", "ext-1")
-      const { result } = renderHook(() => useClaudeChat())
+      const { result } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("continue")
@@ -12907,7 +12907,7 @@ describe("precise external steering ownership", () => {
       type: "image" as const,
       source: { type: "base64" as const, media_type: "image/png", data: "AAAA" },
     }
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await flush()
     await act(async () => {
       await result.current.send([image, { type: "text", text: "use this" }])
@@ -12954,7 +12954,7 @@ describe("VS Code participant foreground dispatch", () => {
           signal.addEventListener("abort", () => resolve(), { once: true })
         )
       })
-      const { result, unmount } = renderHook(() => useClaudeChat())
+      const { result, unmount } = renderHook(() => useAgentChat())
       await flush()
       await act(async () => {
         await result.current.send("hello extension")
@@ -12996,7 +12996,7 @@ it.each(["send", "regenerate", "edit", "steer"])(
       { id: "a1", role: "assistant", parts: [{ type: "text", text: "hi" }] },
     ]
     const release = registerCaptureResponder("sess-1", "bot-turn", true, true)
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     try {
       await flush()
       await act(async () => {
@@ -13032,7 +13032,7 @@ it("holds session admission through desktop preflight so a Bot cannot claim betw
       continuePreflight = resolve
     })
   })
-  const { result, unmount } = renderHook(() => useClaudeChat())
+  const { result, unmount } = renderHook(() => useAgentChat())
   await flush()
   const desktop = result.current.send("Desktop first")
   await reached
@@ -13072,7 +13072,7 @@ it("keeps a waiting Bot behind Stop until its interrupt completes", async () => 
         finishInterrupt = resolve
       })
   )
-  const { result, unmount } = renderHook(() => useClaudeChat())
+  const { result, unmount } = renderHook(() => useAgentChat())
   await flush()
   await act(async () => {
     await result.current.send("Desktop turn")
@@ -13109,7 +13109,7 @@ it("lifts the Stop fence when Stop fails before sending its interrupt", async ()
   useAgentRuntimeStore.getState().setSessionRuntimeRef("sess-1", { kind: "builtin" })
   checkDelegationMock.mockReturnValue({ shouldDelegate: false })
   const { withSessionTurnLock } = await import("@/lib/execution/session-turn-lock")
-  const { result, unmount } = renderHook(() => useClaudeChat())
+  const { result, unmount } = renderHook(() => useAgentChat())
   await flush()
   await act(async () => {
     await result.current.send("Desktop turn")
@@ -13160,7 +13160,7 @@ it("durably accepts a real window background turn and acknowledges replay withou
   }))
   setActiveRuntimeTargetContext("account-1", "target-1")
   const onAccepted = jest.fn()
-  const { result } = renderHook(() => useClaudeChat())
+  const { result } = renderHook(() => useAgentChat())
   try {
     await flush()
     const options = {
@@ -13249,7 +13249,7 @@ it.each([false, true])(
         resolveScope: () => ({ accountId: "account-1", runtimeTargetId: "target-1" }),
       })
     )
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     try {
       await flush()
       await act(async () => {
@@ -13333,7 +13333,7 @@ it("keeps typed thread credential proof, explicit MCP options and admitted hook 
     ])
     return { action: "proceed" as const }
   })
-  const { result } = renderHook(() => useClaudeChat())
+  const { result } = renderHook(() => useAgentChat())
   try {
     await flush()
     await act(async () => {
@@ -13422,7 +13422,7 @@ it.each(["hook-block", "resolver-throw", "provider-cap", "feature-throw"])(
     jest
       .mocked(mockedJournal.startDirectChatExecutionRun)
       .mockImplementation(journal.startDirectChatExecutionRun)
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     try {
       await flush()
       await act(async () => {
@@ -13517,7 +13517,7 @@ it("a Fusion chat turn leaves no undispatched direct-chat row", async () => {
       acceptanceProfile: "evidence_review",
     } as NonNullable<SendOptions["routerFusionRun"]>,
   })
-  const { result } = renderHook(() => useClaudeChat())
+  const { result } = renderHook(() => useAgentChat())
   await flush()
   await act(async () => {
     await result.current.send("review together")

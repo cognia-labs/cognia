@@ -395,7 +395,7 @@ export function createAgentRpcHostStateDispatcher(
               { sendPrompt },
             ] = await Promise.all([
               import("@/lib/db/sessions"),
-              import("@/hooks/chat/claude-chat-send-options"),
+              import("@/hooks/chat/agent-chat-send-options"),
               import("@/lib/ai/agent/execution/sidecar-client"),
             ])
             const session = await getSession(sessionId)
@@ -2992,7 +2992,7 @@ async function forbiddenReceipt(
  * Deliberately NOT a grant check — that already happened — and deliberately not
  * "is the caller attached". Requiring an attachment would refuse every client
  * that drives a companion host through the ordinary chat surface
- * (`use-claude-chat-controller`), which submits `turn.abort` and
+ * (`use-agent-chat-controller`), which submits `turn.abort` and
  * `approval.respond` and never calls `session_attach`; making them all attach
  * belongs with the shared composer, not with this gate. What this DOES refuse
  * is the case the attach lease exists to decide: somebody is already holding

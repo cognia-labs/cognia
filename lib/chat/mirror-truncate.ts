@@ -3,7 +3,7 @@ import { deleteMessage } from "@/lib/ai/agent/execution/sidecar-client"
 
 /**
  * Mobile-only mirror for the chat truncate paths (mobile completeness
- * Phase 2), shared by `useClaudeChat` and `useTeamChat`. Fans out a
+ * Phase 2), shared by `useAgentChat` and `useTeamChat`. Fans out a
  * per-message `deleteMessage` RPC to the desktop's Dexie so a mobile-driven
  * edit/resend doesn't desync the authoritative store. The caller must not
  * delete locally unless every host deletion succeeds; otherwise the next sync

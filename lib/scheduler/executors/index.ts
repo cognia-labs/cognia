@@ -304,7 +304,7 @@ function resolveAgentMode(
 }
 
 // =============================================================================
-// Override layering — keep parity with hooks/chat/use-claude-chat.ts merge
+// Override layering — keep parity with hooks/chat/use-agent-chat.ts merge
 // =============================================================================
 
 function unionStrings(...sources: (readonly string[] | undefined)[]): string[] {

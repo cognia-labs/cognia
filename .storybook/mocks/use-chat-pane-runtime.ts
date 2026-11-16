@@ -1,6 +1,6 @@
 // Storybook-only stand-in for `@/hooks/chat/use-chat-pane-runtime`, aliased in
 // `.storybook/main.ts`. The real hook reads the app-wide chat controller via
-// `useClaudeChat()`, which throws unless `ClaudeChatRuntimeProvider` is mounted
+// `useAgentChat()`, which throws unless `AgentChatRuntimeProvider` is mounted
 // at bootstrap. Mounting that provider here would start the real controller
 // (sidecar transport, Tauri listeners, approval bridges), and an isolated
 // preview must not do that. Same shape as the jest mock in

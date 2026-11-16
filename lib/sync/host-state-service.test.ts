@@ -125,7 +125,7 @@ jest.mock("@/lib/work-submission/lease-heartbeat", () => ({
 
 const prepareTranscriptRuntimeSendMock = jest.fn(async (...args: unknown[]) => args[1])
 const buildSendOptionsMock = jest.fn().mockResolvedValue({ model: "sonnet" })
-jest.mock("@/hooks/chat/claude-chat-send-options", () => ({
+jest.mock("@/hooks/chat/agent-chat-send-options", () => ({
   buildSendOptions: (...args: unknown[]) => buildSendOptionsMock(...args),
   prepareTranscriptRuntimeSend: (...args: unknown[]) => prepareTranscriptRuntimeSendMock(...args),
 }))
@@ -2195,7 +2195,7 @@ describe("HostStateService", () => {
 
     /**
      * Requiring an attachment would refuse every client that drives a companion
-     * host through the ordinary chat surface — `use-claude-chat-controller`
+     * host through the ordinary chat surface — `use-agent-chat-controller`
      * submits `turn.abort` and `approval.respond` and never calls
      * `session_attach`. Making them all attach belongs with the shared
      * composer, not with this gate.
@@ -4372,7 +4372,7 @@ describe("HostState Agent RPC dispatcher", () => {
     const { resolveSendOptions } = await import("@/lib/claude/build-options")
     const { buildRunMcpServerMap } = await import("@/lib/mcp/run-server-map")
     const { startToolExecutionRun } = await import("@/lib/execution/acting-authority")
-    const realBuilder = jest.requireActual("@/hooks/chat/claude-chat-send-options").buildSendOptions
+    const realBuilder = jest.requireActual("@/hooks/chat/agent-chat-send-options").buildSendOptions
     const local = await startToolExecutionRun("session-1", {
       runId: "host-local",
       localAuthorization: LOCAL_PERSON_RUN,

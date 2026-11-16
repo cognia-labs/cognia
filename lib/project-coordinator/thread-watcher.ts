@@ -2,7 +2,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 import type { UIMessage } from "ai"
 import type { ChatStatus, SessionChatSlice } from "@/stores/chat/chat-store"
 import { useChatStore } from "@/stores/chat"
-import { extractAssistantText } from "@/hooks/chat/claude-chat-turn-tasks"
+import { extractAssistantText } from "@/hooks/chat/agent-chat-turn-tasks"
 import { reportThreadToCoordinator, type ThreadOutcome, type ThreadReport } from "./report"
 import { isThreadStopping, releaseThreadHold } from "./thread-runtime"
 

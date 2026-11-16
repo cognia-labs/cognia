@@ -63,7 +63,7 @@ async function denyViaApprovalRegistry(sessionId: string, requestId: string): Pr
 /**
  * Answer one pending approval with `deny` through the channel its requestId
  * belongs to — mirroring the dispatch in `respondToApproval`
- * (use-claude-chat-controller.ts), minus every `allow*` branch. Throws are
+ * (use-agent-chat-controller.ts), minus every `allow*` branch. Throws are
  * the caller's to handle; a resolved call — even one whose registry entry was
  * already gone — means there is no waiter left to answer.
  */

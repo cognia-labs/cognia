@@ -8,7 +8,7 @@
  * `buildChatMentionTargets()` (built-ins + plugins + templates), so a markdown
  * `@`-mention could never route. This module is the SHARED projection used by
  * BOTH the picker hook (`use-markdown-chat-agents.ts`) and the send-time
- * resolver (`use-claude-chat.ts:buildSendOptions`) so the two never drift.
+ * resolver (`use-agent-chat.ts:buildSendOptions`) so the two never drift.
  *
  * The markdown agent id is the kebab filename — the same key
  * `markdownAgentsToSdkMap` uses — so `handle === id` round-trips 1:1 with the

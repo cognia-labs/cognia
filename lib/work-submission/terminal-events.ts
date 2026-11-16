@@ -113,7 +113,7 @@ export function startWorkSubmissionTerminalEvents(
   const loadSession = deps.loadSession ?? getSession
   /**
    * Book the turn's usage, as the chat view does for the turns it renders
-   * (`hooks/chat/claude-chat-events.ts`). A turn this listener settles is one
+   * (`hooks/chat/agent-chat-events.ts`). A turn this listener settles is one
    * no chat view is rendering: the Host runs it for a paired device or an org
    * member, so without this the turn's spend was recorded nowhere. Same row
    * key (the reply's message id) and fields, so a chat view that also books

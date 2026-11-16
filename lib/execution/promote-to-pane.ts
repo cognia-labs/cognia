@@ -5,7 +5,7 @@
  * against a REAL `ChatSession` and persists its messages just like a foreground
  * turn — it simply has no open tab. "Watch / take over" promotes that session to
  * an active, watchable pane: open + focus the session and seed its slice from
- * Dexie. From there `use-claude-chat`'s global `onClaudeMessage` fan-out (which
+ * Dexie. From there `use-agent-chat`'s global `onClaudeMessage` fan-out (which
  * routes events for EVERY sessionId, not just the focused one) streams the live
  * turn straight into the now-visible pane — no extra subscription needed.
  */

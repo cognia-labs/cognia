@@ -498,7 +498,7 @@ export interface BuildOptionsContext {
   /**
    * The turn is a person chatting in the app's own chat pane, the one surface
    * where a built-in skill's desktop approval dialog can be answered. Set only
-   * by `hooks/chat/claude-chat-send-options.ts`. Offers the scheduler family
+   * by `hooks/chat/agent-chat-send-options.ts`. Offers the scheduler family
    * (`schedule.*`) when the user's scheduler policy allows agents to manage
    * the schedule. Scheduled runs, the CLI, teams, eval and twin leave it unset:
    * nobody is there to confirm a write, and a scheduled run must not grow its
@@ -4849,7 +4849,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
 
   // --- Resume / fork continuity --------------------------------------------
   // The sidecar persists the SDK-issued `session_id` onto the ChatSession row
-  // (see hooks/use-claude-chat.ts). Re-passing it as `resumeSessionId` on
+  // (see hooks/use-agent-chat.ts). Re-passing it as `resumeSessionId` on
   // every send is harmless — the sidecar only honours `resume` when it has to
   // start a fresh SDK Query (e.g. after a sidecar restart or app reload). When
   // an in-flight session already has streaming input wired up, options are

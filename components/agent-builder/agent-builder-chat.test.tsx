@@ -11,7 +11,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 
 jest.mock("sonner", () => ({ toast: { error: jest.fn(), success: jest.fn() } }))
 jest.mock("@/lib/db/messages", () => ({ listMessages: jest.fn() }))
-jest.mock("@/hooks/chat/use-claude-chat", () => ({ useClaudeChat: jest.fn() }))
+jest.mock("@/hooks/chat/use-agent-chat", () => ({ useAgentChat: jest.fn() }))
 jest.mock("@/stores/chat", () => {
   const state = {
     sessions: {} as Record<string, { messagesReloadNonce?: number }>,
@@ -65,12 +65,12 @@ jest.mock("@/components/chat/chat-view", () => ({
 
 import { toast } from "sonner"
 import { listMessages } from "@/lib/db/messages"
-import { useClaudeChat } from "@/hooks/chat/use-claude-chat"
+import { useAgentChat } from "@/hooks/chat/use-agent-chat"
 import { useChatStore } from "@/stores/chat"
 import { AgentBuilderChat, buildAgentBuilderStarters } from "./agent-builder-chat"
 
 const listMessagesMock = listMessages as jest.Mock
-const useClaudeChatMock = useClaudeChat as jest.Mock
+const useAgentChatMock = useAgentChat as jest.Mock
 const toastError = toast.error as jest.Mock
 const store = useChatStore.getState() as unknown as {
   sessions: Record<string, { messagesReloadNonce?: number }>
@@ -95,7 +95,7 @@ const messages = [{ id: "m1" }] as unknown as UIMessage[]
 beforeEach(() => {
   jest.clearAllMocks()
   store.sessions = {}
-  useClaudeChatMock.mockReturnValue(claude)
+  useAgentChatMock.mockReturnValue(claude)
   claude.send.mockImplementation(() => Promise.resolve())
   listMessagesMock.mockResolvedValue(messages)
 })

@@ -15,7 +15,7 @@
  *    live turn would otherwise make the sidecar close-and-restart it
  *    (host `restartReason`), silently dropping its context.
  *
- * `useClaudeChat` (direct sessions) and the room runner (team sessions,
+ * `useAgentChat` (direct sessions) and the room runner (team sessions,
  * `lib/chat/room/`) enforce the same rule, so the module-scope pieces — the
  * arm-set, the drain, and the message-state transitions — live here and are
  * shared by both. No React: it sits below the UI layer so the runner, which

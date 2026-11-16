@@ -43,7 +43,7 @@ export function selectExternalAgent(agentId: string | null): void {
  *
  * Called when an agent is deleted or disabled. Without it the runtime store
  * keeps a dangling ref that outlives the record it names, and that ref is what
- * `use-claude-chat-controller` would still hand to the manager on the next
+ * `use-agent-chat-controller` would still hand to the manager on the next
  * external turn.
  */
 export function clearExternalAgentSelectionIfActive(agentId: string): void {

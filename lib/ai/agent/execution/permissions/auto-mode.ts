@@ -15,7 +15,7 @@
  *
  * Anything still uncertain resolves to `ask` — the safe default. This is the
  * brain behind the `permission_request` short-circuit in
- * `hooks/chat/use-claude-chat.ts`; it is pure given the injected client and so
+ * `hooks/chat/use-agent-chat.ts`; it is pure given the injected client and so
  * fully unit-testable.
  */
 

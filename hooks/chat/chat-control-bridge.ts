@@ -6,7 +6,7 @@
  * Same shape as `chat-send-bridge.ts`, for the two controls that one does not
  * carry: answering a tool approval and stopping a turn. Both are closures over
  * the chat runtime's own refs (execution handles, abort controllers, the
- * streaming coalescer), so a caller outside `ClaudeChatRuntimeProvider` — the
+ * streaming coalescer), so a caller outside `AgentChatRuntimeProvider` — the
  * island overlay's main-window half — could not reproduce them without
  * duplicating that runtime. The controller registers them once; this module
  * only forwards.

@@ -2445,7 +2445,7 @@ it("pre-upgrade observed surfaces do not cap the real child options", async () =
 })
 
 it("a non-thread deferred typed turn uses its own readers, sandbox binding, spec and handle despite another active run", async () => {
-  const { buildSendOptions } = await import("@/hooks/chat/claude-chat-send-options")
+  const { buildSendOptions } = await import("@/hooks/chat/agent-chat-send-options")
   const { useProjectStore } = await import("@/stores/project/project-store")
   useProjectStore.setState({ projects: [], activeProjectId: null })
   const { sandboxSessionRuntime } = await import("@/lib/sandbox/session-runtime")
@@ -2758,8 +2758,8 @@ it.each([
 )
 
 it("a typed desktop turn offers its OAuth HTTP server before acceptance while retaining its reserved identity", async () => {
-  const { buildSendOptions } = await import("@/hooks/chat/claude-chat-send-options")
-  const { chatHookCredentialContext } = await import("@/hooks/chat/use-claude-chat-controller")
+  const { buildSendOptions } = await import("@/hooks/chat/agent-chat-send-options")
+  const { chatHookCredentialContext } = await import("@/hooks/chat/use-agent-chat-controller")
   const { admitPersonalCredential } = await import("./personal-credential")
   const { useProjectStore } = await import("@/stores/project/project-store")
   useProjectStore.setState({ projects: [], activeProjectId: null })
@@ -2815,7 +2815,7 @@ it("a typed desktop turn offers its OAuth HTTP server before acceptance while re
 it.each(["legacy-paired", "receipt-less-host-state"])(
   "%s drops an empty dispatch id and builds session-distinct execution identities",
   async () => {
-    const { buildSendOptions } = await import("@/hooks/chat/claude-chat-send-options")
+    const { buildSendOptions } = await import("@/hooks/chat/agent-chat-send-options")
     const { useProjectStore } = await import("@/stores/project/project-store")
     useProjectStore.setState({ projects: [], activeProjectId: null })
     const runIds: string[] = []
@@ -2880,7 +2880,7 @@ it("teammate own subagent selection and inherited caps both keep bare plugin rev
 })
 
 it("a typed service-coordinator thread retains local OAuth credential admission", async () => {
-  const { buildSendOptions } = await import("@/hooks/chat/claude-chat-send-options")
+  const { buildSendOptions } = await import("@/hooks/chat/agent-chat-send-options")
   await getDb().mcpServers.put({
     id: "typed-oauth",
     name: "typed-oauth",
@@ -3006,7 +3006,7 @@ it.each([
 ] as const)(
   "reserved %s hooks launch ctx.agent.run with Host-known parent %s",
   async (branch, knownParent) => {
-    const { chatHookCredentialContext } = await import("@/hooks/chat/use-claude-chat-controller")
+    const { chatHookCredentialContext } = await import("@/hooks/chat/use-agent-chat-controller")
     const { createPluginContext } = await import("@/lib/plugin/core/context")
     const { preloadModulePluginApis } = await import("@/lib/plugin/core/module-plugin-api")
     const { getPluginEventHooks, getPluginLifecycleHooks } =

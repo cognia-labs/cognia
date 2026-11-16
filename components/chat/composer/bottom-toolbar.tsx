@@ -304,7 +304,7 @@ function GenericBottomToolbar({
   // over, so both packings collapse into the single `combined` chip.
   //
   // Mounted on an external runtime too WHEN A SQUAD IS BOUND. The executor axis
-  // is not the mode axis: `use-claude-chat-controller` branches to
+  // is not the mode axis: `use-agent-chat-controller` branches to
   // `startSquadRun` above `resolveSendOptions`, so a Squad-bound turn never
   // reaches the runtime at all and the binding keeps working after a switch to
   // an external agent. Hiding the chip there hid the only control that could

@@ -5,7 +5,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { revealSideChat } from "@/lib/slash-commands/actions/side-chat"
-import { useClaudeChat } from "@/hooks/chat/use-claude-chat-controller"
+import { useAgentChat } from "@/hooks/chat/use-agent-chat-controller"
 import { useChatStore } from "@/stores/chat"
 import { useAgentRuntimeStore } from "@/stores/agent/agent-runtime-store"
 import { getMessageMentions } from "@/lib/chat/mentions/read"
@@ -30,8 +30,8 @@ jest.mock("@/lib/runtime/standalone-mode", () => ({ isStandaloneChatMode: () => 
 jest.mock("@/lib/ai/chat/standalone-engine", () => ({
   runStandaloneTurn: jest.fn(async () => undefined),
 }))
-jest.mock("@/hooks/chat/claude-chat-send-options", () => ({
-  ...jest.requireActual("@/hooks/chat/claude-chat-send-options"),
+jest.mock("@/hooks/chat/agent-chat-send-options", () => ({
+  ...jest.requireActual("@/hooks/chat/agent-chat-send-options"),
   buildSendOptions: jest.fn(async () => ({
     provider: "openai",
     model: "test-model",
@@ -151,7 +151,7 @@ it("persists a sent user row's side-chat source once through the real controller
   useAgentRuntimeStore.setState({ runtimeRef: { kind: "builtin" }, sessionRuntimeRefs: {} })
   useChatStore.getState().clear()
   useChatStore.getState().setActiveSession(parent.id)
-  const { result, unmount } = renderHook(useClaudeChat)
+  const { result, unmount } = renderHook(useAgentChat)
   try {
     await act(async () => {
       await expect(

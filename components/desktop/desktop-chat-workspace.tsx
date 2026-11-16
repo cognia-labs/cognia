@@ -42,7 +42,7 @@ import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import type { Character, ConversationGroupBy, SendContent } from "@cognia/agent-config-types"
 import { characterChatTitle } from "@/lib/chat/character-chat-title"
 import { onComposerMentionRequest } from "@/lib/chat/composer-mention-request"
-import { useClaudeChat, useSessions, useTeamChat } from "@/hooks/chat"
+import { useAgentChat, useSessions, useTeamChat } from "@/hooks/chat"
 import { useChatStore } from "@/stores/chat"
 import { useImNotifyStore } from "@/stores/chat/im-notify-store"
 import type { ChatTemplateRun } from "@/lib/chat/template/run"
@@ -136,7 +136,7 @@ export function DesktopChatWorkspace() {
     listOnly: true,
     crossWorkspace: needsCrossWorkspaceSessions(sidebarGroupBy, sidebarSearch),
   })
-  const directChat = useClaudeChat()
+  const directChat = useAgentChat()
   const teamChat = useTeamChat()
 
   const errorMessage = useChatStore((s) => s.errorMessage)
@@ -393,7 +393,7 @@ export function DesktopChatWorkspace() {
   const isCanvasGuild = selectedGuild.kind === "canvas"
 
   // Kind lookup for the per-pane dispatchers below: a team session routes to
-  // useTeamChat, everything else to useClaudeChat. Both hooks are session-
+  // useTeamChat, everything else to useAgentChat. Both hooks are session-
   // parameterized, so team and direct panes share one ChatPaneGroup.
   const isTeamSessionId = useCallback(
     (sid: string) => {

@@ -2,7 +2,7 @@
  * Headless `/goal` loop driver for the scheduler.
  *
  * The interactive goal loop is pumped by the chat hook
- * (`hooks/chat/use-claude-chat.ts`): after each turn it builds a judge client,
+ * (`hooks/chat/use-agent-chat.ts`): after each turn it builds a judge client,
  * calls `handleTurnComplete`, and dispatches the returned continuation as the
  * next user message. A scheduled goal has no chat hook, so this module
  * reproduces that loop using the same primitives:

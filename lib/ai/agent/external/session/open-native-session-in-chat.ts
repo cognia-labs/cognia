@@ -12,7 +12,7 @@
  * The binding is process-local on purpose, exactly like the one a turn writes:
  * a native session id names state inside one agent process, and the row only
  * ever persists gateway task links (see `persistExternalSession` in
- * `use-claude-chat-controller.ts`). Earlier turns stay in the agent; the
+ * `use-agent-chat-controller.ts`). Earlier turns stay in the agent; the
  * conversation starts with no Cognia-side transcript.
  */
 

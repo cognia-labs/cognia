@@ -465,7 +465,7 @@ describe("createPluginContext", () => {
       "@/components/plugins/dialogs/plugin-data-dialog",
       "@/components/artifacts/artifact-preview",
       "@/components/context-workbench/resource-workbench-chat-panel",
-      "@/hooks/chat/use-claude-chat-controller",
+      "@/hooks/chat/use-agent-chat-controller",
     ]) {
       expect(require.cache[require.resolve(renderer)] !== undefined).toBe(false)
     }

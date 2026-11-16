@@ -38,9 +38,9 @@ import type { Character, SendOptions } from "@cognia/agent-config-types"
  * `wait` is deliberately absent: it declares `requiresApproval: false`, so it
  * never reaches the approval modal and has nothing to suppress.
  *
- * (This used to claim a mirror in `hooks/chat/use-claude-chat.ts`. There is no
+ * (This used to claim a mirror in `hooks/chat/use-agent-chat.ts`. There is no
  * such copy — that file no longer mentions computer use at all;
- * `hooks/chat/claude-chat-tool-hooks.ts` imports this constant directly.)
+ * `hooks/chat/agent-chat-tool-hooks.ts` imports this constant directly.)
  */
 export const COMPUTER_USE_PLUGIN_TOOL_NAMES = [
   "list_apps",

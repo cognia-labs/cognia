@@ -1,4 +1,4 @@
-import { chatToolCallsById, rememberChatToolCall } from "./claude-chat-tool-hooks"
+import { chatToolCallsById, rememberChatToolCall } from "./agent-chat-tool-hooks"
 
 describe("Claude chat tool correlation", () => {
   it("remembers tool calls by id", () => {

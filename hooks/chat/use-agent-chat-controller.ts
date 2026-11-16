@@ -380,19 +380,19 @@ import {
   behaviorTurnStartedAt,
   finishBehaviorTurn,
   isComputerUsePluginToolName,
-} from "./claude-chat-tool-hooks"
+} from "./agent-chat-tool-hooks"
 import {
   applyInstantTitle,
   clearPendingLoopContinuation,
   extractAssistantText,
-} from "./claude-chat-turn-tasks"
-import type { SendFn } from "./claude-chat-turn-tasks"
+} from "./agent-chat-turn-tasks"
+import type { SendFn } from "./agent-chat-turn-tasks"
 import {
   prepareTranscriptRuntimeSend,
   preparePersonalSteer,
   assertPersonalContextReaders,
   buildSendOptions,
-} from "./claude-chat-send-options"
+} from "./agent-chat-send-options"
 import {
   createTranscriptRuntimeFence,
   type TranscriptRuntimeFence,
@@ -407,7 +407,7 @@ import type {
 import type { ExternalAgentImageContent } from "@/types/agent/external-agent"
 import type { RemoteAttachmentsWithheld } from "@/lib/ai/agent/external/runtimes/remote/remote-execute"
 import { routingPlanTraceAttributes } from "@/lib/routing/plan-trace-attributes"
-import { drainSteerVia, handleEvent, tryAutoModeDecision } from "./claude-chat-events"
+import { drainSteerVia, handleEvent, tryAutoModeDecision } from "./agent-chat-events"
 import {
   fusionChatTurnActive,
   routerFusionSendDiagnostic,
@@ -710,8 +710,8 @@ export function redirectSendToBundleAliases(
 }
 
 /**
- * Owns the direct-chat runtime. Only ClaudeChatRuntimeProvider mounts this
- * controller; surfaces consume the shared public useClaudeChat hook.
+ * Owns the direct-chat runtime. Only AgentChatRuntimeProvider mounts this
+ * controller; surfaces consume the shared public useAgentChat hook.
  */
 /** Retained memory must be retired only when the current projection withholds content. */
 export function externalSessionVisibilityMatches(
@@ -1020,7 +1020,7 @@ type DesktopTurnLease = {
 }
 const desktopTurnLeases = new Map<string, DesktopTurnLease>()
 
-export function useClaudeChat() {
+export function useAgentChat() {
   const store = useChatStore
   const tRouting = useTranslations("providers.routingView")
   const tInlineErr = useTranslations("chat.inlineError")

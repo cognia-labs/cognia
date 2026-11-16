@@ -125,7 +125,7 @@ jest.mock("@/hooks/chat", () => ({
       folders: [],
     }
   },
-  useClaudeChat: () => ({
+  useAgentChat: () => ({
     send: directSend,
     stop: jest.fn(),
     regenerate: jest.fn(),

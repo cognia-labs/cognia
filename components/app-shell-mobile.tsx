@@ -105,7 +105,7 @@ import {
 import type { ComposerHandle, ComposerTurnMetadata } from "@/components/chat/composer"
 import { turnMetadataSendOptions } from "@/lib/chat/turn-metadata"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
-import { useClaudeChat, useSessions, useTeamChat } from "@/hooks/chat"
+import { useAgentChat, useSessions, useTeamChat } from "@/hooks/chat"
 import { useCredentialStatus } from "@/hooks/chat/use-credential-status"
 import { useSessionRunStatusMap } from "@/hooks/chat/use-session-run-status-map"
 import { branchWholeConversation } from "@/lib/chat/branch-whole-conversation"
@@ -217,7 +217,7 @@ export function AppShellMobile() {
   })
   // The drawer rows' turn glyphs and its `running` filter, as on desktop.
   const runStatusById = useSessionRunStatusMap()
-  const directChat = useClaudeChat()
+  const directChat = useAgentChat()
   const teamChat = useTeamChat()
 
   const chatStatus = useChatStore((s) => s.status)

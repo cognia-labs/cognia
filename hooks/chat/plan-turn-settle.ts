@@ -4,7 +4,7 @@
  *
  * The in-session driver advances a plan ONLY through `handlePlanTurnComplete`,
  * and that was called from the built-in sidecar's success path alone
- * (`claude-chat-events.ts`). A step run on an external agent (Pi, commandcode)
+ * (`agent-chat-events.ts`). A step run on an external agent (Pi, commandcode)
  * therefore never completed and never failed: it sat `in_progress` until the
  * step watchdog gave up on it. Both runtimes now call these two functions, so a
  * plan step behaves the same whichever lane its turn ran on:
@@ -25,7 +25,7 @@ import type { UIMessage } from "ai"
 import type { PlanStepHaltCause } from "@/types/agent/plan"
 import { useChatStore } from "@/stores/chat"
 import { commitMessageDelta } from "@/lib/db/messages"
-import { renderPlanExitCard } from "./claude-chat-turn-tasks"
+import { renderPlanExitCard } from "./agent-chat-turn-tasks"
 
 export interface DriveInSessionPlanInput {
   sessionId: string

@@ -115,7 +115,7 @@ export async function recordExternalAgentUsage(
 }
 
 /**
- * High-level recorder called from the chat hooks (`use-claude-chat`,
+ * High-level recorder called from the chat hooks (`use-agent-chat`,
  * `use-team-chat`) when a SDK `result` event lands. Pulls usage out of the
  * SDKResultMessage, builds a row, and upserts. No-ops cleanly when there's
  * nothing useful to record (e.g. error results without usage payloads) so

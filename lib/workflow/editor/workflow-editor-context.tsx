@@ -8,7 +8,7 @@
  * Why a context instead of prop drilling: the dedicated workflow toolbar
  * lives deep inside the generic `<ChatPane>` → `<Composer>` → `<BottomToolbar>`
  * tree, none of which know about workflow concerns. The Provider is mounted
- * once in `chat-tab.tsx` (which owns `useClaudeChat()`) and the toolbar
+ * once in `chat-tab.tsx` (which owns `useAgentChat()`) and the toolbar
  * pulls what it needs via `useWorkflowEditor()`.
  *
  * Outside the workflow editor, `useWorkflowEditor()` returns `null` — the
@@ -25,7 +25,7 @@ export interface WorkflowEditorContextValue {
   useEditorStore: EditorStore
   /**
    * Fire a workflow-specific quick action. The implementation lives in
-   * `chat-tab.tsx` (which owns `useClaudeChat()`) and is responsible for
+   * `chat-tab.tsx` (which owns `useAgentChat()`) and is responsible for
    * building the prompt and calling `claude.send(...)`.
    */
   onQuickAction: (kind: WorkflowQuickActionKind) => void | Promise<void>

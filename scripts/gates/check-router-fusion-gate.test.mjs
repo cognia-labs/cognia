@@ -81,7 +81,7 @@ test("passes a shared module that uses only the gate, the switch leaf and dynami
 test("[ACC:OFF-03] fails a shared module that statically imports the engine or a host module", () => {
   withFixture(
     {
-      "hooks/chat/claude-chat-events.ts":
+      "hooks/chat/agent-chat-events.ts":
         'import { finalizeChatRun } from "@/lib/router-fusion/chat/chat-runs"\n',
       "lib/claude/ipc.ts": 'import { usdToMicrousd } from "@cognia/router-fusion"\n',
     },
@@ -89,7 +89,7 @@ test("[ACC:OFF-03] fails a shared module that statically imports the engine or a
       assert.deepEqual(collectViolations(root), [
         { file: "lib/claude/ipc.ts", specifier: "@cognia/router-fusion", kind: "engine" },
         {
-          file: "hooks/chat/claude-chat-events.ts",
+          file: "hooks/chat/agent-chat-events.ts",
           specifier: "@/lib/router-fusion/chat/chat-runs",
           kind: "host",
         },

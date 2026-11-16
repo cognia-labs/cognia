@@ -13,7 +13,7 @@
  *     10-minute TTL auto-deny) — the sidecar is already awaiting the
  *     `plugin_tool_exec` response, so blocking here suspends the turn
  *     naturally;
- *   - `use-claude-chat.respondToApproval` resolves prefixed requestIds
+ *   - `use-agent-chat.respondToApproval` resolves prefixed requestIds
  *     locally via `resolveApproval` and NEVER forwards them to the sidecar's
  *     `approveTool` (there is no sidecar-side permission waiting).
  */

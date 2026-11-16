@@ -37,7 +37,7 @@ function flush(): Promise<void> {
 
 describe("isRealtimeToolApprovalRequestId", () => {
   it("recognises its own request ids", () => {
-    // use-claude-chat branches on this to resolve locally; a miss would forward
+    // use-agent-chat branches on this to resolve locally; a miss would forward
     // the id to the sidecar, which has no waiter for it, and hang the dialog.
     expect(isRealtimeToolApprovalRequestId(`${REALTIME_TOOL_APPROVAL_PREFIX}call_1`)).toBe(true)
   })

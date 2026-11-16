@@ -4,7 +4,7 @@
  * A headless capture (`runAndCaptureAssistantReply`) shares the sidecar event
  * stream with the desktop chat runtime, which ingests every session's
  * transcript and books a `chat` row for each `result` it sees
- * (`hooks/chat/claude-chat-events.ts`). For a headless turn that row knows
+ * (`hooks/chat/agent-chat-events.ts`). For a headless turn that row knows
  * neither the provider (only an interactive send records it) nor the run the
  * turn belonged to, so it never reaches the provider rollup or the cost-budget
  * gate. On the always-on host the chat runtime is not mounted at all and the

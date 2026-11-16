@@ -27,7 +27,7 @@ const buildSendOptionsMock = jest.fn(async () => ({ model: "sonnet" }))
 const prepareTranscriptRuntimeSendMock = jest.fn(
   async (_sessionId: string, options: unknown) => options
 )
-jest.mock("@/hooks/chat/claude-chat-send-options", () => ({
+jest.mock("@/hooks/chat/agent-chat-send-options", () => ({
   buildSendOptions: (...args: unknown[]) =>
     (buildSendOptionsMock as (...a: unknown[]) => unknown)(...args),
   prepareTranscriptRuntimeSend: (...args: unknown[]) =>

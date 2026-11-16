@@ -10,7 +10,7 @@
  * on a spinner instead, which left the run with no visible way to stop it.
  *
  * A send during a live turn is still a first-class path
- * (`use-claude-chat-controller`: a `streaming` / `awaiting_approval` session
+ * (`use-agent-chat-controller`: a `streaming` / `awaiting_approval` session
  * routes the message into the steer lane instead of restarting the turn), so a
  * typed follow-up gets its own secondary control (`followUp`) next to Stop,
  * and Enter keeps queueing it. The control is never a no-op.

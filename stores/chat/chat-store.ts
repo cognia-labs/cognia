@@ -186,7 +186,7 @@ export interface PendingCommandOverrides {
  * Concurrency note (ADR — concurrent chat sessions): events for a non-focused
  * but open session must keep updating *its* slice (so its pane keeps streaming
  * live); switching focus must never wipe a background slice. The store is the
- * single source of truth for that isolation — `use-claude-chat` routes every
+ * single source of truth for that isolation — `use-agent-chat` routes every
  * SDK event to the slice for `evt.sessionId`.
  */
 export interface SessionChatSlice {
@@ -896,7 +896,7 @@ interface ChatState {
   setStatus: (s: ChatStatus) => void
   setError: (msg: string | null) => void
   // ── Session-scoped variants (route by id regardless of focus) ────────────
-  // Used by `use-claude-chat`'s event loop so a background open session keeps
+  // Used by `use-agent-chat`'s event loop so a background open session keeps
   // streaming into its own slice without disturbing the focused pane.
   setSessionMessages: (id: string, msgs: UIMessage[]) => void
   appendSessionMessage: (id: string, msg: UIMessage) => void

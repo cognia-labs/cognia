@@ -102,7 +102,7 @@ import { CustomThemeApplier } from "@/lib/appearance/custom-theme-applier"
 import { PluginThemeApplier } from "@/lib/appearance/plugin-theme-applier"
 import { DataAdapterProvider } from "@/lib/data-hooks/context"
 import { AgentExecutionHandleProvider } from "@/components/providers/agent-execution-handle-provider"
-import { ClaudeChatRuntimeProvider } from "@/hooks/chat/use-claude-chat"
+import { AgentChatRuntimeProvider } from "@/hooks/chat/use-agent-chat"
 import { ProjectCoordinatorHost } from "@/components/project-coordinator/project-coordinator-host"
 import { dexieAdapter } from "@/lib/data-hooks/dexie-adapter"
 import { ExposeTestGlobals } from "@/lib/dev/expose-test-globals"
@@ -379,7 +379,7 @@ export function AppRuntime({
                                                   display:contents keeps it box-less but
                                                   still a valid @scope (#app) root. */}
                                                           <AgentExecutionHandleProvider>
-                                                            <ClaudeChatRuntimeProvider>
+                                                            <AgentChatRuntimeProvider>
                                                               <ProjectCoordinatorHost />
                                                               <div
                                                                 id="app"
@@ -388,7 +388,7 @@ export function AppRuntime({
                                                               >
                                                                 {shell}
                                                               </div>
-                                                            </ClaudeChatRuntimeProvider>
+                                                            </AgentChatRuntimeProvider>
                                                           </AgentExecutionHandleProvider>
                                                         </PlatformDesktopSources>
                                                       </WebCompanionBootProvider>

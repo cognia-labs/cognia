@@ -88,8 +88,8 @@ jest.mock("./context-workbench", () => ({
 jest.mock("@/components/chat/chat-scope-provider", () => ({
   useChatScope: () => ({ sessionId: mockScopeId }),
 }))
-jest.mock("@/hooks/chat/use-claude-chat", () => ({
-  useClaudeChat: () => ({
+jest.mock("@/hooks/chat/use-agent-chat", () => ({
+  useAgentChat: () => ({
     send,
     stop,
     regenerate,

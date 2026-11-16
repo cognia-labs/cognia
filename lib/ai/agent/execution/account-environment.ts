@@ -204,7 +204,7 @@ export async function resolveProxyEnv(
  *
  * Still ATTEMPTED rather than skipped: a turn whose tool surface collapses to
  * `none` is dispatched on the built-in lane after this point (see
- * `use-claude-chat-controller`'s `manualExternal`), and skipping outright would
+ * `use-agent-chat-controller`'s `manualExternal`), and skipping outright would
  * hand that fallback an empty env when a perfectly good account existed. So the
  * env is resolved when it can be, and its absence stops being a refusal.
  */

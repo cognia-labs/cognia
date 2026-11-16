@@ -12885,7 +12885,7 @@
       "content": "Tool input is content-bearing; no content-free exemption. The production getter accepts the exact invoking Host source, never a native session id. Its real canonical-run pin verifies clean then marked policy through the forwarded source; the manager real-run pin covers tool execution. No downstream production execute consumer was found; no upstream dominance exemption is claimed."
     },
     {
-      "file": "hooks/chat/use-claude-chat-controller.ts",
+      "file": "hooks/chat/use-agent-chat-controller.ts",
       "binding": "sessionId and admitted executionRunId",
       "content": "executeOnExternalAgent preserves bound options unchanged."
     },

@@ -25,7 +25,7 @@ import {
 /**
  * Plain assistant text out of a UIMessage's parts.
  *
- * Deliberately re-stated here rather than imported from `use-claude-chat`:
+ * Deliberately re-stated here rather than imported from `use-agent-chat`:
  * that module is the whole chat engine, and pulling it into a panel component
  * would drag the engine and its side effects along. `lib/inbox`'s
  * `extractPlainText` is not usable either — it collapses whitespace, which

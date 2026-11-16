@@ -190,7 +190,7 @@ import {
   handleEvent,
   isArtifactAutoCreateEnabled,
   isTeamSubSession,
-} from "./claude-chat-events"
+} from "./agent-chat-events"
 import { SessionCoalescingRegistry } from "@/lib/chat/stream-coalescing"
 import { useChatStore } from "@/stores/chat"
 import { setSdkSessionId } from "@/lib/db/sessions"
@@ -2000,7 +2000,7 @@ describe("renderer broker Auto-mode responder", () => {
     async (decision) => {
       const { runAutoModeForTool } =
         await import("@/lib/ai/agent/execution/permissions/auto-mode-runner")
-      const { tryAutoModeDecision } = await import("./claude-chat-events")
+      const { tryAutoModeDecision } = await import("./agent-chat-events")
       jest
         .mocked(runAutoModeForTool)
         .mockResolvedValueOnce({ decision, source: "rules", reason: "fixture" } as never)
@@ -2030,7 +2030,7 @@ describe("Auto mode and per-call tools (ADR-0201)", () => {
   it("never lets Auto mode allow a per-call tool, but lets it deny one", async () => {
     const { runAutoModeForTool } =
       await import("@/lib/ai/agent/execution/permissions/auto-mode-runner")
-    const { tryAutoModeDecision } = await import("./claude-chat-events")
+    const { tryAutoModeDecision } = await import("./agent-chat-events")
     const respond = jest.fn(async (_decision: "allow" | "deny", _message?: string) => {})
     const request = {
       sessionId: "chat",

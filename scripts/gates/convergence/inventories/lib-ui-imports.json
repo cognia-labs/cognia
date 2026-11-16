@@ -261,7 +261,7 @@
         "dynamic"
       ],
       "targets": [
-        "hooks/chat/claude-chat-send-options.ts"
+        "hooks/chat/agent-chat-send-options.ts"
       ],
       "typeOnly": false
     },
@@ -273,7 +273,7 @@
         "dynamic"
       ],
       "targets": [
-        "hooks/chat/claude-chat-send-options.ts"
+        "hooks/chat/agent-chat-send-options.ts"
       ],
       "typeOnly": false
     },
@@ -532,8 +532,8 @@
         "static"
       ],
       "targets": [
+        "hooks/chat/agent-chat-turn-tasks.ts",
         "hooks/chat/chat-send-bridge.ts",
-        "hooks/chat/claude-chat-turn-tasks.ts",
         "hooks/chat/steer-runtime.ts"
       ],
       "typeOnly": false
@@ -572,7 +572,7 @@
         "static"
       ],
       "targets": [
-        "hooks/chat/claude-chat-turn-tasks.ts"
+        "hooks/chat/agent-chat-turn-tasks.ts"
       ],
       "typeOnly": false
     },
@@ -584,7 +584,7 @@
         "static"
       ],
       "targets": [
-        "hooks/chat/claude-chat-turn-tasks.ts",
+        "hooks/chat/agent-chat-turn-tasks.ts",
         "hooks/chat/steer-runtime.ts"
       ],
       "typeOnly": false
@@ -729,7 +729,7 @@
         "dynamic"
       ],
       "targets": [
-        "hooks/chat/claude-chat-send-options.ts"
+        "hooks/chat/agent-chat-send-options.ts"
       ],
       "typeOnly": false
     },

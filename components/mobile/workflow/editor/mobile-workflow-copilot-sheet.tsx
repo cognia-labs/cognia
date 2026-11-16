@@ -3,14 +3,14 @@
 /**
  * Mobile workflow copilot — the touch-first counterpart to the desktop
  * right-sidebar Chat tab. It mounts the SAME `WorkflowEditorChatTab`
- * (session pinning + `useClaudeChat` + `ChatPane` + proposal cards) that the
+ * (session pinning + `useAgentChat` + `ChatPane` + proposal cards) that the
  * desktop editor uses; only the chrome is mobile-specific: a slide-up sheet
  * over the canvas instead of a resizable column.
  *
  * Transport: the chat tab is transport-agnostic. On Capacitor / web-companion
  * `sendPrompt` routes through the `agent_send` companion RPC to the paired
  * desktop's sidecar, and streamed turns come back over the companion events
- * WebSocket (`claude://message`) — the same channel `useClaudeChat` now
+ * WebSocket (`claude://message`) — the same channel `useAgentChat` now
  * subscribes to off-desktop. Proposals surface via `WorkflowProposalCard`,
  * which seeds the phone's local proposal store from the tool-result echo (the
  * desktop's `wf_propose_batch` populated the DESKTOP store, not the phone's).

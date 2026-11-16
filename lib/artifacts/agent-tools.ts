@@ -433,7 +433,7 @@ export async function runArtifactBuiltinTool(
         if (!existing) return notFound("artifact", artifactId)
 
         // The same review gate a heuristic revision passes through
-        // (`hooks/chat/claude-chat-events.ts`). An agent-authored edit must not
+        // (`hooks/chat/agent-chat-events.ts`). An agent-authored edit must not
         // be the one way to bypass the user's own setting.
         if (reviewBeforeApply()) {
           const proposal = store.proposeArtifactUpdate(artifactId, content, {

@@ -250,7 +250,7 @@ export async function admitPairedChatTurn(
     bindToolCallRun(sessionId, runId, runId, options.execution?.identity?.attemptId, {
       builtinRuntime: true,
     })
-    const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/claude-chat-send-options")
+    const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/agent-chat-send-options")
     const { withTranscriptRuntimeLock } = await import("@/lib/chat/transcript/revision-events")
     const prepared = await withTranscriptRuntimeLock(sessionId, async () => {
       if (externalRoute) {

@@ -221,13 +221,13 @@ async function defaultTurnDeps(): Promise<HostAutomatedTurnDeps> {
       return projected.messages[0].text
     },
     buildOptions: async (session, text, executionRunId) => {
-      const { buildSendOptions } = await import("@/hooks/chat/claude-chat-send-options")
+      const { buildSendOptions } = await import("@/hooks/chat/agent-chat-send-options")
       return buildSendOptions(session, text, undefined, undefined, undefined, { executionRunId })
     },
     dispatch: async (sessionId, text, options, turn) => {
       const [{ prepareTranscriptRuntimeSend }, { withTranscriptRuntimeLock }, { sendPrompt }] =
         await Promise.all([
-          import("@/hooks/chat/claude-chat-send-options"),
+          import("@/hooks/chat/agent-chat-send-options"),
           import("@/lib/chat/transcript/revision-events"),
           import("@/lib/ai/agent/execution/sidecar-client"),
         ])

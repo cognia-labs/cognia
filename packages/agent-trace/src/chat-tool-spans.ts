@@ -10,7 +10,7 @@
  *     look up the cached spanId, call `endSpan` with the error status (the
  *     SDK sets `is_error: true` for failed tool calls).
  *
- * Why a separate file: keeps `hooks/chat/use-claude-chat.ts` change small
+ * Why a separate file: keeps `hooks/chat/use-agent-chat.ts` change small
  * and lets us unit-test the block extraction without spinning up the chat
  * hook's full mock surface.
  */

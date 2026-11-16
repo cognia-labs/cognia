@@ -5,7 +5,7 @@
  *
  * When a remote device opens a session viewer it calls the `session_attach`
  * RPC; on close / navigate-away it calls `session_detach`. Both land in
- * `lib/companion/desktop-write-source.ts`. `hooks/chat/claude-chat-events.ts`
+ * `lib/companion/desktop-write-source.ts`. `hooks/chat/agent-chat-events.ts`
  * consults `isSessionAttached` so a `permission_request` for a session that is
  * NOT the desktop's foreground session is **routed to the attached remote
  * device** (which already received the frame over its event stream and will

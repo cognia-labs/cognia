@@ -13,7 +13,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 // `ChatPane` (header + message list + composer) renders from the chat store and
 // its props, plus the app-wide chat controller it reaches through
 // `useChatPaneRuntime()`. That controller needs the bootstrap-only
-// `ClaudeChatRuntimeProvider` (sidecar transport, Tauri listeners), so
+// `AgentChatRuntimeProvider` (sidecar transport, Tauri listeners), so
 // .storybook/main.ts aliases the hook to `.storybook/mocks/use-chat-pane-runtime.ts`:
 // this pane owns the session's decisions and every runtime action (send,
 // approve, compact, …) is a spy logged to the Actions panel. Storybook runs on

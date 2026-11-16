@@ -41,8 +41,8 @@ jest.mock("@/lib/agent/plan/turn-driver", () => ({
 const send = jest.fn()
 const stop = jest.fn().mockResolvedValue(undefined)
 let chatRuntime: { send: jest.Mock; stop: jest.Mock } | null = { send, stop }
-jest.mock("@/hooks/chat/use-claude-chat", () => ({
-  useOptionalClaudeChat: () => chatRuntime,
+jest.mock("@/hooks/chat/use-agent-chat", () => ({
+  useOptionalAgentChat: () => chatRuntime,
 }))
 
 const chatSessions: Record<string, { status: string }> = {}

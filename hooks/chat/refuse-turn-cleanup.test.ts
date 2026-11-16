@@ -9,7 +9,7 @@ import { join } from "node:path"
  * send path has exactly one way to refuse a turn that is already `streaming` —
  * so a path added tomorrow either goes through it or shows up here.
  */
-const SOURCE = readFileSync(join(process.cwd(), "hooks/chat/use-claude-chat-controller.ts"), "utf8")
+const SOURCE = readFileSync(join(process.cwd(), "hooks/chat/use-agent-chat-controller.ts"), "utf8")
 
 /** The five steps a refusal owes the session, plus the run finish. */
 const STEPS = [

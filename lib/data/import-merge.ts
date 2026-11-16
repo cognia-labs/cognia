@@ -13,7 +13,7 @@ import { preservePersonalMarkMetadata } from "@cognia/plugin-contract/types/exec
 //     the chat header says so (`components/chat/imported-origin-chip.tsx`).
 //     That badge is what this comment promised for a long time while nothing
 //     in the app read `importFrozen` at all. Freeze is set in
-//     `use-claude-chat-controller.ts` on the first continuation.
+//     `use-agent-chat-controller.ts` on the first continuation.
 //   • otherwise                → refresh CONTENT (messages, auto-title, detected
 //     model, workingDir, updatedAt, branchSeed) from the freshly-parsed
 //     conversation, but PRESERVE the user's local decorations from the existing

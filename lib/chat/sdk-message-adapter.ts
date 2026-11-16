@@ -1076,7 +1076,7 @@ function mergeLiveUsage(messages: UIMessage[], partial: Partial<UsageInfo>): UIM
  * The Agent SDK streams a tool call's arguments as a run of `input_json_delta`
  * fragments that are only valid JSON once the block closes, so the fragments
  * have to be accumulated somewhere across events. They deliberately live HERE
- * rather than on the part: `use-claude-chat` debounce-persists the message list
+ * rather than on the part: `use-agent-chat` debounce-persists the message list
  * mid-stream, so parking a growing raw-JSON string on the part would write a
  * second full copy of every large `Write` / `Edit` payload into Dexie for the
  * duration of the call. Entries are dropped at `content_block_stop`.

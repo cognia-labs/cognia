@@ -5,7 +5,7 @@
  *
  * When a host session that a remote device is watching hits a tool-use
  * approval (and the desktop routed it to that device instead of auto-denying —
- * see `hooks/chat/use-claude-chat.ts`), the remote may have backgrounded the
+ * see `hooks/chat/use-agent-chat.ts`), the remote may have backgrounded the
  * app, dropping its `/ws/events` subscription. This emits a dedicated
  * `companion://needs-input` Tauri event that the Rust `register_push_trigger`
  * (in `companion_api/commands.rs`) turns into an APNs/FCM push.

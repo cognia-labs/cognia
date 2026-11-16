@@ -145,7 +145,7 @@ jest.mock("@/hooks/chat", () => ({
       reorderSessions,
     }
   },
-  useClaudeChat: () => directChatMock,
+  useAgentChat: () => directChatMock,
   useTeamChat: () => teamChatMock,
 }))
 
@@ -878,7 +878,7 @@ test("the pane group's onCreate goes to the team's welcome, and its first send c
   expect(screen.queryByTestId("tool-approval-dialog")).not.toBeInTheDocument()
 })
 
-test("pane callbacks dispatch by session kind (team → useTeamChat, direct → useClaudeChat)", async () => {
+test("pane callbacks dispatch by session kind (team → useTeamChat, direct → useAgentChat)", async () => {
   sessionsRef.current = [
     {
       id: "t-1",

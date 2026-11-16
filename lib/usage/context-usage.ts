@@ -114,7 +114,7 @@ export function getLatestUsage(messages: UIMessage[]): UsageInfo | null {
 
 /**
  * Which execution lane produced the newest assistant turn, from the `run`
- * metadata `use-claude-chat-controller` stamps on it (`"external"` for an
+ * metadata `use-agent-chat-controller` stamps on it (`"external"` for an
  * external agent, the provider id for the built-in path). `null` before any
  * assistant turn, and `null` when the newest one carries no lane.
  *

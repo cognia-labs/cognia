@@ -32,7 +32,7 @@
  *
  * Continuation exemption: a foreground chat turn that continues an
  * already-running session must never be blocked (replicates the
- * `selectIsAtStreamCap` / `use-claude-chat.ts` rule that an already-streaming
+ * `selectIsAtStreamCap` / `use-agent-chat.ts` rule that an already-streaming
  * session is excluded from the cap). The broker detects this — when a lease
  * names a `sessionId` that already has an active leg, it is admitted
  * immediately and consumes no permit.

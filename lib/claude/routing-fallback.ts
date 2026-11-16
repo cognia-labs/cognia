@@ -11,7 +11,7 @@ import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-in
 // pipeline; we trust the upstream resolution and only swap provider/model.
 //
 // This is the implementation of the P4 follow-up TODO that previously
-// lived in `hooks/chat/use-claude-chat.ts`.
+// lived in `hooks/chat/use-agent-chat.ts`.
 
 import { sendPrompt } from "@/lib/ai/agent/execution/sidecar-client"
 import { createDiagnostic } from "@cognia/diagnostics"

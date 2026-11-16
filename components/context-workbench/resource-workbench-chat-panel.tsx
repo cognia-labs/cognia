@@ -7,7 +7,7 @@ import { useLiveQuery } from "dexie-react-hooks"
 import type { SendContent } from "@cognia/agent-config-types"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { useChatScope } from "@/components/chat/chat-scope-provider"
-import { useClaudeChat } from "@/hooks/chat/use-claude-chat"
+import { useAgentChat } from "@/hooks/chat/use-agent-chat"
 import { useSessionAsideIdentity } from "@/hooks/chat/use-session-aside-identity"
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { hostSupportsSessionResetTurns } from "@/lib/ai/agent/external/runtimes/remote/remote-host-configs"
@@ -106,7 +106,7 @@ export function ResourceWorkbenchChatPanel({
   const t = useTranslations("contextWorkbench")
   const { sessionId } = useChatScope()
   const { resource } = useContextWorkbench()
-  const claude = useClaudeChat()
+  const claude = useAgentChat()
   const exportSession = useSingleExport()
   const session = useLiveQuery(() => getDb().sessions.get(sessionId), [sessionId]) ?? null
   const parentSessionId = resource.kind === "session" ? resource.sessionId : undefined

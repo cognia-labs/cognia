@@ -8,7 +8,7 @@
  * skills, MCP, hooks and (given `twinDeps`) the twin. Memory was not, because
  * `build-options` gates its injection on `memoryDeps && memoryUserMessage` and
  * no team module ever passed either. Every other surface that sends a turn
- * builds them: chat (`claude-chat-send-options.ts`), the character-team room,
+ * builds them: chat (`agent-chat-send-options.ts`), the character-team room,
  * scheduled outbound, the pet. A conversation handed to a Squad therefore
  * silently lost every memory the same conversation would have recalled on the
  * direct path.

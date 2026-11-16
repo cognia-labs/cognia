@@ -4,12 +4,12 @@ import { useCallback, useEffect, useId } from "react"
 import { useChatStore } from "@/stores/chat"
 import { updateSession } from "@/lib/db/sessions"
 import type { PlanResumeMode } from "@/components/agent/plan/plan-approval-card"
-import { useClaudeChat } from "./use-claude-chat"
+import { useAgentChat } from "./use-agent-chat"
 
 /** Shared runtime access for every conversation surface. React Activity tears
  * down this effect when a retained panel is hidden, releasing dialog ownership. */
 export function useChatPaneRuntime(sessionId: string | null) {
-  const runtime = useClaudeChat()
+  const runtime = useAgentChat()
   const paneId = useId()
   useEffect(() => {
     if (!sessionId) return

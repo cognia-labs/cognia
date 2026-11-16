@@ -14,7 +14,7 @@ import {
  * session ends.
  *
  * Scope: this helper does NOT save the assistant message itself. The
- * existing renderer-side persistence (`hooks/chat/use-claude-chat.ts`)
+ * existing renderer-side persistence (`hooks/chat/use-agent-chat.ts`)
  * already does that via the same event channel — both subscribers see
  * each event independently. The bridge only intercepts text for outbound
  * routing.
@@ -2296,7 +2296,7 @@ async function captureBoundHostExternalReply(
               async () => {
                 const prepared = cap.currentMessageId
                   ? await (
-                      await import("@/hooks/chat/claude-chat-send-options")
+                      await import("@/hooks/chat/agent-chat-send-options")
                     ).prepareTranscriptRuntimeSend(sessionId, options ?? {}, {
                       currentMessageId: cap.currentMessageId,
                       executionRunId:

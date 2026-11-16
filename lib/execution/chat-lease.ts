@@ -7,7 +7,7 @@
  * the global ExecutionBroker counts chat occupancy alongside the headless legs
  * (and the execution panel can observe / cancel a chat turn).
  *
- * Lifecycle: `acquireChatLease` is called by `use-claude-chat`'s `send()` right
+ * Lifecycle: `acquireChatLease` is called by `use-agent-chat`'s `send()` right
  * before the turn flips to `streaming`. The lease is released by a single
  * store-subscription watcher when the session leaves an active state
  * (`streaming` / `awaiting_approval`) — which covers every settle path

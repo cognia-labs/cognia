@@ -4,7 +4,7 @@ import * as personalSinkHost from "@/lib/execution/personal-sink"
  *
  * Every path that answers a `permission_request` asks this module about an
  * outbound tool before it shows a card, consults an allow list or parks the
- * call: the desktop chat listener (`hooks/chat/claude-chat-events.ts`) and the
+ * call: the desktop chat listener (`hooks/chat/agent-chat-events.ts`) and the
  * team room (`lib/chat/room/runner.ts`) through {@link planOutboundAsk}; the
  * headless captures (`lib/ai/agent/execution/run-and-capture.ts`), the scheduler's own
  * loop and the CLI through {@link answerWithOutboundPolicy}. Each gets the

@@ -66,7 +66,7 @@ jest.mock("@/lib/db/sessions", () => ({
   getSession: (...args: unknown[]) => mockGetSession(...args),
   updateSession: (...args: unknown[]) => mockUpdatePersonalSession(...args),
 }))
-jest.mock("@/hooks/chat/claude-chat-send-options", () => ({
+jest.mock("@/hooks/chat/agent-chat-send-options", () => ({
   prepareTranscriptRuntimeSend: (...args: unknown[]) => mockPrepareTranscriptRuntimeSend(...args),
 }))
 jest.mock("@/lib/chat/transcript/revision-events", () => ({

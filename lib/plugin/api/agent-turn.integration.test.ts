@@ -7,7 +7,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { deleteSession, getSession, updateSession } from "@/lib/db/sessions"
 import { clearMessages, deleteStoredMessage, listMessages, truncateAfter } from "@/lib/db/messages"
-import { prepareTranscriptRuntimeSend } from "@/hooks/chat/claude-chat-send-options"
+import { prepareTranscriptRuntimeSend } from "@/hooks/chat/agent-chat-send-options"
 import { hasCaptureResponder } from "@/lib/ai/agent/execution/hitl/approval-registry"
 import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
 import { resolveRunActingIdentity, recordedRunMetadata } from "@/lib/execution/acting-authority"
@@ -405,7 +405,7 @@ it.each(
           for (const event of kind === "external-tool" ? [] : sdkEvents) {
             cap?.onSdkEvent?.(event)
             if (desktop) {
-              const { handleEvent } = await import("@/hooks/chat/claude-chat-events")
+              const { handleEvent } = await import("@/hooks/chat/agent-chat-events")
               // A viewed session's real desktop listener must return at the capture
               // ownership gate before it reaches its independent transcript writer.
               await handleEvent(

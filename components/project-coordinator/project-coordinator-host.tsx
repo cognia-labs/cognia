@@ -2,7 +2,7 @@
 
 /**
  * The always-mounted runtime for project coordination (ADR-0204). Renders
- * nothing. Mounted once inside `ClaudeChatRuntimeProvider`, so thread briefs
+ * nothing. Mounted once inside `AgentChatRuntimeProvider`, so thread briefs
  * and coordinator reports go through the same `send` a person's message takes.
  *
  * For every workspace with coordination on, it:

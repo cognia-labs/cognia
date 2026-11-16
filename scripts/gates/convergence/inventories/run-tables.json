@@ -1666,7 +1666,7 @@
         "components/mobile/workflow/use-pending-triggers.ts#usePendingWorkflowTriggers::rows",
         "components/providers/companion-outbound-runner-provider.tsx#subscribeToPendingJobs::subscription",
         "components/router-fusion/companion/companion-fusion-run-view.tsx#CompanionFusionRunView::row",
-        "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::sendUnexcluded",
+        "hooks/chat/use-agent-chat-controller.ts#useAgentChat::sendUnexcluded",
         "lib/bot/control-writes/pending-installations.ts#pendingBotInstallationIds",
         "lib/chat/phantom-run-runtime.ts#probeHostStateRun",
         "lib/connectors/inbox-writes/pending-overrides.ts#pendingOverrideConversationKeys",
@@ -2575,7 +2575,7 @@
         "lib/work-submission/service.ts#settleWorkSubmission"
       ],
       "consumerFunctions": [
-        "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::sendUnexcluded",
+        "hooks/chat/use-agent-chat-controller.ts#useAgentChat::sendUnexcluded",
         "lib/chat/auto-archive-schedule.ts#readKernelRunningSessionIds",
         "lib/db/work-submissions.ts#countOpenWorkSubmissions",
         "lib/db/work-submissions.ts#findWorkSubmissionByIdempotencyKey",
@@ -3523,7 +3523,7 @@
       ],
       "consumerFunctions": [
         "hooks/agent-runs/use-agent-runs.ts#resolveSelectedRun",
-        "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::sendUnexcluded",
+        "hooks/chat/use-agent-chat-controller.ts#useAgentChat::sendUnexcluded",
         "hooks/squads/use-squad-latest-run.ts#readSquadLatestRun",
         "lib/ai/agent/recovery/reconcile-crashed-runs.ts#reconcileCrashedAgentRuns",
         "lib/squads/squad/watch-squad-run.ts#watchSquadRunSettlement::subscription",

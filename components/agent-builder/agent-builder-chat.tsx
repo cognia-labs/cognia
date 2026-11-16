@@ -18,7 +18,7 @@ import type { ComposerTurnMetadata } from "@/components/chat/composer"
 import type { StarterSample } from "@/components/chat/empty-state"
 import { ChatPane } from "@/components/chat/chat-view"
 import { ChatScopeProvider } from "@/components/chat/chat-scope-provider"
-import { useClaudeChat } from "@/hooks/chat/use-claude-chat"
+import { useAgentChat } from "@/hooks/chat/use-agent-chat"
 import { useChatStore } from "@/stores/chat"
 import { listMessages } from "@/lib/db/messages"
 import { turnMetadataSendOptions } from "@/lib/chat/turn-metadata"
@@ -54,7 +54,7 @@ export function AgentBuilderChat({
   onOpenSettings?: (tab?: string) => void
 }) {
   const t = useTranslations("agentsConsole.builder")
-  const claude = useClaudeChat()
+  const claude = useAgentChat()
   const sessionId = session.id
   const reloadNonce = useChatStore((s) => s.sessions[sessionId]?.messagesReloadNonce ?? 0)
 

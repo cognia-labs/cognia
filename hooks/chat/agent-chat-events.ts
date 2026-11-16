@@ -144,7 +144,7 @@ import {
   finishBehaviorTurn,
   rememberChatToolCall,
   rememberToolCallsFromSdkEvent,
-} from "./claude-chat-tool-hooks"
+} from "./agent-chat-tool-hooks"
 import {
   SIDECAR_EXITED_TRACE_MESSAGE,
   extractAssistantText,
@@ -155,8 +155,8 @@ import {
   runUtilityModelTasks,
   scheduleGoalContinuation,
   scheduleLoopContinuation,
-} from "./claude-chat-turn-tasks"
-import type { SendFn } from "./claude-chat-turn-tasks"
+} from "./agent-chat-turn-tasks"
+import type { SendFn } from "./agent-chat-turn-tasks"
 import { closeOpenToolParts, hasOpenToolParts } from "@/lib/chat/phantom-run"
 import { toolCallExecutionRunId, toolCallEgressRunId } from "@/lib/execution/acting-authority"
 import { contextSourcesOf } from "@/lib/ai/agent/execution/contributions/context-sources"

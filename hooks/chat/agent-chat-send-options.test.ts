@@ -6,7 +6,7 @@ import {
   buildWorkingSetPostCompaction,
   prepareTranscriptRuntimeSend,
   preparePersonalSteer,
-} from "./claude-chat-send-options"
+} from "./agent-chat-send-options"
 import { resolveSendOptions } from "@/lib/claude/build-options"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useGitStore } from "@/stores/git/git-store"

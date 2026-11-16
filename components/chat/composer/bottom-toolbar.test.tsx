@@ -466,7 +466,7 @@ describe("BottomToolbar — session-kind branching", () => {
   })
 
   /**
-   * The executor axis is not the mode axis. `use-claude-chat-controller`
+   * The executor axis is not the mode axis. `use-agent-chat-controller`
    * branches to `startSquadRun` ABOVE `resolveSendOptions`, so a Squad-bound
    * turn never reaches the runtime and the binding keeps working after a switch
    * to an external agent. Hiding the chip there hid the only control that could

@@ -18,7 +18,7 @@ import "fake-indexeddb/auto"
 import type { UIMessage } from "ai"
 import { SessionCoalescingRegistry } from "@/lib/chat/stream-coalescing"
 import { useChatStore } from "@/stores/chat"
-import { handleEvent } from "./claude-chat-events"
+import { handleEvent } from "./agent-chat-events"
 
 jest.mock("sonner", () => ({ toast: Object.assign(jest.fn(), { success: jest.fn() }) }))
 // Persistence is debounced away from the per-token path; keep Dexie out of it.

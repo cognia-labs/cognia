@@ -28,7 +28,7 @@ import type { PendingOutboundReview } from "@cognia/agent-config-types"
 
 import { useChatStore } from "@/stores/chat"
 
-import { handleEvent } from "./claude-chat-events"
+import { handleEvent } from "./agent-chat-events"
 import { bindToolCallRun } from "@/lib/execution/acting-authority"
 import { dispatchPreToolUse } from "@/lib/plugin/messaging/agent-hook-dispatch"
 

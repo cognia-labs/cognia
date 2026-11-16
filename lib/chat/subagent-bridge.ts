@@ -2,7 +2,7 @@
 // UIMessage parts (consumer / renderer).
 //
 // Phase 8 of the ClaudeCode 完整化 plan. The adapter is intentionally pure
-// (no React or store subscription); the chat hook (`use-claude-chat.ts`)
+// (no React or store subscription); the chat hook (`use-agent-chat.ts`)
 // subscribes to `useSubagentRuntimeStore` and feeds events into
 // `applySubagentUpdate`. That keeps `lib/chat/sdk-message-adapter.ts` independent of
 // runtime UI concerns.

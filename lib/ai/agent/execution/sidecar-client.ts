@@ -393,7 +393,7 @@ export async function sendPrompt(
       options?.expectedRuntimeSessionId &&
       !mcpRuntimeConfigurationMatches(sessionId, options)
     ) {
-      const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/claude-chat-send-options")
+      const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/agent-chat-send-options")
       options = await prepareTranscriptRuntimeSend(sessionId, options, {
         currentMessageId: delivery.messageId,
         executionRunId: personalExecutionRunId,
@@ -413,7 +413,7 @@ export async function sendPrompt(
       await assertPersonalVisibilityDigest(sessionId, options, false, personalExecutionRunId)
       return sendPromptToTransport(sessionId, prompt, options, delivery)
     }
-    const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/claude-chat-send-options")
+    const { prepareTranscriptRuntimeSend } = await import("@/hooks/chat/agent-chat-send-options")
     const prepared = await prepareTranscriptRuntimeSend(sessionId, options ?? {}, {
       currentMessageId: delivery?.messageId,
       executionRunId: personalExecutionRunId,

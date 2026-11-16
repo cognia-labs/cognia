@@ -74,7 +74,7 @@ jest.mock("@/lib/db/sessions", () => ({
   getSession: (id: string) => getSessionMock(id),
 }))
 const buildSendOptionsMock = jest.fn(async () => ({ model: "sonnet", cwd: "/repo" }))
-jest.mock("@/hooks/chat/claude-chat-send-options", () => ({
+jest.mock("@/hooks/chat/agent-chat-send-options", () => ({
   buildSendOptions: (...a: unknown[]) =>
     (buildSendOptionsMock as (...x: unknown[]) => unknown)(...a),
 }))

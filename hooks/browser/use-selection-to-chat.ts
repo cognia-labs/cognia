@@ -2,7 +2,7 @@
 
 import { useCallback } from "react"
 
-import { useOptionalClaudeChat } from "@/hooks/chat/use-claude-chat"
+import { useOptionalAgentChat } from "@/hooks/chat/use-agent-chat"
 import { browserClient } from "@/lib/browser/client"
 import { formatAnnotationBatch } from "@/lib/browser/annotation-queue"
 import {
@@ -100,18 +100,18 @@ export function useSelectionToChat() {
   // itself rendered in Storybook and in unit tests where no runtime is
   // mounted. Every entry point below refuses loudly rather than reporting a
   // send that never happened.
-  const runtime = useOptionalClaudeChat()
+  const runtime = useOptionalAgentChat()
   type Runtime = NonNullable<typeof runtime>
   const send = useCallback<Runtime["send"]>(
     (...args) => {
-      if (!runtime) throw new Error("Cannot send: no ClaudeChatRuntimeProvider is mounted")
+      if (!runtime) throw new Error("Cannot send: no AgentChatRuntimeProvider is mounted")
       return runtime.send(...args)
     },
     [runtime]
   )
   const interruptAndSteer = useCallback<Runtime["interruptAndSteer"]>(
     (...args) => {
-      if (!runtime) throw new Error("Cannot steer: no ClaudeChatRuntimeProvider is mounted")
+      if (!runtime) throw new Error("Cannot steer: no AgentChatRuntimeProvider is mounted")
       return runtime.interruptAndSteer(...args)
     },
     [runtime]

@@ -11,10 +11,10 @@ const ROOT = join(__dirname, "..", "..")
 const REVIEWED_WRITES: Record<string, number> = {
   "components/chat/message-parts/async-questions-card.tsx": 1,
   "components/settings/agent-runtime/sdk-session-manager.tsx": 1,
-  "hooks/chat/claude-chat-events.ts": 8,
+  "hooks/chat/agent-chat-events.ts": 8,
   "hooks/chat/plan-turn-settle.ts": 1,
   "hooks/chat/router-fusion-chat-turn.ts": 2,
-  "hooks/chat/use-claude-chat-controller.ts": 17,
+  "hooks/chat/use-agent-chat-controller.ts": 17,
   "hooks/chat/use-sessions.ts": 2,
   "lib/agent/composition/verified-fresh-agent.ts": 2,
   "lib/background-tasks/host-delivery-lane.ts": 1,
@@ -173,11 +173,11 @@ it("keeps every credential success behind the one marking continuation", () => {
 
 it("pins each Host producer and every canonical persistence form to marking", () => {
   const seams: Record<string, string[]> = {
-    "hooks/chat/claude-chat-events.ts": [
+    "hooks/chat/agent-chat-events.ts": [
       "bindPersonalMessageChanges(current, appliedMessages",
       "toolCallExecutionRunId(sessionId, frame.turnId, frame.attemptId)",
     ],
-    "hooks/chat/use-claude-chat-controller.ts": [
+    "hooks/chat/use-agent-chat-controller.ts": [
       "bindPersonalMessageRun(assistantId, executionRunId)",
       "bindPersonalMessageRun(userMsg.id, callOptions.backgroundDelivery.personalRunIds)",
     ],

@@ -7,8 +7,8 @@ import {
   startToolExecutionRun,
 } from "@/lib/execution/acting-authority"
 import { closeSession } from "@/lib/ai/agent/execution/sidecar-client"
-import { preparePersonalSteer, prepareTranscriptRuntimeSend } from "./claude-chat-send-options"
-import { asideContextForRegenerate, buildPersonalAsideContext } from "./use-claude-chat-controller"
+import { preparePersonalSteer, prepareTranscriptRuntimeSend } from "./agent-chat-send-options"
+import { asideContextForRegenerate, buildPersonalAsideContext } from "./use-agent-chat-controller"
 
 jest.mock("@/lib/ai/agent/execution/sidecar-client", () => ({
   closeSession: jest.fn(async () => undefined),

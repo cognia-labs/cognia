@@ -1542,7 +1542,7 @@ async function resolveInboundSendOptions(params: {
   }
 
   // Twin runtime injection (parity with the in-app chat path in
-  // use-claude-chat): when the conversation's character is twin-bound, hand
+  // use-agent-chat): when the conversation's character is twin-bound, hand
   // resolveSendOptions the RAG deps so the inbound message is grounded in the
   // twin's knowledge. Best-effort — tryBuildTwinDeps returns undefined when the
   // twin runtime is disabled/unconfigured, and a twinId-less character skips the
@@ -1550,7 +1550,7 @@ async function resolveInboundSendOptions(params: {
   const twinHandshake =
     character?.twinId && event.plainText.trim() ? await tryBuildTwinDeps() : undefined
 
-  // Long-term memory recall (parity with use-claude-chat): ground the inbound
+  // Long-term memory recall (parity with use-agent-chat): ground the inbound
   // reply in the operator's memory store. `tryBuildMemoryDeps` no-ops when
   // memory is disabled, and memories are PII-filtered at write time. Inbound
   // content is never *written* back (provenance gate in run-memory-extraction),

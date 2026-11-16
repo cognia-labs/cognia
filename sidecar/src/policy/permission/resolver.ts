@@ -7,7 +7,7 @@
 // ruleset (no baked-in `*: allow` default — that would silently bypass every
 // approval). A non-match resolves to "ask", which means "fall through to the
 // normal round-trip". The rich, compound-command-aware classifier + model
-// judge live renderer-side (the Auto-mode Layer B in use-claude-chat); this
+// judge live renderer-side (the Auto-mode Layer B in use-agent-chat); this
 // fast-path only honors the static rules the user/character/plugin configured.
 
 import { extractSubstitutions, splitTopLevel } from "../shell/segments.ts"

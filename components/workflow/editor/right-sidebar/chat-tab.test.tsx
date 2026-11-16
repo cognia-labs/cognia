@@ -92,8 +92,8 @@ jest.mock("@/components/workflow/editor/chat/session-bar", () => ({
 }))
 
 const claudeSend = jest.fn(async () => undefined)
-jest.mock("@/hooks/chat/use-claude-chat", () => ({
-  useClaudeChat: () => ({
+jest.mock("@/hooks/chat/use-agent-chat", () => ({
+  useAgentChat: () => ({
     send: claudeSend,
     stop: jest.fn(async () => undefined),
     regenerate: jest.fn(async () => undefined),

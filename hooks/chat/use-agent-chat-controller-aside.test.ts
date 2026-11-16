@@ -9,7 +9,7 @@ import { useAgentRuntimeStore } from "@/stores/agent/agent-runtime-store"
 import { runStandaloneTurn } from "@/lib/ai/chat/standalone-engine"
 import { executeOnRemoteHostAgent } from "@/lib/ai/agent/external/runtimes/remote/remote-execute"
 import type { AgentRuntimeRef } from "@/lib/ai/agent/runtime-catalog/types"
-import { useClaudeChat } from "./use-claude-chat-controller"
+import { useAgentChat } from "./use-agent-chat-controller"
 
 // Keep the real controller, canonical history, context builder and PII gate.
 // Only the provider and unrelated host services are replaced at their ports.
@@ -34,8 +34,8 @@ jest.mock("@/lib/runtime/standalone-mode", () => ({ isStandaloneChatMode: () => 
 jest.mock("@/lib/ai/chat/standalone-engine", () => ({
   runStandaloneTurn: jest.fn(async () => undefined),
 }))
-jest.mock("./claude-chat-send-options", () => ({
-  ...jest.requireActual("./claude-chat-send-options"),
+jest.mock("./agent-chat-send-options", () => ({
+  ...jest.requireActual("./agent-chat-send-options"),
   buildSendOptions: jest.fn(async () => ({
     provider: "openai",
     model: "test-model",
@@ -125,7 +125,7 @@ it("redacts fresh parent context at the session-aside controller to standalone b
   useAgentRuntimeStore.setState({ runtimeRef: { kind: "builtin" }, sessionRuntimeRefs: {} })
   useChatStore.getState().replaceSessionMessages(parentId, parentMessages)
   useChatStore.getState().setActiveSession(asideId)
-  const { result, unmount } = renderHook(useClaudeChat)
+  const { result, unmount } = renderHook(useAgentChat)
   try {
     await act(async () => {
       await expect(
@@ -226,7 +226,7 @@ it("sends the empty-parent snapshot after a clear even when the parent UI cache 
   expect(retired?.asidePinnedParentMessageIds).toBeUndefined()
   expect(retired?.asideParentClearedAt).toEqual(expect.any(Number))
   expect((await listMessages(asideId)).map((message) => message.id)).toEqual([ownMessage.id])
-  const { result, unmount } = renderHook(useClaudeChat)
+  const { result, unmount } = renderHook(useAgentChat)
   try {
     await act(async () => {
       await expect(result.current.send("Continue the side question")).resolves.toBe(true)
@@ -294,7 +294,7 @@ it.each([true, false])(
         duration: 1,
       }
     })
-    const { result, unmount } = renderHook(useClaudeChat)
+    const { result, unmount } = renderHook(useAgentChat)
     try {
       await act(async () => {
         await result.current.send("After clear")

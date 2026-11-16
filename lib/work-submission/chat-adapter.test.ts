@@ -397,7 +397,7 @@ describe("settleChatTurn", () => {
   }, 30_000)
 
   it("writes the assistant message exactly once across all four terminal paths", async () => {
-    // claude-chat-events.ts can observe a turn ending in four places; only the
+    // agent-chat-events.ts can observe a turn ending in four places; only the
     // first may persist the reply.
     const writeTranscript = jest.fn(async () => {})
     const outcomes = ["completed", "failed", "cancelled", "no_response"] as const

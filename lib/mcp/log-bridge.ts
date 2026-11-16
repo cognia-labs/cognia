@@ -2,7 +2,7 @@
 // logging pipeline so the GUI can render them. The sidecar already produces
 // structured per-server diagnostics (connect success/failure, `tools()`
 // failures, captured child `stderr`) as `mcp_log` events — but on the GUI side
-// `handleEvent` (hooks/chat/use-claude-chat.ts) has no `mcp_log` branch, so
+// `handleEvent` (hooks/chat/use-agent-chat.ts) has no `mcp_log` branch, so
 // they were silently dropped. Only the CLI/TUI consumed them.
 //
 // By forwarding each event into `loggers.mcp.child(server)` tagged

@@ -3,7 +3,7 @@
 /**
  * Per-session streaming coalescers for the concurrent-chat path.
  *
- * `use-claude-chat` originally held a single rAF-throttled `commit` and a
+ * `use-agent-chat` originally held a single rAF-throttled `commit` and a
  * single debounced `persist` at hook scope — fine when only the focused
  * session streamed. With multiple sessions streaming at once each needs its
  * own coalescing state (latest-args-win is per session, not global), so we

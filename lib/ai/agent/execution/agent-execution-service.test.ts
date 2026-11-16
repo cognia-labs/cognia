@@ -630,7 +630,7 @@ describe("execution-handle path is live (CLAUDE.md working rule 7)", () => {
           !f.endsWith("lib/ai/agent/execution/agent-execution-handle.ts")
       )
 
-    expect(callers).toContain("hooks/chat/use-claude-chat-controller.ts")
+    expect(callers).toContain("hooks/chat/use-agent-chat-controller.ts")
     expect(callers).toContain("cli/src/tui/hooks/useAgentSession.tsx")
   })
 })

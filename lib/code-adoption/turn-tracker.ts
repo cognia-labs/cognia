@@ -2,7 +2,7 @@
  * The single boot-wired seam that closes each in-app turn's attribution window.
  *
  * `beginCodeAdoptionTurn` is called explicitly at the turn-start choke point
- * (`hooks/chat/use-claude-chat.ts`, where cwd/model are in scope). The *end* of
+ * (`hooks/chat/use-agent-chat.ts`, where cwd/model are in scope). The *end* of
  * a turn, by contrast, settles at several call sites, so instead of touching
  * each we subscribe to the chat store's status machine and fire `endTurn` on
  * the settle edge (`streaming | awaiting_approval → idle | error`). `runId` at

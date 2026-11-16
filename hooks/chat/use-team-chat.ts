@@ -20,7 +20,7 @@
  *   Durable rows arrive through the sync mirror. Before this the phone ran
  *   the whole loop itself and lost the round when it went to sleep.
  *
- * Mount this hook once at the shell level alongside `useClaudeChat`. The two
+ * Mount this hook once at the shell level alongside `useAgentChat`. The two
  * partition the event stream with `decodeSubSession` so they never both
  * react to the same event.
  */

@@ -4,7 +4,7 @@
  * Chat main-flow INTEGRATION test (主链路).
  *
  * This reproduces the real send → stream → render pipeline end to end, faking
- * ONLY the sidecar binary boundary. Unlike `use-claude-chat.test.ts` (a pure
+ * ONLY the sidecar binary boundary. Unlike `use-agent-chat.test.ts` (a pure
  * hook unit test that stubs `applySdkEvent` AND the chat-store), this test keeps
  * BOTH real:
  *
@@ -20,7 +20,7 @@
  *
  * The flow under test (all real except the sidecar):
  *   1. user types + clicks send
- *   2. useClaudeChat.send → optimistic user bubble in the real store (sync)
+ *   2. useAgentChat.send → optimistic user bubble in the real store (sync)
  *   3. send → sendPrompt("agent_send", …)  ← the sidecar boundary, asserted
  *   4. we inject an SDKEventEnvelope assistant event on the captured handler
  *   5. real handleEvent → real applySdkEvent → real store → assistant bubble
@@ -187,7 +187,7 @@ jest.mock("@/lib/ai/generation/run-title-task", () => ({
 }))
 
 // Real imports AFTER the mocks.
-import { ClaudeChatRuntimeProvider, useClaudeChat } from "@/hooks/chat/use-claude-chat"
+import { AgentChatRuntimeProvider, useAgentChat } from "@/hooks/chat/use-agent-chat"
 import { useChatStore, useSessionMessages, useSessionStatus } from "@/stores/chat"
 import type { UIMessage } from "ai"
 
@@ -220,9 +220,9 @@ function Transcript({ sessionId }: { sessionId: string }) {
 let lastSend: Promise<unknown> | null = null
 
 // The minimal "chat interface": real composer-style input + real send + real
-// transcript, all driven by the real useClaudeChat hook.
+// transcript, all driven by the real useAgentChat hook.
 function ChatHarness() {
-  const chat = useClaudeChat()
+  const chat = useAgentChat()
   const [text, setText] = useState("")
   return (
     <div>
@@ -301,7 +301,7 @@ async function settle() {
 describe("chat main flow (integration)", () => {
   it("send routes the prompt to the sidecar and optimistically renders the user bubble", async () => {
     const user = userEvent.setup()
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
 
     await user.type(screen.getByLabelText("message"), "Hello from the user")
     await clickSend(user)
@@ -325,7 +325,7 @@ describe("chat main flow (integration)", () => {
 
   it("folds an injected assistant stream event into a rendered assistant bubble", async () => {
     const user = userEvent.setup()
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
 
     await user.type(screen.getByLabelText("message"), "ping")
     await clickSend(user)
@@ -365,7 +365,7 @@ describe("chat main flow (integration)", () => {
   // experience the user sees, which the single-assistant-event test above skips.
   it("accumulates streamed text deltas into a growing assistant bubble", async () => {
     const user = userEvent.setup()
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
 
     await user.type(screen.getByLabelText("message"), "tell me a story")
     await clickSend(user)
@@ -416,11 +416,11 @@ describe("chat main flow (integration)", () => {
 
   // Conversation continuity: after the first reply lands, a second send must
   // route to the sidecar again (the turn went idle, so the busy-gate at
-  // use-claude-chat.ts:731 lets it through) and the transcript must hold BOTH
+  // use-agent-chat.ts:731 lets it through) and the transcript must hold BOTH
   // exchanges in order — proving messages accumulate across turns, not reset.
   it("continues the conversation across a second turn", async () => {
     const user = userEvent.setup()
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
 
     // Turn 1: prompt → reply.
     await user.type(screen.getByLabelText("message"), "first question")
@@ -513,7 +513,7 @@ describe("chat main flow (integration)", () => {
   // This is the seam the earlier tests stop short of (`result` was "increment 2").
   it("seals a full streamed turn: canonical message replaces the preview, result records usage", async () => {
     const user = userEvent.setup()
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
 
     await user.type(screen.getByLabelText("message"), "say hi")
     await clickSend(user)
@@ -630,7 +630,7 @@ describe("plugin tool hooks (W3.1 integration)", () => {
   it("onPreToolUse deny blocks the tool before any approval flow", async () => {
     const onPreToolUse = jest.fn().mockResolvedValue({ action: "deny", reason: "firewalled" })
     seedHookPlugin({ onPreToolUse })
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
     await waitFor(() => expect(messageCallback).not.toBeNull())
 
     await dispatchSidecar({
@@ -665,7 +665,7 @@ describe("plugin tool hooks (W3.1 integration)", () => {
       .fn()
       .mockResolvedValue({ action: "modify", modifiedArgs: { command: "ls" } })
     seedHookPlugin({ onPreToolUse })
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
     await waitFor(() => expect(messageCallback).not.toBeNull())
 
     await dispatchSidecar({
@@ -695,7 +695,7 @@ describe("plugin tool hooks (W3.1 integration)", () => {
   it("onPostToolUse rewrite reaches the tool_result_review decision", async () => {
     const onPostToolUse = jest.fn().mockResolvedValue({ modifiedResult: "REDACTED" })
     seedHookPlugin({ onPostToolUse })
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
     await waitFor(() => expect(messageCallback).not.toBeNull())
 
     // Seed the call correlation the same way the pump does (permission ask).
@@ -749,7 +749,7 @@ describe("plugin message pipeline (W3.3 integration)", () => {
       onMessageSend: async (m: { content: string }) => ({ ...m, content: `${m.content} [signed]` }),
     })
     const user = userEvent.setup()
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
     await waitFor(() => expect(messageCallback).not.toBeNull())
     await user.type(screen.getByLabelText("message"), "hello there")
     await clickSend(user)
@@ -767,7 +767,7 @@ describe("plugin message pipeline (W3.3 integration)", () => {
       onMessageReceive: async (m: { content: string }) => ({ ...m, content: "REWRITTEN" }),
     })
     const user = userEvent.setup()
-    render(<ChatHarness />, { wrapper: ClaudeChatRuntimeProvider })
+    render(<ChatHarness />, { wrapper: AgentChatRuntimeProvider })
     await waitFor(() => expect(messageCallback).not.toBeNull())
     await user.type(screen.getByLabelText("message"), "say hi")
     await clickSend(user)

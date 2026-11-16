@@ -632,7 +632,7 @@ const NAMED_ROUTING_PATH = [
   "lib/router-fusion/host.ts",
   "lib/router-fusion/gate/chat-send.ts",
   // The chat send seam: every caller of `prepareRouterFusionSend`.
-  "hooks/chat/use-claude-chat-controller.ts",
+  "hooks/chat/use-agent-chat-controller.ts",
   "lib/claude/routing-fallback.ts",
   "lib/work-submission/stored-chat-dispatch.ts",
 ]

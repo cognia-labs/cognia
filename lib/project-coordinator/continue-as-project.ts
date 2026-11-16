@@ -11,7 +11,7 @@ import {
 import { getSession, updateSession } from "@/lib/db/sessions"
 import { sessionStatusOf } from "@/lib/chat/steer-runtime"
 import { sendAutomatedChatMessage } from "@/hooks/chat/chat-send-bridge"
-import { extractAssistantText } from "@/hooks/chat/claude-chat-turn-tasks"
+import { extractAssistantText } from "@/hooks/chat/agent-chat-turn-tasks"
 import { enableProjectCoordination } from "./user-actions"
 import { continueAsProjectRefusal, type ContinueAsProjectRefusal } from "./continue-eligibility"
 

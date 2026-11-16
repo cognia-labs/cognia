@@ -6,7 +6,7 @@
 // `isStandaloneChatMode()` is the hot-path predicate the chat send/stop branches
 // read to decide between the standalone engine and the companion transport. It
 // is synchronous (reads the in-memory settings store) so it can run inline in
-// `use-claude-chat.send`.
+// `use-agent-chat.send`.
 
 import { detectPlatform } from "@/lib/platform/detect"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"

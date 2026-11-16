@@ -4,7 +4,7 @@
  *
  * Kept free of stores and the chat runtime so a Host's brain can read a
  * transcript with it without loading the chat view: these two used to live in
- * `hooks/chat/claude-chat-turn-tasks.ts`, which still re-exports them.
+ * `hooks/chat/agent-chat-turn-tasks.ts`, which still re-exports them.
  */
 
 import type { UIMessage } from "ai"

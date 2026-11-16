@@ -35,7 +35,7 @@ import { verificationAvailableOn } from "./verified-fresh-agent"
  *
  * `direct` is the ordinary single-agent turn. `team` routes through
  * `startSquadRun`, and `verified-fresh-agent` arms an independent verifier
- * after the direct turn. Both are wired in `use-claude-chat-controller`.
+ * after the direct turn. Both are wired in `use-agent-chat-controller`.
  */
 export const CHAT_SUPPORTED_ORCHESTRATIONS: readonly AgentOrchestrationPolicy[] = [
   "direct",

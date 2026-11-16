@@ -1,6 +1,6 @@
 /**
  * Pure routing decision for an assistant turn that may be an edit to an
- * existing artifact. Extracted from `use-claude-chat` so it can be unit-tested
+ * existing artifact. Extracted from `use-agent-chat` so it can be unit-tested
  * in isolation. Given the review setting, the in-flight edit target, the target
  * artifact's type, and the artifacts detected in the assistant text, it decides
  * whether to stage a pending-review proposal or fall back to auto-creation.

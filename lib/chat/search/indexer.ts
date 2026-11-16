@@ -1,7 +1,7 @@
 /**
  * Idle search indexer (ADR-0099).
  *
- * Nothing here runs on the streaming path. `use-claude-chat.ts` persists the
+ * Nothing here runs on the streaming path. `use-agent-chat.ts` persists the
  * streaming message every 250ms (`PERSIST_DEBOUNCE_MS`), rewriting the last row
  * each time; projecting on every one of those writes would re-scan the whole
  * growing message ~4 times a second, so a long answer would cost O(n²) in

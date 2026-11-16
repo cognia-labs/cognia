@@ -70,11 +70,11 @@ const REVIEWED_SITES: Record<string, string> = {
   "hooks/agent/use-external-agent.ts": "compactSession:1;resumeSession:1",
   "hooks/analysis/use-session-report.ts": "listMessages:1",
   "hooks/canvas/use-canvas-suggestions.ts": "generateObject:1",
-  "hooks/chat/claude-chat-events.ts": "listMessages:1;resume:sdkSessionId:1",
-  "hooks/chat/claude-chat-send-options.ts":
+  "hooks/chat/agent-chat-events.ts": "listMessages:1;resume:sdkSessionId:1",
+  "hooks/chat/agent-chat-send-options.ts":
     "convertToModelMessages:1;listMessages:2;preparePersonalHistory:4;renderBranchSeed:1;resume:expectedRuntimeSessionId:3;resume:forkFromSessionId:5;resume:forkedFromSdkSessionId:1;resume:initialConversation:4;resume:resumeSessionId:5;resume:sdkSessionId:9",
-  "hooks/chat/claude-chat-turn-tasks.ts": "prepareOwnerHistory:2",
-  "hooks/chat/use-claude-chat-controller.ts":
+  "hooks/chat/agent-chat-turn-tasks.ts": "prepareOwnerHistory:2",
+  "hooks/chat/use-agent-chat-controller.ts":
     "buildHandoffContext:1;compactSession:1;listMessages:5;prepareHandoffContext:1;preparePersonalDerivedHistory:3;preparePersonalHistory:10;renderTranscript:2;resume:externalSessionId:6;resume:forkFromSessionId:2;resume:forkedFromSdkSessionId:2;resume:initialConversation:1;resume:resumeSessionId:4;resume:sdkSessionId:2;steerSession:1;stored-message-read:1",
   "hooks/chat/use-composer-ghost-text.ts": "complete:2;prepareOwnerHistory:1",
   "hooks/chat/use-conversation-summary-draft.ts":
@@ -577,9 +577,9 @@ function digestComparisonCount(text: string): number {
 
 it("requires an actual digest comparison before retaining each engine's opaque memory", () => {
   const engines = [
-    "hooks/chat/claude-chat-send-options.ts",
+    "hooks/chat/agent-chat-send-options.ts",
     "lib/ai/agent/execution/sidecar-client.ts",
-    "hooks/chat/use-claude-chat-controller.ts",
+    "hooks/chat/use-agent-chat-controller.ts",
     "cli/src/agent/session-runner.ts",
     "cli/src/agent/external-agent-session.ts",
     "sidecar/src/host/commands/send.ts",
@@ -690,7 +690,7 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "preparePersonalDerivedHistory",
   ],
   "lib/ai/eval/calibration/runner.ts": ["preparePersonalDerivedHistory"],
-  "hooks/chat/claude-chat-turn-tasks.ts": ["prepareOwnerHistory"],
+  "hooks/chat/agent-chat-turn-tasks.ts": ["prepareOwnerHistory"],
   "lib/ai/generation/run-title-task.ts": ["prepareOwnerDerivedHistory", "sourceRunIds"],
   "lib/workflow/runtime/run-title.ts": ["sourceRunIds: [workflowExecutionRunId(runId)]"],
   "lib/sync/host-state-service.ts": ["prepareOwnerHistory"],
@@ -705,13 +705,13 @@ const FILTER_BOUNDARIES: Record<string, string[]> = {
     "resolveRunActingIdentity",
     "samePersonForHost",
   ],
-  "hooks/chat/claude-chat-send-options.ts": [
+  "hooks/chat/agent-chat-send-options.ts": [
     "preparePersonalHistory",
     "runtimePersonalVisibilityDigest",
     "invalidate",
     "personalHistory.withheldMessageIds.length > 0 && visibilityChanged",
   ],
-  "hooks/chat/use-claude-chat-controller.ts": [
+  "hooks/chat/use-agent-chat-controller.ts": [
     "preparePersonalHistory",
     "preparePersonalDerivedHistory",
     "buildPersonalAsideContext",

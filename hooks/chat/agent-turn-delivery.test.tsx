@@ -8,7 +8,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getSession } from "@/lib/db/sessions"
 import { listMessages, persistMessages } from "@/lib/db/messages"
 import { runAndCaptureAssistantReply } from "@/lib/ai/agent/execution/run-and-capture"
-import { useClaudeChat } from "./use-claude-chat-controller"
+import { useAgentChat } from "./use-agent-chat-controller"
 import { useSessions } from "./use-sessions"
 import { runPluginAgentTurn } from "@/lib/plugin/api/agent-turn"
 import { sendManualMessageToConversation } from "@/lib/inbox/manual-send"
@@ -243,7 +243,7 @@ it("keeps the Bot reply alive while desktop send and regenerate are refused", as
   )
   const background = botTranscript("Background continues")
   await waitFor(() => expect(finish).toBeDefined())
-  const controller = renderHook(() => useClaudeChat())
+  const controller = renderHook(() => useAgentChat())
   await waitFor(() =>
     expect(useChatStore.getState().sessions[session.id]?.status).toBe("streaming")
   )
@@ -285,7 +285,7 @@ it("keeps the Composer input and shows busy when a Bot capture refuses desktop s
   )
   const background = botTranscript("Background continues")
   await waitFor(() => expect(finish).toBeDefined())
-  const controller = renderHook(() => useClaudeChat())
+  const controller = renderHook(() => useAgentChat())
   const warning = jest.spyOn(toast, "warning")
   const onSend = jest.fn((content: Parameters<typeof controller.result.current.send>[0]) =>
     controller.result.current.send(content, undefined, { sessionId: session.id })

@@ -20,7 +20,7 @@
  *    (`./run-projection.ts`): what an engine reports stands only for an entry
  *    with no run row (an in-turn SDK `Task`, a dispatch refused before it
  *    started). Consumers subscribe to read: the chat-side `SubagentPart` tree
- *    (via `subagent-bridge` → `use-claude-chat`) and the Settings Runtime tab.
+ *    (via `subagent-bridge` → `use-agent-chat`) and the Settings Runtime tab.
  */
 
 import { create } from "zustand"

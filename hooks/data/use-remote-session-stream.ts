@@ -477,7 +477,7 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
         // against the default model while the composer already said streaming.
         const [{ getSession }, { buildSendOptions }] = await Promise.all([
           import("@/lib/db/sessions"),
-          import("@/hooks/chat/claude-chat-send-options"),
+          import("@/hooks/chat/agent-chat-send-options"),
         ])
         const session = await getSession(sessionId)
         if (!session) throw new Error("session is not synced to this device yet")

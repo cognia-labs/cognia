@@ -2,7 +2,7 @@
 // the Vercel AI SDK `streamText`, with NO sidecar and NO paired desktop. It
 // emits the exact same `ClaudeEvent` envelopes the Tauri transport delivers, so
 // the whole chat store / renderer / usage pipeline is reused unchanged
-// (`use-claude-chat.ts` feeds these straight into `handleEvent`).
+// (`use-agent-chat.ts` feeds these straight into `handleEvent`).
 //
 // Reuse map:
 //  - provider+model: `resolveStandaloneProvider` + `createFeatureProviderModel`

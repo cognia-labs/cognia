@@ -500,7 +500,7 @@ async function executeAgentTurnPrepared(
  * capabilities fail closed BEFORE the handle is created.
  *
  * No longer dormant: `createAgentExecutionHandle` has real production callers
- * in Chat (`hooks/chat/use-claude-chat-controller.ts`) and the TUI
+ * in Chat (`hooks/chat/use-agent-chat-controller.ts`) and the TUI
  * (`cli/src/tui/hooks/useAgentSession.tsx`). The old "INTENTIONALLY DORMANT
  * until Phase 7" label outlived its truth by two commits; the guard test that
  * was supposed to catch that is rewritten alongside this.

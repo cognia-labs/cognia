@@ -171,7 +171,7 @@
  * - `sites-preview` / `sites-operation-recovery` — Sites uses a visible native terminal,
  *   the singleton embedded webview, and the host-local credential keyring. Provider
  *   reconciliation is deliberately initiated only by the owning desktop account.
- * - `ClaudeChatRuntimeProvider` — owns renderer chat projections, mounted-pane
+ * - `AgentChatRuntimeProvider` — owns renderer chat projections, mounted-pane
  *   decisions and UI command dispatch. Headless run/capture and room runtimes
  *   own their event streams independently.
  * - `session-focus-initializer` — migrates legacy Inbox preferences into the

@@ -19,7 +19,7 @@ import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
-import { useOptionalClaudeChat } from "@/hooks/chat/use-claude-chat"
+import { useOptionalAgentChat } from "@/hooks/chat/use-agent-chat"
 import { getPlanRuntime, type PlanContinueOutcome } from "@/lib/agent/plan/runtime"
 import { readChatHandoff } from "@/lib/agent/plan/chat-handoff"
 import { resolvePlanStrategy } from "@/lib/agent/plan/strategy"
@@ -50,7 +50,7 @@ export function usePlanRunControls(
   plan: AgentPlan | undefined
 ): PlanRunControls {
   const t = useTranslations("plan")
-  const chat = useOptionalClaudeChat()
+  const chat = useOptionalAgentChat()
   const [busy, setBusy] = useState(false)
 
   const inSession = plan ? resolvePlanStrategy(plan) === "in_session" : false

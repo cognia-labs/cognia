@@ -8,7 +8,7 @@
  * function call, not a hook, and nothing here subscribes.
  *
  * Approvals for a room with no open pane follow the direct-chat rule from
- * `hooks/chat/claude-chat-events.ts`: a remote device holding a CONTROL
+ * `hooks/chat/agent-chat-events.ts`: a remote device holding a CONTROL
  * lease on the room decides, a backstop denies if it never answers, and
  * anything else is denied outright. The room used to auto-deny without
  * consulting the lease, which is why a phone could never approve a team

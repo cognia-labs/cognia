@@ -15,14 +15,14 @@ import {
   chatHookCredentialContext,
   resolveNativeExternalSessionId,
   externalSessionVisibilityMatches,
-  useClaudeChat,
+  useAgentChat,
   userPromptText,
   rewriteUserPromptText,
   applyChatCommandOverrides,
   externalTurnPrompt,
   externalAsideTurnContent,
   redirectSendToBundleAliases,
-} from "./use-claude-chat-controller"
+} from "./use-agent-chat-controller"
 import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
@@ -148,7 +148,7 @@ describe("public built-in send Host guard before turn admission", () => {
       updatedAt: 1,
       hostBinding: { origin: { kind: "remote", hostId: "a" } },
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await act(async () => {
       expect(await result.current.send("hello", undefined, { sessionId: "s" })).toBe(false)
     })
@@ -167,7 +167,7 @@ describe("public built-in send Host guard before turn admission", () => {
       })
       return null
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await act(async () => {
       await expect(result.current.send("hello", undefined, { sessionId: "s" })).rejects.toThrow(
         "session_turn_busy"
@@ -190,7 +190,7 @@ describe("public built-in send Host guard before turn admission", () => {
       useRemoteHostStore.setState({ activeHostId: "b" })
       return release
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await act(async () => {
       expect(await result.current.send("hello", undefined, { sessionId: "s" })).toBe(false)
     })
@@ -213,7 +213,7 @@ describe("public built-in send Host guard before turn admission", () => {
       })
       return release
     })
-    const { result } = renderHook(() => useClaudeChat())
+    const { result } = renderHook(() => useAgentChat())
     await act(async () => {
       expect(await result.current.send("hello", undefined, { sessionId: "s" })).toBe(false)
     })
@@ -232,7 +232,7 @@ describe("public built-in send Host guard before turn admission", () => {
     const previousChat = useChatStore.getState()
     const release = jest.fn(async () => undefined)
     jest.mocked(acquireSessionTurnLease).mockResolvedValueOnce(release)
-    const { result, unmount } = renderHook(() => useClaudeChat())
+    const { result, unmount } = renderHook(() => useAgentChat())
     try {
       act(() => useChatStore.getState().setSessionStatus("s", "streaming"))
       // Empty content stops before provider work while the streaming slice
@@ -429,15 +429,15 @@ describe("Claude chat controller seam", () => {
     })
   })
   it("exports the public hook implementation", () => {
-    expect(typeof useClaudeChat).toBe("function")
-    expect(useClaudeChat.name).toBe("useClaudeChat")
+    expect(typeof useAgentChat).toBe("function")
+    expect(useAgentChat.name).toBe("useAgentChat")
   })
 
   it("keeps durable-work behavior covered by the public hook contract suite", () => {
-    // The behavioral tests live in use-claude-chat.test.ts because that suite
+    // The behavioral tests live in use-agent-chat.test.ts because that suite
     // owns the hook's full sidecar/store harness. Keep this seam explicit so a
     // future split cannot silently drop acceptance/claim/handoff coverage.
-    expect(typeof useClaudeChat).toBe("function")
+    expect(typeof useAgentChat).toBe("function")
   })
 
   it("keeps turn stable and increments attempt across regenerate/retry", () => {
@@ -464,7 +464,7 @@ describe("Claude chat controller seam", () => {
 
   // Paired sends preserve provider credentials on direct Agent RPC; that behavior
   // and HostState send/steer/abort/approval branches are exercised by the public
-  // hook contract suite in `use-claude-chat.test.ts`; this seam test remains
+  // hook contract suite in `use-agent-chat.test.ts`; this seam test remains
   // intentionally dependency-free so import regressions fail quickly.
 })
 

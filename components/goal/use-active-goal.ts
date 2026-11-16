@@ -11,7 +11,7 @@ import type { Goal } from "@/types/goal"
  * standard `useLiveQuery` contract); `null` once we know there's no row; the
  * row otherwise.
  *
- * The send path does NOT use this hook: `hooks/chat/use-claude-chat.ts` reads
+ * The send path does NOT use this hook: `hooks/chat/use-agent-chat.ts` reads
  * the active goal directly via `getGoalRuntime().getActiveGoalForSession()`.
  */
 export function useOpenGoal(sessionId: string | null | undefined): Goal | null | undefined {
