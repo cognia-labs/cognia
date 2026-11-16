@@ -4,7 +4,7 @@ import {
   runSessionPeerBuiltinTool,
   SESSION_PEER_TOOL_NAMES,
   type SessionPeerToolRunDeps,
-} from "./session-peer-builtin-tools"
+} from "./session-peer-agent-tools"
 
 function deps(): SessionPeerToolRunDeps {
   return {

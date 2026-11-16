@@ -5,7 +5,7 @@ import {
   drainProjectHistoryEvidence,
   recordProjectHistoryEvidence,
   type ProjectHistoryEvidence,
-} from "./project-history-evidence-registry"
+} from "./history-evidence-registry"
 
 function evidence(id: string, over: Partial<ProjectHistoryEvidence> = {}): ProjectHistoryEvidence {
   return {

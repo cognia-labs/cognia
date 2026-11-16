@@ -208,7 +208,7 @@ jest.mock("@/lib/workflow/publish/run-workflow-typed-tool", () => ({
 const mockRunWorkingSetTool = jest.fn()
 // Module-contributed tools (ADR-0250 §14 amendment): none unless a test adds one.
 jest.mock("@/lib/modules/generated/tools", () => ({ MODULE_TOOLS: [] }))
-jest.mock("./working-set-tool", () => ({
+jest.mock("@/lib/chat/working-set-agent-tool", () => ({
   isWorkingSetTool: (name: string) => name === "working_set",
   runWorkingSetTool: (...args: unknown[]) => mockRunWorkingSetTool(...args),
 }))

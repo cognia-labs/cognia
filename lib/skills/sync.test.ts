@@ -45,7 +45,7 @@ jest.mock("@/lib/db/skill-resources", () => ({
   listResourcesForSkill: jest.fn(),
   replaceResourcesForSkill: jest.fn(),
 }))
-jest.mock("@/lib/claude/skills-io", () => ({
+jest.mock("@/lib/skills/markdown-io", () => ({
   parseSkillMarkdown: jest.fn(),
   serializeSkill: jest.fn(() => "MD"),
   skillFilename: jest.fn((n: string) => `${n}.skill.md`),
@@ -62,7 +62,7 @@ import {
   updateSkill,
 } from "@/lib/db/skills"
 import { listResourcesForSkill, replaceResourcesForSkill } from "@/lib/db/skill-resources"
-import { parseSkillMarkdown } from "@/lib/claude/skills-io"
+import { parseSkillMarkdown } from "@/lib/skills/markdown-io"
 import type { Skill, SkillResource } from "@cognia/agent-config-types"
 
 const mockedIsTauri = isTauri as unknown as jest.Mock

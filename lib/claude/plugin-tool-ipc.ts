@@ -39,26 +39,30 @@ import {
   toolOwnerBeforePlugin,
 } from "./tool-contributions"
 import type { DeclaredModuleTool } from "@/lib/modules/tool-declarations"
-import { ASK_USER_TOOL_NAME } from "./ask-user-tool"
+import { ASK_USER_TOOL_NAME } from "@/lib/ai/agent/execution/ask-user-tool"
 import { DISPATCH_AGENT_TOOL_NAME, TASK_TOOL_NAME } from "./agents/dispatch-agent-tool"
-import { isWebBuiltinTool, runWebBuiltinTool, type WebToolRunDeps } from "./web-builtin-tools"
+import { isWebBuiltinTool, runWebBuiltinTool, type WebToolRunDeps } from "@/lib/web/agent-tools"
 import {
   isSkillBuiltinTool,
   runSkillBuiltinTool,
   type SkillToolRunDeps,
-} from "./skill-builtin-tools"
-import { isWorkingSetTool, runWorkingSetTool, type WorkingSetStore } from "./working-set-tool"
+} from "@/lib/skills/agent-tools"
+import {
+  isWorkingSetTool,
+  runWorkingSetTool,
+  type WorkingSetStore,
+} from "@/lib/chat/working-set-agent-tool"
 import {
   isSessionPeerBuiltinTool,
   runSessionPeerBuiltinTool,
   type SessionPeerToolRunDeps,
-} from "./session-peer-builtin-tools"
+} from "@/lib/chat/session-peer-agent-tools"
 import {
   isAttachmentBuiltinTool,
   resolveAttachmentToolDeps,
   runAttachmentBuiltinTool,
   type AttachmentToolDeps,
-} from "./attachment-builtin-tools"
+} from "@/lib/chat/attachments/agent-tools"
 import type { RemoteExecutionContext } from "./remote-execution"
 
 const PLUGIN_TOOL_RESULT_PII_ERROR = "Plugin tool result blocked by the PII redaction gate"

@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import { runAuthorCallableHostTool, notAuthorCallable } from "./author-host-tools"
-import type { WebToolRunDeps } from "@/lib/claude/web-builtin-tools"
+import type { WebToolRunDeps } from "@/lib/web/agent-tools"
 
 const searchResponse = {
   query: "cognia",

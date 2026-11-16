@@ -1,4 +1,4 @@
-import { HANDOFF_STOP_TOKEN } from "@/lib/claude/team-router"
+import { HANDOFF_STOP_TOKEN } from "@/lib/ai/agent/team/chat-router"
 
 import {
   DEFAULT_TEAM_TRANSCRIPT_BUDGET,

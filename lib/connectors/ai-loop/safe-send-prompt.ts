@@ -38,7 +38,7 @@ import {
 } from "@/lib/task-workspace/client"
 import { isHeadlessHost } from "@/lib/platform/detect"
 import { getSession } from "@/lib/db/sessions"
-import { decodeSubSession } from "@/lib/claude/team-session-id"
+import { decodeSubSession } from "@/lib/ai/agent/team/session-id"
 import { isSessionScratchWorkspace } from "@/lib/task-workspace/managed-workspace"
 import { validateSessionScratchBundle } from "@/lib/task-workspace/session-bundle"
 import { rebindSendOptionsWorkspace } from "@/lib/sandbox/session-runtime"

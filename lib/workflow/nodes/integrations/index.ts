@@ -8,7 +8,7 @@ import {
   updateSkill,
 } from "@/lib/db/skills"
 import { getSkill as getPluginSkill } from "@/lib/plugin/registries/skill-registry"
-import { resolveSkillMarkdown } from "@/lib/claude/skills-io"
+import { resolveSkillMarkdown } from "@/lib/skills/markdown-io"
 import { invokeMcpTool } from "@/lib/mcp/invoke"
 import { guardWorkflowEgress } from "@/lib/workflow/runtime/egress-guard"
 import { proxyFetch } from "@/lib/network/proxy-fetch"

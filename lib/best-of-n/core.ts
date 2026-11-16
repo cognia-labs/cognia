@@ -8,7 +8,7 @@ import type {
 } from "@/types/best-of-n"
 import type { BestOfNHost } from "./host"
 import { TEAM_TOOL_NAMES } from "@/lib/squads/collaboration-tools"
-import { SESSION_PEER_TOOL_NAMES } from "@/lib/claude/session-peer-builtin-tools"
+import { SESSION_PEER_TOOL_NAMES } from "@/lib/chat/session-peer-agent-tools"
 
 export interface BestOfNInput extends Omit<
   StartBestOfN,

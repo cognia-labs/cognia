@@ -4,7 +4,7 @@ import {
   resolveSkillMarkdown,
   serializeSkill,
   skillFilename,
-} from "./skills-io"
+} from "./markdown-io"
 import { isTauri } from "@/lib/platform/detect"
 import { readTextFile } from "@tauri-apps/plugin-fs"
 import type { PluginSkillDef } from "@/types/plugin/plugin-skill"

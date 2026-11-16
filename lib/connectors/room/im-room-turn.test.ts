@@ -1,5 +1,5 @@
 import type { Character, Team, TeamMember } from "@cognia/agent-config-types"
-import { HANDOFF_STOP_TOKEN } from "@/lib/claude/team-router"
+import { HANDOFF_STOP_TOKEN } from "@/lib/ai/agent/team/chat-router"
 import {
   ImRoomTurn,
   primaryRoutingOf,

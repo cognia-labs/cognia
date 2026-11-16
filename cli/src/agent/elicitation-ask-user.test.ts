@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import type { AskUserAnswer, AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserAnswer, AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 import type { AcpElicitationRequest } from "@/types/agent/external-agent"
 
 import {

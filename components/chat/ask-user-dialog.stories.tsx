@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/nextjs"
 
 import { AskUserDialog } from "./ask-user-dialog"
 import { useAskUserStore } from "@/stores/agent/ask-user-store"
-import type { AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 
 // `AskUserDialog` is propless — it subscribes to `useAskUserStore` and renders
 // the active `ask_user` prompt as a modal (returns null when idle). Each story

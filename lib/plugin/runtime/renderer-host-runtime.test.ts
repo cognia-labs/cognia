@@ -1,7 +1,7 @@
 import { streamText } from "ai"
 import { generateEmbeddings } from "@cognia/vector/embedding"
 import { createFeatureProviderModel, resolveFeatureProvider } from "@/lib/ai/provider-consumption"
-import type { WebToolRunDeps } from "@/lib/claude/web-builtin-tools"
+import type { WebToolRunDeps } from "@/lib/web/agent-tools"
 
 import {
   abortableStreamModel,

@@ -107,7 +107,7 @@ export interface BackgroundTaskJournalRecord {
   sessionId: string
   /**
    * The root of `sessionId` when that is itself an ephemeral subagent session
-   * (`lib/claude/agents/root-session.ts`). Persisted because the parent's
+   * (`lib/ai/agent/team/root-session.ts`). Persisted because the parent's
    * in-memory route is gone after a restart, and a re-dispatched grandchild
    * must still surface its approvals in the session the user looks at.
    */

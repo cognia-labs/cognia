@@ -8216,7 +8216,7 @@
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/jina.ts#fetchViaJina>res",
-        "lib/claude/web-builtin-tools.ts#runWebBuiltinTool",
+        "lib/web/agent-tools.ts#runWebBuiltinTool",
         "lib/web/web-tools-core.ts#webFetch",
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
@@ -8236,7 +8236,7 @@
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/jina.ts#readViaJina",
-        "lib/claude/web-builtin-tools.ts#runWebBuiltinTool",
+        "lib/web/agent-tools.ts#runWebBuiltinTool",
         "lib/web/web-tools-core.ts#webFetch",
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
@@ -8256,7 +8256,7 @@
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/platform-scrapers/wechat.ts#scrapeWeChat>res",
-        "lib/claude/web-builtin-tools.ts#runWebBuiltinTool",
+        "lib/web/agent-tools.ts#runWebBuiltinTool",
         "lib/web/web-tools-core.ts#webFetch",
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
@@ -8276,7 +8276,7 @@
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/platform-scrapers/x-twitter.ts#scrapeX>res",
-        "lib/claude/web-builtin-tools.ts#runWebBuiltinTool",
+        "lib/web/agent-tools.ts#runWebBuiltinTool",
         "lib/web/web-tools-core.ts#webFetch",
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
@@ -8296,7 +8296,7 @@
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/platform-scrapers/youtube.ts#scrapeYouTube>res",
-        "lib/claude/web-builtin-tools.ts#runWebBuiltinTool",
+        "lib/web/agent-tools.ts#runWebBuiltinTool",
         "lib/web/web-tools-core.ts#webFetch",
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"
@@ -8316,7 +8316,7 @@
       "reason": "Run-tool web reads enter the gated Host web tool dispatcher (or CLI broker) before webFetch/readWithPolicy/platform reader dispatch. Twin URL-ingestion and reader-test consumers are independent Host/UI uses and are not claimed fenced by these entries.",
       "basis": [
         "lib/web/reader/platform-scrapers/youtube.ts#scrapeYouTube>capRes",
-        "lib/claude/web-builtin-tools.ts#runWebBuiltinTool",
+        "lib/web/agent-tools.ts#runWebBuiltinTool",
         "lib/web/web-tools-core.ts#webFetch",
         "lib/web/reader/configured-reader.ts#runStage",
         "lib/web/reader/dispatch.ts#scrapePlatform"

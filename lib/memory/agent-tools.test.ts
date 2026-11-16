@@ -16,7 +16,7 @@ import { searchChatHistory } from "@/lib/chat/search/engine"
 import { searchChatResults } from "@/lib/db/chat-result-index"
 
 const mockRecordEvidence = jest.fn()
-jest.mock("@/lib/claude/project-history-evidence-registry", () => ({
+jest.mock("@/lib/chat/history-evidence-registry", () => ({
   recordProjectHistoryEvidence: (sessionId: string, evidence: unknown) =>
     mockRecordEvidence(sessionId, evidence),
 }))

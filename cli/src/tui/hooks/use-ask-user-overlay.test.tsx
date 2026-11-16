@@ -3,7 +3,7 @@ import { render, act } from "@testing-library/react"
 
 import { useAskUserOverlay, type AskUserOverlayApi } from "./use-ask-user-overlay"
 import { useAskUserStore } from "@/stores/agent/ask-user-store"
-import type { AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 import type { Overlay, TuiAction } from "../state/types"
 
 const REQUEST: AskUserRequest = {

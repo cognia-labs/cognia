@@ -26,7 +26,7 @@ import {
   getTeamDispatchContext,
   getDispatchContext,
 } from "@/lib/claude/agents/dispatch-context-registry"
-import { decodeSubSession } from "@/lib/claude/team-session-id"
+import { decodeSubSession } from "@/lib/ai/agent/team/session-id"
 import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
 
 const MAX_SESSION_PARENT_DEPTH = 32

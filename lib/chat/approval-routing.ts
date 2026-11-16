@@ -14,7 +14,7 @@ import type {
   PendingApproval,
 } from "@cognia/agent-config-types"
 
-import { decodeSubSession } from "@/lib/claude/team-session-id"
+import { decodeSubSession } from "@/lib/ai/agent/team/session-id"
 import { isCompanionShell } from "@/lib/chat/room/shell"
 
 /** A runtime's own way of answering one of its approvals. */

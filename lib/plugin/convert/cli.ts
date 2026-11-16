@@ -4,7 +4,7 @@
  * The Rust CLI owns the user-facing command; this module owns the actual
  * conversion, because the parsers it reuses (thirteen agent-config
  * adapters in `lib/mcp/config-adapters/*`, the SKILL.md frontmatter parser in
- * `lib/claude/skills-io`) are TypeScript and re-implementing any of them
+ * `lib/skills/markdown-io`) are TypeScript and re-implementing any of them
  * in Rust would create a second surface to keep in sync — the exact defect
  * class that produced the four hand-copied parity lists in `cmd_lint.rs`.
  *

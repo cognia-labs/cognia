@@ -45,8 +45,11 @@ import {
   type AutoRoundStop,
   type TeamReply,
   type TurnHoldReason,
-} from "@/lib/claude/team-router"
-import { fallbackPrimaryResponder, resolveTeamResponseCap } from "@/lib/claude/team-primary-router"
+} from "@/lib/ai/agent/team/chat-router"
+import {
+  fallbackPrimaryResponder,
+  resolveTeamResponseCap,
+} from "@/lib/ai/agent/team/primary-router"
 import { canSendMessage, type RecentMessage } from "@/lib/squads/gates/message-guard"
 import { resolveAutoRoundBudget } from "@/lib/chat/room/settings"
 

@@ -14,7 +14,7 @@ import type {
   CanonicalContentPart,
   CanonicalAgentEvent,
 } from "@cognia/agent-config-types/agent-execution"
-import type { AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 import type { CapturePermissionDecision, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import type { RunStepView, RunUsageTotals } from "../runtime/workflow-run-fold"

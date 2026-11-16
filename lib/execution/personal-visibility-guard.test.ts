@@ -165,7 +165,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/claude/permissions/command-judge.ts": "complete:1",
   "lib/claude/run-and-capture.ts":
     "resume:externalSessionId:1;resume:resumeSessionId:1;resume:sdkSessionId:7",
-  "lib/claude/team-primary-router.ts": "complete:1",
+  "lib/ai/agent/team/primary-router.ts": "complete:1",
   "lib/cli-bridge/handlers/twin-context.ts":
     "preparePersonalHistory:2;withPersonalRerankerVisibility:1",
   "lib/collab/shared-chat-sync.ts": "stored-message-read:1",

@@ -9,7 +9,7 @@ jest.mock("@/lib/chat/room/runner-host", () => ({
 const shell = { companion: false }
 jest.mock("@/lib/chat/room/shell", () => ({ isCompanionShell: () => shell.companion }))
 
-import { subSessionId } from "@/lib/claude/team-session-id"
+import { subSessionId } from "@/lib/ai/agent/team/session-id"
 import {
   denialMessageForModel,
   denialReasonOf,

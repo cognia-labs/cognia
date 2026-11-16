@@ -30,13 +30,13 @@
  * plain local conversation renders exactly the bytes it did before.
  *
  * Agents deliberately keep their bare character name, because that name is the
- * token `lib/claude/team-router.ts:parseMentions` routes on. Decorating it here
+ * token `lib/ai/agent/team/chat-router.ts:parseMentions` routes on. Decorating it here
  * would teach members to write an address the router reads differently.
  */
 
 import { buildRoomRosterSection, type RoomParticipant } from "./room-roster"
 import { projectRoomParticipants } from "./room/participants"
-import { HANDOFF_STOP_TOKEN } from "@/lib/claude/team-router"
+import { HANDOFF_STOP_TOKEN } from "@/lib/ai/agent/team/chat-router"
 import { formatReactionSummary, type MessageReaction } from "@cognia/agent-config-types"
 import { readReplyTo, replyContextLine } from "./reply-to"
 import { bareToolName } from "./tool-summary"

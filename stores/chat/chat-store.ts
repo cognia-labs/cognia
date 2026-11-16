@@ -21,7 +21,7 @@ import {
   clearComputerUsePipSession,
   setComputerUsePipRunEnded,
 } from "@/lib/automation/computer-use-pip"
-import { resolveRootSessionId } from "@/lib/claude/agents/root-session"
+import { resolveRootSessionId } from "@/lib/ai/agent/team/root-session"
 import { useApprovalJournalStore, toPersistedApproval } from "@/stores/agent/approval-journal-store"
 import { IDLE_TIMING, nextRunTiming, type RunTiming } from "@/lib/claude/run-status"
 import { nextToolTimestamps } from "@/lib/claude/run-record"

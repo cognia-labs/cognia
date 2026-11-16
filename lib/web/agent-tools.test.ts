@@ -5,7 +5,7 @@ import {
   buildWebBuiltinManifestEntries,
   isWebBuiltinTool,
   runWebBuiltinTool,
-} from "./web-builtin-tools"
+} from "./agent-tools"
 
 jest.mock("@/lib/web/web-tools-core", () => ({
   webFetch: jest.fn(async () => ({ ok: true, kind: "fetch" })),

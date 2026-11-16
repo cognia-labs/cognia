@@ -10,7 +10,7 @@
 // that both shells consume: desktop seeds the catalog into Dexie, the CLI seeds
 // the same catalog.
 //
-// Frontmatter is parsed with gray-matter (same lib as lib/claude/skills-io.ts).
+// Frontmatter is parsed with gray-matter (same lib as lib/skills/markdown-io.ts).
 // Beyond the standard chat-skill fields we read the orthogonal delivery,
 // trigger, capability-requirement, and host-policy descriptors. Runtime code
 // decides what to inject or offer from those facts without reading the filesystem.

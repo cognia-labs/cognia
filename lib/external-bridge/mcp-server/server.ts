@@ -2256,7 +2256,7 @@ function registerSkillResource(server: McpServer, settingsGetter: SettingsGetter
         })
         throw new Error(`skill '${parts.id}' not found`)
       }
-      const { serializeSkill } = await import("@/lib/claude/skills-io")
+      const { serializeSkill } = await import("@/lib/skills/markdown-io")
       const text = serializeSkill({
         name: skill.name,
         description: skill.description,

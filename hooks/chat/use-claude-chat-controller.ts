@@ -40,7 +40,7 @@ import { isCogniaProjectedTool } from "@/lib/ai/agent/external/policy/tool-preap
 import type { UnlistenFn } from "@tauri-apps/api/event"
 import { persistMessageSessionAssets } from "@/lib/db/session-assets"
 import { makeUserMessage } from "@/lib/claude/adapter"
-import { clearProjectHistoryEvidence } from "@/lib/claude/project-history-evidence-registry"
+import { clearProjectHistoryEvidence } from "@/lib/chat/history-evidence-registry"
 import { toast } from "sonner"
 import { closeOpenToolParts } from "@/lib/chat/phantom-run"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"

@@ -17,7 +17,11 @@
  * lets a multi-field schema be answered at all through a single-question UI.
  */
 
-import type { AskUserOption, AskUserRequest, AskUserAnswer } from "@/lib/claude/ask-user-tool"
+import type {
+  AskUserOption,
+  AskUserRequest,
+  AskUserAnswer,
+} from "@/lib/ai/agent/execution/ask-user-tool"
 import type {
   AcpElicitationPropertySchema,
   AcpElicitationRequest,

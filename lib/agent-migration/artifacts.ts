@@ -294,7 +294,7 @@ async function defaultApplyDeps(): Promise<ArtifactApplyDeps> {
     },
     applySkills: async (items, strategy) => {
       const [{ parseSkillMarkdown }, { bulkImportSkills }] = await Promise.all([
-        import("@/lib/claude/skills-io"),
+        import("@/lib/skills/markdown-io"),
         import("@/lib/db/skills"),
       ])
       const drafts = (items as NativeSkill[]).map((skill) => ({

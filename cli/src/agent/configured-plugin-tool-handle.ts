@@ -1,6 +1,6 @@
 /** CLI plugin-tool handle bound to one resolved config snapshot. */
 
-import { ASK_USER_TOOL_NAME } from "@/lib/claude/ask-user-tool"
+import { ASK_USER_TOOL_NAME } from "@/lib/ai/agent/execution/ask-user-tool"
 
 import type {
   PluginToolExecHostDeps,
@@ -62,7 +62,7 @@ export function makeConfiguredCliPluginToolHandle(
       resolveAttachmentToolDeps: async () => {
         const { ensureCliDb } = await import("../db/bootstrap")
         await ensureCliDb()
-        const { resolveAttachmentToolDeps } = await import("@/lib/claude/attachment-builtin-tools")
+        const { resolveAttachmentToolDeps } = await import("@/lib/chat/attachments/agent-tools")
         return resolveAttachmentToolDeps()
       },
     })

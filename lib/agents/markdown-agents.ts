@@ -5,7 +5,7 @@
  * body) under a project `.cognia/agents/` dir or a global agents dir —
  * the same ergonomics as OpenCode / Claude Code agents. Reuses the
  * existing `gray-matter` frontmatter parser (already a dependency, used
- * by `lib/claude/skills-io.ts`) instead of inventing a new one.
+ * by `lib/skills/markdown-io.ts`) instead of inventing a new one.
  *
  * This module is the PURE parse + merge layer. Filesystem discovery is
  * injected (a `{ id, content }[]` list) so it stays platform-agnostic and

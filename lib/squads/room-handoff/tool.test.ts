@@ -1,7 +1,7 @@
 /** @jest-environment node */
 import type { ChatSession, Character } from "@cognia/agent-config-types"
 import type { ToolCallContext, ToolSurfaceContext } from "@/lib/modules/manifest-types"
-import { imRoomMemberSessionId, subSessionId } from "@/lib/claude/team-session-id"
+import { imRoomMemberSessionId, subSessionId } from "@/lib/ai/agent/team/session-id"
 import { __resetImRoomHandoffStepsForTesting, openImRoomHandoffStep } from "./im-room"
 import {
   ROOM_HANDOFF_INSTRUCTIONS,

@@ -114,7 +114,7 @@ it("treats a reservation's missing Host-known parent as no parent", async () => 
 })
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { assertLarkActingIdentity } from "@/lib/auth-providers/feishu/cli/acting-identity"
-import { subSessionId } from "@/lib/claude/team-session-id"
+import { subSessionId } from "@/lib/ai/agent/team/session-id"
 
 const principal = {
   kind: "platform" as const,

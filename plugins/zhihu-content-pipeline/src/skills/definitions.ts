@@ -5,7 +5,7 @@
  * `zhihu-content-pipeline:<name>` via `packSkillId`). Role characters attach
  * them through `pluginSkillIds`; `resolveSkillsForCharacter` inlines the
  * markdown into the system prompt at send time (see
- * `lib/claude/skills-bridge.ts`).
+ * `lib/skills/character-skills.ts`).
  *
  * `inline` (not `local-folder`) is deliberate: local-folder skills are dropped
  * in browser mode and require an on-disk read at runtime, which a bundled

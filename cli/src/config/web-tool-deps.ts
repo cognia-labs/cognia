@@ -1,7 +1,7 @@
 /** CLI adapter for the promoted web_search / web_fetch executor. */
 import { WEB_READER_IDS } from "@cognia/agent-config-types"
 
-import type { WebToolRunDeps } from "@/lib/claude/web-builtin-tools"
+import type { WebToolRunDeps } from "@/lib/web/agent-tools"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import { configuredSearchProviders } from "@/lib/chat/web-access"
 import { searchWithSettings } from "@/lib/search/configured-search-core"

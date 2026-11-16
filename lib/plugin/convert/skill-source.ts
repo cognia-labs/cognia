@@ -2,7 +2,7 @@
  * Turn a SKILL.md folder into a `PluginSkillDef`.
  *
  * Frontmatter parsing is delegated to `parseSkillMarkdown`
- * (`lib/claude/skills-io.ts`), the same parser the chat-import path and the
+ * (`lib/skills/markdown-io.ts`), the same parser the chat-import path and the
  * bundle loader use, so a skill that imports into a chat converts to a
  * plugin with identical name / description / body semantics.
  *
@@ -19,7 +19,7 @@
  *   read through `@tauri-apps/plugin-fs`.
  */
 
-import { parseSkillMarkdown } from "@/lib/claude/skills-io"
+import { parseSkillMarkdown } from "@/lib/skills/markdown-io"
 import type { PluginSkillDef } from "@/types/plugin/plugin-skill"
 import { slugify } from "./identity"
 import type { ConvertCandidate } from "./types"

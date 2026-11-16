@@ -1,4 +1,4 @@
-// Compose the SKILL.md frontmatter parser (`lib/claude/skills-io`) with the
+// Compose the SKILL.md frontmatter parser (`lib/skills/markdown-io`) with the
 // optional `agents/openai.yaml` parser into a single "parse this bundle's
 // manifest layer" entry point. The bundle loader (`loader.ts`) does the file
 // walking; this module owns the conversion from "two text blobs" to "a
@@ -8,7 +8,7 @@
 // `missing-name` / `missing-content` throw so the import dialog refuses
 // loudly; everything else lives on the draft as a warning.
 
-import { parseSkillMarkdown } from "@/lib/claude/skills-io"
+import { parseSkillMarkdown } from "@/lib/skills/markdown-io"
 import { validateSkill } from "@/lib/skills/validate"
 import type { SkillDraft } from "@/lib/db/skills"
 import type { SkillValidationError } from "@cognia/agent-config-types"

@@ -13,7 +13,7 @@ import {
   stickyResponderOf,
   stripDispatches,
   stripHandoffStopToken,
-} from "./team-router"
+} from "./chat-router"
 import type { Character, Team, TeamMember } from "@cognia/agent-config-types"
 
 function makeCharacter(overrides: Partial<Character> & { id: string; name: string }): Character {

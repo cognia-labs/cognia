@@ -27,7 +27,7 @@
 import nodeFs from "node:fs/promises"
 import path from "node:path"
 
-import { parseSkillMarkdown, nameFromFilename } from "@/lib/claude/skills-io"
+import { parseSkillMarkdown, nameFromFilename } from "@/lib/skills/markdown-io"
 
 /** The minimal fs surface discovery needs (matches `AgentFs`). */
 export interface SkillFs {

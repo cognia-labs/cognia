@@ -16,7 +16,7 @@
 import { usePluginStore } from "@/stores/plugin-runtime"
 import { resolveResilienceConfig } from "@/lib/plugin/resilience/config"
 
-import { buildAskUserManifestEntry } from "@/lib/claude/ask-user-tool"
+import { buildAskUserManifestEntry } from "@/lib/ai/agent/execution/ask-user-tool"
 import {
   buildDispatchAgentManifestEntry,
   type DispatchAgentAvailableSubagent,

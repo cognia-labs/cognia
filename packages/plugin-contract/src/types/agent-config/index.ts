@@ -742,7 +742,7 @@ export type SendOptions = {
   /**
    * Anthropic `container.skill_id` entries for plugin-contributed skills with
    * `source.kind === "anthropic-managed"` (via
-   * `lib/claude/skills-bridge.ts:extractContainerSkillIds`).
+   * `lib/skills/character-skills.ts:extractContainerSkillIds`).
    *
    * @deprecated NOT delivered: the Claude Agent SDK exposes no `query()` option
    * to attach uploaded/managed skill_ids (verified against sdk 0.3.x — no
@@ -7072,7 +7072,7 @@ export interface Character {
    * Plugin-contributed skill ids attached to this character. Separate from
    * the existing `skillIds` (chat skills) — these resolve through the
    * skill-registry overlay (M1·T3) and may include anthropic-managed
-   * container.skill_id entries. See `lib/claude/skills-bridge.ts`.
+   * container.skill_id entries. See `lib/skills/character-skills.ts`.
    */
   pluginSkillIds?: string[]
   workingDir?: string

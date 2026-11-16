@@ -38,7 +38,7 @@ import type { WorkspaceCapabilityScope } from "@/lib/db/workspace-capabilities"
 import { getSkill, getSkillEntry } from "@/lib/plugin/registries/skill-registry"
 import type { Skill } from "@cognia/agent-config-types"
 import type { PluginSkillDef } from "@/types/plugin/plugin-skill"
-import { resolveSkillMarkdown } from "./skills-io"
+import { resolveSkillMarkdown } from "./markdown-io"
 
 export interface ResolvedSkill {
   id: string

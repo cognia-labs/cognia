@@ -42,7 +42,7 @@ import type {
 import { getDispatchContext, getResolvedPermissionCeiling } from "./dispatch-context-registry"
 import { getKnowledgeAccessForSession } from "@/lib/knowledge-base/runtime/session-reader"
 import type { KnowledgeReadingAccess } from "@/lib/knowledge-base/runtime/progressive-reading"
-import { resolveRootSessionId } from "./root-session"
+import { resolveRootSessionId } from "@/lib/ai/agent/team/root-session"
 import { childJobExecutionRunId } from "@/lib/execution/launch-child-run"
 import {
   declareRootRunBudget,

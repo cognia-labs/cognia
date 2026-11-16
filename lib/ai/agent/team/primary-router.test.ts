@@ -14,7 +14,7 @@ import {
   MAX_TEAM_RESPONSE_CAP,
   resolveTeamResponseCap,
   selectPrimaryResponder,
-} from "./team-primary-router"
+} from "./primary-router"
 
 const members = [
   { id: "research", name: "Alice", description: "Find evidence" },

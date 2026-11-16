@@ -22,7 +22,7 @@
  */
 
 import type { ClaudeEvent } from "@cognia/agent-config-types"
-import { decodeSubSession, isImRoomMemberSessionId } from "@/lib/claude/team-session-id"
+import { decodeSubSession, isImRoomMemberSessionId } from "@/lib/ai/agent/team/session-id"
 import { RoomRunner } from "./runner"
 import { createProductionRoomDeps } from "./production-deps"
 import { createStoreRoomSinks } from "./store-sinks"

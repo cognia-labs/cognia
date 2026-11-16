@@ -31,7 +31,7 @@ import type {
   ConnectorCallbackBindingRow,
   ConnectorCallbackEvent,
 } from "@/types/connectors/interaction"
-import type { AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 
 jest.mock("./approval-card-state", () => ({
   settleApprovalCard: jest.fn(async () => undefined),

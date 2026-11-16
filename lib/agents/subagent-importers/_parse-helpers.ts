@@ -1,5 +1,5 @@
 // Shared frontmatter helpers for the source adapters in this folder.
-// Mirrors the same shape used in `lib/claude/skills-io.ts` so authors who
+// Mirrors the same shape used in `lib/skills/markdown-io.ts` so authors who
 // know one parser can read the other.
 //
 // Internal-only — do not export from `index.ts`.

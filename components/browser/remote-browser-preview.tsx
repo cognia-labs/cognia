@@ -69,7 +69,7 @@ import {
   REMOTE_BROWSER_APPROVAL_OPERATIONS,
 } from "@/lib/browser/remote-chromium-engine"
 import { createEngineRecordingDriver } from "@/lib/browser/recording/engine-recording-driver"
-import { decodeSubSession } from "@/lib/claude/team-session-id"
+import { decodeSubSession } from "@/lib/ai/agent/team/session-id"
 import { cn } from "@/lib/utils"
 import {
   listBrowserDomainGrants,

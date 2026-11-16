@@ -6,7 +6,7 @@
 //   1. The chat-import path — `lib/skills/bundle/upsert` (task #3) folds
 //      the result into Dexie via the shared `upsertSkillByCanonicalId`
 //      helper.
-//   2. The plugin path — `lib/claude/skills-io:resolveSkillMarkdown`
+//   2. The plugin path — `lib/skills/markdown-io:resolveSkillMarkdown`
 //      (task #7) uses the result to materialise plugin-shipped
 //      `local-bundle` / `archive` skill sources at runtime.
 //

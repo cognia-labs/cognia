@@ -141,9 +141,9 @@ export async function readResource(uri: string): Promise<ResourceContent | undef
       const skill = await getSkill(parts.id)
       if (!skill) return undefined
       // Render as a synthetic SKILL.md (YAML front-matter + body). We use
-      // the existing `lib/claude/skills-io.ts:serializeSkill` so the
+      // the existing `lib/skills/markdown-io.ts:serializeSkill` so the
       // round-trip with Claude Code is lossless.
-      const { serializeSkill } = await import("@/lib/claude/skills-io")
+      const { serializeSkill } = await import("@/lib/skills/markdown-io")
       const text = serializeSkill({
         name: skill.name,
         description: skill.description,

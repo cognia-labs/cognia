@@ -3,7 +3,7 @@
 // `marketplace-skillssh`). After the row lands in IndexedDB the user may
 // optionally call `pushAllToNative()` to project it onto disk.
 
-import { parseSkillMarkdown } from "@/lib/claude/skills-io"
+import { parseSkillMarkdown } from "@/lib/skills/markdown-io"
 import { listSkills, upsertSkillByCanonicalId } from "@/lib/db/skills"
 import { fetchRegistrySkillContent } from "./marketplace-registry"
 import { fetchSkillsShDetail, fetchSkillsShSkillContent } from "./marketplace-skillssh"

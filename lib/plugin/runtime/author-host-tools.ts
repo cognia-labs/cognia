@@ -20,7 +20,7 @@
  * becomes a general back door into host internals.
  */
 
-import { runWebBuiltinTool, type WebToolRunDeps } from "@/lib/claude/web-builtin-tools"
+import { runWebBuiltinTool, type WebToolRunDeps } from "@/lib/web/agent-tools"
 import { combineAbortSignals } from "@/lib/connectivity/capacitor-http"
 import {
   isAuthorCallableHostTool,

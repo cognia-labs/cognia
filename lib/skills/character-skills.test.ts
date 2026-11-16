@@ -19,7 +19,7 @@ import {
   extractContainerSkillIds,
   renderResolvedSkillsSection,
   resolveSkillsForCharacter,
-} from "./skills-bridge"
+} from "./character-skills"
 
 const mListSkills = listEnabledSkillsByIds as jest.Mock
 

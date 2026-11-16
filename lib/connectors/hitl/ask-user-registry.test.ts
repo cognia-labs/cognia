@@ -13,7 +13,7 @@ import {
   DEFAULT_ASK_USER_TTL_MS,
   type PendingAskUserMeta,
 } from "./ask-user-registry"
-import type { AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 
 const request: AskUserRequest = {
   question: "Pick one",

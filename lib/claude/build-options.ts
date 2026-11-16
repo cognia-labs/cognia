@@ -76,7 +76,7 @@ import {
 import { trippedSurfaceError } from "@/lib/router-fusion/gate/guard"
 import { breakerThresholdOf, routerFusionGate } from "@/lib/router-fusion/gate/feature-gate"
 import { loadRouterFusionHost, type RouterFusionHost } from "@/lib/router-fusion/gate/load-engine"
-import { ASK_USER_TOOL_NAME } from "@/lib/claude/ask-user-tool"
+import { ASK_USER_TOOL_NAME } from "@/lib/ai/agent/execution/ask-user-tool"
 import { resolveCharacterById } from "@/lib/db/characters"
 import {
   activeEffectiveSkillIds,
@@ -2653,7 +2653,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   ) {
     try {
       const { resolveSkillsForCharacter, extractContainerSkillIds, renderResolvedSkillsSection } =
-        await import("@/lib/claude/skills-bridge")
+        await import("@/lib/skills/character-skills")
       const { getSkill } = await import("@/lib/plugin/registries/skill-registry")
       // A grant's skill ids reach this path only when they name a plugin skill;
       // host ids were already resolved with the character's own set above.
@@ -3737,8 +3737,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   })
   if (webAccess.search === "cognia" || webAccess.fetch === "cognia") {
     try {
-      const { buildWebBuiltinManifestEntries } = await import("@/lib/claude/web-builtin-tools")
-      let disclosure: import("@/lib/claude/web-builtin-tools").WebFetchHostDisclosure | undefined
+      const { buildWebBuiltinManifestEntries } = await import("@/lib/web/agent-tools")
+      let disclosure: import("@/lib/web/agent-tools").WebFetchHostDisclosure | undefined
       if (webAccess.fetch === "cognia" && appSettings && !isCliHost() && !isHeadlessHost()) {
         try {
           const [
@@ -3835,7 +3835,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // is the slash-commands module's tools contribution.
   if (appSettings?.selfInvokeTools?.skill === true) {
     try {
-      const { buildSkillManifestEntries } = await import("@/lib/claude/skill-builtin-tools")
+      const { buildSkillManifestEntries } = await import("@/lib/skills/agent-tools")
       opts.pluginTools = [...(opts.pluginTools ?? []), ...buildSkillManifestEntries()]
     } catch (err) {
       loggers.app.warn("failed to append Skill built-in tool", { error: String(err) })
@@ -3845,7 +3845,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   if (appSettings?.selfInvokeTools?.sessionMessaging === true) {
     try {
       const { buildSessionPeerManifestEntries } =
-        await import("@/lib/claude/session-peer-builtin-tools")
+        await import("@/lib/chat/session-peer-agent-tools")
       opts.pluginTools = [...(opts.pluginTools ?? []), ...buildSessionPeerManifestEntries()]
     } catch (err) {
       loggers.app.warn("failed to append session messaging built-in tools", {
@@ -3869,7 +3869,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   if (session?.id) {
     try {
       const { buildWorkingSetManifestEntries, WORKING_SET_TOOL_NAME } =
-        await import("@/lib/claude/working-set-tool")
+        await import("@/lib/chat/working-set-agent-tool")
       if (!(opts.pluginTools ?? []).some((entry) => entry.name === WORKING_SET_TOOL_NAME)) {
         opts.pluginTools = [...(opts.pluginTools ?? []), ...buildWorkingSetManifestEntries()]
       }
@@ -3884,7 +3884,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
 
   // Stored attachments stay readable after their initial bounded prompt projection.
   if (session?.id) {
-    const { buildAttachmentManifestEntries } = await import("@/lib/claude/attachment-builtin-tools")
+    const { buildAttachmentManifestEntries } = await import("@/lib/chat/attachments/agent-tools")
     const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
     opts.pluginTools = [
       ...(opts.pluginTools ?? []),
@@ -5247,7 +5247,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // to load any of them. Describe only the route that survives the clamp.
   // Literal rather than the imported constant so `skill-builtin-tools` stays a
   // dynamic import here, the same way every other tool name in this file is
-  // written. `lib/claude/skill-builtin-tools.ts` owns the name.
+  // written. `lib/skills/agent-tools.ts` owns the name.
   const progressiveLoaderReachable = projectedAllowsTool(["load_skill"])
   const builtInCatalogSection =
     contextualCatalogRows.length && progressiveLoaderReachable
@@ -5281,8 +5281,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         turnId: ctx.turnId,
         attemptId: ctx.executionIdentity?.attemptId,
       })
-      const { buildProgressiveSkillManifestEntries } =
-        await import("@/lib/claude/skill-builtin-tools")
+      const { buildProgressiveSkillManifestEntries } = await import("@/lib/skills/agent-tools")
       const existingToolNames = new Set((opts.pluginTools ?? []).map((tool) => tool.name))
       const loaderEntries = buildProgressiveSkillManifestEntries(
         scopedSkills,
@@ -5371,8 +5370,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     // give it an actual native tool inventory as well as the plan-mode cap.
     const allowed = new Set(opts.allowedTools ?? [])
     const denied = new Set(opts.disallowedTools ?? [])
-    const { WEB_BUILTIN_PLUGIN_ID, isWebBuiltinTool } =
-      await import("@/lib/claude/web-builtin-tools")
+    const { WEB_BUILTIN_PLUGIN_ID, isWebBuiltinTool } = await import("@/lib/web/agent-tools")
     opts.pluginTools = opts.pluginTools?.filter((tool) => {
       const aliases = [tool.name, `mcp__cognia-plugin-tools__${tool.name}`]
       return (

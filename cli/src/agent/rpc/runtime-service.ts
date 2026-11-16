@@ -19,7 +19,7 @@ import {
   ASK_USER_TOOL_NAME,
   formatAskUserAnswer,
   parseAskUserArgs,
-} from "@/lib/claude/ask-user-tool"
+} from "@/lib/ai/agent/execution/ask-user-tool"
 
 import { catalogModelIds } from "@/lib/ai/model-options"
 import { validateMcpDefinition } from "@/lib/mcp/server-definition"

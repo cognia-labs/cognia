@@ -3,8 +3,8 @@ import {
   __clearAllSubagentApprovalRoutesForTesting,
   clearSubagentApprovalRoute,
   registerSubagentApprovalRoute,
-} from "./subagent-approval-routes"
-import { subSessionId } from "@/lib/claude/team-session-id"
+} from "@/lib/claude/agents/subagent-approval-routes"
+import { subSessionId } from "@/lib/ai/agent/team/session-id"
 
 function route(parentSessionId: string, rootSessionId?: string) {
   return {

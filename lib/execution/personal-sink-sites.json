@@ -384,7 +384,7 @@
   "lib/claude/protocol-adapter-ipc.ts | runProtocolAdapterExec | stream | 1",
   "lib/claude/run-and-capture.ts | captureBoundHostExternalReply.onEvent | answerWithOutboundPolicy | 1",
   "lib/claude/run-and-capture.ts | handlePermissionRequest | answerWithOutboundPolicy | 1",
-  "lib/claude/session-peer-builtin-tools.ts | runSessionPeerBuiltinTool | send | 1",
+  "lib/chat/session-peer-agent-tools.ts | runSessionPeerBuiltinTool | send | 1",
   "lib/collab/notifications-sync.ts | defaultNotify | notify | 1",
   "lib/collab/notifications-sync.ts | runPull | notify | 1",
   "lib/collab/shared-approval-bridge.ts | sync | deliver | 1",

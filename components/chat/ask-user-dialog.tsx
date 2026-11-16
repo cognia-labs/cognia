@@ -32,7 +32,7 @@ import {
   initialElicitationValues,
   type ElicitationValues,
 } from "@/components/chat/decisions/elicitation-form"
-import type { AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 import type {
   AcpElicitationPropertySchema,
   AcpElicitationRequest,

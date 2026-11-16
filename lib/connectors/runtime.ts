@@ -69,8 +69,8 @@ import type {
   Character,
   Team,
 } from "@cognia/agent-config-types"
-import { imRoomMemberSessionId } from "@/lib/claude/team-session-id"
-import { selectPrimaryResponder } from "@/lib/claude/team-primary-router"
+import { imRoomMemberSessionId } from "@/lib/ai/agent/team/session-id"
+import { selectPrimaryResponder } from "@/lib/ai/agent/team/primary-router"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
 import { buildRoomInstructionsSection, resolveRoomSettings } from "@/lib/chat/room/settings"
 import { roomKindOf } from "@/lib/chat/room/kind"

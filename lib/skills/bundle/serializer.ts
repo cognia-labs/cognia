@@ -1,6 +1,6 @@
 import JSZip from "jszip"
 import type { Skill, SkillResource } from "@cognia/agent-config-types"
-import { serializeSkill } from "@/lib/claude/skills-io"
+import { serializeSkill } from "@/lib/skills/markdown-io"
 import { validateSkill } from "@/lib/skills/validate"
 import { deriveSkillSlug } from "@/lib/skills/slug"
 import { validateResourcePath } from "./limits"

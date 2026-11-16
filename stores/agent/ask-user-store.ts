@@ -11,7 +11,7 @@ import {
   formatAskUserAnswer,
   type AskUserAnswer,
   type AskUserRequest,
-} from "@/lib/claude/ask-user-tool"
+} from "@/lib/ai/agent/execution/ask-user-tool"
 
 interface PendingAsk {
   id: string

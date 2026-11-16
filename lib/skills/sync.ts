@@ -27,7 +27,7 @@ import {
   updateSkill,
 } from "@/lib/db/skills"
 import { listResourcesForSkill, type SkillResourceDraft } from "@/lib/db/skill-resources"
-import { parseSkillMarkdown, serializeSkill, skillFilename } from "@/lib/claude/skills-io"
+import { parseSkillMarkdown, serializeSkill, skillFilename } from "@/lib/skills/markdown-io"
 import { isTauri } from "@/lib/tauri"
 import { getActiveRemoteTransport } from "@/lib/tauri/transport-routing"
 import type { Transport } from "@/lib/tauri/transport-types"

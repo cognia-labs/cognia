@@ -9,7 +9,7 @@ import {
   __clearAllSubagentApprovalRoutesForTesting,
   registerSubagentApprovalRoute,
 } from "@/lib/claude/agents/subagent-approval-routes"
-import { subSessionId } from "@/lib/claude/team-session-id"
+import { subSessionId } from "@/lib/ai/agent/team/session-id"
 import { recordActionReviewReceipt } from "@/lib/db/action-review-receipts"
 import { getDb } from "@/lib/db/schema"
 import { createDbTestFixture } from "@/lib/db/test-fixture"

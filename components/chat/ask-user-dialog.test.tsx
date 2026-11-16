@@ -5,7 +5,7 @@ import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { AskUserDialog } from "./ask-user-dialog"
 import { useAskUserStore } from "@/stores/agent/ask-user-store"
-import type { AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,

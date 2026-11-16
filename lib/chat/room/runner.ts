@@ -19,8 +19,8 @@ import { bindPersonalMessageChanges, bindPersonalMessageRun } from "@/lib/execut
  * # What did not change
  *
  * The decisions still live in the pure modules they always did:
- * `lib/claude/team-router.ts` (who speaks), `lib/chat/team-transcript.ts`
- * (what each member reads), `lib/claude/team-primary-router.ts` (the smart
+ * `lib/ai/agent/team/chat-router.ts` (who speaks), `lib/chat/team-transcript.ts`
+ * (what each member reads), `lib/ai/agent/team/primary-router.ts` (the smart
  * primary). Members run under one broker lease, one after another or, when
  * the team says `parallel`, all at once over the streaming state keyed by
  * sub-session (`runner-streaming.ts`).
@@ -45,7 +45,7 @@ import {
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { createDiagnostic } from "@cognia/diagnostics"
 import { toDiagnostic } from "@/lib/diagnostics/to-diagnostic"
-import { drainProjectHistoryEvidence } from "@/lib/claude/project-history-evidence-registry"
+import { drainProjectHistoryEvidence } from "@/lib/chat/history-evidence-registry"
 import {
   applySdkEvent,
   makeUserMessage,
@@ -80,13 +80,13 @@ import {
   stripHandoffStopToken,
   type AutoRoundStop,
   type TeamReply,
-} from "@/lib/claude/team-router"
+} from "@/lib/ai/agent/team/chat-router"
 import { canSendMessage, type RecentMessage } from "@/lib/squads/gates/message-guard"
 import {
   duplicateTeamResponseIds,
   resolveTeamResponseCap,
   selectPrimaryResponder,
-} from "@/lib/claude/team-primary-router"
+} from "@/lib/ai/agent/team/primary-router"
 import {
   buildTeamTranscript,
   textFromParts,
@@ -128,7 +128,7 @@ import {
   subSessionId,
   decodeSubSession,
   isImRoomMemberSessionId,
-} from "@/lib/claude/team-session-id"
+} from "@/lib/ai/agent/team/session-id"
 import { steerBlocksOf, steerTextOf, type SteerMessageMeta } from "@/lib/claude/steer"
 import {
   senderIdOf,

@@ -23,7 +23,7 @@
 
 import { resolveDispatchableSubagents } from "@/lib/agent/builtin-catalog/projection"
 import { slugify } from "@/lib/agents/agent-id"
-import { parseMentions } from "@/lib/claude/team-router"
+import { parseMentions } from "@/lib/ai/agent/team/chat-router"
 import type { MentionResolvers } from "@/lib/chat/mentions/resolve-mentions"
 import { RESERVED_MENTION_NAMES } from "@/types/agent/agent-team"
 import { findTargetByHandle, type MentionTarget } from "@/lib/squads/runtime-targets"

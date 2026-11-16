@@ -23,7 +23,7 @@ import { usePanelClick } from "../../input/use-panel-click"
 import { OverlayFooter } from "../OverlayFooter"
 import { windowListWithinRows } from "../list-window"
 import { contentRows } from "../../layout/terminal-layout"
-import type { AskUserAnswer, AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserAnswer, AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 
 /** The dialog's local draft: which options are checked, the free-text answer,
  * and which row the cursor is on (options first, then the text row when

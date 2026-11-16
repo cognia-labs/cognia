@@ -180,7 +180,7 @@ function registerBuiltinMentionPickHandlers(): void {
   registerMentionPickHandler({
     kind: "member",
     onPick: (item, ctx) => {
-      // The character NAME, not a slug. `lib/claude/team-router.ts:parseMentions`
+      // The character NAME, not a slug. `lib/ai/agent/team/chat-router.ts:parseMentions`
       // matches team members by name at send time, so this is the one mention
       // whose inserted text has to be the display string exactly.
       ctx.insertReplacement(`@${item.target.name}`)

@@ -50,7 +50,7 @@ jest.mock("@/lib/skills/bundle/loader", () => ({
   loadBundle: jest.fn(),
 }))
 
-jest.mock("@/lib/claude/skills-io", () => ({
+jest.mock("@/lib/skills/markdown-io", () => ({
   parseSkillMarkdown: jest.fn(),
   nameFromFilename: (s: string) => s,
 }))

@@ -59,7 +59,7 @@ import {
   recordSidecarLog,
   type SidecarLogFrame,
 } from "@/lib/chat/sidecar-log-trail"
-import { drainProjectHistoryEvidence } from "@/lib/claude/project-history-evidence-registry"
+import { drainProjectHistoryEvidence } from "@/lib/chat/history-evidence-registry"
 import { drainSessionPeerMessages } from "@/lib/chat/session-peer-messaging"
 import { completeAttachedSession } from "@/lib/chat/attached-session"
 import { maybeDrainBackgroundResults, onBackgroundJobSettled } from "./background-result-runtime"
@@ -68,7 +68,7 @@ import {
   outboxRecordFromJobExit,
 } from "@/lib/background-tasks/job-settlement"
 import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
-import { resolveRootSessionId } from "@/lib/claude/agents/root-session"
+import { resolveRootSessionId } from "@/lib/ai/agent/team/root-session"
 import { approveTool, toolResultDecision } from "@/lib/claude/ipc"
 import type { RemoteExecutionContext } from "@/lib/claude/remote-execution"
 import { releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
@@ -125,7 +125,7 @@ import type {
   SDKEventEnvelope,
 } from "@cognia/agent-config-types"
 import { mayBeOutboundCall } from "@/lib/policy/risk/outbound-tools"
-import { isSubSessionId } from "@/lib/claude/team-session-id"
+import { isSubSessionId } from "@/lib/ai/agent/team/session-id"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"

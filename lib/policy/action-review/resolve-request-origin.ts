@@ -20,7 +20,7 @@
  * run that checks many tool calls between two messages reads the session once.
  */
 
-import { resolveRootSessionId } from "@/lib/claude/agents/root-session"
+import { resolveRootSessionId } from "@/lib/ai/agent/team/root-session"
 import { getDb } from "@/lib/db/schema"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 

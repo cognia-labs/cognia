@@ -54,7 +54,7 @@ import type { ChatResultIndexRow } from "@/lib/db/chat-result-index"
 import { isSessionExposed } from "@/lib/chat/session-exposure"
 import { wrapUntrusted } from "@/lib/external-bridge/untrusted"
 import type { MessageSpan } from "@/lib/chat/mentions/message-reference"
-import type { ProjectHistoryEvidence } from "@/lib/claude/project-history-evidence-registry"
+import type { ProjectHistoryEvidence } from "@/lib/chat/history-evidence-registry"
 import type { ModuleToolEntry } from "@/lib/modules/manifest-types"
 
 export const PROJECT_HISTORY_TOOL_NAME = "project_history_search"

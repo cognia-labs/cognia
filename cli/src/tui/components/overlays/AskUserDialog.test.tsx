@@ -18,7 +18,7 @@ import {
   buildAnswer,
   type AskUserDraft,
 } from "./AskUserDialog"
-import type { AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 
 const choice = (over: Partial<AskUserRequest> = {}): AskUserRequest => ({
   question: "Pick one",

@@ -1,6 +1,6 @@
 /** Session-scoped attachment reads over the existing host tool relay. */
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
-import type { PluginToolExecRequest } from "./plugin-tool-ipc"
+import type { PluginToolExecRequest } from "@/lib/claude/plugin-tool-ipc"
 import type {
   getSessionAssetMetadata,
   listSessionAssets,

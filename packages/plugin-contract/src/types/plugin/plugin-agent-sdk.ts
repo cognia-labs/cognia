@@ -305,7 +305,7 @@ export interface PluginDispatchApprovalRoute {
    * The session the user is actually looking at: the parent's own root,
    * recorded at dispatch so a grandchild still resolves after its parent's
    * route is cleared. Absent on routes built before it existed, where
-   * `parentSessionId` is the best answer. See `lib/claude/agents/root-session.ts`.
+   * `parentSessionId` is the best answer. See `lib/ai/agent/team/root-session.ts`.
    */
   rootSessionId?: string
   /** Subagent runtime-store run id (cancel handle + card focus). */

@@ -1,4 +1,4 @@
-jest.mock("@/lib/claude/skills-io", () => ({
+jest.mock("@/lib/skills/markdown-io", () => ({
   parseSkillMarkdown: jest.fn(),
 }))
 jest.mock("@/lib/db/skills", () => ({
@@ -20,7 +20,7 @@ import {
   uninstallMarketplaceItem,
   listInstalledCanonicalIds,
 } from "./marketplace-install"
-import { parseSkillMarkdown } from "@/lib/claude/skills-io"
+import { parseSkillMarkdown } from "@/lib/skills/markdown-io"
 import { listSkills, deleteSkill, upsertSkillByCanonicalId } from "@/lib/db/skills"
 import { fetchRegistrySkillContent } from "./marketplace-registry"
 import { fetchSkillsShDetail, fetchSkillsShSkillContent } from "./marketplace-skillssh"

@@ -178,7 +178,7 @@ export type PopoverItem =
    * text for different routers: a subagent pick writes its slugified
    * `handle` and hands the whole turn to that agent, while a member pick
    * writes the character NAME, which is the token
-   * `lib/claude/team-router.ts:parseMentions` matches to pick who answers.
+   * `lib/ai/agent/team/chat-router.ts:parseMentions` matches to pick who answers.
    * Collapsing them would make one of the two silently stop routing.
    */
   | { kind: "member"; target: Character; role?: string }

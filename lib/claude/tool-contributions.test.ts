@@ -102,14 +102,14 @@ describe("tool ownership before plugins", () => {
   })
 
   it("matches the existing host manifest names and owner ids", async () => {
-    const { buildWebBuiltinManifestEntries } = await import("./web-builtin-tools")
-    const { buildAskUserManifestEntry } = await import("./ask-user-tool")
+    const { buildWebBuiltinManifestEntries } = await import("@/lib/web/agent-tools")
+    const { buildAskUserManifestEntry } = await import("@/lib/ai/agent/execution/ask-user-tool")
     const { buildDispatchAgentManifestEntry, TASK_TOOL_NAME, DISPATCH_AGENT_PLUGIN_ID } =
       await import("./agents/dispatch-agent-tool")
-    const { buildSkillManifestEntries } = await import("./skill-builtin-tools")
-    const { buildSessionPeerManifestEntries } = await import("./session-peer-builtin-tools")
-    const { buildAttachmentManifestEntries } = await import("./attachment-builtin-tools")
-    const { buildWorkingSetManifestEntries } = await import("./working-set-tool")
+    const { buildSkillManifestEntries } = await import("@/lib/skills/agent-tools")
+    const { buildSessionPeerManifestEntries } = await import("@/lib/chat/session-peer-agent-tools")
+    const { buildAttachmentManifestEntries } = await import("@/lib/chat/attachments/agent-tools")
+    const { buildWorkingSetManifestEntries } = await import("@/lib/chat/working-set-agent-tool")
     const manifests = [
       ...buildWebBuiltinManifestEntries(),
       buildAskUserManifestEntry(),

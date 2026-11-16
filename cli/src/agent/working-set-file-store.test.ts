@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { WorkingSetConflictError } from "@/lib/chat/working-set"
-import { runWorkingSetTool } from "@/lib/claude/working-set-tool"
+import { runWorkingSetTool } from "@/lib/chat/working-set-agent-tool"
 
 import { workingSetPath } from "./session-store/paths"
 import { createFileWorkingSetStore, type WorkingSetFs } from "./working-set-file-store"

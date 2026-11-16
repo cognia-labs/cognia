@@ -3,7 +3,7 @@
 // IndexedDB, or Tauri.
 
 import type { Character, RoomReplyMode, Team, TeamMember } from "@cognia/agent-config-types"
-import { resolveTeamResponseCap } from "./team-primary-router"
+import { resolveTeamResponseCap } from "./primary-router"
 
 /**
  * Parse `@Name` mentions out of `text`, matched against `members` by name.

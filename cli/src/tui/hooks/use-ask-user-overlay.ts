@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useMemo } from "react"
 
 import { useAskUserStore } from "@/stores/agent/ask-user-store"
-import type { AskUserAnswer } from "@/lib/claude/ask-user-tool"
+import type { AskUserAnswer } from "@/lib/ai/agent/execution/ask-user-tool"
 import type { Overlay, TuiAction } from "../state/types"
 
 export interface AskUserOverlayApi {

@@ -112,8 +112,8 @@ jest.mock("@/lib/ai/generation/run-title-task", () => ({
 jest.mock("@/lib/rag/chat-grounding", () => ({
   attachInteractiveGrounding: (messages: unknown) => messages,
 }))
-jest.mock("@/lib/claude/team-primary-router", () => ({
-  ...jest.requireActual("@/lib/claude/team-primary-router"),
+jest.mock("@/lib/ai/agent/team/primary-router", () => ({
+  ...jest.requireActual("@/lib/ai/agent/team/primary-router"),
   // No utility model in the world: the sticky member, else nobody, which is
   // what lets the routing tests below see the runner's own inputs.
   selectPrimaryResponder: async ({ sticky }: { sticky?: { id: string } }) => sticky,
@@ -129,7 +129,7 @@ import {
 } from "./runner"
 import type { RoomRunnerDeps, RoomRunnerSinks } from "./runner-deps"
 import { withholdForReaders } from "@cognia/plugin-contract/types/execution/personal-visibility"
-import { decodeSubSession } from "@/lib/claude/team-session-id"
+import { decodeSubSession } from "@/lib/ai/agent/team/session-id"
 
 type Msg = UIMessage & { metadata?: Record<string, unknown> }
 

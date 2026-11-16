@@ -4,7 +4,7 @@
  *
  * `PluginSkillDef` sources of kind `local-folder` / `local-bundle` /
  * `archive` carry a filesystem path. Downstream, `resolveSkillMarkdown`
- * (`lib/claude/skills-io.ts`) hands that path straight to
+ * (`lib/skills/markdown-io.ts`) hands that path straight to
  * `@tauri-apps/plugin-fs` — it receives only the def, never the owning
  * plugin, so a *relative* path resolved against the process cwd instead of
  * the plugin directory. That left plugin authors with two bad options:

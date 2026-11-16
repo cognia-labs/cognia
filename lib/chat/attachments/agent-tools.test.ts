@@ -2,7 +2,7 @@ import {
   buildAttachmentManifestEntries,
   runAttachmentBuiltinTool,
   type AttachmentToolDeps,
-} from "./attachment-builtin-tools"
+} from "./agent-tools"
 import type { SessionAsset } from "@/lib/db/session-assets"
 
 function asset(overrides: Partial<SessionAsset> = {}) {

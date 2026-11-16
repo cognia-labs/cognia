@@ -27,7 +27,7 @@ import {
 } from "@cognia/agent-config-types/working-set"
 import { applyWorkingSetMutation, emptyWorkingSet } from "@/lib/chat/working-set"
 import type { WorkingSetMutation } from "@/lib/chat/working-set"
-import type { WorkingSetStore } from "@/lib/claude/working-set-tool"
+import type { WorkingSetStore } from "@/lib/chat/working-set-agent-tool"
 
 import { workingSetPath } from "./session-store/paths"
 

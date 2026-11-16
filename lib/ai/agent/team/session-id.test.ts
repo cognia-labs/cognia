@@ -5,7 +5,7 @@ import {
   imRoomMemberSessionId,
   isImRoomMemberSessionId,
   isSubSessionId,
-} from "./team-session-id"
+} from "./session-id"
 
 describe("team-session-id", () => {
   it("round-trips team session + character through subSessionId/decodeSubSession", () => {

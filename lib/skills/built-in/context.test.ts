@@ -757,7 +757,7 @@ it("allows a local team member to use the personal lane through its persisted ro
   mockSessionGet.mockImplementation(async (id) =>
     id === "local-team" ? { id, kind: "team" } : undefined
   )
-  const { subSessionId } = await import("@/lib/claude/team-session-id")
+  const { subSessionId } = await import("@/lib/ai/agent/team/session-id")
   const context = await resolveBuiltInSkillContext(subSessionId("local-team", "member", "turn"))
   expect(context.personalLane).toBe("local-session")
   await expect(assertLarkActingIdentity("a1", context)).resolves.toBeUndefined()

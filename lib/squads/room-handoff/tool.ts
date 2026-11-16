@@ -21,7 +21,7 @@ import type {
   ToolCallContext,
   ToolSurfaceContext,
 } from "@/lib/modules/manifest-types"
-import { decodeSubSession } from "@/lib/claude/team-session-id"
+import { decodeSubSession } from "@/lib/ai/agent/team/session-id"
 import { isLocallyOrchestratedRoom, roomKindOf } from "@/lib/chat/room/kind"
 import {
   ROOM_HANDOFF_BRIEF_MAX_CHARS,

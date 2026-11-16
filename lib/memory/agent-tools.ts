@@ -18,7 +18,7 @@
 
 import type { ModuleToolFamily } from "@/lib/modules/manifest-types"
 import type { UIMessage } from "ai"
-import type { ProjectHistoryEvidence } from "@/lib/claude/project-history-evidence-registry"
+import type { ProjectHistoryEvidence } from "@/lib/chat/history-evidence-registry"
 import {
   mergePersonalMarks,
   type PersonalMarkV1,
@@ -225,8 +225,7 @@ export const toolFamily: ModuleToolFamily = {
     return { tools: projectHistoryToolEntries() }
   },
   run: async (_name, args, call) => {
-    const { recordProjectHistoryEvidence } =
-      await import("@/lib/claude/project-history-evidence-registry")
+    const { recordProjectHistoryEvidence } = await import("@/lib/chat/history-evidence-registry")
     const deps = await resolveProjectHistoryToolDeps()
     let consumed: readonly ProjectHistoryEvidence[] = []
     const result = await runProjectHistorySearch(

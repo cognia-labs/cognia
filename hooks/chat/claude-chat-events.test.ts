@@ -194,7 +194,7 @@ import {
   __clearAllProjectHistoryEvidenceForTesting,
   drainProjectHistoryEvidence,
   recordProjectHistoryEvidence,
-} from "@/lib/claude/project-history-evidence-registry"
+} from "@/lib/chat/history-evidence-registry"
 
 describe("connector ingress during chat streaming", () => {
   const sessionId = "inbound-stream"

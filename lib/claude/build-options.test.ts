@@ -311,7 +311,7 @@ jest.mock("@/lib/knowledge-base/runtime/apply-agent-knowledge-context", () => ({
 const mResolveSkillsForCharacter = jest.fn()
 const mExtractContainerSkillIds = jest.fn()
 const mRenderResolvedSkillsSection = jest.fn()
-jest.mock("@/lib/claude/skills-bridge", () => ({
+jest.mock("@/lib/skills/character-skills", () => ({
   resolveSkillsForCharacter: (...a: Parameters<typeof mResolveSkillsForCharacter>) =>
     mResolveSkillsForCharacter(...a),
   extractContainerSkillIds: (...a: Parameters<typeof mExtractContainerSkillIds>) =>

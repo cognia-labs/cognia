@@ -17,7 +17,7 @@
  * the correct shared channel.
  */
 
-import type { AskUserAnswer, AskUserRequest } from "@/lib/claude/ask-user-tool"
+import type { AskUserAnswer, AskUserRequest } from "@/lib/ai/agent/execution/ask-user-tool"
 import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
 import type { CallbackActorScope } from "@/types/connectors/interaction"
 

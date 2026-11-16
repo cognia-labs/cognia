@@ -8,7 +8,7 @@ import {
   buildWorkingSetManifestEntries,
   runWorkingSetTool,
   WORKING_SET_TOOL_NAME,
-} from "./working-set-tool"
+} from "./working-set-agent-tool"
 
 describe("working_set host tool", () => {
   beforeEach(async () => {

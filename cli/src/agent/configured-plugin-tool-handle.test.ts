@@ -22,7 +22,7 @@ const mockResolveAttachmentDeps = jest.fn(async () => ({
   search: jest.fn(),
 }))
 jest.mock("../db/bootstrap", () => ({ ensureCliDb: () => mockEnsureCliDb() }))
-jest.mock("@/lib/claude/attachment-builtin-tools", () => ({
+jest.mock("@/lib/chat/attachments/agent-tools", () => ({
   resolveAttachmentToolDeps: () => mockResolveAttachmentDeps(),
 }))
 

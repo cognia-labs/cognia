@@ -114,8 +114,8 @@ const parseMentionsMock = jest.fn((..._a: unknown[]): unknown[] => [])
 const routeTurnMock = jest.fn((..._a: unknown[]): unknown[] => [])
 const stripDispatchesMock = jest.fn((s: string) => s)
 
-jest.mock("@/lib/claude/team-router", () => ({
-  ...jest.requireActual("@/lib/claude/team-router"),
+jest.mock("@/lib/ai/agent/team/chat-router", () => ({
+  ...jest.requireActual("@/lib/ai/agent/team/chat-router"),
   buildSupervisorRoster: (...a: unknown[]) => buildSupervisorRosterMock(...a),
   parseDispatches: (...a: unknown[]) => parseDispatchesMock(...a),
   parseMentions: (...a: unknown[]) => parseMentionsMock(...a),
@@ -126,7 +126,7 @@ jest.mock("@/lib/claude/team-router", () => ({
 const selectPrimaryResponderMock = jest.fn(
   async ({ members }: { members: unknown[] }) => members[0]
 )
-jest.mock("@/lib/claude/team-primary-router", () => ({
+jest.mock("@/lib/ai/agent/team/primary-router", () => ({
   duplicateTeamResponseIds: jest.fn(() => new Set()),
   resolveTeamResponseCap: jest.fn(() => 4),
   selectPrimaryResponder: (...args: unknown[]) =>

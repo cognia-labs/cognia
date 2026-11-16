@@ -29,7 +29,7 @@ import {
 } from "@/lib/claude/ipc"
 import { pickDirectory } from "@/lib/files/file-bridge"
 import { isTauri } from "@/lib/tauri"
-import { parseSkillMarkdown } from "@/lib/claude/skills-io"
+import { parseSkillMarkdown } from "@/lib/skills/markdown-io"
 import { useSkillsStore, type ImportStaging } from "@/stores/skills"
 import { loggers } from "@cognia/logging"
 

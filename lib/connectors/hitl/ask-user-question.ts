@@ -48,7 +48,7 @@ import {
   parseAskUserArgs,
   type AskUserAnswer,
   type AskUserRequest,
-} from "@/lib/claude/ask-user-tool"
+} from "@/lib/ai/agent/execution/ask-user-tool"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import type {
   CallbackActorScope,

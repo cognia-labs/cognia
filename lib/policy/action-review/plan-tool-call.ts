@@ -46,7 +46,7 @@ import {
   type ActionReviewRequest,
 } from "@cognia/agent-config-types/action-review"
 
-import { resolveRootSessionId } from "@/lib/claude/agents/root-session"
+import { resolveRootSessionId } from "@/lib/ai/agent/team/root-session"
 import { assertPersonalSink, isPersonalSinkWithheldError } from "@/lib/execution/personal-sink"
 import { resolveConnectorSinkAudience } from "@/lib/connectors/personal-delivery"
 import { classifyRisk } from "@/lib/policy/risk/classify-risk"

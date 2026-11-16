@@ -152,7 +152,7 @@ export function isSubagentPart(part: unknown): part is SubagentPart {
 /**
  * AgentTeamDispatchPart — emitted when a supervisor turn contains a
  * `<dispatch to="…">…</dispatch>` directive (parsed by
- * `lib/claude/team-router.ts:parseDispatches`). One part per dispatch tag,
+ * `lib/ai/agent/team/chat-router.ts:parseDispatches`). One part per dispatch tag,
  * appended after the visible (stripped) text. The renderer shows a
  * from→to banner with the task body.
  */

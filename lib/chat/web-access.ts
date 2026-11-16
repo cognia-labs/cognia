@@ -7,7 +7,7 @@
  *     / `WebFetch`, which a subscription carries for free (server-side
  *     extraction, citations, Anthropic's token budget).
  *  2. **Cognia's** host-routed `web_search` / `web_fetch`
- *     (`lib/claude/web-builtin-tools.ts`), backed by the user's configured
+ *     (`lib/web/agent-tools.ts`), backed by the user's configured
  *     search provider (Tavily / Brave / Exa / …). The only path for a
  *     non-Anthropic provider.
  *  3. The composer's **pre-search**: run the draft through a provider BEFORE

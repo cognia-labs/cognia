@@ -30,7 +30,7 @@
  *
  * So a label is only used when it survives `redactText` + `hasNoLeakingPii`.
  * Otherwise the speaker falls back to a stable pseudonym. That is the same
- * shape `lib/claude/team-primary-router.ts` already uses for roster tokens
+ * shape `lib/ai/agent/team/primary-router.ts` already uses for roster tokens
  * (`A1` / `A2` + `redactText` + `hasNoLeakingPii`), applied here per
  * participant instead of per team member.
  *

@@ -15,7 +15,7 @@ import {
   isSkillBuiltinTool,
   runSkillBuiltinTool,
   type SkillToolRunDeps,
-} from "./skill-builtin-tools"
+} from "./agent-tools"
 
 describe("skill-builtin-tools", () => {
   beforeEach(() => {
