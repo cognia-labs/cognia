@@ -28,7 +28,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { listMcpServers } from "@/lib/db/mcp-servers"
 import { downloadFile } from "@/lib/files/download"
 import { writeClipboardText } from "@/lib/tauri/clipboard"
-import { MCP_AGENT_ADAPTERS } from "@/lib/claude/agents"
+import { MCP_AGENT_ADAPTERS } from "@/lib/mcp/config-adapters"
 import {
   buildMcpInstallCommand,
   buildMcpTransferJson,

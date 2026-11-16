@@ -1,4 +1,4 @@
-import { applyPresetFields, getPreset, MCP_PRESETS } from "./mcp-presets"
+import { applyPresetFields, getPreset, MCP_PRESETS } from "./presets"
 
 describe("MCP_PRESETS catalog", () => {
   it("has unique IDs", () => {

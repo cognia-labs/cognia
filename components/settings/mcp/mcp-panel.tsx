@@ -45,7 +45,7 @@ import {
   listMcpServers,
   updateMcpServer,
 } from "@/lib/db/mcp-servers"
-import { applyPresetFields, type McpPreset } from "@/lib/claude/mcp-presets"
+import { applyPresetFields, type McpPreset } from "@/lib/mcp/presets"
 import { useMcpPanelStore, type McpPanelTab } from "@/stores/mcp/mcp-panel-store"
 import { blankServerSeed } from "./server-seed"
 import {

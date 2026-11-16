@@ -15,7 +15,7 @@
 import { proxyFetch } from "@/lib/network/proxy-fetch"
 
 import type { McpTransport } from "@cognia/agent-config-types"
-import type { McpPreset, McpPresetField } from "@/lib/claude/mcp-presets"
+import type { McpPreset, McpPresetField } from "@/lib/mcp/presets"
 
 const REGISTRY_BASE = "https://registry.modelcontextprotocol.io"
 

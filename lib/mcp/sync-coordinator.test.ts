@@ -1,7 +1,7 @@
 import type { McpSyncJob } from "@cognia/agent-config-types"
 
 const syncToAgent = jest.fn()
-jest.mock("@/lib/claude/sync", () => ({
+jest.mock("@/lib/mcp/agent-config-sync", () => ({
   syncToAgent: (...args: unknown[]) => syncToAgent(...args),
 }))
 

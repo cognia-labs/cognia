@@ -11,7 +11,7 @@
  *  - `types/plugin/plugin-mcp-preset.ts`
  *
  * The merged view (dynamic ⊕ static) is built by the host in
- * `lib/claude/mcp-presets.ts`. Plugins call `registerMcpServerPreset()`
+ * `lib/mcp/presets.ts`. Plugins call `registerMcpServerPreset()`
  * during `activate(ctx)`; the host calls `unregisterMcpServerPresetsByPlugin()`
  * on disable.
  */

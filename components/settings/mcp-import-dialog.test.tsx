@@ -21,7 +21,7 @@ jest.mock("./mcp-agent-chip-group", () => ({
   refreshAgentAvailability: () => refreshAgentAvailability(),
 }))
 
-jest.mock("@/lib/claude/agents", () => ({
+jest.mock("@/lib/mcp/config-adapters", () => ({
   MCP_AGENT_ADAPTERS: [
     {
       id: "claude-code",
@@ -47,7 +47,7 @@ const previewAgentImport = jest.fn(async (..._args: unknown[]) => ({
     { name: "remote-ok", transport: "http", config: { url: "https://remote/mcp" } },
   ],
 }))
-jest.mock("@/lib/claude/sync", () => ({
+jest.mock("@/lib/mcp/agent-config-sync", () => ({
   previewAgentImport: (...a: unknown[]) => previewAgentImport(...a),
 }))
 

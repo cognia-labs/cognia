@@ -8,11 +8,11 @@
  * `unregisterMcpServerPresetsByPlugin(pluginId)` on disable to drop every
  * entry that plugin contributed in a single shot.
  *
- * The static half is the `MCP_PRESETS` table at `lib/claude/mcp-presets.ts:46`,
+ * The static half is the `MCP_PRESETS` table at `lib/mcp/presets.ts:46`,
  * which ships built-in presets (Playwright, Sequential Thinking, etc.).
  *
  * The merged view (dynamic ⊕ static) is built by callers in
- * `lib/claude/mcp-presets.ts`; the wrapper that composes the two halves
+ * `lib/mcp/presets.ts`; the wrapper that composes the two halves
  * lands in M3 of the plugin-first Computer Use plan.
  *
  * Per-plugin cleanup: `unregisterMcpServerPresetsByPlugin(pluginId)`.

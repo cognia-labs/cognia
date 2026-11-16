@@ -1,4 +1,4 @@
-import { MCP_PRESETS, type McpPreset } from "@/lib/claude/mcp-presets"
+import { MCP_PRESETS, type McpPreset } from "@/lib/mcp/presets"
 import { listMcpServerPresetEntries } from "@/lib/plugin/registries/mcp-server-preset-registry"
 
 /** Static curated presets followed by enabled plugin contributions; static ids cannot be shadowed. */

@@ -13,7 +13,7 @@
 import nodeFs from "node:fs"
 import path from "node:path"
 
-import { normalizeMcpEntry } from "@/lib/claude/agents/shared"
+import { normalizeMcpEntry } from "@/lib/mcp/config-adapters/shared"
 import type { McpServer } from "@cognia/agent-config-types"
 
 export interface McpFs {

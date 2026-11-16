@@ -5,7 +5,7 @@ import { McpDriftBanner } from "./mcp-drift-banner"
 
 jest.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }))
 jest.mock("@/lib/tauri", () => ({ isTauri: () => true }))
-jest.mock("@/lib/claude/sync", () => ({ syncToAgent: jest.fn() }))
+jest.mock("@/lib/mcp/agent-config-sync", () => ({ syncToAgent: jest.fn() }))
 jest.mock("@/hooks/agent", () => ({
   useAgentStatuses: () => ({
     statuses: [

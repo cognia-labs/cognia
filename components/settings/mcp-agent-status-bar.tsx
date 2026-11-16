@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button"
 import { SurfaceUnavailableNotice } from "@/components/platform/surface-unavailable-notice"
 import { useSurfaceReach } from "@/hooks/platform/use-surface-reach"
 import { cn } from "@/lib/utils"
-import { syncToAgent, type SyncResult } from "@/lib/claude/sync"
+import { syncToAgent, type SyncResult } from "@/lib/mcp/agent-config-sync"
 import { useAgentStatuses, type AgentStatus } from "@/hooks/agent"
 import type { AgentId } from "@cognia/agent-config-types"
 

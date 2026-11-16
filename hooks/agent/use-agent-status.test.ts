@@ -31,7 +31,7 @@ jest.mock("@/lib/db/mcp-servers", () => ({
   listMcpServers: () => listMcpServersMock(),
 }))
 
-jest.mock("@/lib/claude/agents", () => ({
+jest.mock("@/lib/mcp/config-adapters", () => ({
   get MCP_AGENT_ADAPTERS() {
     return adapters
   },

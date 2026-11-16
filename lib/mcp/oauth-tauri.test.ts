@@ -4,7 +4,7 @@
 import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 const callMock = jest.fn()
 jest.mock("@/lib/tauri", () => ({ transport: { call: (...a: unknown[]) => callMock(...a) } }))
-jest.mock("@/lib/claude/builtin-mcp/runtime-context", () => ({
+jest.mock("@/lib/mcp/builtin/runtime-context", () => ({
   getBuiltinMcpRuntimeContext: async () => ({ sidecarDir: "/sc", socketPath: "" }),
 }))
 

@@ -17,7 +17,7 @@ import { sessionMcpRows, runtimeMcpRowId } from "./mcp-session-view"
 import type { McpPanelServer } from "./mcp-panel-model"
 import path from "node:path"
 
-import { denormalizeMcpEntry } from "@/lib/claude/agents/shared"
+import { denormalizeMcpEntry } from "@/lib/mcp/config-adapters/shared"
 
 import type { McpServer, McpTransport } from "@cognia/agent-config-types"
 

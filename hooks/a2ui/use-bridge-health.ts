@@ -12,7 +12,7 @@
 import { useEffect, useState } from "react"
 import { isTauri } from "@/lib/tauri"
 import { useA2UIStore } from "@/stores/a2ui"
-import { getBuiltinMcpRuntimeContext } from "@/lib/claude/builtin-mcp/runtime-context"
+import { getBuiltinMcpRuntimeContext } from "@/lib/mcp/builtin/runtime-context"
 
 export interface BridgeHealth {
   isTauri: boolean

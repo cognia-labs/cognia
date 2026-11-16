@@ -1,5 +1,5 @@
 /**
- * The plugin contract's share of `lib/claude/mcp-presets.ts`, which re-exports these.
+ * The plugin contract's share of `lib/mcp/presets.ts`, which re-exports these.
  */
 export interface McpPresetField {
   /** The key under which the user's value lives. For env vars: env name.

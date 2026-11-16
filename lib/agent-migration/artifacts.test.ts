@@ -1,4 +1,4 @@
-jest.mock("@/lib/claude/sync", () => ({
+jest.mock("@/lib/mcp/agent-config-sync", () => ({
   previewAgentImport: jest.fn(async () => ({ drafts: [], parseError: undefined })),
   importFromAgent: jest.fn(async () => ({ created: 1, updated: 0, skipped: 0 })),
 }))
@@ -8,7 +8,7 @@ jest.mock("@/lib/session-import", () => ({
   resolveScanInput: jest.fn(async () => ({ homeDir: "/home" })),
 }))
 
-import { previewAgentImport, importFromAgent } from "@/lib/claude/sync"
+import { previewAgentImport, importFromAgent } from "@/lib/mcp/agent-config-sync"
 import { importSessions, resolveScanInput } from "@/lib/session-import"
 import { applyMigrationArtifact, previewMigrationArtifact } from "./artifacts"
 import type { MigrationPlan, MigrationPreviewCell } from "./types"

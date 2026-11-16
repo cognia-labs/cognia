@@ -973,7 +973,7 @@
       "symbol": "startMcpSyncCoordinator",
       "module": "lib/mcp/sync-coordinator.ts",
       "owner": "components/providers/desktop-sync-source-provider.tsx",
-      "reason": "components/providers/desktop-sync-source-provider.tsx:40 (lib/mcp/sync-coordinator.ts): Tauri-only local agent configuration projection; lib/claude/sync.ts explicitly skips non-Tauri hosts.",
+      "reason": "components/providers/desktop-sync-source-provider.tsx:40 (lib/mcp/sync-coordinator.ts): Tauri-only local agent configuration projection; lib/mcp/agent-config-sync.ts explicitly skips non-Tauri hosts.",
       "evidence": "9594a82f7814b22f"
     },
     {

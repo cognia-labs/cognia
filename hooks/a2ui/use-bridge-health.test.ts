@@ -4,7 +4,7 @@ jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(),
 }))
 
-jest.mock("@/lib/claude/builtin-mcp/runtime-context", () => ({
+jest.mock("@/lib/mcp/builtin/runtime-context", () => ({
   getBuiltinMcpRuntimeContext: jest.fn(),
 }))
 
@@ -15,7 +15,7 @@ jest.mock("@/stores/a2ui", () => ({
 }))
 
 import { isTauri } from "@/lib/tauri"
-import { getBuiltinMcpRuntimeContext } from "@/lib/claude/builtin-mcp/runtime-context"
+import { getBuiltinMcpRuntimeContext } from "@/lib/mcp/builtin/runtime-context"
 import { useBridgeHealth } from "./use-bridge-health"
 
 const mIsTauri = isTauri as jest.Mock

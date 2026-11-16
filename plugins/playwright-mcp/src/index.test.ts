@@ -68,7 +68,7 @@ describe("playwright-mcp (built-in)", () => {
   })
 
   it("contributes NO preset that collides with the static catalog", () => {
-    // `lib/claude/mcp-presets.ts` already owns `playwright` and
+    // `lib/mcp/presets.ts` already owns `playwright` and
     // `playwright-existing-browser`, and `listMcpPresetCatalog` gives static
     // ids precedence — a dynamic entry under either id would be dead weight.
     const ids = (manifest.mcpServerPresets ?? []).map((p) => p.id)

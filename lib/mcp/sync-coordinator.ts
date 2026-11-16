@@ -1,6 +1,6 @@
 import type { AgentId, McpSyncJob } from "@cognia/agent-config-types"
 
-import { syncToAgent, type SyncResult } from "@/lib/claude/sync"
+import { syncToAgent, type SyncResult } from "@/lib/mcp/agent-config-sync"
 import { getDb } from "@/lib/db/schema"
 
 const RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000, 600_000] as const

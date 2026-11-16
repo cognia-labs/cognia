@@ -40,7 +40,7 @@ jest.mock("@/lib/db/mcp-servers", () => ({
   getMcpServer: jest.fn().mockResolvedValue(undefined),
   listMcpServers: jest.fn().mockResolvedValue([]),
 }))
-jest.mock("@/lib/claude/mcp-presets", () => ({ applyPresetFields: jest.fn(() => ({})) }))
+jest.mock("@/lib/mcp/presets", () => ({ applyPresetFields: jest.fn(() => ({})) }))
 jest.mock("./server-seed", () => ({ blankServerSeed: jest.fn().mockResolvedValue({}) }))
 
 jest.mock("./mcp-my-servers-tab", () => ({

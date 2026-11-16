@@ -3,7 +3,7 @@
  */
 import path from "node:path"
 
-import { getPreset } from "@/lib/claude/mcp-presets"
+import { getPreset } from "@/lib/mcp/presets"
 
 import type { PluginFs } from "../plugin/discover-plugins"
 import {

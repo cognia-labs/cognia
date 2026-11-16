@@ -50,7 +50,7 @@ beforeEach(async () => {
 afterAll(dbFixture.dispose)
 
 async function flushDynamicImport() {
-  // Allow the lazy `import("@/lib/claude/sync")` promise chain to settle.
+  // Allow the lazy `import("@/lib/mcp/agent-config-sync")` promise chain to settle.
   await Promise.resolve()
   await Promise.resolve()
   await Promise.resolve()

@@ -955,16 +955,13 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     // manifest carries an `mcpServerPresets` array; the plugin manager
     // calls `registerMcpServerPreset(id, def, {pluginId})` on enable and
     // `unregisterMcpServerPresetsByPlugin(pluginId)` on disable.
-    // Downstream consumers (M3 `lib/claude/mcp-presets.ts`) merge the
+    // Downstream consumers (M3 `lib/mcp/presets.ts`) merge the
     // overlay with the static MCP_PRESETS table.
     id: "mcp-server-preset",
     support: "supported",
     manifestFields: ["mcpServerPresets"],
     runtimeBinding: "context.agent.registerMcpServerPreset + mcp-server-preset-registry overlay",
-    hostBindings: [
-      "lib/plugin/registries/mcp-server-preset-registry.ts",
-      "lib/claude/mcp-presets.ts",
-    ],
+    hostBindings: ["lib/plugin/registries/mcp-server-preset-registry.ts", "lib/mcp/presets.ts"],
     typescriptSdk: [
       "packages/plugin-sdk/src/api/mcp-server-preset.ts",
       "packages/plugin-sdk/src/context/index.ts",

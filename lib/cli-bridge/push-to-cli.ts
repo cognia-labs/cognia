@@ -12,7 +12,7 @@
  */
 
 import type { AppSettings } from "@cognia/agent-config-types"
-import { syncToAgent, type SyncResult } from "@/lib/claude/sync"
+import { syncToAgent, type SyncResult } from "@/lib/mcp/agent-config-sync"
 
 import { resolveCliHome } from "./home"
 import { pushConfigToCli } from "./push-config"

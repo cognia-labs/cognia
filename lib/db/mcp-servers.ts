@@ -7,8 +7,8 @@ import type {
   McpServerTrust,
   McpTransport,
 } from "@cognia/agent-config-types"
-import { CLAUDE_CODE_AGENT } from "@/lib/claude/agents/claude-code"
-import { MCP_AGENT_ADAPTERS } from "@/lib/claude/agents"
+import { CLAUDE_CODE_AGENT } from "@/lib/mcp/config-adapters/claude-code"
+import { MCP_AGENT_ADAPTERS } from "@/lib/mcp/config-adapters"
 import { externalizeMcpSecrets, hasMcpSecretRefs, resolveMcpSecrets } from "@/lib/mcp/credentials"
 import {
   assertUniqueMcpNamespace,

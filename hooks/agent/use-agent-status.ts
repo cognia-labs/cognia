@@ -13,7 +13,7 @@
 import { useEffect, useState } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 
-import { MCP_AGENT_ADAPTERS, type McpAgentAdapter } from "@/lib/claude/agents"
+import { MCP_AGENT_ADAPTERS, type McpAgentAdapter } from "@/lib/mcp/config-adapters"
 import { readAgentConfig } from "@/lib/claude/ipc"
 import { listMcpServers } from "@/lib/db/mcp-servers"
 import { isTauri } from "@/lib/tauri"

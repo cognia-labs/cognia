@@ -18,7 +18,7 @@
  *   3. **Never clobber an unparseable file.** If `settings.json` exists but
  *      does not parse, writing would serialize `{}` over every preference the
  *      user has. The write refuses instead. This mirrors the guard in
- *      `lib/claude/sync.ts`, which exists because of exactly that bug class.
+ *      `lib/mcp/agent-config-sync.ts`, which exists because of exactly that bug class.
  */
 
 import type { AgentReadResult } from "@/lib/claude/ipc"

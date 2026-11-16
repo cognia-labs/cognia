@@ -4,7 +4,7 @@
 // module wraps the IPC + caches the result for the process lifetime.
 //
 // Outside Tauri (web preview, Jest jsdom) the wrapper returns `null`. In that
-// mode `lib/claude/sync.ts` already short-circuits with `not-tauri`, so any
+// mode `lib/mcp/agent-config-sync.ts` already short-circuits with `not-tauri`, so any
 // hypothetical caller that still asks for the context simply skips
 // resolution — leaving placeholders in place is harmless because the
 // projection itself doesn't run.

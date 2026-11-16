@@ -1,5 +1,5 @@
 import { parseMarkdownAgent, serializeMarkdownAgent } from "@/lib/claude/agents/markdown-agents"
-import { MCP_AGENT_ADAPTERS } from "@/lib/claude/agents"
+import { MCP_AGENT_ADAPTERS } from "@/lib/mcp/config-adapters"
 import { serializeSkill } from "@/lib/claude/skills-io"
 import { HOOK_EVENTS } from "@/lib/claude/hooks/event-catalog"
 import { DORMANT_HOOK_HANDLER_FIELDS, type HookGroup, type HooksConfig } from "@/lib/claude/hooks"

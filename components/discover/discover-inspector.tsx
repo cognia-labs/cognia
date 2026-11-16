@@ -71,7 +71,7 @@ import type { DiscoverCategoryId, DiscoverView } from "@/lib/discover/categories
 import type { OcrProvider } from "@/types/ocr"
 import type { TwinDraft, TwinSource } from "@/types/twin"
 import type { WorkflowCopilotTemplate } from "@/lib/workflow/copilot-templates"
-import type { McpPreset } from "@/lib/claude/mcp-presets"
+import type { McpPreset } from "@/lib/mcp/presets"
 import type { SlashCommandDefinition } from "@/lib/slash-commands/registry"
 import type { PluginSubagentDef } from "@/types/plugin/plugin-subagent"
 import { getTemplateWarnings } from "@/lib/plugin/registries/agent-team-template-registry"

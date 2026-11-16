@@ -10,7 +10,7 @@ import { createPreset } from "@/lib/db/prompt-presets"
 import { createSkill } from "@/lib/db/skills"
 import { parseBundleManifest } from "@/lib/skills/bundle/parse"
 import { listSkills } from "@/lib/db/skills"
-import { normalizeMcpEntry } from "@/lib/claude/agents/shared"
+import { normalizeMcpEntry } from "@/lib/mcp/config-adapters/shared"
 
 import { presetById } from "@/lib/subscription/limits/custom/presets"
 

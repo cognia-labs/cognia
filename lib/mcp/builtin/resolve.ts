@@ -3,7 +3,7 @@
 // The `a2ui-bridge` row (and any future builtin server) ships a placeholder
 // `${COGNIA_SIDECAR_DIR}` instead of an absolute path so the row can be seeded
 // at install time before the runtime paths are known. Without this resolver,
-// `lib/claude/sync.ts` projects the unresolved row verbatim into external
+// `lib/mcp/agent-config-sync.ts` projects the unresolved row verbatim into external
 // agent config files (`~/.claude.json`, etc.), so spawned MCP children get a
 // literal placeholder string and cannot launch.
 //

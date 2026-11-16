@@ -91,7 +91,7 @@ jest.mock("@/lib/workflow/copilot-templates", () => ({
 }))
 // New synchronous registries (WF1) — stub so tests control their content and
 // don't pull in the real runtime stores / agent-definition modules.
-jest.mock("@/lib/claude/mcp-presets", () => ({
+jest.mock("@/lib/mcp/presets", () => ({
   MCP_PRESETS: [
     {
       id: "filesystem",

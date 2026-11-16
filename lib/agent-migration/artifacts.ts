@@ -141,7 +141,7 @@ async function defaultPreviewDeps(): Promise<ArtifactPreviewDeps> {
       return sessions.listSessionsForSource(vendor, await sessions.resolveScanInput())
     },
     previewMcp: async (vendor, cwd) => {
-      const sync = await import("@/lib/claude/sync")
+      const sync = await import("@/lib/mcp/agent-config-sync")
       const user = await sync.previewAgentImport(vendor === "pi" ? "pi-mcp-adapter" : vendor)
       const project =
         vendor === "claude-code" && cwd ? await sync.previewProjectMcpImport(cwd) : undefined
@@ -271,12 +271,12 @@ async function defaultApplyDeps(): Promise<ArtifactApplyDeps> {
     applyMcp: async (vendor, strategy) =>
       normalizeMcpResult(
         await (
-          await import("@/lib/claude/sync")
+          await import("@/lib/mcp/agent-config-sync")
         ).importFromAgent(vendor === "pi" ? "pi-mcp-adapter" : vendor, strategy)
       ),
     applyProjectMcp: async (cwd, strategy) =>
       normalizeMcpResult(
-        await (await import("@/lib/claude/sync")).importFromProjectMcp(cwd, strategy)
+        await (await import("@/lib/mcp/agent-config-sync")).importFromProjectMcp(cwd, strategy)
       ),
     applySubagents: async (items, strategy) => {
       const { applySubagentImport } = await import("@/lib/claude/subagent-importers/apply")

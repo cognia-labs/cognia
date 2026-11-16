@@ -2806,9 +2806,9 @@
       "line": 1897,
       "lexicalGate": null,
       "classification": "host-system",
-      "authority": "lib/claude/ipc.ts#readProjectMcpConfig; lib/claude/sync.ts",
+      "authority": "lib/claude/ipc.ts#readProjectMcpConfig; lib/mcp/agent-config-sync.ts",
       "reason": "Reads local project MCP configuration during host synchronization, without making an outbound request.",
-      "basis": ["lib/claude/ipc.ts#readProjectMcpConfig", "lib/claude/sync.ts"]
+      "basis": ["lib/claude/ipc.ts#readProjectMcpConfig", "lib/mcp/agent-config-sync.ts"]
     },
     {
       "key": "lib/claude/ipc.ts::skillsFetchRemoteMd::network::6111f28adc2b:1",

@@ -12,21 +12,21 @@ jest.mock("@/lib/db/mcp-servers", () => ({
   updateMcpServer: jest.fn(),
 }))
 
-jest.mock("./ipc", () => ({
+jest.mock("@/lib/claude/ipc", () => ({
   readAgentConfig: jest.fn(),
   writeAgentConfig: jest.fn(),
   readProjectMcpConfig: jest.fn(),
 }))
 
-jest.mock("./builtin-mcp/runtime-context", () => ({
+jest.mock("./builtin/runtime-context", () => ({
   getBuiltinMcpRuntimeContext: jest.fn(),
 }))
 
 import { bulkImportMcpServers, listMcpServers, updateMcpServer } from "@/lib/db/mcp-servers"
 import { isTauri } from "@/lib/tauri"
 
-import { readAgentConfig, readProjectMcpConfig, writeAgentConfig } from "./ipc"
-import { getBuiltinMcpRuntimeContext } from "./builtin-mcp/runtime-context"
+import { readAgentConfig, readProjectMcpConfig, writeAgentConfig } from "@/lib/claude/ipc"
+import { getBuiltinMcpRuntimeContext } from "./builtin/runtime-context"
 import {
   importFromAgent,
   importFromProjectMcp,
@@ -37,8 +37,8 @@ import {
   __resetScheduledSyncsForTesting,
   syncAll,
   syncToAgent,
-} from "./sync"
-import type { AgentReadResult, AgentWriteResult } from "./ipc"
+} from "./agent-config-sync"
+import type { AgentReadResult, AgentWriteResult } from "@/lib/claude/ipc"
 import type { McpServer } from "@cognia/agent-config-types"
 import { A2UI_BRIDGE_SERVER_NAME } from "@cognia/a2ui-core/mcp-tool-schemas"
 

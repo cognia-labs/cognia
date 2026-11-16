@@ -1,6 +1,6 @@
 import { countPushErrors, countPushSuccesses, pushToCli, type PushToCliDeps } from "./push-to-cli"
 import type { AppSettings } from "@cognia/agent-config-types"
-import type { SyncResult } from "@/lib/claude/sync"
+import type { SyncResult } from "@/lib/mcp/agent-config-sync"
 
 // Mocks back the `?? default` delegations exercised by the no-deps test below;
 // every other test injects deps and bypasses these.
@@ -8,7 +8,7 @@ jest.mock("./home", () => ({ resolveCliHome: jest.fn(async () => "/home/.cognia"
 jest.mock("./push-config", () => ({ pushConfigToCli: jest.fn(async () => true) }))
 jest.mock("./push-credentials", () => ({ pushCredentialsToCli: jest.fn(async () => 1) }))
 jest.mock("./push-history", () => ({ pushHistoryToCli: jest.fn(async () => 2) }))
-jest.mock("@/lib/claude/sync", () => ({
+jest.mock("@/lib/mcp/agent-config-sync", () => ({
   syncToAgent: jest.fn(async () => ({ ok: true, result: { path: "p" }, count: 1 })),
 }))
 

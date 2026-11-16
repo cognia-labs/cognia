@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
-import type { McpPreset } from "@/lib/claude/mcp-presets"
+import type { McpPreset } from "@/lib/mcp/presets"
 import { listMcpPresetCatalog } from "@/lib/mcp/preset-catalog"
 import { searchRegistry } from "@/lib/mcp/registry/client"
 

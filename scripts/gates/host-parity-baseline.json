@@ -20,7 +20,7 @@
     "A:lib/appearance/wallpaper-storage.ts",
     "A:lib/automation/audit.ts",
     "A:lib/ccswitch/client.ts",
-    "A:lib/claude/builtin-mcp/runtime-context.ts",
+    "A:lib/mcp/builtin/runtime-context.ts",
     "A:lib/claude/hook-trust-sync.ts",
     "A:lib/claude/hooks/fleet-hooks.ts",
     "A:lib/claude/settings.ts",

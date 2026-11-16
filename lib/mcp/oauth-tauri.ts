@@ -16,7 +16,7 @@ import {
   type PersonalCredentialContext,
 } from "@/lib/execution/personal-credential"
 import { transport } from "@/lib/tauri"
-import { getBuiltinMcpRuntimeContext } from "@/lib/claude/builtin-mcp/runtime-context"
+import { getBuiltinMcpRuntimeContext } from "@/lib/mcp/builtin/runtime-context"
 import {
   resolveMcpOAuthCredentialPartition,
   runMcpOAuthRefreshSingleFlight,

@@ -23,15 +23,15 @@ import {
   writeAgentConfig,
   type AgentReadResult,
   type AgentWriteResult,
-} from "./ipc"
+} from "@/lib/claude/ipc"
 import {
   CLAUDE_CODE_AGENT,
   MCP_AGENT_ADAPTERS,
   getAgentAdapter,
   requireAgentAdapter,
-} from "./agents"
-import { resolveBuiltinMcpConfig } from "./builtin-mcp/resolve"
-import { getBuiltinMcpRuntimeContext } from "./builtin-mcp/runtime-context"
+} from "./config-adapters"
+import { resolveBuiltinMcpConfig } from "./builtin/resolve"
+import { getBuiltinMcpRuntimeContext } from "./builtin/runtime-context"
 import { resolveMcpSecrets } from "@/lib/mcp/credentials"
 
 // ---- Sync (Cognia → Agent) ----------------------------------------------

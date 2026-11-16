@@ -2,7 +2,7 @@
  * Read an agent's MCP config and turn one entry into a
  * `PluginMcpServerPresetDef`.
  *
- * Parsing is delegated wholesale to the adapters in `lib/claude/agents/*`
+ * Parsing is delegated wholesale to the adapters in `lib/mcp/config-adapters/*`
  * — thirteen of them already know each agent's quirks (VS Code's `servers`
  * key, Windsurf's `serverUrl`, Gemini's `httpUrl`/`url` split, Roo Code's
  * `streamable-http`). Re-deriving any of that here would be a second
@@ -16,7 +16,7 @@
  */
 
 import { parseJsonc } from "@/lib/jsonc"
-import { MCP_AGENT_ADAPTERS, type McpAgentAdapter } from "@/lib/claude/agents"
+import { MCP_AGENT_ADAPTERS, type McpAgentAdapter } from "@/lib/mcp/config-adapters"
 import type { PluginMcpServerPresetDef } from "@/types/plugin/plugin-mcp-preset"
 import type { McpImportDraft } from "@/lib/db/mcp-servers"
 import { parse as parseToml } from "smol-toml"

@@ -12,7 +12,7 @@ jest.mock("@/lib/mcp/registry/client", () => ({ searchRegistry: jest.fn() }))
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { searchRegistry } from "@/lib/mcp/registry/client"
-import type { McpPreset } from "@/lib/claude/mcp-presets"
+import type { McpPreset } from "@/lib/mcp/presets"
 import { McpPresetGrid } from "./mcp-preset-grid"
 import {
   __resetMcpServerPresetsForTesting,

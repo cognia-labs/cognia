@@ -1,4 +1,4 @@
-// Curated starting points for new skills. Like `lib/claude/mcp-presets.ts`,
+// Curated starting points for new skills. Like `lib/mcp/presets.ts`,
 // the catalog lives in code (not the database) so it versions with the app and
 // costs no storage. Picking a template seeds the create editor with a
 // ready-to-edit name / description / body / category / tags — the user always

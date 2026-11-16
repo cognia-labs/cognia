@@ -28,7 +28,7 @@
  * identifying the user.
  */
 
-import type { McpPresetField } from "@/lib/claude/mcp-presets"
+import type { McpPresetField } from "@/lib/mcp/presets"
 import type { McpTransport } from "@cognia/agent-config-types"
 
 /** Result of stripping user-specific values out of one server config. */

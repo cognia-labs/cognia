@@ -24,8 +24,8 @@
  */
 
 import type { AgentId, McpTransport } from "@cognia/agent-config-types"
-import { MCP_AGENT_ADAPTERS } from "@/lib/claude/agents"
-import { denormalizeMcpEntry, normalizeMcpEntry } from "@/lib/claude/agents/shared"
+import { MCP_AGENT_ADAPTERS } from "@/lib/mcp/config-adapters"
+import { denormalizeMcpEntry, normalizeMcpEntry } from "@/lib/mcp/config-adapters/shared"
 
 export interface McpTransferDraft {
   name: string

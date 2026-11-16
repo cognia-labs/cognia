@@ -33,7 +33,7 @@ jest.mock("@/hooks/agent", () => ({
   useAgentStatuses: () => statusesMock,
 }))
 
-jest.mock("@/lib/claude/sync", () => ({
+jest.mock("@/lib/mcp/agent-config-sync", () => ({
   syncToAgent: jest.fn(async () => ({ ok: true, count: 0 })),
 }))
 

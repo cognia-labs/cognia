@@ -11,7 +11,7 @@ import {
   MCP_PRESETS,
   type McpPreset,
   type McpPresetField,
-} from "@/lib/claude/mcp-presets"
+} from "@/lib/mcp/presets"
 import type { PluginMcpServerPresetDef } from "@/types/plugin/plugin-mcp-preset"
 
 import { discoverPlugins, type PluginFs } from "../plugin/discover-plugins"

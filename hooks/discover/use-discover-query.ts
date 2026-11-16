@@ -55,7 +55,7 @@ import {
 } from "@/lib/integrations/registry"
 import { usePort } from "@/hooks/modules/use-port"
 import { listCopilotTemplates } from "@/lib/workflow/copilot-templates"
-import type { McpPreset } from "@/lib/claude/mcp-presets"
+import type { McpPreset } from "@/lib/mcp/presets"
 import { listMcpPresetCatalog } from "@/lib/mcp/preset-catalog"
 import {
   getMcpServerPresetsRevision,

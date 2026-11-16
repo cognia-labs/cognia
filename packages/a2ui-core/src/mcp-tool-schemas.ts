@@ -15,7 +15,7 @@ export const A2UI_BRIDGE_SERVER_NAME = "a2ui-bridge"
 // Bridge package version; this does not declare official protocol compatibility.
 export const A2UI_BRIDGE_VERSION = "0.9.0"
 
-/** Path placeholder resolved by `lib/claude/agents/*` adapters at projection. */
+/** Path placeholder resolved by `lib/mcp/config-adapters/*` adapters at projection. */
 export const SIDECAR_DIR_PLACEHOLDER = "${COGNIA_SIDECAR_DIR}"
 
 export interface A2UIToolSchema {
