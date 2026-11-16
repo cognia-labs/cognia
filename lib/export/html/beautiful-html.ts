@@ -122,7 +122,7 @@ function renderPart(part: UIMessage["parts"][number], expandDetails: boolean): s
   }
   if (part.type === "reasoning") {
     const text = (part as { text: string }).text ?? ""
-    return `<details ${expandDetails ? "" : "open"} class="reasoning">
+    return `<details ${expandDetails ? "open" : ""} class="reasoning">
   <summary>💭 Thinking</summary>
   <pre>${escapeHtml(text)}</pre>
 </details>`

@@ -217,6 +217,31 @@ describe("exportToBeautifulHtml — additional rendering branches", () => {
     expect(html).toContain("let me think...")
   })
 
+  it.each([
+    [true, true],
+    [false, false],
+  ])("opens reasoning with the other details only when expandDetails=%s", (expand, open) => {
+    const html = exportToBeautifulHtml({
+      session,
+      messages: [
+        {
+          id: "r2",
+          sessionId: "s1",
+          role: "assistant",
+          parts: [
+            { type: "reasoning", text: "thinking" } as never,
+            { type: "tool-read", state: "output-available", input: {}, output: "ok" } as never,
+          ],
+          createdAt: 1_700_000_000_000,
+        },
+      ],
+      exportedAt,
+      expandDetails: expand,
+    })
+    expect(html.includes('<details open class="reasoning">')).toBe(open)
+    expect(html.includes('<details open class="tool">')).toBe(open)
+  })
+
   it("folds the composer's context envelope apart from the typed text", () => {
     // The export keeps what the question was asked about, but folded and
     // labelled — the text div is the user's own words. The snapshot is
