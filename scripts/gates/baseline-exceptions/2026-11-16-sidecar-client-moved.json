@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/identity-vocabulary-baseline.json",
+  "measure": "entries:lib/claude/ipc.ts.bareAccountId",
+  "allowRemoval": true,
+  "owner": "lib/ai",
+  "repaymentPhase": "1",
+  "reason": "lib/claude/ipc.ts moved to lib/ai/agent/execution/sidecar-client.ts (lib/claude ownership migration, move-only). The same bare account id is counted under the new path; nothing new is admitted."
+}

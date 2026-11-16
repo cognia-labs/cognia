@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/identity-vocabulary-baseline.json",
+  "measure": "entries:lib/claude/env-resolver.ts.bareAccountId",
+  "allowRemoval": true,
+  "owner": "lib/ai",
+  "repaymentPhase": "1",
+  "reason": "lib/claude/env-resolver.ts moved to lib/ai/agent/execution/account-environment.ts (lib/claude ownership migration, move-only). The same 13 bare account ids are counted under the new path; nothing new is admitted."
+}
