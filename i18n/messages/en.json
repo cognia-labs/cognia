@@ -11153,7 +11153,8 @@
       "sources": "{count, plural, one {# source} other {# sources}}",
       "toolUse": "{name} ×{count}",
       "worked": "Worked through {count, plural, one {# step} other {# steps}}",
-      "workedFor": "Worked for {duration}"
+      "workedFor": "Worked for {duration}",
+      "working": "Working through {count, plural, one {# step} other {# steps}}"
     },
     "twinBadge": {
       "fewShotOff": "Style few-shot off",

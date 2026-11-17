@@ -75,6 +75,16 @@ describe("TurnProcessFold", () => {
     expect(screen.getByTestId("turn-process-fold-label")).toHaveTextContent('worked:{"count":4}')
   })
 
+  it("counts the settled steps while the turn is still being written (D14)", () => {
+    render(
+      <TurnProcessFold fold={fold} live durationMs={5_000}>
+        <p>body</p>
+      </TurnProcessFold>
+    )
+    expect(screen.getByTestId("turn-process-fold-label")).toHaveTextContent('working:{"count":4}')
+    expect(screen.getByTestId("turn-process-fold")).toHaveAttribute("data-live", "true")
+  })
+
   it("shows failed tool calls on the closed row", () => {
     render(
       <TurnProcessFold fold={{ ...fold, failedCount: 2 }} durationMs={1_000}>

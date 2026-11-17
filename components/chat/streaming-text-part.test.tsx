@@ -540,7 +540,12 @@ describe("FinalizedLongTextPart", () => {
       render(<FinalizedLongTextPart text={text} messageId="m1" />)
 
       expect(screen.getAllByTestId("finalized-markdown-section")).toHaveLength(3)
-      expect(screen.getAllByTestId("finalized-markdown-placeholder").length).toBeGreaterThan(0)
+      const placeholders = screen.getAllByTestId("finalized-markdown-placeholder")
+      expect(placeholders.length).toBeGreaterThan(0)
+      // Each reserves the height its own source estimates, not one fixed guess (D14).
+      const reserved = placeholders.map((element) => element.style.containIntrinsicSize)
+      for (const size of reserved) expect(size).toMatch(/^auto \d+px$/)
+      expect(reserved[0]).not.toBe("auto 320px")
 
       act(() => {
         callbacks[0]?.(

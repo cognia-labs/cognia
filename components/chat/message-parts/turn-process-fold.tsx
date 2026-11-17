@@ -42,6 +42,11 @@ export interface TurnProcessFoldProps {
   /** Sealed turn duration (`metadata.run.durationMs`); absent on imported turns. */
   durationMs?: number
   /**
+   * The turn is still being written: its settled steps fold here as they
+   * settle (D14), and the row counts them instead of claiming a duration.
+   */
+  live?: boolean
+  /**
    * Where the reader's open/closed choice is remembered
    * (`disclosureKey(sessionId, messageId, "fold")`). Without one the choice is
    * local to this mount.
@@ -61,6 +66,7 @@ export interface TurnProcessFoldProps {
 export function TurnProcessFold({
   fold,
   durationMs,
+  live = false,
   memoryKey,
   children,
   onOpen,
@@ -70,13 +76,19 @@ export function TurnProcessFold({
   const [remembered, setRemembered] = useRememberedDisclosure(onOpen ? null : (memoryKey ?? null))
   const open = onOpen ? false : (remembered ?? false)
   const steps = fold.toolCount + fold.reasoningCount
-  const label =
-    typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0
+  const label = live
+    ? t("working", { count: steps })
+    : typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0
       ? t("workedFor", { duration: formatWorkedDuration(durationMs) })
       : t("worked", { count: steps })
 
   return (
-    <div className="not-prose mb-2 w-full" data-testid="turn-process-fold" data-open={open}>
+    <div
+      className="not-prose mb-2 w-full"
+      data-testid="turn-process-fold"
+      data-open={open}
+      data-live={live || undefined}
+    >
       <button
         type="button"
         onClick={() => (onOpen ? onOpen() : setRemembered(!open))}

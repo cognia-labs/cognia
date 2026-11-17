@@ -62,19 +62,64 @@ function isProseText(part: FoldablePart): boolean {
  * `null` when the turn should render unfolded.
  */
 export function foldTurnParts<P extends FoldablePart>(parts: readonly P[]): TurnFold | null {
+  for (const part of parts) {
+    if (isToolPartType(part?.type) && part.state && PENDING_TOOL_STATES.has(part.state)) return null
+  }
+  return foldParts(parts, () => true)
+}
+
+/**
+ * The fold of a turn that is still being written (D14): every process part
+ * that has settled goes into the fold as it settles, so the turn has its
+ * final shape before it ends.
+ *
+ * The rules are the finished fold's, applied to settled parts only. What has
+ * not settled stays on screen where it is: the running tool or the reasoning
+ * still streaming, and a tool waiting on input or approval. The last run of
+ * prose so far is the conclusion so far, exactly as the finished fold keeps
+ * the last run. Once every part has settled the two folds are the same, so
+ * nothing moves when the turn ends. `null` while nothing has settled yet.
+ */
+export function foldStreamingTurnParts<P extends FoldablePart>(
+  parts: readonly P[]
+): TurnFold | null {
+  return foldParts(parts, (part, index) => isSettledProcessPart(part, index < parts.length - 1))
+}
+
+/**
+ * Whether a process part is finished. A tool is, once it has an outcome; a
+ * reasoning block, once it is marked done or anything follows it (the stream
+ * marks it done only when the whole assistant message arrives). The data
+ * parts arrive whole.
+ */
+function isSettledProcessPart(part: FoldablePart, followed: boolean): boolean {
+  if (isToolPartType(part.type)) {
+    return (
+      !part.state || (!PENDING_TOOL_STATES.has(part.state) && part.state !== "approval-responded")
+    )
+  }
+  if (part.type === "reasoning") return followed || part.state !== "streaming"
+  return true
+}
+
+function foldParts<P extends FoldablePart>(
+  parts: readonly P[],
+  settled: (part: P, index: number) => boolean
+): TurnFold | null {
   let toolCount = 0
   let failedCount = 0
   let reasoningCount = 0
-  for (const part of parts) {
-    if (!isProcessPart(part)) continue
+  const folded = new Set<number>()
+  parts.forEach((part, index) => {
+    if (!isProcessPart(part) || !settled(part, index)) return
+    folded.add(index)
     if (isToolPartType(part.type)) {
-      if (part.state && PENDING_TOOL_STATES.has(part.state)) return null
       toolCount += 1
       if (part.state === "output-error") failedCount += 1
     } else if (part.type === "reasoning") {
       reasoningCount += 1
     }
-  }
+  })
   if (toolCount === 0 && reasoningCount === 0) return null
 
   // The conclusion: the last run of prose, walking back over parts that render
@@ -95,10 +140,8 @@ export function foldTurnParts<P extends FoldablePart>(parts: readonly P[]): Turn
     }
   }
 
-  const folded = new Set<number>()
   parts.forEach((part, index) => {
-    if (isProcessPart(part)) folded.add(index)
-    else if (isProseText(part) && !conclusion.has(index)) folded.add(index)
+    if (isProseText(part) && !conclusion.has(index)) folded.add(index)
   })
   return { folded, toolCount, failedCount, reasoningCount }
 }

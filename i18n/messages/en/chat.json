@@ -3258,6 +3258,7 @@
   },
   "turnFold": {
     "workedFor": "Worked for {duration}",
+    "working": "Working through {count, plural, one {# step} other {# steps}}",
     "worked": "Worked through {count, plural, one {# step} other {# steps}}",
     "expand": "Show the work behind this answer: {label}",
     "collapse": "Hide the work behind this answer: {label}",

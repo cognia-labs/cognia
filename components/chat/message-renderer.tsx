@@ -107,7 +107,7 @@ import {
   SILENT_CONTROL_PART_TYPES,
 } from "@/lib/chat/agent-flow-grouping"
 import { transcriptActivityOf } from "@/lib/chat/transcript/turn-activity"
-import { foldTurnParts, type TurnFold } from "@/lib/chat/turn-fold"
+import { foldStreamingTurnParts, foldTurnParts, type TurnFold } from "@/lib/chat/turn-fold"
 import { userBubbleClass } from "@/lib/chat/message-bubble"
 import { readReplyTo } from "@/lib/chat/reply-to"
 import { ReplyToQuote } from "@/components/chat/message-parts/reply-to-quote"
@@ -560,15 +560,50 @@ function MessageRendererInner({
     () => groupAgentParts(presentationParts, agentFlowMode),
     [presentationParts, agentFlowMode]
   )
-  // A finished turn folds its process under one "Worked for …" row and keeps
-  // the conclusion on screen (`lib/chat/turn-fold.ts`). Never while the row is
-  // still being written, by the live tail or by a room member.
+  // A turn folds its process under one "Worked for …" row and keeps the
+  // conclusion on screen (`lib/chat/turn-fold.ts`). While the row is still
+  // being written, by the live tail or by a room member, each step folds as it
+  // settles and the running one stays open (D14), so the turn already has its
+  // finished shape and nothing moves when it ends.
+  const turnLive = isStreaming || memberBusy
+  // What a turn leaves behind once it ends (D14): the workflows it fired
+  // (`lib/chat/trigger-audit-ring`) and the memories it learned and recalled.
+  // They sit in the footer line with the actions and the run summary, which
+  // keeps a row reserved while the turn is live, instead of each opening a
+  // line of its own under the body when the turn ends. Memory chips mount only
+  // once the turn is done, so their liveQuery never runs per token.
+  const triggerSessionId =
+    typeof (message as { metadata?: { sessionId?: unknown } }).metadata?.sessionId === "string"
+      ? ((message as { metadata?: { sessionId?: string } }).metadata!.sessionId as string)
+      : null
+  const recalledSources =
+    message.role === "assistant" && !isStreaming
+      ? (message.parts as unknown[]).find(isSourcesPart)
+      : undefined
+  const postTurnChips = (
+    <div
+      className="flex min-w-0 flex-wrap items-center gap-1 empty:hidden"
+      data-testid="message-post-turn-chips"
+    >
+      {triggerSessionId ? (
+        <TriggerBadge sessionId={triggerSessionId} messageId={message.id} />
+      ) : null}
+      {message.role === "assistant" && !isStreaming ? (
+        <>
+          <MemoryLearnedChip messageId={message.id} />
+          {recalledSources ? <MemoryRecalledChip part={recalledSources} /> : null}
+        </>
+      ) : null}
+    </div>
+  )
   const turnFold = useMemo(
     () =>
-      message.role === "assistant" && !isStreaming && !memberBusy && display.foldCompletedTurns
-        ? foldTurnParts(presentationParts)
+      message.role === "assistant" && display.foldCompletedTurns
+        ? turnLive
+          ? foldStreamingTurnParts(presentationParts)
+          : foldTurnParts(presentationParts)
         : null,
-    [message.role, isStreaming, memberBusy, display.foldCompletedTurns, presentationParts]
+    [message.role, turnLive, display.foldCompletedTurns, presentationParts]
   )
 
   // A Host turn folded to its reply carries the turn's activity summary
@@ -1463,13 +1498,18 @@ function MessageRendererInner({
                     {turnFold ? (
                       <TurnProcessFold
                         fold={turnFold}
-                        durationMs={runMetadataOf(message)?.durationMs}
+                        live={turnLive}
+                        durationMs={turnLive ? undefined : runMetadataOf(message)?.durationMs}
                         memoryKey={rememberedDisclosureKey(message.id, "fold")}
                       >
                         {segments.map((segment, si) =>
                           isSegmentFolded(segment, turnFold) ? renderSegment(segment, si) : null
                         )}
-                        <SubagentTree parts={message.parts} mode={agentFlowMode} />
+                        {/* Dispatched subagents report live outside the fold
+                            until the turn ends. */}
+                        {turnLive ? null : (
+                          <SubagentTree parts={message.parts} mode={agentFlowMode} />
+                        )}
                       </TurnProcessFold>
                     ) : null}
                     {segments.map((segment, si) =>
@@ -1477,7 +1517,9 @@ function MessageRendererInner({
                         ? null
                         : renderSegment(segment, si)
                     )}
-                    {turnFold ? null : <SubagentTree parts={message.parts} mode={agentFlowMode} />}
+                    {turnFold && !turnLive ? null : (
+                      <SubagentTree parts={message.parts} mode={agentFlowMode} />
+                    )}
                   </>
                 )}
               </MessageContent>
@@ -1500,30 +1542,6 @@ function MessageRendererInner({
 
           <PluginExtensionSlot point="chat.message.after" className="mt-1 empty:hidden" />
 
-          {/* Trigger audit badge — surfaces workflows fired by this message via */}
-          {/* `lib/chat/trigger-audit-ring`. Only renders when ≥1 trigger fired. */}
-          {(() => {
-            const sessionId =
-              typeof (message as { metadata?: { sessionId?: unknown } }).metadata?.sessionId ===
-              "string"
-                ? ((message as { metadata?: { sessionId?: string } }).metadata!.sessionId as string)
-                : null
-            if (!sessionId) return null
-            return <TriggerBadge sessionId={sessionId} messageId={message.id} />
-          })()}
-
-          {/* Memory transparency chips — "learned N" + "recalled N" for completed */}
-          {/* assistant turns. Mounted only when not streaming so the liveQuery */}
-          {/* inside the chips never runs in the token-delta hot path. */}
-          {message.role === "assistant" && !isStreaming && (
-            <div className="mt-1 flex flex-wrap items-center gap-1 empty:hidden">
-              <MemoryLearnedChip messageId={message.id} />
-              {(() => {
-                const sourcesPart = (message.parts as unknown[]).find(isSourcesPart)
-                return sourcesPart ? <MemoryRecalledChip part={sourcesPart} /> : null
-              })()}
-            </div>
-          )}
           {/* ADR-0026 §5 §A — revived hover-action slot. Distinct from the */}
           {/* footer below: this slot is visible above the message body on hover, */}
           {/* the footer holds host copy/regenerate controls. */}
@@ -1555,8 +1573,12 @@ function MessageRendererInner({
               className={cn(
                 // `empty:hidden`: with the bar handed to the long-press sheet
                 // and no reactions or meta to show, the line has no children
-                // and must not keep a row of gap under the bubble.
-                "flex min-w-0 items-center gap-2 empty:hidden",
+                // and must not keep a row of gap under the bubble. While an
+                // assistant turn is live the line keeps one button row
+                // instead (D14): the bar, chips and run summary a finished
+                // turn shows fill space that is already there.
+                "flex min-w-0 items-center gap-2",
+                turnLive && message.role === "assistant" ? "min-h-8" : "empty:hidden",
                 message.role === "user" && "justify-end"
               )}
               data-testid="message-action-line"
@@ -1651,6 +1673,7 @@ function MessageRendererInner({
               {/* Footer meta: the run summary line on the row's right end.
                   Click opens the per-field popover — no inline expansion, so
                   the transcript below never shifts. */}
+              {postTurnChips}
               <MessageMetaLine
                 message={message}
                 display={display}
@@ -1664,6 +1687,7 @@ function MessageRendererInner({
             <div
               className={cn(
                 "flex min-w-0 items-center gap-2",
+                turnLive && message.role === "assistant" && "min-h-8",
                 message.role === "user" && "justify-end"
               )}
               data-testid="message-action-line"
@@ -1755,6 +1779,7 @@ function MessageRendererInner({
                   className="flex items-center gap-1 empty:hidden"
                 />
               </MessageActions>
+              {postTurnChips}
               <MessageMetaLine
                 message={message}
                 display={display}
@@ -1768,7 +1793,8 @@ function MessageRendererInner({
               turns, but the run metadata still applies — the chip gets a
               meta-only line so the sealed turn keeps its cost/duration read. */}
           {(editing || isToolOnlyTurn) && (
-            <div className="flex empty:hidden" data-testid="message-meta-row">
+            <div className="flex items-center gap-2 empty:hidden" data-testid="message-meta-row">
+              {postTurnChips}
               <MessageMetaLine
                 message={message}
                 display={display}

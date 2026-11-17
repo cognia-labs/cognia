@@ -1069,6 +1069,21 @@ describe("memory transparency chips", () => {
     expect(screen.getByTestId("memory-recalled-chip")).toBeInTheDocument()
   })
 
+  it("puts the chips in the footer line, which keeps its row while the turn is live (D14)", () => {
+    const msg = {
+      id: "memory-2",
+      role: "assistant",
+      parts: [{ type: "text", text: "answer" }],
+    } as unknown as UIMessage
+    const { rerender } = render(<MessageRenderer message={msg} isStreaming />)
+    expect(screen.getByTestId("message-action-line").className).toContain("min-h-8")
+
+    rerender(<MessageRenderer message={msg} isStreaming={false} />)
+    const line = screen.getByTestId("message-action-line")
+    expect(line).toContainElement(screen.getByTestId("memory-learned-chip"))
+    expect(line.className).not.toContain("min-h-8")
+  })
+
   it("does not mount memory chips while the assistant is streaming", () => {
     render(<MessageRenderer message={assistantMsg("memory-stream", "answer")} isStreaming />)
     expect(screen.queryByTestId("memory-learned-chip")).not.toBeInTheDocument()
@@ -3253,11 +3268,50 @@ describe("finished-turn fold", () => {
     expect(document.querySelector("[data-testid='structured-tool-part']")).toBeTruthy()
   })
 
-  it("does not fold while the turn is still streaming", () => {
+  it("folds each step as it settles while streaming, leaving the running one open (D14)", () => {
+    // Its own id: an earlier test opened `fold-1`'s fold, and that is remembered.
+    const live = (parts: UIMessage["parts"]) => ({ ...finished(parts), id: "fold-live" })
+    const { rerender } = render(
+      <MessageRenderer
+        isStreaming
+        message={live([
+          { type: "text", text: "Looking around." },
+          tool("c1"),
+          { type: "text", text: "Next file." },
+          tool("c2", "input-available"),
+        ])}
+      />
+    )
+    // The settled read is in the fold; the running one stays on screen.
+    const fold = screen.getByTestId("turn-process-fold")
+    expect(fold).toHaveAttribute("data-live", "true")
+    expect(screen.getByTestId("turn-process-fold-label")).toHaveTextContent("working")
+    expect(screen.queryByText("Looking around.")).toBeNull()
+    expect(screen.getByText("Next file.")).toBeInTheDocument()
+    expect(document.querySelectorAll("[data-testid='structured-tool-part']")).toHaveLength(1)
+
+    // The turn ends: the same row, now with its duration, and nothing moves.
+    rerender(
+      <MessageRenderer
+        message={live([
+          { type: "text", text: "Looking around." },
+          tool("c1"),
+          { type: "text", text: "Next file." },
+          tool("c2"),
+        ])}
+      />
+    )
+    expect(screen.getByTestId("turn-process-fold")).not.toHaveAttribute("data-live")
+    expect(screen.getByTestId("turn-process-fold-label")).toHaveTextContent("workedFor")
+    expect(screen.getByText("Next file.")).toBeInTheDocument()
+    expect(document.querySelector("[data-testid='structured-tool-part']")).toBeNull()
+  })
+
+  it("draws no fold while nothing has settled yet", () => {
     render(
       <MessageRenderer
         isStreaming
-        message={finished([tool("c1"), { type: "text", text: "The answer." }])}
+        message={finished([{ type: "text", text: "Starting." }, tool("c1", "input-available")])}
       />
     )
     expect(screen.queryByTestId("turn-process-fold")).toBeNull()

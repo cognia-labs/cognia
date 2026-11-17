@@ -3258,6 +3258,7 @@
   },
   "turnFold": {
     "workedFor": "已工作 {duration}",
+    "working": "进行中 · 已完成 {count} 个步骤",
     "worked": "共 {count} 个步骤",
     "expand": "展开此回答的过程：{label}",
     "collapse": "收起此回答的过程：{label}",

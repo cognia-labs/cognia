@@ -20,6 +20,7 @@
  */
 
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react"
+import { estimateMarkdownHeight } from "@/lib/chat/row-height-estimate"
 import { Block, parseMarkdownIntoBlocks, type AnimateOptions, type BlockProps } from "streamdown"
 import { MessageResponse, type MessageResponseProps } from "@/components/ai-elements/message"
 import {
@@ -189,6 +190,9 @@ export const StreamingBlock = memo(function StreamingBlock({
   return <div className="not-typeset">{block}</div>
 })
 
+/** A deferred section never reserves less than one short paragraph. */
+const MIN_SECTION_PLACEHOLDER_PX = 48
+
 function FinalizedMarkdownSection({
   content,
   eager,
@@ -210,6 +214,10 @@ function FinalizedMarkdownSection({
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(eager)
+  const placeholderHeight = useMemo(
+    () => Math.max(MIN_SECTION_PLACEHOLDER_PX, Math.round(estimateMarkdownHeight(content))),
+    [content]
+  )
 
   useEffect(() => {
     if (visible || eager) return
@@ -235,7 +243,11 @@ function FinalizedMarkdownSection({
     <div
       ref={rootRef}
       data-testid={visible ? "finalized-markdown-section" : "finalized-markdown-placeholder"}
-      className="[content-visibility:auto] [contain-intrinsic-size:auto_320px]"
+      className="[content-visibility:auto]"
+      // Sized from the section's own source before it first renders (D14), the
+      // estimate the transcript's virtualizer uses, so a reply scrolled into
+      // does not grow under the reader. `auto` keeps the real size once known.
+      style={{ containIntrinsicSize: `auto ${placeholderHeight}px` }}
     >
       {visible ? (
         <MarkdownRenderer
