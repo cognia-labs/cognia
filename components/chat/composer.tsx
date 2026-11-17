@@ -3,7 +3,6 @@ import {
   PromptInputProvider,
   usePromptInputAttachments,
   usePromptInputController,
-  type TextInputContext,
 } from "@/components/ai-elements/prompt-input"
 import type { ChatStatus as PromptStatus, UIMessage } from "ai"
 import { FileTextIcon, XIcon } from "lucide-react"
@@ -27,7 +26,6 @@ import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 import {
   selectComposerCitedRefs,
-  selectComposerReplyTo,
   useChatStore,
   useComposerEphemeralSkillIds,
   useComposerPermissionMode,
@@ -35,11 +33,6 @@ import {
 } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
 import type { ContextRef } from "@/lib/chat/mentions/types"
-import {
-  COMPOSER_APPEND_EVENT,
-  composerAppendHasContent,
-  type ComposerAppendDetail,
-} from "@/lib/chat/composer-append"
 import type { SendContent, ChatSession, MessageReplyTo } from "@cognia/agent-config-types"
 import {
   type AttachmentManifestEntry,
@@ -159,20 +152,17 @@ import { BestOfNStartDialog } from "./composer/best-of-n-start-dialog"
 import { BottomToolbar } from "./composer/bottom-toolbar"
 import { Collapse } from "./composer/collapse"
 import { SkillChipRow } from "./composer/skill-chip-row"
-import { GoalStatusPill } from "@/components/goal/goal-status-pill"
-import { PlanModeBanner } from "@/components/chat/plan-mode-banner"
-import { LoopStatusPill } from "@/components/loop/loop-status-pill"
 import { HelperHints } from "./composer/helper-hints"
-import { VoiceControls } from "./composer/voice-controls"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { InboxComposerActionsHost } from "@/components/inbox/inbox-composer-actions-host"
 import { CannedResponsePicker } from "@/components/inbox/canned-response-picker"
 import { EnhanceButton } from "./composer/enhance-button"
-import { WebSearchToggle } from "./composer/web-search-toggle"
-import { RoomTargetPicker } from "./composer/room-target-picker"
 import { noteComposerTyping } from "@/stores/chat/composer-typing-store"
-import { SkillsMenuEntry } from "./composer/skills-menu-entry"
 import { ComposerSessionProvider } from "./composer/composer-session-context"
+import { ComposerAppendBridge } from "./composer/composer-append-bridge"
+import { ComposerCapabilityMenu } from "./composer/composer-capability-menu"
+import { ComposerStatusBands } from "./composer/composer-status-bands"
+import { VoiceTranscriptionBridge } from "./composer/voice-transcription-bridge"
 
 interface Props {
   session?: ChatSession | null
@@ -1728,160 +1718,11 @@ function copyPageToClipboard(_page: number, text: string): void {
   void navigator.clipboard?.writeText(text)
 }
 
-/**
- * The self-hiding status bands under the attachments: the goal (ADR-0019), the
- * open `/loop`, and the plan-mode banner. Each reads its own store; the only
- * thing the composer tells them is which conversation they belong to.
- */
-const ComposerStatusBands = memo(function ComposerStatusBands({
-  sessionId,
-}: {
-  sessionId: string | null
-}) {
-  return (
-    <>
-      {/* ADR-0019 — active/paused goal status + controls; self-hides when none. */}
-      <Collapse>
-        <GoalStatusPill sessionId={sessionId} />
-      </Collapse>
-      {/* /loop status + controls; self-hides when no open loop. */}
-      <Collapse>
-        <LoopStatusPill sessionId={sessionId} />
-      </Collapse>
-      {/* Plan-mode state banner; self-hides outside plan mode. */}
-      <Collapse>
-        <PlanModeBanner />
-      </Collapse>
-    </>
-  )
-})
-
-/**
- * Speech → text, appended to the draft.
- *
- * Takes the composer's stable text handle as a prop instead of reading the
- * prompt-input context: a context consumer re-renders on every keystroke, and
- * this one carries the whole voice cluster (dictation, live voice, the
- * settings popover) with it. Memoized with a stable handle, typing never
- * reaches it.
- */
-const VoiceTranscriptionBridge = memo(function VoiceTranscriptionBridge({
-  disabled,
-  textInput,
-}: {
-  disabled?: boolean
-  textInput: TextInputContext
-}) {
-  const onTranscription = useCallback(
-    (text: string) => {
-      if (!text.trim()) return
-      const cur = textInput.value
-      const sep = cur && !cur.endsWith(" ") ? " " : ""
-      textInput.setInput(`${cur}${sep}${text}`)
-    },
-    [textInput]
-  )
-  return <VoiceControls disabled={disabled} onTranscription={onTranscription} />
-})
-
 export {
   COMPOSER_APPEND_EVENT,
   dispatchComposerAppend,
   type ComposerAppendDetail,
 } from "@/lib/chat/composer-append"
-
-/**
- * Lets components outside the PromptInput controller context (e.g. the OCR
- * result card in the message list, a sidechat handing a conclusion back, or a
- * stopped turn putting its queued follow-ups back) stage material in the
- * composer by dispatching `COMPOSER_APPEND_EVENT`. Text is appended; files are
- * staged as attachments; citations, reply target and carried envelopes go to
- * this conversation's composer state, where the send path reads them.
- */
-const ComposerAppendBridge = memo(function ComposerAppendBridge({
-  sessionId,
-  textInput,
-  addFiles,
-  requestSubmit,
-}: {
-  sessionId?: string
-  /** The composer's stable text handle — see `VoiceTranscriptionBridge`. */
-  textInput: TextInputContext
-  /** Stage files the way a drop or paste does. */
-  addFiles: (files: File[]) => void
-  requestSubmit: (text: string, onSubmitted?: (sent: boolean) => void) => void
-}) {
-  const t = useTranslations("chat.composer.putBack")
-  const activeSessionId = useChatStore((s) => s.activeSessionId)
-  useEffect(() => {
-    const onAppend = (e: Event) => {
-      const detail = (e as CustomEvent<ComposerAppendDetail>).detail
-      if (!composerAppendHasContent(detail) || detail.claimed) return
-      // Addressed events go to exactly one composer. An un-addressed event is
-      // legacy shorthand for "the active session", which keeps the single-pane
-      // callers working without making every composer echo it.
-      const target = detail.sessionId ?? activeSessionId
-      if (target && target !== sessionId) return
-      detail.claimed = true
-      const text = detail.text
-      let appended = textInput.value
-      if (text && text.trim()) {
-        const cur = textInput.value
-        const sep = cur && !cur.endsWith(" ") ? " " : ""
-        appended = `${cur}${sep}${text}`
-        textInput.setInput(appended)
-      }
-      if (detail.files?.length) addFiles([...detail.files])
-      const chat = useChatStore.getState()
-      const slice = sessionId ?? null
-      for (const ref of detail.citations ?? []) chat.addCitedRef(ref, slice)
-      if (detail.submit) requestSubmit(appended, detail.onSubmitted)
-      if (detail.carried?.length) chat.addCarriedPreambles([...detail.carried], slice)
-      // A reply the user already picked here wins over the one coming back.
-      if (detail.replyTo && !selectComposerReplyTo(chat, slice))
-        chat.setReplyTo(detail.replyTo, slice)
-      if (detail.missing?.length) {
-        toast.warning(
-          t("missing", { count: detail.missing.length, names: detail.missing.join(", ") })
-        )
-      }
-    }
-    window.addEventListener(COMPOSER_APPEND_EVENT, onAppend)
-    return () => window.removeEventListener(COMPOSER_APPEND_EVENT, onAppend)
-  }, [textInput, activeSessionId, sessionId, addFiles, requestSubmit, t])
-  return null
-})
-
-function ComposerCapabilityMenu({
-  session,
-  status,
-  disabled,
-  onOpenSettings,
-}: {
-  session?: ChatSession | null
-  status: PromptStatus
-  disabled?: boolean
-  onOpenSettings: (tab: SettingsTab) => void
-}) {
-  const isStreaming = status === "streaming"
-  const controlsDisabled = disabled || isStreaming
-
-  return (
-    <>
-      {/* The prompt-enhance wand used to live here. It rewrites what is in the
-          box, so it belongs ON the box: it now sits beside the save-as-template
-          bookmark in the input's corner, in the same icon-button style, where
-          it is visible without opening a menu first. */}
-      {/* Each capability is a CapabilityRow — a full-width menu row matching
-          the menus' own entries, not a toolbar chip. */}
-      <div data-testid="composer-capability-menu">
-        <WebSearchToggle disabled={controlsDisabled} onOpenSettings={onOpenSettings} />
-        <RoomTargetPicker session={session} disabled={controlsDisabled} />
-        <SkillsMenuEntry session={session} disabled={controlsDisabled} />
-      </div>
-    </>
-  )
-}
 
 // --- Outer component ------------------------------------------------------
 
