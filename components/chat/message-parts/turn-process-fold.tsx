@@ -15,6 +15,10 @@
  * Open/closed is remembered per message (`lib/chat/disclosure-memory`), so a
  * fold the reader opened stays open when the virtualized list scrolls it out
  * of its window and back.
+ *
+ * A Host's folded turn (D12) draws the same row from the turn's activity
+ * summary, before its detail is loaded: `onOpen` then fetches the turn, whose
+ * messages bring their own folds, and `detail` names what the turn used.
  */
 
 import { createContext, useContext, type ReactNode } from "react"
@@ -44,13 +48,27 @@ export interface TurnProcessFoldProps {
    */
   memoryKey?: string
   /** The folded parts, rendered only while open. */
-  children: ReactNode
+  children?: ReactNode
+  /**
+   * The process is not here to open: the row asks for it instead (a Host turn
+   * whose detail is not loaded) and stays closed.
+   */
+  onOpen?: () => void
+  /** One muted line of what the process used, shown while closed. */
+  detail?: string
 }
 
-export function TurnProcessFold({ fold, durationMs, memoryKey, children }: TurnProcessFoldProps) {
+export function TurnProcessFold({
+  fold,
+  durationMs,
+  memoryKey,
+  children,
+  onOpen,
+  detail,
+}: TurnProcessFoldProps) {
   const t = useTranslations("chat.turnFold")
-  const [remembered, setRemembered] = useRememberedDisclosure(memoryKey ?? null)
-  const open = remembered ?? false
+  const [remembered, setRemembered] = useRememberedDisclosure(onOpen ? null : (memoryKey ?? null))
+  const open = onOpen ? false : (remembered ?? false)
   const steps = fold.toolCount + fold.reasoningCount
   const label =
     typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0
@@ -61,7 +79,7 @@ export function TurnProcessFold({ fold, durationMs, memoryKey, children }: TurnP
     <div className="not-prose mb-2 w-full" data-testid="turn-process-fold" data-open={open}>
       <button
         type="button"
-        onClick={() => setRemembered(!open)}
+        onClick={() => (onOpen ? onOpen() : setRemembered(!open))}
         aria-expanded={open}
         aria-label={open ? t("collapse", { label }) : t("expand", { label })}
         className="group -mx-1.5 flex w-fit max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -80,6 +98,14 @@ export function TurnProcessFold({ fold, durationMs, memoryKey, children }: TurnP
         {/* The closed row's only hint that something went wrong. Once open,
             every failed call says so on its own row, and repeating the tally
             above them just doubled it. */}
+        {detail && !open ? (
+          <span
+            className="min-w-0 truncate text-xs text-muted-foreground/80"
+            data-testid="turn-process-fold-detail"
+          >
+            {detail}
+          </span>
+        ) : null}
         {fold.failedCount > 0 && !open ? (
           <span
             className="shrink-0 text-[11px] font-medium text-red-600 tabular-nums dark:text-red-500"
@@ -89,11 +115,13 @@ export function TurnProcessFold({ fold, durationMs, memoryKey, children }: TurnP
           </span>
         ) : null}
       </button>
-      <ReadingCollapse open={open}>
-        <div className="pt-2" data-testid="turn-process-fold-body">
-          <TurnFoldContext.Provider value>{children}</TurnFoldContext.Provider>
-        </div>
-      </ReadingCollapse>
+      {onOpen ? null : (
+        <ReadingCollapse open={open}>
+          <div className="pt-2" data-testid="turn-process-fold-body">
+            <TurnFoldContext.Provider value>{children}</TurnFoldContext.Provider>
+          </div>
+        </ReadingCollapse>
+      )}
     </div>
   )
 }

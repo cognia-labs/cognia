@@ -106,6 +106,7 @@ import {
   isToolPartType,
   SILENT_CONTROL_PART_TYPES,
 } from "@/lib/chat/agent-flow-grouping"
+import { transcriptActivityOf } from "@/lib/chat/transcript/turn-activity"
 import { foldTurnParts, type TurnFold } from "@/lib/chat/turn-fold"
 import { userBubbleClass } from "@/lib/chat/message-bubble"
 import { readReplyTo } from "@/lib/chat/reply-to"
@@ -344,8 +345,10 @@ function MessageRendererInner({
   messageDisplay,
 }: Props & { messageDisplay: ResolvedMessageDisplayOptions }) {
   const tActivity = useTranslations("inbox.activity.kind")
-  // The commands this surface can carry out, when it supports only some (D10).
-  const { allowedCommands } = useMessageRenderContext()
+  // The commands this surface can carry out, when it supports only some (D10),
+  // and how a Host turn's folded reply opens the turn (D12).
+  const { allowedCommands, expandTurn } = useMessageRenderContext()
+  const tTurnFold = useTranslations("chat.turnFold")
   const isWithdrawn =
     (suppliedMessage as { metadata?: Record<string, unknown> }).metadata?.deletedAt !== undefined
   const message = useMemo(() => {
@@ -567,6 +570,27 @@ function MessageRendererInner({
         : null,
     [message.role, isStreaming, memberBusy, display.foldCompletedTurns, presentationParts]
   )
+
+  // A Host turn folded to its reply carries the turn's activity summary
+  // instead of its process: the same row, which opens the turn (D12).
+  const hostActivity = useMemo(
+    () =>
+      message.role === "assistant" && !isStreaming && !turnFold && expandTurn
+        ? transcriptActivityOf(message)
+        : null,
+    [message, isStreaming, turnFold, expandTurn]
+  )
+  const hostActivityDetail = useMemo(() => {
+    if (!hostActivity) return undefined
+    const { activity } = hostActivity
+    const pieces = activity.tools.map((tool) =>
+      tool.count > 1 ? tTurnFold("toolUse", { name: tool.name, count: tool.count }) : tool.name
+    )
+    if (activity.sourceCount > 0) {
+      pieces.push(tTurnFold("sources", { count: activity.sourceCount }))
+    }
+    return pieces.length > 0 ? pieces.join(" · ") : undefined
+  }, [hostActivity, tTurnFold])
 
   // A sent video's parts — its description, and the storyboard, frames or
   // poster the model saw — fold into one card at the first part's position.
@@ -1422,6 +1446,20 @@ function MessageRendererInner({
                   )
                 ) : (
                   <>
+                    {hostActivity && expandTurn ? (
+                      <TurnProcessFold
+                        fold={hostActivity.activity}
+                        durationMs={hostActivity.activity.runDurationMs}
+                        detail={hostActivityDetail}
+                        onOpen={() =>
+                          expandTurn(
+                            hostActivity.turnKey,
+                            hostActivity.revision,
+                            hostActivity.detailRevision
+                          )
+                        }
+                      />
+                    ) : null}
                     {turnFold ? (
                       <TurnProcessFold
                         fold={turnFold}

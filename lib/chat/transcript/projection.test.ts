@@ -1,5 +1,8 @@
 import type { StoredMessage } from "@cognia/agent-config-types"
 import {
+  TRANSCRIPT_ACTIVITY_BYTE_LIMIT,
+  TRANSCRIPT_ACTIVITY_TOOL_LIMIT,
+  TRANSCRIPT_ACTIVITY_TOOL_NAME_MAX,
   TRANSCRIPT_DETAIL_PAGE_BYTE_LIMIT,
   TRANSCRIPT_DETAIL_PAGE_DEFAULT,
   TRANSCRIPT_DETAIL_PAGE_MAX,
@@ -513,5 +516,106 @@ describe("transcriptTurnVersion", () => {
       projectTranscriptTimeline({ sessionId: "s", revision, messages })[0]
     expect(at(4)).toMatchObject({ revision: 4, detailRevision: transcriptTurnVersion(messages) })
     expect(at(9)).toMatchObject({ revision: 9, detailRevision: transcriptTurnVersion(messages) })
+  })
+})
+
+describe("a completed turn's activity summary (protocol 2, D12)", () => {
+  const tool = (name: string, state = "output-available") =>
+    ({ type: `tool-${name}`, toolCallId: `${name}-${state}`, state, input: {} }) as never
+
+  it("counts the replies' tools, failures, reasoning and sources, naming tools in first-use order", () => {
+    const [item] = projectTranscriptTimeline({
+      sessionId: "session-1",
+      revision: 1,
+      messages: [
+        message("u1", "user", [{ type: "text", text: "go" }]),
+        message(
+          "a2",
+          "assistant",
+          [
+            { type: "reasoning", text: "plan" } as never,
+            tool("Bash"),
+            tool("Read"),
+            tool("Bash", "output-error"),
+            { type: "source-url", sourceId: "s", url: "https://x.test" } as never,
+            {
+              type: "sources",
+              sources: [
+                { id: "1", title: "a", origin: "cognia-web" },
+                { id: "2", title: "b", origin: "memory" },
+              ],
+            } as never,
+            { type: "text", text: "done" },
+          ],
+          { metadata: { run: { durationMs: 42_000 } } as never }
+        ),
+      ],
+    })
+    expect(item.kind === "completed-turn" && item.activity).toEqual({
+      toolCount: 3,
+      failedCount: 1,
+      reasoningCount: 1,
+      sourceCount: 3,
+      tools: [
+        { name: "Bash", count: 2, failed: 1 },
+        { name: "Read", count: 1, failed: 0 },
+      ],
+      runDurationMs: 42_000,
+    })
+  })
+
+  it("has none for a turn that neither called a tool nor reasoned", () => {
+    const [item] = projectTranscriptTimeline({
+      sessionId: "session-1",
+      revision: 1,
+      messages: [
+        message("u1", "user", [{ type: "text", text: "hi" }]),
+        message("a2", "assistant", [{ type: "text", text: "hello" }]),
+      ],
+    })
+    expect(item.kind === "completed-turn" && item.activity).toBeUndefined()
+  })
+
+  it("counts only the selected branch's reply", () => {
+    const [item] = projectTranscriptTimeline({
+      sessionId: "session-1",
+      revision: 1,
+      activeBranchByGroup: { g: "a3" },
+      messages: [
+        message("u1", "user", [{ type: "text", text: "go" }]),
+        message("a2", "assistant", [tool("Bash"), { type: "text", text: "old" }], {
+          metadata: { branchGroupId: "g" } as never,
+        }),
+        message("a3", "assistant", [{ type: "text", text: "new" }], {
+          metadata: { branchGroupId: "g" } as never,
+        }),
+      ],
+    })
+    expect(item.kind === "completed-turn" && item.activity).toBeUndefined()
+  })
+
+  it("stays under its byte budget, clipping names and naming at most the first tools", () => {
+    const names = Array.from({ length: 20 }, (_, index) => `${"x".repeat(200)}${index}`)
+    const [item] = projectTranscriptTimeline({
+      sessionId: "session-1",
+      revision: 1,
+      messages: [
+        message("u1", "user", [{ type: "text", text: "go" }]),
+        message("a2", "assistant", [
+          ...names.map((name) => tool(name)),
+          { type: "text", text: "ok" },
+        ]),
+      ],
+    })
+    if (item.kind !== "completed-turn" || !item.activity) throw new Error("no activity")
+    expect(item.activity.toolCount).toBe(20)
+    expect(item.activity.tools.length).toBeLessThanOrEqual(TRANSCRIPT_ACTIVITY_TOOL_LIMIT)
+    expect(item.activity.tools.length).toBeGreaterThan(0)
+    for (const entry of item.activity.tools) {
+      expect(entry.name.length).toBeLessThanOrEqual(TRANSCRIPT_ACTIVITY_TOOL_NAME_MAX)
+    }
+    expect(new TextEncoder().encode(JSON.stringify(item.activity)).byteLength).toBeLessThanOrEqual(
+      TRANSCRIPT_ACTIVITY_BYTE_LIMIT
+    )
   })
 })

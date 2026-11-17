@@ -38,6 +38,10 @@ import { selectionFeedback } from "@/lib/capacitor/haptics"
 import { assistantAgentKey, hasMultipleAgentKeys } from "@/lib/chat/transcript-agents"
 import { TranscriptAgentsProvider } from "@/components/chat/transcript-agents-context"
 import { chatColumnClass } from "./chat-column"
+import {
+  TRANSCRIPT_ACTIVITY_METADATA_KEY,
+  type TranscriptActivityStamp,
+} from "@/lib/chat/transcript/turn-activity"
 
 const scrollbarInsetOwners = new WeakMap<Element, symbol>()
 
@@ -70,7 +74,11 @@ export interface TranscriptTimelineSurfaceProps {
   labels: TranscriptTimelineLabels
 }
 
-function previewMessage(preview: TranscriptMessagePreview, sessionId: string): UIMessage {
+function previewMessage(
+  preview: TranscriptMessagePreview,
+  sessionId: string,
+  activity?: TranscriptActivityStamp
+): UIMessage {
   const parts: UIMessage["parts"] = []
   if (preview.text) parts.push({ type: "text", text: preview.text })
   for (const media of preview.media ?? []) {
@@ -85,7 +93,27 @@ function previewMessage(preview: TranscriptMessagePreview, sessionId: string): U
     id: preview.id,
     role: preview.role,
     parts,
-    metadata: { sessionId, createdAt: preview.createdAt },
+    metadata: {
+      sessionId,
+      createdAt: preview.createdAt,
+      ...(activity ? { [TRANSCRIPT_ACTIVITY_METADATA_KEY]: activity } : {}),
+    },
+  }
+}
+
+/**
+ * The stamp that lets a folded turn's reply draw its fold row (D12), when the
+ * Host summarised the turn's activity and the turn has a reply to carry it.
+ */
+function activityStampOf(
+  item: Extract<TranscriptTimelineItem, { kind: "completed-turn" }>
+): TranscriptActivityStamp | undefined {
+  if (!item.activity || !item.finalResponse) return undefined
+  return {
+    activity: item.activity,
+    turnKey: item.turnKey,
+    revision: item.revision,
+    detailRevision: item.detailRevision,
   }
 }
 
@@ -190,6 +218,19 @@ export function TranscriptTimelineSurface(props: TranscriptTimelineSurfaceProps)
   const [sheet, setSheet] = useState<{ message: UIMessage; regenerate: boolean } | null>(null)
   const onLongPress = useCallback<RowLongPress>(
     (message, { regenerate }) => setSheet({ message, regenerate }),
+    []
+  )
+  // A folded turn's fold row opens the turn (D12). Read through a ref so the
+  // rows' context stays the same object while the caller's handler changes.
+  const onExpandRef = useRef(props.onExpand)
+  useIsomorphicLayoutEffect(() => {
+    onExpandRef.current = props.onExpand
+  })
+  const expandContext = useMemo<MessageRenderContextValue>(
+    () => ({
+      expandTurn: (turnKey, revision, detailRevision) =>
+        onExpandRef.current(turnKey, revision, detailRevision),
+    }),
     []
   )
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -316,13 +357,15 @@ export function TranscriptTimelineSurface(props: TranscriptTimelineSurfaceProps)
                   </Button>
                 </div>
               ) : null}
-              <TimelineRows
-                key={`${props.sessionId}:${ready ? "ready" : "empty"}`}
-                props={props}
-                scrollRef={scrollRef}
-                newestCompletedItemKey={newestCompletedItemKey}
-                onLongPress={render.actionSheet ? onLongPress : undefined}
-              />
+              <MessageRenderProvider value={expandContext}>
+                <TimelineRows
+                  key={`${props.sessionId}:${ready ? "ready" : "empty"}`}
+                  props={props}
+                  scrollRef={scrollRef}
+                  newestCompletedItemKey={newestCompletedItemKey}
+                  onLongPress={render.actionSheet ? onLongPress : undefined}
+                />
+              </MessageRenderProvider>
             </div>
           </div>
           {/* Floating over the top edge, so a page arriving or failing moves
@@ -523,9 +566,10 @@ function TranscriptTimelineRow({
   const messages = useMemo(() => {
     if (item.kind === "active-turn") return item.messages.map(fullMessage)
     if (item.kind === "system") return [previewMessage(item.message, sessionId)]
-    return (
-      detail?.messages.map(fullMessage) ??
-      collapsedMessages(item).map((message) => previewMessage(message, sessionId))
+    if (detail) return detail.messages.map(fullMessage)
+    const activity = activityStampOf(item)
+    return collapsedMessages(item).map((message) =>
+      previewMessage(message, sessionId, message === item.finalResponse ? activity : undefined)
     )
   }, [item, detail, sessionId])
 
@@ -560,7 +604,8 @@ function TranscriptTimelineRow({
           </Button>
         </div>
       ) : null}
-      {item.collapsed.exists || detail ? (
+      {/* A reply carrying the turn's fold row opens the turn itself. */}
+      {(item.collapsed.exists && !activityStampOf(item)) || detail ? (
         <div className="pb-3">
           <Button
             type="button"

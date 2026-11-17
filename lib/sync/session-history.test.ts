@@ -403,12 +403,25 @@ describe("hydrateSessionHistory", () => {
     expect(getSessionHistoryMode("s1")).toBeNull()
   })
 
-  it("refuses a Host that does not speak transcript V1", async () => {
-    const call = jest.fn()
+  it("refuses a Host that speaks no transcript protocol this client reads", async () => {
+    for (const version of [0, 3, undefined]) {
+      const call = jest.fn()
+      await expect(
+        hydrateSessionHistory(createTransport(call, { version } as never), "s1")
+      ).rejects.toThrow("invalid transcript capability response")
+      expect(call).not.toHaveBeenCalled()
+    }
+  })
+
+  // Protocol 2 only adds the folded turn's activity summary (D12).
+  it("reads a protocol 2 Host as it reads a protocol 1 one", async () => {
+    const call = jest.fn(async (command: string) =>
+      command === "session_timeline" ? { items: [], revision: 1, hasMore: false } : {}
+    )
     await expect(
-      hydrateSessionHistory(createTransport(call, { version: 2 }), "s1")
-    ).rejects.toThrow("invalid transcript capability response")
-    expect(call).not.toHaveBeenCalled()
+      hydrateSessionHistory(createTransport(call as never, { version: 2 }), "s1")
+    ).resolves.toBeDefined()
+    expect(call).toHaveBeenCalledWith("session_timeline", expect.anything())
   })
 })
 

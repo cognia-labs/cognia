@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { RemoteSessionDetail } from "./remote-session-detail"
@@ -70,8 +70,15 @@ jest.mock("@/hooks/chat/use-transcript-controller", () => ({
   useTranscriptController: () => transcriptControllerMock(),
 }))
 
+// A member agent's live reply (P6e): the test plays the Host's frames.
+const liveListeners = new Set<(frame: unknown) => void>()
 jest.mock("@/lib/chat/transcript/source", () => ({
-  createRemoteTranscriptSource: () => ({}),
+  createRemoteTranscriptSource: () => ({
+    subscribeLive: (_sessionId: string, listener: (frame: unknown) => void) => {
+      liveListeners.add(listener)
+      return () => liveListeners.delete(listener)
+    },
+  }),
 }))
 
 const streamMock = jest.fn()
@@ -289,6 +296,118 @@ describe("<RemoteSessionDetail />", () => {
     expect(renderContexts.at(-1)).toMatchObject({
       messageDisplay: { preset: "balanced", motion: "restrained" },
     })
+  })
+
+  it("draws a member agent's live reply in place of the timeline's older copy (D12)", () => {
+    const timelineSnapshot = (items: unknown[]) => ({
+      snapshot: {
+        mode: "timeline",
+        items,
+        revision: 3,
+        loading: false,
+        loadingOlder: false,
+        hasMore: false,
+        expandedTurnKeys: new Set(),
+        loadingTurnKeys: new Set(),
+        error: null,
+      },
+      getDetail: jest.fn(),
+      loadOlder: jest.fn(),
+      expandTurn: jest.fn(),
+      pageTurn: jest.fn(),
+      collapseTurn: jest.fn(),
+      retry: jest.fn(),
+    })
+    transcriptControllerMock.mockReturnValue(
+      timelineSnapshot([
+        {
+          kind: "completed-turn",
+          itemKey: "turn:u1",
+          turnKey: "turn:u1",
+          revision: 3,
+          detailRevision: 1,
+          status: "completed",
+          userMessages: [{ id: "u1", role: "user", text: "question", createdAt: 1 }],
+          finalResponse: { id: "a1", role: "assistant", text: "partial", createdAt: 2 },
+          collapsed: { exists: true, messageCount: 2, trailingCount: 0, mediaCount: 0 },
+          startedAt: 1,
+        },
+      ])
+    )
+    streamMock.mockReturnValue(baseStream({ messages: [], status: "idle" }))
+    render(<RemoteSessionDetail sessionId="s1" />)
+    act(() => {
+      for (const listener of liveListeners) {
+        listener({
+          sessionId: "s1",
+          messageId: "a1",
+          replyTo: "u1",
+          seq: 1,
+          base: 0,
+          keyframe: true,
+          state: "streaming",
+          parts: [{ type: "text", text: "partial and more" }],
+        })
+      }
+    })
+    const props = timelineSurfaceMock.mock.calls.at(-1)?.[0] as {
+      items: Array<{ finalResponse?: unknown; userMessages: unknown[] }>
+      liveMessages: Array<{ id: string }>
+      liveStatus: string
+    }
+    expect(props.liveMessages).toEqual([
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "partial and more" }] },
+    ])
+    expect(props.liveStatus).toBe("streaming")
+    expect(props.items[0].finalResponse).toBeUndefined()
+    expect(props.items[0].userMessages).toHaveLength(1)
+  })
+
+  it("draws the stream's in-flight turn once, not also from the timeline", () => {
+    transcriptControllerMock.mockReturnValue({
+      snapshot: {
+        mode: "timeline",
+        items: [
+          {
+            kind: "completed-turn",
+            itemKey: "turn:u1",
+            turnKey: "turn:u1",
+            revision: 3,
+            detailRevision: 1,
+            status: "completed",
+            userMessages: [{ id: "u1", role: "user", text: "question", createdAt: 1 }],
+            finalResponse: { id: "a1", role: "assistant", text: "partial", createdAt: 2 },
+            collapsed: { exists: true, messageCount: 2, trailingCount: 0, mediaCount: 0 },
+            startedAt: 1,
+          },
+        ],
+        revision: 3,
+        loading: false,
+        loadingOlder: false,
+        hasMore: false,
+        expandedTurnKeys: new Set(),
+        loadingTurnKeys: new Set(),
+        error: null,
+      },
+      getDetail: jest.fn(),
+      loadOlder: jest.fn(),
+      expandTurn: jest.fn(),
+      pageTurn: jest.fn(),
+      collapseTurn: jest.fn(),
+      retry: jest.fn(),
+    })
+    const tail = [
+      { id: "u1", role: "user", parts: [{ type: "text", text: "question" }] },
+      { id: "a1", role: "assistant", parts: [{ type: "text", text: "partial, newer" }] },
+    ]
+    streamMock.mockReturnValue(baseStream({ messages: tail as never, status: "streaming" }))
+    render(<RemoteSessionDetail sessionId="s1" />)
+    const props = timelineSurfaceMock.mock.calls.at(-1)?.[0] as {
+      items: unknown[]
+      liveMessages: unknown[]
+    }
+    expect(props.items).toEqual([])
+    expect(props.liveMessages).toBe(tail)
   })
 
   it("sends a follow-up via the composer", async () => {

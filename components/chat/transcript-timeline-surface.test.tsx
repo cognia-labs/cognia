@@ -34,6 +34,12 @@ jest.mock("./message-renderer", () => ({
       useMessageRenderContext()
     )
     messageRenderMock(message)
+    // The real renderer draws the turn's fold row from this stamp (D12).
+    const { transcriptActivityOf } = jest.requireActual(
+      "@/lib/chat/transcript/turn-activity"
+    ) as typeof import("@/lib/chat/transcript/turn-activity")
+    const stamp = transcriptActivityOf(message)
+    const { expandTurn } = useMessageRenderContext()
     return (
       <div
         data-testid={`message-${message.id}`}
@@ -41,6 +47,14 @@ jest.mock("./message-renderer", () => ({
         data-regenerable={Boolean(onRegenerate)}
         data-preset={messageDisplay?.preset}
       >
+        {stamp && expandTurn ? (
+          <button
+            type="button"
+            onClick={() => expandTurn(stamp.turnKey, stamp.revision, stamp.detailRevision)}
+          >
+            {`fold ${stamp.activity.toolCount}`}
+          </button>
+        ) : null}
         {message.parts.map((part) => (part.type === "text" ? part.text : part.type))}
       </div>
     )
@@ -511,6 +525,68 @@ describe("<TranscriptTimelineSurface />", () => {
     expect(screen.getByTestId("message-a1")).toHaveTextContent("answer")
     fireEvent.click(screen.getByRole("button", { name: "Expand details" }))
     expect(onExpand).toHaveBeenCalledWith("turn:u1", 2, 2)
+  })
+
+  it("hands a folded turn's activity to its reply, whose fold row opens the turn (D12)", () => {
+    const onExpand = jest.fn()
+    const items: TranscriptTimelineSurfaceProps["items"] = [
+      {
+        kind: "completed-turn",
+        itemKey: "turn:u1",
+        turnKey: "turn:u1",
+        revision: 4,
+        detailRevision: 7,
+        status: "completed",
+        userMessages: [{ id: "u1", role: "user", text: "question", createdAt: 1 }],
+        finalResponse: { id: "a1", role: "assistant", text: "answer", createdAt: 2 },
+        collapsed: { exists: true, messageCount: 2, trailingCount: 0, mediaCount: 0 },
+        activity: {
+          toolCount: 3,
+          failedCount: 0,
+          reasoningCount: 1,
+          sourceCount: 0,
+          tools: [{ name: "Bash", count: 3, failed: 0 }],
+        },
+        startedAt: 1,
+        completedAt: 2,
+      },
+    ]
+    const expanded = new Set<string>()
+    const surface = (onExpandHandler: jest.Mock) => (
+      <TranscriptTimelineSurface
+        sessionId="s1"
+        items={items}
+        expandedTurnKeys={expanded}
+        getDetail={() => undefined}
+        onExpand={onExpandHandler}
+        onCollapse={jest.fn()}
+        onLoadOlder={jest.fn()}
+        onRetry={jest.fn()}
+        hasMore={false}
+        loading={false}
+        loadingOlder={false}
+        error={null}
+        liveMessages={[]}
+        liveStatus="idle"
+        labels={labels}
+      />
+    )
+    const view = render(surface(onExpand))
+
+    // The user's preview carries no stamp; the reply carries the fold row,
+    // which replaces the generic expand button.
+    expect(screen.getByTestId("message-u1")).not.toHaveTextContent("fold")
+    expect(screen.queryByRole("button", { name: "Expand details" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "fold 3" }))
+    expect(onExpand).toHaveBeenCalledWith("turn:u1", 4, 7)
+
+    // A new handler from the caller is used without re-rendering the rows.
+    const rendersBefore = messageRenderMock.mock.calls.length
+    const next = jest.fn()
+    view.rerender(surface(next))
+    expect(messageRenderMock.mock.calls.length).toBe(rendersBefore)
+    fireEvent.click(screen.getByRole("button", { name: "fold 3" }))
+    expect(next).toHaveBeenCalledWith("turn:u1", 4, 7)
   })
 
   it("renders fetched detail and the active live lane without merging them into timeline state", () => {

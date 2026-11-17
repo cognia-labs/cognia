@@ -11149,6 +11149,8 @@
       "collapse": "Hide the work behind this answer: {label}",
       "expand": "Show the work behind this answer: {label}",
       "failed": "{count, plural, one {# failed} other {# failed}}",
+      "sources": "{count, plural, one {# source} other {# sources}}",
+      "toolUse": "{name} ×{count}",
       "worked": "Worked through {count, plural, one {# step} other {# steps}}",
       "workedFor": "Worked for {duration}"
     },

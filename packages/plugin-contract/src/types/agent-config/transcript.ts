@@ -1,7 +1,11 @@
 import type { UIMessage } from "ai"
 import type { MessageCollaborationMetadata } from "./collaboration"
 
-export const TRANSCRIPT_PROTOCOL_VERSION = 1 as const
+/**
+ * 2: a completed turn carries its {@link TranscriptTurnActivity}, so a reader
+ * draws the turn's fold row without its detail.
+ */
+export const TRANSCRIPT_PROTOCOL_VERSION = 2 as const
 export const TRANSCRIPT_TIMELINE_PAGE_DEFAULT = 30
 export const TRANSCRIPT_TIMELINE_PAGE_MAX = 100
 export const TRANSCRIPT_DETAIL_PAGE_DEFAULT = 100
@@ -9,6 +13,12 @@ export const TRANSCRIPT_DETAIL_PAGE_MAX = 200
 export const TRANSCRIPT_DETAIL_PAGE_BYTE_LIMIT = 2 * 1024 * 1024
 export const TRANSCRIPT_SUMMARY_BYTE_LIMIT = 64 * 1024
 export const TRANSCRIPT_SUMMARY_MEDIA_LIMIT = 12
+/** Ceiling on one turn's activity summary, as JSON. */
+export const TRANSCRIPT_ACTIVITY_BYTE_LIMIT = 1024
+/** How many distinct tools an activity summary names. */
+export const TRANSCRIPT_ACTIVITY_TOOL_LIMIT = 8
+/** How long a tool name in an activity summary may be. */
+export const TRANSCRIPT_ACTIVITY_TOOL_NAME_MAX = 64
 
 export type TranscriptMediaVariant = "thumbnail" | "canonical"
 export type TranscriptDirection = "backward" | "forward"
@@ -98,6 +108,32 @@ export interface TranscriptCollapsedDetail {
   mediaCount: number
 }
 
+/** One tool a turn called, and how often. */
+export interface TranscriptActivityTool {
+  name: string
+  count: number
+  /** Calls that ended in an error. */
+  failed: number
+}
+
+/**
+ * What a completed turn did on the way to its answer, without the detail:
+ * enough to draw the "Worked for …" row a local turn folds its process into
+ * (ADR-0114). Under {@link TRANSCRIPT_ACTIVITY_BYTE_LIMIT}: tool names are
+ * clipped and only the first {@link TRANSCRIPT_ACTIVITY_TOOL_LIMIT} named.
+ */
+export interface TranscriptTurnActivity {
+  toolCount: number
+  failedCount: number
+  reasoningCount: number
+  /** Citations and source documents the turn's replies carry. */
+  sourceCount: number
+  /** Tools by name, in order of first use. */
+  tools: TranscriptActivityTool[]
+  /** The sealed run's duration (`metadata.run.durationMs`), when it recorded one. */
+  runDurationMs?: number
+}
+
 export interface TranscriptBranchGroupSummary {
   groupId: string
   selectedMessageId: string
@@ -125,6 +161,8 @@ export interface CompletedTurnTimelineItem extends TranscriptTimelineItemBase {
   finalResponse?: TranscriptMessagePreview
   visibleResult?: TranscriptMessagePreview
   collapsed: TranscriptCollapsedDetail
+  /** Present when the turn called a tool or reasoned (protocol 2). */
+  activity?: TranscriptTurnActivity
   branchSummary?: TranscriptBranchSummary
 }
 

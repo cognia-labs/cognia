@@ -3289,6 +3289,61 @@ describe("finished-turn fold", () => {
   })
 })
 
+describe("a Host turn's fold row from its activity summary (D12)", () => {
+  const { MessageRenderProvider } = jest.requireActual(
+    "./message-render-context"
+  ) as typeof import("./message-render-context")
+  const reply = {
+    id: "host-reply",
+    role: "assistant",
+    parts: [{ type: "text", text: "The answer." }],
+    metadata: {
+      sessionId: "s-host",
+      transcriptActivity: {
+        activity: {
+          toolCount: 4,
+          failedCount: 1,
+          reasoningCount: 1,
+          sourceCount: 2,
+          tools: [
+            { name: "Bash", count: 3, failed: 1 },
+            { name: "Read", count: 1, failed: 0 },
+          ],
+          runDurationMs: 65_000,
+        },
+        turnKey: "turn:u1",
+        revision: 5,
+        detailRevision: 8,
+      },
+    },
+  } as unknown as UIMessage
+
+  it("draws the fold row over the reply, naming what the turn used, and opens the turn", () => {
+    const expandTurn = jest.fn()
+    render(
+      <MessageRenderProvider value={{ expandTurn }}>
+        <MessageRenderer message={reply} />
+      </MessageRenderProvider>
+    )
+    expect(screen.getByTestId("turn-process-fold-label")).toHaveTextContent("workedFor")
+    // This suite's translator returns keys: a repeated tool reads as its
+    // `toolUse` label, a single one as its name, then the source count.
+    expect(screen.getByTestId("turn-process-fold-detail")).toHaveTextContent(
+      "toolUse · Read · sources"
+    )
+    expect(screen.getByTestId("turn-process-fold-failed")).toBeInTheDocument()
+    expect(screen.getByText("The answer.")).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("turn-process-fold-toggle"))
+    expect(expandTurn).toHaveBeenCalledWith("turn:u1", 5, 8)
+    expect(screen.queryByTestId("turn-process-fold-body")).toBeNull()
+  })
+
+  it("draws nothing outside a timeline that can open the turn", () => {
+    render(<MessageRenderer message={reply} />)
+    expect(screen.queryByTestId("turn-process-fold")).toBeNull()
+  })
+})
+
 describe("turn changes card", () => {
   const reply = (sessionId = "s-cards"): UIMessage =>
     ({

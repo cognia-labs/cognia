@@ -159,7 +159,7 @@ describe("remote transcript source", () => {
   it("publishes the versioned byte and page budgets", () => {
     const value: TranscriptCapabilitiesV1 = transcriptCapabilitiesV1()
     expect(value).toMatchObject({
-      version: 1,
+      version: 2,
       maxTimelinePageSize: 100,
       maxTurnMessagePageSize: 200,
       maxTurnMessagePageBytes: 2 * 1024 * 1024,

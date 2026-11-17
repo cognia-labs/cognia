@@ -3260,7 +3260,9 @@
     "worked": "Worked through {count, plural, one {# step} other {# steps}}",
     "expand": "Show the work behind this answer: {label}",
     "collapse": "Hide the work behind this answer: {label}",
-    "failed": "{count, plural, one {# failed} other {# failed}}"
+    "failed": "{count, plural, one {# failed} other {# failed}}",
+    "toolUse": "{name} ×{count}",
+    "sources": "{count, plural, one {# source} other {# sources}}"
   },
   "turnChanges": {
     "changed": "Changed {count, plural, one {# file} other {# files}}",

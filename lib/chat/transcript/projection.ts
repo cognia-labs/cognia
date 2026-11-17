@@ -1,3 +1,4 @@
+import type { UIMessage } from "ai"
 import type {
   StoredMessage,
   TranscriptBranchGroupSummary,
@@ -7,16 +8,28 @@ import type {
   TranscriptMessage,
   TranscriptMessagePreview,
   TranscriptTimelineItem,
+  TranscriptTurnActivity,
 } from "@cognia/agent-config-types"
 import {
-  TRANSCRIPT_PROTOCOL_VERSION,
+  TRANSCRIPT_ACTIVITY_BYTE_LIMIT,
+  TRANSCRIPT_ACTIVITY_TOOL_LIMIT,
+  TRANSCRIPT_ACTIVITY_TOOL_NAME_MAX,
   TRANSCRIPT_SUMMARY_BYTE_LIMIT,
   TRANSCRIPT_SUMMARY_MEDIA_LIMIT,
 } from "@cognia/agent-config-types"
 import { isToolPartType } from "@/lib/chat/agent-flow-grouping"
 import { resolveBranchWinners, visibleThread } from "@/lib/chat/branch-visibility"
+import { runMetadataOf } from "@/lib/chat/message-run-metadata"
 import { stripPromptPreambleFromParts } from "@/lib/chat/prompt-preamble"
+import { normalizeToolName, type ToolPartLike } from "@/lib/chat/tool-summary"
 import { assistantAgentKey } from "@/lib/chat/transcript-agents"
+
+/**
+ * The cursors' own format, apart from the protocol version: a cursor is
+ * opaque to the client and read only by the Host that issued it, so a
+ * protocol bump that leaves the cursor shape alone keeps them valid.
+ */
+const TRANSCRIPT_CURSOR_VERSION = 1
 
 interface ProjectTimelineOptions {
   sessionId: string
@@ -34,7 +47,7 @@ interface ProjectTimelineOptions {
  * reads as stale, and the client re-reads from the newest page.
  */
 interface TimelineCursorPayload {
-  version: typeof TRANSCRIPT_PROTOCOL_VERSION
+  version: typeof TRANSCRIPT_CURSOR_VERSION
   kind: "keyset"
   sessionId: string
   direction: TranscriptDirection
@@ -43,7 +56,7 @@ interface TimelineCursorPayload {
 
 /** A position inside one turn, valid while that turn's version holds. */
 interface TurnDetailCursorPayload {
-  version: typeof TRANSCRIPT_PROTOCOL_VERSION
+  version: typeof TRANSCRIPT_CURSOR_VERSION
   sessionId: string
   turnKey: string
   detailRevision: number
@@ -136,6 +149,69 @@ function fullMessage(message: StoredMessage): TranscriptMessage {
   }
 }
 
+function clipToolName(name: string): string {
+  if (name.length <= TRANSCRIPT_ACTIVITY_TOOL_NAME_MAX) return name
+  const end = TRANSCRIPT_ACTIVITY_TOOL_NAME_MAX - 1
+  // Never leave half a surrogate pair.
+  const code = name.charCodeAt(end - 1)
+  return `${name.slice(0, code >= 0xd800 && code <= 0xdbff ? end - 1 : end)}…`
+}
+
+/**
+ * What the replies of a turn did, for its fold row (protocol 2). Counted over
+ * the thread the reader selected, the same messages the previews come from.
+ * Absent when no reply called a tool or reasoned: such a turn has no fold.
+ */
+function turnActivity(replies: readonly StoredMessage[]): TranscriptTurnActivity | undefined {
+  let toolCount = 0
+  let failedCount = 0
+  let reasoningCount = 0
+  let sourceCount = 0
+  const tools = new Map<string, { count: number; failed: number }>()
+  for (const reply of replies) {
+    for (const part of reply.parts) {
+      const candidate = part as { type?: unknown; state?: unknown; sources?: unknown }
+      const type = typeof candidate.type === "string" ? candidate.type : ""
+      if (isToolPartType(type)) {
+        const failed = candidate.state === "output-error" ? 1 : 0
+        toolCount += 1
+        failedCount += failed
+        const name = clipToolName(normalizeToolName(part as unknown as ToolPartLike))
+        const entry = tools.get(name) ?? { count: 0, failed: 0 }
+        entry.count += 1
+        entry.failed += failed
+        tools.set(name, entry)
+      } else if (type === "reasoning") {
+        reasoningCount += 1
+      } else if (type === "sources" && Array.isArray(candidate.sources)) {
+        sourceCount += candidate.sources.length
+      } else if (type === "source-url" || type === "source-document") {
+        sourceCount += 1
+      }
+    }
+  }
+  if (toolCount === 0 && reasoningCount === 0) return undefined
+  const last = replies.at(-1)
+  const runDurationMs = last ? runMetadataOf(last as unknown as UIMessage)?.durationMs : undefined
+  const activity: TranscriptTurnActivity = {
+    toolCount,
+    failedCount,
+    reasoningCount,
+    sourceCount,
+    tools: [...tools.entries()]
+      .slice(0, TRANSCRIPT_ACTIVITY_TOOL_LIMIT)
+      .map(([name, entry]) => ({ name, ...entry })),
+    ...(typeof runDurationMs === "number" && Number.isFinite(runDurationMs) && runDurationMs > 0
+      ? { runDurationMs }
+      : {}),
+  }
+  // The budget holds for any names: drop the last-named tools until it fits.
+  while (activity.tools.length > 0 && byteLength(activity) > TRANSCRIPT_ACTIVITY_BYTE_LIMIT) {
+    activity.tools.pop()
+  }
+  return activity
+}
+
 function branchSummary(
   messages: StoredMessage[],
   activeBranchByGroup: Record<string, string> | undefined
@@ -222,6 +298,7 @@ function completedTurn(
   const finalResponseIndex = finalResponseMessage ? messages.indexOf(finalResponseMessage) : -1
   const mediaCount = messages.reduce((sum, message) => sum + collectMedia(message).length, 0)
   const branches = branchSummary(messages, activeBranchByGroup)
+  const activity = turnActivity(visible.filter((message) => message.role === "assistant"))
   const item: TranscriptTimelineItem = {
     kind: "completed-turn",
     itemKey: turnKey,
@@ -246,6 +323,7 @@ function completedTurn(
         finalResponseIndex >= 0 ? Math.max(0, messages.length - finalResponseIndex - 1) : 0,
       mediaCount,
     },
+    ...(activity ? { activity } : {}),
     ...(branches ? { branchSummary: branches } : {}),
     startedAt: messages[0]?.createdAt ?? 0,
     completedAt: messages.at(-1)?.createdAt,
@@ -337,11 +415,11 @@ function decodeCursor(value: string): unknown {
 export function encodeTimelineCursor(
   value: Omit<TimelineCursorPayload, "version" | "kind">
 ): string {
-  return encodeCursor({ version: TRANSCRIPT_PROTOCOL_VERSION, kind: "keyset", ...value })
+  return encodeCursor({ version: TRANSCRIPT_CURSOR_VERSION, kind: "keyset", ...value })
 }
 
 export function encodeTurnDetailCursor(value: Omit<TurnDetailCursorPayload, "version">): string {
-  return encodeCursor({ version: TRANSCRIPT_PROTOCOL_VERSION, ...value })
+  return encodeCursor({ version: TRANSCRIPT_CURSOR_VERSION, ...value })
 }
 
 export function validateTimelineCursor(
@@ -350,7 +428,7 @@ export function validateTimelineCursor(
 ): CursorValidation<TimelineCursorPayload> {
   try {
     const value = decodeCursor(cursor) as Partial<TimelineCursorPayload> & { position?: unknown }
-    if (value.version !== TRANSCRIPT_PROTOCOL_VERSION || typeof value.sessionId !== "string") {
+    if (value.version !== TRANSCRIPT_CURSOR_VERSION || typeof value.sessionId !== "string") {
       return { ok: false, code: "INVALID_PARAMS" }
     }
     // A position cursor from before keyset paging: the client re-reads from
@@ -386,7 +464,7 @@ export function validateTurnDetailCursor(
   try {
     const value = decodeCursor(cursor) as Partial<TurnDetailCursorPayload>
     if (
-      value.version !== TRANSCRIPT_PROTOCOL_VERSION ||
+      value.version !== TRANSCRIPT_CURSOR_VERSION ||
       typeof value.sessionId !== "string" ||
       typeof value.turnKey !== "string" ||
       typeof value.detailRevision !== "number" ||

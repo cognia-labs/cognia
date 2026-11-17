@@ -3260,7 +3260,9 @@
     "worked": "共 {count} 个步骤",
     "expand": "展开此回答的过程：{label}",
     "collapse": "收起此回答的过程：{label}",
-    "failed": "{count} 个失败"
+    "failed": "{count} 个失败",
+    "toolUse": "{name} ×{count}",
+    "sources": "{count} 个来源"
   },
   "turnChanges": {
     "changed": "本轮变更了 {count} 个文件",

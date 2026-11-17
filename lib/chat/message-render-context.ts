@@ -77,6 +77,12 @@ export interface MessageRenderContextValue {
    * open it do not import it; present means rows are long-pressable.
    */
   actionSheet?: ComponentType<MessageActionSheetHostProps>
+  /**
+   * Open a Host turn's detail (D12): a folded turn's reply draws its fold row
+   * from the turn's activity summary, and the row asks for the turn here.
+   * Supplied by the transcript timeline.
+   */
+  expandTurn?: (turnKey: string, revision: number, detailRevision: number) => void
 }
 
 /**

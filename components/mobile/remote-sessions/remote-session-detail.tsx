@@ -33,7 +33,9 @@ import { SessionChangesPanel } from "./session-changes-panel"
 import { SessionTestsPanel } from "./session-tests-panel"
 import { TranscriptTimelineSurface } from "@/components/chat/transcript-timeline-surface"
 import { useTranscriptController } from "@/hooks/chat/use-transcript-controller"
+import { useTranscriptLiveTurn } from "@/hooks/chat/use-transcript-live-turn"
 import { SessionMediaProvider } from "@/hooks/chat/session-media-provider"
+import { withLiveTurn } from "@/lib/chat/transcript/live-turn-view"
 import { createRemoteTranscriptSource } from "@/lib/chat/transcript/source"
 import { transport } from "@/lib/tauri"
 import { onTransportChange } from "@/lib/tauri/transport-instance"
@@ -119,6 +121,20 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
     respond,
     reconcileTranscript,
   } = useRemoteSessionStream(sessionId)
+  // A member agent's reply arrives live from the person brain (P6e), never
+  // through this device's stream: draw it in place of the timeline's older
+  // copy. The stream's own unfinished turn wins over the timeline's copy of
+  // it the same way, so an in-flight turn is drawn once.
+  const liveReply = useTranscriptLiveTurn(
+    sessionId,
+    remoteTranscriptSource,
+    transcript.snapshot.revision
+  )
+  const view = useMemo(
+    () => withLiveTurn({ items: timelineItems, tail: messages, live: liveReply }),
+    [timelineItems, messages, liveReply]
+  )
+  const liveStatus = liveReply?.state === "streaming" ? "streaming" : status
   const reconciledRevisionRef = useRef<number | null>(null)
   const connection = useConnectionState()
   // Sends can't reach the desktop while the transport is down — gate the
@@ -206,14 +222,14 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
                 single RPC or Dexie read until someone actually opens it. */}
             <TabsContent value="transcript" className="flex min-h-0 flex-1 flex-col">
               {transcript.snapshot.mode === "timeline" ? (
-          transcript.snapshot.items.length === 0 && messages.length === 0 && !transcript.snapshot.loading ? (
+          transcript.snapshot.items.length === 0 && view.liveMessages.length === 0 && !transcript.snapshot.loading ? (
             <p className="flex-1 p-4 text-xs text-muted-foreground">{t("empty")}</p>
           ) : (
             <SessionMediaProvider sessionId={sessionId} transport={transport}>
               <MessageRenderProvider value={renderContext}>
               <TranscriptTimelineSurface
                 sessionId={sessionId}
-                items={timelineItems}
+                items={view.items}
                 expandedTurnKeys={transcript.snapshot.expandedTurnKeys}
                 getDetail={transcript.getDetail}
                 onPageTurn={(turnKey, direction) => void transcript.pageTurn(turnKey, direction)}
@@ -228,8 +244,8 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
                 loading={transcript.snapshot.loading}
                 loadingOlder={transcript.snapshot.loadingOlder}
                 error={transcript.snapshot.error}
-                liveMessages={messages}
-                liveStatus={status}
+                liveMessages={view.liveMessages}
+                liveStatus={liveStatus}
                 labels={{
                   expand: t("expandTurn"),
                   collapse: t("collapseTurn"),

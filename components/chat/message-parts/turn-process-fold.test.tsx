@@ -125,4 +125,14 @@ describe("TurnProcessFold", () => {
     expect(screen.getByTestId("turn-process-fold-toggle")).toHaveAttribute("aria-expanded", "true")
     expect(screen.getByText("process body")).toBeInTheDocument()
   })
+
+  it("asks for the process elsewhere when it is not here to open (D12)", () => {
+    const onOpen = jest.fn()
+    render(<TurnProcessFold fold={fold} onOpen={onOpen} detail="Bash ×3 · Read" />)
+    expect(screen.getByTestId("turn-process-fold-detail")).toHaveTextContent("Bash ×3 · Read")
+    fireEvent.click(screen.getByTestId("turn-process-fold-toggle"))
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId("turn-process-fold-toggle")).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByTestId("turn-process-fold-body")).toBeNull()
+  })
 })

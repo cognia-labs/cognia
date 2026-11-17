@@ -1,4 +1,5 @@
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
+import { TRANSCRIPT_PROTOCOL_VERSION } from "@cognia/agent-config-types"
 
 import { getDb } from "@/lib/db/schema"
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
@@ -240,7 +241,11 @@ async function negotiate(
   assertCurrent()
   const capability = await transport.call<{ version?: unknown }>("transcript_capabilities", {})
   assertCurrent()
-  if (capability?.version !== 1) throw new Error("invalid transcript capability response")
+  // Protocol 2 only adds the folded turn's activity summary, which a reader
+  // draws when present: a protocol 1 Host is read the same way.
+  if (capability?.version !== 1 && capability?.version !== TRANSCRIPT_PROTOCOL_VERSION) {
+    throw new Error("invalid transcript capability response")
+  }
   return negotiateTimelineOwnership(transport, sessionId, assertCurrent)
 }
 

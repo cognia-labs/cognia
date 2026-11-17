@@ -11149,6 +11149,8 @@
       "collapse": "收起此回答的过程：{label}",
       "expand": "展开此回答的过程：{label}",
       "failed": "{count} 个失败",
+      "sources": "{count} 个来源",
+      "toolUse": "{name} ×{count}",
       "worked": "共 {count} 个步骤",
       "workedFor": "已工作 {duration}"
     },
