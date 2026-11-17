@@ -350,7 +350,6 @@ import {
   fusionChatTurnActive,
   routerFusionSendDiagnostic,
   runFusionChatTurn,
-  stopFusionChatTurn,
 } from "./router-fusion-chat-turn"
 import {
   applyChatCommandOverrides,
@@ -382,6 +381,7 @@ import {
   resetChatRuntime,
   rewindChatFiles,
 } from "./agent-chat-session-controls"
+import { interruptChatTurnAndSteer, flushChatSteer } from "./agent-chat-steer-controls"
 
 /**
  * Sessions whose live shared send already warned about embedded references.
@@ -5436,46 +5436,11 @@ export function useAgentChat() {
   // Arming covers the case where the abort surfaces as an errored
   // `session_ended`. No-op when nothing is queued.
   const interruptAndSteer = useCallback(
-    async (targetSessionId?: string) => {
-      const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
-      if (!sessionId) return
-      if (refuseCapturedTurn(sessionId)) return
-      const queued = useChatStore.getState().sessions[sessionId]?.steerQueue ?? []
-      if (queued.length === 0) return
-      steerArmed.add(sessionId)
-      try {
-        if (!externalGatewayAbortRef.current.has(sessionId) && fusionChatTurnActive(sessionId)) {
-          // A verified run has no live input: stop it, and its settle replays
-          // the queue.
-          await stopFusionChatTurn(sessionId, useSettingsStore.getState().settings, {
-            settled: false,
-          })
-          return
-        }
-        // The same dispatch Stop uses, so a BYOK, external-agent or
-        // paired-host turn is really cut short. A sidecar-only interrupt
-        // reached none of those: the turn ran on, and the "now" message
-        // waited for it to finish.
-        const hostStateAbortQueued = Boolean(
-          await enqueueHostStateIntentIfAvailable({
-            sessionId,
-            action: { kind: "turn.abort" },
-          })
-        )
-        if (hostStateAbortQueued) hostStateTurnsRef.current.add(sessionId)
-        await abortRunningTurn(sessionId, hostStateAbortQueued)
-        await cancelRouterFusionTurn(sessionId)
-      } catch (err) {
-        console.error("interrupt(steer) failed", err)
-        steerArmed.delete(sessionId)
-        store
-          .getState()
-          .setSessionDiagnostic(
-            sessionId,
-            toDiagnostic(err, { source: "chat", meta: { sessionId } })
-          )
-      }
-    },
+    async (targetSessionId?: string) =>
+      interruptChatTurnAndSteer(
+        { store, refuseCapturedTurn, externalGatewayAbortRef, hostStateTurnsRef, abortRunningTurn },
+        targetSessionId
+      ),
     [store, abortRunningTurn, refuseCapturedTurn]
   )
 
@@ -5484,12 +5449,7 @@ export function useAgentChat() {
   // settle event is coming — `interruptAndSteer` can't help (nothing to
   // interrupt), so we drain directly. No-op when the queue is empty.
   const flushSteer = useCallback(
-    (targetSessionId?: string) => {
-      const sessionId = targetSessionId ?? useChatStore.getState().activeSessionId
-      if (!sessionId) return
-      if (refuseCapturedTurn(sessionId)) return
-      drainSteerVia(sessionId, sendRef)
-    },
+    (targetSessionId?: string) => flushChatSteer({ refuseCapturedTurn, sendRef }, targetSessionId),
     [refuseCapturedTurn]
   )
 
