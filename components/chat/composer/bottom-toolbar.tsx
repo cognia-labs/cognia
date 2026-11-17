@@ -665,7 +665,7 @@ function GenericBottomToolbar({
         ref={rootRef}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-1 text-[11px] text-muted-foreground",
-          layout === "rail" && "font-mono text-[10px] tracking-tight"
+          layout === "rail" && "font-mono text-2xs tracking-tight"
         )}
         data-testid="composer-toolbar-embedded"
         data-toolbar-layout={layout}
@@ -783,7 +783,7 @@ function GenericBottomToolbar({
     <div className="flex min-w-0 flex-col" data-toolbar-layout="expanded" data-toolbar-tier={tier}>
       {detachedRow(true)}
       <div
-        className="flex min-w-0 items-center gap-2 px-1 pt-0.5 font-mono text-[10px] text-muted-foreground/80"
+        className="flex min-w-0 items-center gap-2 px-1 pt-0.5 font-mono text-2xs text-muted-foreground/80"
         data-testid="composer-ambient-rail"
       >
         {costBadge(false)}
@@ -863,7 +863,7 @@ function ToolbarMenuRow({
           "min-h-9 cursor-pointer transition-colors hover:bg-muted/50 has-[:disabled]:cursor-default has-[:disabled]:hover:bg-transparent"
       )}
     >
-      <span className="w-20 shrink-0 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80">
+      <span className="w-20 shrink-0 text-2xs font-medium uppercase tracking-wider text-muted-foreground/80">
         {label}
       </span>
       <div

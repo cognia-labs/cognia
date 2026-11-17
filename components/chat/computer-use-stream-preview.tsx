@@ -59,7 +59,7 @@ export function ComputerUseStreamPreview({
         className={`absolute inset-0 size-full border-0 bg-black ${ready ? "opacity-100" : "opacity-0"}`}
       />
       {ready && (
-        <span className="absolute left-2 top-2 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white">
+        <span className="absolute left-2 top-2 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-2xs text-white">
           <span className="size-1.5 rounded-full bg-emerald-400" />
           {t("live")}
         </span>

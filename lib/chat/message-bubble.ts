@@ -22,13 +22,17 @@
 
 import type { MessageDisplayLayout } from "@/types/appearance"
 
-/**
+/*
  * `rounded-2xl` is deliberate and NOT migrated to the named scale: it is 16px
  * where `rounded-stage` is 14px, and bubbles already follow a style pack
  * through the `rounded-2xl` rebase in globals.css. Swapping it would move the
  * default look by 2px to buy nothing.
+ *
+ * Every class below is a whole literal. Tailwind generates only the classes it
+ * finds verbatim in source, and a variant spelled around an interpolated
+ * constant is not one: the user bubble's radius used to
+ * render only because a test file happened to spell the same string.
  */
-const BUBBLE_RADIUS = "rounded-2xl"
 
 /**
  * Classes for the user's message body, applied to `MessageContent`.
@@ -43,12 +47,12 @@ export function userBubbleClass(layout: MessageDisplayLayout): string {
     // vendored `bg-secondary` treatment by accident.
     return "group-[.is-user]:rounded-panel group-[.is-user]:bg-muted/70 group-[.is-user]:px-3 group-[.is-user]:py-2"
   }
-  return `group-[.is-user]:${BUBBLE_RADIUS} group-[.is-user]:rounded-br-md group-[.is-user]:bg-muted/70 group-[.is-user]:px-4 group-[.is-user]:py-2.5`
+  return "group-[.is-user]:rounded-2xl group-[.is-user]:rounded-br-md group-[.is-user]:bg-muted/70 group-[.is-user]:px-4 group-[.is-user]:py-2.5"
 }
 
 /** Classes for the assistant's bubble, applied to the message shell. */
 export function assistantBubbleClass(layout: MessageDisplayLayout): string {
-  return layout === "bubbles" ? `${BUBBLE_RADIUS} bg-muted/45 px-4 py-3` : ""
+  return layout === "bubbles" ? "rounded-2xl bg-muted/45 px-4 py-3" : ""
 }
 
 /** Classes for the card shell that wraps every message in the `cards` layout. */

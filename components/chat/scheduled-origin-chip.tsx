@@ -66,7 +66,7 @@ export function ScheduledOriginChip({
           <Badge
             variant="secondary"
             className={cn(
-              "h-5 max-w-56 shrink-0 gap-1 px-1.5 text-[10px] font-normal transition-colors",
+              "h-5 max-w-56 shrink-0 gap-1 px-1.5 text-2xs font-normal transition-colors",
               gone ? "opacity-60" : "hover:bg-secondary/70",
               className
             )}

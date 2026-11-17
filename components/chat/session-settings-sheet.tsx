@@ -1377,7 +1377,7 @@ export function SessionSettingsSheet({
                         <SelectItem value="__none__">{t("presetNoneOption")}</SelectItem>
                         {presetGroups.map((group) => (
                           <SelectGroup key={group.label}>
-                            <SelectLabel className="text-[10px] uppercase tracking-wider">
+                            <SelectLabel className="text-2xs uppercase tracking-wider">
                               {group.translateLabel ? t(`groups.${group.label}`) : group.label}
                             </SelectLabel>
                             {group.presets.map((p) => (

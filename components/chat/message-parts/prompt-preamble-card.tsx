@@ -131,7 +131,7 @@ export function PromptPreambleCard({ preamble, summary, className }: PromptPream
         {extras.map((kind) => (
           <span
             key={kind}
-            className="shrink-0 rounded-sm bg-muted px-1 py-px text-[10px]"
+            className="shrink-0 rounded-sm bg-muted px-1 py-px text-2xs"
             data-testid={`prompt-preamble-section-${kind}`}
           >
             {t(`sections.${kind}`)}

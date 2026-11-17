@@ -47,7 +47,7 @@ export function PlanModeBanner() {
         />
       ) : null}
       {showKeyboardHints ? (
-        <kbd className="shrink-0 rounded border border-warning/40 px-1 font-mono text-[10px]">
+        <kbd className="shrink-0 rounded border border-warning/40 px-1 font-mono text-2xs">
           {t("hint")}
         </kbd>
       ) : null}

@@ -76,7 +76,7 @@ export function SpawnTaskCard({ part, sessionId }: { part: ToolUIPart; sessionId
           {output.title}
         </span>
         <span className="flex items-center gap-1.5">
-          <Badge variant="outline" className="text-[10px]">
+          <Badge variant="outline" className="text-2xs">
             {output.mode === "inherit" ? t("inherit") : t("aside")}
           </Badge>
           {action}

@@ -59,6 +59,12 @@
    * user's Typography picks reach chat body text and code. */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  /* One step below `text-xs` for dense chrome (badges, counts, run meta):
+   * 10px at the default root size, in rem so it follows the user's text size
+   * as the rest of the scale does. Its line height is restated on `:root`
+   * and every density surface with the others. */
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: calc(0.875 / 0.625);
   /* Spring easings for CSS-only motion, sampled from the same springs as
    * `SPRING_POP` / `SPRING_DRAG` (`packages/plugin-ui/src/motion-tokens.ts`)
    * so a checkbox or switch moves with the personality a motion component
@@ -485,6 +491,7 @@
      `normal`, so neither input is left unguarded. */
   --leading-multiplier: calc(var(--density-line-height, 1.5) / 1.5 * var(--line-height-scale, 1));
 
+  --text-2xs--line-height: calc(0.875 / 0.625 * var(--leading-multiplier));
   --text-xs--line-height: calc(1 / 0.75 * var(--leading-multiplier));
   --text-sm--line-height: calc(1.25 / 0.875 * var(--leading-multiplier));
   --text-base--line-height: calc(1.5 / 1 * var(--leading-multiplier));

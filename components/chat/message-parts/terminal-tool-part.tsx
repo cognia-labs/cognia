@@ -147,7 +147,7 @@ const BashOutputView = memo(function BashOutputView({
       data-testid="terminal-tool-output"
       data-streaming={streaming || undefined}
     >
-      <div className="flex items-center justify-between gap-2 border-b px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+      <div className="flex items-center justify-between gap-2 border-b px-2 py-0.5 text-2xs uppercase tracking-wide text-muted-foreground">
         <span>{label}</span>
         {io.text ? (
           <InlineCopyButton

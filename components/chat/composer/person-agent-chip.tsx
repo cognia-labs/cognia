@@ -227,16 +227,16 @@ export function PersonAgentChip({
                         : agentName(agent.runtimeId)}
                     </span>
                     {agents.defaultAgent === agent.runtimeId ? (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-2xs">
                         {t("badge.default")}
                       </Badge>
                     ) : null}
                     {!agent.available ? (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-2xs">
                         {t("badge.noKey")}
                       </Badge>
                     ) : !seed ? (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-2xs">
                         {t("badge.noModel")}
                       </Badge>
                     ) : null}

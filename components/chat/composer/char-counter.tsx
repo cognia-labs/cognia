@@ -27,7 +27,7 @@ export function CharCounter({ hideBelow = 1 }: { hideBelow?: number } = {}) {
       aria-live={announce ? "polite" : "off"}
       className={cn(
         // `end-2` (logical) keeps the counter in the trailing corner under RTL.
-        "pointer-events-none absolute end-2 bottom-1 select-none text-[10px] tabular-nums text-muted-foreground/60",
+        "pointer-events-none absolute end-2 bottom-1 select-none text-2xs tabular-nums text-muted-foreground/60",
         len >= AMBER_THRESHOLD && len < RED_THRESHOLD && "text-warning-ink",
         len >= RED_THRESHOLD && "text-destructive"
       )}

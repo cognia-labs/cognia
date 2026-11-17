@@ -384,7 +384,7 @@ function ScopeTabs({
         ))}
       </ToggleGroup>
       {captured ? (
-        <p className="text-[10px] text-muted-foreground" data-testid="usage-captured-at">
+        <p className="text-2xs text-muted-foreground" data-testid="usage-captured-at">
           {t("capturedAt", { time: captured })}
         </p>
       ) : null}
@@ -470,7 +470,7 @@ function SpendSummary({
 function StatTile({ label, value, testid }: { label: string; value: string; testid: string }) {
   return (
     <div className="min-w-0" data-testid={testid}>
-      <p className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="truncate text-2xs uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="truncate font-mono text-sm tabular-nums">{value}</p>
     </div>
   )
@@ -685,7 +685,7 @@ function camelNoteId(id: string): string {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
       {children}
     </p>
   )

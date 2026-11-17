@@ -99,7 +99,7 @@ export function FailedCommandChips({ segments, errors = [], onRemove }: FailedCo
             )}
           >
             <QueueItemIndicator className="border-destructive bg-destructive" />
-            <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+            <span className="font-mono text-2xs tabular-nums text-muted-foreground">
               {index + 1}
             </span>
             <AlertTriangleIcon className="size-3.5 text-destructive" aria-hidden />
@@ -107,7 +107,7 @@ export function FailedCommandChips({ segments, errors = [], onRemove }: FailedCo
               /{cmd.name}
             </span>
             {cmd.args ? (
-              <span className="max-w-[min(160px,40vw)] truncate text-[10px] text-muted-foreground">
+              <span className="max-w-[min(160px,40vw)] truncate text-2xs text-muted-foreground">
                 {cmd.args}
               </span>
             ) : null}

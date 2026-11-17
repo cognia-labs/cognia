@@ -567,13 +567,13 @@ export const ConversationTimeline = memo(function ConversationTimeline({
               </span>
               {starredReply ? (
                 <span
-                  className="mt-0.5 block truncate text-[10px] text-yellow-600 dark:text-yellow-500"
+                  className="mt-0.5 block truncate text-2xs text-yellow-600 dark:text-yellow-500"
                   data-testid="timeline-starred-reply"
                 >
                   {t("starredReply")}
                 </span>
               ) : null}
-              <span className="mt-0.5 block text-[10px] text-muted-foreground/70">
+              <span className="mt-0.5 block text-2xs text-muted-foreground/70">
                 {time && <span>{time}</span>}
                 {time && turn.replyCount > 0 && <span> · </span>}
                 {turn.replyCount > 0 && <span>{t("replyCount", { count: turn.replyCount })}</span>}
@@ -606,7 +606,7 @@ export const ConversationTimeline = memo(function ConversationTimeline({
         // virtualization the rows are transform-positioned, so sticky is inert
         // here and `timeline-pinned-date-header` does the job instead; this
         // still marks the boundary as it scrolls past.
-        className="sticky top-0 z-20 block bg-background/95 px-2.5 py-1 text-[10px] font-medium text-muted-foreground backdrop-blur"
+        className="sticky top-0 z-20 block bg-background/95 px-2.5 py-1 text-2xs font-medium text-muted-foreground backdrop-blur"
         data-testid="timeline-date-header"
       >
         {header}
@@ -690,7 +690,7 @@ export const ConversationTimeline = memo(function ConversationTimeline({
               // turns) where grouping earns its keep. This one sits outside the
               // transformed subtree and tracks the topmost visible row instead.
               <div
-                className="sticky top-0 z-30 bg-background/95 px-2.5 py-1 text-[10px] font-medium text-muted-foreground backdrop-blur"
+                className="sticky top-0 z-30 bg-background/95 px-2.5 py-1 text-2xs font-medium text-muted-foreground backdrop-blur"
                 data-testid="timeline-pinned-date-header"
               >
                 {pinnedDateHeader}
@@ -765,7 +765,7 @@ export const ConversationTimeline = memo(function ConversationTimeline({
               style={{ top: `calc(1.75rem + ${scrub?.y ?? 0}px)` }}
             >
               {scrubTime && (
-                <div className="text-[10px] font-medium tabular-nums text-muted-foreground">
+                <div className="text-2xs font-medium tabular-nums text-muted-foreground">
                   {scrubTime}
                 </div>
               )}

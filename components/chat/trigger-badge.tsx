@@ -41,7 +41,7 @@ export function TriggerBadge({ sessionId, messageId }: Props) {
           className="inline-flex"
           data-testid="trigger-badge"
         >
-          <Badge variant="secondary" className="gap-1 px-1.5 py-0 text-[10px] font-normal">
+          <Badge variant="secondary" className="gap-1 px-1.5 py-0 text-2xs font-normal">
             <ZapIcon className="size-3 text-amber-500" />
             {t("badge.label", { count: entries.length })}
           </Badge>
@@ -73,12 +73,12 @@ function TriggerRow({ entry }: { entry: TriggerAuditEntry }) {
                 ? "outline"
                 : "destructive"
           }
-          className="text-[10px]"
+          className="text-2xs"
         >
           {t(`status.${entry.status}`)}
         </Badge>
       </div>
-      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+      <div className="flex items-center gap-2 text-2xs text-muted-foreground">
         <span className="truncate">
           {t("badge.workflowPrefix")} {entry.workflowId}
         </span>
@@ -88,7 +88,7 @@ function TriggerRow({ entry }: { entry: TriggerAuditEntry }) {
           </span>
         )}
       </div>
-      {entry.errorMessage && <p className="text-[10px] text-destructive">{entry.errorMessage}</p>}
+      {entry.errorMessage && <p className="text-2xs text-destructive">{entry.errorMessage}</p>}
     </li>
   )
 }

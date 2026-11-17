@@ -121,7 +121,7 @@ function InboundA2UIBlockView({ block, className }: InboundA2UIRendererProps) {
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <Badge variant="outline" className="shrink-0 text-[10px]">
+        <Badge variant="outline" className="shrink-0 text-2xs">
           {SOURCE_LABEL[block.source] ?? block.source}
         </Badge>
         {block.title && !titleInBody && (

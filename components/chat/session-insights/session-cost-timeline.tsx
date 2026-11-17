@@ -80,9 +80,7 @@ export function SessionCostTimeline({
 
   return (
     <section className="space-y-2" data-testid="session-cost-timeline">
-      {hideTitle ? null : (
-        <p className="text-[10px] uppercase text-muted-foreground">{t("title")}</p>
-      )}
+      {hideTitle ? null : <p className="text-2xs uppercase text-muted-foreground">{t("title")}</p>}
       <div className="h-40" data-testid="session-cost-timeline-chart">
         <ResponsiveContainer
           width="100%"
@@ -171,7 +169,7 @@ export function SessionCostTimeline({
 
       {top.length > 0 ? (
         <div className="space-y-1">
-          <p className="text-[10px] uppercase text-muted-foreground">{t("priciest")}</p>
+          <p className="text-2xs uppercase text-muted-foreground">{t("priciest")}</p>
           <ul className="space-y-1" data-testid="session-cost-top-turns">
             {top.map((p) => (
               <li

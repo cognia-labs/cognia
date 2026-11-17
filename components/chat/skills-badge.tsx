@@ -102,7 +102,7 @@ export function SkillsBadge({
                       {sk.name}
                     </span>
                     {isInert && (
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                      <span className="shrink-0 text-2xs text-muted-foreground">
                         {t("attachedInert")}
                       </span>
                     )}

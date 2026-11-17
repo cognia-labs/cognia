@@ -59,7 +59,7 @@ export function HandlerBadge({
     <Badge
       variant="outline"
       className={cn(
-        "h-6 gap-1 px-2 text-[10px] uppercase tracking-wide",
+        "h-6 gap-1 px-2 text-2xs uppercase tracking-wide",
         isHandover ? "border-primary/40 bg-primary/5 text-primary" : "text-muted-foreground",
         className
       )}

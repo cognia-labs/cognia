@@ -158,7 +158,7 @@ export function HeaderAccountSwitcher({
         >
           {t(inheritsManualKey ? "manualApiKey" : "useInherited")}
           {!sessionAccountId && (
-            <span className="ml-auto text-[10px] text-muted-foreground">{t("effective")}</span>
+            <span className="ml-auto text-2xs text-muted-foreground">{t("effective")}</span>
           )}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
@@ -172,7 +172,7 @@ export function HeaderAccountSwitcher({
             >
               {label}
               {!usesManualKey && effectiveAccountId === account.id && (
-                <span className="ml-auto text-[10px] text-muted-foreground">{t("effective")}</span>
+                <span className="ml-auto text-2xs text-muted-foreground">{t("effective")}</span>
               )}
             </DropdownMenuItem>
           )

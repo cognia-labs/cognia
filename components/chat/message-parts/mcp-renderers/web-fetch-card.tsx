@@ -191,7 +191,7 @@ export function WebFetchCard({ part }: { part: ToolUIPart }) {
           </div>
           {isLong && !expanded && (
             <p
-              className="flex items-center gap-2 pt-0.5 pl-3 text-[10px] text-muted-foreground"
+              className="flex items-center gap-2 pt-0.5 pl-3 text-2xs text-muted-foreground"
               data-testid="mcp-webfetch-clamped"
             >
               <span>
@@ -202,7 +202,7 @@ export function WebFetchCard({ part }: { part: ToolUIPart }) {
                 variant="link"
                 size="xs"
                 onClick={() => setExpanded(true)}
-                className="h-auto p-0 text-[10px] leading-[inherit]"
+                className="h-auto p-0 text-2xs leading-[inherit]"
                 data-testid="mcp-webfetch-show-all"
               >
                 {tRow("preview.showAll")}

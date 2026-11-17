@@ -43,7 +43,7 @@ export function WorkflowRefChips({ bare = false }: WorkflowRefChipsProps = {}) {
             <span className="max-w-[min(220px,calc(100vw-6rem))] truncate font-medium">
               {r.label}
             </span>
-            <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+            <span className="font-mono text-2xs uppercase tracking-wide text-muted-foreground">
               {r.kind}
             </span>
             <Button

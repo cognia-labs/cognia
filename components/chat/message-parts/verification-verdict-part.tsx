@@ -121,7 +121,7 @@ export const VerificationVerdictPart = memo(function VerificationVerdictPart({ p
           <>
             {part.status === "running" ? (
               <span
-                className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground"
+                className="flex shrink-0 items-center gap-1 text-2xs text-muted-foreground"
                 data-testid="verification-verdict-running"
               >
                 <Spinner className="size-3" />
@@ -130,7 +130,7 @@ export const VerificationVerdictPart = memo(function VerificationVerdictPart({ p
             ) : null}
             {part.status === "failed" ? (
               <span
-                className="shrink-0 text-[10px] font-medium text-destructive"
+                className="shrink-0 text-2xs font-medium text-destructive"
                 data-testid="verification-verdict-failed"
               >
                 {t("failed")}

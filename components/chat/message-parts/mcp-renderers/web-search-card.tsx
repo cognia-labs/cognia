@@ -120,15 +120,15 @@ export function WebSearchCard({ part }: { part: ToolUIPart }) {
                     </span>
                   )}
                   {host && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">· {host}</span>
+                    <span className="shrink-0 text-2xs text-muted-foreground">· {host}</span>
                   )}
                   {date && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">· {date}</span>
+                    <span className="shrink-0 text-2xs text-muted-foreground">· {date}</span>
                   )}
                   {r.credibility && (
                     <Badge
                       variant="outline"
-                      className="h-4 shrink-0 px-1 text-[9px]"
+                      className="h-4 shrink-0 px-1 text-2xs"
                       data-testid="mcp-websearch-credibility"
                     >
                       {r.credibility}

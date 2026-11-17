@@ -43,10 +43,10 @@ export function WikiSearchCard({ part }: { part: ToolUIPart }) {
                 <div className="flex min-w-0 flex-1 flex-col">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-medium">{hit.title}</span>
-                    <span className="font-mono text-[10px] text-muted-foreground">{hit.slug}</span>
+                    <span className="font-mono text-2xs text-muted-foreground">{hit.slug}</span>
                     {typeof hit.score === "number" && (
                       <span
-                        className="text-[10px] text-muted-foreground"
+                        className="text-2xs text-muted-foreground"
                         data-testid="mcp-wiki-search-score"
                       >
                         {hit.score.toFixed(2)}

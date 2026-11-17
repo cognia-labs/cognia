@@ -73,3 +73,23 @@ describe("style-pack reachability", () => {
     }
   })
 })
+
+describe("scannable classes", () => {
+  it("spells every class as a whole literal in its own source", () => {
+    // Tailwind only generates what it finds verbatim; a template-built variant
+    // renders by accident or not at all.
+    const { readFileSync } = jest.requireActual<typeof import("node:fs")>("node:fs")
+    const { join } = jest.requireActual<typeof import("node:path")>("node:path")
+    const src = readFileSync(join(__dirname, "message-bubble.ts"), "utf8")
+    expect(src).not.toMatch(/\$\{/)
+    for (const layout of LAYOUTS) {
+      for (const cls of [
+        ...userBubbleClass(layout).split(" "),
+        ...assistantBubbleClass(layout).split(" "),
+        ...messageCardClass(layout).split(" "),
+      ].filter(Boolean)) {
+        expect(src).toContain(cls)
+      }
+    }
+  })
+})

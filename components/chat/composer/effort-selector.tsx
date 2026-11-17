@@ -495,7 +495,7 @@ function EffortTrack({
               disabled={disabled}
               onClick={() => onSelect(level)}
               className={cn(
-                "min-w-0 truncate rounded px-1 py-0.5 text-[10px] transition-colors",
+                "min-w-0 truncate rounded px-1 py-0.5 text-2xs transition-colors",
                 level === current
                   ? level === "ultracode"
                     ? "font-medium text-effort-ultra"
@@ -521,7 +521,7 @@ function EffortTrack({
           onClick={() => onSelect("off")}
           data-testid="effort-auto-toggle"
           className={cn(
-            "shrink-0 rounded-pill px-2 py-0.5 text-[10px] transition-colors",
+            "shrink-0 rounded-pill px-2 py-0.5 text-2xs transition-colors",
             off
               ? "bg-accent font-medium text-foreground"
               : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
@@ -592,7 +592,7 @@ function EffortList({
                 {levelLabel(level)}
               </span>
               {layout === "wide" && (
-                <span className="truncate text-[10px] text-muted-foreground">
+                <span className="truncate text-2xs text-muted-foreground">
                   {levelDescription(level)}
                 </span>
               )}

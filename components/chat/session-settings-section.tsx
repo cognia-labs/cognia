@@ -78,7 +78,7 @@ export function SessionSettingsSection({
       {overrideCount > 0 && (
         <Badge
           variant="secondary"
-          className="h-5 min-w-5 justify-center px-1.5 font-mono text-[10px] tabular-nums"
+          className="h-5 min-w-5 justify-center px-1.5 font-mono text-2xs tabular-nums"
           data-testid={`session-settings-section-${id}-count`}
         >
           {overrideCount}

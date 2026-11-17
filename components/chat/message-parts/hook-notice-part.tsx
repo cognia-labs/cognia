@@ -103,7 +103,7 @@ export function HookNoticeRow({ data: part }: { data: HookNoticePartData }) {
       target={
         part.toolName ? (
           <span
-            className="min-w-0 flex-1 truncate rounded bg-muted/60 px-1 py-0.5 font-mono text-[10px] text-muted-foreground"
+            className="min-w-0 flex-1 truncate rounded bg-muted/60 px-1 py-0.5 font-mono text-2xs text-muted-foreground"
             data-testid="hook-notice-tool"
           >
             {part.toolName}
@@ -114,7 +114,7 @@ export function HookNoticeRow({ data: part }: { data: HookNoticePartData }) {
       }
       meta={
         <span
-          className={cn("shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium", styles.pill)}
+          className={cn("shrink-0 rounded px-1.5 py-0.5 text-2xs font-medium", styles.pill)}
           data-testid="hook-notice-outcome"
         >
           {outcomeLabel}

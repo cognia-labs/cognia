@@ -449,7 +449,7 @@ function PanelLabel({ children, className }: { children: React.ReactNode; classN
   return (
     <p
       className={cn(
-        "px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground",
+        "px-2 py-1 text-2xs font-medium uppercase tracking-wider text-muted-foreground",
         className
       )}
     >

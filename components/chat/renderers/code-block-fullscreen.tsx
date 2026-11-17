@@ -82,7 +82,7 @@ export function CodeBlockFullscreen({
         <>
           {filename ? (
             <span
-              className="shrink-0 rounded bg-muted px-1 font-mono text-[10px]"
+              className="shrink-0 rounded bg-muted px-1 font-mono text-2xs"
               data-testid="code-fullscreen-language"
             >
               {languageLabel}

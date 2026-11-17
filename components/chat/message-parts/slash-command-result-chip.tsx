@@ -29,7 +29,7 @@ export function SlashCommandResultChip({ block }: { block: SlashCommandResultBlo
     >
       <Badge
         variant="outline"
-        className="max-w-[16rem] gap-1 border-primary/40 bg-primary/5 text-[10px]"
+        className="max-w-[16rem] gap-1 border-primary/40 bg-primary/5 text-2xs"
       >
         <TerminalSquareIcon className="size-3 shrink-0" />
         <span className="shrink-0">/{block.commandId}</span>

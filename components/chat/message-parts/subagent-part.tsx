@@ -176,7 +176,7 @@ const SubagentLogBody = memo(function SubagentLogBody({
         </div>
       ) : null}
       {toolCalls.length >= 100 ? (
-        <p className="text-[10px] italic text-muted-foreground" data-testid="subagent-tools-tail">
+        <p className="text-2xs italic text-muted-foreground" data-testid="subagent-tools-tail">
           {t("toolsTailNote", { n: 100 })}
         </p>
       ) : null}
@@ -189,7 +189,7 @@ const SubagentLogBody = memo(function SubagentLogBody({
             <MarkdownRenderer content={finalResponse} />
           </div>
           {cutOff ? (
-            <p className="text-[10px] italic text-warning-ink" data-testid="subagent-cutoff-note">
+            <p className="text-2xs italic text-warning-ink" data-testid="subagent-cutoff-note">
               {t("cutOff")}
             </p>
           ) : null}
@@ -209,10 +209,7 @@ const SubagentLogBody = memo(function SubagentLogBody({
             />
           ))}
           {logs.length >= 50 ? (
-            <p
-              className="text-[10px] italic text-muted-foreground"
-              data-testid="subagent-logs-tail"
-            >
+            <p className="text-2xs italic text-muted-foreground" data-testid="subagent-logs-tail">
               {t("logsTailNote", { n: 50 })}
             </p>
           ) : null}
@@ -224,7 +221,7 @@ const SubagentLogBody = memo(function SubagentLogBody({
       ) : null}
 
       {tokenUsage ? (
-        <p className="text-[10px] text-muted-foreground" data-testid="subagent-tokens-breakdown">
+        <p className="text-2xs text-muted-foreground" data-testid="subagent-tokens-breakdown">
           {t("tokensBreakdown", {
             prompt: tokenUsage.promptTokens,
             completion: tokenUsage.completionTokens,
@@ -398,20 +395,20 @@ export const SubagentPart = memo(function SubagentPart({
                 text badge keeps the named status legible. */}
             <Badge
               variant="outline"
-              className={cn("text-[10px]", cfg.color)}
+              className={cn("text-2xs", cfg.color)}
               data-testid="subagent-status-badge"
             >
               {statusLabel}
             </Badge>
             {typeof depth === "number" ? (
-              <Badge variant="secondary" className="text-[10px]" data-testid="subagent-depth-badge">
+              <Badge variant="secondary" className="text-2xs" data-testid="subagent-depth-badge">
                 {t("depthBadge", { n: depth })}
               </Badge>
             ) : null}
             {backgrounded ? (
               <Badge
                 variant="outline"
-                className="text-[10px] text-muted-foreground"
+                className="text-2xs text-muted-foreground"
                 data-testid="subagent-background-badge"
               >
                 {t("backgroundRunning")}
@@ -420,7 +417,7 @@ export const SubagentPart = memo(function SubagentPart({
             {isRunning && retryCount > 0 ? (
               <Badge
                 variant="outline"
-                className="text-[10px] text-warning-ink"
+                className="text-2xs text-warning-ink"
                 data-testid="subagent-retry-badge"
               >
                 {t("retrying", { n: retryCount })}
@@ -429,7 +426,7 @@ export const SubagentPart = memo(function SubagentPart({
             {typeof tokenTotal === "number" && tokenTotal > 0 ? (
               <Badge
                 variant="outline"
-                className="hidden text-[10px] text-muted-foreground @md/subagent:inline-flex"
+                className="hidden text-2xs text-muted-foreground @md/subagent:inline-flex"
                 data-testid="subagent-tokens-badge"
               >
                 {t("tokens", { n: tokenTotal })}

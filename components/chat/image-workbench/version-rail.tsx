@@ -105,13 +105,13 @@ export function VersionRail({ items, activeUrl, onSelect, draftLabel }: VersionR
           >
             <RailThumbnail url={item.url} fallback={item.displayUrl} />
             {isOriginal ? (
-              <span className="absolute inset-x-0 bottom-0 bg-black/65 px-1 py-0.5 text-[10px] text-white/85">
+              <span className="absolute inset-x-0 bottom-0 bg-black/65 px-1 py-0.5 text-2xs text-white/85">
                 {t("rail.original")}
               </span>
             ) : byModel ? (
               <span
                 data-testid="workbench-version-ai-badge"
-                className="absolute inset-x-0 bottom-0 bg-black/65 px-1 py-0.5 text-[10px] text-white/85"
+                className="absolute inset-x-0 bottom-0 bg-black/65 px-1 py-0.5 text-2xs text-white/85"
               >
                 {t("rail.aiBadge")}
               </span>
@@ -122,7 +122,7 @@ export function VersionRail({ items, activeUrl, onSelect, draftLabel }: VersionR
       {draftLabel ? (
         <span
           data-testid="workbench-version-draft"
-          className="flex size-14 shrink-0 items-center justify-center rounded-md border-2 border-dashed border-white/40 px-1 text-center text-[10px] text-white/70 lg:h-16 lg:w-full"
+          className="flex size-14 shrink-0 items-center justify-center rounded-md border-2 border-dashed border-white/40 px-1 text-center text-2xs text-white/70 lg:h-16 lg:w-full"
         >
           {draftLabel}
         </span>

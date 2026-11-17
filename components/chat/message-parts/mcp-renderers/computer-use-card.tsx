@@ -88,7 +88,7 @@ export function ComputerUseCard({ part }: { part: ToolUIPart }) {
     return (
       <div data-testid="computer-use-card-frame" className="my-1 text-xs">
         {(width && height) || region ? (
-          <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+          <div className="mb-1 flex flex-wrap items-center gap-1.5 text-2xs text-muted-foreground">
             {width && height ? (
               <span>
                 {width}×{height}
@@ -96,7 +96,7 @@ export function ComputerUseCard({ part }: { part: ToolUIPart }) {
               </span>
             ) : null}
             {region && (
-              <Badge variant="secondary" className="text-[10px]">
+              <Badge variant="secondary" className="text-2xs">
                 {t("region", region)}
               </Badge>
             )}
@@ -141,17 +141,17 @@ export function ComputerUseCard({ part }: { part: ToolUIPart }) {
           )}
           <span className="font-medium">{parsed.status}</span>
           {input.request?.target?.kind && (
-            <Badge variant="secondary" className="text-[10px]">
+            <Badge variant="secondary" className="text-2xs">
               {input.request.target.kind}
             </Badge>
           )}
           {parsed.method && (
-            <Badge variant="secondary" className="text-[10px]">
+            <Badge variant="secondary" className="text-2xs">
               {parsed.method}
             </Badge>
           )}
           {typeof parsed.afterRevision === "number" && (
-            <Badge variant="secondary" className="text-[10px]">
+            <Badge variant="secondary" className="text-2xs">
               r{parsed.beforeRevision} → r{parsed.afterRevision}
             </Badge>
           )}
@@ -169,7 +169,7 @@ export function ComputerUseCard({ part }: { part: ToolUIPart }) {
       <div data-testid="computer-use-card-ocr" className="my-1 text-xs">
         <div className="flex items-center gap-2">
           <ScanSearchIcon className="size-3 text-muted-foreground" />
-          <code className="max-w-[40ch] truncate font-mono text-[10px]">{label}</code>
+          <code className="max-w-[40ch] truncate font-mono text-2xs">{label}</code>
         </div>
       </div>
     )
@@ -185,7 +185,7 @@ export function ComputerUseCard({ part }: { part: ToolUIPart }) {
           <span className="text-muted-foreground">{t("nodes", { count: nodeCount })}</span>
         )}
         {typeof input.durationMs === "number" && (
-          <Badge variant="secondary" className="text-[10px]">
+          <Badge variant="secondary" className="text-2xs">
             {input.durationMs}ms
           </Badge>
         )}

@@ -413,9 +413,7 @@ function VideoOutput({
                     alt={t("frameAlt", { time })}
                     className="aspect-video w-full rounded border object-cover"
                   />
-                  <span className="block text-[10px] tabular-nums text-muted-foreground">
-                    {time}
-                  </span>
+                  <span className="block text-2xs tabular-nums text-muted-foreground">{time}</span>
                 </li>
               )
             })}

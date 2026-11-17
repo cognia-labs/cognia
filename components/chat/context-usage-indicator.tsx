@@ -390,7 +390,7 @@ export function ContextTurnSummary({
   ]
   return (
     <div className="space-y-1.5" data-testid="context-turn-summary">
-      <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <p className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
         {t("latestTurn")}
       </p>
       {slices.map((slice) => (
@@ -406,7 +406,7 @@ export function ContextTurnSummary({
         />
       ))}
       {session.turns === 0 ? (
-        <p className="pt-0.5 text-[10px] text-muted-foreground">
+        <p className="pt-0.5 text-2xs text-muted-foreground">
           {assistantTurns > 0 ? t("usageNotReported") : t("noUsageYet")}
         </p>
       ) : null}
@@ -540,7 +540,7 @@ export function ContextWindowHeader({
           />
         ) : null}
       </div>
-      <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
+      <div className="flex items-center justify-between gap-3 text-2xs text-muted-foreground">
         <p>{note}</p>
         {title ? <p className="font-mono tabular-nums">{reported ? size : UNKNOWN}</p> : null}
       </div>

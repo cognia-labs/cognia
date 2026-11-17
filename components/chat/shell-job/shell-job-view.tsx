@@ -82,13 +82,13 @@ export function ShellJobCard({ run }: { run: ShellJobRun }) {
           </span>
         </span>
         {live && (
-          <Badge variant="outline" className="shrink-0 gap-1 text-[10px]">
+          <Badge variant="outline" className="shrink-0 gap-1 text-2xs">
             <Spinner className="size-3" />
             {stopping ? t("stopping") : t("running")}
           </Badge>
         )}
       </div>
-      <p className="truncate font-mono text-[10px] text-muted-foreground" title={cwd}>
+      <p className="truncate font-mono text-2xs text-muted-foreground" title={cwd}>
         {cwd}
       </p>
 
@@ -103,7 +103,7 @@ export function ShellJobCard({ run }: { run: ShellJobRun }) {
       ) : (
         <>
           {output.truncated && (
-            <p className="text-[10px] text-muted-foreground">{t("liveTruncated")}</p>
+            <p className="text-2xs text-muted-foreground">{t("liveTruncated")}</p>
           )}
           <pre
             ref={outputRef}

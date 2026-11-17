@@ -90,7 +90,7 @@ export function SourceFavicon({ src, host }: { src?: string; host: string }) {
     <span
       aria-hidden
       className={cn(
-        "inline-flex size-3.5 shrink-0 items-center justify-center rounded-control text-[9px] font-semibold text-white",
+        "inline-flex size-3.5 shrink-0 items-center justify-center rounded-control text-2xs font-semibold text-white",
         FAVICON_PALETTE[hash % FAVICON_PALETTE.length]
       )}
     >

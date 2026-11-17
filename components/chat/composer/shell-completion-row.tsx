@@ -76,7 +76,7 @@ export function ShellCompletionRow({ completion }: { completion: ShellCompletion
       </span>
       <span
         className={cn(
-          "shrink-0 rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
+          "shrink-0 rounded-md bg-muted/60 px-1.5 py-0.5 text-2xs uppercase tracking-wide",
           "text-muted-foreground"
         )}
       >

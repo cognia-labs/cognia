@@ -353,7 +353,7 @@ export function ToolRowBlock({
     >
       <div
         className={cn(
-          "flex items-center justify-between gap-2 border-b px-2 py-0.5 text-[10px] uppercase tracking-wide",
+          "flex items-center justify-between gap-2 border-b px-2 py-0.5 text-2xs uppercase tracking-wide",
           error ? "text-destructive" : "text-muted-foreground"
         )}
       >

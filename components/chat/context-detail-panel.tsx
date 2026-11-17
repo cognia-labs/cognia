@@ -142,7 +142,7 @@ export function ContextDetailPanel({
         />
         <span className="font-medium">{t("detailsToggle")}</span>
         <span
-          className="ml-auto rounded-sm bg-muted px-1 py-px font-mono text-[9px] uppercase tracking-wide"
+          className="ml-auto rounded-sm bg-muted px-1 py-px font-mono text-2xs uppercase tracking-wide"
           data-testid="context-detail-source"
         >
           {breakdown.source === "live" ? t("detailsLive") : t("detailsEstimated")}
@@ -152,10 +152,7 @@ export function ContextDetailPanel({
       <CollapsibleContent className="pt-2">
         <SegmentBar groups={breakdown.groups} />
         {breakdown.denominator === "attributed" ? (
-          <p
-            className="mt-1 text-[10px] text-muted-foreground/80"
-            data-testid="context-detail-note"
-          >
+          <p className="mt-1 text-2xs text-muted-foreground/80" data-testid="context-detail-note">
             {t("detailsOfTranscript")}
           </p>
         ) : null}
@@ -245,7 +242,7 @@ function GroupRow({
         <span className="min-w-0 flex-1 truncate text-muted-foreground">{label}</span>
         {group.itemCount > 0 ? (
           <span
-            className="shrink-0 font-mono text-[10px] text-muted-foreground/60"
+            className="shrink-0 font-mono text-2xs text-muted-foreground/60"
             aria-label={t("breakdownItemsAria", { count: group.itemCount })}
           >
             {group.itemCount}
@@ -254,7 +251,7 @@ function GroupRow({
         <span className="w-11 shrink-0 text-right font-mono tabular-nums">
           {compact.format(group.tokens)}
         </span>
-        <span className="w-10 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+        <span className="w-10 shrink-0 text-right font-mono text-2xs tabular-nums text-muted-foreground">
           {formatShare(group.fraction)}
         </span>
       </button>
@@ -267,7 +264,7 @@ function GroupRow({
           {group.items.slice(0, MAX_ITEMS).map((item) => (
             <li
               key={`${item.label}:${item.hint ?? ""}`}
-              className="flex items-center gap-2 py-px text-[10px] text-muted-foreground"
+              className="flex items-center gap-2 py-px text-2xs text-muted-foreground"
             >
               <span
                 className="min-w-0 flex-1 truncate"
@@ -282,7 +279,7 @@ function GroupRow({
             </li>
           ))}
           {hidden > 0 ? (
-            <li className="py-px text-[10px] text-muted-foreground/70">
+            <li className="py-px text-2xs text-muted-foreground/70">
               {t("breakdownMoreItems", { count: hidden })}
             </li>
           ) : null}

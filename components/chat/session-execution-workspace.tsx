@@ -352,7 +352,7 @@ function SessionExecutionWorkspaceContent({
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-medium">{t("title")}</p>
-          <p className="text-[10px] text-muted-foreground">{t("description")}</p>
+          <p className="text-2xs text-muted-foreground">{t("description")}</p>
         </div>
         <Badge variant={location === "managedWorktree" ? "default" : "secondary"}>
           {location === "managedWorktree" ? t("managed") : t("local")}
@@ -360,17 +360,15 @@ function SessionExecutionWorkspaceContent({
       </div>
 
       {context?.worktreePath && (
-        <p className="break-all text-[10px] text-muted-foreground">
+        <p className="break-all text-2xs text-muted-foreground">
           {t("path", { path: context.worktreePath })}
         </p>
       )}
       {context?.branch && (
-        <p className="text-[10px] text-muted-foreground">
-          {t("branch", { branch: context.branch })}
-        </p>
+        <p className="text-2xs text-muted-foreground">{t("branch", { branch: context.branch })}</p>
       )}
       {context?.lifecycle && (
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           {t("state", { state: context.lifecycle.state })}
         </p>
       )}
@@ -384,7 +382,7 @@ function SessionExecutionWorkspaceContent({
                 {t(`managedAssets.availability.${managedAvailability}`)}
               </p>
             </div>
-            <code className="max-w-full truncate text-[10px] text-muted-foreground">
+            <code className="max-w-full truncate text-2xs text-muted-foreground">
               {context.workspaceBinding?.kind === "managed"
                 ? context.workspaceBinding.workspaceId
                 : ""}
@@ -477,9 +475,7 @@ function SessionExecutionWorkspaceContent({
               </Button>
             )}
           </fieldset>
-          <p className="text-[10px] text-muted-foreground">
-            {t("managedAssets.sessionDeleteNote")}
-          </p>
+          <p className="text-2xs text-muted-foreground">{t("managedAssets.sessionDeleteNote")}</p>
           <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
             <AlertDialogContent>
               <AlertDialogHeader>
@@ -757,7 +753,7 @@ function SessionExecutionWorkspaceContent({
           )}
         </div>
       )}
-      {busy && <p className="text-[10px] text-muted-foreground">{t("busy")}</p>}
+      {busy && <p className="text-2xs text-muted-foreground">{t("busy")}</p>}
     </div>
   )
 }

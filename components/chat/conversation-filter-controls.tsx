@@ -423,7 +423,7 @@ function FilterTrigger({
       {activeFilters > 0 ? (
         <span
           aria-hidden
-          className="absolute top-1 right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-pill bg-primary px-0.5 text-[9px] leading-none font-semibold text-primary-foreground tabular-nums"
+          className="absolute top-1 right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-pill bg-primary px-0.5 text-2xs leading-none font-semibold text-primary-foreground tabular-nums"
           data-testid={`${testId}-dot`}
         >
           {activeFilters}
@@ -646,7 +646,7 @@ function FilterDropdown({
                 >
                   <span className="flex-1 truncate">{labelOf(view)}</span>
                   {view.builtIn ? (
-                    <span className="ml-1 shrink-0 text-[10px] text-muted-foreground">
+                    <span className="ml-1 shrink-0 text-2xs text-muted-foreground">
                       {t("views.builtInBadge")}
                     </span>
                   ) : null}
@@ -1211,9 +1211,7 @@ function ViewRow({
     return (
       <li className="flex items-center gap-2 px-1">
         <span className="flex-1 truncate text-sm">{label}</span>
-        <span className="shrink-0 text-[10px] text-muted-foreground">
-          {t("views.builtInBadge")}
-        </span>
+        <span className="shrink-0 text-2xs text-muted-foreground">{t("views.builtInBadge")}</span>
         <Button
           size="icon"
           variant="ghost"
@@ -1319,7 +1317,7 @@ export function ConversationSearchScopeControl({
           {widened > 0 ? (
             <span
               aria-hidden
-              className="absolute top-1 right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-pill bg-primary px-0.5 text-[9px] leading-none font-semibold text-primary-foreground tabular-nums"
+              className="absolute top-1 right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-pill bg-primary px-0.5 text-2xs leading-none font-semibold text-primary-foreground tabular-nums"
               data-testid={`${testId}-dot`}
             >
               {widened}
@@ -1519,7 +1517,7 @@ export function ConversationFilterChips({
   return (
     <div className={cn("flex flex-wrap items-center gap-1", className)} data-testid={testId}>
       {sortPinned ? (
-        <span className="inline-flex items-center gap-1 rounded-pill bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1 rounded-pill bg-muted px-2 py-0.5 text-2xs text-muted-foreground">
           <ArrowDownUpIcon className="size-2.5" aria-hidden />
           {t(`sort.options.${sortBy}`)}
         </span>
@@ -1528,7 +1526,7 @@ export function ConversationFilterChips({
       {activeFilters > 0 ? (
         <>
           <span
-            className="ml-auto text-[10px] text-muted-foreground tabular-nums"
+            className="ml-auto text-2xs text-muted-foreground tabular-nums"
             data-testid={`${testId}-count`}
           >
             {t("count", { shown, total })}
@@ -1538,7 +1536,7 @@ export function ConversationFilterChips({
             variant="ghost"
             // `touch-hit` gives the 20px link the 44px thumb floor on a coarse
             // pointer without growing the chip row; a mouse sees no change.
-            className="touch-hit h-5 px-1.5 text-[10px] text-muted-foreground"
+            className="touch-hit h-5 px-1.5 text-2xs text-muted-foreground"
             onClick={actions.reset}
             data-testid={`${testId}-clear`}
           >
@@ -1574,7 +1572,7 @@ function FilterChip({
 }) {
   return (
     <span
-      className="inline-flex max-w-full items-center gap-1 rounded-full bg-primary/15 py-0.5 pr-0.5 pl-2 text-[10px] text-primary"
+      className="inline-flex max-w-full items-center gap-1 rounded-full bg-primary/15 py-0.5 pr-0.5 pl-2 text-2xs text-primary"
       title={title}
       data-testid={testId}
     >

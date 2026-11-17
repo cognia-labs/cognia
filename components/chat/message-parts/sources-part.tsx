@@ -281,7 +281,7 @@ const JumpToSourceButton = memo(function JumpToSourceButton({
   return (
     <button
       type="button"
-      className="ml-auto text-[10px] text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded-sm"
+      className="ml-auto text-2xs text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded-sm"
       data-testid="sources-part-jump"
       onClick={() => {
         void import("@/lib/chat/cross-session-jump")
@@ -534,7 +534,7 @@ const KnowledgeSourceButton = memo(function KnowledgeSourceButton({
         type="button"
         disabled={loading}
         aria-busy={loading}
-        className="ml-auto rounded-sm text-[10px] text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
+        className="ml-auto rounded-sm text-2xs text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
         data-testid="sources-part-view-knowledge"
         onClick={() => void open()}
       >
@@ -578,18 +578,18 @@ const SourceRow = memo(function SourceRow({ source }: { source: SourcesPartItem 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium">{source.title}</span>
-          <Badge variant="secondary" className="text-[10px]" data-testid="sources-part-origin">
+          <Badge variant="secondary" className="text-2xs" data-testid="sources-part-origin">
             {t(`originLabel.${ORIGIN_LABEL_KEY[source.origin]}`)}
           </Badge>
           {typeof source.score === "number" && (
-            <span className="text-[10px] text-muted-foreground" data-testid="sources-part-score">
+            <span className="text-2xs text-muted-foreground" data-testid="sources-part-score">
               {source.score.toFixed(2)}
             </span>
           )}
           {source.chunkRef && (
             <Link
               href={buildTwinDeepLink(source.chunkRef)}
-              className="ml-auto text-[10px] text-muted-foreground hover:text-primary"
+              className="ml-auto text-2xs text-muted-foreground hover:text-primary"
               data-testid="sources-part-view-source"
             >
               {t("viewSource")}

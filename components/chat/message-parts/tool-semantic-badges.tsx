@@ -15,14 +15,14 @@ export function ToolSemanticBadges({ readOnlyHint }: ToolSemanticBadgesProps) {
   if (readOnlyHint === undefined || readOnlyHint === null) return null
 
   return readOnlyHint ? (
-    <Badge variant="outline" className="gap-1 text-[10px]" data-testid="tool-readonly">
+    <Badge variant="outline" className="gap-1 text-2xs" data-testid="tool-readonly">
       <EyeIcon className="size-3" aria-hidden />
       {t("readOnly")}
     </Badge>
   ) : (
     <Badge
       variant="outline"
-      className="gap-1 border-info/40 bg-info/10 text-[10px] text-info-ink"
+      className="gap-1 border-info/40 bg-info/10 text-2xs text-info-ink"
       data-testid="tool-write-capable"
     >
       <PencilIcon className="size-3" aria-hidden />

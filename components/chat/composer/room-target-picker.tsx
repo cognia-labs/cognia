@@ -228,7 +228,7 @@ function RoomTargetList({
                   <span
                     className={cn(
                       "shrink-0 truncate text-muted-foreground",
-                      sheet ? "text-xs" : "text-[10px]"
+                      sheet ? "text-xs" : "text-2xs"
                     )}
                   >
                     {role}
@@ -238,7 +238,7 @@ function RoomTargetList({
                   <span
                     className={cn(
                       "shrink-0 rounded-sm bg-muted px-1 text-muted-foreground",
-                      sheet ? "text-xs" : "text-[10px]"
+                      sheet ? "text-xs" : "text-2xs"
                     )}
                     data-testid={`composer-room-target-muted-${member.id}`}
                   >

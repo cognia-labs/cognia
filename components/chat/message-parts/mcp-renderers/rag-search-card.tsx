@@ -49,13 +49,13 @@ export function RagSearchCard({ part }: { part: ToolUIPart }) {
                     </span>
                   )}
                   {hit.scope && (
-                    <Badge variant="secondary" className="max-w-full truncate text-[10px]">
+                    <Badge variant="secondary" className="max-w-full truncate text-2xs">
                       {hit.scope}
                     </Badge>
                   )}
                   {typeof hit.score === "number" && Number.isFinite(hit.score) && (
                     <span
-                      className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground"
+                      className="ml-auto shrink-0 font-mono text-2xs text-muted-foreground"
                       data-testid="mcp-rag-search-score"
                       aria-label={t("scoreLabel", { score: hit.score.toFixed(2) })}
                     >

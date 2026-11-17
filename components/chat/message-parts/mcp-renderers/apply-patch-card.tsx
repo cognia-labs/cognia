@@ -119,7 +119,7 @@ const PatchFileSection = memo(function PatchFileSection({
       <header className="flex min-w-0 items-center gap-1.5 border-b px-2 py-0.5 text-[11px]">
         <span
           className={cn(
-            "shrink-0 rounded-sm border px-1 text-[10px] font-semibold uppercase leading-4",
+            "shrink-0 rounded-sm border px-1 text-2xs font-semibold uppercase leading-4",
             CHANGE_CLASS[file.change]
           )}
         >

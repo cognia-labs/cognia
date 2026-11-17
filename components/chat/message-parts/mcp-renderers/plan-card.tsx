@@ -110,11 +110,7 @@ export function PlanCard({ part, sessionId }: { part: ToolUIPart; sessionId?: st
                 {t("composer.stepCount", { count: captured.totalSteps })}
               </span>
             )}
-            <Badge
-              variant="secondary"
-              className="shrink-0 text-[10px]"
-              data-testid="mcp-plan-status"
-            >
+            <Badge variant="secondary" className="shrink-0 text-2xs" data-testid="mcp-plan-status">
               {t(`status.${captured.status}`)}
             </Badge>
           </>

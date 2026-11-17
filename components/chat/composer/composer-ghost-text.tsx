@@ -61,7 +61,7 @@ interface ComposerGhostTextProps {
 }
 
 const BADGE_CLASS =
-  "ml-2 whitespace-nowrap rounded border border-border/60 bg-muted/70 px-1 text-[10px] leading-tight text-muted-foreground"
+  "ml-2 whitespace-nowrap rounded border border-border/60 bg-muted/70 px-1 text-2xs leading-tight text-muted-foreground"
 
 const ComposerGhostTextBase = forwardRef<HTMLDivElement, ComposerGhostTextProps>(
   function ComposerGhostText({ value, ghost, caret, manualHint, mono, padEndClass }, innerRef) {

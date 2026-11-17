@@ -53,7 +53,7 @@ export function TwinHeaderBadge({ twinId, twinSettings }: Props) {
           href={`/twin?twinId=${encodeURIComponent(twinId)}&tab=settings`}
           aria-label={t("openWorkbench")}
         >
-          <Badge variant="outline" className="font-mono text-[10px]">
+          <Badge variant="outline" className="font-mono text-2xs">
             <BrainCircuitIcon className="mr-1 size-3" aria-hidden />
             {t("label", { chunks })}
           </Badge>

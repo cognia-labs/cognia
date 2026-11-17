@@ -36,7 +36,7 @@ function FileStats({ file }: { file: RunChangeFile }) {
   // none, and "+0 −0" would state that an added file added nothing.
   if (!file.stats) return null
   return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px]">
+    <span className="flex shrink-0 items-center gap-1.5 font-mono text-2xs">
       <span className="text-emerald-600 dark:text-emerald-400">+{file.stats.additions}</span>
       <span className="text-red-600 dark:text-red-400">−{file.stats.deletions}</span>
     </span>
@@ -131,7 +131,7 @@ export function SessionChangesPanel({ sessionId }: SessionChangesPanelProps) {
               })}
             </span>
             {changes.totals.withheld > 0 ? (
-              <Badge variant="outline" className="text-[10px]" data-testid="session-changes-withheld">
+              <Badge variant="outline" className="text-2xs" data-testid="session-changes-withheld">
                 {t("withheld", { count: changes.totals.withheld })}
               </Badge>
             ) : null}
@@ -158,7 +158,7 @@ export function SessionChangesPanel({ sessionId }: SessionChangesPanelProps) {
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-mono text-[11px]">{file.path}</span>
                       {file.oldPath ? (
-                        <span className="block truncate text-[10px] text-muted-foreground">
+                        <span className="block truncate text-2xs text-muted-foreground">
                           {t("renamedFrom", { path: file.oldPath })}
                         </span>
                       ) : null}
@@ -166,7 +166,7 @@ export function SessionChangesPanel({ sessionId }: SessionChangesPanelProps) {
                     <Badge
                       variant="outline"
                       className={cn(
-                        "shrink-0 text-[10px]",
+                        "shrink-0 text-2xs",
                         file.kind === "deleted" && "text-red-600 dark:text-red-400"
                       )}
                     >

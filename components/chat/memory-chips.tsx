@@ -124,7 +124,7 @@ export function MemoryLearnedChip({ messageId }: { messageId: string }) {
           className="inline-flex"
           data-testid="memory-learned-chip"
         >
-          <Badge variant="secondary" className="gap-1 px-1.5 py-0 text-[10px] font-normal">
+          <Badge variant="secondary" className="gap-1 px-1.5 py-0 text-2xs font-normal">
             <BrainIcon className="size-3 text-violet-500" />
             {t("memoryChips.learnedLabel", { count: memories.length })}
           </Badge>
@@ -211,11 +211,11 @@ function LearnedRow({ memory }: { memory: Memory }) {
         </p>
       )}
       <div className="flex items-center gap-1">
-        <Badge variant="outline" className="px-1 py-0 text-[10px]">
+        <Badge variant="outline" className="px-1 py-0 text-2xs">
           {tTypes(memory.type)}
         </Badge>
         {undone && (
-          <Badge variant="outline" className="px-1 py-0 text-[10px] text-muted-foreground">
+          <Badge variant="outline" className="px-1 py-0 text-2xs text-muted-foreground">
             {t("memoryChips.undone")}
           </Badge>
         )}
@@ -278,7 +278,7 @@ export function MemoryRecalledChip({ part }: { part: SourcesPart }) {
           className="inline-flex"
           data-testid="memory-recalled-chip"
         >
-          <Badge variant="secondary" className="gap-1 px-1.5 py-0 text-[10px] font-normal">
+          <Badge variant="secondary" className="gap-1 px-1.5 py-0 text-2xs font-normal">
             <QuoteIcon className="size-3 text-info" />
             {t("memoryChips.recalledLabel", { count: items.length })}
           </Badge>
@@ -297,7 +297,7 @@ export function MemoryRecalledChip({ part }: { part: SourcesPart }) {
                 className="flex flex-col gap-0.5 border-b border-border/40 pb-2 last:border-b-0 last:pb-0"
               >
                 <p className="text-xs leading-snug">{text}</p>
-                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <div className="flex items-center gap-1 text-2xs text-muted-foreground">
                   {item.score !== undefined && <span>{Math.round(item.score * 100)}%</span>}
                   {!live && <span>{t("memoryChips.deletedFallback")}</span>}
                   <span className="flex-1" />
@@ -319,7 +319,7 @@ export function MemoryRecalledChip({ part }: { part: SourcesPart }) {
         </ul>
       )}
       {(part.memoryBudget || part.memoryDegraded) && (
-        <div className="mt-2 space-y-0.5 border-t border-border/40 pt-1.5 text-[10px] text-muted-foreground">
+        <div className="mt-2 space-y-0.5 border-t border-border/40 pt-1.5 text-2xs text-muted-foreground">
           {part.memoryBudget && (
             <p>
               {t("memoryChips.budgetLine", {

@@ -115,7 +115,7 @@ export function PermissionModeIndicator({
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-xs">
         <p className="text-xs">{tooltip}</p>
-        <p className="mt-1 text-[10px] text-muted-foreground">{t("shiftTabHint")}</p>
+        <p className="mt-1 text-2xs text-muted-foreground">{t("shiftTabHint")}</p>
       </TooltipContent>
     </Tooltip>
   )

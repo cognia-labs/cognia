@@ -88,7 +88,7 @@ export function SessionTestsPanel({ sessionId }: SessionTestsPanelProps) {
               >
                 <TestResultsHeader>
                   <TestResultsSummary>
-                    <Badge variant="secondary" className={cn("text-[10px]", CONCLUSION_TONE[conclusion])}>
+                    <Badge variant="secondary" className={cn("text-2xs", CONCLUSION_TONE[conclusion])}>
                       {t(`conclusions.${conclusion}`)}
                     </Badge>
                     {inconclusive ? null : (
@@ -123,7 +123,7 @@ export function SessionTestsPanel({ sessionId }: SessionTestsPanelProps) {
                         <div className="bg-emerald-500" style={{ width: `${percent(passed)}%` }} />
                         <div className="bg-red-500" style={{ width: `${percent(failed)}%` }} />
                       </div>
-                      <p className="mt-1 text-[10px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {t("progress", { passed, total })}
                       </p>
                     </TestResultsProgress>

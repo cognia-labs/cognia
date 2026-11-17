@@ -102,7 +102,7 @@ export function LinkPreviewCard({ url, state, allowFetch, className }: LinkPrevi
           <LinkSiteIcon url={url} allowFetch={allowFetch} className="me-0 shrink-0" />
           <span className="truncate">{site}</span>
           {fileType ? (
-            <span className="ms-auto inline-flex shrink-0 items-center gap-1 rounded border px-1 py-px text-[10px] font-medium uppercase">
+            <span className="ms-auto inline-flex shrink-0 items-center gap-1 rounded border px-1 py-px text-2xs font-medium uppercase">
               <FileIcon className="size-3" aria-hidden />
               {fileType}
             </span>

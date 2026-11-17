@@ -1401,7 +1401,7 @@ const HEADER_CLASS =
   // Opaque bg + bottom rule: rows slide under a readable bar, not a translucent
   // band that lets a half-covered row bleed through (and avoids a
   // backdrop-filter composite layer).
-  "z-10 border-b border-border/60 bg-popover px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+  "z-10 border-b border-border/60 bg-popover px-2.5 py-1.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground"
 
 function itemRowProps(row: Extract<PopoverRow, { kind: "item" }>, props: PopoverRowsProps) {
   const { item, index } = row
@@ -1634,14 +1634,14 @@ const ItemRow = memo(function ItemRow({
                   {hintParts.slice(0, 4).map((part) => (
                     <span
                       key={part}
-                      className="shrink-0 rounded-md border border-border/70 bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground"
+                      className="shrink-0 rounded-md border border-border/70 bg-muted/50 px-1.5 py-0.5 font-mono text-2xs leading-none text-muted-foreground"
                       data-slot="command-argument"
                     >
                       {part}
                     </span>
                   ))}
                   {hintParts.length > 4 ? (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                    <span className="shrink-0 text-2xs text-muted-foreground">
                       +{hintParts.length - 4}
                     </span>
                   ) : null}
@@ -1682,7 +1682,7 @@ const ItemRow = memo(function ItemRow({
             {pinned ? <PinOffIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}
           </button>
         ) : null}
-        <Badge variant="outline" className="shrink-0 px-1.5 text-[10px] font-normal">
+        <Badge variant="outline" className="shrink-0 px-1.5 text-2xs font-normal">
           {c.scope}
         </Badge>
       </>
@@ -1705,7 +1705,7 @@ const ItemRow = memo(function ItemRow({
         <FileTypeIcon path={e.relPath} isDir={e.isDir} className="size-4" />
         <span className="truncate font-mono text-xs">{e.relPath}</span>
         {!e.isDir && e.size > 0 ? (
-          <span className="ml-auto text-[10px] text-muted-foreground">{formatBytes(e.size)}</span>
+          <span className="ml-auto text-2xs text-muted-foreground">{formatBytes(e.size)}</span>
         ) : null}
       </>
     )
@@ -1728,7 +1728,7 @@ const ItemRow = memo(function ItemRow({
       <>
         <Icon className="size-4 shrink-0 text-muted-foreground" />
         <span className="truncate font-medium">{doc.title}</span>
-        <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <span className="ml-auto shrink-0 text-2xs uppercase tracking-wide text-muted-foreground">
           {tDocs(`kind.${doc.kind}`)}
         </span>
         {target && sessionId && doc.accountBinding ? (
@@ -1760,7 +1760,7 @@ const ItemRow = memo(function ItemRow({
         <Icon className="size-4 shrink-0 text-muted-foreground" />
         <span className="truncate font-medium">{candidate.title}</span>
         {candidate.subtitle ? (
-          <span className="ml-auto shrink-0 truncate text-[10px] text-muted-foreground">
+          <span className="ml-auto shrink-0 truncate text-2xs text-muted-foreground">
             {candidate.subtitle}
           </span>
         ) : null}
@@ -1895,7 +1895,7 @@ const ItemRow = memo(function ItemRow({
       <>
         <Icon className="size-4 shrink-0 text-muted-foreground" />
         <span className="truncate font-medium">{el.label}</span>
-        <span className="ml-auto shrink-0 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+        <span className="ml-auto shrink-0 font-mono text-2xs uppercase tracking-wide text-muted-foreground">
           {el.kind}
         </span>
       </>

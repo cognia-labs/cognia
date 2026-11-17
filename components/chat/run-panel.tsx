@@ -138,7 +138,7 @@ export interface RunStatusBarProps {
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+    <div className="px-1 pt-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground/70">
       {children}
     </div>
   )
@@ -318,7 +318,7 @@ function SteerQueueSection({
           </ul>
         </SortableContext>
       </DndContext>
-      <p className="px-1 pt-1 text-[10px] text-muted-foreground/70">{tp("queueMergeHint")}</p>
+      <p className="px-1 pt-1 text-2xs text-muted-foreground/70">{tp("queueMergeHint")}</p>
     </section>
   )
 }
@@ -386,7 +386,7 @@ function SteerQueueRow({
         <GripVerticalIcon className="size-3" aria-hidden />
       </button>
 
-      <span className="mt-1 w-3 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground/70">
+      <span className="mt-1 w-3 shrink-0 text-right text-2xs tabular-nums text-muted-foreground/70">
         {index + 1}
       </span>
 
@@ -425,7 +425,7 @@ function SteerQueueRow({
 
       {attachments > 0 && (
         <span
-          className="mt-0.5 flex shrink-0 items-center gap-0.5 text-[10px] text-muted-foreground"
+          className="mt-0.5 flex shrink-0 items-center gap-0.5 text-2xs text-muted-foreground"
           title={tp("queueAttachments", { count: attachments })}
         >
           <PaperclipIcon className="size-3" aria-hidden />
@@ -874,7 +874,7 @@ function RunPanelImpl({
                         <ToolCallRow part={entry.part} />
                       </div>
                       {toolElapsed && (
-                        <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground/70">
+                        <span className="shrink-0 tabular-nums text-2xs text-muted-foreground/70">
                           {toolElapsed}
                         </span>
                       )}

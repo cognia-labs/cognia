@@ -45,7 +45,7 @@ export function HelperHints({ onOpenCheatsheet }: HelperHintsProps) {
     // ≥sm (keyboard hints are useless on touch) AND the composer container is
     // ≥@lg (a medium-width sidebar still uses the stacked composer and
     // shouldn't burn another row on hint chips).
-    <div className="mt-1.5 hidden sm:@lg/composer:flex flex-wrap items-center justify-center gap-1.5 text-[10px] text-muted-foreground/70">
+    <div className="mt-1.5 hidden sm:@lg/composer:flex flex-wrap items-center justify-center gap-1.5 text-2xs text-muted-foreground/70">
       <Hint>
         {t("send", { send: formatKeyCombo(keys.send), newline: formatKeyCombo(keys.newline) })}
       </Hint>
@@ -59,7 +59,7 @@ export function HelperHints({ onOpenCheatsheet }: HelperHintsProps) {
           type="button"
           onClick={onOpenCheatsheet}
           data-testid="composer-cheatsheet-trigger"
-          className="flex items-center gap-1 rounded-pill border border-transparent px-2 py-0.5 text-[10px] underline-offset-2 hover:underline"
+          className="flex items-center gap-1 rounded-pill border border-transparent px-2 py-0.5 text-2xs underline-offset-2 hover:underline"
         >
           <KeyboardIcon className="size-3" aria-hidden />
           {t("cheatsheetLabel")}
@@ -75,7 +75,7 @@ function Hint({ children }: { children: React.ReactNode }) {
     // as quiet print instead of a row of outlined buttons.
     <Badge
       variant="outline"
-      className="rounded-pill border-transparent bg-muted/70 px-2 py-0.5 text-[10px] font-normal text-muted-foreground"
+      className="rounded-pill border-transparent bg-muted/70 px-2 py-0.5 text-2xs font-normal text-muted-foreground"
     >
       {children}
     </Badge>

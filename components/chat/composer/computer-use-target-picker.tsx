@@ -170,7 +170,7 @@ export function ComputerUseTargetPicker({
           </NativeSelectOptGroup>
         )}
       </NativeSelect>
-      <p id={`${id}-description`} className="text-[10px] text-muted-foreground">
+      <p id={`${id}-description`} className="text-2xs text-muted-foreground">
         {t("description")}
       </p>
       {failed && (

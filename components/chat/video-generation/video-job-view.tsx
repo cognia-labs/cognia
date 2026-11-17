@@ -141,7 +141,7 @@ export function VideoJobCard({
           <ClapperboardIcon className="size-3.5 shrink-0" aria-hidden />
           <span className="truncate">{t(`status.${statusKey(row.status)}` as never)}</span>
         </span>
-        <Badge variant="outline" className="shrink-0 text-[10px]">
+        <Badge variant="outline" className="shrink-0 text-2xs">
           {t("providerModel", { provider, model: row.provider.modelId })}
         </Badge>
       </div>

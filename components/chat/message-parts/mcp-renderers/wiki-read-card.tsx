@@ -34,7 +34,7 @@ export function WikiReadCard({ part }: { part: ToolUIPart }) {
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 px-1 text-[10px] text-muted-foreground"
+            className="h-6 px-1 text-2xs text-muted-foreground"
             onClick={() => setOpen((v) => !v)}
             data-testid="mcp-wiki-read-toggle"
           >

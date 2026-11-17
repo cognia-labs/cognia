@@ -136,7 +136,7 @@ export function MessageVideoAttachmentCard({
           <span className="min-w-0 truncate text-sm font-medium" title={info.filename}>
             {info.filename}
           </span>
-          <Badge variant="secondary" className="shrink-0 text-[10px]">
+          <Badge variant="secondary" className="shrink-0 text-2xs">
             {info.kind === "gif" ? t("gif") : t("video")}
           </Badge>
         </div>

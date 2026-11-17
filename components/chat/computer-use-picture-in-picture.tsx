@@ -806,7 +806,7 @@ function ComputerUsePipSurface({
                   {t(snapshot.frameUnavailable ? "previewUnavailable" : "waitingForFrame")}
                 </div>
               )}
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-1 bg-black/70 px-2 py-1 text-[10px] text-white">
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-1 bg-black/70 px-2 py-1 text-2xs text-white">
                 <span
                   role="status"
                   aria-live="polite"

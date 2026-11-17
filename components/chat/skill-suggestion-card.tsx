@@ -45,7 +45,7 @@ export function SkillSuggestionCard({
         <div className="min-w-0 flex-1 space-y-1">
           <p className="text-sm font-medium">{t("skillSuggestion.title")}</p>
           <p className="text-xs text-muted-foreground">{t("skillSuggestion.description")}</p>
-          <p className="text-[10px] text-muted-foreground">{t("skillSuggestion.privacy")}</p>
+          <p className="text-2xs text-muted-foreground">{t("skillSuggestion.privacy")}</p>
         </div>
       </div>
       <Button size="sm" disabled={preparing} onClick={() => void confirm()}>

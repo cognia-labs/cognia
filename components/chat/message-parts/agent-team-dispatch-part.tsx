@@ -59,7 +59,7 @@ export const AgentTeamDispatchPart = memo(function AgentTeamDispatchPart({
             <ArrowRightIcon className="size-3 shrink-0" aria-hidden />
             <Badge
               variant="secondary"
-              className="max-w-[45%] truncate text-[10px]"
+              className="max-w-[45%] truncate text-2xs"
               data-testid="dispatch-to"
             >
               {part.toName}

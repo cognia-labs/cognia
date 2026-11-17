@@ -113,7 +113,7 @@ export function ImportedOriginChip({
       <TooltipTrigger asChild>
         <Badge
           variant="secondary"
-          className={cn("h-5 shrink-0 gap-1 px-1.5 text-[10px] font-normal", className)}
+          className={cn("h-5 shrink-0 gap-1 px-1.5 text-2xs font-normal", className)}
           data-testid="imported-origin-chip"
         >
           <DownloadIcon className="size-3" />
@@ -136,7 +136,7 @@ export function ImportedOriginChip({
           <Badge
             variant="outline"
             className={cn(
-              "h-5 shrink-0 gap-1 border-warning/50 px-1.5 text-[10px] font-normal text-warning-ink",
+              "h-5 shrink-0 gap-1 border-warning/50 px-1.5 text-2xs font-normal text-warning-ink",
               className
             )}
           >
@@ -240,10 +240,7 @@ export function ImportedOriginChip({
                 aria-label={t("resumeNative")}
                 data-testid="imported-native-resume"
               >
-                <Badge
-                  variant="outline"
-                  className="h-5 shrink-0 gap-1 px-1.5 text-[10px] font-normal"
-                >
+                <Badge variant="outline" className="h-5 shrink-0 gap-1 px-1.5 text-2xs font-normal">
                   {resuming ? <Spinner className="size-3" /> : <RotateCcwIcon className="size-3" />}
                   {t("resume")}
                 </Badge>

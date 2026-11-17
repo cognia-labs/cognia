@@ -115,13 +115,13 @@ export const SquadRunPart = memo(function SquadRunPart({ part }: Props) {
           <StatusBadge
             value={view.run.status satisfies ExecutionRunStatus}
             labelNamespace="squadRun.runStatus"
-            className="shrink-0 text-[10px]"
+            className="shrink-0 text-2xs"
             pulse={view.run.status === "running"}
           />
         ) : (
           // The run row is gone (pruned, or this device never had it). Say so
           // rather than showing a status the message cannot know.
-          <Badge variant="outline" className="text-[10px]" data-testid="squad-run-unknown">
+          <Badge variant="outline" className="text-2xs" data-testid="squad-run-unknown">
             {t("runUnavailable")}
           </Badge>
         )

@@ -553,7 +553,7 @@ export function ArtifactSelectionChips({ bare = false }: ArtifactSelectionChipsP
             {showEditTarget && isTarget ? (
               <Badge
                 variant="secondary"
-                className="shrink-0 px-1 text-[9px]"
+                className="shrink-0 px-1 text-2xs"
                 title={t("editTargetHint")}
               >
                 {t("editTargetBadge")}

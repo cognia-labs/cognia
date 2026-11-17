@@ -156,7 +156,7 @@ export function ChatHeaderPresetPill({
             ) : (
               groups.map((group) => (
                 <div key={group.label} className="space-y-1">
-                  <p className="px-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <p className="px-1 text-2xs uppercase tracking-wider text-muted-foreground">
                     {group.translateLabel
                       ? safeTGroups(group.label, group.label)
                       : safeTCategory(group.label, group.label)}
@@ -179,7 +179,7 @@ export function ChatHeaderPresetPill({
                           data-testid={`chat-header-preset-pill-row-${p.id}`}
                         >
                           <span
-                            className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full text-[10px]"
+                            className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full text-2xs"
                             style={{
                               backgroundColor: p.color ?? "oklch(0.7 0.14 250)",
                               color: "white",
@@ -197,7 +197,7 @@ export function ChatHeaderPresetPill({
                             )}
                           </span>
                           {p.isDefault && (
-                            <Badge variant="secondary" className="text-[10px]">
+                            <Badge variant="secondary" className="text-2xs">
                               {t("defaultBadge")}
                             </Badge>
                           )}

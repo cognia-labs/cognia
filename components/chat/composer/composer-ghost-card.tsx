@@ -191,19 +191,19 @@ export function ComposerGhostCard({
             {ghost ? (
               <button type="button" className={FOOTER_BUTTON} onClick={onAccept}>
                 {/* i18n-exempt: keyboard key legend */}
-                {!isMobile ? <Kbd className="h-4 text-[10px]">Tab</Kbd> : null}
+                {!isMobile ? <Kbd className="h-4 text-2xs">Tab</Kbd> : null}
                 {t("ghostAccept")}
               </button>
             ) : null}
             <button type="button" className={FOOTER_BUTTON} onClick={onDismiss}>
               {/* i18n-exempt: keyboard key legend */}
-              {!isMobile ? <Kbd className="h-4 text-[10px]">Esc</Kbd> : null}
+              {!isMobile ? <Kbd className="h-4 text-2xs">Esc</Kbd> : null}
               {t("ghostDismiss")}
             </button>
             {!isMobile && candidates.length > 1 ? (
               <span className="ms-auto flex items-center gap-1 text-muted-foreground">
-                <Kbd className="h-4 text-[10px]">⌥]</Kbd>
-                <Kbd className="h-4 text-[10px]">⌥[</Kbd>
+                <Kbd className="h-4 text-2xs">⌥]</Kbd>
+                <Kbd className="h-4 text-2xs">⌥[</Kbd>
                 {t("ghostCardCycle")}
               </span>
             ) : null}

@@ -41,7 +41,7 @@ import {
 export function Kpi({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="rounded-md border p-2">
-      <p className="text-[10px] uppercase text-muted-foreground">{label}</p>
+      <p className="text-2xs uppercase text-muted-foreground">{label}</p>
       <p className="font-mono text-sm">{value}</p>
     </div>
   )
@@ -128,7 +128,7 @@ export function SessionReportView({
       {/* Per-turn averages */}
       {turns > 0 && (
         <section className="space-y-1.5" data-testid="averages-panel">
-          <p className="text-[10px] uppercase text-muted-foreground">{t("averages.title")}</p>
+          <p className="text-2xs uppercase text-muted-foreground">{t("averages.title")}</p>
           <div className="grid grid-cols-3 gap-2">
             <Kpi label={t("averages.tokens")} value={avgTokens} />
             <Kpi label={t("averages.cost")} value={avgCost} />
@@ -142,7 +142,7 @@ export function SessionReportView({
       {/* Per-model usage */}
       {report.models.length > 0 && (
         <section className="space-y-1.5">
-          <p className="text-[10px] uppercase text-muted-foreground">{t("models.title")}</p>
+          <p className="text-2xs uppercase text-muted-foreground">{t("models.title")}</p>
           {report.models.map((m) => {
             const modelSpeed = tokensPerSecond(m.outputTokens, m.durationMs)
             return (
@@ -167,7 +167,7 @@ export function SessionReportView({
 
       {turns > 0 && (
         <section className="space-y-1.5">
-          <p className="text-[10px] uppercase text-muted-foreground">{t("efficiency.title")}</p>
+          <p className="text-2xs uppercase text-muted-foreground">{t("efficiency.title")}</p>
           <UsageEfficiencyPanel
             savings={report.cacheSavings}
             distribution={report.turnDistribution}
@@ -178,7 +178,7 @@ export function SessionReportView({
 
       {/* Health assessments */}
       <section className="space-y-1.5">
-        <p className="text-[10px] uppercase text-muted-foreground">{t("assessments.title")}</p>
+        <p className="text-2xs uppercase text-muted-foreground">{t("assessments.title")}</p>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {report.assessments.map((a) => (
             <AssessmentCard key={a.id} assessment={a} />
@@ -188,7 +188,7 @@ export function SessionReportView({
 
       {/* Friction / thinking signals */}
       <section className="space-y-1.5">
-        <p className="text-[10px] uppercase text-muted-foreground">{t("signals.title")}</p>
+        <p className="text-2xs uppercase text-muted-foreground">{t("signals.title")}</p>
         <ul className="space-y-1 text-xs text-muted-foreground" data-testid="signals-panel">
           {report.frictionTotal > 0 && (
             <li>{t("signals.friction", { count: report.frictionTotal })}</li>
@@ -249,7 +249,7 @@ export function SessionReportView({
         </TestResults>
       )}
 
-      {report.degraded && <p className="text-[10px] text-muted-foreground">{t("degradedTree")}</p>}
+      {report.degraded && <p className="text-2xs text-muted-foreground">{t("degradedTree")}</p>}
     </div>
   )
 }

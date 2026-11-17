@@ -202,7 +202,7 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
               data-testid="remote-connection-pill"
               data-state={connection}
               className={cn(
-                "font-mono text-[10px] uppercase",
+                "font-mono text-2xs uppercase",
                 CONNECTION_STATE_META[connection].tone
               )}
             >

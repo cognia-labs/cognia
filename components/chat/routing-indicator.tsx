@@ -45,7 +45,7 @@ export function RoutingIndicator({ routing }: RoutingIndicatorProps) {
           variant="outline"
           data-testid="routing-indicator"
           className={cn(
-            "h-5 cursor-help px-1.5 text-[10px] font-normal",
+            "h-5 cursor-help px-1.5 text-2xs font-normal",
             costCapExceeded && "text-warning-ink"
           )}
         >

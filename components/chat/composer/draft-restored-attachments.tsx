@@ -41,7 +41,7 @@ export function DraftRestoredAttachments({ items, onDismiss }: DraftRestoredAtta
           <PaperclipIcon className="size-3 shrink-0" aria-hidden="true" />
           <span className="truncate">{item.name}</span>
           {item.size > 0 ? (
-            <span className="shrink-0 text-[10px] text-muted-foreground">
+            <span className="shrink-0 text-2xs text-muted-foreground">
               {formatBytes(item.size)}
             </span>
           ) : null}

@@ -540,7 +540,7 @@ function SortableChip({
                 onModelView()
               }}
               onPointerDown={(event) => event.stopPropagation()}
-              className="absolute right-7 top-0 rounded bg-background/90 px-1 text-[10px]"
+              className="absolute right-7 top-0 rounded bg-background/90 px-1 text-2xs"
             >
               {tDoc("modelView")}
             </button>
@@ -716,7 +716,7 @@ function StatusBadge({
     const percent = Math.round((state.video.progress ?? 0) * 100)
     return (
       <span
-        className="flex items-center gap-1 tabular-nums text-[10px] text-muted-foreground"
+        className="flex items-center gap-1 tabular-nums text-2xs text-muted-foreground"
         title={t("video.processing")}
         data-testid="attachment-video-progress"
       >
@@ -770,7 +770,7 @@ function StatusBadge({
   if (videoLabel) {
     return (
       <span
-        className="tabular-nums text-[10px] text-muted-foreground"
+        className="tabular-nums text-2xs text-muted-foreground"
         data-testid="attachment-video-summary"
       >
         {videoLabel}
@@ -780,10 +780,7 @@ function StatusBadge({
   const tokens = state.extracted?.tokens ?? 0
   if (tokens <= 0) return null
   return (
-    <span
-      className="tabular-nums text-[10px] text-muted-foreground"
-      data-testid="attachment-tokens"
-    >
+    <span className="tabular-nums text-2xs text-muted-foreground" data-testid="attachment-tokens">
       {t("tokenBadge", { tokens })}
     </span>
   )

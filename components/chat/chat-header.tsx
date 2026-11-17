@@ -188,7 +188,7 @@ export function ChatHeader({ session, onSplitView, onExitSplit }: Props) {
         {character && (
           <Avatar className="size-6 shrink-0" title={characterTooltip}>
             <AvatarFallback
-              className="text-[10px] text-white"
+              className="text-2xs text-white"
               style={{ backgroundColor: avatarColor(character) }}
               aria-hidden
             >
