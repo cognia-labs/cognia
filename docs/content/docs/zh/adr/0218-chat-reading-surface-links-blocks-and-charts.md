@@ -191,3 +191,17 @@ markdown?: {
 | --- | --- |
 | P0 修复（字体作用到正文和代码、提示框结构、行内代码一致、`mark`/`u`/`abbr`、图表提示框） | 已在 `c8cdaf667` 落地 |
 | §1–§5：阅读令牌、链接呈现与预览、块框架、流式一致、mermaid 配色、内联图表与路由、设置 | 已落地 |
+| 两条分支使用同一配置的围栏渲染器，流式时的 `diff`（2026-11-17 修订） | 已在 `3fae43be64` 落地 |
+
+## 修订 — 2026-11-17：两条分支使用相同的围栏渲染器
+
+由聊天界面重构记录（`docs/plans/2026-11-16-chat-surface-overhaul.md`，D7，步骤 6.1）。§3 把 mermaid 和 `chart` 注册为 Streamdown 自定义渲染器。现在流式分支的围栏渲染器取自完成态分支使用的同一套配置（`resolveChatStreamdownConfig`，见 [ADR-0127](./0127-chat-render-transport-efficiency) 的修订），所以围栏在流式时和回合封存后绘制的是同一个组件：
+
+| 围栏 | 未闭合时 | 开关（两条分支相同） |
+| --- | --- | --- |
+| `mermaid` | 同一框架内的定尺寸占位，然后是 `MermaidBlock` | `markdown.mermaid` |
+| `chart` | 定尺寸占位，然后是 `ChartBlock` | `markdown.charts` |
+| `diff` | 逐行显示的 diff 查看器：不完整的 diff 也是 diff | `markdown.diff`；关闭时两条分支都保留为高亮代码块 |
+| `a2ui` | 结构上完整的前缀的预览（`a2ui-streaming-fence.tsx`） | 始终 |
+
+`withStreamingFenceRenderers`（`components/chat/markdown/streaming-fence-renderers.tsx`）为三个开关的每种组合构建一套渲染器并复用，所以改动设置时是换一套，而不是修改原有的那套。真实引擎矩阵（`tests/integration/fixtures/markdown-renderer-matrix.tsx`）在完成态、分段和流式三条路径上渲染 diff 和 mermaid 围栏。

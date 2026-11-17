@@ -51,3 +51,30 @@ ADR-0057 补全了富消息部件，但展示策略仍分散在消息渲染器�
 - 历史来源保持真实，代价是旧消息缺失的信息会保持空白。
 - 新展示选项必须先进入解析器及其测试，渲染器才能消费。
 - 插件保持兼容，但不能接管完整消息框架。
+
+## 修订 — 2026-11-17：回合折叠、统一渲染上下文、带位置的操作
+
+由聊天界面重构记录（`docs/plans/2026-11-16-chat-surface-overhaul.md`，D10 和 D12）。
+
+### 回合折叠
+
+已完成的回合把过程折叠成一行"已工作 …"（`TurnProcessFold`，自 `4ad63e3941` 起已存在）。`foldTurnParts`（`lib/chat/turn-fold.ts`）决定哪些部分属于过程：结论之前的工具调用和推理。这一行只负责展开和收起：
+
+- 收起时是一行弱化文字，让下面的结论读起来就是回答。
+- 展开时以普通行显示回合的工具调用。折叠区里的工具组不再显示自己的标题，因为折叠区本身就是这个组。
+- 主体只在展开时挂载；展开状态按消息记忆（`lib/chat/disclosure-memory`），虚拟列表把它滚出再滚回时仍保留读者的选择。
+
+配对设备从 Host 读取的回合，会在细节加载之前，用回合的活动摘要画出同样的一行（[ADR-0257](./0257-a-remote-reader-folds-the-hosts-transcript-without-its-detail) §4）。打开它会获取该回合，回合中的消息自带各自的折叠。
+
+### 统一渲染上下文
+
+`MessageRenderContext`（`lib/chat/message-render-context.ts`，provider 在 `components/chat/message-render-context.tsx`）提供每条消息行所需的内容：角色、行操作、`canMutate(id, kind)`、项目根目录、解析后的显示设置、外壳的长按面板，以及该界面允许的命令。
+
+- `MessageList`、`TranscriptMessageList`、`CompanionTranscriptMessages` 和手机的 `RemoteSessionDetail` 都提供它。行上传入的 prop 依然优先。
+- 嵌套的 provider 会合并：内层的键优先，`canMutate` 和 `allowedCommands` 只会收窄。空值直接透传父级，所以什么都不收窄的作用域不会让任何行重新渲染。
+- `MessageRenderer` 会重新提供它解析出的显示设置，所以消息内部嵌套的 Markdown 用的也是对话记录的设置。
+- 面板组件由外壳提供，聊天界面从不导入移动端外壳。
+
+### 带位置的操作
+
+`resolveMessageActionCommands` 为每个命令指定位置（`bar` 或 `menu`），并按统一顺序返回，bar 的在前。桌面悬停工具栏、它的"…"菜单、常显工具栏和手机长按面板都从这一个列表绘制，各命令共用的逻辑放在 `useMessageCommands`。插件菜单项放进消息自己的"…"和面板中，排在分隔线之后。界面通过 `allowed` 传入它能执行的命令。读取 Host 对话记录的配对设备允许复制、分享、分享卡片、书签、朗读和选择文本；只有当 Host 以分支方式执行编辑、重发和重新生成时，才再加上这三项（ADR-0257 §6）。

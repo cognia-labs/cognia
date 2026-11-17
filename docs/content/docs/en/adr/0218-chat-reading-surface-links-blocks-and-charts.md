@@ -225,3 +225,17 @@ disappear when the turn finished and jump the transcript. A failed turn keeps it
 | --- | --- |
 | P0 fixes (fonts reach prose and code, alert structure, inline code parity, `mark`/`u`/`abbr`, chart tooltip) | Landed in `c8cdaf667` |
 | §1–§5: reading tokens, link presentation and previews, block frame, streaming parity, mermaid theming, inline charts and routing, settings | Landed |
+| Fence renderers from one configuration in both branches, `diff` while streaming (amendment 2026-11-17) | Landed in `3fae43be64` |
+
+## Amendment — 2026-11-17: fence renderers in both branches
+
+Recorded by the chat-surface overhaul (`docs/plans/2026-11-16-chat-surface-overhaul.md`, D7, step 6.1). §3 registered mermaid and `chart` as Streamdown custom renderers. The streaming branch now takes its fence renderers from the same configuration the finished branch uses (`resolveChatStreamdownConfig`, [ADR-0127](./0127-chat-render-transport-efficiency) amendment), so a fence draws the same component while it streams and after the turn seals:
+
+| Fence | While open | Gate (same in both branches) |
+| --- | --- | --- |
+| `mermaid` | A sized placeholder in the same frame, then `MermaidBlock` | `markdown.mermaid` |
+| `chart` | A sized placeholder, then `ChartBlock` | `markdown.charts` |
+| `diff` | The diff viewer, line by line: a partial diff is still a diff | `markdown.diff`; off keeps a highlighted code block in both branches |
+| `a2ui` | A preview of the structurally complete prefix (`a2ui-streaming-fence.tsx`) | always |
+
+`withStreamingFenceRenderers` (`components/chat/markdown/streaming-fence-renderers.tsx`) builds one renderer set per combination of the three gates and reuses it, so changing a setting swaps the set instead of mutating it. The real-engine matrix (`tests/integration/fixtures/markdown-renderer-matrix.tsx`) renders diff and mermaid fences on the finished, sectioned and streaming paths.

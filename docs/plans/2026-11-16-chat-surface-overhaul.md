@@ -170,6 +170,18 @@ Done (2026-11-17):
 
 `minor` changeset for the user-visible parts. New ADR for the transcript timeline protocol (none exists): next free number at the time. Amend ADR-0114 (fold model, action placement), ADR-0127 (one configuration, remend/ink policy, event-channel batching) and ADR-0218 (fence renderers in both branches) with the shipped decisions.
 
+Done (2026-11-17):
+
+- **6.1 One Markdown configuration** (`3fae43be64`): `resolveChatMarkdownConfig` and `resolveChatStreamdownConfig` in `components/chat/markdown/`. Streaming gained heading ids, LaTeX preprocessing, single-dollar math, the `diff` fence and `onOpenProjectFile`; mentions render inside Markdown; a reply with link or footnote definitions renders as one tree. The real-engine matrix `tests/integration/fixtures/markdown-renderer-matrix.tsx` replaces the shared-semantics parity check.
+- **6.2 `MessageRenderContext`** (`5234f21937`): the contract in `lib/chat/message-render-context.ts`, the provider in `components/chat/message-render-context.tsx`. The three list shells and `RemoteSessionDetail` provide it. The phone gained characters, copy feedback, the long-press sheet and refused-host messages; the shell supplies the sheet component.
+- **6.2b Edit and regenerate on the phone** (`8c9598768f`): no new intent kind. `message.enqueue` gained `branch` (regenerate, or edit of an earlier question), behind the `host_state_message_branch` capability marker. The Host writes the desktop's branch, rebuilds the prompt from its stored rows and arms the reply in `lib/chat/branch-arming.ts`, which the desktop event loop and the headless settlement listener both consume.
+- **6.3 Message actions** (`dee2de3fee`): every command has a `bar` or `menu` placement; the bar, the "…" menu and the phone sheet draw from one list; plugin items moved into the message's "…".
+- **6.4 Part descriptors** (`5785e9a850`, `663d14e181`): `lib/chat/parts/descriptors.ts`, with exporter labels from `export.document.*` in both locales. Corrections to the plan above: `messagesToMarkdown` did have a production caller (the command palette's export-markdown), which now goes through `useSingleExport`; the `redaction` purpose was not added, because nothing calls it (`hasNoLeakingPiiDeep` walks the parts itself).
+- **6.5 Remote activity summary** (`e61d81fbd1`): `TRANSCRIPT_PROTOCOL_VERSION` 2 and `CompletedTurnTimelineItem.activity`; the fold row draws it and opens the turn through `expandTurn`; the phone subscribes to `transcript://live` and draws the in-flight turn once. The cursor format kept its own version (`TRANSCRIPT_CURSOR_VERSION` 1), so the bump did not invalidate cursors. Clients accept protocol 1 and 2; a client built before protocol 2 refuses a version-2 Host and must be updated with it.
+- **Authoring kit** repinned to `e0fbfe49147e` (Host pin `4b214b0bd7`, kit commit `281dee0`, cognia-plugins lock `6f84cc7`). The independent proof now pins `csstype` to the Host-lock version, because 3.2.4 breaks `framer-motion` 13.5.1's declarations.
+- **ADRs**: [ADR-0257](../content/docs/en/adr/0257-a-remote-reader-folds-the-hosts-transcript-without-its-detail.md) records the transcript timeline protocol. ADR-0114 (turn fold, render context, placed actions), ADR-0127 (one configuration, remend and ink on the tail) and ADR-0218 (fence renderers in both branches) carry 2026-11-17 amendments.
+- Still open from step 6: per-tool elapsed times on the phone (the activity summary carries counts only). No real phone-to-Host smoke of 6.2b or 6.5 yet; it belongs to step 8.
+
 ### 7. UI/UX polish (D1, D2, D14, D15)
 
 - Turn fold per D14; post-turn footer row with reserved height; lazy-block placeholders sized from the source (line count).

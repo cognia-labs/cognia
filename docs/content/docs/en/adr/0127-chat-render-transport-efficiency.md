@@ -107,3 +107,29 @@ Deterministic count assertions (commits/frame, batches, Dexie writes) run in Jes
 - New presentation options must be added to `resolveMessageDisplayOptions` **and** both renderers before they are user-visible; the tests enforce Streamdown/react-markdown parity.
 - Enabling per-surface density and serif body font makes previously inert UI live; users who had set them will see the change on upgrade.
 - The browser push channels add a Rust → renderer event volume that only exists while the embedded browser is open, and only locally.
+
+## Amendment — 2026-11-17: one Markdown configuration, a fixed settled prefix
+
+Recorded by the chat-surface overhaul (`docs/plans/2026-11-16-chat-surface-overhaul.md`, D7–D9). The cross-channel frame batching recorded in §2 on 2026-11-16 is the same overhaul's step 4.5.
+
+### Two engines, one configuration (D7)
+
+The finished renderer (react-markdown, `MarkdownRenderer`) and the streaming renderer (Streamdown) both stay, behind one configuration:
+
+- `resolveChatMarkdownConfig` (`components/chat/markdown/chat-markdown-config.ts`) turns the resolved display settings and the text's trust into the remark and rehype lists, the URL transform, LaTeX preprocessing and the setting classes.
+- `resolveChatStreamdownConfig` derives Streamdown's plugin set from the same object, with the app's fence renderers ([ADR-0218](./0218-chat-reading-surface-links-blocks-and-charts) amendment).
+- `MarkdownRenderer`, `StreamingTextPart`, reasoning, the pet chat and the skill editor's AI popup all read it.
+
+Streaming therefore has heading ids, LaTeX preprocessing, single-dollar inline math (Streamdown's stock math plugin turns it off), the `diff` fence and project-file links, as finished text does. Mentions render inside Markdown (`rehypeMarkdownMentions`). Heading ids stay unique across a message's separately rendered blocks: one pure rehype step takes what earlier blocks consumed through its options. Streamdown caches a processor per plugin name and JSON options, so a per-block closure would share block 0's processor. A long finished reply keeps lazy sections, but one with link or footnote definitions renders as one tree, so its references resolve.
+
+The parity test checks a feature matrix, not shared semantics alone: `tests/integration/fixtures/markdown-renderer-matrix.tsx` renders heading ids, math, diff and mermaid fences, links, references, footnotes and mentions on the finished, sectioned and streaming paths with the real engines.
+
+### A fixed settled prefix while streaming (D8, D9)
+
+- **Remend on the tail only.** Streamdown closes open markers before it parses. The incremental block parser reuses every block before the tail when only the tail changed, so the closers it adds no longer force a full reparse. Settled blocks are never rewritten.
+- **Large fences are throttled.** An open fence past 4,000 characters advances at most every 200 ms, so a large code block is not re-highlighted on every delta.
+- **Ink on the trailing block only.** Blocks before the tail render once, without the animation plugin. Ink is off past 12,000 characters and under reduced motion.
+
+Measured on a 50 KB reply (Node bench, step 4.4): streaming DOM 4.38 MB to 1.15 MB, per-delta p95 7.8–14.1 ms to 6.0–8.8 ms; a 20 KB fence's p95 5.8–9.5 ms to 1.9–2.0 ms.
+
+The Consequences line "the tests enforce Streamdown/react-markdown parity" now means the feature matrix above. A new Markdown feature is added to `resolveChatMarkdownConfig` and to the matrix, not to one engine.

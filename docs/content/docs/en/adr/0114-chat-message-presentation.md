@@ -51,3 +51,30 @@ The settings and session fields are optional JSON properties, and run data stays
 - Historical provenance remains truthful, at the cost of leaving unavailable legacy fields blank.
 - New presentation options must be added to the resolver and its tests before renderers consume them.
 - Plugins remain compatible but cannot take ownership of the whole message shell.
+
+## Amendment — 2026-11-17: the turn fold, one render context, placed actions
+
+Recorded by the chat-surface overhaul (`docs/plans/2026-11-16-chat-surface-overhaul.md`, D10 and D12).
+
+### The turn fold
+
+A finished turn folds its process into one "Worked for …" row (`TurnProcessFold`, in place since `4ad63e3941`). `foldTurnParts` (`lib/chat/turn-fold.ts`) decides which parts are process: tool calls and reasoning before the conclusion. The row is the disclosure only:
+
+- Closed, it is one muted line, so the conclusion under it reads as the answer.
+- Open, it shows the turn's tool calls as plain rows. A tool group inside the fold drops its own header, because the fold already is the group.
+- Its body mounts only while open, and open/closed is remembered per message (`lib/chat/disclosure-memory`), so a virtualized list that scrolls it away and back keeps the reader's choice.
+
+A turn a paired device reads from the Host draws the same row from the turn's activity summary, before its detail is loaded ([ADR-0257](./0257-a-remote-reader-folds-the-hosts-transcript-without-its-detail) §4). Opening it fetches the turn, whose messages bring their own folds.
+
+### One render context
+
+`MessageRenderContext` (`lib/chat/message-render-context.ts`, provider in `components/chat/message-render-context.tsx`) supplies what every message row needs: characters, row actions, `canMutate(id, kind)`, the project root, the resolved display settings, the shell's long-press sheet, and the commands a surface allows.
+
+- `MessageList`, `TranscriptMessageList`, `CompanionTranscriptMessages` and the phone's `RemoteSessionDetail` provide it. A prop on the row still wins.
+- Nested providers merge: inner keys win, while `canMutate` and `allowedCommands` only narrow. An empty value passes the parent through, so a scope that narrows nothing re-renders no row.
+- `MessageRenderer` re-provides its resolved display settings, so Markdown nested inside a message draws with the transcript's settings.
+- The shell supplies the sheet component; the chat surface never imports a mobile shell.
+
+### Placed actions
+
+`resolveMessageActionCommands` gives every command a placement, `bar` or `menu`, and returns them in one order, the bar's first. The desktop hover bar, its "…" menu, the always-visible bar and the phone's long-press sheet all draw from that one list, and `useMessageCommands` holds the work the commands share. Plugin items join the message's own "…" and the sheet, after a separator. A surface passes `allowed` for the commands it can carry out. A paired device reading the Host's transcript allows copy, share, share card, bookmark, read aloud and select text. It adds edit, resend and regenerate only when the Host runs them as branches (ADR-0257 §6).
