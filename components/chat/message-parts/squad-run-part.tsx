@@ -45,7 +45,7 @@ interface Props {
 
 const STEP_DOT: Record<SquadRunStep["status"], string> = {
   running: "animate-pulse bg-primary",
-  completed: "bg-emerald-500",
+  completed: "bg-success",
   failed: "bg-destructive",
   skipped: "bg-muted-foreground/40",
 }

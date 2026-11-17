@@ -151,6 +151,14 @@ describe("TerminalToolPart", () => {
     expect(out).not.toHaveTextContent("$ ls -la")
   })
 
+  it("names the call's state in the row's accessible name, not only its dot's colour", () => {
+    const { unmount } = render(<TerminalToolPart part={bashPart("output-error")} />)
+    expect(screen.getByRole("button", { name: /ls -la — Error/ })).toBeInTheDocument()
+    unmount()
+    render(<TerminalToolPart part={bashPart("output-available", { output: { stdout: "" } })} />)
+    expect(screen.getByRole("button", { name: /ls -la — Completed/ })).toBeInTheDocument()
+  })
+
   it("echoes a one-line command too long to fit the row", () => {
     const command = `grep -rn "some fairly long pattern" components lib hooks --include=*.tsx | head -50`
     render(

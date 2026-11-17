@@ -222,13 +222,13 @@ export function ToolActivityGroup({
             ))}
           </span>
           {attentionState ? (
-            <span className="shrink-0 text-[11px] text-amber-600">
+            <span className="shrink-0 text-[11px] text-warning-ink">
               {t(`status.${attentionState}`)}
             </span>
           ) : null}
           {errorCount > 0 ? (
             <span
-              className="shrink-0 text-[11px] font-medium text-red-600 dark:text-red-500"
+              className="shrink-0 text-[11px] font-medium text-destructive"
               data-testid="tool-activity-group-failed"
             >
               {t("group.failed", { count: errorCount })}

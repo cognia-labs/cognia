@@ -1385,7 +1385,7 @@ export function SessionSettingsSheet({
                                 <span className="flex items-center gap-1.5">
                                   {p.icon ?? "📌"} {p.name}
                                   {p.isDefault && (
-                                    <StarIcon className="size-3 fill-amber-400 text-amber-400" />
+                                    <StarIcon className="size-3 fill-warning text-warning" />
                                   )}
                                 </span>
                               </SelectItem>

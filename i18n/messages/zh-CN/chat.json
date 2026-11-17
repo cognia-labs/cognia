@@ -2952,7 +2952,7 @@
     "output": "输出",
     "proposedChange": "变更预览",
     "rowAria": "{verb} {target} — {status}",
-    "bashRowAria": "Bash 命令 {command}",
+    "bashRowAria": "Bash 命令 {command} — {status}",
     "stdout": "stdout",
     "stderr": "stderr",
     "exitCode": "exit {code}",

@@ -42,6 +42,7 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { ToolSemanticBadges } from "@/components/chat/message-parts/tool-semantic-badges"
 import {
+  TOOL_STATE_STATUS_KEY,
   InlineCopyButton,
   TOOL_ROW_SCROLL_TEXT_CLASS,
   ToolRowShell,
@@ -365,15 +366,6 @@ export const StructuredToolPart = memo(function StructuredToolPart({
   }, [part, spec, input, parsed, t, tFlow, backgrounded])
 
   const copyValue = spec?.copyValue?.(input, parsed) ?? target
-  const statusKey: Record<ToolUIPart["state"], string> = {
-    "input-streaming": "pending",
-    "input-available": "running",
-    "approval-requested": "awaitingApproval",
-    "approval-responded": "responded",
-    "output-available": "completed",
-    "output-denied": "denied",
-    "output-error": "error",
-  }
 
   return (
     <ToolRowShell
@@ -383,7 +375,9 @@ export const StructuredToolPart = memo(function StructuredToolPart({
       ariaLabel={tRow("rowAria", {
         verb: verbLabel,
         target: target ?? "",
-        status: tFlow(`status.${backgrounded ? "backgrounded" : statusKey[part.state]}`),
+        status: tFlow(
+          `status.${backgrounded ? "backgrounded" : TOOL_STATE_STATUS_KEY[part.state]}`
+        ),
       })}
       title={target}
       testId="structured-tool-part"

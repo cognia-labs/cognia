@@ -33,6 +33,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Button } from "@/components/ui/button"
 import { ToolSemanticBadges } from "@/components/chat/message-parts/tool-semantic-badges"
 import {
+  TOOL_STATE_STATUS_KEY,
   InlineCopyButton,
   TOOL_ROW_SCROLL_TEXT_CLASS,
   ToolRowShell,
@@ -346,7 +347,13 @@ export const TerminalToolPart = memo(function TerminalToolPart({
       status={backgrounded ? "info" : part.state}
       open={open}
       onToggle={toggle}
-      ariaLabel={t("bashRowAria", { command: firstLine || displayTitle })}
+      ariaLabel={t("bashRowAria", {
+        command: firstLine || displayTitle,
+        // The dot beside it is colour alone; the name says the state.
+        status: tFlow(
+          `status.${backgrounded ? "backgrounded" : TOOL_STATE_STATUS_KEY[part.state]}`
+        ),
+      })}
       title={command}
       testId="terminal-tool-part"
       lead={

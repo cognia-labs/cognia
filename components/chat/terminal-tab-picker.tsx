@@ -91,7 +91,7 @@ export function TerminalTabPicker({
                     <TerminalIcon className="mr-2 h-3.5 w-3.5" />
                     <span className="flex-1 truncate">{displayTitle(row)}</span>
                     {row.agentTrusted ? (
-                      <span className="ml-2 text-[10px] text-amber-500">{t("trustedBadge")}</span>
+                      <span className="ml-2 text-[10px] text-warning-ink">{t("trustedBadge")}</span>
                     ) : null}
                   </CommandItem>
                 ))}

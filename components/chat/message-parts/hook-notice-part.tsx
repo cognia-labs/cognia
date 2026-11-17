@@ -55,8 +55,8 @@ const OUTCOME_STYLES: Record<HookNoticePartData["outcome"], OutcomeStyle> = {
   },
   warning: {
     dot: "warning",
-    icon: "text-amber-600 dark:text-amber-400",
-    pill: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    icon: "text-warning-ink",
+    pill: "bg-warning/10 text-warning-ink",
     Icon: TriangleAlertIcon,
   },
 }
@@ -138,7 +138,7 @@ export function HookNoticeRow({ data: part }: { data: HookNoticePartData }) {
           {part.warnings.length > 0 ? (
             <ul className="flex flex-col gap-0.5" data-testid="hook-notice-warnings">
               {part.warnings.map((w, i) => (
-                <li key={i} className="flex items-start gap-1 text-amber-600 dark:text-amber-400">
+                <li key={i} className="flex items-start gap-1 text-warning-ink">
                   <span aria-hidden>⚠</span>
                   <span className="break-words">{w}</span>
                 </li>

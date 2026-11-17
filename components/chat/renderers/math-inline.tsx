@@ -113,7 +113,7 @@ function MathInlineBase({
                 data-slot="copy-feedback-icon"
                 data-state={copied ? "copied" : "idle"}
               >
-                {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+                {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
               </span>
             </span>
           )}

@@ -107,10 +107,7 @@ export function WebFetchCard({ part }: { part: ToolUIPart }) {
   return (
     <div data-testid="mcp-webfetch-card" className="my-1 space-y-0.5 text-xs">
       {redirected && (
-        <p
-          className="text-[11px] text-amber-600 dark:text-amber-400"
-          data-testid="mcp-webfetch-redirect"
-        >
+        <p className="text-[11px] text-warning-ink" data-testid="mcp-webfetch-redirect">
           {t("redirectedTo", { url: parsed?.url ?? "" })}
         </p>
       )}

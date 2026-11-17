@@ -52,7 +52,7 @@ export const SquadGatePart = memo(function SquadGatePart({ part }: Props) {
             aria-hidden
             className={cn(
               "size-3.5 shrink-0",
-              part.decision === "approved" && "text-emerald-600",
+              part.decision === "approved" && "text-success-ink",
               part.decision === "rejected" && "text-destructive",
               part.decision === "dismissed" && "text-muted-foreground"
             )}

@@ -24,14 +24,16 @@ jest.mock("@/components/ai-elements/message", () => ({
     children,
     className,
     from,
+    "data-message-row": messageRow,
   }: {
     children: ReactForMocks.ReactNode
     className?: string
     from?: string
+    "data-message-row"?: string
   }) =>
     ReactForMocks.createElement(
       "div",
-      { "data-test": "message", "data-from": from, className },
+      { "data-test": "message", "data-from": from, "data-message-row": messageRow, className },
       children
     ),
   MessageContent: ({
@@ -738,6 +740,31 @@ describe("message actions from their placements (D10)", () => {
   afterEach(() => {
     mockActions = "all"
     __resetContextMenuRegistryForTesting()
+  })
+
+  it("folds the least used bar commands into the menu on a narrow row", () => {
+    const { container } = render(<MessageRenderer message={inSession(assistantMsg())} />)
+    const row = container.querySelector<HTMLElement>("[data-message-row]")!
+    expect(row).toHaveClass("@container/msgrow")
+    // The row hides a foldable command below its slot's width; copy never folds.
+    const reply = screen.getByLabelText("replyTooltip")
+    expect(reply.closest("[data-bar-fold]")?.className).toMatch(/@max-\[[\d.]+rem\]\/msgrow:hidden/)
+    expect(screen.getByLabelText("copyTooltip").closest("[data-bar-fold]")).toBeNull()
+    jest.spyOn(row, "getBoundingClientRect").mockReturnValue({ width: 240 } as DOMRect)
+    const menu = openMenu()
+    // Listed first, before the menu's own commands.
+    expect(menu).toHaveTextContent("replyLabel")
+    expect(menu.textContent!.indexOf("replyLabel")).toBeLessThan(
+      menu.textContent!.indexOf("shareLabel")
+    )
+    expect(menu).not.toHaveTextContent("copyLabel")
+  })
+
+  it("folds nothing into the menu on a wide row", () => {
+    const { container } = render(<MessageRenderer message={inSession(assistantMsg())} />)
+    const row = container.querySelector<HTMLElement>("[data-message-row]")!
+    jest.spyOn(row, "getBoundingClientRect").mockReturnValue({ width: 900 } as DOMRect)
+    expect(openMenu()).not.toHaveTextContent("replyLabel")
   })
 
   it("draws Reply once: on the bar, not again in the menu", () => {

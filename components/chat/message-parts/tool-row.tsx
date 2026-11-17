@@ -26,22 +26,22 @@ export type ToolDotStatus =
 
 const STATUS_DOT: Record<ToolDotStatus, { className: string; breathe?: boolean }> = {
   "input-streaming": { className: "bg-muted-foreground/50" },
-  "input-available": { className: "bg-blue-500", breathe: true },
-  "approval-requested": { className: "bg-yellow-600 dark:bg-yellow-500", breathe: true },
-  "approval-responded": { className: "bg-blue-600 dark:bg-blue-500" },
-  "output-available": { className: "bg-green-600 dark:bg-green-500" },
+  "input-available": { className: "bg-info", breathe: true },
+  "approval-requested": { className: "bg-warning", breathe: true },
+  "approval-responded": { className: "bg-info" },
+  "output-available": { className: "bg-success" },
   "output-denied": { className: "bg-orange-600 dark:bg-orange-500" },
-  "output-error": { className: "bg-red-600 dark:bg-red-500" },
+  "output-error": { className: "bg-destructive" },
   // Aggregate aliases (ToolActivityGroup folds a run into one status).
-  running: { className: "bg-blue-500", breathe: true },
-  error: { className: "bg-red-600 dark:bg-red-500" },
+  running: { className: "bg-info", breathe: true },
+  error: { className: "bg-destructive" },
   pending: { className: "bg-muted-foreground/50" },
-  complete: { className: "bg-green-600 dark:bg-green-500" },
+  complete: { className: "bg-success" },
   // Non-tool stream rows map their outcomes onto these aliases too: a hook
   // warning, an ungrounded claim, or a context injection is still one status
   // in the same dot language.
-  warning: { className: "bg-amber-500" },
-  info: { className: "bg-blue-500" },
+  warning: { className: "bg-warning" },
+  info: { className: "bg-info" },
 }
 
 /**
@@ -63,6 +63,20 @@ export const TOOL_ROW_SCROLL_TEXT_CLASS = cn(
   "pointer-coarse:[mask-image:linear-gradient(to_right,#000_calc(100%-1rem),transparent)]",
   "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
 )
+
+/**
+ * A tool call's state as its `chat.agentFlow.status.*` key: the word a row's
+ * accessible name carries, since its status dot is colour alone.
+ */
+export const TOOL_STATE_STATUS_KEY: Record<ToolUIPart["state"], string> = {
+  "input-streaming": "pending",
+  "input-available": "running",
+  "approval-requested": "awaitingApproval",
+  "approval-responded": "responded",
+  "output-available": "completed",
+  "output-denied": "denied",
+  "output-error": "error",
+}
 
 /** The breathing status dot every tool row leads with. */
 export const ToolStatusDot = memo(function ToolStatusDot({

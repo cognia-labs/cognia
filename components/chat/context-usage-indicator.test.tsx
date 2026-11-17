@@ -142,7 +142,7 @@ describe("ContextUsageIndicator", () => {
     })
     const { container } = render(<ContextUsageIndicator modelId="claude-sonnet-4-5" />) // 200k window
     const button = container.querySelector("button")
-    expect(button?.className).toContain("text-red-500")
+    expect(button?.className).toContain("text-destructive")
   })
 
   it("applies the green tint when the window is mostly empty", () => {
@@ -151,7 +151,7 @@ describe("ContextUsageIndicator", () => {
     })
     const { container } = render(<ContextUsageIndicator modelId="claude-sonnet-4-5" />)
     const button = container.querySelector("button")
-    expect(button?.className).toContain("text-emerald-500")
+    expect(button?.className).toContain("text-success-ink")
   })
 
   it("backfills an estimated session cost when the SDK reports none (non-Anthropic path)", () => {
@@ -216,7 +216,7 @@ describe("ContextWindowHeader", () => {
       <ContextWindowHeader fraction={1} level="crit" used={200_000} max={200_000} />
     )
     const fill = container.querySelector('[data-testid="context-window-bar"] > div')
-    expect(fill?.className).toContain("bg-red-500")
+    expect(fill?.className).toContain("bg-destructive")
   })
 
   it("says the occupancy is unknown rather than drawing an empty window", () => {
@@ -286,7 +286,7 @@ describe("ContextWindowHeader", () => {
     )
     expect(screen.getByText("Context window")).toBeInTheDocument()
     const pct = screen.getByText("50%")
-    expect(pct.className).toContain("text-amber-500")
+    expect(pct.className).toContain("text-warning-ink")
     // The window size moves under the bar so the heading can own the top row.
     expect(screen.getByText("100K / 200K")).toBeInTheDocument()
   })
@@ -296,7 +296,7 @@ describe("ContextWindowHeader", () => {
       <ContextWindowHeader fraction={0.05} level="ok" used={10_000} max={200_000} />
     )
     const fill = container.querySelector('[data-testid="context-window-bar"] > div')
-    expect(fill?.className).toContain("bg-emerald-500")
+    expect(fill?.className).toContain("bg-success")
   })
 })
 

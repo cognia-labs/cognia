@@ -35,10 +35,10 @@ jest.mock("@/hooks/ui", () => ({
 describe("ToolStatusDot", () => {
   it("maps each tool state to a status colour", () => {
     const { container, rerender } = render(<ToolStatusDot status="output-available" />)
-    expect(container.firstChild).toHaveClass("bg-green-600")
+    expect(container.firstChild).toHaveClass("bg-success")
 
     rerender(<ToolStatusDot status="output-error" />)
-    expect(container.firstChild).toHaveClass("bg-red-600")
+    expect(container.firstChild).toHaveClass("bg-destructive")
 
     rerender(<ToolStatusDot status="output-denied" />)
     expect(container.firstChild).toHaveClass("bg-orange-600")

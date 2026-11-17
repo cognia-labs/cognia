@@ -69,7 +69,7 @@ export function WorkspaceTrustDialog({ workspacePath, pendingActions, onResolved
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ShieldAlertIcon className="size-4 text-amber-500" />
+            <ShieldAlertIcon className="size-4 text-warning" />
             {t("title")}
           </DialogTitle>
           <DialogDescription>{t("description")}</DialogDescription>

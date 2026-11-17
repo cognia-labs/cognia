@@ -358,10 +358,7 @@ export function SharedSessionFiles({
       ) : (
         <>
           {!state.host.online ? (
-            <p
-              className="text-xs text-amber-600 dark:text-amber-400"
-              data-testid="shared-files-offline"
-            >
+            <p className="text-xs text-warning-ink" data-testid="shared-files-offline">
               {t("offlineHint")}
             </p>
           ) : null}

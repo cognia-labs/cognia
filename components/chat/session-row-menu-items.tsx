@@ -151,7 +151,7 @@ export function SessionRowMenuItems({
       {locked ? (
         <>
           <Label className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
-            <LockKeyholeIcon className="size-3.5 shrink-0 text-amber-600" aria-hidden />
+            <LockKeyholeIcon className="size-3.5 shrink-0 text-warning-ink" aria-hidden />
             {t("lockedMenuNote")}
           </Label>
           <Separator />

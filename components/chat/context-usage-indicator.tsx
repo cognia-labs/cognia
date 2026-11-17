@@ -66,15 +66,16 @@ import {
 } from "@/lib/usage/context-usage"
 
 const LEVEL_TEXT: Record<ContextLevel, string> = {
-  ok: "text-emerald-500",
-  warn: "text-amber-500",
-  crit: "text-red-500",
+  // Text (the percentage, the ring's label): the ink tones hold ≥4.5:1.
+  ok: "text-success-ink",
+  warn: "text-warning-ink",
+  crit: "text-destructive",
 }
 
 const LEVEL_FILL: Record<ContextLevel, string> = {
-  ok: "bg-emerald-500",
-  warn: "bg-amber-500",
-  crit: "bg-red-500",
+  ok: "bg-success",
+  warn: "bg-warning",
+  crit: "bg-destructive",
 }
 
 const compact = new Intl.NumberFormat("en-US", { notation: "compact" })

@@ -86,16 +86,13 @@ export function ImageInputNotice({
           className={cn(
             "inline-flex h-7 max-w-[18rem] items-center gap-1.5 rounded-md border px-2 text-[11px] transition-colors",
             "focus-visible:ring-ring/50 outline-none focus-visible:ring-[3px]",
-            "border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+            "border-warning/30 bg-warning/10 text-warning-ink hover:bg-warning/15"
           )}
         >
           <EyeOffIcon aria-hidden className="size-3.5 shrink-0" />
           <span className="truncate">{copy.short}</span>
           {textIncluded ? (
-            <CheckIcon
-              aria-hidden
-              className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400"
-            />
+            <CheckIcon aria-hidden className="size-3 shrink-0 text-success-ink" />
           ) : null}
         </button>
       </PopoverTrigger>
@@ -108,7 +105,7 @@ export function ImageInputNotice({
         {imageCount > 0 ? (
           textIncluded ? (
             <p
-              className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400"
+              className="flex items-center gap-1.5 text-success-ink"
               data-testid="attachment-visual-notice-text-included"
             >
               <CheckIcon aria-hidden className="size-3.5 shrink-0" />

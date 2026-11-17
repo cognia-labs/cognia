@@ -33,6 +33,7 @@ import { FileTypeIcon } from "@/components/shared/file-type-icon"
 import { Button } from "@/components/ui/button"
 import { ToolSemanticBadges } from "@/components/chat/message-parts/tool-semantic-badges"
 import {
+  TOOL_STATE_STATUS_KEY,
   InlineCopyButton,
   TOOL_ROW_SCROLL_TEXT_CLASS,
   ToolRowBlock,
@@ -465,15 +466,6 @@ export const FileToolPart = memo(function FileToolPart({
 
   const copyValue = info.path ?? info.target
   const writable = kind === "write" || kind === "edit" || kind === "patch"
-  const statusKey: Record<ToolUIPart["state"], string> = {
-    "input-streaming": "pending",
-    "input-available": "running",
-    "approval-requested": "awaitingApproval",
-    "approval-responded": "responded",
-    "output-available": "completed",
-    "output-denied": "denied",
-    "output-error": "error",
-  }
 
   return (
     <ToolRowShell
@@ -483,7 +475,7 @@ export const FileToolPart = memo(function FileToolPart({
       ariaLabel={t("rowAria", {
         verb: verbLabel,
         target: info.target ?? "",
-        status: tFlow(`status.${statusKey[part.state]}`),
+        status: tFlow(`status.${TOOL_STATE_STATUS_KEY[part.state]}`),
       })}
       title={info.target}
       testId="file-tool-part"

@@ -1,5 +1,12 @@
 import {
   messageActionCommandsAt,
+  ACTION_BUTTON_REM,
+  ACTION_FOLD_RESERVE_REM,
+  BAR_FOLD_HIDE_CLASS,
+  barFoldHideClass,
+  barFoldNeeds,
+  barFoldThresholdRem,
+  foldedBarCommandIds,
   resolveMessageActionCommands,
   splitSheetCommands,
   type MessageActionCommand,
@@ -387,5 +394,59 @@ describe("splitSheetCommands (D15)", () => {
       canRegenerate: true,
     })
     expect(splitSheetCommands(commands, 2).primary).toHaveLength(2)
+  })
+})
+
+describe("folding the bar by row width", () => {
+  const assistantBar = () =>
+    messageActionCommandsAt(
+      resolveMessageActionCommands({
+        role: "assistant",
+        hasContent: true,
+        hasSession: true,
+        canRegenerate: true,
+        canReadAloud: true,
+        canSaveAsMemory: true,
+        canSaveAsIssue: true,
+      }),
+      "bar"
+    )
+
+  it("spells each hide class from the threshold it encodes", () => {
+    BAR_FOLD_HIDE_CLASS.forEach((cls, n) => {
+      if (n === 0) return expect(cls).toBe("")
+      const rem = ACTION_FOLD_RESERVE_REM + n * ACTION_BUTTON_REM
+      expect(barFoldThresholdRem(n)).toBe(rem)
+      expect(cls).toBe(`@max-[${rem}rem]/msgrow:hidden`)
+    })
+  })
+
+  it("never folds copy or read-aloud, and folds regenerate last", () => {
+    const needs = barFoldNeeds(assistantBar())
+    expect(needs.has("copy")).toBe(false)
+    expect(needs.has("readAloud")).toBe(false)
+    expect(barFoldHideClass(needs, "copy")).toBe("")
+    // copy + readAloud + reaction picker + "…" = 4 fixed; 4 foldable.
+    expect(needs.get("regenerate")).toBe(5)
+    expect(needs.get("reply")).toBe(6)
+    expect(needs.get("saveAsMemory")).toBe(7)
+    expect(needs.get("saveAsIssue")).toBe(8)
+  })
+
+  it("folds from the least used command as the row narrows", () => {
+    const bar = assistantBar()
+    expect(foldedBarCommandIds(bar, 800)).toEqual([])
+    // 28rem = 448px: needs 8 → saveAsIssue folds (28rem) but 7 (25.75rem) fits.
+    expect(foldedBarCommandIds(bar, 440)).toEqual(["saveAsIssue"])
+    expect(foldedBarCommandIds(bar, 300)).toEqual([
+      "reply",
+      "saveAsMemory",
+      "saveAsIssue",
+      "regenerate",
+    ])
+  })
+
+  it("folds nothing on a row that has not been laid out", () => {
+    expect(foldedBarCommandIds(assistantBar(), 0)).toEqual([])
   })
 })

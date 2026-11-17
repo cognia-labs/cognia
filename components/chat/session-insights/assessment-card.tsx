@@ -13,17 +13,17 @@ import { cn } from "@/lib/utils"
 import type { Assessment, AssessmentLevel } from "@/lib/analysis/session-report"
 
 const LEVEL_TEXT: Record<AssessmentLevel, string> = {
-  critical: "text-red-500",
-  warning: "text-amber-500",
-  info: "text-sky-500",
-  healthy: "text-emerald-500",
+  critical: "text-destructive",
+  warning: "text-warning-ink",
+  info: "text-info-ink",
+  healthy: "text-success-ink",
 }
 
 const LEVEL_FILL: Record<AssessmentLevel, string> = {
-  critical: "bg-red-500",
-  warning: "bg-amber-500",
-  info: "bg-sky-500",
-  healthy: "bg-emerald-500",
+  critical: "bg-destructive",
+  warning: "bg-warning",
+  info: "bg-info",
+  healthy: "bg-success",
 }
 
 export function AssessmentCard({ assessment }: { assessment: Assessment }) {

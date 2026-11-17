@@ -47,9 +47,9 @@ const VERDICT_ICON: Record<VerificationVerdict, LucideIcon> = {
 }
 
 const VERDICT_TONE: Record<VerificationVerdict, string> = {
-  pass: "text-emerald-600 dark:text-emerald-500",
+  pass: "text-success-ink",
   fail: "text-destructive",
-  unsure: "text-amber-600 dark:text-amber-500",
+  unsure: "text-warning-ink",
 }
 
 const VERDICT_DOT: Record<VerificationVerdict, ToolDotStatus> = {

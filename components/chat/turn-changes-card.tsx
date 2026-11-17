@@ -256,8 +256,8 @@ function TurnChangesCardBody({ sessionId, row }: { sessionId: string; row: CodeA
               : t("changed", { count: allFiles.length })}
           </p>
           <p className="font-mono text-xs" data-testid="turn-changes-total">
-            <span className="text-emerald-600 dark:text-emerald-400">+{added}</span>{" "}
-            <span className="text-red-600 dark:text-red-400">−{removed}</span>
+            <span className="text-success-ink">+{added}</span>{" "}
+            <span className="text-destructive">−{removed}</span>
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -354,8 +354,8 @@ function TurnChangesCardBody({ sessionId, row }: { sessionId: string; row: CodeA
                   </span>
                 ) : (
                   <span className="shrink-0 font-mono text-[11px]">
-                    <span className="text-emerald-600 dark:text-emerald-400">+{file.added}</span>{" "}
-                    <span className="text-red-600 dark:text-red-400">−{file.removed}</span>
+                    <span className="text-success-ink">+{file.added}</span>{" "}
+                    <span className="text-destructive">−{file.removed}</span>
                   </span>
                 )}
               </button>

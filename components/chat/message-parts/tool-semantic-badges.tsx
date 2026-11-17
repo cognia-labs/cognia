@@ -22,7 +22,7 @@ export function ToolSemanticBadges({ readOnlyHint }: ToolSemanticBadgesProps) {
   ) : (
     <Badge
       variant="outline"
-      className="gap-1 border-blue-500/40 bg-blue-500/10 text-[10px] text-blue-700 dark:text-blue-400"
+      className="gap-1 border-info/40 bg-info/10 text-[10px] text-info-ink"
       data-testid="tool-write-capable"
     >
       <PencilIcon className="size-3" aria-hidden />

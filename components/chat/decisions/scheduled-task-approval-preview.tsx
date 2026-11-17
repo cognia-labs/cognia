@@ -154,7 +154,7 @@ function TaskRow({ taskId, task }: { taskId: string; task: ScheduledTask | null 
   if (task === null) {
     return (
       <p
-        className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400"
+        className="flex items-center gap-1.5 text-xs text-warning-ink"
         data-testid="schedule-approval-missing"
       >
         <AlertTriangleIcon className="size-3.5" aria-hidden="true" />

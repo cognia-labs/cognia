@@ -616,7 +616,7 @@ function SessionExecutionWorkspaceContent({
       )}
 
       {conflicts.length > 0 && (
-        <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2">
+        <div className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-2">
           <p className="text-xs font-medium">{t("conflictTitle")}</p>
           {conflicts.map((conflict) => (
             <p

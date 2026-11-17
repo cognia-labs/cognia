@@ -51,7 +51,7 @@ describe("PlanModeBanner", () => {
     const banner = screen.getByTestId("plan-mode-banner")
     expect(banner).toHaveTextContent("banner")
     expect(banner).toHaveTextContent("hint")
-    expect(banner.className).toContain("border-amber-500/40")
+    expect(banner.className).toContain("border-warning/40")
   })
 
   it("leaves out the Shift+Tab chip on a device without a keyboard", () => {

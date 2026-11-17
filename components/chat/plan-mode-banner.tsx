@@ -35,7 +35,7 @@ export function PlanModeBanner() {
 
   return (
     <div
-      className="mx-1 mb-1 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-400"
+      className="mx-1 mb-1 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning-ink"
       data-testid="plan-mode-banner"
     >
       <NotebookPenIcon className="size-3.5 shrink-0" />
@@ -43,11 +43,11 @@ export function PlanModeBanner() {
       {sessionId && !openPlan ? (
         <WritePlanButton
           sessionId={sessionId}
-          className="-my-0.5 shrink-0 text-amber-700 hover:bg-amber-500/15 hover:text-amber-800 dark:text-amber-400"
+          className="-my-0.5 shrink-0 text-warning-ink hover:bg-warning/15"
         />
       ) : null}
       {showKeyboardHints ? (
-        <kbd className="shrink-0 rounded border border-amber-500/40 px-1 font-mono text-[10px]">
+        <kbd className="shrink-0 rounded border border-warning/40 px-1 font-mono text-[10px]">
           {t("hint")}
         </kbd>
       ) : null}

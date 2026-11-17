@@ -66,9 +66,7 @@ export function OpticalArchiveDialog({
             <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
               <Stat label={t("tokens")}>
                 {compactNum.format(archive.preTokens)} → {compactNum.format(archive.postTokens)}
-                <span className="ml-1 text-emerald-600 dark:text-emerald-400">
-                  ({t("saved", { pct: savedPct })})
-                </span>
+                <span className="ml-1 text-success-ink">({t("saved", { pct: savedPct })})</span>
               </Stat>
               {shape && (
                 <Stat label={t("shape")}>

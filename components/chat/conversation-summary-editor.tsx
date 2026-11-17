@@ -72,11 +72,7 @@ export function ConversationSummaryEditor({
         disabled={generating}
       />
       {fallback && !generating ? (
-        <p
-          className="text-xs text-amber-700 dark:text-amber-400"
-          role="status"
-          data-testid="branch-summary-fallback"
-        >
+        <p className="text-xs text-warning-ink" role="status" data-testid="branch-summary-fallback">
           {t(SUMMARY_FALLBACK_KEYS[fallback])}
         </p>
       ) : null}

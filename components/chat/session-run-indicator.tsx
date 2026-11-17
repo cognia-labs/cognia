@@ -45,7 +45,7 @@ export function SessionRunIndicator({ status, testIdPrefix, className }: Session
       <ShieldQuestionIcon
         role="img"
         aria-label={t("awaitingApproval")}
-        className={cn("size-3 shrink-0 text-amber-600", className)}
+        className={cn("size-3 shrink-0 text-warning-ink", className)}
         data-testid={`${testIdPrefix}-awaiting`}
       />
     )

@@ -485,7 +485,7 @@ export function ArtifactSelectionChips({ bare = false }: ArtifactSelectionChipsP
                 aria-label={t("refreshSelectionAria", { title: sel.title })}
                 title={t("refreshSelectionHint")}
                 onClick={() => void refresh(index, sel)}
-                className="size-5 text-amber-600 opacity-80 transition-opacity hover:opacity-100 dark:text-amber-400"
+                className="size-5 text-warning-ink opacity-80 transition-opacity hover:opacity-100"
               >
                 <RefreshCwIcon className="size-3" />
               </Button>

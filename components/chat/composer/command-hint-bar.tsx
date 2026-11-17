@@ -98,7 +98,7 @@ export function CommandHintBar({ trigger, commandMap, value }: CommandHintBarPro
       data-testid="command-hint-bar"
       className={cn(
         "flex items-center gap-1.5 px-2 pt-1 text-[11px]",
-        missingParams ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
+        missingParams ? "text-warning-ink" : "text-muted-foreground"
       )}
     >
       {missingParams ? (

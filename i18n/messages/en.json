@@ -10991,7 +10991,7 @@
       }
     },
     "toolRow": {
-      "bashRowAria": "Bash command {command}",
+      "bashRowAria": "Bash command {command} — {status}",
       "copyCommand": "Copy command",
       "copyInput": "Copy input",
       "copyOutput": "Copy output",

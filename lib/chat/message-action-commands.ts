@@ -111,6 +111,105 @@ export function messageActionCommandsAt(
 }
 
 /**
+ * The bar commands that fold into the "…" menu when the message row is
+ * narrow, the first listed folding first. Copy never folds, and read-aloud
+ * does not either: it is a live toggle with its own progress, which a menu
+ * item that closes on select could not show.
+ */
+const BAR_FOLD_ORDER: readonly MessageActionCommandId[] = [
+  "saveAsIssue",
+  "saveAsMemory",
+  "rerunTemplate",
+  "resend",
+  "reply",
+  "edit",
+  "regenerate",
+]
+
+/** Width the action line keeps for the run summary, gaps and branch arrows. */
+export const ACTION_FOLD_RESERVE_REM = 10
+/** One bar button with its gap (`size-8` + `gap-1`). */
+export const ACTION_BUTTON_REM = 2.25
+
+/**
+ * The class that hides a bar command below the row width its slot needs,
+ * indexed by how many buttons the line holds once that command is on it:
+ * `ACTION_FOLD_RESERVE_REM + n × ACTION_BUTTON_REM`. Whole literals, because
+ * Tailwind only generates the container queries it finds verbatim; the
+ * container is the message row (`@container/msgrow`). A test pins each one to
+ * its number, so the CSS and {@link foldedBarCommandIds} cannot drift.
+ */
+export const BAR_FOLD_HIDE_CLASS: readonly string[] = [
+  "",
+  "@max-[12.25rem]/msgrow:hidden",
+  "@max-[14.5rem]/msgrow:hidden",
+  "@max-[16.75rem]/msgrow:hidden",
+  "@max-[19rem]/msgrow:hidden",
+  "@max-[21.25rem]/msgrow:hidden",
+  "@max-[23.5rem]/msgrow:hidden",
+  "@max-[25.75rem]/msgrow:hidden",
+  "@max-[28rem]/msgrow:hidden",
+  "@max-[30.25rem]/msgrow:hidden",
+  "@max-[32.5rem]/msgrow:hidden",
+  "@max-[34.75rem]/msgrow:hidden",
+  "@max-[37rem]/msgrow:hidden",
+  "@max-[39.25rem]/msgrow:hidden",
+]
+
+/** Row width, in rem, below which a command needing `buttons` slots folds. */
+export function barFoldThresholdRem(buttons: number): number {
+  return ACTION_FOLD_RESERVE_REM + buttons * ACTION_BUTTON_REM
+}
+
+/**
+ * How many buttons the line holds once each foldable bar command is on it.
+ * The ones that never fold, the reaction picker and the "…" itself are always
+ * there; the foldable ones are added last-to-fold first. A command missing
+ * from the map never folds.
+ */
+export function barFoldNeeds(
+  bar: readonly MessageActionCommand[]
+): Map<MessageActionCommandId, number> {
+  const foldable = BAR_FOLD_ORDER.filter((id) => bar.some((command) => command.id === id))
+  // + the reaction picker and the "…" trigger.
+  const fixed = bar.length - foldable.length + 2
+  const needs = new Map<MessageActionCommandId, number>()
+  foldable.forEach((id, rank) => {
+    needs.set(id, Math.min(fixed + foldable.length - rank, BAR_FOLD_HIDE_CLASS.length - 1))
+  })
+  return needs
+}
+
+/** The hide class for one bar command ("" for one that never folds). */
+export function barFoldHideClass(
+  needs: ReadonlyMap<MessageActionCommandId, number>,
+  id: MessageActionCommandId
+): string {
+  const n = needs.get(id)
+  return n === undefined ? "" : (BAR_FOLD_HIDE_CLASS[n] ?? "")
+}
+
+/**
+ * The bar commands the row's width has folded away, in bar order, for the
+ * "…" menu to list first. Uses the thresholds the hide classes encode. A row
+ * that has not been laid out (width 0) folds nothing.
+ */
+export function foldedBarCommandIds(
+  bar: readonly MessageActionCommand[],
+  rowWidthPx: number,
+  remPx = 16
+): MessageActionCommandId[] {
+  if (!(rowWidthPx > 0) || !(remPx > 0)) return []
+  const needs = barFoldNeeds(bar)
+  return bar
+    .filter((command) => {
+      const n = needs.get(command.id)
+      return n !== undefined && rowWidthPx < barFoldThresholdRem(n) * remPx
+    })
+    .map((command) => command.id)
+}
+
+/**
  * What a thumb reaches for first on the touch sheet, in this order. The sheet
  * draws the first {@link MESSAGE_SHEET_PRIMARY_MAX} of these that the message
  * offers as one strip above the list, so the common actions never sit below

@@ -23,7 +23,7 @@ import {
 
 const SEVERITY_CLASS: Record<InboundLabelSeverity, string> = {
   info: "text-muted-foreground",
-  warn: "border-amber-500/50 text-amber-700 dark:text-amber-400",
+  warn: "border-warning/50 text-warning-ink",
   high: "border-destructive/60 text-destructive",
 }
 

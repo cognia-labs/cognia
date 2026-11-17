@@ -101,8 +101,8 @@ const COMPACT_CHOICE_CLASS =
   "h-6 min-w-0 px-2 text-[11px] transition-all hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 data-[state=on]:bg-secondary data-[state=on]:text-secondary-foreground data-[state=on]:hover:bg-secondary/80 data-[state=on]:hover:text-secondary-foreground dark:data-[state=on]:hover:bg-secondary/80"
 
 const STATUS_ICON: Record<UsageStatus, { icon: typeof ClockIcon; className: string }> = {
-  allowed: { icon: CheckCircle2Icon, className: "text-emerald-500" },
-  allowed_warning: { icon: AlertTriangleIcon, className: "text-amber-500" },
+  allowed: { icon: CheckCircle2Icon, className: "text-success" },
+  allowed_warning: { icon: AlertTriangleIcon, className: "text-warning" },
   rate_limited: { icon: BanIcon, className: "text-destructive" },
   unknown: { icon: ClockIcon, className: "text-muted-foreground" },
 }

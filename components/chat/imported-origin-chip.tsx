@@ -136,7 +136,7 @@ export function ImportedOriginChip({
           <Badge
             variant="outline"
             className={cn(
-              "h-5 shrink-0 gap-1 border-amber-500/50 px-1.5 text-[10px] font-normal text-amber-600 dark:text-amber-400",
+              "h-5 shrink-0 gap-1 border-warning/50 px-1.5 text-[10px] font-normal text-warning-ink",
               className
             )}
           >

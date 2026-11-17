@@ -58,7 +58,7 @@ describe("RoutingIndicator", () => {
         routing={routing({ reasonCodes: ["auto-task-fit", "cost-cap-exceeded"] })}
       />
     )
-    expect(screen.getByTestId("routing-indicator").className).toContain("text-amber-600")
+    expect(screen.getByTestId("routing-indicator").className).toContain("text-warning-ink")
   })
 
   it("explains the decision in the tooltip: strategy, tier, score, judge, candidates, reasons", async () => {

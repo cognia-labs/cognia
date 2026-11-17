@@ -147,14 +147,14 @@ function LinkMarker({ url }: { url?: string }) {
 export type RouteChipState = "ready" | "unavailable"
 
 const ROUTE_PILL_CLASS: Record<RouteChipState, string> = {
-  ready: "bg-sky-500/[0.08] text-sky-700 ring-1 ring-sky-500/35 ring-inset dark:text-sky-300",
-  unavailable: "bg-amber-500/10 ring-1 ring-amber-500/40 ring-inset",
+  ready: "bg-info/[0.08] text-info-ink ring-1 ring-info/35 ring-inset",
+  unavailable: "bg-warning/10 ring-1 ring-warning/40 ring-inset",
 }
 
 const PARAM_PILL_CLASS: Record<ParamPillState, string> = {
   empty: "border border-dashed border-muted-foreground/50",
   filled: "bg-primary/10 ring-1 ring-primary/25 ring-inset",
-  unresolved: "bg-amber-500/10 ring-1 ring-amber-500/40 ring-inset",
+  unresolved: "bg-warning/10 ring-1 ring-warning/40 ring-inset",
 }
 
 /**

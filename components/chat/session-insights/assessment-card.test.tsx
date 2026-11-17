@@ -29,12 +29,12 @@ describe("AssessmentCard", () => {
     expect(bar).toHaveAttribute("data-slot", "progress")
     const fill = bar.querySelector('[data-slot="progress-indicator"]')
     expect(fill).toHaveStyle({ transform: "translateX(-58%)" })
-    expect(fill).toHaveClass("bg-red-500")
+    expect(fill).toHaveClass("bg-destructive")
     rerender(<AssessmentCard assessment={make({ score: 0.9, level: "healthy" })} />)
     expect(bar).toHaveAttribute("aria-valuenow", "90")
     expect(fill).toHaveStyle({ transform: "translateX(-10%)" })
-    expect(fill).toHaveClass("bg-emerald-500")
-    expect(fill).not.toHaveClass("bg-red-500", "bg-primary")
+    expect(fill).toHaveClass("bg-success")
+    expect(fill).not.toHaveClass("bg-destructive", "bg-primary")
   })
 
   it("renders the label, level, score bar, and reasoning", () => {
@@ -52,6 +52,6 @@ describe("AssessmentCard", () => {
 
   it("applies the level color class", () => {
     render(<AssessmentCard assessment={make({ level: "healthy" })} />)
-    expect(screen.getByTestId("assessment-level")).toHaveClass("text-emerald-500")
+    expect(screen.getByTestId("assessment-level")).toHaveClass("text-success-ink")
   })
 })

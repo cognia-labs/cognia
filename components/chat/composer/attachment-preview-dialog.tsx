@@ -384,7 +384,7 @@ export function AttachmentPreviewDialog(props: AttachmentPreviewDialogProps) {
                 </div>
               ) : null}
               {state?.extracted?.extractedContent?.status === "partial" ? (
-                <p className="mb-2 text-xs text-amber-600">{t("processing.partial")}</p>
+                <p className="mb-2 text-xs text-warning-ink">{t("processing.partial")}</p>
               ) : null}
               <ScrollArea className="min-h-0 flex-1 pr-2">
                 {isMotion && target ? (
@@ -483,10 +483,7 @@ export function AttachmentPreviewDialog(props: AttachmentPreviewDialogProps) {
                 ) : modelText ? (
                   <div className="space-y-2">
                     {redactionCount > 0 ? (
-                      <p
-                        className="text-xs text-amber-600 dark:text-amber-500"
-                        data-testid="redaction-note"
-                      >
+                      <p className="text-xs text-warning-ink" data-testid="redaction-note">
                         {t("preview.redactedNote")}
                       </p>
                     ) : null}

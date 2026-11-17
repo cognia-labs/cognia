@@ -80,10 +80,7 @@ export function ComposerPasteReminder({
   const orphans = findPastePlaceholders(text).filter((ph) => !(ph in pastedBlocks))
   if (orphans.length === 0) return null
   return (
-    <div
-      className="px-1 pb-1 text-[11px] text-amber-600 dark:text-amber-500"
-      data-testid="composer-paste-reminder"
-    >
+    <div className="px-1 pb-1 text-[11px] text-warning-ink" data-testid="composer-paste-reminder">
       {t("pasteReminder", { count: orphans.length })}
     </div>
   )

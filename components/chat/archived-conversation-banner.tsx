@@ -80,7 +80,7 @@ function ArchivedBanner({
             className="flex w-full items-center gap-1.5 text-xs"
             data-testid="archived-conversation-locked"
           >
-            <LockKeyholeIcon aria-hidden className="size-3.5 shrink-0 text-amber-600" />
+            <LockKeyholeIcon aria-hidden className="size-3.5 shrink-0 text-warning-ink" />
             {tWrite("actionLocked")}
           </span>
         ) : null}

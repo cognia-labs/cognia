@@ -584,7 +584,7 @@ export function LiveVoiceDialog({ disabled, onUserTranscript }: LiveVoiceDialogP
                   className={cn(
                     "relative flex size-24 items-center justify-center rounded-full bg-primary/10 text-primary",
                     phase === "speaking" && "animate-pulse bg-destructive/10 text-destructive",
-                    phase === "responding" && "bg-emerald-500/10 text-emerald-600"
+                    phase === "responding" && "bg-success/10 text-success-ink"
                   )}
                   data-testid="live-voice-persona-fallback"
                 >

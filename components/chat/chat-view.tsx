@@ -1051,7 +1051,7 @@ function ChatPaneContent({
         <ChatColumn className="mb-1">
           <div
             role="status"
-            className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300"
+            className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs text-warning-ink"
           >
             <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
             <span>{tConcurrent("overCapacity", { max: 3 })}</span>

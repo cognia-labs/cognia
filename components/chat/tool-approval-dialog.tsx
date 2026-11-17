@@ -47,7 +47,7 @@ export function ToolApprovalDialog({ approval, onRespond, onDismiss, onCancelRun
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ShieldAlertIcon className="size-4 text-amber-500" />
+            <ShieldAlertIcon className="size-4 text-warning" />
             {approval?.title ?? t("titleFallback", { tool: approval?.toolName ?? "" })}
           </DialogTitle>
         </DialogHeader>

@@ -279,7 +279,7 @@ export function MemoryRecalledChip({ part }: { part: SourcesPart }) {
           data-testid="memory-recalled-chip"
         >
           <Badge variant="secondary" className="gap-1 px-1.5 py-0 text-[10px] font-normal">
-            <QuoteIcon className="size-3 text-sky-500" />
+            <QuoteIcon className="size-3 text-info" />
             {t("memoryChips.recalledLabel", { count: items.length })}
           </Badge>
         </motion.button>

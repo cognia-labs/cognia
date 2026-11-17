@@ -386,7 +386,7 @@ function VideoOutput({
             <p className="text-xs text-muted-foreground">{t("nativeFallbackNote")}</p>
           </div>
         ) : (
-          <p className="text-xs text-amber-600 dark:text-amber-500" data-testid="native-failure">
+          <p className="text-xs text-warning-ink" data-testid="native-failure">
             {t(`nativeFailure.${nativeFailure ?? "failed"}` as never)}
           </p>
         )

@@ -140,7 +140,7 @@ export function PersonAgentChip({
                 "inline-flex h-7 min-w-0 items-center gap-1.5 rounded-lg border border-transparent bg-muted/35 px-2 text-[11px] text-muted-foreground outline-none transition-colors hover:border-border/70 hover:bg-muted/70 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50",
                 className,
                 dense && "w-7 justify-center px-0",
-                warn && "text-amber-600 dark:text-amber-400"
+                warn && "text-warning-ink"
               )}
               aria-label={label}
               data-testid="person-agent-trigger"
@@ -170,15 +170,13 @@ export function PersonAgentChip({
             {t("current.locked")}
           </p>
           {problem ? (
-            <p className="text-amber-600 dark:text-amber-400" data-testid="person-agent-problem">
+            <p className="text-warning-ink" data-testid="person-agent-problem">
               {t(`problem.${problem}`)}
             </p>
           ) : null}
           {allowanceLine ? (
             <p
-              className={cn(
-                usedUp ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
-              )}
+              className={cn(usedUp ? "text-warning-ink" : "text-muted-foreground")}
               data-testid="person-agent-allowance"
             >
               {allowanceLine}
@@ -190,11 +188,7 @@ export function PersonAgentChip({
             </p>
           ) : null}
           {startError ? (
-            <p
-              className="text-amber-600 dark:text-amber-400"
-              role="alert"
-              data-testid="person-agent-start-error"
-            >
+            <p className="text-warning-ink" role="alert" data-testid="person-agent-start-error">
               {t(`startError.${startError}`)}
             </p>
           ) : null}

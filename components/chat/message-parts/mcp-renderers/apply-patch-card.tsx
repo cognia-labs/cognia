@@ -29,7 +29,7 @@ const CHANGE_CLASS: Record<PatchFile["change"], string> = {
   added: "border-success/40 text-success",
   deleted: "border-destructive/40 text-destructive",
   renamed: "border-info/40 text-info",
-  modified: "border-amber-500/40 text-amber-600 dark:text-amber-400",
+  modified: "border-warning/40 text-warning-ink",
 }
 
 export function ApplyPatchCard({ part, sessionId }: { part: ToolUIPart; sessionId?: string }) {

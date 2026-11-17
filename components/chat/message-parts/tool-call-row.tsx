@@ -182,7 +182,7 @@ export const ToolCallRow = memo(function ToolCallRow({
           <span
             className={
               backgrounded || part.state === "approval-requested" || part.state === "output-denied"
-                ? "shrink-0 text-[11px] text-amber-600"
+                ? "shrink-0 text-[11px] text-warning-ink"
                 : "sr-only"
             }
           >
@@ -200,8 +200,8 @@ export const ToolCallRow = memo(function ToolCallRow({
 
 const TONE_CLASS: Record<ToolResultDescriptor["tone"], string> = {
   neutral: "text-muted-foreground",
-  success: "text-green-600 dark:text-green-500",
-  error: "text-red-600 dark:text-red-500",
+  success: "text-success-ink",
+  error: "text-destructive",
 }
 
 /** Translated result summary chip — "12 matches" / "+5 −2" / first error line. */

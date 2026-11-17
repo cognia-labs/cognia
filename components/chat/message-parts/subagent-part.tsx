@@ -189,7 +189,7 @@ const SubagentLogBody = memo(function SubagentLogBody({
             <MarkdownRenderer content={finalResponse} />
           </div>
           {cutOff ? (
-            <p className="text-[10px] italic text-amber-600" data-testid="subagent-cutoff-note">
+            <p className="text-[10px] italic text-warning-ink" data-testid="subagent-cutoff-note">
               {t("cutOff")}
             </p>
           ) : null}
@@ -420,7 +420,7 @@ export const SubagentPart = memo(function SubagentPart({
             {isRunning && retryCount > 0 ? (
               <Badge
                 variant="outline"
-                className="text-[10px] text-amber-600"
+                className="text-[10px] text-warning-ink"
                 data-testid="subagent-retry-badge"
               >
                 {t("retrying", { n: retryCount })}

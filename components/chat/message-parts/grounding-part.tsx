@@ -16,7 +16,7 @@ export function GroundingPart({ part }: { part: GroundingPartType }) {
   if (part.action === "allow" || unsupported.length === 0) {
     return (
       <div
-        className="not-prose my-2 flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400"
+        className="not-prose my-2 flex items-center gap-1.5 text-xs text-success-ink"
         data-testid="grounding-supported"
         role="status"
       >
@@ -37,16 +37,11 @@ export function GroundingPart({ part }: { part: GroundingPartType }) {
       ariaLabel={t("unsupported", { count: unsupported.length })}
       testId="grounding-unsupported"
       lead={
-        <span className="shrink-0 text-xs text-amber-700 dark:text-amber-400">
+        <span className="shrink-0 text-xs text-warning-ink">
           {t("unsupported", { count: unsupported.length })}
         </span>
       }
-      icon={
-        <AlertTriangleIcon
-          className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
-          aria-hidden
-        />
-      }
+      icon={<AlertTriangleIcon className="size-3.5 shrink-0 text-warning-ink" aria-hidden />}
       target={<span className="flex-1" />}
     >
       <ul className="mb-1 list-disc space-y-1 border-l pl-5 pt-1 text-xs text-muted-foreground">

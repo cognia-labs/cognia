@@ -120,7 +120,7 @@ export function TurnProcessFold({
         ) : null}
         {fold.failedCount > 0 && !open ? (
           <span
-            className="shrink-0 text-[11px] font-medium text-red-600 tabular-nums dark:text-red-500"
+            className="shrink-0 text-[11px] font-medium text-destructive tabular-nums"
             data-testid="turn-process-fold-failed"
           >
             {t("failed", { count: fold.failedCount })}

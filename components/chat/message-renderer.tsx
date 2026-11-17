@@ -140,6 +140,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
@@ -205,9 +206,13 @@ import {
   shareMessageContent,
 } from "@/lib/chat/message-share"
 import {
+  barFoldHideClass,
+  barFoldNeeds,
+  foldedBarCommandIds,
   messageActionCommandsAt,
   resolveMessageActionCommands,
   type MessageActionCommand,
+  type MessageActionCommandId,
 } from "@/lib/chat/message-action-commands"
 import { loggers } from "@cognia/logging"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
@@ -713,6 +718,27 @@ function MessageRendererInner({
     () => messageActionCommandsAt(messageActionCommands, "menu"),
     [messageActionCommands]
   )
+  // A narrow row folds the least used bar commands into the "…" menu: CSS
+  // container queries hide them on the row, and the menu reads the row's
+  // width when it opens to list the same ones first — no observer per row.
+  const barFold = useMemo(() => barFoldNeeds(barCommands), [barCommands])
+  const moreTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const [foldedBarIds, setFoldedBarIds] = useState<readonly MessageActionCommandId[]>([])
+  const onMoreOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) return
+      const row = moreTriggerRef.current?.closest<HTMLElement>("[data-message-row]")
+      const remPx = Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
+      setFoldedBarIds(
+        foldedBarCommandIds(barCommands, row?.getBoundingClientRect().width ?? 0, remPx || 16)
+      )
+    },
+    [barCommands]
+  )
+  const foldedBarCommands = useMemo(
+    () => barCommands.filter((command) => foldedBarIds.includes(command.id)),
+    [barCommands, foldedBarIds]
+  )
   const pluginItems = useMessagePluginItems({
     messageId: message.id,
     sessionId:
@@ -1093,6 +1119,59 @@ function MessageRendererInner({
   const renderMenuCommand = (command: MessageActionCommand): ReactNode => {
     const { disabled } = command
     switch (command.id) {
+      // A bar command lands here only when the row's width folded it away.
+      case "edit":
+        return onEditResend ? (
+          <DropdownMenuItem disabled={disabled} onSelect={startEdit}>
+            <PencilIcon className="size-4" />
+            {t("editLabel")}
+          </DropdownMenuItem>
+        ) : null
+      case "resend":
+        return onEditResend ? (
+          <DropdownMenuItem
+            disabled={disabled}
+            onSelect={() => void onEditResend(message.id, messageTypedText(message))}
+          >
+            <SendHorizontalIcon className="size-4" />
+            {t("resendLabel")}
+          </DropdownMenuItem>
+        ) : null
+      case "reply":
+        return (
+          <DropdownMenuItem onSelect={commands.reply}>
+            <ReplyIcon className="size-4" />
+            {t("replyLabel")}
+          </DropdownMenuItem>
+        )
+      case "rerunTemplate":
+        return (
+          <DropdownMenuItem disabled={disabled} onSelect={commands.rerunTemplate}>
+            <Repeat2Icon className="size-4" />
+            {t("rerunTemplateLabel")}
+          </DropdownMenuItem>
+        )
+      case "saveAsMemory":
+        return (
+          <DropdownMenuItem disabled={disabled} onSelect={() => void commands.saveAsMemory()}>
+            <BrainIcon className="size-4" />
+            {t("saveAsMemoryLabel")}
+          </DropdownMenuItem>
+        )
+      case "saveAsIssue":
+        return (
+          <DropdownMenuItem disabled={disabled} onSelect={() => void commands.saveAsIssue()}>
+            <CircleDotIcon className="size-4" />
+            {t("saveAsIssueLabel")}
+          </DropdownMenuItem>
+        )
+      case "regenerate":
+        return onRegenerate ? (
+          <DropdownMenuItem disabled={disabled} onSelect={() => void onRegenerate()}>
+            <RefreshCcwIcon className="size-4" />
+            {t("regenerateLabel")}
+          </DropdownMenuItem>
+        ) : null
       case "share":
         return (
           <DropdownMenuItem onSelect={() => void handleShare()}>
@@ -1361,7 +1440,10 @@ function MessageRendererInner({
     <PerfBoundary id="chat:message">
       <Message
         from={message.role}
+        // The container the action bar folds against (`BAR_FOLD_HIDE_CLASS`).
+        data-message-row=""
         className={cn(
+          "@container/msgrow",
           // ADR-0127: the vertical rhythm between turns follows the chat
           // density surface (`--density-gap`: 0.5 / 0.75 / 1rem).
           "py-[calc(var(--density-gap,0.75rem)*0.5)] sm:py-[calc(var(--density-gap,0.75rem)*0.667)]",
@@ -1619,9 +1701,17 @@ function MessageRendererInner({
                     message.role === "user" ? "w-fit" : ""
                   )}
                 >
-                  {barCommands.map((command) => (
-                    <Fragment key={command.id}>{renderInlineCommand(command)}</Fragment>
-                  ))}
+                  {barCommands.map((command) => {
+                    const hide = barFoldHideClass(barFold, command.id)
+                    return hide ? (
+                      // `contents`: no box of its own, so the bar's gap holds.
+                      <span key={command.id} className={cn("contents", hide)} data-bar-fold="">
+                        {renderInlineCommand(command)}
+                      </span>
+                    ) : (
+                      <Fragment key={command.id}>{renderInlineCommand(command)}</Fragment>
+                    )
+                  })}
 
                   {/* IM cross-links: forward this text to an IM conversation, or
                   lift an inbound IM message into a fresh main chat. Self-hide
@@ -1638,10 +1728,11 @@ function MessageRendererInner({
                   drawer sitting mid-row reads as just another action while
                   pushing the real ones past it. Plugin items sit in it too, after
                   a separator, instead of in a second "…" beside it. */}
-                  {menuCommands.length > 0 || pluginItems.length > 0 ? (
-                    <DropdownMenu>
+                  {menuCommands.length > 0 || pluginItems.length > 0 || barFold.size > 0 ? (
+                    <DropdownMenu onOpenChange={onMoreOpenChange}>
                       <DropdownMenuTrigger asChild>
                         <Button
+                          ref={moreTriggerRef}
                           type="button"
                           variant="ghost"
                           size="icon"
@@ -1653,6 +1744,12 @@ function MessageRendererInner({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align={message.role === "user" ? "end" : "start"}>
+                        {foldedBarCommands.map((command) => (
+                          <Fragment key={command.id}>{renderMenuCommand(command)}</Fragment>
+                        ))}
+                        {foldedBarCommands.length > 0 && menuCommands.length > 0 ? (
+                          <DropdownMenuSeparator />
+                        ) : null}
                         {menuCommands.map((command) => (
                           <Fragment key={command.id}>{renderMenuCommand(command)}</Fragment>
                         ))}
@@ -1686,7 +1783,9 @@ function MessageRendererInner({
           {!editing && !isToolOnlyTurn && display.actions === "all" && (
             <div
               className={cn(
-                "flex min-w-0 items-center gap-2",
+                // `all` shows every command by choice, so a narrow row wraps
+                // them instead of folding any away.
+                "flex min-w-0 flex-wrap items-center gap-2",
                 turnLive && message.role === "assistant" && "min-h-8",
                 message.role === "user" && "justify-end"
               )}
@@ -1698,7 +1797,7 @@ function MessageRendererInner({
               <MessageActions
                 data-message-actions=""
                 className={cn(
-                  "text-xs text-muted-foreground",
+                  "flex-wrap text-xs text-muted-foreground",
                   message.role === "user" ? "w-fit" : ""
                 )}
               >

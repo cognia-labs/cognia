@@ -21,10 +21,10 @@ export function WorkspaceRestrictedBanner({ untrustedRoots, onTrust }: Props) {
   return (
     <div
       role="status"
-      className="flex flex-col gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm"
+      className="flex flex-col gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-sm"
     >
       <div className="flex items-center gap-2">
-        <ShieldAlertIcon className="size-4 shrink-0 text-amber-500" />
+        <ShieldAlertIcon className="size-4 shrink-0 text-warning" />
         <span className="font-medium">{t("title")}</span>
         <Button
           size="sm"

@@ -27,7 +27,7 @@ describe("CharCounter", () => {
     const el = screen.getByText("11")
     // No per-keystroke announcements while well under the limit.
     expect(el).toHaveAttribute("aria-live", "off")
-    expect(el.className).not.toContain("text-amber-500")
+    expect(el.className).not.toContain("text-warning-ink")
     expect(el.className).not.toContain("text-destructive")
   })
 
@@ -36,7 +36,7 @@ describe("CharCounter", () => {
     render(<CharCounter />)
     const el = screen.getByText("8,000")
     expect(el).toHaveAttribute("aria-live", "polite")
-    expect(el.className).toContain("text-amber-500")
+    expect(el.className).toContain("text-warning-ink")
   })
 
   it("turns destructive past 10 000 characters", () => {

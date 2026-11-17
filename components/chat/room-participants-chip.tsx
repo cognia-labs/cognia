@@ -176,7 +176,7 @@ export function RoomParticipantsChip({
               <span className="truncate">{row.label}</span>
               {row.activity ? (
                 <span
-                  className="truncate text-[11px] text-amber-600 dark:text-amber-400"
+                  className="truncate text-[11px] text-warning-ink"
                   aria-label={t("working", { activity: row.activity })}
                   data-testid={`room-participant-activity-${row.id}`}
                 >

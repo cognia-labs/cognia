@@ -147,6 +147,9 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+  --color-success-ink: var(--success-ink);
+  --color-warning-ink: var(--warning-ink);
+  --color-info-ink: var(--info-ink);
   /* Workflow category & status semantic tokens. Each is referenced by the
      `--wf-*` variables in `:root` / `.dark` so dark-mode tracking is automatic
      once a component switches from `bg-emerald-500/15` to `bg-wf-trigger/15`. */
@@ -277,6 +280,14 @@
      by ThinkingIndicator's "agent" variant and other info-level chrome. */
   --info: oklch(0.6 0.13 220);
   --info-foreground: oklch(0.205 0 0);
+  /* Status as TEXT. The fills above are tuned to read as a swatch, and the
+     light warning one (L 0.75) is about 2:1 as text on --background; pulled
+     40% toward --foreground they hold ≥4.5:1 in both modes, and a theme that
+     moves a status hue moves its ink with it. Use the fill for dots, washes
+     and rings, the ink for words. */
+  --success-ink: color-mix(in oklab, var(--success) 60%, var(--foreground));
+  --warning-ink: color-mix(in oklab, var(--warning) 60%, var(--foreground));
+  --info-ink: color-mix(in oklab, var(--info) 60%, var(--foreground));
   /* Text highlight (`<mark>`) in rendered markdown; mixed at 40% in app/typeset.css. */
   --mark: oklch(0.86 0.17 95);
   /* ADR-0218 — link colour in chat prose. Tuned for ≥4.5:1 on --background. */

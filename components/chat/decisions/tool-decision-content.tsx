@@ -276,7 +276,7 @@ export function ToolDecisionContent({
         // — there is nothing left to answer, so Approve/Deny would be a lie.
         // "superseded" names the specific cause (a new instruction made the
         // ask stale) rather than the generic interruption wording.
-        <p data-testid="approval-interrupted-notice" className="text-xs text-amber-600">
+        <p data-testid="approval-interrupted-notice" className="text-xs text-warning-ink">
           {approval.interruptReason === "superseded"
             ? t("supersededNotice")
             : t("interruptedNotice")}

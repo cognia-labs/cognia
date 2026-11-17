@@ -196,7 +196,7 @@ describe("ComposerChipOverlay", () => {
     )
     const mentions = Array.from(container.querySelectorAll('[data-chip="mention"]'))
     expect(mentions.map((m) => m.getAttribute("data-route-state"))).toEqual(["unavailable", null])
-    expect(mentions[0].className).toMatch(/amber/)
+    expect(mentions[0].className).toMatch(/\bbg-warning\/10\b/)
     expect(mentions[1].className).toMatch(/bg-muted/)
     expect(container.textContent).toBe(value)
 

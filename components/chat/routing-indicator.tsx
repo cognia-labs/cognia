@@ -46,7 +46,7 @@ export function RoutingIndicator({ routing }: RoutingIndicatorProps) {
           data-testid="routing-indicator"
           className={cn(
             "h-5 cursor-help px-1.5 text-[10px] font-normal",
-            costCapExceeded && "text-amber-600 dark:text-amber-400"
+            costCapExceeded && "text-warning-ink"
           )}
         >
           {label}
@@ -64,9 +64,7 @@ export function RoutingIndicator({ routing }: RoutingIndicatorProps) {
           {routing.reasonCodes.map((code) => (
             <p key={code}>{localizeReasonCode(code)}</p>
           ))}
-          {costCapExceeded && (
-            <p className="text-amber-600 dark:text-amber-400">{t("costCapExceeded")}</p>
-          )}
+          {costCapExceeded && <p className="text-warning-ink">{t("costCapExceeded")}</p>}
         </div>
       </TooltipContent>
     </Tooltip>

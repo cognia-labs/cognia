@@ -148,7 +148,7 @@ export function SourcesPart({ part, className, defaultOpen }: SourcesPartProps) 
     <div
       data-testid="sources-part-degraded"
       role="status"
-      className="not-prose my-2 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400"
+      className="not-prose my-2 flex items-start gap-1.5 text-xs text-warning-ink"
     >
       <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
       <span>{t("degradedNotice")}</span>

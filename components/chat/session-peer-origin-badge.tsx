@@ -11,10 +11,7 @@ export function SessionPeerOriginBadge({ metadata }: { metadata: unknown }) {
   const peer = sessionPeerMetadataOf(metadata)
   if (!peer) return null
   return (
-    <Badge
-      variant="outline"
-      className="mt-1 gap-1 border-amber-500/40 text-amber-700 dark:text-amber-300"
-    >
+    <Badge variant="outline" className="mt-1 gap-1 border-warning/40 text-warning-ink">
       <ShieldAlertIcon className="size-3" />
       {peer.origin === "agent"
         ? t("agentOrigin", { name: peer.senderTitle })

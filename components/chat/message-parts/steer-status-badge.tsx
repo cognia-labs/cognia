@@ -114,7 +114,7 @@ export function SteerStatusBadge({
     state === "failed"
       ? "text-destructive"
       : state === "accepted"
-        ? "text-emerald-600 dark:text-emerald-500"
+        ? "text-success-ink"
         : "text-muted-foreground"
   const Icon = state === "failed" ? TriangleAlertIcon : state === "accepted" ? CheckIcon : ClockIcon
 

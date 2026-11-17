@@ -650,7 +650,7 @@ function RunPanelImpl({
       <Loader2
         className={cn(
           "size-3 shrink-0 animate-spin",
-          awaitingApproval ? "text-amber-500" : "text-muted-foreground"
+          awaitingApproval ? "text-warning" : "text-muted-foreground"
         )}
         aria-hidden
       />
@@ -832,7 +832,7 @@ function RunPanelImpl({
               type="button"
               size="sm"
               variant="ghost"
-              className="ml-auto h-5 gap-1 px-2 text-[11px] text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-500 dark:hover:text-amber-400"
+              className="ml-auto h-5 gap-1 px-2 text-[11px] text-warning-ink hover:bg-warning/10"
               aria-label={t("ariaSteerNow")}
               title={t("steerNowHint")}
               onClick={requestSteerNow}
