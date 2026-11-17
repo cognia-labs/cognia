@@ -86,7 +86,6 @@ import { useCompactLayout } from "@/hooks/ui/use-compact-layout"
 import { useSoftKeyboardDevice } from "@/hooks/ui/use-keyboard-insets"
 import { useComposerKeyboardAvoidance } from "./composer/use-composer-keyboard-avoidance"
 import { useCoarsePointer } from "@/hooks/ui/use-pointer"
-import { useStableCallback } from "@/hooks/ui/use-stable-callback"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -129,12 +128,10 @@ import { type ChatTemplateRun } from "@/lib/chat/template/run"
 import { TemplateParamPopover } from "./composer/template-param-popover"
 import { SaveAsTemplateDialog } from "./composer/save-as-template-dialog"
 import { TemplateLaunchDiffBar } from "./template-launch-diff-bar"
-import { pillDeleteRange } from "./composer-pill-delete"
 import { type CommandError } from "@/lib/slash-commands/run-segments"
 import { type ComposerMemoryTarget } from "@/lib/chat/memory-target"
 import { useComposerCommandStore } from "@/stores/chat/composer-command-store"
 import { useComposerGhostText } from "@/hooks/chat/use-composer-ghost-text"
-import { useFollowUpSuggestions } from "@/hooks/chat/use-follow-up-suggestions"
 import { FollowUpSuggestions } from "./follow-up-suggestions"
 import type { InlineCommandInfo } from "@/lib/chat/completion/inline/types"
 import { useLatestTextInput } from "./composer/hooks/use-latest-text-input"
@@ -296,6 +293,8 @@ import {
   runComposerTurn,
 } from "./composer/composer-turn-handlers"
 import { useComposerBestOfN } from "./composer/hooks/use-composer-best-of-n"
+import { useComposerSuggestions } from "./composer/hooks/use-composer-suggestions"
+import { useComposerPillEditing } from "./composer/hooks/use-composer-pill-editing"
 
 /**
  * Imperative handle exposed by `<Composer>`. The desktop shell uses it to
@@ -968,162 +967,37 @@ function ComposerInner(props: ComposerInnerProps) {
       tCommands,
     ]
   )
-
-  // Accept the inline ghost-text suggestion: write the completed value back
-  // into the textarea and park the caret at the end. Shared by the keyboard
-  // (Tab) path below and the suggestion card's accept button, since touch
-  // devices have no Tab key. Returns false when there was nothing to
-  // accept so the Tab keystroke can fall through to its default behavior.
-  const acceptGhost = useCallback((): boolean => {
-    const next = ghost.accept()
-    if (next === null) return false
-    textInput.setInput(next)
-    setCaret(next.length)
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current
-      if (ta) {
-        ta.setSelectionRange(next.length, next.length)
-        ta.focus()
-      }
-    })
-    return true
-  }, [ghost, textInput])
-
-  // Predictions belong to this input's session and never replace a user's work.
-  // Wait for draft hydration so a late restore cannot overwrite an accepted prediction.
-  const predictionEligible =
-    !!props.session &&
-    props.session.kind !== "subagent" &&
-    !props.session.platformBinding &&
-    !props.disabled &&
-    !outboundBlocked &&
-    props.status !== "streaming" &&
-    !turnInFlight &&
-    !followUpInFlight &&
-    !isComposing &&
-    textValue === "" &&
-    attachments.files.length === 0 &&
-    restoredAttachments.length === 0 &&
-    (!persistDrafts || draftHydratedFor === props.session.id)
-  const prediction = useFollowUpSuggestions(props.session, { enabled: predictionEligible })
-  const acceptPrediction = useCallback(
-    (text: string, sendImmediately = false): boolean => {
-      if (
-        !predictionEligible ||
-        turnInFlightRef.current ||
-        followUpInFlightRef.current ||
-        textInput.value !== "" ||
-        attachments.files.length > 0 ||
-        attachmentPrepareCountRef.current > 0 ||
-        isComposing
-      )
-        return false
-      acceptedPredictionRef.current = { sessionId, text }
-      textInput.setInput(text)
-      setCaret(text.length)
-      if (sendImmediately) {
-        // Reuse this bound composer's validation, model routing and send protection.
-        void submit()
-      } else {
-        const input = textareaRef.current
-        requestAnimationFrame(() => {
-          // A session change remounts/resets the input; never focus a new owner.
-          if (input && input === textareaRef.current && input.value === text) {
-            input.setSelectionRange(text.length, text.length)
-            input.focus()
-          }
-        })
-      }
-      prediction.dismiss()
-      return true
-    },
-    [
-      predictionEligible,
-      sessionId,
-      textInput,
-      attachments.files.length,
-      attachmentPrepareCountRef,
-      isComposing,
-      prediction,
-      submit,
-    ]
-  )
-
-  // --- Textarea key handling --------------------------------------------
-  /**
-   * Move the caret to the parameter after (or before) the caret and open it.
-   * Returns false when there is nowhere to go, so the caller can let the key
-   * do its normal job.
-   */
-  const stepToParam = useCallback(
-    (direction: 1 | -1): boolean => {
-      const ta = textareaRef.current
-      if (!ta || paramTokens.length === 0) return false
-      const caretAt = ta.selectionStart ?? 0
-      const ordered = direction === 1 ? paramTokens : [...paramTokens].reverse()
-      const next =
-        ordered.find((seg) => (direction === 1 ? seg.start > caretAt : seg.end < caretAt)) ??
-        ordered[0]
-      if (!next) return false
-      ta.setSelectionRange(next.start, next.start)
-      setCaret(next.start)
-      setActiveParamId(next.paramId)
-      return true
-    },
-    [paramTokens, setActiveParamId]
-  )
-
-  /**
-   * Remove the whole `/command`, `@mention`, `{{parameter}}` or folded-link pill
-   * the collapsed caret is hugging, and report whether it did. Only while no
-   * completion popover is open, so mid-typing edits stay character by character.
-   */
-  const deletePillAtCaret = useCallback(
-    (ta: HTMLTextAreaElement, direction: "backward" | "forward"): boolean => {
-      if (completionTrigger || ta.selectionStart !== ta.selectionEnd) return false
-      const range = pillDeleteRange(textInput.value, ta.selectionStart, overlaySegments, direction)
-      if (!range) return false
-      const cur = textInput.value
-      textInput.setInput(cur.slice(0, range.start) + cur.slice(range.end))
-      setCaret(range.start)
-      requestAnimationFrame(() => {
-        const ta2 = textareaRef.current
-        if (ta2) {
-          ta2.setSelectionRange(range.start, range.start)
-          ta2.focus()
-        }
-      })
-      return true
-    },
-    [completionTrigger, textInput, overlaySegments]
-  )
-
-  // The same atomic delete for keyboards that never send a usable keydown.
-  // Android's soft keyboards (Gboard, the EMUI keyboard, every IME) report
-  // Backspace as `key: "Unidentified"`, so on a phone the keydown branch never
-  // fired and one Backspace turned the `/goal` pill into the plain text
-  // `/goa`, which then went out as an ordinary message. What they do send is
-  // a cancelable `beforeinput` naming the edit, so the pill is caught there.
-  // Listened for on the document because the textarea mounts and remounts
-  // with the composer's mode, and a capture listener outlives all of that.
-  // A delete that is part of an IME composition is not cancelable and is left
-  // to the keyboard.
-  const deletePillFromInputEvent = useStableCallback((event: InputEvent) => {
-    const ta = textareaRef.current
-    if (!ta || event.target !== ta || !event.cancelable || event.isComposing) return
-    const direction =
-      event.inputType === "deleteContentBackward"
-        ? "backward"
-        : event.inputType === "deleteContentForward"
-          ? "forward"
-          : null
-    if (!direction) return
-    if (deletePillAtCaret(ta, direction)) event.preventDefault()
+  const { acceptGhost, predictionEligible, prediction, acceptPrediction } = useComposerSuggestions({
+    outboundBlocked,
+    persistDrafts,
+    textValue,
+    textInput,
+    attachments,
+    textareaRef,
+    turnInFlight,
+    followUpInFlight,
+    turnInFlightRef,
+    followUpInFlightRef,
+    setCaret,
+    isComposing,
+    draftHydratedFor,
+    restoredAttachments,
+    attachmentPrepareCountRef,
+    sessionId,
+    ghost,
+    acceptedPredictionRef,
+    submit,
+    props,
   })
-  useEffect(() => {
-    document.addEventListener("beforeinput", deletePillFromInputEvent, true)
-    return () => document.removeEventListener("beforeinput", deletePillFromInputEvent, true)
-  }, [deletePillFromInputEvent])
+  const { stepToParam, deletePillAtCaret } = useComposerPillEditing({
+    textInput,
+    textareaRef,
+    setCaret,
+    overlaySegments,
+    setActiveParamId,
+    paramTokens,
+    completionTrigger,
+  })
 
   // Local handles so the key handler depends on the specific props it reads,
   // not the whole `props` object (react-hooks/exhaustive-deps).
