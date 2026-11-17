@@ -13,6 +13,7 @@ import { bookUsageRow, startUsageWriteOutbox } from "@/lib/usage/usage-write-out
 import { priceMemberUsageRow } from "@/lib/headless/person-agent/model-pricing"
 import { bindPersonalMessageChanges } from "@/lib/execution/personal-marks"
 import { toolCallExecutionRunId } from "@/lib/execution/acting-authority"
+import { applyArmedBranchReply, disarmBranchReply } from "@/lib/chat/branch-arming"
 
 import { settleChatTurnForSession } from "./chat-adapter"
 import { settleWorkSubmission } from "./service"
@@ -29,7 +30,7 @@ interface WorkSubmissionTerminalEventDeps {
   applyEvent?: (
     messages: UIMessage[],
     event: SDKMessage
-  ) => { messages: UIMessage[]; result?: SDKResultMessage }
+  ) => { messages: UIMessage[]; turnComplete?: boolean; result?: SDKResultMessage }
   /**
    * Book a turn's usage row; the chat view's own `recordResultUsage` call.
    * Defaults to booking through the usage outbox (ADR-0253 §10), which keeps
@@ -195,8 +196,20 @@ export function startWorkSubmissionTerminalEvents(
           activeSessions.add(event.sessionId)
         }
         const current = mirrors.get(event.sessionId) ?? (await loadMirror(event.sessionId))
-        const applied = project(current, event.event)
         const frame = event as ClaudeEvent & { turnId?: string; attemptId?: string }
+        const projected = project(current, event.event)
+        // A turn the HostState dispatcher sent as a branch (a paired device's
+        // regenerate or edit) is stamped as the chat view stamps its own.
+        const applied = {
+          ...projected,
+          messages: applyArmedBranchReply(
+            event.sessionId,
+            frame.turnId,
+            current,
+            projected.messages,
+            projected.turnComplete === true
+          ).messages,
+        }
         bindPersonalMessageChanges(
           current,
           applied.messages,
@@ -219,6 +232,8 @@ export function startWorkSubmissionTerminalEvents(
           personChatCapability().chat === "tool-less"
             ? await import("@/lib/ai/agent/execution/person-chat-turn")
             : null
+        // The turn is over; its branch stamp, spent or not, goes with it.
+        disarmBranchReply(event.sessionId)
         const terminal = personChat ? await personChat.personChatTerminalEvent(event) : event
         if (!terminal) return
         try {

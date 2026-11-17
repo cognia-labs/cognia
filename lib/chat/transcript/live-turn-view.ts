@@ -150,3 +150,36 @@ export function settledReplyCaughtUp(
   if (live.afterRevision !== undefined) return timelineRevision > live.afterRevision
   return revisionAtSettle !== null && timelineRevision !== revisionAtSettle
 }
+
+function textOf(message: UIMessage): string {
+  return message.parts
+    .flatMap((part) =>
+      part.type === "text" && typeof (part as { text?: unknown }).text === "string"
+        ? [(part as { text: string }).text]
+        : []
+    )
+    .join("\n")
+}
+
+/**
+ * The question a regenerate sends again: the last user message the view
+ * draws, by id and the words it shows. The live tail is newer than the
+ * timeline. `null` when the conversation has no question yet.
+ */
+export function lastUserMessageOf(view: LiveTurnView): { id: string; text: string } | null {
+  for (let index = view.liveMessages.length - 1; index >= 0; index -= 1) {
+    const message = view.liveMessages[index]
+    if (message.role === "user") return { id: message.id, text: textOf(message) }
+  }
+  for (let index = view.items.length - 1; index >= 0; index -= 1) {
+    const item = view.items[index]
+    if (item.kind === "completed-turn") {
+      const question = item.userMessages.at(-1)
+      if (question) return { id: question.id, text: question.text ?? "" }
+    } else if (item.kind === "active-turn") {
+      const question = item.messages.findLast((message) => message.role === "user")
+      if (question) return { id: question.id, text: textOf(question as unknown as UIMessage) }
+    }
+  }
+  return null
+}

@@ -551,6 +551,53 @@ describe("useRemoteSessionStream", () => {
     expect(approveToolMock).not.toHaveBeenCalled()
   })
 
+  it("sends a regenerate and an edit as branches of the Host's conversation", async () => {
+    enqueueHostStateIntentMock.mockResolvedValue({ id: "queued", status: "pending" })
+    const { result } = renderHook(() => useRemoteSessionStream("sess-1"))
+    await waitFor(() => expect(streamHandler).toBeTruthy())
+
+    await act(async () => {
+      await result.current.regenerate({ id: "u2", text: "second" })
+      await result.current.editResend("u1", "reworded")
+    })
+
+    expect(enqueueHostStateIntentMock).toHaveBeenCalledWith({
+      sessionId: "sess-1",
+      action: {
+        kind: "message.enqueue",
+        messageId: "u2",
+        text: "second",
+        attachments: [],
+        branch: { kind: "regenerate" },
+      },
+    })
+    expect(enqueueHostStateIntentMock).toHaveBeenCalledWith({
+      sessionId: "sess-1",
+      action: {
+        kind: "message.enqueue",
+        messageId: expect.any(String),
+        text: "reworded",
+        attachments: [],
+        branch: { kind: "edit", editsMessageId: "u1" },
+      },
+    })
+    // The status follows the Host's turn, not the press: a branch it refuses
+    // starts nothing.
+    expect(result.current.status).toBe("idle")
+    expect(sendPromptMock).not.toHaveBeenCalled()
+  })
+
+  it("says so, and sends nothing directly, when no HostState Host can take a branch", async () => {
+    enqueueHostStateIntentMock.mockResolvedValue(null)
+    const { result } = renderHook(() => useRemoteSessionStream("sess-1"))
+    await waitFor(() => expect(streamHandler).toBeTruthy())
+    await act(async () => {
+      await result.current.regenerate({ id: "u2", text: "second" })
+    })
+    expect(toastWarning).toHaveBeenCalled()
+    expect(sendPromptMock).not.toHaveBeenCalled()
+  })
+
   it("hands the sends Stop overtook back to the composer and drops their bubbles", async () => {
     enqueueHostStateIntentMock.mockResolvedValue({ id: "queued", status: "pending" })
     const withdrawn = [

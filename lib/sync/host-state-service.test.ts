@@ -1746,6 +1746,95 @@ describe("HostStateService", () => {
     expect(dispatchRuntime).not.toHaveBeenCalled()
   })
 
+  it("refuses a branch of a member's sandboxed agent", async () => {
+    const { initializePersonChat } = await import("@/lib/headless/person-chat")
+    const dispatchRuntime = jest.fn(async () => ({ correlationId: "ok" }))
+    const service = createHostStateService({
+      ...scope,
+      hostId,
+      ownerId: "brain-a",
+      now: () => 100,
+      dispatchRuntime,
+      publish: jest.fn(async () => undefined),
+    })
+    await service.start({ now: 0, heartbeat: false })
+    await getDb().messages.put({
+      id: "u1",
+      sessionId: "session-1",
+      role: "user",
+      parts: [{ type: "text", text: "q" }],
+      createdAt: 1,
+    })
+    initializePersonChat("person-brain", { COGNIA_PERSON_EXECUTION: "sandboxed" })
+    try {
+      const response = await service.submit(
+        {
+          ...scope,
+          actions: [
+            action({
+              kind: "message.enqueue",
+              messageId: "u1",
+              text: "q",
+              attachments: [],
+              branch: { kind: "regenerate" },
+            }),
+          ],
+        },
+        owner
+      )
+      expect(response.results[0]).toMatchObject({
+        outcome: "rejected",
+        rejection: { code: "host_state_branch_unavailable" },
+      })
+      expect(dispatchRuntime).not.toHaveBeenCalled()
+    } finally {
+      initializePersonChat("brain", {})
+    }
+  })
+
+  it("refuses a branch while a turn runs", async () => {
+    const dispatchRuntime = jest.fn(async () => ({ correlationId: "ok" }))
+    const service = createHostStateService({
+      ...scope,
+      hostId,
+      ownerId: "brain-a",
+      now: () => 100,
+      dispatchRuntime,
+      publish: jest.fn(async () => undefined),
+    })
+    await service.start({ now: 0, heartbeat: false })
+    await getDb().messages.put({
+      id: "u1",
+      sessionId: "session-1",
+      role: "user",
+      parts: [{ type: "text", text: "q" }],
+      createdAt: 1,
+    })
+    await service.projectRuntimeEnvelope(
+      runtimeEnvelope({ kind: "lifecycle", phase: "started" }, "evt-start")
+    )
+    const response = await service.submit(
+      {
+        ...scope,
+        actions: [
+          action({
+            kind: "message.enqueue",
+            messageId: "u1",
+            text: "q",
+            attachments: [],
+            branch: { kind: "regenerate" },
+          }),
+        ],
+      },
+      owner
+    )
+    expect(response.results[0]).toMatchObject({
+      outcome: "rejected",
+      rejection: { code: "host_state_turn_running" },
+    })
+    expect(dispatchRuntime).not.toHaveBeenCalled()
+  })
+
   it("refuses a live control fenced to a turn that is no longer the running one", async () => {
     const dispatchRuntime = jest.fn(async () => ({ correlationId: "ok" }))
     const service = createHostStateService({
@@ -4613,6 +4702,106 @@ describe("HostState Agent RPC dispatcher", () => {
     } finally {
       clone.mockRestore()
     }
+  })
+
+  describe("a branched turn", () => {
+    async function seedRows(rows: Array<Record<string, unknown>>) {
+      await getDb().messages.bulkPut(
+        rows.map((row, index) => ({
+          sessionId: "session-1",
+          createdAt: index + 1,
+          ...row,
+        })) as never
+      )
+    }
+    afterEach(async () => {
+      const arming = await import("@/lib/chat/branch-arming")
+      arming.resetBranchReplyArmsForTests()
+    })
+
+    it("regenerates from the stored question, rebuilds history, and arms the next slot", async () => {
+      await seedRows([
+        { id: "u1", role: "user", parts: [{ type: "text", text: "the stored question" }] },
+        {
+          id: "a1",
+          role: "assistant",
+          parts: [{ type: "text", text: "first answer" }],
+          metadata: { branchGroupId: "u1", branchIndex: 0 },
+        },
+      ])
+      prepareTranscriptRuntimeSendMock.mockResolvedValueOnce({ model: "sonnet", turnId: "turn-9" })
+
+      await createAgentRpcHostStateDispatcher()(
+        action({
+          kind: "message.enqueue",
+          messageId: "u1",
+          text: "what the phone showed",
+          attachments: [],
+          branch: { kind: "regenerate" },
+        })
+      )
+
+      expect(prepareTranscriptRuntimeSendMock).toHaveBeenCalledWith(
+        "session-1",
+        expect.anything(),
+        expect.objectContaining({ replacesHistory: true, currentMessageId: "u1" })
+      )
+      expect(sendPromptMock.mock.calls.at(-1)?.[1]).toBe("the stored question")
+      const { armedBranchReply } = await import("@/lib/chat/branch-arming")
+      expect(armedBranchReply("session-1", "turn-9")).toEqual({
+        turnId: "turn-9",
+        tag: { groupId: "u1", index: 1 },
+      })
+    })
+
+    it("sends an edit's new words and hangs the turn's replies off the replacement", async () => {
+      await seedRows([
+        { id: "u1", role: "user", parts: [{ type: "text", text: "old words" }] },
+        { id: "u1b", role: "user", parts: [{ type: "text", text: "new words" }] },
+      ])
+      prepareTranscriptRuntimeSendMock.mockResolvedValueOnce({ model: "sonnet", turnId: "turn-3" })
+
+      await createAgentRpcHostStateDispatcher()(
+        action({
+          kind: "message.enqueue",
+          messageId: "u1b",
+          text: "new words",
+          attachments: [],
+          branch: { kind: "edit", editsMessageId: "u1" },
+        })
+      )
+
+      expect(sendPromptMock.mock.calls.at(-1)?.[1]).toBe("new words")
+      const { armedBranchReply } = await import("@/lib/chat/branch-arming")
+      expect(armedBranchReply("session-1", "turn-3")).toEqual({ turnId: "turn-3", owner: "u1b" })
+    })
+
+    it("never lets a plain send answer into a branch an earlier turn left armed", async () => {
+      const { armBranchReply, armedBranchReply } = await import("@/lib/chat/branch-arming")
+      armBranchReply("session-1", { tag: { groupId: "u0", index: 1 } })
+      await createAgentRpcHostStateDispatcher()(
+        action({ kind: "message.enqueue", messageId: "m-plain", text: "hi", attachments: [] })
+      )
+      expect(armedBranchReply("session-1", undefined)).toBeUndefined()
+    })
+
+    it("disarms a branch whose send never started", async () => {
+      await seedRows([{ id: "u1", role: "user", parts: [{ type: "text", text: "q" }] }])
+      sendPromptMock.mockRejectedValueOnce(new Error("sidecar down"))
+      await expect(
+        createAgentRpcHostStateDispatcher()(
+          action({
+            kind: "message.enqueue",
+            messageId: "u1",
+            text: "q",
+            attachments: [],
+            branch: { kind: "regenerate" },
+          })
+        )
+      ).rejects.toThrow("sidecar down")
+      const { armedBranchReply } = await import("@/lib/chat/branch-arming")
+      expect(armedBranchReply("session-1", undefined)).toBeUndefined()
+    })
   })
 
   it("fails the dispatch rather than sending a prompt whose attachment vanished", async () => {

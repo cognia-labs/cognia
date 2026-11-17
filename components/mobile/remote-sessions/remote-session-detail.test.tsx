@@ -144,6 +144,8 @@ function baseStream(overrides: Partial<RemoteSessionStream> = {}): RemoteSession
     sessionEnded: false,
     notFound: false,
     send: jest.fn().mockResolvedValue(undefined),
+    regenerate: jest.fn().mockResolvedValue(undefined),
+    editResend: jest.fn().mockResolvedValue(undefined),
     interrupt: jest.fn().mockResolvedValue(undefined),
     respond: jest.fn().mockResolvedValue(undefined),
     reconcileTranscript: jest.fn(),
@@ -748,13 +750,76 @@ describe("<RemoteSessionDetail />", () => {
       expect(context.actionSheet).toBe(MessageActionSheet)
       ;(context.onCopy as () => void)()
       expect(toastSuccess).toHaveBeenCalled()
-      // No Host action backs these on this view yet: not offered, not inert.
+      // No Host that branches turns is paired: not offered, not inert.
       expect(context.onRegenerate).toBeUndefined()
       expect(context.onEditResend).toBeUndefined()
       // The transcript is the Host's: nothing that writes it locally is offered.
       expect([...(context.allowedCommands as Set<string>)].sort()).toEqual(
         ["bookmark", "copy", "readAloud", "selectText", "share", "shareCard"].sort()
       )
+    })
+
+    describe("with a Host that branches turns", () => {
+      beforeEach(() => {
+        setRuntimeSnapshot({
+          target: null,
+          vaultState: "unlocked",
+          connectionState: "online",
+          host: runtimeHostSnapshotFromManifest(
+            buildLocalHostFeatureManifest({
+              platform: "tauri",
+              deviceGrants: ["host.observe", "agent.run"],
+            })
+          ),
+        })
+      })
+      afterEach(() => {
+        __resetRuntimeSnapshotForTesting()
+      })
+
+      const turn = (question: string, text: string) => ({
+        kind: "completed-turn",
+        itemKey: `turn:${question}`,
+        turnKey: `turn:${question}`,
+        revision: 1,
+        detailRevision: 1,
+        status: "completed",
+        userMessages: [{ id: question, role: "user", text, createdAt: 1 }],
+        collapsed: { exists: false, messageCount: 2, trailingCount: 0, mediaCount: 0 },
+        startedAt: 1,
+      })
+
+      it("runs edit, resend and regenerate on the Host against the last question", async () => {
+        transcriptControllerMock.mockReturnValue(
+          timeline([turn("u1", "first"), turn("u2", "second")])
+        )
+        const stream = baseStream({ status: "idle" })
+        streamMock.mockReturnValue(stream)
+        renderContexts.length = 0
+        render(<RemoteSessionDetail sessionId="s1" />)
+
+        const context = renderContexts.at(-1)!
+        expect([...(context.allowedCommands as Set<string>)]).toEqual(
+          expect.arrayContaining(["edit", "resend", "regenerate"])
+        )
+        await act(async () => {
+          await (context.onRegenerate as () => Promise<void>)()
+        })
+        expect(stream.regenerate).toHaveBeenCalledWith({ id: "u2", text: "second" })
+        expect(context.onEditResend).toBe(stream.editResend)
+      })
+
+      it("offers neither to a device that does not control the conversation", () => {
+        transcriptControllerMock.mockReturnValue(timeline([turn("u1", "first")]))
+        streamMock.mockReturnValue(baseStream({ canControl: false }))
+        renderContexts.length = 0
+        render(<RemoteSessionDetail sessionId="s1" />)
+
+        const context = renderContexts.at(-1)!
+        expect(context.onRegenerate).toBeUndefined()
+        expect(context.onEditResend).toBeUndefined()
+        expect(context.allowedCommands as Set<string>).not.toContain("regenerate")
+      })
     })
 
     it("keeps refused sends beside the timeline and out of it", () => {

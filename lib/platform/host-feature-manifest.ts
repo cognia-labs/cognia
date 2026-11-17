@@ -1,5 +1,8 @@
 import { getDocumentAcceptExtensions } from "@cognia/document/support-matrix"
-import { HOST_STATE_TURN_FENCE_OPERATION } from "@cognia/agent-config-types/host-state"
+import {
+  HOST_STATE_MESSAGE_BRANCH_OPERATION,
+  HOST_STATE_TURN_FENCE_OPERATION,
+} from "@cognia/agent-config-types/host-state"
 import { APP_VERSION } from "@/lib/app-version"
 import {
   COMPOSER_MAX_ATTACHMENTS,
@@ -729,6 +732,8 @@ export function buildLocalHostFeatureManifest({
         // `session.state-sync` to version 1 exactly, and a bump would turn
         // HostState off on every one of them.
         HOST_STATE_TURN_FENCE_OPERATION,
+        // Likewise: `message.enqueue` accepts `branch` (regenerate, edit).
+        HOST_STATE_MESSAGE_BRANCH_OPERATION,
       ],
     }
     // Advertised on both hosts that can actually spawn a process. The

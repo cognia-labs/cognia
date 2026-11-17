@@ -35,7 +35,9 @@ import { TranscriptTimelineSurface } from "@/components/chat/transcript-timeline
 import { useTranscriptController } from "@/hooks/chat/use-transcript-controller"
 import { useTranscriptLiveTurn } from "@/hooks/chat/use-transcript-live-turn"
 import { SessionMediaProvider } from "@/hooks/chat/session-media-provider"
-import { withLiveTurn } from "@/lib/chat/transcript/live-turn-view"
+import { lastUserMessageOf, withLiveTurn } from "@/lib/chat/transcript/live-turn-view"
+import { hostStateMessageBranchNegotiatedIn } from "@/lib/db/mobile-outbound-queue"
+import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
 import { createRemoteTranscriptSource } from "@/lib/chat/transcript/source"
 import { transport } from "@/lib/tauri"
 import { onTransportChange } from "@/lib/tauri/transport-instance"
@@ -61,10 +63,18 @@ const remoteTranscriptSource = createRemoteTranscriptSource(() => transport, { o
  * The row commands this view can carry out. The transcript is the Host's, so
  * anything that writes it locally (branch, truncate, restore point, quote or
  * reply into the local composer, save as memory or issue against a local
- * session) is left out; edit and regenerate wait on Host actions.
+ * session) is left out.
  */
 const REMOTE_MESSAGE_COMMANDS: ReadonlySet<MessageActionCommandId> = new Set<MessageActionCommandId>(
   ["copy", "share", "shareCard", "bookmark", "readAloud", "selectText"]
+)
+
+/**
+ * With a Host that branches a turn for this device (`HostStateMessageBranch`):
+ * edit, resend and regenerate run there, keeping what they replace as siblings.
+ */
+const REMOTE_BRANCH_COMMANDS: ReadonlySet<MessageActionCommandId> = new Set<MessageActionCommandId>(
+  [...REMOTE_MESSAGE_COMMANDS, "edit", "resend", "regenerate"]
 )
 
 export interface RemoteSessionDetailProps {
@@ -82,26 +92,11 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
   const tCopy = useTranslations("chat.copy")
   const messageDisplay = useMessageDisplay(session?.messageDisplayOverride)
   const transcript = useTranscriptController(sessionId, remoteTranscriptSource)
-  // D10: the rows read the same characters, copy feedback and display
-  // settings as the chat, and a long press opens the message's sheet with the
-  // commands this view can carry out. Edit and regenerate need Host actions
-  // this view does not have yet, so they are not supplied.
   const characterById = useStableCharacterById(useCharacters())
   const directCharacter = useCharacter(session?.characterId) ?? null
   const onCopy = useCallback(() => {
     toast.success(tCopy("success"))
   }, [tCopy])
-  const renderContext = useMemo<MessageRenderContextValue>(
-    () => ({
-      characterById,
-      directCharacter,
-      onCopy,
-      messageDisplay,
-      actionSheet: MessageActionSheet,
-      allowedCommands: REMOTE_MESSAGE_COMMANDS,
-    }),
-    [characterById, directCharacter, onCopy, messageDisplay]
-  )
   // Sends the Host refused stay on this device, beside the transcript.
   const refused = useRefusedHostMessages(sessionId)
   const timelineItems = useMemo(
@@ -117,6 +112,8 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
     sessionEnded,
     notFound,
     send,
+    regenerate,
+    editResend,
     interrupt,
     respond,
     reconcileTranscript,
@@ -135,6 +132,45 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
     [timelineItems, messages, liveReply]
   )
   const liveStatus = liveReply?.state === "streaming" ? "streaming" : status
+  // D10: the rows read the same characters, copy feedback and display
+  // settings as the chat, and a long press opens the message's sheet with the
+  // commands this view can carry out. Edit and regenerate are the Host's to
+  // run, as branches, so they are offered only by a Host that takes them and
+  // only while this device controls the conversation.
+  const runtimeSnapshot = useRuntimeSnapshot()
+  const branchOffered =
+    hostStateMessageBranchNegotiatedIn(runtimeSnapshot) &&
+    canControl &&
+    !sessionEnded &&
+    !notFound
+  const viewRef = useRef(view)
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
+  const onRegenerate = useCallback(async () => {
+    const question = lastUserMessageOf(viewRef.current)
+    if (question) await regenerate(question)
+  }, [regenerate])
+  const renderContext = useMemo<MessageRenderContextValue>(
+    () => ({
+      characterById,
+      directCharacter,
+      onCopy,
+      messageDisplay,
+      actionSheet: MessageActionSheet,
+      allowedCommands: branchOffered ? REMOTE_BRANCH_COMMANDS : REMOTE_MESSAGE_COMMANDS,
+      ...(branchOffered ? { onRegenerate, onEditResend: editResend } : {}),
+    }),
+    [
+      characterById,
+      directCharacter,
+      onCopy,
+      messageDisplay,
+      branchOffered,
+      onRegenerate,
+      editResend,
+    ]
+  )
   const reconciledRevisionRef = useRef<number | null>(null)
   const connection = useConnectionState()
   // Sends can't reach the desktop while the transport is down — gate the

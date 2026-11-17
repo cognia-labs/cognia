@@ -810,6 +810,120 @@ describe("HostState durable store", () => {
     })
   })
 
+  describe("a branched enqueue (regenerate, edit)", () => {
+    async function seedTurn() {
+      await getDb().messages.bulkPut([
+        {
+          id: "u1",
+          sessionId: "session-1",
+          role: "user",
+          parts: [{ type: "text", text: "question" }],
+          createdAt: 1,
+        },
+        {
+          id: "a1",
+          sessionId: "session-1",
+          role: "assistant",
+          parts: [{ type: "text", text: "answer" }],
+          createdAt: 2,
+        },
+      ])
+      await getDb().sessions.update("session-1", { activeBranchByGroup: { u1: "a1" } })
+    }
+
+    function branchAction(
+      messageId: string,
+      branch: { kind: "regenerate" } | { kind: "edit"; editsMessageId: string }
+    ): HostStateAction {
+      return draftAction({
+        actionId: `branch-${messageId}`,
+        baseRevision: undefined,
+        action: { kind: "message.enqueue", messageId, text: "question", attachments: [], branch },
+      })
+    }
+
+    function queued(action: HostStateAction) {
+      const intent = action.action as Extract<AllowedHostStateIntent, { kind: "message.enqueue" }>
+      return {
+        kind: "message.queued" as const,
+        message: {
+          actionId: action.actionId,
+          messageId: intent.messageId,
+          text: intent.text,
+          attachments: [],
+          clientId: "client-a",
+        },
+        operation: {
+          actionId: action.actionId,
+          kind: "message.enqueue" as const,
+          status: "accepted" as const,
+          clientId: "client-a",
+          createdAt: 10,
+          updatedAt: 10,
+        },
+        draftRevision: 1,
+        revision: 1,
+      }
+    }
+
+    it("regenerates without adding a question, keeping the reply as a sibling", async () => {
+      await seedTurn()
+      await acquireWritableLease()
+      const action = branchAction("u1", { kind: "regenerate" })
+      await expect(validateHostStateBusinessAction(action)).resolves.toBeUndefined()
+      await commitHostStateAction({ action, mutation: queued(action), now: 10 })
+
+      const rows = await getDb().messages.where("sessionId").equals("session-1").toArray()
+      expect(rows.map((message) => message.id).sort()).toEqual(["a1", "u1"])
+      expect(rows.find((message) => message.id === "u1")?.parts).toEqual([
+        { type: "text", text: "question" },
+      ])
+      expect(rows.find((message) => message.id === "a1")?.metadata).toMatchObject({
+        branchGroupId: "u1",
+        branchIndex: 0,
+      })
+      // The pick goes, so the reply the turn adds is the one shown.
+      expect((await getDb().sessions.get("session-1"))?.activeBranchByGroup).toBeUndefined()
+    })
+
+    it("edits by adding the replacement as the original's next sibling", async () => {
+      await seedTurn()
+      await acquireWritableLease()
+      const action = branchAction("u1b", { kind: "edit", editsMessageId: "u1" })
+      await expect(validateHostStateBusinessAction(action)).resolves.toBeUndefined()
+      await commitHostStateAction({ action, mutation: queued(action), now: 10 })
+
+      expect((await getDb().messages.get("u1"))?.metadata).toMatchObject({
+        branchGroupId: "edit::u1",
+        branchIndex: 0,
+      })
+      expect((await getDb().messages.get("a1"))?.metadata).toMatchObject({ branchOwnerId: "u1" })
+      expect((await getDb().messages.get("u1b"))?.metadata).toMatchObject({
+        branchGroupId: "edit::u1",
+        branchIndex: 1,
+      })
+      // Another group's pick stays.
+      expect((await getDb().sessions.get("session-1"))?.activeBranchByGroup).toEqual({ u1: "a1" })
+    })
+
+    it("refuses a regenerate the conversation moved past, and an edit of a reply", async () => {
+      await seedTurn()
+      await getDb().messages.put({
+        id: "u2",
+        sessionId: "session-1",
+        role: "user",
+        parts: [{ type: "text", text: "later" }],
+        createdAt: 3,
+      })
+      await expect(
+        validateHostStateBusinessAction(branchAction("u1", { kind: "regenerate" }))
+      ).resolves.toMatchObject({ code: "host_state_regenerate_anchor_moved" })
+      await expect(
+        validateHostStateBusinessAction(branchAction("u3", { kind: "edit", editsMessageId: "a1" }))
+      ).resolves.toMatchObject({ code: "host_state_message_not_found" })
+    })
+  })
+
   /**
    * The mutation is broadcast verbatim to every replica, so a malformed one
    * poisons all of them at once. Before this check a missing field surfaced

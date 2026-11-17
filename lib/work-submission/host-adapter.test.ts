@@ -188,6 +188,28 @@ describe("acceptHostStateChatTurn", () => {
     expect(row?.idempotencyKey).toBe(chatIdempotencyKey("session-1", "message-1"))
   }, 30_000)
 
+  it("keeps a regenerate apart from the turn its question already had", async () => {
+    // The question's own turn holds the plain key; a regenerate is new work.
+    await acceptHostStateChatTurn(action(), deps())
+    const regenerate = action(
+      {
+        kind: "message.enqueue",
+        messageId: "message-1",
+        text: "hello from mobile",
+        attachments: [],
+        branch: { kind: "regenerate" },
+      },
+      { actionId: "action-2" }
+    )
+    const receipt = await acceptHostStateChatTurn(regenerate, deps())
+    expect(receipt?.submissionId).toBe("work:hoststate:action-2")
+    expect((await getWorkSubmission("work:hoststate:action-2"))?.idempotencyKey).toBe(
+      chatIdempotencyKey("session-1", "message-1#regenerate:action-2")
+    )
+    // Its own redelivery still collapses.
+    await expect(acceptHostStateChatTurn(regenerate, deps())).resolves.toEqual(receipt)
+  }, 30_000)
+
   it("collapses a redelivered action onto the original submission", async () => {
     const first = await acceptHostStateChatTurn(action(), deps())
     const second = await acceptHostStateChatTurn(action(), deps())

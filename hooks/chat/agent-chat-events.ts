@@ -45,6 +45,11 @@ import {
   routerFusionTurnActive,
 } from "@/lib/router-fusion/gate/chat-events"
 import { routerFusionRefusalDiagnostic } from "@/lib/router-fusion/gate/refusal-diagnostic"
+import {
+  applyArmedBranchReply,
+  disarmBranchReply,
+  stampBranchReply,
+} from "@/lib/chat/branch-arming"
 import { ProviderResolutionError } from "@/lib/ai/provider-resolution-error"
 import {
   isHeldInBackgroundOnly,
@@ -646,6 +651,7 @@ export async function handleEvent(
       // NEXT unrelated turn's first message.
       pendingBranchTagRef.current.delete(evt.sessionId)
       pendingBranchOwnerRef.current.delete(evt.sessionId)
+      disarmBranchReply(evt.sessionId)
       // Cancel any backstop deny still pending for a remote-routed approval
       // on this session (Remote Session Control).
       clearApprovalBackstops(evt.sessionId)
@@ -1256,9 +1262,6 @@ export async function handleEvent(
         })
       }
 
-      // If `regenerate` queued a branch tag for this session, stamp it onto
-      // the freshly-appended assistant message. The tag is one-shot — once
-      // consumed we drop it so subsequent assistant turns are untouched.
       let nextMessages = appliedMessages
       const systemEvent = env.event as {
         type?: string
@@ -1304,60 +1307,32 @@ export async function handleEvent(
         }
       }
       if (!isCurrentEvent()) return
+      // Branch stamps (`lib/chat/branch-arming.ts`). A regenerate's reply
+      // takes the slot its send armed, and is selected; an edit's replacement
+      // owns every message its turn appends, so flipping the navigator back to
+      // the original hides the new turn's replies along with the variant they
+      // answer (`selectVisibleMessages` rule 2). This controller arms its own
+      // sends in its refs; a turn the Host runs for a paired device is armed
+      // by the HostState dispatcher instead.
       const pendingTag = pendingBranchTagRef.current.get(sessionId)
-      if (pendingTag && appliedMessages !== current && appliedMessages.length > current.length) {
-        const lastIdx = appliedMessages.length - 1
-        const last = appliedMessages[lastIdx]
-        if (last?.role === "assistant") {
-          const meta = (last as { metadata?: Record<string, unknown> }).metadata ?? {}
-          const stamped = {
-            ...last,
-            metadata: {
-              ...meta,
-              branchGroupId: pendingTag.groupId,
-              branchIndex: pendingTag.index,
-            },
-          }
-          nextMessages = [...appliedMessages.slice(0, lastIdx), stamped]
-          pendingBranchTagRef.current.delete(sessionId)
-          if (isOpen) {
-            useChatStore
-              .getState()
-              .setSessionActiveBranch(sessionId, pendingTag.groupId, stamped.id)
-          }
-        }
-      }
-
-      // Edit-as-branch: the replacement user message owns every message its
-      // turn appends, so flipping the navigator back to the original hides the
-      // new turn's replies along with the variant they answer
-      // (`selectVisibleMessages` rule 2). `pendingBranchTagRef` covers the
-      // regenerate sibling; this covers everything else the turn writes.
       const pendingOwner = pendingBranchOwnerRef.current.get(sessionId)
-      if (pendingOwner) {
-        if (turnComplete) pendingBranchOwnerRef.current.delete(sessionId)
-        const ownerIndex = nextMessages.findIndex((m) => m.id === pendingOwner)
-        if (ownerIndex >= 0) {
-          const preexisting = new Set(current.map((m) => m.id))
-          let owned: UIMessage[] | null = null
-          for (let i = ownerIndex + 1; i < nextMessages.length; i++) {
-            const m = nextMessages[i]
-            // Rows already in the slice — e.g. a queued steer's optimistic
-            // bubble appended mid-turn — are not this turn's output.
-            if (preexisting.has(m.id)) continue
-            const meta = (m as { metadata?: { branchOwnerId?: unknown } }).metadata
-            if (meta?.branchOwnerId !== undefined) continue
-            if (!owned) owned = nextMessages.slice()
-            owned[i] = {
-              ...m,
-              metadata: {
-                ...(meta as Record<string, unknown> | undefined),
-                branchOwnerId: pendingOwner,
-              },
-            } as UIMessage
-          }
-          if (owned) nextMessages = owned
-        }
+      if (pendingOwner && turnComplete) pendingBranchOwnerRef.current.delete(sessionId)
+      const ownStamp = stampBranchReply(current, nextMessages, {
+        tag: pendingTag,
+        owner: pendingOwner,
+      })
+      const hostStamp = applyArmedBranchReply(
+        sessionId,
+        frame.turnId,
+        current,
+        ownStamp.messages,
+        turnComplete
+      )
+      nextMessages = hostStamp.messages
+      if (ownStamp.tagged) pendingBranchTagRef.current.delete(sessionId)
+      const tagged = ownStamp.tagged ?? hostStamp.tagged
+      if (tagged && isOpen) {
+        useChatStore.getState().setSessionActiveBranch(sessionId, tagged.groupId, tagged.messageId)
       }
 
       // Plan-mode → tasks bridge: forward TodoWrite / TaskCreate / TaskUpdate

@@ -30551,6 +30551,7 @@
         "attachmentUnsupported": "Some files were skipped — that type cannot be attached.",
         "attachmentUploading": "Uploading {name}",
         "attachmentsNeedHost": "This desktop cannot receive attachments — the message was sent without them.",
+        "branchNeedsHost": "This desktop cannot regenerate or edit from here — update it to the latest version.",
         "changes": {
           "collapseDiff": "Hide the diff for {path}",
           "diffEmpty": "The desktop returned no diff body for this file.",

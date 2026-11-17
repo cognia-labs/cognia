@@ -122,6 +122,54 @@ describe("work submission terminal events", () => {
     stop()
   })
 
+  it("stamps the reply of a turn the Host armed as a branch", async () => {
+    const { armBranchReply, resetBranchReplyArmsForTests } =
+      await import("@/lib/chat/branch-arming")
+    armBranchReply("session-1", { turnId: "turn-1", tag: { groupId: "user-1", index: 1 } })
+    let handler: ((event: ClaudeEvent) => void) | undefined
+    const question = { id: "user-1", role: "user", parts: [] }
+    const reply = { id: "assistant-2", role: "assistant", parts: [{ type: "text", text: "again" }] }
+    const persistMessages = jest.fn(async () => {})
+    let settled!: () => void
+    const done = new Promise<void>((resolve) => {
+      settled = resolve
+    })
+    const stop = startWorkSubmissionTerminalEvents({
+      subscribe: async (next) => {
+        handler = next
+        return () => {}
+      },
+      loadMessages: async () => [question] as never,
+      applyEvent: (messages) => ({ messages: [...messages, reply] as never }),
+      persistMessages,
+      settleSession: async (_sessionId, input) => {
+        await input.writeTranscript?.()
+        settled()
+        return true
+      },
+      hasOpenSubmission: async () => true,
+    })
+    try {
+      await Promise.resolve()
+      handler?.({
+        type: "event",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        event: { type: "assistant" },
+      } as never)
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve()
+      handler?.({ type: "session_ended", sessionId: "session-1" })
+      await done
+      expect(persistMessages).toHaveBeenCalledWith("session-1", [
+        question,
+        { ...reply, metadata: { branchGroupId: "user-1", branchIndex: 1 } },
+      ])
+    } finally {
+      stop()
+      resetBranchReplyArmsForTests()
+    }
+  })
+
   it("books the usage of a turn no chat view renders, under the reply's id", async () => {
     let handler: ((event: ClaudeEvent) => void) | undefined
     const reply = { id: "assistant-7", role: "assistant", parts: [] }

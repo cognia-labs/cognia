@@ -2,7 +2,12 @@ import type { UIMessage } from "ai"
 import type { TranscriptTimelineItem } from "@cognia/agent-config-types"
 
 import type { TranscriptLiveTurn } from "./live-frames"
-import { settledReplyCaughtUp, withLiveReply, withLiveTurn } from "./live-turn-view"
+import {
+  lastUserMessageOf,
+  settledReplyCaughtUp,
+  withLiveReply,
+  withLiveTurn,
+} from "./live-turn-view"
 
 const live = (overrides: Partial<TranscriptLiveTurn> = {}): TranscriptLiveTurn => ({
   sessionId: "s1",
@@ -147,6 +152,51 @@ describe("withLiveTurn", () => {
     expect(
       withLiveTurn({ items: [earlier], tail: [...tail, stale], live: live() }).liveMessages
     ).toEqual([...tail, reply])
+  })
+})
+
+describe("lastUserMessageOf", () => {
+  it("reads the live tail before the timeline", () => {
+    expect(lastUserMessageOf({ items: [earlier, current], liveMessages: tail })).toEqual({
+      id: "u2",
+      text: "second",
+    })
+  })
+
+  it("reads the newest turn of the timeline when nothing is live", () => {
+    expect(lastUserMessageOf({ items: [earlier, current], liveMessages: [] })).toEqual({
+      id: "u2",
+      text: "second",
+    })
+    expect(lastUserMessageOf({ items: [earlier], liveMessages: [reply] })).toEqual({
+      id: "u1",
+      text: "first",
+    })
+  })
+
+  it("reads an active turn's question, and nothing from an empty conversation", () => {
+    const active: TranscriptTimelineItem = {
+      kind: "active-turn",
+      itemKey: "turn:u3",
+      turnKey: "turn:u3",
+      revision: 5,
+      status: "active",
+      startedAt: 5,
+      messages: [
+        {
+          id: "u3",
+          sessionId: "s1",
+          role: "user",
+          parts: [{ type: "text", text: "third" }],
+          createdAt: 5,
+        },
+      ] as never,
+    }
+    expect(lastUserMessageOf({ items: [earlier, active], liveMessages: [] })).toEqual({
+      id: "u3",
+      text: "third",
+    })
+    expect(lastUserMessageOf({ items: [], liveMessages: [] })).toBeNull()
   })
 })
 

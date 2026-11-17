@@ -58,7 +58,11 @@ const REVIEWED_WRITES: Record<string, number> = {
   "lib/squads/gates/record-gate-answer.ts": 1,
   "lib/sync/handlers/messages.ts": 1,
   "lib/sync/host-state-service.ts": 3,
-  "lib/sync/host-state-store.ts": 3,
+  // +2: a paired device's regenerate/edit (`message.enqueue.branch`) re-puts
+  // the session's own rows with branch fields added to their spread metadata,
+  // so run binding and marks survive; it deletes only non-reply rows after the
+  // regenerated question, as the desktop does.
+  "lib/sync/host-state-store.ts": 5,
   "lib/sync/session-history.ts": 1,
   "lib/voice/live/persist-turns.ts": 1,
   "lib/work-submission/paired-turn-adapter.ts": 1,

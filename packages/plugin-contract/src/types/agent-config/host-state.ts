@@ -257,6 +257,8 @@ export type AllowedHostStateIntent =
       mentions?: HostStateContextRef[]
       /** The envelope summary for the row's `metadata.promptPreamble`. */
       promptPreamble?: HostStatePromptPreamble
+      /** See {@link HostStateMessageBranch}. */
+      branch?: HostStateMessageBranch
     }
   | {
       kind: "turn.steer"
@@ -307,6 +309,29 @@ export type HostStateTurnFence = { expectedTurnId?: string }
 
 /** Capability marker: this Host understands `expectedTurnId`. Not a command. */
 export const HOST_STATE_TURN_FENCE_OPERATION = "host_state_turn_fence"
+
+/**
+ * A turn sent again as a branch of the conversation, the way the desktop
+ * regenerates and edits (`lib/chat/branch-regen.ts`): nothing is deleted.
+ *
+ * - `regenerate`: `messageId` names the conversation's last user message, which
+ *   the turn sends again from its stored row (files included; `text` is what
+ *   the client showed and is not the prompt). The replies already under it
+ *   become siblings of the one this turn produces.
+ * - `edit`: `messageId` is a new user message replacing `editsMessageId`, an
+ *   earlier user message. The two become siblings, the original keeps its own
+ *   replies, and the original's files go with the new words.
+ *
+ * Both need an idle conversation: the Host refuses either while a turn runs or
+ * waits (`host_state_turn_running`). A client sends `branch` only to a Host that
+ * advertises {@link HOST_STATE_MESSAGE_BRANCH_OPERATION}, because an older
+ * Host's closed guard refuses the field.
+ */
+export type HostStateMessageBranch =
+  { kind: "regenerate" } | { kind: "edit"; editsMessageId: string }
+
+/** Capability marker: this Host understands `message.enqueue.branch`. Not a command. */
+export const HOST_STATE_MESSAGE_BRANCH_OPERATION = "host_state_message_branch"
 
 const INTENT_KINDS: readonly HostStateIntentKind[] = [
   "session.create",
@@ -2118,12 +2143,14 @@ function isAllowedIntent(value: unknown): value is AllowedHostStateIntent {
           "attachments",
           "mentions",
           "promptPreamble",
+          "branch",
         ]) &&
         nonEmptyString(value.messageId) &&
         typeof value.text === "string" &&
         isAttachmentList(value.attachments) &&
         (value.mentions === undefined || isContextRefList(value.mentions)) &&
-        (value.promptPreamble === undefined || isPromptPreamble(value.promptPreamble))
+        (value.promptPreamble === undefined || isPromptPreamble(value.promptPreamble)) &&
+        (value.branch === undefined || isMessageBranch(value.branch, value))
       )
     case "turn.steer":
     case "turn.followup":
@@ -2322,6 +2349,25 @@ function isContextRefList(value: unknown): value is HostStateContextRef[] {
         (item.label === undefined || typeof item.label === "string") &&
         (item.raw === undefined || typeof item.raw === "string")
     )
+  )
+}
+
+/**
+ * A branch re-sends files from the Host's own rows, so the enqueue that carries
+ * one names no attachments of its own; an edit replaces a different message.
+ */
+function isMessageBranch(
+  value: unknown,
+  intent: Record<string, unknown>
+): value is HostStateMessageBranch {
+  if (!isRecord(value) || !Array.isArray(intent.attachments) || intent.attachments.length > 0)
+    return false
+  if (value.kind === "regenerate") return hasOnlyKeys(value, ["kind"])
+  return (
+    value.kind === "edit" &&
+    hasOnlyKeys(value, ["kind", "editsMessageId"]) &&
+    nonEmptyString(value.editsMessageId) &&
+    value.editsMessageId !== intent.messageId
   )
 }
 

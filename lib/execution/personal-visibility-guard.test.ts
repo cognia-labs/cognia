@@ -307,8 +307,13 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/squads/workflow-nodes/team-ops.ts": "preparePersonalDerivedHistory:1",
   "lib/sync/desktop-sync-source.ts": "preparePairedHistory:3;stored-message-read:6",
   "lib/sync/handlers/messages.ts": "stored-message-read:1",
-  "lib/sync/host-state-service.ts": "listMessages:1;prepareOwnerHistory:1;stored-message-read:6",
-  "lib/sync/host-state-store.ts": "stored-message-read:4",
+  // Branched enqueue (+1 each): the store reads the session's rows to plan the
+  // branch (branch metadata only); the dispatcher reads the requester's own
+  // question to resend it and the rows to arm the reply. `message.enqueue` is
+  // owner-only for paired readers and refused under sandboxed member
+  // execution; the history still passes prepareTranscriptRuntimeSend.
+  "lib/sync/host-state-service.ts": "listMessages:1;prepareOwnerHistory:1;stored-message-read:7",
+  "lib/sync/host-state-store.ts": "stored-message-read:5",
   "lib/sync/session-history.ts": "stored-message-read:1",
   "lib/tasks/spawn-task-dispatch.ts": "listMessages:2;preparePersonalHistory:1;renderBranchSeed:1",
   "lib/terminal/ai-shell/error-advisor.ts": "complete:1",

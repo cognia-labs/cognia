@@ -143,7 +143,15 @@ export async function acceptHostStateChatTurn(
         intent: {
           contractVersion: 1,
           // Same shape the renderer uses, so the two arrival paths collapse.
-          idempotencyKey: chatIdempotencyKey(sessionId, action.action.messageId),
+          // A regenerate re-sends a question that already has a turn. Keyed on
+          // the question alone it would collapse into that turn's receipt, as
+          // a replay does; the action is what makes it new work.
+          idempotencyKey: chatIdempotencyKey(
+            sessionId,
+            action.action.branch?.kind === "regenerate"
+              ? `${action.action.messageId}#regenerate:${action.actionId}`
+              : action.action.messageId
+          ),
           source: { kind: "chat", sourceId: sessionId, triggerId: action.actionId },
           scope: {
             accountId: action.accountId,

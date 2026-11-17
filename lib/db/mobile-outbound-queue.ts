@@ -8,6 +8,7 @@ import type { Transaction } from "dexie"
 import { nanoid } from "nanoid"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import {
+  HOST_STATE_MESSAGE_BRANCH_OPERATION,
   HOST_STATE_TURN_FENCE_OPERATION,
   hostStateIntentTargetsSessionIndex,
   isHostStateAction,
@@ -670,6 +671,19 @@ function hostStateSubmitNegotiatedIn(snapshot: RuntimeSnapshot): boolean {
 async function hostStateSubmitNegotiated(): Promise<boolean> {
   const { getRuntimeSnapshot } = await import("@/lib/runtime/runtime-snapshot-store")
   return hostStateSubmitNegotiatedIn(getRuntimeSnapshot())
+}
+
+/**
+ * Whether the active Host takes `message.enqueue.branch`: a regenerate or an
+ * edit sent as a branch (`HostStateMessageBranch`). An older Host's closed
+ * guard refuses the field, so a client offers either only when this holds.
+ * Pure over `snapshot`, for a React subscriber to the runtime snapshot.
+ */
+export function hostStateMessageBranchNegotiatedIn(snapshot: RuntimeSnapshot): boolean {
+  return (
+    hostStateSubmitNegotiatedIn(snapshot) &&
+    snapshot.host?.operations.includes(HOST_STATE_MESSAGE_BRANCH_OPERATION) === true
+  )
 }
 
 async function hostStateTurnFenceNegotiated(): Promise<boolean> {
@@ -1402,12 +1416,17 @@ export async function withdrawUnsentHostStateMessages(
         await db.messages.delete(intent.messageId)
       }
     }
-    return unsent.map(({ action, intent }) => ({
-      actionId: action.actionId,
-      messageId: intent.messageId,
-      text: intent.text,
-      attachmentNames: intent.attachments.map((attachment) => attachment.name),
-    }))
+    // A regenerate is withdrawn like any send, but it is no words of the
+    // user's to hand back: its question is already in the transcript, under
+    // the id the caller would otherwise drop from view.
+    return unsent
+      .filter(({ intent }) => intent.branch?.kind !== "regenerate")
+      .map(({ action, intent }) => ({
+        actionId: action.actionId,
+        messageId: intent.messageId,
+        text: intent.text,
+        attachmentNames: intent.attachments.map((attachment) => attachment.name),
+      }))
   })
 }
 

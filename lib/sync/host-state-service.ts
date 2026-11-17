@@ -19,6 +19,7 @@ import {
   type HostStateAction,
   type HostStateIntentKind,
   type HostStateAttachmentRef,
+  type HostStateMessageBranch,
   type HostStateAppliedAction,
   type HostStateChannelState,
   type HostStateDecision,
@@ -236,6 +237,54 @@ function personChatQueueEnvelope(
  * the user can see; silently sending "have a look at this screenshot" with no
  * screenshot attached is the one outcome nobody can debug.
  */
+/**
+ * A branched turn's prompt, from the Host's own rows: a regenerate sends its
+ * question again exactly as stored, files included; an edit sends the new
+ * words with the original's files, as the desktop does
+ * (`hooks/chat/agent-chat-edit-regenerate.ts`). A file the row can no longer
+ * send (a native video, an image whose bytes are gone) is left out and logged.
+ */
+async function resolveBranchTurnPrompt(
+  sessionId: string,
+  messageId: string,
+  text: string,
+  branch: HostStateMessageBranch
+): Promise<{
+  content: SendContent
+  manifest?: import("@/lib/chat/attachments/dispatch").AttachmentManifestEntry[]
+}> {
+  const sourceId = branch.kind === "regenerate" ? messageId : branch.editsMessageId
+  const source = await getDb().messages.get(sourceId)
+  if (!source || source.sessionId !== sessionId) throw new Error("host_state_message_not_found")
+  const resend = await import("@/lib/chat/attachments/resend")
+  let prompt: Awaited<ReturnType<typeof resolveBranchTurnPrompt>>
+  let unavailable: string[]
+  if (branch.kind === "regenerate") {
+    const turn = await resend.resendableUserTurn(source.parts)
+    prompt = { content: turn.content }
+    unavailable = turn.unavailable
+  } else {
+    const carried = await resend.resendableAttachments(source.parts)
+    unavailable = carried.unavailable
+    prompt =
+      carried.blocks.length === 0
+        ? { content: text }
+        : {
+            content: text.trim()
+              ? [...carried.blocks, { type: "text" as const, text }]
+              : carried.blocks,
+            manifest: carried.manifest,
+          }
+  }
+  if (unavailable.length > 0)
+    loggers.sync.warn("[host-state] branched turn could not resend every file", {
+      sessionId,
+      messageId,
+      unavailable: unavailable.length,
+    })
+  return prompt
+}
+
 async function resolveOutboundAttachments(
   sessionId: string,
   text: string,
@@ -474,11 +523,21 @@ export function createAgentRpcHostStateDispatcher(
             // (or the replay stream, or a queue row that gets retried). This is
             // the last point at which the bytes are still on the Host and the
             // prompt has not been built.
-            const prompt = await resolveOutboundAttachments(
-              sessionId,
-              action.action.text,
-              action.action.attachments
-            )
+            const branch = action.action.branch
+            const turnMessageId = action.action.messageId
+            const prompt = branch
+              ? await resolveBranchTurnPrompt(
+                  sessionId,
+                  action.action.messageId,
+                  action.action.text,
+                  branch
+                )
+              : await resolveOutboundAttachments(
+                  sessionId,
+                  action.action.text,
+                  action.action.attachments
+                )
+            // A regenerate's row already records its files.
             if (prompt.manifest?.length) {
               const [{ makeUserMessage }, { commitMessageDelta }] = await Promise.all([
                 import("@/lib/chat/sdk-message-adapter"),
@@ -508,7 +567,9 @@ export function createAgentRpcHostStateDispatcher(
                   executionRunId: receipt?.runId,
                   // Partition RPC admits no runtimeStatus probe. Always hydrate
                   // from this account's canonical history, including after a restart.
-                  ...(partitionChat ? { replacesHistory: true } : {}),
+                  // A branch rebuilds it too: the runtime's own history still
+                  // holds the replies and the question the branch replaced.
+                  ...(partitionChat || branch ? { replacesHistory: true } : {}),
                   currentMessageId:
                     action.action.kind === "message.enqueue" ? action.action.messageId : null,
                 })
@@ -518,10 +579,32 @@ export function createAgentRpcHostStateDispatcher(
                   prepared.turnId ??= receipt.turnId
                   bindToolCallRun(sessionId, prepared.turnId, receipt.runId)
                 }
-                await sendPrompt(sessionId, prompt.content, prepared, {
-                  commandId: refreshed ? `${action.actionId}:ticket-refresh` : action.actionId,
-                  transcriptRuntime: "prepared",
-                })
+                // Read from the rows the commit branched, so a dispatch retried
+                // after a restart arms the same stamp.
+                const arming = await import("@/lib/chat/branch-arming")
+                if (branch) {
+                  const { hostStateBranchReplyArm } = await import("./host-state-branch")
+                  const rows = await getDb()
+                    .messages.where("[sessionId+createdAt]")
+                    .between([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER])
+                    .sortBy("createdAt")
+                  arming.armBranchReply(sessionId, {
+                    ...(prepared.turnId ? { turnId: prepared.turnId } : {}),
+                    ...hostStateBranchReplyArm(rows, { messageId: turnMessageId, branch }),
+                  })
+                } else {
+                  arming.disarmBranchReply(sessionId)
+                }
+                try {
+                  await sendPrompt(sessionId, prompt.content, prepared, {
+                    commandId: refreshed ? `${action.actionId}:ticket-refresh` : action.actionId,
+                    transcriptRuntime: "prepared",
+                  })
+                } catch (error) {
+                  // A turn that never started must not leave its stamp armed.
+                  if (branch) arming.disarmBranchReply(sessionId)
+                  throw error
+                }
               })
             if (personAgent) {
               const { getPersonAgentRunner } = await import("@/lib/headless/person-agent")
@@ -3210,6 +3293,34 @@ function mutationForAction(
         },
       }
     case "message.enqueue":
+      // A member's sandboxed agent is a separate process whose history a
+      // branch cannot rewind.
+      if (action.action.branch && personChatCapability().execution === "sandboxed") {
+        return {
+          rejection: {
+            code: "host_state_branch_unavailable",
+            message: "This Host cannot regenerate or edit a member's conversation.",
+            currentRevision: state.revision,
+          },
+        }
+      }
+      // A branch re-runs or rewords a turn the conversation has finished. While
+      // one runs, waits or stops, the turn it would branch is not settled, and
+      // a send queued behind it would make the branch answer the wrong turn.
+      if (
+        action.action.branch &&
+        (LIVE_TURN_STATUSES.has(state.turn) ||
+          state.turn === "stopping" ||
+          state.queue.some((queued) => queued.actionId !== action.actionId))
+      ) {
+        return {
+          rejection: {
+            code: "host_state_turn_running",
+            message: "Wait for the running turn to finish.",
+            currentRevision: state.revision,
+          },
+        }
+      }
       return {
         mutation: {
           kind: "message.queued",

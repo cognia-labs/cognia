@@ -50,6 +50,12 @@ import {
 } from "@/lib/chat/session-write-guard"
 import { hostSessionMoveRejection, planHostSessionMove } from "./host-state-session-move"
 import {
+  hostStateBranchRejection,
+  planEditBranch,
+  planRegenerateBranch,
+  type BranchIntent,
+} from "./host-state-branch"
+import {
   listSessionBoundAsides,
   retireAsideParentContext,
 } from "@/lib/db/resource-workbench-sessions"
@@ -125,6 +131,7 @@ export type HostStateStoreErrorCode =
   | "host_state_lease_expired"
   | "host_state_session_not_found"
   | "host_state_message_not_found"
+  | "host_state_regenerate_anchor_moved"
   | "host_state_folder_not_found"
   | "host_state_session_move_refused"
   | "host_state_action_conflict"
@@ -841,6 +848,17 @@ export async function validateHostStateBusinessAction(
     })
     return plan.ok ? undefined : hostSessionMoveRejection(plan.reason)
   }
+  if (action.action.kind === "message.enqueue" && action.action.branch) {
+    return validateBranchEnqueue(
+      db,
+      action.sessionId,
+      {
+        messageId: action.action.messageId,
+        branch: action.action.branch,
+      },
+      action.actionId
+    )
+  }
   if (action.action.kind === "message.enqueue") {
     const existing = await db.messages.get(action.action.messageId)
     const existingActionId = (existing?.metadata?.hostState as { actionId?: unknown } | undefined)
@@ -862,6 +880,50 @@ export async function validateHostStateBusinessAction(
       : undefined
   }
   return undefined
+}
+
+/**
+ * The session's branch picks without `groupId`'s, so the newest sibling (the
+ * one a branch just added) is the one shown.
+ */
+function withoutBranchSelection(
+  session: ChatSession | undefined,
+  groupId: string
+): Record<string, string> | undefined {
+  const { [groupId]: _picked, ...rest } = session?.activeBranchByGroup ?? {}
+  return Object.keys(rest).length > 0 ? rest : undefined
+}
+
+/** The session's rows in transcript order, as the branch rules read them. */
+function sessionRowsInOrder(db: ReturnType<typeof getDb>, sessionId: string) {
+  return db.messages
+    .where("[sessionId+createdAt]")
+    .between([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER])
+    .sortBy("createdAt")
+}
+
+/**
+ * A regenerate must name the last question; an edit, an earlier question of
+ * this session and a new id.
+ */
+async function validateBranchEnqueue(
+  db: ReturnType<typeof getDb>,
+  sessionId: string,
+  intent: BranchIntent,
+  actionId: string
+): Promise<{ code: string; message: string } | undefined> {
+  if (intent.branch.kind === "edit") {
+    const existing = await db.messages.get(intent.messageId)
+    const existingActionId = (existing?.metadata?.hostState as { actionId?: unknown } | undefined)
+      ?.actionId
+    if (existing && existingActionId !== actionId) {
+      return { code: "host_state_message_id_exists", message: "The message id already exists." }
+    }
+    // A replay of an edit the Host already wrote finds its own replacement
+    // last; the original is still where it was.
+    if (existing) return undefined
+  }
+  return hostStateBranchRejection(await sessionRowsInOrder(db, sessionId), intent) ?? undefined
 }
 
 /**
@@ -1386,6 +1448,32 @@ async function persistBusinessProjection(
       return
     }
     case "message.enqueue": {
+      const branch = action.action.branch
+      if (branch?.kind === "regenerate") {
+        // The question is already in the transcript: no row is added, and the
+        // replies under it become siblings of the one the turn will write.
+        const plan = planRegenerateBranch(
+          await sessionRowsInOrder(db, action.sessionId),
+          action.action.messageId
+        )
+        if (!plan) throw new HostStateStoreError("host_state_regenerate_anchor_moved")
+        if (plan.upserts.length > 0) await db.messages.bulkPut(plan.upserts)
+        if (plan.deleteIds.length > 0) await db.messages.bulkDelete(plan.deleteIds)
+        markSessionDirty(action.sessionId)
+        await db.sessions.update(action.sessionId, {
+          activeBranchByGroup: withoutBranchSelection(session, plan.groupId),
+          updatedAt: now,
+        })
+        return
+      }
+      const editPlan =
+        branch?.kind === "edit"
+          ? planEditBranch(await sessionRowsInOrder(db, action.sessionId), branch.editsMessageId)
+          : null
+      if (branch?.kind === "edit" && !editPlan) {
+        throw new HostStateStoreError("host_state_message_not_found")
+      }
+      if (editPlan && editPlan.upserts.length > 0) await db.messages.bulkPut(editPlan.upserts)
       const instantTitle = instantSessionTitle(action.action.text)
       const message: StoredMessage = {
         id: action.action.messageId,
@@ -1399,6 +1487,8 @@ async function persistBusinessProjection(
             clientId: action.clientId,
             attachmentRefs: action.action.attachments,
           },
+          // The replacement joins the original's group in the next slot.
+          ...(editPlan ? { branchGroupId: editPlan.groupId, branchIndex: editPlan.index } : {}),
         },
         createdAt: now,
       }
@@ -1420,6 +1510,10 @@ async function persistBusinessProjection(
         lastMessagePreview: action.action.text.replace(/\s+/g, " ").trim().slice(0, 120),
         lastMessageAt: now,
         updatedAt: now,
+        // The newest sibling is the one shown when nothing is picked: the edit.
+        ...(editPlan
+          ? { activeBranchByGroup: withoutBranchSelection(session, editPlan.groupId) }
+          : {}),
       })
       return
     }

@@ -30551,6 +30551,7 @@
         "attachmentUnsupported": "部分文件已跳过——不支持该类型。",
         "attachmentUploading": "正在上传 {name}",
         "attachmentsNeedHost": "该桌面端无法接收附件——消息已发送，但未带附件。",
+        "branchNeedsHost": "该桌面端不支持从这里重新生成或编辑——请将它更新到最新版本。",
         "changes": {
           "collapseDiff": "收起 {path} 的差异",
           "diffEmpty": "桌面端没有返回该文件的差异内容。",

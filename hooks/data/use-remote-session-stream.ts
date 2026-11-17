@@ -43,6 +43,7 @@ import type {
   PendingApproval,
   SDKEventEnvelope,
 } from "@cognia/agent-config-types"
+import type { HostStateMessageBranch } from "@cognia/agent-config-types/host-state"
 import {
   enqueueHostStateIntentIfAvailable,
   withdrawUnsentHostStateMessages,
@@ -140,6 +141,17 @@ export interface RemoteSessionStream {
     attachments?: readonly UploadableAttachment[],
     options?: RemoteSendOptions
   ) => Promise<void>
+  /**
+   * Regenerate the reply to `question`, the conversation's last one, on the
+   * Host as a branch: the replies it had stay as siblings. Needs a Host that
+   * advertises `HOST_STATE_MESSAGE_BRANCH_OPERATION`.
+   */
+  regenerate: (question: { id: string; text: string }) => Promise<void>
+  /**
+   * Send `text` in place of the question `messageId` on the Host as a branch:
+   * the original and its replies stay as a sibling. Same Host requirement.
+   */
+  editResend: (messageId: string, text: string) => Promise<void>
   /** Interrupt the in-flight turn. */
   interrupt: () => Promise<void>
   /**
@@ -501,6 +513,51 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
     [sessionId, setStatusBoth, t]
   )
 
+  /**
+   * Send a finished turn again as a branch, the way the desktop regenerates
+   * and edits: the Host keeps what it replaces as siblings
+   * (`HostStateMessageBranch`). Only a HostState Host that advertises the
+   * field can take one; the view offers neither otherwise. The status moves
+   * when the Host starts the turn, not here: a branch it refuses (the
+   * conversation moved on, a turn started) starts nothing, and the outbox
+   * shows the refusal.
+   */
+  const sendBranch = useCallback(
+    async (messageId: string, text: string, branch: HostStateMessageBranch) => {
+      if (!sessionId) return
+      try {
+        const queued = await enqueueHostStateIntentIfAvailable({
+          sessionId,
+          action: { kind: "message.enqueue", messageId, text, attachments: [], branch },
+        })
+        if (!queued) toast.warning(t("detail.branchNeedsHost"))
+      } catch (err) {
+        if (isControlForbidden(err)) {
+          setCanControl(false)
+          toast.warning(t("detail.controlLost"))
+        } else {
+          toast.error(t("detail.sendFailed", { reason: errReason(err) }))
+        }
+        throw err
+      }
+    },
+    [sessionId, t]
+  )
+
+  /** Regenerate the reply to `question`, the conversation's last one. */
+  const regenerate = useCallback(
+    (question: { id: string; text: string }) =>
+      sendBranch(question.id, question.text, { kind: "regenerate" }),
+    [sendBranch]
+  )
+
+  /** Send `text` in place of the question `messageId`, as a new sibling. */
+  const editResend = useCallback(
+    (messageId: string, text: string) =>
+      sendBranch(crypto.randomUUID(), text, { kind: "edit", editsMessageId: messageId }),
+    [sendBranch]
+  )
+
   const interrupt = useCallback(async () => {
     if (!sessionId) return
     // Nothing in flight — don't fire a spurious interrupt RPC.
@@ -609,6 +666,8 @@ export function useRemoteSessionStream(sessionId: string | null): RemoteSessionS
     sessionEnded,
     notFound,
     send,
+    regenerate,
+    editResend,
     interrupt,
     respond,
     reconcileTranscript,

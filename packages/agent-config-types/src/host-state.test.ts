@@ -970,6 +970,20 @@ describe("wire guards", () => {
     { kind: "folder.delete", folderId: "f1" },
     { kind: "draft.replace", text: "t", attachments: [] },
     { kind: "message.enqueue", messageId: "m", text: "t", attachments: [] },
+    {
+      kind: "message.enqueue",
+      messageId: "m",
+      text: "t",
+      attachments: [],
+      branch: { kind: "regenerate" },
+    },
+    {
+      kind: "message.enqueue",
+      messageId: "m2",
+      text: "t",
+      attachments: [],
+      branch: { kind: "edit", editsMessageId: "m" },
+    },
     { kind: "turn.steer", text: "t" },
     { kind: "turn.steer", text: "t", expectedTurnId: "turn-1" },
     { kind: "turn.followup", text: "t" },
@@ -1027,6 +1041,26 @@ describe("wire guards", () => {
         } as never)
       )
     ).toBe(false)
+  })
+
+  it("takes a branch only as a regenerate or an edit of another message, with no files", () => {
+    const enqueue = (branch: unknown, attachments: unknown[] = []) =>
+      isHostStateAction(
+        action({ kind: "message.enqueue", messageId: "m", text: "t", attachments, branch } as never)
+      )
+    expect(enqueue({ kind: "regenerate" })).toBe(true)
+    expect(enqueue({ kind: "edit", editsMessageId: "m0" })).toBe(true)
+    // The Host re-sends files from its own rows; a client cannot add some.
+    expect(
+      enqueue({ kind: "regenerate" }, [
+        { name: "a.png", mediaType: "image/png", size: 1, ref: "r" },
+      ])
+    ).toBe(false)
+    expect(enqueue({ kind: "edit", editsMessageId: "m" })).toBe(false)
+    expect(enqueue({ kind: "edit", editsMessageId: "" })).toBe(false)
+    expect(enqueue({ kind: "regenerate", anchorId: "m0" })).toBe(false)
+    expect(enqueue({ kind: "fork" })).toBe(false)
+    expect(enqueue("regenerate")).toBe(false)
   })
 
   it("accepts the closed action shape and rejects any unknown wire field", () => {

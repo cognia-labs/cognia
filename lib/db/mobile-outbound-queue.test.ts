@@ -23,6 +23,7 @@ import {
   HostStateChannelUnavailableError,
   awaitHostStateIntentSettlement,
   hostOwnsSessionState,
+  hostStateMessageBranchNegotiatedIn,
   hostStateSessionIntentAvailable,
   isAbandonedClaim,
   listByStatus,
@@ -49,6 +50,7 @@ import type { MobileOutboundJobRow } from "./mobile-outbound-types"
 import { __resetDbForTesting, activateAccountDatabase, getDb } from "./schema"
 import {
   __resetRuntimeSnapshotForTesting,
+  getRuntimeSnapshot,
   setRuntimeSnapshot,
 } from "@/lib/runtime/runtime-snapshot-store"
 import {
@@ -57,6 +59,7 @@ import {
   setActiveRuntimeTargetContext,
 } from "@/lib/runtime/runtime-target-context"
 import {
+  HOST_STATE_MESSAGE_BRANCH_OPERATION,
   HOST_STATE_TURN_FENCE_OPERATION,
   createEmptyHostStateSession,
   sessionIndexChannel,
@@ -1876,6 +1879,41 @@ describe("Stop: turn fence, priority and withdrawal", () => {
     expect(left.map((row) => row.id)).toEqual([offered!.id])
     expect(left.some((row) => row.id === unsent!.id || row.id === later!.id)).toBe(false)
     expect((await getDb().messages.toArray()).map((message) => message.id)).toEqual(["m2"])
+  })
+
+  it("offers a branch only to a Host that submits HostState and takes the field", () => {
+    negotiate(["host_state_submit", HOST_STATE_MESSAGE_BRANCH_OPERATION])
+    expect(hostStateMessageBranchNegotiatedIn(getRuntimeSnapshot())).toBe(true)
+    negotiate(["host_state_submit"])
+    expect(hostStateMessageBranchNegotiatedIn(getRuntimeSnapshot())).toBe(false)
+    negotiate([HOST_STATE_MESSAGE_BRANCH_OPERATION])
+    expect(hostStateMessageBranchNegotiatedIn(getRuntimeSnapshot())).toBe(false)
+  })
+
+  it("withdraws a regenerate Stop overtakes without handing its question back", async () => {
+    negotiate(["host_state_submit"])
+    await getDb().messages.put({
+      id: "anchor",
+      sessionId: "s-stop",
+      role: "user",
+      parts: [{ type: "text", text: "the question" }],
+      createdAt: 1,
+    })
+    await enqueueHostStateIntentIfAvailable({
+      sessionId: "s-stop",
+      actionId: "action-regenerate",
+      nowMs: 10,
+      action: {
+        kind: "message.enqueue",
+        messageId: "anchor",
+        text: "the question",
+        attachments: [],
+        branch: { kind: "regenerate" },
+      },
+    })
+    await expect(withdrawUnsentHostStateMessages("s-stop")).resolves.toEqual([])
+    expect(await getDb().mobileOutboundQueue.count()).toBe(0)
+    expect(await getDb().messages.get("anchor")).toBeDefined()
   })
 
   it("keeps a bubble the Host already confirmed, and withdraws nothing off HostState", async () => {
