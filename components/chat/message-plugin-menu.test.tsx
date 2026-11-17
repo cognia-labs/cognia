@@ -1,21 +1,48 @@
 /**
  * @jest-environment jsdom
  *
- * Tests for the chat-message plugin context-menu dropdown: hidden when
- * empty, zone filtering, CustomEvent dispatch with the message click
- * context, disabled handling.
+ * Tests for the chat-message plugin context-menu items: nothing when empty,
+ * zone filtering, CustomEvent dispatch with the message click context,
+ * disabled handling, drawn inside a host menu.
  */
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 
-import { MessagePluginMenu } from "./message-plugin-menu"
+import { renderHook } from "@testing-library/react"
+
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+
+import {
+  MessagePluginMenuItems,
+  useMessagePluginItems,
+  type MessagePluginItemTarget,
+} from "./message-plugin-menu"
 import {
   __resetContextMenuRegistryForTesting,
   registerContextMenuItem,
 } from "@/lib/plugin/context-menu/registry"
 
-const messages = { chat: { message: { pluginMenu: "Plugin actions" } } }
+const messages = {}
+
+/** A host "…" menu with one item of its own and the plugin items after it. */
+function HostMenu(target: MessagePluginItemTarget) {
+  const items = useMessagePluginItems(target)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger>More</DropdownMenuTrigger>
+      <DropdownMenuContent>
+        <DropdownMenuItem>Share</DropdownMenuItem>
+        <MessagePluginMenuItems items={items} separated />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 function wrap(ui: React.ReactNode) {
   return render(
@@ -29,13 +56,15 @@ afterEach(() => {
   __resetContextMenuRegistryForTesting()
 })
 
-describe("MessagePluginMenu", () => {
-  it("renders nothing when no plugin contributed chat:message items", () => {
-    const { container } = wrap(<MessagePluginMenu messageId="m1" />)
+describe("message plugin items", () => {
+  it("has nothing to draw when no plugin contributed chat:message items", () => {
+    const { result } = renderHook(() => useMessagePluginItems({ messageId: "m1" }))
+    expect(result.current).toEqual([])
+    const { container } = wrap(<MessagePluginMenuItems items={[]} separated />)
     expect(container).toBeEmptyDOMElement()
   })
 
-  it("lists chat:message items and dispatches the CustomEvent with the click context", async () => {
+  it("lists chat:message items in the host menu and dispatches the click context", async () => {
     const user = userEvent.setup()
     const handler = jest.fn()
     window.addEventListener("plugin-context-menu:p:translate", ((e: CustomEvent) =>
@@ -50,9 +79,11 @@ describe("MessagePluginMenu", () => {
       pluginId: "p",
       item: { id: "p:canvas-only", label: "Canvas only", when: "canvas", onClick: () => {} },
     })
-    wrap(<MessagePluginMenu messageId="m1" sessionId="s1" selection="hello" />)
+    wrap(<HostMenu messageId="m1" sessionId="s1" selection="hello" />)
 
-    await user.click(screen.getByRole("button", { name: "Plugin actions" }))
+    await user.click(screen.getByRole("button", { name: "More" }))
+    expect(screen.getByRole("menuitem", { name: "Share" })).toBeInTheDocument()
+    expect(screen.getByRole("separator")).toBeInTheDocument()
     expect(screen.queryByText("Canvas only")).not.toBeInTheDocument()
     await user.click(await screen.findByText("Translate"))
 
@@ -77,9 +108,9 @@ describe("MessagePluginMenu", () => {
         onClick: () => {},
       },
     })
-    wrap(<MessagePluginMenu messageId="m1" />)
+    wrap(<HostMenu messageId="m1" />)
 
-    await user.click(screen.getByRole("button", { name: "Plugin actions" }))
+    await user.click(screen.getByRole("button", { name: "More" }))
 
     const item = await screen.findByText("Disabled item")
     expect(item.closest("[role='menuitem']")).toHaveAttribute("aria-disabled", "true")

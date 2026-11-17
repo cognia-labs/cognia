@@ -1,4 +1,8 @@
-import { resolveMessageActionCommands } from "./message-action-commands"
+import {
+  messageActionCommandsAt,
+  resolveMessageActionCommands,
+  type MessageActionCommandContext,
+} from "./message-action-commands"
 
 describe("resolveMessageActionCommands", () => {
   it("produces the same capability-based set independently of the UI surface", () => {
@@ -30,7 +34,7 @@ describe("resolveMessageActionCommands", () => {
   it("does not invent content or session actions", () => {
     expect(
       resolveMessageActionCommands({ role: "user", hasContent: false, hasSession: false })
-    ).toEqual([{ id: "bookmark" }])
+    ).toEqual([{ id: "bookmark", placement: "menu" }])
   })
 
   it("includes role and host capabilities with their safety flags", () => {
@@ -56,7 +60,7 @@ describe("resolveMessageActionCommands", () => {
       canRegenerate: true,
       streaming: false,
     })
-    expect(assistant).toContainEqual({ id: "regenerate", disabled: false })
+    expect(assistant).toContainEqual({ id: "regenerate", placement: "bar", disabled: false })
     expect(assistant.some(({ id }) => id === "edit")).toBe(false)
   })
 })
@@ -239,7 +243,7 @@ describe("restorePoint", () => {
     }).find((c) => c.id === "restorePoint")
 
   it("is offered on the user's own turn in a conversation", () => {
-    expect(command()).toEqual({ id: "restorePoint", disabled: undefined })
+    expect(command()).toEqual({ id: "restorePoint", placement: "menu", disabled: undefined })
   })
 
   it("is absent on a reply or outside a conversation", () => {
@@ -249,5 +253,86 @@ describe("restorePoint", () => {
 
   it("is disabled while the conversation is mid-turn", () => {
     expect(command({ streaming: true })?.disabled).toBe(true)
+  })
+})
+
+describe("placement (D10)", () => {
+  const everything: MessageActionCommandContext = {
+    role: "assistant",
+    hasContent: true,
+    hasSession: true,
+    canRegenerate: true,
+    canReadAloud: true,
+    canSaveAsMemory: true,
+    canSaveAsIssue: true,
+    canSelect: true,
+    canSelectText: true,
+    canBringBack: true,
+    canSendToMain: true,
+    canDelete: true,
+  }
+
+  it("puts every command in exactly one place, the bar's first", () => {
+    const commands = resolveMessageActionCommands(everything)
+    const ids = commands.map((command) => command.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    const firstMenu = commands.findIndex((command) => command.placement === "menu")
+    expect(commands.slice(firstMenu).every((command) => command.placement === "menu")).toBe(true)
+    expect(messageActionCommandsAt(commands, "bar").map((command) => command.id)).toEqual([
+      "copy",
+      "reply",
+      "saveAsMemory",
+      "saveAsIssue",
+      "regenerate",
+      "readAloud",
+    ])
+    expect(messageActionCommandsAt(commands, "menu").map((command) => command.id)).toEqual([
+      "share",
+      "quote",
+      "copyLink",
+      "shareCard",
+      "bookmark",
+      "select",
+      "selectText",
+      "branch",
+      "truncate",
+      "sendToMain",
+      "bringBack",
+      "delete",
+    ])
+  })
+
+  it("draws reply once, on the bar", () => {
+    const reply = resolveMessageActionCommands(everything).filter(({ id }) => id === "reply")
+    expect(reply).toEqual([{ id: "reply", placement: "bar" }])
+  })
+
+  it("keeps the user's own turn's commands on the bar in reading order", () => {
+    const bar = messageActionCommandsAt(
+      resolveMessageActionCommands({
+        role: "user",
+        hasContent: true,
+        hasSession: true,
+        canEdit: true,
+        canRerunTemplate: true,
+      }),
+      "bar"
+    ).map(({ id }) => id)
+    expect(bar).toEqual(["copy", "edit", "resend", "reply", "rerunTemplate"])
+  })
+
+  it("offers send to main only from a side chat, with words to send", () => {
+    const ids = (over: Partial<MessageActionCommandContext>) =>
+      resolveMessageActionCommands({ ...everything, ...over }).map(({ id }) => id)
+    expect(ids({ canSendToMain: false })).not.toContain("sendToMain")
+    expect(ids({ hasContent: false })).not.toContain("sendToMain")
+  })
+
+  it("keeps only what the surface allows", () => {
+    const commands = resolveMessageActionCommands({
+      ...everything,
+      allowed: new Set(["copy", "bookmark", "branch"]),
+    })
+    expect(commands.map(({ id }) => id)).toEqual(["copy", "bookmark", "branch"])
   })
 })

@@ -395,6 +395,7 @@ function TimelineActionSheet({
           ? (target, text) => onEditResend(target.id, text)
           : undefined
       }
+      allowedCommands={render.allowedCommands}
     />
   )
 }

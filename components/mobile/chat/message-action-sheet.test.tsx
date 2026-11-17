@@ -95,9 +95,13 @@ const chatState = {
   // the active one's, so the sheet can be opened on a background pane's message.
   sessions: {} as Record<string, { status: string }>,
 }
+const mockSetReplyTo = jest.fn()
 jest.mock("@/stores/chat", () => ({
   __esModule: true,
-  useChatStore: (selector: (s: typeof chatState) => unknown) => selector(chatState),
+  useChatStore: Object.assign(
+    (selector: (s: typeof chatState) => unknown) => selector(chatState),
+    { getState: () => ({ ...chatState, setReplyTo: mockSetReplyTo }) }
+  ),
 }))
 
 const settingsState = { settings: { ttsEnabled: true } }
@@ -176,6 +180,16 @@ const messages = {
     },
   },
   common: { cancel: "Cancel" },
+  chat: {
+    message: {
+      replyLabel: "Reply",
+      rerunTemplateLabel: "Re-run this message",
+      saveAsMemoryLabel: "Save as memory",
+      saveAsIssueLabel: "Save as issue",
+      sendToMainLabel: "Send to main thread",
+      bringBackLabel: "Bring back to the main conversation",
+    },
+  },
 }
 
 function renderSheet(
@@ -187,6 +201,7 @@ function renderSheet(
     onEditResend?: (m: UIMessage, newText: string) => void | Promise<void>
     onSelect?: (m: UIMessage) => void
     character?: { voiceProfile?: undefined } | null
+    allowedCommands?: ReadonlySet<import("@/lib/chat/message-action-commands").MessageActionCommandId>
   } = {}
 ) {
   return render(
@@ -196,11 +211,17 @@ function renderSheet(
   )
 }
 
+/** A message outside any conversation (no session id, no transcript around it). */
+function sessionless(text: string): UIMessage {
+  return { id: "m1", role: "assistant", parts: [{ type: "text", text }] } as UIMessage
+}
+
 function makeMessage(text: string): UIMessage {
   return {
     id: "m1",
     role: "assistant",
     parts: [{ type: "text", text }],
+    metadata: { sessionId: "s1" },
   } as UIMessage
 }
 
@@ -258,7 +279,7 @@ describe("MessageActionSheet", () => {
   })
 
   it("hides the Branch row without a session id", () => {
-    renderSheet(makeMessage("hello"), jest.fn())
+    renderSheet(sessionless("hello"), jest.fn())
     expect(screen.queryByTestId("message-action-branch")).not.toBeInTheDocument()
   })
 
@@ -379,11 +400,12 @@ describe("MessageActionSheet", () => {
     expect(screen.getByTestId("message-action-quote")).toBeInTheDocument()
   })
 
-  it("disables Copy/Quote/Share for an empty message", () => {
+  it("offers no Copy/Quote/Share for an empty message, as the desktop bar does", () => {
     renderSheet(makeMessage(""), jest.fn())
-    expect(screen.getByTestId("message-action-quote")).toBeDisabled()
-    expect(screen.getByTestId("message-action-copy")).toBeDisabled()
-    expect(screen.getByTestId("message-action-share")).toBeDisabled()
+    expect(screen.queryByTestId("message-action-quote")).toBeNull()
+    expect(screen.queryByTestId("message-action-copy")).toBeNull()
+    expect(screen.queryByTestId("message-action-share")).toBeNull()
+    expect(screen.getByTestId("message-action-bookmark")).toBeInTheDocument()
   })
 
   it("dispatches a markdown blockquote to the composer and closes on Quote", () => {
@@ -455,6 +477,7 @@ describe("MessageActionSheet", () => {
         { type: "reasoning", text: "private thinking" },
         { type: "text", text },
       ],
+      metadata: { sessionId: "s1" },
     } as UIMessage
     renderSheet(message, jest.fn())
     fireEvent.click(screen.getByTestId("message-action-copy"))
@@ -690,7 +713,7 @@ describe("MessageActionSheet", () => {
     it("offers no text to select without words or a conversation", () => {
       renderSheet(inSession(""), jest.fn())
       expect(screen.queryByTestId("message-action-select-text")).toBeNull()
-      renderSheet(makeMessage("no session"), jest.fn())
+      renderSheet(sessionless("no session"), jest.fn())
       expect(screen.queryByTestId("message-action-select-text")).toBeNull()
     })
 
@@ -708,6 +731,46 @@ describe("MessageActionSheet", () => {
     it("offers no Select messages without onSelect", () => {
       renderSheet(inSession(), jest.fn())
       expect(screen.queryByTestId("message-action-select")).toBeNull()
+    })
+  })
+
+  describe("the commands the desktop bar has (D10)", () => {
+    it("offers reply, save as memory and save as issue on a reply in a conversation", () => {
+      renderSheet(makeMessage("hello"), jest.fn())
+      expect(screen.getByTestId("message-action-reply")).toBeInTheDocument()
+      expect(screen.getByTestId("message-action-save-as-memory")).toBeInTheDocument()
+      expect(screen.getByTestId("message-action-save-as-issue")).toBeInTheDocument()
+    })
+
+    it("lists the bar's commands before the menu's", () => {
+      renderSheet(makeMessage("hello"), jest.fn())
+      const order = screen
+        .getAllByTestId(/^message-action-(copy|reply|share|branch)$/)
+        .map((row) => row.dataset.testid)
+      expect(order).toEqual([
+        "message-action-copy",
+        "message-action-reply",
+        "message-action-share",
+        "message-action-branch",
+      ])
+    })
+
+    it("aims the composer's next send at the message on Reply, and closes", () => {
+      const onOpenChange = jest.fn()
+      renderSheet(makeMessage("hello"), onOpenChange)
+      fireEvent.click(screen.getByTestId("message-action-reply"))
+      expect(mockSetReplyTo).toHaveBeenCalledWith(expect.objectContaining({ messageId: "m1" }), "s1")
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+    })
+
+    it("keeps only the commands the surface allows", () => {
+      renderSheet(makeMessage("hello"), jest.fn(), {
+        allowedCommands: new Set(["copy", "readAloud"]),
+      })
+      expect(screen.getByTestId("message-action-copy")).toBeInTheDocument()
+      expect(screen.queryByTestId("message-action-reply")).toBeNull()
+      expect(screen.queryByTestId("message-action-branch")).toBeNull()
+      expect(screen.queryByTestId("message-action-bookmark")).toBeNull()
     })
   })
 })

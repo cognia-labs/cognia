@@ -718,6 +718,80 @@ describe("message display actions", () => {
   })
 })
 
+describe("message actions from their placements (D10)", () => {
+  const { registerContextMenuItem, __resetContextMenuRegistryForTesting } = jest.requireActual(
+    "@/lib/plugin/context-menu/registry"
+  ) as typeof import("@/lib/plugin/context-menu/registry")
+  const { MessageRenderProvider } = jest.requireActual(
+    "./message-render-context"
+  ) as typeof import("./message-render-context")
+  const inSession = (message: UIMessage) =>
+    ({ ...message, metadata: { sessionId: "s-actions" } }) as UIMessage
+  const openMenu = () => {
+    fireEvent.pointerDown(screen.getByLabelText("moreLabel"))
+    return screen.getByRole("menu")
+  }
+
+  beforeEach(() => {
+    mockActions = "hover"
+  })
+  afterEach(() => {
+    mockActions = "all"
+    __resetContextMenuRegistryForTesting()
+  })
+
+  it("draws Reply once: on the bar, not again in the menu", () => {
+    render(<MessageRenderer message={inSession(assistantMsg())} />)
+    expect(screen.getAllByLabelText("replyTooltip")).toHaveLength(1)
+    const menu = openMenu()
+    expect(menu.querySelector("[data-testid='message-reply-menu']")).toBeNull()
+    expect(menu).not.toHaveTextContent("replyLabel")
+  })
+
+  it("puts plugin items in the message's own menu, after a separator", () => {
+    registerContextMenuItem({
+      id: "p:translate",
+      pluginId: "p",
+      item: { id: "p:translate", label: "Translate", when: "chat:message", onClick: () => {} },
+    })
+    render(<MessageRenderer message={inSession(assistantMsg())} />)
+    expect(screen.getAllByLabelText("moreLabel")).toHaveLength(1)
+    const menu = openMenu()
+    expect(menu).toHaveTextContent("shareLabel")
+    expect(menu.querySelector("[data-testid='message-plugin-menu-item']")).toHaveTextContent(
+      "Translate"
+    )
+    expect(menu.querySelector("[role='separator']")).not.toBeNull()
+  })
+
+  it("draws only the commands the surface allows", () => {
+    render(
+      <MessageRenderProvider value={{ allowedCommands: new Set(["copy", "bookmark"]) }}>
+        <MessageRenderer message={inSession(assistantMsg())} />
+      </MessageRenderProvider>
+    )
+    expect(screen.queryByLabelText("replyTooltip")).toBeNull()
+    const menu = openMenu()
+    expect(menu).toHaveTextContent("bookmarkTooltip")
+    expect(menu).not.toHaveTextContent("shareLabel")
+    expect(menu).not.toHaveTextContent("branchLabel")
+  })
+
+  it("draws every command inline when all actions are shown, plugin items in a menu", () => {
+    mockActions = "all"
+    registerContextMenuItem({
+      id: "p:pin",
+      pluginId: "p",
+      item: { id: "p:pin", label: "Pin", when: "chat:message", onClick: () => {} },
+    })
+    render(<MessageRenderer message={inSession(assistantMsg())} />)
+    expect(screen.getByLabelText("replyTooltip")).toBeInTheDocument()
+    expect(screen.getByLabelText("shareTooltip")).toBeInTheDocument()
+    expect(screen.getByLabelText("branchTooltip")).toBeInTheDocument()
+    expect(openMenu()).toHaveTextContent("Pin")
+  })
+})
+
 beforeEach(() => {
   useChatStore.getState().clear()
   mockReasoningRow.mockClear()

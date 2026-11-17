@@ -14,8 +14,6 @@ import { Reasoning } from "@/components/ai-elements/reasoning"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
 import { MessageMetaLine, MessageShell } from "@/components/chat/message-shell"
 import { UserMessageBody } from "@/components/chat/user-message-body"
-import { entityCitation } from "@/lib/chat/mentions/selection-citations"
-import { messageRefId } from "@/lib/chat/mentions/message-reference"
 import type { MarkdownMention } from "@/components/chat/markdown/markdown-plugins"
 import { resolveMessageRenderProps } from "@/lib/chat/message-render-context"
 import {
@@ -110,7 +108,7 @@ import {
 } from "@/lib/chat/agent-flow-grouping"
 import { foldTurnParts, type TurnFold } from "@/lib/chat/turn-fold"
 import { userBubbleClass } from "@/lib/chat/message-bubble"
-import { buildReplyTo, readReplyTo } from "@/lib/chat/reply-to"
+import { readReplyTo } from "@/lib/chat/reply-to"
 import { ReplyToQuote } from "@/components/chat/message-parts/reply-to-quote"
 import { PromptPreambleCard } from "@/components/chat/message-parts/prompt-preamble-card"
 import { locatePromptPreamble, readPromptPreambleSummary } from "@/lib/chat/prompt-preamble"
@@ -176,6 +174,7 @@ import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import { UsageBreakdown } from "@/components/chat/usage-breakdown"
 import type { Character } from "@cognia/agent-config-types"
 import React, {
+  Fragment,
   memo,
   useCallback,
   useMemo,
@@ -204,13 +203,19 @@ import {
   messageTypedText,
   shareMessageContent,
 } from "@/lib/chat/message-share"
-import { resolveMessageActionCommands } from "@/lib/chat/message-action-commands"
+import {
+  messageActionCommandsAt,
+  resolveMessageActionCommands,
+  type MessageActionCommand,
+} from "@/lib/chat/message-action-commands"
 import { loggers } from "@cognia/logging"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
-import { MessagePluginMenu } from "@/components/chat/message-plugin-menu"
+import {
+  MessagePluginMenuItems,
+  useMessagePluginItems,
+} from "@/components/chat/message-plugin-menu"
+import { useMessageCommands } from "@/components/chat/use-message-commands"
 import { MessageImActions } from "@/components/chat/message-im-actions"
-import { readChatTemplateRun } from "@/lib/chat/template/run"
-import { requestTemplateRerun } from "@/lib/chat/template/rerun-request"
 import { BranchDialog } from "@/components/chat/branch-dialog"
 import { TruncateFromDialog } from "@/components/chat/truncate-from-dialog"
 import { SteerStatusBadge } from "@/components/chat/message-parts/steer-status-badge"
@@ -218,14 +223,7 @@ import { TurnAdmissionBadge } from "@/components/chat/message-parts/turn-admissi
 import { SessionPeerOriginBadge } from "@/components/chat/session-peer-origin-badge"
 import { useComposerIntentStore } from "@/stores/chat/composer-intent-store"
 import { dispatchComposerAppend } from "@/components/chat/composer"
-import { saveMessageAsMemory } from "@/lib/chat/save-message-as-memory"
-import { saveMessageAsIssue } from "@/lib/chat/save-message-as-issue"
-import { useRouter } from "next/navigation"
-import { useProjectStore } from "@/stores/project/project-store"
-import { useAsideTarget } from "@/components/context-workbench/aside-target"
 import { useTranscriptSelectionHost } from "@/hooks/chat/use-transcript-selection"
-import { useLiveQuery } from "dexie-react-hooks"
-import { getSession } from "@/lib/db/sessions"
 import {
   getMessagePartRenderer,
   subscribeMessagePartRenderers,
@@ -346,6 +344,8 @@ function MessageRendererInner({
   messageDisplay,
 }: Props & { messageDisplay: ResolvedMessageDisplayOptions }) {
   const tActivity = useTranslations("inbox.activity.kind")
+  // The commands this surface can carry out, when it supports only some (D10).
+  const { allowedCommands } = useMessageRenderContext()
   const isWithdrawn =
     (suppliedMessage as { metadata?: Record<string, unknown> }).metadata?.deletedAt !== undefined
   const message = useMemo(() => {
@@ -366,7 +366,6 @@ function MessageRendererInner({
   const t = useTranslations("chat.message")
   // "Send (⌘/Ctrl+Enter)" names keys a phone does not have.
   const showKeyboardHints = useShowKeyboardHints()
-  const router = useRouter()
   // Agent invocation-flow display mode (simplified / standard / detailed).
   const display = messageDisplay
   // `all` is an explicit choice to see every bar, so a sheet does not thin it.
@@ -391,9 +390,6 @@ function MessageRendererInner({
   // out of render via a lazy state initializer).
   const [nowFallback] = useState(() => new Date())
   const activeSessionId = useChatStore((s) => s.activeSessionId)
-  // Non-null only inside a workbench sidechat — see `AsideTargetProvider`.
-  const asideTargetSessionId = useAsideTarget()
-  const tAsides = useTranslations("contextWorkbench.asides")
   // Non-null only inside a transcript that mounts selection mode; a read-only
   // transcript renders this same row and offers no "Select".
   const selectionHost = useTranscriptSelectionHost()
@@ -413,16 +409,13 @@ function MessageRendererInner({
     // is (a side chat or an unfocused split pane is not the active session).
     transcriptSessionId ??
     activeSessionId
-  // Where "hand this back" should land. An aside hands back to the main
-  // conversation; a branch hands back to the one it was cut from. Both are
-  // "up one level", so one action covers both rather than two that differ only
-  // in how they resolve the target. Null in an ordinary top-level conversation.
-  const branchParentId = useLiveQuery(
-    async () =>
-      branchSessionId ? ((await getSession(branchSessionId))?.parentSessionId ?? null) : null,
-    [branchSessionId]
-  )
-  const handBackTargetId = asideTargetSessionId ?? branchParentId ?? null
+  // Reply, rerun, save and hand-back: the same work the phone's sheet does.
+  const commands = useMessageCommands({
+    message,
+    sessionId: branchSessionId ?? undefined,
+    documentSessionId,
+  })
+  const { asideTargetSessionId, handBackTargetId, templateRun } = commands
   const defaultProvider = useSettingsStore((s) => s.settings?.defaultProvider)
   const messageProvider = (message as { metadata?: { provider?: string } }).metadata?.provider
   const checkpointEnabled =
@@ -611,17 +604,6 @@ function MessageRendererInner({
   // Plain text of the message, for the "share as card" action + gate.
   const messageText = useMemo(() => messageTypedText(message), [message])
   const messageShareContent = useMemo(() => buildMessageShareContent(message), [message])
-  /**
-   * The parameters this turn was written from, when it came from a template.
-   *
-   * Read defensively: `metadata` is persisted and synced, so an older build or
-   * another device can have put anything there, and one hidden button is a far
-   * better outcome than a transcript that will not render.
-   */
-  const templateRun = useMemo(
-    () => readChatTemplateRun((message as { metadata?: unknown }).metadata),
-    [message]
-  )
   // Command gating is session-scoped — a resend/truncate mid-turn lands as a
   // steer or rewrites history under a live stream — so it keys off the branch
   // session's status, not this row's live-tail flag.
@@ -643,9 +625,13 @@ function MessageRendererInner({
         canSaveAsMemory: Boolean(branchSessionId),
         canSaveAsIssue: Boolean(branchSessionId),
         canSelect: Boolean(selectionHost),
+        canSendToMain: Boolean(asideTargetSessionId),
+        allowed: allowedCommands,
         streaming: isStreaming || sessionBusy,
       }),
     [
+      allowedCommands,
+      asideTargetSessionId,
       branchSessionId,
       selectionHost,
       handBackTargetId,
@@ -660,16 +646,21 @@ function MessageRendererInner({
       ttsEnabled,
     ]
   )
-  const hasActionCommand = useCallback(
-    (id: (typeof messageActionCommands)[number]["id"]) =>
-      messageActionCommands.some((command) => command.id === id),
+  const barCommands = useMemo(
+    () => messageActionCommandsAt(messageActionCommands, "bar"),
     [messageActionCommands]
   )
-  const actionCommand = useCallback(
-    (id: (typeof messageActionCommands)[number]["id"]) =>
-      messageActionCommands.find((command) => command.id === id),
+  const menuCommands = useMemo(
+    () => messageActionCommandsAt(messageActionCommands, "menu"),
     [messageActionCommands]
   )
+  const pluginItems = useMessagePluginItems({
+    messageId: message.id,
+    sessionId:
+      typeof (message as { metadata?: { sessionId?: unknown } }).metadata?.sessionId === "string"
+        ? ((message as { metadata?: { sessionId?: string } }).metadata!.sessionId as string)
+        : undefined,
+  })
 
   // A turn that is nothing but tool calls has no prose to copy, quote, read
   // aloud or card, so it renders no action bar. The bar is `opacity-0` until
@@ -777,117 +768,6 @@ function MessageRendererInner({
     if (out.kind === "copied") toast.success(t("shareCopiedFallback"))
   }, [messageShareContent, t])
 
-  const handBack = useCallback(
-    async (submit: boolean) => {
-      const target = submit ? asideTargetSessionId : handBackTargetId
-      if (!target) return
-      const content = messageTypedText(message).trim()
-      if (!content) return
-      const text = `${content
-        .split("\n")
-        .map((line) => `> ${line}`)
-        .join("\n")}\n\n`
-      const source =
-        asideTargetSessionId && documentSessionId
-          ? await getSession(documentSessionId).catch((error) => {
-              loggers.chat.warn("Could not read side chat title", error)
-              return undefined
-            })
-          : undefined
-      const citations =
-        asideTargetSessionId && documentSessionId
-          ? [
-              entityCitation(
-                "message",
-                messageRefId(documentSessionId, message.id),
-                source?.title || tAsides("fallbackName")
-              ),
-            ]
-          : []
-      const claimed = dispatchComposerAppend({
-        text,
-        citations,
-        sessionId: target,
-        submit,
-        ...(submit
-          ? {
-              onSubmitted: (sent: boolean) => {
-                if (sent) toast.success(t("sendToMainDone"))
-                else toast.info(t("sendToMainDraft"))
-              },
-            }
-          : {}),
-      })
-      if (!claimed) {
-        useComposerIntentStore.getState().stage(target, {
-          candidateId: crypto.randomUUID(),
-          prompt: text,
-          mode: "append",
-          citations,
-        })
-        toast.info(t(submit ? "sendToMainDraft" : "bringBackDraft"))
-      } else if (!submit) toast.success(t("bringBackDone"))
-    },
-    [asideTargetSessionId, documentSessionId, handBackTargetId, message, t, tAsides]
-  )
-  const handleBringBack = useCallback(() => void handBack(false), [handBack])
-  const handleSendToMain = useCallback(() => void handBack(true), [handBack])
-
-  const handleSaveAsMemory = useCallback(async () => {
-    if (!branchSessionId) return
-    try {
-      // Read at click time rather than subscribed: the value is used once per
-      // action, and `branch-dialog.tsx` reaches for it the same way.
-      const { activeProjectId } = useProjectStore.getState()
-      const title = await saveMessageAsMemory({
-        parts: message.parts,
-        sessionId: branchSessionId,
-        ...(activeProjectId ? { projectId: activeProjectId } : {}),
-      })
-      // Nothing readable in the turn. Saying so beats a success toast for a
-      // draft that was never filed.
-      if (!title) {
-        toast.error(t("saveAsMemoryEmpty"))
-        return
-      }
-      toast.success(t("saveAsMemoryDone", { title }))
-    } catch (err) {
-      // A PII-gate refusal arrives here, and it is a real answer the user has
-      // to see — the draft was not filed and no retry will change that.
-      toast.error(
-        t("saveAsMemoryFailed", { reason: err instanceof Error ? err.message : String(err) })
-      )
-    }
-  }, [branchSessionId, message.parts, t])
-
-  const handleSaveAsIssue = useCallback(async () => {
-    if (!branchSessionId) return
-    try {
-      const { activeProjectId } = useProjectStore.getState()
-      const issue = await saveMessageAsIssue({
-        parts: message.parts,
-        sessionId: branchSessionId,
-        messageId: message.id,
-        ...(activeProjectId ? { projectId: activeProjectId } : {}),
-      })
-      if (!issue) {
-        toast.error(t("saveAsIssueEmpty"))
-        return
-      }
-      toast.success(t("saveAsIssueDone", { identifier: issue.identifier }), {
-        action: {
-          label: t("saveAsIssueOpen"),
-          onClick: () => router.push(`/issues?id=${encodeURIComponent(issue.id)}`),
-        },
-      })
-    } catch (err) {
-      // "Create a project first" is a real answer the user has to see.
-      toast.error(
-        t("saveAsIssueFailed", { reason: err instanceof Error ? err.message : String(err) })
-      )
-    }
-  }, [branchSessionId, message.id, message.parts, router, t])
-
   const handleQuote = useCallback(() => {
     if (!branchSessionId) return
     const content = messageTypedText(message).trim()
@@ -906,15 +786,342 @@ function MessageRendererInner({
     }
   }, [branchSessionId, message, t])
 
-  // Aim the composer's next send at this row (ADR-0177 batch 2). The store
-  // keeps one target per conversation, so a second click on another row simply
-  // replaces the first, and the chip over the composer is the only UI state.
-  const handleReply = useCallback(() => {
-    if (!branchSessionId) return
-    useChatStore.getState().setReplyTo(buildReplyTo(message), branchSessionId)
-  }, [branchSessionId, message])
-
   const usage = (message as { metadata?: { usage?: UsageInfo } }).metadata?.usage
+
+  // One drawing per command for each placement (D10): the bar (and, with
+  // `actions === "all"`, every command inline) and the "…" menu. A command
+  // with no drawing on this surface (the sheet's `selectText`, `delete`) is
+  // never resolved here, so it draws nothing.
+  const renderInlineCommand = (command: MessageActionCommand): ReactNode => {
+    const { disabled } = command
+    switch (command.id) {
+      case "copy":
+        return (
+          <MessageAction
+            tooltip={copied || richCopied ? t("copyDone") : t("copyTooltip")}
+            label={t("copyLabel")}
+            onClick={handleCopy}
+          >
+            <CopyFeedbackIcon copied={copied || richCopied} size={14} />
+          </MessageAction>
+        )
+      case "edit":
+        return onEditResend ? (
+          <MessageAction
+            tooltip={t("editTooltip")}
+            label={t("editLabel")}
+            onClick={startEdit}
+            disabled={disabled}
+          >
+            <PencilIcon className="size-3.5" />
+          </MessageAction>
+        ) : null
+      case "resend":
+        return onEditResend ? (
+          <MessageAction
+            tooltip={t("resendTooltip")}
+            label={t("resendLabel")}
+            onClick={() => void onEditResend(message.id, messageTypedText(message))}
+            disabled={disabled}
+            data-testid="message-resend"
+          >
+            <SendHorizontalIcon className="size-3.5" />
+          </MessageAction>
+        ) : null
+      case "reply":
+        return (
+          <MessageAction
+            tooltip={t("replyTooltip")}
+            label={t("replyLabel")}
+            onClick={commands.reply}
+            data-testid="message-reply"
+          >
+            <ReplyIcon className="size-3.5" />
+          </MessageAction>
+        )
+      case "rerunTemplate":
+        return (
+          <MessageAction
+            tooltip={t("rerunTemplateTooltip")}
+            label={t("rerunTemplateLabel")}
+            onClick={commands.rerunTemplate}
+            disabled={disabled}
+          >
+            <Repeat2Icon className="size-3.5" />
+          </MessageAction>
+        )
+      case "saveAsMemory":
+        return (
+          <MessageAction
+            tooltip={t("saveAsMemoryTooltip")}
+            label={t("saveAsMemoryLabel")}
+            onClick={() => void commands.saveAsMemory()}
+            disabled={disabled}
+          >
+            <BrainIcon className="size-3.5" />
+          </MessageAction>
+        )
+      case "saveAsIssue":
+        return (
+          <MessageAction
+            tooltip={t("saveAsIssueTooltip")}
+            label={t("saveAsIssueLabel")}
+            onClick={() => void commands.saveAsIssue()}
+            disabled={disabled}
+            data-testid="message-save-as-issue"
+          >
+            <CircleDotIcon className="size-3.5" />
+          </MessageAction>
+        )
+      case "regenerate":
+        return onRegenerate ? (
+          <MessageAction
+            tooltip={t("regenerateTooltip")}
+            label={t("regenerateLabel")}
+            onClick={() => void onRegenerate()}
+            disabled={disabled}
+          >
+            <RefreshCcwIcon className="size-3.5" />
+          </MessageAction>
+        ) : null
+      // ADR-0127: read-aloud is a host command and stays reachable under every
+      // preset, not only `inspector`.
+      case "readAloud":
+        return (
+          <ReadAloudButton
+            messageId={message.id}
+            text={messageTypedText(message)}
+            character={speaker ?? directCharacter ?? null}
+          />
+        )
+      case "share":
+        return (
+          <MessageAction
+            tooltip={shared ? t("shareDone") : t("shareTooltip")}
+            label={t("shareLabel")}
+            onClick={handleShare}
+          >
+            <Share2Icon className="size-3.5" />
+          </MessageAction>
+        )
+      case "quote":
+        return (
+          <MessageAction tooltip={t("quoteLabel")} label={t("quoteLabel")} onClick={handleQuote}>
+            <QuoteIcon className="size-3.5" />
+          </MessageAction>
+        )
+      case "copyLink":
+        return (
+          <MessageAction
+            // Deliberately worded as a *link to this message*, never as
+            // "share": the neighbouring share action publishes content, this
+            // one only navigates, and confusing the two is either a privacy
+            // accident or a dead link.
+            tooltip={linkCopied ? t("copyLinkDone") : t("copyLinkTooltip")}
+            label={t("copyLinkLabel")}
+            onClick={handleCopyLink}
+          >
+            {linkCopied ? (
+              <AnimatedActionIcon icon={AnimatedCheckIcon} size={14} animateOnChange />
+            ) : (
+              <LinkIcon className="size-3.5" />
+            )}
+          </MessageAction>
+        )
+      case "shareCard":
+        return (
+          <MessageAction
+            tooltip={t("shareCardTooltip")}
+            label={t("shareCardLabel")}
+            onClick={() => setCardOpen(true)}
+          >
+            <ImageIcon className="size-3.5" />
+          </MessageAction>
+        )
+      case "bookmark":
+        return (
+          <MessageAction
+            tooltip={isBookmarked ? t("bookmarkRemoveTooltip") : t("bookmarkTooltip")}
+            label={t("bookmarkLabel")}
+            onClick={() => toggleBookmark(message.id)}
+            className={cn(isBookmarked && "text-yellow-500")}
+          >
+            <AnimatedActionIcon
+              icon={AnimatedBookmarkIcon}
+              size={14}
+              animateOnChange={isBookmarked}
+              className={isBookmarked ? "fill-current" : undefined}
+            />
+          </MessageAction>
+        )
+      case "select":
+        return selectionHost ? (
+          <MessageAction
+            tooltip={t("selectLabel")}
+            label={t("selectLabel")}
+            onClick={() => selectionHost.start(message.id)}
+            data-testid="message-select"
+          >
+            <ListChecksIcon className="size-3.5" />
+          </MessageAction>
+        ) : null
+      case "branch":
+        return (
+          <MessageAction
+            tooltip={isStreaming ? t("branchStreamingTooltip") : t("branchTooltip")}
+            label={t("branchLabel")}
+            onClick={() => setBranchOpen(true)}
+            // A branch snapshots the visible thread, so taking one mid-turn
+            // would copy a half-written reply and seed the child with an
+            // unfinished exchange.
+            disabled={disabled}
+          >
+            <GitBranchIcon className="size-3.5" />
+          </MessageAction>
+        )
+      case "restorePoint":
+        return (
+          <MessageAction
+            tooltip={t("restorePointLabel")}
+            label={t("restorePointLabel")}
+            onClick={() => setRestoreOpen(true)}
+            disabled={disabled}
+            data-testid="message-restore-point-action"
+          >
+            <HistoryIcon className="size-3.5" />
+          </MessageAction>
+        )
+      // Removing messages has to be asked for explicitly: editing branches
+      // instead of deleting the tail.
+      case "truncate":
+        return (
+          <MessageAction
+            tooltip={t("truncateFromTooltip")}
+            label={t("truncateFromLabel")}
+            onClick={() => setTruncateOpen(true)}
+            disabled={disabled}
+          >
+            <ScissorsIcon className="size-3.5" />
+          </MessageAction>
+        )
+      // Hand a conclusion back up: a side chat to the main conversation, a
+      // branch to the one it was cut from.
+      case "sendToMain":
+        return (
+          <MessageAction
+            tooltip={t("sendToMainLabel")}
+            label={t("sendToMainLabel")}
+            onClick={() => void commands.sendToMain()}
+          >
+            <CornerUpLeftIcon className="size-3.5" />
+          </MessageAction>
+        )
+      case "bringBack":
+        return (
+          <MessageAction
+            tooltip={t("bringBackTooltip")}
+            label={t("bringBackLabel")}
+            onClick={() => void commands.bringBack()}
+          >
+            <CornerUpLeftIcon className="size-3.5" />
+          </MessageAction>
+        )
+      default:
+        return null
+    }
+  }
+
+  const renderMenuCommand = (command: MessageActionCommand): ReactNode => {
+    const { disabled } = command
+    switch (command.id) {
+      case "share":
+        return (
+          <DropdownMenuItem onSelect={() => void handleShare()}>
+            <Share2Icon className="size-4" />
+            {t("shareLabel")}
+          </DropdownMenuItem>
+        )
+      case "quote":
+        return (
+          <DropdownMenuItem onSelect={handleQuote}>
+            <QuoteIcon className="size-4" />
+            {t("quoteLabel")}
+          </DropdownMenuItem>
+        )
+      case "copyLink":
+        return (
+          <DropdownMenuItem onSelect={() => void handleCopyLink()}>
+            <LinkIcon className="size-4" />
+            {t("copyLinkLabel")}
+          </DropdownMenuItem>
+        )
+      case "shareCard":
+        return (
+          <DropdownMenuItem onSelect={() => setCardOpen(true)}>
+            <ImageIcon className="size-4" />
+            {t("shareCardLabel")}
+          </DropdownMenuItem>
+        )
+      case "bookmark":
+        return (
+          <DropdownMenuItem onSelect={() => toggleBookmark(message.id)}>
+            <AnimatedBookmarkIcon className="size-4" />
+            {isBookmarked ? t("bookmarkRemoveTooltip") : t("bookmarkTooltip")}
+          </DropdownMenuItem>
+        )
+      case "select":
+        return selectionHost ? (
+          <DropdownMenuItem
+            onSelect={() => selectionHost.start(message.id)}
+            data-testid="message-select-menu"
+          >
+            <ListChecksIcon className="size-4" />
+            {t("selectLabel")}
+          </DropdownMenuItem>
+        ) : null
+      case "branch":
+        return (
+          <DropdownMenuItem disabled={disabled} onSelect={() => setBranchOpen(true)}>
+            <GitBranchIcon className="size-4" />
+            {t("branchLabel")}
+          </DropdownMenuItem>
+        )
+      case "restorePoint":
+        return (
+          <DropdownMenuItem
+            disabled={disabled}
+            onSelect={() => setRestoreOpen(true)}
+            data-testid="message-restore-point"
+          >
+            <HistoryIcon className="size-4" />
+            {t("restorePointLabel")}
+          </DropdownMenuItem>
+        )
+      case "truncate":
+        return (
+          <DropdownMenuItem disabled={disabled} onSelect={() => setTruncateOpen(true)}>
+            <ScissorsIcon className="size-4" />
+            {t("truncateFromLabel")}
+          </DropdownMenuItem>
+        )
+      case "sendToMain":
+        return (
+          <DropdownMenuItem onSelect={() => void commands.sendToMain()}>
+            <CornerUpLeftIcon className="size-4" />
+            {t("sendToMainLabel")}
+          </DropdownMenuItem>
+        )
+      case "bringBack":
+        return (
+          <DropdownMenuItem onSelect={() => void commands.bringBack()}>
+            <CornerUpLeftIcon className="size-4" />
+            {t("bringBackLabel")}
+          </DropdownMenuItem>
+        )
+      default:
+        return null
+    }
+  }
 
   // One render segment: a tool-activity group or a single part. Shared by the
   // folded process and the visible remainder of a finished turn.
@@ -1303,29 +1510,6 @@ function MessageRendererInner({
             />
           </div>
 
-          {/* Plugin context-menu items targeting the `chat:message` zone
-            (ctx.contextMenu.register) — hover ellipsis dropdown. Renders
-            nothing when no plugin contributed items. */}
-          <div
-            className={cn(
-              "empty:hidden",
-              HOVER_REVEAL_CLASS,
-              message.role === "user" ? "ml-auto w-fit" : ""
-            )}
-            data-message-actions=""
-          >
-            <MessagePluginMenu
-              messageId={message.id}
-              sessionId={
-                typeof (message as { metadata?: { sessionId?: unknown } }).metadata?.sessionId ===
-                "string"
-                  ? ((message as { metadata?: { sessionId?: string } }).metadata!
-                      .sessionId as string)
-                  : undefined
-              }
-            />
-          </div>
-
           {/* One line under the body: the reactions on the row (always
               visible) and the action bar, both on the message's side. */}
           {!editing && !isToolOnlyTurn && display.actions !== "all" && (
@@ -1375,105 +1559,9 @@ function MessageRendererInner({
                     message.role === "user" ? "w-fit" : ""
                   )}
                 >
-                  <MessageAction
-                    tooltip={copied || richCopied ? t("copyDone") : t("copyTooltip")}
-                    label={t("copyLabel")}
-                    onClick={handleCopy}
-                  >
-                    <CopyFeedbackIcon copied={copied || richCopied} size={14} />
-                  </MessageAction>
-
-                  {hasActionCommand("edit") && onEditResend && (
-                    <MessageAction
-                      tooltip={t("editTooltip")}
-                      label={t("editLabel")}
-                      onClick={startEdit}
-                      disabled={actionCommand("edit")?.disabled}
-                    >
-                      <PencilIcon className="size-3.5" />
-                    </MessageAction>
-                  )}
-
-                  {hasActionCommand("resend") && onEditResend && (
-                    <MessageAction
-                      tooltip={t("resendTooltip")}
-                      label={t("resendLabel")}
-                      onClick={() => void onEditResend(message.id, messageTypedText(message))}
-                      disabled={actionCommand("resend")?.disabled}
-                      data-testid="message-resend"
-                    >
-                      <SendHorizontalIcon className="size-3.5" />
-                    </MessageAction>
-                  )}
-
-                  {hasActionCommand("reply") && (
-                    <MessageAction
-                      tooltip={t("replyTooltip")}
-                      label={t("replyLabel")}
-                      onClick={handleReply}
-                      data-testid="message-reply"
-                    >
-                      <ReplyIcon className="size-3.5" />
-                    </MessageAction>
-                  )}
-
-                  {hasActionCommand("rerunTemplate") && templateRun && branchSessionId && (
-                    <MessageAction
-                      tooltip={t("rerunTemplateTooltip")}
-                      label={t("rerunTemplateLabel")}
-                      onClick={() =>
-                        requestTemplateRerun({ sessionId: branchSessionId, run: templateRun })
-                      }
-                      disabled={actionCommand("rerunTemplate")?.disabled}
-                    >
-                      <Repeat2Icon className="size-3.5" />
-                    </MessageAction>
-                  )}
-
-                  {hasActionCommand("saveAsMemory") && (
-                    <MessageAction
-                      tooltip={t("saveAsMemoryTooltip")}
-                      label={t("saveAsMemoryLabel")}
-                      onClick={() => void handleSaveAsMemory()}
-                      disabled={actionCommand("saveAsMemory")?.disabled}
-                    >
-                      <BrainIcon className="size-3.5" />
-                    </MessageAction>
-                  )}
-
-                  {hasActionCommand("saveAsIssue") && (
-                    <MessageAction
-                      tooltip={t("saveAsIssueTooltip")}
-                      label={t("saveAsIssueLabel")}
-                      onClick={() => void handleSaveAsIssue()}
-                      disabled={actionCommand("saveAsIssue")?.disabled}
-                      data-testid="message-save-as-issue"
-                    >
-                      <CircleDotIcon className="size-3.5" />
-                    </MessageAction>
-                  )}
-
-                  {hasActionCommand("regenerate") && onRegenerate && (
-                    <MessageAction
-                      tooltip={t("regenerateTooltip")}
-                      label={t("regenerateLabel")}
-                      onClick={() => void onRegenerate()}
-                      disabled={actionCommand("regenerate")?.disabled}
-                    >
-                      <RefreshCcwIcon className="size-3.5" />
-                    </MessageAction>
-                  )}
-
-                  {/* ADR-0127: read-aloud is a host command (`readAloud`) and must
-                stay reachable under every preset, not only `inspector` — the
-                `all` branch below is the only place it used to render. */}
-                  {hasActionCommand("readAloud") && (
-                    <ReadAloudButton
-                      messageId={message.id}
-                      text={messageTypedText(message)}
-                      character={speaker ?? directCharacter ?? null}
-                    />
-                  )}
+                  {barCommands.map((command) => (
+                    <Fragment key={command.id}>{renderInlineCommand(command)}</Fragment>
+                  ))}
 
                   {/* IM cross-links: forward this text to an IM conversation, or
                   lift an inbound IM message into a fresh main chat. Self-hide
@@ -1488,103 +1576,33 @@ function MessageRendererInner({
                   {/* Overflow LAST. Everything above is a single-purpose button;
                   this one is the drawer the rest of the actions live in, and a
                   drawer sitting mid-row reads as just another action while
-                  pushing the real ones past it. */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-8"
-                        aria-label={t("moreLabel")}
-                      >
-                        <MoreHorizontalIcon className="size-3.5" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align={message.role === "user" ? "end" : "start"}>
-                      <DropdownMenuItem onSelect={() => void handleShare()}>
-                        <Share2Icon className="size-4" />
-                        {t("shareLabel")}
-                      </DropdownMenuItem>
-                      {hasActionCommand("quote") && branchSessionId && (
-                        <DropdownMenuItem onSelect={handleQuote}>
-                          <QuoteIcon className="size-4" />
-                          {t("quoteLabel")}
-                        </DropdownMenuItem>
-                      )}
-                      {hasActionCommand("reply") && (
-                        <DropdownMenuItem onSelect={handleReply} data-testid="message-reply-menu">
-                          <ReplyIcon className="size-4" />
-                          {t("replyLabel")}
-                        </DropdownMenuItem>
-                      )}
-                      {hasActionCommand("copyLink") && branchSessionId && (
-                        <DropdownMenuItem onSelect={() => void handleCopyLink()}>
-                          <LinkIcon className="size-4" />
-                          {t("copyLinkLabel")}
-                        </DropdownMenuItem>
-                      )}
-                      {hasActionCommand("shareCard") && (
-                        <DropdownMenuItem onSelect={() => setCardOpen(true)}>
-                          <ImageIcon className="size-4" />
-                          {t("shareCardLabel")}
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuItem onSelect={() => toggleBookmark(message.id)}>
-                        <AnimatedBookmarkIcon className="size-4" />
-                        {isBookmarked ? t("bookmarkRemoveTooltip") : t("bookmarkTooltip")}
-                      </DropdownMenuItem>
-                      {hasActionCommand("select") && selectionHost && (
-                        <DropdownMenuItem
-                          onSelect={() => selectionHost.start(message.id)}
-                          data-testid="message-select-menu"
+                  pushing the real ones past it. Plugin items sit in it too, after
+                  a separator, instead of in a second "…" beside it. */}
+                  {menuCommands.length > 0 || pluginItems.length > 0 ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-8"
+                          aria-label={t("moreLabel")}
+                          data-testid="message-more"
                         >
-                          <ListChecksIcon className="size-4" />
-                          {t("selectLabel")}
-                        </DropdownMenuItem>
-                      )}
-                      {hasActionCommand("branch") && branchSessionId && (
-                        <DropdownMenuItem
-                          disabled={actionCommand("branch")?.disabled}
-                          onSelect={() => setBranchOpen(true)}
-                        >
-                          <GitBranchIcon className="size-4" />
-                          {t("branchLabel")}
-                        </DropdownMenuItem>
-                      )}
-                      {hasActionCommand("restorePoint") && branchSessionId && (
-                        <DropdownMenuItem
-                          disabled={actionCommand("restorePoint")?.disabled}
-                          onSelect={() => setRestoreOpen(true)}
-                          data-testid="message-restore-point"
-                        >
-                          <HistoryIcon className="size-4" />
-                          {t("restorePointLabel")}
-                        </DropdownMenuItem>
-                      )}
-                      {hasActionCommand("truncate") && branchSessionId && (
-                        <DropdownMenuItem
-                          disabled={actionCommand("truncate")?.disabled}
-                          onSelect={() => setTruncateOpen(true)}
-                        >
-                          <ScissorsIcon className="size-4" />
-                          {t("truncateFromLabel")}
-                        </DropdownMenuItem>
-                      )}
-                      {asideTargetSessionId && (
-                        <DropdownMenuItem onSelect={handleSendToMain}>
-                          <CornerUpLeftIcon className="size-4" />
-                          {t("sendToMainLabel")}
-                        </DropdownMenuItem>
-                      )}
-                      {hasActionCommand("bringBack") && handBackTargetId && (
-                        <DropdownMenuItem onSelect={handleBringBack}>
-                          <CornerUpLeftIcon className="size-4" />
-                          {t("bringBackLabel")}
-                        </DropdownMenuItem>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                          <MoreHorizontalIcon className="size-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align={message.role === "user" ? "end" : "start"}>
+                        {menuCommands.map((command) => (
+                          <Fragment key={command.id}>{renderMenuCommand(command)}</Fragment>
+                        ))}
+                        <MessagePluginMenuItems
+                          items={pluginItems}
+                          separated={menuCommands.length > 0}
+                        />
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : null}
 
                   <BranchNavigator message={message} className="mx-1" />
                   {branchSessionId && (
@@ -1636,118 +1654,11 @@ function MessageRendererInner({
                   </Tooltip>
                 )}
 
-                <MessageAction
-                  tooltip={copied || richCopied ? t("copyDone") : t("copyTooltip")}
-                  label={t("copyLabel")}
-                  onClick={handleCopy}
-                >
-                  <CopyFeedbackIcon copied={copied || richCopied} size={14} />
-                </MessageAction>
-
-                <MessageAction
-                  tooltip={shared ? t("shareDone") : t("shareTooltip")}
-                  label={t("shareLabel")}
-                  onClick={handleShare}
-                >
-                  <Share2Icon className="size-3.5" />
-                </MessageAction>
-
-                {hasActionCommand("quote") && branchSessionId && (
-                  <MessageAction
-                    tooltip={t("quoteLabel")}
-                    label={t("quoteLabel")}
-                    onClick={handleQuote}
-                  >
-                    <QuoteIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
-                {hasActionCommand("reply") && (
-                  <MessageAction
-                    tooltip={t("replyTooltip")}
-                    label={t("replyLabel")}
-                    onClick={handleReply}
-                    data-testid="message-reply"
-                  >
-                    <ReplyIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
-                {branchSessionId && (
-                  <MessageAction
-                    // Deliberately worded as a *link to this message*, never as
-                    // "share": the neighbouring share action publishes content,
-                    // this one only navigates, and confusing the two is either a
-                    // privacy accident or a dead link.
-                    tooltip={linkCopied ? t("copyLinkDone") : t("copyLinkTooltip")}
-                    label={t("copyLinkLabel")}
-                    onClick={handleCopyLink}
-                  >
-                    {linkCopied ? (
-                      <AnimatedActionIcon icon={AnimatedCheckIcon} size={14} animateOnChange />
-                    ) : (
-                      <LinkIcon className="size-3.5" />
-                    )}
-                  </MessageAction>
-                )}
-
-                {messageShareContent.hasContent && (
-                  <MessageAction
-                    tooltip={t("shareCardTooltip")}
-                    label={t("shareCardLabel")}
-                    onClick={() => setCardOpen(true)}
-                  >
-                    <ImageIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
-                <MessageAction
-                  tooltip={isBookmarked ? t("bookmarkRemoveTooltip") : t("bookmarkTooltip")}
-                  label={t("bookmarkLabel")}
-                  onClick={() => toggleBookmark(message.id)}
-                  className={cn(isBookmarked && "text-yellow-500")}
-                >
-                  <AnimatedActionIcon
-                    icon={AnimatedBookmarkIcon}
-                    size={14}
-                    animateOnChange={isBookmarked}
-                    className={isBookmarked ? "fill-current" : undefined}
-                  />
-                </MessageAction>
-
-                {hasActionCommand("select") && selectionHost && (
-                  <MessageAction
-                    tooltip={t("selectLabel")}
-                    label={t("selectLabel")}
-                    onClick={() => selectionHost.start(message.id)}
-                    data-testid="message-select"
-                  >
-                    <ListChecksIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
-                {message.role === "user" && onEditResend && (
-                  <MessageAction
-                    tooltip={t("editTooltip")}
-                    label={t("editLabel")}
-                    onClick={startEdit}
-                    disabled={actionCommand("edit")?.disabled}
-                  >
-                    <PencilIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
-                {hasActionCommand("resend") && onEditResend && (
-                  <MessageAction
-                    tooltip={t("resendTooltip")}
-                    label={t("resendLabel")}
-                    onClick={() => void onEditResend(message.id, messageTypedText(message))}
-                    disabled={actionCommand("resend")?.disabled}
-                    data-testid="message-resend"
-                  >
-                    <SendHorizontalIcon className="size-3.5" />
-                  </MessageAction>
-                )}
+                {/* Every command inline, the bar's first (ADR-0127: `all` is an
+                explicit choice to see them). */}
+                {messageActionCommands.map((command) => (
+                  <Fragment key={command.id}>{renderInlineCommand(command)}</Fragment>
+                ))}
 
                 {message.role === "user" && branchSessionId && onRewindFiles && (
                   <CheckpointAction
@@ -1756,80 +1667,6 @@ function MessageRendererInner({
                     rewindFiles={(checkpointId, dryRun) =>
                       onRewindFiles(branchSessionId, checkpointId, dryRun)
                     }
-                  />
-                )}
-
-                {branchSessionId && (
-                  <MessageAction
-                    tooltip={isStreaming ? t("branchStreamingTooltip") : t("branchTooltip")}
-                    label={t("branchLabel")}
-                    onClick={() => setBranchOpen(true)}
-                    // A branch snapshots the visible thread, so taking one mid-turn
-                    // would copy a half-written reply and seed the child with an
-                    // unfinished exchange. Matches the regenerate action below.
-                    disabled={actionCommand("branch")?.disabled}
-                  >
-                    <GitBranchIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
-                {/* The only remaining destructive path. Editing a user message used
-                to delete its whole tail as a side effect; now that it branches
-                instead, removing messages has to be asked for explicitly. */}
-                {actionCommand("truncate")?.destructive && branchSessionId && (
-                  <MessageAction
-                    tooltip={t("truncateFromTooltip")}
-                    label={t("truncateFromLabel")}
-                    onClick={() => setTruncateOpen(true)}
-                    disabled={actionCommand("truncate")?.disabled}
-                  >
-                    <ScissorsIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
-                {hasActionCommand("restorePoint") && branchSessionId && (
-                  <MessageAction
-                    tooltip={t("restorePointLabel")}
-                    label={t("restorePointLabel")}
-                    onClick={() => setRestoreOpen(true)}
-                    disabled={actionCommand("restorePoint")?.disabled}
-                    data-testid="message-restore-point-action"
-                  >
-                    <HistoryIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
-                {/* Hand a conclusion back up.
-                Two shapes of the same gesture, so they share one action and one
-                mechanism: a sidechat hands back to the MAIN conversation, a
-                branch hands back to the conversation it was cut from. Lineage
-                used to be one-way for branches — the chip could carry you to
-                the parent to look, but nothing brought a finding with you.
-                Bring back keeps a draft; session asides also offer an explicit send. */}
-                {asideTargetSessionId && (
-                  <MessageAction
-                    tooltip={t("sendToMainLabel")}
-                    label={t("sendToMainLabel")}
-                    onClick={handleSendToMain}
-                  >
-                    <CornerUpLeftIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-                {handBackTargetId && (
-                  <MessageAction
-                    tooltip={t("bringBackTooltip")}
-                    label={t("bringBackLabel")}
-                    onClick={handleBringBack}
-                  >
-                    <CornerUpLeftIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
-                {message.role === "assistant" && ttsEnabled && (
-                  <ReadAloudButton
-                    messageId={message.id}
-                    text={messageTypedText(message)}
-                    character={speaker ?? directCharacter ?? null}
                   />
                 )}
 
@@ -1846,23 +1683,34 @@ function MessageRendererInner({
                   <BranchPointMarker sessionId={branchSessionId} messageId={message.id} />
                 )}
 
-                {message.role === "assistant" && isLastAssistant && onRegenerate && (
-                  <MessageAction
-                    tooltip={t("regenerateTooltip")}
-                    label={t("regenerateLabel")}
-                    onClick={() => void onRegenerate()}
-                    disabled={actionCommand("regenerate")?.disabled}
-                  >
-                    <RefreshCcwIcon className="size-3.5" />
-                  </MessageAction>
-                )}
-
                 <MessageReactionAdd message={message} sessionId={branchSessionId} />
                 <MessageImActions
                   message={message}
                   text={messageText}
                   sessionId={branchSessionId}
                 />
+
+                {/* With every host command inline, the "…" holds only what
+                plugins contributed. */}
+                {pluginItems.length > 0 ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-8"
+                        aria-label={t("moreLabel")}
+                        data-testid="message-more"
+                      >
+                        <MoreHorizontalIcon className="size-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align={message.role === "user" ? "end" : "start"}>
+                      <MessagePluginMenuItems items={pluginItems} />
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
 
                 <PluginExtensionSlot
                   point="chat.message.footer"

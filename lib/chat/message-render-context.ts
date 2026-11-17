@@ -18,6 +18,7 @@ import type { UIMessage } from "ai"
 import type { Character } from "@cognia/agent-config-types"
 
 import type { RewindFilesResult } from "@/lib/ai/agent/execution/sidecar-client"
+import type { MessageActionCommandId } from "@/lib/chat/message-action-commands"
 import type { ResolvedMessageDisplayOptions } from "@/lib/chat/message-display"
 import type { MessageMotion } from "@/types/appearance"
 
@@ -34,6 +35,8 @@ export interface MessageActionSheetHostProps {
   messageMotion?: MessageMotion
   onRegenerate?: () => void | Promise<void>
   onEditResend?: (message: UIMessage, newText: string) => void | Promise<void>
+  /** See {@link MessageRenderContextValue.allowedCommands}. */
+  allowedCommands?: ReadonlySet<MessageActionCommandId>
 }
 
 /** A change to a row that writes the transcript. */
@@ -58,6 +61,12 @@ export interface MessageRenderContextValue {
    * may. Nested providers narrow it: each level must allow.
    */
   canMutate?: (messageId: string, kind: MessageMutationKind) => boolean
+  /**
+   * The row commands this surface can carry out, when it supports only some
+   * (the phone's view of a Host session has no local transcript to branch,
+   * truncate or reply into). Absent means all. Nested providers intersect.
+   */
+  allowedCommands?: ReadonlySet<MessageActionCommandId>
   /** Root used to resolve project-relative links in a message. */
   projectRoot?: string | null
   /** The display settings resolved for this transcript (session override included). */
@@ -72,7 +81,8 @@ export interface MessageRenderContextValue {
 
 /**
  * `child` inside `parent`: every key the child sets wins, except
- * {@link MessageRenderContextValue.canMutate}, where both must allow.
+ * {@link MessageRenderContextValue.canMutate} and
+ * {@link MessageRenderContextValue.allowedCommands}, where both must allow.
  */
 export function mergeMessageRenderContext(
   parent: MessageRenderContextValue,
@@ -86,6 +96,10 @@ export function mergeMessageRenderContext(
     const outer = parent.canMutate
     const inner = child.canMutate
     merged.canMutate = (messageId, kind) => outer(messageId, kind) && inner(messageId, kind)
+  }
+  if (parent.allowedCommands && child.allowedCommands) {
+    const outer = parent.allowedCommands
+    merged.allowedCommands = new Set([...child.allowedCommands].filter((id) => outer.has(id)))
   }
   return merged
 }

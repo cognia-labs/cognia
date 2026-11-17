@@ -632,6 +632,10 @@ describe("<RemoteSessionDetail />", () => {
       // No Host action backs these on this view yet: not offered, not inert.
       expect(context.onRegenerate).toBeUndefined()
       expect(context.onEditResend).toBeUndefined()
+      // The transcript is the Host's: nothing that writes it locally is offered.
+      expect([...(context.allowedCommands as Set<string>)].sort()).toEqual(
+        ["bookmark", "copy", "readAloud", "selectText", "share", "shareCard"].sort()
+      )
     })
 
     it("keeps refused sends beside the timeline and out of it", () => {

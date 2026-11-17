@@ -1,24 +1,18 @@
 "use client"
 
 /**
- * Hover dropdown surfacing plugin-contributed context-menu items that
- * target the `chat:message` zone (`ctx.contextMenu.register`). Renders
- * nothing when no plugin contributed items, so messages pay zero cost in
- * the common case.
+ * Plugin-contributed context-menu items for the `chat:message` zone
+ * (`ctx.contextMenu.register`), drawn inside the message's own "…" menu and
+ * its long-press sheet (D10) rather than in a menu of their own beside it.
+ * Nothing renders when no plugin contributed items.
  *
  * Click dispatch goes through the `plugin-context-menu:<id>` CustomEvent
  * contract — the handlers plugins attached at registration fire unchanged.
  */
 
-import { MoreHorizontalIcon } from "lucide-react"
-import { useTranslations } from "next-intl"
-import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { useMemo } from "react"
+
+import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import {
   firePluginContextMenuItem,
   isContextMenuItemDisabled,
@@ -26,50 +20,67 @@ import {
 } from "@/hooks/plugins/use-plugin-context-menu-items"
 import type { ContextMenuClickContext } from "@/types/plugin"
 
-export function MessagePluginMenu({
-  messageId,
-  sessionId,
-  selection,
-}: {
+export interface MessagePluginItemTarget {
   messageId: string
   sessionId?: string
   selection?: string
+}
+
+export interface MessagePluginItem {
+  id: string
+  label: string
+  disabled: boolean
+  run: () => void
+}
+
+/** The contributed items for one message, ready to draw on any surface. */
+export function useMessagePluginItems({
+  messageId,
+  sessionId,
+  selection,
+}: MessagePluginItemTarget): MessagePluginItem[] {
+  const entries = usePluginContextMenuItems("chat:message")
+  return useMemo(() => {
+    const context: ContextMenuClickContext = {
+      target: "chat:message",
+      messageId,
+      sessionId,
+      selection,
+    }
+    return entries.map((entry) => ({
+      id: entry.id,
+      label: entry.item.label,
+      disabled: isContextMenuItemDisabled(entry, context),
+      run: () => firePluginContextMenuItem(entry, context),
+    }))
+  }, [entries, messageId, sessionId, selection])
+}
+
+/**
+ * The items as `DropdownMenuItem`s, after a separator when `separated` and
+ * there is anything above them. For the host's "…" menu.
+ */
+export function MessagePluginMenuItems({
+  items,
+  separated = false,
+}: {
+  items: readonly MessagePluginItem[]
+  separated?: boolean
 }) {
-  const t = useTranslations("chat.message")
-  const items = usePluginContextMenuItems("chat:message")
   if (items.length === 0) return null
-
-  const clickContext: ContextMenuClickContext = {
-    target: "chat:message",
-    messageId,
-    sessionId,
-    selection,
-  }
-
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          aria-label={t("pluginMenu")}
-          className="size-6"
+    <>
+      {separated ? <DropdownMenuSeparator /> : null}
+      {items.map((item) => (
+        <DropdownMenuItem
+          key={item.id}
+          disabled={item.disabled}
+          onSelect={item.run}
+          data-testid="message-plugin-menu-item"
         >
-          <MoreHorizontalIcon className="size-3.5" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-w-72">
-        {items.map((entry) => (
-          <DropdownMenuItem
-            key={entry.id}
-            disabled={isContextMenuItemDisabled(entry, clickContext)}
-            onSelect={() => firePluginContextMenuItem(entry, clickContext)}
-          >
-            {entry.item.label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+          {item.label}
+        </DropdownMenuItem>
+      ))}
+    </>
   )
 }

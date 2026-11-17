@@ -65,6 +65,7 @@ jest.mock("@/lib/capacitor/haptics", () => ({ selectionFeedback: jest.fn() }))
 const sheetMock = jest.fn()
 // The shell's sheet, handed to the surface through the context (D10).
 function SheetStandIn(props: {
+  allowedCommands?: ReadonlySet<string>
   message: UIMessage | null
   onRegenerate?: unknown
   onEditResend?: unknown
@@ -78,6 +79,7 @@ function SheetStandIn(props: {
       data-regenerate={Boolean(props.onRegenerate)}
       data-edit={Boolean(props.onEditResend)}
       data-character={props.character?.name}
+      data-allowed={props.allowedCommands ? [...props.allowedCommands].join(",") : undefined}
     />
   ) : null
 }
@@ -666,6 +668,14 @@ describe("<TranscriptTimelineSurface />", () => {
 
       fireEvent.click(presses[0])
       expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-edit", "true")
+    })
+
+    it("hands the sheet the commands the surface allows", () => {
+      render(<TranscriptTimelineSurface {...surface()} />, {
+        wrapper: providing({ actionSheet: SheetStandIn, allowedCommands: new Set(["copy"]) }),
+      })
+      fireEvent.click(screen.getAllByTestId("long-press")[0])
+      expect(screen.getByTestId("action-sheet")).toHaveAttribute("data-allowed", "copy")
     })
 
     it("offers neither edit nor regenerate from the sheet while a turn is live", () => {

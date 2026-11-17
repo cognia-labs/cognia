@@ -27,6 +27,14 @@ describe("mergeMessageRenderContext", () => {
     expect(merged.canMutate!("locked", "edit")).toBe(false)
   })
 
+  it("intersects allowedCommands", () => {
+    const merged = mergeMessageRenderContext(
+      { allowedCommands: new Set(["copy", "share"]) },
+      { allowedCommands: new Set(["share", "branch"]) }
+    )
+    expect([...merged.allowedCommands!]).toEqual(["share"])
+  })
+
   it("keeps a single level's canMutate as it is", () => {
     const canMutate = () => false
     expect(mergeMessageRenderContext({ canMutate }, {}).canMutate).toBe(canMutate)

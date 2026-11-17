@@ -45,6 +45,7 @@ import { RefusedHostMessages } from "@/components/chat/refused-host-messages"
 import { useRefusedHostMessages } from "@/hooks/chat/use-refused-host-messages"
 import { useStableCharacterById } from "@/hooks/data/use-stable-character-by-id"
 import { useCharacter, useCharacters } from "@/lib/data-hooks/context"
+import type { MessageActionCommandId } from "@/lib/chat/message-action-commands"
 import type { MessageRenderContextValue } from "@/lib/chat/message-render-context"
 import { withoutRefusedHostMessages } from "@/lib/chat/refused-host-message"
 import { useCompanionFusionRuns } from "@/components/router-fusion/companion/use-companion-fusion-runs"
@@ -53,6 +54,16 @@ import { CompanionFusionRunList } from "@/components/router-fusion/companion/com
 // Resolved per call: a browser that pairs after this module loaded swaps the
 // transport, and a captured instance would keep reading the pre-pairing stub.
 const remoteTranscriptSource = createRemoteTranscriptSource(() => transport, { onTransportChange })
+
+/**
+ * The row commands this view can carry out. The transcript is the Host's, so
+ * anything that writes it locally (branch, truncate, restore point, quote or
+ * reply into the local composer, save as memory or issue against a local
+ * session) is left out; edit and regenerate wait on Host actions.
+ */
+const REMOTE_MESSAGE_COMMANDS: ReadonlySet<MessageActionCommandId> = new Set<MessageActionCommandId>(
+  ["copy", "share", "shareCard", "bookmark", "readAloud", "selectText"]
+)
 
 export interface RemoteSessionDetailProps {
   sessionId: string
@@ -70,9 +81,9 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
   const messageDisplay = useMessageDisplay(session?.messageDisplayOverride)
   const transcript = useTranscriptController(sessionId, remoteTranscriptSource)
   // D10: the rows read the same characters, copy feedback and display
-  // settings as the chat, and a long press opens the message's sheet. Edit
-  // and regenerate need Host actions this view does not have yet, so they
-  // are not supplied.
+  // settings as the chat, and a long press opens the message's sheet with the
+  // commands this view can carry out. Edit and regenerate need Host actions
+  // this view does not have yet, so they are not supplied.
   const characterById = useStableCharacterById(useCharacters())
   const directCharacter = useCharacter(session?.characterId) ?? null
   const onCopy = useCallback(() => {
@@ -85,6 +96,7 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
       onCopy,
       messageDisplay,
       actionSheet: MessageActionSheet,
+      allowedCommands: REMOTE_MESSAGE_COMMANDS,
     }),
     [characterById, directCharacter, onCopy, messageDisplay]
   )

@@ -13,10 +13,16 @@
  * mirror fan-out).
  */
 
-import { useMemo, useState } from "react"
+import { Fragment, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
+  BrainIcon,
+  CircleDotIcon,
+  CornerUpLeftIcon,
   GitBranchIcon,
+  PuzzleIcon,
+  Repeat2Icon,
+  ReplyIcon,
   ImageIcon,
   ListChecksIcon,
   Loader2Icon,
@@ -74,7 +80,14 @@ import type { UsageInfo } from "@/lib/chat/sdk-message-adapter"
 import { useChatStore } from "@/stores/chat"
 import { useSpeechSettingsView } from "@/lib/speech/settings"
 import type { CharacterVoiceSource } from "@/lib/plugin/character-pack/character-voice"
-import { resolveMessageActionCommands } from "@/lib/chat/message-action-commands"
+import {
+  resolveMessageActionCommands,
+  type MessageActionCommand,
+  type MessageActionCommandId,
+} from "@/lib/chat/message-action-commands"
+import { useMessagePluginItems } from "@/components/chat/message-plugin-menu"
+import { useMessageCommands } from "@/components/chat/use-message-commands"
+import { useTranscriptSessionId } from "@/components/chat/transcript-session-context"
 import { useFlowMotion } from "@/components/chat/motion/motion-reveal"
 import type { MessageMotion } from "@/types/appearance"
 import { QuoteCardDialog } from "@/components/share/quote-card-dialog"
@@ -122,6 +135,11 @@ export interface MessageActionSheetProps {
    * transcript offers no "Select messages" that would open nothing.
    */
   onSelect?: (message: UIMessage) => void
+  /**
+   * The commands the surface can carry out, when it supports only some (the
+   * phone's view of a Host session). Absent means all.
+   */
+  allowedCommands?: ReadonlySet<MessageActionCommandId>
 }
 
 export function MessageActionSheet({
@@ -133,8 +151,11 @@ export function MessageActionSheet({
   character,
   messageMotion = "restrained",
   onSelect,
+  allowedCommands,
 }: MessageActionSheetProps) {
   const t = useTranslations("mobile.messageActions")
+  // The rows the desktop bar also draws read its labels, so the two match.
+  const tMessage = useTranslations("chat.message")
   const tCommon = useTranslations("common")
   const open = message !== null
   const [cardOpen, setCardOpen] = useState(false)
@@ -181,10 +202,15 @@ export function MessageActionSheet({
   // Per-message token/cost — on desktop this lives in the hover-only action bar
   // (unreachable on touch), so surface it here as a non-interactive footer.
   const usage = (message?.metadata as { usage?: UsageInfo } | undefined)?.usage
+  // A live reply has no session id yet; the transcript the sheet was opened
+  // from knows whose it is, as the desktop row does.
+  const transcriptSessionId = useTranscriptSessionId()
   const branchSessionId =
     message && typeof (message.metadata as { sessionId?: unknown } | undefined)?.sessionId === "string"
       ? ((message.metadata as { sessionId?: string }).sessionId as string)
-      : undefined
+      : message
+        ? (transcriptSessionId ?? undefined)
+        : undefined
 
   // A branch snapshots the visible thread, so taking one mid-turn would copy a
   // half-written reply. Read the branch target's OWN slice — the sheet can be
@@ -195,39 +221,60 @@ export function MessageActionSheet({
     // truncate would still freeze a half-written turn.
     return status === "streaming" || status === "awaiting_approval"
   })
+  // Reply, rerun, save and hand-back do the same work as on the desktop bar.
+  const shared = useMessageCommands({ message, sessionId: branchSessionId })
+  const pluginItems = useMessagePluginItems({
+    messageId: message?.id ?? "",
+    sessionId: branchSessionId,
+  })
   const commands = useMemo(
     () =>
-      resolveMessageActionCommands({
-        role: message?.role ?? "system",
-        hasContent: canShare,
-        hasSession: Boolean(branchSessionId),
-        canEdit: Boolean(onEditResend),
-        canRegenerate: Boolean(onRegenerate),
-        // Off where no module provides the `speech` port (ADR-0250 §14).
-        canReadAloud: ttsEnabled && readAloudAvailable,
-        canDelete: Boolean(onDelete),
-        canSelect: Boolean(onSelect),
-        // This sheet is the touch surface the capability exists for.
-        canSelectText: true,
-        streaming: branchSessionStreaming,
-      }),
+      message
+        ? resolveMessageActionCommands({
+            role: message.role,
+            hasContent: canShare,
+            hasSession: Boolean(branchSessionId),
+            canEdit: Boolean(onEditResend),
+            canRegenerate: Boolean(onRegenerate),
+            // Off where no module provides the `speech` port (ADR-0250 §14).
+            canReadAloud: ttsEnabled && readAloudAvailable,
+            canBringBack: Boolean(shared.handBackTargetId),
+            canRerunTemplate: Boolean(shared.templateRun && branchSessionId),
+            canSaveAsMemory: Boolean(branchSessionId),
+            canSaveAsIssue: Boolean(branchSessionId),
+            canSendToMain: Boolean(shared.asideTargetSessionId),
+            canDelete: Boolean(onDelete),
+            canSelect: Boolean(onSelect),
+            // This sheet is the touch surface the capability exists for.
+            canSelectText: true,
+            allowed: allowedCommands,
+            streaming: branchSessionStreaming,
+          })
+        : [],
     [
+      allowedCommands,
       branchSessionId,
       branchSessionStreaming,
-      message?.role,
+      canShare,
+      message,
       onDelete,
       onEditResend,
       onRegenerate,
       onSelect,
       readAloudAvailable,
-      canShare,
+      shared.asideTargetSessionId,
+      shared.handBackTargetId,
+      shared.templateRun,
       ttsEnabled,
     ]
   )
-  const commandById = useMemo(
-    () => new Map(commands.map((command) => [command.id, command])),
-    [commands]
-  )
+
+  /** Run a command and close the sheet; the command reports its own outcome. */
+  const runAndClose = (run: () => unknown) => {
+    void selectionFeedback()
+    void run()
+    onOpenChange(false)
+  }
 
   const onSelectText = () => {
     if (!message || !branchSessionId) return
@@ -412,6 +459,247 @@ export function MessageActionSheet({
     onOpenChange(false)
   }
 
+  const renderRow = (command: MessageActionCommand): React.ReactNode => {
+    const off = busy || command.disabled
+    switch (command.id) {
+      case "copy":
+        return (
+          <Row
+            icon={<AnimatedActionIcon icon={AnimatedCopyIcon} size={16} />}
+            label={t("copy")}
+            onClick={onCopy}
+            disabled={off}
+            testid="message-action-copy"
+          />
+        )
+      case "edit":
+        return onEditResend ? (
+          <Row
+            icon={<PencilIcon className="size-4" />}
+            label={t("edit")}
+            onClick={() => setEditText(text)}
+            disabled={off || !text}
+            testid="message-action-edit"
+          />
+        ) : null
+      case "resend":
+        return onEditResend ? (
+          <Row
+            icon={<SendHorizontalIcon className="size-4" />}
+            label={t("resend")}
+            onClick={() => void onResendRow()}
+            disabled={off || !text}
+            testid="message-action-resend"
+          />
+        ) : null
+      case "reply":
+        return (
+          <Row
+            icon={<ReplyIcon className="size-4" />}
+            label={tMessage("replyLabel")}
+            onClick={() => runAndClose(shared.reply)}
+            disabled={off}
+            testid="message-action-reply"
+          />
+        )
+      case "rerunTemplate":
+        return (
+          <Row
+            icon={<Repeat2Icon className="size-4" />}
+            label={tMessage("rerunTemplateLabel")}
+            onClick={() => runAndClose(shared.rerunTemplate)}
+            disabled={off}
+            testid="message-action-rerun-template"
+          />
+        )
+      case "saveAsMemory":
+        return (
+          <Row
+            icon={<BrainIcon className="size-4" />}
+            label={tMessage("saveAsMemoryLabel")}
+            onClick={() => runAndClose(shared.saveAsMemory)}
+            disabled={off}
+            testid="message-action-save-as-memory"
+          />
+        )
+      case "saveAsIssue":
+        return (
+          <Row
+            icon={<CircleDotIcon className="size-4" />}
+            label={tMessage("saveAsIssueLabel")}
+            onClick={() => runAndClose(shared.saveAsIssue)}
+            disabled={off}
+            testid="message-action-save-as-issue"
+          />
+        )
+      case "regenerate":
+        return onRegenerate ? (
+          <Row
+            icon={<RefreshCcwIcon className="size-4" />}
+            label={t("regenerate")}
+            onClick={onRegenerateRow}
+            disabled={off}
+            testid="message-action-regenerate"
+          />
+        ) : null
+      case "readAloud":
+        return (
+          <Row
+            icon={
+              readAloudLoading ? (
+                <Loader2Icon className="size-4 animate-spin" />
+              ) : readAloudActive ? (
+                <SquareIcon className="size-4" />
+              ) : (
+                <Volume2Icon className="size-4" />
+              )
+            }
+            label={readAloudActive ? t("stopReading") : t("readAloud")}
+            onClick={onReadAloud}
+            disabled={off || !text}
+            testid="message-action-read-aloud"
+          />
+        )
+      case "share":
+        return (
+          <Row
+            icon={<Share2Icon className="size-4" />}
+            label={t("share")}
+            onClick={onShare}
+            disabled={off}
+            testid="message-action-share"
+          />
+        )
+      case "quote":
+        return (
+          <Row
+            icon={<QuoteIcon className="size-4" />}
+            label={t("quote")}
+            onClick={onQuote}
+            disabled={off || !text}
+            testid="message-action-quote"
+          />
+        )
+      case "copyLink":
+        return (
+          <Row
+            icon={<LinkIcon className="size-4" />}
+            label={t("copyLink")}
+            onClick={onCopyLink}
+            disabled={off}
+            testid="message-action-copy-link"
+          />
+        )
+      case "shareCard":
+        return (
+          <Row
+            icon={<ImageIcon className="size-4" />}
+            label={t("shareCard")}
+            onClick={() => setCardOpen(true)}
+            disabled={off || !text}
+            testid="message-action-share-card"
+          />
+        )
+      case "bookmark":
+        return (
+          <Row
+            icon={
+              <AnimatedActionIcon
+                icon={AnimatedBookmarkIcon}
+                size={16}
+                animateOnChange={isBookmarked}
+                className={isBookmarked ? "fill-current text-yellow-500" : undefined}
+              />
+            }
+            label={isBookmarked ? t("bookmarkRemove") : t("bookmark")}
+            onClick={onBookmark}
+            disabled={off}
+            testid="message-action-bookmark"
+          />
+        )
+      case "select":
+        return onSelect ? (
+          <Row
+            icon={<ListChecksIcon className="size-4" />}
+            label={t("select")}
+            onClick={onSelectMessages}
+            disabled={off}
+            testid="message-action-select"
+          />
+        ) : null
+      case "selectText":
+        return (
+          <Row
+            icon={<TextSelectIcon className="size-4" />}
+            label={t("selectText")}
+            onClick={onSelectText}
+            disabled={off}
+            testid="message-action-select-text"
+          />
+        )
+      case "branch":
+        return (
+          <Row
+            icon={<GitBranchIcon className="size-4" />}
+            label={t("branch")}
+            onClick={onBranch}
+            disabled={off}
+            testid="message-action-branch"
+          />
+        )
+      case "restorePoint":
+        return (
+          <Row
+            icon={<HistoryIcon className="size-4" />}
+            label={t("restorePoint")}
+            onClick={() => setRestoreOpen(true)}
+            disabled={off}
+            testid="message-action-restore-point"
+          />
+        )
+      case "truncate":
+        return (
+          <Row
+            icon={<ScissorsIcon className="size-4 text-destructive" />}
+            label={t("truncate")}
+            onClick={() => setTruncateOpen(true)}
+            disabled={off}
+            testid="message-action-truncate"
+          />
+        )
+      case "sendToMain":
+        return (
+          <Row
+            icon={<CornerUpLeftIcon className="size-4" />}
+            label={tMessage("sendToMainLabel")}
+            onClick={() => runAndClose(shared.sendToMain)}
+            disabled={off}
+            testid="message-action-send-to-main"
+          />
+        )
+      case "bringBack":
+        return (
+          <Row
+            icon={<CornerUpLeftIcon className="size-4" />}
+            label={tMessage("bringBackLabel")}
+            onClick={() => runAndClose(shared.bringBack)}
+            disabled={off}
+            testid="message-action-bring-back"
+          />
+        )
+      case "delete":
+        return onDelete ? (
+          <Row
+            icon={<Trash2Icon className="size-4 text-destructive" />}
+            label={t("delete")}
+            onClick={() => setConfirmDelete(true)}
+            disabled={busy}
+            testid="message-action-delete"
+          />
+        ) : null
+    }
+  }
+
   return (
     <>
     <Drawer
@@ -460,119 +748,10 @@ export function MessageActionSheet({
           </div>
         ) : (
         <StaggeredRows disabled={messageMotion === "off"}>
-          <Row
-            icon={<AnimatedActionIcon icon={AnimatedCopyIcon} size={16} />}
-            label={t("copy")}
-            onClick={onCopy}
-            disabled={busy || !canShare}
-            testid="message-action-copy"
-          />
-          {commandById.has("selectText") && (
-            <Row
-              icon={<TextSelectIcon className="size-4" />}
-              label={t("selectText")}
-              onClick={onSelectText}
-              disabled={busy}
-              testid="message-action-select-text"
-            />
-          )}
-          {commandById.has("select") && onSelect && (
-            <Row
-              icon={<ListChecksIcon className="size-4" />}
-              label={t("select")}
-              onClick={onSelectMessages}
-              disabled={busy}
-              testid="message-action-select"
-            />
-          )}
-          <Row
-            icon={<QuoteIcon className="size-4" />}
-            label={t("quote")}
-            onClick={onQuote}
-            disabled={busy || !text}
-            testid="message-action-quote"
-          />
-          <Row
-            icon={<Share2Icon className="size-4" />}
-            label={t("share")}
-            onClick={onShare}
-            disabled={busy || !canShare}
-            testid="message-action-share"
-          />
-          {commandById.has("shareCard") && (
-            <Row
-              icon={<ImageIcon className="size-4" />}
-              label={t("shareCard")}
-              onClick={() => setCardOpen(true)}
-              disabled={busy || !text}
-              testid="message-action-share-card"
-            />
-          )}
-          <Row
-            icon={<LinkIcon className="size-4" />}
-            label={t("copyLink")}
-            onClick={onCopyLink}
-            disabled={busy || !message || !branchSessionId}
-            testid="message-action-copy-link"
-          />
-          <Row
-            icon={
-              <AnimatedActionIcon
-                icon={AnimatedBookmarkIcon}
-                size={16}
-                animateOnChange={isBookmarked}
-                className={isBookmarked ? "fill-current text-yellow-500" : undefined}
-              />
-            }
-            label={isBookmarked ? t("bookmarkRemove") : t("bookmark")}
-            onClick={onBookmark}
-            disabled={busy || !message}
-            testid="message-action-bookmark"
-          />
-          {commandById.has("readAloud") && (
-            <Row
-              icon={
-                readAloudLoading ? (
-                  <Loader2Icon className="size-4 animate-spin" />
-                ) : readAloudActive ? (
-                  <SquareIcon className="size-4" />
-                ) : (
-                  <Volume2Icon className="size-4" />
-                )
-              }
-              label={readAloudActive ? t("stopReading") : t("readAloud")}
-              onClick={onReadAloud}
-              disabled={busy || !text}
-              testid="message-action-read-aloud"
-            />
-          )}
-          {commandById.has("branch") && branchSessionId && (
-            <Row
-              icon={<GitBranchIcon className="size-4" />}
-              label={t("branch")}
-              onClick={onBranch}
-              disabled={busy || commandById.get("branch")?.disabled}
-              testid="message-action-branch"
-            />
-          )}
-          {commandById.has("restorePoint") && branchSessionId && message && (
-            <Row
-              icon={<HistoryIcon className="size-4" />}
-              label={t("restorePoint")}
-              onClick={() => setRestoreOpen(true)}
-              disabled={busy || commandById.get("restorePoint")?.disabled}
-              testid="message-action-restore-point"
-            />
-          )}
-          {commandById.get("truncate")?.destructive && branchSessionId && message && (
-            <Row
-              icon={<ScissorsIcon className="size-4 text-destructive" />}
-              label={t("truncate")}
-              onClick={() => setTruncateOpen(true)}
-              disabled={busy || commandById.get("truncate")?.disabled}
-              testid="message-action-truncate"
-            />
-          )}
+          {/* Every command the surface allows, the bar's first (D10). */}
+          {commands.map((command) => (
+            <Fragment key={command.id}>{renderRow(command)}</Fragment>
+          ))}
           {message?.role === "assistant" && (
             // BranchNavigator renders null when the message has <2 regeneration
             // siblings; `has-[...]` keeps the labeled row hidden with it.
@@ -584,42 +763,17 @@ export function MessageActionSheet({
               <BranchNavigator message={message} />
             </div>
           )}
-          {commandById.has("edit") && onEditResend && (
+          {/* What plugins contributed, as on the desktop "…" menu. */}
+          {pluginItems.map((item) => (
             <Row
-              icon={<PencilIcon className="size-4" />}
-              label={t("edit")}
-              onClick={() => setEditText(text)}
-              disabled={busy || !text || commandById.get("edit")?.disabled}
-              testid="message-action-edit"
+              key={item.id}
+              icon={<PuzzleIcon className="size-4" />}
+              label={item.label}
+              onClick={() => runAndClose(item.run)}
+              disabled={busy || item.disabled}
+              testid="message-action-plugin"
             />
-          )}
-          {commandById.has("resend") && onEditResend && (
-            <Row
-              icon={<SendHorizontalIcon className="size-4" />}
-              label={t("resend")}
-              onClick={() => void onResendRow()}
-              disabled={busy || !text || commandById.get("resend")?.disabled}
-              testid="message-action-resend"
-            />
-          )}
-          {commandById.has("regenerate") && onRegenerate && (
-            <Row
-              icon={<RefreshCcwIcon className="size-4" />}
-              label={t("regenerate")}
-              onClick={onRegenerateRow}
-              disabled={busy || commandById.get("regenerate")?.disabled}
-              testid="message-action-regenerate"
-            />
-          )}
-          {commandById.get("delete")?.destructive && onDelete && (
-            <Row
-              icon={<Trash2Icon className="size-4 text-destructive" />}
-              label={t("delete")}
-              onClick={() => setConfirmDelete(true)}
-              disabled={busy}
-              testid="message-action-delete"
-            />
-          )}
+          ))}
           {message?.role === "assistant" && usage && (
             <div
               className="mt-1 border-t border-border px-3 pt-2 text-xs text-muted-foreground"
