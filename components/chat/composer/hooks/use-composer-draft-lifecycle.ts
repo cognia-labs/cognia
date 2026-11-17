@@ -8,7 +8,6 @@ import {
   type AttachmentsContext,
   type TextInputContext,
 } from "@/components/ai-elements/prompt-input"
-import { attachmentToFiles } from "@/components/mobile/chat/composer-attachment"
 import { isVideoPreprocessSettings } from "@/lib/chat/attachments/video/settings"
 import { draftAttachmentsFromFiles } from "@/lib/chat/draft-attachments"
 import { type FoldedLinks } from "@/lib/chat/link-fold"
@@ -34,6 +33,15 @@ import { useEffect, useRef } from "react"
 import { toast } from "sonner"
 
 export interface ComposerDraftLifecycleInput {
+  /**
+   * Turns a composer intent's images into files (the mobile composer's
+   * `attachmentToFiles`). Passed in so this hook does not import the mobile
+   * shell; the composer already does.
+   */
+  attachmentToFiles: (attachment: {
+    kind: "photos"
+    items: Array<{ uri: string; mime: string }>
+  }) => Promise<File[]>
   tCommands: ReturnType<typeof useTranslations<"chat.composer.commands">>
   persistDrafts: boolean
   textValue: string
@@ -81,6 +89,7 @@ export interface ComposerDraftLifecycleInput {
  */
 export function useComposerDraftLifecycle(input: ComposerDraftLifecycleInput) {
   const {
+    attachmentToFiles,
     tCommands,
     persistDrafts,
     textValue,
@@ -367,6 +376,7 @@ export function useComposerDraftLifecycle(input: ComposerDraftLifecycleInput) {
     followUpInFlight,
     pendingAutoSendRef,
     textareaRef,
+    attachmentToFiles,
   ])
 
   // Second half of the auto-send handshake: fire only once the committed input

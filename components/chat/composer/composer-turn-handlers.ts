@@ -75,8 +75,8 @@ import { useComposerCommandStore } from "@/stores/chat/composer-command-store"
 import { clearComposerTyping } from "@/stores/chat/composer-typing-store"
 import { roomTargetsOf } from "@/stores/chat/room-target-store"
 import { useProjectStore } from "@/stores/project/project-store"
-import { useSettingsStore } from "@/stores/settings"
 import {
+  type AppSettings,
   type ChatSession,
   type MessageReplyTo,
   type SendContent,
@@ -134,6 +134,8 @@ export interface ComposerTurnContext {
   setBestOfNChoice: React.Dispatch<React.SetStateAction<{ sessionId: string; n: 2 | 3 | 4 } | null>>
   bestOfNCount: 2 | 3 | 4 | null
   requestBestOfN: (prompt: string, n: 2 | 3 | 4, agents?: string[] | undefined) => Promise<boolean>
+  /** The live app settings, read at the moment each step needs them. */
+  readSettings: () => AppSettings | null
 }
 
 export async function runComposerSlashCommand(
@@ -379,11 +381,11 @@ export async function runComposerShellSubmit(
 }
 
 export async function runComposerMemorySubmit(
-  ctx: Pick<ComposerTurnContext, "session" | "tMemory" | "cwd">,
+  ctx: Pick<ComposerTurnContext, "session" | "tMemory" | "cwd" | "readSettings">,
   target: ComposerMemoryTarget,
   text: string
 ): Promise<boolean> {
-  const { session, tMemory, cwd } = ctx
+  const { session, tMemory, cwd, readSettings } = ctx
 
   const noteUsed = () =>
     useComposerCommandStore.getState().noteMemoryTargetUsed(memoryTargetKey(target))
@@ -422,7 +424,7 @@ export async function runComposerMemorySubmit(
       text,
       cwd,
       roots: workspace ? allRootPaths(workspace) : cwd ? [cwd] : [],
-      config: character?.instructionsOverride ?? useSettingsStore.getState().settings?.instructions,
+      config: character?.instructionsOverride ?? readSettings()?.instructions,
     })
     noteUsed()
     toast.success(tMemory("appended", { path }))
@@ -464,6 +466,7 @@ export async function runComposerTurn(
     | "setBestOfNChoice"
     | "bestOfNCount"
     | "requestBestOfN"
+    | "readSettings"
   >,
   text: string,
   files: SubmittedFile[],
@@ -493,6 +496,7 @@ export async function runComposerTurn(
     setBestOfNChoice,
     bestOfNCount,
     requestBestOfN,
+    readSettings,
   } = ctx
 
   const trimmed = text.trim()
@@ -571,10 +575,7 @@ export async function runComposerTurn(
       return false
     }
     const snapshot = await snapshotRouteContext(session?.id ?? null, {
-      providerId:
-        session?.providerOverride ??
-        useSettingsStore.getState().settings?.defaultProvider ??
-        "anthropic",
+      providerId: session?.providerOverride ?? readSettings()?.defaultProvider ?? "anthropic",
       session: session ?? null,
     })
     const lane = resolveRouteLane(route.target, snapshot)
@@ -616,7 +617,7 @@ export async function runComposerTurn(
   // re-derivation of half of it. `preSearch` also covers the `webTools`
   // kill switch and "is a provider actually configured", so a toggle armed
   // before the user turned web tools off cannot still reach the network.
-  const searchSettings = useSettingsStore.getState().settings
+  const searchSettings = readSettings()
   const proactiveSearchEnabled = resolveWebAccess({
     ...(searchSettings?.webTools ? { webTools: searchSettings.webTools } : {}),
     nativeAvailable: false,

@@ -346,6 +346,9 @@ const MOTION_ATTACHMENT_ACCEPT = [
   ".aac",
 ].join(",")
 
+/** The turn handlers read the live settings through this, not the store. */
+const readAppSettings = () => useSettingsStore.getState().settings
+
 // --- Inner box with full state wiring --------------------------------------
 
 /** What `ComposerInner` receives from the `Composer` wrapper (its hooks read these fields). */
@@ -1175,6 +1178,7 @@ function ComposerInner(props: ComposerInnerProps) {
     }
   )
   useComposerDraftLifecycle({
+    attachmentToFiles,
     tCommands,
     persistDrafts,
     textValue,
@@ -2145,7 +2149,11 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
 
   const handleMemorySubmit = useCallback(
     async (target: ComposerMemoryTarget, text: string): Promise<boolean> =>
-      runComposerMemorySubmit({ session, tMemory, cwd }, target, text),
+      runComposerMemorySubmit(
+        { readSettings: readAppSettings, session, tMemory, cwd },
+        target,
+        text
+      ),
     [cwd, tMemory, session]
   )
 
@@ -2160,6 +2168,7 @@ const ComposerWithRef = forwardRef<ComposerHandle, Props>(function Composer(
     ) =>
       runComposerTurn(
         {
+          readSettings: readAppSettings,
           session,
           onOpenSettings,
           onSend,

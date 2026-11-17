@@ -1039,34 +1039,34 @@
       ]
     },
     {
-      "key": "components/chat/composer.tsx::blobUrlToDataUrl>res::network::02080ee9df20:1",
-      "file": "components/chat/composer.tsx",
+      "key": "components/chat/composer/composer-submit.ts::blobUrlToDataUrl>res::network::02080ee9df20:1",
+      "file": "components/chat/composer/composer-submit.ts",
       "owner": "blobUrlToDataUrl>res",
       "kind": "network",
       "primitive": "fetch",
-      "line": 513,
+      "line": 57,
       "lexicalGate": null,
       "classification": "host-system",
-      "authority": "components/chat/composer.tsx#blobUrlToDataUrl>res; components/chat/composer.tsx#ComposerInner",
+      "authority": "components/chat/composer/composer-submit.ts#blobUrlToDataUrl>res; components/chat/composer/composer-submit.ts#runComposerSubmit",
       "reason": "Composer attachment conversion reads a user-selected blob/data resource; imported by composer UI, with no run-tool dispatch.",
       "basis": [
-        "components/chat/composer.tsx#blobUrlToDataUrl>res",
-        "components/chat/composer.tsx#ComposerInner"
+        "components/chat/composer/composer-submit.ts#blobUrlToDataUrl>res",
+        "components/chat/composer/composer-submit.ts#runComposerSubmit"
       ]
     },
     {
-      "key": "components/chat/composer.tsx::ComposerInner>runComposerOcr::network::4dcabf7dfcc9:1",
-      "file": "components/chat/composer.tsx",
-      "owner": "ComposerInner>runComposerOcr",
+      "key": "components/chat/composer/hooks/use-composer-ocr.ts::useComposerOcr>runComposerOcr::network::4dcabf7dfcc9:1",
+      "file": "components/chat/composer/hooks/use-composer-ocr.ts",
+      "owner": "useComposerOcr>runComposerOcr",
       "kind": "network",
       "primitive": "fetch",
-      "line": 717,
+      "line": 47,
       "lexicalGate": null,
       "classification": "host-system",
-      "authority": "components/chat/composer.tsx#ComposerInner>runComposerOcr; components/chat/composer/staged-attachment-store.tsx#StagedAttachmentsProvider",
+      "authority": "components/chat/composer/hooks/use-composer-ocr.ts#useComposerOcr>runComposerOcr; components/chat/composer/staged-attachment-store.tsx#StagedAttachmentsProvider",
       "reason": "Composer-owned attachment intake/OCR/hash processing reads staged attachment bytes; this callback belongs to the attachment UI, not a run tool.",
       "basis": [
-        "components/chat/composer.tsx#ComposerInner>runComposerOcr",
+        "components/chat/composer/hooks/use-composer-ocr.ts#useComposerOcr>runComposerOcr",
         "components/chat/composer/staged-attachment-store.tsx#StagedAttachmentsProvider"
       ]
     },

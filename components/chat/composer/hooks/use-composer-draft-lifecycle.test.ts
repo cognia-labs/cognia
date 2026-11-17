@@ -43,6 +43,7 @@ function textInputWith(initial: string) {
 
 function input(extra: Partial<ComposerDraftLifecycleInput> = {}): ComposerDraftLifecycleInput {
   return {
+    attachmentToFiles: jest.fn(async () => []),
     tCommands: ((k: string) => k) as never,
     persistDrafts: true,
     textValue: "",
